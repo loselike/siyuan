@@ -15,6 +15,15 @@ export type ShipmentStatus =
   | 'CANCELLED';
 
 export type RiskLevel = 'low' | 'medium' | 'high';
+export type FulfillmentAction =
+  | 'confirm-declare'
+  | 'confirm-receive'
+  | 'assign-route'
+  | 'confirm-dispatch'
+  | 'fill-transfer-no'
+  | 'add-tracking'
+  | 'mark-return'
+  | 'create-problem';
 
 export interface Shipment {
   id: string;
@@ -106,6 +115,28 @@ export interface ProductModule {
   phase: ModulePhase;
   capabilities: string[];
   aiEnhancements: string[];
+}
+
+export interface FulfillmentActionContext {
+  status: ShipmentStatus;
+  hasTransferNo?: boolean;
+}
+
+export interface FulfillmentStageSummary {
+  declared: number;
+  receiving: number;
+  sorting: number;
+  dispatching: number;
+  online: number;
+  signing: number;
+  exception: number;
+}
+
+export interface FulfillmentAdvice {
+  priority: AutomationPriority;
+  nextAction: string;
+  riskReasons: string[];
+  customerMessage: string;
 }
 
 export const shipmentStatusLabels: Record<ShipmentStatus, string> = {
@@ -388,6 +419,85 @@ export function createAutomationPlan(shipments: Shipment[]): AutomationPlanItem[
     .sort((a, b) => automationPriorityWeight(b.priority) - automationPriorityWeight(a.priority));
 }
 
+export function getAvailableFulfillmentActions(context: FulfillmentActionContext): FulfillmentAction[] {
+  const hasTransferNo = context.hasTransferNo ?? true;
+  const actionsByStatus: Record<ShipmentStatus, FulfillmentAction[]> = {
+    DRAFT: ['confirm-declare', 'create-problem'],
+    DECLARED: ['confirm-receive', 'create-problem'],
+    WAITING_RECEIVE: ['confirm-receive', 'create-problem', 'mark-return'],
+    WAITING_SORT: ['assign-route', 'create-problem', 'mark-return'],
+    WAITING_DISPATCH: ['confirm-dispatch', 'add-tracking', 'create-problem'],
+    WAITING_ONLINE: ['add-tracking', 'create-problem', 'mark-return'],
+    WAITING_SIGNED: ['add-tracking', 'create-problem'],
+    WAITING_RETURN: ['add-tracking', 'create-problem'],
+    PROBLEM: ['add-tracking', 'mark-return'],
+    STUCK: ['add-tracking', 'create-problem', 'mark-return'],
+    SIGNED: ['add-tracking'],
+    CANCELLED: []
+  };
+  const actions = actionsByStatus[context.status];
+
+  if (!hasTransferNo && ['WAITING_DISPATCH', 'WAITING_ONLINE', 'WAITING_SIGNED'].includes(context.status)) {
+    return ['fill-transfer-no', ...actions.filter((action) => action !== 'fill-transfer-no')];
+  }
+
+  return actions;
+}
+
+export function summarizeFulfillmentStages(shipments: Shipment[], businessType: BusinessType = 'EXPRESS'): FulfillmentStageSummary {
+  const scopedShipments = shipments.filter((shipment) => shipment.businessType === businessType);
+
+  return {
+    declared: scopedShipments.filter((shipment) => shipment.status === 'DECLARED').length,
+    receiving: scopedShipments.filter((shipment) => shipment.status === 'WAITING_RECEIVE').length,
+    sorting: scopedShipments.filter((shipment) => shipment.status === 'WAITING_SORT').length,
+    dispatching: scopedShipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH').length,
+    online: scopedShipments.filter((shipment) => shipment.status === 'WAITING_ONLINE').length,
+    signing: scopedShipments.filter((shipment) => shipment.status === 'WAITING_SIGNED').length,
+    exception: scopedShipments.filter((shipment) => ['WAITING_RETURN', 'PROBLEM', 'STUCK'].includes(shipment.status)).length
+  };
+}
+
+export function createFulfillmentAdvice(shipment: Shipment): FulfillmentAdvice {
+  const riskReasons: string[] = [];
+
+  if (!shipment.transferNo && ['WAITING_DISPATCH', 'WAITING_ONLINE', 'WAITING_SIGNED'].includes(shipment.status)) {
+    riskReasons.push('缺少转单号');
+  }
+
+  if (shipment.trackingStaleDays >= 3) {
+    riskReasons.push(`轨迹 ${shipment.trackingStaleDays} 天未更新`);
+  }
+
+  if (shipment.hasProblemTicket || shipment.status === 'PROBLEM') {
+    riskReasons.push('存在问题件');
+  }
+
+  if (Math.abs(shipment.receivableWeightKg - shipment.agentWeightKg) >= 1) {
+    riskReasons.push('计费重量差异');
+  }
+
+  const priority: AutomationPriority =
+    riskReasons.length >= 3 || shipment.trackingStaleDays >= 7 ? 'urgent' : riskReasons.length >= 1 ? 'high' : 'normal';
+  const nextAction = !shipment.transferNo && ['WAITING_DISPATCH', 'WAITING_ONLINE', 'WAITING_SIGNED'].includes(shipment.status)
+    ? '补齐转单号'
+    : shipment.hasProblemTicket || shipment.status === 'PROBLEM'
+      ? '处理问题件'
+      : shipment.trackingStaleDays >= 3
+        ? '跟进轨迹'
+        : nextActionFromStatus(shipment.status);
+
+  return {
+    priority,
+    nextAction,
+    riskReasons: riskReasons.length ? riskReasons : ['暂无明显异常'],
+    customerMessage:
+      priority === 'urgent'
+        ? `您好，${shipment.systemOrderNo} 我们已优先跟进，将同步最新处理进展。`
+        : `您好，${shipment.systemOrderNo} 当前节点为${shipmentStatusLabels[shipment.status]}，我们会持续跟进。`
+  };
+}
+
 export function getModuleCoverageSummary() {
   return {
     totalModules: productModules.length,
@@ -413,4 +523,22 @@ export function round2(value: number): number {
 
 function automationPriorityWeight(priority: AutomationPriority): number {
   return priority === 'urgent' ? 3 : priority === 'high' ? 2 : 1;
+}
+
+function nextActionFromStatus(status: ShipmentStatus): string {
+  const labels: Partial<Record<ShipmentStatus, string>> = {
+    DRAFT: '确认预报',
+    DECLARED: '确认收货',
+    WAITING_RECEIVE: '确认收货',
+    WAITING_SORT: '分配渠道',
+    WAITING_DISPATCH: '确认发货',
+    WAITING_ONLINE: '跟进上网',
+    WAITING_SIGNED: '跟进签收',
+    WAITING_RETURN: '处理退货',
+    STUCK: '处理滞留',
+    SIGNED: '归档',
+    CANCELLED: '无需处理'
+  };
+
+  return labels[status] ?? '处理异常';
 }

@@ -45,14 +45,19 @@ import {
 } from 'lucide-react';
 import {
   businessTypeLabels,
+  canTransitionShipment,
   createAutomationPlan,
+  createFulfillmentAdvice,
   createShipmentInsights,
+  getAvailableFulfillmentActions,
   getModuleCoverageSummary,
   productModules,
   shipmentStatusLabels,
+  summarizeFulfillmentStages,
   summarizeStatusCounts,
   validateShipmentImportRows,
   type BusinessType,
+  type FulfillmentAction,
   type Shipment,
   type ShipmentStatus
 } from '@siyuan/shared';
@@ -95,14 +100,32 @@ const importCheckRows = [
   { customerOrderNo: 'AI-0606-003', destinationCountry: '', weightKg: -1, channelName: '' }
 ];
 
+type MenuKey = 'workspace' | 'orders' | 'receive' | 'routing' | 'tracking' | 'problems' | 'pricing' | 'finance' | 'reports' | 'master' | 'settings';
+type FulfillmentStageKey = 'all' | 'declared' | 'receiving' | 'sorting' | 'dispatching' | 'online' | 'signing' | 'exception';
+
+const fulfillmentStages: Array<{ key: FulfillmentStageKey; label: string; statuses: ShipmentStatus[] }> = [
+  { key: 'all', label: '全部', statuses: [] },
+  { key: 'declared', label: '已预报', statuses: ['DECLARED'] },
+  { key: 'receiving', label: '待收货', statuses: ['WAITING_RECEIVE'] },
+  { key: 'sorting', label: '待排货', statuses: ['WAITING_SORT'] },
+  { key: 'dispatching', label: '待发货', statuses: ['WAITING_DISPATCH'] },
+  { key: 'online', label: '待上网', statuses: ['WAITING_ONLINE'] },
+  { key: 'signing', label: '待签收', statuses: ['WAITING_SIGNED'] },
+  { key: 'exception', label: '退货/滞留', statuses: ['WAITING_RETURN', 'PROBLEM', 'STUCK'] }
+];
+
 export function App() {
+  const [activeMenuKey, setActiveMenuKey] = useState<MenuKey>('workspace');
   const [businessType, setBusinessType] = useState<BusinessType>('EXPRESS');
   const [selectedStatus, setSelectedStatus] = useState<ShipmentStatus | 'ALL'>('ALL');
+  const [selectedFulfillmentStage, setSelectedFulfillmentStage] = useState<FulfillmentStageKey>('all');
   const [keyword, setKeyword] = useState('');
+  const [localShipments, setLocalShipments] = useState<Shipment[]>(shipments);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const visibleShipments = useMemo(() => {
     const normalized = keyword.trim().toLowerCase();
-    return shipments.filter((shipment) => {
+    return localShipments.filter((shipment) => {
       const matchesBusiness = shipment.businessType === businessType;
       const matchesStatus = selectedStatus === 'ALL' || shipment.status === selectedStatus;
       const matchesKeyword =
@@ -122,11 +145,11 @@ export function App() {
 
       return matchesBusiness && matchesStatus && matchesKeyword;
     });
-  }, [businessType, keyword, selectedStatus]);
+  }, [businessType, keyword, localShipments, selectedStatus]);
 
   const businessShipments = useMemo(
-    () => shipments.filter((shipment) => shipment.businessType === businessType),
-    [businessType]
+    () => localShipments.filter((shipment) => shipment.businessType === businessType),
+    [businessType, localShipments]
   );
   const statusCounts = summarizeStatusCounts(businessShipments);
   const aiQueue = useMemo(
@@ -152,6 +175,21 @@ export function App() {
   const moduleSummary = getModuleCoverageSummary();
   const spotlightModules = productModules.filter((module) =>
     ['运单履约', '问题件中心', '客户门户', 'AI 助手', '开放 API', '系统设置'].includes(module.name)
+  );
+  const fulfillmentStageSummary = summarizeFulfillmentStages(localShipments, businessType);
+  const fulfillmentShipments = useMemo(() => {
+    const activeStage = fulfillmentStages.find((stage) => stage.key === selectedFulfillmentStage);
+    return businessShipments.filter(
+      (shipment) => selectedFulfillmentStage === 'all' || activeStage?.statuses.includes(shipment.status)
+    );
+  }, [businessShipments, selectedFulfillmentStage]);
+  const fulfillmentAdviceQueue = useMemo(
+    () =>
+      businessShipments
+        .map((shipment) => ({ shipment, advice: createFulfillmentAdvice(shipment) }))
+        .filter((item) => item.advice.priority !== 'normal')
+        .slice(0, 5),
+    [businessShipments]
   );
 
   const columns: ColumnsType<Shipment> = [
@@ -241,6 +279,66 @@ export function App() {
     }
   ];
 
+  const fulfillmentColumns: ColumnsType<Shipment> = [
+    ...columns,
+    {
+      title: 'AI 下一步',
+      width: 170,
+      render: (_, record) => {
+        const advice = createFulfillmentAdvice(record);
+        return (
+          <Space direction="vertical" size={0}>
+            <Text strong>{advice.nextAction}</Text>
+            <Text type={advice.priority === 'urgent' ? 'danger' : 'secondary'}>{advice.riskReasons[0]}</Text>
+          </Space>
+        );
+      }
+    },
+    {
+      title: '履约操作',
+      width: 250,
+      fixed: 'right',
+      render: (_, record) => (
+        <Space wrap>
+          {(() => {
+            const actions = getAvailableFulfillmentActions({
+            status: record.status,
+            hasTransferNo: Boolean(record.transferNo)
+          }).slice(0, 3);
+            return (
+              <>
+                {actions.map((action) => (
+                  <Button key={action} size="small" onClick={() => handleFulfillmentAction(record, action)}>
+                    {fulfillmentActionLabels[action]}
+                  </Button>
+                ))}
+                {!actions.includes('confirm-receive') ? (
+                  <Button size="small" onClick={() => handleFulfillmentAction(record, 'confirm-receive')}>
+                    确认收货
+                  </Button>
+                ) : null}
+              </>
+            );
+          })()}
+        </Space>
+      )
+    }
+  ];
+
+  function handleFulfillmentAction(record: Shipment, action: FulfillmentAction) {
+    const actionResult = resolveFulfillmentAction(record, action);
+
+    if (!actionResult.ok) {
+      setNotice(actionResult.message);
+      return;
+    }
+
+    setLocalShipments((current) =>
+      current.map((shipment) => (shipment.id === record.id ? { ...shipment, ...actionResult.patch } : shipment))
+    );
+    setNotice(actionResult.message);
+  }
+
   return (
     <ConfigProvider
       theme={{
@@ -261,7 +359,13 @@ export function App() {
               <Text className="brand-subtitle">AI TMS / OMS</Text>
             </div>
           </div>
-          <Menu className="side-menu" mode="inline" selectedKeys={['workspace']} items={menuItems} />
+          <Menu
+            className="side-menu"
+            mode="inline"
+            selectedKeys={[activeMenuKey]}
+            items={menuItems}
+            onClick={({ key }) => setActiveMenuKey(key as MenuKey)}
+          />
           <Card className="sidebar-card" size="small">
             <Space direction="vertical" size={8}>
               <Flex align="center" gap={8}>
@@ -276,7 +380,7 @@ export function App() {
           <Header className="topbar">
             <Space className="business-switch" role="group" aria-label="业务类型">
               {businessTabs.map((tab) => {
-                const count = shipments.filter((shipment) => shipment.businessType === tab.key).length;
+                const count = localShipments.filter((shipment) => shipment.businessType === tab.key).length;
                 return (
                   <Button
                     key={tab.key}
@@ -307,6 +411,130 @@ export function App() {
             </Space>
           </Header>
           <Content className="content">
+            {activeMenuKey === 'orders' ? (
+              <>
+                <Flex justify="space-between" align="center" className="page-heading">
+                  <div>
+                    <Title level={2}>运单履约中心</Title>
+                    <Text type="secondary">围绕预报、收货、排货、发货、转单号和异常处理的前端闭环工作台。</Text>
+                  </div>
+                  <Space>
+                    <Button icon={<FileInput size={16} />}>导入履约运单</Button>
+                    <Button icon={<PackagePlus size={16} />}>新建预报</Button>
+                    <Button type="primary" icon={<Sparkles size={16} />}>
+                      AI 批量处理
+                    </Button>
+                  </Space>
+                </Flex>
+
+                {notice ? <Alert className="notice-bar" type={notice.includes('不允许') ? 'error' : 'success'} showIcon message={notice} /> : null}
+
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} md={8} xl={4}>
+                    <MetricCard icon={<FileText />} title="待预报" value={fulfillmentStageSummary.declared} extra="客户资料待确认" />
+                  </Col>
+                  <Col xs={24} md={8} xl={4}>
+                    <MetricCard icon={<PackagePlus />} title="待收货" value={fulfillmentStageSummary.receiving} extra="仓库扫描入口" />
+                  </Col>
+                  <Col xs={24} md={8} xl={4}>
+                    <MetricCard icon={<Route />} title="待排货" value={fulfillmentStageSummary.sorting} extra="渠道/代理分配" />
+                  </Col>
+                  <Col xs={24} md={8} xl={4}>
+                    <MetricCard icon={<Send />} title="待发货" value={fulfillmentStageSummary.dispatching} extra="出库确认" />
+                  </Col>
+                  <Col xs={24} md={8} xl={4}>
+                    <MetricCard icon={<Activity />} title="待上网" value={fulfillmentStageSummary.online} extra="轨迹跟进" />
+                  </Col>
+                  <Col xs={24} md={8} xl={4}>
+                    <MetricCard icon={<TicketCheck />} title="异常件" value={fulfillmentStageSummary.exception} extra="问题/退货/滞留" />
+                  </Col>
+                </Row>
+
+                <Row gutter={[16, 16]} className="main-grid">
+                  <Col xs={24} xl={17}>
+                    <Card
+                      title={
+                        <Flex align="center" gap={8}>
+                          <Boxes size={18} />
+                          <span>履约阶段看板</span>
+                        </Flex>
+                      }
+                      extra={<Text type="secondary">所有动作仅更新本地 mock 状态，不触发真实发货</Text>}
+                    >
+                      <div className="status-strip">
+                        {fulfillmentStages.map((stage) => {
+                          const count =
+                            stage.key === 'all'
+                              ? businessShipments.length
+                              : fulfillmentStageSummary[stage.key as keyof typeof fulfillmentStageSummary];
+                          return (
+                            <Button
+                              key={stage.key}
+                              type={selectedFulfillmentStage === stage.key ? 'primary' : 'default'}
+                              onClick={() => setSelectedFulfillmentStage(stage.key)}
+                            >
+                              {stage.label} {count}
+                            </Button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="batch-bar">
+                        <Space wrap>
+                          <Button size="small" onClick={() => setNotice('已模拟批量排货，进入待发货队列')}>批量排货</Button>
+                          <Button size="small" onClick={() => setNotice('已模拟批量获取转单号')}>批量获取转单号</Button>
+                          <Button size="small" onClick={() => setNotice('已模拟批量添加轨迹')}>批量添加轨迹</Button>
+                          <Button size="small" onClick={() => setNotice('已模拟批量标记异常')}>批量标记异常</Button>
+                        </Space>
+                      </div>
+
+                      <Table
+                        rowKey="id"
+                        columns={fulfillmentColumns}
+                        dataSource={fulfillmentShipments}
+                        size="small"
+                        pagination={{ pageSize: 8 }}
+                        scroll={{ x: 1600 }}
+                      />
+                    </Card>
+                  </Col>
+
+                  <Col xs={24} xl={7}>
+                    <Card
+                      title={
+                        <Flex align="center" gap={8}>
+                          <Bot size={18} />
+                          <span>AI 履约助手</span>
+                        </Flex>
+                      }
+                    >
+                      <Space direction="vertical" size={12} className="ai-list">
+                        {fulfillmentAdviceQueue.map(({ shipment, advice }) => (
+                          <Card key={shipment.id} size="small" className={`risk-card risk-${advice.priority === 'urgent' ? 'high' : 'medium'}`}>
+                            <Flex justify="space-between" align="start">
+                              <Space direction="vertical" size={4}>
+                                <Text strong>{advice.nextAction}</Text>
+                                <Text type="secondary">{shipment.systemOrderNo}</Text>
+                              </Space>
+                              <Tag color={advice.priority === 'urgent' ? 'red' : 'orange'}>
+                                {advice.priority === 'urgent' ? '紧急' : '高优先'}
+                              </Tag>
+                            </Flex>
+                            <Space wrap className="risk-tags">
+                              {advice.riskReasons.map((reason) => (
+                                <Tag key={reason}>{reason}</Tag>
+                              ))}
+                            </Space>
+                            <Alert type={advice.priority === 'urgent' ? 'error' : 'warning'} showIcon message={advice.customerMessage} />
+                          </Card>
+                        ))}
+                      </Space>
+                    </Card>
+                  </Col>
+                </Row>
+              </>
+            ) : (
+              <>
             <Flex justify="space-between" align="center" className="page-heading">
               <div>
                 <Title level={2}>AI 物流运营工作台</Title>
@@ -541,6 +769,8 @@ export function App() {
                 </Card>
               </Col>
             </Row>
+              </>
+            )}
           </Content>
         </Layout>
       </Layout>
@@ -580,4 +810,90 @@ function riskWeight(risk: string) {
 
 function riskLabel(risk: string) {
   return risk === 'high' ? '高风险' : risk === 'medium' ? '需关注' : '正常';
+}
+
+const fulfillmentActionLabels: Record<FulfillmentAction, string> = {
+  'confirm-declare': '确认预报',
+  'confirm-receive': '确认收货',
+  'assign-route': '分配渠道',
+  'confirm-dispatch': '确认发货',
+  'fill-transfer-no': '填写转单号',
+  'add-tracking': '添加轨迹',
+  'mark-return': '标记退货',
+  'create-problem': '创建问题件'
+};
+
+function resolveFulfillmentAction(record: Shipment, action: FulfillmentAction): {
+  ok: boolean;
+  message: string;
+  patch?: Partial<Shipment>;
+} {
+  if (!getAvailableFulfillmentActions({ status: record.status, hasTransferNo: Boolean(record.transferNo) }).includes(action)) {
+    return { ok: false, message: `当前状态不允许执行${fulfillmentActionLabels[action]}` };
+  }
+
+  if (action === 'confirm-receive') {
+    if (!canTransitionShipment(record.status, 'WAITING_SORT')) {
+      return { ok: false, message: `当前状态不允许执行${fulfillmentActionLabels[action]}` };
+    }
+    return {
+      ok: true,
+      message: '已确认收货，进入待排货',
+      patch: { status: 'WAITING_SORT', latestTracking: '收货扫描', trackingStaleDays: 0 }
+    };
+  }
+
+  if (action === 'assign-route') {
+    return {
+      ok: true,
+      message: '已分配渠道，进入待发货',
+      patch: { status: 'WAITING_DISPATCH', channelName: record.channelName || 'AI 推荐渠道' }
+    };
+  }
+
+  if (action === 'confirm-dispatch') {
+    return {
+      ok: true,
+      message: '已确认发货，进入待上网',
+      patch: { status: 'WAITING_ONLINE', latestTracking: '已发货' }
+    };
+  }
+
+  if (action === 'fill-transfer-no') {
+    return {
+      ok: true,
+      message: '已填写转单号',
+      patch: { transferNo: `${record.carrier}${record.systemOrderNo.slice(-6)}` }
+    };
+  }
+
+  if (action === 'add-tracking') {
+    return {
+      ok: true,
+      message: '已添加轨迹',
+      patch: { latestTracking: '人工新增轨迹', trackingStaleDays: 0 }
+    };
+  }
+
+  if (action === 'mark-return') {
+    return {
+      ok: true,
+      message: '已标记退货',
+      patch: { status: 'WAITING_RETURN', latestTracking: '已标记退货' }
+    };
+  }
+
+  if (action === 'create-problem') {
+    return {
+      ok: true,
+      message: '已创建问题件',
+      patch: { status: 'PROBLEM', hasProblemTicket: true, latestTracking: '新建问题件' }
+    };
+  }
+
+  return {
+    ok: true,
+    message: '已确认预报',
+    patch: { status: 'DECLARED', latestTracking: '已预报' }
+  };
 }

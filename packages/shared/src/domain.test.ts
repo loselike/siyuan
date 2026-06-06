@@ -4,9 +4,13 @@ import {
   calculateQuote,
   canTransitionShipment,
   createAutomationPlan,
+  createFulfillmentAdvice,
+  getAvailableFulfillmentActions,
+  summarizeFulfillmentStages,
   createShipmentInsights,
   getModuleCoverageSummary,
   validateShipmentImportRows,
+  type Shipment,
   ShipmentStatus
 } from './index';
 
@@ -145,3 +149,97 @@ describe('module coverage catalog', () => {
     );
   });
 });
+
+describe('fulfillment workflow rules', () => {
+  it('returns executable actions for each shipment state', () => {
+    expect(getAvailableFulfillmentActions({ status: 'DECLARED' })).toEqual(['confirm-receive', 'create-problem']);
+    expect(getAvailableFulfillmentActions({ status: 'WAITING_SORT' })).toEqual([
+      'assign-route',
+      'create-problem',
+      'mark-return'
+    ]);
+    expect(getAvailableFulfillmentActions({ status: 'WAITING_DISPATCH', hasTransferNo: false })).toContain(
+      'fill-transfer-no'
+    );
+    expect(getAvailableFulfillmentActions({ status: 'SIGNED' })).toEqual(['add-tracking']);
+  });
+
+  it('summarizes fulfillment stages by business type', () => {
+    const summary = summarizeFulfillmentStages([
+      sampleShipment('a', 'EXPRESS', 'DECLARED'),
+      sampleShipment('b', 'EXPRESS', 'WAITING_RECEIVE'),
+      sampleShipment('c', 'EXPRESS', 'WAITING_SORT'),
+      sampleShipment('d', 'EXPRESS', 'WAITING_DISPATCH'),
+      sampleShipment('e', 'EXPRESS', 'WAITING_ONLINE'),
+      sampleShipment('f', 'EXPRESS', 'STUCK'),
+      sampleShipment('g', 'SMALL_PACKET', 'DECLARED')
+    ]);
+
+    expect(summary).toEqual({
+      declared: 1,
+      receiving: 1,
+      sorting: 1,
+      dispatching: 1,
+      online: 1,
+      signing: 0,
+      exception: 1
+    });
+  });
+
+  it('creates AI fulfillment advice for missing transfer number and stale tracking', () => {
+    const advice = createFulfillmentAdvice(
+      sampleShipment('risk', 'EXPRESS', 'WAITING_ONLINE', {
+        transferNo: undefined,
+        trackingStaleDays: 7,
+        hasProblemTicket: true,
+        receivableWeightKg: 55,
+        agentWeightKg: 53
+      })
+    );
+
+    expect(advice.priority).toBe('urgent');
+    expect(advice.nextAction).toBe('补齐转单号');
+    expect(advice.riskReasons).toEqual(expect.arrayContaining(['缺少转单号', '轨迹 7 天未更新', '存在问题件']));
+    expect(advice.customerMessage).toContain('我们已优先跟进');
+  });
+});
+
+function sampleShipment(
+  id: string,
+  businessType: 'EXPRESS' | 'SMALL_PACKET' | 'DEDICATED_LINE',
+  status: ShipmentStatus,
+  overrides: Partial<Shipment> = {}
+): Shipment {
+  return {
+    ...sampleShipmentBase(id, businessType, status),
+    ...overrides
+  };
+}
+
+function sampleShipmentBase(
+  id: string,
+  businessType: 'EXPRESS' | 'SMALL_PACKET' | 'DEDICATED_LINE',
+  status: ShipmentStatus
+) {
+  return {
+    id,
+    createdAt: '2026-06-06 10:00',
+    customerName: '测试客户',
+    customerOrderNo: `CO-${id}`,
+    systemOrderNo: `SY-${id}`,
+    businessType,
+    packageType: 'WPX' as const,
+    destinationCountry: '美国',
+    carrier: 'DHL',
+    packageCount: 1,
+    receivableWeightKg: 10,
+    agentWeightKg: 10,
+    latestTracking: '已预报',
+    trackingStaleDays: 0,
+    isRemoteArea: false,
+    status,
+    channelName: 'DHL HK',
+    agentName: '宇环',
+    hasProblemTicket: false
+  };
+}

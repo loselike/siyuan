@@ -124,6 +124,10 @@ body {
   margin-top: 16px;
 }
 
+.notice-bar {
+  margin-bottom: 16px;
+}
+
 .status-strip {
   display: flex;
   flex-wrap: wrap;
