@@ -179,4 +179,26 @@ describe('AI logistics workspace', () => {
     expect(screen.getAllByText('状态字典').length).toBeGreaterThan(0);
     expect(screen.getByText('转单提醒')).toBeInTheDocument();
   });
+
+  it('shows administrator settings with separated permission areas', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('menuitem', { name: '系统设置' }));
+
+    expect(screen.getByRole('heading', { name: '系统设置中心' })).toBeInTheDocument();
+    expect(screen.getByText('系统管理员 · 最大权限')).toBeInTheDocument();
+    expect(screen.getByText('员工账号管理')).toBeInTheDocument();
+    expect(screen.getByText('新建员工')).toBeInTheDocument();
+    expect(screen.getByText('员工账号重置密码')).toBeInTheDocument();
+    expect(screen.getByText('角色权限分配')).toBeInTheDocument();
+    expect(screen.getByText('分配客户端角色权限')).toBeInTheDocument();
+    expect(screen.getAllByText('管理员').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('客服').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('操作').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('财务').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('客户').length).toBeGreaterThan(0);
+    expect(screen.getByText('拥有全部菜单、按钮、数据范围和系统参数权限')).toBeInTheDocument();
+    expect(screen.getAllByText('权限修改必须写入 audit_logs').length).toBeGreaterThan(0);
+  });
 });

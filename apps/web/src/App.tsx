@@ -792,6 +792,8 @@ export function App() {
                   </Col>
                 </Row>
               </>
+            ) : activeMenuKey === 'settings' ? (
+              <SystemSettingsPage />
             ) : modulePageConfigs[activeMenuKey] ? (
               <GenericModulePage config={modulePageConfigs[activeMenuKey]} />
             ) : (
@@ -1043,6 +1045,204 @@ export function App() {
         </Layout>
       </Layout>
     </ConfigProvider>
+  );
+}
+
+const rolePermissionRows = [
+  {
+    role: '管理员',
+    scope: '全局数据',
+    menus: '全部菜单',
+    buttons: '全部按钮',
+    restriction: '拥有全部菜单、按钮、数据范围和系统参数权限'
+  },
+  {
+    role: '客服',
+    scope: '客户与问题件',
+    menus: '运单、轨迹、问题件、客户资料',
+    buttons: '新建问题、回复、客户通知',
+    restriction: '不能核销、不能改系统权限'
+  },
+  {
+    role: '操作',
+    scope: '仓库与履约',
+    menus: '收货、打单、排货、发货、轨迹',
+    buttons: '收货确认、排货、发货、转单号',
+    restriction: '不能改财务、不能改权限'
+  },
+  {
+    role: '财务',
+    scope: '财务数据',
+    menus: '报价、应收、应付、对账、流水',
+    buttons: '费用调整、收付款、核销、导出账单',
+    restriction: '不能改系统角色'
+  },
+  {
+    role: '客户',
+    scope: '本人数据',
+    menus: '预报、我的运单、问题件、价格、对账单',
+    buttons: '新建预报、导入预报、提交问题',
+    restriction: '只能访问自己的运单与账单'
+  }
+];
+
+const employeeAccountRows = [
+  { account: 'admin@siyuan', name: '系统管理员', role: '管理员', status: '启用', action: '最大权限' },
+  { account: 'cs01@siyuan', name: '客服一组', role: '客服', status: '启用', action: '可重置密码' },
+  { account: 'ops01@siyuan', name: '操作主管', role: '操作', status: '启用', action: '可调整角色' },
+  { account: 'fin01@siyuan', name: '财务主管', role: '财务', status: '启用', action: '可核销' }
+];
+
+const clientRoleRows = [
+  { role: '客户管理员', scope: '客户公司全部运单', permissions: '预报、导入、对账、余额、成员管理' },
+  { role: '客户操作员', scope: '本人创建运单', permissions: '预报、导入、问题件回复、轨迹查询' },
+  { role: '客户财务', scope: '客户公司账务', permissions: '对账单、费用明细、账户余额、付款记录' }
+];
+
+function SystemSettingsPage() {
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+
+  const handleSettingAction = (message: string) => {
+    setSettingsNotice(message);
+  };
+
+  return (
+    <>
+      <Flex justify="space-between" align="center" className="page-heading">
+        <div>
+          <Title level={2}>系统设置中心</Title>
+          <Text type="secondary">系统管理员 · 最大权限</Text>
+        </div>
+        <Space>
+          <Button icon={<FileInput size={16} />} onClick={() => handleSettingAction('已模拟导入员工与角色配置')}>
+            导入配置
+          </Button>
+          <Button icon={<ClipboardCheck size={16} />} onClick={() => handleSettingAction('已模拟导出权限矩阵')}>
+            导出权限
+          </Button>
+          <Button type="primary" icon={<Sparkles size={16} />} onClick={() => handleSettingAction('AI 已检查权限冲突与高危配置')}>
+            AI 权限体检
+          </Button>
+        </Space>
+      </Flex>
+
+      {settingsNotice ? <Alert className="notice-bar" type="success" showIcon message={settingsNotice} /> : null}
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<ShieldCheck />} title="管理员权限" value="100%" extra="菜单、按钮、数据范围、系统参数" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Users />} title="员工账号" value="4" extra="管理员/客服/操作/财务" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Activity />} title="审计项" value="9" extra="权限修改必须写入 audit_logs" />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} className="main-grid">
+        <Col xs={24} xl={15}>
+          <Card
+            title={
+              <Flex align="center" gap={8}>
+                <Users size={18} />
+                <span>员工账号管理</span>
+              </Flex>
+            }
+            extra={
+              <Space>
+                <Button size="small" onClick={() => handleSettingAction('已模拟新建员工账号')}>
+                  新建员工
+                </Button>
+                <Button size="small" onClick={() => handleSettingAction('已模拟员工账号重置密码')}>
+                  员工账号重置密码
+                </Button>
+              </Space>
+            }
+          >
+            <Table
+              rowKey="account"
+              size="small"
+              pagination={false}
+              dataSource={employeeAccountRows}
+              columns={[
+                { title: '账号', dataIndex: 'account' },
+                { title: '姓名', dataIndex: 'name', width: 130 },
+                { title: '角色', dataIndex: 'role', width: 100, render: (value: string) => <Tag color={value === '管理员' ? 'red' : 'blue'}>{value}</Tag> },
+                { title: '状态', dataIndex: 'status', width: 90, render: (value: string) => <Tag color="green">{value}</Tag> },
+                { title: '能力', dataIndex: 'action', width: 150 }
+              ]}
+            />
+          </Card>
+
+          <Card className="module-grid" title="角色权限分配">
+            <Table
+              rowKey="role"
+              size="small"
+              pagination={false}
+              dataSource={rolePermissionRows}
+              columns={[
+                { title: '角色', dataIndex: 'role', width: 100, render: (value: string) => <Text strong>{value}</Text> },
+                { title: '数据范围', dataIndex: 'scope', width: 150 },
+                { title: '菜单权限', dataIndex: 'menus' },
+                { title: '按钮权限', dataIndex: 'buttons' },
+                { title: '限制', dataIndex: 'restriction' }
+              ]}
+            />
+          </Card>
+
+          <Card className="module-grid" title="分配客户端角色权限">
+            <Table
+              rowKey="role"
+              size="small"
+              pagination={false}
+              dataSource={clientRoleRows}
+              columns={[
+                { title: '客户端角色', dataIndex: 'role', width: 150 },
+                { title: '数据范围', dataIndex: 'scope', width: 180 },
+                { title: '可用能力', dataIndex: 'permissions' }
+              ]}
+            />
+          </Card>
+        </Col>
+
+        <Col xs={24} xl={9}>
+          <Card
+            title={
+              <Flex align="center" gap={8}>
+                <ShieldCheck size={18} />
+                <span>权限安全区</span>
+              </Flex>
+            }
+          >
+            <Space direction="vertical" size={12} className="quality-panel">
+              <Alert type="success" showIcon message="系统管理员默认拥有最大权限" />
+              <Alert type="warning" showIcon message="客服不能改财务核销" />
+              <Alert type="warning" showIcon message="财务不能改系统权限" />
+              <Alert type="info" showIcon message="客户只能访问本人或所属客户公司的数据" />
+            </Space>
+          </Card>
+
+          <Card className="automation-card" title="高危操作审计">
+            <Space direction="vertical" size={10} className="quality-panel">
+              {['权限修改必须写入 audit_logs', '员工账号重置密码必须记录操作人', '角色权限分配需要保存前后变化', '系统参数修改需要二次确认'].map((item) => (
+                <Alert key={item} type="info" showIcon message={item} />
+              ))}
+            </Space>
+          </Card>
+
+          <Card className="automation-card" title="系统基础配置">
+            <Space wrap>
+              {['公司资料', '模板', '通知', '轨迹规则', '状态字典', '转单提醒'].map((item) => (
+                <Button key={item} onClick={() => handleSettingAction(`已进入${item}模拟配置`)}>
+                  {item}
+                </Button>
+              ))}
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+    </>
   );
 }
 
