@@ -110,6 +110,8 @@ const businessWorkspaceConfigs: Record<
     metrics: Array<{ title: string; extra: string }>;
     batchActions: string[];
     assistantCopy: string;
+    focusTitle: string;
+    focusItems: Array<{ title: string; description: string }>;
   }
 > = {
   EXPRESS: {
@@ -121,7 +123,13 @@ const businessWorkspaceConfigs: Record<
       { title: '今日签收率', extra: '快件妥投表现' }
     ],
     batchActions: ['批量修改', '复制运单', '获取转单号', '日终处理', '新建问题', '回复/查看', '单证审核', '添加轨迹', '轨迹对接设置'],
-    assistantCopy: '用自然语言批量生成运单、解释快递报价差异、总结问题件、自动生成客户回复。'
+    assistantCopy: '用自然语言批量生成运单、解释快递报价差异、总结问题件、自动生成客户回复。',
+    focusTitle: '快递作业重点',
+    focusItems: [
+      { title: '转单号', description: 'DHL、FedEx、UPS 转单号获取与补录' },
+      { title: '偏远/附加费', description: '识别偏远、燃油、超长超重等附加成本' },
+      { title: '上网签收', description: '跟进离港、上网、妥投和退件节点' }
+    ]
   },
   SMALL_PACKET: {
     description: '轻小件批量预报、邮袋交接、挂号/平邮转单和上网时效跟进。',
@@ -132,7 +140,13 @@ const businessWorkspaceConfigs: Record<
       { title: '今日交邮率', extra: '邮袋交接完成度' }
     ],
     batchActions: ['批量预报', '邮袋交接', '挂号转单号', '平邮批量上网', '重量分段复核', '批量添加轨迹', '新建问题', '客户通知'],
-    assistantCopy: 'AI 可按克重段识别报价异常、提醒未交邮袋批次，并生成客户上网延迟说明。'
+    assistantCopy: 'AI 可按克重段识别报价异常、提醒未交邮袋批次，并生成客户上网延迟说明。',
+    focusTitle: '小包作业重点',
+    focusItems: [
+      { title: '邮袋交接', description: '按客户批次、邮袋号、目的国集中交邮' },
+      { title: '克重分段', description: '按 0-2kg 小包克重段复核成本与报价' },
+      { title: '挂号/平邮', description: '区分可追踪挂号和平邮上网策略' }
+    ]
   },
   DEDICATED_LINE: {
     description: '专线业务聚焦 FBA/海外仓大货、装板排舱、清关节点和头程/尾程轨迹。',
@@ -143,7 +157,13 @@ const businessWorkspaceConfigs: Record<
       { title: '今日入仓率', extra: 'FBA / 海外仓签收表现' }
     ],
     batchActions: ['批量装板', '排舱确认', '生成装箱单', '头程发货', '尾程转单', '清关资料审核', '新建问题', '添加轨迹'],
-    assistantCopy: 'AI 可解释清关/排舱延误、提示大货成本倒挂，并生成客户节点汇报。'
+    assistantCopy: 'AI 可解释清关/排舱延误、提示大货成本倒挂，并生成客户节点汇报。',
+    focusTitle: '专线作业重点',
+    focusItems: [
+      { title: '装板/排舱', description: '按航线、板位、仓库批次确认头程计划' },
+      { title: '清关资料', description: '审核箱单、发票、品名、税号和查验资料' },
+      { title: '尾程转单', description: '补齐 UPS/FedEx/本地卡派尾程单号' }
+    ]
   }
 };
 
@@ -908,6 +928,17 @@ export function App() {
                     <Button type="primary" block icon={<Send size={16} />}>
                       生成今日处理建议
                     </Button>
+                  </Space>
+                </Card>
+
+                <Card className="automation-card" title={businessWorkspaceConfig.focusTitle}>
+                  <Space direction="vertical" size={10} className="quality-panel">
+                    {businessWorkspaceConfig.focusItems.map((item) => (
+                      <div key={item.title} className="automation-item">
+                        <Text strong>{item.title}</Text>
+                        <Text type="secondary">{item.description}</Text>
+                      </div>
+                    ))}
                   </Space>
                 </Card>
               </Col>

@@ -35,10 +35,31 @@ describe('AI logistics workspace', () => {
 
     expect(screen.getByText('小包运单池')).toBeInTheDocument();
     expect(screen.getByText('轻小件批量预报、邮袋交接、挂号/平邮转单和上网时效跟进。')).toBeInTheDocument();
-    expect(screen.getByText('邮袋交接')).toBeInTheDocument();
+    expect(screen.getAllByText('邮袋交接').length).toBeGreaterThan(0);
     expect(screen.getByText('SYXB0606DE002')).toBeInTheDocument();
     expect(screen.getByText('燕文小包线')).toBeInTheDocument();
     expect(screen.getAllByText('待交邮袋').length).toBeGreaterThan(0);
+  });
+
+  it('shows a dedicated line workspace when switching business type', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: '专线 4' }));
+
+    expect(screen.getByText('专线运单池')).toBeInTheDocument();
+    expect(screen.getByText('专线业务聚焦 FBA/海外仓大货、装板排舱、清关节点和头程/尾程轨迹。')).toBeInTheDocument();
+    expect(screen.getByText('批量装板')).toBeInTheDocument();
+    expect(screen.getByText('排舱确认')).toBeInTheDocument();
+    expect(screen.getByText('清关资料审核')).toBeInTheDocument();
+    expect(screen.getByText('SYZX0606US002')).toBeInTheDocument();
+    expect(screen.getByText('美国 FBA 空派')).toBeInTheDocument();
+    expect(screen.getByText('欧洲卡航')).toBeInTheDocument();
+    expect(screen.getAllByText('清关查验').length).toBeGreaterThan(0);
+    expect(screen.getByText('专线作业重点')).toBeInTheDocument();
+    expect(screen.getByText('装板/排舱')).toBeInTheDocument();
+    expect(screen.getByText('清关资料')).toBeInTheDocument();
+    expect(screen.getAllByText('尾程转单').length).toBeGreaterThan(0);
   });
 
   it('surfaces the expanded product modules and AI-first workflows', () => {
