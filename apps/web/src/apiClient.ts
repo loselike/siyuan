@@ -1,9 +1,13 @@
 import type {
   CustomerStatementCreateInput,
   CustomerStatementSummary,
+  CustomerAccountSummary,
   CarrierTaskRunResponse,
   CarrierTaskSummary,
+  AccountLedgerSummary,
   LabelCreateResponse,
+  PaymentCreateInput,
+  PaymentCreateResponse,
   PricingQuoteRequest,
   ProblemTicketCreateInput,
   ProblemTicketSummary,
@@ -47,7 +51,6 @@ export interface RolePermissionRow {
   key: RoleKey;
   label: string;
   account: string;
-  password: string;
   scope: string;
   permissions: PermissionKey[];
   restriction: string;
@@ -56,6 +59,13 @@ export interface RolePermissionRow {
 export interface RolePermissionMatrix {
   availablePermissions: PermissionDefinition[];
   roles: RolePermissionRow[];
+}
+
+export interface AiAssistResponse {
+  provider: 'siliconflow';
+  mode: 'live' | 'mock';
+  model: string;
+  content: string;
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001/api';
@@ -146,12 +156,28 @@ export class ApiClient {
     return this.request('/finance/customer-statements', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async customerAccounts(): Promise<CustomerAccountSummary[]> {
+    return this.request('/finance/customer-accounts');
+  }
+
+  async accountLedger(): Promise<AccountLedgerSummary[]> {
+    return this.request('/finance/account-ledger');
+  }
+
+  async createPayment(input: PaymentCreateInput): Promise<PaymentCreateResponse> {
+    return this.request('/finance/payments', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async rolePermissions(): Promise<RolePermissionMatrix> {
     return this.request('/system/roles');
   }
 
   async updateRolePermissions(role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
     return this.request(`/system/roles/${role}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions }) });
+  }
+
+  async aiAssist(input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }): Promise<AiAssistResponse> {
+    return this.request('/ai/assist', { method: 'POST', body: JSON.stringify(input) });
   }
 
   private async request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {

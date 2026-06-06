@@ -7,14 +7,20 @@ import {
   createMockTrackingStatus,
   createSystemOrderNo,
   summarizeStatement,
+  summarizePaymentSettlement,
   summarizeStatusCounts,
   validateShipmentImportRows,
+  type AccountLedgerSummary,
   type CarrierTaskRunResponse,
   type CarrierTaskSummary,
   type CarrierAdapterCode,
+  type CustomerAccountSummary,
   type CustomerStatementCreateInput,
   type CustomerStatementSummary,
   type LabelCreateResponse,
+  type PaymentCreateInput,
+  type PaymentCreateResponse,
+  type PaymentSummary,
   type PricingQuoteRequest,
   type ProblemTicketCreateInput,
   type ProblemTicketSummary,
@@ -56,6 +62,12 @@ interface StoredReceivableFee extends ReceivableFeeSummary {
 interface StoredLabel extends ShipmentLabelSummary {}
 
 interface StoredCarrierTask extends CarrierTaskSummary {}
+
+interface StoredCustomerAccount extends CustomerAccountSummary {}
+
+interface StoredAccountLedger extends AccountLedgerSummary {}
+
+interface StoredPayment extends PaymentSummary {}
 
 export class InMemoryRepository {
   private sequence = 20;
@@ -161,6 +173,32 @@ export class InMemoryRepository {
 
   private readonly payableFees: Array<{ id: string; shipmentId: string; name: string; amount: number; settled: boolean }> = [];
   private readonly customerStatements: CustomerStatementSummary[] = [];
+  private readonly customerAccounts: StoredCustomerAccount[] = [
+    { customerId: 'c-9409', customerName: '9409-Daloday', balance: 10000, currency: 'CNY' },
+    { customerId: 'c-1344', customerName: '1344-TILL', balance: 8000, currency: 'CNY' },
+    { customerId: 'c-9509', customerName: '9509-Cam&Clae', balance: 0, currency: 'CNY' }
+  ];
+  private readonly payments: StoredPayment[] = [];
+  private readonly accountLedger: StoredAccountLedger[] = [
+    {
+      id: 'al-seed-9409',
+      customerId: 'c-9409',
+      customerName: '9409-Daloday',
+      amount: 10000,
+      balance: 10000,
+      note: '期初余额',
+      createdAt: '2026-06-01T10:00:00.000Z'
+    },
+    {
+      id: 'al-seed-1344',
+      customerId: 'c-1344',
+      customerName: '1344-TILL',
+      amount: 8000,
+      balance: 8000,
+      note: '期初余额',
+      createdAt: '2026-06-01T10:00:00.000Z'
+    }
+  ];
   private readonly labels: StoredLabel[] = [];
   private readonly carrierTasks: StoredCarrierTask[] = [];
 
@@ -304,6 +342,92 @@ export class InMemoryRepository {
     };
     this.customerStatements.push(statement);
     return statement;
+  }
+
+  async getCustomerAccounts(principal: Principal): Promise<CustomerAccountSummary[]> {
+    return this.customerAccounts.filter((account) => principal.role !== 'CUSTOMER' || account.customerId === principal.customerId);
+  }
+
+  async getAccountLedger(principal: Principal): Promise<AccountLedgerSummary[]> {
+    return this.accountLedger
+      .filter((entry) => principal.role !== 'CUSTOMER' || entry.customerId === principal.customerId)
+      .slice()
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  async createPayment(_principal: Principal, input: PaymentCreateInput): Promise<PaymentCreateResponse> {
+    if (input.amount <= 0) {
+      throw new BadRequestException('收款金额必须大于 0');
+    }
+    const account = this.customerAccounts.find((item) => item.customerId === input.customerId);
+    if (!account) {
+      throw new BadRequestException('客户账户不存在');
+    }
+    const feeIds = input.feeIds ?? [];
+    const selectedFees = this.receivableFees.filter((fee) => feeIds.includes(fee.id));
+    if (selectedFees.length !== feeIds.length) {
+      throw new BadRequestException('应收费用不存在');
+    }
+    if (selectedFees.some((fee) => fee.customerId !== input.customerId)) {
+      throw new BadRequestException('应收费用不属于该客户');
+    }
+    if (selectedFees.some((fee) => fee.settled)) {
+      throw new BadRequestException('应收费用已核销');
+    }
+    const settledAmount = roundMoney(selectedFees.reduce((sum, fee) => sum + fee.amount, 0));
+    if (input.amount < settledAmount) {
+      throw new BadRequestException('收款金额不足以核销选中费用');
+    }
+
+    const now = new Date().toISOString();
+    const payment = summarizePaymentSettlement({
+      id: `pay-${this.payments.length + 1}`,
+      customerId: account.customerId,
+      customerName: account.customerName,
+      amount: input.amount,
+      settledAmount,
+      createdAt: now
+    });
+    this.payments.push(payment);
+
+    account.balance = roundMoney(account.balance + input.amount);
+    this.accountLedger.push({
+      id: `al-${this.accountLedger.length + 1}`,
+      customerId: account.customerId,
+      customerName: account.customerName,
+      amount: roundMoney(input.amount),
+      balance: account.balance,
+      note: input.note?.trim() || '收款登记',
+      createdAt: now
+    });
+
+    if (settledAmount > 0) {
+      selectedFees.forEach((fee) => {
+        fee.settled = true;
+      });
+      account.balance = roundMoney(account.balance - settledAmount);
+      this.accountLedger.push({
+        id: `al-${this.accountLedger.length + 1}`,
+        customerId: account.customerId,
+        customerName: account.customerName,
+        amount: -settledAmount,
+        balance: account.balance,
+        note: '核销应收费用',
+        createdAt: now
+      });
+    }
+
+    const statement = input.statementId ? this.customerStatements.find((item) => item.id === input.statementId) : undefined;
+    if (statement && statement.customerId === input.customerId && input.amount >= statement.total) {
+      statement.status = 'SETTLED';
+    }
+
+    return {
+      payment,
+      account: { ...account },
+      settledFees: selectedFees.map((fee) => this.toReceivableSummary(fee)),
+      statement
+    };
   }
 
   async createShipment(principal: Principal, input: ShipmentCreateInput): Promise<Shipment> {
@@ -728,4 +852,8 @@ export class InMemoryRepository {
       ...overrides
     };
   }
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
 }

@@ -8,15 +8,20 @@ import {
   createMockTrackingStatus,
   createSystemOrderNo,
   summarizeStatement,
+  summarizePaymentSettlement,
   summarizeStatusCounts,
   validateShipmentImportRows,
+  type AccountLedgerSummary,
   type BusinessType,
   type CarrierAdapterCode,
   type CarrierTaskRunResponse,
   type CarrierTaskSummary,
+  type CustomerAccountSummary,
   type CustomerStatementCreateInput,
   type CustomerStatementSummary,
   type LabelCreateResponse,
+  type PaymentCreateInput,
+  type PaymentCreateResponse,
   type PricingQuoteRequest,
   type ProblemTicketCreateInput,
   type ProblemTicketSummary,
@@ -332,6 +337,191 @@ export class PrismaRepository {
     });
 
     return { ...draft, id: created.id, createdAt: created.createdAt.toISOString() };
+  }
+
+  async getCustomerAccounts(principal: Principal): Promise<CustomerAccountSummary[]> {
+    const rows = await this.prisma.customerAccount.findMany({
+      where: principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : undefined,
+      include: { customer: true },
+      orderBy: { customerId: 'asc' }
+    });
+
+    return rows.map((row) => ({
+      customerId: row.customerId,
+      customerName: `${row.customer.code}-${row.customer.name}`,
+      balance: Number(row.balance),
+      currency: row.currency
+    }));
+  }
+
+  async getAccountLedger(principal: Principal): Promise<AccountLedgerSummary[]> {
+    const rows = await this.prisma.accountLedger.findMany({
+      where: {
+        partyType: 'CUSTOMER',
+        ...(principal.role === 'CUSTOMER' ? { partyId: principal.customerId } : {})
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    const customers = await this.prisma.customer.findMany({
+      where: { id: { in: rows.map((row) => row.partyId) } }
+    });
+    const customerMap = new Map(customers.map((customer) => [customer.id, customer]));
+
+    return rows.map((row) => {
+      const customer = customerMap.get(row.partyId);
+      return {
+        id: row.id,
+        customerId: row.partyId,
+        customerName: customer ? `${customer.code}-${customer.name}` : row.partyId,
+        amount: Number(row.amount),
+        balance: Number(row.balance),
+        note: row.note ?? undefined,
+        createdAt: row.createdAt.toISOString()
+      };
+    });
+  }
+
+  async createPayment(_principal: Principal, input: PaymentCreateInput): Promise<PaymentCreateResponse> {
+    if (input.amount <= 0) {
+      throw new BadRequestException('收款金额必须大于 0');
+    }
+    const customer = await this.prisma.customer.findUnique({ where: { id: input.customerId } });
+    if (!customer) {
+      throw new BadRequestException('客户不存在');
+    }
+    const account = await this.prisma.customerAccount.upsert({
+      where: { id: `ca-${customer.code}-cny` },
+      update: {},
+      create: { id: `ca-${customer.code}-cny`, customerId: customer.id, balance: 0, currency: 'CNY' },
+      include: { customer: true }
+    });
+    const feeIds = input.feeIds ?? [];
+    const fees = await this.prisma.receivableFee.findMany({
+      where: { id: { in: feeIds } },
+      include: { shipment: { include: { customer: true } } }
+    });
+    if (fees.length !== feeIds.length) {
+      throw new BadRequestException('应收费用不存在');
+    }
+    if (fees.some((fee) => fee.shipment.customerId !== input.customerId)) {
+      throw new BadRequestException('应收费用不属于该客户');
+    }
+    if (fees.some((fee) => fee.settled)) {
+      throw new BadRequestException('应收费用已核销');
+    }
+    const settledAmount = roundMoney(fees.reduce((sum, fee) => sum + Number(fee.amount), 0));
+    if (input.amount < settledAmount) {
+      throw new BadRequestException('收款金额不足以核销选中费用');
+    }
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.create({
+        data: {
+          partyType: 'CUSTOMER',
+          partyId: input.customerId,
+          amount: input.amount
+        }
+      });
+      const afterReceiptBalance = roundMoney(Number(account.balance) + input.amount);
+      await tx.customerAccount.update({
+        where: { id: account.id },
+        data: { balance: afterReceiptBalance }
+      });
+      await tx.accountLedger.create({
+        data: {
+          partyType: 'CUSTOMER',
+          partyId: input.customerId,
+          amount: input.amount,
+          balance: afterReceiptBalance,
+          note: input.note?.trim() || '收款登记'
+        }
+      });
+
+      let finalBalance = afterReceiptBalance;
+      if (settledAmount > 0) {
+        finalBalance = roundMoney(afterReceiptBalance - settledAmount);
+        await tx.receivableFee.updateMany({ where: { id: { in: feeIds } }, data: { settled: true } });
+        await tx.customerAccount.update({
+          where: { id: account.id },
+          data: { balance: finalBalance }
+        });
+        await tx.accountLedger.create({
+          data: {
+            partyType: 'CUSTOMER',
+            partyId: input.customerId,
+            amount: -settledAmount,
+            balance: finalBalance,
+            note: '核销应收费用'
+          }
+        });
+        await tx.settlement.createMany({
+          data: fees.map((fee) => ({
+            paymentId: payment.id,
+            feeId: fee.id,
+            amount: Number(fee.amount)
+          }))
+        });
+      }
+
+      let statement: CustomerStatementSummary | undefined;
+      if (input.statementId) {
+        const updated = await tx.customerStatement.updateMany({
+          where: { id: input.statementId, customerId: input.customerId },
+          data: { status: 'SETTLED' }
+        });
+        if (updated.count > 0) {
+          const row = await tx.customerStatement.findUnique({ where: { id: input.statementId } });
+          if (row) {
+            statement = {
+              id: row.id,
+              customerId: row.customerId,
+              customerName: `${customer.code}-${customer.name}`,
+              periodStart: row.createdAt.toISOString().slice(0, 10),
+              periodEnd: row.createdAt.toISOString().slice(0, 10),
+              total: Number(row.total),
+              feeCount: 0,
+              status: row.status as CustomerStatementSummary['status'],
+              createdAt: row.createdAt.toISOString()
+            };
+          }
+        }
+      }
+
+      return {
+        payment,
+        accountBalance: finalBalance,
+        statement
+      };
+    });
+
+    const paymentSummary = summarizePaymentSettlement({
+      id: result.payment.id,
+      customerId: customer.id,
+      customerName: `${customer.code}-${customer.name}`,
+      amount: Number(result.payment.amount),
+      settledAmount,
+      createdAt: result.payment.createdAt.toISOString()
+    });
+
+    return {
+      payment: paymentSummary,
+      account: {
+        customerId: customer.id,
+        customerName: `${customer.code}-${customer.name}`,
+        balance: result.accountBalance,
+        currency: account.currency
+      },
+      settledFees: fees.map((fee) => ({
+        id: fee.id,
+        shipmentId: fee.shipmentId,
+        systemOrderNo: fee.shipment.systemOrderNo,
+        customerName: `${fee.shipment.customer.code}-${fee.shipment.customer.name}`,
+        name: fee.name,
+        amount: Number(fee.amount),
+        settled: true
+      })),
+      statement: result.statement
+    };
   }
 
   async createShipment(principal: Principal, input: ShipmentCreateInput): Promise<Shipment> {
@@ -908,6 +1098,10 @@ function toCarrierAdapterCode(carrier: string): CarrierAdapterCode {
     return 'USPS';
   }
   return 'OTHER';
+}
+
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
 }
 
 function formatDate(date: Date): string {

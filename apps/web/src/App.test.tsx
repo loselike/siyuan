@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CarrierTaskSummary, Shipment, ShipmentStatus } from '@siyuan/shared';
+import type { AccountLedgerSummary, CarrierTaskSummary, CustomerAccountSummary, Shipment, ShipmentStatus } from '@siyuan/shared';
 import { App } from './App';
 
 const employeeShipments = [
@@ -53,6 +53,12 @@ const customerStatements = [
     createdAt: '2026-06-06T10:00:00.000Z'
   }
 ];
+const customerAccounts: CustomerAccountSummary[] = [
+  { customerId: 'c-9409', customerName: '9409-Daloday', balance: 10000, currency: 'CNY' }
+];
+const accountLedger: AccountLedgerSummary[] = [
+  { id: 'al-seed-1', customerId: 'c-9409', customerName: '9409-Daloday', amount: 10000, balance: 10000, note: '期初余额', createdAt: '2026-06-01T10:00:00.000Z' }
+];
 const carrierTasks: CarrierTaskSummary[] = [
   {
     id: 'ct-1',
@@ -96,7 +102,6 @@ const systemRoleMatrix = {
       key: 'ADMIN',
       label: '系统管理员',
       account: 'admin',
-      password: 'admin123',
       scope: '全局数据',
       permissions: ['shipments:read', 'shipments:write', 'finance:read', 'finance:settle', 'master-data:read', 'system:manage'],
       restriction: '全部权限'
@@ -105,7 +110,6 @@ const systemRoleMatrix = {
       key: 'CUSTOMER_SERVICE',
       label: '客服',
       account: 'service',
-      password: 'service123',
       scope: '客户与问题件',
       permissions: ['shipments:read', 'shipments:write', 'master-data:read'],
       restriction: '不能核销、不能改系统权限'
@@ -114,7 +118,6 @@ const systemRoleMatrix = {
       key: 'FINANCE',
       label: '财务',
       account: 'finance',
-      password: 'finance123',
       scope: '财务数据',
       permissions: ['shipments:read', 'finance:read', 'finance:settle', 'master-data:read'],
       restriction: '不能改系统权限'
@@ -124,6 +127,19 @@ const systemRoleMatrix = {
 
 beforeEach(() => {
   localStorage.clear();
+  receivableFees.forEach((fee) => {
+    fee.settled = false;
+  });
+  customerAccounts[0] = { customerId: 'c-9409', customerName: '9409-Daloday', balance: 10000, currency: 'CNY' };
+  accountLedger.splice(0, accountLedger.length, {
+    id: 'al-seed-1',
+    customerId: 'c-9409',
+    customerName: '9409-Daloday',
+    amount: 10000,
+    balance: 10000,
+    note: '期初余额',
+    createdAt: '2026-06-01T10:00:00.000Z'
+  });
   vi.stubGlobal('fetch', vi.fn(mockFetch));
 });
 
@@ -187,7 +203,7 @@ describe('M1+M2 API-backed workspace', () => {
     await userEvent.type(screen.getByLabelText('密码'), 'admin123');
     await userEvent.click(screen.getByRole('button', { name: '登录' }));
 
-    expect(await screen.findByRole('heading', { name: '登录思源物流' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '登录思远物流' })).toBeInTheDocument();
   });
 
   it('shows realistic data child functions and SiliconFlow AI capability for every staff module', async () => {
@@ -237,12 +253,30 @@ describe('M1+M2 API-backed workspace', () => {
     expect(await screen.findByText('对账单草稿 ¥230')).toBeInTheDocument();
   });
 
+  it('lets finance staff register a payment and settle selected receivables', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '财务结算' }));
+    expect(await screen.findByText('账户余额')).toBeInTheDocument();
+    expect((await screen.findAllByText('¥10000.00')).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: '登记 9409 收款并核销' }));
+
+    expect(await screen.findByText('收款已核销 ¥230')).toBeInTheDocument();
+    expect(screen.getAllByText('已结算').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('核销应收费用')).toBeInTheDocument();
+  });
+
   it('shows customer-visible receivables and statements in the customer portal', async () => {
     await renderAndLogin('customer', 'customer123');
 
     expect((await screen.findAllByText('费用明细')).length).toBeGreaterThan(0);
     expect(screen.getByText('¥200.00')).toBeInTheDocument();
     expect(screen.getByText('对账单草稿')).toBeInTheDocument();
+    expect(screen.getAllByText('账户余额').length).toBeGreaterThan(0);
+    expect(screen.getByText('期初余额')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '登记 9409 收款并核销' })).not.toBeInTheDocument();
   });
 
   it('lets staff create a mock label from the receive label page and dispatch with its transfer number', async () => {
@@ -307,8 +341,10 @@ describe('M1+M2 API-backed workspace', () => {
 
     await user.click(screen.getByRole('menuitem', { name: '系统设置' }));
 
-    expect(await screen.findByText('admin / admin123')).toBeInTheDocument();
-    expect(screen.getByText('service / service123')).toBeInTheDocument();
+    expect((await screen.findAllByText('admin')).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('service').length).toBeGreaterThan(0);
+    expect(screen.queryByText('admin123')).not.toBeInTheDocument();
+    expect(screen.queryByText('service123')).not.toBeInTheDocument();
     expect(screen.getAllByText('财务核销').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: '保存客服权限' }));
@@ -317,6 +353,21 @@ describe('M1+M2 API-backed workspace', () => {
     expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining('/api/system/roles/CUSTOMER_SERVICE/permissions'),
       expect.objectContaining({ method: 'PUT' })
+    );
+  });
+
+  it('calls AI assist from module buttons and renders the returned content', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '渠道排货' }));
+    await user.click(await screen.findByRole('button', { name: 'AI 辅助处理' }));
+
+    expect(await screen.findByText(/硅基流动实时输出|本地兜底输出/)).toBeInTheDocument();
+    expect(screen.getByText('AI 已输出渠道排货中心建议')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/ai/assist'),
+      expect.objectContaining({ method: 'POST' })
     );
   });
 });
@@ -336,6 +387,15 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (url.endsWith('/api/auth/login')) {
     const role = body.username === 'customer' ? 'CUSTOMER' : 'ADMIN';
     return jsonResponse({ accessToken: `${role}-token`, user: { id: `u-${body.username}`, username: body.username, role, customerId: role === 'CUSTOMER' ? 'c-9409' : undefined } });
+  }
+
+  if (url.endsWith('/api/ai/assist')) {
+    return jsonResponse({
+      provider: 'siliconflow',
+      mode: 'live',
+      model: 'Qwen/Qwen2.5-7B-Instruct',
+      content: `AI 已输出${body.module ?? body.scenario ?? '模块'}建议`
+    });
   }
 
   if (url.endsWith('/api/shipments') && init?.method === 'POST') {
@@ -411,6 +471,30 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
 
   if (url.endsWith('/api/finance/receivables')) {
     return jsonResponse(receivableFees);
+  }
+
+  if (url.endsWith('/api/finance/customer-accounts')) {
+    return jsonResponse(customerAccounts);
+  }
+
+  if (url.endsWith('/api/finance/account-ledger')) {
+    return jsonResponse(accountLedger);
+  }
+
+  if (url.endsWith('/api/finance/payments')) {
+    const amount = receivableFees.reduce((sum, fee) => sum + (fee.settled ? 0 : fee.amount), 0);
+    receivableFees.forEach((fee) => {
+      fee.settled = true;
+    });
+    accountLedger.push(
+      { id: 'al-pay-1', customerId: 'c-9409', customerName: '9409-Daloday', amount, balance: 10230, note: '收款登记', createdAt: '2026-06-06T10:00:00.000Z' },
+      { id: 'al-settle-1', customerId: 'c-9409', customerName: '9409-Daloday', amount: -amount, balance: 10000, note: '核销应收费用', createdAt: '2026-06-06T10:00:00.000Z' }
+    );
+    return jsonResponse({
+      payment: { id: 'pay-1', customerId: 'c-9409', customerName: '9409-Daloday', amount, settledAmount: amount, remainingAmount: 0, createdAt: '2026-06-06T10:00:00.000Z' },
+      account: customerAccounts[0],
+      settledFees: receivableFees
+    });
   }
 
   if (url.endsWith('/api/finance/customer-statements') && init?.method === 'POST') {

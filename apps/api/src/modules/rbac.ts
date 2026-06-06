@@ -24,7 +24,6 @@ export interface RolePermissionRow {
   key: RoleKey;
   label: string;
   account: string;
-  password: string;
   scope: string;
   permissions: PermissionKey[];
   restriction: string;
@@ -52,7 +51,6 @@ export const roleMetadata: Record<RoleKey, Omit<RolePermissionRow, 'permissions'
     key: 'ADMIN',
     label: '系统管理员',
     account: 'admin',
-    password: 'admin123',
     scope: '全局数据',
     restriction: '全部权限：运单、财务、基础资料、系统管理'
   },
@@ -60,7 +58,6 @@ export const roleMetadata: Record<RoleKey, Omit<RolePermissionRow, 'permissions'
     key: 'CUSTOMER_SERVICE',
     label: '客服',
     account: 'service',
-    password: 'service123',
     scope: '客户与问题件',
     restriction: '运单读写、基础资料读取；不能核销、不能改系统权限'
   },
@@ -68,7 +65,6 @@ export const roleMetadata: Record<RoleKey, Omit<RolePermissionRow, 'permissions'
     key: 'OPERATOR',
     label: '操作',
     account: 'operator',
-    password: 'operator123',
     scope: '仓库与履约',
     restriction: '运单读写、基础资料读取；不能改财务、不能改权限'
   },
@@ -76,7 +72,6 @@ export const roleMetadata: Record<RoleKey, Omit<RolePermissionRow, 'permissions'
     key: 'FINANCE',
     label: '财务',
     account: 'finance',
-    password: 'finance123',
     scope: '财务数据',
     restriction: '运单读取、财务读取、财务核销、基础资料读取；不能改系统权限'
   },
@@ -84,7 +79,6 @@ export const roleMetadata: Record<RoleKey, Omit<RolePermissionRow, 'permissions'
     key: 'CUSTOMER',
     label: '客户',
     account: 'customer',
-    password: 'customer123',
     scope: '本人客户数据',
     restriction: '客户门户、本人运单、本人费用、本人问题件'
   }

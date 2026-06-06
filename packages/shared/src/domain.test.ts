@@ -4,6 +4,7 @@ import {
   calculateQuote,
   createFeeLinesFromQuote,
   summarizeStatement,
+  summarizePaymentSettlement,
   canTransitionShipment,
   createAutomationPlan,
   createFulfillmentAdvice,
@@ -16,6 +17,10 @@ import {
   createMockTransferNo,
   createMockTrackingStatus,
   type CarrierTaskSummary,
+  type AccountLedgerSummary,
+  type CustomerAccountSummary,
+  type PaymentCreateResponse,
+  type PaymentSummary,
   type ShipmentLabelSummary,
   type Shipment,
   ShipmentStatus
@@ -218,6 +223,39 @@ describe('API DTO helpers', () => {
       status: 'SUCCESS',
       completedAt: '2026-06-06T10:02:00.000Z'
     });
+  });
+
+  it('represents customer account balances, receipts, and settlement ledger entries', () => {
+    const account: CustomerAccountSummary = {
+      customerId: 'c-9409',
+      customerName: '9409-Daloday',
+      balance: 10000,
+      currency: 'CNY'
+    };
+    const payment: PaymentSummary = summarizePaymentSettlement({
+      id: 'pay-1',
+      customerId: 'c-9409',
+      customerName: '9409-Daloday',
+      amount: 230,
+      settledAmount: 230,
+      createdAt: '2026-06-06T10:00:00.000Z'
+    });
+    const ledger: AccountLedgerSummary[] = [
+      { id: 'al-1', customerId: 'c-9409', customerName: '9409-Daloday', amount: 230, balance: 10230, note: '收款登记', createdAt: '2026-06-06T10:00:00.000Z' },
+      { id: 'al-2', customerId: 'c-9409', customerName: '9409-Daloday', amount: -230, balance: 10000, note: '核销应收费用', createdAt: '2026-06-06T10:00:00.000Z' }
+    ];
+    const response: PaymentCreateResponse = {
+      payment,
+      account,
+      settledFees: [
+        { id: 'rf-1', shipmentId: 's-1', systemOrderNo: 'SYGJ26060600001', customerName: '9409-Daloday', name: '基础运费', amount: 200, settled: true },
+        { id: 'rf-2', shipmentId: 's-1', systemOrderNo: 'SYGJ26060600001', customerName: '9409-Daloday', name: '燃油费', amount: 30, settled: true }
+      ]
+    };
+
+    expect(response.payment.remainingAmount).toBe(0);
+    expect(response.account.balance).toBe(10000);
+    expect(ledger.map((item) => item.amount)).toEqual([230, -230]);
   });
 });
 

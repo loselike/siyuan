@@ -1,6 +1,7 @@
 import { Body, Controller, ForbiddenException, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import type {
   CustomerStatementCreateInput,
+  PaymentCreateInput,
   PricingQuoteRequest,
   ProblemTicketCreateInput,
   ReceivableAdjustmentInput,
@@ -210,5 +211,23 @@ export class DataController {
   @RequirePermission('finance:settle')
   async createCustomerStatement(@Req() request: { user: Principal }, @Body() body: CustomerStatementCreateInput) {
     return this.repository.createCustomerStatement(request.user, body);
+  }
+
+  @Get('finance/customer-accounts')
+  @RequirePermission('finance:read')
+  async customerAccounts(@Req() request: { user: Principal }) {
+    return this.repository.getCustomerAccounts(request.user);
+  }
+
+  @Get('finance/account-ledger')
+  @RequirePermission('finance:read')
+  async accountLedger(@Req() request: { user: Principal }) {
+    return this.repository.getAccountLedger(request.user);
+  }
+
+  @Post('finance/payments')
+  @RequirePermission('finance:settle')
+  async createPayment(@Req() request: { user: Principal }, @Body() body: PaymentCreateInput) {
+    return this.repository.createPayment(request.user, body);
   }
 }

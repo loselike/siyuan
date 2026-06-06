@@ -168,12 +168,63 @@ export interface CustomerStatementSummary {
   createdAt?: string;
 }
 
+export interface CustomerAccountSummary {
+  customerId: string;
+  customerName: string;
+  balance: number;
+  currency: string;
+}
+
+export interface PaymentCreateInput {
+  customerId: string;
+  amount: number;
+  feeIds?: string[];
+  statementId?: string;
+  note?: string;
+}
+
+export interface PaymentSummary {
+  id: string;
+  customerId: string;
+  customerName: string;
+  amount: number;
+  settledAmount: number;
+  remainingAmount: number;
+  createdAt: string;
+}
+
+export interface AccountLedgerSummary {
+  id: string;
+  customerId: string;
+  customerName: string;
+  amount: number;
+  balance: number;
+  note?: string;
+  createdAt: string;
+}
+
+export interface PaymentCreateResponse {
+  payment: PaymentSummary;
+  account: CustomerAccountSummary;
+  settledFees: ReceivableFeeSummary[];
+  statement?: CustomerStatementSummary;
+}
+
 export interface StatementSummaryInput {
   customerId: string;
   customerName: string;
   periodStart: string;
   periodEnd: string;
   fees: ReceivableFeeSummary[];
+}
+
+export interface PaymentSettlementInput {
+  id: string;
+  customerId: string;
+  customerName: string;
+  amount: number;
+  settledAmount: number;
+  createdAt: string;
 }
 
 export interface ShipmentInsightInput {
@@ -488,6 +539,18 @@ export function summarizeStatement(input: StatementSummaryInput): CustomerStatem
     total: round2(unsettledFees.reduce((sum, fee) => sum + fee.amount, 0)),
     feeCount: unsettledFees.length,
     status: 'DRAFT'
+  };
+}
+
+export function summarizePaymentSettlement(input: PaymentSettlementInput): PaymentSummary {
+  return {
+    id: input.id,
+    customerId: input.customerId,
+    customerName: input.customerName,
+    amount: round2(input.amount),
+    settledAmount: round2(input.settledAmount),
+    remainingAmount: round2(input.amount - input.settledAmount),
+    createdAt: input.createdAt
   };
 }
 

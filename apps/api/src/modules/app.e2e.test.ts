@@ -50,12 +50,13 @@ describe('Siyuan API MVP', () => {
             expect.objectContaining({
               key: 'ADMIN',
               account: 'admin',
-              password: 'admin123',
               permissions: expect.arrayContaining(['system:manage', 'finance:settle'])
             }),
-            expect.objectContaining({ key: 'CUSTOMER_SERVICE', account: 'service', password: 'service123' })
+            expect.objectContaining({ key: 'CUSTOMER_SERVICE', account: 'service' })
           ])
         );
+        expect(JSON.stringify(response.body)).not.toContain('admin123');
+        expect(JSON.stringify(response.body)).not.toContain('service123');
       });
 
     const financeLogin = await request(app.getHttpServer())
@@ -690,5 +691,91 @@ describe('Siyuan API MVP', () => {
       .expect((response) => {
         expect(response.body.every((statement: { customerId: string }) => statement.customerId === 'c-9409')).toBe(true);
       });
+  });
+
+  it('records customer payments, settles selected receivables, and exposes account ledger read-only to customers', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+
+    const beforeAccounts = await request(app.getHttpServer())
+      .get('/api/finance/customer-accounts')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    const before9409 = beforeAccounts.body.find((account: { customerId: string }) => account.customerId === 'c-9409');
+    expect(before9409.balance).toBe(10000);
+
+    const receivables = await request(app.getHttpServer())
+      .get('/api/finance/receivables')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    const selectedFees = receivables.body
+      .filter((fee: { customerName: string; settled: boolean }) => fee.customerName.startsWith('9409-') && !fee.settled)
+      .slice(0, 2);
+    const amount = selectedFees.reduce((sum: number, fee: { amount: number }) => sum + fee.amount, 0);
+
+    await request(app.getHttpServer())
+      .post('/api/finance/payments')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ customerId: 'c-9409', amount, feeIds: selectedFees.map((fee: { id: string }) => fee.id), note: '测试收款' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.payment.settledAmount).toBe(amount);
+        expect(response.body.payment.remainingAmount).toBe(0);
+        expect(response.body.account.balance).toBe(10000);
+        expect(response.body.settledFees.every((fee: { settled: boolean }) => fee.settled)).toBe(true);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/finance/receivables')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect((response) => {
+        const settledIds = new Set(selectedFees.map((fee: { id: string }) => fee.id));
+        expect(response.body.filter((fee: { id: string; settled: boolean }) => settledIds.has(fee.id)).every((fee: { settled: boolean }) => fee.settled)).toBe(true);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/finance/account-ledger')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ customerId: 'c-9409', amount, note: '测试收款' }),
+            expect.objectContaining({ customerId: 'c-9409', amount: -amount, note: '核销应收费用' })
+          ])
+        );
+      });
+
+    const customerLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'customer', password: 'customer123' })
+      .expect(201);
+    const customerToken = customerLogin.body.accessToken;
+
+    await request(app.getHttpServer())
+      .get('/api/finance/customer-accounts')
+      .set('Authorization', `Bearer ${customerToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual([expect.objectContaining({ customerId: 'c-9409', balance: 10000 })]);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/finance/account-ledger')
+      .set('Authorization', `Bearer ${customerToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.every((entry: { customerId: string }) => entry.customerId === 'c-9409')).toBe(true);
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/finance/payments')
+      .set('Authorization', `Bearer ${customerToken}`)
+      .send({ customerId: 'c-9409', amount: 1 })
+      .expect(403);
   });
 });

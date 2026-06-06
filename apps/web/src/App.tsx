@@ -57,8 +57,10 @@ import {
   summarizeFulfillmentStages,
   summarizeStatusCounts,
   validateShipmentImportRows,
+  type AccountLedgerSummary,
   type BusinessType,
   type CarrierTaskSummary,
+  type CustomerAccountSummary,
   type CustomerStatementSummary,
   type FulfillmentAction,
   type QuoteResponse,
@@ -67,11 +69,16 @@ import {
   type ShipmentLabelSummary,
   type ShipmentStatus
 } from '@siyuan/shared';
-import { ApiClient, type PermissionKey, type Principal, type RoleKey, type RolePermissionMatrix, type RolePermissionRow, type Session } from './apiClient';
+import { ApiClient, type AiAssistResponse, type PermissionKey, type Principal, type RoleKey, type RolePermissionMatrix, type RolePermissionRow, type Session } from './apiClient';
 import { businessTabs } from './data';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
+
+interface AiResult {
+  title: string;
+  response: AiAssistResponse;
+}
 
 const statusOrder: ShipmentStatus[] = [
   'DRAFT',
@@ -432,7 +439,7 @@ function LoginPage({ onLogin }: { onLogin: (username: string, password: string) 
         <Card className="login-card">
           <Space direction="vertical" size={18} style={{ width: '100%' }}>
             <div>
-              <Title level={2}>登录思源物流</Title>
+              <Title level={2}>登录思远物流</Title>
               <Text type="secondary">员工端 / 客户端按角色自动进入对应工作台。</Text>
             </div>
             {error ? <Alert type="error" message={error} showIcon /> : null}
@@ -462,6 +469,8 @@ function CustomerPortal({
   problemTickets,
   receivables,
   statements,
+  accounts,
+  ledger,
   onLogout,
   onCreate
 }: {
@@ -470,6 +479,8 @@ function CustomerPortal({
   problemTickets: Array<{ id: string; reason: string; status: string; customerVisible: boolean }>;
   receivables: ReceivableFeeSummary[];
   statements: CustomerStatementSummary[];
+  accounts: CustomerAccountSummary[];
+  ledger: AccountLedgerSummary[];
   onLogout: () => void;
   onCreate: (input: {
     customerOrderNo: string;
@@ -520,7 +531,7 @@ function CustomerPortal({
             <Space>
               <div className="brand-mark">S</div>
               <div>
-                <Text className="brand-title">思源物流</Text>
+                <Text className="brand-title">思远物流</Text>
                 <Text className="brand-subtitle">客户工作台 · {user.username}</Text>
               </div>
             </Space>
@@ -625,6 +636,30 @@ function CustomerPortal({
                 </Space>
               </Card>
             </Col>
+            <Col xs={24} lg={12}>
+              <Card title="账户余额">
+                <Space direction="vertical" className="ai-list">
+                  {accounts.map((account) => (
+                    <Flex key={account.customerId} justify="space-between">
+                      <Text>{account.customerName}</Text>
+                      <Text strong>{formatCurrency(account.balance)}</Text>
+                    </Flex>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="账户流水">
+                <Space direction="vertical" className="ai-list">
+                  {ledger.map((entry) => (
+                    <Flex key={entry.id} justify="space-between">
+                      <Text>{entry.note ?? '账户变动'}</Text>
+                      <Text strong>{formatCurrency(entry.amount)}</Text>
+                    </Flex>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
           </Row>
         </Content>
       </Layout>
@@ -646,10 +681,14 @@ export function App() {
   const [problemTickets, setProblemTickets] = useState<Awaited<ReturnType<ApiClient['problemTickets']>>>([]);
   const [receivables, setReceivables] = useState<ReceivableFeeSummary[]>([]);
   const [customerStatements, setCustomerStatements] = useState<CustomerStatementSummary[]>([]);
+  const [customerAccounts, setCustomerAccounts] = useState<CustomerAccountSummary[]>([]);
+  const [accountLedger, setAccountLedger] = useState<AccountLedgerSummary[]>([]);
   const [shipmentLabels, setShipmentLabels] = useState<Record<string, ShipmentLabelSummary[]>>({});
   const [carrierTasks, setCarrierTasks] = useState<CarrierTaskSummary[]>([]);
   const [quoteResult, setQuoteResult] = useState<QuoteResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [aiResult, setAiResult] = useState<AiResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
   const businessWorkspaceConfig = businessWorkspaceConfigs[businessType];
   const apiClient = useMemo(
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
@@ -670,22 +709,29 @@ export function App() {
     setProblemTickets([]);
     setReceivables([]);
     setCustomerStatements([]);
+    setCustomerAccounts([]);
+    setAccountLedger([]);
     setShipmentLabels({});
     setCarrierTasks([]);
     setQuoteResult(null);
+    setAiResult(null);
   }
 
   async function refreshWorkspace(client = apiClient, user = session?.user) {
-    const [nextShipments, nextTickets, nextReceivables, nextStatements] = await Promise.all([
+    const [nextShipments, nextTickets, nextReceivables, nextStatements, nextAccounts, nextLedger] = await Promise.all([
       client.shipments(),
       client.problemTickets(),
       client.receivables(),
-      client.customerStatements()
+      client.customerStatements(),
+      client.customerAccounts(),
+      client.accountLedger()
     ]);
     setLocalShipments(nextShipments);
     setProblemTickets(nextTickets);
     setReceivables(nextReceivables);
     setCustomerStatements(nextStatements);
+    setCustomerAccounts(nextAccounts);
+    setAccountLedger(nextLedger);
     if (user?.role !== 'CUSTOMER') {
       setCarrierTasks(await client.carrierTasks());
     } else {
@@ -1013,6 +1059,43 @@ export function App() {
     setNotice(`对账单草稿 ¥${statement.total}`);
   }
 
+  async function handleCreatePayment() {
+    const selectedFees = receivables.filter((fee) => fee.customerName.startsWith('9409-') && !fee.settled);
+    const amount = selectedFees.reduce((sum, fee) => sum + fee.amount, 0);
+    const response = await apiClient.createPayment({
+      customerId: 'c-9409',
+      amount,
+      feeIds: selectedFees.map((fee) => fee.id),
+      note: '收款登记'
+    });
+    setReceivables((current) =>
+      current.map((fee) => response.settledFees.find((settledFee) => settledFee.id === fee.id) ?? fee)
+    );
+    setCustomerAccounts((current) => current.map((account) => (account.customerId === response.account.customerId ? response.account : account)));
+    setAccountLedger(await apiClient.accountLedger());
+    setNotice(`收款已核销 ¥${response.payment.settledAmount}`);
+  }
+
+  async function handleAiAssist(input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) {
+    setAiLoading(true);
+    try {
+      const response = await apiClient.aiAssist(input);
+      setAiResult({ title: input.task ?? input.scenario ?? input.module ?? 'AI 辅助处理', response });
+    } catch (error) {
+      setAiResult({
+        title: input.task ?? 'AI 辅助处理',
+        response: {
+          provider: 'siliconflow',
+          mode: 'mock',
+          model: 'local-error',
+          content: error instanceof Error ? error.message : 'AI 调用失败，请稍后重试'
+        }
+      });
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
   if (!session) {
     return <LoginPage onLogin={handleLogin} />;
   }
@@ -1025,6 +1108,8 @@ export function App() {
         problemTickets={problemTickets}
         receivables={receivables}
         statements={customerStatements}
+        accounts={customerAccounts}
+        ledger={accountLedger}
         onLogout={handleUnauthorized}
         onCreate={async (input) => {
           const created = await apiClient.createShipment(input);
@@ -1050,7 +1135,7 @@ export function App() {
           <div className="brand">
             <div className="brand-mark">S</div>
             <div>
-              <Text className="brand-title">思源物流</Text>
+              <Text className="brand-title">思远物流</Text>
               <Text className="brand-subtitle">AI TMS / OMS</Text>
             </div>
           </div>
@@ -1103,12 +1188,40 @@ export function App() {
               <Text type="secondary">{session.user.username}</Text>
               <Button icon={<ShieldCheck size={16} />}>权限视图</Button>
               <Button onClick={handleUnauthorized}>退出</Button>
-              <Button type="primary" icon={<Sparkles size={16} />}>
+              <Button
+                type="primary"
+                icon={<Sparkles size={16} />}
+                loading={aiLoading}
+                onClick={() =>
+                  handleAiAssist({
+                    module: '全局工作流',
+                    task: '生成跨模块处理建议',
+                    prompt: `请基于当前${businessTypeLabels[businessType]}业务、${businessShipments.length}票运单、${aiQueue.length}个风险项，输出今日优先处理建议。`,
+                    context: { businessType, shipmentCount: businessShipments.length, riskCount: aiQueue.length }
+                  })
+                }
+              >
                 AI 工作流
               </Button>
             </Space>
           </Header>
           <Content className="content">
+            {aiResult ? (
+              <Alert
+                className="notice-bar"
+                type={aiResult.response.mode === 'live' ? 'success' : 'info'}
+                showIcon
+                closable
+                onClose={() => setAiResult(null)}
+                message={`${aiResult.title} · ${aiResult.response.mode === 'live' ? '硅基流动实时输出' : '本地兜底输出'}`}
+                description={
+                  <Space direction="vertical" size={6}>
+                    <Text type="secondary">{aiResult.response.model}</Text>
+                    <Text style={{ whiteSpace: 'pre-wrap' }}>{aiResult.response.content}</Text>
+                  </Space>
+                }
+              />
+            ) : null}
             {activeMenuKey === 'orders' ? (
               <>
                 <Flex justify="space-between" align="center" className="page-heading">
@@ -1119,7 +1232,19 @@ export function App() {
                   <Space>
                     <Button icon={<FileInput size={16} />}>导入履约运单</Button>
                     <Button icon={<PackagePlus size={16} />}>新建预报</Button>
-                    <Button type="primary" icon={<Sparkles size={16} />}>
+                    <Button
+                      type="primary"
+                      icon={<Sparkles size={16} />}
+                      loading={aiLoading}
+                      onClick={() =>
+                        handleAiAssist({
+                          module: '运单履约',
+                          task: '批量履约处理建议',
+                          prompt: '请根据待预报、待收货、待排货、待发货、待上网和异常件，输出批量处理顺序、风险提醒和客户沟通话术。',
+                          context: { fulfillmentStageSummary, samples: businessShipments.slice(0, 5) }
+                        })
+                      }
+                    >
                       AI 批量处理
                     </Button>
                   </Space>
@@ -1232,17 +1357,20 @@ export function App() {
                 </Row>
               </>
             ) : activeMenuKey === 'settings' ? (
-              <SystemSettingsPage apiClient={apiClient} />
+              <SystemSettingsPage apiClient={apiClient} onAiAssist={handleAiAssist} aiLoading={aiLoading} />
             ) : activeMenuKey === 'master' ? (
-              <MasterDataPage />
+              <MasterDataPage onAiAssist={handleAiAssist} aiLoading={aiLoading} />
             ) : activeMenuKey === 'pricing' ? (
               <PricingPage quoteResult={quoteResult} onQuote={handleQuote} />
             ) : activeMenuKey === 'finance' ? (
               <FinancePage
                 receivables={receivables}
                 statements={customerStatements}
+                accounts={customerAccounts}
+                ledger={accountLedger}
                 notice={notice}
                 onCreateStatement={handleCreateCustomerStatement}
+                onCreatePayment={handleCreatePayment}
               />
             ) : activeMenuKey === 'receive' ? (
               <ReceiveLabelPage
@@ -1265,7 +1393,7 @@ export function App() {
                 onRetryTask={handleRetryCarrierTask}
               />
             ) : modulePageConfigs[activeMenuKey] ? (
-              <GenericModulePage config={modulePageConfigs[activeMenuKey]} />
+              <GenericModulePage config={modulePageConfigs[activeMenuKey]} onAiAssist={handleAiAssist} aiLoading={aiLoading} />
             ) : (
               <>
             <Flex justify="space-between" align="center" className="page-heading">
@@ -1278,7 +1406,19 @@ export function App() {
               <Space>
                 <Button icon={<FileInput size={16} />}>导入运单</Button>
                 <Button icon={<PackagePlus size={16} />}>新建预报</Button>
-                <Button type="primary" icon={<Bot size={16} />}>
+                <Button
+                  type="primary"
+                  icon={<Bot size={16} />}
+                  loading={aiLoading}
+                  onClick={() =>
+                    handleAiAssist({
+                      module: '运营工作台',
+                      task: '智能录单建议',
+                      prompt: '请把当前导入质检错误转成录单修正建议，并给客服一段可直接发送给客户的说明。',
+                      context: { importErrors: importValidation.errors, businessType }
+                    })
+                  }
+                >
                   智能录单
                 </Button>
               </Space>
@@ -1397,7 +1537,20 @@ export function App() {
                       <Text strong>下一步 AI 赋能</Text>
                     </Flex>
                     <Text type="secondary">{businessWorkspaceConfig.assistantCopy}</Text>
-                    <Button type="primary" block icon={<Send size={16} />}>
+                    <Button
+                      type="primary"
+                      block
+                      icon={<Send size={16} />}
+                      loading={aiLoading}
+                      onClick={() =>
+                        handleAiAssist({
+                          module: '运营工作台',
+                          task: '生成今日处理建议',
+                          prompt: businessWorkspaceConfig.assistantCopy,
+                          context: { automationPlan, focusItems: businessWorkspaceConfig.focusItems }
+                        })
+                      }
+                    >
                       生成今日处理建议
                     </Button>
                   </Space>
@@ -1524,7 +1677,15 @@ const clientRoleRows = [
   { role: '客户财务', scope: '客户公司账务', permissions: '对账单、费用明细、账户余额、付款记录' }
 ];
 
-function SystemSettingsPage({ apiClient }: { apiClient: ApiClient }) {
+function SystemSettingsPage({
+  apiClient,
+  onAiAssist,
+  aiLoading
+}: {
+  apiClient: ApiClient;
+  onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
+  aiLoading: boolean;
+}) {
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
   const [roleMatrix, setRoleMatrix] = useState<RolePermissionMatrix | null>(null);
   const [draftPermissions, setDraftPermissions] = useState<Record<RoleKey, PermissionKey[]>>({
@@ -1593,7 +1754,19 @@ function SystemSettingsPage({ apiClient }: { apiClient: ApiClient }) {
           <Button icon={<ClipboardCheck size={16} />} onClick={() => handleSettingAction('已模拟导出权限矩阵')}>
             导出权限
           </Button>
-          <Button type="primary" icon={<Sparkles size={16} />} onClick={() => handleSettingAction('AI 已检查权限冲突与高危配置')}>
+          <Button
+            type="primary"
+            icon={<Sparkles size={16} />}
+            loading={aiLoading}
+            onClick={() =>
+              onAiAssist({
+                module: '系统设置',
+                task: '权限体检',
+                prompt: '请检查管理员、客服、操作、财务、客户的权限边界，指出高风险配置和建议的审计项。',
+                context: { roles: roleRows.map((role) => ({ key: role.key, label: role.label, permissions: role.permissions })) }
+              })
+            }
+          >
             AI 权限体检
           </Button>
         </Space>
@@ -1641,7 +1814,7 @@ function SystemSettingsPage({ apiClient }: { apiClient: ApiClient }) {
               loading={!roleMatrix}
               columns={[
                 { title: '角色', dataIndex: 'label', width: 130, render: (value: string, record) => <Tag color={record.key === 'ADMIN' ? 'red' : record.key === 'CUSTOMER' ? 'green' : 'blue'}>{value}</Tag> },
-                { title: '账号密码', width: 170, render: (_, record) => <Text code>{record.account} / {record.password}</Text> },
+                { title: '账号', dataIndex: 'account', width: 130, render: (value: string) => <Text code>{value}</Text> },
                 { title: '数据范围', dataIndex: 'scope', width: 160 },
                 { title: '边界', dataIndex: 'restriction' }
               ]}
@@ -1794,7 +1967,13 @@ const templateRows = [
   { name: '自定义运单类型模板', scene: '运单导入导出', permission: '管理员', status: '可编辑' }
 ];
 
-function MasterDataPage() {
+function MasterDataPage({
+  onAiAssist,
+  aiLoading
+}: {
+  onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
+  aiLoading: boolean;
+}) {
   const [masterNotice, setMasterNotice] = useState<string | null>(null);
 
   const handleMasterAction = (message: string) => {
@@ -1815,7 +1994,19 @@ function MasterDataPage() {
           <Button icon={<ClipboardCheck size={16} />} onClick={() => handleMasterAction('已模拟导出基础资料清单')}>
             导出资料
           </Button>
-          <Button type="primary" icon={<Sparkles size={16} />} onClick={() => handleMasterAction('AI 已检查资料缺失、重复客户和汇率过期')}>
+          <Button
+            type="primary"
+            icon={<Sparkles size={16} />}
+            loading={aiLoading}
+            onClick={() =>
+              onAiAssist({
+                module: '基础资料',
+                task: '资料体检',
+                prompt: '请检查客户、代理、承运商、渠道、费用名称、汇率、模板权限的资料完整性，输出缺失项和处理顺序。',
+                context: { records: masterRecordRows, templates: templateRows }
+              })
+            }
+          >
             AI 资料体检
           </Button>
         </Space>
@@ -1994,15 +2185,22 @@ function PricingPage({ quoteResult, onQuote }: { quoteResult: QuoteResponse | nu
 function FinancePage({
   receivables,
   statements,
+  accounts,
+  ledger,
   notice,
-  onCreateStatement
+  onCreateStatement,
+  onCreatePayment
 }: {
   receivables: ReceivableFeeSummary[];
   statements: CustomerStatementSummary[];
+  accounts: CustomerAccountSummary[];
+  ledger: AccountLedgerSummary[];
   notice: string | null;
   onCreateStatement: () => Promise<void>;
+  onCreatePayment: () => Promise<void>;
 }) {
-  const total = receivables.reduce((sum, fee) => sum + fee.amount, 0);
+  const total = receivables.filter((fee) => !fee.settled).reduce((sum, fee) => sum + fee.amount, 0);
+  const primaryAccount = accounts.find((account) => account.customerId === 'c-9409') ?? accounts[0];
 
   return (
     <>
@@ -2011,9 +2209,14 @@ function FinancePage({
           <Title level={2}>财务结算中心</Title>
           <Text type="secondary">M3 最小闭环：应收费用、调整项和客户对账单草稿。</Text>
         </div>
-        <Button type="primary" icon={<Landmark size={16} />} onClick={onCreateStatement}>
-          生成 9409 对账单
-        </Button>
+        <Space>
+          <Button icon={<Landmark size={16} />} onClick={onCreateStatement}>
+            生成 9409 对账单
+          </Button>
+          <Button type="primary" icon={<Banknote size={16} />} onClick={onCreatePayment}>
+            登记 9409 收款并核销
+          </Button>
+        </Space>
       </Flex>
 
       {notice ? <Alert className="notice-bar" type="success" showIcon message={notice} /> : null}
@@ -2026,7 +2229,7 @@ function FinancePage({
           <MetricCard icon={<FileText />} title="对账草稿" value={statements.length} extra="客户账单待确认" />
         </Col>
         <Col xs={24} md={8}>
-          <MetricCard icon={<Sparkles />} title="费用解释" value="AI" extra="保留费用问答扩展点" />
+          <MetricCard icon={<CircleDollarSign />} title="账户余额" value={primaryAccount ? formatCurrency(primaryAccount.balance) : '¥0.00'} extra={primaryAccount?.customerName ?? '待初始化'} />
         </Col>
       </Row>
 
@@ -2066,6 +2269,20 @@ function FinancePage({
                 />
               ))}
             </Space>
+          </Card>
+          <Card className="module-grid" title="账户流水">
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={ledger}
+              columns={[
+                { title: '客户', dataIndex: 'customerName' },
+                { title: '摘要', dataIndex: 'note', render: (value?: string) => value ?? '账户变动' },
+                { title: '金额', dataIndex: 'amount', render: (value: number) => formatCurrency(value) },
+                { title: '余额', dataIndex: 'balance', render: (value: number) => formatCurrency(value) }
+              ]}
+            />
           </Card>
         </Col>
       </Row>
@@ -2342,7 +2559,15 @@ function TrackingTaskPage({
   );
 }
 
-function GenericModulePage({ config }: { config?: ModulePageConfig }) {
+function GenericModulePage({
+  config,
+  onAiAssist,
+  aiLoading
+}: {
+  config?: ModulePageConfig;
+  onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
+  aiLoading: boolean;
+}) {
   if (!config) {
     return null;
   }
@@ -2360,7 +2585,24 @@ function GenericModulePage({ config }: { config?: ModulePageConfig }) {
         <Space>
           <Button icon={<FileInput size={16} />}>导入</Button>
           <Button icon={<ClipboardCheck size={16} />}>导出</Button>
-          <Button type="primary" icon={<Sparkles size={16} />}>
+          <Button
+            type="primary"
+            icon={<Sparkles size={16} />}
+            loading={aiLoading}
+            onClick={() =>
+              onAiAssist({
+                module: config.title,
+                task: 'AI 辅助处理',
+                prompt: `请围绕${config.title}的核心能力，输出当前优先处理事项、风险说明和可发给客户或内部同事的沟通建议。`,
+                context: {
+                  stats: config.stats,
+                  records: config.records,
+                  queue: config.queue,
+                  scenarios: config.siliconFlowScenarios
+                }
+              })
+            }
+          >
             AI 辅助处理
           </Button>
         </Space>

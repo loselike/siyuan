@@ -168,6 +168,9 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
   await prisma.shipmentPackage.deleteMany();
   await prisma.receivableFee.deleteMany();
   await prisma.payableFee.deleteMany();
+  await prisma.settlement.deleteMany();
+  await prisma.payment.deleteMany();
+  await prisma.accountLedger.deleteMany();
   await prisma.carrierTask.deleteMany();
   await prisma.shipmentLabel.deleteMany();
   await prisma.shipment.deleteMany();
@@ -214,6 +217,13 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
     data: [
       { id: 'ca-9409-cny', customerId: 'c-9409', balance: 10000, currency: 'CNY' },
       { id: 'ca-1344-cny', customerId: 'c-1344', balance: 8000, currency: 'CNY' }
+    ]
+  });
+
+  await prisma.accountLedger.createMany({
+    data: [
+      { id: 'al-seed-9409', partyType: 'CUSTOMER', partyId: 'c-9409', amount: 10000, balance: 10000, note: '期初余额', createdAt: new Date('2026-06-01T10:00:00.000Z') },
+      { id: 'al-seed-1344', partyType: 'CUSTOMER', partyId: 'c-1344', amount: 8000, balance: 8000, note: '期初余额', createdAt: new Date('2026-06-01T10:00:00.000Z') }
     ]
   });
 
