@@ -6,6 +6,7 @@
     "target": "ES2022",
     "outDir": "dist",
     "rootDir": "src",
+    "noEmit": false,
     "types": ["node", "vitest"],
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,

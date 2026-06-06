@@ -1,14 +1,18 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException, ForbiddenException, Inject } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
+import { PrismaRepository } from './prisma.repository.js';
 import { REQUIRED_PERMISSION } from './require-permission.decorator.js';
-import { hasPermission, type PermissionKey, type Principal } from './rbac.js';
+import { type PermissionKey, type Principal } from './rbac.js';
 
 @Injectable()
 export class RbacGuard implements CanActivate {
-  constructor(@Inject(Reflector) private readonly reflector: Reflector) {}
+  constructor(
+    @Inject(Reflector) private readonly reflector: Reflector,
+    @Inject(PrismaRepository) private readonly repository: PrismaRepository
+  ) {}
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const permission = this.reflector.getAllAndOverride<PermissionKey | undefined>(REQUIRED_PERMISSION, [
       context.getHandler(),
       context.getClass()
@@ -29,7 +33,7 @@ export class RbacGuard implements CanActivate {
       const principal = jwt.verify(authorization.slice(7), jwtSecret()) as Principal;
       request.user = principal;
 
-      if (!hasPermission(principal.role, permission)) {
+      if (!(await this.repository.hasPermission(principal.role, permission))) {
         throw new ForbiddenException('没有访问权限');
       }
 

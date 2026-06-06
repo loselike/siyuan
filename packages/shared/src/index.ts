@@ -50,6 +50,8 @@ export interface Shipment {
 
 export type CarrierAdapterCode = 'DHL' | 'FEDEX' | 'UPS' | 'USPS' | 'OTHER';
 export type ShipmentLabelStatus = 'CREATED' | 'VOIDED';
+export type CarrierTaskStatus = 'PENDING' | 'SUCCESS' | 'FAILED';
+export type CarrierTaskType = 'TRACKING_SYNC';
 
 export interface LabelCreateRequest {
   shipmentId: string;
@@ -72,6 +74,27 @@ export interface ShipmentLabelSummary {
 
 export interface LabelCreateResponse {
   label: ShipmentLabelSummary;
+  shipment: Shipment;
+}
+
+export interface CarrierTaskSummary {
+  id: string;
+  shipmentId: string;
+  systemOrderNo: string;
+  customerName: string;
+  type: CarrierTaskType;
+  carrier: CarrierAdapterCode;
+  transferNo: string;
+  status: CarrierTaskStatus;
+  attempts: number;
+  lastError?: string;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface CarrierTaskRunResponse {
+  task: CarrierTaskSummary;
   shipment: Shipment;
 }
 
@@ -586,6 +609,17 @@ export function createMockTransferNo(carrier: CarrierAdapterCode, date: Date, se
   const serial = String(sequence).padStart(5, '0');
 
   return `${prefixes[carrier]}${year}${month}${day}${serial}`;
+}
+
+export function createMockTrackingStatus(carrier: CarrierAdapterCode, transferNo: string): string {
+  const messages: Record<CarrierAdapterCode, string> = {
+    DHL: 'DHL 已揽收',
+    FEDEX: 'FEDEX 运输中',
+    UPS: 'UPS 运输中',
+    USPS: 'USPS 已交邮',
+    OTHER: '承运商已接收'
+  };
+  return `${messages[carrier]} ${transferNo}`;
 }
 
 export function createAutomationPlan(shipments: Shipment[]): AutomationPlanItem[] {

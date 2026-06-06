@@ -33,6 +33,73 @@ describe('Siyuan API MVP', () => {
       });
   });
 
+  it('lets admins edit role permissions and applies the saved matrix to RBAC checks', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+
+    await request(app.getHttpServer())
+      .get('/api/system/roles')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.roles).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              key: 'ADMIN',
+              account: 'admin',
+              password: 'admin123',
+              permissions: expect.arrayContaining(['system:manage', 'finance:settle'])
+            }),
+            expect.objectContaining({ key: 'CUSTOMER_SERVICE', account: 'service', password: 'service123' })
+          ])
+        );
+      });
+
+    const financeLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'finance', password: 'finance123' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .put('/api/system/roles/OPERATOR/permissions')
+      .set('Authorization', `Bearer ${financeLogin.body.accessToken}`)
+      .send({ permissions: ['shipments:read'] })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .put('/api/system/roles/CUSTOMER_SERVICE/permissions')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ permissions: ['shipments:read', 'master-data:read'] })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.permissions).toEqual(['shipments:read', 'master-data:read']);
+      });
+
+    const serviceLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'service', password: 'service123' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', `Bearer ${serviceLogin.body.accessToken}`)
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'CS-NO-WRITE',
+        businessType: 'EXPRESS',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 2,
+        agentWeightKg: 2,
+        channelId: 'ch-dhl-hk'
+      })
+      .expect(403);
+  });
+
   it('lets a customer create a declared shipment that staff can see in the receiving queue', async () => {
     const customerLogin = await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -295,6 +362,137 @@ describe('Siyuan API MVP', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({})
       .expect(400);
+  });
+
+  it('creates carrier tracking tasks after dispatch and runs a successful customer-visible sync', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const token = adminLogin.body.accessToken;
+
+    const created = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'TASK-001',
+        businessType: 'EXPRESS',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 4,
+        agentWeightKg: 4,
+        channelId: 'ch-ups-ca'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/receive`).set('Authorization', `Bearer ${token}`).expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/route`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ channelId: 'ch-ups-ca', agentId: 'a-canada' })
+      .expect(201);
+    await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/labels`).set('Authorization', `Bearer ${token}`).expect(201);
+    await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/dispatch`).set('Authorization', `Bearer ${token}`).send({}).expect(201);
+
+    const tasks = await request(app.getHttpServer())
+      .get('/api/carrier-tasks')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    const task = tasks.body.find((item: { shipmentId: string }) => item.shipmentId === created.body.id);
+    expect(task).toMatchObject({ type: 'TRACKING_SYNC', status: 'PENDING', carrier: 'UPS', attempts: 0 });
+
+    const run = await request(app.getHttpServer())
+      .post(`/api/carrier-tasks/${task.id}/run`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+      .expect(201);
+    expect(run.body.task.status).toBe('SUCCESS');
+    expect(run.body.shipment.latestTracking).toBe(`UPS 运输中 ${task.transferNo}`);
+    expect(run.body.shipment.status).toBe('WAITING_ONLINE');
+
+    await request(app.getHttpServer())
+      .post(`/api/carrier-tasks/${task.id}/run`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+      .expect(400);
+
+    const customerLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'customer', password: 'customer123' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .get('/api/carrier-tasks')
+      .set('Authorization', `Bearer ${customerLogin.body.accessToken}`)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', `Bearer ${customerLogin.body.accessToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.some((shipment: { id: string; latestTracking: string }) => shipment.id === created.body.id && shipment.latestTracking === `UPS 运输中 ${task.transferNo}`)).toBe(true);
+      });
+  });
+
+  it('marks carrier tracking tasks failed and lets staff retry them successfully', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const token = adminLogin.body.accessToken;
+
+    const created = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'TASK-FAIL-001',
+        businessType: 'EXPRESS',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 4,
+        agentWeightKg: 4,
+        channelId: 'ch-dhl-hk'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/receive`).set('Authorization', `Bearer ${token}`).expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/route`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan' })
+      .expect(201);
+    await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/labels`).set('Authorization', `Bearer ${token}`).expect(201);
+    await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/dispatch`).set('Authorization', `Bearer ${token}`).send({}).expect(201);
+
+    const tasks = await request(app.getHttpServer()).get('/api/carrier-tasks').set('Authorization', `Bearer ${token}`).expect(200);
+    const task = tasks.body.find((item: { shipmentId: string }) => item.shipmentId === created.body.id);
+
+    await request(app.getHttpServer())
+      .post(`/api/carrier-tasks/${task.id}/run`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({ fail: true })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.task.status).toBe('FAILED');
+        expect(response.body.task.attempts).toBe(1);
+        expect(response.body.task.lastError).toBe('模拟承运商接口失败');
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/carrier-tasks/${task.id}/retry`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({})
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.task.status).toBe('SUCCESS');
+        expect(response.body.task.attempts).toBe(2);
+        expect(response.body.shipment.latestTracking).toBe(`DHL 已揽收 ${task.transferNo}`);
+      });
   });
 
   it('creates replies and closes problem tickets with customer visibility filtering', async () => {

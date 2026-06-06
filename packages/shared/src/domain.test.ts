@@ -14,6 +14,8 @@ import {
   validateShipmentImportRows,
   createSystemOrderNo,
   createMockTransferNo,
+  createMockTrackingStatus,
+  type CarrierTaskSummary,
   type ShipmentLabelSummary,
   type Shipment,
   ShipmentStatus
@@ -184,6 +186,37 @@ describe('API DTO helpers', () => {
     expect({ ...label, status: 'VOIDED', voidedAt: '2026-06-06T11:00:00.000Z' }).toMatchObject({
       status: 'VOIDED',
       voidedAt: '2026-06-06T11:00:00.000Z'
+    });
+  });
+
+  it('generates stable mock tracking statuses by carrier', () => {
+    expect(createMockTrackingStatus('DHL', 'DHL26060600001')).toBe('DHL 已揽收 DHL26060600001');
+    expect(createMockTrackingStatus('FEDEX', 'FDX26060600001')).toBe('FEDEX 运输中 FDX26060600001');
+    expect(createMockTrackingStatus('UPS', '1Z26060600001')).toBe('UPS 运输中 1Z26060600001');
+    expect(createMockTrackingStatus('USPS', 'USPS26060600001')).toBe('USPS 已交邮 USPS26060600001');
+    expect(createMockTrackingStatus('OTHER', 'SIM26060600001')).toBe('承运商已接收 SIM26060600001');
+  });
+
+  it('represents carrier task states for tracking sync workflows', () => {
+    const task: CarrierTaskSummary = {
+      id: 'ct-1',
+      shipmentId: 's-1',
+      systemOrderNo: 'SYGJ26060600001',
+      customerName: '9409-Daloday',
+      type: 'TRACKING_SYNC',
+      carrier: 'UPS',
+      transferNo: '1Z26060600001',
+      status: 'FAILED',
+      attempts: 1,
+      lastError: '模拟承运商接口失败',
+      createdAt: '2026-06-06T10:00:00.000Z',
+      updatedAt: '2026-06-06T10:01:00.000Z'
+    };
+
+    expect(task.status).toBe('FAILED');
+    expect({ ...task, status: 'SUCCESS', lastError: undefined, completedAt: '2026-06-06T10:02:00.000Z' }).toMatchObject({
+      status: 'SUCCESS',
+      completedAt: '2026-06-06T10:02:00.000Z'
     });
   });
 });

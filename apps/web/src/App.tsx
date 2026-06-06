@@ -5,6 +5,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Col,
   ConfigProvider,
   Flex,
@@ -57,6 +58,7 @@ import {
   summarizeStatusCounts,
   validateShipmentImportRows,
   type BusinessType,
+  type CarrierTaskSummary,
   type CustomerStatementSummary,
   type FulfillmentAction,
   type QuoteResponse,
@@ -65,7 +67,7 @@ import {
   type ShipmentLabelSummary,
   type ShipmentStatus
 } from '@siyuan/shared';
-import { ApiClient, type Principal, type Session } from './apiClient';
+import { ApiClient, type PermissionKey, type Principal, type RoleKey, type RolePermissionMatrix, type RolePermissionRow, type Session } from './apiClient';
 import { businessTabs } from './data';
 
 const { Header, Sider, Content } = Layout;
@@ -572,6 +574,7 @@ function CustomerPortal({
                   columns={[
                     { title: '客户单号', dataIndex: 'customerOrderNo' },
                     { title: '系统单号', dataIndex: 'systemOrderNo' },
+                    { title: '转单号', dataIndex: 'transferNo', render: (value?: string) => value ?? '待生成' },
                     { title: '目的地', dataIndex: 'destinationCountry' },
                     { title: '状态', dataIndex: 'status', render: (status: ShipmentStatus) => shipmentStatusLabels[status] },
                     { title: '最新轨迹', dataIndex: 'latestTracking' }
@@ -643,6 +646,8 @@ export function App() {
   const [problemTickets, setProblemTickets] = useState<Awaited<ReturnType<ApiClient['problemTickets']>>>([]);
   const [receivables, setReceivables] = useState<ReceivableFeeSummary[]>([]);
   const [customerStatements, setCustomerStatements] = useState<CustomerStatementSummary[]>([]);
+  const [shipmentLabels, setShipmentLabels] = useState<Record<string, ShipmentLabelSummary[]>>({});
+  const [carrierTasks, setCarrierTasks] = useState<CarrierTaskSummary[]>([]);
   const [quoteResult, setQuoteResult] = useState<QuoteResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const businessWorkspaceConfig = businessWorkspaceConfigs[businessType];
@@ -665,10 +670,12 @@ export function App() {
     setProblemTickets([]);
     setReceivables([]);
     setCustomerStatements([]);
+    setShipmentLabels({});
+    setCarrierTasks([]);
     setQuoteResult(null);
   }
 
-  async function refreshWorkspace(client = apiClient) {
+  async function refreshWorkspace(client = apiClient, user = session?.user) {
     const [nextShipments, nextTickets, nextReceivables, nextStatements] = await Promise.all([
       client.shipments(),
       client.problemTickets(),
@@ -679,6 +686,11 @@ export function App() {
     setProblemTickets(nextTickets);
     setReceivables(nextReceivables);
     setCustomerStatements(nextStatements);
+    if (user?.role !== 'CUSTOMER') {
+      setCarrierTasks(await client.carrierTasks());
+    } else {
+      setCarrierTasks([]);
+    }
   }
 
   async function handleLogin(username: string, password: string) {
@@ -686,7 +698,7 @@ export function App() {
     localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
     setSession(nextSession);
     const loginClient = new ApiClient(() => nextSession.accessToken, handleUnauthorized);
-    await refreshWorkspace(loginClient);
+    await refreshWorkspace(loginClient, nextSession.user);
   }
 
   const visibleShipments = useMemo(() => {
@@ -914,6 +926,68 @@ export function App() {
 
     setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
     setNotice(actionResult.message);
+  }
+
+  async function handleReceiveShipment(record: Shipment) {
+    const updated = await apiClient.receiveShipment(record.id);
+    setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
+    setNotice('已确认收货，进入待排货');
+  }
+
+  async function handleRouteShipment(record: Shipment) {
+    const updated = await apiClient.routeShipment(record.id, { channelId: 'ch-dhl-hk', agentId: 'a-yuhuan' });
+    setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
+    setNotice('已排货，进入待发货');
+  }
+
+  async function handleCreateShipmentLabel(record: Shipment) {
+    const response = await apiClient.createShipmentLabel(record.id);
+    setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? response.shipment : shipment)));
+    setShipmentLabels((current) => ({ ...current, [record.id]: [response.label, ...(current[record.id] ?? []).filter((label) => label.id !== response.label.id)] }));
+    setNotice(`已生成模拟面单 ${response.label.transferNo}`);
+  }
+
+  async function handleLoadShipmentLabels(record: Shipment) {
+    const labels = await apiClient.shipmentLabels(record.id);
+    setShipmentLabels((current) => ({ ...current, [record.id]: labels }));
+    setNotice(labels.length ? `已读取 ${labels.length} 张面单` : '暂无面单记录');
+  }
+
+  async function handleVoidShipmentLabel(record: Shipment, label: ShipmentLabelSummary) {
+    const updatedLabel = await apiClient.voidShipmentLabel(record.id, label.id);
+    setShipmentLabels((current) => ({
+      ...current,
+      [record.id]: (current[record.id] ?? []).map((item) => (item.id === updatedLabel.id ? updatedLabel : item))
+    }));
+    setLocalShipments((current) =>
+      current.map((shipment) =>
+        shipment.id === record.id && shipment.transferNo === updatedLabel.transferNo
+          ? { ...shipment, transferNo: undefined, latestTracking: '面单已作废' }
+          : shipment
+      )
+    );
+    setNotice('面单已作废');
+  }
+
+  async function handleDispatchShipment(record: Shipment) {
+    const updated = await apiClient.dispatchShipment(record.id, {});
+    setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
+    setCarrierTasks(await apiClient.carrierTasks());
+    setNotice('已确认发货，进入待上网');
+  }
+
+  async function handleRunCarrierTask(task: CarrierTaskSummary) {
+    const response = await apiClient.runCarrierTask(task.id);
+    setCarrierTasks((current) => current.map((item) => (item.id === response.task.id ? response.task : item)));
+    setLocalShipments((current) => current.map((shipment) => (shipment.id === response.shipment.id ? response.shipment : shipment)));
+    setNotice(`轨迹同步成功：${response.shipment.latestTracking}`);
+  }
+
+  async function handleRetryCarrierTask(task: CarrierTaskSummary) {
+    const response = await apiClient.retryCarrierTask(task.id);
+    setCarrierTasks((current) => current.map((item) => (item.id === response.task.id ? response.task : item)));
+    setLocalShipments((current) => current.map((shipment) => (shipment.id === response.shipment.id ? response.shipment : shipment)));
+    setNotice(`轨迹同步成功：${response.shipment.latestTracking}`);
   }
 
   async function handleQuote() {
@@ -1158,7 +1232,7 @@ export function App() {
                 </Row>
               </>
             ) : activeMenuKey === 'settings' ? (
-              <SystemSettingsPage />
+              <SystemSettingsPage apiClient={apiClient} />
             ) : activeMenuKey === 'master' ? (
               <MasterDataPage />
             ) : activeMenuKey === 'pricing' ? (
@@ -1169,6 +1243,26 @@ export function App() {
                 statements={customerStatements}
                 notice={notice}
                 onCreateStatement={handleCreateCustomerStatement}
+              />
+            ) : activeMenuKey === 'receive' ? (
+              <ReceiveLabelPage
+                shipments={businessShipments}
+                labelsByShipmentId={shipmentLabels}
+                notice={notice}
+                onReceive={handleReceiveShipment}
+                onRoute={handleRouteShipment}
+                onCreateLabel={handleCreateShipmentLabel}
+                onLoadLabels={handleLoadShipmentLabels}
+                onVoidLabel={handleVoidShipmentLabel}
+                onDispatch={handleDispatchShipment}
+              />
+            ) : activeMenuKey === 'tracking' ? (
+              <TrackingTaskPage
+                shipments={businessShipments}
+                tasks={carrierTasks}
+                notice={notice}
+                onRunTask={handleRunCarrierTask}
+                onRetryTask={handleRetryCarrierTask}
               />
             ) : modulePageConfigs[activeMenuKey] ? (
               <GenericModulePage config={modulePageConfigs[activeMenuKey]} />
@@ -1424,63 +1518,66 @@ export function App() {
   );
 }
 
-const rolePermissionRows = [
-  {
-    role: '管理员',
-    scope: '全局数据',
-    menus: '全部菜单',
-    buttons: '全部按钮',
-    restriction: '拥有全部菜单、按钮、数据范围和系统参数权限'
-  },
-  {
-    role: '客服',
-    scope: '客户与问题件',
-    menus: '运单、轨迹、问题件、客户资料',
-    buttons: '新建问题、回复、客户通知',
-    restriction: '不能核销、不能改系统权限'
-  },
-  {
-    role: '操作',
-    scope: '仓库与履约',
-    menus: '收货、打单、排货、发货、轨迹',
-    buttons: '收货确认、排货、发货、转单号',
-    restriction: '不能改财务、不能改权限'
-  },
-  {
-    role: '财务',
-    scope: '财务数据',
-    menus: '报价、应收、应付、对账、流水',
-    buttons: '费用调整、收付款、核销、导出账单',
-    restriction: '不能改系统角色'
-  },
-  {
-    role: '客户',
-    scope: '本人数据',
-    menus: '预报、我的运单、问题件、价格、对账单',
-    buttons: '新建预报、导入预报、提交问题',
-    restriction: '只能访问自己的运单与账单'
-  }
-];
-
-const employeeAccountRows = [
-  { account: 'admin@siyuan', name: '系统管理员', role: '管理员', status: '启用', action: '最大权限' },
-  { account: 'cs01@siyuan', name: '客服一组', role: '客服', status: '启用', action: '可重置密码' },
-  { account: 'ops01@siyuan', name: '操作主管', role: '操作', status: '启用', action: '可调整角色' },
-  { account: 'fin01@siyuan', name: '财务主管', role: '财务', status: '启用', action: '可核销' }
-];
-
 const clientRoleRows = [
   { role: '客户管理员', scope: '客户公司全部运单', permissions: '预报、导入、对账、余额、成员管理' },
   { role: '客户操作员', scope: '本人创建运单', permissions: '预报、导入、问题件回复、轨迹查询' },
   { role: '客户财务', scope: '客户公司账务', permissions: '对账单、费用明细、账户余额、付款记录' }
 ];
 
-function SystemSettingsPage() {
+function SystemSettingsPage({ apiClient }: { apiClient: ApiClient }) {
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null);
+  const [roleMatrix, setRoleMatrix] = useState<RolePermissionMatrix | null>(null);
+  const [draftPermissions, setDraftPermissions] = useState<Record<RoleKey, PermissionKey[]>>({
+    ADMIN: [],
+    CUSTOMER_SERVICE: [],
+    OPERATOR: [],
+    FINANCE: [],
+    CUSTOMER: []
+  });
 
   const handleSettingAction = (message: string) => {
     setSettingsNotice(message);
   };
+
+  useEffect(() => {
+    let mounted = true;
+    void apiClient.rolePermissions().then((matrix) => {
+      if (!mounted) {
+        return;
+      }
+      setRoleMatrix(matrix);
+      setDraftPermissions(
+        matrix.roles.reduce(
+          (acc, role) => ({ ...acc, [role.key]: role.permissions }),
+          { ADMIN: [], CUSTOMER_SERVICE: [], OPERATOR: [], FINANCE: [], CUSTOMER: [] } as Record<RoleKey, PermissionKey[]>
+        )
+      );
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [apiClient]);
+
+  const roleRows = roleMatrix?.roles ?? [];
+  const permissionOptions =
+    roleMatrix?.availablePermissions.map((permission) => ({
+      label: permission.label,
+      value: permission.code
+    })) ?? [];
+
+  async function saveRolePermissions(role: RolePermissionRow) {
+    const updated = await apiClient.updateRolePermissions(role.key, draftPermissions[role.key] ?? []);
+    setRoleMatrix((current) =>
+      current
+        ? {
+            ...current,
+            roles: current.roles.map((item) => (item.key === updated.key ? updated : item))
+          }
+        : current
+    );
+    setDraftPermissions((current) => ({ ...current, [updated.key]: updated.permissions }));
+    setSettingsNotice(`${updated.label}权限已保存，RBAC 即时生效`);
+  }
 
   return (
     <>
@@ -1509,7 +1606,7 @@ function SystemSettingsPage() {
           <MetricCard icon={<ShieldCheck />} title="管理员权限" value="100%" extra="菜单、按钮、数据范围、系统参数" />
         </Col>
         <Col xs={24} md={8}>
-          <MetricCard icon={<Users />} title="员工账号" value="4" extra="管理员/客服/操作/财务" />
+          <MetricCard icon={<Users />} title="角色账号" value={roleRows.length || 5} extra="管理员/客服/操作/财务/客户" />
         </Col>
         <Col xs={24} md={8}>
           <MetricCard icon={<Activity />} title="审计项" value="9" extra="权限修改必须写入 audit_logs" />
@@ -1537,32 +1634,60 @@ function SystemSettingsPage() {
             }
           >
             <Table
-              rowKey="account"
+              rowKey="key"
               size="small"
               pagination={false}
-              dataSource={employeeAccountRows}
+              dataSource={roleRows}
+              loading={!roleMatrix}
               columns={[
-                { title: '账号', dataIndex: 'account' },
-                { title: '姓名', dataIndex: 'name', width: 130 },
-                { title: '角色', dataIndex: 'role', width: 100, render: (value: string) => <Tag color={value === '管理员' ? 'red' : 'blue'}>{value}</Tag> },
-                { title: '状态', dataIndex: 'status', width: 90, render: (value: string) => <Tag color="green">{value}</Tag> },
-                { title: '能力', dataIndex: 'action', width: 150 }
+                { title: '角色', dataIndex: 'label', width: 130, render: (value: string, record) => <Tag color={record.key === 'ADMIN' ? 'red' : record.key === 'CUSTOMER' ? 'green' : 'blue'}>{value}</Tag> },
+                { title: '账号密码', width: 170, render: (_, record) => <Text code>{record.account} / {record.password}</Text> },
+                { title: '数据范围', dataIndex: 'scope', width: 160 },
+                { title: '边界', dataIndex: 'restriction' }
               ]}
             />
           </Card>
 
           <Card className="module-grid" title="角色权限分配">
             <Table
-              rowKey="role"
+              rowKey="key"
               size="small"
               pagination={false}
-              dataSource={rolePermissionRows}
+              dataSource={roleRows}
+              loading={!roleMatrix}
               columns={[
-                { title: '角色', dataIndex: 'role', width: 100, render: (value: string) => <Text strong>{value}</Text> },
-                { title: '数据范围', dataIndex: 'scope', width: 150 },
-                { title: '菜单权限', dataIndex: 'menus' },
-                { title: '按钮权限', dataIndex: 'buttons' },
-                { title: '限制', dataIndex: 'restriction' }
+                { title: '角色', dataIndex: 'label', width: 120, render: (value: string) => <Text strong>{value}</Text> },
+                {
+                  title: '可配置权限',
+                  render: (_, record) =>
+                    record.key === 'ADMIN' ? (
+                      <Space wrap>
+                        {record.permissions.map((permission) => (
+                          <Tag key={permission} color="red">{roleMatrix?.availablePermissions.find((item) => item.code === permission)?.label ?? permission}</Tag>
+                        ))}
+                      </Space>
+                    ) : (
+                      <Checkbox.Group
+                        options={permissionOptions}
+                        value={draftPermissions[record.key]}
+                        onChange={(values) =>
+                          setDraftPermissions((current) => ({
+                            ...current,
+                            [record.key]: values as PermissionKey[]
+                          }))
+                        }
+                      />
+                    )
+                },
+                {
+                  title: '操作',
+                  width: 150,
+                  render: (_, record) => (
+                    <Button size="small" disabled={record.key === 'ADMIN'} onClick={() => saveRolePermissions(record)}>
+                      保存{record.label.replace('系统管理员', '管理员')}权限
+                    </Button>
+                  )
+                }
               ]}
             />
           </Card>
@@ -1944,6 +2069,275 @@ function FinancePage({
           </Card>
         </Col>
       </Row>
+    </>
+  );
+}
+
+function ReceiveLabelPage({
+  shipments,
+  labelsByShipmentId,
+  notice,
+  onReceive,
+  onRoute,
+  onCreateLabel,
+  onLoadLabels,
+  onVoidLabel,
+  onDispatch
+}: {
+  shipments: Shipment[];
+  labelsByShipmentId: Record<string, ShipmentLabelSummary[]>;
+  notice: string | null;
+  onReceive: (record: Shipment) => Promise<void>;
+  onRoute: (record: Shipment) => Promise<void>;
+  onCreateLabel: (record: Shipment) => Promise<void>;
+  onLoadLabels: (record: Shipment) => Promise<void>;
+  onVoidLabel: (record: Shipment, label: ShipmentLabelSummary) => Promise<void>;
+  onDispatch: (record: Shipment) => Promise<void>;
+}) {
+  const config = modulePageConfigs.receive!;
+  const workQueue = shipments.filter((shipment) =>
+    ['DECLARED', 'WAITING_RECEIVE', 'WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment.status)
+  );
+  const columns: ColumnsType<Shipment> = [
+    {
+      title: '系统单号 / 客户单号',
+      dataIndex: 'systemOrderNo',
+      width: 210,
+      render: (value: string, record) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{value}</Text>
+          <Text type="secondary">{record.customerOrderNo}</Text>
+        </Space>
+      )
+    },
+    { title: '客户', dataIndex: 'customerName', width: 150 },
+    { title: '承运商', dataIndex: 'carrier', width: 90 },
+    {
+      title: '渠道 / 代理',
+      width: 170,
+      render: (_, record) => (
+        <Space direction="vertical" size={0}>
+          <Text>{record.channelName}</Text>
+          <Text type="secondary">{record.agentName || '待分配'}</Text>
+        </Space>
+      )
+    },
+    { title: '转单号', dataIndex: 'transferNo', width: 170, render: (value?: string) => value ?? '待申请面单' },
+    { title: '状态', dataIndex: 'status', width: 110, render: (status: ShipmentStatus) => <StatusTag status={status} /> },
+    {
+      title: '操作',
+      width: 330,
+      fixed: 'right',
+      render: (_, record) => {
+        const labels = labelsByShipmentId[record.id] ?? [];
+        const activeLabel = labels.find((label) => label.status === 'CREATED');
+        return (
+          <Space wrap>
+            {record.status === 'DECLARED' || record.status === 'WAITING_RECEIVE' ? (
+              <Button size="small" onClick={() => void onReceive(record)}>
+                确认收货
+              </Button>
+            ) : null}
+            {record.status === 'WAITING_SORT' ? (
+              <Button size="small" onClick={() => void onRoute(record)}>
+                排货
+              </Button>
+            ) : null}
+            {record.status === 'WAITING_DISPATCH' ? (
+              <>
+                <Button size="small" type="primary" onClick={() => void onCreateLabel(record)}>
+                  申请面单
+                </Button>
+                <Button size="small" onClick={() => void onLoadLabels(record)}>
+                  查看面单
+                </Button>
+                {activeLabel ? (
+                  <Button size="small" danger onClick={() => void onVoidLabel(record, activeLabel)}>
+                    作废面单
+                  </Button>
+                ) : null}
+                <Button size="small" disabled={!record.transferNo} onClick={() => void onDispatch(record)}>
+                  确认发货
+                </Button>
+              </>
+            ) : null}
+          </Space>
+        );
+      }
+    }
+  ];
+
+  return (
+    <>
+      <Flex justify="space-between" align="center" className="page-heading">
+        <div>
+          <Title level={2}>{config.title}</Title>
+          <Text type="secondary">{config.description}</Text>
+        </div>
+        <Space>
+          <Button icon={<PackageCheck size={16} />}>收货扫描</Button>
+          <Button type="primary" icon={<FileText size={16} />}>模拟面单</Button>
+        </Space>
+      </Flex>
+
+      {notice ? <Alert className="notice-bar" type={notice.includes('不允许') ? 'error' : 'success'} showIcon message={notice} /> : null}
+
+      <Row gutter={[16, 16]}>
+        {config.stats.map((stat) => (
+          <Col xs={24} md={8} key={stat.label}>
+            <MetricCard icon={<PackagePlus />} title={stat.label} value={stat.value} extra={stat.helper} />
+          </Col>
+        ))}
+      </Row>
+
+      <Card className="module-card">
+        <Space wrap>
+          {config.childFunctions.map((item) => (
+            <Tag key={item}>{item}</Tag>
+          ))}
+        </Space>
+      </Card>
+
+      <Card title="API 收货打单队列">
+        <Table
+          rowKey="id"
+          columns={columns}
+          dataSource={workQueue}
+          size="small"
+          pagination={{ pageSize: 8 }}
+          scroll={{ x: 1280 }}
+          expandable={{
+            expandedRowRender: (record) => {
+              const labels = labelsByShipmentId[record.id] ?? [];
+              return labels.length ? (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {labels.map((label) => (
+                    <Flex key={label.id} justify="space-between" align="center">
+                      <Space>
+                        <Tag color={label.status === 'CREATED' ? 'green' : 'default'}>{label.status === 'CREATED' ? '已生成' : '已作废'}</Tag>
+                        <Text>{label.labelNo}</Text>
+                        <Text strong>{label.transferNo}</Text>
+                        <Text type="secondary">{label.labelUrl}</Text>
+                      </Space>
+                    </Flex>
+                  ))}
+                </Space>
+              ) : (
+                <Text type="secondary">暂无面单记录</Text>
+              );
+            }
+          }}
+        />
+      </Card>
+
+      <Card className="module-card" title="文档覆盖样例">
+        <Space direction="vertical">
+          {config.records.map((record) => (
+            <Text key={record.primary}>{record.primary} · {record.secondary}</Text>
+          ))}
+        </Space>
+      </Card>
+    </>
+  );
+}
+
+function TrackingTaskPage({
+  shipments,
+  tasks,
+  notice,
+  onRunTask,
+  onRetryTask
+}: {
+  shipments: Shipment[];
+  tasks: CarrierTaskSummary[];
+  notice: string | null;
+  onRunTask: (task: CarrierTaskSummary) => Promise<void>;
+  onRetryTask: (task: CarrierTaskSummary) => Promise<void>;
+}) {
+  const config = modulePageConfigs.tracking!;
+  const staleCount = shipments.filter((shipment) => shipment.trackingStaleDays >= 5).length;
+  const taskColumns: ColumnsType<CarrierTaskSummary> = [
+    { title: '系统单号', dataIndex: 'systemOrderNo' },
+    { title: '客户', dataIndex: 'customerName' },
+    { title: '承运商', dataIndex: 'carrier', width: 90 },
+    { title: '转单号', dataIndex: 'transferNo' },
+    {
+      title: '状态',
+      dataIndex: 'status',
+      width: 100,
+      render: (status: CarrierTaskSummary['status']) => (
+        <Tag color={status === 'SUCCESS' ? 'green' : status === 'FAILED' ? 'red' : 'gold'}>
+          {status === 'SUCCESS' ? '成功' : status === 'FAILED' ? '失败' : '待执行'}
+        </Tag>
+      )
+    },
+    { title: '尝试次数', dataIndex: 'attempts', width: 90 },
+    { title: '错误信息', dataIndex: 'lastError', render: (value?: string) => value ?? '-' },
+    {
+      title: '操作',
+      width: 160,
+      render: (_, task) => (
+        <Space>
+          {task.status === 'PENDING' ? (
+            <Button size="small" onClick={() => void onRunTask(task)}>
+              同步轨迹
+            </Button>
+          ) : null}
+          {task.status === 'FAILED' ? (
+            <Button size="small" onClick={() => void onRetryTask(task)}>
+              重试
+            </Button>
+          ) : null}
+        </Space>
+      )
+    }
+  ];
+
+  return (
+    <>
+      <Flex justify="space-between" align="center" className="page-heading">
+        <div>
+          <Title level={2}>{config.title}</Title>
+          <Text type="secondary">{config.description}</Text>
+        </div>
+        <Button type="primary" icon={<Activity size={16} />}>承运商任务</Button>
+      </Flex>
+
+      {notice ? <Alert className="notice-bar" type={notice.includes('失败') ? 'warning' : 'success'} showIcon message={notice} /> : null}
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Activity />} title="承运商任务" value={tasks.length} extra="手动同步轨迹" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Truck />} title="未更新" value={staleCount} extra="超过 5 天无新轨迹" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Sparkles />} title="硅基流动" value="AI" extra="轨迹超时解释" />
+        </Col>
+      </Row>
+
+      <Card className="module-card">
+        <Space wrap>
+          {config.childFunctions.map((item) => (
+            <Tag key={item}>{item}</Tag>
+          ))}
+          <Tag>9064656160</Tag>
+          <Tag>硅基流动</Tag>
+        </Space>
+      </Card>
+
+      <Card title="承运商任务">
+        <Table rowKey="id" size="small" pagination={false} columns={taskColumns} dataSource={tasks} />
+      </Card>
+
+      <Card className="module-card" title="最新轨迹">
+        <Space direction="vertical" className="ai-list">
+          {shipments.map((shipment) => (
+            <Alert key={shipment.id} type={shipment.trackingStaleDays >= 5 ? 'warning' : 'info'} showIcon message={shipment.latestTracking} description={shipment.systemOrderNo} />
+          ))}
+        </Space>
+      </Card>
     </>
   );
 }

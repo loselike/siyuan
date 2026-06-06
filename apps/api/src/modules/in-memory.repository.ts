@@ -4,10 +4,13 @@ import {
   calculateQuote,
   createFeeLinesFromQuote,
   createMockTransferNo,
+  createMockTrackingStatus,
   createSystemOrderNo,
   summarizeStatement,
   summarizeStatusCounts,
   validateShipmentImportRows,
+  type CarrierTaskRunResponse,
+  type CarrierTaskSummary,
   type CarrierAdapterCode,
   type CustomerStatementCreateInput,
   type CustomerStatementSummary,
@@ -26,7 +29,16 @@ import {
   type TrackingEventInput
 } from '@siyuan/shared';
 import { hashPassword } from './password.js';
-import type { Principal, RoleKey } from './rbac.js';
+import {
+  buildRolePermissionRow,
+  normalizeRolePermissions,
+  permissionDefinitions,
+  rolePermissions,
+  type PermissionKey,
+  type Principal,
+  type RoleKey,
+  type RolePermissionRow
+} from './rbac.js';
 
 interface Account extends Principal {
   passwordHash: string;
@@ -43,8 +55,17 @@ interface StoredReceivableFee extends ReceivableFeeSummary {
 
 interface StoredLabel extends ShipmentLabelSummary {}
 
+interface StoredCarrierTask extends CarrierTaskSummary {}
+
 export class InMemoryRepository {
   private sequence = 20;
+  private readonly rolePermissionMatrix: Record<RoleKey, PermissionKey[]> = {
+    ADMIN: [...rolePermissions.ADMIN],
+    CUSTOMER_SERVICE: [...rolePermissions.CUSTOMER_SERVICE],
+    OPERATOR: [...rolePermissions.OPERATOR],
+    FINANCE: [...rolePermissions.FINANCE],
+    CUSTOMER: [...rolePermissions.CUSTOMER]
+  };
   private readonly accounts: Account[] = [
     { id: 'u-admin', username: 'admin', passwordHash: hashPassword('admin123'), role: 'ADMIN' },
     { id: 'u-cs', username: 'service', passwordHash: hashPassword('service123'), role: 'CUSTOMER_SERVICE' },
@@ -141,6 +162,7 @@ export class InMemoryRepository {
   private readonly payableFees: Array<{ id: string; shipmentId: string; name: string; amount: number; settled: boolean }> = [];
   private readonly customerStatements: CustomerStatementSummary[] = [];
   private readonly labels: StoredLabel[] = [];
+  private readonly carrierTasks: StoredCarrierTask[] = [];
 
   async findAccount(username: string, password: string): Promise<Principal | undefined> {
     const passwordHash = hashPassword(password);
@@ -161,6 +183,24 @@ export class InMemoryRepository {
 
   async getMasterData() {
     return { customers: this.customers, channels: this.channels, agents: this.agents, roles: this.getRoles() };
+  }
+
+  async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
+    return role === 'ADMIN' || this.rolePermissionMatrix[role].includes(permission);
+  }
+
+  async getRolePermissionMatrix(): Promise<{ availablePermissions: typeof permissionDefinitions; roles: RolePermissionRow[] }> {
+    return {
+      availablePermissions: permissionDefinitions,
+      roles: this.getRoles().map((role) => buildRolePermissionRow(role, this.rolePermissionMatrix[role]))
+    };
+  }
+
+  async updateRolePermissions(principal: Principal, role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
+    const before = [...this.rolePermissionMatrix[role]];
+    this.rolePermissionMatrix[role] = normalizeRolePermissions(role, permissions);
+    this.audit('system.role_permissions.update', `role:${role}`, principal, before, this.rolePermissionMatrix[role]);
+    return buildRolePermissionRow(role, this.rolePermissionMatrix[role]);
   }
 
   quote(input: PricingQuoteRequest) {
@@ -370,7 +410,27 @@ export class InMemoryRepository {
     shipment.transferNo = transferNo;
     shipment.status = 'WAITING_ONLINE';
     shipment.latestTracking = '已发货';
+    this.ensureCarrierTask(shipment, transferNo);
     return shipment;
+  }
+
+  async getCarrierTasks(_principal: Principal): Promise<CarrierTaskSummary[]> {
+    return this.carrierTasks;
+  }
+
+  async runCarrierTask(_principal: Principal, taskId: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
+    return this.executeCarrierTask(taskId, body.fail === true);
+  }
+
+  async retryCarrierTask(_principal: Principal, taskId: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
+    const task = this.carrierTask(taskId);
+    if (task.status !== 'FAILED') {
+      throw new BadRequestException('只有失败任务可以重试');
+    }
+    task.status = 'PENDING';
+    task.lastError = undefined;
+    task.updatedAt = new Date().toISOString();
+    return this.executeCarrierTask(taskId, body.fail === true);
   }
 
   async createShipmentLabel(principal: Principal, shipmentId: string): Promise<LabelCreateResponse> {
@@ -492,6 +552,10 @@ export class InMemoryRepository {
     return ['ADMIN', 'CUSTOMER_SERVICE', 'OPERATOR', 'FINANCE', 'CUSTOMER'];
   }
 
+  private audit(action: string, target: string, principal: Principal, before: unknown, after: unknown) {
+    void { action, target, actorId: principal.id, before, after, createdAt: new Date().toISOString() };
+  }
+
   private visibleShipments(principal: Principal) {
     return principal.role === 'CUSTOMER'
       ? this.shipments.filter((shipment) => shipment.customerId === principal.customerId)
@@ -514,6 +578,64 @@ export class InMemoryRepository {
       throw new NotFoundException('问题件不存在');
     }
     return ticket;
+  }
+
+  private ensureCarrierTask(shipment: Shipment & { customerId: string }, transferNo: string) {
+    const existing = this.carrierTasks.find((task) => task.shipmentId === shipment.id && task.type === 'TRACKING_SYNC');
+    if (existing) {
+      return existing;
+    }
+    const now = new Date().toISOString();
+    const task: StoredCarrierTask = {
+      id: `ct-${this.carrierTasks.length + 1}`,
+      shipmentId: shipment.id,
+      systemOrderNo: shipment.systemOrderNo,
+      customerName: shipment.customerName,
+      type: 'TRACKING_SYNC',
+      carrier: this.toCarrierAdapterCode(shipment.carrier),
+      transferNo,
+      status: 'PENDING',
+      attempts: 0,
+      createdAt: now,
+      updatedAt: now
+    };
+    this.carrierTasks.unshift(task);
+    return task;
+  }
+
+  private executeCarrierTask(taskId: string, fail: boolean): CarrierTaskRunResponse {
+    const task = this.carrierTask(taskId);
+    if (task.status === 'SUCCESS') {
+      throw new BadRequestException('已成功任务不能重复执行');
+    }
+    const shipment = this.shipments.find((item) => item.id === task.shipmentId);
+    if (!shipment) {
+      throw new NotFoundException('运单不存在');
+    }
+    const now = new Date().toISOString();
+    task.attempts += 1;
+    task.updatedAt = now;
+    if (fail) {
+      task.status = 'FAILED';
+      task.lastError = '模拟承运商接口失败';
+      return { task, shipment };
+    }
+
+    const trackingStatus = createMockTrackingStatus(task.carrier, task.transferNo);
+    task.status = 'SUCCESS';
+    task.lastError = undefined;
+    task.completedAt = now;
+    shipment.latestTracking = trackingStatus;
+    shipment.trackingStaleDays = 0;
+    return { task, shipment };
+  }
+
+  private carrierTask(taskId: string) {
+    const task = this.carrierTasks.find((item) => item.id === taskId);
+    if (!task) {
+      throw new NotFoundException('承运商任务不存在');
+    }
+    return task;
   }
 
   private toTicketSummary(ticket: Ticket): ProblemTicketSummary {

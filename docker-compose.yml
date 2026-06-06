@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: docker.m.daocloud.io/library/postgres:16-alpine
     environment:
       POSTGRES_DB: siyuan
       POSTGRES_USER: siyuan
@@ -40,7 +40,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: docker.m.daocloud.io/library/redis:7-alpine
     volumes:
       - redis-data:/data
     restart: unless-stopped

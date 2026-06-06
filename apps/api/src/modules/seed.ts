@@ -168,6 +168,7 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
   await prisma.shipmentPackage.deleteMany();
   await prisma.receivableFee.deleteMany();
   await prisma.payableFee.deleteMany();
+  await prisma.carrierTask.deleteMany();
   await prisma.shipmentLabel.deleteMany();
   await prisma.shipment.deleteMany();
   await prisma.user.deleteMany();
@@ -307,6 +308,19 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
       labelUrl: '/mock-labels/LBL26060600001.pdf',
       status: 'CREATED',
       createdAt: new Date('2026-06-06T10:00:00.000Z')
+    }
+  });
+
+  await prisma.carrierTask.create({
+    data: {
+      id: 'ct-seed-1',
+      shipmentId: 's-seed-2',
+      type: 'TRACKING_SYNC',
+      carrier: 'DHL',
+      transferNo: '9064656160',
+      status: 'PENDING',
+      attempts: 0,
+      createdAt: new Date('2026-06-06T10:05:00.000Z')
     }
   });
 

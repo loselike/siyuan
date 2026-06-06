@@ -5,12 +5,15 @@ import {
   calculateQuote,
   createFeeLinesFromQuote,
   createMockTransferNo,
+  createMockTrackingStatus,
   createSystemOrderNo,
   summarizeStatement,
   summarizeStatusCounts,
   validateShipmentImportRows,
   type BusinessType,
   type CarrierAdapterCode,
+  type CarrierTaskRunResponse,
+  type CarrierTaskSummary,
   type CustomerStatementCreateInput,
   type CustomerStatementSummary,
   type LabelCreateResponse,
@@ -29,7 +32,17 @@ import {
 } from '@siyuan/shared';
 import { hashPassword } from './password.js';
 import { PrismaService } from './prisma.service.js';
-import type { Principal, RoleKey } from './rbac.js';
+import {
+  buildRolePermissionRow,
+  normalizeRolePermissions,
+  permissionDefinitions,
+  roleMetadata,
+  rolePermissions,
+  type PermissionKey,
+  type Principal,
+  type RoleKey,
+  type RolePermissionRow
+} from './rbac.js';
 
 type ShipmentWithRelations = PrismaShipment & {
   customer: { code: string; name: string };
@@ -88,6 +101,55 @@ export class PrismaRepository {
       agents,
       roles: roles.map((role) => role.name)
     };
+  }
+
+  async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
+    if (role === 'ADMIN') {
+      return true;
+    }
+    const row = await this.prisma.role.findUnique({
+      where: { name: role },
+      include: { permissions: true }
+    });
+    const permissions = row?.permissions.map((item) => item.code as PermissionKey) ?? rolePermissions[role];
+    return permissions.includes(permission);
+  }
+
+  async getRolePermissionMatrix(): Promise<{ availablePermissions: typeof permissionDefinitions; roles: RolePermissionRow[] }> {
+    const rows = await this.prisma.role.findMany({ include: { permissions: true } });
+    const byName = new Map(rows.map((row) => [row.name as RoleKey, row.permissions.map((item) => item.code as PermissionKey)]));
+    return {
+      availablePermissions: permissionDefinitions,
+      roles: (Object.keys(roleMetadata) as RoleKey[]).map((role) => buildRolePermissionRow(role, byName.get(role) ?? rolePermissions[role]))
+    };
+  }
+
+  async updateRolePermissions(principal: Principal, role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
+    const normalized = normalizeRolePermissions(role, permissions);
+    const before = (await this.getRolePermissionMatrix()).roles.find((item) => item.key === role)?.permissions ?? [];
+    for (const permission of normalized) {
+      await this.prisma.permission.upsert({
+        where: { code: permission },
+        create: { code: permission },
+        update: {}
+      });
+    }
+    const updated = await this.prisma.role.update({
+      where: { name: role },
+      data: { permissions: { set: normalized.map((code) => ({ code })) } },
+      include: { permissions: true }
+    });
+    const after = updated.permissions.map((item) => item.code as PermissionKey);
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'system.role_permissions.update',
+        target: `role:${role}`,
+        before,
+        after
+      }
+    });
+    return buildRolePermissionRow(role, after);
   }
 
   quote(input: PricingQuoteRequest) {
@@ -401,7 +463,36 @@ export class PrismaRepository {
     }
 
     await this.prisma.shipment.update({ where: { id: shipment.id }, data: { transferNo } });
-    return this.updateShipmentStatus(shipment.id, shipment.status as ShipmentStatus, 'WAITING_ONLINE', '确认发货');
+    const updated = await this.updateShipmentStatus(shipment.id, shipment.status as ShipmentStatus, 'WAITING_ONLINE', '确认发货');
+    await this.ensureCarrierTask(updated.id, updated.carrier, updated.transferNo ?? transferNo);
+    return updated;
+  }
+
+  async getCarrierTasks(_principal: Principal): Promise<CarrierTaskSummary[]> {
+    const tasks = await this.prisma.carrierTask.findMany({
+      include: { shipment: { include: { customer: true } } },
+      orderBy: { createdAt: 'desc' }
+    });
+    return tasks.map(mapCarrierTask);
+  }
+
+  async runCarrierTask(_principal: Principal, taskId: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
+    return this.executeCarrierTask(taskId, body.fail === true);
+  }
+
+  async retryCarrierTask(_principal: Principal, taskId: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
+    const task = await this.prisma.carrierTask.findUnique({ where: { id: taskId } });
+    if (!task) {
+      throw new NotFoundException('承运商任务不存在');
+    }
+    if (task.status !== 'FAILED') {
+      throw new BadRequestException('只有失败任务可以重试');
+    }
+    await this.prisma.carrierTask.update({
+      where: { id: task.id },
+      data: { status: 'PENDING', lastError: null }
+    });
+    return this.executeCarrierTask(taskId, body.fail === true);
   }
 
   async createShipmentLabel(principal: Principal, shipmentId: string): Promise<LabelCreateResponse> {
@@ -600,6 +691,68 @@ export class PrismaRepository {
     return count + 1;
   }
 
+  private async ensureCarrierTask(shipmentId: string, carrier: string, transferNo: string) {
+    const existing = await this.prisma.carrierTask.findFirst({
+      where: { shipmentId, type: 'TRACKING_SYNC' }
+    });
+    if (existing) {
+      return existing;
+    }
+    return this.prisma.carrierTask.create({
+      data: {
+        shipmentId,
+        type: 'TRACKING_SYNC',
+        carrier: toCarrierAdapterCode(carrier),
+        transferNo,
+        status: 'PENDING',
+        attempts: 0
+      }
+    });
+  }
+
+  private async executeCarrierTask(taskId: string, fail: boolean): Promise<CarrierTaskRunResponse> {
+    const task = await this.prisma.carrierTask.findUnique({
+      where: { id: taskId },
+      include: { shipment: { include: shipmentIncludes } }
+    });
+    if (!task) {
+      throw new NotFoundException('承运商任务不存在');
+    }
+    if (task.status === 'SUCCESS') {
+      throw new BadRequestException('已成功任务不能重复执行');
+    }
+
+    if (fail) {
+      const failed = await this.prisma.carrierTask.update({
+        where: { id: task.id },
+        data: { status: 'FAILED', attempts: { increment: 1 }, lastError: '模拟承运商接口失败' },
+        include: { shipment: { include: { customer: true } } }
+      });
+      return { task: mapCarrierTask(failed), shipment: mapShipment(task.shipment) };
+    }
+
+    const now = new Date();
+    const trackingStatus = createMockTrackingStatus(toCarrierAdapterCode(task.carrier), task.transferNo);
+    const [updatedTask, updatedShipment] = await this.prisma.$transaction([
+      this.prisma.carrierTask.update({
+        where: { id: task.id },
+        data: { status: 'SUCCESS', attempts: { increment: 1 }, lastError: null, completedAt: now },
+        include: { shipment: { include: { customer: true } } }
+      }),
+      this.prisma.shipment.update({
+        where: { id: task.shipmentId },
+        data: {
+          latestTracking: trackingStatus,
+          trackingStaleDays: 0,
+          trackingEvents: { create: { status: trackingStatus, happenedAt: now, visibleToCustomer: true } }
+        },
+        include: shipmentIncludes
+      })
+    ]);
+
+    return { task: mapCarrierTask(updatedTask), shipment: mapShipment(updatedShipment) };
+  }
+
   private async getVisibleShipment(principal: Principal, shipmentId: string) {
     const shipment = await this.prisma.shipment.findFirst({
       where: {
@@ -706,6 +859,37 @@ function mapShipmentLabel(row: {
     status: row.status as ShipmentLabelSummary['status'],
     createdAt: row.createdAt.toISOString(),
     voidedAt: row.voidedAt?.toISOString()
+  };
+}
+
+function mapCarrierTask(row: {
+  id: string;
+  shipmentId: string;
+  type: string;
+  carrier: string;
+  transferNo: string;
+  status: string;
+  attempts: number;
+  lastError: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+  shipment: { systemOrderNo: string; customer: { code: string; name: string } };
+}): CarrierTaskSummary {
+  return {
+    id: row.id,
+    shipmentId: row.shipmentId,
+    systemOrderNo: row.shipment.systemOrderNo,
+    customerName: `${row.shipment.customer.code}-${row.shipment.customer.name}`,
+    type: row.type as CarrierTaskSummary['type'],
+    carrier: toCarrierAdapterCode(row.carrier),
+    transferNo: row.transferNo,
+    status: row.status as CarrierTaskSummary['status'],
+    attempts: row.attempts,
+    lastError: row.lastError ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    completedAt: row.completedAt?.toISOString()
   };
 }
 

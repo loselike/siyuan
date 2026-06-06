@@ -1,13 +1,28 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CarrierTaskSummary, Shipment, ShipmentStatus } from '@siyuan/shared';
 import { App } from './App';
 
 const employeeShipments = [
   shipment('s-1', 'SYGJ06061230001', 'RCV-0606', 'WAITING_RECEIVE', '9409-Daloday'),
+  shipment('s-3', 'SYGJ06061230003', 'LBL-0606-US', 'WAITING_DISPATCH', '9409-Daloday', { carrier: 'UPS', channelName: 'UPS 加美线', agentName: '加美代理' }),
   shipment('s-2', 'SYGJ05291344165', 'TILL-0529', 'WAITING_ONLINE', '1344-TILL', { transferNo: '9064656160', trackingStaleDays: 9, hasProblemTicket: true })
 ];
-const customerShipments = [shipment('s-1', 'SYGJ06061230001', 'RCV-0606', 'WAITING_RECEIVE', '9409-Daloday')];
+const customerShipments: Shipment[] = [shipment('s-1', 'SYGJ06061230001', 'RCV-0606', 'WAITING_RECEIVE', '9409-Daloday', { transferNo: 'DHL26060600001', latestTracking: '已生成面单' })];
+const shipmentLabels = [
+  {
+    id: 'lbl-s-3',
+    shipmentId: 's-3',
+    carrier: 'UPS',
+    channelName: 'UPS 加美线',
+    labelNo: 'LBL26060600001',
+    transferNo: '1Z26060600001',
+    labelUrl: '/mock-labels/LBL26060600001.pdf',
+    status: 'CREATED',
+    createdAt: '2026-06-06T10:00:00.000Z'
+  }
+];
 const problemTickets = [
   {
     id: 'pt-1',
@@ -38,6 +53,74 @@ const customerStatements = [
     createdAt: '2026-06-06T10:00:00.000Z'
   }
 ];
+const carrierTasks: CarrierTaskSummary[] = [
+  {
+    id: 'ct-1',
+    shipmentId: 's-2',
+    systemOrderNo: 'SYGJ05291344165',
+    customerName: '1344-TILL',
+    type: 'TRACKING_SYNC',
+    carrier: 'DHL',
+    transferNo: '9064656160',
+    status: 'PENDING',
+    attempts: 0,
+    createdAt: '2026-06-06T10:00:00.000Z',
+    updatedAt: '2026-06-06T10:00:00.000Z'
+  },
+  {
+    id: 'ct-2',
+    shipmentId: 's-3',
+    systemOrderNo: 'SYGJ06061230003',
+    customerName: '9409-Daloday',
+    type: 'TRACKING_SYNC',
+    carrier: 'UPS',
+    transferNo: '1Z26060600001',
+    status: 'FAILED',
+    attempts: 1,
+    lastError: '模拟承运商接口失败',
+    createdAt: '2026-06-06T10:00:00.000Z',
+    updatedAt: '2026-06-06T10:01:00.000Z'
+  }
+];
+const systemRoleMatrix = {
+  availablePermissions: [
+    { code: 'shipments:read', label: '运单读取', group: '运单' },
+    { code: 'shipments:write', label: '运单写入', group: '运单' },
+    { code: 'finance:read', label: '财务读取', group: '财务' },
+    { code: 'finance:settle', label: '财务核销', group: '财务' },
+    { code: 'master-data:read', label: '基础资料读取', group: '资料' },
+    { code: 'system:manage', label: '系统管理', group: '系统' }
+  ],
+  roles: [
+    {
+      key: 'ADMIN',
+      label: '系统管理员',
+      account: 'admin',
+      password: 'admin123',
+      scope: '全局数据',
+      permissions: ['shipments:read', 'shipments:write', 'finance:read', 'finance:settle', 'master-data:read', 'system:manage'],
+      restriction: '全部权限'
+    },
+    {
+      key: 'CUSTOMER_SERVICE',
+      label: '客服',
+      account: 'service',
+      password: 'service123',
+      scope: '客户与问题件',
+      permissions: ['shipments:read', 'shipments:write', 'master-data:read'],
+      restriction: '不能核销、不能改系统权限'
+    },
+    {
+      key: 'FINANCE',
+      label: '财务',
+      account: 'finance',
+      password: 'finance123',
+      scope: '财务数据',
+      permissions: ['shipments:read', 'finance:read', 'finance:settle', 'master-data:read'],
+      restriction: '不能改系统权限'
+    }
+  ]
+};
 
 beforeEach(() => {
   localStorage.clear();
@@ -55,7 +138,7 @@ describe('M1+M2 API-backed workspace', () => {
 
     expect(await screen.findByRole('heading', { name: 'AI 物流运营工作台' })).toBeInTheDocument();
     expect(screen.getByText('SYGJ06061230001')).toBeInTheDocument();
-    expect(screen.getByText('9409-Daloday')).toBeInTheDocument();
+    expect(screen.getAllByText('9409-Daloday').length).toBeGreaterThan(0);
   });
 
   it('calls the receive API and refreshes shipment state', async () => {
@@ -161,6 +244,81 @@ describe('M1+M2 API-backed workspace', () => {
     expect(screen.getByText('¥200.00')).toBeInTheDocument();
     expect(screen.getByText('对账单草稿')).toBeInTheDocument();
   });
+
+  it('lets staff create a mock label from the receive label page and dispatch with its transfer number', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '收货打单' }));
+    expect(await screen.findByRole('heading', { name: '收货打单中心' })).toBeInTheDocument();
+    expect(screen.getByText('SYGJ06061230003')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '申请面单' }));
+    expect(await screen.findByText('已生成模拟面单 1Z26060600001')).toBeInTheDocument();
+    expect(screen.getByText('1Z26060600001')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '确认发货' }));
+    expect(await screen.findByText('已确认发货，进入待上网')).toBeInTheDocument();
+    expect(screen.queryByText('SYGJ06061230003')).not.toBeInTheDocument();
+  });
+
+  it('shows transfer numbers in the customer portal without internal label controls', async () => {
+    await renderAndLogin('customer', 'customer123');
+
+    expect(await screen.findByText('DHL26060600001')).toBeInTheDocument();
+    expect(screen.getByText('已生成面单')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '作废面单' })).not.toBeInTheDocument();
+  });
+
+  it('shows carrier tasks on tracking page and syncs tracking manually', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '轨迹监控' }));
+    expect(await screen.findByRole('heading', { name: '轨迹监控中心' })).toBeInTheDocument();
+    expect(screen.getAllByText('承运商任务').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('SYGJ05291344165').length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: '同步轨迹' }));
+    expect(await screen.findByText('轨迹同步成功：DHL 已揽收 9064656160')).toBeInTheDocument();
+    expect(screen.getByText('DHL 已揽收 9064656160')).toBeInTheDocument();
+  });
+
+  it('retries failed carrier tasks and keeps task controls staff-only', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '轨迹监控' }));
+    expect(await screen.findByText('模拟承运商接口失败')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /重\s*试/ }));
+    expect(await screen.findByText('轨迹同步成功：UPS 运输中 1Z26060600001')).toBeInTheDocument();
+
+    cleanup();
+    localStorage.clear();
+    await renderAndLogin('customer', 'customer123');
+    expect(screen.queryByRole('button', { name: '同步轨迹' })).not.toBeInTheDocument();
+    expect(screen.queryByText('承运商任务')).not.toBeInTheDocument();
+  });
+
+  it('loads and saves the real role permission matrix on system settings', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '系统设置' }));
+
+    expect(await screen.findByText('admin / admin123')).toBeInTheDocument();
+    expect(screen.getByText('service / service123')).toBeInTheDocument();
+    expect(screen.getAllByText('财务核销').length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: '保存客服权限' }));
+
+    expect(await screen.findByText('客服权限已保存，RBAC 即时生效')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining('/api/system/roles/CUSTOMER_SERVICE/permissions'),
+      expect.objectContaining({ method: 'PUT' })
+    );
+  });
 });
 
 async function renderAndLogin(username: string, password: string) {
@@ -193,6 +351,49 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (url.endsWith('/api/shipments/s-1/receive')) {
     employeeShipments[0] = { ...employeeShipments[0], status: 'WAITING_SORT', latestTracking: '已收货' };
     return jsonResponse(employeeShipments[0]);
+  }
+
+  if (url.endsWith('/api/shipments/s-3/labels') && init?.method === 'POST') {
+    employeeShipments[1] = { ...employeeShipments[1], transferNo: '1Z26060600001', latestTracking: '已生成面单' };
+    return jsonResponse({ label: shipmentLabels[0], shipment: employeeShipments[1] });
+  }
+
+  if (url.endsWith('/api/shipments/s-3/labels')) {
+    return jsonResponse(shipmentLabels);
+  }
+
+  if (url.endsWith('/api/shipments/s-3/dispatch')) {
+    employeeShipments[1] = { ...employeeShipments[1], status: 'WAITING_ONLINE', latestTracking: '已发货' };
+    return jsonResponse(employeeShipments[1]);
+  }
+
+  if (url.endsWith('/api/carrier-tasks/ct-1/run')) {
+    carrierTasks[0] = { ...carrierTasks[0], status: 'SUCCESS', attempts: 1, completedAt: '2026-06-06T10:02:00.000Z' };
+    employeeShipments[2] = { ...employeeShipments[2], latestTracking: 'DHL 已揽收 9064656160', trackingStaleDays: 0 };
+    return jsonResponse({ task: carrierTasks[0], shipment: employeeShipments[2] });
+  }
+
+  if (url.endsWith('/api/carrier-tasks/ct-2/retry')) {
+    carrierTasks[1] = { ...carrierTasks[1], status: 'SUCCESS', attempts: 2, lastError: undefined, completedAt: '2026-06-06T10:03:00.000Z' };
+    employeeShipments[1] = { ...employeeShipments[1], latestTracking: 'UPS 运输中 1Z26060600001', trackingStaleDays: 0 };
+    return jsonResponse({ task: carrierTasks[1], shipment: employeeShipments[1] });
+  }
+
+  if (url.endsWith('/api/carrier-tasks')) {
+    const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
+    if (token.includes('CUSTOMER')) {
+      return Promise.resolve(new Response('Forbidden', { status: 403 }));
+    }
+    return jsonResponse(carrierTasks);
+  }
+
+  if (url.endsWith('/api/system/roles/CUSTOMER_SERVICE/permissions')) {
+    systemRoleMatrix.roles[1] = { ...systemRoleMatrix.roles[1], permissions: body.permissions };
+    return jsonResponse(systemRoleMatrix.roles[1]);
+  }
+
+  if (url.endsWith('/api/system/roles')) {
+    return jsonResponse(systemRoleMatrix);
   }
 
   if (url.endsWith('/api/shipments')) {
@@ -231,10 +432,10 @@ function shipment(
   id: string,
   systemOrderNo: string,
   customerOrderNo: string,
-  status: string,
+  status: ShipmentStatus,
   customerName: string,
-  overrides = {}
-) {
+  overrides: Partial<Shipment> = {}
+): Shipment {
   return {
     id,
     createdAt: '2026-06-06T09:40:00.000Z',

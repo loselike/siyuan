@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Inject, Param, Post, Req } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import type {
   CustomerStatementCreateInput,
   PricingQuoteRequest,
@@ -10,7 +10,7 @@ import type {
 } from '@siyuan/shared';
 import { PrismaRepository } from './prisma.repository.js';
 import { RequirePermission } from './require-permission.decorator.js';
-import type { Principal } from './rbac.js';
+import { roleMetadata, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 
 @Controller()
 export class DataController {
@@ -90,6 +90,33 @@ export class DataController {
     return this.repository.voidShipmentLabel(request.user, id, labelId);
   }
 
+  @Get('carrier-tasks')
+  @RequirePermission('shipments:read')
+  async carrierTasks(@Req() request: { user: Principal }) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能查看承运商任务');
+    }
+    return this.repository.getCarrierTasks(request.user);
+  }
+
+  @Post('carrier-tasks/:id/run')
+  @RequirePermission('shipments:write')
+  async runCarrierTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { fail?: boolean }) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能执行承运商任务');
+    }
+    return this.repository.runCarrierTask(request.user, id, body);
+  }
+
+  @Post('carrier-tasks/:id/retry')
+  @RequirePermission('shipments:write')
+  async retryCarrierTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { fail?: boolean }) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能重试承运商任务');
+    }
+    return this.repository.retryCarrierTask(request.user, id, body);
+  }
+
   @Post('shipments/:id/fees/generate')
   @RequirePermission('finance:settle')
   async generateShipmentFees(
@@ -140,6 +167,25 @@ export class DataController {
   @RequirePermission('master-data:read')
   async masterData() {
     return this.repository.getMasterData();
+  }
+
+  @Get('system/roles')
+  @RequirePermission('system:manage')
+  async systemRoles() {
+    return this.repository.getRolePermissionMatrix();
+  }
+
+  @Put('system/roles/:role/permissions')
+  @RequirePermission('system:manage')
+  async updateRolePermissions(
+    @Req() request: { user: Principal },
+    @Param('role') role: RoleKey,
+    @Body() body: { permissions?: PermissionKey[] }
+  ) {
+    if (!roleMetadata[role]) {
+      throw new ForbiddenException('角色不存在');
+    }
+    return this.repository.updateRolePermissions(request.user, role, body.permissions ?? []);
   }
 
   @Post('pricing/quote')

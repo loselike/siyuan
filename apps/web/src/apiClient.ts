@@ -1,6 +1,8 @@
 import type {
   CustomerStatementCreateInput,
   CustomerStatementSummary,
+  CarrierTaskRunResponse,
+  CarrierTaskSummary,
   LabelCreateResponse,
   PricingQuoteRequest,
   ProblemTicketCreateInput,
@@ -15,6 +17,13 @@ import type {
 } from '@siyuan/shared';
 
 export type RoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'FINANCE' | 'CUSTOMER';
+export type PermissionKey =
+  | 'shipments:read'
+  | 'shipments:write'
+  | 'finance:read'
+  | 'finance:settle'
+  | 'master-data:read'
+  | 'system:manage';
 
 export interface Principal {
   id: string;
@@ -26,6 +35,27 @@ export interface Principal {
 export interface Session {
   accessToken: string;
   user: Principal;
+}
+
+export interface PermissionDefinition {
+  code: PermissionKey;
+  label: string;
+  group: string;
+}
+
+export interface RolePermissionRow {
+  key: RoleKey;
+  label: string;
+  account: string;
+  password: string;
+  scope: string;
+  permissions: PermissionKey[];
+  restriction: string;
+}
+
+export interface RolePermissionMatrix {
+  availablePermissions: PermissionDefinition[];
+  roles: RolePermissionRow[];
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001/api';
@@ -76,6 +106,18 @@ export class ApiClient {
     return this.request(`/shipments/${id}/tracking-events`, { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async carrierTasks(): Promise<CarrierTaskSummary[]> {
+    return this.request('/carrier-tasks');
+  }
+
+  async runCarrierTask(id: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
+    return this.request(`/carrier-tasks/${id}/run`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async retryCarrierTask(id: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
+    return this.request(`/carrier-tasks/${id}/retry`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
   async problemTickets(): Promise<ProblemTicketSummary[]> {
     return this.request('/problem-tickets');
   }
@@ -102,6 +144,14 @@ export class ApiClient {
 
   async createCustomerStatement(input: CustomerStatementCreateInput): Promise<CustomerStatementSummary> {
     return this.request('/finance/customer-statements', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async rolePermissions(): Promise<RolePermissionMatrix> {
+    return this.request('/system/roles');
+  }
+
+  async updateRolePermissions(role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
+    return this.request(`/system/roles/${role}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions }) });
   }
 
   private async request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
