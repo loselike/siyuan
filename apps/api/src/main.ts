@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import './modules/load-local-env.js';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './modules/app.module.js';
 

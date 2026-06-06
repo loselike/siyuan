@@ -19,7 +19,7 @@ export const rolePermissions: Record<RoleKey, PermissionKey[]> = {
   CUSTOMER_SERVICE: ['shipments:read', 'shipments:write', 'master-data:read'],
   OPERATOR: ['shipments:read', 'shipments:write', 'master-data:read'],
   FINANCE: ['shipments:read', 'finance:read', 'finance:settle', 'master-data:read'],
-  CUSTOMER: ['shipments:read', 'finance:read']
+  CUSTOMER: ['shipments:read', 'shipments:write', 'finance:read']
 };
 
 export function hasPermission(role: RoleKey, permission: PermissionKey): boolean {

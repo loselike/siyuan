@@ -140,6 +140,21 @@ model Shipment {
   problemTickets      ProblemTicket[]
   receivableFees      ReceivableFee[]
   payableFees         PayableFee[]
+  labels              ShipmentLabel[]
+}
+
+model ShipmentLabel {
+  id          String    @id @default(cuid())
+  shipmentId  String
+  carrier     String
+  channelName String
+  labelNo     String    @unique
+  transferNo  String
+  labelUrl    String
+  status      String
+  createdAt   DateTime  @default(now())
+  voidedAt    DateTime?
+  shipment    Shipment  @relation(fields: [shipmentId], references: [id])
 }
 
 model ShipmentPackage {

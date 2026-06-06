@@ -8,6 +8,19 @@ body {
   color: #182033;
 }
 
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: #eef2f7;
+}
+
+.login-card {
+  width: min(420px, 100%);
+  border-color: #d9e1ec;
+}
+
 .app-shell {
   min-height: 100vh;
 }

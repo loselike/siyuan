@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   calculateChargeableWeight,
   calculateQuote,
+  createFeeLinesFromQuote,
+  summarizeStatement,
   canTransitionShipment,
   createAutomationPlan,
   createFulfillmentAdvice,
@@ -10,6 +12,9 @@ import {
   createShipmentInsights,
   getModuleCoverageSummary,
   validateShipmentImportRows,
+  createSystemOrderNo,
+  createMockTransferNo,
+  type ShipmentLabelSummary,
   type Shipment,
   ShipmentStatus
 } from './index';
@@ -67,6 +72,46 @@ describe('shipment weight and quote calculations', () => {
     expect(quote.surchargeTotal).toBe(200);
     expect(quote.total).toBe(638.96);
   });
+
+  it('creates named fee lines from a quote with receivable adjustments', () => {
+    const quote = calculateQuote({
+      chargeableWeightKg: 10,
+      baseRatePerKg: 20,
+      fuelRate: 0.15,
+      surcharges: [{ name: '偏远费', amount: 50 }]
+    });
+
+    const lines = createFeeLinesFromQuote('shipment-1', quote, [
+      { name: '人工优惠', amount: -15 },
+      { name: '地址更正费', amount: 20 }
+    ]);
+
+    expect(lines).toEqual([
+      { shipmentId: 'shipment-1', name: '基础运费', amount: 200 },
+      { shipmentId: 'shipment-1', name: '燃油费', amount: 30 },
+      { shipmentId: 'shipment-1', name: '附加费', amount: 50 },
+      { shipmentId: 'shipment-1', name: '人工优惠', amount: -15 },
+      { shipmentId: 'shipment-1', name: '地址更正费', amount: 20 }
+    ]);
+  });
+
+  it('summarizes customer statement totals from unsettled fee lines', () => {
+    const statement = summarizeStatement({
+      customerId: 'c-9409',
+      customerName: '9409-Daloday',
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-06',
+      fees: [
+        { id: 'f-1', shipmentId: 's-1', systemOrderNo: 'SY1', customerName: '9409-Daloday', name: '基础运费', amount: 200, settled: false },
+        { id: 'f-2', shipmentId: 's-1', systemOrderNo: 'SY1', customerName: '9409-Daloday', name: '燃油费', amount: 30, settled: false },
+        { id: 'f-3', shipmentId: 's-2', systemOrderNo: 'SY2', customerName: '9409-Daloday', name: '已结算费用', amount: 99, settled: true }
+      ]
+    });
+
+    expect(statement.total).toBe(230);
+    expect(statement.feeCount).toBe(2);
+    expect(statement.status).toBe('DRAFT');
+  });
 });
 
 describe('AI-friendly shipment insights', () => {
@@ -102,6 +147,44 @@ describe('shipment import validation', () => {
       { rowNumber: 3, field: 'weightKg', message: '重量必须大于 0' },
       { rowNumber: 3, field: 'channelName', message: '渠道不能为空' }
     ]);
+  });
+});
+
+describe('API DTO helpers', () => {
+  it('generates system order numbers with business prefix and daily sequence', () => {
+    expect(createSystemOrderNo('EXPRESS', new Date('2026-06-06T10:00:00Z'), 12)).toBe('SYGJ26060600012');
+    expect(createSystemOrderNo('SMALL_PACKET', new Date('2026-06-06T10:00:00Z'), 3)).toBe('SYXB26060600003');
+    expect(createSystemOrderNo('DEDICATED_LINE', new Date('2026-06-06T10:00:00Z'), 99)).toBe('SYZX26060600099');
+  });
+
+  it('generates mock transfer numbers by carrier adapter prefix', () => {
+    const date = new Date('2026-06-06T10:00:00Z');
+
+    expect(createMockTransferNo('DHL', date, 7)).toBe('DHL26060600007');
+    expect(createMockTransferNo('FEDEX', date, 7)).toBe('FDX26060600007');
+    expect(createMockTransferNo('UPS', date, 7)).toBe('1Z26060600007');
+    expect(createMockTransferNo('USPS', date, 7)).toBe('USPS26060600007');
+    expect(createMockTransferNo('OTHER', date, 7)).toBe('SIM26060600007');
+  });
+
+  it('represents created and voided shipment labels for staff-only label workflows', () => {
+    const label: ShipmentLabelSummary = {
+      id: 'lbl-1',
+      shipmentId: 's-1',
+      carrier: 'DHL',
+      channelName: 'DHL HK',
+      labelNo: 'LBL26060600001',
+      transferNo: 'DHL26060600001',
+      labelUrl: '/mock-labels/LBL26060600001.pdf',
+      status: 'CREATED',
+      createdAt: '2026-06-06T10:00:00.000Z'
+    };
+
+    expect(label.status).toBe('CREATED');
+    expect({ ...label, status: 'VOIDED', voidedAt: '2026-06-06T11:00:00.000Z' }).toMatchObject({
+      status: 'VOIDED',
+      voidedAt: '2026-06-06T11:00:00.000Z'
+    });
   });
 });
 

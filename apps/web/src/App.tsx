@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -57,11 +57,16 @@ import {
   summarizeStatusCounts,
   validateShipmentImportRows,
   type BusinessType,
+  type CustomerStatementSummary,
   type FulfillmentAction,
+  type QuoteResponse,
+  type ReceivableFeeSummary,
   type Shipment,
+  type ShipmentLabelSummary,
   type ShipmentStatus
 } from '@siyuan/shared';
-import { businessTabs, shipments } from './data';
+import { ApiClient, type Principal, type Session } from './apiClient';
+import { businessTabs } from './data';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -182,7 +187,9 @@ interface ModulePageConfig {
   title: string;
   description: string;
   capabilities: string[];
+  childFunctions: string[];
   aiEnhancements: string[];
+  siliconFlowScenarios: string[];
   queue: Array<{ item: string; owner: string; status: string }>;
   stats: Array<{ label: string; value: string; helper: string }>;
   records: Array<{ primary: string; secondary: string; metric: string; status: string }>;
@@ -193,14 +200,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '收货打单中心',
     description: '覆盖收货扫描、重量复核、包裹明细和面单生成，适合作为仓库作业入口。',
     capabilities: ['收货扫描', '面单生成', '重量复核', '包裹明细', '异常入库'],
+    childFunctions: ['扫描收货', '批量收货', '打单录入', '重量复核', '包裹明细', '面单预览', '异常入库', '重复扫描提醒'],
     aiEnhancements: ['重量异常识别', '面单信息补全', '重复扫描提醒'],
+    siliconFlowScenarios: ['识别预报重量与实重差异', '根据品名补全面单申报要素', '生成异常入库内部说明'],
     stats: [
       { label: '待收货', value: '18', helper: '今日仓库扫描队列' },
       { label: '待打单', value: '9', helper: '已复重未出面单' },
       { label: '重量异常', value: '3', helper: '实重与预报差异超 15%' }
     ],
     records: [
-      { primary: '入库扫描批次 RCV-0606-A', secondary: '9409-Daloday / SYGJ06061230001', metric: '实重 2.36kg / 预报 2.10kg', status: '待确认收货' },
+      { primary: 'RCV-0606-001', secondary: '9409-Daloday / SYGJ06061230001 / 扫描收货', metric: '实重 2.36kg / 预报 2.10kg', status: '待确认收货' },
       { primary: '面单生成批次 LBL-0606-US', secondary: '美国 USPS 小包线 / 6 票', metric: '已生成 4 / 待补 2', status: '待补申报' },
       { primary: '重量复核 WR-0606-02', secondary: 'SYGJ06059409051 / 德国', metric: '材积重 3.20kg', status: '待复核' }
     ],
@@ -213,7 +222,9 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '渠道排货中心',
     description: '沉淀手动排货、规则排货、代理分配、承运商选择和转单号获取能力。',
     capabilities: ['规则排货', '手动分配渠道', '代理/承运商选择', '转单号获取', '排货日志'],
+    childFunctions: ['规则排货', '手动排货', '批量排货', '代理分配', '承运商选择', '获取转单号', '填写转单号', '排货日志'],
     aiEnhancements: ['推荐最优渠道', '批量操作风险提示', '渠道配置建议'],
+    siliconFlowScenarios: ['按国家/重量/时效推荐渠道', '解释成本倒挂原因', '生成批量排货风险提示'],
     stats: [
       { label: '待排货', value: '21', helper: '需要渠道/代理确认' },
       { label: '缺转单号', value: '7', helper: '可手工补齐或模拟获取' },
@@ -233,14 +244,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '轨迹监控中心',
     description: '集中处理轨迹录入、轨迹同步、未上网、长时间未更新和客户可见轨迹。',
     capabilities: ['轨迹列表', '手工添加轨迹', '轨迹未更新监控', '客户可见轨迹', '轨迹规则'],
+    childFunctions: ['轨迹列表', '手工添加轨迹', '客户可见轨迹', '未上网监控', '未更新队列', '标记上网', '标记签收', '生成客户说明'],
     aiEnhancements: ['轨迹超时解释', '客户沟通草稿', '接口失败诊断'],
+    siliconFlowScenarios: ['解释轨迹超过 3 天未更新', '生成客户可见延误说明', '诊断承运商接口失败原因'],
     stats: [
       { label: '未更新', value: '12', helper: '超过 5 天无新轨迹' },
       { label: '待上网', value: '6', helper: '已发货未上网' },
       { label: '客户可见', value: '48', helper: '今日同步轨迹条数' }
     ],
     records: [
-      { primary: 'SYGJ05291344165', secondary: '客户可见 / USPS 小包线', metric: '9 天未更新', status: '高风险' },
+      { primary: '9064656160', secondary: 'SYGJ05291344165 / 客户可见轨迹 / USPS 小包线', metric: '9 天未更新', status: '高风险' },
       { primary: 'SYGJ06061230003', secondary: '清关延误 / 德国 DHL', metric: '最后轨迹：到达目的国', status: '需说明' },
       { primary: 'TRK-0606-MANUAL', secondary: '手工轨迹：航班起飞', metric: '同步 14 票', status: '待发布' }
     ],
@@ -253,13 +266,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '问题件中心',
     description: '管理问题件新建、回复、关闭、附件和客户可见状态。',
     capabilities: ['新建问题', '回复查看', '关闭问题', '附件', '客户可见状态'],
+    childFunctions: ['新建问题', '回复/查看', '客户回复模拟', '关闭问题', '上传附件', '客户可见状态', '关联运单', 'SLA 跟进'],
     aiEnhancements: ['自动归类问题原因', '生成客户回复', 'SLA 超时提醒'],
+    siliconFlowScenarios: ['按原因归类问题件', '生成客户回复草稿', '总结问题件关闭说明'],
     stats: [
       { label: '待回复', value: '8', helper: '客户可见问题件' },
       { label: '待关闭', value: '5', helper: '内部已处理待复核' },
       { label: 'SLA 超时', value: '2', helper: '超过承诺响应时间' }
     ],
     records: [
+      { primary: '轨迹超过3天未更新', secondary: 'SYGJ05291344165 / 客户可见 / 代理待回复', metric: 'SLA 18h', status: '待员工回复' },
       { primary: '清关资料缺失', secondary: 'SYGJ06061230003 / 客户可见', metric: 'SLA 18h', status: '待客户回复' },
       { primary: '客户退件：不出', secondary: 'SYGJ06059409051 / 内部处理', metric: '附件 2 个', status: '待关闭' },
       { primary: '重量差异申诉', secondary: '9409-Daloday / 收货复重', metric: '差异 0.42kg', status: '待员工回复' }
@@ -273,13 +289,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '报价查价中心',
     description: '支持客户报价、代理成本价、分区、燃油、附加费和价格试算。',
     capabilities: ['客户报价', '代理成本价', '分区', '燃油', '附加费', '价格试算'],
+    childFunctions: ['客户报价', '代理成本价', '渠道报价', '国家分区', '重量段规则', '燃油附加费', '偏远附加费', '价格试算'],
     aiEnhancements: ['自然语言查价', '报价差异解释', '推荐最优渠道'],
+    siliconFlowScenarios: ['自然语言查价转结构化试算', '解释客户价与代理成本差异', '按利润和时效推荐报价'],
     stats: [
       { label: '今日试算', value: '34', helper: '客户与销售查价' },
       { label: '报价产品', value: '16', helper: '按渠道/国家/分区' },
       { label: '待复核价', value: '4', helper: '燃油或偏远费变动' }
     ],
     records: [
+      { primary: '美国 2.4kg', secondary: 'DHL HK / 分区 US-2 / 燃油附加费 18%', metric: '¥96.80', status: '可报价' },
       { primary: '美国 12kg DHL', secondary: '分区 US-2 / 燃油 18%', metric: '¥410.00', status: '可报价' },
       { primary: '德国 3kg 小包', secondary: 'DHL Paket / 普货', metric: '¥128.50', status: '含挂号费' },
       { primary: '澳大利亚偏远费', secondary: '邮编 6714 / FedEx AU', metric: '¥95.00', status: '需提示客户' }
@@ -293,14 +312,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '财务结算中心',
     description: '闭环应收、应付、对账、收付款、核销和余额流水。',
     capabilities: ['应收费用', '应付费用', '客户对账', '代理对账', '收付款', '核销', '余额流水'],
+    childFunctions: ['应收费用', '应付费用', '客户对账', '代理对账', '生成对账单', '收款登记', '付款登记', '核销', '余额流水'],
     aiEnhancements: ['费用差异解释', '欠费风险提示', '对账单摘要'],
+    siliconFlowScenarios: ['解释应收应付差异', '生成客户对账单摘要', '识别欠费与超授信风险'],
     stats: [
       { label: '应收', value: '¥18,642', helper: '今日已生成费用' },
       { label: '应付', value: '¥13,908', helper: '代理/承运商成本' },
       { label: '待核销', value: '11', helper: '收付款未匹配' }
     ],
     records: [
-      { primary: '9409-Daloday', secondary: '应收 ¥1,864.20 / 账户余额 ¥8,420.00', metric: '利润 ¥356.80', status: '待核销' },
+      { primary: 'INV-202606-9409', secondary: '9409-Daloday / 客户对账 / 应收 ¥1,864.20', metric: '利润 ¥356.80', status: '待核销' },
       { primary: '宇环代理账单', secondary: '代理对账 / DHL HK 38 票', metric: '应付 ¥7,230.60', status: '待确认' },
       { primary: '客户充值 PAY-0606-01', secondary: '银行转账 / 财务已认领', metric: '¥5,000.00', status: '待入账' }
     ],
@@ -313,14 +334,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '统计报表中心',
     description: '提供运单、收货、发货、应收应付和利润分析报表。',
     capabilities: ['运单报表', '收货统计', '发货统计', '应收应付分析', '利润分析'],
+    childFunctions: ['运单报表', '收货统计', '发货统计', '应收应付分析', '利润分析', '客户报表', '代理报表', '日报生成'],
     aiEnhancements: ['经营异常洞察', '利润波动解释', '日报生成'],
+    siliconFlowScenarios: ['生成运营日报', '解释利润波动', '识别收发货异常趋势'],
     stats: [
       { label: '今日发货', value: '46', helper: '快递/小包/专线合计' },
       { label: '今日收货', value: '58', helper: '仓库扫描完成' },
       { label: '利润率', value: '18.6%', helper: '按已发货费用估算' }
     ],
     records: [
-      { primary: '今日发货 46', secondary: '快递 31 / 小包 10 / 专线 5', metric: '利润率 18.6%', status: '可导出' },
+      { primary: '日报-2026-06-06', secondary: '快递 31 / 小包 10 / 专线 5', metric: '利润率 18.6%', status: '可导出' },
       { primary: '收货统计 RCV-0606', secondary: '仓库一组 34 / 仓库二组 24', metric: '异常 3 票', status: '已汇总' },
       { primary: '应收应付分析', secondary: '应收 ¥18,642 / 应付 ¥13,908', metric: '毛利 ¥4,734', status: '待复核' }
     ],
@@ -333,7 +356,9 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '基础资料中心',
     description: '维护客户、代理、承运商、渠道、国家地区、费用名称和汇率。',
     capabilities: ['客户', '代理', '承运商', '渠道', '国家地区', '费用名称', '汇率'],
+    childFunctions: ['客户创建', '客户端账号创建', '创建客户联系人', '代理创建', '代理账号创建', '电子词典-费用名称', '触发器', '汇率'],
     aiEnhancements: ['资料缺失检查', '渠道配置建议', '规则冲突提示'],
+    siliconFlowScenarios: ['识别客户资料缺失', '检查渠道配置冲突', '生成资料维护建议'],
     stats: [
       { label: '客户', value: '126', helper: '启用 118 / 停用 8' },
       { label: '渠道', value: '42', helper: '绑定代理与承运商' },
@@ -353,7 +378,9 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     title: '系统设置中心',
     description: '承载公司资料、模板、通知、轨迹规则、状态字典和权限设置。',
     capabilities: ['公司资料', '模板', '通知', '轨迹规则', '状态字典', '权限'],
+    childFunctions: ['新建员工', '修改员工角色', '员工账号重置密码', '角色权限分配', '分配客户端角色权限', '模板权限设置', '轨迹规则', '状态字典'],
     aiEnhancements: ['配置健康检查', '规则冲突提示', '权限风险提示'],
+    siliconFlowScenarios: ['检查权限冲突', '解释角色权限差异', '生成系统配置变更说明'],
     stats: [
       { label: '角色', value: '5', helper: '管理员/客服/操作/财务/客户' },
       { label: '模板', value: '14', helper: '面单、通知、对账单' },
@@ -371,15 +398,296 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
   }
 };
 
+function LoginPage({ onLogin }: { onLogin: (username: string, password: string) => Promise<void> }) {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submitLogin() {
+    setSubmitting(true);
+    setError('');
+    try {
+      await onLogin(username, password);
+    } catch {
+      setError('账号或密码错误');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <ConfigProvider
+      theme={{
+        token: {
+          colorPrimary: '#2458d3',
+          borderRadius: 6,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+        }
+      }}
+    >
+      <div className="login-shell">
+        <Card className="login-card">
+          <Space direction="vertical" size={18} style={{ width: '100%' }}>
+            <div>
+              <Title level={2}>登录思源物流</Title>
+              <Text type="secondary">员工端 / 客户端按角色自动进入对应工作台。</Text>
+            </div>
+            {error ? <Alert type="error" message={error} showIcon /> : null}
+            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <label>
+                <Text strong>账号</Text>
+                <Input aria-label="账号" value={username} onChange={(event) => setUsername(event.target.value)} />
+              </label>
+              <label>
+                <Text strong>密码</Text>
+                <Input.Password aria-label="密码" value={password} onChange={(event) => setPassword(event.target.value)} />
+              </label>
+              <Button type="primary" block loading={submitting} aria-label="登录" onClick={submitLogin}>
+                登录
+              </Button>
+            </Space>
+          </Space>
+        </Card>
+      </div>
+    </ConfigProvider>
+  );
+}
+
+function CustomerPortal({
+  user,
+  shipments,
+  problemTickets,
+  receivables,
+  statements,
+  onLogout,
+  onCreate
+}: {
+  user: Principal;
+  shipments: Shipment[];
+  problemTickets: Array<{ id: string; reason: string; status: string; customerVisible: boolean }>;
+  receivables: ReceivableFeeSummary[];
+  statements: CustomerStatementSummary[];
+  onLogout: () => void;
+  onCreate: (input: {
+    customerOrderNo: string;
+    businessType: BusinessType;
+    packageType: 'DOC' | 'WPX' | 'PAK';
+    destinationCountry: string;
+    packageCount: number;
+    receivableWeightKg: number;
+    agentWeightKg: number;
+    channelId?: string;
+  }) => Promise<void>;
+}) {
+  const [customerOrderNo, setCustomerOrderNo] = useState('');
+  const [destinationCountry, setDestinationCountry] = useState('');
+  const [weight, setWeight] = useState('1');
+  const [notice, setNotice] = useState('');
+
+  async function submitDeclaration() {
+    await onCreate({
+      customerOrderNo,
+      businessType: 'EXPRESS',
+      packageType: 'WPX',
+      destinationCountry,
+      packageCount: 1,
+      receivableWeightKg: Number(weight),
+      agentWeightKg: Number(weight),
+      channelId: 'ch-dhl-hk'
+    });
+    setNotice('预报已提交');
+    setCustomerOrderNo('');
+    setDestinationCountry('');
+    setWeight('1');
+  }
+
+  return (
+    <ConfigProvider
+      theme={{
+        token: {
+          colorPrimary: '#2458d3',
+          borderRadius: 6,
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif'
+        }
+      }}
+    >
+      <Layout className="app-shell">
+        <Header className="topbar">
+          <Flex justify="space-between" align="center" style={{ width: '100%' }}>
+            <Space>
+              <div className="brand-mark">S</div>
+              <div>
+                <Text className="brand-title">思源物流</Text>
+                <Text className="brand-subtitle">客户工作台 · {user.username}</Text>
+              </div>
+            </Space>
+            <Button onClick={onLogout}>退出</Button>
+          </Flex>
+        </Header>
+        <Content className="content">
+          <Flex className="page-heading" justify="space-between" align="center">
+            <div>
+              <Title level={2}>客户门户</Title>
+              <Text type="secondary">预报运单、查询轨迹、处理问题件、查看费用和对账单。</Text>
+            </div>
+            <Space>
+              <Button>价格查询</Button>
+              <Button>费用明细</Button>
+              <Button type="primary">账户余额</Button>
+            </Space>
+          </Flex>
+
+          {notice ? <Alert className="notice-bar" type="success" message={notice} showIcon /> : null}
+
+          <Row gutter={[16, 16]}>
+            <Col xs={24} lg={8}>
+              <Card title="新建预报">
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <label>
+                    <Text strong>客户单号</Text>
+                    <Input aria-label="客户单号" value={customerOrderNo} onChange={(event) => setCustomerOrderNo(event.target.value)} />
+                  </label>
+                  <label>
+                    <Text strong>目的地国家</Text>
+                    <Input aria-label="目的地国家" value={destinationCountry} onChange={(event) => setDestinationCountry(event.target.value)} />
+                  </label>
+                  <label>
+                    <Text strong>重量</Text>
+                    <Input aria-label="重量" value={weight} onChange={(event) => setWeight(event.target.value)} />
+                  </label>
+                  <Button type="primary" block onClick={submitDeclaration}>
+                    提交预报
+                  </Button>
+                </Space>
+              </Card>
+            </Col>
+            <Col xs={24} lg={16}>
+              <Card title="我的运单">
+                <Table
+                  size="small"
+                  rowKey="id"
+                  dataSource={shipments}
+                  pagination={false}
+                  columns={[
+                    { title: '客户单号', dataIndex: 'customerOrderNo' },
+                    { title: '系统单号', dataIndex: 'systemOrderNo' },
+                    { title: '目的地', dataIndex: 'destinationCountry' },
+                    { title: '状态', dataIndex: 'status', render: (status: ShipmentStatus) => shipmentStatusLabels[status] },
+                    { title: '最新轨迹', dataIndex: 'latestTracking' }
+                  ]}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="问题件">
+                <Space direction="vertical" className="ai-list">
+                  {problemTickets.map((ticket) => (
+                    <Alert key={ticket.id} type={ticket.status === 'CLOSED' ? 'success' : 'warning'} message={ticket.reason} showIcon />
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="客户常用功能">
+                <Space wrap>
+                  <Button>偏远/邮编查询</Button>
+                  <Button>黑名单查询</Button>
+                  <Button>对账单</Button>
+                  <Button>个人中心</Button>
+                </Space>
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="费用明细">
+                <Space direction="vertical" className="ai-list">
+                  {receivables.map((fee) => (
+                    <Flex key={fee.id} justify="space-between">
+                      <Text>{fee.name}</Text>
+                      <Text strong>{formatCurrency(fee.amount)}</Text>
+                    </Flex>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+            <Col xs={24} lg={12}>
+              <Card title="对账单草稿">
+                <Space direction="vertical" className="ai-list">
+                  {statements.map((statement) => (
+                    <Flex key={statement.id ?? `${statement.customerId}-${statement.periodStart}`} justify="space-between">
+                      <Text>{statement.periodStart} - {statement.periodEnd}</Text>
+                      <Text strong>{formatCurrency(statement.total)}</Text>
+                    </Flex>
+                  ))}
+                </Space>
+              </Card>
+            </Col>
+          </Row>
+        </Content>
+      </Layout>
+    </ConfigProvider>
+  );
+}
+
 export function App() {
+  const [session, setSession] = useState<Session | null>(() => {
+    const raw = localStorage.getItem('siyuan-session');
+    return raw ? (JSON.parse(raw) as Session) : null;
+  });
   const [activeMenuKey, setActiveMenuKey] = useState<MenuKey>('workspace');
   const [businessType, setBusinessType] = useState<BusinessType>('EXPRESS');
   const [selectedStatus, setSelectedStatus] = useState<ShipmentStatus | 'ALL'>('ALL');
   const [selectedFulfillmentStage, setSelectedFulfillmentStage] = useState<FulfillmentStageKey>('all');
   const [keyword, setKeyword] = useState('');
-  const [localShipments, setLocalShipments] = useState<Shipment[]>(shipments);
+  const [localShipments, setLocalShipments] = useState<Shipment[]>([]);
+  const [problemTickets, setProblemTickets] = useState<Awaited<ReturnType<ApiClient['problemTickets']>>>([]);
+  const [receivables, setReceivables] = useState<ReceivableFeeSummary[]>([]);
+  const [customerStatements, setCustomerStatements] = useState<CustomerStatementSummary[]>([]);
+  const [quoteResult, setQuoteResult] = useState<QuoteResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const businessWorkspaceConfig = businessWorkspaceConfigs[businessType];
+  const apiClient = useMemo(
+    () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
+    [session?.accessToken]
+  );
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+    void refreshWorkspace(apiClient);
+  }, [apiClient, session]);
+
+  function handleUnauthorized() {
+    localStorage.removeItem('siyuan-session');
+    setSession(null);
+    setLocalShipments([]);
+    setProblemTickets([]);
+    setReceivables([]);
+    setCustomerStatements([]);
+    setQuoteResult(null);
+  }
+
+  async function refreshWorkspace(client = apiClient) {
+    const [nextShipments, nextTickets, nextReceivables, nextStatements] = await Promise.all([
+      client.shipments(),
+      client.problemTickets(),
+      client.receivables(),
+      client.customerStatements()
+    ]);
+    setLocalShipments(nextShipments);
+    setProblemTickets(nextTickets);
+    setReceivables(nextReceivables);
+    setCustomerStatements(nextStatements);
+  }
+
+  async function handleLogin(username: string, password: string) {
+    const nextSession = await apiClient.login(username, password);
+    localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
+    setSession(nextSession);
+    const loginClient = new ApiClient(() => nextSession.accessToken, handleUnauthorized);
+    await refreshWorkspace(loginClient);
+  }
 
   const visibleShipments = useMemo(() => {
     const normalized = keyword.trim().toLowerCase();
@@ -583,7 +891,7 @@ export function App() {
     }
   ];
 
-  function handleFulfillmentAction(record: Shipment, action: FulfillmentAction) {
+  async function handleFulfillmentAction(record: Shipment, action: FulfillmentAction) {
     const actionResult = resolveFulfillmentAction(record, action);
 
     if (!actionResult.ok) {
@@ -591,10 +899,65 @@ export function App() {
       return;
     }
 
-    setLocalShipments((current) =>
-      current.map((shipment) => (shipment.id === record.id ? { ...shipment, ...actionResult.patch } : shipment))
-    );
+    const updated =
+      action === 'confirm-receive'
+        ? await apiClient.receiveShipment(record.id)
+        : action === 'assign-route'
+          ? await apiClient.routeShipment(record.id, { channelId: 'ch-dhl-hk', agentId: 'a-yuhuan' })
+          : action === 'confirm-dispatch' || action === 'fill-transfer-no'
+            ? await apiClient.dispatchShipment(record.id, { transferNo: record.transferNo ?? `TRK-${record.systemOrderNo}` })
+            : action === 'add-tracking'
+              ? await apiClient.addTrackingEvent(record.id, { status: '手工轨迹更新', happenedAt: new Date().toISOString() })
+              : action === 'create-problem'
+                ? (await apiClient.createProblemTicket(record.id, { reason: '人工创建问题件', customerVisible: true }), { ...record, hasProblemTicket: true, status: 'PROBLEM' as ShipmentStatus })
+                : { ...record, ...actionResult.patch };
+
+    setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
     setNotice(actionResult.message);
+  }
+
+  async function handleQuote() {
+    const quote = await apiClient.quote({
+      customerId: 'c-9409',
+      channelId: 'ch-dhl-hk',
+      destinationCountry: '美国',
+      chargeableWeightKg: 10,
+      baseRatePerKg: 20,
+      fuelRate: 0.15,
+      surcharges: [{ name: '偏远费', amount: 50 }]
+    });
+    setQuoteResult(quote);
+  }
+
+  async function handleCreateCustomerStatement() {
+    const statement = await apiClient.createCustomerStatement({
+      customerId: 'c-9409',
+      periodStart: '2026-06-01',
+      periodEnd: '2026-06-30'
+    });
+    setCustomerStatements((current) => [statement, ...current.filter((item) => item.id !== statement.id)]);
+    setNotice(`对账单草稿 ¥${statement.total}`);
+  }
+
+  if (!session) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
+
+  if (session.user.role === 'CUSTOMER') {
+    return (
+      <CustomerPortal
+        user={session.user}
+        shipments={localShipments}
+        problemTickets={problemTickets}
+        receivables={receivables}
+        statements={customerStatements}
+        onLogout={handleUnauthorized}
+        onCreate={async (input) => {
+          const created = await apiClient.createShipment(input);
+          setLocalShipments((current) => [created, ...current]);
+        }}
+      />
+    );
   }
 
   return (
@@ -663,7 +1026,9 @@ export function App() {
               allowClear
             />
             <Space>
+              <Text type="secondary">{session.user.username}</Text>
               <Button icon={<ShieldCheck size={16} />}>权限视图</Button>
+              <Button onClick={handleUnauthorized}>退出</Button>
               <Button type="primary" icon={<Sparkles size={16} />}>
                 AI 工作流
               </Button>
@@ -794,6 +1159,17 @@ export function App() {
               </>
             ) : activeMenuKey === 'settings' ? (
               <SystemSettingsPage />
+            ) : activeMenuKey === 'master' ? (
+              <MasterDataPage />
+            ) : activeMenuKey === 'pricing' ? (
+              <PricingPage quoteResult={quoteResult} onQuote={handleQuote} />
+            ) : activeMenuKey === 'finance' ? (
+              <FinancePage
+                receivables={receivables}
+                statements={customerStatements}
+                notice={notice}
+                onCreateStatement={handleCreateCustomerStatement}
+              />
             ) : modulePageConfigs[activeMenuKey] ? (
               <GenericModulePage config={modulePageConfigs[activeMenuKey]} />
             ) : (
@@ -1223,6 +1599,14 @@ function SystemSettingsPage() {
             </Space>
           </Card>
 
+          <Card className="automation-card" title="AI 接口安全">
+            <Space direction="vertical" size={10} className="quality-panel">
+              <Tag color="blue">硅基流动</Tag>
+              <Alert type="success" showIcon message="所有 AI 调用统一走后端 /api/ai/assist" />
+              <Alert type="warning" showIcon message="SILICONFLOW_API_KEY 只读取环境变量，不写入前端代码" />
+            </Space>
+          </Card>
+
           <Card className="automation-card" title="高危操作审计">
             <Space direction="vertical" size={10} className="quality-panel">
               {['权限修改必须写入 audit_logs', '员工账号重置密码必须记录操作人', '角色权限分配需要保存前后变化', '系统参数修改需要二次确认'].map((item) => (
@@ -1246,6 +1630,324 @@ function SystemSettingsPage() {
   );
 }
 
+const masterManualSections = [
+  {
+    title: '客户档案',
+    items: ['客户端账号创建', '创建客户联系人', '客户启用/停用', '客户授信与结算方式'],
+    owner: '客服组'
+  },
+  {
+    title: '代理档案',
+    items: ['代理账号创建', '代理 API 对接预留', '代理联系人', '代理结算资料'],
+    owner: '产品组'
+  },
+  {
+    title: '基础数据',
+    items: ['电子词典-费用名称', '触发器', '汇率', '国家地区'],
+    owner: '管理员'
+  },
+  {
+    title: '单证模板',
+    items: ['下载市场模板', '修改及制作模板', '上传模板', '模板权限设置'],
+    owner: '操作主管'
+  }
+];
+
+const masterRecordRows = [
+  { type: '客户', name: '9409-Daloday', detail: '月结客户 / 联系人 Lina / 客户端账号已启用', status: '启用' },
+  { type: '代理', name: 'HKD01 代理价', detail: '宇环代理 / DHL HK 成本价 / API 转单预留', status: '待更新' },
+  { type: '承运商', name: 'USPS 小包线', detail: '美国小包 / 材积 6000 / 支持挂号转单', status: '启用' },
+  { type: '费用名称', name: '偏远附加费', detail: '电子词典 / 应收应付共用 / 可参与报价试算', status: '启用' },
+  { type: '汇率', name: 'USD/CNY 7.2450', detail: '2026-06-06 生效 / 财务与报价共用', status: '启用' },
+  { type: '模板', name: '客户对账单模板', detail: 'Excel 导出模板 / 已配置模板权限', status: '启用' }
+];
+
+const templateRows = [
+  { name: '收货清单模板', scene: '收货导出', permission: '操作/管理员', status: '可导出' },
+  { name: '发货清单模板', scene: '发货导出', permission: '操作/管理员', status: '可导出' },
+  { name: '客户对账单模板', scene: '财务对账', permission: '财务/管理员', status: '可导出' },
+  { name: '自定义运单类型模板', scene: '运单导入导出', permission: '管理员', status: '可编辑' }
+];
+
+function MasterDataPage() {
+  const [masterNotice, setMasterNotice] = useState<string | null>(null);
+
+  const handleMasterAction = (message: string) => {
+    setMasterNotice(message);
+  };
+
+  return (
+    <>
+      <Flex justify="space-between" align="center" className="page-heading">
+        <div>
+          <Title level={2}>基础资料中心</Title>
+          <Text type="secondary">按手册维护客户、代理、基础数据、费用名称、汇率、单证模板和模板权限。</Text>
+        </div>
+        <Space>
+          <Button icon={<FileInput size={16} />} onClick={() => handleMasterAction('已模拟导入客户、代理与汇率资料')}>
+            导入资料
+          </Button>
+          <Button icon={<ClipboardCheck size={16} />} onClick={() => handleMasterAction('已模拟导出基础资料清单')}>
+            导出资料
+          </Button>
+          <Button type="primary" icon={<Sparkles size={16} />} onClick={() => handleMasterAction('AI 已检查资料缺失、重复客户和汇率过期')}>
+            AI 资料体检
+          </Button>
+        </Space>
+      </Flex>
+
+      {masterNotice ? <Alert className="notice-bar" type="success" showIcon message={masterNotice} /> : null}
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Users />} title="客户/联系人" value="126" extra="客户端账号创建、客户联系人" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Route />} title="代理/渠道" value="42" extra="代理账号创建、API 对接预留" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<FileText />} title="模板/汇率" value="18" extra="单证模板、模板权限、USD/CNY 7.2450" />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} className="main-grid">
+        <Col xs={24} xl={15}>
+          <Card
+            title={
+              <Flex align="center" gap={8}>
+                <Boxes size={18} />
+                <span>手册功能点</span>
+              </Flex>
+            }
+          >
+            <Row gutter={[12, 12]}>
+              {masterManualSections.map((section) => (
+                <Col xs={24} md={12} key={section.title}>
+                  <div className="module-card">
+                    <Flex justify="space-between" align="center">
+                      <Text strong>{section.title}</Text>
+                      <Tag color="blue">{section.owner}</Tag>
+                    </Flex>
+                    <Space wrap className="risk-tags">
+                      {section.items.map((item) => (
+                        <Tag key={item}>{item}</Tag>
+                      ))}
+                    </Space>
+                    <Button size="small" onClick={() => handleMasterAction(`已进入${section.title}模拟维护`)}>
+                      进入维护
+                    </Button>
+                  </div>
+                </Col>
+              ))}
+            </Row>
+          </Card>
+
+          <Card className="module-grid" title="基础资料台账">
+            <Table
+              rowKey="name"
+              size="small"
+              pagination={false}
+              dataSource={masterRecordRows}
+              columns={[
+                { title: '类型', dataIndex: 'type', width: 100, render: (value: string) => <Tag>{value}</Tag> },
+                { title: '名称', dataIndex: 'name', width: 170, render: (value: string) => <Text strong>{value}</Text> },
+                { title: '说明', dataIndex: 'detail' },
+                { title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <Tag color={value === '启用' ? 'green' : 'gold'}>{value}</Tag> }
+              ]}
+            />
+          </Card>
+
+          <Card className="module-grid" title="单证模板与权限">
+            <Table
+              rowKey="name"
+              size="small"
+              pagination={false}
+              dataSource={templateRows}
+              columns={[
+                { title: '模板', dataIndex: 'name' },
+                { title: '场景', dataIndex: 'scene', width: 150 },
+                { title: '模板权限设置', dataIndex: 'permission', width: 160 },
+                { title: '状态', dataIndex: 'status', width: 110, render: (value: string) => <Tag color="blue">{value}</Tag> }
+              ]}
+            />
+          </Card>
+        </Col>
+
+        <Col xs={24} xl={9}>
+          <Card
+            title={
+              <Flex align="center" gap={8}>
+                <Bot size={18} />
+                <span>AI 资料助手</span>
+              </Flex>
+            }
+          >
+            <Space direction="vertical" size={12} className="quality-panel">
+              <Tag color="blue">硅基流动</Tag>
+              <Alert type="info" showIcon message="客户联系人缺手机号时提醒客服补齐" />
+              <Alert type="warning" showIcon message="代理 API 对接预留不需要填写真实 key" />
+              <Alert type="warning" showIcon message="汇率超过 24 小时未更新时提示复核" />
+              <Alert type="info" showIcon message="模板权限变更写入 audit_logs" />
+            </Space>
+          </Card>
+
+          <Card className="automation-card" title="快捷维护">
+            <Space wrap>
+              {['新建客户', '创建客户联系人', '客户端账号创建', '代理账号创建', '电子词典-费用名称', '触发器', '汇率', '模板权限设置'].map((item) => (
+                <Button key={item} onClick={() => handleMasterAction(`已打开${item}模拟入口`)}>
+                  {item}
+                </Button>
+              ))}
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+    </>
+  );
+}
+
+function PricingPage({ quoteResult, onQuote }: { quoteResult: QuoteResponse | null; onQuote: () => Promise<void> }) {
+  const [loading, setLoading] = useState(false);
+
+  async function runQuote() {
+    setLoading(true);
+    try {
+      await onQuote();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <>
+      <Flex justify="space-between" align="center" className="page-heading">
+        <div>
+          <Title level={2}>报价查价中心</Title>
+          <Text type="secondary">基于 M3 最小财务公式试算客户应收报价。</Text>
+        </div>
+        <Button type="primary" icon={<CircleDollarSign size={16} />} loading={loading} onClick={runQuote}>
+          试算报价
+        </Button>
+      </Flex>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Banknote />} title="计费重" value="10kg" extra="DHL HK / 美国" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Activity />} title="燃油" value="15%" extra="按基础运费计算" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<PackageCheck />} title="附加费" value="¥50" extra="偏远费样例" />
+        </Col>
+      </Row>
+
+      <Card className="module-grid" title="报价结果">
+        {quoteResult ? (
+          <Space direction="vertical" size={10}>
+            <Text>基础运费 {formatCurrency(quoteResult.freight)}</Text>
+            <Text>燃油费 {formatCurrency(quoteResult.fuel)}</Text>
+            <Text>附加费 {formatCurrency(quoteResult.surchargeTotal)}</Text>
+            <Title level={3}>报价合计 ¥{quoteResult.total}</Title>
+          </Space>
+        ) : (
+          <Text type="secondary">点击试算报价后显示费用拆分。</Text>
+        )}
+      </Card>
+
+      <Card className="module-grid" title="报价能力">
+        <Space wrap>
+          <Tag>燃油附加费</Tag>
+          <Tag>美国 2.4kg</Tag>
+          <Tag>硅基流动</Tag>
+        </Space>
+      </Card>
+    </>
+  );
+}
+
+function FinancePage({
+  receivables,
+  statements,
+  notice,
+  onCreateStatement
+}: {
+  receivables: ReceivableFeeSummary[];
+  statements: CustomerStatementSummary[];
+  notice: string | null;
+  onCreateStatement: () => Promise<void>;
+}) {
+  const total = receivables.reduce((sum, fee) => sum + fee.amount, 0);
+
+  return (
+    <>
+      <Flex justify="space-between" align="center" className="page-heading">
+        <div>
+          <Title level={2}>财务结算中心</Title>
+          <Text type="secondary">M3 最小闭环：应收费用、调整项和客户对账单草稿。</Text>
+        </div>
+        <Button type="primary" icon={<Landmark size={16} />} onClick={onCreateStatement}>
+          生成 9409 对账单
+        </Button>
+      </Flex>
+
+      {notice ? <Alert className="notice-bar" type="success" showIcon message={notice} /> : null}
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Banknote />} title="未结应收" value={formatCurrency(total)} extra={`${receivables.length} 条费用`} />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<FileText />} title="对账草稿" value={statements.length} extra="客户账单待确认" />
+        </Col>
+        <Col xs={24} md={8}>
+          <MetricCard icon={<Sparkles />} title="费用解释" value="AI" extra="保留费用问答扩展点" />
+        </Col>
+      </Row>
+
+      <Row gutter={[16, 16]} className="main-grid">
+        <Col xs={24} xl={15}>
+          <Card title="应收费用">
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={receivables}
+              columns={[
+                { title: '系统单号', dataIndex: 'systemOrderNo' },
+                { title: '客户', dataIndex: 'customerName' },
+                { title: '费用名称', dataIndex: 'name' },
+                { title: '金额', dataIndex: 'amount', render: (value: number) => formatCurrency(value) },
+                { title: '状态', dataIndex: 'settled', render: (settled: boolean) => (settled ? '已结算' : '未结算') }
+              ]}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} xl={9}>
+          <Card title="客户对账单">
+            <Space wrap className="surface-strip">
+              <Tag>客户对账</Tag>
+              <Tag>INV-202606-9409</Tag>
+              <Tag>硅基流动</Tag>
+            </Space>
+            <Space direction="vertical" className="ai-list">
+              {statements.map((statement) => (
+                <Alert
+                  key={statement.id ?? `${statement.customerId}-${statement.periodStart}`}
+                  type="info"
+                  showIcon
+                  message={`对账单草稿 ${formatCurrency(statement.total)}`}
+                  description={`${statement.customerName} · ${statement.periodStart} - ${statement.periodEnd}`}
+                />
+              ))}
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+    </>
+  );
+}
+
 function GenericModulePage({ config }: { config?: ModulePageConfig }) {
   if (!config) {
     return null;
@@ -1257,6 +1959,9 @@ function GenericModulePage({ config }: { config?: ModulePageConfig }) {
         <div>
           <Title level={2}>{config.title}</Title>
           <Text type="secondary">{config.description}</Text>
+          <div>
+            <Tag color="blue">硅基流动</Tag>
+          </div>
         </div>
         <Space>
           <Button icon={<FileInput size={16} />}>导入</Button>
@@ -1295,6 +2000,14 @@ function GenericModulePage({ config }: { config?: ModulePageConfig }) {
                 </Col>
               ))}
             </Row>
+          </Card>
+
+          <Card className="module-grid" title="功能点">
+            <Space wrap>
+              {config.childFunctions.map((child) => (
+                <Tag key={child}>{child}</Tag>
+              ))}
+            </Space>
           </Card>
 
           <Card className="module-grid" title="模拟业务数据">
@@ -1375,9 +2088,14 @@ function GenericModulePage({ config }: { config?: ModulePageConfig }) {
             }
           >
             <Space direction="vertical" size={12} className="quality-panel">
+              <Tag color="blue">硅基流动</Tag>
               {config.aiEnhancements.map((item) => (
                 <Alert key={item} type="info" showIcon message={item} />
               ))}
+              {config.siliconFlowScenarios.map((item) => (
+                <Alert key={item} type="success" showIcon message={`硅基流动场景：${item}`} />
+              ))}
+              <Alert type="warning" showIcon message="API Key 仅由后端环境变量读取，前端不保存密钥" />
             </Space>
           </Card>
 
@@ -1427,6 +2145,10 @@ function riskWeight(risk: string) {
 
 function riskLabel(risk: string) {
   return risk === 'high' ? '高风险' : risk === 'medium' ? '需关注' : '正常';
+}
+
+function formatCurrency(amount: number) {
+  return `¥${amount.toFixed(2)}`;
 }
 
 const fulfillmentActionLabels: Record<FulfillmentAction, string> = {

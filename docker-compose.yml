@@ -1,21 +1,49 @@
 services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE_URL: /api
+    depends_on:
+      - api
+    ports:
+      - "${APP_PORT:-8899}:80"
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      API_PORT: 3001
+      JWT_SECRET: ${JWT_SECRET:-siyuan-production-secret}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://siyuan:siyuan@postgres:5432/siyuan}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+      SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+      USE_PRISMA_REPOSITORY: ${USE_PRISMA_REPOSITORY:-false}
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: siyuan
       POSTGRES_USER: siyuan
-      POSTGRES_PASSWORD: siyuan
-    ports:
-      - "5432:5432"
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-siyuan}
     volumes:
       - postgres-data:/var/lib/postgresql/data
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redis-data:/data
+    restart: unless-stopped
 
 volumes:
   postgres-data:

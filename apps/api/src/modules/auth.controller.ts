@@ -1,17 +1,17 @@
 import { Body, Controller, Get, Inject, Post, UnauthorizedException, Req } from '@nestjs/common';
 import jwt from 'jsonwebtoken';
-import { InMemoryRepository } from './in-memory.repository.js';
+import { PrismaRepository } from './prisma.repository.js';
 import { RequirePermission } from './require-permission.decorator.js';
 import { jwtSecret } from './rbac.guard.js';
 import type { Principal } from './rbac.js';
 
 @Controller('auth')
 export class AuthController {
-  constructor(@Inject(InMemoryRepository) private readonly repository: InMemoryRepository) {}
+  constructor(@Inject(PrismaRepository) private readonly repository: PrismaRepository) {}
 
   @Post('login')
-  login(@Body() body: { username?: string; password?: string }) {
-    const account = this.repository.findAccount(body.username ?? '', body.password ?? '');
+  async login(@Body() body: { username?: string; password?: string }) {
+    const account = await this.repository.findAccount(body.username ?? '', body.password ?? '');
 
     if (!account) {
       throw new UnauthorizedException('账号或密码错误');

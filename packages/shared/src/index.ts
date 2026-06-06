@@ -48,6 +48,33 @@ export interface Shipment {
   hasProblemTicket: boolean;
 }
 
+export type CarrierAdapterCode = 'DHL' | 'FEDEX' | 'UPS' | 'USPS' | 'OTHER';
+export type ShipmentLabelStatus = 'CREATED' | 'VOIDED';
+
+export interface LabelCreateRequest {
+  shipmentId: string;
+  carrier: CarrierAdapterCode;
+  channelName: string;
+}
+
+export interface ShipmentLabelSummary {
+  id: string;
+  shipmentId: string;
+  carrier: CarrierAdapterCode;
+  channelName: string;
+  labelNo: string;
+  transferNo: string;
+  labelUrl: string;
+  status: ShipmentLabelStatus;
+  createdAt: string;
+  voidedAt?: string;
+}
+
+export interface LabelCreateResponse {
+  label: ShipmentLabelSummary;
+  shipment: Shipment;
+}
+
 export interface ChargeableWeightInput {
   actualWeightKg: number;
   lengthCm: number;
@@ -61,6 +88,69 @@ export interface QuoteInput {
   baseRatePerKg: number;
   fuelRate: number;
   surcharges: Array<{ name: string; amount: number }>;
+}
+
+export interface QuoteResponse {
+  freight: number;
+  fuel: number;
+  surchargeTotal: number;
+  total: number;
+}
+
+export interface PricingQuoteRequest extends QuoteInput {
+  customerId?: string;
+  channelId?: string;
+  destinationCountry: string;
+}
+
+export interface FeeLineInput {
+  name: string;
+  amount: number;
+}
+
+export interface FeeLineDraft extends FeeLineInput {
+  shipmentId: string;
+}
+
+export interface ReceivableFeeSummary {
+  id: string;
+  shipmentId: string;
+  systemOrderNo: string;
+  customerName: string;
+  name: string;
+  amount: number;
+  settled: boolean;
+}
+
+export interface ReceivableAdjustmentInput {
+  name: string;
+  amount: number;
+}
+
+export interface CustomerStatementCreateInput {
+  customerId: string;
+  periodStart: string;
+  periodEnd: string;
+}
+
+export interface CustomerStatementSummary {
+  id?: string;
+  customerId: string;
+  customerName: string;
+  periodStart: string;
+  periodEnd: string;
+  total: number;
+  feeCount: number;
+  status: 'DRAFT' | 'CONFIRMED' | 'SETTLED';
+  createdAt?: string;
+}
+
+export interface StatementSummaryInput {
+  customerId: string;
+  customerName: string;
+  periodStart: string;
+  periodEnd: string;
+  fees: ReceivableFeeSummary[];
 }
 
 export interface ShipmentInsightInput {
@@ -95,6 +185,57 @@ export interface ShipmentImportError {
 export interface ShipmentImportValidationResult {
   validRows: ShipmentImportRow[];
   errors: ShipmentImportError[];
+}
+
+export interface ShipmentCreateInput {
+  customerId?: string;
+  customerOrderNo: string;
+  businessType: BusinessType;
+  packageType: 'DOC' | 'WPX' | 'PAK';
+  destinationCountry: string;
+  packageCount: number;
+  receivableWeightKg: number;
+  agentWeightKg?: number;
+  channelId?: string;
+}
+
+export interface ShipmentImportRequest {
+  customerId?: string;
+  rows: ShipmentImportRow[];
+}
+
+export interface ShipmentImportResponse {
+  created: Shipment[];
+  errors: ShipmentImportError[];
+}
+
+export interface ShipmentActionResponse {
+  shipment: Shipment;
+  message: string;
+}
+
+export interface TrackingEventInput {
+  status: string;
+  happenedAt: string;
+  visibleToCustomer?: boolean;
+}
+
+export interface ProblemTicketCreateInput {
+  reason: string;
+  customerVisible?: boolean;
+}
+
+export interface ProblemTicketSummary {
+  id: string;
+  shipmentId: string;
+  systemOrderNo: string;
+  customerName: string;
+  reason: string;
+  status: string;
+  customerVisible: boolean;
+  createdAt: string;
+  closedAt?: string;
+  replies: Array<{ id: string; author: string; message: string; createdAt: string }>;
 }
 
 export type AutomationPriority = 'urgent' | 'high' | 'normal';
@@ -278,7 +419,7 @@ export function calculateChargeableWeight(input: ChargeableWeightInput) {
   };
 }
 
-export function calculateQuote(input: QuoteInput) {
+export function calculateQuote(input: QuoteInput): QuoteResponse {
   const freight = round2(input.chargeableWeightKg * input.baseRatePerKg);
   const fuel = round2(freight * input.fuelRate);
   const surchargeTotal = round2(input.surcharges.reduce((sum, item) => sum + item.amount, 0));
@@ -288,6 +429,42 @@ export function calculateQuote(input: QuoteInput) {
     fuel,
     surchargeTotal,
     total: round2(freight + fuel + surchargeTotal)
+  };
+}
+
+export function createFeeLinesFromQuote(
+  shipmentId: string,
+  quote: QuoteResponse,
+  adjustments: FeeLineInput[] = []
+): FeeLineDraft[] {
+  const lines: FeeLineDraft[] = [
+    { shipmentId, name: '基础运费', amount: quote.freight },
+    { shipmentId, name: '燃油费', amount: quote.fuel }
+  ];
+
+  if (quote.surchargeTotal !== 0) {
+    lines.push({ shipmentId, name: '附加费', amount: quote.surchargeTotal });
+  }
+
+  for (const adjustment of adjustments) {
+    if (adjustment.amount !== 0) {
+      lines.push({ shipmentId, name: adjustment.name, amount: round2(adjustment.amount) });
+    }
+  }
+
+  return lines;
+}
+
+export function summarizeStatement(input: StatementSummaryInput): CustomerStatementSummary {
+  const unsettledFees = input.fees.filter((fee) => !fee.settled);
+  return {
+    customerId: input.customerId,
+    customerName: input.customerName,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
+    total: round2(unsettledFees.reduce((sum, fee) => sum + fee.amount, 0)),
+    feeCount: unsettledFees.length,
+    status: 'DRAFT'
   };
 }
 
@@ -379,6 +556,36 @@ export function validateShipmentImportRows(rows: ShipmentImportRow[]): ShipmentI
   });
 
   return { validRows, errors };
+}
+
+export function createSystemOrderNo(businessType: BusinessType, date: Date, sequence: number): string {
+  const prefixes: Record<BusinessType, string> = {
+    EXPRESS: 'GJ',
+    SMALL_PACKET: 'XB',
+    DEDICATED_LINE: 'ZX'
+  };
+  const year = String(date.getUTCFullYear()).slice(-2);
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const serial = String(sequence).padStart(5, '0');
+
+  return `SY${prefixes[businessType]}${year}${month}${day}${serial}`;
+}
+
+export function createMockTransferNo(carrier: CarrierAdapterCode, date: Date, sequence: number): string {
+  const prefixes: Record<CarrierAdapterCode, string> = {
+    DHL: 'DHL',
+    FEDEX: 'FDX',
+    UPS: '1Z',
+    USPS: 'USPS',
+    OTHER: 'SIM'
+  };
+  const year = String(date.getUTCFullYear()).slice(-2);
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const serial = String(sequence).padStart(5, '0');
+
+  return `${prefixes[carrier]}${year}${month}${day}${serial}`;
 }
 
 export function createAutomationPlan(shipments: Shipment[]): AutomationPlanItem[] {

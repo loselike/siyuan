@@ -19,13 +19,20 @@ export default [
         document: 'readonly',
         window: 'readonly',
         HTMLElement: 'readonly',
-        CSSStyleDeclaration: 'readonly'
+        CSSStyleDeclaration: 'readonly',
+        localStorage: 'readonly',
+        fetch: 'readonly',
+        Response: 'readonly',
+        RequestInfo: 'readonly',
+        RequestInit: 'readonly',
+        URL: 'readonly'
       }
     },
     plugins: {
       '@typescript-eslint': tseslint
     },
     rules: {
+      'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }]
     }
   }
