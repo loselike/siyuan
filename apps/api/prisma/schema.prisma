@@ -1,0 +1,318 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BusinessType {
+  EXPRESS
+  SMALL_PACKET
+  DEDICATED_LINE
+}
+
+enum ShipmentStatus {
+  DRAFT
+  DECLARED
+  WAITING_RECEIVE
+  WAITING_SORT
+  WAITING_DISPATCH
+  WAITING_ONLINE
+  WAITING_SIGNED
+  WAITING_RETURN
+  PROBLEM
+  STUCK
+  SIGNED
+  CANCELLED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  roleId       String
+  customerId   String?
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  role         Role     @relation(fields: [roleId], references: [id])
+  customer     Customer? @relation(fields: [customerId], references: [id])
+}
+
+model Role {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  users       User[]
+  permissions Permission[]
+}
+
+model Permission {
+  id     String @id @default(cuid())
+  code   String @unique
+  roles  Role[]
+}
+
+model Department {
+  id      String @id @default(cuid())
+  name    String
+  enabled Boolean @default(true)
+}
+
+model Customer {
+  id        String            @id @default(cuid())
+  code      String            @unique
+  name      String
+  enabled   Boolean           @default(true)
+  users     User[]
+  contacts  CustomerContact[]
+  accounts  CustomerAccount[]
+  shipments Shipment[]
+}
+
+model CustomerContact {
+  id         String   @id @default(cuid())
+  customerId String
+  name       String
+  phone      String?
+  email      String?
+  enabled    Boolean  @default(true)
+  customer   Customer @relation(fields: [customerId], references: [id])
+}
+
+model CustomerAccount {
+  id         String   @id @default(cuid())
+  customerId String
+  balance    Decimal  @default(0)
+  currency   String   @default("CNY")
+  customer   Customer @relation(fields: [customerId], references: [id])
+}
+
+model Agent {
+  id        String     @id @default(cuid())
+  name      String
+  enabled   Boolean    @default(true)
+  shipments Shipment[]
+}
+
+model Carrier {
+  id       String    @id @default(cuid())
+  name     String
+  enabled  Boolean   @default(true)
+  channels Channel[]
+}
+
+model Channel {
+  id        String     @id @default(cuid())
+  name      String
+  carrierId String
+  enabled   Boolean    @default(true)
+  carrier   Carrier    @relation(fields: [carrierId], references: [id])
+  shipments Shipment[]
+}
+
+model Shipment {
+  id                  String            @id @default(cuid())
+  customerId          String
+  agentId             String?
+  channelId           String?
+  customerOrderNo     String
+  systemOrderNo       String            @unique
+  transferNo          String?
+  businessType        BusinessType
+  status              ShipmentStatus
+  destinationCountry  String
+  packageType         String
+  packageCount        Int               @default(1)
+  receivableWeightKg  Decimal
+  agentWeightKg       Decimal
+  latestTracking      String?
+  trackingStaleDays   Int               @default(0)
+  isRemoteArea        Boolean           @default(false)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  customer            Customer          @relation(fields: [customerId], references: [id])
+  agent               Agent?            @relation(fields: [agentId], references: [id])
+  channel             Channel?          @relation(fields: [channelId], references: [id])
+  packages            ShipmentPackage[]
+  events              ShipmentEvent[]
+  trackingEvents      TrackingEvent[]
+  problemTickets      ProblemTicket[]
+  receivableFees      ReceivableFee[]
+  payableFees         PayableFee[]
+}
+
+model ShipmentPackage {
+  id          String   @id @default(cuid())
+  shipmentId  String
+  lengthCm    Decimal
+  widthCm     Decimal
+  heightCm    Decimal
+  actualKg    Decimal
+  volumeKg    Decimal
+  shipment    Shipment @relation(fields: [shipmentId], references: [id])
+}
+
+model ShipmentEvent {
+  id         String         @id @default(cuid())
+  shipmentId String
+  fromStatus ShipmentStatus?
+  toStatus   ShipmentStatus
+  note       String?
+  createdAt  DateTime       @default(now())
+  shipment   Shipment       @relation(fields: [shipmentId], references: [id])
+}
+
+model TrackingEvent {
+  id                String   @id @default(cuid())
+  shipmentId         String
+  status             String
+  happenedAt         DateTime
+  visibleToCustomer  Boolean  @default(true)
+  shipment           Shipment @relation(fields: [shipmentId], references: [id])
+}
+
+model ProblemTicket {
+  id                String         @id @default(cuid())
+  shipmentId         String
+  reason             String
+  status             String
+  customerVisible    Boolean        @default(true)
+  createdAt          DateTime       @default(now())
+  closedAt           DateTime?
+  shipment           Shipment       @relation(fields: [shipmentId], references: [id])
+  replies            ProblemReply[]
+}
+
+model ProblemReply {
+  id        String        @id @default(cuid())
+  ticketId  String
+  author    String
+  message   String
+  createdAt DateTime      @default(now())
+  ticket    ProblemTicket @relation(fields: [ticketId], references: [id])
+}
+
+model PriceProduct {
+  id      String      @id @default(cuid())
+  name    String
+  enabled Boolean     @default(true)
+  zones   PriceZone[]
+  rules   PriceRule[]
+}
+
+model PriceZone {
+  id        String       @id @default(cuid())
+  productId String
+  name      String
+  countries String[]
+  product   PriceProduct @relation(fields: [productId], references: [id])
+}
+
+model PriceRule {
+  id            String       @id @default(cuid())
+  productId     String
+  zoneName      String
+  minWeightKg   Decimal
+  maxWeightKg   Decimal
+  ratePerKg     Decimal
+  product       PriceProduct @relation(fields: [productId], references: [id])
+}
+
+model Surcharge {
+  id      String  @id @default(cuid())
+  name    String
+  amount  Decimal
+  enabled Boolean @default(true)
+}
+
+model FuelRate {
+  id        String   @id @default(cuid())
+  channelId String
+  rate      Decimal
+  activeAt  DateTime
+}
+
+model ReceivableFee {
+  id         String   @id @default(cuid())
+  shipmentId String
+  amount     Decimal
+  name       String
+  settled    Boolean  @default(false)
+  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+}
+
+model PayableFee {
+  id         String   @id @default(cuid())
+  shipmentId String
+  amount     Decimal
+  name       String
+  settled    Boolean  @default(false)
+  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+}
+
+model CustomerStatement {
+  id         String   @id @default(cuid())
+  customerId String
+  total      Decimal
+  status     String
+  createdAt  DateTime @default(now())
+}
+
+model AgentStatement {
+  id        String   @id @default(cuid())
+  agentId   String
+  total     Decimal
+  status    String
+  createdAt DateTime @default(now())
+}
+
+model Payment {
+  id        String   @id @default(cuid())
+  partyType String
+  partyId   String
+  amount    Decimal
+  createdAt DateTime @default(now())
+}
+
+model Settlement {
+  id        String   @id @default(cuid())
+  paymentId String
+  feeId     String
+  amount    Decimal
+  createdAt DateTime @default(now())
+}
+
+model AccountLedger {
+  id        String   @id @default(cuid())
+  partyType String
+  partyId   String
+  amount    Decimal
+  balance   Decimal
+  note      String?
+  createdAt DateTime @default(now())
+}
+
+model ImportJob {
+  id        String   @id @default(cuid())
+  type      String
+  status    String
+  createdAt DateTime @default(now())
+}
+
+model ExportJob {
+  id        String   @id @default(cuid())
+  type      String
+  status    String
+  createdAt DateTime @default(now())
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String
+  action    String
+  target    String
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+}

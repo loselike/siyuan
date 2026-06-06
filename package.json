@@ -9,10 +9,11 @@
   ],
   "scripts": {
     "dev": "npm run dev -w @siyuan/web",
-    "build": "npm run build -w @siyuan/shared && npm run build -w @siyuan/web",
-    "test": "npm run test -w @siyuan/shared && npm run test -w @siyuan/web",
-    "lint": "npm run lint -w @siyuan/web",
-    "typecheck": "npm run typecheck -w @siyuan/shared && npm run typecheck -w @siyuan/web"
+    "dev:api": "npm run dev -w @siyuan/api",
+    "build": "npm run build -w @siyuan/shared && npm run build -w @siyuan/api && npm run build -w @siyuan/web",
+    "test": "npm run test -w @siyuan/shared && npm run test -w @siyuan/api && npm run test -w @siyuan/web",
+    "lint": "npm run lint -w @siyuan/api && npm run lint -w @siyuan/web",
+    "typecheck": "npm run typecheck -w @siyuan/shared && npm run typecheck -w @siyuan/api && npm run typecheck -w @siyuan/web"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.34.0",
