@@ -1,0 +1,187 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #eef2f7;
+  color: #182033;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: #f7f9fc !important;
+  border-right: 1px solid #d9e1ec;
+  padding: 16px 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px 18px;
+}
+
+.brand-mark {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #2458d3;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.brand-title,
+.brand-subtitle {
+  display: block;
+  line-height: 1.2;
+}
+
+.brand-title {
+  color: #152340;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.brand-subtitle {
+  color: #68758a;
+  font-size: 12px;
+}
+
+.side-menu {
+  background: transparent;
+  border-inline-end: 0 !important;
+}
+
+.sidebar-card {
+  margin-top: 16px;
+  background: #fff;
+  border-color: #dce5f1;
+}
+
+.topbar {
+  height: 64px;
+  padding: 0 20px;
+  background: #fff;
+  border-bottom: 1px solid #d9e1ec;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.global-search {
+  max-width: 420px;
+  min-width: 280px;
+}
+
+.content {
+  padding: 20px;
+  background: #eef2f7;
+}
+
+.page-heading {
+  margin-bottom: 18px;
+}
+
+.page-heading h2 {
+  margin: 0 0 4px;
+  font-size: 26px;
+}
+
+.metric-card {
+  min-height: 126px;
+}
+
+.metric-icon {
+  color: #2458d3;
+  background: #e8eefc;
+  border-radius: 6px;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+}
+
+.metric-extra {
+  margin-top: 14px;
+  min-height: 18px;
+  color: #65728a;
+}
+
+.main-grid {
+  margin-top: 16px;
+}
+
+.status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.batch-bar {
+  padding: 10px;
+  margin-bottom: 12px;
+  border: 1px solid #d9e1ec;
+  background: #f8fafc;
+  border-radius: 6px;
+}
+
+.ai-list {
+  width: 100%;
+}
+
+.risk-card {
+  border-left-width: 4px;
+}
+
+.risk-high {
+  border-left-color: #d4380d;
+}
+
+.risk-medium {
+  border-left-color: #d48806;
+}
+
+.risk-summary {
+  display: block;
+  margin: 10px 0;
+}
+
+.risk-tags {
+  margin-bottom: 10px;
+}
+
+.assistant-card {
+  margin-top: 16px;
+  background: #f8fbff;
+}
+
+@media (max-width: 900px) {
+  .sidebar {
+    display: none;
+  }
+
+  .topbar {
+    height: auto;
+    padding: 12px;
+    flex-wrap: wrap;
+  }
+
+  .global-search {
+    max-width: none;
+    min-width: 100%;
+  }
+
+  .page-heading {
+    align-items: flex-start !important;
+    flex-direction: column;
+    gap: 12px;
+  }
+}
