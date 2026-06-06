@@ -222,6 +222,9 @@ describe('M1+M2 API-backed workspace', () => {
     await renderAndLogin('admin', 'admin123');
 
     expect(await screen.findByRole('heading', { name: 'AI 物流运营工作台' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '专线 3' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /快递/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /小包/ })).not.toBeInTheDocument();
     expect(screen.getByText('SYGJ06061230001')).toBeInTheDocument();
     expect(screen.getAllByText('9409-Daloday').length).toBeGreaterThan(0);
   });

@@ -76,7 +76,6 @@ import {
   type ShipmentStatus
 } from '@siyuan/shared';
 import { ApiClient, type AiAssistResponse, type PermissionKey, type Principal, type RoleKey, type RolePermissionMatrix, type RolePermissionRow, type Session } from './apiClient';
-import { businessTabs } from './data';
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -182,16 +181,16 @@ const businessWorkspaceConfigs: Record<
     ]
   },
   DEDICATED_LINE: {
-    description: '专线业务聚焦 FBA/海外仓大货、装板排舱、清关节点和头程/尾程轨迹。',
+    description: '专线聚合视图统一承载原快递、小包、专线数据，集中处理渠道履约、清关节点、头程/尾程轨迹和异常风险。',
     metrics: [
-      { title: '待处理专线', extra: '按航线、板位和仓库聚合' },
-      { title: '清关风险', extra: '查验、资料缺失、尾程异常' },
-      { title: '预计应收', extra: '头程、尾程、派送费合计' },
-      { title: '今日入仓率', extra: 'FBA / 海外仓签收表现' }
+      { title: '待处理运单', extra: '快递/小包/专线统一聚合' },
+      { title: '履约风险', extra: '转单、清关、尾程、轨迹异常' },
+      { title: '预计应收', extra: '运费、燃油、偏远和派送费合计' },
+      { title: '今日完成率', extra: '上网、签收、入仓综合表现' }
     ],
     batchActions: ['批量装板', '排舱确认', '生成装箱单', '头程发货', '尾程转单', '清关资料审核', '新建问题', '添加轨迹'],
     assistantCopy: 'AI 可解释清关/排舱延误、提示大货成本倒挂，并生成客户节点汇报。',
-    focusTitle: '专线作业重点',
+    focusTitle: '专线聚合作业重点',
     focusItems: [
       { title: '装板/排舱', description: '按航线、板位、仓库批次确认头程计划' },
       { title: '清关资料', description: '审核箱单、发票、品名、税号和查验资料' },
@@ -692,7 +691,7 @@ export function App() {
     return raw ? (JSON.parse(raw) as Session) : null;
   });
   const [activeMenuKey, setActiveMenuKey] = useState<MenuKey>('workspace');
-  const [businessType, setBusinessType] = useState<BusinessType>('EXPRESS');
+  const businessType: BusinessType = 'DEDICATED_LINE';
   const [selectedStatus, setSelectedStatus] = useState<ShipmentStatus | 'ALL'>('ALL');
   const [selectedFulfillmentStage, setSelectedFulfillmentStage] = useState<FulfillmentStageKey>('all');
   const [keyword, setKeyword] = useState('');
@@ -710,7 +709,7 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState<AiResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
-  const businessWorkspaceConfig = businessWorkspaceConfigs[businessType];
+  const businessWorkspaceConfig = businessWorkspaceConfigs.DEDICATED_LINE;
   const apiClient = useMemo(
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
     [session?.accessToken]
@@ -807,7 +806,6 @@ export function App() {
   const visibleShipments = useMemo(() => {
     const normalized = keyword.trim().toLowerCase();
     return localShipments.filter((shipment) => {
-      const matchesBusiness = shipment.businessType === businessType;
       const matchesStatus = selectedStatus === 'ALL' || shipment.status === selectedStatus;
       const matchesKeyword =
         normalized.length === 0 ||
@@ -824,13 +822,13 @@ export function App() {
           .filter(Boolean)
           .some((value) => value?.toLowerCase().includes(normalized));
 
-      return matchesBusiness && matchesStatus && matchesKeyword;
+      return matchesStatus && matchesKeyword;
     });
-  }, [businessType, keyword, localShipments, selectedStatus]);
+  }, [keyword, localShipments, selectedStatus]);
 
   const businessShipments = useMemo(
-    () => localShipments.filter((shipment) => shipment.businessType === businessType),
-    [businessType, localShipments]
+    () => localShipments,
+    [localShipments]
   );
   const statusCounts = summarizeStatusCounts(businessShipments);
   const aiQueue = useMemo(
@@ -857,7 +855,7 @@ export function App() {
   const spotlightModules = productModules.filter((module) =>
     ['运单履约', '问题件中心', '客户门户', 'AI 助手', '开放 API', '系统设置'].includes(module.name)
   );
-  const fulfillmentStageSummary = summarizeFulfillmentStages(localShipments, businessType);
+  const fulfillmentStageSummary = summarizeFulfillmentStages(localShipments, 'ALL');
   const fulfillmentShipments = useMemo(() => {
     const activeStage = fulfillmentStages.find((stage) => stage.key === selectedFulfillmentStage);
     return businessShipments.filter(
@@ -1307,22 +1305,15 @@ export function App() {
         <Layout>
           <Header className="topbar">
             <Space className="business-switch" role="group" aria-label="业务类型">
-              {businessTabs.map((tab) => {
-                const count = localShipments.filter((shipment) => shipment.businessType === tab.key).length;
-                return (
-                  <Button
-                    key={tab.key}
-                    type={businessType === tab.key ? 'primary' : 'default'}
-                    onClick={() => {
-                      setBusinessType(tab.key);
-                      setSelectedStatus('ALL');
-                      setActiveMenuKey('workspace');
-                    }}
-                  >
-                    {tab.label} {count}
-                  </Button>
-                );
-              })}
+              <Button
+                type="primary"
+                onClick={() => {
+                  setSelectedStatus('ALL');
+                  setActiveMenuKey('workspace');
+                }}
+              >
+                专线 {localShipments.length}
+              </Button>
             </Space>
             <Input
               className="global-search"
@@ -1344,8 +1335,8 @@ export function App() {
                   handleAiAssist({
                     module: '全局工作流',
                     task: '生成跨模块处理建议',
-                    prompt: `请基于当前${businessTypeLabels[businessType]}业务、${businessShipments.length}票运单、${aiQueue.length}个风险项，输出今日优先处理建议。`,
-                    context: { businessType, shipmentCount: businessShipments.length, riskCount: aiQueue.length }
+                    prompt: `请基于当前专线聚合业务、${businessShipments.length}票运单、${aiQueue.length}个风险项，输出今日优先处理建议。`,
+                    context: { businessType: 'DEDICATED_LINE_AGGREGATED', shipmentCount: businessShipments.length, riskCount: aiQueue.length }
                   })
                 }
               >

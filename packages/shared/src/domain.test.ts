@@ -471,6 +471,30 @@ describe('fulfillment workflow rules', () => {
     });
   });
 
+  it('summarizes fulfillment stages across all business types for unified dedicated-line view', () => {
+    const summary = summarizeFulfillmentStages(
+      [
+        sampleShipment('a', 'EXPRESS', 'DECLARED'),
+        sampleShipment('b', 'SMALL_PACKET', 'WAITING_RECEIVE'),
+        sampleShipment('c', 'DEDICATED_LINE', 'WAITING_SORT'),
+        sampleShipment('d', 'DEDICATED_LINE', 'WAITING_DISPATCH'),
+        sampleShipment('e', 'SMALL_PACKET', 'WAITING_ONLINE'),
+        sampleShipment('f', 'EXPRESS', 'STUCK')
+      ],
+      'ALL'
+    );
+
+    expect(summary).toEqual({
+      declared: 1,
+      receiving: 1,
+      sorting: 1,
+      dispatching: 1,
+      online: 1,
+      signing: 0,
+      exception: 1
+    });
+  });
+
   it('creates AI fulfillment advice for missing transfer number and stale tracking', () => {
     const advice = createFulfillmentAdvice(
       sampleShipment('risk', 'EXPRESS', 'WAITING_ONLINE', {

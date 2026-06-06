@@ -1022,8 +1022,8 @@ export function getAvailableFulfillmentActions(context: FulfillmentActionContext
   return actions;
 }
 
-export function summarizeFulfillmentStages(shipments: Shipment[], businessType: BusinessType = 'EXPRESS'): FulfillmentStageSummary {
-  const scopedShipments = shipments.filter((shipment) => shipment.businessType === businessType);
+export function summarizeFulfillmentStages(shipments: Shipment[], businessType: BusinessType | 'ALL' = 'EXPRESS'): FulfillmentStageSummary {
+  const scopedShipments = businessType === 'ALL' ? shipments : shipments.filter((shipment) => shipment.businessType === businessType);
 
   return {
     declared: scopedShipments.filter((shipment) => shipment.status === 'DECLARED').length,
