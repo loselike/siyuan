@@ -26,4 +26,18 @@ describe('AI logistics workspace', () => {
     expect(screen.getByText('SYZX0606UK001')).toBeInTheDocument();
     expect(screen.queryByText('SYGJ05291344165')).not.toBeInTheDocument();
   });
+
+  it('surfaces the expanded product modules and AI-first workflows', () => {
+    render(<App />);
+
+    expect(screen.getByRole('heading', { name: '全模块产品地图' })).toBeInTheDocument();
+    expect(screen.getByText('员工端')).toBeInTheDocument();
+    expect(screen.getByText('客户端')).toBeInTheDocument();
+    expect(screen.getByText('AI 助手')).toBeInTheDocument();
+    expect(screen.getByText('开放集成')).toBeInTheDocument();
+    expect(screen.getByText('智能导入质检')).toBeInTheDocument();
+    expect(screen.getByText('报价查价')).toBeInTheDocument();
+    expect(screen.getByText('财务结算')).toBeInTheDocument();
+    expect(screen.getByText('客户门户')).toBeInTheDocument();
+  });
 });

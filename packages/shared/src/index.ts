@@ -70,6 +70,44 @@ export interface ShipmentInsight {
   suggestedActions: string[];
 }
 
+export interface ShipmentImportRow {
+  customerOrderNo: string;
+  destinationCountry: string;
+  weightKg: number;
+  channelName: string;
+}
+
+export interface ShipmentImportError {
+  rowNumber: number;
+  field: keyof ShipmentImportRow;
+  message: string;
+}
+
+export interface ShipmentImportValidationResult {
+  validRows: ShipmentImportRow[];
+  errors: ShipmentImportError[];
+}
+
+export type AutomationPriority = 'urgent' | 'high' | 'normal';
+
+export interface AutomationPlanItem {
+  shipmentId: string;
+  priority: AutomationPriority;
+  title: string;
+  actions: string[];
+}
+
+export type ProductSurface = '员工端' | '客户端' | 'AI 助手' | '开放集成';
+export type ModulePhase = 'phase-one' | 'phase-two';
+
+export interface ProductModule {
+  name: string;
+  surface: ProductSurface;
+  phase: ModulePhase;
+  capabilities: string[];
+  aiEnhancements: string[];
+}
+
 export const shipmentStatusLabels: Record<ShipmentStatus, string> = {
   DRAFT: '草稿',
   DECLARED: '已预报',
@@ -90,6 +128,93 @@ export const businessTypeLabels: Record<BusinessType, string> = {
   SMALL_PACKET: '小包',
   DEDICATED_LINE: '专线'
 };
+
+export const productModules: ProductModule[] = [
+  {
+    name: '运单履约',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['预报', '导入运单', '收货', '打单', '排货', '发货', '转单号', '退货', '滞留件'],
+    aiEnhancements: ['异常优先级排序', '自动生成处理建议', '批量操作风险提示']
+  },
+  {
+    name: '运营工作台',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['业务类型切换', '状态池', '多字段筛选', '批量操作', '轨迹监控'],
+    aiEnhancements: ['今日待办摘要', '轨迹超时解释', '客户沟通草稿']
+  },
+  {
+    name: '收货打单',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['收货扫描', '面单生成', '重量复核', '包裹明细'],
+    aiEnhancements: ['重量异常识别', '面单信息补全']
+  },
+  {
+    name: '报价查价',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['客户报价', '代理成本价', '分区', '燃油', '附加费', '价格试算'],
+    aiEnhancements: ['自然语言查价', '报价差异解释', '推荐最优渠道']
+  },
+  {
+    name: '问题件中心',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['新建问题', '回复查看', '关闭问题', '附件', '客户可见状态'],
+    aiEnhancements: ['自动归类问题原因', '生成客户回复', 'SLA 超时提醒']
+  },
+  {
+    name: '财务结算',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['应收费用', '应付费用', '客户对账', '代理对账', '收付款', '核销', '余额流水'],
+    aiEnhancements: ['费用差异解释', '欠费风险提示', '对账单摘要']
+  },
+  {
+    name: '统计报表',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['运单报表', '收货统计', '发货统计', '应收应付分析', '利润分析'],
+    aiEnhancements: ['经营异常洞察', '利润波动解释']
+  },
+  {
+    name: '基础资料',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['客户', '代理', '承运商', '渠道', '国家地区', '费用名称', '汇率'],
+    aiEnhancements: ['资料缺失检查', '渠道配置建议']
+  },
+  {
+    name: '客户门户',
+    surface: '客户端',
+    phase: 'phase-one',
+    capabilities: ['预报运单', '我的运单', '问题件', '价格查询', '费用明细', '对账单', '账户余额'],
+    aiEnhancements: ['智能录单', '物流问答', '费用解释']
+  },
+  {
+    name: '系统设置',
+    surface: '员工端',
+    phase: 'phase-one',
+    capabilities: ['公司资料', '模板', '通知', '轨迹规则', '状态字典', '权限'],
+    aiEnhancements: ['配置健康检查', '规则冲突提示']
+  },
+  {
+    name: 'AI 助手',
+    surface: 'AI 助手',
+    phase: 'phase-one',
+    capabilities: ['智能录单', '异常解释', '客户回复', '费用问答', '日报生成'],
+    aiEnhancements: ['上下文任务编排', '可审计建议记录']
+  },
+  {
+    name: '开放 API',
+    surface: '开放集成',
+    phase: 'phase-two',
+    capabilities: ['代理 API', '承运商 API', '轨迹抓取', '打印套件', '电子秤', 'PDA', '微信入口'],
+    aiEnhancements: ['接口失败诊断', '自动重试建议']
+  }
+];
 
 const allowedTransitions: Record<ShipmentStatus, ShipmentStatus[]> = {
   DRAFT: ['DECLARED', 'CANCELLED'],
@@ -183,6 +308,95 @@ export function createShipmentInsights(input: ShipmentInsightInput): ShipmentIns
   };
 }
 
+export function validateShipmentImportRows(rows: ShipmentImportRow[]): ShipmentImportValidationResult {
+  const seenOrderNos = new Set<string>();
+  const errors: ShipmentImportError[] = [];
+  const validRows: ShipmentImportRow[] = [];
+
+  rows.forEach((row, index) => {
+    const rowNumber = index + 1;
+    const normalizedOrderNo = row.customerOrderNo.trim();
+    const rowErrors: ShipmentImportError[] = [];
+
+    if (!normalizedOrderNo) {
+      rowErrors.push({ rowNumber, field: 'customerOrderNo', message: '客户单号不能为空' });
+    } else if (seenOrderNos.has(normalizedOrderNo)) {
+      rowErrors.push({ rowNumber, field: 'customerOrderNo', message: '客户单号重复' });
+    }
+
+    if (!row.destinationCountry.trim()) {
+      rowErrors.push({ rowNumber, field: 'destinationCountry', message: '目的地国家不能为空' });
+    }
+
+    if (!Number.isFinite(row.weightKg) || row.weightKg <= 0) {
+      rowErrors.push({ rowNumber, field: 'weightKg', message: '重量必须大于 0' });
+    }
+
+    if (!row.channelName.trim()) {
+      rowErrors.push({ rowNumber, field: 'channelName', message: '渠道不能为空' });
+    }
+
+    if (rowErrors.length === 0) {
+      validRows.push({ ...row, customerOrderNo: normalizedOrderNo });
+    }
+
+    if (normalizedOrderNo) {
+      seenOrderNos.add(normalizedOrderNo);
+    }
+
+    errors.push(...rowErrors);
+  });
+
+  return { validRows, errors };
+}
+
+export function createAutomationPlan(shipments: Shipment[]): AutomationPlanItem[] {
+  return shipments
+    .map((shipment) => {
+      const insight = createShipmentInsights({
+        status: shipment.status,
+        trackingStaleDays: shipment.trackingStaleDays,
+        isRemoteArea: shipment.isRemoteArea,
+        hasProblemTicket: shipment.hasProblemTicket,
+        chargeableWeightKg: shipment.receivableWeightKg,
+        carrier: shipment.carrier
+      });
+      const actions = new Set<string>(insight.suggestedActions);
+
+      if (shipment.hasProblemTicket || shipment.status === 'PROBLEM') {
+        actions.add('同步客户异常说明');
+      }
+
+      if (Math.abs(shipment.receivableWeightKg - shipment.agentWeightKg) >= 1 || shipment.receivableWeightKg >= 50) {
+        actions.add('复核应收/应付费用差异');
+      }
+
+      if (!shipment.transferNo && ['WAITING_DISPATCH', 'WAITING_ONLINE', 'WAITING_SIGNED'].includes(shipment.status)) {
+        actions.add('补齐转单号后再推进状态');
+      }
+
+      const priority: AutomationPriority =
+        insight.riskLevel === 'high' ? 'urgent' : insight.riskLevel === 'medium' ? 'high' : 'normal';
+
+      return {
+        shipmentId: shipment.id,
+        priority,
+        title: `${shipment.systemOrderNo} · ${shipment.customerName}`,
+        actions: Array.from(actions)
+      };
+    })
+    .sort((a, b) => automationPriorityWeight(b.priority) - automationPriorityWeight(a.priority));
+}
+
+export function getModuleCoverageSummary() {
+  return {
+    totalModules: productModules.length,
+    surfaces: Array.from(new Set(productModules.map((module) => module.surface))),
+    phaseOneModules: productModules.filter((module) => module.phase === 'phase-one').map((module) => module.name),
+    phaseTwoModules: productModules.filter((module) => module.phase === 'phase-two').map((module) => module.name)
+  };
+}
+
 export function summarizeStatusCounts(shipments: Shipment[]) {
   return Object.keys(shipmentStatusLabels).reduce(
     (summary, status) => ({
@@ -195,4 +409,8 @@ export function summarizeStatusCounts(shipments: Shipment[]) {
 
 export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function automationPriorityWeight(priority: AutomationPriority): number {
+  return priority === 'urgent' ? 3 : priority === 'high' ? 2 : 1;
 }

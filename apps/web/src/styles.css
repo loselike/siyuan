@@ -94,6 +94,12 @@ body {
   font-size: 26px;
 }
 
+.card-heading {
+  margin: 0 !important;
+  font-size: 16px !important;
+  line-height: 1.4 !important;
+}
+
 .metric-card {
   min-height: 126px;
 }
@@ -161,6 +167,54 @@ body {
 .assistant-card {
   margin-top: 16px;
   background: #f8fbff;
+}
+
+.module-grid {
+  margin-top: 16px;
+}
+
+.surface-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.module-card {
+  min-height: 126px;
+  padding: 12px;
+  border: 1px solid #d9e1ec;
+  border-radius: 6px;
+  background: #fbfcfe;
+}
+
+.module-card .ant-typography-secondary {
+  display: block;
+  margin: 10px 0;
+  line-height: 1.5;
+}
+
+.ai-enhancement {
+  color: #2458d3;
+  background: #e8eefc;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+
+.quality-panel {
+  width: 100%;
+}
+
+.automation-card {
+  margin-top: 16px;
+}
+
+.automation-item {
+  padding: 10px;
+  border: 1px solid #d9e1ec;
+  border-radius: 6px;
+  background: #fff;
 }
 
 @media (max-width: 900px) {

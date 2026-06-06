@@ -45,9 +45,13 @@ import {
 } from 'lucide-react';
 import {
   businessTypeLabels,
+  createAutomationPlan,
   createShipmentInsights,
+  getModuleCoverageSummary,
+  productModules,
   shipmentStatusLabels,
   summarizeStatusCounts,
+  validateShipmentImportRows,
   type BusinessType,
   type Shipment,
   type ShipmentStatus
@@ -83,6 +87,12 @@ const menuItems = [
   { key: 'reports', icon: <ClipboardCheck size={16} />, label: '统计报表' },
   { key: 'master', icon: <Users size={16} />, label: '基础资料' },
   { key: 'settings', icon: <Settings size={16} />, label: '系统设置' }
+];
+
+const importCheckRows = [
+  { customerOrderNo: 'AI-0606-001', destinationCountry: '美国', weightKg: 2.4, channelName: 'USPS 小包线' },
+  { customerOrderNo: 'AI-0606-001', destinationCountry: '德国', weightKg: 1.2, channelName: 'DHL HK' },
+  { customerOrderNo: 'AI-0606-003', destinationCountry: '', weightKg: -1, channelName: '' }
 ];
 
 export function App() {
@@ -136,6 +146,12 @@ export function App() {
         .filter(({ insight }) => insight.riskLevel !== 'low')
         .sort((a, b) => riskWeight(b.insight.riskLevel) - riskWeight(a.insight.riskLevel)),
     [businessShipments]
+  );
+  const automationPlan = useMemo(() => createAutomationPlan(businessShipments).slice(0, 4), [businessShipments]);
+  const importValidation = useMemo(() => validateShipmentImportRows(importCheckRows), []);
+  const moduleSummary = getModuleCoverageSummary();
+  const spotlightModules = productModules.filter((module) =>
+    ['运单履约', '问题件中心', '客户门户', 'AI 助手', '开放 API', '系统设置'].includes(module.name)
   );
 
   const columns: ColumnsType<Shipment> = [
@@ -427,6 +443,100 @@ export function App() {
                     <Button type="primary" block icon={<Send size={16} />}>
                       生成今日处理建议
                     </Button>
+                  </Space>
+                </Card>
+              </Col>
+            </Row>
+
+            <Row gutter={[16, 16]} className="module-grid">
+              <Col xs={24} xl={16}>
+                <Card
+                  title={
+                    <Flex align="center" gap={8}>
+                      <Boxes size={18} />
+                      <Title level={3} className="card-heading">
+                        全模块产品地图
+                      </Title>
+                    </Flex>
+                  }
+                  extra={<Text type="secondary">一期先闭环核心业务，二期接入硬件、微信和开放 API</Text>}
+                >
+                  <div className="surface-strip">
+                    {moduleSummary.surfaces.map((surface) => (
+                      <Tag key={surface} color={surface === 'AI 助手' ? 'blue' : 'default'}>
+                        {surface}
+                      </Tag>
+                    ))}
+                  </div>
+                  <Row gutter={[12, 12]}>
+                    {spotlightModules.map((module) => (
+                      <Col xs={24} md={12} key={module.name}>
+                        <div className="module-card">
+                          <Flex justify="space-between" align="center">
+                            <Text strong>
+                              {module.name === '开放 API'
+                                ? '开放接口与设备'
+                                : module.name === 'AI 助手'
+                                  ? '智能助手中心'
+                                  : module.name}
+                            </Text>
+                            <Tag color={module.phase === 'phase-one' ? 'green' : 'gold'}>
+                              {module.phase === 'phase-one' ? '一期' : '二期'}
+                            </Tag>
+                          </Flex>
+                          <Text type="secondary">{module.capabilities.slice(0, 4).join(' / ')}</Text>
+                          <div className="ai-enhancement">AI 增强：{module.aiEnhancements[0]}</div>
+                        </div>
+                      </Col>
+                    ))}
+                  </Row>
+                </Card>
+              </Col>
+
+              <Col xs={24} xl={8}>
+                <Card
+                  title={
+                    <Flex align="center" gap={8}>
+                      <FileInput size={18} />
+                      <span>智能导入质检</span>
+                    </Flex>
+                  }
+                >
+                  <Space direction="vertical" size={12} className="quality-panel">
+                    <Flex justify="space-between">
+                      <Text>可导入行</Text>
+                      <Text strong>{importValidation.validRows.length}</Text>
+                    </Flex>
+                    <Flex justify="space-between">
+                      <Text>待修正问题</Text>
+                      <Text strong type="danger">
+                        {importValidation.errors.length}
+                      </Text>
+                    </Flex>
+                    {importValidation.errors.slice(0, 3).map((error) => (
+                      <Alert
+                        key={`${error.rowNumber}-${error.field}`}
+                        type="warning"
+                        showIcon
+                        message={`第 ${error.rowNumber} 行：${error.message}`}
+                      />
+                    ))}
+                  </Space>
+                </Card>
+
+                <Card className="automation-card" title="AI 自动化计划">
+                  <Space direction="vertical" size={10} className="quality-panel">
+                    {automationPlan.map((item) => (
+                      <div key={item.shipmentId} className="automation-item">
+                        <Flex justify="space-between" align="center">
+                          <Text strong>{item.title}</Text>
+                          <Tag color={item.priority === 'urgent' ? 'red' : item.priority === 'high' ? 'orange' : 'default'}>
+                            {item.priority === 'urgent' ? '紧急' : item.priority === 'high' ? '高优先' : '普通'}
+                          </Tag>
+                        </Flex>
+                        <Text type="secondary">{item.actions.slice(0, 2).join('；')}</Text>
+                      </div>
+                    ))}
                   </Space>
                 </Card>
               </Col>
