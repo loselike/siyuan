@@ -103,6 +103,50 @@ const importCheckRows = [
 type MenuKey = 'workspace' | 'orders' | 'receive' | 'routing' | 'tracking' | 'problems' | 'pricing' | 'finance' | 'reports' | 'master' | 'settings';
 type FulfillmentStageKey = 'all' | 'declared' | 'receiving' | 'sorting' | 'dispatching' | 'online' | 'signing' | 'exception';
 
+const businessWorkspaceConfigs: Record<
+  BusinessType,
+  {
+    description: string;
+    metrics: Array<{ title: string; extra: string }>;
+    batchActions: string[];
+    assistantCopy: string;
+  }
+> = {
+  EXPRESS: {
+    description: '快递业务聚焦商业快件、转单号、偏远识别、渠道排货和上网签收时效。',
+    metrics: [
+      { title: '待处理运单', extra: '按快递渠道聚合' },
+      { title: '轨迹风险', extra: 'DHL / FedEx / UPS 自动识别' },
+      { title: '预计应收', extra: '含燃油与偏远附加费' },
+      { title: '今日签收率', extra: '快件妥投表现' }
+    ],
+    batchActions: ['批量修改', '复制运单', '获取转单号', '日终处理', '新建问题', '回复/查看', '单证审核', '添加轨迹', '轨迹对接设置'],
+    assistantCopy: '用自然语言批量生成运单、解释快递报价差异、总结问题件、自动生成客户回复。'
+  },
+  SMALL_PACKET: {
+    description: '轻小件批量预报、邮袋交接、挂号/平邮转单和上网时效跟进。',
+    metrics: [
+      { title: '待处理小包', extra: '按客户批次和邮袋聚合' },
+      { title: '上网风险', extra: '超过 5 天未上网自动识别' },
+      { title: '预估运费', extra: '按克重段、挂号费、燃油计算' },
+      { title: '今日交邮率', extra: '邮袋交接完成度' }
+    ],
+    batchActions: ['批量预报', '邮袋交接', '挂号转单号', '平邮批量上网', '重量分段复核', '批量添加轨迹', '新建问题', '客户通知'],
+    assistantCopy: 'AI 可按克重段识别报价异常、提醒未交邮袋批次，并生成客户上网延迟说明。'
+  },
+  DEDICATED_LINE: {
+    description: '专线业务聚焦 FBA/海外仓大货、装板排舱、清关节点和头程/尾程轨迹。',
+    metrics: [
+      { title: '待处理专线', extra: '按航线、板位和仓库聚合' },
+      { title: '清关风险', extra: '查验、资料缺失、尾程异常' },
+      { title: '预计应收', extra: '头程、尾程、派送费合计' },
+      { title: '今日入仓率', extra: 'FBA / 海外仓签收表现' }
+    ],
+    batchActions: ['批量装板', '排舱确认', '生成装箱单', '头程发货', '尾程转单', '清关资料审核', '新建问题', '添加轨迹'],
+    assistantCopy: 'AI 可解释清关/排舱延误、提示大货成本倒挂，并生成客户节点汇报。'
+  }
+};
+
 const fulfillmentStages: Array<{ key: FulfillmentStageKey; label: string; statuses: ShipmentStatus[] }> = [
   { key: 'all', label: '全部', statuses: [] },
   { key: 'declared', label: '已预报', statuses: ['DECLARED'] },
@@ -315,6 +359,7 @@ export function App() {
   const [keyword, setKeyword] = useState('');
   const [localShipments, setLocalShipments] = useState<Shipment[]>(shipments);
   const [notice, setNotice] = useState<string | null>(null);
+  const businessWorkspaceConfig = businessWorkspaceConfigs[businessType];
 
   const visibleShipments = useMemo(() => {
     const normalized = keyword.trim().toLowerCase();
@@ -581,6 +626,7 @@ export function App() {
                     onClick={() => {
                       setBusinessType(tab.key);
                       setSelectedStatus('ALL');
+                      setActiveMenuKey('workspace');
                     }}
                   >
                     {tab.label} {count}
@@ -734,7 +780,7 @@ export function App() {
               <div>
                 <Title level={2}>AI 物流运营工作台</Title>
                 <Text type="secondary">
-                  吸收易抵达核心业务闭环，重构为状态驱动、风险优先、可扩展的现代运营台。
+                  {businessWorkspaceConfig.description}
                 </Text>
               </div>
               <Space>
@@ -748,21 +794,21 @@ export function App() {
 
             <Row gutter={[16, 16]}>
               <Col xs={24} md={12} xl={6}>
-                <MetricCard icon={<Truck />} title="待处理运单" value={businessShipments.length} extra="按业务类型聚合" />
+                <MetricCard icon={<Truck />} title={businessWorkspaceConfig.metrics[0].title} value={businessShipments.length} extra={businessWorkspaceConfig.metrics[0].extra} />
               </Col>
               <Col xs={24} md={12} xl={6}>
                 <MetricCard
                   icon={<Activity />}
-                  title="轨迹风险"
+                  title={businessWorkspaceConfig.metrics[1].title}
                   value={aiQueue.filter((item) => item.insight.tags.includes('轨迹超时')).length}
-                  extra="AI 自动识别"
+                  extra={businessWorkspaceConfig.metrics[1].extra}
                 />
               </Col>
               <Col xs={24} md={12} xl={6}>
-                <MetricCard icon={<Banknote />} title="预计应收" value="¥ 18,642" extra="含燃油与附加费" />
+                <MetricCard icon={<Banknote />} title={businessWorkspaceConfig.metrics[2].title} value="¥ 18,642" extra={businessWorkspaceConfig.metrics[2].extra} />
               </Col>
               <Col xs={24} md={12} xl={6}>
-                <MetricCard icon={<PackageCheck />} title="今日签收率" value="92%" extra={<Progress percent={92} showInfo={false} />} />
+                <MetricCard icon={<PackageCheck />} title={businessWorkspaceConfig.metrics[3].title} value="92%" extra={<Progress percent={92} showInfo={false} />} />
               </Col>
             </Row>
 
@@ -797,15 +843,11 @@ export function App() {
 
                   <div className="batch-bar">
                     <Space wrap>
-                      <Button size="small">批量修改</Button>
-                      <Button size="small">复制运单</Button>
-                      <Button size="small">获取转单号</Button>
-                      <Button size="small">日终处理</Button>
-                      <Button size="small">新建问题</Button>
-                      <Button size="small">回复/查看</Button>
-                      <Button size="small">单证审核</Button>
-                      <Button size="small">添加轨迹</Button>
-                      <Button size="small">轨迹对接设置</Button>
+                      {businessWorkspaceConfig.batchActions.map((action) => (
+                        <Button key={action} size="small">
+                          {action}
+                        </Button>
+                      ))}
                     </Space>
                   </div>
 
@@ -862,7 +904,7 @@ export function App() {
                       <Sparkles size={18} />
                       <Text strong>下一步 AI 赋能</Text>
                     </Flex>
-                    <Text type="secondary">用自然语言批量生成运单、解释报价差异、总结问题件、自动生成客户回复。</Text>
+                    <Text type="secondary">{businessWorkspaceConfig.assistantCopy}</Text>
                     <Button type="primary" block icon={<Send size={16} />}>
                       生成今日处理建议
                     </Button>

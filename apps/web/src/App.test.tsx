@@ -21,10 +21,24 @@ describe('AI logistics workspace', () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.click(screen.getByRole('button', { name: '专线 1' }));
+    await user.click(screen.getByRole('button', { name: '专线 4' }));
 
     expect(screen.getByText('SYZX0606UK001')).toBeInTheDocument();
     expect(screen.queryByText('SYGJ05291344165')).not.toBeInTheDocument();
+  });
+
+  it('shows a dedicated small packet workspace when switching business type', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: '小包 6' }));
+
+    expect(screen.getByText('小包运单池')).toBeInTheDocument();
+    expect(screen.getByText('轻小件批量预报、邮袋交接、挂号/平邮转单和上网时效跟进。')).toBeInTheDocument();
+    expect(screen.getByText('邮袋交接')).toBeInTheDocument();
+    expect(screen.getByText('SYXB0606DE002')).toBeInTheDocument();
+    expect(screen.getByText('燕文小包线')).toBeInTheDocument();
+    expect(screen.getAllByText('待交邮袋').length).toBeGreaterThan(0);
   });
 
   it('surfaces the expanded product modules and AI-first workflows', () => {
