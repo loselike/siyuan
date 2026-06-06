@@ -1,8 +1,9 @@
 import { Injectable } from '@nestjs/common';
 
 export interface AiAssistRequest {
-  module: string;
-  task: string;
+  module?: string;
+  task?: string;
+  scenario?: string;
   prompt: string;
   context?: Record<string, unknown>;
 }
@@ -41,7 +42,7 @@ export class AiService {
           },
           {
             role: 'user',
-            content: `模块：${input.module}\n任务：${input.task}\n上下文：${JSON.stringify(input.context ?? {})}\n需求：${input.prompt}`
+            content: `模块：${this.moduleName(input)}\n任务：${this.taskName(input)}\n上下文：${JSON.stringify(input.context ?? {})}\n需求：${input.prompt}`
           }
         ],
         temperature: 0.2,
@@ -72,6 +73,14 @@ export class AiService {
   }
 
   private mockText(input: AiAssistRequest): string {
-    return `【${input.module} · ${input.task}】建议优先核对：${input.prompt}。下一步：1. 标记风险等级；2. 指派责任人；3. 生成客户可见说明；4. 写入审计记录。`;
+    return `【${this.moduleName(input)} · ${this.taskName(input)}】建议优先核对：${input.prompt}。下一步：1. 标记风险等级；2. 指派责任人；3. 生成客户可见说明；4. 写入审计记录。`;
+  }
+
+  private moduleName(input: AiAssistRequest): string {
+    return input.module?.trim() || input.scenario?.trim() || 'AI 工作流';
+  }
+
+  private taskName(input: AiAssistRequest): string {
+    return input.task?.trim() || input.scenario?.trim() || '辅助处理';
   }
 }

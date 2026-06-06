@@ -580,6 +580,16 @@ describe('Siyuan API MVP', () => {
         expect(response.body.content).toContain('轨迹监控');
         expect(response.body.content).toContain('9064656160');
       });
+
+    await request(app.getHttpServer())
+      .post('/api/ai/assist')
+      .set('Authorization', `Bearer ${login.body.accessToken}`)
+      .send({ scenario: '权限体检', prompt: '检查角色权限边界' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.content).not.toContain('undefined');
+        expect(response.body.content).toContain('权限体检');
+      });
   });
 
   it('quotes generates adjusts and drafts customer statements with visibility rules', async () => {
