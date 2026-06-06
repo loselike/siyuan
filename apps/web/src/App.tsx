@@ -120,6 +120,8 @@ interface ModulePageConfig {
   capabilities: string[];
   aiEnhancements: string[];
   queue: Array<{ item: string; owner: string; status: string }>;
+  stats: Array<{ label: string; value: string; helper: string }>;
+  records: Array<{ primary: string; secondary: string; metric: string; status: string }>;
 }
 
 const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
@@ -128,6 +130,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '覆盖收货扫描、重量复核、包裹明细和面单生成，适合作为仓库作业入口。',
     capabilities: ['收货扫描', '面单生成', '重量复核', '包裹明细', '异常入库'],
     aiEnhancements: ['重量异常识别', '面单信息补全', '重复扫描提醒'],
+    stats: [
+      { label: '待收货', value: '18', helper: '今日仓库扫描队列' },
+      { label: '待打单', value: '9', helper: '已复重未出面单' },
+      { label: '重量异常', value: '3', helper: '实重与预报差异超 15%' }
+    ],
+    records: [
+      { primary: '入库扫描批次 RCV-0606-A', secondary: '9409-Daloday / SYGJ06061230001', metric: '实重 2.36kg / 预报 2.10kg', status: '待确认收货' },
+      { primary: '面单生成批次 LBL-0606-US', secondary: '美国 USPS 小包线 / 6 票', metric: '已生成 4 / 待补 2', status: '待补申报' },
+      { primary: '重量复核 WR-0606-02', secondary: 'SYGJ06059409051 / 德国', metric: '材积重 3.20kg', status: '待复核' }
+    ],
     queue: [
       { item: 'SYGJ06061230001', owner: '仓库一组', status: '待扫描' },
       { item: 'SYGJ06059409051', owner: '仓库二组', status: '待复重' }
@@ -138,6 +150,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '沉淀手动排货、规则排货、代理分配、承运商选择和转单号获取能力。',
     capabilities: ['规则排货', '手动分配渠道', '代理/承运商选择', '转单号获取', '排货日志'],
     aiEnhancements: ['推荐最优渠道', '批量操作风险提示', '渠道配置建议'],
+    stats: [
+      { label: '待排货', value: '21', helper: '需要渠道/代理确认' },
+      { label: '缺转单号', value: '7', helper: '可手工补齐或模拟获取' },
+      { label: '成本预警', value: '2', helper: '报价低于代理成本' }
+    ],
+    records: [
+      { primary: 'DHL HK 优先', secondary: '美国 2-5kg / 时效 4-7 天', metric: '预计利润 ¥38.60/票', status: '推荐' },
+      { primary: 'UPS 加美线', secondary: '加拿大 5-20kg / 代理 宇环', metric: '成本 ¥31.20/kg', status: '待确认' },
+      { primary: 'FedEx AU 促销', secondary: '澳大利亚偏远区需附加费', metric: '偏远费 ¥95.00', status: '需复核' }
+    ],
     queue: [
       { item: 'FEDEX AU 促销', owner: '操作主管', status: '待确认成本' },
       { item: '英国 FBA 空派', owner: '专线组', status: '待排舱' }
@@ -148,8 +170,18 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '集中处理轨迹录入、轨迹同步、未上网、长时间未更新和客户可见轨迹。',
     capabilities: ['轨迹列表', '手工添加轨迹', '轨迹未更新监控', '客户可见轨迹', '轨迹规则'],
     aiEnhancements: ['轨迹超时解释', '客户沟通草稿', '接口失败诊断'],
+    stats: [
+      { label: '未更新', value: '12', helper: '超过 5 天无新轨迹' },
+      { label: '待上网', value: '6', helper: '已发货未上网' },
+      { label: '客户可见', value: '48', helper: '今日同步轨迹条数' }
+    ],
+    records: [
+      { primary: 'SYGJ05291344165', secondary: '客户可见 / USPS 小包线', metric: '9 天未更新', status: '高风险' },
+      { primary: 'SYGJ06061230003', secondary: '清关延误 / 德国 DHL', metric: '最后轨迹：到达目的国', status: '需说明' },
+      { primary: 'TRK-0606-MANUAL', secondary: '手工轨迹：航班起飞', metric: '同步 14 票', status: '待发布' }
+    ],
     queue: [
-      { item: 'SYGJ05291344165', owner: '客服组', status: '9 天未更新' },
+      { item: 'SYGJ05291344165', owner: '客服组', status: '超时跟进' },
       { item: 'SYGJ06061230003', owner: '异常组', status: '清关延误' }
     ]
   },
@@ -158,8 +190,18 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '管理问题件新建、回复、关闭、附件和客户可见状态。',
     capabilities: ['新建问题', '回复查看', '关闭问题', '附件', '客户可见状态'],
     aiEnhancements: ['自动归类问题原因', '生成客户回复', 'SLA 超时提醒'],
+    stats: [
+      { label: '待回复', value: '8', helper: '客户可见问题件' },
+      { label: '待关闭', value: '5', helper: '内部已处理待复核' },
+      { label: 'SLA 超时', value: '2', helper: '超过承诺响应时间' }
+    ],
+    records: [
+      { primary: '清关资料缺失', secondary: 'SYGJ06061230003 / 客户可见', metric: 'SLA 18h', status: '待客户回复' },
+      { primary: '客户退件：不出', secondary: 'SYGJ06059409051 / 内部处理', metric: '附件 2 个', status: '待关闭' },
+      { primary: '重量差异申诉', secondary: '9409-Daloday / 收货复重', metric: '差异 0.42kg', status: '待员工回复' }
+    ],
     queue: [
-      { item: '清关资料缺失', owner: '客服组', status: '待客户回复' },
+      { item: '清关资料待客户补充', owner: '客服组', status: '待客户回复' },
       { item: '客户退件：不出', owner: '操作组', status: '待关闭' }
     ]
   },
@@ -168,8 +210,18 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '支持客户报价、代理成本价、分区、燃油、附加费和价格试算。',
     capabilities: ['客户报价', '代理成本价', '分区', '燃油', '附加费', '价格试算'],
     aiEnhancements: ['自然语言查价', '报价差异解释', '推荐最优渠道'],
+    stats: [
+      { label: '今日试算', value: '34', helper: '客户与销售查价' },
+      { label: '报价产品', value: '16', helper: '按渠道/国家/分区' },
+      { label: '待复核价', value: '4', helper: '燃油或偏远费变动' }
+    ],
+    records: [
+      { primary: '美国 12kg DHL', secondary: '分区 US-2 / 燃油 18%', metric: '¥410.00', status: '可报价' },
+      { primary: '德国 3kg 小包', secondary: 'DHL Paket / 普货', metric: '¥128.50', status: '含挂号费' },
+      { primary: '澳大利亚偏远费', secondary: '邮编 6714 / FedEx AU', metric: '¥95.00', status: '需提示客户' }
+    ],
     queue: [
-      { item: '美国 12kg DHL', owner: '销售组', status: '待报价' },
+      { item: '美国 DHL 12kg 试算', owner: '销售组', status: '待报价' },
       { item: '澳大利亚偏远费', owner: '财务组', status: '待复核' }
     ]
   },
@@ -178,6 +230,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '闭环应收、应付、对账、收付款、核销和余额流水。',
     capabilities: ['应收费用', '应付费用', '客户对账', '代理对账', '收付款', '核销', '余额流水'],
     aiEnhancements: ['费用差异解释', '欠费风险提示', '对账单摘要'],
+    stats: [
+      { label: '应收', value: '¥18,642', helper: '今日已生成费用' },
+      { label: '应付', value: '¥13,908', helper: '代理/承运商成本' },
+      { label: '待核销', value: '11', helper: '收付款未匹配' }
+    ],
+    records: [
+      { primary: '9409-Daloday', secondary: '应收 ¥1,864.20 / 账户余额 ¥8,420.00', metric: '利润 ¥356.80', status: '待核销' },
+      { primary: '宇环代理账单', secondary: '代理对账 / DHL HK 38 票', metric: '应付 ¥7,230.60', status: '待确认' },
+      { primary: '客户充值 PAY-0606-01', secondary: '银行转账 / 财务已认领', metric: '¥5,000.00', status: '待入账' }
+    ],
     queue: [
       { item: '9409-Daloday 应收', owner: '财务组', status: '待核销' },
       { item: '宇环代理账单', owner: '财务组', status: '待对账' }
@@ -188,6 +250,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '提供运单、收货、发货、应收应付和利润分析报表。',
     capabilities: ['运单报表', '收货统计', '发货统计', '应收应付分析', '利润分析'],
     aiEnhancements: ['经营异常洞察', '利润波动解释', '日报生成'],
+    stats: [
+      { label: '今日发货', value: '46', helper: '快递/小包/专线合计' },
+      { label: '今日收货', value: '58', helper: '仓库扫描完成' },
+      { label: '利润率', value: '18.6%', helper: '按已发货费用估算' }
+    ],
+    records: [
+      { primary: '今日发货 46', secondary: '快递 31 / 小包 10 / 专线 5', metric: '利润率 18.6%', status: '可导出' },
+      { primary: '收货统计 RCV-0606', secondary: '仓库一组 34 / 仓库二组 24', metric: '异常 3 票', status: '已汇总' },
+      { primary: '应收应付分析', secondary: '应收 ¥18,642 / 应付 ¥13,908', metric: '毛利 ¥4,734', status: '待复核' }
+    ],
     queue: [
       { item: '今日发货统计', owner: '运营主管', status: '可生成' },
       { item: '本周利润分析', owner: '管理层', status: '待汇总' }
@@ -198,8 +270,18 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '维护客户、代理、承运商、渠道、国家地区、费用名称和汇率。',
     capabilities: ['客户', '代理', '承运商', '渠道', '国家地区', '费用名称', '汇率'],
     aiEnhancements: ['资料缺失检查', '渠道配置建议', '规则冲突提示'],
+    stats: [
+      { label: '客户', value: '126', helper: '启用 118 / 停用 8' },
+      { label: '渠道', value: '42', helper: '绑定代理与承运商' },
+      { label: '汇率', value: '7.2450', helper: 'USD 对 CNY' }
+    ],
+    records: [
+      { primary: '9409-Daloday', secondary: '客户 / 月结 / 联系人 Lina', metric: '授信 ¥50,000', status: '启用' },
+      { primary: 'HKD01 代理价', secondary: '代理 宇环 / DHL HK 成本', metric: '更新 2026-06-06', status: '待更新' },
+      { primary: 'USPS 小包线', secondary: '承运商 USPS / 国家 美国', metric: '材积 6000', status: '启用' }
+    ],
     queue: [
-      { item: 'HKD01 代理价', owner: '产品组', status: '待更新' },
+      { item: 'HKD01 成本价更新', owner: '产品组', status: '待更新' },
       { item: '客户联系人', owner: '客服组', status: '缺资料' }
     ]
   },
@@ -208,6 +290,16 @@ const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     description: '承载公司资料、模板、通知、轨迹规则、状态字典和权限设置。',
     capabilities: ['公司资料', '模板', '通知', '轨迹规则', '状态字典', '权限'],
     aiEnhancements: ['配置健康检查', '规则冲突提示', '权限风险提示'],
+    stats: [
+      { label: '角色', value: '5', helper: '管理员/客服/操作/财务/客户' },
+      { label: '模板', value: '14', helper: '面单、通知、对账单' },
+      { label: '审计项', value: '9', helper: '高风险操作写日志' }
+    ],
+    records: [
+      { primary: '状态字典', secondary: 'DRAFT -> DECLARED -> WAITING_RECEIVE', metric: '12 个状态', status: '启用' },
+      { primary: '转单提醒', secondary: '待上网超过 2 天且缺转单号', metric: '影响 7 票', status: '已开启' },
+      { primary: '财务核销权限', secondary: '仅 ADMIN / FINANCE 可操作', metric: '2 个角色', status: '需审计' }
+    ],
     queue: [
       { item: '轨迹规则', owner: '管理员', status: '待检查' },
       { item: '角色权限', owner: '管理员', status: '待复核' }
@@ -903,6 +995,14 @@ function GenericModulePage({ config }: { config?: ModulePageConfig }) {
       </Flex>
 
       <Row gutter={[16, 16]}>
+        {config.stats.map((stat) => (
+          <Col xs={24} md={8} key={stat.label}>
+            <MetricCard icon={<Activity />} title={stat.label} value={stat.value} extra={stat.helper} />
+          </Col>
+        ))}
+      </Row>
+
+      <Row gutter={[16, 16]} className="main-grid">
         <Col xs={24} xl={15}>
           <Card
             title={
@@ -922,6 +1022,44 @@ function GenericModulePage({ config }: { config?: ModulePageConfig }) {
                 </Col>
               ))}
             </Row>
+          </Card>
+
+          <Card className="module-grid" title="模拟业务数据">
+            <Table
+              rowKey="primary"
+              size="small"
+              pagination={false}
+              dataSource={config.records}
+              columns={[
+                {
+                  title: '业务对象',
+                  dataIndex: 'primary',
+                  render: (value: string, record) => (
+                    <Space direction="vertical" size={0}>
+                      <Text strong>{value}</Text>
+                      <Text type="secondary">{record.secondary}</Text>
+                    </Space>
+                  )
+                },
+                { title: '关键指标', dataIndex: 'metric', width: 180 },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 130,
+                  render: (value: string) => <Tag color={value.includes('风险') || value.includes('超时') ? 'red' : 'blue'}>{value}</Tag>
+                },
+                {
+                  title: '操作',
+                  width: 180,
+                  render: () => (
+                    <Space>
+                      <Button size="small">查看</Button>
+                      <Button size="small">模拟处理</Button>
+                    </Space>
+                  )
+                }
+              ]}
+            />
           </Card>
 
           <Card className="module-grid" title="模块待办">

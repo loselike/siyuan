@@ -103,4 +103,45 @@ describe('AI logistics workspace', () => {
     expect(screen.getByRole('heading', { name: '财务结算中心' })).toBeInTheDocument();
     expect(screen.getByText('费用差异解释')).toBeInTheDocument();
   });
+
+  it('shows simulated business data for every independent module page', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('menuitem', { name: '收货打单' }));
+    expect(screen.getByText('入库扫描批次 RCV-0606-A')).toBeInTheDocument();
+    expect(screen.getByText('SYGJ06061230001')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '渠道排货' }));
+    expect(screen.getByText('DHL HK 优先')).toBeInTheDocument();
+    expect(screen.getByText('UPS 加美线')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '轨迹监控' }));
+    expect(screen.getAllByText('9 天未更新').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('客户可见').length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('menuitem', { name: '问题件中心' }));
+    expect(screen.getByText('清关资料缺失')).toBeInTheDocument();
+    expect(screen.getByText('SLA 18h')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '报价查价' }));
+    expect(screen.getByText('美国 12kg DHL')).toBeInTheDocument();
+    expect(screen.getByText('¥410.00')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '财务结算' }));
+    expect(screen.getByText(/应收 ¥1,864.20/)).toBeInTheDocument();
+    expect(screen.getAllByText(/代理对账/).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('menuitem', { name: '统计报表' }));
+    expect(screen.getByText('今日发货 46')).toBeInTheDocument();
+    expect(screen.getByText('利润率 18.6%')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '基础资料' }));
+    expect(screen.getByText('9409-Daloday')).toBeInTheDocument();
+    expect(screen.getByText('HKD01 代理价')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '系统设置' }));
+    expect(screen.getAllByText('状态字典').length).toBeGreaterThan(0);
+    expect(screen.getByText('转单提醒')).toBeInTheDocument();
+  });
 });
