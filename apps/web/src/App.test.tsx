@@ -81,4 +81,26 @@ describe('AI logistics workspace', () => {
     await user.click(screen.getAllByRole('button', { name: '确认收货' })[0]);
     expect(await screen.findByText('当前状态不允许执行确认收货')).toBeInTheDocument();
   });
+
+  it('opens independent pages for the remaining operation modules', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole('menuitem', { name: '收货打单' }));
+    expect(screen.getByRole('heading', { name: '收货打单中心' })).toBeInTheDocument();
+    expect(screen.getByText('收货扫描')).toBeInTheDocument();
+    expect(screen.getByText('重量异常识别')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '渠道排货' }));
+    expect(screen.getByRole('heading', { name: '渠道排货中心' })).toBeInTheDocument();
+    expect(screen.getByText('规则排货')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '报价查价' }));
+    expect(screen.getByRole('heading', { name: '报价查价中心' })).toBeInTheDocument();
+    expect(screen.getByText('自然语言查价')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: '财务结算' }));
+    expect(screen.getByRole('heading', { name: '财务结算中心' })).toBeInTheDocument();
+    expect(screen.getByText('费用差异解释')).toBeInTheDocument();
+  });
 });

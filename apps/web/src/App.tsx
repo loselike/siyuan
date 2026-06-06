@@ -114,6 +114,107 @@ const fulfillmentStages: Array<{ key: FulfillmentStageKey; label: string; status
   { key: 'exception', label: '退货/滞留', statuses: ['WAITING_RETURN', 'PROBLEM', 'STUCK'] }
 ];
 
+interface ModulePageConfig {
+  title: string;
+  description: string;
+  capabilities: string[];
+  aiEnhancements: string[];
+  queue: Array<{ item: string; owner: string; status: string }>;
+}
+
+const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
+  receive: {
+    title: '收货打单中心',
+    description: '覆盖收货扫描、重量复核、包裹明细和面单生成，适合作为仓库作业入口。',
+    capabilities: ['收货扫描', '面单生成', '重量复核', '包裹明细', '异常入库'],
+    aiEnhancements: ['重量异常识别', '面单信息补全', '重复扫描提醒'],
+    queue: [
+      { item: 'SYGJ06061230001', owner: '仓库一组', status: '待扫描' },
+      { item: 'SYGJ06059409051', owner: '仓库二组', status: '待复重' }
+    ]
+  },
+  routing: {
+    title: '渠道排货中心',
+    description: '沉淀手动排货、规则排货、代理分配、承运商选择和转单号获取能力。',
+    capabilities: ['规则排货', '手动分配渠道', '代理/承运商选择', '转单号获取', '排货日志'],
+    aiEnhancements: ['推荐最优渠道', '批量操作风险提示', '渠道配置建议'],
+    queue: [
+      { item: 'FEDEX AU 促销', owner: '操作主管', status: '待确认成本' },
+      { item: '英国 FBA 空派', owner: '专线组', status: '待排舱' }
+    ]
+  },
+  tracking: {
+    title: '轨迹监控中心',
+    description: '集中处理轨迹录入、轨迹同步、未上网、长时间未更新和客户可见轨迹。',
+    capabilities: ['轨迹列表', '手工添加轨迹', '轨迹未更新监控', '客户可见轨迹', '轨迹规则'],
+    aiEnhancements: ['轨迹超时解释', '客户沟通草稿', '接口失败诊断'],
+    queue: [
+      { item: 'SYGJ05291344165', owner: '客服组', status: '9 天未更新' },
+      { item: 'SYGJ06061230003', owner: '异常组', status: '清关延误' }
+    ]
+  },
+  problems: {
+    title: '问题件中心',
+    description: '管理问题件新建、回复、关闭、附件和客户可见状态。',
+    capabilities: ['新建问题', '回复查看', '关闭问题', '附件', '客户可见状态'],
+    aiEnhancements: ['自动归类问题原因', '生成客户回复', 'SLA 超时提醒'],
+    queue: [
+      { item: '清关资料缺失', owner: '客服组', status: '待客户回复' },
+      { item: '客户退件：不出', owner: '操作组', status: '待关闭' }
+    ]
+  },
+  pricing: {
+    title: '报价查价中心',
+    description: '支持客户报价、代理成本价、分区、燃油、附加费和价格试算。',
+    capabilities: ['客户报价', '代理成本价', '分区', '燃油', '附加费', '价格试算'],
+    aiEnhancements: ['自然语言查价', '报价差异解释', '推荐最优渠道'],
+    queue: [
+      { item: '美国 12kg DHL', owner: '销售组', status: '待报价' },
+      { item: '澳大利亚偏远费', owner: '财务组', status: '待复核' }
+    ]
+  },
+  finance: {
+    title: '财务结算中心',
+    description: '闭环应收、应付、对账、收付款、核销和余额流水。',
+    capabilities: ['应收费用', '应付费用', '客户对账', '代理对账', '收付款', '核销', '余额流水'],
+    aiEnhancements: ['费用差异解释', '欠费风险提示', '对账单摘要'],
+    queue: [
+      { item: '9409-Daloday 应收', owner: '财务组', status: '待核销' },
+      { item: '宇环代理账单', owner: '财务组', status: '待对账' }
+    ]
+  },
+  reports: {
+    title: '统计报表中心',
+    description: '提供运单、收货、发货、应收应付和利润分析报表。',
+    capabilities: ['运单报表', '收货统计', '发货统计', '应收应付分析', '利润分析'],
+    aiEnhancements: ['经营异常洞察', '利润波动解释', '日报生成'],
+    queue: [
+      { item: '今日发货统计', owner: '运营主管', status: '可生成' },
+      { item: '本周利润分析', owner: '管理层', status: '待汇总' }
+    ]
+  },
+  master: {
+    title: '基础资料中心',
+    description: '维护客户、代理、承运商、渠道、国家地区、费用名称和汇率。',
+    capabilities: ['客户', '代理', '承运商', '渠道', '国家地区', '费用名称', '汇率'],
+    aiEnhancements: ['资料缺失检查', '渠道配置建议', '规则冲突提示'],
+    queue: [
+      { item: 'HKD01 代理价', owner: '产品组', status: '待更新' },
+      { item: '客户联系人', owner: '客服组', status: '缺资料' }
+    ]
+  },
+  settings: {
+    title: '系统设置中心',
+    description: '承载公司资料、模板、通知、轨迹规则、状态字典和权限设置。',
+    capabilities: ['公司资料', '模板', '通知', '轨迹规则', '状态字典', '权限'],
+    aiEnhancements: ['配置健康检查', '规则冲突提示', '权限风险提示'],
+    queue: [
+      { item: '轨迹规则', owner: '管理员', status: '待检查' },
+      { item: '角色权限', owner: '管理员', status: '待复核' }
+    ]
+  }
+};
+
 export function App() {
   const [activeMenuKey, setActiveMenuKey] = useState<MenuKey>('workspace');
   const [businessType, setBusinessType] = useState<BusinessType>('EXPRESS');
@@ -533,6 +634,8 @@ export function App() {
                   </Col>
                 </Row>
               </>
+            ) : modulePageConfigs[activeMenuKey] ? (
+              <GenericModulePage config={modulePageConfigs[activeMenuKey]} />
             ) : (
               <>
             <Flex justify="space-between" align="center" className="page-heading">
@@ -775,6 +878,109 @@ export function App() {
         </Layout>
       </Layout>
     </ConfigProvider>
+  );
+}
+
+function GenericModulePage({ config }: { config?: ModulePageConfig }) {
+  if (!config) {
+    return null;
+  }
+
+  return (
+    <>
+      <Flex justify="space-between" align="center" className="page-heading">
+        <div>
+          <Title level={2}>{config.title}</Title>
+          <Text type="secondary">{config.description}</Text>
+        </div>
+        <Space>
+          <Button icon={<FileInput size={16} />}>导入</Button>
+          <Button icon={<ClipboardCheck size={16} />}>导出</Button>
+          <Button type="primary" icon={<Sparkles size={16} />}>
+            AI 辅助处理
+          </Button>
+        </Space>
+      </Flex>
+
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={15}>
+          <Card
+            title={
+              <Flex align="center" gap={8}>
+                <Boxes size={18} />
+                <span>核心能力</span>
+              </Flex>
+            }
+          >
+            <Row gutter={[12, 12]}>
+              {config.capabilities.map((capability) => (
+                <Col xs={24} sm={12} lg={8} key={capability}>
+                  <div className="module-card compact-module-card">
+                    <Text strong>{capability}</Text>
+                    <Text type="secondary">查询、筛选、批量处理、状态记录</Text>
+                  </div>
+                </Col>
+              ))}
+            </Row>
+          </Card>
+
+          <Card className="module-grid" title="模块待办">
+            <Table
+              rowKey="item"
+              size="small"
+              pagination={false}
+              dataSource={config.queue}
+              columns={[
+                { title: '事项', dataIndex: 'item' },
+                { title: '负责人', dataIndex: 'owner', width: 120 },
+                {
+                  title: '状态',
+                  dataIndex: 'status',
+                  width: 140,
+                  render: (value: string) => <Tag color="blue">{value}</Tag>
+                },
+                {
+                  title: '操作',
+                  width: 180,
+                  render: () => (
+                    <Space>
+                      <Button size="small">查看</Button>
+                      <Button size="small">处理</Button>
+                    </Space>
+                  )
+                }
+              ]}
+            />
+          </Card>
+        </Col>
+
+        <Col xs={24} xl={9}>
+          <Card
+            title={
+              <Flex align="center" gap={8}>
+                <Bot size={18} />
+                <span>AI 赋能</span>
+              </Flex>
+            }
+          >
+            <Space direction="vertical" size={12} className="quality-panel">
+              {config.aiEnhancements.map((item) => (
+                <Alert key={item} type="info" showIcon message={item} />
+              ))}
+            </Space>
+          </Card>
+
+          <Card className="automation-card" title="快捷动作">
+            <Space wrap>
+              <Button>批量修改</Button>
+              <Button>生成说明</Button>
+              <Button>同步客户</Button>
+              <Button>写入审计</Button>
+            </Space>
+          </Card>
+        </Col>
+      </Row>
+    </>
   );
 }
 

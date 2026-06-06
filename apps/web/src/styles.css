@@ -192,6 +192,10 @@ body {
   background: #fbfcfe;
 }
 
+.compact-module-card {
+  min-height: 92px;
+}
+
 .module-card .ant-typography-secondary {
   display: block;
   margin: 10px 0;
