@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import {
   canTransitionShipment,
   calculateQuote,
+  quoteWithPricingRules,
   createFeeLinesFromQuote,
   createMockTransferNo,
   createMockTrackingStatus,
@@ -11,21 +12,45 @@ import {
   summarizeStatusCounts,
   validateShipmentImportRows,
   type AccountLedgerSummary,
+  type AgentCreateInput,
+  type AgentSummary,
   type CarrierTaskRunResponse,
   type CarrierTaskSummary,
   type CarrierAdapterCode,
+  type CarrierCreateInput,
+  type CarrierSummary,
+  type ChannelCreateInput,
+  type ChannelSummary,
   type CustomerAccountSummary,
+  type CustomerContactCreateInput,
+  type CustomerContactSummary,
+  type CustomerCreateInput,
   type CustomerStatementCreateInput,
   type CustomerStatementSummary,
+  type CustomerSummary,
+  type CustomerUserCreateInput,
+  type CustomerUserSummary,
+  type EnabledUpdateInput,
+  type ExchangeRateCreateInput,
+  type ExchangeRateSummary,
+  type FuelRateCreateInput,
+  type FuelRateSummary,
   type LabelCreateResponse,
+  type MasterDataSnapshot,
   type PaymentCreateInput,
   type PaymentCreateResponse,
   type PaymentSummary,
   type PricingQuoteRequest,
+  type PricingRuleCreateInput,
+  type PricingRuleQuoteRequest,
+  type PricingRuleQuoteResponse,
+  type PricingRuleSummary,
   type ProblemTicketCreateInput,
   type ProblemTicketSummary,
   type ReceivableAdjustmentInput,
   type ReceivableFeeSummary,
+  type SurchargeCreateInput,
+  type SurchargeSummary,
   type Shipment,
   type ShipmentCreateInput,
   type ShipmentImportRequest,
@@ -69,6 +94,28 @@ interface StoredAccountLedger extends AccountLedgerSummary {}
 
 interface StoredPayment extends PaymentSummary {}
 
+interface StoredCustomer extends CustomerSummary {}
+
+interface StoredCustomerContact extends CustomerContactSummary {}
+
+interface StoredCustomerUser extends CustomerUserSummary {}
+
+interface StoredAgent extends AgentSummary {}
+
+interface StoredCarrier extends CarrierSummary {}
+
+interface StoredChannel extends ChannelSummary {
+  carrier: string;
+}
+
+interface StoredSurcharge extends SurchargeSummary {}
+
+interface StoredFuelRate extends FuelRateSummary {}
+
+interface StoredExchangeRate extends ExchangeRateSummary {}
+
+interface StoredPricingRule extends PricingRuleSummary {}
+
 export class InMemoryRepository {
   private sequence = 20;
   private readonly rolePermissionMatrix: Record<RoleKey, PermissionKey[]> = {
@@ -86,26 +133,62 @@ export class InMemoryRepository {
     { id: 'u-customer', username: 'customer', passwordHash: hashPassword('customer123'), role: 'CUSTOMER', customerId: 'c-9409' }
   ];
 
-  readonly customers = [
+  readonly customers: StoredCustomer[] = [
     { id: 'c-9409', code: '9409', name: 'Daloday', enabled: true },
     { id: 'c-1344', code: '1344', name: 'TILL', enabled: true },
     { id: 'c-9509', code: '9509', name: 'Cam&Clae', enabled: true }
   ];
 
-  readonly channels = [
-    { id: 'ch-dhl-hk', name: 'DHL HK', carrier: 'DHL', enabled: true },
-    { id: 'ch-fedex-au', name: 'FEDEX AU 促销', carrier: 'FEDEX', enabled: true },
-    { id: 'ch-ups-ca', name: 'UPS 加美线', carrier: 'UPS', enabled: true },
-    { id: 'ch-usps', name: 'USPS 小包线', carrier: 'USPS', enabled: true },
-    { id: 'ch-europe-truck', name: '欧洲卡航', carrier: '专线承运商', enabled: true }
+  readonly customerContacts: StoredCustomerContact[] = [
+    { id: 'cc-9409-main', customerId: 'c-9409', customerName: '9409-Daloday', name: 'Daloday 联系人', phone: '13800000001', email: 'daloday@example.com', enabled: true },
+    { id: 'cc-1344-main', customerId: 'c-1344', customerName: '1344-TILL', name: 'TILL 联系人', phone: '13800000002', email: 'till@example.com', enabled: true }
   ];
 
-  readonly agents = [
+  readonly customerUsers: StoredCustomerUser[] = [
+    { id: 'u-customer', customerId: 'c-9409', customerName: '9409-Daloday', username: 'customer', enabled: true }
+  ];
+
+  readonly carriers: StoredCarrier[] = [
+    { id: 'cr-dhl', name: 'DHL', enabled: true },
+    { id: 'cr-fedex', name: 'FEDEX', enabled: true },
+    { id: 'cr-ups', name: 'UPS', enabled: true },
+    { id: 'cr-usps', name: 'USPS', enabled: true },
+    { id: 'cr-line', name: '专线承运商', enabled: true }
+  ];
+
+  readonly channels: StoredChannel[] = [
+    { id: 'ch-dhl-hk', name: 'DHL HK', carrierId: 'cr-dhl', carrierName: 'DHL', carrier: 'DHL', enabled: true },
+    { id: 'ch-fedex-au', name: 'FEDEX AU 促销', carrierId: 'cr-fedex', carrierName: 'FEDEX', carrier: 'FEDEX', enabled: true },
+    { id: 'ch-ups-ca', name: 'UPS 加美线', carrierId: 'cr-ups', carrierName: 'UPS', carrier: 'UPS', enabled: true },
+    { id: 'ch-usps', name: 'USPS 小包线', carrierId: 'cr-usps', carrierName: 'USPS', carrier: 'USPS', enabled: true },
+    { id: 'ch-europe-truck', name: '欧洲卡航', carrierId: 'cr-line', carrierName: '专线承运商', carrier: '专线承运商', enabled: true }
+  ];
+
+  readonly agents: StoredAgent[] = [
     { id: 'a-yuhuan', name: '宇环', enabled: true },
     { id: 'a-far-east', name: '远东', enabled: true },
     { id: 'a-canada', name: '加美代理', enabled: true },
     { id: 'a-lanmate', name: '蓝玛特', enabled: true },
     { id: 'a-europe', name: '欧洲代理', enabled: true }
+  ];
+
+  readonly surcharges: StoredSurcharge[] = [
+    { id: 'sc-remote', name: '偏远附加费', amount: 50, enabled: true }
+  ];
+
+  readonly fuelRates: StoredFuelRate[] = [
+    { id: 'fr-dhl-hk', channelId: 'ch-dhl-hk', channelName: 'DHL HK', rate: 0.15, activeAt: '2026-06-06T00:00:00.000Z' }
+  ];
+
+  readonly exchangeRates: StoredExchangeRate[] = [
+    { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'CNY', rate: 7.245, activeAt: '2026-06-06T00:00:00.000Z', enabled: true }
+  ];
+
+  readonly pricingRules: StoredPricingRule[] = [
+    { id: 'pr-dhl-us-0-5', channelId: 'ch-dhl-hk', channelName: 'DHL HK', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 5, ratePerKg: 10, currency: 'USD', enabled: true },
+    { id: 'pr-dhl-us-5-20', channelId: 'ch-dhl-hk', channelName: 'DHL HK', destinationCountry: '美国', minWeightKg: 5, maxWeightKg: 20, ratePerKg: 9.5, currency: 'USD', enabled: true },
+    { id: 'pr-fedex-us-0-5', channelId: 'ch-fedex-au', channelName: 'FEDEX AU 促销', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 5, ratePerKg: 68, currency: 'CNY', enabled: true },
+    { id: 'pr-line-us-5-20', channelId: 'ch-europe-truck', channelName: '欧洲卡航', destinationCountry: '美国', minWeightKg: 5, maxWeightKg: 20, ratePerKg: 42, currency: 'CNY', enabled: true }
   ];
 
   private readonly shipments: Array<Shipment & { customerId: string; channelId?: string; agentId?: string }> = [
@@ -219,8 +302,177 @@ export class InMemoryRepository {
     return summarizeStatusCounts(await this.getShipments(principal));
   }
 
-  async getMasterData() {
-    return { customers: this.customers, channels: this.channels, agents: this.agents, roles: this.getRoles() };
+  async getMasterData(): Promise<MasterDataSnapshot> {
+    return {
+      customers: this.customers.map((customer) => ({ ...customer })),
+      contacts: this.customerContacts.map((contact) => ({ ...contact })),
+      customerUsers: this.customerUsers.map((user) => ({ ...user })),
+      agents: this.agents.map((agent) => ({ ...agent })),
+      carriers: this.carriers.map((carrier) => ({ ...carrier })),
+      channels: this.channels.map((channel) => this.channelSummary(channel)),
+      surcharges: this.surcharges.map((surcharge) => ({ ...surcharge })),
+      fuelRates: this.fuelRates.map((fuelRate) => ({ ...fuelRate })),
+      exchangeRates: this.exchangeRates.map((exchangeRate) => ({ ...exchangeRate })),
+      roles: this.getRoles()
+    };
+  }
+
+  async createCustomer(_principal: Principal, input: CustomerCreateInput): Promise<CustomerSummary> {
+    if (!input.code?.trim() || !input.name?.trim()) {
+      throw new BadRequestException('客户代码和名称不能为空');
+    }
+    if (this.customers.some((customer) => customer.code === input.code.trim())) {
+      throw new BadRequestException('客户代码已存在');
+    }
+    const customer = { id: `c-${input.code.trim()}`, code: input.code.trim(), name: input.name.trim(), enabled: true };
+    this.customers.push(customer);
+    this.customerAccounts.push({ customerId: customer.id, customerName: this.customerDisplayName(customer), balance: 0, currency: 'CNY' });
+    return { ...customer };
+  }
+
+  async createCustomerContact(_principal: Principal, customerId: string, input: CustomerContactCreateInput): Promise<CustomerContactSummary> {
+    const customer = this.findCustomer(customerId);
+    if (!input.name?.trim()) {
+      throw new BadRequestException('联系人名称不能为空');
+    }
+    const contact = {
+      id: `cc-${customer.id}-${this.customerContacts.length + 1}`,
+      customerId: customer.id,
+      customerName: this.customerDisplayName(customer),
+      name: input.name.trim(),
+      phone: input.phone?.trim(),
+      email: input.email?.trim(),
+      enabled: true
+    };
+    this.customerContacts.push(contact);
+    return { ...contact };
+  }
+
+  async createCustomerUser(_principal: Principal, customerId: string, input: CustomerUserCreateInput): Promise<CustomerUserSummary> {
+    const customer = this.findCustomer(customerId);
+    if (!input.username?.trim() || !input.password?.trim()) {
+      throw new BadRequestException('账号和密码不能为空');
+    }
+    if (this.accounts.some((account) => account.username === input.username.trim())) {
+      throw new BadRequestException('账号已存在');
+    }
+    const account = {
+      id: `u-${input.username.trim()}`,
+      username: input.username.trim(),
+      passwordHash: hashPassword(input.password),
+      role: 'CUSTOMER' as const,
+      customerId: customer.id
+    };
+    this.accounts.push(account);
+    const summary = { id: account.id, customerId: customer.id, customerName: this.customerDisplayName(customer), username: account.username, enabled: true };
+    this.customerUsers.push(summary);
+    return { ...summary };
+  }
+
+  async updateCustomerEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<CustomerSummary> {
+    const customer = this.findCustomer(id);
+    customer.enabled = input.enabled === true;
+    return { ...customer };
+  }
+
+  async createAgent(_principal: Principal, input: AgentCreateInput): Promise<AgentSummary> {
+    if (!input.name?.trim()) {
+      throw new BadRequestException('代理名称不能为空');
+    }
+    const agent = { id: `a-${this.slug(input.name)}`, name: input.name.trim(), enabled: true };
+    this.agents.push(agent);
+    return { ...agent };
+  }
+
+  async updateAgentEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<AgentSummary> {
+    const agent = this.findEnabledEntity(this.agents, id, '代理不存在');
+    agent.enabled = input.enabled === true;
+    return { ...agent };
+  }
+
+  async createCarrier(_principal: Principal, input: CarrierCreateInput): Promise<CarrierSummary> {
+    if (!input.name?.trim()) {
+      throw new BadRequestException('承运商名称不能为空');
+    }
+    const carrier = { id: `cr-${this.slug(input.name)}`, name: input.name.trim(), enabled: true };
+    this.carriers.push(carrier);
+    return { ...carrier };
+  }
+
+  async updateCarrierEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<CarrierSummary> {
+    const carrier = this.findEnabledEntity(this.carriers, id, '承运商不存在');
+    carrier.enabled = input.enabled === true;
+    return { ...carrier };
+  }
+
+  async createChannel(_principal: Principal, input: ChannelCreateInput): Promise<ChannelSummary> {
+    const carrier = this.findEnabledEntity(this.carriers, input.carrierId, '承运商不存在');
+    if (!input.name?.trim()) {
+      throw new BadRequestException('渠道名称不能为空');
+    }
+    const channel = {
+      id: `ch-${this.slug(input.name)}`,
+      name: input.name.trim(),
+      carrierId: carrier.id,
+      carrierName: carrier.name,
+      carrier: carrier.name,
+      enabled: true
+    };
+    this.channels.push(channel);
+    return this.channelSummary(channel);
+  }
+
+  async updateChannelEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<ChannelSummary> {
+    const channel = this.findEnabledEntity(this.channels, id, '渠道不存在');
+    channel.enabled = input.enabled === true;
+    return this.channelSummary(channel);
+  }
+
+  async createSurcharge(_principal: Principal, input: SurchargeCreateInput): Promise<SurchargeSummary> {
+    if (!input.name?.trim() || input.amount <= 0) {
+      throw new BadRequestException('附加费名称和金额无效');
+    }
+    const surcharge = { id: `sc-${this.slug(input.name)}`, name: input.name.trim(), amount: roundMoney(input.amount), enabled: true };
+    this.surcharges.push(surcharge);
+    return { ...surcharge };
+  }
+
+  async updateSurchargeEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<SurchargeSummary> {
+    const surcharge = this.findEnabledEntity(this.surcharges, id, '附加费不存在');
+    surcharge.enabled = input.enabled === true;
+    return { ...surcharge };
+  }
+
+  async createFuelRate(_principal: Principal, input: FuelRateCreateInput): Promise<FuelRateSummary> {
+    const channel = this.findEnabledEntity(this.channels, input.channelId, '渠道不存在');
+    if (input.rate < 0) {
+      throw new BadRequestException('燃油费率无效');
+    }
+    const fuelRate = {
+      id: `fr-${this.fuelRates.length + 1}`,
+      channelId: channel.id,
+      channelName: channel.name,
+      rate: roundMoney(input.rate),
+      activeAt: new Date(input.activeAt).toISOString()
+    };
+    this.fuelRates.push(fuelRate);
+    return { ...fuelRate };
+  }
+
+  async createExchangeRate(_principal: Principal, input: ExchangeRateCreateInput): Promise<ExchangeRateSummary> {
+    if (!input.baseCurrency?.trim() || !input.quoteCurrency?.trim() || input.rate <= 0) {
+      throw new BadRequestException('汇率信息无效');
+    }
+    const exchangeRate = {
+      id: `er-${input.baseCurrency.toLowerCase()}-${input.quoteCurrency.toLowerCase()}-${this.exchangeRates.length + 1}`,
+      baseCurrency: input.baseCurrency.trim().toUpperCase(),
+      quoteCurrency: input.quoteCurrency.trim().toUpperCase(),
+      rate: roundMoney(input.rate),
+      activeAt: new Date(input.activeAt).toISOString(),
+      enabled: true
+    };
+    this.exchangeRates.push(exchangeRate);
+    return { ...exchangeRate };
   }
 
   async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
@@ -245,6 +497,47 @@ export class InMemoryRepository {
     return calculateQuote(input);
   }
 
+  async getPricingRules(principal: Principal): Promise<PricingRuleSummary[]> {
+    this.ensureStaffPricingAccess(principal);
+    return this.pricingRules.map((rule) => ({ ...rule }));
+  }
+
+  async createPricingRule(principal: Principal, input: PricingRuleCreateInput): Promise<PricingRuleSummary> {
+    this.ensureStaffPricingAccess(principal);
+    if (!input.channelId?.trim() || !input.destinationCountry?.trim() || input.minWeightKg < 0 || input.maxWeightKg <= input.minWeightKg || input.ratePerKg <= 0) {
+      throw new BadRequestException('报价规则参数不完整');
+    }
+    const channel = this.findEnabledEntity(this.channels, input.channelId, '渠道不存在');
+    if (!channel.enabled) {
+      throw new BadRequestException('渠道已停用');
+    }
+    const rule = {
+      id: `pr-${this.slug(channel.name)}-${this.pricingRules.length + 1}`,
+      channelId: channel.id,
+      channelName: channel.name,
+      destinationCountry: input.destinationCountry.trim(),
+      minWeightKg: roundMoney(input.minWeightKg),
+      maxWeightKg: roundMoney(input.maxWeightKg),
+      ratePerKg: roundMoney(input.ratePerKg),
+      currency: input.currency.trim().toUpperCase() || 'CNY',
+      enabled: true
+    };
+    this.pricingRules.push(rule);
+    return { ...rule };
+  }
+
+  async updatePricingRuleEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<PricingRuleSummary> {
+    this.ensureStaffPricingAccess(principal);
+    const rule = this.findEnabledEntity(this.pricingRules, id, '报价规则不存在');
+    rule.enabled = input.enabled === true;
+    return { ...rule };
+  }
+
+  async quotePricingRule(principal: Principal, input: PricingRuleQuoteRequest): Promise<PricingRuleQuoteResponse> {
+    this.ensureStaffPricingAccess(principal);
+    return this.quoteFromRules(input);
+  }
+
   async getReceivables(principal: Principal): Promise<ReceivableFeeSummary[]> {
     return this.receivableFees
       .filter((fee) => principal.role !== 'CUSTOMER' || fee.customerId === principal.customerId)
@@ -254,22 +547,28 @@ export class InMemoryRepository {
   async generateShipmentFees(
     principal: Principal,
     shipmentId: string,
-    input: { baseRatePerKg: number; payableRatePerKg: number; fuelRate: number; surcharges?: Array<{ name: string; amount: number }> }
+    input: { baseRatePerKg?: number; payableRatePerKg?: number; fuelRate?: number; surcharges?: Array<{ name: string; amount: number }>; pricingRuleId?: string; channelId?: string; destinationCountry?: string }
   ) {
     const shipment = this.visibleShipment(principal, shipmentId);
     this.receivableFees.splice(0, this.receivableFees.length, ...this.receivableFees.filter((fee) => fee.shipmentId !== shipment.id));
     this.payableFees.splice(0, this.payableFees.length, ...this.payableFees.filter((fee) => fee.shipmentId !== shipment.id));
 
-    const receivableQuote = calculateQuote({
-      chargeableWeightKg: shipment.receivableWeightKg,
-      baseRatePerKg: input.baseRatePerKg,
-      fuelRate: input.fuelRate,
-      surcharges: input.surcharges ?? []
-    });
+    const receivableQuote = input.baseRatePerKg && input.fuelRate !== undefined
+      ? calculateQuote({
+        chargeableWeightKg: shipment.receivableWeightKg,
+        baseRatePerKg: input.baseRatePerKg,
+        fuelRate: input.fuelRate,
+        surcharges: input.surcharges ?? []
+      })
+      : this.quoteFromRules({
+        channelId: input.channelId ?? shipment.channelId ?? '',
+        destinationCountry: input.destinationCountry ?? shipment.destinationCountry,
+        chargeableWeightKg: shipment.receivableWeightKg
+      });
     const payableQuote = calculateQuote({
       chargeableWeightKg: shipment.agentWeightKg,
-      baseRatePerKg: input.payableRatePerKg,
-      fuelRate: input.fuelRate,
+      baseRatePerKg: input.payableRatePerKg ?? 0,
+      fuelRate: input.fuelRate ?? 0,
       surcharges: []
     });
     const receivables = createFeeLinesFromQuote(shipment.id, receivableQuote).map((line, index): StoredReceivableFee => ({
@@ -804,6 +1103,60 @@ export class InMemoryRepository {
       return 'USPS';
     }
     return 'OTHER';
+  }
+
+  private findCustomer(id: string): StoredCustomer {
+    const customer = this.customers.find((item) => item.id === id);
+    if (!customer) {
+      throw new BadRequestException('客户不存在');
+    }
+    return customer;
+  }
+
+  private customerDisplayName(customer: Pick<StoredCustomer, 'code' | 'name'>): string {
+    return `${customer.code}-${customer.name}`;
+  }
+
+  private findEnabledEntity<T extends { id: string }>(rows: T[], id: string, message: string): T {
+    const row = rows.find((item) => item.id === id);
+    if (!row) {
+      throw new BadRequestException(message);
+    }
+    return row;
+  }
+
+  private quoteFromRules(input: PricingRuleQuoteRequest): PricingRuleQuoteResponse {
+    try {
+      return quoteWithPricingRules({
+        ...input,
+        rules: this.pricingRules,
+        fuelRates: this.fuelRates,
+        surcharges: this.surcharges,
+        exchangeRates: this.exchangeRates
+      });
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '报价失败');
+    }
+  }
+
+  private ensureStaffPricingAccess(principal: Principal) {
+    if (principal.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能访问内部报价规则');
+    }
+  }
+
+  private channelSummary(channel: ChannelSummary & { carrier?: string }): ChannelSummary {
+    return {
+      id: channel.id,
+      name: channel.name,
+      carrierId: channel.carrierId,
+      carrierName: channel.carrierName,
+      enabled: channel.enabled
+    };
+  }
+
+  private slug(value: string): string {
+    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || String(Date.now());
   }
 
   private formatDate(date: Date): string {

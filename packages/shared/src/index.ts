@@ -1,5 +1,35 @@
 export type BusinessType = 'EXPRESS' | 'SMALL_PACKET' | 'DEDICATED_LINE';
 
+export type StaffRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'FINANCE' | 'CUSTOMER';
+export type StaffMenuKey =
+  | 'workspace'
+  | 'orders'
+  | 'receive'
+  | 'routing'
+  | 'tracking'
+  | 'problems'
+  | 'pricing'
+  | 'finance'
+  | 'reports'
+  | 'master'
+  | 'settings';
+
+const roleMenuMatrix: Record<StaffRoleKey, StaffMenuKey[]> = {
+  ADMIN: ['workspace', 'orders', 'receive', 'routing', 'tracking', 'problems', 'pricing', 'finance', 'reports', 'master', 'settings'],
+  CUSTOMER_SERVICE: ['workspace', 'orders', 'tracking', 'problems', 'pricing', 'master'],
+  OPERATOR: ['workspace', 'orders', 'receive', 'routing', 'tracking', 'problems', 'master'],
+  FINANCE: ['workspace', 'orders', 'pricing', 'finance', 'reports', 'master'],
+  CUSTOMER: []
+};
+
+export function getVisibleStaffMenuKeys(role: StaffRoleKey): StaffMenuKey[] {
+  return roleMenuMatrix[role] ?? [];
+}
+
+export function canAccessStaffMenu(role: StaffRoleKey, menuKey: StaffMenuKey): boolean {
+  return getVisibleStaffMenuKeys(role).includes(menuKey);
+}
+
 export type ShipmentStatus =
   | 'DRAFT'
   | 'DECLARED'
@@ -126,6 +156,49 @@ export interface PricingQuoteRequest extends QuoteInput {
   destinationCountry: string;
 }
 
+export interface PricingRuleSummary {
+  id: string;
+  channelId: string;
+  channelName: string;
+  destinationCountry: string;
+  minWeightKg: number;
+  maxWeightKg: number;
+  ratePerKg: number;
+  currency: string;
+  enabled: boolean;
+}
+
+export interface PricingRuleCreateInput {
+  channelId: string;
+  destinationCountry: string;
+  minWeightKg: number;
+  maxWeightKg: number;
+  ratePerKg: number;
+  currency: string;
+}
+
+export interface PricingRuleQuoteRequest {
+  channelId: string;
+  destinationCountry: string;
+  chargeableWeightKg: number;
+}
+
+export interface PricingRuleQuoteInput extends PricingRuleQuoteRequest {
+  rules: PricingRuleSummary[];
+  fuelRates: FuelRateSummary[];
+  surcharges: SurchargeSummary[];
+  exchangeRates: ExchangeRateSummary[];
+}
+
+export interface PricingRuleQuoteResponse extends QuoteResponse {
+  rule: PricingRuleSummary;
+  currency: 'CNY';
+  originalCurrency: string;
+  exchangeRate: number;
+  appliedFuelRate: number;
+  appliedSurcharges: Array<{ name: string; amount: number }>;
+}
+
 export interface FeeLineInput {
   name: string;
   amount: number;
@@ -208,6 +281,148 @@ export interface PaymentCreateResponse {
   account: CustomerAccountSummary;
   settledFees: ReceivableFeeSummary[];
   statement?: CustomerStatementSummary;
+}
+
+export interface CustomerSummary {
+  id: string;
+  code: string;
+  name: string;
+  enabled: boolean;
+}
+
+export interface CustomerContactSummary {
+  id: string;
+  customerId: string;
+  customerName: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  enabled: boolean;
+}
+
+export interface CustomerUserSummary {
+  id: string;
+  customerId: string;
+  customerName: string;
+  username: string;
+  enabled: boolean;
+}
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+export interface CarrierSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
+export interface ChannelSummary {
+  id: string;
+  name: string;
+  carrierId: string;
+  carrierName: string;
+  enabled: boolean;
+}
+
+export interface SurchargeSummary {
+  id: string;
+  name: string;
+  amount: number;
+  enabled: boolean;
+}
+
+export interface FuelRateSummary {
+  id: string;
+  channelId: string;
+  channelName: string;
+  rate: number;
+  activeAt: string;
+}
+
+export interface ExchangeRateSummary {
+  id: string;
+  baseCurrency: string;
+  quoteCurrency: string;
+  rate: number;
+  activeAt: string;
+  enabled: boolean;
+}
+
+export interface MasterDataSnapshot {
+  customers: CustomerSummary[];
+  contacts: CustomerContactSummary[];
+  customerUsers: CustomerUserSummary[];
+  agents: AgentSummary[];
+  carriers: CarrierSummary[];
+  channels: ChannelSummary[];
+  surcharges: SurchargeSummary[];
+  fuelRates: FuelRateSummary[];
+  exchangeRates: ExchangeRateSummary[];
+  roles: string[];
+}
+
+export interface CustomerCreateInput {
+  code: string;
+  name: string;
+}
+
+export interface CustomerContactCreateInput {
+  name: string;
+  phone?: string;
+  email?: string;
+}
+
+export interface CustomerUserCreateInput {
+  username: string;
+  password: string;
+}
+
+export interface AgentCreateInput {
+  name: string;
+}
+
+export interface CarrierCreateInput {
+  name: string;
+}
+
+export interface ChannelCreateInput {
+  name: string;
+  carrierId: string;
+}
+
+export interface SurchargeCreateInput {
+  name: string;
+  amount: number;
+}
+
+export interface FuelRateCreateInput {
+  channelId: string;
+  rate: number;
+  activeAt: string;
+}
+
+export interface ExchangeRateCreateInput {
+  baseCurrency: string;
+  quoteCurrency: string;
+  rate: number;
+  activeAt: string;
+}
+
+export interface EnabledUpdateInput {
+  enabled: boolean;
+}
+
+export interface MasterDataSnapshotSummary {
+  enabledCustomers: number;
+  enabledChannels: number;
+  enabledAgents: number;
+  enabledCarriers: number;
+  enabledSurcharges: number;
+  activeExchangeRates: number;
 }
 
 export interface StatementSummaryInput {
@@ -506,6 +721,54 @@ export function calculateQuote(input: QuoteInput): QuoteResponse {
   };
 }
 
+export function quoteWithPricingRules(input: PricingRuleQuoteInput): PricingRuleQuoteResponse {
+  const rule = input.rules.find(
+    (item) =>
+      item.enabled &&
+      item.channelId === input.channelId &&
+      item.destinationCountry === input.destinationCountry &&
+      input.chargeableWeightKg >= item.minWeightKg &&
+      input.chargeableWeightKg <= item.maxWeightKg
+  );
+  if (!rule) {
+    throw new Error('无可用报价规则');
+  }
+
+  const fuelRate = [...input.fuelRates]
+    .filter((item) => item.channelId === input.channelId)
+    .sort((left, right) => Date.parse(right.activeAt) - Date.parse(left.activeAt))[0]?.rate ?? 0;
+  const appliedSurcharges = input.surcharges
+    .filter((item) => item.enabled)
+    .map((item) => ({ name: item.name, amount: item.amount }));
+  const originalCurrency = rule.currency.trim().toUpperCase();
+  const exchangeRate = originalCurrency === 'CNY'
+    ? 1
+    : [...input.exchangeRates]
+      .filter((item) => item.enabled && item.baseCurrency === originalCurrency && item.quoteCurrency === 'CNY')
+      .sort((left, right) => Date.parse(right.activeAt) - Date.parse(left.activeAt))[0]?.rate;
+
+  if (!exchangeRate) {
+    throw new Error('无可用汇率');
+  }
+
+  const quote = calculateQuote({
+    chargeableWeightKg: input.chargeableWeightKg,
+    baseRatePerKg: rule.ratePerKg * exchangeRate,
+    fuelRate,
+    surcharges: appliedSurcharges
+  });
+
+  return {
+    ...quote,
+    rule,
+    currency: 'CNY',
+    originalCurrency,
+    exchangeRate,
+    appliedFuelRate: fuelRate,
+    appliedSurcharges
+  };
+}
+
 export function createFeeLinesFromQuote(
   shipmentId: string,
   quote: QuoteResponse,
@@ -551,6 +814,17 @@ export function summarizePaymentSettlement(input: PaymentSettlementInput): Payme
     settledAmount: round2(input.settledAmount),
     remainingAmount: round2(input.amount - input.settledAmount),
     createdAt: input.createdAt
+  };
+}
+
+export function summarizeMasterDataSnapshot(snapshot: MasterDataSnapshot): MasterDataSnapshotSummary {
+  return {
+    enabledCustomers: snapshot.customers.filter((item) => item.enabled).length,
+    enabledChannels: snapshot.channels.filter((item) => item.enabled).length,
+    enabledAgents: snapshot.agents.filter((item) => item.enabled).length,
+    enabledCarriers: snapshot.carriers.filter((item) => item.enabled).length,
+    enabledSurcharges: snapshot.surcharges.filter((item) => item.enabled).length,
+    activeExchangeRates: snapshot.exchangeRates.filter((item) => item.enabled).length
   };
 }
 

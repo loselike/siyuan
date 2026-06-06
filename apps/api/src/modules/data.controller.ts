@@ -1,10 +1,22 @@
 import { Body, Controller, ForbiddenException, Get, Inject, Param, Post, Put, Req } from '@nestjs/common';
 import type {
+  AgentCreateInput,
+  CarrierCreateInput,
+  ChannelCreateInput,
   CustomerStatementCreateInput,
+  CustomerContactCreateInput,
+  CustomerCreateInput,
+  CustomerUserCreateInput,
+  EnabledUpdateInput,
+  ExchangeRateCreateInput,
+  FuelRateCreateInput,
   PaymentCreateInput,
   PricingQuoteRequest,
+  PricingRuleCreateInput,
+  PricingRuleQuoteRequest,
   ProblemTicketCreateInput,
   ReceivableAdjustmentInput,
+  SurchargeCreateInput,
   ShipmentCreateInput,
   ShipmentImportRequest,
   TrackingEventInput
@@ -170,6 +182,132 @@ export class DataController {
     return this.repository.getMasterData();
   }
 
+  @Get('master-data/customers')
+  @RequirePermission('master-data:read')
+  async masterDataCustomers() {
+    return (await this.repository.getMasterData()).customers;
+  }
+
+  @Post('master-data/customers')
+  @RequirePermission('system:manage')
+  async createMasterDataCustomer(@Req() request: { user: Principal }, @Body() body: CustomerCreateInput) {
+    return this.repository.createCustomer(request.user, body);
+  }
+
+  @Post('master-data/customers/:id/contacts')
+  @RequirePermission('system:manage')
+  async createMasterDataCustomerContact(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerContactCreateInput) {
+    return this.repository.createCustomerContact(request.user, id, body);
+  }
+
+  @Post('master-data/customers/:id/users')
+  @RequirePermission('system:manage')
+  async createMasterDataCustomerUser(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerUserCreateInput) {
+    return this.repository.createCustomerUser(request.user, id, body);
+  }
+
+  @Put('master-data/customers/:id/enabled')
+  @RequirePermission('system:manage')
+  async updateMasterDataCustomerEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
+    return this.repository.updateCustomerEnabled(request.user, id, body);
+  }
+
+  @Get('master-data/agents')
+  @RequirePermission('master-data:read')
+  async masterDataAgents() {
+    return (await this.repository.getMasterData()).agents;
+  }
+
+  @Post('master-data/agents')
+  @RequirePermission('system:manage')
+  async createMasterDataAgent(@Req() request: { user: Principal }, @Body() body: AgentCreateInput) {
+    return this.repository.createAgent(request.user, body);
+  }
+
+  @Put('master-data/agents/:id/enabled')
+  @RequirePermission('system:manage')
+  async updateMasterDataAgentEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
+    return this.repository.updateAgentEnabled(request.user, id, body);
+  }
+
+  @Get('master-data/carriers')
+  @RequirePermission('master-data:read')
+  async masterDataCarriers() {
+    return (await this.repository.getMasterData()).carriers;
+  }
+
+  @Post('master-data/carriers')
+  @RequirePermission('system:manage')
+  async createMasterDataCarrier(@Req() request: { user: Principal }, @Body() body: CarrierCreateInput) {
+    return this.repository.createCarrier(request.user, body);
+  }
+
+  @Put('master-data/carriers/:id/enabled')
+  @RequirePermission('system:manage')
+  async updateMasterDataCarrierEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
+    return this.repository.updateCarrierEnabled(request.user, id, body);
+  }
+
+  @Get('master-data/channels')
+  @RequirePermission('master-data:read')
+  async masterDataChannels() {
+    return (await this.repository.getMasterData()).channels;
+  }
+
+  @Post('master-data/channels')
+  @RequirePermission('system:manage')
+  async createMasterDataChannel(@Req() request: { user: Principal }, @Body() body: ChannelCreateInput) {
+    return this.repository.createChannel(request.user, body);
+  }
+
+  @Put('master-data/channels/:id/enabled')
+  @RequirePermission('system:manage')
+  async updateMasterDataChannelEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
+    return this.repository.updateChannelEnabled(request.user, id, body);
+  }
+
+  @Get('master-data/surcharges')
+  @RequirePermission('master-data:read')
+  async masterDataSurcharges() {
+    return (await this.repository.getMasterData()).surcharges;
+  }
+
+  @Post('master-data/surcharges')
+  @RequirePermission('system:manage')
+  async createMasterDataSurcharge(@Req() request: { user: Principal }, @Body() body: SurchargeCreateInput) {
+    return this.repository.createSurcharge(request.user, body);
+  }
+
+  @Put('master-data/surcharges/:id/enabled')
+  @RequirePermission('system:manage')
+  async updateMasterDataSurchargeEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
+    return this.repository.updateSurchargeEnabled(request.user, id, body);
+  }
+
+  @Get('master-data/fuel-rates')
+  @RequirePermission('master-data:read')
+  async masterDataFuelRates() {
+    return (await this.repository.getMasterData()).fuelRates;
+  }
+
+  @Post('master-data/fuel-rates')
+  @RequirePermission('system:manage')
+  async createMasterDataFuelRate(@Req() request: { user: Principal }, @Body() body: FuelRateCreateInput) {
+    return this.repository.createFuelRate(request.user, body);
+  }
+
+  @Get('master-data/exchange-rates')
+  @RequirePermission('master-data:read')
+  async masterDataExchangeRates() {
+    return (await this.repository.getMasterData()).exchangeRates;
+  }
+
+  @Post('master-data/exchange-rates')
+  @RequirePermission('system:manage')
+  async createMasterDataExchangeRate(@Req() request: { user: Principal }, @Body() body: ExchangeRateCreateInput) {
+    return this.repository.createExchangeRate(request.user, body);
+  }
+
   @Get('system/roles')
   @RequirePermission('system:manage')
   async systemRoles() {
@@ -193,6 +331,30 @@ export class DataController {
   @RequirePermission('finance:read')
   quote(@Body() body: PricingQuoteRequest) {
     return this.repository.quote(body);
+  }
+
+  @Get('pricing/rules')
+  @RequirePermission('finance:read')
+  async pricingRules(@Req() request: { user: Principal }) {
+    return this.repository.getPricingRules(request.user);
+  }
+
+  @Post('pricing/rules')
+  @RequirePermission('finance:settle')
+  async createPricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleCreateInput) {
+    return this.repository.createPricingRule(request.user, body);
+  }
+
+  @Put('pricing/rules/:id/enabled')
+  @RequirePermission('finance:settle')
+  async updatePricingRuleEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
+    return this.repository.updatePricingRuleEnabled(request.user, id, body);
+  }
+
+  @Post('pricing/rules/quote')
+  @RequirePermission('finance:read')
+  async quotePricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleQuoteRequest) {
+    return this.repository.quotePricingRule(request.user, body);
   }
 
   @Get('finance/receivables')

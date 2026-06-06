@@ -46,15 +46,18 @@ import {
 } from 'lucide-react';
 import {
   businessTypeLabels,
+  canAccessStaffMenu,
   canTransitionShipment,
   createAutomationPlan,
   createFulfillmentAdvice,
   createShipmentInsights,
   getAvailableFulfillmentActions,
+  getVisibleStaffMenuKeys,
   getModuleCoverageSummary,
   productModules,
   shipmentStatusLabels,
   summarizeFulfillmentStages,
+  summarizeMasterDataSnapshot,
   summarizeStatusCounts,
   validateShipmentImportRows,
   type AccountLedgerSummary,
@@ -63,10 +66,13 @@ import {
   type CustomerAccountSummary,
   type CustomerStatementSummary,
   type FulfillmentAction,
-  type QuoteResponse,
+  type MasterDataSnapshot,
+  type PricingRuleQuoteResponse,
+  type PricingRuleSummary,
   type ReceivableFeeSummary,
   type Shipment,
   type ShipmentLabelSummary,
+  type StaffMenuKey,
   type ShipmentStatus
 } from '@siyuan/shared';
 import { ApiClient, type AiAssistResponse, type PermissionKey, type Principal, type RoleKey, type RolePermissionMatrix, type RolePermissionRow, type Session } from './apiClient';
@@ -79,6 +85,19 @@ interface AiResult {
   title: string;
   response: AiAssistResponse;
 }
+
+const emptyMasterData: MasterDataSnapshot = {
+  customers: [],
+  contacts: [],
+  customerUsers: [],
+  agents: [],
+  carriers: [],
+  channels: [],
+  surcharges: [],
+  fuelRates: [],
+  exchangeRates: [],
+  roles: []
+};
 
 const statusOrder: ShipmentStatus[] = [
   'DRAFT',
@@ -94,7 +113,7 @@ const statusOrder: ShipmentStatus[] = [
   'SIGNED'
 ];
 
-const menuItems = [
+const menuItems: Array<{ key: StaffMenuKey; icon: ReactNode; label: string }> = [
   { key: 'workspace', icon: <Gauge size={16} />, label: '运营工作台' },
   { key: 'orders', icon: <Boxes size={16} />, label: '运单履约' },
   { key: 'receive', icon: <PackagePlus size={16} />, label: '收货打单' },
@@ -114,7 +133,7 @@ const importCheckRows = [
   { customerOrderNo: 'AI-0606-003', destinationCountry: '', weightKg: -1, channelName: '' }
 ];
 
-type MenuKey = 'workspace' | 'orders' | 'receive' | 'routing' | 'tracking' | 'problems' | 'pricing' | 'finance' | 'reports' | 'master' | 'settings';
+type MenuKey = StaffMenuKey;
 type FulfillmentStageKey = 'all' | 'declared' | 'receiving' | 'sorting' | 'dispatching' | 'online' | 'signing' | 'exception';
 
 const businessWorkspaceConfigs: Record<
@@ -683,9 +702,11 @@ export function App() {
   const [customerStatements, setCustomerStatements] = useState<CustomerStatementSummary[]>([]);
   const [customerAccounts, setCustomerAccounts] = useState<CustomerAccountSummary[]>([]);
   const [accountLedger, setAccountLedger] = useState<AccountLedgerSummary[]>([]);
+  const [masterData, setMasterData] = useState<MasterDataSnapshot>(emptyMasterData);
   const [shipmentLabels, setShipmentLabels] = useState<Record<string, ShipmentLabelSummary[]>>({});
   const [carrierTasks, setCarrierTasks] = useState<CarrierTaskSummary[]>([]);
-  const [quoteResult, setQuoteResult] = useState<QuoteResponse | null>(null);
+  const [pricingRules, setPricingRules] = useState<PricingRuleSummary[]>([]);
+  const [quoteResult, setQuoteResult] = useState<PricingRuleQuoteResponse | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState<AiResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -694,6 +715,21 @@ export function App() {
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
     [session?.accessToken]
   );
+  const visibleMenuKeys = useMemo(
+    () => (session && session.user.role !== 'CUSTOMER' ? getVisibleStaffMenuKeys(session.user.role) : []),
+    [session]
+  );
+  const visibleMenuItems = useMemo(
+    () => menuItems.filter((item) => visibleMenuKeys.includes(item.key)),
+    [visibleMenuKeys]
+  );
+  const currentMenuKey = useMemo<MenuKey>(
+    () =>
+      session && session.user.role !== 'CUSTOMER' && canAccessStaffMenu(session.user.role, activeMenuKey)
+        ? activeMenuKey
+        : visibleMenuKeys[0] ?? 'workspace',
+    [activeMenuKey, session, visibleMenuKeys]
+  );
 
   useEffect(() => {
     if (!session) {
@@ -701,6 +737,15 @@ export function App() {
     }
     void refreshWorkspace(apiClient);
   }, [apiClient, session]);
+
+  useEffect(() => {
+    if (!session || session.user.role === 'CUSTOMER') {
+      return;
+    }
+    if (!canAccessStaffMenu(session.user.role, activeMenuKey)) {
+      setActiveMenuKey(visibleMenuKeys[0] ?? 'workspace');
+    }
+  }, [activeMenuKey, session, visibleMenuKeys]);
 
   function handleUnauthorized() {
     localStorage.removeItem('siyuan-session');
@@ -711,8 +756,10 @@ export function App() {
     setCustomerStatements([]);
     setCustomerAccounts([]);
     setAccountLedger([]);
+    setMasterData(emptyMasterData);
     setShipmentLabels({});
     setCarrierTasks([]);
+    setPricingRules([]);
     setQuoteResult(null);
     setAiResult(null);
   }
@@ -733,9 +780,18 @@ export function App() {
     setCustomerAccounts(nextAccounts);
     setAccountLedger(nextLedger);
     if (user?.role !== 'CUSTOMER') {
-      setCarrierTasks(await client.carrierTasks());
+      const [nextTasks, nextMasterData, nextPricingRules] = await Promise.all([
+        client.carrierTasks(),
+        client.masterData(),
+        client.pricingRules()
+      ]);
+      setCarrierTasks(nextTasks);
+      setMasterData(nextMasterData);
+      setPricingRules(nextPricingRules);
     } else {
       setCarrierTasks([]);
+      setMasterData(emptyMasterData);
+      setPricingRules([]);
     }
   }
 
@@ -743,6 +799,7 @@ export function App() {
     const nextSession = await apiClient.login(username, password);
     localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
     setSession(nextSession);
+    setActiveMenuKey(getVisibleStaffMenuKeys(nextSession.user.role)[0] ?? 'workspace');
     const loginClient = new ApiClient(() => nextSession.accessToken, handleUnauthorized);
     await refreshWorkspace(loginClient, nextSession.user);
   }
@@ -1037,16 +1094,31 @@ export function App() {
   }
 
   async function handleQuote() {
-    const quote = await apiClient.quote({
-      customerId: 'c-9409',
+    const quote = await apiClient.quotePricingRule({
       channelId: 'ch-dhl-hk',
       destinationCountry: '美国',
-      chargeableWeightKg: 10,
-      baseRatePerKg: 20,
-      fuelRate: 0.15,
-      surcharges: [{ name: '偏远费', amount: 50 }]
+      chargeableWeightKg: 4
     });
     setQuoteResult(quote);
+  }
+
+  async function handleCreatePricingRule() {
+    const rule = await apiClient.createPricingRule({
+      channelId: 'ch-dhl-hk',
+      destinationCountry: '美国',
+      minWeightKg: 5,
+      maxWeightKg: 20,
+      ratePerKg: 8,
+      currency: 'USD'
+    });
+    setPricingRules((current) => [rule, ...current.filter((item) => item.id !== rule.id)]);
+    setNotice(`已新建报价规则 ${rule.channelName} ${rule.minWeightKg}-${rule.maxWeightKg}kg`);
+  }
+
+  async function handleTogglePricingRule(rule: PricingRuleSummary) {
+    const updated = await apiClient.updatePricingRuleEnabled(rule.id, { enabled: !rule.enabled });
+    setPricingRules((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    setNotice(`${updated.minWeightKg}-${updated.maxWeightKg}kg ${updated.enabled ? '已启用' : '已停用'}`);
   }
 
   async function handleCreateCustomerStatement() {
@@ -1074,6 +1146,82 @@ export function App() {
     setCustomerAccounts((current) => current.map((account) => (account.customerId === response.account.customerId ? response.account : account)));
     setAccountLedger(await apiClient.accountLedger());
     setNotice(`收款已核销 ¥${response.payment.settledAmount}`);
+  }
+
+  async function handleCreateMasterCustomer() {
+    const customer = await apiClient.createCustomer({ code: '7777', name: 'M7-Test' });
+    setMasterData((current) => ({ ...current, customers: [...current.customers.filter((item) => item.id !== customer.id), customer] }));
+    setNotice('基础资料客户已创建');
+  }
+
+  async function handleCreateMasterContact() {
+    const customerId = masterData.customers.find((customer) => customer.code === '7777')?.id ?? masterData.customers[0]?.id;
+    if (!customerId) {
+      return;
+    }
+    const contact = await apiClient.createCustomerContact(customerId, { name: 'M7 Contact', phone: '13900000007', email: 'm7@example.com' });
+    setMasterData((current) => ({ ...current, contacts: [...current.contacts.filter((item) => item.id !== contact.id), contact] }));
+    setNotice('客户联系人已创建');
+  }
+
+  async function handleCreateMasterCustomerUser() {
+    const customerId = masterData.customers.find((customer) => customer.code === '7777')?.id ?? masterData.customers[0]?.id;
+    if (!customerId) {
+      return;
+    }
+    const customerUser = await apiClient.createCustomerUser(customerId, { username: 'm7customer', password: 'm7pass123' });
+    setMasterData((current) => ({ ...current, customerUsers: [...current.customerUsers.filter((item) => item.id !== customerUser.id), customerUser] }));
+    setNotice('客户门户账号已创建');
+  }
+
+  async function handleCreateMasterCarrier() {
+    const carrier = await apiClient.createCarrier({ name: 'M7 Carrier' });
+    setMasterData((current) => ({ ...current, carriers: [...current.carriers.filter((item) => item.id !== carrier.id), carrier] }));
+    setNotice('承运商已创建');
+  }
+
+  async function handleCreateMasterChannel() {
+    const carrierId = masterData.carriers.find((carrier) => carrier.name === 'M7 Carrier')?.id ?? masterData.carriers[0]?.id;
+    if (!carrierId) {
+      return;
+    }
+    const channel = await apiClient.createChannel({ name: 'M7 Channel', carrierId });
+    setMasterData((current) => ({ ...current, channels: [...current.channels.filter((item) => item.id !== channel.id), channel] }));
+    setNotice('渠道已创建');
+  }
+
+  async function handleCreateMasterAgent() {
+    const agent = await apiClient.createAgent({ name: 'M7 Agent' });
+    setMasterData((current) => ({ ...current, agents: [...current.agents.filter((item) => item.id !== agent.id), agent] }));
+    setNotice('代理已创建');
+  }
+
+  async function handleCreateMasterSurcharge() {
+    const surcharge = await apiClient.createSurcharge({ name: 'M7 附加费', amount: 88 });
+    setMasterData((current) => ({ ...current, surcharges: [...current.surcharges.filter((item) => item.id !== surcharge.id), surcharge] }));
+    setNotice('附加费已创建');
+  }
+
+  async function handleCreateMasterFuelRate() {
+    const channelId = masterData.channels.find((channel) => channel.name === 'M7 Channel')?.id ?? masterData.channels[0]?.id;
+    if (!channelId) {
+      return;
+    }
+    const fuelRate = await apiClient.createFuelRate({ channelId, rate: 0.18, activeAt: '2026-06-06T00:00:00.000Z' });
+    setMasterData((current) => ({ ...current, fuelRates: [...current.fuelRates.filter((item) => item.id !== fuelRate.id), fuelRate] }));
+    setNotice('燃油费率已创建');
+  }
+
+  async function handleCreateMasterExchangeRate() {
+    const exchangeRate = await apiClient.createExchangeRate({ baseCurrency: 'EUR', quoteCurrency: 'CNY', rate: 7.8, activeAt: '2026-06-06T00:00:00.000Z' });
+    setMasterData((current) => ({ ...current, exchangeRates: [...current.exchangeRates.filter((item) => item.id !== exchangeRate.id), exchangeRate] }));
+    setNotice('汇率已创建');
+  }
+
+  async function handleToggleMasterChannel(channelId: string, enabled: boolean) {
+    const channel = await apiClient.updateChannelEnabled(channelId, { enabled });
+    setMasterData((current) => ({ ...current, channels: current.channels.map((item) => (item.id === channel.id ? channel : item)) }));
+    setNotice(`${channel.name} 已${channel.enabled ? '启用' : '停用'}`);
   }
 
   async function handleAiAssist(input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) {
@@ -1142,8 +1290,8 @@ export function App() {
           <Menu
             className="side-menu"
             mode="inline"
-            selectedKeys={[activeMenuKey]}
-            items={menuItems}
+            selectedKeys={[currentMenuKey]}
+            items={visibleMenuItems}
             onClick={({ key }) => setActiveMenuKey(key as MenuKey)}
           />
           <Card className="sidebar-card" size="small">
@@ -1222,7 +1370,7 @@ export function App() {
                 }
               />
             ) : null}
-            {activeMenuKey === 'orders' ? (
+            {currentMenuKey === 'orders' ? (
               <>
                 <Flex justify="space-between" align="center" className="page-heading">
                   <div>
@@ -1356,13 +1504,35 @@ export function App() {
                   </Col>
                 </Row>
               </>
-            ) : activeMenuKey === 'settings' ? (
+            ) : currentMenuKey === 'settings' ? (
               <SystemSettingsPage apiClient={apiClient} onAiAssist={handleAiAssist} aiLoading={aiLoading} />
-            ) : activeMenuKey === 'master' ? (
-              <MasterDataPage onAiAssist={handleAiAssist} aiLoading={aiLoading} />
-            ) : activeMenuKey === 'pricing' ? (
-              <PricingPage quoteResult={quoteResult} onQuote={handleQuote} />
-            ) : activeMenuKey === 'finance' ? (
+            ) : currentMenuKey === 'master' ? (
+              <MasterDataPage
+                masterData={masterData}
+                notice={notice}
+                onAiAssist={handleAiAssist}
+                aiLoading={aiLoading}
+                onCreateCustomer={handleCreateMasterCustomer}
+                onCreateContact={handleCreateMasterContact}
+                onCreateCustomerUser={handleCreateMasterCustomerUser}
+                onCreateAgent={handleCreateMasterAgent}
+                onCreateCarrier={handleCreateMasterCarrier}
+                onCreateChannel={handleCreateMasterChannel}
+                onCreateSurcharge={handleCreateMasterSurcharge}
+                onCreateFuelRate={handleCreateMasterFuelRate}
+                onCreateExchangeRate={handleCreateMasterExchangeRate}
+                onToggleChannel={handleToggleMasterChannel}
+              />
+            ) : currentMenuKey === 'pricing' ? (
+              <PricingPage
+                quoteResult={quoteResult}
+                pricingRules={pricingRules}
+                notice={notice}
+                onQuote={handleQuote}
+                onCreatePricingRule={handleCreatePricingRule}
+                onTogglePricingRule={handleTogglePricingRule}
+              />
+            ) : currentMenuKey === 'finance' ? (
               <FinancePage
                 receivables={receivables}
                 statements={customerStatements}
@@ -1372,7 +1542,7 @@ export function App() {
                 onCreateStatement={handleCreateCustomerStatement}
                 onCreatePayment={handleCreatePayment}
               />
-            ) : activeMenuKey === 'receive' ? (
+            ) : currentMenuKey === 'receive' ? (
               <ReceiveLabelPage
                 shipments={businessShipments}
                 labelsByShipmentId={shipmentLabels}
@@ -1384,7 +1554,7 @@ export function App() {
                 onVoidLabel={handleVoidShipmentLabel}
                 onDispatch={handleDispatchShipment}
               />
-            ) : activeMenuKey === 'tracking' ? (
+            ) : currentMenuKey === 'tracking' ? (
               <TrackingTaskPage
                 shipments={businessShipments}
                 tasks={carrierTasks}
@@ -1392,8 +1562,8 @@ export function App() {
                 onRunTask={handleRunCarrierTask}
                 onRetryTask={handleRetryCarrierTask}
               />
-            ) : modulePageConfigs[activeMenuKey] ? (
-              <GenericModulePage config={modulePageConfigs[activeMenuKey]} onAiAssist={handleAiAssist} aiLoading={aiLoading} />
+            ) : modulePageConfigs[currentMenuKey] ? (
+              <GenericModulePage config={modulePageConfigs[currentMenuKey]} onAiAssist={handleAiAssist} aiLoading={aiLoading} />
             ) : (
               <>
             <Flex justify="space-between" align="center" className="page-heading">
@@ -1928,57 +2098,60 @@ function SystemSettingsPage({
   );
 }
 
-const masterManualSections = [
-  {
-    title: '客户档案',
-    items: ['客户端账号创建', '创建客户联系人', '客户启用/停用', '客户授信与结算方式'],
-    owner: '客服组'
-  },
-  {
-    title: '代理档案',
-    items: ['代理账号创建', '代理 API 对接预留', '代理联系人', '代理结算资料'],
-    owner: '产品组'
-  },
-  {
-    title: '基础数据',
-    items: ['电子词典-费用名称', '触发器', '汇率', '国家地区'],
-    owner: '管理员'
-  },
-  {
-    title: '单证模板',
-    items: ['下载市场模板', '修改及制作模板', '上传模板', '模板权限设置'],
-    owner: '操作主管'
-  }
-];
-
-const masterRecordRows = [
-  { type: '客户', name: '9409-Daloday', detail: '月结客户 / 联系人 Lina / 客户端账号已启用', status: '启用' },
-  { type: '代理', name: 'HKD01 代理价', detail: '宇环代理 / DHL HK 成本价 / API 转单预留', status: '待更新' },
-  { type: '承运商', name: 'USPS 小包线', detail: '美国小包 / 材积 6000 / 支持挂号转单', status: '启用' },
-  { type: '费用名称', name: '偏远附加费', detail: '电子词典 / 应收应付共用 / 可参与报价试算', status: '启用' },
-  { type: '汇率', name: 'USD/CNY 7.2450', detail: '2026-06-06 生效 / 财务与报价共用', status: '启用' },
-  { type: '模板', name: '客户对账单模板', detail: 'Excel 导出模板 / 已配置模板权限', status: '启用' }
-];
-
-const templateRows = [
-  { name: '收货清单模板', scene: '收货导出', permission: '操作/管理员', status: '可导出' },
-  { name: '发货清单模板', scene: '发货导出', permission: '操作/管理员', status: '可导出' },
-  { name: '客户对账单模板', scene: '财务对账', permission: '财务/管理员', status: '可导出' },
-  { name: '自定义运单类型模板', scene: '运单导入导出', permission: '管理员', status: '可编辑' }
-];
-
 function MasterDataPage({
+  masterData,
+  notice,
   onAiAssist,
-  aiLoading
+  aiLoading,
+  onCreateCustomer,
+  onCreateContact,
+  onCreateCustomerUser,
+  onCreateAgent,
+  onCreateCarrier,
+  onCreateChannel,
+  onCreateSurcharge,
+  onCreateFuelRate,
+  onCreateExchangeRate,
+  onToggleChannel
 }: {
+  masterData: MasterDataSnapshot;
+  notice: string | null;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
+  onCreateCustomer: () => Promise<void>;
+  onCreateContact: () => Promise<void>;
+  onCreateCustomerUser: () => Promise<void>;
+  onCreateAgent: () => Promise<void>;
+  onCreateCarrier: () => Promise<void>;
+  onCreateChannel: () => Promise<void>;
+  onCreateSurcharge: () => Promise<void>;
+  onCreateFuelRate: () => Promise<void>;
+  onCreateExchangeRate: () => Promise<void>;
+  onToggleChannel: (channelId: string, enabled: boolean) => Promise<void>;
 }) {
-  const [masterNotice, setMasterNotice] = useState<string | null>(null);
-
-  const handleMasterAction = (message: string) => {
-    setMasterNotice(message);
-  };
+  const summary = summarizeMasterDataSnapshot(masterData);
+  const customerRows = masterData.customers.map((customer) => ({
+    ...customer,
+    displayName: `${customer.code}-${customer.name}`,
+    contactCount: masterData.contacts.filter((contact) => contact.customerId === customer.id).length,
+    userCount: masterData.customerUsers.filter((user) => user.customerId === customer.id).length
+  }));
+  const rateRows = [
+    ...masterData.fuelRates.map((rate) => ({
+      id: rate.id,
+      type: '燃油',
+      name: `${rate.channelName} ${rate.rate}`,
+      detail: rate.activeAt.slice(0, 10),
+      enabled: true
+    })),
+    ...masterData.exchangeRates.map((rate) => ({
+      id: rate.id,
+      type: '汇率',
+      name: `${rate.baseCurrency}/${rate.quoteCurrency} ${rate.rate}`,
+      detail: rate.activeAt.slice(0, 10),
+      enabled: rate.enabled
+    }))
+  ];
 
   return (
     <>
@@ -1988,12 +2161,6 @@ function MasterDataPage({
           <Text type="secondary">按手册维护客户、代理、基础数据、费用名称、汇率、单证模板和模板权限。</Text>
         </div>
         <Space>
-          <Button icon={<FileInput size={16} />} onClick={() => handleMasterAction('已模拟导入客户、代理与汇率资料')}>
-            导入资料
-          </Button>
-          <Button icon={<ClipboardCheck size={16} />} onClick={() => handleMasterAction('已模拟导出基础资料清单')}>
-            导出资料
-          </Button>
           <Button
             type="primary"
             icon={<Sparkles size={16} />}
@@ -2003,7 +2170,7 @@ function MasterDataPage({
                 module: '基础资料',
                 task: '资料体检',
                 prompt: '请检查客户、代理、承运商、渠道、费用名称、汇率、模板权限的资料完整性，输出缺失项和处理顺序。',
-                context: { records: masterRecordRows, templates: templateRows }
+                context: { masterData }
               })
             }
           >
@@ -2012,80 +2179,101 @@ function MasterDataPage({
         </Space>
       </Flex>
 
-      {masterNotice ? <Alert className="notice-bar" type="success" showIcon message={masterNotice} /> : null}
+      {notice ? <Alert className="notice-bar" type="success" showIcon message={notice} /> : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
-          <MetricCard icon={<Users />} title="客户/联系人" value="126" extra="客户端账号创建、客户联系人" />
+          <MetricCard icon={<Users />} title="客户/联系人" value={summary.enabledCustomers} extra={`${masterData.contacts.length} 个联系人 / ${masterData.customerUsers.length} 个账号`} />
         </Col>
         <Col xs={24} md={8}>
-          <MetricCard icon={<Route />} title="代理/渠道" value="42" extra="代理账号创建、API 对接预留" />
+          <MetricCard icon={<Route />} title="代理/渠道" value={summary.enabledChannels} extra={`${summary.enabledAgents} 个代理 / ${summary.enabledCarriers} 个承运商`} />
         </Col>
         <Col xs={24} md={8}>
-          <MetricCard icon={<FileText />} title="模板/汇率" value="18" extra="单证模板、模板权限、USD/CNY 7.2450" />
+          <MetricCard icon={<FileText />} title="费用/汇率" value={summary.enabledSurcharges} extra={`${summary.activeExchangeRates} 条启用汇率`} />
         </Col>
       </Row>
 
       <Row gutter={[16, 16]} className="main-grid">
         <Col xs={24} xl={15}>
           <Card
-            title={
-              <Flex align="center" gap={8}>
-                <Boxes size={18} />
-                <span>手册功能点</span>
-              </Flex>
+            title="客户、联系人与账号"
+            extra={
+              <Space wrap>
+                <Button size="small" onClick={() => void onCreateCustomer()}>新建客户</Button>
+                <Button size="small" onClick={() => void onCreateContact()}>创建客户联系人</Button>
+                <Button size="small" onClick={() => void onCreateCustomerUser()}>客户端账号创建</Button>
+              </Space>
             }
           >
-            <Row gutter={[12, 12]}>
-              {masterManualSections.map((section) => (
-                <Col xs={24} md={12} key={section.title}>
-                  <div className="module-card">
-                    <Flex justify="space-between" align="center">
-                      <Text strong>{section.title}</Text>
-                      <Tag color="blue">{section.owner}</Tag>
-                    </Flex>
-                    <Space wrap className="risk-tags">
-                      {section.items.map((item) => (
-                        <Tag key={item}>{item}</Tag>
-                      ))}
-                    </Space>
-                    <Button size="small" onClick={() => handleMasterAction(`已进入${section.title}模拟维护`)}>
-                      进入维护
-                    </Button>
-                  </div>
-                </Col>
-              ))}
-            </Row>
-          </Card>
-
-          <Card className="module-grid" title="基础资料台账">
             <Table
-              rowKey="name"
+              rowKey="id"
               size="small"
               pagination={false}
-              dataSource={masterRecordRows}
+              dataSource={customerRows}
+              columns={[
+                { title: '客户', dataIndex: 'displayName', render: (value: string) => <Text strong>{value}</Text> },
+                { title: '联系人', dataIndex: 'contactCount', width: 90 },
+                { title: '账号', dataIndex: 'userCount', width: 90 },
+                { title: '状态', dataIndex: 'enabled', width: 100, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> }
+              ]}
+            />
+            <Space wrap className="surface-strip">
+              {masterData.contacts.map((contact) => <Tag key={contact.id}>{contact.name}</Tag>)}
+              {masterData.customerUsers.map((user) => <Tag key={user.id}>{user.username}</Tag>)}
+            </Space>
+          </Card>
+
+          <Card className="module-grid" title="代理、承运商与渠道">
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={masterData.channels}
+              columns={[
+                { title: '渠道', dataIndex: 'name', render: (value: string) => <Text strong>{value}</Text> },
+                { title: '承运商', dataIndex: 'carrierName', width: 140 },
+                { title: '状态', dataIndex: 'enabled', width: 100, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> },
+                {
+                  title: '操作',
+                  width: 150,
+                  render: (_, channel) => (
+                    <Button size="small" onClick={() => void onToggleChannel(channel.id, !channel.enabled)}>
+                      {channel.enabled ? `停用 ${channel.name}` : `启用 ${channel.name}`}
+                    </Button>
+                  )
+                }
+              ]}
+            />
+            <Space wrap className="surface-strip">
+              <Button size="small" onClick={() => void onCreateAgent()}>新建代理</Button>
+              <Button size="small" onClick={() => void onCreateCarrier()}>新建承运商</Button>
+              <Button size="small" onClick={() => void onCreateChannel()}>新建渠道</Button>
+              {masterData.agents.map((agent) => <Tag key={agent.id}>{agent.name}</Tag>)}
+              {masterData.carriers.map((carrier) => <Tag key={carrier.id}>{carrier.name}</Tag>)}
+            </Space>
+          </Card>
+
+          <Card className="module-grid" title="费用、燃油与汇率">
+            <Table
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={[
+                ...masterData.surcharges.map((item) => ({ id: item.id, type: '附加费', name: item.name, detail: formatCurrency(item.amount), enabled: item.enabled })),
+                ...rateRows
+              ]}
               columns={[
                 { title: '类型', dataIndex: 'type', width: 100, render: (value: string) => <Tag>{value}</Tag> },
-                { title: '名称', dataIndex: 'name', width: 170, render: (value: string) => <Text strong>{value}</Text> },
-                { title: '说明', dataIndex: 'detail' },
-                { title: '状态', dataIndex: 'status', width: 100, render: (value: string) => <Tag color={value === '启用' ? 'green' : 'gold'}>{value}</Tag> }
+                { title: '名称', dataIndex: 'name', render: (value: string) => <Text strong>{value}</Text> },
+                { title: '说明', dataIndex: 'detail', width: 140 },
+                { title: '状态', dataIndex: 'enabled', width: 100, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> }
               ]}
             />
-          </Card>
-
-          <Card className="module-grid" title="单证模板与权限">
-            <Table
-              rowKey="name"
-              size="small"
-              pagination={false}
-              dataSource={templateRows}
-              columns={[
-                { title: '模板', dataIndex: 'name' },
-                { title: '场景', dataIndex: 'scene', width: 150 },
-                { title: '模板权限设置', dataIndex: 'permission', width: 160 },
-                { title: '状态', dataIndex: 'status', width: 110, render: (value: string) => <Tag color="blue">{value}</Tag> }
-              ]}
-            />
+            <Space wrap className="surface-strip">
+              <Button size="small" onClick={() => void onCreateSurcharge()}>新建附加费</Button>
+              <Button size="small" onClick={() => void onCreateFuelRate()}>新建燃油费率</Button>
+              <Button size="small" onClick={() => void onCreateExchangeRate()}>新建汇率</Button>
+            </Space>
           </Card>
         </Col>
 
@@ -2109,11 +2297,11 @@ function MasterDataPage({
 
           <Card className="automation-card" title="快捷维护">
             <Space wrap>
-              {['新建客户', '创建客户联系人', '客户端账号创建', '代理账号创建', '电子词典-费用名称', '触发器', '汇率', '模板权限设置'].map((item) => (
-                <Button key={item} onClick={() => handleMasterAction(`已打开${item}模拟入口`)}>
-                  {item}
-                </Button>
-              ))}
+              <Tag>客户 {masterData.customers.length}</Tag>
+              <Tag>渠道 {masterData.channels.length}</Tag>
+              <Tag>费用 {masterData.surcharges.length}</Tag>
+              <Tag>燃油 {masterData.fuelRates.length}</Tag>
+              <Tag>汇率 {masterData.exchangeRates.length}</Tag>
             </Space>
           </Card>
         </Col>
@@ -2122,7 +2310,21 @@ function MasterDataPage({
   );
 }
 
-function PricingPage({ quoteResult, onQuote }: { quoteResult: QuoteResponse | null; onQuote: () => Promise<void> }) {
+function PricingPage({
+  quoteResult,
+  pricingRules,
+  notice,
+  onQuote,
+  onCreatePricingRule,
+  onTogglePricingRule
+}: {
+  quoteResult: PricingRuleQuoteResponse | null;
+  pricingRules: PricingRuleSummary[];
+  notice: string | null;
+  onQuote: () => Promise<void>;
+  onCreatePricingRule: () => Promise<void>;
+  onTogglePricingRule: (rule: PricingRuleSummary) => Promise<void>;
+}) {
   const [loading, setLoading] = useState(false);
 
   async function runQuote() {
@@ -2139,22 +2341,29 @@ function PricingPage({ quoteResult, onQuote }: { quoteResult: QuoteResponse | nu
       <Flex justify="space-between" align="center" className="page-heading">
         <div>
           <Title level={2}>报价查价中心</Title>
-          <Text type="secondary">基于 M3 最小财务公式试算客户应收报价。</Text>
+          <Text type="secondary">按渠道、目的国、重量段匹配报价规则，并自动套用燃油、附加费和汇率。</Text>
         </div>
-        <Button type="primary" icon={<CircleDollarSign size={16} />} loading={loading} onClick={runQuote}>
-          试算报价
-        </Button>
+        <Space>
+          <Button icon={<PackageCheck size={16} />} onClick={() => void onCreatePricingRule()}>
+            新建报价规则
+          </Button>
+          <Button type="primary" icon={<CircleDollarSign size={16} />} loading={loading} onClick={runQuote}>
+            试算报价
+          </Button>
+        </Space>
       </Flex>
+
+      {notice ? <Alert className="notice-bar" type="success" showIcon message={notice} /> : null}
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8}>
-          <MetricCard icon={<Banknote />} title="计费重" value="10kg" extra="DHL HK / 美国" />
+          <MetricCard icon={<Banknote />} title="计费重" value="4kg" extra="DHL HK / 美国" />
         </Col>
         <Col xs={24} md={8}>
-          <MetricCard icon={<Activity />} title="燃油" value="15%" extra="按基础运费计算" />
+          <MetricCard icon={<Activity />} title="燃油" value={quoteResult ? `${Math.round(quoteResult.appliedFuelRate * 100)}%` : '待试算'} extra="取渠道最新启用费率" />
         </Col>
         <Col xs={24} md={8}>
-          <MetricCard icon={<PackageCheck />} title="附加费" value="¥50" extra="偏远费样例" />
+          <MetricCard icon={<PackageCheck />} title="附加费" value={quoteResult ? formatCurrency(quoteResult.surchargeTotal) : '待试算'} extra="启用附加费自动加入" />
         </Col>
       </Row>
 
@@ -2164,19 +2373,44 @@ function PricingPage({ quoteResult, onQuote }: { quoteResult: QuoteResponse | nu
             <Text>基础运费 {formatCurrency(quoteResult.freight)}</Text>
             <Text>燃油费 {formatCurrency(quoteResult.fuel)}</Text>
             <Text>附加费 {formatCurrency(quoteResult.surchargeTotal)}</Text>
-            <Title level={3}>报价合计 ¥{quoteResult.total}</Title>
+            <Text>匹配规则 {quoteResult.rule.channelName} / {quoteResult.rule.destinationCountry} / {quoteResult.rule.minWeightKg}-{quoteResult.rule.maxWeightKg}kg</Text>
+            <Text>汇率 {quoteResult.originalCurrency}/CNY {quoteResult.exchangeRate}</Text>
+            <Title level={3}>报价合计 {formatCurrency(quoteResult.total)}</Title>
           </Space>
         ) : (
           <Text type="secondary">点击试算报价后显示费用拆分。</Text>
         )}
       </Card>
 
-      <Card className="module-grid" title="报价能力">
-        <Space wrap>
+      <Card className="module-grid" title="报价规则台账">
+        <Space wrap className="surface-strip">
           <Tag>燃油附加费</Tag>
           <Tag>美国 2.4kg</Tag>
-          <Tag>硅基流动</Tag>
+          <Tag>规则报价</Tag>
         </Space>
+        <Table
+          rowKey="id"
+          size="small"
+          pagination={false}
+          dataSource={pricingRules}
+          columns={[
+            {
+              title: '规则',
+              render: (_, rule) => <Text strong>{rule.channelName} / {rule.destinationCountry} / {rule.minWeightKg}-{rule.maxWeightKg}kg</Text>
+            },
+            { title: '单价', render: (_, rule) => `${rule.currency} ${rule.ratePerKg}/kg`, width: 140 },
+            { title: '状态', dataIndex: 'enabled', width: 100, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> },
+            {
+              title: '操作',
+              width: 140,
+              render: (_, rule) => (
+                <Button size="small" onClick={() => void onTogglePricingRule(rule)}>
+                  {rule.enabled ? `停用 ${rule.minWeightKg}-${rule.maxWeightKg}kg` : `启用 ${rule.minWeightKg}-${rule.maxWeightKg}kg`}
+                </Button>
+              )
+            }
+          ]}
+        />
       </Card>
     </>
   );

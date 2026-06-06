@@ -549,6 +549,135 @@ describe('Siyuan API MVP', () => {
       .expect(403);
   });
 
+  it('lets admins maintain master data and use new agents and channels in fulfillment', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+
+    await request(app.getHttpServer())
+      .get('/api/master-data')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.customers).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'c-9409', enabled: true })]));
+        expect(response.body.channels[0]).toHaveProperty('carrierName');
+        expect(response.body.surcharges).toEqual(expect.arrayContaining([expect.objectContaining({ name: '偏远附加费' })]));
+        expect(response.body.exchangeRates).toEqual(expect.arrayContaining([expect.objectContaining({ baseCurrency: 'USD', quoteCurrency: 'CNY' })]));
+      });
+
+    const customer = await request(app.getHttpServer())
+      .post('/api/master-data/customers')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ code: '7777', name: 'M7-Test' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/api/master-data/customers/${customer.body.id}/contacts`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'M7 Contact', phone: '13900000007', email: 'm7@example.com' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.customerId).toBe(customer.body.id);
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/master-data/customers/${customer.body.id}/users`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ username: 'm7customer', password: 'm7pass123' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.customerId).toBe(customer.body.id);
+        expect(response.body.username).toBe('m7customer');
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'm7customer', password: 'm7pass123' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.user.customerId).toBe(customer.body.id);
+      });
+
+    const carrier = await request(app.getHttpServer())
+      .post('/api/master-data/carriers')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'M7 Carrier' })
+      .expect(201);
+    const agent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'M7 Agent' })
+      .expect(201);
+    const channel = await request(app.getHttpServer())
+      .post('/api/master-data/channels')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'M7 Channel', carrierId: carrier.body.id })
+      .expect(201);
+
+    const shipment = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'M7-ROUTE-001',
+        businessType: 'EXPRESS',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 2,
+        agentWeightKg: 2,
+        channelId: 'ch-dhl-hk'
+      })
+      .expect(201);
+    await request(app.getHttpServer()).post(`/api/shipments/${shipment.body.id}/receive`).set('Authorization', `Bearer ${adminToken}`).expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${shipment.body.id}/route`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ channelId: channel.body.id, agentId: agent.body.id })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.channelName).toBe('M7 Channel');
+        expect(response.body.agentName).toBe('M7 Agent');
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/surcharges')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ name: 'M7 附加费', amount: 88 })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/master-data/fuel-rates')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ channelId: channel.body.id, rate: 0.18, activeAt: '2026-06-06T00:00:00.000Z' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/master-data/exchange-rates')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ baseCurrency: 'EUR', quoteCurrency: 'CNY', rate: 7.8, activeAt: '2026-06-06T00:00:00.000Z' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .put(`/api/master-data/channels/${channel.body.id}/enabled`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ enabled: false })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.enabled).toBe(false);
+      });
+
+    const serviceLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'service', password: 'service123' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', `Bearer ${serviceLogin.body.accessToken}`)
+      .send({ name: 'Should Fail' })
+      .expect(403);
+  });
+
   it('allows finance users to read receivables', async () => {
     const login = await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -562,6 +691,93 @@ describe('Siyuan API MVP', () => {
       .expect((response) => {
         expect(response.body[0].amount).toBeGreaterThan(0);
       });
+  });
+
+  it('maintains channel pricing rules and generates shipment fees from rule quotes', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/rules')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ channelId: 'ch-dhl-hk', destinationCountry: '美国' })]));
+      });
+
+    const rule = await request(app.getHttpServer())
+      .post('/api/pricing/rules')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ channelId: 'ch-dhl-hk', destinationCountry: '美国', minWeightKg: 20, maxWeightKg: 30, ratePerKg: 9, currency: 'USD' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/rules/quote')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ channelId: 'ch-dhl-hk', destinationCountry: '美国', chargeableWeightKg: 24 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.rule.id).toBe(rule.body.id);
+        expect(response.body.exchangeRate).toBe(7.245);
+        expect(response.body.freight).toBe(1564.92);
+        expect(response.body.fuel).toBe(234.74);
+        expect(response.body.surchargeTotal).toBeGreaterThanOrEqual(50);
+        expect(response.body.total).toBeGreaterThan(1800);
+      });
+
+    const shipment = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'M8-FEE-001',
+        businessType: 'EXPRESS',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 24,
+        agentWeightKg: 20,
+        channelId: 'ch-dhl-hk'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${shipment.body.id}/fees/generate`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({})
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.receivables.map((fee: { name: string }) => fee.name)).toEqual(['基础运费', '燃油费', '附加费']);
+        expect(response.body.receivableTotal).toBeGreaterThan(1800);
+      });
+
+    await request(app.getHttpServer())
+      .put(`/api/pricing/rules/${rule.body.id}/enabled`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ enabled: false })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.enabled).toBe(false);
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/rules/quote')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ channelId: 'ch-dhl-hk', destinationCountry: '美国', chargeableWeightKg: 24 })
+      .expect(400);
+
+    const customerLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'customer', password: 'customer123' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/rules')
+      .set('Authorization', `Bearer ${customerLogin.body.accessToken}`)
+      .expect(403);
   });
 
   it('returns a safe SiliconFlow-compatible AI assist response for logged-in staff', async () => {

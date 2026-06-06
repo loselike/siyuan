@@ -109,6 +109,7 @@ model Channel {
   enabled   Boolean    @default(true)
   carrier   Carrier    @relation(fields: [carrierId], references: [id])
   shipments Shipment[]
+  pricingRules PricingRule[]
 }
 
 model Shipment {
@@ -250,6 +251,18 @@ model PriceRule {
   product       PriceProduct @relation(fields: [productId], references: [id])
 }
 
+model PricingRule {
+  id                 String   @id @default(cuid())
+  channelId          String
+  destinationCountry String
+  minWeightKg        Decimal
+  maxWeightKg        Decimal
+  ratePerKg          Decimal
+  currency           String
+  enabled            Boolean  @default(true)
+  channel            Channel  @relation(fields: [channelId], references: [id])
+}
+
 model Surcharge {
   id      String  @id @default(cuid())
   name    String
@@ -262,6 +275,15 @@ model FuelRate {
   channelId String
   rate      Decimal
   activeAt  DateTime
+}
+
+model ExchangeRate {
+  id            String   @id @default(cuid())
+  baseCurrency  String
+  quoteCurrency String
+  rate          Decimal
+  activeAt      DateTime
+  enabled       Boolean  @default(true)
 }
 
 model ReceivableFee {

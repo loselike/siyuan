@@ -1,19 +1,43 @@
 import type {
+  AgentCreateInput,
+  AgentSummary,
   CustomerStatementCreateInput,
   CustomerStatementSummary,
   CustomerAccountSummary,
+  CarrierCreateInput,
+  CarrierSummary,
   CarrierTaskRunResponse,
   CarrierTaskSummary,
   AccountLedgerSummary,
+  ChannelCreateInput,
+  ChannelSummary,
+  CustomerContactCreateInput,
+  CustomerContactSummary,
+  CustomerCreateInput,
+  CustomerSummary,
+  CustomerUserCreateInput,
+  CustomerUserSummary,
+  EnabledUpdateInput,
+  ExchangeRateCreateInput,
+  ExchangeRateSummary,
+  FuelRateCreateInput,
+  FuelRateSummary,
   LabelCreateResponse,
+  MasterDataSnapshot,
   PaymentCreateInput,
   PaymentCreateResponse,
   PricingQuoteRequest,
+  PricingRuleCreateInput,
+  PricingRuleQuoteRequest,
+  PricingRuleQuoteResponse,
+  PricingRuleSummary,
   ProblemTicketCreateInput,
   ProblemTicketSummary,
   QuoteResponse,
   ReceivableAdjustmentInput,
   ReceivableFeeSummary,
+  SurchargeCreateInput,
+  SurchargeSummary,
   Shipment,
   ShipmentCreateInput,
   ShipmentLabelSummary,
@@ -140,6 +164,22 @@ export class ApiClient {
     return this.request('/pricing/quote', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async pricingRules(): Promise<PricingRuleSummary[]> {
+    return this.request('/pricing/rules');
+  }
+
+  async createPricingRule(input: PricingRuleCreateInput): Promise<PricingRuleSummary> {
+    return this.request('/pricing/rules', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updatePricingRuleEnabled(id: string, input: EnabledUpdateInput): Promise<PricingRuleSummary> {
+    return this.request(`/pricing/rules/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async quotePricingRule(input: PricingRuleQuoteRequest): Promise<PricingRuleQuoteResponse> {
+    return this.request('/pricing/rules/quote', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async receivables(): Promise<ReceivableFeeSummary[]> {
     return this.request('/finance/receivables');
   }
@@ -166,6 +206,66 @@ export class ApiClient {
 
   async createPayment(input: PaymentCreateInput): Promise<PaymentCreateResponse> {
     return this.request('/finance/payments', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async masterData(): Promise<MasterDataSnapshot> {
+    return this.request('/master-data');
+  }
+
+  async createCustomer(input: CustomerCreateInput): Promise<CustomerSummary> {
+    return this.request('/master-data/customers', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createCustomerContact(customerId: string, input: CustomerContactCreateInput): Promise<CustomerContactSummary> {
+    return this.request(`/master-data/customers/${customerId}/contacts`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createCustomerUser(customerId: string, input: CustomerUserCreateInput): Promise<CustomerUserSummary> {
+    return this.request(`/master-data/customers/${customerId}/users`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateCustomerEnabled(id: string, input: EnabledUpdateInput): Promise<CustomerSummary> {
+    return this.request(`/master-data/customers/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async createAgent(input: AgentCreateInput): Promise<AgentSummary> {
+    return this.request('/master-data/agents', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateAgentEnabled(id: string, input: EnabledUpdateInput): Promise<AgentSummary> {
+    return this.request(`/master-data/agents/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async createCarrier(input: CarrierCreateInput): Promise<CarrierSummary> {
+    return this.request('/master-data/carriers', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateCarrierEnabled(id: string, input: EnabledUpdateInput): Promise<CarrierSummary> {
+    return this.request(`/master-data/carriers/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async createChannel(input: ChannelCreateInput): Promise<ChannelSummary> {
+    return this.request('/master-data/channels', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateChannelEnabled(id: string, input: EnabledUpdateInput): Promise<ChannelSummary> {
+    return this.request(`/master-data/channels/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async createSurcharge(input: SurchargeCreateInput): Promise<SurchargeSummary> {
+    return this.request('/master-data/surcharges', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateSurchargeEnabled(id: string, input: EnabledUpdateInput): Promise<SurchargeSummary> {
+    return this.request(`/master-data/surcharges/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async createFuelRate(input: FuelRateCreateInput): Promise<FuelRateSummary> {
+    return this.request('/master-data/fuel-rates', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createExchangeRate(input: ExchangeRateCreateInput): Promise<ExchangeRateSummary> {
+    return this.request('/master-data/exchange-rates', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async rolePermissions(): Promise<RolePermissionMatrix> {

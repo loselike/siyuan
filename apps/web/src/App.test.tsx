@@ -1,7 +1,15 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AccountLedgerSummary, CarrierTaskSummary, CustomerAccountSummary, Shipment, ShipmentStatus } from '@siyuan/shared';
+import type {
+  AccountLedgerSummary,
+  CarrierTaskSummary,
+  CustomerAccountSummary,
+  MasterDataSnapshot,
+  PricingRuleSummary,
+  Shipment,
+  ShipmentStatus
+} from '@siyuan/shared';
 import { App } from './App';
 
 const employeeShipments = [
@@ -88,6 +96,31 @@ const carrierTasks: CarrierTaskSummary[] = [
     updatedAt: '2026-06-06T10:01:00.000Z'
   }
 ];
+const pricingRules: PricingRuleSummary[] = [
+  {
+    id: 'pr-dhl-us-0-5',
+    channelId: 'ch-dhl-hk',
+    channelName: 'DHL HK',
+    destinationCountry: '美国',
+    minWeightKg: 0,
+    maxWeightKg: 5,
+    ratePerKg: 10,
+    currency: 'USD',
+    enabled: true
+  }
+];
+const masterData: MasterDataSnapshot = {
+  customers: [{ id: 'c-9409', code: '9409', name: 'Daloday', enabled: true }],
+  contacts: [{ id: 'cc-9409-main', customerId: 'c-9409', customerName: '9409-Daloday', name: 'Lina', phone: '13800000001', email: 'lina@example.com', enabled: true }],
+  customerUsers: [{ id: 'u-customer', customerId: 'c-9409', customerName: '9409-Daloday', username: 'customer', enabled: true }],
+  agents: [{ id: 'a-yuhuan', name: '宇环', enabled: true }],
+  carriers: [{ id: 'cr-dhl', name: 'DHL', enabled: true }],
+  channels: [{ id: 'ch-dhl-hk', name: 'DHL HK', carrierId: 'cr-dhl', carrierName: 'DHL', enabled: true }],
+  surcharges: [{ id: 'sc-remote', name: '偏远附加费', amount: 50, enabled: true }],
+  fuelRates: [{ id: 'fr-dhl', channelId: 'ch-dhl-hk', channelName: 'DHL HK', rate: 0.15, activeAt: '2026-06-06T00:00:00.000Z' }],
+  exchangeRates: [{ id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'CNY', rate: 7.245, activeAt: '2026-06-06T00:00:00.000Z', enabled: true }],
+  roles: ['ADMIN', 'CUSTOMER']
+};
 const systemRoleMatrix = {
   availablePermissions: [
     { code: 'shipments:read', label: '运单读取', group: '运单' },
@@ -115,12 +148,28 @@ const systemRoleMatrix = {
       restriction: '不能核销、不能改系统权限'
     },
     {
+      key: 'OPERATOR',
+      label: '操作',
+      account: 'operator',
+      scope: '仓库与履约',
+      permissions: ['shipments:read', 'shipments:write', 'master-data:read'],
+      restriction: '不能改财务、不能改权限'
+    },
+    {
       key: 'FINANCE',
       label: '财务',
       account: 'finance',
       scope: '财务数据',
       permissions: ['shipments:read', 'finance:read', 'finance:settle', 'master-data:read'],
       restriction: '不能改系统权限'
+    },
+    {
+      key: 'CUSTOMER',
+      label: '客户',
+      account: 'customer',
+      scope: '本人客户数据',
+      permissions: ['shipments:read', 'shipments:write', 'finance:read'],
+      restriction: '客户门户、本人运单、本人费用、本人问题件'
     }
   ]
 };
@@ -139,6 +188,26 @@ beforeEach(() => {
     balance: 10000,
     note: '期初余额',
     createdAt: '2026-06-01T10:00:00.000Z'
+  });
+  masterData.customers.splice(0, masterData.customers.length, { id: 'c-9409', code: '9409', name: 'Daloday', enabled: true });
+  masterData.contacts.splice(0, masterData.contacts.length, { id: 'cc-9409-main', customerId: 'c-9409', customerName: '9409-Daloday', name: 'Lina', phone: '13800000001', email: 'lina@example.com', enabled: true });
+  masterData.customerUsers.splice(0, masterData.customerUsers.length, { id: 'u-customer', customerId: 'c-9409', customerName: '9409-Daloday', username: 'customer', enabled: true });
+  masterData.agents.splice(0, masterData.agents.length, { id: 'a-yuhuan', name: '宇环', enabled: true });
+  masterData.carriers.splice(0, masterData.carriers.length, { id: 'cr-dhl', name: 'DHL', enabled: true });
+  masterData.channels.splice(0, masterData.channels.length, { id: 'ch-dhl-hk', name: 'DHL HK', carrierId: 'cr-dhl', carrierName: 'DHL', enabled: true });
+  masterData.surcharges.splice(0, masterData.surcharges.length, { id: 'sc-remote', name: '偏远附加费', amount: 50, enabled: true });
+  masterData.fuelRates.splice(0, masterData.fuelRates.length, { id: 'fr-dhl', channelId: 'ch-dhl-hk', channelName: 'DHL HK', rate: 0.15, activeAt: '2026-06-06T00:00:00.000Z' });
+  masterData.exchangeRates.splice(0, masterData.exchangeRates.length, { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'CNY', rate: 7.245, activeAt: '2026-06-06T00:00:00.000Z', enabled: true });
+  pricingRules.splice(0, pricingRules.length, {
+    id: 'pr-dhl-us-0-5',
+    channelId: 'ch-dhl-hk',
+    channelName: 'DHL HK',
+    destinationCountry: '美国',
+    minWeightKg: 0,
+    maxWeightKg: 5,
+    ratePerKg: 10,
+    currency: 'USD',
+    enabled: true
   });
   vi.stubGlobal('fetch', vi.fn(mockFetch));
 });
@@ -215,7 +284,7 @@ describe('M1+M2 API-backed workspace', () => {
       { menu: '渠道排货', heading: '渠道排货中心', child: '规则排货', record: 'UPS 加美线', ai: '硅基流动' },
       { menu: '轨迹监控', heading: '轨迹监控中心', child: '客户可见轨迹', record: '9064656160', ai: '硅基流动' },
       { menu: '问题件中心', heading: '问题件中心', child: '关闭问题', record: '轨迹超过3天未更新', ai: '硅基流动' },
-      { menu: '报价查价', heading: '报价查价中心', child: '燃油附加费', record: '美国 2.4kg', ai: '硅基流动' },
+      { menu: '报价查价', heading: '报价查价中心', child: '报价规则台账', record: 'DHL HK / 美国 / 0-5kg', ai: '硅基流动' },
       { menu: '财务结算', heading: '财务结算中心', child: '客户对账', record: 'INV-202606-9409', ai: '硅基流动' },
       { menu: '统计报表', heading: '统计报表中心', child: '利润分析', record: '日报-2026-06-06', ai: '硅基流动' },
       { menu: '基础资料', heading: '基础资料中心', child: '客户端账号创建', record: '9409-Daloday', ai: '硅基流动' },
@@ -237,7 +306,23 @@ describe('M1+M2 API-backed workspace', () => {
     await user.click(screen.getByRole('menuitem', { name: '报价查价' }));
     await user.click(await screen.findByRole('button', { name: '试算报价' }));
 
-    expect(await screen.findByText('报价合计 ¥280')).toBeInTheDocument();
+    expect(await screen.findByText('报价合计 ¥383.50')).toBeInTheDocument();
+    expect(screen.getByText('DHL HK / 美国 / 0-5kg')).toBeInTheDocument();
+    expect(screen.getByText('汇率 USD/CNY 7.25')).toBeInTheDocument();
+  });
+
+  it('loads creates and disables channel pricing rules on the pricing page', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '报价查价' }));
+
+    expect(await screen.findByText('DHL HK / 美国 / 0-5kg')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '新建报价规则' }));
+    expect(await screen.findByText('DHL HK / 美国 / 5-20kg')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '停用 5-20kg' }));
+    expect(await screen.findByText('5-20kg 已停用')).toBeInTheDocument();
   });
 
   it('shows receivables and creates customer statement drafts on the finance page', async () => {
@@ -356,6 +441,67 @@ describe('M1+M2 API-backed workspace', () => {
     );
   });
 
+  it('isolates staff menus by role and keeps operator out of system management', async () => {
+    await renderAndLogin('operator', 'operator123');
+
+    expect(screen.getByRole('menuitem', { name: '运营工作台' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '运单履约' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '收货打单' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '渠道排货' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '轨迹监控' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '问题件中心' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '基础资料' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '财务结算' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '系统设置' })).not.toBeInTheDocument();
+    expect(screen.queryByText('员工账号管理')).not.toBeInTheDocument();
+    expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining('/api/system/roles'), expect.anything());
+
+    cleanup();
+    localStorage.clear();
+    await renderAndLogin('finance', 'finance123');
+
+    expect(screen.getByRole('menuitem', { name: '财务结算' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '系统设置' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: '收货打单' })).not.toBeInTheDocument();
+  });
+
+  it('loads real master data and maintains customers channels fees fuel rates and exchange rates', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '基础资料' }));
+
+    expect(await screen.findByRole('heading', { name: '基础资料中心' })).toBeInTheDocument();
+    expect(screen.getByText('9409-Daloday')).toBeInTheDocument();
+    expect(screen.getByText('DHL HK')).toBeInTheDocument();
+    expect(screen.getByText('USD/CNY 7.245')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '新建客户' }));
+    expect(await screen.findByText('7777-M7-Test')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '创建客户联系人' }));
+    expect(await screen.findByText('M7 Contact')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '客户端账号创建' }));
+    expect(await screen.findByText('m7customer')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '新建承运商' }));
+    await user.click(screen.getByRole('button', { name: '新建渠道' }));
+    expect(await screen.findByText('M7 Channel')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '新建附加费' }));
+    expect(await screen.findByText('M7 附加费')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '新建燃油费率' }));
+    expect(await screen.findByText('M7 Channel 0.18')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '新建汇率' }));
+    expect(await screen.findByText('EUR/CNY 7.8')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '停用 M7 Channel' }));
+    expect(await screen.findByText('M7 Channel 已停用')).toBeInTheDocument();
+  });
+
   it('calls AI assist from module buttons and renders the returned content', async () => {
     const user = userEvent.setup();
     await renderAndLogin('admin', 'admin123');
@@ -385,7 +531,14 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   const body = init?.body ? JSON.parse(String(init.body)) : undefined;
 
   if (url.endsWith('/api/auth/login')) {
-    const role = body.username === 'customer' ? 'CUSTOMER' : 'ADMIN';
+    const roleByUsername: Record<string, string> = {
+      admin: 'ADMIN',
+      service: 'CUSTOMER_SERVICE',
+      operator: 'OPERATOR',
+      finance: 'FINANCE',
+      customer: 'CUSTOMER'
+    };
+    const role = roleByUsername[body.username] ?? 'ADMIN';
     return jsonResponse({ accessToken: `${role}-token`, user: { id: `u-${body.username}`, username: body.username, role, customerId: role === 'CUSTOMER' ? 'c-9409' : undefined } });
   }
 
@@ -456,6 +609,63 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(systemRoleMatrix);
   }
 
+  if (url.endsWith('/api/master-data/customers') && init?.method === 'POST') {
+    const customer = { id: 'c-7777', code: '7777', name: 'M7-Test', enabled: true };
+    masterData.customers.push(customer);
+    return jsonResponse(customer);
+  }
+
+  if (url.endsWith('/api/master-data/customers/c-7777/contacts')) {
+    const contact = { id: 'cc-m7', customerId: 'c-7777', customerName: '7777-M7-Test', name: 'M7 Contact', phone: '13900000007', email: 'm7@example.com', enabled: true };
+    masterData.contacts.push(contact);
+    return jsonResponse(contact);
+  }
+
+  if (url.endsWith('/api/master-data/customers/c-7777/users')) {
+    const customerUser = { id: 'u-m7customer', customerId: 'c-7777', customerName: '7777-M7-Test', username: 'm7customer', enabled: true };
+    masterData.customerUsers.push(customerUser);
+    return jsonResponse(customerUser);
+  }
+
+  if (url.endsWith('/api/master-data/carriers') && init?.method === 'POST') {
+    const carrier = { id: 'cr-m7', name: 'M7 Carrier', enabled: true };
+    masterData.carriers.push(carrier);
+    return jsonResponse(carrier);
+  }
+
+  if (url.endsWith('/api/master-data/channels') && init?.method === 'POST') {
+    const channel = { id: 'ch-m7', name: 'M7 Channel', carrierId: 'cr-m7', carrierName: 'M7 Carrier', enabled: true };
+    masterData.channels.push(channel);
+    return jsonResponse(channel);
+  }
+
+  if (url.endsWith('/api/master-data/channels/ch-m7/enabled')) {
+    masterData.channels[masterData.channels.findIndex((channel) => channel.id === 'ch-m7')] = { ...masterData.channels.find((channel) => channel.id === 'ch-m7')!, enabled: body.enabled };
+    return jsonResponse(masterData.channels.find((channel) => channel.id === 'ch-m7'));
+  }
+
+  if (url.endsWith('/api/master-data/surcharges') && init?.method === 'POST') {
+    const surcharge = { id: 'sc-m7', name: 'M7 附加费', amount: 88, enabled: true };
+    masterData.surcharges.push(surcharge);
+    return jsonResponse(surcharge);
+  }
+
+  if (url.endsWith('/api/master-data/fuel-rates') && init?.method === 'POST') {
+    const fuelRate = { id: 'fr-m7', channelId: 'ch-m7', channelName: 'M7 Channel', rate: 0.18, activeAt: '2026-06-06T00:00:00.000Z' };
+    masterData.fuelRates.push(fuelRate);
+    return jsonResponse(fuelRate);
+  }
+
+  if (url.endsWith('/api/master-data/exchange-rates') && init?.method === 'POST') {
+    const exchangeRate = { id: 'er-m7', baseCurrency: 'EUR', quoteCurrency: 'CNY', rate: 7.8, activeAt: '2026-06-06T00:00:00.000Z', enabled: true };
+    masterData.exchangeRates.push(exchangeRate);
+    return jsonResponse(exchangeRate);
+  }
+
+  if (url.endsWith('/api/master-data')) {
+    return jsonResponse(masterData);
+  }
+
   if (url.endsWith('/api/shipments')) {
     const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
     return jsonResponse(token.includes('CUSTOMER') ? customerShipments : employeeShipments);
@@ -463,6 +673,49 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
 
   if (url.endsWith('/api/problem-tickets')) {
     return jsonResponse(problemTickets);
+  }
+
+  if (url.endsWith('/api/pricing/rules') && init?.method === 'POST') {
+    const rule = {
+      id: 'pr-dhl-us-5-20',
+      channelId: 'ch-dhl-hk',
+      channelName: 'DHL HK',
+      destinationCountry: '美国',
+      minWeightKg: 5,
+      maxWeightKg: 20,
+      ratePerKg: 8,
+      currency: 'USD',
+      enabled: true
+    };
+    pricingRules.push(rule);
+    return jsonResponse(rule);
+  }
+
+  if (url.endsWith('/api/pricing/rules/pr-dhl-us-5-20/enabled')) {
+    pricingRules[pricingRules.findIndex((rule) => rule.id === 'pr-dhl-us-5-20')] = {
+      ...pricingRules.find((rule) => rule.id === 'pr-dhl-us-5-20')!,
+      enabled: body.enabled
+    };
+    return jsonResponse(pricingRules.find((rule) => rule.id === 'pr-dhl-us-5-20'));
+  }
+
+  if (url.endsWith('/api/pricing/rules/quote')) {
+    return jsonResponse({
+      rule: pricingRules[0],
+      freight: 290,
+      fuel: 43.5,
+      surchargeTotal: 50,
+      total: 383.5,
+      currency: 'CNY',
+      originalCurrency: 'USD',
+      exchangeRate: 7.25,
+      appliedFuelRate: 0.15,
+      appliedSurcharges: [{ name: '偏远附加费', amount: 50 }]
+    });
+  }
+
+  if (url.endsWith('/api/pricing/rules')) {
+    return jsonResponse(pricingRules);
   }
 
   if (url.endsWith('/api/pricing/quote')) {

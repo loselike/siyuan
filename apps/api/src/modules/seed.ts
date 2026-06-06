@@ -168,6 +168,10 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
   await prisma.shipmentPackage.deleteMany();
   await prisma.receivableFee.deleteMany();
   await prisma.payableFee.deleteMany();
+  await (prisma as any).pricingRule.deleteMany();
+  await (prisma as any).exchangeRate.deleteMany();
+  await prisma.fuelRate.deleteMany();
+  await prisma.surcharge.deleteMany();
   await prisma.settlement.deleteMany();
   await prisma.payment.deleteMany();
   await prisma.accountLedger.deleteMany();
@@ -272,6 +276,35 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
       { id: 'ch-usps', name: 'USPS 小包线', carrierId: 'cr-usps' },
       { id: 'ch-yanwen', name: '燕文小包线', carrierId: 'cr-yanwen' },
       { id: 'ch-europe-truck', name: '欧洲卡航', carrierId: 'cr-line' }
+    ]
+  });
+
+  await prisma.surcharge.createMany({
+    data: [
+      { id: 'sc-remote', name: '偏远附加费', amount: 50 }
+    ]
+  });
+
+  await prisma.fuelRate.createMany({
+    data: [
+      { id: 'fr-dhl-hk', channelId: 'ch-dhl-hk', rate: 0.15, activeAt: new Date('2026-06-06T00:00:00.000Z') }
+    ]
+  });
+
+  await (prisma as any).exchangeRate.createMany({
+    data: [
+      { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'CNY', rate: 7.245, activeAt: new Date('2026-06-06T00:00:00.000Z'), enabled: true }
+    ]
+  });
+
+  await (prisma as any).pricingRule.createMany({
+    data: [
+      { id: 'pr-dhl-us-0-5', channelId: 'ch-dhl-hk', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 5, ratePerKg: 10, currency: 'USD', enabled: true },
+      { id: 'pr-dhl-us-5-20', channelId: 'ch-dhl-hk', destinationCountry: '美国', minWeightKg: 5, maxWeightKg: 20, ratePerKg: 9.5, currency: 'USD', enabled: true },
+      { id: 'pr-fedex-us-0-5', channelId: 'ch-fedex-au', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 5, ratePerKg: 68, currency: 'CNY', enabled: true },
+      { id: 'pr-fedex-us-5-20', channelId: 'ch-fedex-au', destinationCountry: '美国', minWeightKg: 5, maxWeightKg: 20, ratePerKg: 62, currency: 'CNY', enabled: true },
+      { id: 'pr-line-us-0-5', channelId: 'ch-europe-truck', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 5, ratePerKg: 48, currency: 'CNY', enabled: true },
+      { id: 'pr-line-us-5-20', channelId: 'ch-europe-truck', destinationCountry: '美国', minWeightKg: 5, maxWeightKg: 20, ratePerKg: 42, currency: 'CNY', enabled: true }
     ]
   });
 

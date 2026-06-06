@@ -3,6 +3,7 @@ import type { Shipment as PrismaShipment } from '@prisma/client';
 import {
   canTransitionShipment,
   calculateQuote,
+  quoteWithPricingRules,
   createFeeLinesFromQuote,
   createMockTransferNo,
   createMockTrackingStatus,
@@ -12,21 +13,45 @@ import {
   summarizeStatusCounts,
   validateShipmentImportRows,
   type AccountLedgerSummary,
+  type AgentCreateInput,
+  type AgentSummary,
   type BusinessType,
   type CarrierAdapterCode,
+  type CarrierCreateInput,
+  type CarrierSummary,
   type CarrierTaskRunResponse,
   type CarrierTaskSummary,
+  type ChannelCreateInput,
+  type ChannelSummary,
   type CustomerAccountSummary,
+  type CustomerContactCreateInput,
+  type CustomerContactSummary,
+  type CustomerCreateInput,
   type CustomerStatementCreateInput,
   type CustomerStatementSummary,
+  type CustomerSummary,
+  type CustomerUserCreateInput,
+  type CustomerUserSummary,
+  type EnabledUpdateInput,
+  type ExchangeRateCreateInput,
+  type ExchangeRateSummary,
+  type FuelRateCreateInput,
+  type FuelRateSummary,
   type LabelCreateResponse,
+  type MasterDataSnapshot,
   type PaymentCreateInput,
   type PaymentCreateResponse,
   type PricingQuoteRequest,
+  type PricingRuleCreateInput,
+  type PricingRuleQuoteRequest,
+  type PricingRuleQuoteResponse,
+  type PricingRuleSummary,
   type ProblemTicketCreateInput,
   type ProblemTicketSummary,
   type ReceivableAdjustmentInput,
   type ReceivableFeeSummary,
+  type SurchargeCreateInput,
+  type SurchargeSummary,
   type Shipment,
   type ShipmentCreateInput,
   type ShipmentImportRequest,
@@ -92,19 +117,236 @@ export class PrismaRepository {
     return summarizeStatusCounts(await this.getShipments(principal));
   }
 
-  async getMasterData() {
-    const [customers, channels, roles, agents] = await Promise.all([
+  async getMasterData(): Promise<MasterDataSnapshot> {
+    const [customers, contacts, customerUsers, carriers, channels, roles, agents, surcharges, fuelRates, exchangeRates] = await Promise.all([
       this.prisma.customer.findMany({ orderBy: { code: 'asc' } }),
+      this.prisma.customerContact.findMany({ include: { customer: true }, orderBy: { name: 'asc' } }),
+      this.prisma.user.findMany({ where: { customerId: { not: null }, role: { name: 'CUSTOMER' } }, include: { customer: true }, orderBy: { username: 'asc' } }),
+      this.prisma.carrier.findMany({ orderBy: { name: 'asc' } }),
       this.prisma.channel.findMany({ include: { carrier: true }, orderBy: { name: 'asc' } }),
       this.prisma.role.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.agent.findMany({ orderBy: { name: 'asc' } })
+      this.prisma.agent.findMany({ orderBy: { name: 'asc' } }),
+      this.prisma.surcharge.findMany({ orderBy: { name: 'asc' } }),
+      this.prisma.fuelRate.findMany({ orderBy: { activeAt: 'desc' } }),
+      (this.prisma as any).exchangeRate.findMany({ orderBy: { activeAt: 'desc' } })
     ]);
+    const channelMap = new Map(channels.map((channel) => [channel.id, channel.name]));
 
     return {
-      customers,
-      channels: channels.map((channel) => ({ ...channel, carrier: channel.carrier.name })),
-      agents,
+      customers: customers.map((customer) => ({
+        id: customer.id,
+        code: customer.code,
+        name: customer.name,
+        enabled: customer.enabled
+      })),
+      contacts: contacts.map((contact) => ({
+        id: contact.id,
+        customerId: contact.customerId,
+        customerName: `${contact.customer.code}-${contact.customer.name}`,
+        name: contact.name,
+        phone: contact.phone ?? undefined,
+        email: contact.email ?? undefined,
+        enabled: contact.enabled
+      })),
+      customerUsers: customerUsers.map((user) => ({
+        id: user.id,
+        customerId: user.customerId!,
+        customerName: user.customer ? `${user.customer.code}-${user.customer.name}` : user.customerId!,
+        username: user.username,
+        enabled: user.enabled
+      })),
+      carriers: carriers.map((carrier) => ({
+        id: carrier.id,
+        name: carrier.name,
+        enabled: carrier.enabled
+      })),
+      channels: channels.map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        carrierId: channel.carrierId,
+        carrierName: channel.carrier.name,
+        enabled: channel.enabled
+      })),
+      agents: agents.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        enabled: agent.enabled
+      })),
+      surcharges: surcharges.map((surcharge) => ({
+        id: surcharge.id,
+        name: surcharge.name,
+        amount: Number(surcharge.amount),
+        enabled: surcharge.enabled
+      })),
+      fuelRates: fuelRates.map((fuelRate) => ({
+        id: fuelRate.id,
+        channelId: fuelRate.channelId,
+        channelName: channelMap.get(fuelRate.channelId) ?? fuelRate.channelId,
+        rate: Number(fuelRate.rate),
+        activeAt: fuelRate.activeAt.toISOString()
+      })),
+      exchangeRates: exchangeRates.map((exchangeRate: any) => ({
+        id: exchangeRate.id,
+        baseCurrency: exchangeRate.baseCurrency,
+        quoteCurrency: exchangeRate.quoteCurrency,
+        rate: Number(exchangeRate.rate),
+        activeAt: exchangeRate.activeAt.toISOString(),
+        enabled: exchangeRate.enabled
+      })),
       roles: roles.map((role) => role.name)
+    };
+  }
+
+  async createCustomer(_principal: Principal, input: CustomerCreateInput): Promise<CustomerSummary> {
+    if (!input.code?.trim() || !input.name?.trim()) {
+      throw new BadRequestException('客户代码和名称不能为空');
+    }
+    const customer = await this.prisma.customer.create({
+      data: { id: `c-${input.code.trim()}`, code: input.code.trim(), name: input.name.trim() }
+    });
+    await this.prisma.customerAccount.create({
+      data: { id: `ca-${customer.code}-cny`, customerId: customer.id, balance: 0, currency: 'CNY' }
+    });
+    return { id: customer.id, code: customer.code, name: customer.name, enabled: customer.enabled };
+  }
+
+  async createCustomerContact(_principal: Principal, customerId: string, input: CustomerContactCreateInput): Promise<CustomerContactSummary> {
+    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer) {
+      throw new BadRequestException('客户不存在');
+    }
+    if (!input.name?.trim()) {
+      throw new BadRequestException('联系人名称不能为空');
+    }
+    const contact = await this.prisma.customerContact.create({
+      data: {
+        customerId,
+        name: input.name.trim(),
+        phone: input.phone?.trim(),
+        email: input.email?.trim()
+      }
+    });
+    return {
+      id: contact.id,
+      customerId,
+      customerName: `${customer.code}-${customer.name}`,
+      name: contact.name,
+      phone: contact.phone ?? undefined,
+      email: contact.email ?? undefined,
+      enabled: contact.enabled
+    };
+  }
+
+  async createCustomerUser(_principal: Principal, customerId: string, input: CustomerUserCreateInput): Promise<CustomerUserSummary> {
+    const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+    if (!customer) {
+      throw new BadRequestException('客户不存在');
+    }
+    if (!input.username?.trim() || !input.password?.trim()) {
+      throw new BadRequestException('账号和密码不能为空');
+    }
+    const role = await this.prisma.role.findUnique({ where: { name: 'CUSTOMER' } });
+    if (!role) {
+      throw new BadRequestException('客户角色不存在');
+    }
+    const user = await this.prisma.user.create({
+      data: {
+        id: `u-${input.username.trim()}`,
+        username: input.username.trim(),
+        passwordHash: hashPassword(input.password),
+        roleId: role.id,
+        customerId
+      }
+    });
+    return {
+      id: user.id,
+      customerId,
+      customerName: `${customer.code}-${customer.name}`,
+      username: user.username,
+      enabled: user.enabled
+    };
+  }
+
+  async updateCustomerEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<CustomerSummary> {
+    const customer = await this.prisma.customer.update({ where: { id }, data: { enabled: input.enabled === true } });
+    return { id: customer.id, code: customer.code, name: customer.name, enabled: customer.enabled };
+  }
+
+  async createAgent(_principal: Principal, input: AgentCreateInput): Promise<AgentSummary> {
+    const agent = await this.prisma.agent.create({ data: { id: `a-${slug(input.name)}`, name: input.name.trim() } });
+    return { id: agent.id, name: agent.name, enabled: agent.enabled };
+  }
+
+  async updateAgentEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<AgentSummary> {
+    const agent = await this.prisma.agent.update({ where: { id }, data: { enabled: input.enabled === true } });
+    return { id: agent.id, name: agent.name, enabled: agent.enabled };
+  }
+
+  async createCarrier(_principal: Principal, input: CarrierCreateInput): Promise<CarrierSummary> {
+    const carrier = await this.prisma.carrier.create({ data: { id: `cr-${slug(input.name)}`, name: input.name.trim() } });
+    return { id: carrier.id, name: carrier.name, enabled: carrier.enabled };
+  }
+
+  async updateCarrierEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<CarrierSummary> {
+    const carrier = await this.prisma.carrier.update({ where: { id }, data: { enabled: input.enabled === true } });
+    return { id: carrier.id, name: carrier.name, enabled: carrier.enabled };
+  }
+
+  async createChannel(_principal: Principal, input: ChannelCreateInput): Promise<ChannelSummary> {
+    const carrier = await this.prisma.carrier.findUnique({ where: { id: input.carrierId } });
+    if (!carrier) {
+      throw new BadRequestException('承运商不存在');
+    }
+    const channel = await this.prisma.channel.create({
+      data: { id: `ch-${slug(input.name)}`, name: input.name.trim(), carrierId: carrier.id }
+    });
+    return { id: channel.id, name: channel.name, carrierId: carrier.id, carrierName: carrier.name, enabled: channel.enabled };
+  }
+
+  async updateChannelEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<ChannelSummary> {
+    const channel = await this.prisma.channel.update({ where: { id }, data: { enabled: input.enabled === true }, include: { carrier: true } });
+    return { id: channel.id, name: channel.name, carrierId: channel.carrierId, carrierName: channel.carrier.name, enabled: channel.enabled };
+  }
+
+  async createSurcharge(_principal: Principal, input: SurchargeCreateInput): Promise<SurchargeSummary> {
+    const surcharge = await this.prisma.surcharge.create({ data: { id: `sc-${slug(input.name)}`, name: input.name.trim(), amount: input.amount } });
+    return { id: surcharge.id, name: surcharge.name, amount: Number(surcharge.amount), enabled: surcharge.enabled };
+  }
+
+  async updateSurchargeEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<SurchargeSummary> {
+    const surcharge = await this.prisma.surcharge.update({ where: { id }, data: { enabled: input.enabled === true } });
+    return { id: surcharge.id, name: surcharge.name, amount: Number(surcharge.amount), enabled: surcharge.enabled };
+  }
+
+  async createFuelRate(_principal: Principal, input: FuelRateCreateInput): Promise<FuelRateSummary> {
+    const channel = await this.prisma.channel.findUnique({ where: { id: input.channelId } });
+    if (!channel) {
+      throw new BadRequestException('渠道不存在');
+    }
+    const fuelRate = await this.prisma.fuelRate.create({
+      data: { id: `fr-${Date.now()}`, channelId: channel.id, rate: input.rate, activeAt: new Date(input.activeAt) }
+    });
+    return { id: fuelRate.id, channelId: channel.id, channelName: channel.name, rate: Number(fuelRate.rate), activeAt: fuelRate.activeAt.toISOString() };
+  }
+
+  async createExchangeRate(_principal: Principal, input: ExchangeRateCreateInput): Promise<ExchangeRateSummary> {
+    const exchangeRate = await (this.prisma as any).exchangeRate.create({
+      data: {
+        id: `er-${input.baseCurrency.toLowerCase()}-${input.quoteCurrency.toLowerCase()}-${Date.now()}`,
+        baseCurrency: input.baseCurrency.trim().toUpperCase(),
+        quoteCurrency: input.quoteCurrency.trim().toUpperCase(),
+        rate: input.rate,
+        activeAt: new Date(input.activeAt),
+        enabled: true
+      }
+    });
+    return {
+      id: exchangeRate.id,
+      baseCurrency: exchangeRate.baseCurrency,
+      quoteCurrency: exchangeRate.quoteCurrency,
+      rate: Number(exchangeRate.rate),
+      activeAt: exchangeRate.activeAt.toISOString(),
+      enabled: exchangeRate.enabled
     };
   }
 
@@ -161,6 +403,52 @@ export class PrismaRepository {
     return calculateQuote(input);
   }
 
+  async getPricingRules(principal: Principal): Promise<PricingRuleSummary[]> {
+    this.ensureStaffPricingAccess(principal);
+    const rows = await (this.prisma as any).pricingRule.findMany({ include: { channel: true }, orderBy: [{ channelId: 'asc' }, { minWeightKg: 'asc' }] });
+    return rows.map(mapPricingRule);
+  }
+
+  async createPricingRule(principal: Principal, input: PricingRuleCreateInput): Promise<PricingRuleSummary> {
+    this.ensureStaffPricingAccess(principal);
+    if (!input.channelId?.trim() || !input.destinationCountry?.trim() || input.minWeightKg < 0 || input.maxWeightKg <= input.minWeightKg || input.ratePerKg <= 0) {
+      throw new BadRequestException('报价规则参数不完整');
+    }
+    const channel = await this.prisma.channel.findUnique({ where: { id: input.channelId } });
+    if (!channel || !channel.enabled) {
+      throw new BadRequestException('渠道不存在或已停用');
+    }
+    const row = await (this.prisma as any).pricingRule.create({
+      data: {
+        id: `pr-${slug(channel.name)}-${Date.now()}`,
+        channelId: channel.id,
+        destinationCountry: input.destinationCountry.trim(),
+        minWeightKg: input.minWeightKg,
+        maxWeightKg: input.maxWeightKg,
+        ratePerKg: input.ratePerKg,
+        currency: input.currency.trim().toUpperCase() || 'CNY',
+        enabled: true
+      },
+      include: { channel: true }
+    });
+    return mapPricingRule(row);
+  }
+
+  async updatePricingRuleEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<PricingRuleSummary> {
+    this.ensureStaffPricingAccess(principal);
+    const row = await (this.prisma as any).pricingRule.update({
+      where: { id },
+      data: { enabled: input.enabled === true },
+      include: { channel: true }
+    });
+    return mapPricingRule(row);
+  }
+
+  async quotePricingRule(principal: Principal, input: PricingRuleQuoteRequest): Promise<PricingRuleQuoteResponse> {
+    this.ensureStaffPricingAccess(principal);
+    return this.quoteFromRules(input);
+  }
+
   async getReceivables(principal: Principal): Promise<ReceivableFeeSummary[]> {
     const rows = await this.prisma.receivableFee.findMany({
       where: principal.role === 'CUSTOMER' ? { shipment: { customerId: principal.customerId } } : undefined,
@@ -182,22 +470,28 @@ export class PrismaRepository {
   async generateShipmentFees(
     principal: Principal,
     shipmentId: string,
-    input: { baseRatePerKg: number; payableRatePerKg: number; fuelRate: number; surcharges?: Array<{ name: string; amount: number }> }
+    input: { baseRatePerKg?: number; payableRatePerKg?: number; fuelRate?: number; surcharges?: Array<{ name: string; amount: number }>; pricingRuleId?: string; channelId?: string; destinationCountry?: string }
   ) {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     await this.prisma.receivableFee.deleteMany({ where: { shipmentId: shipment.id, settled: false } });
     await this.prisma.payableFee.deleteMany({ where: { shipmentId: shipment.id, settled: false } });
 
-    const receivableQuote = calculateQuote({
-      chargeableWeightKg: Number(shipment.receivableWeightKg),
-      baseRatePerKg: input.baseRatePerKg,
-      fuelRate: input.fuelRate,
-      surcharges: input.surcharges ?? []
-    });
+    const receivableQuote = input.baseRatePerKg && input.fuelRate !== undefined
+      ? calculateQuote({
+        chargeableWeightKg: Number(shipment.receivableWeightKg),
+        baseRatePerKg: input.baseRatePerKg,
+        fuelRate: input.fuelRate,
+        surcharges: input.surcharges ?? []
+      })
+      : await this.quoteFromRules({
+        channelId: input.channelId ?? shipment.channelId ?? '',
+        destinationCountry: input.destinationCountry ?? shipment.destinationCountry,
+        chargeableWeightKg: Number(shipment.receivableWeightKg)
+      });
     const payableQuote = calculateQuote({
       chargeableWeightKg: Number(shipment.agentWeightKg),
-      baseRatePerKg: input.payableRatePerKg,
-      fuelRate: input.fuelRate,
+      baseRatePerKg: input.payableRatePerKg ?? 0,
+      fuelRate: input.fuelRate ?? 0,
       surcharges: []
     });
 
@@ -865,6 +1159,52 @@ export class PrismaRepository {
     return (await this.getProblemTickets({ ...principal, role: 'ADMIN' })).find((item) => item.id === ticketId)!;
   }
 
+  private async quoteFromRules(input: PricingRuleQuoteRequest): Promise<PricingRuleQuoteResponse> {
+    const [rules, fuelRates, surcharges, exchangeRates, channels] = await Promise.all([
+      (this.prisma as any).pricingRule.findMany({ include: { channel: true } }),
+      this.prisma.fuelRate.findMany({ orderBy: { activeAt: 'desc' } }),
+      this.prisma.surcharge.findMany({ where: { enabled: true } }),
+      (this.prisma as any).exchangeRate.findMany({ where: { enabled: true }, orderBy: { activeAt: 'desc' } }),
+      this.prisma.channel.findMany()
+    ]);
+    const channelMap = new Map(channels.map((channel) => [channel.id, channel.name]));
+    try {
+      return quoteWithPricingRules({
+        ...input,
+        rules: rules.map(mapPricingRule),
+        fuelRates: fuelRates.map((fuelRate) => ({
+          id: fuelRate.id,
+          channelId: fuelRate.channelId,
+          channelName: channelMap.get(fuelRate.channelId) ?? fuelRate.channelId,
+          rate: Number(fuelRate.rate),
+          activeAt: fuelRate.activeAt.toISOString()
+        })),
+        surcharges: surcharges.map((surcharge) => ({
+          id: surcharge.id,
+          name: surcharge.name,
+          amount: Number(surcharge.amount),
+          enabled: surcharge.enabled
+        })),
+        exchangeRates: exchangeRates.map((exchangeRate: any) => ({
+          id: exchangeRate.id,
+          baseCurrency: exchangeRate.baseCurrency,
+          quoteCurrency: exchangeRate.quoteCurrency,
+          rate: Number(exchangeRate.rate),
+          activeAt: exchangeRate.activeAt.toISOString(),
+          enabled: exchangeRate.enabled
+        }))
+      });
+    } catch (error) {
+      throw new BadRequestException(error instanceof Error ? error.message : '报价失败');
+    }
+  }
+
+  private ensureStaffPricingAccess(principal: Principal) {
+    if (principal.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能访问内部报价规则');
+    }
+  }
+
   private async nextSystemOrderNo(businessType: BusinessType, date: Date): Promise<string> {
     const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
     const end = new Date(start);
@@ -1052,6 +1392,20 @@ function mapShipmentLabel(row: {
   };
 }
 
+function mapPricingRule(row: any): PricingRuleSummary {
+  return {
+    id: row.id,
+    channelId: row.channelId,
+    channelName: row.channel?.name ?? row.channelName ?? row.channelId,
+    destinationCountry: row.destinationCountry,
+    minWeightKg: Number(row.minWeightKg),
+    maxWeightKg: Number(row.maxWeightKg),
+    ratePerKg: Number(row.ratePerKg),
+    currency: row.currency,
+    enabled: row.enabled
+  };
+}
+
 function mapCarrierTask(row: {
   id: string;
   shipmentId: string;
@@ -1102,6 +1456,10 @@ function toCarrierAdapterCode(carrier: string): CarrierAdapterCode {
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function slug(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || String(Date.now());
 }
 
 function formatDate(date: Date): string {

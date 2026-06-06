@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import {
   calculateChargeableWeight,
   calculateQuote,
+  quoteWithPricingRules,
   createFeeLinesFromQuote,
   summarizeStatement,
   summarizePaymentSettlement,
+  summarizeMasterDataSnapshot,
   canTransitionShipment,
   createAutomationPlan,
   createFulfillmentAdvice,
@@ -16,15 +18,36 @@ import {
   createSystemOrderNo,
   createMockTransferNo,
   createMockTrackingStatus,
+  canAccessStaffMenu,
+  getVisibleStaffMenuKeys,
   type CarrierTaskSummary,
   type AccountLedgerSummary,
   type CustomerAccountSummary,
+  type MasterDataSnapshot,
   type PaymentCreateResponse,
   type PaymentSummary,
+  type PricingRuleSummary,
   type ShipmentLabelSummary,
   type Shipment,
   ShipmentStatus
 } from './index';
+
+describe('role menu access', () => {
+  it('keeps system settings admin-only and separates operation from finance menus', () => {
+    expect(getVisibleStaffMenuKeys('ADMIN')).toEqual(expect.arrayContaining(['settings', 'finance', 'receive', 'routing']));
+    expect(canAccessStaffMenu('ADMIN', 'settings')).toBe(true);
+
+    expect(getVisibleStaffMenuKeys('OPERATOR')).toEqual(expect.arrayContaining(['receive', 'routing', 'tracking', 'master']));
+    expect(canAccessStaffMenu('OPERATOR', 'settings')).toBe(false);
+    expect(canAccessStaffMenu('OPERATOR', 'finance')).toBe(false);
+
+    expect(getVisibleStaffMenuKeys('FINANCE')).toEqual(expect.arrayContaining(['finance', 'reports', 'pricing', 'master']));
+    expect(canAccessStaffMenu('FINANCE', 'settings')).toBe(false);
+    expect(canAccessStaffMenu('FINANCE', 'receive')).toBe(false);
+
+    expect(getVisibleStaffMenuKeys('CUSTOMER')).toEqual([]);
+  });
+});
 
 describe('shipment state transitions', () => {
   it('allows the happy path from draft to signed', () => {
@@ -100,6 +123,72 @@ describe('shipment weight and quote calculations', () => {
       { shipmentId: 'shipment-1', name: '人工优惠', amount: -15 },
       { shipmentId: 'shipment-1', name: '地址更正费', amount: 20 }
     ]);
+  });
+
+  it('quotes from enabled channel pricing rules with fuel, surcharges, and exchange rates', () => {
+    const rules: PricingRuleSummary[] = [
+      {
+        id: 'pr-disabled',
+        channelId: 'ch-dhl-hk',
+        channelName: 'DHL HK',
+        destinationCountry: '美国',
+        minWeightKg: 0,
+        maxWeightKg: 5,
+        ratePerKg: 8,
+        currency: 'USD',
+        enabled: false
+      },
+      {
+        id: 'pr-dhl-us-0-5',
+        channelId: 'ch-dhl-hk',
+        channelName: 'DHL HK',
+        destinationCountry: '美国',
+        minWeightKg: 0,
+        maxWeightKg: 5,
+        ratePerKg: 10,
+        currency: 'USD',
+        enabled: true
+      }
+    ];
+
+    const quote = quoteWithPricingRules({
+      channelId: 'ch-dhl-hk',
+      destinationCountry: '美国',
+      chargeableWeightKg: 4,
+      rules,
+      fuelRates: [
+        { id: 'fr-old', channelId: 'ch-dhl-hk', channelName: 'DHL HK', rate: 0.1, activeAt: '2026-06-01T00:00:00.000Z' },
+        { id: 'fr-new', channelId: 'ch-dhl-hk', channelName: 'DHL HK', rate: 0.15, activeAt: '2026-06-06T00:00:00.000Z' }
+      ],
+      surcharges: [
+        { id: 'sc-remote', name: '偏远附加费', amount: 50, enabled: true },
+        { id: 'sc-disabled', name: '停用费', amount: 999, enabled: false }
+      ],
+      exchangeRates: [
+        { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'CNY', rate: 7.25, activeAt: '2026-06-06T00:00:00.000Z', enabled: true }
+      ]
+    });
+
+    expect(quote.rule.id).toBe('pr-dhl-us-0-5');
+    expect(quote.exchangeRate).toBe(7.25);
+    expect(quote.freight).toBe(290);
+    expect(quote.fuel).toBe(43.5);
+    expect(quote.surchargeTotal).toBe(50);
+    expect(quote.total).toBe(383.5);
+  });
+
+  it('fails pricing rule quote when no enabled rule matches the channel country and weight', () => {
+    expect(() =>
+      quoteWithPricingRules({
+        channelId: 'ch-dhl-hk',
+        destinationCountry: '加拿大',
+        chargeableWeightKg: 4,
+        rules: [],
+        fuelRates: [],
+        surcharges: [],
+        exchangeRates: []
+      })
+    ).toThrow('无可用报价规则');
   });
 
   it('summarizes customer statement totals from unsettled fee lines', () => {
@@ -256,6 +345,48 @@ describe('API DTO helpers', () => {
     expect(response.payment.remainingAmount).toBe(0);
     expect(response.account.balance).toBe(10000);
     expect(ledger.map((item) => item.amount)).toEqual([230, -230]);
+  });
+
+  it('represents master data snapshots with customers, channels, fees, fuel rates, and exchange rates', () => {
+    const snapshot: MasterDataSnapshot = {
+      customers: [
+        { id: 'c-9409', code: '9409', name: 'Daloday', enabled: true }
+      ],
+      contacts: [
+        { id: 'cc-1', customerId: 'c-9409', customerName: '9409-Daloday', name: 'Lina', phone: '13800000001', email: 'lina@example.com', enabled: true }
+      ],
+      customerUsers: [
+        { id: 'u-customer', customerId: 'c-9409', customerName: '9409-Daloday', username: 'customer', enabled: true }
+      ],
+      agents: [
+        { id: 'a-yuhuan', name: '宇环', enabled: true }
+      ],
+      carriers: [
+        { id: 'cr-dhl', name: 'DHL', enabled: true }
+      ],
+      channels: [
+        { id: 'ch-dhl-hk', name: 'DHL HK', carrierId: 'cr-dhl', carrierName: 'DHL', enabled: true }
+      ],
+      surcharges: [
+        { id: 'sc-remote', name: '偏远附加费', amount: 50, enabled: true }
+      ],
+      fuelRates: [
+        { id: 'fr-dhl', channelId: 'ch-dhl-hk', channelName: 'DHL HK', rate: 0.15, activeAt: '2026-06-06T00:00:00.000Z' }
+      ],
+      exchangeRates: [
+        { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'CNY', rate: 7.245, activeAt: '2026-06-06T00:00:00.000Z', enabled: true }
+      ],
+      roles: ['ADMIN', 'CUSTOMER']
+    };
+
+    const summary = summarizeMasterDataSnapshot(snapshot);
+
+    expect(snapshot.customers[0].enabled).toBe(true);
+    expect(snapshot.channels[0].carrierName).toBe('DHL');
+    expect(snapshot.exchangeRates[0].rate).toBe(7.245);
+    expect(summary.enabledCustomers).toBe(1);
+    expect(summary.enabledChannels).toBe(1);
+    expect(summary.activeExchangeRates).toBe(1);
   });
 });
 
