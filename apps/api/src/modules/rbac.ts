@@ -1,10 +1,23 @@
-export type RoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'FINANCE' | 'CUSTOMER';
+export type RoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type PermissionKey =
-  | 'shipments:read'
-  | 'shipments:write'
+  | 'workspace:access'
+  | 'orders:read'
+  | 'orders:write'
+  | 'routing:read'
+  | 'routing:write'
+  | 'warehouse:read'
+  | 'warehouse:write'
+  | 'tracking:read'
+  | 'tracking:write'
+  | 'problems:read'
+  | 'problems:write'
+  | 'pricing:lookup'
+  | 'pricing:manage'
   | 'finance:read'
   | 'finance:settle'
   | 'master-data:read'
+  | 'master-data:write'
+  | 'reports:read'
   | 'system:manage';
 
 export interface Principal {
@@ -30,20 +43,34 @@ export interface RolePermissionRow {
 }
 
 export const permissionDefinitions: PermissionDefinition[] = [
-  { code: 'shipments:read', label: '运单读取', group: '运单' },
-  { code: 'shipments:write', label: '运单写入', group: '运单' },
-  { code: 'finance:read', label: '财务读取', group: '财务' },
-  { code: 'finance:settle', label: '财务核销', group: '财务' },
-  { code: 'master-data:read', label: '基础资料读取', group: '资料' },
-  { code: 'system:manage', label: '系统管理', group: '系统' }
+  { code: 'workspace:access', label: '运营工作台', group: '工作台' },
+  { code: 'orders:read', label: '运单查看', group: '运单履约' },
+  { code: 'orders:write', label: '运单操作', group: '运单履约' },
+  { code: 'routing:read', label: '渠道排货查看', group: '渠道排货' },
+  { code: 'routing:write', label: '渠道排货操作', group: '渠道排货' },
+  { code: 'warehouse:read', label: '仓库查看', group: '仓库管理' },
+  { code: 'warehouse:write', label: '仓库操作', group: '仓库管理' },
+  { code: 'tracking:read', label: '轨迹查看', group: '轨迹监控' },
+  { code: 'tracking:write', label: '轨迹操作', group: '轨迹监控' },
+  { code: 'problems:read', label: '问题件查看', group: '问题件' },
+  { code: 'problems:write', label: '问题件处理', group: '问题件' },
+  { code: 'pricing:lookup', label: '报价查询', group: '报价查价' },
+  { code: 'pricing:manage', label: '报价管理', group: '报价查价' },
+  { code: 'finance:read', label: '财务查看', group: '财务结算' },
+  { code: 'finance:settle', label: '财务核销', group: '财务结算' },
+  { code: 'reports:read', label: '统计报表', group: '统计报表' },
+  { code: 'master-data:read', label: '基础资料查看', group: '基础资料' },
+  { code: 'master-data:write', label: '基础资料维护', group: '基础资料' },
+  { code: 'system:manage', label: '系统设置', group: '系统设置' }
 ];
 
 export const rolePermissions: Record<RoleKey, PermissionKey[]> = {
-  ADMIN: ['shipments:read', 'shipments:write', 'finance:read', 'finance:settle', 'master-data:read', 'system:manage'],
-  CUSTOMER_SERVICE: ['shipments:read', 'shipments:write', 'master-data:read'],
-  OPERATOR: ['shipments:read', 'shipments:write', 'master-data:read'],
-  FINANCE: ['shipments:read', 'finance:read', 'finance:settle', 'master-data:read'],
-  CUSTOMER: ['shipments:read', 'shipments:write', 'finance:read']
+  ADMIN: allPermissions(),
+  CUSTOMER_SERVICE: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'master-data:read'],
+  OPERATOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'tracking:read', 'pricing:lookup', 'master-data:read'],
+  WAREHOUSE: ['workspace:access', 'orders:read', 'warehouse:read', 'warehouse:write', 'tracking:read'],
+  FINANCE: ['workspace:access', 'orders:read', 'pricing:lookup', 'finance:read', 'finance:settle', 'reports:read', 'master-data:read'],
+  CUSTOMER: ['workspace:access', 'orders:read', 'orders:write', 'finance:read', 'problems:read', 'problems:write', 'pricing:lookup']
 };
 
 export const roleMetadata: Record<RoleKey, Omit<RolePermissionRow, 'permissions'>> = {
@@ -63,10 +90,17 @@ export const roleMetadata: Record<RoleKey, Omit<RolePermissionRow, 'permissions'
   },
   OPERATOR: {
     key: 'OPERATOR',
-    label: '操作',
+    label: '业务员',
     account: 'operator',
-    scope: '仓库与履约',
-    restriction: '运单读写、基础资料读取；不能改财务、不能改权限'
+    scope: '客户出货与渠道排货',
+    restriction: '可操作运单、排货和查询报价；不能查看成本、加价、价格表管理、财务核销和系统设置'
+  },
+  WAREHOUSE: {
+    key: 'WAREHOUSE',
+    label: '仓库',
+    account: 'warehouse',
+    scope: '入库、合票、打单、出货',
+    restriction: '只处理仓库管理和必要轨迹查看；不能访问报价管理、财务和系统设置'
   },
   FINANCE: {
     key: 'FINANCE',

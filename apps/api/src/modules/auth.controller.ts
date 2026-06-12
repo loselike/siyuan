@@ -10,7 +10,7 @@ export class AuthController {
   constructor(@Inject(PrismaRepository) private readonly repository: PrismaRepository) {}
 
   @Post('login')
-  async login(@Body() body: { username?: string; password?: string }) {
+  async login(@Req() request: { headers: Record<string, string | string[] | undefined>; ip?: string }, @Body() body: { username?: string; password?: string }) {
     const account = await this.repository.findAccount(body.username ?? '', body.password ?? '');
 
     if (!account) {
@@ -23,16 +23,44 @@ export class AuthController {
       role: account.role,
       customerId: account.customerId
     };
+    await this.repository.recordLoginLog(principal, {
+      ip: getRequestIp(request),
+      userAgent: getHeaderValue(request.headers['user-agent'])
+    });
+
+    const permissions = await this.repository.getPermissionsForRole(account.role);
 
     return {
       accessToken: jwt.sign(principal, jwtSecret(), { expiresIn: '8h' }),
-      user: principal
+      user: principal,
+      permissions
     };
   }
 
   @Get('me')
-  @RequirePermission('shipments:read')
+  @RequirePermission('workspace:access')
   me(@Req() request: { user?: Principal }) {
     return request.user;
   }
+
+  @Get('login-logs')
+  @RequirePermission('workspace:access')
+  loginLogs(@Req() request: { user: Principal }) {
+    return this.repository.getLoginLogs(request.user);
+  }
+
+  @Post('change-password')
+  @RequirePermission('workspace:access')
+  changePassword(@Req() request: { user: Principal }, @Body() body: { currentPassword?: string; newPassword?: string }) {
+    return this.repository.changePassword(request.user, body);
+  }
+}
+
+function getRequestIp(request: { headers: Record<string, string | string[] | undefined>; ip?: string }) {
+  const forwardedFor = getHeaderValue(request.headers['x-forwarded-for']);
+  return forwardedFor?.split(',')[0]?.trim() || getHeaderValue(request.headers['x-real-ip']) || request.ip || '未知';
+}
+
+function getHeaderValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
 }

@@ -38,6 +38,7 @@ model User {
   createdAt    DateTime @default(now())
   role         Role     @relation(fields: [roleId], references: [id])
   customer     Customer? @relation(fields: [customerId], references: [id])
+  loginLogs    LoginLog[]
 }
 
 model Role {
@@ -107,6 +108,8 @@ model Channel {
   name      String
   carrierId String
   enabled   Boolean    @default(true)
+  volumeDivisor Int     @default(5000)
+  roundingRule  String  @default("NONE")
   carrier   Carrier    @relation(fields: [carrierId], references: [id])
   shipments Shipment[]
   pricingRules PricingRule[]
@@ -130,8 +133,12 @@ model Shipment {
   latestTracking      String?
   trackingStaleDays   Int               @default(0)
   isRemoteArea        Boolean           @default(false)
+  paymentAmountUsd    Decimal?
+  paymentAmountCny    Decimal?
+  paymentMethod       String?
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
+  deletedAt           DateTime?
   customer            Customer          @relation(fields: [customerId], references: [id])
   agent               Agent?            @relation(fields: [agentId], references: [id])
   channel             Channel?          @relation(fields: [channelId], references: [id])
@@ -263,6 +270,103 @@ model PricingRule {
   channel            Channel  @relation(fields: [channelId], references: [id])
 }
 
+model PriceBook {
+  id         String         @id @default(cuid())
+  fileName   String
+  remark     String?
+  importedAt DateTime       @default(now())
+  deletedAt  DateTime?
+  rows       PriceBookRow[]
+}
+
+model PriceBookRow {
+  id                 String    @id @default(cuid())
+  priceBookId        String
+  agentName          String
+  carrierName        String?
+  sourceSheetName    String?
+  channelName        String
+  businessRouteName  String?
+  realChannelName    String?
+  warehouseCode      String?
+  destinationCountry String
+  minWeightKg        Decimal
+  maxWeightKg        Decimal
+  costPerKg          Decimal
+  currency           String
+  transitDays        Int?
+  transitLabel       String?
+  quoteSourceType    String?
+  surchargeFee       Decimal?
+  surchargeDetails   Json?
+  priceBook          PriceBook @relation(fields: [priceBookId], references: [id])
+}
+
+model AgentMarkupRule {
+  id                 String   @id @default(cuid())
+  agentName          String
+  channelName        String?
+  realChannelName    String?
+  destinationCountry String?
+  markupPerKg        Decimal
+  enabled            Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model WarehousePackage {
+  id                        String    @id @default(cuid())
+  customerCode              String
+  customerOrderNo           String
+  domesticTrackingNo        String
+  combinedOrderNo           String
+  systemOrderNo             String?
+  shipmentId                String?
+  receivingChannel          String
+  destinationCountry        String?
+  expectedTotalPackageCount Int?
+  packageCount              Int       @default(1)
+  weightKg                  Decimal
+  lengthCm                  Decimal
+  widthCm                   Decimal
+  heightCm                  Decimal
+  cbm                       Decimal
+  volumetricWeightKg        Decimal
+  chargeableWeightKg        Decimal
+  divisor                   Int       @default(5000)
+  roundingRule              String    @default("NONE")
+  scanTime                  DateTime?
+  status                    String    @default("RECEIVED")
+  exceptions                String[]
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+  consolidationItems        WarehouseConsolidationItem[]
+}
+
+model WarehouseConsolidation {
+  id                       String    @id @default(cuid())
+  consolidationNo          String    @unique
+  mode                     String
+  shipmentId               String?
+  systemOrderNo            String?
+  totalPackages            Int
+  totalActualWeightKg      Decimal
+  totalVolumetricWeightKg  Decimal
+  totalChargeableWeightKg  Decimal
+  createdAt                DateTime  @default(now())
+  items                    WarehouseConsolidationItem[]
+}
+
+model WarehouseConsolidationItem {
+  id              String @id @default(cuid())
+  consolidationId String
+  packageId       String
+  consolidation   WarehouseConsolidation @relation(fields: [consolidationId], references: [id])
+  package         WarehousePackage @relation(fields: [packageId], references: [id])
+
+  @@unique([consolidationId, packageId])
+}
+
 model Surcharge {
   id      String  @id @default(cuid())
   name    String
@@ -368,4 +472,15 @@ model AuditLog {
   before    Json?
   after     Json?
   createdAt DateTime @default(now())
+}
+
+model LoginLog {
+  id        String   @id @default(cuid())
+  userId    String
+  username  String
+  ip        String
+  region    String
+  userAgent String?
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
 }

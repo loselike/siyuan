@@ -2,6 +2,7 @@ import request from 'supertest';
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { configureApp } from '../configure-app.js';
 import { AppModule } from './app.module.js';
 
 describe('Siyuan API MVP', () => {
@@ -9,8 +10,8 @@ describe('Siyuan API MVP', () => {
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = moduleRef.createNestApplication();
-    app.setGlobalPrefix('api');
+    app = moduleRef.createNestApplication({ bodyParser: false });
+    configureApp(app);
     await app.init();
   });
 
@@ -33,6 +34,45 @@ describe('Siyuan API MVP', () => {
       });
   });
 
+  it('soft deletes shipments so they no longer return from the workspace list', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const token = login.body.accessToken;
+
+    const created = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'DELETE-PERSIST-001',
+        businessType: 'EXPRESS',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 2,
+        agentWeightKg: 2,
+        channelId: 'ch-dhl-hk'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .delete(`/api/shipments/${created.body.id}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ id: created.body.id })])
+        );
+      });
+  });
+
   it('lets admins edit role permissions and applies the saved matrix to RBAC checks', async () => {
     const adminLogin = await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -50,9 +90,11 @@ describe('Siyuan API MVP', () => {
             expect.objectContaining({
               key: 'ADMIN',
               account: 'admin',
-              permissions: expect.arrayContaining(['system:manage', 'finance:settle'])
+              permissions: expect.arrayContaining(['system:manage', 'finance:settle', 'pricing:manage'])
             }),
-            expect.objectContaining({ key: 'CUSTOMER_SERVICE', account: 'service' })
+            expect.objectContaining({ key: 'CUSTOMER_SERVICE', account: 'service' }),
+            expect.objectContaining({ key: 'OPERATOR', label: '业务员', account: 'operator' }),
+            expect.objectContaining({ key: 'WAREHOUSE', label: '仓库', account: 'warehouse' })
           ])
         );
         expect(JSON.stringify(response.body)).not.toContain('admin123');
@@ -67,16 +109,16 @@ describe('Siyuan API MVP', () => {
     await request(app.getHttpServer())
       .put('/api/system/roles/OPERATOR/permissions')
       .set('Authorization', `Bearer ${financeLogin.body.accessToken}`)
-      .send({ permissions: ['shipments:read'] })
+      .send({ permissions: ['orders:read'] })
       .expect(403);
 
     await request(app.getHttpServer())
       .put('/api/system/roles/CUSTOMER_SERVICE/permissions')
       .set('Authorization', `Bearer ${adminToken}`)
-      .send({ permissions: ['shipments:read', 'master-data:read'] })
+      .send({ permissions: ['orders:read', 'pricing:lookup', 'master-data:read'] })
       .expect(200)
       .expect((response) => {
-        expect(response.body.permissions).toEqual(['shipments:read', 'master-data:read']);
+        expect(response.body.permissions).toEqual(['orders:read', 'pricing:lookup', 'master-data:read']);
       });
 
     const serviceLogin = await request(app.getHttpServer())
@@ -137,6 +179,194 @@ describe('Siyuan API MVP', () => {
       .expect((response) => {
         expect(response.body.some((shipment: { customerOrderNo: string }) => shipment.customerOrderNo === 'CUST-NEW-001')).toBe(
           true
+        );
+      });
+  });
+
+  it('lets staff create a draft outbound shipment that persists after reload', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const token = adminLogin.body.accessToken;
+
+    const created = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'OUT-PERSIST-001',
+        systemOrderNo: 'SYOUTPERSIST001',
+        transferNo: 'DHL-PERSIST-001',
+        businessType: 'DEDICATED_LINE',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 18,
+        agentWeightKg: 18,
+        channelId: 'ch-dhl-hk',
+        initialStatus: 'DRAFT',
+        latestTracking: '新建出货订单，待审核'
+      })
+      .expect(201);
+
+    expect(created.body.status).toBe('DRAFT');
+    expect(created.body.systemOrderNo).toBe('SYOUTPERSIST001');
+    expect(created.body.transferNo).toBe('DHL-PERSIST-001');
+    expect(created.body.latestTracking).toBe('新建出货订单，待审核');
+
+    await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect((response) => {
+        expect(
+          response.body.some(
+            (shipment: { customerOrderNo: string; status: string; systemOrderNo: string }) =>
+              shipment.customerOrderNo === 'OUT-PERSIST-001' &&
+              shipment.status === 'DRAFT' &&
+              shipment.systemOrderNo === 'SYOUTPERSIST001'
+          )
+        ).toBe(true);
+      });
+  });
+
+  it('keeps markup rules admin-only and strips internal price fields for operator lookup', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const operatorLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'operator', password: 'operator123' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/markup-rules')
+      .set('Authorization', `Bearer ${operatorLogin.body.accessToken}`)
+      .expect(403);
+
+    const channelRule = await request(app.getHttpServer())
+      .post('/api/pricing/markup-rules')
+      .set('Authorization', `Bearer ${adminLogin.body.accessToken}`)
+      .send({ agentName: 'a代理', channelName: '海运洛杉矶专线', markupPerKg: 3, enabled: true })
+      .expect(201);
+    expect(channelRule.body.channelName).toBe('海运洛杉矶专线');
+
+    const lineRule = await request(app.getHttpServer())
+      .post('/api/pricing/markup-rules')
+      .set('Authorization', `Bearer ${adminLogin.body.accessToken}`)
+      .send({ agentName: 'a代理', channelName: 'DHL HK', realChannelName: 'DHL代理', markupPerKg: 2, enabled: true })
+      .expect(201);
+    expect(lineRule.body.realChannelName).toBe('DHL代理');
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', `Bearer ${adminLogin.body.accessToken}`)
+      .send({
+        fileName: 'DHL线路测试价格表.xls',
+        rows: [
+          {
+            agentName: 'a代理',
+            carrierName: 'DHL',
+            sourceSheetName: 'DHL测试小表',
+            channelName: 'DHL HK',
+            businessRouteName: 'HK-DHL',
+            realChannelName: 'DHL代理',
+            destinationCountry: '美国',
+            minWeightKg: 0,
+            maxWeightKg: 20,
+            costPerKg: 20,
+            currency: 'CNY',
+            transitDays: 5,
+            transitLabel: '4-7 天'
+          }
+        ]
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/lookup')
+      .set('Authorization', `Bearer ${operatorLogin.body.accessToken}`)
+      .send({ destinationCountry: '美国', chargeableWeightKg: 10, amazonCode: 'AMZ-US-001' })
+      .expect(201)
+      .expect((response) => {
+        expect(JSON.stringify(response.body)).not.toContain('costPerKg');
+        expect(JSON.stringify(response.body)).not.toContain('grossProfit');
+        const dhlRecommendation = response.body.recommendations.find((item: any) => item.realChannelName === 'DHL代理');
+        expect(dhlRecommendation.totalSales).toBe(220);
+      });
+
+    await request(app.getHttpServer())
+      .delete(`/api/pricing/markup-rules/${lineRule.body.id}`)
+      .set('Authorization', `Bearer ${adminLogin.body.accessToken}`)
+      .expect(200)
+      .expect((response) => expect(response.body.enabled).toBe(false));
+
+    await request(app.getHttpServer())
+      .delete(`/api/pricing/markup-rules/${channelRule.body.id}`)
+      .set('Authorization', `Bearer ${adminLogin.body.accessToken}`)
+      .expect(200)
+      .expect((response) => expect(response.body.enabled).toBe(false));
+  });
+
+  it('groups warehouse API packages and creates draft shipments from consolidation', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const token = adminLogin.body.accessToken;
+
+    const groups = await request(app.getHttpServer())
+      .get('/api/warehouse/package-groups')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    const group1399 = groups.body.find((row: { customerOrderNo: string }) => row.customerOrderNo === '1399');
+    expect(group1399).toEqual(expect.objectContaining({
+      combinedOrderNo: '1399-KY4001036478949',
+      expectedTotalPackageCount: 10,
+      arrivedPackageCount: 3,
+      remainingPackageCount: 7
+    }));
+
+    const packages = await request(app.getHttpServer())
+      .get('/api/warehouse/packages')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    const packageIds = packages.body
+      .filter((row: { customerOrderNo: string }) => row.customerOrderNo === '1399')
+      .slice(0, 2)
+      .map((row: { id: string }) => row.id);
+
+    const mergeOnly = await request(app.getHttpServer())
+      .post('/api/warehouse/consolidations')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ packageIds, mode: 'MERGE_ONLY' })
+      .expect(201);
+    expect(mergeOnly.body.consolidationNo).toBe('1399-MERGE001');
+    expect(mergeOnly.body.systemOrderNo).toBeUndefined();
+
+    const remainingPackageIds = packages.body
+      .filter((row: { customerOrderNo: string; id: string }) => row.customerOrderNo === 'P710')
+      .slice(0, 2)
+      .map((row: { id: string }) => row.id);
+    const mergeAndShip = await request(app.getHttpServer())
+      .post('/api/warehouse/consolidations')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ packageIds: remainingPackageIds, mode: 'MERGE_AND_SHIP' })
+      .expect(201);
+    expect(mergeAndShip.body.systemOrderNo).toBe('P710-OUT001');
+
+    await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ systemOrderNo: 'P710-OUT001', status: 'DRAFT' })
+          ])
         );
       });
   });
@@ -227,6 +457,108 @@ describe('Siyuan API MVP', () => {
       .expect(201)
       .expect((response) => {
         expect(response.body.latestTracking).toBe('已上网');
+      });
+  });
+
+  it('persists manual shipment edits, shipment payments, and bulk tracking imports through API endpoints', async () => {
+    const login = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const token = login.body.accessToken;
+
+    const created = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'BACKEND-ACTION-001',
+        systemOrderNo: 'SYBACKENDACTION001',
+        businessType: 'DEDICATED_LINE',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 18,
+        agentWeightKg: 18,
+        channelId: 'ch-dhl-hk',
+        initialStatus: 'DRAFT',
+        latestTracking: '新建出货订单，待审核'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/api/shipments/${created.body.id}/operational`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        latestTracking: '人工复核通过',
+        transferNo: 'TRK-BACKEND-001',
+        status: 'WAITING_RECEIVE'
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.latestTracking).toBe('人工复核通过');
+        expect(response.body.transferNo).toBe('TRK-BACKEND-001');
+        expect(response.body.status).toBe('WAITING_RECEIVE');
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/payment`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        paymentAmountUsd: 128,
+        paymentAmountCny: 927.36,
+        paymentMethod: '对公'
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.paymentAmountUsd).toBe(128);
+        expect(response.body.paymentAmountCny).toBe(927.36);
+        expect(response.body.paymentMethod).toBe('对公');
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/tracking-events/import')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        updates: [
+          {
+            shipmentId: created.body.id,
+            customerOrderNo: 'BACKEND-ACTION-001',
+            trackingDate: '2026-06-08T10:00:00.000Z',
+            latestTracking: '批量轨迹已签收'
+          }
+        ]
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.updated).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: created.body.id,
+              latestTracking: '批量轨迹已签收',
+              trackingStaleDays: 0
+            })
+          ])
+        );
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              id: created.body.id,
+              latestTracking: '批量轨迹已签收',
+              transferNo: 'TRK-BACKEND-001',
+              paymentAmountUsd: 128,
+              paymentAmountCny: 927.36,
+              paymentMethod: '对公'
+            })
+          ])
+        );
       });
   });
 
@@ -778,6 +1110,333 @@ describe('Siyuan API MVP', () => {
       .get('/api/pricing/rules')
       .set('Authorization', `Bearer ${customerLogin.body.accessToken}`)
       .expect(403);
+  });
+
+  it('persists imported price books with remarks and admin-only management', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+
+    const operatorLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'operator', password: 'operator123' })
+      .expect(201);
+    const operatorToken = operatorLogin.body.accessToken;
+
+    const imported = await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        fileName: '测试价格表.xlsx',
+        rows: [
+          {
+            agentName: '亿阳国际',
+            carrierName: '专线',
+            channelName: '海运洛杉矶专线',
+            realChannelName: '海运洛杉矶专线',
+            warehouseCode: 'LAX9',
+            destinationCountry: '美国',
+            minWeightKg: 100,
+            maxWeightKg: 99999,
+            costPerKg: 18,
+            currency: 'CNY',
+            transitDays: 22,
+            transitLabel: '22-28 天'
+          }
+        ]
+      })
+      .expect(201);
+
+    expect(imported.body.book.fileName).toBe('测试价格表.xlsx');
+    expect(imported.body.book.rowCount).toBe(1);
+    expect(imported.body.rows[0].priceBookId).toBe(imported.body.book.id);
+
+    await request(app.getHttpServer())
+      .put(`/api/pricing/books/${imported.body.book.id}/remark`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ remark: '亚马逊卡派最长边 180CM-220CM' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.remark).toContain('最长边');
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/books')
+      .set('Authorization', `Bearer ${operatorToken}`)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .put(`/api/pricing/books/${imported.body.book.id}/remark`)
+      .set('Authorization', `Bearer ${operatorToken}`)
+      .send({ remark: '业务员不能改' })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .delete(`/api/pricing/books/${imported.body.book.id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/books')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.books).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: imported.body.book.id })]));
+        expect(response.body.rows).not.toEqual(expect.arrayContaining([expect.objectContaining({ priceBookId: imported.body.book.id })]));
+      });
+  });
+
+  it('accepts large parsed price book imports from XLS uploads', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+    const rows = Array.from({ length: 800 }, (_, index) => ({
+      agentName: '大表代理',
+      carrierName: '专线',
+      channelName: `海运测试渠道-${index}`,
+      realChannelName: `TEST-REAL-${index}`,
+      warehouseCode: 'LAX9',
+      destinationCountry: '美国',
+      minWeightKg: 0,
+      maxWeightKg: 99999,
+      costPerKg: 18 + (index % 5),
+      currency: 'CNY',
+      transitDays: 22,
+      transitLabel: '22-28 天',
+      surchargeFee: 0,
+      surchargeDetails: [{ name: '测试附加费', amount: 0 }]
+    }));
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ fileName: '大价格表.xlsx', rows })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.book.rowCount).toBe(rows.length);
+      });
+  });
+
+  it('calculates price lookup on the backend and masks internal cost fields for operators', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+
+    const operatorLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'operator', password: 'operator123' })
+      .expect(201);
+    const operatorToken = operatorLogin.body.accessToken;
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/books')
+      .set('Authorization', `Bearer ${operatorToken}`)
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/lookup')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ destinationCountry: '未导入国', amazonCode: 'AMZ-US-001', chargeableWeightKg: 835 })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('没有匹配的代理成本价');
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        fileName: '测试价格表.xls',
+        rows: [
+          {
+            agentName: 'a代理',
+            carrierName: 'DHL',
+            sourceSheetName: 'YY美西快线海卡渠道汇总',
+            channelName: '海运洛杉矶专线',
+            businessRouteName: 'HK-DHL',
+            realChannelName: 'DHK03',
+            destinationCountry: '美国',
+            minWeightKg: 0,
+            maxWeightKg: 1000,
+            costPerKg: 18,
+            currency: 'CNY',
+            transitDays: 25,
+            transitLabel: '22-28 天'
+          }
+        ]
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/lookup')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ destinationCountry: '美国', amazonCode: 'AMZ-US-001', chargeableWeightKg: 835 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.channelName).toBe('海运洛杉矶专线');
+        expect(response.body.totalSales).toBe(15447.5);
+        expect(response.body.totalCost).toBe(15030);
+        expect(response.body.grossProfit).toBe(417.5);
+        expect(response.body.price.costPerKg).toBe(18);
+        expect(response.body.markup.markupPerKg).toBe(0.5);
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/lookup')
+      .set('Authorization', `Bearer ${operatorToken}`)
+      .send({ destinationCountry: '美国', amazonCode: 'AMZ-US-001', chargeableWeightKg: 835 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.channelName).toBe('海运洛杉矶专线');
+        expect(response.body.totalSales).toBe(15447.5);
+        expect(response.body.totalCost).toBeUndefined();
+        expect(response.body.grossProfit).toBeUndefined();
+        expect(response.body.markup).toBeUndefined();
+        expect(response.body.price.costPerKg).toBeUndefined();
+        expect(response.body.recommendations[0].price.costPerKg).toBeUndefined();
+        expect(response.body.recommendations[0].grossProfit).toBeUndefined();
+      });
+  });
+
+  it('maps Amazon warehouse codes to regional price table rows before lookup', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        fileName: '亚马逊仓库映射测试价格表.xls',
+        rows: [
+          {
+            agentName: 'a代理',
+            carrierName: '专线',
+            sourceSheetName: 'YY美西快线海卡渠道汇总',
+            channelName: 'YY美西特惠海卡',
+            realChannelName: 'YY美西特惠海卡',
+            warehouseCode: 'LAX9',
+            destinationCountry: '映射测试国',
+            minWeightKg: 0,
+            maxWeightKg: 1000,
+            costPerKg: 18,
+            currency: 'CNY',
+            transitDays: 25,
+            transitLabel: '22-28 天'
+          },
+          {
+            agentName: 'a代理',
+            carrierName: '专线',
+            sourceSheetName: 'YY美中快线海卡渠道汇总',
+            channelName: 'YY美中休斯顿海卡',
+            realChannelName: 'YY美中休斯顿海卡',
+            warehouseCode: 'HOU8',
+            destinationCountry: '映射测试国',
+            minWeightKg: 0,
+            maxWeightKg: 1000,
+            costPerKg: 12,
+            currency: 'CNY',
+            transitDays: 20,
+            transitLabel: '20-25 天'
+          }
+        ]
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/lookup')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ destinationCountry: '映射测试国', amazonCode: 'ONT8', chargeableWeightKg: 100 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.channelName).toBe('YY美西特惠海卡');
+        expect(response.body.recommendations.map((item: { channelName: string }) => item.channelName)).not.toContain(
+          'YY美中休斯顿海卡'
+        );
+      });
+  });
+
+  it('prefers exact Amazon warehouse fallback tiers before mapped warehouse rows', async () => {
+    const adminLogin = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'admin123' })
+      .expect(201);
+    const adminToken = adminLogin.body.accessToken;
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        fileName: 'ONT8高重量回退价格表.xls',
+        rows: [
+          {
+            agentName: '亿阳国际',
+            carrierName: '海运',
+            sourceSheetName: '海卡快速查询',
+            channelName: 'YY美西特惠海卡',
+            realChannelName: 'YY美西特惠海卡',
+            warehouseCode: 'ONT8',
+            destinationCountry: 'ONT8回退测试国',
+            minWeightKg: 51,
+            maxWeightKg: 99.999,
+            costPerKg: 5,
+            currency: 'CNY',
+            transitDays: 25,
+            transitLabel: '24-26 天左右'
+          },
+          {
+            agentName: '亿阳国际',
+            carrierName: '海运',
+            sourceSheetName: '海卡快速查询',
+            channelName: 'YY美西特惠海卡',
+            realChannelName: 'YY美西特惠海卡',
+            warehouseCode: 'ONT8',
+            destinationCountry: 'ONT8回退测试国',
+            minWeightKg: 51,
+            maxWeightKg: 99.999,
+            costPerKg: 4.5,
+            currency: 'CNY',
+            transitDays: 25,
+            transitLabel: '24-26 天左右'
+          },
+          {
+            agentName: '亿阳国际',
+            carrierName: '海运',
+            sourceSheetName: '海卡快速查询',
+            channelName: 'YY美西特惠海卡',
+            realChannelName: 'YY美西特惠海卡',
+            warehouseCode: 'IUSJ',
+            destinationCountry: 'ONT8回退测试国',
+            minWeightKg: 100,
+            maxWeightKg: 99999,
+            costPerKg: 4.8,
+            currency: 'CNY',
+            transitDays: 25,
+            transitLabel: '24-26 天左右'
+          }
+        ]
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/lookup')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ destinationCountry: 'ONT8回退测试国', amazonCode: 'ONT8', chargeableWeightKg: 835 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.price.warehouseCode).toBe('ONT8');
+        expect(response.body.price.costPerKg).toBe(4.5);
+        expect(response.body.salesRatePerKg).toBe(5);
+        expect(response.body.totalSales).toBe(4175);
+      });
   });
 
   it('returns a safe SiliconFlow-compatible AI assist response for logged-in staff', async () => {

@@ -10,8 +10,13 @@ import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
 
+const usePrismaRepository =
+  process.env.USE_PRISMA_REPOSITORY === 'false'
+    ? false
+    : process.env.USE_PRISMA_REPOSITORY === 'true' || Boolean(process.env.DATABASE_URL);
+
 const repositoryProviders =
-  process.env.USE_PRISMA_REPOSITORY === 'true'
+  usePrismaRepository
     ? [PrismaService, PrismaRepository, DatabaseSeedService]
     : [{ provide: PrismaRepository, useClass: InMemoryRepository }];
 

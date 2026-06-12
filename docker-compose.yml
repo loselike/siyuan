@@ -17,24 +17,38 @@ services:
       dockerfile: Dockerfile.api
     environment:
       API_PORT: 3001
-      JWT_SECRET: ${JWT_SECRET:-siyuan-production-secret}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://siyuan:siyuan@postgres:5432/siyuan}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be provided in .env}
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be provided in .env}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
       SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
       SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-Qwen/Qwen2.5-7B-Instruct}
-      USE_PRISMA_REPOSITORY: ${USE_PRISMA_REPOSITORY:-false}
+      USE_PRISMA_REPOSITORY: ${USE_PRISMA_REPOSITORY:-true}
+      SEED_ON_EMPTY: ${SEED_ON_EMPTY:-true}
     depends_on:
       - postgres
       - redis
     restart: unless-stopped
+
+  db-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      target: prisma-runner
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be provided in .env}
+    depends_on:
+      - postgres
+    profiles:
+      - tools
+    restart: "no"
 
   postgres:
     image: docker.m.daocloud.io/library/postgres:16-alpine
     environment:
       POSTGRES_DB: siyuan
       POSTGRES_USER: siyuan
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-siyuan}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be provided in .env}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped

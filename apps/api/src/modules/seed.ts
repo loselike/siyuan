@@ -2,22 +2,36 @@ import type { PrismaClient } from '@prisma/client';
 import type { BusinessType, ShipmentStatus } from '@siyuan/shared';
 import { hashPassword } from './password.js';
 
-const roles = ['ADMIN', 'CUSTOMER_SERVICE', 'OPERATOR', 'FINANCE', 'CUSTOMER'] as const;
+const roles = ['ADMIN', 'CUSTOMER_SERVICE', 'OPERATOR', 'WAREHOUSE', 'FINANCE', 'CUSTOMER'] as const;
 const permissions = [
-  'shipments:read',
-  'shipments:write',
+  'workspace:access',
+  'orders:read',
+  'orders:write',
+  'routing:read',
+  'routing:write',
+  'warehouse:read',
+  'warehouse:write',
+  'tracking:read',
+  'tracking:write',
+  'problems:read',
+  'problems:write',
+  'pricing:lookup',
+  'pricing:manage',
   'finance:read',
   'finance:settle',
+  'reports:read',
   'master-data:read',
+  'master-data:write',
   'system:manage'
 ];
 
 const rolePermissions: Record<(typeof roles)[number], string[]> = {
   ADMIN: permissions,
-  CUSTOMER_SERVICE: ['shipments:read', 'shipments:write', 'master-data:read'],
-  OPERATOR: ['shipments:read', 'shipments:write', 'master-data:read'],
-  FINANCE: ['shipments:read', 'finance:read', 'finance:settle', 'master-data:read'],
-  CUSTOMER: ['shipments:read', 'shipments:write', 'finance:read']
+  CUSTOMER_SERVICE: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'master-data:read'],
+  OPERATOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'tracking:read', 'pricing:lookup', 'master-data:read'],
+  WAREHOUSE: ['workspace:access', 'orders:read', 'warehouse:read', 'warehouse:write', 'tracking:read'],
+  FINANCE: ['workspace:access', 'orders:read', 'pricing:lookup', 'finance:read', 'finance:settle', 'reports:read', 'master-data:read'],
+  CUSTOMER: ['workspace:access', 'orders:read', 'orders:write', 'finance:read', 'problems:read', 'problems:write', 'pricing:lookup']
 };
 
 interface SeedShipment {
@@ -160,6 +174,21 @@ const seedShipments: SeedShipment[] = [
   }
 ];
 
+const seedAgentMarkupRules = [
+  { id: 'markup-a-default', agentName: 'a代理', markupPerKg: 0.5 },
+  { id: 'markup-b-default', agentName: 'b代理', markupPerKg: 1 },
+  { id: 'markup-yiyang-default', agentName: '亿阳国际', markupPerKg: 0.5 }
+];
+
+const seedWarehousePackages = [
+  { id: 'wh-api-1399-1', combinedOrderNo: '1399-KY4001036478949', customerCode: '1399', customerOrderNo: '1399', domesticTrackingNo: 'KY4001036478949', expectedTotalPackageCount: 10, weightKg: 14.2, lengthCm: 128, widthCm: 46, heightCm: 51, cbm: 0.300288, volumetricWeightKg: 50.05, scanTime: new Date('2026-06-08T10:07:28+08:00') },
+  { id: 'wh-api-1399-2', combinedOrderNo: '1399-KY4001036478949', customerCode: '1399', customerOrderNo: '1399', domesticTrackingNo: 'KY4001036478949', expectedTotalPackageCount: 10, weightKg: 13.9, lengthCm: 130, widthCm: 46, heightCm: 51, cbm: 0.30498, volumetricWeightKg: 50.83, scanTime: new Date('2026-06-08T10:08:08+08:00') },
+  { id: 'wh-api-1399-3', combinedOrderNo: '1399-KY4001036478949', customerCode: '1399', customerOrderNo: '1399', domesticTrackingNo: 'KY4001036478949', expectedTotalPackageCount: 10, weightKg: 14.2, lengthCm: 129, widthCm: 46, heightCm: 51, cbm: 0.302634, volumetricWeightKg: 50.44, scanTime: new Date('2026-06-08T10:08:48+08:00') },
+  { id: 'wh-api-p710-1', combinedOrderNo: 'P710-999056444656', customerCode: 'P710', customerOrderNo: 'P710', domesticTrackingNo: '999056444656', expectedTotalPackageCount: 5, weightKg: 18, lengthCm: 54, widthCm: 34, heightCm: 41, cbm: 0.075276, volumetricWeightKg: 12.55, scanTime: new Date('2026-06-08T10:14:14+08:00') },
+  { id: 'wh-api-p710-2', combinedOrderNo: 'P710-999056444656', customerCode: 'P710', customerOrderNo: 'P710', domesticTrackingNo: '999056444656', expectedTotalPackageCount: 5, weightKg: 18, lengthCm: 54, widthCm: 34, heightCm: 41, cbm: 0.075276, volumetricWeightKg: 12.55, scanTime: new Date('2026-06-08T10:14:14+08:00') },
+  { id: 'wh-api-p710-3', combinedOrderNo: 'P710-999056444656', customerCode: 'P710', customerOrderNo: 'P710', domesticTrackingNo: '999056444656', expectedTotalPackageCount: 5, weightKg: 18, lengthCm: 54, widthCm: 35, heightCm: 41, cbm: 0.07749, volumetricWeightKg: 12.91, scanTime: new Date('2026-06-08T10:14:23+08:00') }
+];
+
 export async function resetAndSeedDatabase(prisma: PrismaClient) {
   await prisma.problemReply.deleteMany();
   await prisma.problemTicket.deleteMany();
@@ -177,6 +206,10 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
   await prisma.accountLedger.deleteMany();
   await prisma.carrierTask.deleteMany();
   await prisma.shipmentLabel.deleteMany();
+  await (prisma as any).warehouseConsolidationItem.deleteMany();
+  await (prisma as any).warehouseConsolidation.deleteMany();
+  await (prisma as any).warehousePackage.deleteMany();
+  await (prisma as any).agentMarkupRule.deleteMany();
   await prisma.shipment.deleteMany();
   await prisma.user.deleteMany();
   await prisma.customerContact.deleteMany();
@@ -236,6 +269,7 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
       { id: 'u-admin', username: 'admin', passwordHash: hashPassword('admin123'), roleId: 'r-admin' },
       { id: 'u-cs', username: 'service', passwordHash: hashPassword('service123'), roleId: 'r-customer_service' },
       { id: 'u-op', username: 'operator', passwordHash: hashPassword('operator123'), roleId: 'r-operator' },
+      { id: 'u-warehouse', username: 'warehouse', passwordHash: hashPassword('warehouse123'), roleId: 'r-warehouse' },
       { id: 'u-finance', username: 'finance', passwordHash: hashPassword('finance123'), roleId: 'r-finance' },
       {
         id: 'u-customer',
@@ -306,6 +340,28 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
       { id: 'pr-line-us-0-5', channelId: 'ch-europe-truck', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 5, ratePerKg: 48, currency: 'CNY', enabled: true },
       { id: 'pr-line-us-5-20', channelId: 'ch-europe-truck', destinationCountry: '美国', minWeightKg: 5, maxWeightKg: 20, ratePerKg: 42, currency: 'CNY', enabled: true }
     ]
+  });
+
+  await (prisma as any).agentMarkupRule.createMany({
+    data: seedAgentMarkupRules.map((rule) => ({
+      ...rule,
+      markupPerKg: rule.markupPerKg,
+      enabled: true
+    }))
+  });
+
+  await (prisma as any).warehousePackage.createMany({
+    data: seedWarehousePackages.map((pkg) => ({
+      ...pkg,
+      receivingChannel: '仓库接口返回',
+      destinationCountry: '美国',
+      packageCount: 1,
+      chargeableWeightKg: Math.max(pkg.weightKg, pkg.volumetricWeightKg),
+      divisor: 6000,
+      roundingRule: 'NONE',
+      status: 'RECEIVED',
+      exceptions: pkg.expectedTotalPackageCount && pkg.expectedTotalPackageCount > 1 ? ['部分到仓'] : []
+    }))
   });
 
   for (const shipment of seedShipments) {

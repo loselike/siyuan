@@ -8,7 +8,7 @@ export class AiController {
   constructor(@Inject(AiService) private readonly aiService: AiService) {}
 
   @Post('assist')
-  @RequirePermission('shipments:read')
+  @RequirePermission('workspace:access')
   async assist(@Req() _request: { user: Principal }, @Body() body: AiAssistRequest) {
     return this.aiService.assist(body);
   }

@@ -1,6 +1,10 @@
 import type {
   AgentCreateInput,
+  AgentMarkupCreateInput,
+  AgentMarkupSummary,
+  AgentMarkupUpdateInput,
   AgentSummary,
+  AgentUpdateInput,
   CustomerStatementCreateInput,
   CustomerStatementSummary,
   CustomerAccountSummary,
@@ -15,6 +19,7 @@ import type {
   CustomerContactSummary,
   CustomerCreateInput,
   CustomerSummary,
+  CustomerUpdateInput,
   CustomerUserCreateInput,
   CustomerUserSummary,
   EnabledUpdateInput,
@@ -26,6 +31,13 @@ import type {
   MasterDataSnapshot,
   PaymentCreateInput,
   PaymentCreateResponse,
+  PriceBookImportInput,
+  PriceBookRemarkUpdateInput,
+  PriceBookRowSummary,
+  PriceBooksResponse,
+  PriceBookSummary,
+  PriceLookupRequest,
+  PriceLookupResponse,
   PricingQuoteRequest,
   PricingRuleCreateInput,
   PricingRuleQuoteRequest,
@@ -38,19 +50,40 @@ import type {
   ReceivableFeeSummary,
   SurchargeCreateInput,
   SurchargeSummary,
+  BulkTrackingApplyRequest,
+  BulkTrackingApplyResponse,
   Shipment,
   ShipmentCreateInput,
   ShipmentLabelSummary,
-  TrackingEventInput
+  ShipmentOperationalUpdateInput,
+  ShipmentPaymentUpdateInput,
+  TrackingEventInput,
+  WarehouseConsolidationCreateInput,
+  WarehouseConsolidationSummary,
+  WarehousePackageGroupSummary,
+  WarehousePackageSummary
 } from '@siyuan/shared';
 
-export type RoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'FINANCE' | 'CUSTOMER';
+export type RoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type PermissionKey =
-  | 'shipments:read'
-  | 'shipments:write'
+  | 'workspace:access'
+  | 'orders:read'
+  | 'orders:write'
+  | 'routing:read'
+  | 'routing:write'
+  | 'warehouse:read'
+  | 'warehouse:write'
+  | 'tracking:read'
+  | 'tracking:write'
+  | 'problems:read'
+  | 'problems:write'
+  | 'pricing:lookup'
+  | 'pricing:manage'
   | 'finance:read'
   | 'finance:settle'
   | 'master-data:read'
+  | 'master-data:write'
+  | 'reports:read'
   | 'system:manage';
 
 export interface Principal {
@@ -63,6 +96,7 @@ export interface Principal {
 export interface Session {
   accessToken: string;
   user: Principal;
+  permissions: PermissionKey[];
 }
 
 export interface PermissionDefinition {
@@ -85,6 +119,15 @@ export interface RolePermissionMatrix {
   roles: RolePermissionRow[];
 }
 
+export interface LoginLogSummary {
+  id: string;
+  username: string;
+  ip: string;
+  region: string;
+  userAgent?: string;
+  createdAt: string;
+}
+
 export interface AiAssistResponse {
   provider: 'siliconflow';
   mode: 'live' | 'mock';
@@ -102,6 +145,14 @@ export class ApiClient {
 
   async login(username: string, password: string): Promise<Session> {
     return this.request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }, false);
+  }
+
+  async loginLogs(): Promise<LoginLogSummary[]> {
+    return this.request('/auth/login-logs');
+  }
+
+  async changePassword(input: { currentPassword: string; newPassword: string }): Promise<{ ok: true }> {
+    return this.request('/auth/change-password', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async shipments(): Promise<Shipment[]> {
@@ -122,6 +173,22 @@ export class ApiClient {
 
   async dispatchShipment(id: string, body: { transferNo?: string }): Promise<Shipment> {
     return this.request(`/shipments/${id}/dispatch`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async deleteShipment(id: string): Promise<Shipment> {
+    return this.request(`/shipments/${id}`, { method: 'DELETE' });
+  }
+
+  async updateShipmentOperational(id: string, input: ShipmentOperationalUpdateInput): Promise<Shipment> {
+    return this.request(`/shipments/${id}/operational`, { method: 'PATCH', body: JSON.stringify(input) });
+  }
+
+  async registerShipmentPayment(id: string, input: ShipmentPaymentUpdateInput): Promise<Shipment> {
+    return this.request(`/shipments/${id}/payment`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async importTrackingEvents(input: BulkTrackingApplyRequest): Promise<BulkTrackingApplyResponse> {
+    return this.request('/shipments/tracking-events/import', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async createShipmentLabel(id: string): Promise<LabelCreateResponse> {
@@ -180,6 +247,66 @@ export class ApiClient {
     return this.request('/pricing/rules/quote', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async priceBooks(): Promise<PriceBooksResponse> {
+    return this.request('/pricing/books');
+  }
+
+  async importPriceBook(input: PriceBookImportInput): Promise<{ book: PriceBookSummary; rows: PriceBookRowSummary[] }> {
+    return this.request('/pricing/books/import', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updatePriceBookRemark(id: string, input: PriceBookRemarkUpdateInput): Promise<PriceBookSummary> {
+    return this.request(`/pricing/books/${id}/remark`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deletePriceBook(id: string): Promise<PriceBookSummary> {
+    return this.request(`/pricing/books/${id}`, { method: 'DELETE' });
+  }
+
+  async lookupPrice(input: PriceLookupRequest): Promise<PriceLookupResponse> {
+    return this.request('/pricing/lookup', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async agentMarkupRules(): Promise<AgentMarkupSummary[]> {
+    return this.request('/pricing/markup-rules');
+  }
+
+  async createAgentMarkupRule(input: AgentMarkupCreateInput): Promise<AgentMarkupSummary> {
+    return this.request('/pricing/markup-rules', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateAgentMarkupRule(id: string, input: AgentMarkupUpdateInput): Promise<AgentMarkupSummary> {
+    return this.request(`/pricing/markup-rules/${id}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deleteAgentMarkupRule(id: string): Promise<AgentMarkupSummary> {
+    return this.request(`/pricing/markup-rules/${id}`, { method: 'DELETE' });
+  }
+
+  async warehousePackages(): Promise<WarehousePackageSummary[]> {
+    return this.request('/warehouse/packages');
+  }
+
+  async warehousePackageGroups(): Promise<WarehousePackageGroupSummary[]> {
+    return this.request('/warehouse/package-groups');
+  }
+
+  async syncWarehouseMockPackages(): Promise<WarehousePackageSummary[]> {
+    return this.request('/warehouse/packages/sync-mock', { method: 'POST' });
+  }
+
+  async createWarehouseConsolidation(input: WarehouseConsolidationCreateInput): Promise<WarehouseConsolidationSummary> {
+    return this.request('/warehouse/consolidations', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createWarehouseConsolidationShipment(id: string): Promise<WarehouseConsolidationSummary> {
+    return this.request(`/warehouse/consolidations/${id}/create-shipment`, { method: 'POST' });
+  }
+
+  async warehouseConsolidationItems(id: string): Promise<WarehousePackageSummary[]> {
+    return this.request(`/warehouse/consolidations/${id}/items`);
+  }
+
   async receivables(): Promise<ReceivableFeeSummary[]> {
     return this.request('/finance/receivables');
   }
@@ -216,6 +343,10 @@ export class ApiClient {
     return this.request('/master-data/customers', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async updateCustomer(id: string, input: CustomerUpdateInput): Promise<CustomerSummary> {
+    return this.request(`/master-data/customers/${id}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
   async createCustomerContact(customerId: string, input: CustomerContactCreateInput): Promise<CustomerContactSummary> {
     return this.request(`/master-data/customers/${customerId}/contacts`, { method: 'POST', body: JSON.stringify(input) });
   }
@@ -230,6 +361,10 @@ export class ApiClient {
 
   async createAgent(input: AgentCreateInput): Promise<AgentSummary> {
     return this.request('/master-data/agents', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateAgent(id: string, input: AgentUpdateInput): Promise<AgentSummary> {
+    return this.request(`/master-data/agents/${id}`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
   async updateAgentEnabled(id: string, input: EnabledUpdateInput): Promise<AgentSummary> {

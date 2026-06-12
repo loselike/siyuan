@@ -10,6 +10,8 @@ import {
   canTransitionShipment,
   createAutomationPlan,
   createFulfillmentAdvice,
+  calculateTransitTimeLabel,
+  createBulkTrackingImportResult,
   getAvailableFulfillmentActions,
   summarizeFulfillmentStages,
   createShipmentInsights,
@@ -37,9 +39,14 @@ describe('role menu access', () => {
     expect(getVisibleStaffMenuKeys('ADMIN')).toEqual(expect.arrayContaining(['settings', 'finance', 'receive', 'routing']));
     expect(canAccessStaffMenu('ADMIN', 'settings')).toBe(true);
 
-    expect(getVisibleStaffMenuKeys('OPERATOR')).toEqual(expect.arrayContaining(['receive', 'routing', 'tracking', 'master']));
+    expect(getVisibleStaffMenuKeys('OPERATOR')).toEqual(expect.arrayContaining(['orders', 'routing', 'tracking', 'pricing', 'master']));
     expect(canAccessStaffMenu('OPERATOR', 'settings')).toBe(false);
     expect(canAccessStaffMenu('OPERATOR', 'finance')).toBe(false);
+    expect(canAccessStaffMenu('OPERATOR', 'receive')).toBe(false);
+
+    expect(getVisibleStaffMenuKeys('WAREHOUSE')).toEqual(expect.arrayContaining(['workspace', 'receive', 'tracking']));
+    expect(canAccessStaffMenu('WAREHOUSE', 'receive')).toBe(true);
+    expect(canAccessStaffMenu('WAREHOUSE', 'pricing')).toBe(false);
 
     expect(getVisibleStaffMenuKeys('FINANCE')).toEqual(expect.arrayContaining(['finance', 'reports', 'pricing', 'master']));
     expect(canAccessStaffMenu('FINANCE', 'settings')).toBe(false);
@@ -437,12 +444,14 @@ describe('module coverage catalog', () => {
 
 describe('fulfillment workflow rules', () => {
   it('returns executable actions for each shipment state', () => {
-    expect(getAvailableFulfillmentActions({ status: 'DECLARED' })).toEqual(['confirm-receive', 'create-problem']);
+    expect(getAvailableFulfillmentActions({ status: 'DRAFT' })).toEqual(['confirm-declare', 'reject-declare']);
+    expect(getAvailableFulfillmentActions({ status: 'DECLARED' })).toEqual(['confirm-receive']);
     expect(getAvailableFulfillmentActions({ status: 'WAITING_SORT' })).toEqual([
       'assign-route',
       'create-problem',
       'mark-return'
     ]);
+    expect(getAvailableFulfillmentActions({ status: 'WAITING_RETURN' })).toEqual(['add-tracking']);
     expect(getAvailableFulfillmentActions({ status: 'WAITING_DISPATCH', hasTransferNo: false })).toContain(
       'fill-transfer-no'
     );
@@ -461,6 +470,7 @@ describe('fulfillment workflow rules', () => {
     ]);
 
     expect(summary).toEqual({
+      reviewing: 0,
       declared: 1,
       receiving: 1,
       sorting: 1,
@@ -485,6 +495,7 @@ describe('fulfillment workflow rules', () => {
     );
 
     expect(summary).toEqual({
+      reviewing: 0,
       declared: 1,
       receiving: 1,
       sorting: 1,
@@ -510,6 +521,70 @@ describe('fulfillment workflow rules', () => {
     expect(advice.nextAction).toBe('补齐转单号');
     expect(advice.riskReasons).toEqual(expect.arrayContaining(['缺少转单号', '轨迹 7 天未更新', '存在问题件']));
     expect(advice.customerMessage).toContain('我们已优先跟进');
+  });
+
+  it('calculates transit time from dispatch to signature and in-transit duration', () => {
+    expect(
+      calculateTransitTimeLabel(
+        sampleShipment('signed', 'EXPRESS', 'SIGNED', {
+          dispatchedAt: '2026-06-01T10:00:00.000Z',
+          signedAt: '2026-06-04T09:00:00.000Z'
+        }),
+        '2026-06-06T10:00:00.000Z'
+      )
+    ).toBe('签收 3 天');
+
+    expect(
+      calculateTransitTimeLabel(
+        sampleShipment('online', 'EXPRESS', 'WAITING_ONLINE', {
+          dispatchedAt: '2026-06-02T10:00:00.000Z'
+        }),
+        '2026-06-06T10:00:00.000Z'
+      )
+    ).toBe('在途 4 天');
+
+    expect(calculateTransitTimeLabel(sampleShipment('waiting', 'EXPRESS', 'WAITING_DISPATCH'), '2026-06-06T10:00:00.000Z')).toBe('未出货');
+  });
+
+  it('creates bulk tracking updates by keeping latest dated row per order number', () => {
+    const shipments = [
+      sampleShipment('a', 'EXPRESS', 'WAITING_ONLINE', {
+        customerOrderNo: 'OUT-1001',
+        systemOrderNo: 'SY1001',
+        latestTracking: '旧轨迹'
+      }),
+      sampleShipment('b', 'EXPRESS', 'WAITING_DISPATCH', {
+        customerOrderNo: 'OUT-1002',
+        systemOrderNo: 'SY1002',
+        latestTracking: '旧轨迹'
+      })
+    ];
+
+    const result = createBulkTrackingImportResult(
+      [
+        { customerOrderNo: 'OUT-1001', date: '2026-06-01 09:00', description: '到达处理中心', location: '深圳' },
+        { customerOrderNo: 'OUT-1001', date: '2026-06-03 18:00', description: '航班已起飞', location: '香港' },
+        { customerOrderNo: 'OUT-1002', date: '2026-06-02', description: '已揽收', location: '广州' },
+        { customerOrderNo: 'MISS-1', date: '2026-06-04', description: '未匹配轨迹', location: '上海' }
+      ],
+      shipments
+    );
+
+    expect(result.updates).toEqual([
+      {
+        shipmentId: 'a',
+        customerOrderNo: 'OUT-1001',
+        trackingDate: '2026-06-03 18:00',
+        latestTracking: '航班已起飞（香港）'
+      },
+      {
+        shipmentId: 'b',
+        customerOrderNo: 'OUT-1002',
+        trackingDate: '2026-06-02',
+        latestTracking: '已揽收（广州）'
+      }
+    ]);
+    expect(result.unmatchedOrderNos).toEqual(['MISS-1']);
   });
 });
 

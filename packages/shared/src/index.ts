@@ -1,6 +1,6 @@
 export type BusinessType = 'EXPRESS' | 'SMALL_PACKET' | 'DEDICATED_LINE';
 
-export type StaffRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'FINANCE' | 'CUSTOMER';
+export type StaffRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type StaffMenuKey =
   | 'workspace'
   | 'orders'
@@ -17,7 +17,8 @@ export type StaffMenuKey =
 const roleMenuMatrix: Record<StaffRoleKey, StaffMenuKey[]> = {
   ADMIN: ['workspace', 'orders', 'receive', 'routing', 'tracking', 'problems', 'pricing', 'finance', 'reports', 'master', 'settings'],
   CUSTOMER_SERVICE: ['workspace', 'orders', 'tracking', 'problems', 'pricing', 'master'],
-  OPERATOR: ['workspace', 'orders', 'receive', 'routing', 'tracking', 'problems', 'master'],
+  OPERATOR: ['workspace', 'orders', 'routing', 'tracking', 'pricing', 'master'],
+  WAREHOUSE: ['workspace', 'receive', 'tracking'],
   FINANCE: ['workspace', 'orders', 'pricing', 'finance', 'reports', 'master'],
   CUSTOMER: []
 };
@@ -47,6 +48,7 @@ export type ShipmentStatus =
 export type RiskLevel = 'low' | 'medium' | 'high';
 export type FulfillmentAction =
   | 'confirm-declare'
+  | 'reject-declare'
   | 'confirm-receive'
   | 'assign-route'
   | 'confirm-dispatch'
@@ -55,13 +57,18 @@ export type FulfillmentAction =
   | 'mark-return'
   | 'create-problem';
 
+export type ShipmentPaymentMethod = '对公' | '对私' | '阿里店铺' | '外汇';
+
 export interface Shipment {
   id: string;
   createdAt: string;
+  dispatchedAt?: string;
+  signedAt?: string;
   customerName: string;
   customerOrderNo: string;
   systemOrderNo: string;
   transferNo?: string;
+  remark?: string;
   businessType: BusinessType;
   packageType: 'DOC' | 'WPX' | 'PAK';
   destinationCountry: string;
@@ -75,7 +82,49 @@ export interface Shipment {
   status: ShipmentStatus;
   channelName: string;
   agentName: string;
+  paymentAmountUsd?: number;
+  paymentAmountCny?: number;
+  paymentMethod?: ShipmentPaymentMethod;
   hasProblemTicket: boolean;
+}
+
+export interface BulkTrackingImportRow {
+  customerOrderNo: string;
+  date: string | number;
+  description: string;
+  location?: string;
+}
+
+export interface BulkTrackingUpdate {
+  shipmentId: string;
+  customerOrderNo: string;
+  trackingDate: string | number;
+  latestTracking: string;
+}
+
+export interface BulkTrackingImportResult {
+  updates: BulkTrackingUpdate[];
+  unmatchedOrderNos: string[];
+}
+
+export interface ShipmentOperationalUpdateInput {
+  latestTracking?: string;
+  transferNo?: string;
+  status?: ShipmentStatus;
+}
+
+export interface ShipmentPaymentUpdateInput {
+  paymentAmountUsd?: number;
+  paymentAmountCny?: number;
+  paymentMethod: ShipmentPaymentMethod;
+}
+
+export interface BulkTrackingApplyRequest {
+  updates: BulkTrackingUpdate[];
+}
+
+export interface BulkTrackingApplyResponse {
+  updated: Shipment[];
 }
 
 export type CarrierAdapterCode = 'DHL' | 'FEDEX' | 'UPS' | 'USPS' | 'OTHER';
@@ -199,6 +248,214 @@ export interface PricingRuleQuoteResponse extends QuoteResponse {
   appliedSurcharges: Array<{ name: string; amount: number }>;
 }
 
+export type QuoteSourceType = 'local' | 'agentApi';
+
+export interface PriceBookRowSummary {
+  id: string;
+  priceBookId: string;
+  agentName: string;
+  carrierName?: string;
+  sourceSheetName?: string;
+  channelName: string;
+  businessRouteName?: string;
+  realChannelName?: string;
+  warehouseCode?: string;
+  destinationCountry: string;
+  minWeightKg: number;
+  maxWeightKg: number;
+  costPerKg: number;
+  currency: string;
+  transitDays?: number;
+  transitLabel?: string;
+  quoteSourceType?: QuoteSourceType;
+  surchargeFee?: number;
+  surchargeDetails?: Array<{ name: string; amount: number }>;
+}
+
+export interface PriceBookSummary {
+  id: string;
+  fileName: string;
+  rowCount: number;
+  importedAt: string;
+  remark?: string;
+}
+
+export interface PriceBooksResponse {
+  books: PriceBookSummary[];
+  rows: PriceBookRowSummary[];
+}
+
+export interface PriceBookImportInput {
+  fileName: string;
+  rows: Omit<PriceBookRowSummary, 'id' | 'priceBookId'>[];
+}
+
+export interface PriceBookRemarkUpdateInput {
+  remark?: string;
+}
+
+export interface AgentMarkupSummary {
+  id: string;
+  agentName: string;
+  channelName?: string;
+  realChannelName?: string;
+  destinationCountry?: string;
+  markupPerKg: number;
+  enabled: boolean;
+}
+
+export interface AgentMarkupCreateInput {
+  agentName: string;
+  channelName?: string;
+  realChannelName?: string;
+  destinationCountry?: string;
+  markupPerKg: number;
+  enabled?: boolean;
+}
+
+export interface AgentMarkupUpdateInput {
+  agentName?: string;
+  channelName?: string;
+  realChannelName?: string;
+  destinationCountry?: string;
+  markupPerKg?: number;
+  enabled?: boolean;
+}
+
+export interface PriceLookupRequest {
+  amazonCode?: string;
+  productName?: string;
+  destinationCountry: string;
+  postalCode?: string;
+  address?: string;
+  packageInfo?: string;
+  chargeableWeightKg: number;
+  markupRules?: AgentMarkupSummary[];
+}
+
+export interface PriceLookupRecommendation {
+  price: Omit<PriceBookRowSummary, 'costPerKg'> & { costPerKg?: number };
+  markup?: AgentMarkupSummary;
+  channelName: string;
+  carrierName: string;
+  agentName: string;
+  businessRouteName?: string;
+  realChannelName: string;
+  isRouteMapped: boolean;
+  quoteSourceType: QuoteSourceType;
+  weightSegmentLabel: string;
+  salesRatePerKg: number;
+  freightFee: number;
+  surchargeFee: number;
+  totalFee: number;
+  freightUnitPrice: number;
+  totalUnitPrice: number;
+  totalCost?: number;
+  totalSales: number;
+  grossProfit?: number;
+  transitLabel: string;
+  surchargeDetails: Array<{ name: string; amount: number }>;
+  remark?: string;
+}
+
+export interface AgentQuoteErrorSummary {
+  agentName: string;
+  quoteCount: number;
+  errorCode: string;
+  errorMessage: string;
+}
+
+export interface PriceLookupResponse {
+  price: PriceLookupRecommendation['price'];
+  markup?: AgentMarkupSummary;
+  recommendations: PriceLookupRecommendation[];
+  cheapestRecommendations: PriceLookupRecommendation[];
+  fastestRecommendations: PriceLookupRecommendation[];
+  agentErrors: AgentQuoteErrorSummary[];
+  amazonCode: string;
+  productName: string;
+  postalCode: string;
+  address: string;
+  packageInfo: string;
+  channelName: string;
+  chargeableWeightKg: number;
+  weightSegmentLabel: string;
+  salesRatePerKg: number;
+  totalCost?: number;
+  totalSales: number;
+  totalPrice: number;
+  grossProfit?: number;
+}
+
+export type WarehousePackageStatus = 'PENDING' | 'RECEIVED' | 'CONSOLIDATED';
+export type WarehouseConsolidationMode = 'MERGE_ONLY' | 'MERGE_AND_SHIP';
+export type WarehouseRoundingRule = 'NONE' | 'HALF_UP' | 'INTEGER_UP';
+
+export interface WarehousePackageSummary {
+  id: string;
+  customerCode: string;
+  customerOrderNo: string;
+  domesticTrackingNo: string;
+  combinedOrderNo: string;
+  systemOrderNo?: string;
+  shipmentId?: string;
+  receivingChannel: string;
+  destinationCountry?: string;
+  expectedTotalPackageCount?: number;
+  packageCount: number;
+  weightKg: number;
+  lengthCm: number;
+  widthCm: number;
+  heightCm: number;
+  cbm: number;
+  volumetricWeightKg: number;
+  chargeableWeightKg: number;
+  divisor: number;
+  roundingRule: WarehouseRoundingRule;
+  scanTime?: string;
+  status: WarehousePackageStatus;
+  exceptions: string[];
+  createdAt: string;
+}
+
+export interface WarehousePackageGroupSummary {
+  id: string;
+  customerCode: string;
+  customerOrderNo: string;
+  domesticTrackingNo: string;
+  combinedOrderNo: string;
+  expectedTotalPackageCount: number;
+  arrivedPackageCount: number;
+  remainingPackageCount: number;
+  totalActualWeightKg: number;
+  totalCbm: number;
+  maxLengthCm: number;
+  maxWidthCm: number;
+  maxHeightCm: number;
+  maxVolumetricWeightKg: number;
+  totalChargeableWeightKg: number;
+  latestScanTime?: string;
+}
+
+export interface WarehouseConsolidationSummary {
+  id: string;
+  consolidationNo: string;
+  mode: WarehouseConsolidationMode;
+  shipmentId?: string;
+  systemOrderNo?: string;
+  packageIds: string[];
+  totalPackages: number;
+  totalActualWeightKg: number;
+  totalVolumetricWeightKg: number;
+  totalChargeableWeightKg: number;
+  createdAt: string;
+}
+
+export interface WarehouseConsolidationCreateInput {
+  packageIds: string[];
+  mode: WarehouseConsolidationMode;
+}
+
 export interface FeeLineInput {
   name: string;
   amount: number;
@@ -287,6 +544,10 @@ export interface CustomerSummary {
   id: string;
   code: string;
   name: string;
+  shortName?: string;
+  fullName?: string;
+  customerType?: string;
+  salesperson?: string;
   enabled: boolean;
 }
 
@@ -308,9 +569,14 @@ export interface CustomerUserSummary {
   enabled: boolean;
 }
 
+export type AgentIntegrationType = 'MANUAL' | 'API' | 'PLATFORM' | 'OTHER';
+
 export interface AgentSummary {
   id: string;
+  code?: string;
+  shortName?: string;
   name: string;
+  integrationType?: AgentIntegrationType;
   enabled: boolean;
 }
 
@@ -368,6 +634,14 @@ export interface MasterDataSnapshot {
 export interface CustomerCreateInput {
   code: string;
   name: string;
+  shortName?: string;
+  fullName?: string;
+  customerType?: string;
+  salesperson?: string;
+}
+
+export interface CustomerUpdateInput extends CustomerCreateInput {
+  enabled?: boolean;
 }
 
 export interface CustomerContactCreateInput {
@@ -383,6 +657,13 @@ export interface CustomerUserCreateInput {
 
 export interface AgentCreateInput {
   name: string;
+  code?: string;
+  shortName?: string;
+  integrationType?: AgentIntegrationType;
+}
+
+export interface AgentUpdateInput extends AgentCreateInput {
+  enabled?: boolean;
 }
 
 export interface CarrierCreateInput {
@@ -479,6 +760,8 @@ export interface ShipmentImportValidationResult {
 export interface ShipmentCreateInput {
   customerId?: string;
   customerOrderNo: string;
+  systemOrderNo?: string;
+  transferNo?: string;
   businessType: BusinessType;
   packageType: 'DOC' | 'WPX' | 'PAK';
   destinationCountry: string;
@@ -486,6 +769,9 @@ export interface ShipmentCreateInput {
   receivableWeightKg: number;
   agentWeightKg?: number;
   channelId?: string;
+  receivingChannel?: string;
+  initialStatus?: ShipmentStatus;
+  latestTracking?: string;
 }
 
 export interface ShipmentImportRequest {
@@ -553,6 +839,7 @@ export interface FulfillmentActionContext {
 }
 
 export interface FulfillmentStageSummary {
+  reviewing: number;
   declared: number;
   receiving: number;
   sorting: number;
@@ -570,9 +857,9 @@ export interface FulfillmentAdvice {
 }
 
 export const shipmentStatusLabels: Record<ShipmentStatus, string> = {
-  DRAFT: '草稿',
+  DRAFT: '待审核',
   DECLARED: '已预报',
-  WAITING_RECEIVE: '待收货',
+  WAITING_RECEIVE: '已入库',
   WAITING_SORT: '待排货',
   WAITING_DISPATCH: '待发货',
   WAITING_ONLINE: '待上网',
@@ -606,11 +893,11 @@ export const productModules: ProductModule[] = [
     aiEnhancements: ['今日待办摘要', '轨迹超时解释', '客户沟通草稿']
   },
   {
-    name: '收货打单',
+    name: '仓库管理',
     surface: '员工端',
     phase: 'phase-one',
-    capabilities: ['收货扫描', '面单生成', '重量复核', '包裹明细'],
-    aiEnhancements: ['重量异常识别', '面单信息补全']
+    capabilities: ['入库收货', '包裹明细', '合票出货', '面单队列', '收货异常'],
+    aiEnhancements: ['重量异常识别', '合票风险提示', '收货资料补全']
   },
   {
     name: '报价查价',
@@ -1000,14 +1287,14 @@ export function createAutomationPlan(shipments: Shipment[]): AutomationPlanItem[
 export function getAvailableFulfillmentActions(context: FulfillmentActionContext): FulfillmentAction[] {
   const hasTransferNo = context.hasTransferNo ?? true;
   const actionsByStatus: Record<ShipmentStatus, FulfillmentAction[]> = {
-    DRAFT: ['confirm-declare', 'create-problem'],
-    DECLARED: ['confirm-receive', 'create-problem'],
+    DRAFT: ['confirm-declare', 'reject-declare'],
+    DECLARED: ['confirm-receive'],
     WAITING_RECEIVE: ['confirm-receive', 'create-problem', 'mark-return'],
     WAITING_SORT: ['assign-route', 'create-problem', 'mark-return'],
     WAITING_DISPATCH: ['confirm-dispatch', 'add-tracking', 'create-problem'],
     WAITING_ONLINE: ['add-tracking', 'create-problem', 'mark-return'],
     WAITING_SIGNED: ['add-tracking', 'create-problem'],
-    WAITING_RETURN: ['add-tracking', 'create-problem'],
+    WAITING_RETURN: ['add-tracking'],
     PROBLEM: ['add-tracking', 'mark-return'],
     STUCK: ['add-tracking', 'create-problem', 'mark-return'],
     SIGNED: ['add-tracking'],
@@ -1026,6 +1313,7 @@ export function summarizeFulfillmentStages(shipments: Shipment[], businessType: 
   const scopedShipments = businessType === 'ALL' ? shipments : shipments.filter((shipment) => shipment.businessType === businessType);
 
   return {
+    reviewing: scopedShipments.filter((shipment) => shipment.status === 'DRAFT').length,
     declared: scopedShipments.filter((shipment) => shipment.status === 'DECLARED').length,
     receiving: scopedShipments.filter((shipment) => shipment.status === 'WAITING_RECEIVE').length,
     sorting: scopedShipments.filter((shipment) => shipment.status === 'WAITING_SORT').length,
@@ -1034,6 +1322,85 @@ export function summarizeFulfillmentStages(shipments: Shipment[], businessType: 
     signing: scopedShipments.filter((shipment) => shipment.status === 'WAITING_SIGNED').length,
     exception: scopedShipments.filter((shipment) => ['WAITING_RETURN', 'PROBLEM', 'STUCK'].includes(shipment.status)).length
   };
+}
+
+export function calculateTransitTimeLabel(shipment: Shipment, now: string | Date = new Date()): string {
+  if (!shipment.dispatchedAt) {
+    return '未出货';
+  }
+
+  const start = new Date(shipment.dispatchedAt).getTime();
+  const end = shipment.signedAt ? new Date(shipment.signedAt).getTime() : new Date(now).getTime();
+
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) {
+    return '时效待确认';
+  }
+
+  const days = Math.max(1, Math.ceil((end - start) / (24 * 60 * 60 * 1000)));
+  return shipment.signedAt || shipment.status === 'SIGNED' ? `签收 ${days} 天` : `在途 ${days} 天`;
+}
+
+export function createBulkTrackingImportResult(rows: BulkTrackingImportRow[], shipments: Shipment[]): BulkTrackingImportResult {
+  const latestRowsByOrderNo = new Map<string, BulkTrackingImportRow>();
+
+  for (const row of rows) {
+    const orderNo = String(row.customerOrderNo ?? '').trim();
+    const description = String(row.description ?? '').trim();
+    if (!orderNo || !description) {
+      continue;
+    }
+
+    const current = latestRowsByOrderNo.get(orderNo);
+    if (!current || compareTrackingDate(row.date, current.date) > 0) {
+      latestRowsByOrderNo.set(orderNo, { ...row, customerOrderNo: orderNo, description });
+    }
+  }
+
+  const updates: BulkTrackingUpdate[] = [];
+  const unmatchedOrderNos: string[] = [];
+
+  for (const [orderNo, row] of latestRowsByOrderNo) {
+    const shipment = shipments.find((item) =>
+      [item.customerOrderNo, item.systemOrderNo, item.transferNo].filter(Boolean).some((value) => String(value).trim() === orderNo)
+    );
+
+    if (!shipment) {
+      unmatchedOrderNos.push(orderNo);
+      continue;
+    }
+
+    updates.push({
+      shipmentId: shipment.id,
+      customerOrderNo: orderNo,
+      trackingDate: row.date,
+      latestTracking: formatImportedTracking(row.description, row.location)
+    });
+  }
+
+  return { updates, unmatchedOrderNos };
+}
+
+function formatImportedTracking(description: string, location?: string): string {
+  const cleanDescription = description.trim();
+  const cleanLocation = String(location ?? '').trim();
+  return cleanLocation ? `${cleanDescription}（${cleanLocation}）` : cleanDescription;
+}
+
+function compareTrackingDate(left: string | number, right: string | number): number {
+  const leftTime = parseTrackingDateValue(left);
+  const rightTime = parseTrackingDateValue(right);
+  return leftTime - rightTime;
+}
+
+function parseTrackingDateValue(value: string | number): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  const normalized = trimmed.replace(/\./g, '-').replace(/\//g, '-');
+  const parsed = new Date(normalized).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 export function createFulfillmentAdvice(shipment: Shipment): FulfillmentAdvice {
@@ -1105,7 +1472,7 @@ function automationPriorityWeight(priority: AutomationPriority): number {
 
 function nextActionFromStatus(status: ShipmentStatus): string {
   const labels: Partial<Record<ShipmentStatus, string>> = {
-    DRAFT: '确认预报',
+    DRAFT: '审核订单',
     DECLARED: '确认收货',
     WAITING_RECEIVE: '确认收货',
     WAITING_SORT: '分配渠道',

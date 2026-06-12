@@ -9,6 +9,14 @@ export class DatabaseSeedService implements OnModuleInit {
   async onModuleInit() {
     if (process.env.SEED_ON_START === 'true') {
       await resetAndSeedDatabase(this.prisma);
+      return;
+    }
+
+    if (process.env.SEED_ON_EMPTY === 'true') {
+      const userCount = await this.prisma.user.count();
+      if (userCount === 0) {
+        await resetAndSeedDatabase(this.prisma);
+      }
     }
   }
 }
