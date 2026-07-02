@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1200" viewBox="0 0 1700 1200">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .bg{fill:#f8fafc}
+      .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+      .sub{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+      .center{fill:#111827;stroke:#111827;stroke-width:2;rx:22}
+      .centerText{font:700 26px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#ffffff}
+      .centerSmall{font:17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#e5e7eb}
+      .box{fill:#ffffff;stroke:#94a3b8;stroke-width:2;rx:16}
+      .warehouse{fill:#ecfeff;stroke:#0891b2}
+      .order{fill:#eff6ff;stroke:#2563eb}
+      .finance{fill:#f0fdf4;stroke:#16a34a}
+      .role{fill:#fff7ed;stroke:#ea580c}
+      .audit{fill:#f5f3ff;stroke:#7c3aed}
+      .boxTitle{font:700 21px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+      .boxText{font:16px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#334155}
+      .line{stroke:#1f2937;stroke-width:2.5;fill:none;marker-end:url(#arrow)}
+      .dash{stroke:#64748b;stroke-width:2;fill:none;stroke-dasharray:9 8;marker-end:url(#arrow)}
+      .caption{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+    </style>
+  </defs>
+
+  <rect class="bg" width="1700" height="1200"/>
+  <text class="title" x="70" y="70">Sunny 业务闭环追溯链路图</text>
+  <text class="sub" x="70" y="105">核心不是页面长相，而是同一票对象能在仓库、订单、财务、权限、日志、47 中互相追溯。</text>
+
+  <rect class="center" x="600" y="440" width="500" height="210"/>
+  <text class="centerText" x="690" y="492">同一票事实主线</text>
+  <text class="centerSmall" x="650" y="532">客户编号：9409 / Daloday</text>
+  <text class="centerSmall" x="650" y="562">仓库包裹：9409-KY-STOCK-075</text>
+  <text class="centerSmall" x="650" y="592">运单：SY-9409-001 / 系统自动号</text>
+  <text class="centerSmall" x="650" y="622">转单号：1Z9409001；付款申请：PA-9409-001</text>
+
+  <rect class="box warehouse" x="95" y="220" width="390" height="170"/>
+  <text class="boxTitle" x="125" y="258">货物闭环</text>
+  <text class="boxText" x="125" y="290">今日收货、在仓、理货、标签</text>
+  <text class="boxText" x="125" y="320">拆票/合票、待出库、交接单</text>
+  <text class="boxText" x="125" y="350">确认出库、出库归档</text>
+  <text class="caption" x="125" y="375">关键字段：件重尺、6000/5000、outboundAt</text>
+
+  <rect class="box order" x="655" y="170" width="390" height="190"/>
+  <text class="boxTitle" x="685" y="208">订单客服闭环</text>
+  <text class="boxText" x="685" y="240">录单、待审核、排货审核</text>
+  <text class="boxText" x="685" y="270">客服业务/代理数据双审核</text>
+  <text class="boxText" x="685" y="300">转单号、面单、状态池、签收</text>
+  <text class="caption" x="685" y="330">规则：转单号前必须双审核</text>
+
+  <rect class="box finance" x="1215" y="220" width="390" height="190"/>
+  <text class="boxTitle" x="1245" y="258">费用闭环</text>
+  <text class="boxText" x="1245" y="290">水单到账、应收匹配审核</text>
+  <text class="boxText" x="1245" y="320">业务成本、真实应付、待付款</text>
+  <text class="boxText" x="1245" y="350">已付款凭证、代理账单差异</text>
+  <text class="caption" x="1245" y="380">规则：未到账水单不能抵扣应收</text>
+
+  <rect class="box role" x="95" y="735" width="390" height="190"/>
+  <text class="boxTitle" x="125" y="773">角色权限闭环</text>
+  <text class="boxText" x="125" y="805">仓库：看货，不看价格</text>
+  <text class="boxText" x="125" y="835">业务员：看业务成本，不看真实应付</text>
+  <text class="boxText" x="125" y="865">客服/市场/财务按动作分权</text>
+  <text class="caption" x="125" y="895">验收：后端响应和导出均裁剪</text>
+
+  <rect class="box audit" x="655" y="790" width="390" height="190"/>
+  <text class="boxTitle" x="685" y="828">审计日志闭环</text>
+  <text class="boxText" x="685" y="860">actor、action、target、before/after</text>
+  <text class="boxText" x="685" y="890">收货、理货、排货、出库、审核</text>
+  <text class="boxText" x="685" y="920">付款、拒绝、导出、签收</text>
+  <text class="caption" x="685" y="950">验收：按同一 target 可反查</text>
+
+  <rect class="box audit" x="1215" y="735" width="390" height="190"/>
+  <text class="boxTitle" x="1245" y="773">47 最终验收闭环</text>
+  <text class="boxText" x="1245" y="805">47 数据库是事实来源</text>
+  <text class="boxText" x="1245" y="835">本地测试不能替代线上销账</text>
+  <text class="boxText" x="1245" y="865">受控同一票样本才算最终证明</text>
+  <text class="caption" x="1245" y="895">目标：STRICT_FULL_CHAIN_CANDIDATE >= 1</text>
+
+  <path class="line" d="M485 305 C560 345 600 430 650 475"/>
+  <path class="line" d="M850 360 V440"/>
+  <path class="line" d="M1215 315 C1130 360 1100 430 1050 475"/>
+  <path class="line" d="M485 830 C560 780 600 670 650 615"/>
+  <path class="line" d="M850 790 V650"/>
+  <path class="line" d="M1215 830 C1130 780 1100 670 1050 615"/>
+
+  <path class="dash" d="M290 390 C270 540 270 650 290 735"/>
+  <text class="caption" x="130" y="590">同一包裹出库后</text>
+  <text class="caption" x="130" y="615">进入订单/客服事实</text>
+
+  <path class="dash" d="M1410 410 C1470 520 1470 620 1410 735"/>
+  <text class="caption" x="1450" y="575">付款和账单差异</text>
+  <text class="caption" x="1450" y="600">回写利润归档</text>
+
+  <path class="dash" d="M1045 265 C1120 170 1280 145 1410 220"/>
+  <text class="caption" x="1115" y="165">排货形成真实应付</text>
+
+  <path class="dash" d="M655 885 C520 900 470 880 485 830"/>
+  <text class="caption" x="500" y="930">权限拒绝也要留痕</text>
+</svg>

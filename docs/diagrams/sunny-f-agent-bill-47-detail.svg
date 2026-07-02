@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="810" viewBox="0 0 1680 810">
+  <style>
+    .bg{fill:#f8fafc}
+    .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+    .subtitle{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+    .card{fill:#ffffff;stroke:#cbd5e1;stroke-width:2}
+    .cardTitle{font:700 22px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+    .body{font:17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#334155}
+    .footer{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#64748b}
+  </style>
+  <rect class="bg" width="1680" height="810"/>
+  <text class="title" x="70" y="68">F 代理账单与 47 验收详细图</text>
+  <text class="subtitle" x="70" y="106">代理账单、差异、杂费、跨越账单最终回写费用链；47 受控样本负责最终销账。</text>
+  <line x1="70" y1="135" x2="1610" y2="135" stroke="#0f766e" stroke-width="4" stroke-linecap="round"/>
+
+  <rect class="card" x="70" y="185" width="480" height="230" rx="18"/>
+  <rect x="70" y="185" width="480" height="54" rx="18" fill="#0f766e" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="221">F1 代理账单导入</text>
+<circle cx="106" cy="271" r="4" fill="#0f766e"/><text class="body" x="122" y="277">代理账单号、账单周期、代理、渠道</text>
+<circle cx="106" cy="305" r="4" fill="#0f766e"/><text class="body" x="122" y="311">账单金额、币种、文件/凭证元数据</text>
+<circle cx="106" cy="339" r="4" fill="#0f766e"/><text class="body" x="122" y="345">第一阶段人工导入，AI 后置</text>
+<circle cx="106" cy="373" r="4" fill="#0f766e"/><text class="body" x="122" y="379">导入写日志</text>
+
+  <rect class="card" x="605" y="185" width="480" height="230" rx="18"/>
+  <rect x="605" y="185" width="480" height="54" rx="18" fill="#0f766e" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="221">F2 应付匹配</text>
+<circle cx="641" cy="271" r="4" fill="#0f766e"/><text class="body" x="657" y="277">系统应付 vs 代理账单</text>
+<circle cx="641" cy="305" r="4" fill="#0f766e"/><text class="body" x="657" y="311">匹配运单、费用行、代理渠道</text>
+<circle cx="641" cy="339" r="4" fill="#0f766e"/><text class="body" x="657" y="345">不能静默覆盖系统应付</text>
+<circle cx="641" cy="373" r="4" fill="#0f766e"/><text class="body" x="657" y="379">差异进入处理池</text>
+
+  <rect class="card" x="1140" y="185" width="480" height="230" rx="18"/>
+  <rect x="1140" y="185" width="480" height="54" rx="18" fill="#0f766e" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="221">F3 差异处理</text>
+<circle cx="1176" cy="271" r="4" fill="#0f766e"/><text class="body" x="1192" y="277">差异金额、差异原因、责任归属</text>
+<circle cx="1176" cy="305" r="4" fill="#0f766e"/><text class="body" x="1192" y="311">业务员确认归属订单</text>
+<circle cx="1176" cy="339" r="4" fill="#0f766e"/><text class="body" x="1192" y="345">财务确认处理结果</text>
+<circle cx="1176" cy="373" r="4" fill="#0f766e"/><text class="body" x="1192" y="379">差异回写利润归档</text>
+
+  <rect class="card" x="70" y="465" width="480" height="230" rx="18"/>
+  <rect x="70" y="465" width="480" height="54" rx="18" fill="#0f766e" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="501">F4 杂费归属</text>
+<circle cx="106" cy="551" r="4" fill="#0f766e"/><text class="body" x="122" y="557">杂费类型、提货费、送货费</text>
+<circle cx="106" cy="585" r="4" fill="#0f766e"/><text class="body" x="122" y="591">归属运单/客户/代理</text>
+<circle cx="106" cy="619" r="4" fill="#0f766e"/><text class="body" x="122" y="625">未来进入业务成本和应付</text>
+<circle cx="106" cy="653" r="4" fill="#0f766e"/><text class="body" x="122" y="659">第一阶段人工入口</text>
+
+  <rect class="card" x="605" y="465" width="480" height="230" rx="18"/>
+  <rect x="605" y="465" width="480" height="54" rx="18" fill="#0f766e" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="501">F5 跨越账单</text>
+<circle cx="641" cy="551" r="4" fill="#0f766e"/><text class="body" x="657" y="557">跨越账单号、月结/人工录入</text>
+<circle cx="641" cy="585" r="4" fill="#0f766e"/><text class="body" x="657" y="591">暂不做自动匹配</text>
+<circle cx="641" cy="619" r="4" fill="#0f766e"/><text class="body" x="657" y="625">可挂回订单和费用行</text>
+<circle cx="641" cy="653" r="4" fill="#0f766e"/><text class="body" x="657" y="659">后续可扩展批量导入</text>
+
+  <rect class="card" x="1140" y="465" width="480" height="230" rx="18"/>
+  <rect x="1140" y="465" width="480" height="54" rx="18" fill="#0f766e" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="501">47 验收</text>
+<circle cx="1176" cy="551" r="4" fill="#0f766e"/><text class="body" x="1192" y="557">47 数据库是事实来源</text>
+<circle cx="1176" cy="585" r="4" fill="#0f766e"/><text class="body" x="1192" y="591">本地测试不能替代线上销账</text>
+<circle cx="1176" cy="619" r="4" fill="#0f766e"/><text class="body" x="1192" y="625">受控同一 Shipment.id 才算证明</text>
+<circle cx="1176" cy="653" r="4" fill="#0f766e"/><text class="body" x="1192" y="659">STRICT_FULL_CHAIN_CANDIDATE &gt;= 1</text>
+  <text class="footer" x="70" y="772">生成口径：docs/sunny-dev-index.md、docs/slices/*、docs/sunny-lifecycle-objective-audit.md；图片用于业务闭环和后续代码落地对齐。</text>
+</svg>

@@ -2,7 +2,7 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException, Forbi
 import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
 import { PrismaRepository } from './prisma.repository.js';
-import { REQUIRED_PERMISSION } from './require-permission.decorator.js';
+import { REQUIRED_AUTH, REQUIRED_PERMISSION } from './require-permission.decorator.js';
 import { type PermissionKey, type Principal } from './rbac.js';
 
 @Injectable()
@@ -13,16 +13,20 @@ export class RbacGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const permission = this.reflector.getAllAndOverride<PermissionKey | undefined>(REQUIRED_PERMISSION, [
+    const permission = this.reflector.getAllAndOverride<PermissionKey | PermissionKey[] | undefined>(REQUIRED_PERMISSION, [
+      context.getHandler(),
+      context.getClass()
+    ]);
+    const authRequired = this.reflector.getAllAndOverride<boolean | undefined>(REQUIRED_AUTH, [
       context.getHandler(),
       context.getClass()
     ]);
 
-    if (!permission) {
+    if (!permission && !authRequired) {
       return true;
     }
 
-    const request = context.switchToHttp().getRequest<{ headers: Record<string, string>; user?: Principal }>();
+    const request = context.switchToHttp().getRequest<{ headers: Record<string, string>; user?: Principal; method?: string; url?: string }>();
     const authorization = request.headers.authorization;
 
     if (!authorization?.startsWith('Bearer ')) {
@@ -33,7 +37,18 @@ export class RbacGuard implements CanActivate {
       const principal = jwt.verify(authorization.slice(7), jwtSecret()) as Principal;
       request.user = principal;
 
-      if (!(await this.repository.hasPermission(principal.role, permission))) {
+      if (!permission) {
+        return true;
+      }
+
+      const permissions = Array.isArray(permission) ? permission : [permission];
+      const allowed = await Promise.all(permissions.map((item) => this.repository.hasPermission(principal.role, item)));
+      if (!allowed.some(Boolean)) {
+        await (this.repository as any).recordPermissionDenied?.(principal, {
+          permissions,
+          method: request.method,
+          path: request.url
+        }).catch(() => undefined);
         throw new ForbiddenException('没有访问权限');
       }
 
@@ -48,5 +63,12 @@ export class RbacGuard implements CanActivate {
 }
 
 export function jwtSecret(): string {
-  return process.env.JWT_SECRET ?? 'dev-secret';
+  const secret = process.env.JWT_SECRET;
+  if (secret) {
+    return secret;
+  }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET is required in production');
+  }
+  return 'dev-secret';
 }

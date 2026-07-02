@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="1090" viewBox="0 0 1680 1090">
+  <style>
+    .bg{fill:#f8fafc}
+    .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+    .subtitle{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+    .card{fill:#ffffff;stroke:#cbd5e1;stroke-width:2}
+    .cardTitle{font:700 22px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+    .body{font:17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#334155}
+    .footer{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#64748b}
+  </style>
+  <rect class="bg" width="1680" height="1090"/>
+  <text class="title" x="70" y="68">D 财务费用生命周期详细图</text>
+  <text class="subtitle" x="70" y="106">钱从水单到账到应收审核，从业务成本/真实应付到付款申请、已付款凭证和付款审计。</text>
+  <line x1="70" y1="135" x2="1610" y2="135" stroke="#16a34a" stroke-width="4" stroke-linecap="round"/>
+
+  <rect class="card" x="70" y="185" width="480" height="230" rx="18"/>
+  <rect x="70" y="185" width="480" height="54" rx="18" fill="#16a34a" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="221">D1 水单到账</text>
+<circle cx="106" cy="271" r="4" fill="#16a34a"/><text class="body" x="122" y="277">水单编号 WR-9409-001</text>
+<circle cx="106" cy="305" r="4" fill="#16a34a"/><text class="body" x="122" y="311">客户编号、币种、金额、付款编号</text>
+<circle cx="106" cy="339" r="4" fill="#16a34a"/><text class="body" x="122" y="345">凭证、到账人、到账时间</text>
+<circle cx="106" cy="373" r="4" fill="#16a34a"/><text class="body" x="122" y="379">未到账水单不能抵扣应收</text>
+
+  <rect class="card" x="605" y="185" width="480" height="230" rx="18"/>
+  <rect x="605" y="185" width="480" height="54" rx="18" fill="#16a34a" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="221">D2 应收匹配审核</text>
+<circle cx="641" cy="271" r="4" fill="#16a34a"/><text class="body" x="657" y="277">应收费用行、匹配金额、余额</text>
+<circle cx="641" cy="305" r="4" fill="#16a34a"/><text class="body" x="657" y="311">同币种匹配；跨币种要明确汇率</text>
+<circle cx="641" cy="339" r="4" fill="#16a34a"/><text class="body" x="657" y="345">应收审核后锁定</text>
+<circle cx="641" cy="373" r="4" fill="#16a34a"/><text class="body" x="657" y="379">匹配后反审核必须先撤销匹配</text>
+
+  <rect class="card" x="1140" y="185" width="480" height="230" rx="18"/>
+  <rect x="1140" y="185" width="480" height="54" rx="18" fill="#16a34a" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="221">D3 业务成本</text>
+<circle cx="1176" cy="271" r="4" fill="#16a34a"/><text class="body" x="1192" y="277">业务成本费用行、业务员</text>
+<circle cx="1176" cy="305" r="4" fill="#16a34a"/><text class="body" x="1192" y="311">计费重、单价、金额、币种</text>
+<circle cx="1176" cy="339" r="4" fill="#16a34a"/><text class="body" x="1192" y="345">业务员可见业务成本口径</text>
+<circle cx="1176" cy="373" r="4" fill="#16a34a"/><text class="body" x="1192" y="379">业务员看不到真实应付</text>
+
+  <rect class="card" x="70" y="465" width="480" height="230" rx="18"/>
+  <rect x="70" y="465" width="480" height="54" rx="18" fill="#16a34a" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="501">D4 真实应付审核</text>
+<circle cx="106" cy="551" r="4" fill="#16a34a"/><text class="body" x="122" y="557">真实代理、代理渠道、应付费用行</text>
+<circle cx="106" cy="585" r="4" fill="#16a34a"/><text class="body" x="122" y="591">供应商账单、付款编号、代理银行</text>
+<circle cx="106" cy="619" r="4" fill="#16a34a"/><text class="body" x="122" y="625">业务成本不能替代真实应付</text>
+<circle cx="106" cy="653" r="4" fill="#16a34a"/><text class="body" x="122" y="659">审核后生成待付款，反审核失效待付款</text>
+
+  <rect class="card" x="605" y="465" width="480" height="230" rx="18"/>
+  <rect x="605" y="465" width="480" height="54" rx="18" fill="#16a34a" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="501">D5 付款申请</text>
+<circle cx="641" cy="551" r="4" fill="#16a34a"/><text class="body" x="657" y="557">付款申请 PA-9409-001</text>
+<circle cx="641" cy="585" r="4" fill="#16a34a"/><text class="body" x="657" y="591">按代理、银行、币种分组</text>
+<circle cx="641" cy="619" r="4" fill="#16a34a"/><text class="body" x="657" y="625">跨代理/跨银行/跨币种不得混付</text>
+<circle cx="641" cy="653" r="4" fill="#16a34a"/><text class="body" x="657" y="659">撤回后待付款回 READY</text>
+
+  <rect class="card" x="1140" y="465" width="480" height="230" rx="18"/>
+  <rect x="1140" y="465" width="480" height="54" rx="18" fill="#16a34a" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="501">D6 已付款凭证</text>
+<circle cx="1176" cy="551" r="4" fill="#16a34a"/><text class="body" x="1192" y="557">付款时间、付款人、付款银行账号</text>
+<circle cx="1176" cy="585" r="4" fill="#16a34a"/><text class="body" x="1192" y="591">付款凭证/水单/银行流水元数据</text>
+<circle cx="1176" cy="619" r="4" fill="#16a34a"/><text class="body" x="1192" y="625">已撤回申请不能确认付款</text>
+<circle cx="1176" cy="653" r="4" fill="#16a34a"/><text class="body" x="1192" y="659">客服/业务员不能确认付款或看敏感凭证</text>
+
+  <rect class="card" x="70" y="745" width="480" height="230" rx="18"/>
+  <rect x="70" y="745" width="480" height="54" rx="18" fill="#16a34a" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="781">D7 财务审计</text>
+<circle cx="106" cy="831" r="4" fill="#16a34a"/><text class="body" x="122" y="837">finance.water_receipt.*</text>
+<circle cx="106" cy="865" r="4" fill="#16a34a"/><text class="body" x="122" y="871">finance.receivable.*</text>
+<circle cx="106" cy="899" r="4" fill="#16a34a"/><text class="body" x="122" y="905">finance.business_cost.*</text>
+<circle cx="106" cy="933" r="4" fill="#16a34a"/><text class="body" x="122" y="939">finance.payable.*</text>
+<circle cx="106" cy="967" r="4" fill="#16a34a"/><text class="body" x="122" y="973">finance.payment_application.*</text>
+<circle cx="106" cy="1001" r="4" fill="#16a34a"/><text class="body" x="122" y="1007">finance.paid_payment.*</text>
+  <text class="footer" x="70" y="1052">生成口径：docs/sunny-dev-index.md、docs/slices/*、docs/sunny-lifecycle-objective-audit.md；图片用于业务闭环和后续代码落地对齐。</text>
+</svg>

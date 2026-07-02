@@ -15,16 +15,23 @@ enum BusinessType {
 
 enum ShipmentStatus {
   DRAFT
+  REVIEW_PENDING
   DECLARED
   WAITING_RECEIVE
   WAITING_SORT
   WAITING_DISPATCH
+  OUTBOUNDED
+  WAITING_DEPARTURE
+  DEPARTED
+  ARRIVED_PORT
+  DELIVERING
   WAITING_ONLINE
   WAITING_SIGNED
   WAITING_RETURN
   PROBLEM
   STUCK
   SIGNED
+  REVIEW_REJECTED
   CANCELLED
 }
 
@@ -34,6 +41,12 @@ model User {
   passwordHash String
   roleId       String
   customerId   String?
+  name         String?
+  phone        String?
+  gender       String?
+  nickname     String?
+  site         String?
+  mustChangePassword Boolean @default(false)
   enabled      Boolean  @default(true)
   createdAt    DateTime @default(now())
   role         Role     @relation(fields: [roleId], references: [id])
@@ -42,10 +55,16 @@ model User {
 }
 
 model Role {
-  id          String       @id @default(cuid())
-  name        String       @unique
-  users       User[]
-  permissions Permission[]
+  id            String       @id @default(cuid())
+  name          String       @unique
+  label         String?
+  description   String?
+  site          String?
+  sortOrder     Int          @default(0)
+  enabled       Boolean      @default(true)
+  systemBuiltin Boolean      @default(false)
+  users         User[]
+  permissions   Permission[]
 }
 
 model Permission {
@@ -64,19 +83,28 @@ model Customer {
   id        String            @id @default(cuid())
   code      String            @unique
   name      String
+  customerSource String?
+  salesperson String?
+  defaultSettlementMethod String?
   enabled   Boolean           @default(true)
   users     User[]
   contacts  CustomerContact[]
   accounts  CustomerAccount[]
   shipments Shipment[]
+  waterReceipts WaterReceipt[]
 }
 
 model CustomerContact {
   id         String   @id @default(cuid())
   customerId String
   name       String
+  company    String?
   phone      String?
   email      String?
+  address    String?
+  country    String?
+  state      String?
+  postalCode String?
   enabled    Boolean  @default(true)
   customer   Customer @relation(fields: [customerId], references: [id])
 }
@@ -85,15 +113,37 @@ model CustomerAccount {
   id         String   @id @default(cuid())
   customerId String
   balance    Decimal  @default(0)
-  currency   String   @default("CNY")
+  currency   String   @default("RMB")
   customer   Customer @relation(fields: [customerId], references: [id])
 }
 
 model Agent {
   id        String     @id @default(cuid())
   name      String
+  code      String?
+  shortName String?
+  integrationType String @default("MANUAL")
+  warehouseAddress1 String?
+  warehouseAddress2 String?
+  warehouseAddress3 String?
+  warehouseContact String?
+  invoiceTemplateName String?
+  invoiceTemplateUrl String?
   enabled   Boolean    @default(true)
   shipments Shipment[]
+  bankAccounts AgentBankAccount[]
+  payeeBankAccounts PayeeBankAccount[]
+  agentChannels AgentChannel[]
+}
+
+model AgentChannel {
+  id          String  @id @default(cuid())
+  agentId     String
+  channelName String
+  enabled     Boolean @default(true)
+  agent       Agent   @relation(fields: [agentId], references: [id])
+
+  @@index([agentId])
 }
 
 model Carrier {
@@ -110,9 +160,36 @@ model Channel {
   enabled   Boolean    @default(true)
   volumeDivisor Int     @default(5000)
   roundingRule  String  @default("NONE")
+  businessType String @default("EXPRESS")
+  category String @default("DHL")
+  multiPieceWeightRule String @default("SUM_THEN_COMPARE")
+  singleWeightRoundingRule String @default("ACTUAL")
+  settlementWeightRule String @default("MAX_ACTUAL_VOLUME")
+  settlementWeightRoundingRule String @default("NONE")
+  largeCargoThresholdKg Decimal?
+  remoteAreaRule String @default("NONE")
   carrier   Carrier    @relation(fields: [carrierId], references: [id])
   shipments Shipment[]
   pricingRules PricingRule[]
+}
+
+model ChannelCategory {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Site {
+  id        String   @id @default(cuid())
+  sortOrder Int      @default(0)
+  name      String   @unique
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder, name])
 }
 
 model Shipment {
@@ -123,6 +200,29 @@ model Shipment {
   customerOrderNo     String
   systemOrderNo       String            @unique
   transferNo          String?
+  subOrderNo          String?
+  inboundNo           String?
+  productName         String?
+  declarationRequired Boolean           @default(false)
+  sensitive           Boolean           @default(false)
+  cargoType           String?
+  volumeCbm           Decimal?
+  settlementMethod    String?
+  tradeTerms          String?
+  fbaInboundNo        String?
+  receiverName        String?
+  receiverCompany     String?
+  receiverPhone       String?
+  receiverAddress     String?
+  receiverCountry     String?
+  receiverState       String?
+  receiverPostalCode  String?
+  fbaWarehouseCode    String?
+  entryBy             String?
+  entryAt             DateTime?
+  reviewedBy          String?
+  reviewedAt          DateTime?
+  reviewRejectedReason String?
   businessType        BusinessType
   status              ShipmentStatus
   destinationCountry  String
@@ -136,9 +236,20 @@ model Shipment {
   paymentAmountUsd    Decimal?
   paymentAmountCny    Decimal?
   paymentMethod       String?
+  outboundAt          DateTime?
+  etaAt               DateTime?
+  etdAt               DateTime?
+  remark              String?
+  draftWarehousePackageIds String[]          @default([])
   createdAt           DateTime          @default(now())
   updatedAt           DateTime          @updatedAt
   deletedAt           DateTime?
+  deletedBy           String?
+  deletedReason       String?
+  deleteType          String?
+  restoredAt          DateTime?
+  restoredBy          String?
+  restoreMode         String?
   customer            Customer          @relation(fields: [customerId], references: [id])
   agent               Agent?            @relation(fields: [agentId], references: [id])
   channel             Channel?          @relation(fields: [channelId], references: [id])
@@ -148,8 +259,16 @@ model Shipment {
   problemTickets      ProblemTicket[]
   receivableFees      ReceivableFee[]
   payableFees         PayableFee[]
+  financeItems        ShipmentFinanceItem[]
+  payablePaymentApplications PayablePaymentApplication[]
+  paymentApplicationItems PaymentApplicationItem[]
+  waterReceiptMatches WaterReceiptMatch[]
   labels              ShipmentLabel[]
   carrierTasks        CarrierTask[]
+
+  @@index([status, createdAt])
+  @@index([customerId, createdAt])
+  @@index([deletedAt, createdAt])
 }
 
 model ShipmentLabel {
@@ -277,6 +396,8 @@ model PriceBook {
   importedAt DateTime       @default(now())
   deletedAt  DateTime?
   rows       PriceBookRow[]
+
+  @@index([deletedAt, importedAt])
 }
 
 model PriceBookRow {
@@ -299,7 +420,13 @@ model PriceBookRow {
   quoteSourceType    String?
   surchargeFee       Decimal?
   surchargeDetails   Json?
+  productSurchargeRemark String?
+  specialRemark      String?
   priceBook          PriceBook @relation(fields: [priceBookId], references: [id])
+
+  @@index([priceBookId])
+  @@index([destinationCountry, minWeightKg, maxWeightKg])
+  @@index([warehouseCode, destinationCountry])
 }
 
 model AgentMarkupRule {
@@ -317,14 +444,21 @@ model AgentMarkupRule {
 model WarehousePackage {
   id                        String    @id @default(cuid())
   customerCode              String
+  customerName              String?
+  site                      String?
+  salesperson               String?
   customerOrderNo           String
   domesticTrackingNo        String
   combinedOrderNo           String
+  labelNo                   String?
+  sourcePackageId           String?
+  sourcePackageNo           String?
   systemOrderNo             String?
   shipmentId                String?
   receivingChannel          String
   destinationCountry        String?
   expectedTotalPackageCount Int?
+  packageIndex              Int?
   packageCount              Int       @default(1)
   weightKg                  Decimal
   lengthCm                  Decimal
@@ -333,14 +467,23 @@ model WarehousePackage {
   cbm                       Decimal
   volumetricWeightKg        Decimal
   chargeableWeightKg        Decimal
-  divisor                   Int       @default(5000)
+  divisor                   Int       @default(6000)
   roundingRule              String    @default("NONE")
   scanTime                  DateTime?
+  remark                    String?
+  manualException           String?
+  scanSource                String?
   status                    String    @default("RECEIVED")
   exceptions                String[]
+  createdBy                 String?
   createdAt                 DateTime  @default(now())
   updatedAt                 DateTime  @updatedAt
   consolidationItems        WarehouseConsolidationItem[]
+
+  @@index([customerOrderNo, domesticTrackingNo])
+  @@index([shipmentId, createdAt])
+  @@index([status, scanTime])
+  @@index([combinedOrderNo])
 }
 
 model WarehouseConsolidation {
@@ -367,6 +510,52 @@ model WarehouseConsolidationItem {
   @@unique([consolidationId, packageId])
 }
 
+model WarehouseTallyTask {
+  id                            String    @id @default(cuid())
+  taskNo                        String    @unique
+  status                        String    @default("PENDING")
+  packageIds                    String[]
+  sourcePackageId               String
+  sourceCombinedOrderNo         String
+  customerCode                  String
+  customerName                  String?
+  salesperson                   String?
+  packageCount                  Int
+  originalWeightKg              Decimal
+  originalLengthCm              Decimal
+  originalWidthCm               Decimal
+  originalHeightCm              Decimal
+  originalVolumetricWeightKg    Decimal
+  originalVolumetricWeightKg5000 Decimal
+  tallyRequirement              String
+  remark                        String?
+  createdBy                     String?
+  createdAt                     DateTime  @default(now())
+  completedPackageCount         Int?
+  completedWeightKg             Decimal?
+  completedLengthCm             Decimal?
+  completedWidthCm              Decimal?
+  completedHeightCm             Decimal?
+  completedVolumetricWeightKg   Decimal?
+  completedVolumetricWeightKg5000 Decimal?
+  completedBy                   String?
+  completedAt                   DateTime?
+  labelStatus                   String    @default("NOT_GENERATED")
+  labelNo                       String?
+  labelQrContent                String?
+  labelGeneratedAt              DateTime?
+  labelGeneratedBy              String?
+  labelPrintedAt                DateTime?
+  labelPrintedBy                String?
+  labelDownloadedAt             DateTime?
+  labelDownloadedBy             String?
+
+  @@index([status, createdAt])
+  @@index([customerCode, createdAt])
+  @@index([sourceCombinedOrderNo])
+  @@index([labelNo])
+}
+
 model Surcharge {
   id      String  @id @default(cuid())
   name    String
@@ -387,16 +576,32 @@ model ExchangeRate {
   quoteCurrency String
   rate          Decimal
   activeAt      DateTime
+  endAt         DateTime?
   enabled       Boolean  @default(true)
 }
 
 model ReceivableFee {
-  id         String   @id @default(cuid())
-  shipmentId String
-  amount     Decimal
-  name       String
-  settled    Boolean  @default(false)
-  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+  id                   String   @id @default(cuid())
+  shipmentId           String
+  amount               Decimal
+  name                 String
+  settled              Boolean  @default(false)
+  currency             String   @default("RMB")
+  settlementMethod     String?
+  paymentNo            String?
+  reconciliationStatus String   @default("PENDING")
+  createdBy            String?
+  reviewedBy           String?
+  reviewedAt           DateTime?
+  remark               String?
+  voided               Boolean  @default(false)
+  voidedAt             DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  shipment             Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@index([shipmentId, createdAt])
+  @@index([voided, reconciliationStatus, createdAt])
 }
 
 model PayableFee {
@@ -406,6 +611,238 @@ model PayableFee {
   name       String
   settled    Boolean  @default(false)
   shipment   Shipment @relation(fields: [shipmentId], references: [id])
+}
+
+model ShipmentFinanceItem {
+  id                   String   @id @default(cuid())
+  shipmentId           String
+  type                 String
+  name                 String
+  amount               Decimal
+  currency             String   @default("RMB")
+  settlementMethod     String?
+  paymentNo            String?
+  reconciliationStatus String   @default("PENDING")
+  receivedAmount       Decimal  @default(0)
+  receiptStatus        String   @default("UNPAID")
+  receivedAt           DateTime?
+  agentName            String?
+  chargeWeightKg       Decimal?
+  unitPrice            Decimal?
+  amountOverridden     Boolean  @default(false)
+  remark               String?
+  locked               Boolean  @default(false)
+  voided               Boolean  @default(false)
+  createdBy            String?
+  reviewedBy           String?
+  reviewedAt           DateTime?
+  voidedAt             DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  shipment             Shipment @relation(fields: [shipmentId], references: [id])
+  payablePaymentApplications PayablePaymentApplication[]
+  paymentApplicationItems PaymentApplicationItem[]
+  waterReceiptMatches WaterReceiptMatch[]
+
+  @@index([shipmentId, type])
+  @@index([type, voided, createdAt])
+  @@index([reconciliationStatus, createdAt])
+  @@index([receiptStatus, createdAt])
+}
+
+model AgentBankAccount {
+  id            String   @id @default(cuid())
+  agentId       String?
+  agentName     String
+  accountName   String
+  bankName      String
+  bankAccountNo String
+  currency      String   @default("RMB")
+  remark        String?
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  agent         Agent?   @relation(fields: [agentId], references: [id])
+  paymentApplications PayablePaymentApplication[]
+
+  @@index([agentName, enabled])
+  @@index([agentId, enabled])
+}
+
+model PayablePaymentApplication {
+  id                   String   @id @default(cuid())
+  payableFinanceItemId String
+  shipmentId           String
+  agentBankAccountId   String?
+  payeeBankAccountId   String?
+  amount               Decimal
+  currency             String   @default("RMB")
+  paymentNo            String?
+  status               String   @default("PENDING")
+  applicationStatus    String   @default("PENDING")
+  remark               String?
+  appliedAt            DateTime?
+  invalidatedAt        DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  payableFinanceItem   ShipmentFinanceItem @relation(fields: [payableFinanceItemId], references: [id])
+  shipment             Shipment @relation(fields: [shipmentId], references: [id])
+  bankAccount          AgentBankAccount? @relation(fields: [agentBankAccountId], references: [id])
+  payeeBankAccount     PayeeBankAccount? @relation(fields: [payeeBankAccountId], references: [id])
+  attachments          PayableBillAttachment[]
+  paymentApplicationItem PaymentApplicationItem?
+
+  @@unique([payableFinanceItemId])
+  @@index([status, createdAt])
+  @@index([applicationStatus, createdAt])
+  @@index([shipmentId])
+}
+
+model PayableBillAttachment {
+  id                          String   @id @default(cuid())
+  payablePaymentApplicationId String
+  fileName                    String
+  mimeType                    String?
+  sizeBytes                   Int?
+  url                         String?
+  uploadedBy                  String?
+  createdAt                   DateTime @default(now())
+  payablePaymentApplication   PayablePaymentApplication @relation(fields: [payablePaymentApplicationId], references: [id])
+
+  @@index([payablePaymentApplicationId, createdAt])
+}
+
+model PayeeBankAccount {
+  id            String   @id @default(cuid())
+  agentId       String?
+  agentName     String
+  accountName   String
+  bankName      String
+  bankAccountNo String
+  currency      String   @default("RMB")
+  remark        String?
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  agent         Agent?   @relation(fields: [agentId], references: [id])
+  pendingPayments PayablePaymentApplication[]
+  paymentApplications PaymentApplication[]
+
+  @@index([agentName, currency, enabled])
+  @@index([agentId, currency, enabled])
+}
+
+model PaymentApplication {
+  id                 String   @id @default(cuid())
+  applicationNo      String   @unique
+  agentName          String
+  currency           String   @default("RMB")
+  totalAmount        Decimal
+  status             String   @default("WAITING_PAYMENT")
+  payeeBankAccountId String?
+  remark             String?
+  appliedBy          String?
+  appliedAt          DateTime @default(now())
+  canceledAt         DateTime?
+  cancelReason       String?
+  payerBankName      String?
+  payerBankAccountName String?
+  payerBankAccountNo String?
+  paidAt             DateTime?
+  paidBy             String?
+  paidRemark         String?
+  reversedAt         DateTime?
+  reversedBy         String?
+  reverseReason      String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  bankAccount        PayeeBankAccount? @relation(fields: [payeeBankAccountId], references: [id])
+  items              PaymentApplicationItem[]
+  vouchers           PaymentVoucher[]
+
+  @@index([status, appliedAt])
+  @@index([status, paidAt])
+  @@index([agentName, currency, appliedAt])
+}
+
+model PaymentApplicationItem {
+  id                           String   @id @default(cuid())
+  paymentApplicationId          String
+  payablePaymentApplicationId   String   @unique
+  payableFinanceItemId          String
+  shipmentId                    String
+  amount                        Decimal
+  currency                      String   @default("RMB")
+  createdAt                     DateTime @default(now())
+  paymentApplication            PaymentApplication @relation(fields: [paymentApplicationId], references: [id])
+  payablePaymentApplication     PayablePaymentApplication @relation(fields: [payablePaymentApplicationId], references: [id])
+  payableFinanceItem            ShipmentFinanceItem @relation(fields: [payableFinanceItemId], references: [id])
+  shipment                      Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@index([paymentApplicationId])
+  @@index([payableFinanceItemId])
+}
+
+model PaymentVoucher {
+  id                   String   @id @default(cuid())
+  paymentApplicationId String?
+  pendingPaymentId     String?
+  voucherType          String   @default("BILL")
+  billNo               String?
+  transferNo           String?
+  agentName            String?
+  billDate             DateTime?
+  currency             String?
+  billAmount           Decimal?
+  status               String   @default("IMPORTED")
+  differenceType       String?
+  differenceAmount     Decimal?
+  differenceReason     String?
+  differenceStatus     String?
+  differenceHandledBy  String?
+  differenceHandledAt  DateTime?
+  extraFeeType         String?
+  extraFeeAmount       Decimal?
+  extraFeeCurrency     String?
+  extraFeeAgentName    String?
+  extraFeeCustomerCode String?
+  extraFeeSystemOrderNo String?
+  extraFeeOccurredAt   DateTime?
+  extraFeeFinanceItemId String?
+  extraFeeRemark       String?
+  kuayueBillNo         String?
+  kuayueCustomerCode   String?
+  kuayueSystemOrderNo  String?
+  kuayueAmount         Decimal?
+  kuayueCurrency       String?
+  kuayueBillDate       DateTime?
+  kuayueStatus         String?
+  fileName             String
+  mimeType             String?
+  sizeBytes            Int?
+  url                  String?
+  uploadedBy           String?
+  createdAt            DateTime @default(now())
+  paymentApplication   PaymentApplication? @relation(fields: [paymentApplicationId], references: [id])
+
+  @@index([paymentApplicationId, createdAt])
+  @@index([pendingPaymentId, createdAt])
+  @@index([billNo, agentName])
+  @@index([kuayueBillNo, kuayueCustomerCode])
+}
+
+model FinanceCatalogItem {
+  id        String   @id @default(cuid())
+  category  String
+  sortOrder Int      @default(0)
+  name      String
+  currency  String?
+  remark    String?
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category, sortOrder])
 }
 
 model CustomerStatement {
@@ -448,6 +885,79 @@ model AccountLedger {
   balance   Decimal
   note      String?
   createdAt DateTime @default(now())
+  waterReceipts WaterReceipt[]
+}
+
+model WaterReceipt {
+  id              String   @id @default(cuid())
+  receiptNo       String   @unique
+  site            String   @default("思远收款")
+  customerId      String?
+  customerCode    String?
+  customerName    String?
+  salesperson     String?
+  receiptMethod   String?
+  receiptDate     DateTime
+  currency        String   @default("RMB")
+  amount          Decimal
+  matchedAmount   Decimal  @default(0)
+  balance         Decimal
+  paymentNo       String?
+  status          String   @default("PENDING")
+  remark          String?
+  arrivedAt       DateTime?
+  arrivedBy       String?
+  archivedAt      DateTime?
+  archivedBy      String?
+  voidedAt        DateTime?
+  voidedBy        String?
+  voidedReason    String?
+  adjustReason    String?
+  accountLedgerId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  accountLedger   AccountLedger? @relation(fields: [accountLedgerId], references: [id])
+  matches         WaterReceiptMatch[]
+  voucher         WaterReceiptVoucher?
+
+  @@index([status, receiptDate])
+  @@index([customerId, receiptDate])
+  @@index([receiptNo])
+}
+
+model WaterReceiptMatch {
+  id                      String   @id @default(cuid())
+  waterReceiptId           String
+  receivableFinanceItemId  String
+  shipmentId               String
+  amount                   Decimal
+  voided                   Boolean  @default(false)
+  voidedAt                 DateTime?
+  voidedBy                 String?
+  voidReason               String?
+  createdAt                DateTime @default(now())
+  waterReceipt             WaterReceipt @relation(fields: [waterReceiptId], references: [id])
+  receivableFinanceItem    ShipmentFinanceItem @relation(fields: [receivableFinanceItemId], references: [id])
+  shipment                 Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@index([waterReceiptId, createdAt])
+  @@index([receivableFinanceItemId, voided])
+  @@index([shipmentId])
+}
+
+model WaterReceiptVoucher {
+  id             String   @id @default(cuid())
+  waterReceiptId String   @unique
+  fileName       String
+  mimeType       String?
+  sizeBytes      Int?
+  url            String?
+  uploadedBy     String?
+  createdAt      DateTime @default(now())
+  waterReceipt   WaterReceipt @relation(fields: [waterReceiptId], references: [id])
+
+  @@index([waterReceiptId, createdAt])
 }
 
 model ImportJob {
@@ -472,6 +982,10 @@ model AuditLog {
   before    Json?
   after     Json?
   createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
 }
 
 model LoginLog {
@@ -483,4 +997,6 @@ model LoginLog {
   userAgent String?
   createdAt DateTime @default(now())
   user      User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
 }

@@ -1,0 +1,46 @@
+.column-settings-panel {
+  width: 280px;
+}
+
+.column-settings-hint {
+  padding: 4px 2px 8px;
+  color: var(--sy-muted);
+  font-size: 12px;
+}
+
+.column-settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.column-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border: 1px solid var(--sy-border);
+  border-radius: 8px;
+  background: #fff;
+  cursor: grab;
+  user-select: none;
+}
+
+.column-settings-row:hover {
+  border-color: rgba(37, 99, 235, 0.35);
+  background: #f8fbff;
+}
+
+.column-settings-row.is-dragging {
+  opacity: 0.6;
+}
+
+.column-settings-title {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-weight: 600;
+}

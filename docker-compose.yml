@@ -23,8 +23,12 @@ services:
       SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
       SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
       SILICONFLOW_MODEL: ${SILICONFLOW_MODEL:-Qwen/Qwen2.5-7B-Instruct}
+      MOJIA_DEVICE_TOKEN: ${MOJIA_DEVICE_TOKEN:-}
       USE_PRISMA_REPOSITORY: ${USE_PRISMA_REPOSITORY:-true}
       SEED_ON_EMPTY: ${SEED_ON_EMPTY:-true}
+      UPLOAD_DIR: ${UPLOAD_DIR:-/app/uploads/vouchers}
+    volumes:
+      - api-uploads:/app/uploads
     depends_on:
       - postgres
       - redis
@@ -62,3 +66,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  api-uploads:

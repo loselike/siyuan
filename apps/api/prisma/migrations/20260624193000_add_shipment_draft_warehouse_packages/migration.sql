@@ -1,0 +1,2 @@
+ALTER TABLE "Shipment"
+  ADD COLUMN IF NOT EXISTS "draftWarehousePackageIds" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

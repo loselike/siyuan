@@ -12,8 +12,21 @@
     "dev:api": "npm run dev -w @siyuan/api",
     "build": "npm run build -w @siyuan/shared && npm run build -w @siyuan/api && npm run build -w @siyuan/web",
     "test": "npm run test -w @siyuan/shared && npm run build -w @siyuan/shared && npm run test -w @siyuan/api && npm run test -w @siyuan/web",
+    "test:web": "npm test -w @siyuan/web -- --run src/modules",
+    "test:web:finance": "npm test -w @siyuan/web -- --run src/modules/finance",
+    "test:web:warehouse": "npm test -w @siyuan/web -- --run src/modules/warehouse",
+    "test:web:routing": "npm test -w @siyuan/web -- --run src/modules/routing",
+    "test:web:orders": "npm test -w @siyuan/web -- --run src/modules/orders",
+    "test:web:pricing": "npm test -w @siyuan/web -- --run src/modules/pricing",
+    "test:web:tracking": "npm test -w @siyuan/web -- --run src/modules/tracking",
+    "test:web:problemTickets": "npm test -w @siyuan/web -- --run src/modules/problemTickets",
+    "test:web:reports": "npm test -w @siyuan/web -- --run src/modules/reports",
+    "test:web:settings": "npm test -w @siyuan/web -- --run src/modules/settings",
+    "test:web:workspace": "npm test -w @siyuan/web -- --run src/modules/workspace",
+    "test:api": "npm test -w @siyuan/api -- --run src/modules",
     "lint": "npm run lint -w @siyuan/api && npm run lint -w @siyuan/web",
-    "typecheck": "npm run build -w @siyuan/shared && npm run typecheck -w @siyuan/shared && npm run typecheck -w @siyuan/api && npm run typecheck -w @siyuan/web"
+    "typecheck": "npm run build -w @siyuan/shared && npm run typecheck -w @siyuan/shared && npm run typecheck -w @siyuan/api && npm run typecheck -w @siyuan/web",
+    "sync:47": "bash scripts/sync-47.sh"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.34.0",

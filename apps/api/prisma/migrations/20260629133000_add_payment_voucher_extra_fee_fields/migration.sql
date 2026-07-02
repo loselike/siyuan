@@ -1,0 +1,9 @@
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeType" TEXT;
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeAmount" DECIMAL(65,30);
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeCurrency" TEXT;
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeAgentName" TEXT;
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeCustomerCode" TEXT;
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeSystemOrderNo" TEXT;
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeOccurredAt" TIMESTAMP(3);
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeFinanceItemId" TEXT;
+ALTER TABLE "PaymentVoucher" ADD COLUMN "extraFeeRemark" TEXT;

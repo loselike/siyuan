@@ -1,0 +1,1 @@
+ALTER TABLE "ExchangeRate" ADD COLUMN "endAt" TIMESTAMP(3);

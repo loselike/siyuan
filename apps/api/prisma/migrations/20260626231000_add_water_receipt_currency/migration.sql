@@ -1,0 +1,1 @@
+ALTER TABLE "WaterReceipt" ADD COLUMN "currency" TEXT NOT NULL DEFAULT 'RMB';

@@ -1,0 +1,29 @@
+sequenceDiagram
+  autonumber
+  participant Sales as 客户/业务员
+  participant Wh as 仓库
+  participant Market as 市场
+  participant Service as 客服
+  participant Finance as 财务
+  participant Audit as 47 / AuditLog
+
+  Sales->>Wh: 客户/工厂送货；提供客户编号、客户单号
+  Wh->>Audit: 扫描/导入今日收货：件重尺、6000/5000、异常
+  Audit-->>Wh: 写 warehouse.package.create/update
+  Wh->>Wh: 在仓 -> 理货需求 -> 完成理货 -> 标签/二维码
+  Wh->>Sales: 合票/录单入口
+  Sales->>Audit: 基于仓库货物录单：渠道、收货人、应收、业务成本
+  Note over Sales,Audit: 录单阶段不得填写转单号；重量尺寸从仓库汇总
+  Audit->>Market: 审核通过后进入市场排货
+  Market->>Audit: 写真实代理、代理渠道、真实应付、排货人、排货时间
+  Note over Sales,Market: 业务员不可见真实代理渠道和真实应付
+  Market->>Wh: 排货审核后进入仓库待出库
+  Wh->>Audit: 打印交接单并确认出库：outboundAt、包裹 SHIPPED
+  Note over Wh,Audit: 仓库交接单不能含价格、利润、水单、银行账号
+  Audit->>Service: 出库后客服业务数据 + 代理数据双审核
+  Service->>Audit: 双审核后填写转单号/面单；追踪网站默认隐藏
+  Service->>Sales: 状态池流转；已派送后业务员确认签收
+  Sales->>Finance: 登记客户水单
+  Finance->>Audit: 到账 -> 应收匹配审核；业务成本 -> 应付 -> 付款申请 -> 已付款
+  Finance->>Audit: 代理账单、杂费、差异处理写回订单/费用链
+  Note over Sales,Audit: 最终验收：同一 Shipment.id + AuditLog + 47 只读复验

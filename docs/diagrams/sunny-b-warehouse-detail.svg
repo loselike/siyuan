@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="1090" viewBox="0 0 1680 1090">
+  <style>
+    .bg{fill:#f8fafc}
+    .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+    .subtitle{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+    .card{fill:#ffffff;stroke:#cbd5e1;stroke-width:2}
+    .cardTitle{font:700 22px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+    .body{font:17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#334155}
+    .footer{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#64748b}
+  </style>
+  <rect class="bg" width="1680" height="1090"/>
+  <text class="title" x="70" y="68">B 仓库货物生命周期详细图</text>
+  <text class="subtitle" x="70" y="106">货从客户/工厂来，到今日收货、在仓、理货、标签、合票、待出库、确认出库归档。</text>
+  <line x1="70" y1="135" x2="1610" y2="135" stroke="#0891b2" stroke-width="4" stroke-linecap="round"/>
+
+  <rect class="card" x="70" y="185" width="480" height="230" rx="18"/>
+  <rect x="70" y="185" width="480" height="54" rx="18" fill="#0891b2" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="221">B1 今日收货</text>
+<circle cx="106" cy="271" r="4" fill="#0891b2"/><text class="body" x="122" y="277">客户编号、客户单号、快递单号</text>
+<circle cx="106" cy="305" r="4" fill="#0891b2"/><text class="body" x="122" y="311">件数、重量、长宽高、CBM</text>
+<circle cx="106" cy="339" r="4" fill="#0891b2"/><text class="body" x="122" y="345">机器默认 6000，系统补算 5000</text>
+<circle cx="106" cy="373" r="4" fill="#0891b2"/><text class="body" x="122" y="379">扫描时间、站点、备注、异常</text>
+
+  <rect class="card" x="605" y="185" width="480" height="230" rx="18"/>
+  <rect x="605" y="185" width="480" height="54" rx="18" fill="#0891b2" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="221">B2 在仓数据</text>
+<circle cx="641" cy="271" r="4" fill="#0891b2"/><text class="body" x="657" y="277">只显示未出库货物池</text>
+<circle cx="641" cy="305" r="4" fill="#0891b2"/><text class="body" x="657" y="311">组合号 9409-KY-STOCK-075</text>
+<circle cx="641" cy="339" r="4" fill="#0891b2"/><text class="body" x="657" y="345">业务员只看自己货且不返回站点</text>
+<circle cx="641" cy="373" r="4" fill="#0891b2"/><text class="body" x="657" y="379">CONSOLIDATED/SHIPPED 不进入在仓池</text>
+
+  <rect class="card" x="1140" y="185" width="480" height="230" rx="18"/>
+  <rect x="1140" y="185" width="480" height="54" rx="18" fill="#0891b2" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="221">B3 理货任务</text>
+<circle cx="1176" cy="271" r="4" fill="#0891b2"/><text class="body" x="1192" y="277">理货需求、来源包裹、原始件重尺</text>
+<circle cx="1176" cy="305" r="4" fill="#0891b2"/><text class="body" x="1192" y="311">PENDING 未完成，COMPLETED 已完成</text>
+<circle cx="1176" cy="339" r="4" fill="#0891b2"/><text class="body" x="1192" y="345">创建人、完成时间、完成人</text>
+<circle cx="1176" cy="373" r="4" fill="#0891b2"/><text class="body" x="1192" y="379">业务员只能读，不能完成理货</text>
+
+  <rect class="card" x="70" y="465" width="480" height="230" rx="18"/>
+  <rect x="70" y="465" width="480" height="54" rx="18" fill="#0891b2" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="501">B4 理货标签</text>
+<circle cx="106" cy="551" r="4" fill="#0891b2"/><text class="body" x="122" y="557">标签号、二维码内容</text>
+<circle cx="106" cy="585" r="4" fill="#0891b2"/><text class="body" x="122" y="591">客户编号、日期、件数</text>
+<circle cx="106" cy="619" r="4" fill="#0891b2"/><text class="body" x="122" y="625">生成/打印/下载时间和操作人</text>
+<circle cx="106" cy="653" r="4" fill="#0891b2"/><text class="body" x="122" y="659">完成理货必须能生成标签</text>
+
+  <rect class="card" x="605" y="465" width="480" height="230" rx="18"/>
+  <rect x="605" y="465" width="480" height="54" rx="18" fill="#0891b2" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="501">B5 拆票/合票</text>
+<circle cx="641" cy="551" r="4" fill="#0891b2"/><text class="body" x="657" y="557">拆票子编号 -1/-2</text>
+<circle cx="641" cy="585" r="4" fill="#0891b2"/><text class="body" x="657" y="591">源包裹关系可追溯</text>
+<circle cx="641" cy="619" r="4" fill="#0891b2"/><text class="body" x="657" y="625">合票批次 9409-OUT001</text>
+<circle cx="641" cy="653" r="4" fill="#0891b2"/><text class="body" x="657" y="659">合票进入录单，不替代理货完成</text>
+
+  <rect class="card" x="1140" y="465" width="480" height="230" rx="18"/>
+  <rect x="1140" y="465" width="480" height="54" rx="18" fill="#0891b2" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="501">B6 出库归档</text>
+<circle cx="1176" cy="551" r="4" fill="#0891b2"/><text class="body" x="1192" y="557">待出库含代理、渠道、排货时间</text>
+<circle cx="1176" cy="585" r="4" fill="#0891b2"/><text class="body" x="1192" y="591">交接单不能含价格</text>
+<circle cx="1176" cy="619" r="4" fill="#0891b2"/><text class="body" x="1192" y="625">确认出库写 outboundAt、出库人</text>
+<circle cx="1176" cy="653" r="4" fill="#0891b2"/><text class="body" x="1192" y="659">包裹 SHIPPED，出库后转客服确认</text>
+
+  <rect class="card" x="70" y="745" width="480" height="230" rx="18"/>
+  <rect x="70" y="745" width="480" height="54" rx="18" fill="#0891b2" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="781">权限/日志</text>
+<circle cx="106" cy="831" r="4" fill="#0891b2"/><text class="body" x="122" y="837">仓库看货，不看应收/应付/利润/水单/银行</text>
+<circle cx="106" cy="865" r="4" fill="#0891b2"/><text class="body" x="122" y="871">warehouse.package.*</text>
+<circle cx="106" cy="899" r="4" fill="#0891b2"/><text class="body" x="122" y="905">warehouse.tally.*</text>
+<circle cx="106" cy="933" r="4" fill="#0891b2"/><text class="body" x="122" y="939">warehouse.consolidation.create</text>
+<circle cx="106" cy="967" r="4" fill="#0891b2"/><text class="body" x="122" y="973">shipment.dispatch</text>
+  <text class="footer" x="70" y="1052">生成口径：docs/sunny-dev-index.md、docs/slices/*、docs/sunny-lifecycle-objective-audit.md；图片用于业务闭环和后续代码落地对齐。</text>
+</svg>

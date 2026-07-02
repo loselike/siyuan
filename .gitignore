@@ -12,3 +12,6 @@ coverage
 worktrees
 .worktrees
 scraped_docs
+uploads
+apps/api/uploads
+outputs

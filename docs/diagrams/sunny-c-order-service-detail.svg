@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="1090" viewBox="0 0 1680 1090">
+  <style>
+    .bg{fill:#f8fafc}
+    .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+    .subtitle{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+    .card{fill:#ffffff;stroke:#cbd5e1;stroke-width:2}
+    .cardTitle{font:700 22px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+    .body{font:17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#334155}
+    .footer{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#64748b}
+  </style>
+  <rect class="bg" width="1680" height="1090"/>
+  <text class="title" x="70" y="68">C 订单与客服生命周期详细图</text>
+  <text class="subtitle" x="70" y="106">订单从仓库货物生成，经过审核、排货、出库桥接、客服双审核、转单号、状态池和签收。</text>
+  <line x1="70" y1="135" x2="1610" y2="135" stroke="#2563eb" stroke-width="4" stroke-linecap="round"/>
+
+  <rect class="card" x="70" y="185" width="480" height="230" rx="18"/>
+  <rect x="70" y="185" width="480" height="54" rx="18" fill="#2563eb" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="221">C1 仓库货物录单</text>
+<circle cx="106" cy="271" r="4" fill="#2563eb"/><text class="body" x="122" y="277">从 WarehousePackage 汇总重量尺寸</text>
+<circle cx="106" cy="305" r="4" fill="#2563eb"/><text class="body" x="122" y="311">客户编号、业务渠道、目的地、收货人</text>
+<circle cx="106" cy="339" r="4" fill="#2563eb"/><text class="body" x="122" y="345">应收、业务成本</text>
+<circle cx="106" cy="373" r="4" fill="#2563eb"/><text class="body" x="122" y="379">录单阶段不得直接填转单号</text>
+
+  <rect class="card" x="605" y="185" width="480" height="230" rx="18"/>
+  <rect x="605" y="185" width="480" height="54" rx="18" fill="#2563eb" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="221">C2 待审核</text>
+<circle cx="641" cy="271" r="4" fill="#2563eb"/><text class="body" x="657" y="277">审核摘要、货物、费用</text>
+<circle cx="641" cy="305" r="4" fill="#2563eb"/><text class="body" x="657" y="311">审核人、审核时间、驳回原因</text>
+<circle cx="641" cy="339" r="4" fill="#2563eb"/><text class="body" x="657" y="345">删除/恢复/彻底删除按权限</text>
+<circle cx="641" cy="373" r="4" fill="#2563eb"/><text class="body" x="657" y="379">审核后才能待排货</text>
+
+  <rect class="card" x="1140" y="185" width="480" height="230" rx="18"/>
+  <rect x="1140" y="185" width="480" height="54" rx="18" fill="#2563eb" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="221">C3 市场排货</text>
+<circle cx="1176" cy="271" r="4" fill="#2563eb"/><text class="body" x="1192" y="277">真实代理、代理渠道、真实应付</text>
+<circle cx="1176" cy="305" r="4" fill="#2563eb"/><text class="body" x="1192" y="311">排货人、排货时间、排货审核人</text>
+<circle cx="1176" cy="339" r="4" fill="#2563eb"/><text class="body" x="1192" y="345">业务渠道不等于真实代理渠道</text>
+<circle cx="1176" cy="373" r="4" fill="#2563eb"/><text class="body" x="1192" y="379">业务员不可见真实代理渠道和真实应付</text>
+
+  <rect class="card" x="70" y="465" width="480" height="230" rx="18"/>
+  <rect x="70" y="465" width="480" height="54" rx="18" fill="#2563eb" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="501">C4 出库桥接</text>
+<circle cx="106" cy="551" r="4" fill="#2563eb"/><text class="body" x="122" y="557">排货审核后进入仓库待出库</text>
+<circle cx="106" cy="585" r="4" fill="#2563eb"/><text class="body" x="122" y="591">仓库确认出库后进入客服确认</text>
+<circle cx="106" cy="619" r="4" fill="#2563eb"/><text class="body" x="122" y="625">不能跳过客服确认直接进轨迹</text>
+<circle cx="106" cy="653" r="4" fill="#2563eb"/><text class="body" x="122" y="659">出库时间和包裹 SHIPPED 必须可追溯</text>
+
+  <rect class="card" x="605" y="465" width="480" height="230" rx="18"/>
+  <rect x="605" y="465" width="480" height="54" rx="18" fill="#2563eb" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="501">C5 客服双审核</text>
+<circle cx="641" cy="551" r="4" fill="#2563eb"/><text class="body" x="657" y="557">业务数据审核 + 代理数据审核</text>
+<circle cx="641" cy="585" r="4" fill="#2563eb"/><text class="body" x="657" y="591">计费重差异反馈</text>
+<circle cx="641" cy="619" r="4" fill="#2563eb"/><text class="body" x="657" y="625">修改/反审核记录</text>
+<circle cx="641" cy="653" r="4" fill="#2563eb"/><text class="body" x="657" y="659">双审核完成后才能填转单号</text>
+
+  <rect class="card" x="1140" y="465" width="480" height="230" rx="18"/>
+  <rect x="1140" y="465" width="480" height="54" rx="18" fill="#2563eb" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="501">C6 转单号/面单</text>
+<circle cx="1176" cy="551" r="4" fill="#2563eb"/><text class="body" x="1192" y="557">转单号 1Z9409001</text>
+<circle cx="1176" cy="585" r="4" fill="#2563eb"/><text class="body" x="1192" y="591">面单号、面单 URL、推送开关</text>
+<circle cx="1176" cy="619" r="4" fill="#2563eb"/><text class="body" x="1192" y="625">追踪网站默认对业务员隐藏</text>
+<circle cx="1176" cy="653" r="4" fill="#2563eb"/><text class="body" x="1192" y="659">生成面单不能绕过双审核</text>
+
+  <rect class="card" x="70" y="745" width="480" height="230" rx="18"/>
+  <rect x="70" y="745" width="480" height="54" rx="18" fill="#2563eb" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="781">C7 状态池/签收</text>
+<circle cx="106" cy="831" r="4" fill="#2563eb"/><text class="body" x="122" y="837">WAITING_DEPARTURE -&gt; DEPARTED -&gt; ARRIVED_PORT -&gt; DELIVERING -&gt; SIGNED</text>
+<circle cx="106" cy="865" r="4" fill="#2563eb"/><text class="body" x="122" y="871">ETA/ETD、停留时长</text>
+<circle cx="106" cy="899" r="4" fill="#2563eb"/><text class="body" x="122" y="905">问题件挂载不移出原状态池</text>
+<circle cx="106" cy="933" r="4" fill="#2563eb"/><text class="body" x="122" y="939">最终由归属业务员确认签收</text>
+  <text class="footer" x="70" y="1052">生成口径：docs/sunny-dev-index.md、docs/slices/*、docs/sunny-lifecycle-objective-audit.md；图片用于业务闭环和后续代码落地对齐。</text>
+</svg>

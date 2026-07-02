@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1180" viewBox="0 0 1800 1180">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .bg{fill:#f8fafc}
+      .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+      .sub{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+      .lane-title{font:700 24px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+      .node-title{font:700 19px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+      .node-text{font:16px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#334155}
+      .small{font:14px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+      .lane{fill:#ffffff;stroke:#cbd5e1;stroke-width:2}
+      .node{fill:#ffffff;stroke:#94a3b8;stroke-width:2;rx:14}
+      .warehouse{fill:#ecfeff;stroke:#0891b2}
+      .order{fill:#eff6ff;stroke:#2563eb}
+      .finance{fill:#f0fdf4;stroke:#16a34a}
+      .guard{fill:#fff7ed;stroke:#ea580c}
+      .audit{fill:#f5f3ff;stroke:#7c3aed}
+      .line{stroke:#1f2937;stroke-width:2.5;fill:none;marker-end:url(#arrow)}
+      .dash{stroke:#64748b;stroke-width:2;fill:none;stroke-dasharray:8 8;marker-end:url(#arrow)}
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1800" height="1180"/>
+  <text class="title" x="70" y="70">Sunny 物流/货代系统业务流转图</text>
+  <text class="sub" x="70" y="105">口径：按客户沟通文本、Sunny 第一阶段开发入口和五条主线审计文档整理；以同一客户编号、仓库包裹、运单、费用和审计日志形成闭环。</text>
+
+  <rect class="lane" x="60" y="140" width="1680" height="180" rx="18"/>
+  <text class="lane-title" x="90" y="178">A. 基础资料先行</text>
+  <rect class="node guard" x="90" y="205" width="285" height="80"/>
+  <text class="node-title" x="112" y="235">客户资料</text>
+  <text class="node-text" x="112" y="262">客户编号 9409 是主识别键</text>
+  <rect class="node guard" x="420" y="205" width="310" height="80"/>
+  <text class="node-title" x="442" y="235">代理/渠道/汇率</text>
+  <text class="node-text" x="442" y="262">代理银行、渠道进位、历史汇率</text>
+  <rect class="node guard" x="775" y="205" width="315" height="80"/>
+  <text class="node-title" x="797" y="235">站点/用户/角色</text>
+  <text class="node-text" x="797" y="262">仓库、业务员、市场、客服、财务</text>
+  <rect class="node audit" x="1135" y="205" width="330" height="80"/>
+  <text class="node-title" x="1157" y="235">操作日志底座</text>
+  <text class="node-text" x="1157" y="262">AuditLog 记录 actor/action/target</text>
+  <path class="line" d="M375 245 H420"/>
+  <path class="line" d="M730 245 H775"/>
+  <path class="line" d="M1090 245 H1135"/>
+
+  <rect class="lane" x="60" y="360" width="1680" height="220" rx="18"/>
+  <text class="lane-title" x="90" y="398">B. 货物链：客户/工厂来货 -> 仓库出库</text>
+  <rect class="node warehouse" x="90" y="425" width="225" height="95"/>
+  <text class="node-title" x="112" y="455">今日收货</text>
+  <text class="node-text" x="112" y="482">客户单号、快递单号</text>
+  <text class="node-text" x="112" y="505">件重尺、6000/5000</text>
+  <rect class="node warehouse" x="350" y="425" width="210" height="95"/>
+  <text class="node-title" x="372" y="455">在仓数据</text>
+  <text class="node-text" x="372" y="482">未出库货物池</text>
+  <text class="node-text" x="372" y="505">业务员只看自己</text>
+  <rect class="node warehouse" x="595" y="425" width="230" height="95"/>
+  <text class="node-title" x="617" y="455">理货/标签</text>
+  <text class="node-text" x="617" y="482">未完成 -> 已完成</text>
+  <text class="node-text" x="617" y="505">标签号、二维码</text>
+  <rect class="node warehouse" x="860" y="425" width="210" height="95"/>
+  <text class="node-title" x="882" y="455">拆票/合票</text>
+  <text class="node-text" x="882" y="482">源包裹可追溯</text>
+  <text class="node-text" x="882" y="505">合票进入录单</text>
+  <rect class="node warehouse" x="1105" y="425" width="250" height="95"/>
+  <text class="node-title" x="1127" y="455">待出库/交接单</text>
+  <text class="node-text" x="1127" y="482">代理、渠道、排货时间</text>
+  <text class="node-text" x="1127" y="505">仓库不能看价格</text>
+  <rect class="node warehouse" x="1390" y="425" width="250" height="95"/>
+  <text class="node-title" x="1412" y="455">确认出库归档</text>
+  <text class="node-text" x="1412" y="482">outboundAt、出库人</text>
+  <text class="node-text" x="1412" y="505">出库后转客服确认</text>
+  <path class="line" d="M315 472 H350"/>
+  <path class="line" d="M560 472 H595"/>
+  <path class="line" d="M825 472 H860"/>
+  <path class="line" d="M1070 472 H1105"/>
+  <path class="line" d="M1355 472 H1390"/>
+
+  <rect class="lane" x="60" y="620" width="1680" height="220" rx="18"/>
+  <text class="lane-title" x="90" y="658">C. 订单链：录单 -> 客服状态池 -> 签收</text>
+  <rect class="node order" x="90" y="685" width="220" height="95"/>
+  <text class="node-title" x="112" y="715">仓库货物录单</text>
+  <text class="node-text" x="112" y="742">从包裹汇总重量尺寸</text>
+  <text class="node-text" x="112" y="765">录单不能填转单号</text>
+  <rect class="node order" x="345" y="685" width="205" height="95"/>
+  <text class="node-title" x="367" y="715">待审核</text>
+  <text class="node-text" x="367" y="742">审核/驳回/删除恢复</text>
+  <text class="node-text" x="367" y="765">审核后待排货</text>
+  <rect class="node order" x="585" y="685" width="230" height="95"/>
+  <text class="node-title" x="607" y="715">市场排货</text>
+  <text class="node-text" x="607" y="742">真实代理、真实应付</text>
+  <text class="node-text" x="607" y="765">业务员不可见</text>
+  <rect class="node order" x="850" y="685" width="240" height="95"/>
+  <text class="node-title" x="872" y="715">客服双审核</text>
+  <text class="node-text" x="872" y="742">业务数据 + 代理数据</text>
+  <text class="node-text" x="872" y="765">完成后才能转单号</text>
+  <rect class="node order" x="1125" y="685" width="235" height="95"/>
+  <text class="node-title" x="1147" y="715">转单号/面单</text>
+  <text class="node-text" x="1147" y="742">追踪网站默认隐藏</text>
+  <text class="node-text" x="1147" y="765">可控是否给业务员</text>
+  <rect class="node order" x="1395" y="685" width="245" height="95"/>
+  <text class="node-title" x="1417" y="715">状态池/签收</text>
+  <text class="node-text" x="1417" y="742">离港、到港、派送</text>
+  <text class="node-text" x="1417" y="765">业务员确认签收</text>
+  <path class="line" d="M310 732 H345"/>
+  <path class="line" d="M550 732 H585"/>
+  <path class="line" d="M815 732 H850"/>
+  <path class="line" d="M1090 732 H1125"/>
+  <path class="line" d="M1360 732 H1395"/>
+  <path class="dash" d="M1515 520 V685"/>
+
+  <rect class="lane" x="60" y="880" width="1680" height="210" rx="18"/>
+  <text class="lane-title" x="90" y="918">D/F. 费用链：水单到账 -> 应收，应付 -> 付款，代理账单差异闭环</text>
+  <rect class="node finance" x="90" y="945" width="220" height="90"/>
+  <text class="node-title" x="112" y="975">客户水单到账</text>
+  <text class="node-text" x="112" y="1002">币种、金额、凭证</text>
+  <rect class="node finance" x="345" y="945" width="220" height="90"/>
+  <text class="node-title" x="367" y="975">应收匹配审核</text>
+  <text class="node-text" x="367" y="1002">未到账不能抵扣</text>
+  <rect class="node finance" x="600" y="945" width="220" height="90"/>
+  <text class="node-title" x="622" y="975">业务成本</text>
+  <text class="node-text" x="622" y="1002">业务员可见口径</text>
+  <rect class="node finance" x="855" y="945" width="220" height="90"/>
+  <text class="node-title" x="877" y="975">真实应付审核</text>
+  <text class="node-text" x="877" y="1002">代理、渠道、银行</text>
+  <rect class="node finance" x="1110" y="945" width="220" height="90"/>
+  <text class="node-title" x="1132" y="975">付款申请/已付款</text>
+  <text class="node-text" x="1132" y="1002">按代理/银行/币种</text>
+  <rect class="node finance" x="1365" y="945" width="260" height="90"/>
+  <text class="node-title" x="1387" y="975">代理账单/杂费</text>
+  <text class="node-text" x="1387" y="1002">差异、提货费、跨越账单</text>
+  <path class="line" d="M310 990 H345"/>
+  <path class="line" d="M565 990 H600"/>
+  <path class="line" d="M820 990 H855"/>
+  <path class="line" d="M1075 990 H1110"/>
+  <path class="line" d="M1330 990 H1365"/>
+  <path class="dash" d="M700 780 V945"/>
+  <path class="dash" d="M1240 780 V945"/>
+
+  <rect class="node audit" x="1260" y="110" width="400" height="72"/>
+  <text class="node-title" x="1282" y="140">贯穿红线：权限 + 审计 + 47</text>
+  <text class="node-text" x="1282" y="166">后端字段裁剪；每步可查 AuditLog；47 受控样本销账</text>
+  <path class="dash" d="M1460 182 V205"/>
+  <path class="dash" d="M1460 285 C1690 350 1690 900 1495 945"/>
+</svg>

@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="1400" viewBox="0 0 1700 1400">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .bg{fill:#f8fafc}
+      .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+      .sub{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+      .actor{fill:#ffffff;stroke:#334155;stroke-width:2;rx:14}
+      .actorText{font:700 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+      .lane{stroke:#cbd5e1;stroke-width:2;stroke-dasharray:8 8}
+      .msg{stroke:#1f2937;stroke-width:2.4;marker-end:url(#arrow)}
+      .ret{stroke:#64748b;stroke-width:2;stroke-dasharray:7 7;marker-end:url(#arrow)}
+      .step{font:17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+      .note{fill:#fff7ed;stroke:#ea580c;stroke-width:2;rx:12}
+      .noteText{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#7c2d12}
+      .audit{fill:#f5f3ff;stroke:#7c3aed;stroke-width:2;rx:12}
+      .auditText{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#4c1d95}
+    </style>
+  </defs>
+
+  <rect class="bg" width="1700" height="1400"/>
+  <text class="title" x="70" y="70">Sunny 一票到底业务时序图</text>
+  <text class="sub" x="70" y="105">按真实岗位顺序展示：客户/业务员、仓库、市场、客服、财务、47/AuditLog 如何把同一票走完整。</text>
+
+  <rect class="actor" x="70" y="145" width="210" height="64"/>
+  <text class="actorText" x="108" y="185">客户/业务员</text>
+  <rect class="actor" x="330" y="145" width="210" height="64"/>
+  <text class="actorText" x="392" y="185">仓库</text>
+  <rect class="actor" x="590" y="145" width="210" height="64"/>
+  <text class="actorText" x="652" y="185">市场</text>
+  <rect class="actor" x="850" y="145" width="210" height="64"/>
+  <text class="actorText" x="912" y="185">客服</text>
+  <rect class="actor" x="1110" y="145" width="210" height="64"/>
+  <text class="actorText" x="1172" y="185">财务</text>
+  <rect class="actor" x="1370" y="145" width="250" height="64"/>
+  <text class="actorText" x="1422" y="185">47 / AuditLog</text>
+
+  <line class="lane" x1="175" y1="209" x2="175" y2="1335"/>
+  <line class="lane" x1="435" y1="209" x2="435" y2="1335"/>
+  <line class="lane" x1="695" y1="209" x2="695" y2="1335"/>
+  <line class="lane" x1="955" y1="209" x2="955" y2="1335"/>
+  <line class="lane" x1="1215" y1="209" x2="1215" y2="1335"/>
+  <line class="lane" x1="1495" y1="209" x2="1495" y2="1335"/>
+
+  <line class="msg" x1="175" y1="260" x2="435" y2="260"/>
+  <text class="step" x="205" y="248">1. 客户/工厂送货；业务员提供客户编号、客户单号</text>
+  <line class="msg" x1="435" y1="325" x2="1495" y2="325"/>
+  <text class="step" x="470" y="313">2. 仓库扫描/导入今日收货：件重尺、6000/5000、扫描时间、异常</text>
+  <rect class="audit" x="1210" y="345" width="350" height="48"/>
+  <text class="auditText" x="1230" y="375">写入 warehouse.package.create/update</text>
+
+  <line class="msg" x1="435" y1="430" x2="435" y2="500"/>
+  <text class="step" x="470" y="465">3. 在仓 -> 理货需求 -> 完成理货 -> 标签/二维码</text>
+  <line class="msg" x1="435" y1="535" x2="175" y2="535"/>
+  <text class="step" x="210" y="523">4. 合票/录单入口返回业务员</text>
+
+  <line class="msg" x1="175" y1="600" x2="1495" y2="600"/>
+  <text class="step" x="205" y="588">5. 业务员基于仓库货物录单：客户编号、渠道、收货人、应收、业务成本</text>
+  <rect class="note" x="760" y="620" width="430" height="48"/>
+  <text class="noteText" x="780" y="650">规则：录单阶段不得直接填写转单号；重量尺寸从仓库汇总</text>
+
+  <line class="msg" x1="1495" y1="705" x2="695" y2="705"/>
+  <text class="step" x="735" y="693">6. 审核通过后进入市场排货</text>
+  <line class="msg" x1="695" y1="770" x2="1495" y2="770"/>
+  <text class="step" x="730" y="758">7. 市场写真实代理、代理渠道、真实应付、排货人、排货时间</text>
+  <rect class="note" x="190" y="790" width="460" height="48"/>
+  <text class="noteText" x="210" y="820">规则：业务员不可见真实代理渠道和真实应付</text>
+
+  <line class="msg" x1="695" y1="875" x2="435" y2="875"/>
+  <text class="step" x="470" y="863">8. 排货审核后仓库待出库</text>
+  <line class="msg" x1="435" y1="940" x2="1495" y2="940"/>
+  <text class="step" x="470" y="928">9. 仓库打印交接单并确认出库：outboundAt、出库人、包裹 SHIPPED</text>
+  <rect class="note" x="690" y="960" width="405" height="48"/>
+  <text class="noteText" x="710" y="990">规则：仓库交接单不能含价格、利润、水单、银行账号</text>
+
+  <line class="msg" x1="1495" y1="1045" x2="955" y2="1045"/>
+  <text class="step" x="985" y="1033">10. 出库后客服业务数据 + 代理数据双审核</text>
+  <line class="msg" x1="955" y1="1110" x2="1495" y2="1110"/>
+  <text class="step" x="985" y="1098">11. 双审核后填写转单号/面单；追踪网站默认对业务员隐藏</text>
+  <line class="msg" x1="955" y1="1175" x2="175" y2="1175"/>
+  <text class="step" x="205" y="1163">12. 状态池流转：待离港、已离港、已到港、已派送；业务员确认签收</text>
+
+  <line class="msg" x1="175" y1="1240" x2="1215" y2="1240"/>
+  <text class="step" x="205" y="1228">13. 水单到账 -> 应收匹配审核；业务成本 -> 真实应付 -> 付款申请 -> 已付款</text>
+  <line class="msg" x1="1215" y1="1305" x2="1495" y2="1305"/>
+  <text class="step" x="1035" y="1293">14. 代理账单、杂费、差异处理写回订单/费用链</text>
+  <rect class="audit" x="1210" y="1330" width="350" height="48"/>
+  <text class="auditText" x="1230" y="1360">最终：同一 Shipment.id + AuditLog + 47 只读复验</text>
+</svg>

@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="810" viewBox="0 0 1680 810">
+  <style>
+    .bg{fill:#f8fafc}
+    .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+    .subtitle{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+    .card{fill:#ffffff;stroke:#cbd5e1;stroke-width:2}
+    .cardTitle{font:700 22px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+    .body{font:17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#334155}
+    .footer{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#64748b}
+  </style>
+  <rect class="bg" width="1680" height="810"/>
+  <text class="title" x="70" y="68">A 基础资料与权限底座详细图</text>
+  <text class="subtitle" x="70" y="106">先保证客户、代理、渠道、站点、账号、权限和资料日志能被后续流程复用。</text>
+  <line x1="70" y1="135" x2="1610" y2="135" stroke="#ea580c" stroke-width="4" stroke-linecap="round"/>
+
+  <rect class="card" x="70" y="185" width="480" height="230" rx="18"/>
+  <rect x="70" y="185" width="480" height="54" rx="18" fill="#ea580c" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="221">客户资料</text>
+<circle cx="106" cy="271" r="4" fill="#ea580c"/><text class="body" x="122" y="277">客户编号 9409 为主识别键</text>
+<circle cx="106" cy="305" r="4" fill="#ea580c"/><text class="body" x="122" y="311">客户名称 Daloday、业务员 R-sales</text>
+<circle cx="106" cy="339" r="4" fill="#ea580c"/><text class="body" x="122" y="345">结算方式、币种、收货人、联系人</text>
+<circle cx="106" cy="373" r="4" fill="#ea580c"/><text class="body" x="122" y="379">客户只作为归属，不替代仓库包裹</text>
+
+  <rect class="card" x="605" y="185" width="480" height="230" rx="18"/>
+  <rect x="605" y="185" width="480" height="54" rx="18" fill="#ea580c" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="221">代理资料</text>
+<circle cx="641" cy="271" r="4" fill="#ea580c"/><text class="body" x="657" y="277">代理 AG-9409-UPS / 宇环</text>
+<circle cx="641" cy="305" r="4" fill="#ea580c"/><text class="body" x="657" y="311">代理银行账号挂代理资料</text>
+<circle cx="641" cy="339" r="4" fill="#ea580c"/><text class="body" x="657" y="345">供应商账单和付款对象来自代理</text>
+<circle cx="641" cy="373" r="4" fill="#ea580c"/><text class="body" x="657" y="379">业务员默认不能看代理银行</text>
+
+  <rect class="card" x="1140" y="185" width="480" height="230" rx="18"/>
+  <rect x="1140" y="185" width="480" height="54" rx="18" fill="#ea580c" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="221">渠道资料</text>
+<circle cx="1176" cy="271" r="4" fill="#ea580c"/><text class="body" x="1192" y="277">代理渠道 AGCH-UPS-EXP</text>
+<circle cx="1176" cy="305" r="4" fill="#ea580c"/><text class="body" x="1192" y="311">公司渠道 COCH-US-UPS-EXP</text>
+<circle cx="1176" cy="339" r="4" fill="#ea580c"/><text class="body" x="1192" y="345">渠道类别 UPS / 美西卡车</text>
+<circle cx="1176" cy="373" r="4" fill="#ea580c"/><text class="body" x="1192" y="379">重量进位：15.2-&gt;15.5，15.7-&gt;16，21.1-&gt;22</text>
+
+  <rect class="card" x="70" y="465" width="480" height="230" rx="18"/>
+  <rect x="70" y="465" width="480" height="54" rx="18" fill="#ea580c" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="501">汇率/偏远</text>
+<circle cx="106" cy="551" r="4" fill="#ea580c"/><text class="body" x="122" y="557">USD/RMB、EUR/RMB 历史生效日期</text>
+<circle cx="106" cy="585" r="4" fill="#ea580c"/><text class="body" x="122" y="591">偏远附加费、附加费规则</text>
+<circle cx="106" cy="619" r="4" fill="#ea580c"/><text class="body" x="122" y="625">汇率按业务时间匹配</text>
+<circle cx="106" cy="653" r="4" fill="#ea580c"/><text class="body" x="122" y="659">AI 价格表后置，不阻塞第一阶段</text>
+
+  <rect class="card" x="605" y="465" width="480" height="230" rx="18"/>
+  <rect x="605" y="465" width="480" height="54" rx="18" fill="#ea580c" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="501">站点/账号/角色</text>
+<circle cx="641" cy="551" r="4" fill="#ea580c"/><text class="body" x="657" y="557">深圳站</text>
+<circle cx="641" cy="585" r="4" fill="#ea580c"/><text class="body" x="657" y="591">R-sales、R-warehouse、R-market、R-service、R-finance、R-admin</text>
+<circle cx="641" cy="619" r="4" fill="#ea580c"/><text class="body" x="657" y="625">复用 RBAC，不新建权限体系</text>
+<circle cx="641" cy="653" r="4" fill="#ea580c"/><text class="body" x="657" y="659">非管理员不能维护系统资料</text>
+
+  <rect class="card" x="1140" y="465" width="480" height="230" rx="18"/>
+  <rect x="1140" y="465" width="480" height="54" rx="18" fill="#ea580c" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="501">审计验收</text>
+<circle cx="1176" cy="551" r="4" fill="#ea580c"/><text class="body" x="1192" y="557">master_data.*</text>
+<circle cx="1176" cy="585" r="4" fill="#ea580c"/><text class="body" x="1192" y="591">system.site.*</text>
+<circle cx="1176" cy="619" r="4" fill="#ea580c"/><text class="body" x="1192" y="625">system.staff.*</text>
+<circle cx="1176" cy="653" r="4" fill="#ea580c"/><text class="body" x="1192" y="659">system.role_permissions.update</text>
+<circle cx="1176" cy="687" r="4" fill="#ea580c"/><text class="body" x="1192" y="693">操作人、对象、before/after 必须可查</text>
+  <text class="footer" x="70" y="772">生成口径：docs/sunny-dev-index.md、docs/slices/*、docs/sunny-lifecycle-objective-audit.md；图片用于业务闭环和后续代码落地对齐。</text>
+</svg>

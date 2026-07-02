@@ -1,10 +1,20 @@
 import { Module } from '@nestjs/common';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AiController } from './ai.controller.js';
 import { AiService } from './ai.service.js';
+import { AuditInterceptor } from './audit.interceptor.js';
 import { AuthController } from './auth.controller.js';
 import { DataController } from './data.controller.js';
 import { DatabaseSeedService } from './database-seed.service.js';
+import { FinanceCatalogController } from './finance/catalog/finance-catalog.controller.js';
+import {
+  FINANCE_CATALOG_REPOSITORY,
+  InMemoryFinanceCatalogRepository,
+  PrismaFinanceCatalogRepository
+} from './finance/catalog/finance-catalog.repository.js';
+import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
+import { FinanceReceivableController } from './finance/receivable/finance-receivable.controller.js';
+import { FinanceReceivableService } from './finance/receivable/finance-receivable.service.js';
 import { InMemoryRepository } from './in-memory.repository.js';
 import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
@@ -20,14 +30,25 @@ const repositoryProviders =
     ? [PrismaService, PrismaRepository, DatabaseSeedService]
     : [{ provide: PrismaRepository, useClass: InMemoryRepository }];
 
+const financeCatalogRepositoryProvider = usePrismaRepository
+  ? { provide: FINANCE_CATALOG_REPOSITORY, useClass: PrismaFinanceCatalogRepository }
+  : { provide: FINANCE_CATALOG_REPOSITORY, useClass: InMemoryFinanceCatalogRepository };
+
 @Module({
-  controllers: [AuthController, DataController, AiController],
+  controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController],
   providers: [
     AiService,
     ...repositoryProviders,
+    financeCatalogRepositoryProvider,
+    FinanceCatalogService,
+    FinanceReceivableService,
     {
       provide: APP_GUARD,
       useClass: RbacGuard
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: AuditInterceptor
     }
   ]
 })

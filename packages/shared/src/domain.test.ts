@@ -36,19 +36,19 @@ import {
 
 describe('role menu access', () => {
   it('keeps system settings admin-only and separates operation from finance menus', () => {
-    expect(getVisibleStaffMenuKeys('ADMIN')).toEqual(expect.arrayContaining(['settings', 'finance', 'receive', 'routing']));
+    expect(getVisibleStaffMenuKeys('ADMIN')).toEqual(expect.arrayContaining(['settings', 'finance', 'receive', 'market', 'business', 'logisticsTracking', 'customerService']));
     expect(canAccessStaffMenu('ADMIN', 'settings')).toBe(true);
 
-    expect(getVisibleStaffMenuKeys('OPERATOR')).toEqual(expect.arrayContaining(['orders', 'routing', 'tracking', 'pricing', 'master']));
+    expect(getVisibleStaffMenuKeys('OPERATOR')).toEqual(expect.arrayContaining(['business', 'market', 'logisticsTracking', 'pricing', 'master', 'receive']));
     expect(canAccessStaffMenu('OPERATOR', 'settings')).toBe(false);
     expect(canAccessStaffMenu('OPERATOR', 'finance')).toBe(false);
-    expect(canAccessStaffMenu('OPERATOR', 'receive')).toBe(false);
+    expect(canAccessStaffMenu('OPERATOR', 'receive')).toBe(true);
 
-    expect(getVisibleStaffMenuKeys('WAREHOUSE')).toEqual(expect.arrayContaining(['workspace', 'receive', 'tracking']));
+    expect(getVisibleStaffMenuKeys('WAREHOUSE')).toEqual(expect.arrayContaining(['workspace', 'receive', 'logisticsTracking']));
     expect(canAccessStaffMenu('WAREHOUSE', 'receive')).toBe(true);
     expect(canAccessStaffMenu('WAREHOUSE', 'pricing')).toBe(false);
 
-    expect(getVisibleStaffMenuKeys('FINANCE')).toEqual(expect.arrayContaining(['finance', 'reports', 'pricing', 'master']));
+    expect(getVisibleStaffMenuKeys('FINANCE')).toEqual(expect.arrayContaining(['workspace', 'finance', 'pricing', 'master']));
     expect(canAccessStaffMenu('FINANCE', 'settings')).toBe(false);
     expect(canAccessStaffMenu('FINANCE', 'receive')).toBe(false);
 
@@ -57,15 +57,16 @@ describe('role menu access', () => {
 });
 
 describe('shipment state transitions', () => {
-  it('allows the happy path from draft to signed', () => {
+  it('allows the order lifecycle from audit to signature', () => {
     const path: ShipmentStatus[] = [
       'DRAFT',
-      'DECLARED',
-      'WAITING_RECEIVE',
       'WAITING_SORT',
       'WAITING_DISPATCH',
-      'WAITING_ONLINE',
-      'WAITING_SIGNED',
+      'OUTBOUNDED',
+      'WAITING_DEPARTURE',
+      'DEPARTED',
+      'ARRIVED_PORT',
+      'DELIVERING',
       'SIGNED'
     ];
 
@@ -172,7 +173,7 @@ describe('shipment weight and quote calculations', () => {
         { id: 'sc-disabled', name: '停用费', amount: 999, enabled: false }
       ],
       exchangeRates: [
-        { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'CNY', rate: 7.25, activeAt: '2026-06-06T00:00:00.000Z', enabled: true }
+        { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'RMB', rate: 7.25, activeAt: '2026-06-06T00:00:00.000Z', enabled: true }
       ]
     });
 
@@ -326,7 +327,7 @@ describe('API DTO helpers', () => {
       customerId: 'c-9409',
       customerName: '9409-Daloday',
       balance: 10000,
-      currency: 'CNY'
+      currency: 'RMB'
     };
     const payment: PaymentSummary = summarizePaymentSettlement({
       id: 'pay-1',
@@ -368,11 +369,31 @@ describe('API DTO helpers', () => {
       agents: [
         { id: 'a-yuhuan', name: '宇环', enabled: true }
       ],
+      agentChannels: [
+        { id: 'ach-yuhuan-dhl', agentId: 'a-yuhuan', agentName: '宇环', channelName: '宇环 DHL', enabled: true }
+      ],
       carriers: [
         { id: 'cr-dhl', name: 'DHL', enabled: true }
       ],
+      channelCategories: [
+        { id: 'cc-dhl', name: 'DHL', enabled: true }
+      ],
       channels: [
-        { id: 'ch-dhl-hk', name: 'DHL HK', carrierId: 'cr-dhl', carrierName: 'DHL', enabled: true }
+        {
+          id: 'ch-dhl-hk',
+          name: 'DHL HK',
+          carrierId: 'cr-dhl',
+          carrierName: 'DHL',
+          businessType: 'EXPRESS',
+          category: 'DHL',
+          volumeDivisor: 5000,
+          multiPieceWeightRule: 'SUM_THEN_COMPARE',
+          singleWeightRoundingRule: 'ACTUAL',
+          settlementWeightRule: 'MAX_ACTUAL_VOLUME',
+          settlementWeightRoundingRule: 'NONE',
+          remoteAreaRule: 'NONE',
+          enabled: true
+        }
       ],
       surcharges: [
         { id: 'sc-remote', name: '偏远附加费', amount: 50, enabled: true }
@@ -381,7 +402,7 @@ describe('API DTO helpers', () => {
         { id: 'fr-dhl', channelId: 'ch-dhl-hk', channelName: 'DHL HK', rate: 0.15, activeAt: '2026-06-06T00:00:00.000Z' }
       ],
       exchangeRates: [
-        { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'CNY', rate: 7.245, activeAt: '2026-06-06T00:00:00.000Z', enabled: true }
+        { id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'RMB', rate: 7.245, activeAt: '2026-06-06T00:00:00.000Z', enabled: true }
       ],
       roles: ['ADMIN', 'CUSTOMER']
     };
@@ -437,7 +458,7 @@ describe('module coverage catalog', () => {
     expect(summary.totalModules).toBeGreaterThanOrEqual(12);
     expect(summary.surfaces).toEqual(expect.arrayContaining(['员工端', '客户端', 'AI 助手', '开放集成']));
     expect(summary.phaseOneModules).toEqual(
-      expect.arrayContaining(['运单履约', '报价查价', '财务结算', '问题件中心'])
+      expect.arrayContaining(['我的订单', '报价查价', '财务结算', '问题件中心'])
     );
   });
 });
@@ -445,34 +466,32 @@ describe('module coverage catalog', () => {
 describe('fulfillment workflow rules', () => {
   it('returns executable actions for each shipment state', () => {
     expect(getAvailableFulfillmentActions({ status: 'DRAFT' })).toEqual(['confirm-declare', 'reject-declare']);
-    expect(getAvailableFulfillmentActions({ status: 'DECLARED' })).toEqual(['confirm-receive']);
-    expect(getAvailableFulfillmentActions({ status: 'WAITING_SORT' })).toEqual([
-      'assign-route',
-      'create-problem',
-      'mark-return'
-    ]);
-    expect(getAvailableFulfillmentActions({ status: 'WAITING_RETURN' })).toEqual(['add-tracking']);
-    expect(getAvailableFulfillmentActions({ status: 'WAITING_DISPATCH', hasTransferNo: false })).toContain(
+    expect(getAvailableFulfillmentActions({ status: 'REVIEW_REJECTED' })).toEqual([]);
+    expect(getAvailableFulfillmentActions({ status: 'WAITING_SORT' })).toEqual(['assign-route']);
+    expect(getAvailableFulfillmentActions({ status: 'WAITING_DISPATCH' })).toEqual(['confirm-dispatch']);
+    expect(getAvailableFulfillmentActions({ status: 'OUTBOUNDED', hasTransferNo: false })).toContain(
       'fill-transfer-no'
     );
-    expect(getAvailableFulfillmentActions({ status: 'SIGNED' })).toEqual(['add-tracking']);
+    expect(getAvailableFulfillmentActions({ status: 'WAITING_DEPARTURE' })).toEqual(['add-tracking', 'create-problem']);
+    expect(getAvailableFulfillmentActions({ status: 'ARRIVED_PORT' })).toEqual(['add-tracking', 'create-problem']);
+    expect(getAvailableFulfillmentActions({ status: 'DELIVERING' })).toEqual(['add-tracking', 'create-problem']);
+    expect(getAvailableFulfillmentActions({ status: 'SIGNED' })).toEqual([]);
   });
 
   it('summarizes fulfillment stages by business type', () => {
     const summary = summarizeFulfillmentStages([
-      sampleShipment('a', 'EXPRESS', 'DECLARED'),
-      sampleShipment('b', 'EXPRESS', 'WAITING_RECEIVE'),
+      sampleShipment('a', 'EXPRESS', 'DRAFT'),
       sampleShipment('c', 'EXPRESS', 'WAITING_SORT'),
       sampleShipment('d', 'EXPRESS', 'WAITING_DISPATCH'),
-      sampleShipment('e', 'EXPRESS', 'WAITING_ONLINE'),
-      sampleShipment('f', 'EXPRESS', 'STUCK'),
-      sampleShipment('g', 'SMALL_PACKET', 'DECLARED')
+      sampleShipment('e', 'EXPRESS', 'OUTBOUNDED'),
+      sampleShipment('f', 'EXPRESS', 'PROBLEM'),
+      sampleShipment('g', 'SMALL_PACKET', 'DRAFT')
     ]);
 
     expect(summary).toEqual({
-      reviewing: 0,
-      declared: 1,
-      receiving: 1,
+      reviewing: 1,
+      declared: 0,
+      receiving: 0,
       sorting: 1,
       dispatching: 1,
       online: 1,
@@ -484,23 +503,23 @@ describe('fulfillment workflow rules', () => {
   it('summarizes fulfillment stages across all business types for unified dedicated-line view', () => {
     const summary = summarizeFulfillmentStages(
       [
-        sampleShipment('a', 'EXPRESS', 'DECLARED'),
-        sampleShipment('b', 'SMALL_PACKET', 'WAITING_RECEIVE'),
+        sampleShipment('a', 'EXPRESS', 'DRAFT'),
+        sampleShipment('b', 'SMALL_PACKET', 'OUTBOUNDED'),
         sampleShipment('c', 'DEDICATED_LINE', 'WAITING_SORT'),
         sampleShipment('d', 'DEDICATED_LINE', 'WAITING_DISPATCH'),
-        sampleShipment('e', 'SMALL_PACKET', 'WAITING_ONLINE'),
-        sampleShipment('f', 'EXPRESS', 'STUCK')
+        sampleShipment('e', 'SMALL_PACKET', 'WAITING_DEPARTURE'),
+        sampleShipment('f', 'EXPRESS', 'PROBLEM')
       ],
       'ALL'
     );
 
     expect(summary).toEqual({
-      reviewing: 0,
-      declared: 1,
-      receiving: 1,
+      reviewing: 1,
+      declared: 0,
+      receiving: 0,
       sorting: 1,
       dispatching: 1,
-      online: 1,
+      online: 2,
       signing: 0,
       exception: 1
     });
@@ -508,7 +527,7 @@ describe('fulfillment workflow rules', () => {
 
   it('creates AI fulfillment advice for missing transfer number and stale tracking', () => {
     const advice = createFulfillmentAdvice(
-      sampleShipment('risk', 'EXPRESS', 'WAITING_ONLINE', {
+      sampleShipment('risk', 'EXPRESS', 'OUTBOUNDED', {
         transferNo: undefined,
         trackingStaleDays: 7,
         hasProblemTicket: true,

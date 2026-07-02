@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="810" viewBox="0 0 1680 810">
+  <style>
+    .bg{fill:#f8fafc}
+    .title{font:700 38px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#0f172a}
+    .subtitle{font:500 20px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#475569}
+    .card{fill:#ffffff;stroke:#cbd5e1;stroke-width:2}
+    .cardTitle{font:700 22px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#111827}
+    .body{font:17px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#334155}
+    .footer{font:15px -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;fill:#64748b}
+  </style>
+  <rect class="bg" width="1680" height="810"/>
+  <text class="title" x="70" y="68">E 角色权限与审计详细图</text>
+  <text class="subtitle" x="70" y="106">同一票对象在不同角色下字段不同；越权动作必须 403 并写拒绝日志。</text>
+  <line x1="70" y1="135" x2="1610" y2="135" stroke="#7c3aed" stroke-width="4" stroke-linecap="round"/>
+
+  <rect class="card" x="70" y="185" width="480" height="230" rx="18"/>
+  <rect x="70" y="185" width="480" height="54" rx="18" fill="#7c3aed" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="221">业务员</text>
+<circle cx="106" cy="271" r="4" fill="#7c3aed"/><text class="body" x="122" y="277">看自己客户、自己货物、录单、应收、业务成本</text>
+<circle cx="106" cy="305" r="4" fill="#7c3aed"/><text class="body" x="122" y="311">不能看真实应付、真实代理渠道</text>
+<circle cx="106" cy="339" r="4" fill="#7c3aed"/><text class="body" x="122" y="345">不能看代理银行、付款凭证、完整代理账单</text>
+<circle cx="106" cy="373" r="4" fill="#7c3aed"/><text class="body" x="122" y="379">可确认自己订单签收</text>
+
+  <rect class="card" x="605" y="185" width="480" height="230" rx="18"/>
+  <rect x="605" y="185" width="480" height="54" rx="18" fill="#7c3aed" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="221">仓库</text>
+<circle cx="641" cy="271" r="4" fill="#7c3aed"/><text class="body" x="657" y="277">看今日收货、在仓、理货、标签、待出库、交接单</text>
+<circle cx="641" cy="305" r="4" fill="#7c3aed"/><text class="body" x="657" y="311">不能看价格、应收、业务成本、真实应付、利润</text>
+<circle cx="641" cy="339" r="4" fill="#7c3aed"/><text class="body" x="657" y="345">不能看水单、付款、代理银行</text>
+<circle cx="641" cy="373" r="4" fill="#7c3aed"/><text class="body" x="657" y="379">出库动作由 warehouse:write 控制</text>
+
+  <rect class="card" x="1140" y="185" width="480" height="230" rx="18"/>
+  <rect x="1140" y="185" width="480" height="54" rx="18" fill="#7c3aed" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="221">市场</text>
+<circle cx="1176" cy="271" r="4" fill="#7c3aed"/><text class="body" x="1192" y="277">看待排货、真实代理、代理渠道、真实应付</text>
+<circle cx="1176" cy="305" r="4" fill="#7c3aed"/><text class="body" x="1192" y="311">负责排货和排货审核</text>
+<circle cx="1176" cy="339" r="4" fill="#7c3aed"/><text class="body" x="1192" y="345">不能确认水单到账或付款</text>
+<circle cx="1176" cy="373" r="4" fill="#7c3aed"/><text class="body" x="1192" y="379">排货形成真实应付来源</text>
+
+  <rect class="card" x="70" y="465" width="480" height="230" rx="18"/>
+  <rect x="70" y="465" width="480" height="54" rx="18" fill="#7c3aed" opacity="0.12"/>
+  <text class="cardTitle" x="98" y="501">客服</text>
+<circle cx="106" cy="551" r="4" fill="#7c3aed"/><text class="body" x="122" y="557">看客服数据确认、转单号、面单、状态池、问题件</text>
+<circle cx="106" cy="585" r="4" fill="#7c3aed"/><text class="body" x="122" y="591">不能付款、不能越权修改财务审核</text>
+<circle cx="106" cy="619" r="4" fill="#7c3aed"/><text class="body" x="122" y="625">追踪网站默认对业务员隐藏</text>
+<circle cx="106" cy="653" r="4" fill="#7c3aed"/><text class="body" x="122" y="659">客服不能代替业务员签收</text>
+
+  <rect class="card" x="605" y="465" width="480" height="230" rx="18"/>
+  <rect x="605" y="465" width="480" height="54" rx="18" fill="#7c3aed" opacity="0.12"/>
+  <text class="cardTitle" x="633" y="501">财务</text>
+<circle cx="641" cy="551" r="4" fill="#7c3aed"/><text class="body" x="657" y="557">看水单、应收、业务成本、应付、待付款、已付款</text>
+<circle cx="641" cy="585" r="4" fill="#7c3aed"/><text class="body" x="657" y="591">处理凭证、代理账单、差异和杂费</text>
+<circle cx="641" cy="619" r="4" fill="#7c3aed"/><text class="body" x="657" y="625">不能替仓库收货或市场排货</text>
+<circle cx="641" cy="653" r="4" fill="#7c3aed"/><text class="body" x="657" y="659">撤销链路必须按状态守门</text>
+
+  <rect class="card" x="1140" y="465" width="480" height="230" rx="18"/>
+  <rect x="1140" y="465" width="480" height="54" rx="18" fill="#7c3aed" opacity="0.12"/>
+  <text class="cardTitle" x="1168" y="501">审计/导出</text>
+<circle cx="1176" cy="551" r="4" fill="#7c3aed"/><text class="body" x="1192" y="557">后端响应裁剪为准，前端隐藏不算</text>
+<circle cx="1176" cy="585" r="4" fill="#7c3aed"/><text class="body" x="1192" y="591">导出按完整筛选或勾选范围</text>
+<circle cx="1176" cy="619" r="4" fill="#7c3aed"/><text class="body" x="1192" y="625">security.permission.denied</text>
+<circle cx="1176" cy="653" r="4" fill="#7c3aed"/><text class="body" x="1192" y="659">workflow.guard_denied</text>
+  <text class="footer" x="70" y="772">生成口径：docs/sunny-dev-index.md、docs/slices/*、docs/sunny-lifecycle-objective-audit.md；图片用于业务闭环和后续代码落地对齐。</text>
+</svg>
