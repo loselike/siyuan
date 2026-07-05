@@ -1,6 +1,12 @@
 # Sunny 第一阶段开发入口
 
-本文档是唯一开发入口。`docs/sunny-lifecycle-objective-audit.md` 是历史审计证据库；`docs/slices/` 是可连续执行任务卡；`.codex-state.md` 是当前推进指针。
+本文档是 A-F 第一阶段唯一开发入口。`docs/sunny-lifecycle-objective-audit.md` 是历史审计证据库；`docs/slices/` 是可连续执行任务卡；`.codex-state.md` 是当前推进指针。
+
+## 开发协作规则入口
+
+- `AGENTS.md` 只保留每次会话必须加载的硬规则和文档索引。
+- `docs/dev-thread-rules.md` 存放详细工程规则、多会话分工、Ponytail 细则、长需求拆卡、模块交付、前端布局和验证矩阵。
+- A-F 任务推进仍以本文档和 `.codex-state.md` 为准；需要执行具体任务卡时再打开对应 `docs/slices/<任务卡>`。
 
 ## 第一阶段总目标
 
