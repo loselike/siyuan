@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { AutoComplete, Button, Card, Col, Dropdown, Flex, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
+import { App as AntdApp, AutoComplete, Button, Card, Col, Dropdown, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import { RefreshCw, Settings } from 'lucide-react';
 import type {
@@ -30,6 +30,7 @@ type PayableAuditPageProps = {
   renderShipmentOrderNoLink: (systemOrderNo?: string) => ReactNode;
   onRowsChange: (rows: PayableAuditSummary[]) => void;
   onGoPendingPayment?: (query?: PendingPaymentListQuery) => void;
+  onGoAgentBill?: () => void;
 };
 
 type ColumnKey =
@@ -96,7 +97,8 @@ function statusTag(value?: string) {
   return <Tag color={status === 'CONFIRMED' ? 'success' : status === 'VOIDED' ? 'default' : 'warning'}>{status === 'CONFIRMED' ? '已审核' : status === 'VOIDED' ? '已作废' : '待审核'}</Tag>;
 }
 
-export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange, onGoPendingPayment }: PayableAuditPageProps) {
+export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange, onGoPendingPayment, onGoAgentBill }: PayableAuditPageProps) {
+  const { message, modal } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PayableAuditListQuery>();
   const [form] = Form.useForm<PayableAuditCreateInput & PayableAuditUpdateInput>();
   const [query, setQuery] = useState<PayableAuditListQuery>(defaultQuery);
@@ -174,12 +176,17 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
   });
 
   const showPendingPaymentPrompt = (row?: PayableAuditSummary) => {
-    Modal.success({
-      title: '已生成待付款记录',
-      content: row?.systemOrderNo ? `应付费用已审核，可前往待付款处理：${row.systemOrderNo}` : '应付费用已审核，可前往待付款统一处理付款资料。',
-      okText: '去待付款处理',
+    modal.success({
+      title: '已完成市场应付审核',
+      content: row?.systemOrderNo
+        ? `市场应付已审核，下一步进入代理账单核对：${row.systemOrderNo}`
+        : '市场应付已审核，下一步进入代理账单核对；核对完成后再处理待付款。',
+      okText: '去代理账单',
       cancelText: '留在当前页',
-      onOk: () => onGoPendingPayment?.(pendingPaymentQueryFor(row))
+      onOk: () => {
+        if (onGoAgentBill) onGoAgentBill();
+        else onGoPendingPayment?.(pendingPaymentQueryFor(row));
+      }
     });
   };
 
@@ -293,7 +300,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
               <Button size="small" disabled={!canReverse}>反审核</Button>
             </Popconfirm>
           ) : (
-            <Popconfirm title="确认审核该应付费用并生成待付款？" onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
+            <Popconfirm title="确认审核该市场应付并进入代理账单核对？" onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
               <Button size="small" type="primary" disabled={!canAudit || row.voided}>审核</Button>
             </Popconfirm>
           )}
@@ -325,7 +332,8 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
 
   return (
     <Card
-      title="应付审核"
+      title="市场应付审核"
+      className="finance-work-card"
       extra={
         <Space wrap>
           <Button onClick={togglePageSelection}>{isPageSelected ? '取消全选' : '全选本页'}</Button>
@@ -379,7 +387,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
           <Col xs={24} md={8} xl={3}><Form.Item label=" "><Space><Button type="primary" onClick={() => { const next = { ...defaultQuery, ...queryForm.getFieldsValue(), page: 1 }; setQuery(next); void loadRows(next); }}>查询</Button><Button onClick={() => { queryForm.resetFields(); setQuery(defaultQuery); void loadRows(defaultQuery); }}>重置</Button></Space></Form.Item></Col>
         </Row>
       </Form>
-      <Flex gap={12} wrap className="finance-audit-summary">
+      <Flex gap={12} wrap className="finance-work-status-strip finance-audit-summary">
         {canViewSensitive ? <Tag color="blue">RMB 合计 {formatCurrency(response.totals.rmbTotal)}</Tag> : <Tag>金额按权限隐藏</Tag>}
         {canViewProfit ? <Tag color="green">应收利润 {formatCurrency(response.totals.receivableProfitTotal ?? 0)}</Tag> : null}
         {canViewProfit ? <Tag color="cyan">运营利润 {formatCurrency(response.totals.operationProfitTotal ?? 0)}</Tag> : null}
@@ -410,7 +418,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
           void loadRows(next);
         }}
       />
-      <Modal title={editingRow ? '修改应付费用' : '添加应付'} open={editorOpen} onCancel={() => { setEditorOpen(false); setEditingRow(null); setMatchedShipment(null); form.resetFields(); }} onOk={submitEditor} okText="保存应付" cancelText="取消">
+      <Modal title={editingRow ? '修改应付费用' : '添加应付'} className="finance-modal" width={800} open={editorOpen} onCancel={() => { setEditorOpen(false); setEditingRow(null); setMatchedShipment(null); form.resetFields(); }} onOk={submitEditor} okText="保存应付" cancelText="取消">
         <Form form={form} layout="vertical" initialValues={{ name: '代理成本', currency: 'RMB' }} onValuesChange={(_, values) => syncAmount(values)}>
           {!editingRow ? (
             <>

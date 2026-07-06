@@ -4,12 +4,12 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [react()],
   build: {
-    chunkSizeWarningLimit: 950,
+    chunkSizeWarningLimit: 1100,
     rollupOptions: {
       output: {
         manualChunks: {
           'antd-vendor': ['antd', '@ant-design/icons'],
-          xlsx: ['xlsx']
+          excel: ['read-excel-file/browser', 'write-excel-file/browser']
         }
       }
     }

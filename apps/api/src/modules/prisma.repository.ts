@@ -10,6 +10,7 @@ import {
   createSystemOrderNo,
   summarizeStatement,
   summarizePaymentSettlement,
+  summarizeLineShipmentPool,
   summarizeStatusCounts,
   validateShipmentImportRows,
   type AccountLedgerSummary,
@@ -20,6 +21,11 @@ import {
   type AgentBankAccountInput,
   type AgentBankAccountSummary,
   type AgentMarkupCreateInput,
+  type AgentMarkupExportResponse,
+  type AgentMarkupImportResponse,
+  type AgentMarkupListQuery,
+  type AgentMarkupListResponse,
+  type AgentMarkupPreviewResponse,
   type AgentMarkupSummary,
   type AgentMarkupUpdateInput,
   type AgentSummary,
@@ -165,10 +171,13 @@ import {
   type ShipmentFinanceDetailSummary,
   type ShipmentImportRequest,
   type ShipmentImportResponse,
+  type LineShipmentPoolQuery,
+  type LineShipmentPoolResponse,
   type ShipmentLabelSummary,
   type ShipmentOperationalUpdateInput,
   type ShipmentPaymentUpdateInput,
   type ShipmentPaymentMethod,
+  type ShipmentDispatchInput,
   type ShipmentRerouteInput,
   type ShipmentRouteInput,
   type ShipmentRestoreInput,
@@ -228,7 +237,7 @@ import {
 } from './rbac.js';
 
 type ShipmentWithRelations = PrismaShipment & {
-  customer: { code: string; name: string; salesperson: string | null };
+  customer: { id: string; code: string; name: string; salesperson: string | null };
   channel: ({ name: string; carrier: { name: string } } | null);
   agent: ({ name: string } | null);
   problemTickets: Array<{ id: string; status: string }>;
@@ -250,9 +259,9 @@ type StaffProfileInput = {
   site?: string;
 };
 
-const defaultAgentMarkupRules = [
-  { id: 'markup-a', agentName: 'a代理', markupPerKg: 0.5, enabled: true },
-  { id: 'markup-b', agentName: 'b代理', markupPerKg: 1, enabled: true }
+const defaultAgentMarkupRules: AgentMarkupSummary[] = [
+  { id: 'markup-a', agentName: 'a代理', markupPerKg: 0.5, markupType: 'WEIGHT' as const, markupValue: 0.5, priority: 100, enabled: true },
+  { id: 'markup-b', agentName: 'b代理', markupPerKg: 1, markupType: 'WEIGHT' as const, markupValue: 1, priority: 100, enabled: true }
 ];
 
 const seedAgentQuoteErrors = [
@@ -432,6 +441,59 @@ function buildAuditDeleteWarnings(rows: AuditLogSummary[]): AuditLogListResponse
     }
   });
   return warnings;
+}
+
+function isImportantAudit(row: AuditLogSummary) {
+  return row.result === 'FAILED'
+    || /(delete|void|purge|clear|删除|作废|清除)/i.test(row.action)
+    || /(audit|review|审核|反审核)/i.test(row.action)
+    || /(permission|role|权限)/i.test(row.action)
+    || /(finance|payment|voucher|receipt|payable|receivable|财务|付款|水单|应收|应付)/i.test(row.action)
+    || /(import|export|导入|导出)/i.test(row.action);
+}
+
+function isPermissionFinanceAudit(row: AuditLogSummary) {
+  return /(permission|role|finance|payment|voucher|receipt|payable|receivable|权限|角色|财务|付款|水单|应收|应付)/i.test(row.action);
+}
+
+function beijingDayStartUtc(date: Date) {
+  const beijingTime = date.getTime() + 8 * 60 * 60 * 1000;
+  const beijingDate = new Date(beijingTime);
+  return Date.UTC(beijingDate.getUTCFullYear(), beijingDate.getUTCMonth(), beijingDate.getUTCDate()) - 8 * 60 * 60 * 1000;
+}
+
+function buildAuditDashboard(rows: AuditLogSummary[], now = new Date()): NonNullable<AuditLogListResponse['dashboard']> {
+  const todayStart = beijingDayStartUtc(now);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const metricRows = rows.filter((row) => new Date(row.createdAt).getTime() >= todayStart - 13 * dayMs);
+  const metric = (predicate: (row: AuditLogSummary) => boolean) => {
+    const trend = Array.from({ length: 14 }, (_, index) => {
+      const start = todayStart - (13 - index) * dayMs;
+      const end = start + dayMs;
+      return metricRows.filter((row) => {
+        const time = new Date(row.createdAt).getTime();
+        return time >= start && time < end && predicate(row);
+      }).length;
+    });
+    const value = trend[13] ?? 0;
+    const yesterdayValue = trend[12] ?? 0;
+    return {
+      value,
+      yesterdayValue,
+      changePercent: yesterdayValue ? Math.round(((value - yesterdayValue) / yesterdayValue) * 1000) / 10 : value ? 100 : 0,
+      trend
+    };
+  };
+  return {
+    generatedAt: now.toISOString(),
+    metrics: {
+      total: metric(() => true),
+      failed: metric((row) => row.result === 'FAILED'),
+      important: metric(isImportantAudit),
+      permissionFinance: metric(isPermissionFinanceAudit)
+    },
+    recentFailedImportant: rows.filter((row) => row.result === 'FAILED' && isImportantAudit(row)).slice(0, 10)
+  };
 }
 
 @Injectable()
@@ -620,6 +682,11 @@ export class PrismaRepository {
     return summarizeStatusCounts(await this.getShipments(principal));
   }
 
+  async getLineShipmentPool(principal: Principal, query: LineShipmentPoolQuery = {}): Promise<LineShipmentPoolResponse> {
+    const allRows = (await this.getShipments(principal)).filter((shipment) => shipment.businessType === 'DEDICATED_LINE');
+    return summarizeLineShipmentPool(allRows, query);
+  }
+
   async getMasterData(): Promise<MasterDataSnapshot> {
     const [customers, contacts, customerUsers, carriers, channels, channelCategories, roles, agents, agentChannels, surcharges, fuelRates, exchangeRates] = await Promise.all([
       this.prisma.customer.findMany({ orderBy: { code: 'asc' } }),
@@ -743,13 +810,14 @@ export class PrismaRepository {
     if (existing) {
       throw new BadRequestException('客户代码已存在');
     }
+    const salesperson = principal.username;
     const customer = await this.prisma.customer.create({
       data: {
         id: `c-${code}`,
         code,
         name: input.name.trim(),
         customerSource: input.customerSource?.trim() || null,
-        salesperson: input.salesperson?.trim() || null,
+        salesperson,
         defaultSettlementMethod: input.defaultSettlementMethod?.trim() || null
       }
     });
@@ -764,7 +832,7 @@ export class PrismaRepository {
       fullName: input.fullName?.trim() || `${customer.name} Co., Ltd.`,
       customerType: input.customerType?.trim() || '直客',
       customerSource: input.customerSource?.trim() || undefined,
-      salesperson: input.salesperson?.trim() || '',
+      salesperson: customer.salesperson ?? '',
       defaultSettlementMethod: input.defaultSettlementMethod?.trim() || undefined,
       enabled: customer.enabled
     };
@@ -782,13 +850,14 @@ export class PrismaRepository {
       throw new BadRequestException('客户代码已存在');
     }
     const before = await this.prisma.customer.findUnique({ where: { id } });
+    this.ensureCustomerMasterAccess(principal, before);
     const customer = await this.prisma.customer.update({
       where: { id },
       data: {
         code,
         name: input.name.trim(),
         customerSource: input.customerSource?.trim() || null,
-        salesperson: input.salesperson?.trim() || null,
+        salesperson: before?.salesperson ?? principal.username,
         defaultSettlementMethod: input.defaultSettlementMethod?.trim() || null,
         enabled: typeof input.enabled === 'boolean' ? input.enabled : undefined
       }
@@ -801,7 +870,7 @@ export class PrismaRepository {
       fullName: input.fullName?.trim() || `${customer.name} Co., Ltd.`,
       customerType: input.customerType?.trim() || '直客',
       customerSource: input.customerSource?.trim() || undefined,
-      salesperson: input.salesperson?.trim() || '',
+      salesperson: customer.salesperson ?? '',
       defaultSettlementMethod: input.defaultSettlementMethod?.trim() || undefined,
       enabled: customer.enabled
     };
@@ -814,6 +883,7 @@ export class PrismaRepository {
     if (!customer) {
       throw new BadRequestException('客户不存在');
     }
+    this.ensureCustomerMasterAccess(principal, customer);
     if (!input.name?.trim()) {
       throw new BadRequestException('联系人名称不能为空');
     }
@@ -857,6 +927,7 @@ export class PrismaRepository {
     if (!before) {
       throw new BadRequestException('收货人不存在');
     }
+    this.ensureCustomerMasterAccess(principal, before.customer);
     if (!input.name?.trim()) {
       throw new BadRequestException('联系人名称不能为空');
     }
@@ -898,6 +969,7 @@ export class PrismaRepository {
     if (!customer) {
       throw new BadRequestException('客户不存在');
     }
+    this.ensureCustomerMasterAccess(principal, customer);
     if (!input.username?.trim() || !input.password?.trim()) {
       throw new BadRequestException('账号和密码不能为空');
     }
@@ -927,6 +999,7 @@ export class PrismaRepository {
 
   async updateCustomerEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<CustomerSummary> {
     const before = await this.prisma.customer.findUnique({ where: { id } });
+    this.ensureCustomerMasterAccess(principal, before);
     const customer = await this.prisma.customer.update({ where: { id }, data: { enabled: input.enabled === true } });
     const summary = {
       id: customer.id,
@@ -941,6 +1014,43 @@ export class PrismaRepository {
       enabled: customer.enabled
     };
     await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'master_data.customer.update', target: id, before: before ? JSON.parse(JSON.stringify(before)) : undefined, after: JSON.parse(JSON.stringify(summary)) } });
+    return summary;
+  }
+
+  async deleteCustomer(principal: Principal, id: string): Promise<CustomerSummary> {
+    const customer = await this.prisma.customer.findUnique({ where: { id } });
+    this.ensureCustomerMasterAccess(principal, customer);
+    if (!customer) {
+      throw new BadRequestException('客户不存在');
+    }
+    const [shipmentCount, receiptCount, statementCount, userCount, nonZeroAccountCount] = await Promise.all([
+      this.prisma.shipment.count({ where: { customerId: id } }),
+      this.prisma.waterReceipt.count({ where: { customerId: id } }),
+      this.prisma.customerStatement.count({ where: { customerId: id } }),
+      this.prisma.user.count({ where: { customerId: id } }),
+      this.prisma.customerAccount.count({ where: { customerId: id, NOT: { balance: 0 } } })
+    ]);
+    if (shipmentCount || receiptCount || statementCount || userCount || nonZeroAccountCount) {
+      throw new BadRequestException('该客户存在运单、财务记录、客户账号或账户余额，不能删除，请使用停用');
+    }
+    const summary = {
+      id: customer.id,
+      code: customer.code,
+      name: customer.name,
+      shortName: customer.name,
+      fullName: `${customer.name} Co., Ltd.`,
+      customerType: '直客',
+      customerSource: customer.customerSource ?? undefined,
+      salesperson: customer.salesperson ?? '',
+      defaultSettlementMethod: customer.defaultSettlementMethod ?? undefined,
+      enabled: customer.enabled
+    };
+    await this.prisma.$transaction([
+      this.prisma.customerContact.deleteMany({ where: { customerId: id } }),
+      this.prisma.customerAccount.deleteMany({ where: { customerId: id } }),
+      this.prisma.customer.delete({ where: { id } }),
+      this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'master_data.customer.delete', target: id, before: JSON.parse(JSON.stringify(summary)) } })
+    ]);
     return summary;
   }
 
@@ -1111,7 +1221,12 @@ export class PrismaRepository {
   }
 
   async createChannel(principal: Principal, input: ChannelCreateInput): Promise<ChannelSummary> {
-    const carrier = await this.prisma.carrier.findUnique({ where: { id: input.carrierId } });
+    const carrierName = input.carrierName?.trim();
+    const carrier = input.carrierId
+      ? await this.prisma.carrier.findUnique({ where: { id: input.carrierId } })
+      : carrierName
+        ? (await this.prisma.carrier.findFirst({ where: { name: carrierName } })) ?? await this.prisma.carrier.create({ data: { id: `cr-${slug(carrierName)}`, name: carrierName } })
+        : null;
     if (!carrier) {
       throw new BadRequestException('承运商不存在');
     }
@@ -1376,6 +1491,20 @@ export class PrismaRepository {
       include: { role: true },
       orderBy: { createdAt: 'asc' }
     });
+    const userIds = users.map((user) => user.id);
+    const loginRows = userIds.length
+      ? await (this.prisma as any).loginLog.findMany({
+          where: { userId: { in: userIds } },
+          orderBy: { createdAt: 'desc' },
+          select: { userId: true, createdAt: true }
+        })
+      : [];
+    const lastLoginByUserId = new Map<string, string>();
+    for (const login of loginRows as Array<{ userId: string; createdAt: Date }>) {
+      if (!lastLoginByUserId.has(login.userId)) {
+        lastLoginByUserId.set(login.userId, login.createdAt.toISOString());
+      }
+    }
     return users.map((user) => ({
       id: user.id,
       username: user.username,
@@ -1388,6 +1517,7 @@ export class PrismaRepository {
       roleLabel: user.role.label ?? getRoleMetadata(user.role.name as RoleKey).label,
       enabled: user.enabled,
       mustChangePassword: user.mustChangePassword,
+      lastLoginAt: lastLoginByUserId.get(user.id),
       createdAt: user.createdAt.toISOString()
     }));
   }
@@ -1575,6 +1705,28 @@ export class PrismaRepository {
         target: `user:${id}`,
         before: { username: existing.username, role: existing.role.name, enabled: existing.enabled, ...pickStaffProfile(existing) },
         after: { username: user.username, role: user.role.name, enabled: user.enabled, ...pickStaffProfile(user), passwordChanged: Boolean(password) }
+      }
+    });
+    return mapStaffAccount(user);
+  }
+
+  async updateStaffAccountEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<StaffAccountSummary> {
+    this.ensureAdmin(principal, '只有管理员可以启停员工账号');
+    if (id === principal.id && input.enabled !== true) {
+      throw new BadRequestException('不能停用当前登录账号');
+    }
+    const existing = await this.prisma.user.findUnique({ where: { id }, include: { role: true } });
+    if (!existing || !isStaffRoleName(existing.role.name)) {
+      throw new NotFoundException('员工账号不存在');
+    }
+    const user = await this.prisma.user.update({ where: { id }, data: { enabled: input.enabled === true }, include: { role: true } });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'system.staff.enabled',
+        target: `user:${id}`,
+        before: { username: existing.username, role: existing.role.name, enabled: existing.enabled, ...pickStaffProfile(existing) },
+        after: { username: user.username, role: user.role.name, enabled: user.enabled, ...pickStaffProfile(user) }
       }
     });
     return mapStaffAccount(user);
@@ -1837,9 +1989,16 @@ export class PrismaRepository {
       orderBy: { createdAt: 'desc' },
       ...(needsDerivedFilter ? {} : { skip: (page - 1) * pageSize, take: pageSize })
     });
+    const now = new Date();
+    const dashboardStartedAt = new Date(beijingDayStartUtc(now) - 13 * 24 * 60 * 60 * 1000);
+    const [dashboardTrendRows, dashboardRecentRows] = await Promise.all([
+      this.prisma.auditLog.findMany({ where: { createdAt: { gte: dashboardStartedAt } }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.auditLog.findMany({ orderBy: { createdAt: 'desc' }, take: 200 })
+    ]);
+    const dashboardRawRows = [...new Map([...dashboardRecentRows, ...dashboardTrendRows].map((row) => [row.id, row])).values()];
 
     const users = await this.prisma.user.findMany({
-      where: { id: { in: [...new Set(rows.map((row) => row.actorId))] } },
+      where: { id: { in: [...new Set([...rows, ...dashboardRawRows].map((row) => row.actorId))] } },
       select: { id: true, username: true }
     });
     const usernameById = new Map(users.map((user) => [user.id, user.username]));
@@ -1851,8 +2010,14 @@ export class PrismaRepository {
       .filter((row) => (resultFilter ? row.result === resultFilter : true));
     const totalItems = needsDerivedFilter ? summaries.length : await this.prisma.auditLog.count({ where });
     const pagedRows = needsDerivedFilter ? summaries.slice((page - 1) * pageSize, page * pageSize) : summaries;
+    const dashboardRows = dashboardRawRows.map((row) => toAuditSummary(row, usernameById));
 
-    return { rows: pagedRows, suspiciousDeleteWarnings: buildAuditDeleteWarnings(pagedRows), pagination: { page, pageSize, totalItems } };
+    return {
+      rows: pagedRows,
+      suspiciousDeleteWarnings: buildAuditDeleteWarnings(pagedRows),
+      pagination: { page, pageSize, totalItems },
+      dashboard: buildAuditDashboard(dashboardRows, now)
+    };
   }
 
   async recordPermissionDenied(principal: Principal, input: { permissions: string[]; method?: string; path?: string }) {
@@ -1911,24 +2076,76 @@ export class PrismaRepository {
     );
   }
 
-  async getAgentMarkupRules(principal: Principal): Promise<AgentMarkupSummary[]> {
+  async getAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
     this.ensureAdmin(principal, '只有管理员可以查看代理加价规则');
-    return this.loadAgentMarkupRules();
+    const [rules, books] = await Promise.all([
+      this.loadAgentMarkupRules(true),
+      (this.prisma as any).priceBook.findMany({ where: { deletedAt: null }, include: { rows: true } })
+    ]);
+    return buildAgentMarkupListResponse(rules, books.flatMap((book: any) => book.rows.map(mapPriceBookRow)), query);
+  }
+
+  async previewAgentMarkupRule(principal: Principal, id: string): Promise<AgentMarkupPreviewResponse> {
+    this.ensureAdmin(principal, '只有管理员可以查看规则命中线路');
+    const [current, books, logs] = await Promise.all([
+      (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } }),
+      (this.prisma as any).priceBook.findMany({ where: { deletedAt: null }, include: { rows: true } }),
+      this.prisma.auditLog.findMany({ where: { target: id }, orderBy: { createdAt: 'desc' }, take: 5 })
+    ]);
+    if (!current) {
+      throw new NotFoundException('代理加价规则不存在');
+    }
+    return buildAgentMarkupPreview(mapAgentMarkupRule(current), books.flatMap((book: any) => book.rows.map(mapPriceBookRow)), logs);
+  }
+
+  async exportAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {
+    this.ensureAdmin(principal, '只有管理员可以导出代理加价规则');
+    const response = await this.getAgentMarkupRules(principal, { ...query, page: 1, pageSize: -1 });
+    await this.prisma.auditLog.create({
+      data: { actorId: principal.id, action: 'pricing.markup.export', target: 'agent-markup-rules', after: { count: response.rows.length } }
+    });
+    return { rows: response.rows, exportedAt: new Date().toISOString() };
+  }
+
+  async importAgentMarkupRules(principal: Principal, input: { rows?: AgentMarkupCreateInput[] }): Promise<AgentMarkupImportResponse> {
+    this.ensureAdmin(principal, '只有管理员可以导入代理加价规则');
+    const rows = Array.isArray(input.rows) ? input.rows : [];
+    const created: AgentMarkupSummary[] = [];
+    const errorRows: AgentMarkupImportResponse['errorRows'] = [];
+    for (const [index, row] of rows.entries()) {
+      try {
+        created.push(await this.createAgentMarkupRule(principal, row));
+      } catch (error) {
+        errorRows.push({ index: index + 1, reason: error instanceof Error ? error.message : '规则格式错误' });
+      }
+    }
+    await this.prisma.auditLog.create({
+      data: { actorId: principal.id, action: 'pricing.markup.import', target: 'agent-markup-rules', after: { successCount: created.length, errorRows } }
+    });
+    return { successCount: created.length, errorRows, rows: created };
   }
 
   async createAgentMarkupRule(principal: Principal, input: AgentMarkupCreateInput): Promise<AgentMarkupSummary> {
     this.ensureAdmin(principal, '只有管理员可以新增代理加价规则');
-    if (!input.agentName?.trim() || !Number.isFinite(input.markupPerKg) || input.markupPerKg < 0) {
+    const normalized = normalizeAgentMarkupInput(input);
+    const priceRows = await this.loadPriceBookRowsForMarkupValidation();
+    const currentRules = await this.loadAgentMarkupRules(true);
+    validateAgentMarkupRule(normalized, priceRows, currentRules);
+    const markupValue = normalized.markupValue ?? normalized.markupPerKg;
+    if (!input.agentName?.trim() || !Number.isFinite(markupValue) || markupValue < 0) {
       throw new BadRequestException('代理名称和加价金额不能为空');
     }
     const row = await (this.prisma as any).agentMarkupRule.create({
       data: {
-        agentName: input.agentName.trim(),
-        channelName: input.channelName?.trim() || null,
-        realChannelName: input.realChannelName?.trim() || null,
-        destinationCountry: input.destinationCountry?.trim() || null,
-        markupPerKg: input.markupPerKg,
-        enabled: input.enabled !== false
+        agentName: normalized.agentName,
+        channelName: normalized.channelName ?? null,
+        realChannelName: normalized.realChannelName ?? null,
+        destinationCountry: normalized.destinationCountry ?? null,
+        markupPerKg: normalized.markupPerKg,
+        markupType: normalized.markupType,
+        markupValue: normalized.markupValue,
+        priority: normalized.priority,
+        enabled: normalized.enabled
       }
     });
     await this.prisma.auditLog.create({
@@ -1939,18 +2156,23 @@ export class PrismaRepository {
 
   async updateAgentMarkupRule(principal: Principal, id: string, input: AgentMarkupUpdateInput): Promise<AgentMarkupSummary> {
     this.ensureAdmin(principal, '只有管理员可以修改代理加价规则');
-    const current = await (this.prisma as any).agentMarkupRule.findUnique({ where: { id } });
+    const current = await (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
     }
+    const normalized = normalizeAgentMarkupInput({ ...mapAgentMarkupRule(current), ...input });
+    const priceRows = await this.loadPriceBookRowsForMarkupValidation();
+    const currentRules = await this.loadAgentMarkupRules(true);
+    validateAgentMarkupRule(normalized, priceRows, currentRules, id);
     const row = await (this.prisma as any).agentMarkupRule.update({
       where: { id },
       data: {
-        ...(input.agentName !== undefined ? { agentName: input.agentName.trim() } : {}),
-        ...(input.channelName !== undefined ? { channelName: input.channelName.trim() || null } : {}),
-        ...(input.realChannelName !== undefined ? { realChannelName: input.realChannelName.trim() || null } : {}),
-        ...(input.destinationCountry !== undefined ? { destinationCountry: input.destinationCountry.trim() || null } : {}),
-        ...(input.markupPerKg !== undefined ? { markupPerKg: input.markupPerKg } : {}),
+        ...(input.agentName !== undefined ? { agentName: normalized.agentName } : {}),
+        ...(input.channelName !== undefined ? { channelName: normalized.channelName ?? null } : {}),
+        ...(input.realChannelName !== undefined ? { realChannelName: normalized.realChannelName ?? null } : {}),
+        ...(input.destinationCountry !== undefined ? { destinationCountry: normalized.destinationCountry ?? null } : {}),
+        ...(input.markupPerKg !== undefined || input.markupValue !== undefined || input.markupType !== undefined ? { markupPerKg: normalized.markupPerKg, markupType: normalized.markupType, markupValue: normalized.markupValue } : {}),
+        ...(input.priority !== undefined ? { priority: normalized.priority } : {}),
         ...(input.enabled !== undefined ? { enabled: input.enabled } : {})
       }
     });
@@ -1962,15 +2184,15 @@ export class PrismaRepository {
 
   async deleteAgentMarkupRule(principal: Principal, id: string): Promise<AgentMarkupSummary> {
     this.ensureAdmin(principal, '只有管理员可以删除代理加价规则');
-    const current = await (this.prisma as any).agentMarkupRule.findUnique({ where: { id } });
+    const current = await (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
     }
-    await (this.prisma as any).agentMarkupRule.delete({ where: { id } });
+    const deleted = await (this.prisma as any).agentMarkupRule.update({ where: { id }, data: { enabled: false, deletedAt: new Date() } });
     await this.prisma.auditLog.create({
-      data: { actorId: principal.id, action: 'pricing.markup_rule.delete', target: id, before: { ...mapAgentMarkupRule(current) } }
+      data: { actorId: principal.id, action: 'pricing.markup_rule.delete', target: id, before: { ...mapAgentMarkupRule(current) }, after: { ...mapAgentMarkupRule(deleted) } }
     });
-    return mapAgentMarkupRule(current);
+    return mapAgentMarkupRule(deleted);
   }
 
   async getPriceBooks(principal: Principal): Promise<PriceBooksResponse> {
@@ -3444,6 +3666,7 @@ export class PrismaRepository {
       orderBy: { createdAt: 'desc' }
     });
     const scoped = rows
+      .filter((row: any) => Boolean(row.shipment?.businessReviewedAt))
       .filter((row: any) => this.canAccessBusinessCostRow(principal, row, canViewAll))
       .map((row: any) => this.toBusinessCostAuditSummary(row, { canViewAgent, canViewProfit }));
     return this.buildBusinessCostAuditListResponse(scoped, query);
@@ -3667,13 +3890,13 @@ export class PrismaRepository {
       const vouchers = await this.getPaymentVouchers(principal, { status: 'DIFFERENCE_PENDING', page: 1, pageSize: 1000 });
       kpis.push({ key: 'pending-payable', title: '待审应付', count: pending.length, amount: sum(pending), currency: 'RMB', sectionKey: 'payables' });
       kpis.push({ key: 'agent-bill-difference', title: '代理账单差异', count: vouchers.length, sectionKey: 'agent-bill-ai' });
-      if (pending.length) todos.push({ key: 'todo-payable', title: '应付审核', count: pending.length, amount: sum(pending), currency: 'RMB', sectionKey: 'payables' });
+      if (pending.length) todos.push({ key: 'todo-payable', title: '市场应付审核', count: pending.length, amount: sum(pending), currency: 'RMB', sectionKey: 'payables' });
       if (vouchers.length) {
         todos.push({ key: 'todo-agent-bill', title: '代理账单差异处理', count: vouchers.length, sectionKey: 'agent-bill-ai' });
         exceptions.push({ key: 'exception-agent-bill', title: '代理账单差异待处理', count: vouchers.length, sectionKey: 'agent-bill-ai' });
       }
-      addQuick('payables', '应付审核', '审核代理应付费用');
-      addQuick('agent-bill-ai', '代理账单核对', '处理代理账单导入和差异');
+      addQuick('payables', '市场应付审核', '审核市场排货后的代理应付费用');
+      addQuick('agent-bill-ai', '代理账单', '核对代理账单和处理差异');
     }
 
     if (await can('finance:payable:payment')) {
@@ -3688,9 +3911,9 @@ export class PrismaRepository {
 
     if (await can('finance:payable:paid-read')) {
       const response = await this.getPaidPayments(principal, { status: 'WAITING_PAYMENT', currency: 'ALL', page: 1, pageSize: -1 });
-      kpis.push({ key: 'waiting-paid-confirm', title: '待确认付款', count: response.rows.length, amount: response.rows.reduce((total, row) => total + Number(row.totalAmount ?? 0), 0), currency: 'RMB', sectionKey: 'paid-verification' });
-      if (response.rows.length) todos.push({ key: 'todo-paid-confirm', title: '确认付款', count: response.rows.length, sectionKey: 'paid-verification' });
-      addQuick('paid-verification', '已付款', '确认付款和补充凭证');
+      kpis.push({ key: 'waiting-paid-confirm', title: '待支付', count: response.rows.length, amount: response.rows.reduce((total, row) => total + Number(row.totalAmount ?? 0), 0), currency: 'RMB', sectionKey: 'paid-verification' });
+      if (response.rows.length) todos.push({ key: 'todo-paid-confirm', title: '确认支付', count: response.rows.length, sectionKey: 'paid-verification' });
+      addQuick('paid-verification', '待支付/已支付', '确认支付和补充凭证');
     }
 
     if (await can('finance:water-receipt:read')) {
@@ -3821,7 +4044,7 @@ export class PrismaRepository {
       include: { paymentApplication: true }
     });
     if (activePaymentItem?.paymentApplication?.status === 'PAID') {
-      throw new BadRequestException('该应付已付款，请先在已付款模块反核销');
+      throw new BadRequestException('该应付已支付，请先在待支付/已支付模块反核销');
     }
     if (activePaymentItem?.paymentApplication?.status === 'WAITING_PAYMENT') {
       await this.cancelPaymentApplication(principal, activePaymentItem.paymentApplication.id, { reason: '应付反审核自动撤回待支付申请' });
@@ -3992,7 +4215,7 @@ export class PrismaRepository {
     for (const row of pendingRows) {
       await this.ensurePendingPaymentReadyForFinance(row);
       const summary = this.toPendingPaymentSummary(row);
-      if (summary.status === 'INVALIDATED' || summary.status === 'PAID') throw new BadRequestException('已失效或已付款记录不能提交付款申请');
+      if (summary.status === 'INVALIDATED' || summary.status === 'PAID') throw new BadRequestException('已失效或已支付记录不能提交付款申请');
       if (summary.status === 'APPLIED') throw new BadRequestException('已申请付款记录不能重复提交');
       const bank = selectedBank ?? row.payeeBankAccount;
       this.assertPayeeBankMatchesPending(bank, [summary]);
@@ -4338,7 +4561,7 @@ export class PrismaRepository {
   async updatePaidPayment(principal: Principal, id: string, input: PaidPaymentUpdateInput): Promise<PaidPaymentSummary> {
     await this.ensurePayablePermission(principal, 'finance:payable:paid-confirm');
     const current = await this.findPaymentApplicationById(id);
-    if (current.status !== 'PAID') throw new BadRequestException('只有已付款记录可以补充信息');
+    if (current.status !== 'PAID') throw new BadRequestException('只有已支付记录可以补充信息');
     const updated = await (this.prisma as any).paymentApplication.update({
       where: { id },
       data: {
@@ -4373,7 +4596,7 @@ export class PrismaRepository {
   async reversePaidPayment(principal: Principal, id: string, input: PaidPaymentReverseInput = {}): Promise<PaidPaymentSummary> {
     await this.ensurePayablePermission(principal, 'finance:payable:paid-reverse');
     const current = await this.findPaymentApplicationById(id);
-    if (current.status !== 'PAID') throw new BadRequestException('只有已付款记录可以反核销');
+    if (current.status !== 'PAID') throw new BadRequestException('只有已支付记录可以反核销');
     const updated = await (this.prisma as any).paymentApplication.update({
       where: { id },
       data: {
@@ -4418,7 +4641,7 @@ export class PrismaRepository {
     await this.ensurePayablePermission(principal, 'finance:payable:paid-voucher');
     if (!input.fileName?.trim()) throw new BadRequestException('水单文件名不能为空');
     const application = await this.findPaymentApplicationById(input.paymentApplicationId);
-    if (application.status !== 'PAID') throw new BadRequestException('只有已付款记录可以上传水单');
+    if (application.status !== 'PAID') throw new BadRequestException('只有已支付记录可以上传水单');
     const created = await (this.prisma as any).paymentVoucher.create({
       data: {
         paymentApplicationId: input.paymentApplicationId,
@@ -4560,12 +4783,20 @@ export class PrismaRepository {
     businessCosts.forEach((row) => {
       row.rmbAmount = this.toShipmentFinanceDetailRmbAmount(row.amount, row.currency ?? 'RMB', usdRate);
     });
-    const canViewPayables = await this.hasAnyPermission(principal.role, ['finance:order-fee:payable:view', 'finance:payable:view-sensitive']);
+    const salesScope = this.operatorCustomerScope(principal);
+    const canViewOwnOrderPayables = Boolean(salesScope && (
+      ((shipment as any).entryBy && salesScope.includes((shipment as any).entryBy))
+      || (shipment.customer.salesperson && salesScope.includes(shipment.customer.salesperson))
+    ));
+    const canViewInternalPayables = await this.hasAnyPermission(principal.role, ['finance:order-fee:payable:view', 'finance:payable:view-sensitive']);
+    const canViewPayables = canViewOwnOrderPayables || canViewInternalPayables;
     const canViewReceivablePayableProfit = await this.hasAnyPermission(principal.role, ['finance:order-fee:profit:receivable-payable', 'finance:payable:view-profit']);
     const canViewReceivableBusinessProfit = await this.hasAnyPermission(principal.role, ['finance:order-fee:profit:receivable-business', 'finance:business-cost:view-profit']);
     const canViewBusinessPayableProfit = await this.hasAnyPermission(principal.role, ['finance:order-fee:profit:business-payable', 'finance:payable:view-profit']);
     const canViewBusinessCostAgent = await this.hasAnyPermission(principal.role, ['finance:business-cost:view-agent', 'finance:order-fee:payable:view', 'finance:payable:view-sensitive']);
-    const visiblePayables = canViewPayables ? payables : [];
+    const visiblePayables = canViewPayables
+      ? (canViewInternalPayables ? payables : payables.map((row) => ({ ...row, agentName: undefined, paymentNo: undefined })))
+      : [];
     const receivableTotal = roundMoney(receivables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
     const payableTotal = roundMoney(payables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
     const visiblePayableTotal = roundMoney(visiblePayables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
@@ -4599,7 +4830,7 @@ export class PrismaRepository {
       businessCostTotal: businessCostTotal || (hasPayables ? payableTotal : undefined),
       ...(canViewPayables
         ? {
-            agentName,
+            ...(canViewInternalPayables ? { agentName } : {}),
             payables: visiblePayables,
             payableTotal: visiblePayableTotal,
             canViewPayables: true
@@ -4618,13 +4849,16 @@ export class PrismaRepository {
   async getReviewPendingShipments(principal: Principal): Promise<Shipment[]> {
     await this.cleanupOverdueReviewShipments(principal);
     const operatorCustomerScope = this.operatorCustomerScope(principal);
+    const scopedOwnerWhere = operatorCustomerScope
+      ? { OR: [{ entryBy: { in: operatorCustomerScope } }, { customer: { salesperson: { in: operatorCustomerScope } } }] }
+      : {};
     const rows = await this.prisma.shipment.findMany({
       where: {
         deletedAt: null,
         status: { in: ['DRAFT', 'REVIEW_PENDING'] as ShipmentStatus[] },
         ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-        ...(operatorCustomerScope ? { customer: { salesperson: { in: operatorCustomerScope } } } : {})
-      },
+        ...(operatorCustomerScope ? scopedOwnerWhere : {})
+      } as any,
       include: shipmentIncludes,
       orderBy: { createdAt: 'asc' }
     });
@@ -4634,13 +4868,16 @@ export class PrismaRepository {
   async getReviewDeletedShipments(principal: Principal): Promise<Shipment[]> {
     await this.cleanupOverdueReviewShipments(principal);
     const operatorCustomerScope = this.operatorCustomerScope(principal);
+    const scopedOwnerWhere = operatorCustomerScope
+      ? { OR: [{ entryBy: { in: operatorCustomerScope } }, { customer: { salesperson: { in: operatorCustomerScope } } }] }
+      : {};
     const rows = await this.prisma.shipment.findMany({
       where: {
         deletedAt: { not: null },
         status: { in: ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'] as ShipmentStatus[] },
         ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-        ...(operatorCustomerScope ? { customer: { salesperson: { in: operatorCustomerScope } } } : {})
-      },
+        ...(operatorCustomerScope ? scopedOwnerWhere : {})
+      } as any,
       include: shipmentIncludes,
       orderBy: [{ deletedAt: 'desc' }, { createdAt: 'asc' }]
     });
@@ -4655,7 +4892,7 @@ export class PrismaRepository {
     return this.buildShipmentReviewDetail(principal, shipment);
   }
 
-  async approveShipmentReview(principal: Principal, shipmentId: string): Promise<ShipmentReviewDetailSummary> {
+  async approveShipmentReview(principal: Principal, shipmentId: string, options: { businessReview?: boolean } = {}): Promise<ShipmentReviewDetailSummary> {
     if (principal.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能审核运单');
     }
@@ -4667,49 +4904,61 @@ export class PrismaRepository {
     if (detail.approvalWarnings.length > 0) {
       throw new BadRequestException(`审核资料未完整：${detail.approvalWarnings.join('；')}`);
     }
-
-    const updated = await this.prisma.shipment.update({
-      where: { id: shipment.id },
-      data: {
-        status: 'WAITING_SORT',
-        reviewedBy: principal.username,
-        reviewedAt: new Date(),
-        reviewRejectedReason: null,
-        latestTracking: '审核通过，进入待排货',
-        trackingStaleDays: 0,
-        trackingEvents: { create: { status: '审核通过，进入待排货', happenedAt: new Date(), visibleToCustomer: true } }
-      },
-      include: shipmentIncludes
-    });
-    await this.createEvent(shipment.id, shipment.status as ShipmentStatus, 'WAITING_SORT', `审核通过：${principal.username}`);
-    const mappedUpdated = mapShipment(updated);
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'shipment.review.approve',
-        target: shipment.id,
-        before: toAuditJson(mapShipment(shipment)),
-        after: toAuditJson({
-          ...mappedUpdated,
-          reviewStatus: 'APPROVED',
-          statusFrom: shipment.status,
-          statusTo: mappedUpdated.status,
-          reviewer: principal.username,
-          reviewedBy: mappedUpdated.reviewedBy,
-          reviewedAt: mappedUpdated.reviewedAt,
-          receivableTotal: detail.finance.receivableTotal,
-          businessCostTotal: detail.finance.businessCostTotal ?? 0,
-          payableTotal: detail.finance.payableTotal,
-          approvalWarnings: detail.approvalWarnings
-        })
+    const canBusinessReview = Boolean(this.operatorCustomerScope(principal)) || (principal.role === 'ADMIN' && options.businessReview === true);
+    if (canBusinessReview) {
+      if ((shipment as any).businessReviewedAt) {
+        throw new BadRequestException('该订单已完成业务员自审，已进入待排货与业务成本审核');
       }
-    });
-    return this.buildShipmentReviewDetail(principal, updated);
+      const updated = await this.prisma.shipment.update({
+        where: { id: shipment.id },
+        data: {
+          status: 'WAITING_SORT',
+          businessReviewedBy: principal.username,
+          businessReviewedAt: new Date(),
+          reviewRejectedReason: null,
+          latestTracking: '业务员自审通过，进入待排货',
+          trackingStaleDays: 0,
+          trackingEvents: { create: { status: '业务员自审通过，进入待排货', happenedAt: new Date(), visibleToCustomer: true } }
+        } as any,
+        include: shipmentIncludes
+      });
+      await this.createEvent(shipment.id, shipment.status as ShipmentStatus, 'WAITING_SORT', `业务员自审通过并进入待排货：${principal.username}`);
+      const mappedUpdated = mapShipment(updated);
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'shipment.review.business_approve',
+          target: shipment.id,
+          before: toAuditJson(mapShipment(shipment)),
+          after: toAuditJson({
+            ...mappedUpdated,
+            reviewStatus: 'BUSINESS_APPROVED',
+            statusFrom: shipment.status,
+            statusTo: mappedUpdated.status,
+            businessReviewer: principal.username,
+            businessReviewedBy: mappedUpdated.businessReviewedBy,
+            businessReviewedAt: mappedUpdated.businessReviewedAt,
+            receivableTotal: detail.finance.receivableTotal,
+            businessCostTotal: detail.finance.businessCostTotal ?? 0,
+            payableTotal: detail.finance.payableTotal,
+            approvalWarnings: detail.approvalWarnings
+          })
+        }
+      });
+      return this.buildShipmentReviewDetail(principal, updated);
+    }
+    if (isFinalReviewRole(principal.role)) {
+      throw new ForbiddenException('待审核运单不再支持财务终审，请在业务成本审核处理');
+    }
+    throw new ForbiddenException('当前角色不能终审运单');
   }
 
   async rejectShipmentReview(principal: Principal, shipmentId: string, input: ShipmentReviewRejectInput): Promise<ShipmentReviewDetailSummary> {
     if (principal.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能驳回运单');
+    }
+    if (!isFinalReviewRole(principal.role)) {
+      throw new ForbiddenException('当前角色不能终审运单');
     }
     const reason = input.reason?.trim();
     if (!reason) {
@@ -4773,7 +5022,7 @@ export class PrismaRepository {
     if (
       !shipment
       || shipment.deletedAt
-      || (operatorCustomerScope && !operatorCustomerScope.includes(shipment.customer.salesperson ?? ''))
+      || (operatorCustomerScope && !operatorCustomerScope.includes((shipment as any).entryBy ?? shipment.customer.salesperson ?? ''))
     ) {
       throw new NotFoundException('运单不存在');
     }
@@ -4987,6 +5236,9 @@ export class PrismaRepository {
     const status = input.submitForReview ? 'REVIEW_PENDING' : 'DRAFT';
     const latestTracking = input.submitForReview ? '财务录单创建，待审核' : '财务录单保存草稿';
     const systemOrderNo = normalized.shipment.systemOrderNo?.trim() || (await this.nextSystemOrderNo(normalized.shipment.businessType, now));
+    if (await this.prisma.shipment.findUnique({ where: { systemOrderNo } })) {
+      throw new BadRequestException(`运单号 ${systemOrderNo} 已存在，请更换后再提交`);
+    }
 
     const created = await this.prisma.$transaction(async (tx) => {
       const shipment = await tx.shipment.create({
@@ -5065,7 +5317,7 @@ export class PrismaRepository {
               chargeWeightKg: normalized.totals.chargeWeightKg,
               destinationCountry: normalized.shipment.destinationCountry,
               receiverName: normalized.shipment.receiverName?.trim() || undefined,
-              salesperson: normalized.customer.salesperson,
+              salesperson: principal.username,
               businessChannel: normalized.shipment.receivingChannel?.trim() || normalized.shipment.channelId,
               cargoSummary: {
                 cargoType: normalized.shipment.cargoType,
@@ -5095,7 +5347,7 @@ export class PrismaRepository {
               chargeWeightKg: normalized.totals.chargeWeightKg,
               destinationCountry: normalized.shipment.destinationCountry,
               receiverName: normalized.shipment.receiverName?.trim() || undefined,
-              salesperson: normalized.customer.salesperson,
+              salesperson: principal.username,
               businessChannel: normalized.shipment.receivingChannel?.trim() || normalized.shipment.channelId,
               cargoSummary: {
                 cargoType: normalized.shipment.cargoType,
@@ -5146,6 +5398,7 @@ export class PrismaRepository {
     });
     const financeItems = ((shipment as any).financeItems ?? []) as any[];
     const canViewPayables = this.canViewOrderEntryPayables(principal);
+    const canViewSensitivePayables = this.canUseSensitiveOrderEntryPayables(principal);
     return {
       shipment: mappedShipment,
       packages: packages.map(mapWarehousePackage),
@@ -5156,7 +5409,10 @@ export class PrismaRepository {
         .filter((item) => item.type === 'BUSINESS_COST')
         .map((item) => this.toBusinessCostFinanceSummary(item, shipment)),
       payables: canViewPayables
-        ? financeItems.filter((item) => item.type === 'PAYABLE').map((item) => this.toPayableFinanceSummary(item, shipment))
+        ? financeItems.filter((item) => item.type === 'PAYABLE').map((item) => {
+          const row = this.toPayableFinanceSummary(item, shipment);
+          return canViewSensitivePayables ? row : { ...row, agentName: undefined, paymentNo: undefined };
+        })
         : [],
       canViewPayables
     };
@@ -5182,6 +5438,11 @@ export class PrismaRepository {
     const entryAt = this.resolveOrderEntryEntryAt(principal, normalized.shipment.entryAt, current.entryAt ?? current.createdAt ?? now);
     const nextStatus = input.submitForReview ? 'REVIEW_PENDING' : 'DRAFT';
     const latestTracking = input.submitForReview ? '财务录单提交审核' : '财务录单草稿已更新';
+    const nextSystemOrderNo = normalized.shipment.systemOrderNo?.trim() || current.systemOrderNo;
+    const duplicated = await this.prisma.shipment.findUnique({ where: { systemOrderNo: nextSystemOrderNo } });
+    if (duplicated && duplicated.id !== current.id) {
+      throw new BadRequestException(`运单号 ${nextSystemOrderNo} 已存在，请更换后再提交`);
+    }
 
     await this.prisma.$transaction(async (tx) => {
       await tx.shipment.update({
@@ -5191,7 +5452,7 @@ export class PrismaRepository {
           channelId: normalized.shipment.channelId,
           agentId: normalized.shipment.agentId,
           customerOrderNo: normalized.shipment.customerOrderNo.trim(),
-          systemOrderNo: normalized.shipment.systemOrderNo?.trim() || current.systemOrderNo,
+          systemOrderNo: nextSystemOrderNo,
           subOrderNo: normalized.shipment.subOrderNo?.trim() || null,
           inboundNo: normalized.shipment.inboundNo?.trim() || null,
           productName: normalized.shipment.productName.trim(),
@@ -5210,6 +5471,7 @@ export class PrismaRepository {
           receiverState: normalized.shipment.receiverState?.trim() || null,
           receiverPostalCode: normalized.shipment.receiverPostalCode?.trim() || null,
           fbaWarehouseCode: normalized.shipment.fbaWarehouseCode?.trim() || null,
+          entryBy: principal.username,
           entryAt,
           businessType: normalized.shipment.businessType,
           status: nextStatus,
@@ -5241,7 +5503,7 @@ export class PrismaRepository {
       if (input.submitForReview) {
         await tx.warehousePackage.updateMany({
           where: { id: { in: normalized.packageIds } },
-          data: { shipmentId: current.id, systemOrderNo: normalized.shipment.systemOrderNo?.trim() || current.systemOrderNo }
+          data: { shipmentId: current.id, systemOrderNo: nextSystemOrderNo }
         });
       }
       await tx.shipmentEvent.create({
@@ -5256,7 +5518,7 @@ export class PrismaRepository {
           action: input.submitForReview ? 'shipment.order_entry.draft_submit' : 'shipment.order_entry.draft_update',
           target: `shipment:${current.id}`,
           before: toAuditJson(mapShipment(current)),
-          after: toAuditJson({ warehousePackageIds: normalized.packageIds, financeItemCount: normalized.financeItems.length })
+          after: toAuditJson({ warehousePackageIds: normalized.packageIds, salesperson: principal.username, entryBy: principal.username, financeItemCount: normalized.financeItems.length })
         }
       });
     });
@@ -6014,9 +6276,9 @@ export class PrismaRepository {
           createdBy: principal.username
         }
       });
-      await tx.shipment.update({
+      await (tx as any).shipment.update({
         where: { id: shipment.id },
-        data: { channelId: channel.id, agentId: agent.id }
+        data: { channelId: channel.id, agentId: agent.id, shippingMarkRequired: body.shippingMarkRequired === true }
       });
       const existingAgentChannel = await (tx as any).agentChannel.findFirst({
         where: { agentId: agent.id, channelName: manualAgentChannelName }
@@ -6077,14 +6339,15 @@ export class PrismaRepository {
           currency: body.currency ?? 'RMB',
           payableTotal,
           routedBy: principal.username,
-          routedAt
+          routedAt,
+          shippingMarkRequired: body.shippingMarkRequired === true
         }
       }
     });
     return updated;
   }
 
-  async dispatchShipment(principal: Principal, shipmentId: string, body: { transferNo?: string }): Promise<Shipment> {
+  async dispatchShipment(principal: Principal, shipmentId: string, body: ShipmentDispatchInput): Promise<Shipment> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     const transferNo = body.transferNo ?? shipment.transferNo;
     if (transferNo) {
@@ -6109,6 +6372,9 @@ export class PrismaRepository {
     const routed = routeLog.after as { agentId?: string; agentChannelName?: string; payableTotal?: number } | null | undefined;
     if (!shipment.agentId || !shipment.channelId || !routed?.agentChannelName || !routed.payableTotal || routed.payableTotal <= 0) {
       throw new BadRequestException('请先完成代理、渠道和市场成本排货');
+    }
+    if ((shipment as any).shippingMarkRequired && body.shippingMarkConfirmed !== true) {
+      throw new BadRequestException('该票需要贴麦头，请确认已贴麦头后再出库');
     }
     if (transferNo && transferNo !== shipment.transferNo) {
       await this.ensureTransferDataApproved(principal, shipment.id);
@@ -6163,7 +6429,9 @@ export class PrismaRepository {
           archiveStatus: '已出库归档',
           warehousePackageIds,
           warehousePackageStatuses: warehousePackages.map((pkg: any) => ({ id: pkg.id, from: pkg.status, to: 'SHIPPED' })),
-          warehousePackageStatusTo: warehousePackageIds.length ? 'SHIPPED' : undefined
+          warehousePackageStatusTo: warehousePackageIds.length ? 'SHIPPED' : undefined,
+          shippingMarkRequired: (shipment as any).shippingMarkRequired === true,
+          shippingMarkConfirmed: body.shippingMarkConfirmed === true
         }
       }
     });
@@ -6313,12 +6581,15 @@ export class PrismaRepository {
     const subOrderNo = input.subOrderNo !== undefined ? input.subOrderNo.trim() || null : shipment.subOrderNo ?? null;
     const etaAt = input.etaAt ? this.parseTrackingDate(input.etaAt) : null;
     const etdAt = input.etdAt ? this.parseTrackingDate(input.etdAt) : null;
+    const channel = input.channelId
+      ? await this.prisma.channel.findFirst({ where: { id: input.channelId, enabled: true } })
+      : null;
+    if (input.channelId && !channel) {
+      throw new BadRequestException('渠道不存在');
+    }
     const currentStatus = shipment.status as ShipmentStatus;
     let nextStatus = input.status ?? currentStatus;
 
-    if (!input.status && currentStatus === 'OUTBOUNDED' && transferNo && transferNo !== shipment.transferNo) {
-      nextStatus = 'WAITING_DEPARTURE';
-    }
     if (transferNo && transferNo !== shipment.transferNo) {
       if (!['ADMIN', 'CUSTOMER_SERVICE', 'UG_CUSTOMER_SERVICE'].includes(principal.role)) {
         throw new ForbiddenException('只有客服或管理员可以填写转单号');
@@ -6340,9 +6611,6 @@ export class PrismaRepository {
     }
     if (shipment.status !== nextStatus && nextStatus === 'OUTBOUNDED') {
       throw new BadRequestException('请通过仓库出库进入已出库');
-    }
-    if (nextStatus === 'WAITING_DEPARTURE' && !transferNo) {
-      throw new BadRequestException('进入待离港前必须填写转单号');
     }
     if (nextStatus === 'SIGNED' && !transferNo) {
       throw new BadRequestException('签收前必须填写转单号');
@@ -6371,6 +6639,25 @@ export class PrismaRepository {
     if (shipment.status !== nextStatus) {
       notes.push(`更新状态：${shipmentStatusLabels[shipment.status as ShipmentStatus]} -> ${shipmentStatusLabels[nextStatus]}`);
     }
+    if (channel && shipment.channelId !== channel.id) {
+      notes.push(`更新渠道：${shipment.channel?.name ?? '空'} -> ${channel.name}`);
+    }
+    const factUpdates = {
+      customerOrderNo: input.customerOrderNo?.trim(),
+      productName: input.productName?.trim(),
+      destinationCountry: input.destinationCountry?.trim(),
+      cargoType: input.cargoType?.trim(),
+      settlementMethod: input.settlementMethod?.trim(),
+      packageCount: input.packageCount,
+      receivableWeightKg: input.receivableWeightKg,
+      agentWeightKg: input.agentWeightKg ?? input.receivableWeightKg,
+      volumeCbm: input.volumeCbm,
+      declarationRequired: input.declarationRequired,
+      sensitive: input.sensitive
+    };
+    if (factUpdates.customerOrderNo && shipment.customerOrderNo !== factUpdates.customerOrderNo) notes.push(`更新客户单号：${shipment.customerOrderNo} -> ${factUpdates.customerOrderNo}`);
+    if (factUpdates.productName && (shipment as any).productName !== factUpdates.productName) notes.push(`更新品名：${(shipment as any).productName ?? '空'} -> ${factUpdates.productName}`);
+    if (factUpdates.destinationCountry && shipment.destinationCountry !== factUpdates.destinationCountry) notes.push(`更新目的地：${shipment.destinationCountry} -> ${factUpdates.destinationCountry}`);
     if (etaAt) {
       notes.push(`更新 ETA：${etaAt.toISOString()}`);
     }
@@ -6384,6 +6671,18 @@ export class PrismaRepository {
         latestTracking: latestTracking ?? shipment.latestTracking,
         transferNo,
         subOrderNo,
+        ...(channel ? { channelId: channel.id } : {}),
+        ...(factUpdates.customerOrderNo ? { customerOrderNo: factUpdates.customerOrderNo } : {}),
+        ...(factUpdates.productName ? { productName: factUpdates.productName } : {}),
+        ...(factUpdates.destinationCountry ? { destinationCountry: factUpdates.destinationCountry } : {}),
+        ...(factUpdates.cargoType ? { cargoType: factUpdates.cargoType } : {}),
+        ...(factUpdates.settlementMethod ? { settlementMethod: factUpdates.settlementMethod } : {}),
+        ...(factUpdates.packageCount !== undefined ? { packageCount: factUpdates.packageCount } : {}),
+        ...(factUpdates.receivableWeightKg !== undefined ? { receivableWeightKg: factUpdates.receivableWeightKg } : {}),
+        ...(factUpdates.agentWeightKg !== undefined ? { agentWeightKg: factUpdates.agentWeightKg } : {}),
+        ...(factUpdates.volumeCbm !== undefined ? { volumeCbm: factUpdates.volumeCbm } : {}),
+        ...(factUpdates.declarationRequired !== undefined ? { declarationRequired: factUpdates.declarationRequired } : {}),
+        ...(factUpdates.sensitive !== undefined ? { sensitive: factUpdates.sensitive } : {}),
         status: nextStatus,
         etaAt: etaAt ?? shipment.etaAt,
         etdAt: etdAt ?? shipment.etdAt,
@@ -6719,7 +7018,7 @@ export class PrismaRepository {
     if (!['ADMIN', 'CUSTOMER_SERVICE', 'UG_CUSTOMER_SERVICE'].includes(principal.role)) {
       throw new ForbiddenException('只有客服或管理员可以上传面单');
     }
-    if (!['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED'].includes(shipment.status)) {
+    if (!['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status)) {
       throw new BadRequestException('当前状态不允许上传面单');
     }
     const transferNo = input.transferNo?.trim() || shipment.transferNo;
@@ -6767,6 +7066,54 @@ export class PrismaRepository {
       }
     });
     return { label: mapShipmentLabel(label), shipment: mapShipment(updated) };
+  }
+
+  async uploadShipmentBusinessInvoice(
+    principal: Principal,
+    shipmentId: string,
+    input: { fileName: string; mimeType: string; sizeBytes: number; url: string }
+  ) {
+    const shipment = await this.getVisibleShipment(principal, shipmentId);
+    if (!shipment.agentId) {
+      throw new BadRequestException('运单未选择代理，不能上传发票');
+    }
+    if (!shipment.agent?.invoiceTemplateUrl) {
+      throw new BadRequestException('代理未维护发票模板');
+    }
+    const now = new Date();
+    const updated = await this.prisma.shipment.update({
+      where: { id: shipment.id },
+      data: {
+        businessInvoiceName: input.fileName,
+        businessInvoiceUrl: input.url,
+        businessInvoiceUploadedBy: principal.username,
+        businessInvoiceUploadedAt: now
+      },
+      include: shipmentIncludes
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'shipment.business_invoice.upload',
+        target: shipment.id,
+        before: toAuditJson({
+          businessInvoiceName: (shipment as any).businessInvoiceName,
+          businessInvoiceUrl: (shipment as any).businessInvoiceUrl
+        }),
+        after: toAuditJson({
+          fileName: input.fileName,
+          mimeType: input.mimeType,
+          sizeBytes: input.sizeBytes,
+          url: input.url,
+          agentId: shipment.agentId,
+          agentName: shipment.agent?.name,
+          templateName: shipment.agent?.invoiceTemplateName,
+          uploadedBy: principal.username,
+          uploadedAt: now.toISOString()
+        })
+      }
+    });
+    return { shipment: mapShipment(updated), fileName: input.fileName, url: input.url };
   }
 
   async getShipmentLabels(principal: Principal, shipmentId: string): Promise<ShipmentLabelSummary[]> {
@@ -7180,11 +7527,19 @@ export class PrismaRepository {
   }
 
   private canViewOrderEntryPayables(principal: Principal) {
+    return ['ADMIN', 'FINANCE', 'UG_FINANCE', 'OPERATOR', 'UG_BUSINESS', 'UG_MARKET', 'CUSTOMER_SERVICE', 'UG_CUSTOMER_SERVICE'].includes(principal.role);
+  }
+
+  private canUseSensitiveOrderEntryPayables(principal: Principal) {
+    return ['ADMIN', 'FINANCE', 'UG_FINANCE'].includes(principal.role);
+  }
+
+  private canEditOrderEntryEntryAt(principal: Principal) {
     return principal.role === 'ADMIN' || ['FINANCE', 'UG_FINANCE'].includes(principal.role);
   }
 
   private resolveOrderEntryEntryAt(principal: Principal, value: string | undefined, fallback: Date) {
-    if (value && this.canViewOrderEntryPayables(principal)) {
+    if (value && this.canEditOrderEntryEntryAt(principal)) {
       const parsed = new Date(value);
       if (!Number.isNaN(parsed.getTime())) return parsed;
     }
@@ -7211,10 +7566,19 @@ export class PrismaRepository {
 
     const receivables = this.normalizeOrderEntryFinanceItems('RECEIVABLE', input.receivables);
     const businessCosts = this.normalizeOrderEntryFinanceItems('BUSINESS_COST', input.businessCosts);
-    const payables = this.normalizeOrderEntryFinanceItems('PAYABLE', input.payables ?? []);
+    const rawPayables = input.payables ?? [];
+    if (!this.canUseSensitiveOrderEntryPayables(principal) && rawPayables.some((row) => row.agentName?.trim() || row.paymentNo?.trim())) {
+      throw new ForbiddenException('当前角色不能录入代理或付款敏感信息');
+    }
+    const payables = this.normalizeOrderEntryFinanceItems('PAYABLE', rawPayables);
     if (!this.canViewOrderEntryPayables(principal) && payables.length) {
       throw new ForbiddenException('当前角色不能录入应付费用');
     }
+    const channel = shipment.channelId?.trim()
+      ? await this.prisma.channel.findFirst({ where: { id: shipment.channelId.trim(), enabled: true } })
+      : shipment.receivingChannel?.trim()
+        ? await this.prisma.channel.findFirst({ where: { name: shipment.receivingChannel.trim(), enabled: true } })
+        : null;
     if (input.submitForReview) {
       this.validateOrderEntryRequiredFields(input, packageIds, receivables, businessCosts);
     }
@@ -7232,7 +7596,7 @@ export class PrismaRepository {
     }
     return {
       customer,
-      shipment,
+      shipment: { ...shipment, channelId: channel?.id ?? shipment.channelId, receivingChannel: channel?.name ?? shipment.receivingChannel },
       packageIds,
       totals: {
         packageCount: totals.packageCount || packages.length,
@@ -7779,6 +8143,7 @@ export class PrismaRepository {
 
   private toReceivableAuditSummary(row: any, sourceType: 'SYSTEM' | 'MANUAL'): ReceivableAuditSummary {
     const customerName = `${row.shipment.customer.code}-${row.shipment.customer.name}`;
+    const createdAt = this.resolveReceivableAuditCreatedAt(row);
     return {
       id: row.id,
       shipmentId: row.shipmentId,
@@ -7788,7 +8153,7 @@ export class PrismaRepository {
       customerCode: row.shipment.customer.code,
       customerOrderNo: row.shipment.customerOrderNo ?? undefined,
       transferNo: row.shipment.transferNo ?? undefined,
-      salesperson: row.shipment.customer.salesperson ?? row.shipment.salespersonName ?? undefined,
+      salesperson: row.shipment.entryBy ?? row.shipment.customer.salesperson ?? row.shipment.salespersonName ?? undefined,
       name: row.name,
       amount: Number(row.amount),
       settled: Boolean(row.settled),
@@ -7800,7 +8165,7 @@ export class PrismaRepository {
 	      receivedAmount: Number(row.receivedAmount ?? 0),
 	      receiptStatus: row.receiptStatus ?? 'UNPAID',
 	      receivedAt: row.receivedAt?.toISOString?.() ?? row.receivedAt ?? undefined,
-	      createdAt: row.createdAt?.toISOString?.() ?? row.createdAt ?? undefined,
+	      createdAt,
       createdBy: row.createdBy ?? undefined,
       reviewedAt: row.reviewedAt?.toISOString?.() ?? row.reviewedAt ?? undefined,
       reviewedBy: row.reviewedBy ?? undefined,
@@ -7809,6 +8174,19 @@ export class PrismaRepository {
       voided: row.voided ?? false,
       sourceType
     };
+  }
+
+  private resolveReceivableAuditCreatedAt(row: any) {
+    const reviewedAt = row.shipment?.businessReviewedAt;
+    const createdAt = row.createdAt;
+    if (reviewedAt && createdAt) {
+      const reviewedTime = new Date(reviewedAt).getTime();
+      const createdTime = new Date(createdAt).getTime();
+      if (!Number.isNaN(reviewedTime) && !Number.isNaN(createdTime) && createdTime <= reviewedTime) {
+        return reviewedAt?.toISOString?.() ?? reviewedAt;
+      }
+    }
+    return createdAt?.toISOString?.() ?? createdAt ?? undefined;
   }
 
   private toManualReceivableAuditSummary(item: any): ReceivableAuditSummary {
@@ -7859,6 +8237,10 @@ export class PrismaRepository {
       shipmentId: item.shipmentId,
       systemOrderNo: shipment.systemOrderNo,
       customerName,
+      salesperson: (shipment as { entryBy?: string; customer?: { salesperson?: string | null }; salespersonName?: string }).entryBy
+        ?? (shipment as { customer?: { salesperson?: string | null } }).customer?.salesperson
+        ?? (shipment as { salespersonName?: string }).salespersonName
+        ?? undefined,
       name: item.name,
       amount: Number(item.amount),
       settled: item.reconciliationStatus === 'CONFIRMED' || item.reconciliationStatus === 'LOCKED',
@@ -8066,7 +8448,7 @@ export class PrismaRepository {
       customerOrderNo: shipment.customerOrderNo ?? undefined,
       systemOrderNo: shipment.systemOrderNo,
       transferNo: shipment.transferNo ?? undefined,
-      salesperson: shipment.customer.salesperson ?? shipment.salespersonName ?? undefined,
+      salesperson: shipment.entryBy ?? shipment.customer.salesperson ?? shipment.salespersonName ?? undefined,
       agentName: shipment.agent?.name ?? undefined,
       agentChannel: shipment.channel?.name ?? undefined
     };
@@ -8080,13 +8462,13 @@ export class PrismaRepository {
 
   private async ensurePayablePermission(principal: Principal, permission: PermissionKey) {
     if (!(await this.hasPermission(principal.role, permission))) {
-      throw new ForbiddenException('没有应付审核权限');
+      throw new ForbiddenException('没有市场应付审核权限');
     }
   }
 
   private canAccessBusinessCostShipment(principal: Principal, shipment: any) {
     if (principal.role !== 'OPERATOR') return true;
-    const salesperson = shipment.customer?.salesperson ?? shipment.salespersonName ?? shipment.salesperson;
+    const salesperson = shipment.entryBy ?? shipment.customer?.salesperson ?? shipment.salespersonName ?? shipment.salesperson;
     return Boolean(salesperson && this.operatorCustomerScope(principal)?.includes(salesperson));
   }
 
@@ -8398,12 +8780,18 @@ export class PrismaRepository {
     }));
   }
 
+  private async isBusinessEnteredPayable(item: any) {
+    if (item.type !== 'PAYABLE' || !item.createdBy) return false;
+    const creator = await this.prisma.user.findUnique({ where: { username: item.createdBy }, select: { roleId: true } });
+    return Boolean(creator && isSalesScopedRole(creator.roleId));
+  }
+
   private async canExposePayableToFinance(item: any) {
-    return !await this.isRouteAgentPayable(item) || await this.hasBusinessDataApproval(item.shipmentId);
+    return await this.isRouteAgentPayable(item) || !await this.isBusinessEnteredPayable(item) || await this.hasBusinessDataApproval(item.shipmentId);
   }
 
   private async ensurePayableReadyForFinance(item: any) {
-    if (!await this.canExposePayableToFinance(item)) throw new BadRequestException('客服确认数据后才能审核该代理成本');
+    if (!await this.canExposePayableToFinance(item)) throw new BadRequestException('客服确认数据后才能审核该应付费用');
   }
 
   private async canExposePendingPaymentToFinance(row: any) {
@@ -8537,7 +8925,7 @@ export class PrismaRepository {
       customerOrderNo: shipment.customerOrderNo ?? undefined,
       systemOrderNo: shipment.systemOrderNo,
       transferNo: shipment.transferNo ?? undefined,
-      salesperson: shipment.customer.salesperson ?? shipment.salespersonName ?? undefined,
+      salesperson: shipment.entryBy ?? shipment.customer.salesperson ?? shipment.salespersonName ?? undefined,
       agentName: visibility.canViewAgent ? item.agentName ?? shipment.agent?.name ?? undefined : undefined,
       receivableTotal,
       businessCostTotal,
@@ -8631,7 +9019,7 @@ export class PrismaRepository {
       systemOrderNo: shipment.systemOrderNo,
       transferNo: shipment.transferNo ?? undefined,
       agentChannel: shipment.channel?.name ?? undefined,
-      salesperson: shipment.customer.salesperson ?? shipment.salespersonName ?? undefined,
+      salesperson: shipment.entryBy ?? shipment.customer.salesperson ?? shipment.salespersonName ?? undefined,
       payableTotal: visibility.canViewSensitivePayable ? Number(payableTotal.toFixed(2)) : 0,
       receivableProfit: visibility.canViewProfit ? Number((receivableTotal - payableTotal).toFixed(2)) : undefined,
       operationProfit: visibility.canViewProfit ? Number((businessCostTotal - payableTotal).toFixed(2)) : undefined,
@@ -8758,7 +9146,7 @@ export class PrismaRepository {
       shipmentId: row.shipmentId,
       date: row.appliedAt?.toISOString?.() ?? row.appliedAt ?? row.createdAt?.toISOString?.() ?? row.createdAt,
       agentName: payable?.agentName ?? shipment.agent?.name ?? undefined,
-      salesperson: shipment.customer?.salesperson ?? shipment.salespersonName ?? undefined,
+      salesperson: shipment.entryBy ?? shipment.customer?.salesperson ?? shipment.salespersonName ?? undefined,
       customerCode: shipment.customer.code,
       customerName: `${shipment.customer.code}-${shipment.customer.name}`,
       systemOrderNo: shipment.systemOrderNo,
@@ -9057,6 +9445,10 @@ export class PrismaRepository {
       name: item.name,
       amount: Number(item.amount),
       settled: item.reconciliationStatus === 'CONFIRMED' || item.reconciliationStatus === 'LOCKED',
+      salesperson: (shipment as { entryBy?: string; customer?: { salesperson?: string | null }; salespersonName?: string }).entryBy
+        ?? (shipment as { customer?: { salesperson?: string | null } }).customer?.salesperson
+        ?? (shipment as { salespersonName?: string }).salespersonName
+        ?? undefined,
       agentName: item.agentName ?? shipment.agent?.name ?? shipment.agentName ?? undefined,
       type: 'PAYABLE',
       currency: item.currency,
@@ -9084,6 +9476,10 @@ export class PrismaRepository {
       name: item.name,
       amount: Number(item.amount),
       settled: item.reconciliationStatus === 'CONFIRMED' || item.reconciliationStatus === 'LOCKED',
+      salesperson: (shipment as { entryBy?: string; customer?: { salesperson?: string | null }; salespersonName?: string } | undefined)?.entryBy
+        ?? (shipment as { customer?: { salesperson?: string | null } } | undefined)?.customer?.salesperson
+        ?? (shipment as { salespersonName?: string } | undefined)?.salespersonName
+        ?? undefined,
       agentName: item.agentName ?? shipment?.agent?.name ?? shipment?.agentName ?? undefined,
       type: 'BUSINESS_COST' as const,
       currency: item.currency,
@@ -9107,7 +9503,17 @@ export class PrismaRepository {
     if (!isSalesScopedRole(principal.role)) {
       return undefined;
     }
-    return Array.from(new Set([principal.username, 'operator', '业务员'].filter(Boolean)));
+    return Array.from(new Set([principal.username, principal.name, principal.nickname, 'operator', '业务员'].filter((value): value is string => Boolean(value))));
+  }
+
+  private ensureCustomerMasterAccess(principal: Principal, customer: { salesperson?: string | null } | null) {
+    if (!customer) {
+      throw new BadRequestException('客户不存在');
+    }
+    const scope = this.operatorCustomerScope(principal);
+    if (scope && (!customer.salesperson || !scope.includes(customer.salesperson))) {
+      throw new ForbiddenException('业务员只能操作自己名下客户');
+    }
   }
 
   private maskShipmentListFields(principal: Principal, shipment: Shipment): Shipment {
@@ -9136,9 +9542,17 @@ export class PrismaRepository {
     };
   }
 
-  private async loadAgentMarkupRules(): Promise<AgentMarkupSummary[]> {
-    const rows = await (this.prisma as any).agentMarkupRule.findMany({ orderBy: [{ agentName: 'asc' }, { channelName: 'asc' }, { realChannelName: 'asc' }] });
+  private async loadAgentMarkupRules(includeDisabled = false): Promise<AgentMarkupSummary[]> {
+    const rows = await (this.prisma as any).agentMarkupRule.findMany({
+      where: { deletedAt: null, ...(includeDisabled ? {} : { enabled: true }) },
+      orderBy: [{ priority: 'asc' }, { agentName: 'asc' }, { channelName: 'asc' }, { realChannelName: 'asc' }]
+    });
     return rows.map(mapAgentMarkupRule);
+  }
+
+  private async loadPriceBookRowsForMarkupValidation(): Promise<PriceBookRowSummary[]> {
+    const books = await (this.prisma as any).priceBook.findMany({ where: { deletedAt: null }, include: { rows: true } });
+    return books.flatMap((book: any) => book.rows.map(mapPriceBookRow));
   }
 
   private async nextWarehouseConsolidationNo(packages: WarehousePackageSummary[], mode: WarehouseConsolidationCreateInput['mode']) {
@@ -9257,13 +9671,16 @@ export class PrismaRepository {
 
   private async getReviewVisibleShipment(principal: Principal, shipmentId: string, includeDeleted: boolean) {
     const operatorCustomerScope = this.operatorCustomerScope(principal);
+    const scopedOwnerWhere = operatorCustomerScope
+      ? { OR: [{ entryBy: { in: operatorCustomerScope } }, { customer: { salesperson: { in: operatorCustomerScope } } }] }
+      : {};
     const shipment = await this.prisma.shipment.findFirst({
       where: {
         id: shipmentId,
         ...(includeDeleted ? {} : { deletedAt: null }),
         ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-        ...(operatorCustomerScope ? { customer: { salesperson: { in: operatorCustomerScope } } } : {})
-      },
+        ...(operatorCustomerScope ? scopedOwnerWhere : {})
+      } as any,
       include: shipmentIncludes
     });
     if (!shipment) {
@@ -9272,17 +9689,26 @@ export class PrismaRepository {
     return shipment;
   }
 
+  private async isShipmentSubmittedBySalesScopedUser(shipment: { entryBy?: string | null }) {
+    if (!shipment.entryBy) return false;
+    const user = await (this.prisma as any).user.findUnique({ where: { username: shipment.entryBy }, select: { roleId: true } });
+    return Boolean(user?.roleId && isSalesScopedRole(user.roleId));
+  }
+
   private async cleanupOverdueReviewShipments(principal: Principal) {
     const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     const operatorCustomerScope = this.operatorCustomerScope(principal);
+    const scopedOwnerWhere = operatorCustomerScope
+      ? { OR: [{ entryBy: { in: operatorCustomerScope } }, { customer: { salesperson: { in: operatorCustomerScope } } }] }
+      : {};
     const rows = await this.prisma.shipment.findMany({
       where: {
         deletedAt: null,
         status: { in: ['DRAFT', 'REVIEW_PENDING'] as ShipmentStatus[] },
         createdAt: { lt: cutoff },
         ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-        ...(operatorCustomerScope ? { customer: { salesperson: { in: operatorCustomerScope } } } : {})
-      },
+        ...(operatorCustomerScope ? scopedOwnerWhere : {})
+      } as any,
       include: shipmentIncludes
     });
 
@@ -9504,8 +9930,9 @@ function mapShipment(row: ShipmentWithRelations): Shipment {
     createdAt: row.createdAt.toISOString(),
     entryAt: (row as any).entryAt?.toISOString?.() ?? (row as any).entryAt ?? undefined,
     customerName: `${row.customer.code}-${row.customer.name}`,
+    customerId: row.customer.id,
     customerCode: row.customer.code,
-    salesperson: row.customer.salesperson ?? undefined,
+    salesperson: (row as any).entryBy ?? row.customer.salesperson ?? undefined,
     customerOrderNo: row.customerOrderNo,
     systemOrderNo: row.systemOrderNo,
     transferNo: row.transferNo ?? undefined,
@@ -9530,6 +9957,8 @@ function mapShipment(row: ShipmentWithRelations): Shipment {
     receiverPostalCode: (row as any).receiverPostalCode ?? undefined,
     fbaWarehouseCode: (row as any).fbaWarehouseCode ?? undefined,
     entryBy: (row as any).entryBy ?? undefined,
+    businessReviewedBy: (row as any).businessReviewedBy ?? undefined,
+    businessReviewedAt: (row as any).businessReviewedAt?.toISOString?.() ?? (row as any).businessReviewedAt ?? undefined,
     reviewedBy: (row as any).reviewedBy ?? undefined,
     reviewedAt: (row as any).reviewedAt?.toISOString?.() ?? (row as any).reviewedAt ?? undefined,
     reviewRejectedReason: (row as any).reviewRejectedReason ?? undefined,
@@ -9554,7 +9983,9 @@ function mapShipment(row: ShipmentWithRelations): Shipment {
     trackingStaleDays: row.trackingStaleDays,
     isRemoteArea: row.isRemoteArea,
     status: row.status as ShipmentStatus,
+    channelId: row.channelId ?? undefined,
     channelName: row.channel?.name ?? '',
+    agentId: row.agentId ?? undefined,
     agentName: row.agent?.name ?? '',
     routedAt: routePayable?.createdAt instanceof Date ? routePayable.createdAt.toISOString() : routePayable?.createdAt,
     routeAgentChannelName: routeRemark.agentChannelName,
@@ -9563,6 +9994,11 @@ function mapShipment(row: ShipmentWithRelations): Shipment {
     routeOtherFee: routeRemark.otherFee,
     routeCostTotal: routePayable?.amount === null || routePayable?.amount === undefined ? undefined : Number(routePayable.amount),
     routeCurrency: routePayable?.currency ?? undefined,
+    shippingMarkRequired: (row as any).shippingMarkRequired === true,
+    businessInvoiceName: (row as any).businessInvoiceName ?? undefined,
+    businessInvoiceUrl: (row as any).businessInvoiceUrl ?? undefined,
+    businessInvoiceUploadedBy: (row as any).businessInvoiceUploadedBy ?? undefined,
+    businessInvoiceUploadedAt: (row as any).businessInvoiceUploadedAt?.toISOString?.() ?? (row as any).businessInvoiceUploadedAt ?? undefined,
     paymentAmountUsd: row.paymentAmountUsd === null ? undefined : Number(row.paymentAmountUsd),
     paymentAmountCny: row.paymentAmountCny === null ? undefined : Number(row.paymentAmountCny),
     paymentMethod: row.paymentMethod === null ? undefined : row.paymentMethod as ShipmentPaymentMethod,
@@ -9654,6 +10090,12 @@ function mapAgentMarkupRule(row: any): AgentMarkupSummary {
     realChannelName: row.realChannelName ?? undefined,
     destinationCountry: row.destinationCountry ?? undefined,
     markupPerKg: Number(row.markupPerKg),
+    markupType: row.markupType ?? 'WEIGHT',
+    markupValue: row.markupValue === null || row.markupValue === undefined ? Number(row.markupPerKg) : Number(row.markupValue),
+    priority: row.priority ?? 100,
+    createdAt: row.createdAt?.toISOString?.() ?? row.createdAt ?? undefined,
+    updatedAt: row.updatedAt?.toISOString?.() ?? row.updatedAt ?? undefined,
+    deletedAt: row.deletedAt?.toISOString?.() ?? row.deletedAt ?? undefined,
     enabled: row.enabled
   };
 }
@@ -9687,6 +10129,168 @@ function mapCarrierTask(row: {
     updatedAt: row.updatedAt.toISOString(),
     completedAt: row.completedAt?.toISOString()
   };
+}
+
+function normalizeAgentMarkupInput(input: AgentMarkupCreateInput | AgentMarkupUpdateInput | AgentMarkupSummary): AgentMarkupSummary {
+  const markupType = input.markupType ?? 'WEIGHT';
+  const rawValue = input.markupValue ?? input.markupPerKg ?? 0;
+  const markupValue = roundMoney(Number(rawValue));
+  return {
+    id: 'id' in input ? input.id : '',
+    agentName: input.agentName?.trim() ?? '',
+    channelName: input.channelName?.trim() || undefined,
+    realChannelName: input.realChannelName?.trim() || undefined,
+    destinationCountry: input.destinationCountry?.trim() || undefined,
+    markupType,
+    markupValue,
+    markupPerKg: markupType === 'WEIGHT' ? markupValue : roundMoney(Number(input.markupPerKg ?? 0)),
+    priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : 100,
+    enabled: input.enabled !== false,
+    createdAt: 'createdAt' in input ? input.createdAt : undefined,
+    updatedAt: 'updatedAt' in input ? input.updatedAt : undefined,
+    deletedAt: 'deletedAt' in input ? input.deletedAt : undefined
+  };
+}
+
+function validateAgentMarkupRule(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[], rules: AgentMarkupSummary[], currentId?: string) {
+  if (!rule.agentName) throw new BadRequestException('代理名称不能为空');
+  if (!Number.isFinite(rule.markupValue ?? rule.markupPerKg) || (rule.markupValue ?? rule.markupPerKg) < 0) throw new BadRequestException('加价值不能为空');
+  if (!['WEIGHT', 'PER_SHIPMENT', 'FIXED', 'PERCENT'].includes(rule.markupType ?? 'WEIGHT')) throw new BadRequestException('加价方式不正确');
+  const conflict = rules.find((item) =>
+    item.id !== currentId &&
+    !item.deletedAt &&
+    item.agentName === rule.agentName &&
+    (item.channelName ?? '') === (rule.channelName ?? '') &&
+    (item.realChannelName ?? '') === (rule.realChannelName ?? '') &&
+    (item.destinationCountry ?? '') === (rule.destinationCountry ?? '') &&
+    (item.priority ?? 100) === (rule.priority ?? 100)
+  );
+  if (conflict) throw new BadRequestException('优先级冲突，请调整规则优先级');
+}
+
+function buildAgentMarkupListResponse(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[], query: AgentMarkupListQuery): AgentMarkupListResponse {
+  const activeRows = rules.filter((rule) => !rule.deletedAt);
+  const enriched = activeRows.map((rule) => ({ ...rule, hitCount: countAgentMarkupHits(rule, priceRows) }));
+  const filtered = enriched
+    .filter((rule) => textMatch(rule.agentName, query.agentName))
+    .filter((rule) => textMatch(rule.channelName ?? '', query.channelName))
+    .filter((rule) => textMatch(rule.realChannelName ?? '', query.realChannelName))
+    .filter((rule) => textMatch(rule.destinationCountry ?? '', query.destinationCountry))
+    .filter((rule) => query.status === 'ENABLED' ? rule.enabled : query.status === 'DISABLED' ? !rule.enabled : true)
+    .sort((left, right) => (left.priority ?? 100) - (right.priority ?? 100) || safeTime(right.updatedAt) - safeTime(left.updatedAt));
+  const page = Math.max(1, Number(query.page ?? 1));
+  const pageSize = Number(query.pageSize ?? 20);
+  const grouped = query.detail ? filtered : groupAgentMarkupRows(filtered, priceRows);
+  const rows = pageSize < 0 ? grouped : grouped.slice((page - 1) * pageSize, page * pageSize);
+  const matchedRows = new Set(enriched.flatMap((rule) => matchingPriceRowsForRule(rule, priceRows).map((row) => row.id)));
+  return {
+    metrics: {
+      totalRules: activeRows.length,
+      enabledRules: activeRows.filter((rule) => rule.enabled).length,
+      disabledRules: activeRows.filter((rule) => !rule.enabled).length,
+      unmatchedQuotes: priceRows.filter((row) => !matchedRows.has(row.id)).length,
+      latestUpdatedAt: activeRows.map((rule) => rule.updatedAt).filter(Boolean).sort().at(-1)
+    },
+    rows,
+    pagination: { page, pageSize: pageSize < 0 ? grouped.length : pageSize, totalItems: grouped.length }
+  };
+}
+
+function groupAgentMarkupRows(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[]) {
+  const groups = new Map<string, AgentMarkupSummary[]>();
+  for (const rule of rules) {
+    const list = groups.get(rule.agentName) ?? [];
+    list.push(rule);
+    groups.set(rule.agentName, list);
+  }
+  return [...groups.entries()].map(([agentName, rows]) => {
+    const sorted = [...rows].sort((left, right) => markupScopeRank(left) - markupScopeRank(right) || (left.priority ?? 100) - (right.priority ?? 100) || safeTime(right.updatedAt) - safeTime(left.updatedAt));
+    const primary = sorted[0];
+    const hitIds = new Set(rows.flatMap((rule) => matchingPriceRowsForRule(rule, priceRows).map((row) => row.id)));
+    const latestUpdatedAt = rows.map((rule) => rule.updatedAt).filter(Boolean).sort().at(-1);
+    return {
+      ...primary,
+      id: `agent:${agentName}`,
+      agentName,
+      channelName: undefined,
+      realChannelName: undefined,
+      destinationCountry: undefined,
+      enabled: rows.some((rule) => rule.enabled),
+      ruleCount: rows.length,
+      hitCount: hitIds.size,
+      updatedAt: latestUpdatedAt ?? primary.updatedAt
+    };
+  });
+}
+
+function markupScopeRank(rule: AgentMarkupSummary) {
+  return [rule.channelName, rule.realChannelName, rule.destinationCountry].filter(Boolean).length;
+}
+
+function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[], logs: Array<{ action: string; createdAt?: Date | string }>): AgentMarkupPreviewResponse {
+  const rows = matchingPriceRowsForRule(rule, priceRows);
+  return {
+    rule: { ...rule, hitCount: rows.length },
+    scope: {
+      channelLabel: rule.channelName ?? '全部渠道',
+      realChannelLabel: rule.realChannelName ?? '全部线路',
+      countryLabel: rule.destinationCountry ?? '全部国家'
+    },
+    stats: {
+      priceBookRows: rows.length,
+      channels: new Set(rows.map((row) => row.channelName)).size,
+      countries: new Set(rows.map((row) => row.destinationCountry)).size
+    },
+    examples: rows.slice(0, 8).map((row) => ({
+      id: row.id,
+      channelName: row.channelName,
+      realChannelName: row.realChannelName,
+      destinationCountry: row.destinationCountry,
+      weightSegmentLabel: `${row.minWeightKg}-${row.maxWeightKg}kg`
+    })),
+    recentChanges: logs.slice(0, 5).map((log) => ({
+      action: log.action,
+      createdAt: log.createdAt instanceof Date ? log.createdAt.toISOString() : String(log.createdAt ?? new Date().toISOString())
+    }))
+  };
+}
+
+function matchingPriceRowsForRule(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[]) {
+  return priceRows.filter((row) =>
+    row.agentName === rule.agentName &&
+    (!rule.channelName || row.channelName === rule.channelName) &&
+    (!rule.realChannelName || (row.realChannelName ?? row.channelName) === rule.realChannelName) &&
+    (!rule.destinationCountry || row.destinationCountry === rule.destinationCountry)
+  );
+}
+
+function countAgentMarkupHits(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[]) {
+  return matchingPriceRowsForRule(rule, priceRows).length;
+}
+
+function textMatch(value: string, keyword?: string) {
+  return !keyword?.trim() || value.toLowerCase().includes(keyword.trim().toLowerCase());
+}
+
+function safeTime(value?: string) {
+  const time = Date.parse(value ?? '');
+  return Number.isFinite(time) ? time : 0;
+}
+
+function applyAgentMarkup(costPerKg: number, chargeableWeightKg: number, rule: AgentMarkupSummary) {
+  const type = rule.markupType ?? 'WEIGHT';
+  const value = Number(rule.markupValue ?? rule.markupPerKg ?? 0);
+  const totalCost = roundMoney(costPerKg * chargeableWeightKg);
+  if (type === 'PERCENT') {
+    const totalSales = roundMoney(totalCost * (1 + value / 100));
+    return { totalSales, salesRatePerKg: roundMoney(totalSales / chargeableWeightKg) };
+  }
+  if (type === 'PER_SHIPMENT' || type === 'FIXED') {
+    const totalSales = roundMoney(totalCost + value);
+    return { totalSales, salesRatePerKg: roundMoney(totalSales / chargeableWeightKg) };
+  }
+  const salesRatePerKg = roundMoney(costPerKg + value);
+  return { totalSales: roundMoney(salesRatePerKg * chargeableWeightKg), salesRatePerKg };
 }
 
 function mapWarehousePackage(row: any): WarehousePackageSummary {
@@ -10050,14 +10654,14 @@ function createBackendPriceLookup(
   persistedMarkupRules: AgentMarkupSummary[] = defaultAgentMarkupRules
 ): PriceLookupResponse {
   const destinationCountry = input.destinationCountry?.trim();
-  const chargeableWeightKg = Number(input.chargeableWeightKg);
+  const chargeableWeightKg = calculateLookupChargeableWeight(input);
   const warehouseProfile = createWarehouseLookupProfile(input);
   if ((!destinationCountry && !warehouseProfile.code) || !Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0) {
     throw new BadRequestException('目的地和计费重不能为空');
   }
 
   const priceBookRemarkMap = new Map(priceBooks.map((book) => [book.id, book.remark?.trim() || undefined]));
-  const markupRules = persistedMarkupRules.length ? persistedMarkupRules : defaultAgentMarkupRules;
+  const markupRules = (persistedMarkupRules.length ? persistedMarkupRules : defaultAgentMarkupRules).filter((rule) => !('deletedAt' in rule) || !rule.deletedAt);
   const matchedPrices = selectPriceRowsForLookup(priceRows, warehouseProfile, destinationCountry, chargeableWeightKg);
   if (!matchedPrices.length) {
     throw new BadRequestException('没有匹配的代理成本价');
@@ -10071,9 +10675,10 @@ function createBackendPriceLookup(
         return null;
       }
 
-      const salesRatePerKg = roundMoney(price.costPerKg + markup.markupPerKg);
+      const quoteTotals = applyAgentMarkup(price.costPerKg, chargeableWeightKg, markup);
+      const salesRatePerKg = quoteTotals.salesRatePerKg;
       const totalCost = roundMoney(price.costPerKg * chargeableWeightKg);
-      const totalSales = roundMoney(salesRatePerKg * chargeableWeightKg);
+      const totalSales = quoteTotals.totalSales;
       const surchargeFee = roundMoney(price.surchargeFee ?? 0);
       const realChannelName = price.realChannelName?.trim() || price.channelName.trim();
       const businessRouteName = price.businessRouteName?.trim() || undefined;
@@ -10142,15 +10747,19 @@ function findBestMarkupRule(markupRules: AgentMarkupSummary[], price: PriceBookR
   const destination = price.destinationCountry.trim();
   const channel = price.channelName.trim();
   const realChannel = (price.realChannelName?.trim() || price.channelName.trim());
-  return markupRules
-    .filter((rule) => rule.enabled && rule.agentName === price.agentName)
-    .sort((left, right) => markupSpecificity(right, channel, realChannel, destination) - markupSpecificity(left, channel, realChannel, destination))
-    .find((rule) => {
+  return [...markupRules]
+    .filter((rule) => rule.enabled && !rule.deletedAt && rule.agentName === price.agentName)
+    .filter((rule) => {
       const channelMatches = !rule.channelName || rule.channelName === channel;
       const realChannelMatches = !rule.realChannelName || rule.realChannelName === realChannel;
       const countryMatches = !rule.destinationCountry || rule.destinationCountry === destination;
       return channelMatches && realChannelMatches && countryMatches;
-    });
+    })
+    .sort((left, right) =>
+      (left.priority ?? 100) - (right.priority ?? 100)
+      || markupSpecificity(right, channel, realChannel, destination) - markupSpecificity(left, channel, realChannel, destination)
+      || safeTime(right.updatedAt) - safeTime(left.updatedAt)
+    )[0];
 }
 
 function markupSpecificity(rule: AgentMarkupSummary, channel: string, realChannel: string, destination: string): number {
@@ -10203,6 +10812,22 @@ const amazonWarehouseProfiles: Record<string, { warehouseCodes: string[]; keywor
 
 function normalizeWarehouseCode(value?: string) {
   return value?.trim().replace(/[\s-]/g, '').toUpperCase() ?? '';
+}
+
+function calculateLookupChargeableWeight(input: PriceLookupRequest) {
+  const manualWeightValue = Number(input.chargeableWeightKg);
+  const manualWeight = Number.isFinite(manualWeightValue) ? manualWeightValue : 0;
+  const packageCount = Number(input.packageCount ?? 1);
+  const safePackageCount = Number.isFinite(packageCount) && packageCount > 0 ? packageCount : 1;
+  const volumeWeight = Number(input.volumeCbm ?? 0) > 0 ? Number(input.volumeCbm) * 167 : 0;
+  const actualWeight = Number(input.actualWeightKg ?? 0) > 0
+    ? Number(input.actualWeightKg)
+    : (Number(input.unitActualWeightKg ?? 0) > 0 ? Number(input.unitActualWeightKg) * safePackageCount : 0);
+  const dimensionWeight =
+    Number(input.lengthCm ?? 0) > 0 && Number(input.widthCm ?? 0) > 0 && Number(input.heightCm ?? 0) > 0
+      ? (Number(input.lengthCm) * Number(input.widthCm) * Number(input.heightCm) * safePackageCount) / 6000
+      : 0;
+  return roundMoney(Math.max(manualWeight, volumeWeight, actualWeight, dimensionWeight));
 }
 
 function createWarehouseLookupProfile(input: PriceLookupRequest) {
@@ -10332,6 +10957,10 @@ function isSalesScopedRole(role: string): boolean {
     'UG_BUSINESS_MANAGER',
     'UG_BUSINESS_SUPERVISOR'
   ].includes(role);
+}
+
+function isFinalReviewRole(role: string): boolean {
+  return role === 'FINANCE' || role === 'UG_FINANCE';
 }
 
 function normalizeRoleGroupInput(input: RoleGroupInput, fallbackSortOrder = 0) {

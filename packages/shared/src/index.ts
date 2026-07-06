@@ -50,6 +50,7 @@ export interface StaffAccountSummary {
   roleLabel: string;
   enabled: boolean;
   mustChangePassword?: boolean;
+  lastLoginAt?: string;
   createdAt: string;
 }
 
@@ -161,6 +162,7 @@ export interface Shipment {
   dispatchedAt?: string;
   signedAt?: string;
   customerName: string;
+  customerId?: string;
   customerCode?: string;
   salesperson?: string;
   customerOrderNo: string;
@@ -188,6 +190,8 @@ export interface Shipment {
   receiverPostalCode?: string;
   fbaWarehouseCode?: string;
   entryBy?: string;
+  businessReviewedBy?: string;
+  businessReviewedAt?: string;
   reviewedBy?: string;
   reviewedAt?: string;
   reviewRejectedReason?: string;
@@ -212,7 +216,9 @@ export interface Shipment {
   trackingStaleDays: number;
   isRemoteArea: boolean;
   status: ShipmentStatus;
+  channelId?: string;
   channelName: string;
+  agentId?: string;
   agentName: string;
   routedAt?: string;
   routeReturnedAt?: string;
@@ -222,10 +228,66 @@ export interface Shipment {
   routeOtherFee?: number;
   routeCostTotal?: number;
   routeCurrency?: string;
+  shippingMarkRequired?: boolean;
+  businessInvoiceName?: string;
+  businessInvoiceUrl?: string;
+  businessInvoiceUploadedBy?: string;
+  businessInvoiceUploadedAt?: string;
   paymentAmountUsd?: number;
   paymentAmountCny?: number;
   paymentMethod?: ShipmentPaymentMethod;
   hasProblemTicket: boolean;
+}
+
+export type LineShipmentStatusGroup =
+  | 'ALL'
+  | 'REVIEW_PENDING'
+  | 'REVIEW_REJECTED'
+  | 'WAITING_SORT'
+  | 'WAITING_DISPATCH'
+  | 'OUTBOUNDED'
+  | 'WAITING_DEPARTURE'
+  | 'DEPARTED'
+  | 'SIGNED'
+  | 'PROBLEM';
+
+export type LineShipmentDatePreset = 'TODAY' | 'LAST_7_DAYS' | 'ALL';
+
+export interface LineShipmentPoolQuery {
+  statusGroup?: LineShipmentStatusGroup;
+  keyword?: string;
+  datePreset?: LineShipmentDatePreset;
+  sortBy?: 'createdAt' | 'status' | 'systemOrderNo' | 'customerName';
+  sortOrder?: 'asc' | 'desc';
+  page?: number;
+  pageSize?: number;
+}
+
+export interface LineShipmentPoolMetrics {
+  pendingCount: number;
+  riskCount: number;
+  todayDispatchCount: number;
+  estimatedReceivable: number;
+  todayCompletionRate: number;
+  todayUpdatedCount: number;
+}
+
+export interface LineShipmentPoolRow {
+  shipment: Shipment;
+  latestTracking?: string;
+  receivableAmount?: number;
+  hasProblem?: boolean;
+}
+
+export interface LineShipmentPoolResponse {
+  metrics: LineShipmentPoolMetrics;
+  statusCounts: Record<LineShipmentStatusGroup, number>;
+  rows: LineShipmentPoolRow[];
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalItems: number;
+  };
 }
 
 export interface ShipmentRouteInput {
@@ -237,6 +299,18 @@ export interface ShipmentRouteInput {
   otherFee?: number;
   otherFeeRemark?: string;
   currency?: string;
+  shippingMarkRequired?: boolean;
+}
+
+export interface ShipmentDispatchInput {
+  transferNo?: string;
+  shippingMarkConfirmed?: boolean;
+}
+
+export interface ShipmentInvoiceUploadResponse {
+  shipment: Shipment;
+  fileName: string;
+  url: string;
 }
 
 export interface ShipmentRerouteInput {
@@ -268,6 +342,18 @@ export interface ShipmentOperationalUpdateInput {
   subOrderNo?: string;
   trackingWebsite?: string;
   trackingWebsiteVisibleToSales?: boolean;
+  channelId?: string;
+  customerOrderNo?: string;
+  productName?: string;
+  destinationCountry?: string;
+  packageCount?: number;
+  receivableWeightKg?: number;
+  agentWeightKg?: number;
+  declarationRequired?: boolean;
+  sensitive?: boolean;
+  cargoType?: string;
+  volumeCbm?: number;
+  settlementMethod?: string;
   status?: ShipmentStatus;
   etaAt?: string;
   etdAt?: string;
@@ -325,10 +411,29 @@ export interface AuditLogWarningSummary {
   count: number;
 }
 
+export interface AuditLogMetricSummary {
+  value: number;
+  yesterdayValue: number;
+  changePercent: number;
+  trend: number[];
+}
+
+export interface AuditLogDashboardSummary {
+  generatedAt: string;
+  metrics: {
+    total: AuditLogMetricSummary;
+    failed: AuditLogMetricSummary;
+    important: AuditLogMetricSummary;
+    permissionFinance: AuditLogMetricSummary;
+  };
+  recentFailedImportant: AuditLogSummary[];
+}
+
 export interface AuditLogListResponse {
   rows: AuditLogSummary[];
   suspiciousDeleteWarnings: AuditLogWarningSummary[];
   pagination: { page: number; pageSize: number; totalItems: number };
+  dashboard?: AuditLogDashboardSummary;
 }
 
 export type CarrierAdapterCode = 'DHL' | 'FEDEX' | 'UPS' | 'USPS' | 'OTHER';
@@ -507,8 +612,19 @@ export interface AgentMarkupSummary {
   realChannelName?: string;
   destinationCountry?: string;
   markupPerKg: number;
+  markupType?: AgentMarkupType;
+  markupValue?: number;
+  priority?: number;
+  ruleCount?: number;
+  hitCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  deletedAt?: string;
   enabled: boolean;
 }
+
+export type AgentMarkupType = 'WEIGHT' | 'PER_SHIPMENT' | 'FIXED' | 'PERCENT';
+export type AgentMarkupStatusFilter = 'ALL' | 'ENABLED' | 'DISABLED';
 
 export interface AgentMarkupCreateInput {
   agentName: string;
@@ -516,6 +632,9 @@ export interface AgentMarkupCreateInput {
   realChannelName?: string;
   destinationCountry?: string;
   markupPerKg: number;
+  markupType?: AgentMarkupType;
+  markupValue?: number;
+  priority?: number;
   enabled?: boolean;
 }
 
@@ -525,7 +644,68 @@ export interface AgentMarkupUpdateInput {
   realChannelName?: string;
   destinationCountry?: string;
   markupPerKg?: number;
+  markupType?: AgentMarkupType;
+  markupValue?: number;
+  priority?: number;
   enabled?: boolean;
+}
+
+export interface AgentMarkupListQuery {
+  agentName?: string;
+  channelName?: string;
+  realChannelName?: string;
+  destinationCountry?: string;
+  status?: AgentMarkupStatusFilter;
+  detail?: boolean;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AgentMarkupMetrics {
+  totalRules: number;
+  enabledRules: number;
+  disabledRules: number;
+  unmatchedQuotes: number;
+  latestUpdatedAt?: string;
+}
+
+export interface AgentMarkupListResponse {
+  metrics: AgentMarkupMetrics;
+  rows: AgentMarkupSummary[];
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+export interface AgentMarkupPreviewResponse {
+  rule: AgentMarkupSummary;
+  scope: {
+    channelLabel: string;
+    realChannelLabel: string;
+    countryLabel: string;
+  };
+  stats: {
+    priceBookRows: number;
+    channels: number;
+    countries: number;
+  };
+  examples: Array<{
+    id: string;
+    channelName: string;
+    realChannelName?: string;
+    destinationCountry: string;
+    weightSegmentLabel: string;
+  }>;
+  recentChanges: Array<{ action: string; actor?: string; createdAt: string }>;
+}
+
+export interface AgentMarkupExportResponse {
+  rows: AgentMarkupSummary[];
+  exportedAt: string;
+}
+
+export interface AgentMarkupImportResponse {
+  successCount: number;
+  errorRows: Array<{ index: number; reason: string }>;
+  rows: AgentMarkupSummary[];
 }
 
 export interface PriceLookupRequest {
@@ -536,6 +716,13 @@ export interface PriceLookupRequest {
   address?: string;
   packageInfo?: string;
   chargeableWeightKg: number;
+  actualWeightKg?: number;
+  volumeCbm?: number;
+  lengthCm?: number;
+  widthCm?: number;
+  heightCm?: number;
+  packageCount?: number;
+  unitActualWeightKg?: number;
   markupRules?: AgentMarkupSummary[];
 }
 
@@ -955,6 +1142,7 @@ export interface ReceivableFeeSummary {
   shipmentId: string;
   systemOrderNo: string;
   customerName: string;
+  salesperson?: string;
   name: string;
   amount: number;
   settled: boolean;
@@ -1263,6 +1451,7 @@ export interface PayableFeeSummary {
   name: string;
   amount: number;
   settled: boolean;
+  salesperson?: string;
   agentName?: string;
   type?: 'PAYABLE';
   currency?: string;
@@ -1800,6 +1989,7 @@ export interface BusinessCostFeeSummary {
   name: string;
   amount: number;
   settled: boolean;
+  salesperson?: string;
   agentName?: string;
   type?: 'BUSINESS_COST';
   currency?: string;
@@ -2366,6 +2556,7 @@ export interface CarrierCreateInput {
 export interface ChannelCreateInput {
   name: string;
   carrierId: string;
+  carrierName?: string;
   businessType?: BusinessType;
   category?: string;
   volumeDivisor?: number;
@@ -3231,8 +3422,116 @@ export function summarizeStatusCounts(shipments: Shipment[]) {
   );
 }
 
+export function summarizeLineShipmentPool(shipments: Shipment[], query: LineShipmentPoolQuery = {}): LineShipmentPoolResponse {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const lastSevenStart = new Date(todayStart);
+  lastSevenStart.setDate(lastSevenStart.getDate() - 6);
+  const statusGroup = query.statusGroup ?? 'ALL';
+  const keyword = query.keyword?.trim().toLowerCase() ?? '';
+  const page = Math.max(1, Number(query.page) || 1);
+  const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+
+  const dateFiltered = shipments.filter((shipment) => {
+    const createdAt = new Date(shipment.createdAt);
+    if (query.datePreset === 'TODAY') return createdAt >= todayStart;
+    if (query.datePreset === 'LAST_7_DAYS') return createdAt >= lastSevenStart;
+    return true;
+  });
+  const keywordFiltered = dateFiltered.filter((shipment) => {
+    if (!keyword) return true;
+    return [
+      shipment.customerName,
+      shipment.customerCode,
+      shipment.salesperson,
+      shipment.systemOrderNo,
+      shipment.transferNo,
+      shipment.channelName,
+      shipment.agentName,
+      shipment.destinationCountry,
+      shipment.latestTracking
+    ].some((value) => value?.toLowerCase().includes(keyword));
+  });
+
+  const statusCounts = lineShipmentStatusGroups.reduce(
+    (summary, group) => ({
+      ...summary,
+      [group]: group === 'ALL' ? keywordFiltered.length : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, group)).length
+    }),
+    {} as Record<LineShipmentStatusGroup, number>
+  );
+
+  const selectedRows = statusGroup === 'ALL' ? keywordFiltered : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, statusGroup));
+  const sortBy = query.sortBy ?? 'createdAt';
+  const sortOrder = query.sortOrder ?? 'desc';
+  const sortedRows = [...selectedRows].sort((left, right) => {
+    const leftValue = String(left[sortBy] ?? '');
+    const rightValue = String(right[sortBy] ?? '');
+    const direction = sortOrder === 'asc' ? 1 : -1;
+    if (sortBy === 'createdAt') return (new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()) * direction;
+    return leftValue.localeCompare(rightValue, 'zh-Hans-CN') * direction;
+  });
+  const todayRows = keywordFiltered.filter((shipment) => new Date(shipment.createdAt) >= todayStart);
+  const completedToday = todayRows.filter((shipment) => ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'SIGNED'].includes(shipment.status)).length;
+  const pageStart = (page - 1) * pageSize;
+
+  return {
+    metrics: {
+      pendingCount: (statusCounts.REVIEW_PENDING ?? 0) + (statusCounts.WAITING_SORT ?? 0) + (statusCounts.WAITING_DISPATCH ?? 0),
+      riskCount: keywordFiltered.filter(lineShipmentHasRisk).length,
+      todayDispatchCount: keywordFiltered.filter((shipment) => shipment.status === 'WAITING_DISPATCH').length,
+      estimatedReceivable: round2(keywordFiltered.reduce((total, shipment) => total + (shipment.paymentAmountCny ?? 0) + (shipment.paymentAmountUsd ?? 0) * 7, 0)),
+      todayCompletionRate: todayRows.length ? Math.round((completedToday / todayRows.length) * 100) : 0,
+      todayUpdatedCount: todayRows.length
+    },
+    statusCounts,
+    rows: sortedRows.slice(pageStart, pageStart + pageSize).map((shipment) => ({
+      shipment,
+      latestTracking: shipment.latestTracking,
+      receivableAmount: shipment.paymentAmountCny ?? (shipment.paymentAmountUsd !== undefined ? round2(shipment.paymentAmountUsd * 7) : undefined),
+      hasProblem: lineShipmentHasRisk(shipment)
+    })),
+    pagination: {
+      page,
+      pageSize,
+      totalItems: selectedRows.length
+    }
+  };
+}
+
 export function round2(value: number): number {
   return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+const lineShipmentStatusGroups: LineShipmentStatusGroup[] = [
+  'ALL',
+  'REVIEW_PENDING',
+  'REVIEW_REJECTED',
+  'WAITING_SORT',
+  'WAITING_DISPATCH',
+  'OUTBOUNDED',
+  'WAITING_DEPARTURE',
+  'DEPARTED',
+  'SIGNED',
+  'PROBLEM'
+];
+
+function lineShipmentBelongsToGroup(shipment: Shipment, group: LineShipmentStatusGroup): boolean {
+  if (group === 'ALL') return true;
+  if (group === 'REVIEW_PENDING') return shipment.status === 'DRAFT' || shipment.status === 'REVIEW_PENDING';
+  if (group === 'PROBLEM') return lineShipmentHasRisk(shipment);
+  return shipment.status === group;
+}
+
+function lineShipmentHasRisk(shipment: Shipment): boolean {
+  return Boolean(
+    shipment.status === 'PROBLEM'
+    || shipment.status === 'STUCK'
+    || shipment.hasProblemTicket
+    || shipment.trackingStaleDays > 0
+    || shipment.reviewRejectedReason
+    || (['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED'].includes(shipment.status) && !shipment.transferNo)
+  );
 }
 
 function automationPriorityWeight(priority: AutomationPriority): number {

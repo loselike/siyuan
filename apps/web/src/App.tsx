@@ -1,5 +1,5 @@
 import type { ChangeEvent, Key, ReactNode } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -8,6 +8,7 @@ import {
   Checkbox,
   Col,
   ConfigProvider,
+  App as AntdApp,
   Flex,
   Form,
   Input,
@@ -126,14 +127,12 @@ import {
 } from './modules/appShell/config';
 import { formatPaymentSummary, fulfillmentActionLabels, getRoleDisplayName, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
 import { CustomerPortal } from './modules/customer/CustomerPortal';
-import { CustomerServicePage } from './modules/customerService/CustomerServicePage';
 import {
   createFinanceCatalogFilters,
   createSettlementMethodOptions,
   getSettlementMethodRows,
   normalizeFinanceCatalogCurrency
 } from './modules/finance/catalog';
-import { FinancePage } from './modules/finance/FinancePage';
 import { OrderFeePanel } from './modules/finance/orderFee/OrderFeePanel';
 import { OperationsPage } from './modules/operations/OperationsPage';
 import {
@@ -159,10 +158,14 @@ import { ProblemTicketsPage } from './modules/problemTickets/ProblemTicketsPage'
 import { ReportsPage } from './modules/reports/ReportsPage';
 import { SettingsPage } from './modules/settings/SettingsPage';
 import { TrackingPage } from './modules/tracking/TrackingPage';
-import { formatTrackingImportDate, loadXlsx, parseBulkTrackingWorkbook, readFileAsArrayBuffer } from './modules/tracking/bulkImport';
+import { loadExcel } from './modules/shared/excel';
+import { formatTrackingImportDate, parseBulkTrackingWorkbook, readFileAsArrayBuffer } from './modules/tracking/bulkImport';
 import { formatBeijingDateTime, formatCurrency, formatUsd } from './modules/shared/format';
-import { MetricCard, StatusTag, renderFilterActions, renderFilterField, renderNoticeBar, riskLabel, riskWeight, tenRowTablePagination } from './modules/shared/ui';
-import { WarehousePage } from './modules/warehouse/WarehousePage';
+import { MetricCard, StatusTag, createNoticeMessage, renderFilterActions, renderFilterField, renderNoticeBar, riskLabel, riskWeight, tenRowTablePagination } from './modules/shared/ui';
+
+const CustomerServicePage = lazy(() => import('./modules/customerService/CustomerServicePage').then((module) => ({ default: module.CustomerServicePage })));
+const FinancePage = lazy(() => import('./modules/finance/FinancePage').then((module) => ({ default: module.FinancePage })));
+const WarehousePage = lazy(() => import('./modules/warehouse/WarehousePage').then((module) => ({ default: module.WarehousePage })));
 
 
 const { Header, Sider, Content } = Layout;
@@ -233,7 +236,10 @@ export function App() {
   const [accountLedger, setAccountLedger] = useState<AccountLedgerSummary[]>([]);
   const [masterData, setMasterData] = useState<MasterDataSnapshot>(emptyMasterData);
   const [carrierTasks, setCarrierTasks] = useState<CarrierTaskSummary[]>([]);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNoticeState] = useState<string | null>(null);
+  const setNotice = useCallback((message: string | null) => {
+    setNoticeState(createNoticeMessage(message));
+  }, []);
   const [outboundOrderOpen, setOutboundOrderOpen] = useState(false);
   const [editingShipment, setEditingShipment] = useState<Shipment | null>(null);
   const [editingShipmentSource, setEditingShipmentSource] = useState<ShipmentEditSource>('operation');
@@ -253,6 +259,7 @@ export function App() {
   const [bulkTrackingRows, setBulkTrackingRows] = useState<BulkTrackingImportRow[]>([]);
   const [bulkTrackingResult, setBulkTrackingResult] = useState<BulkTrackingImportResult | null>(null);
   const [bulkTrackingError, setBulkTrackingError] = useState<string | null>(null);
+  const [customerServiceInitialSection, setCustomerServiceInitialSection] = useState('service-dashboard');
   const [aiResult, setAiResult] = useState<AiResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [personalCenterOpen, setPersonalCenterOpen] = useState(false);
@@ -265,7 +272,6 @@ export function App() {
   const [forcePasswordChangeLoading, setForcePasswordChangeLoading] = useState(false);
   const [forcePasswordChangeError, setForcePasswordChangeError] = useState<string | null>(null);
   const [settlementCatalogItems, setSettlementCatalogItems] = useState<FinanceCatalogItemSummary[]>([]);
-  const [orderEntryPrefillPackageIds, setOrderEntryPrefillPackageIds] = useState<string[]>([]);
   const businessWorkspaceConfig = businessWorkspaceConfigs.DEDICATED_LINE;
   const apiClient = useMemo(
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
@@ -325,14 +331,18 @@ export function App() {
   );
   const handlePrimaryMenuClick = (key: MenuKey) => {
     setNotice(null);
+    if (key === 'customerService') {
+      setCustomerServiceInitialSection('service-dashboard');
+    }
     setActiveMenuKey(key);
     setExpandedMenuKey((current) => (currentMenuKey === key && current === key ? null : key));
   };
-  const openOrderEntryFromWarehouse = useCallback((packageIds: string[]) => {
-    setOrderEntryPrefillPackageIds(packageIds);
-    setActiveMenuKey('business');
-    setExpandedMenuKey('business');
-  }, []);
+  const handleBrandClick = () => {
+    setNotice(null);
+    setActiveMenuKey('workspace');
+    setExpandedMenuKey('workspace');
+    setActiveWorkspaceSection('shipmentPool');
+  };
   const canViewShipmentFinanceDetail = session?.user.role === 'ADMIN' || session?.user.role === 'FINANCE' || session?.user.role === 'OPERATOR';
   const canViewInternalShipmentFinance = session?.user.role === 'ADMIN' || session?.user.role === 'FINANCE';
 
@@ -992,7 +1002,21 @@ export function App() {
       )
     };
   });
-
+  const fulfillmentTrackingColumn: ColumnsType<Shipment>[number] = {
+    ...shipmentColumnMap.latestTracking,
+    key: 'trackingStatus',
+    title: '轨迹状态'
+  };
+  const fulfillmentBaseColumns = columns.filter((column) => column.key !== 'latestTracking');
+  const fulfillmentTrackingInsertIndex = fulfillmentBaseColumns.findIndex((column) => column.key === 'channel');
+  const fulfillmentDisplayColumns =
+    fulfillmentTrackingInsertIndex >= 0
+      ? [
+          ...fulfillmentBaseColumns.slice(0, fulfillmentTrackingInsertIndex + 1),
+          fulfillmentTrackingColumn,
+          ...fulfillmentBaseColumns.slice(fulfillmentTrackingInsertIndex + 1)
+        ]
+      : [fulfillmentTrackingColumn, ...fulfillmentBaseColumns];
   const auditStatusColumn: ColumnsType<Shipment>[number] = {
     title: '审核状态',
     width: 110,
@@ -1008,7 +1032,7 @@ export function App() {
   };
 
   const fulfillmentColumns: ColumnsType<Shipment> = [
-    ...columns,
+    ...fulfillmentDisplayColumns,
     auditStatusColumn,
     {
       title: 'AI 下一步',
@@ -1218,11 +1242,28 @@ export function App() {
     setNotice(actionResult.message);
   }
 
-  async function handleWarehouseDispatchShipment(record: Shipment) {
-    const updated = await apiClient.dispatchShipment(record.id, {});
+  async function handleWarehouseDispatchShipment(record: Shipment, options: { shippingMarkConfirmed?: boolean } = {}) {
+    const updated = await apiClient.dispatchShipment(record.id, { shippingMarkConfirmed: options.shippingMarkConfirmed });
     setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
     appendShipmentOperationLog(record.id, '仓库管理：确认出库');
-    setNotice(`仓库已确认 ${record.systemOrderNo} 出库，等待客服补齐转单号`);
+    setNotice(`仓库已确认 ${record.systemOrderNo} 出库，已进入客服数据确认`);
+    if (visibleMenuKeys.includes('customerService')) {
+      setCustomerServiceInitialSection('dataConfirm');
+      setActiveMenuKey('customerService');
+      setExpandedMenuKey('customerService');
+    }
+  }
+
+  async function handleUploadShipmentBusinessInvoice(record: Shipment, file: File) {
+    const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+    if (!['.xls', '.xlsx'].includes(extension) || extension === '.xlsm') {
+      setNotice('请上传 .xls/.xlsx 发票文件');
+      return;
+    }
+    const result = await apiClient.uploadShipmentBusinessInvoice(record.id, file);
+    setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? result.shipment : shipment)));
+    appendShipmentOperationLog(record.id, `业务上传发票：${result.fileName}`);
+    setNotice(`已上传 ${record.systemOrderNo} 业务发票`);
   }
 
   async function handleWarehouseRouteShipment(record: Shipment) {
@@ -1262,7 +1303,8 @@ export function App() {
       chargeWeightKg: record.routeChargeWeightKg,
       unitPrice: record.routeUnitPrice,
       otherFee: record.routeOtherFee ?? 0,
-      currency: record.routeCurrency ?? 'RMB'
+      currency: record.routeCurrency ?? 'RMB',
+      shippingMarkRequired: false
     });
     setRoutingAssignmentShipment(record);
   }
@@ -1316,11 +1358,11 @@ export function App() {
 
   async function handleConfirmRoutingAssignment() {
     if (!routingAssignmentShipment) {
-      return;
+      return false;
     }
     if (routingAssignmentShipment.status !== 'WAITING_SORT') {
       setNotice('当前状态不允许执行分配渠道');
-      return;
+      return false;
     }
 
     try {
@@ -1330,11 +1372,11 @@ export function App() {
 
       if (!agent) {
         setNotice('请选择代理');
-        return;
+        return false;
       }
       if (!channel) {
         setNotice('请填写代理渠道');
-        return;
+        return false;
       }
 
       const otherFee = Number(values.otherFee || 0);
@@ -1345,10 +1387,11 @@ export function App() {
         agentChannelName: values.agentChannelName,
         chargeWeightKg: values.chargeWeightKg,
         unitPrice: values.unitPrice,
-      otherFee,
-      otherFeeRemark: values.otherFeeRemark?.trim() || undefined,
-      currency: values.currency ?? 'RMB'
-    });
+        otherFee,
+        otherFeeRemark: values.otherFeeRemark?.trim() || undefined,
+        currency: values.currency ?? 'RMB',
+        shippingMarkRequired: values.shippingMarkRequired === true
+      });
       const patched: Shipment = {
         ...updated,
         channelName: channel.name,
@@ -1363,11 +1406,16 @@ export function App() {
       appendShipmentOperationLog(routingAssignmentShipment.id, `渠道排货：代理 ${agent.name}，渠道 ${channel.name}，成本 ${routeCostTotal.toFixed(2)} ${values.currency ?? 'RMB'}`);
       setRoutingAssignmentShipment(null);
       routingAssignmentForm.resetFields();
-      setNotice('市场排货完成，进入仓库管理待出库');
+      setNotice('市场排货完成，已进入已排货');
+      return true;
     } catch (error) {
-      if (error instanceof Error && error.message) {
-        setNotice(error.message);
+      if (error && typeof error === 'object' && 'errorFields' in error) {
+        return false;
       }
+      if (error instanceof Error && error.message) {
+        Modal.error({ title: '排货失败', content: error.message });
+      }
+      return false;
     }
   }
 
@@ -1384,6 +1432,18 @@ export function App() {
     editShipmentForm.setFieldsValue({
       latestTracking: record.latestTracking,
       transferNo: record.transferNo ?? '',
+      channelId: masterData.channels.find((channel) => channel.name === record.channelName)?.id,
+      customerOrderNo: record.customerOrderNo,
+      productName: record.productName,
+      destinationCountry: record.destinationCountry,
+      packageCount: record.packageCount,
+      receivableWeightKg: record.receivableWeightKg,
+      agentWeightKg: record.agentWeightKg,
+      declarationRequired: record.declarationRequired,
+      sensitive: record.sensitive,
+      cargoType: record.cargoType,
+      volumeCbm: record.volumeCbm,
+      settlementMethod: record.settlementMethod,
       status: record.status,
       etaAt: record.etaAt ?? '',
       etdAt: record.etdAt ?? ''
@@ -1401,6 +1461,18 @@ export function App() {
     const updated = await apiClient.updateShipmentOperational(editingShipment.id, {
       latestTracking: values.latestTracking.trim(),
       transferNo: nextTransferNo,
+      channelId: values.channelId || undefined,
+      customerOrderNo: values.customerOrderNo?.trim() || undefined,
+      productName: values.productName?.trim() || undefined,
+      destinationCountry: values.destinationCountry?.trim() || undefined,
+      packageCount: values.packageCount,
+      receivableWeightKg: values.receivableWeightKg,
+      agentWeightKg: values.agentWeightKg,
+      declarationRequired: values.declarationRequired,
+      sensitive: values.sensitive,
+      cargoType: values.cargoType?.trim() || undefined,
+      volumeCbm: values.volumeCbm,
+      settlementMethod: values.settlementMethod?.trim() || undefined,
       status: values.status,
       etaAt: values.etaAt?.trim() || undefined,
       etdAt: values.etdAt?.trim() || undefined
@@ -1489,7 +1561,7 @@ export function App() {
     setBulkTrackingError(null);
 
     try {
-      const rows = parseBulkTrackingWorkbook(await readFileAsArrayBuffer(file), await loadXlsx());
+      const rows = await parseBulkTrackingWorkbook(await readFileAsArrayBuffer(file), await loadExcel());
       const result = createBulkTrackingImportResult(rows, localShipments);
       setBulkTrackingRows(rows);
       setBulkTrackingResult(result);
@@ -1928,12 +2000,13 @@ export function App() {
 
   return (
     <ConfigProvider theme={appTheme}>
+      <AntdApp>
       <Layout className="app-shell">
         <a className="skip-link" href="#main-content">
           跳到主内容
         </a>
         <Sider className="sidebar" width={196}>
-          <div className="brand">
+          <button type="button" className="brand" aria-label="返回运营工作台" onClick={handleBrandClick}>
             <div className="brand-mark brand-logo-mark">
               <img src="/green-cargo-logo.png" alt="Green Cargo 思远物流标识" width={66} height={36} />
             </div>
@@ -1941,7 +2014,7 @@ export function App() {
               <Text className="brand-title">思远物流</Text>
               <Text className="brand-subtitle">AI TMS / OMS</Text>
             </div>
-          </div>
+          </button>
           <nav className="side-nav" role="menu" aria-label="员工端主导航">
             {visibleMenuItems.map((item) => {
               const isActive = currentMenuKey === item.key;
@@ -2294,6 +2367,7 @@ export function App() {
                 }
               />
             ) : null}
+            <Suspense fallback={null}>
             {currentMenuKey === 'business' || currentMenuKey === 'orders' ? (
               <FinancePage
                 menuMode="business"
@@ -2349,8 +2423,6 @@ export function App() {
                 customers={masterData.customers}
                 customerContacts={masterData.contacts}
                 onCustomerContactsChange={(contacts) => setMasterData((current) => ({ ...current, contacts }))}
-                prefillOrderEntryPackageIds={orderEntryPrefillPackageIds}
-                onOrderEntryPrefillConsumed={() => setOrderEntryPrefillPackageIds([])}
                 renderOrderManagement={() => (
                   <OrdersPage
                     notice={null}
@@ -2388,6 +2460,7 @@ export function App() {
                     pendingShipmentPayment={pendingShipmentPayment}
                     onConfirmShipmentPayment={confirmShipmentPayment}
                     onCancelPendingShipmentPayment={() => setPendingShipmentPayment(null)}
+                    onUploadShipmentBusinessInvoice={handleUploadShipmentBusinessInvoice}
                     logViewingShipment={logViewingShipment}
                     logViewingMode={logViewingMode}
                     shipmentLogs={allShipmentLogs}
@@ -2405,11 +2478,13 @@ export function App() {
                 apiClient={apiClient}
                 masterData={masterData}
                 permissions={session.permissions}
+                currentUser={session.user}
                 notice={notice}
                 onMasterDataChange={setMasterData}
                 onNotice={setNotice}
                 onAiAssist={handleAiAssist}
                 aiLoading={aiLoading}
+                shipments={localShipments}
               />
             ) : currentMenuKey === 'pricing' ? (
               <PricingPage
@@ -2486,7 +2561,6 @@ export function App() {
                 canRouteShipments={session.permissions.includes('routing:write') && !['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(session.user.role)}
                 findShipmentBySystemOrderNo={findShipmentBySystemOrderNo}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
-                onCreateOrderEntry={openOrderEntryFromWarehouse}
               />
             ) : currentMenuKey === 'customerService' ? (
               <CustomerServicePage
@@ -2497,6 +2571,7 @@ export function App() {
                 onProblemTicketCreated={(ticket) => setProblemTickets((current) => [ticket, ...current])}
                 onProblemTicketUpdated={(ticket) => setProblemTickets((current) => current.map((item) => item.id === ticket.id ? ticket : item))}
                 onNotice={setNotice}
+                initialSection={customerServiceInitialSection}
               />
             ) : currentMenuKey === 'logisticsTracking' || currentMenuKey === 'tracking' ? (
               <TrackingPage
@@ -2544,6 +2619,10 @@ export function App() {
               <ReportsPage
                 config={modulePageConfigs.reports}
                 notice={notice}
+                shipments={businessShipments}
+                receivables={receivables}
+                businessCostAudits={businessCostAudits}
+                payableAudits={payableAudits}
                 onAiAssist={handleAiAssist}
                 aiLoading={aiLoading}
               />
@@ -2571,8 +2650,12 @@ export function App() {
                 automationPlan={automationPlan}
                 moduleSummary={moduleSummary}
                 spotlightModules={spotlightModules}
+                apiClient={apiClient}
+                onViewShipment={setDetailViewingShipment}
+                onProcessShipment={openEditShipmentOperationalModal}
               />
             )}
+            </Suspense>
             <Modal
               title="批量添加轨迹"
               open={bulkTrackingOpen && currentMenuKey !== 'orders'}
@@ -2670,6 +2753,72 @@ export function App() {
                 <Form.Item name="transferNo" label="转单号">
                   <Input placeholder="可直接修改或清空快递号" />
                 </Form.Item>
+                <Form.Item name="channelId" label="发货渠道">
+                  <Select
+                    allowClear
+                    showSearch
+                    placeholder="选择发货渠道"
+                    optionFilterProp="label"
+                    options={masterData.channels
+                      .filter((channel) => channel.enabled)
+                      .map((channel) => ({
+                        label: `${channel.name} / ${channel.carrierName}`,
+                        value: channel.id
+                    }))}
+                  />
+                </Form.Item>
+                <Row gutter={12}>
+                  <Col xs={24} md={12}>
+                    <Form.Item name="customerOrderNo" label="客户单号">
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item name="productName" label="品名">
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item name="destinationCountry" label="目的地">
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item name="cargoType" label="货物属性">
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Form.Item name="packageCount" label="件数">
+                      <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Form.Item name="receivableWeightKg" label="实重/计费重">
+                      <InputNumber min={0} precision={3} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Form.Item name="volumeCbm" label="体积 CBM">
+                      <InputNumber min={0} precision={3} style={{ width: '100%' }} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Form.Item name="settlementMethod" label="结算方式">
+                      <Input />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12}>
+                    <Space size={16}>
+                      <Form.Item name="declarationRequired" valuePropName="checked" noStyle>
+                        <Checkbox>报关</Checkbox>
+                      </Form.Item>
+                      <Form.Item name="sensitive" valuePropName="checked" noStyle>
+                        <Checkbox>敏感</Checkbox>
+                      </Form.Item>
+                    </Space>
+                  </Col>
+                </Row>
                 <Form.Item name="status" label="状态" rules={[{ required: true, message: '请选择状态' }]}>
                   <select aria-label="状态" className="native-select">
                     {editableShipmentStatuses.map((status) => (
@@ -2718,6 +2867,7 @@ export function App() {
           </ModuleSubNavContext.Provider>
         </Layout>
       </Layout>
+      </AntdApp>
     </ConfigProvider>
   );
 }

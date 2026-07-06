@@ -31,6 +31,7 @@ import type {
   WarehousePackageSummary,
   WarehouseTallyTaskSummary
 } from '@siyuan/shared';
+import { summarizeLineShipmentPool } from '@siyuan/shared';
 import { App } from '../../App';
 
 type TestPayablePaymentApplication = {
@@ -100,6 +101,8 @@ export const employeeShipments = [
     declarationRequired: false,
     sensitive: false,
     entryBy: 'operator',
+    businessReviewedBy: 'operator',
+    businessReviewedAt: '2026-06-25T09:30:00.000Z',
     latestTracking: '财务录单创建，待审核'
   }),
   shipment('s-review-deleted', 'SYREVIEWDEL001', 'OUT-DEL', 'REVIEW_PENDING', '9409-Daloday', {
@@ -243,6 +246,7 @@ function createShipmentFinanceResponse(shipmentId: string, role: string) {
   const shipment = employeeShipments.find((item) => item.id === shipmentId);
   const shipmentReceivables = receivableFees.filter((fee) => fee.shipmentId === shipmentId);
   const canViewInternalFinance = role === 'ADMIN' || role === 'FINANCE';
+  const canViewOwnPayables = canViewInternalFinance || (['OPERATOR', 'UG_BUSINESS'].includes(role) && shipment?.salesperson === 'operator');
   const payables = payableAuditFees
     .filter((fee) => fee.shipmentId === shipmentId && fee.reconciliationStatus !== 'VOIDED')
     .map((fee) => ({ ...fee, type: 'PAYABLE' as const, chargeWeightKg: fee.chargeWeightKg ?? 8, unitPrice: fee.unitPrice ?? 17.5, amountOverridden: fee.amountOverridden ?? false }));
@@ -257,13 +261,13 @@ function createShipmentFinanceResponse(shipmentId: string, role: string) {
     systemOrderNo: shipment?.systemOrderNo ?? 'UNKNOWN',
     agentName: canViewInternalFinance ? shipment?.agentName : undefined,
     receivables: shipmentReceivables,
-    payables: canViewInternalFinance ? payables : [],
+    payables: canViewOwnPayables ? (canViewInternalFinance ? payables : payables.map((fee) => ({ ...fee, agentName: undefined, paymentNo: undefined }))) : [],
     businessCosts,
     receivableTotal,
-    payableTotal: canViewInternalFinance ? payableTotal : 0,
+    payableTotal: canViewOwnPayables ? payableTotal : 0,
     businessCostTotal,
     grossProfit: canViewInternalFinance ? receivableTotal - payableTotal : undefined,
-    canViewPayables: canViewInternalFinance,
+    canViewPayables: canViewOwnPayables,
     profitSections: [
       ...(canViewInternalFinance ? [{ key: 'RECEIVABLE_PAYABLE', title: '应收与应付利润', amount: receivableTotal - payableTotal, currency: 'RMB' }] : []),
       { key: 'RECEIVABLE_BUSINESS', title: '应收与业务利润', amount: receivableTotal - businessCostTotal, currency: 'RMB' },
@@ -484,10 +488,23 @@ const systemRoleMatrix = {
     { code: 'reports:read', label: '统计报表', group: '统计报表' },
     { code: 'master-data:read', label: '基础资料查看', group: '基础资料' },
     { code: 'master-data:write', label: '基础资料维护', group: '基础资料' },
+    { code: 'master-data:customers:read', label: '客户资料查看', group: '基础资料' },
+    { code: 'master-data:customers:write', label: '客户资料维护', group: '基础资料' },
+    { code: 'master-data:finance:read', label: '财务资料查看', group: '基础资料' },
+    { code: 'master-data:finance:write', label: '财务资料维护', group: '基础资料' },
     { code: 'master-data:agents:read', label: '代理资料查看', group: '基础资料' },
     { code: 'master-data:agents:write', label: '代理资料维护', group: '基础资料' },
+    { code: 'master-data:agent-channels:read', label: '代理渠道查看', group: '基础资料' },
+    { code: 'master-data:agent-channels:write', label: '代理渠道维护', group: '基础资料' },
     { code: 'master-data:channels:read', label: '公司渠道查看', group: '基础资料' },
     { code: 'master-data:channels:write', label: '公司渠道维护', group: '基础资料' },
+    { code: 'master-data:channel-categories:read', label: '渠道类别查看', group: '基础资料' },
+    { code: 'master-data:channel-categories:write', label: '渠道类别维护', group: '基础资料' },
+    { code: 'master-data:remote-areas:read', label: '偏远查看', group: '基础资料' },
+    { code: 'master-data:remote-areas:write', label: '偏远维护', group: '基础资料' },
+    { code: 'master-data:exchange-rates:read', label: '汇率查看', group: '基础资料' },
+    { code: 'master-data:exchange-rates:write', label: '汇率维护', group: '基础资料' },
+    { code: 'master-data:assistant:read', label: '资料辅助查看', group: '基础资料' },
     { code: 'system:manage', label: '系统设置', group: '系统设置' }
   ],
   roles: [
@@ -512,7 +529,7 @@ const systemRoleMatrix = {
       label: '业务员',
       account: 'operator',
       scope: '客户出货与渠道排货',
-      permissions: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:view-profit', 'finance:order-fee:profit:receivable-business', 'master-data:read'],
+      permissions: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:view-profit', 'finance:order-fee:profit:receivable-business', 'master-data:read', 'master-data:write'],
       restriction: '不能改财务、不能改权限'
     },
     {
@@ -578,11 +595,11 @@ systemRoleMatrix.roles.forEach((role, index) => {
   });
 });
 const staffAccounts: StaffAccountSummary[] = [
-  { id: 'u-admin', username: 'admin', role: 'ADMIN', roleLabel: '管理员组', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'u-service', username: 'service', role: 'UG_CUSTOMER_SERVICE', roleLabel: '客服', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'u-operator', username: 'operator', role: 'UG_BUSINESS', roleLabel: '业务部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'u-warehouse', username: 'warehouse', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'u-finance', username: 'finance', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' }
+  { id: 'u-admin', username: 'admin', name: '系统管理员', nickname: 'admin', role: 'ADMIN', roleLabel: '管理员组', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T15:12:00.000Z' },
+  { id: 'u-service', username: 'service', name: '客服专员', nickname: '王五', site: '深圳思远', role: 'UG_CUSTOMER_SERVICE', roleLabel: '客服', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T17:41:00.000Z' },
+  { id: 'u-operator', username: 'operator', name: '业务操作员', nickname: '赵六', site: '深圳思远', role: 'UG_BUSINESS', roleLabel: '业务部', enabled: true, mustChangePassword: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T16:58:00.000Z' },
+  { id: 'u-warehouse', username: 'warehouse', name: '仓库操作员', nickname: '刘七', site: '深圳思远', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T13:26:00.000Z' },
+  { id: 'u-finance', username: 'finance', name: '财务专员', nickname: '李四', site: '深圳思远', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T18:23:00.000Z' }
 ];
 const auditLogs: AuditLogSummary[] = [
   {
@@ -631,6 +648,21 @@ const auditLogs: AuditLogSummary[] = [
     createdAt: '2026-06-05T10:00:00.000Z'
   },
   {
+    id: 'audit-business-approved-s-2',
+    actorId: 'u-service',
+    actorUsername: 'service',
+    action: 'customer_service.business_data.approved',
+    actionLabel: '业务数据审核通过',
+    module: 'customer_service',
+    moduleLabel: '客服管理',
+    target: 's-2',
+    result: 'SUCCESS',
+    resultLabel: '成功',
+    before: { status: 'OUTBOUNDED', businessDataReviewStatus: 'PENDING' },
+    after: { statusFrom: 'OUTBOUNDED', statusTo: 'OUTBOUNDED', businessDataReviewStatus: 'APPROVED' },
+    createdAt: '2026-06-05T09:50:00.000Z'
+  },
+  {
     id: 'audit-agent-approved-s-delivering',
     actorId: 'u-service',
     actorUsername: 'service',
@@ -644,6 +676,21 @@ const auditLogs: AuditLogSummary[] = [
     before: { agentDataReviewStatus: 'PENDING' },
     after: { agentDataReviewStatus: 'APPROVED' },
     createdAt: '2026-06-14T10:00:00.000Z'
+  },
+  {
+    id: 'audit-business-approved-s-delivering',
+    actorId: 'u-service',
+    actorUsername: 'service',
+    action: 'customer_service.business_data.approved',
+    actionLabel: '业务数据审核通过',
+    module: 'customer_service',
+    moduleLabel: '客服管理',
+    target: 's-delivering',
+    result: 'SUCCESS',
+    resultLabel: '成功',
+    before: { status: 'OUTBOUNDED', businessDataReviewStatus: 'PENDING' },
+    after: { statusFrom: 'OUTBOUNDED', statusTo: 'OUTBOUNDED', businessDataReviewStatus: 'APPROVED' },
+    createdAt: '2026-06-14T09:50:00.000Z'
   },
   {
     id: 'audit-arrived-s-delivering',
@@ -689,6 +736,21 @@ const auditLogs: AuditLogSummary[] = [
     before: { agentDataReviewStatus: 'PENDING' },
     after: { agentDataReviewStatus: 'APPROVED' },
     createdAt: '2026-06-15T10:00:00.000Z'
+  },
+  {
+    id: 'audit-business-approved-s-arrived',
+    actorId: 'u-service',
+    actorUsername: 'service',
+    action: 'customer_service.business_data.approved',
+    actionLabel: '业务数据审核通过',
+    module: 'customer_service',
+    moduleLabel: '客服管理',
+    target: 's-arrived',
+    result: 'SUCCESS',
+    resultLabel: '成功',
+    before: { status: 'OUTBOUNDED', businessDataReviewStatus: 'PENDING' },
+    after: { statusFrom: 'OUTBOUNDED', statusTo: 'OUTBOUNDED', businessDataReviewStatus: 'APPROVED' },
+    createdAt: '2026-06-15T09:50:00.000Z'
   },
   {
     id: 'audit-arrived-s-arrived',
@@ -737,6 +799,22 @@ const auditLogs: AuditLogSummary[] = [
   }
 ];
 
+function buildAuditDashboard(rows: AuditLogSummary[]) {
+  const isImportant = (row: AuditLogSummary) => row.result === 'FAILED' || /(delete|void|audit|review|permission|role|finance|payment|voucher|receipt|import|export)/i.test(row.action);
+  const values = rows.slice(0, 14).map((_row, index) => (index % 4) + 1).reverse();
+  const metric = (count: number) => ({ value: count, yesterdayValue: Math.max(0, count - 1), changePercent: count ? 12.5 : 0, trend: values });
+  return {
+    generatedAt: new Date().toISOString(),
+    metrics: {
+      total: metric(rows.length),
+      failed: metric(rows.filter((row) => row.result === 'FAILED').length),
+      important: metric(rows.filter(isImportant).length),
+      permissionFinance: metric(rows.filter((row) => /(permission|role|finance|payment|voucher|receipt)/i.test(row.action)).length)
+    },
+    recentFailedImportant: rows.filter((row) => row.result === 'FAILED' && isImportant(row)).slice(0, 10)
+  };
+}
+
 beforeEach(() => {
   localStorage.clear();
   employeeShipments.splice(
@@ -781,6 +859,8 @@ beforeEach(() => {
       declarationRequired: false,
       sensitive: false,
       entryBy: 'operator',
+      businessReviewedBy: 'operator',
+      businessReviewedAt: '2026-06-25T09:30:00.000Z',
       latestTracking: '财务录单创建，待审核'
     }),
     shipment('s-review-deleted', 'SYREVIEWDEL001', 'OUT-DEL', 'REVIEW_PENDING', '9409-Daloday', {
@@ -1078,6 +1158,8 @@ function buildBusinessCostAuditResponse(rows: BusinessCostAuditSummary[], url = 
     return !needle || (value ?? '').toLowerCase().includes(needle.toLowerCase());
   };
   const filteredRows = rows.filter((row) => {
+    const shipment = employeeShipments.find((item) => item.id === row.shipmentId);
+    if (!shipment?.businessReviewedAt) return false;
     const status = params.get('status') ?? 'ALL';
     if (status === 'ALL' && row.voided) return false;
     if (status !== 'ALL' && row.reconciliationStatus !== status) return false;
@@ -1195,8 +1277,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   const body = init?.body instanceof FormData
     ? Object.fromEntries(init.body.entries())
     : init?.body ? JSON.parse(String(init.body)) : undefined;
+  const actorRole = () => String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '').replace('Bearer ', '').replace('-token', '');
   const actorUsername = () => {
-    const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
+    const token = actorRole();
     return token.includes('CUSTOMER_SERVICE') ? 'service' : token.includes('OPERATOR') ? 'operator' : 'admin';
   };
 
@@ -1285,6 +1368,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     if (!currentShipment) {
       return jsonResponse({ message: '运单不存在' }, 404);
     }
+    if (currentShipment.status !== 'WAITING_SORT') {
+      return jsonResponse({ message: '当前状态不允许排货' }, 400);
+    }
     if (!body.agentId || !body.agentChannelName || !body.chargeWeightKg || !body.unitPrice) {
       return jsonResponse({ message: '请先完成代理、渠道和市场成本排货' }, 400);
     }
@@ -1306,6 +1392,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       routeOtherFee: otherFee,
       routeCostTotal: amount,
       routeCurrency: body.currency ?? 'RMB',
+      shippingMarkRequired: body.shippingMarkRequired === true,
       latestTracking: '渠道排货已分配渠道'
     };
     payableAuditFees.push({
@@ -1402,6 +1489,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const current = employeeShipments[index];
     if (!current.agentName || !current.routeAgentChannelName || !current.routeCostTotal) {
       return jsonResponse({ message: '请先完成代理、渠道和市场成本排货' }, 400);
+    }
+    if (current.shippingMarkRequired && body.shippingMarkConfirmed !== true) {
+      return jsonResponse({ message: '该票需要贴麦头，请确认已贴麦头后再出库' }, 400);
     }
     const updated = {
       ...current,
@@ -1510,12 +1600,13 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       return (!result || row.result === result)
         && operatorMatches
         && keyword(row.module, 'module')
-        && keyword(row.action, 'action');
+        && keyword(row.action, 'action')
+        && keyword(row.target, 'target');
     });
     const page = Math.max(1, Number(params.get('page') ?? 1) || 1);
-    const pageSize = Math.max(1, Number(params.get('pageSize') ?? 10) || 10);
+    const pageSize = Math.max(1, Number(params.get('pageSize') ?? 500) || 500);
     const rows = filtered.slice((page - 1) * pageSize, page * pageSize);
-    return jsonResponse({ rows, suspiciousDeleteWarnings: [], pagination: { page, pageSize, totalItems: filtered.length } });
+    return jsonResponse({ rows, suspiciousDeleteWarnings: [], pagination: { page, pageSize, totalItems: filtered.length }, dashboard: buildAuditDashboard(auditLogs) });
   }
 
   if (url.endsWith('/api/system/sites') && init?.method === 'POST') {
@@ -1567,6 +1658,14 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       createdAt: '2026-06-21T10:00:00.000Z'
     };
     staffAccounts.push(account);
+    return jsonResponse(account);
+  }
+
+  const staffEnabledMatch = url.match(/\/api\/system\/staff-accounts\/([^/]+)\/enabled$/);
+  if (staffEnabledMatch && init?.method === 'PUT') {
+    const account = staffAccounts.find((item) => item.id === staffEnabledMatch[1]);
+    if (!account) return jsonResponse({ message: 'Not found' }, 404);
+    account.enabled = body.enabled === true;
     return jsonResponse(account);
   }
 
@@ -1649,6 +1748,10 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(customer);
   }
 
+  if (url.endsWith('/api/master-data/customers')) {
+    return jsonResponse(masterData.customers);
+  }
+
   const customerUpdateMatch = url.match(/\/api\/master-data\/customers\/([^/]+)$/);
   if (customerUpdateMatch && init?.method === 'PUT') {
     const customer = masterData.customers.find((item) => item.id === customerUpdateMatch[1]);
@@ -1676,6 +1779,32 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       return Promise.resolve(new Response('Not found', { status: 404 }));
     }
     customer.enabled = body.enabled === true;
+    return jsonResponse(customer);
+  }
+
+  const customerDeleteMatch = url.match(/\/api\/master-data\/customers\/([^/]+)$/);
+  if (customerDeleteMatch && init?.method === 'DELETE') {
+    const customerIndex = masterData.customers.findIndex((item) => item.id === customerDeleteMatch[1]);
+    if (customerIndex < 0) {
+      return Promise.resolve(new Response('Not found', { status: 404 }));
+    }
+    const [customer] = masterData.customers.splice(customerIndex, 1);
+    masterData.contacts = masterData.contacts.filter((item) => item.customerId !== customer.id);
+    masterData.customerUsers = masterData.customerUsers.filter((item) => item.customerId !== customer.id);
+    auditLogs.unshift({
+      id: `audit-customer-delete-${auditLogs.length + 1}`,
+      actorId: 'u-admin',
+      actorUsername: actorUsername(),
+      action: 'master_data.customer.delete',
+      actionLabel: '删除客户资料',
+      module: 'master_data',
+      moduleLabel: '基础资料',
+      target: customer.id,
+      result: 'SUCCESS',
+      resultLabel: '成功',
+      before: customer,
+      createdAt: new Date().toISOString()
+    });
     return jsonResponse(customer);
   }
 
@@ -2019,7 +2148,11 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   }
 
   if (url.endsWith('/api/shipments/review-pending')) {
-    return jsonResponse(employeeShipments.filter((shipment) => (shipment.status === 'DRAFT' || shipment.status === 'REVIEW_PENDING') && !shipment.deletedAt));
+    const role = actorRole();
+    const rows = employeeShipments.filter((shipment) => (shipment.status === 'DRAFT' || shipment.status === 'REVIEW_PENDING') && !shipment.deletedAt);
+    return jsonResponse(role.includes('OPERATOR') || role.includes('UG_BUSINESS')
+      ? rows.filter((shipment) => shipment.entryBy === 'operator' || shipment.salesperson === 'operator')
+      : rows);
   }
 
   if (url.endsWith('/api/shipments/review-deleted')) {
@@ -2034,6 +2167,24 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     }
     const [removed] = employeeShipments.splice(index, 1);
     return jsonResponse({ id: removed.id, deleted: true });
+  }
+
+  const reviewApproveMatch = url.match(/\/api\/shipments\/([^/]+)\/review\/approve$/);
+  if (reviewApproveMatch && init?.method === 'POST') {
+    const shipment = employeeShipments.find((item) => item.id === reviewApproveMatch[1]);
+    if (!shipment) return jsonResponse({ message: '运单不存在' }, 404);
+    const role = actorRole();
+    const actor = actorUsername();
+    if (role.includes('OPERATOR') || role.includes('UG_BUSINESS') || (role === 'ADMIN' && body?.businessReview === true)) {
+      shipment.status = 'WAITING_SORT';
+      shipment.businessReviewedBy = actor;
+      shipment.businessReviewedAt = '2026-06-25T10:30:00.000Z';
+      shipment.latestTracking = '业务员自审通过，进入待排货';
+    } else {
+      if (role === 'FINANCE' || role === 'UG_FINANCE') return jsonResponse({ message: '待审核运单不再支持财务终审，请在业务成本审核处理' }, 403);
+      return jsonResponse({ message: '当前角色不能终审运单' }, 403);
+    }
+    return jsonResponse({ shipment, packages: [], finance: { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, receivables: [], payables: [], businessCosts: [], receivableTotal: 0, payableTotal: 0 }, events: [], trackingEvents: [], problemTickets: [], files: [], approvalWarnings: [], overdue: false });
   }
 
   const reviewDeleteMatch = url.match(/\/api\/shipments\/([^/]+)\/review$/);
@@ -2127,6 +2278,13 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(token.includes('CUSTOMER') ? customerShipments : employeeShipments);
   }
 
+  if (url.includes('/api/operations/line-shipments')) {
+    const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
+    const rows = token.includes('CUSTOMER') ? customerShipments : employeeShipments;
+    const query = Object.fromEntries(new URL(url, 'http://test.local').searchParams.entries());
+    return jsonResponse(summarizeLineShipmentPool(rows, { ...query, datePreset: 'ALL' }));
+  }
+
   const businessApproveMatch = url.match(/\/api\/shipments\/([^/]+)\/business-data\/approve$/);
   if (businessApproveMatch && init?.method === 'POST') {
     const shipment = employeeShipments.find((item) => item.id === businessApproveMatch[1]);
@@ -2181,13 +2339,25 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
     const actorUsername = token.includes('CUSTOMER_SERVICE') ? 'service' : token.includes('OPERATOR') ? 'operator' : 'admin';
     const now = new Date().toISOString();
-    const nextStatus = !body.status && shipment.status === 'OUTBOUNDED' && body.transferNo?.trim() && body.transferNo !== shipment.transferNo
-      ? 'WAITING_DEPARTURE'
-      : body.status ?? shipment.status;
+    const nextStatus = body.status ?? shipment.status;
+    const channel = body.channelId ? masterData.channels.find((item) => item.id === body.channelId) : undefined;
     Object.assign(shipment, {
       latestTracking: body.latestTracking ?? shipment.latestTracking,
       transferNo: body.transferNo !== undefined ? body.transferNo || undefined : shipment.transferNo,
       subOrderNo: body.subOrderNo !== undefined ? body.subOrderNo || undefined : shipment.subOrderNo,
+      channelName: channel?.name ?? shipment.channelName,
+      carrier: channel?.carrierName ?? shipment.carrier,
+      customerOrderNo: body.customerOrderNo ?? shipment.customerOrderNo,
+      productName: body.productName ?? shipment.productName,
+      destinationCountry: body.destinationCountry ?? shipment.destinationCountry,
+      cargoType: body.cargoType ?? shipment.cargoType,
+      settlementMethod: body.settlementMethod ?? shipment.settlementMethod,
+      packageCount: body.packageCount ?? shipment.packageCount,
+      receivableWeightKg: body.receivableWeightKg ?? shipment.receivableWeightKg,
+      agentWeightKg: body.agentWeightKg ?? body.receivableWeightKg ?? shipment.agentWeightKg,
+      volumeCbm: body.volumeCbm ?? shipment.volumeCbm,
+      declarationRequired: body.declarationRequired ?? shipment.declarationRequired,
+      sensitive: body.sensitive ?? shipment.sensitive,
       status: nextStatus,
       etaAt: body.etaAt ?? shipment.etaAt,
       etdAt: body.etdAt ?? shipment.etdAt,
@@ -2454,11 +2624,49 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       channelName: body.channelName,
       realChannelName: body.realChannelName,
       destinationCountry: body.destinationCountry,
+      markupType: body.markupType ?? 'WEIGHT',
+      markupValue: body.markupValue ?? body.markupPerKg,
       markupPerKg: body.markupPerKg,
+      priority: body.priority ?? 100,
       enabled: body.enabled !== false
     };
     agentMarkupRules.unshift(rule);
     return jsonResponse(rule);
+  }
+
+  const markupPreviewMatch = url.match(/\/api\/pricing\/markup-rules\/([^/]+)\/preview$/);
+  if (markupPreviewMatch) {
+    const rule = agentMarkupRules.find((item) => item.id === markupPreviewMatch[1]);
+    if (!rule) {
+      return jsonResponse({ message: '加价规则不存在' }, 404);
+    }
+    const rows = [...importedPriceRows, ...backendSeedPriceRows].filter((row) =>
+      row.agentName === rule.agentName &&
+      (!rule.channelName || row.channelName === rule.channelName) &&
+      (!rule.realChannelName || (row.realChannelName ?? row.channelName) === rule.realChannelName) &&
+      (!rule.destinationCountry || row.destinationCountry === rule.destinationCountry)
+    );
+    return jsonResponse({
+      rule: { ...rule, hitCount: rows.length },
+      scope: {
+        channelLabel: rule.channelName ?? '全部渠道',
+        realChannelLabel: rule.realChannelName ?? '全部线路',
+        countryLabel: rule.destinationCountry ?? '全部国家'
+      },
+      stats: {
+        priceBookRows: rows.length,
+        channels: new Set(rows.map((row) => row.channelName)).size,
+        countries: new Set(rows.map((row) => row.destinationCountry)).size
+      },
+      examples: rows.map((row) => ({
+        id: row.id,
+        channelName: row.channelName,
+        realChannelName: row.realChannelName,
+        destinationCountry: row.destinationCountry,
+        weightSegmentLabel: `${row.minWeightKg}-${row.maxWeightKg}kg`
+      })),
+      recentChanges: []
+    });
   }
 
   const markupUpdateMatch = url.match(/\/api\/pricing\/markup-rules\/([^/]+)$/);
@@ -2480,8 +2688,59 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(rule);
   }
 
-  if (url.endsWith('/api/pricing/markup-rules')) {
-    return jsonResponse(agentMarkupRules);
+  if (url.includes('/api/pricing/markup-rules?') || url.endsWith('/api/pricing/markup-rules')) {
+    const parsedUrl = new URL(url, 'http://localhost');
+    const detail = parsedUrl.searchParams.get('detail') === 'true';
+    const status = parsedUrl.searchParams.get('status') ?? 'ALL';
+    const agentName = parsedUrl.searchParams.get('agentName') ?? '';
+    const visibleRules = agentMarkupRules
+      .filter((rule) => !agentName || rule.agentName.includes(agentName))
+      .filter((rule) => status === 'ENABLED' ? rule.enabled : status === 'DISABLED' ? !rule.enabled : true);
+    const groupedRules = Array.from(
+      visibleRules.reduce((groups, rule) => {
+        const rows = groups.get(rule.agentName) ?? [];
+        rows.push(rule);
+        groups.set(rule.agentName, rows);
+        return groups;
+      }, new Map<string, AgentMarkupSummary[]>())
+    ).map(([name, rules]) => {
+      const primary = [...rules].sort((left, right) =>
+        [left.channelName, left.realChannelName, left.destinationCountry].filter(Boolean).length -
+        [right.channelName, right.realChannelName, right.destinationCountry].filter(Boolean).length ||
+        (left.priority ?? 100) - (right.priority ?? 100)
+      )[0];
+      const hitIds = new Set(
+        [...importedPriceRows, ...backendSeedPriceRows]
+          .filter((row) => row.agentName === name)
+          .map((row) => row.id)
+      );
+      return {
+        ...primary,
+        id: `agent:${name}`,
+        agentName: name,
+        channelName: undefined,
+        realChannelName: undefined,
+        destinationCountry: undefined,
+        enabled: rules.some((rule) => rule.enabled),
+        ruleCount: rules.length,
+        hitCount: hitIds.size
+      };
+    });
+    const rows = detail ? visibleRules : groupedRules;
+    return jsonResponse({
+      metrics: {
+        totalRules: agentMarkupRules.length,
+        enabledRules: agentMarkupRules.filter((rule) => rule.enabled).length,
+        disabledRules: agentMarkupRules.filter((rule) => !rule.enabled).length,
+        unmatchedQuotes: 0
+      },
+      rows,
+      pagination: {
+        page: 1,
+        pageSize: rows.length,
+        totalItems: rows.length
+      }
+    });
   }
 
   if (url.endsWith('/api/pricing/lookup') && init?.method === 'POST') {
@@ -2619,6 +2878,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       return jsonResponse({ message: '录单阶段不能填写转单号，请在出库后完成双审核再填写' }, 400);
     }
     const customerCode = body.shipment?.customerCode ?? '1399';
+    const actor = actorUsername();
     const selectedPackages = warehousePackages.filter((pkg) => body.warehousePackageIds?.includes(pkg.id));
     const packageCount = selectedPackages.reduce((sum, pkg) => sum + pkg.packageCount, 0) || selectedPackages.length;
     const chargeWeightKg = selectedPackages.reduce((sum, pkg) => sum + pkg.chargeableWeightKg, 0);
@@ -2627,7 +2887,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       createdAt: '2026-06-25T10:00:00.000Z',
       customerName: `${customerCode}-${customerCode === '9409' ? 'Daloday' : '仓库客户'}`,
       customerCode,
-      salesperson: 'operator',
+      salesperson: actor,
       customerOrderNo: body.shipment?.customerOrderNo ?? customerCode,
       systemOrderNo: body.shipment?.systemOrderNo ?? `SYENTRY${String(employeeShipments.length + 1).padStart(6, '0')}`,
       subOrderNo: body.shipment?.subOrderNo,
@@ -2640,7 +2900,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       settlementMethod: body.shipment?.settlementMethod,
       tradeTerms: body.shipment?.tradeTerms,
       fbaInboundNo: body.shipment?.fbaInboundNo,
-      entryBy: 'admin',
+      entryBy: actor,
+      businessReviewedBy: undefined,
+      businessReviewedAt: undefined,
       remark: body.shipment?.remark,
       businessType: body.shipment?.businessType ?? 'DEDICATED_LINE',
       packageType: body.shipment?.packageType ?? 'WPX',
@@ -2682,7 +2944,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       paymentNo: row.paymentNo,
       reconciliationStatus: 'PENDING',
       createdAt: created.createdAt,
-      createdBy: 'admin',
+      createdBy: actor,
       remark: row.remark,
       sourceType: 'MANUAL'
     }));
@@ -2697,7 +2959,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       settlementMethod: row.settlementMethod,
       reconciliationStatus: 'PENDING',
       createdAt: created.createdAt,
-      createdBy: 'admin',
+      createdBy: actor,
       remark: row.remark,
       sourceType: 'MANUAL',
       chargeWeightKg: row.chargeWeightKg,
@@ -2725,7 +2987,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       paymentNo: row.paymentNo,
       reconciliationStatus: 'PENDING',
       createdAt: created.createdAt,
-      createdBy: 'admin',
+      createdBy: actor,
       remark: row.remark,
       sourceType: 'MANUAL',
       salesperson: created.salesperson,

@@ -197,18 +197,20 @@ export function FinanceCatalogPage({
 
   return (
     <>
-      <Card title={title}>
+      <Card title={title} className="finance-work-card">
         <div className="finance-catalog-grid">
           {categories.map(renderSection)}
         </div>
       </Card>
       <Modal
         title={`${editingItem ? '编辑' : '新增'}${financeCatalogCategoryLabels[editingCategory]}`}
+        className="finance-modal"
+        width={680}
         open={editorOpen}
         onCancel={onCloseEditor}
         onOk={() => form.submit()}
         confirmLoading={submitting}
-        destroyOnClose
+        destroyOnHidden
         okText={editingItem ? '保存修改' : '新增'}
         cancelText="取消"
       >

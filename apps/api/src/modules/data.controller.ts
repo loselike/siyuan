@@ -8,6 +8,7 @@ import type {
   AgentChannelCreateInput,
   AgentChannelUpdateInput,
   AgentMarkupCreateInput,
+  AgentMarkupListQuery,
   AgentMarkupUpdateInput,
   AgentUpdateInput,
   AuditLogQuery,
@@ -44,6 +45,7 @@ import type {
   PaidPaymentUpdateInput,
   PaymentConfirmPaidInput,
   PaymentWaterReceiptInput,
+  ShipmentDispatchInput,
   VoucherImageUploadContext,
   PayableAuditBatchInput,
   PayableAuditListQuery,
@@ -70,6 +72,7 @@ import type {
   RoleGroupInput,
   BulkTrackingApplyRequest,
   ShipmentCreateInput,
+  LineShipmentPoolQuery,
   ShipmentFinanceItemCreateInput,
   ShipmentFinanceItemUpdateInput,
   ShipmentImportRequest,
@@ -117,10 +120,20 @@ export class DataController {
     ...this.imageMimeExtensions,
     'application/pdf': '.pdf'
   };
+  private readonly excelMimeExtensions: Record<string, string> = {
+    'application/vnd.ms-excel': '.xls',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
+    'application/octet-stream': ''
+  };
+
+  private async hasAnyPermission(role: RoleKey, permissions: PermissionKey[]) {
+    const checks = await Promise.all(permissions.map((permission) => this.repository.hasPermission(role, permission)));
+    return checks.some(Boolean);
+  }
 
   private scopeMasterDataCustomers(principal: Principal, snapshot: MasterDataSnapshot): MasterDataSnapshot {
     if (!isSalesScopedRole(principal.role)) return snapshot;
-    const scope = new Set([principal.username, 'operator', '业务员'].filter(Boolean));
+    const scope = new Set([principal.username, principal.name, principal.nickname, 'operator', '业务员'].filter((value): value is string => Boolean(value)));
     const customers = snapshot.customers.filter((customer) => customer.salesperson && scope.has(customer.salesperson));
     const customerIds = new Set(customers.map((customer) => customer.id));
     return {
@@ -211,6 +224,12 @@ export class DataController {
     return this.repository.getShipments(request.user);
   }
 
+  @Get('operations/line-shipments')
+  @RequirePermission('orders:read')
+  async lineShipments(@Req() request: { user: Principal }, @Query() query: LineShipmentPoolQuery) {
+    return this.repository.getLineShipmentPool(request.user, query);
+  }
+
   @Get('shipments/status-counts')
   @RequirePermission('orders:read')
   async shipmentStatusCounts(@Req() request: { user: Principal }) {
@@ -272,16 +291,16 @@ export class DataController {
   }
 
   @Post('shipments/:id/review/approve')
-  @RequirePermission('orders:write')
-  async approveShipmentReview(@Req() request: { user: Principal }, @Param('id') id: string) {
+  @RequirePermission(['orders:write', 'finance:settle'])
+  async approveShipmentReview(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body?: { businessReview?: boolean }) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能审核运单');
     }
-    return this.repository.approveShipmentReview(request.user, id);
+    return this.repository.approveShipmentReview(request.user, id, { businessReview: body?.businessReview === true });
   }
 
   @Post('shipments/:id/review/reject')
-  @RequirePermission('orders:write')
+  @RequirePermission(['orders:write', 'finance:settle'])
   async rejectShipmentReview(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentReviewRejectInput) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能驳回运单');
@@ -345,8 +364,36 @@ export class DataController {
 
   @Post('shipments/:id/dispatch')
   @RequirePermission('warehouse:write')
-  async dispatchShipment(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { transferNo?: string }) {
+  async dispatchShipment(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentDispatchInput) {
     return this.repository.dispatchShipment(request.user, id, body);
+  }
+
+  @Post('master-data/agent-invoice-template/upload')
+  @RequirePermission('master-data:write')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  async uploadAgentInvoiceTemplate(
+    @Req() request: { user: Principal },
+    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined
+  ) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能上传代理发票模板');
+    }
+    if (!file) throw new BadRequestException('请上传代理发票模板');
+    this.assertExcelFile(file);
+    const uploadRoot = process.env.UPLOAD_DIR
+      ? join(process.env.UPLOAD_DIR, '..')
+      : process.env.NODE_ENV === 'production'
+        ? '/app/uploads'
+        : join(process.cwd(), 'uploads');
+    const uploadDir = join(uploadRoot, 'invoice-templates');
+    await mkdir(uploadDir, { recursive: true });
+    const extension = extname(file.originalname).toLowerCase();
+    const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
+    await writeFile(join(uploadDir, fileName), file.buffer);
+    return {
+      fileName: file.originalname,
+      url: `/api/uploads/${basename(uploadDir)}/${fileName}`
+    };
   }
 
   @Post('shipments/:id/business-data/approve')
@@ -436,6 +483,37 @@ export class DataController {
       sizeBytes: file.size,
       url: `/api/uploads/${basename(uploadDir)}/${fileName}`,
       transferNo: body.transferNo
+    });
+  }
+
+  @Post('shipments/:id/invoice/upload')
+  @RequirePermission('orders:write')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  async uploadShipmentBusinessInvoice(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined
+  ) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能上传业务发票');
+    }
+    if (!file) throw new BadRequestException('请上传业务发票');
+    this.assertExcelFile(file);
+    const uploadRoot = process.env.UPLOAD_DIR
+      ? join(process.env.UPLOAD_DIR, '..')
+      : process.env.NODE_ENV === 'production'
+        ? '/app/uploads'
+        : join(process.cwd(), 'uploads');
+    const uploadDir = join(uploadRoot, 'business-invoices');
+    await mkdir(uploadDir, { recursive: true });
+    const extension = extname(file.originalname).toLowerCase();
+    const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
+    await writeFile(join(uploadDir, fileName), file.buffer);
+    return this.repository.uploadShipmentBusinessInvoice(request.user, id, {
+      fileName: file.originalname,
+      mimeType: file.mimetype,
+      sizeBytes: file.size,
+      url: `/api/uploads/${basename(uploadDir)}/${fileName}`
     });
   }
 
@@ -572,61 +650,98 @@ export class DataController {
   }
 
   @Get('master-data')
-  @RequirePermission('master-data:read')
+  @RequirePermission([
+    'master-data:read',
+    'master-data:customers:read',
+    'master-data:finance:read',
+    'master-data:agents:read',
+    'master-data:agent-channels:read',
+    'master-data:channels:read',
+    'master-data:channel-categories:read',
+    'master-data:remote-areas:read',
+    'master-data:exchange-rates:read',
+    'master-data:assistant:read'
+  ])
   async masterData(@Req() request: { user: Principal }) {
     const snapshot = await this.repository.getMasterData();
+    const canReadCustomers = await this.hasAnyPermission(request.user.role, ['master-data:read', 'master-data:customers:read']);
+    const canReadFinanceCatalog = await this.hasAnyPermission(request.user.role, ['master-data:read', 'master-data:finance:read']);
     const canReadAgents = await this.repository.hasPermission(request.user.role, 'master-data:agents:read');
+    const canReadAgentChannels = await this.hasAnyPermission(request.user.role, ['master-data:agents:read', 'master-data:agent-channels:read']);
     const canReadChannels = await this.repository.hasPermission(request.user.role, 'master-data:channels:read');
+    const canReadChannelCategories = await this.hasAnyPermission(request.user.role, ['master-data:channels:read', 'master-data:channel-categories:read']);
+    const canReadExchangeRates = await this.hasAnyPermission(request.user.role, ['master-data:read', 'master-data:exchange-rates:read']);
     let result = snapshot;
+    if (!canReadCustomers) {
+      result = { ...result, customers: [], contacts: [], customerUsers: [] };
+    }
+    if (!canReadFinanceCatalog) {
+      result = { ...result, surcharges: [], fuelRates: [] };
+    }
     if (!canReadAgents) {
-      result = { ...result, agents: [], agentChannels: [] };
+      result = { ...result, agents: [] };
+    }
+    if (!canReadAgentChannels) {
+      result = { ...result, agentChannels: [] };
     }
     if (!canReadChannels) {
-      result = { ...result, channels: [], channelCategories: [] };
+      result = { ...result, channels: [] };
+    }
+    if (!canReadChannelCategories) {
+      result = { ...result, channelCategories: [] };
+    }
+    if (!canReadExchangeRates) {
+      result = { ...result, exchangeRates: [] };
     }
     return this.scopeMasterDataCustomers(request.user, result);
   }
 
   @Get('master-data/customers')
-  @RequirePermission('master-data:read')
+  @RequirePermission(['master-data:read', 'master-data:customers:read'])
   async masterDataCustomers(@Req() request: { user: Principal }) {
     return this.scopeMasterDataCustomers(request.user, await this.repository.getMasterData()).customers;
   }
 
   @Post('master-data/customers')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:customers:write'])
   async createMasterDataCustomer(@Req() request: { user: Principal }, @Body() body: CustomerCreateInput) {
     return this.repository.createCustomer(request.user, body);
   }
 
   @Put('master-data/customers/:id')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:customers:write'])
   async updateMasterDataCustomer(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerUpdateInput) {
     return this.repository.updateCustomer(request.user, id, body);
   }
 
   @Post('master-data/customers/:id/contacts')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:customers:write'])
   async createMasterDataCustomerContact(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerContactCreateInput) {
     return this.repository.createCustomerContact(request.user, id, body);
   }
 
   @Put('master-data/customers/:id/contacts/:contactId')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:customers:write'])
   async updateMasterDataCustomerContact(@Req() request: { user: Principal }, @Param('id') id: string, @Param('contactId') contactId: string, @Body() body: CustomerContactUpdateInput) {
     return this.repository.updateCustomerContact(request.user, id, contactId, body);
   }
 
   @Post('master-data/customers/:id/users')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:customers:write'])
   async createMasterDataCustomerUser(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerUserCreateInput) {
     return this.repository.createCustomerUser(request.user, id, body);
   }
 
   @Put('master-data/customers/:id/enabled')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:customers:write'])
   async updateMasterDataCustomerEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateCustomerEnabled(request.user, id, body);
+  }
+
+  @Delete('master-data/customers/:id')
+  @RequirePermission(['master-data:write', 'master-data:customers:write'])
+  async deleteMasterDataCustomer(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.deleteCustomer(request.user, id);
   }
 
   @Get('master-data/agents')
@@ -654,25 +769,25 @@ export class DataController {
   }
 
   @Get('master-data/agent-channels')
-  @RequirePermission('master-data:agents:read')
+  @RequirePermission(['master-data:agents:read', 'master-data:agent-channels:read'])
   async masterDataAgentChannels() {
     return (await this.repository.getMasterData()).agentChannels;
   }
 
   @Post('master-data/agent-channels')
-  @RequirePermission('master-data:agents:write')
+  @RequirePermission(['master-data:agents:write', 'master-data:agent-channels:write'])
   async createMasterDataAgentChannel(@Req() request: { user: Principal }, @Body() body: AgentChannelCreateInput) {
     return this.repository.createAgentChannel(request.user, body);
   }
 
   @Put('master-data/agent-channels/:id')
-  @RequirePermission('master-data:agents:write')
+  @RequirePermission(['master-data:agents:write', 'master-data:agent-channels:write'])
   async updateMasterDataAgentChannel(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: AgentChannelUpdateInput) {
     return this.repository.updateAgentChannel(request.user, id, body);
   }
 
   @Put('master-data/agent-channels/:id/enabled')
-  @RequirePermission('master-data:agents:write')
+  @RequirePermission(['master-data:agents:write', 'master-data:agent-channels:write'])
   async updateMasterDataAgentChannelEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateAgentChannelEnabled(request.user, id, body);
   }
@@ -720,79 +835,79 @@ export class DataController {
   }
 
   @Get('master-data/channel-categories')
-  @RequirePermission('master-data:channels:read')
+  @RequirePermission(['master-data:channels:read', 'master-data:channel-categories:read'])
   async masterDataChannelCategories() {
     return (await this.repository.getMasterData()).channelCategories;
   }
 
   @Post('master-data/channel-categories')
-  @RequirePermission('master-data:channels:write')
+  @RequirePermission(['master-data:channels:write', 'master-data:channel-categories:write'])
   async createMasterDataChannelCategory(@Req() request: { user: Principal }, @Body() body: ChannelCategoryCreateInput) {
     return this.repository.createChannelCategory(request.user, body);
   }
 
   @Put('master-data/channel-categories/:id')
-  @RequirePermission('master-data:channels:write')
+  @RequirePermission(['master-data:channels:write', 'master-data:channel-categories:write'])
   async updateMasterDataChannelCategory(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ChannelCategoryUpdateInput) {
     return this.repository.updateChannelCategory(request.user, id, body);
   }
 
   @Put('master-data/channel-categories/:id/enabled')
-  @RequirePermission('master-data:channels:write')
+  @RequirePermission(['master-data:channels:write', 'master-data:channel-categories:write'])
   async updateMasterDataChannelCategoryEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateChannelCategoryEnabled(request.user, id, body);
   }
 
   @Get('master-data/surcharges')
-  @RequirePermission('master-data:read')
+  @RequirePermission(['master-data:read', 'master-data:finance:read'])
   async masterDataSurcharges() {
     return (await this.repository.getMasterData()).surcharges;
   }
 
   @Post('master-data/surcharges')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:finance:write'])
   async createMasterDataSurcharge(@Req() request: { user: Principal }, @Body() body: SurchargeCreateInput) {
     return this.repository.createSurcharge(request.user, body);
   }
 
   @Put('master-data/surcharges/:id/enabled')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:finance:write'])
   async updateMasterDataSurchargeEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateSurchargeEnabled(request.user, id, body);
   }
 
   @Get('master-data/fuel-rates')
-  @RequirePermission('master-data:read')
+  @RequirePermission(['master-data:read', 'master-data:finance:read'])
   async masterDataFuelRates() {
     return (await this.repository.getMasterData()).fuelRates;
   }
 
   @Post('master-data/fuel-rates')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:finance:write'])
   async createMasterDataFuelRate(@Req() request: { user: Principal }, @Body() body: FuelRateCreateInput) {
     return this.repository.createFuelRate(request.user, body);
   }
 
   @Get('master-data/exchange-rates')
-  @RequirePermission('master-data:read')
+  @RequirePermission(['master-data:read', 'master-data:exchange-rates:read'])
   async masterDataExchangeRates() {
     return (await this.repository.getMasterData()).exchangeRates;
   }
 
   @Post('master-data/exchange-rates')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:exchange-rates:write'])
   async createMasterDataExchangeRate(@Req() request: { user: Principal }, @Body() body: ExchangeRateCreateInput) {
     return this.repository.createExchangeRate(request.user, body);
   }
 
   @Put('master-data/exchange-rates/:id')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:exchange-rates:write'])
   async updateMasterDataExchangeRate(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ExchangeRateUpdateInput) {
     return this.repository.updateExchangeRate(request.user, id, body);
   }
 
   @Delete('master-data/exchange-rates/:id')
-  @RequirePermission('master-data:write')
+  @RequirePermission(['master-data:write', 'master-data:exchange-rates:write'])
   async deleteMasterDataExchangeRate(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.updateExchangeRate(request.user, id, { enabled: false });
   }
@@ -855,6 +970,12 @@ export class DataController {
   @RequirePermission('system:manage')
   async createSystemStaffAccount(@Req() request: { user: Principal }, @Body() body: StaffAccountCreateInput) {
     return this.repository.createStaffAccount(request.user, body);
+  }
+
+  @Put('system/staff-accounts/:id/enabled')
+  @RequirePermission('system:manage')
+  async updateSystemStaffAccountEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
+    return this.repository.updateStaffAccountEnabled(request.user, id, body);
   }
 
   @Put('system/staff-accounts/:id')
@@ -927,37 +1048,43 @@ export class DataController {
 
   @Get('pricing/markup-rules')
   @RequirePermission('pricing:manage')
-  async agentMarkupRules(@Req() request: { user: Principal }) {
-    if (request.user.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以查看代理加价规则');
-    }
-    return this.repository.getAgentMarkupRules(request.user);
+  async agentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
+    return this.repository.getAgentMarkupRules(request.user, query);
+  }
+
+  @Get('pricing/markup-rules/export')
+  @RequirePermission('pricing:manage')
+  async exportAgentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
+    return this.repository.exportAgentMarkupRules(request.user, query);
+  }
+
+  @Post('pricing/markup-rules/import')
+  @RequirePermission('pricing:manage')
+  async importAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { rows?: AgentMarkupCreateInput[] }) {
+    return this.repository.importAgentMarkupRules(request.user, body);
+  }
+
+  @Get('pricing/markup-rules/:id/preview')
+  @RequirePermission('pricing:manage')
+  async previewAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.previewAgentMarkupRule(request.user, id);
   }
 
   @Post('pricing/markup-rules')
   @RequirePermission('pricing:manage')
   async createAgentMarkupRule(@Req() request: { user: Principal }, @Body() body: AgentMarkupCreateInput) {
-    if (request.user.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以新增代理加价规则');
-    }
     return this.repository.createAgentMarkupRule(request.user, body);
   }
 
   @Put('pricing/markup-rules/:id')
   @RequirePermission('pricing:manage')
   async updateAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: AgentMarkupUpdateInput) {
-    if (request.user.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以修改代理加价规则');
-    }
     return this.repository.updateAgentMarkupRule(request.user, id, body);
   }
 
   @Delete('pricing/markup-rules/:id')
   @RequirePermission('pricing:manage')
   async deleteAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以删除代理加价规则');
-    }
     return this.repository.deleteAgentMarkupRule(request.user, id);
   }
 
@@ -1420,6 +1547,25 @@ export class DataController {
       return;
     }
     this.assertVoucherImage(file);
+  }
+
+  private assertExcelFile(file: { mimetype: string; originalname: string; buffer: Buffer }) {
+    const extension = extname(file.originalname).toLowerCase();
+    if (!['.xls', '.xlsx'].includes(extension) || extension === '.xlsm') {
+      throw new BadRequestException('仅支持 .xls/.xlsx 发票模板');
+    }
+    if (!(file.mimetype in this.excelMimeExtensions) && file.mimetype !== '') {
+      throw new BadRequestException('仅支持 Excel 发票模板');
+    }
+    if (extension === '.xlsx' && file.buffer.subarray(0, 2).toString('ascii') !== 'PK') {
+      throw new BadRequestException('XLSX 内容格式无效');
+    }
+    if (extension === '.xls') {
+      const oleHeader = file.buffer.subarray(0, 4);
+      if (!(oleHeader[0] === 0xd0 && oleHeader[1] === 0xcf && oleHeader[2] === 0x11 && oleHeader[3] === 0xe0)) {
+        throw new BadRequestException('XLS 内容格式无效');
+      }
+    }
   }
 
   @Get('finance/paid-payments')

@@ -220,6 +220,8 @@ model Shipment {
   fbaWarehouseCode    String?
   entryBy             String?
   entryAt             DateTime?
+  businessReviewedBy  String?
+  businessReviewedAt  DateTime?
   reviewedBy          String?
   reviewedAt          DateTime?
   reviewRejectedReason String?
@@ -236,6 +238,11 @@ model Shipment {
   paymentAmountUsd    Decimal?
   paymentAmountCny    Decimal?
   paymentMethod       String?
+  shippingMarkRequired Boolean          @default(false)
+  businessInvoiceName String?
+  businessInvoiceUrl  String?
+  businessInvoiceUploadedBy String?
+  businessInvoiceUploadedAt DateTime?
   outboundAt          DateTime?
   etaAt               DateTime?
   etdAt               DateTime?
@@ -436,9 +443,16 @@ model AgentMarkupRule {
   realChannelName    String?
   destinationCountry String?
   markupPerKg        Decimal
+  markupType         String   @default("WEIGHT")
+  markupValue        Decimal  @default(0)
+  priority           Int      @default(100)
   enabled            Boolean  @default(true)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
+  deletedAt          DateTime?
+
+  @@index([agentName, enabled, deletedAt])
+  @@index([priority])
 }
 
 model WarehousePackage {

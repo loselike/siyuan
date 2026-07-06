@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import * as XLSX from 'xlsx';
 import { describe, expect, it, vi } from 'vitest';
+import { addRowsWorksheet, createWorkbook, writeWorkbookBuffer } from '../shared/excel';
 import { App, cleanup, jsonResponse, renderAndLogin } from '../testSupport/appTestHarness';
 
 describe('Settings and admin flows', () => {
@@ -72,6 +72,7 @@ describe('Settings and admin flows', () => {
     await user.click(screen.getByRole('menuitem', { name: '系统管理' }));
 
     expect((await screen.findAllByText('admin')).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: '客户资料' })).not.toBeInTheDocument();
     expect(screen.getAllByText('service').length).toBeGreaterThan(0);
     expect(screen.getAllByText('warehouse').length).toBeGreaterThan(0);
     expect(screen.queryByText('admin123')).not.toBeInTheDocument();
@@ -83,6 +84,13 @@ describe('Settings and admin flows', () => {
     expect(screen.getAllByText('报价查询').length).toBeGreaterThan(0);
     expect(screen.getAllByText('报价管理').length).toBeGreaterThan(0);
     expect(screen.getAllByText('财务核销').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('客户资料查看').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('财务资料查看').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('代理渠道查看').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('渠道类别查看').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('偏远查看').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('汇率查看').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('资料辅助查看').length).toBeGreaterThan(0);
 
     await user.click(screen.getByText('客服'));
     await user.click(screen.getByRole('button', { name: '保存客服用户组权限' }));
@@ -94,6 +102,34 @@ describe('Settings and admin flows', () => {
     );
   });
 
+  it('shows the site workspace with metrics filters and enable controls', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '系统管理' }));
+    await user.click(await screen.findByRole('button', { name: /站点/ }));
+
+    expect(await screen.findByText('站点资料')).toBeInTheDocument();
+    expect(screen.getByText('启用站点')).toBeInTheDocument();
+    expect(screen.getByText('停用站点')).toBeInTheDocument();
+    expect(screen.getAllByText('绑定员工').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('站点名称').length).toBeGreaterThan(0);
+
+    await user.type(screen.getByLabelText('站点名称筛选'), '武汉');
+    await user.click(screen.getByRole('button', { name: /查\s*询/ }));
+    expect(await screen.findByText('武汉九域联')).toBeInTheDocument();
+    expect(screen.queryByText('漳州思华')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /重\s*置/ }));
+    expect(await screen.findByText('漳州思华')).toBeInTheDocument();
+
+    const row = screen.getByText('深圳思远').closest('tr') as HTMLElement;
+    await user.click(within(row).getByRole('button', { name: /停\s*用/ }));
+    await user.click(await screen.findByRole('button', { name: '确认停用' }));
+    expect(await screen.findByText('深圳思远 已停用')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/sites/site-shenzhen-siyuan/enabled'), expect.objectContaining({ method: 'PUT' }));
+  });
+
   it('maintains role groups and offers enabled groups when creating staff accounts', async () => {
     const user = userEvent.setup();
     await renderAndLogin('admin', 'admin123');
@@ -102,8 +138,25 @@ describe('Settings and admin flows', () => {
     await user.click(await screen.findByRole('button', { name: /用户组/ }));
 
     expect(await screen.findByText('仓库收货')).toBeInTheDocument();
-    expect(screen.getByText('市场部')).toBeInTheDocument();
+    expect(screen.getAllByText('市场部').length).toBeGreaterThan(0);
     expect(screen.queryByText('功能后续设计')).not.toBeInTheDocument();
+    expect(screen.getByText('启用用户组')).toBeInTheDocument();
+    expect(screen.getByText('停用用户组')).toBeInTheDocument();
+    expect(screen.getByText('绑定员工数')).toBeInTheDocument();
+    expect(screen.getByText('用户组详情')).toBeInTheDocument();
+    expect(screen.getByText('基础信息')).toBeInTheDocument();
+    expect(screen.getByText('菜单权限')).toBeInTheDocument();
+
+    await user.clear(screen.getByPlaceholderText('用户组名称 / 说明'));
+    await user.type(screen.getByPlaceholderText('用户组名称 / 说明'), '市场');
+    await user.click(screen.getByRole('button', { name: /查\s*询/ }));
+    expect(screen.getAllByText('市场部').length).toBeGreaterThan(0);
+    expect(screen.queryByText('仓库出货')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /重\s*置/ }));
+    expect(await screen.findByText('仓库出货')).toBeInTheDocument();
+
+    await user.click(screen.getAllByText('市场部')[0]);
+    expect(screen.getAllByText('处理排货').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: /增\s*加/ }));
     let dialog = await screen.findByRole('dialog', { name: '新建用户组' });
@@ -116,9 +169,25 @@ describe('Settings and admin flows', () => {
     await user.click(within(dialog).getByRole('button', { name: '创建用户组' }));
 
     expect(await screen.findByText('测试用户组 已创建')).toBeInTheDocument();
-    expect(screen.getByText('测试说明')).toBeInTheDocument();
+    expect(screen.getAllByText('测试说明').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: /用户名/ }));
+    expect(await screen.findByText('员工账号管理')).toBeInTheDocument();
+    expect(screen.getByText('在职账号')).toBeInTheDocument();
+    expect(screen.getByText('停用账号')).toBeInTheDocument();
+    expect(screen.getByText('需改密')).toBeInTheDocument();
+    expect(screen.getByText('资料未完善')).toBeInTheDocument();
+    expect(screen.getByText('停用保留历史记录；删除需二次确认')).toBeInTheDocument();
+    expect(screen.getAllByText('最近登录').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('姓名 / 业务员').length).toBeGreaterThan(0);
+
+    await user.clear(screen.getByLabelText('员工账号关键字'));
+    await user.type(screen.getByLabelText('员工账号关键字'), 'finance');
+    await user.click(screen.getByRole('button', { name: /查\s*询/ }));
+    expect(await screen.findByText('finance')).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/staff-accounts?status=ALL&keyword=finance'), expect.anything());
+    await user.click(screen.getAllByRole('button', { name: /重\s*置/ }).find((button) => button.textContent === '重置') as HTMLElement);
+
     await user.click(screen.getByRole('button', { name: /新\s*增/ }));
     dialog = await screen.findByRole('dialog', { name: '新建用户' });
     await user.type(within(dialog).getByLabelText('账户'), 'teststaff');
@@ -135,16 +204,16 @@ describe('Settings and admin flows', () => {
     fireEvent.change(staffImportInput, { target: { files: [new File(['bad'], 'bad.xls', { type: 'application/vnd.ms-excel' })] } });
     expect(await screen.findByText('仅支持导入 .xlsx 模板文件')).toBeInTheDocument();
 
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(
+    const workbook = createWorkbook();
+    addRowsWorksheet(
       workbook,
-      XLSX.utils.aoa_to_sheet([
+      '用户名导入模板',
+      [
         ['账户', '密码', '业务员', '中文名', '性别', '所属站点', '状态', '所属用户组'],
         ['import001', 'Import@123', '导入业务员', '导入员工', '女', '', '在职', '测试用户组']
-      ]),
-      '用户名导入模板'
+      ]
     );
-    const importFile = new File([XLSX.write(workbook, { type: 'array', bookType: 'xlsx' })], 'staff-import.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    const importFile = new File([await writeWorkbookBuffer(workbook)], 'staff-import.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
     fireEvent.change(staffImportInput, { target: { files: [importFile] } });
     expect(await screen.findByText('导入成功 1 条')).toBeInTheDocument();
     expect(await screen.findByText('import001')).toBeInTheDocument();
@@ -157,13 +226,23 @@ describe('Settings and admin flows', () => {
     await user.click(within(dialog).getByRole('button', { name: '保存用户' }));
     expect(await screen.findByText('teststaff 已更新')).toBeInTheDocument();
 
-    await user.click(screen.getByText('teststaff'));
-    await user.click(screen.getByRole('button', { name: /删\s*除/ }));
+    let staffRow = screen.getByText('teststaff').closest('tr') as HTMLElement;
+    await user.click(within(staffRow).getByRole('button', { name: /停\s*用/ }));
+    await user.click(await screen.findByRole('button', { name: '确认停用' }));
+    expect(await screen.findByText('已停用 1 个员工账号')).toBeInTheDocument();
+
+    staffRow = screen.getByText('teststaff').closest('tr') as HTMLElement;
+    await user.click(within(staffRow).getByRole('button', { name: /启\s*用/ }));
+    await user.click(await screen.findByRole('button', { name: '确认启用' }));
+    expect(await screen.findByText('已启用 1 个员工账号')).toBeInTheDocument();
+
+    staffRow = screen.getByText('teststaff').closest('tr') as HTMLElement;
+    await user.click(within(staffRow).getByRole('button', { name: /删\s*除/ }));
     await user.click(await screen.findByRole('button', { name: '确认删除' }));
     expect(await screen.findByText('teststaff 已删除')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /用户组/ }));
-    await user.click(screen.getByText('测试用户组'));
+    await user.click(screen.getAllByText('测试用户组')[0]);
     await user.click(screen.getByRole('button', { name: /修\s*改/ }));
     dialog = await screen.findByRole('dialog', { name: '编辑用户组' });
     await user.clear(within(dialog).getByLabelText('用户组名称'));
@@ -171,14 +250,15 @@ describe('Settings and admin flows', () => {
     await user.click(within(dialog).getByRole('button', { name: '保存用户组' }));
     expect(await screen.findByText('测试用户组改 已更新')).toBeInTheDocument();
 
-    await user.click(screen.getByText('测试用户组改'));
-    await user.click(screen.getByRole('button', { name: /删\s*除/ }));
+    await user.click(screen.getAllByText('测试用户组改')[0]);
+    await user.click(screen.getAllByRole('button', { name: /停\s*用/ })[0]);
     await user.click(await screen.findByRole('button', { name: '确认停用' }));
     expect(await screen.findByText('测试用户组改 已停用')).toBeInTheDocument();
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/roles'), expect.objectContaining({ method: 'POST' }));
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/roles/UG_TEST_'), expect.objectContaining({ method: 'PUT' }));
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/staff-accounts'), expect.objectContaining({ method: 'POST' }));
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/staff-accounts/u-teststaff'), expect.objectContaining({ method: 'PUT' }));
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/staff-accounts/u-teststaff/enabled'), expect.objectContaining({ method: 'PUT' }));
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/staff-accounts/u-teststaff'), expect.objectContaining({ method: 'DELETE' }));
   });
 
@@ -189,20 +269,29 @@ describe('Settings and admin flows', () => {
     await user.click(screen.getByRole('menuitem', { name: '系统管理' }));
     await user.click(await screen.findByRole('button', { name: /操作日志/ }));
 
-    expect(await screen.findByText('基础资料')).toBeInTheDocument();
-    expect(screen.getByText('修改')).toBeInTheDocument();
-    expect(screen.getByText('ch-dhl-hk')).toBeInTheDocument();
+    expect(await screen.findByText('今日操作')).toBeInTheDocument();
+    expect(screen.getAllByText('基础资料').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('修改').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('ch-dhl-hk').length).toBeGreaterThan(0);
     expect(screen.getByText('查看财务资料库：结算方式')).toBeInTheDocument();
     expect(screen.getByText('GET /api/finance/catalog?category=SETTLEMENT_METHOD')).toBeInTheDocument();
     expect(screen.getAllByText('成功').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/已记录操作前数据/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/已记录操作后数据/).length).toBeGreaterThan(0);
 
-    await user.click(screen.getAllByRole('button', { name: /查看/ })[0]);
-    const rawDialog = await screen.findByRole('dialog', { name: '原始日志查看' });
-    expect(within(rawDialog).getByText(/"before"/)).toBeInTheDocument();
-    expect(within(rawDialog).getByText(/"after"/)).toBeInTheDocument();
-    expect(within(rawDialog).getByText(/"actor"/)).toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: /查看详情/ })[0]);
+    expect(screen.getByText('审计详情')).toBeInTheDocument();
+    expect(screen.getByText('变更前')).toBeInTheDocument();
+    expect(screen.getByText('变更后')).toBeInTheDocument();
+    expect(screen.getByText('原始请求')).toBeInTheDocument();
+    expect(screen.getByText(/"before"/)).toBeInTheDocument();
+    expect(screen.getByText(/"after"/)).toBeInTheDocument();
+    expect(screen.getByText(/"actor"/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '更多筛选' }));
+    await user.type(screen.getByPlaceholderText('例如 审核 / 删除'), 'system.');
+    await user.click(screen.getByRole('button', { name: /查\s*询/ }));
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/api/system/audit-logs'), expect.anything());
   });
 
 
@@ -248,6 +337,31 @@ describe('Settings and admin flows', () => {
     expect(screen.queryByRole('menuitem', { name: '系统管理' })).not.toBeInTheDocument();
   });
 
+  it('defaults new customer ownership to the current salesperson', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('operator', 'operator123');
+
+    await user.click(screen.getByRole('menuitem', { name: '基础资料库' }));
+    await user.click(screen.getByRole('button', { name: '客户资料' }));
+    const customerWorkspace = await screen.findByRole('region', { name: '客户资料' });
+    await user.click(within(customerWorkspace).getByRole('button', { name: '增加客户' }));
+    const dialog = await screen.findByRole('dialog', { name: '新建客户' });
+
+    const salespersonInput = within(dialog).getByLabelText('业务员');
+    expect(salespersonInput).toHaveValue('operator');
+    expect(salespersonInput).toBeDisabled();
+    expect(within(dialog).queryByPlaceholderText('例如 mira')).not.toBeInTheDocument();
+
+    await user.type(within(dialog).getByLabelText('客户编码'), '8899');
+    await user.type(within(dialog).getByLabelText('客户简称'), 'Operator Customer');
+    await user.type(within(dialog).getByLabelText('客户全称'), 'Operator Customer Inc.');
+    await user.click(screen.getByRole('button', { name: '创建客户' }));
+
+    expect(await screen.findByText('8899')).toBeInTheDocument();
+    expect(await screen.findByText('Operator Customer')).toBeInTheDocument();
+    expect(await screen.findByText('已创建客户 8899-Operator Customer，业务员 operator')).toBeInTheDocument();
+  });
+
 
   it('loads real master data and maintains customers channels fees fuel rates and exchange rates', async () => {
     const user = userEvent.setup();
@@ -265,23 +379,25 @@ describe('Settings and admin flows', () => {
     expect(screen.queryByText('功能后续设计')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /客户资料/ }));
     expect(screen.getAllByText('客户资料').length).toBeGreaterThan(0);
+    expect(screen.getByText('启用客户')).toBeInTheDocument();
+    expect(screen.getByText('缺结算信息')).toBeInTheDocument();
     expect(screen.getAllByText('客户编码').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('客户简称').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('客户全称').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('客户信息').length).toBeGreaterThan(0);
     expect(screen.getAllByText('结算信息').length).toBeGreaterThan(0);
     expect(screen.getAllByText('收货人').length).toBeGreaterThan(0);
     expect(screen.getAllByText('客户类型').length).toBeGreaterThan(0);
     expect(screen.getAllByText('业务员').length).toBeGreaterThan(0);
+    expect(screen.getByText('客户详情')).toBeInTheDocument();
     expect(screen.getAllByText('代理资料').length).toBeGreaterThan(0);
     expect(screen.queryByText('客户、联系人与账号')).not.toBeInTheDocument();
     expect(screen.queryByText('代理、承运商与渠道')).not.toBeInTheDocument();
     expect(screen.queryByText('承运商与渠道')).not.toBeInTheDocument();
     expect(screen.queryByText('费用、燃油与汇率')).not.toBeInTheDocument();
-    expect(screen.getByText('9409')).toBeInTheDocument();
-    expect(screen.getByText('Daloday')).toBeInTheDocument();
-    expect(screen.getByText('Daloday Inc.')).toBeInTheDocument();
+    expect(screen.getAllByText('9409').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Daloday').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Daloday Inc.').length).toBeGreaterThan(0);
     expect(screen.getAllByText('直客').length).toBeGreaterThan(0);
-    expect(screen.getByText('何俊妮')).toBeInTheDocument();
+    expect(screen.getAllByText('何俊妮').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: /代理资料/ }));
     expect(screen.getAllByText('代理编码').length).toBeGreaterThan(0);
@@ -299,7 +415,7 @@ describe('Settings and admin flows', () => {
     await user.click(screen.getByRole('button', { name: '增加代理' }));
     const createBankAgentDialog = await screen.findByRole('dialog', { name: '新建代理' });
     expect(within(createBankAgentDialog).getByText('收款方银行信息')).toBeInTheDocument();
-    expect(within(createBankAgentDialog).getByRole('button', { name: '上传图片' })).toBeInTheDocument();
+    expect(within(createBankAgentDialog).getByRole('button', { name: '上传模板' })).toBeInTheDocument();
     await user.type(within(createBankAgentDialog).getByLabelText('代理编码'), 'JL');
     await user.type(within(createBankAgentDialog).getByLabelText('代理简称'), '鲸链');
     await user.type(within(createBankAgentDialog).getByLabelText('代理详细公司名'), '深圳市鲸链国际物流有限公司');
@@ -458,33 +574,34 @@ describe('Settings and admin flows', () => {
     expect(within(createCustomerDialog).getByLabelText('客户简称')).toHaveValue('');
     expect(within(createCustomerDialog).getByLabelText('客户类型')).toHaveValue('直客');
     expect(within(createCustomerDialog).getByLabelText('结算信息')).toHaveValue('RMB月结');
+    expect(within(createCustomerDialog).getByLabelText('业务员')).toHaveValue('admin');
+    expect(within(createCustomerDialog).getByLabelText('业务员')).toBeDisabled();
     await user.type(within(createCustomerDialog).getByLabelText('客户编码'), '8888');
     await user.type(within(createCustomerDialog).getByLabelText('客户简称'), 'Mira Logistics');
     await user.type(within(createCustomerDialog).getByLabelText('客户全称'), 'Mira Logistics Co., Ltd.');
     await user.clear(within(createCustomerDialog).getByLabelText('客户类型'));
     await user.type(within(createCustomerDialog).getByLabelText('客户类型'), '直客');
     await user.type(within(createCustomerDialog).getByLabelText('客户来源'), '展会');
-    await user.type(within(createCustomerDialog).getByLabelText('业务员'), 'mira');
     await user.click(screen.getByRole('button', { name: '创建客户' }));
-    expect(await screen.findByText('8888')).toBeInTheDocument();
+    expect((await screen.findAllByText('8888')).length).toBeGreaterThan(0);
     expect(await screen.findByText('Mira Logistics')).toBeInTheDocument();
     expect(await screen.findByText('Mira Logistics Co., Ltd.')).toBeInTheDocument();
     expect(await screen.findByText('展会')).toBeInTheDocument();
     expect(screen.getAllByText('RMB月结').length).toBeGreaterThan(0);
-    expect(await screen.findAllByText('mira')).toHaveLength(1);
+    expect((await screen.findAllByText('admin')).length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '新建客户' })).not.toBeInTheDocument());
-    expect(screen.getByRole('button', { name: '修改客户' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '删除客户' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '编辑客户' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '删除客户' })).toBeEnabled();
 
     await user.type(screen.getByLabelText('客户编码筛选'), '8888');
-    expect(screen.getByText('9409')).toBeInTheDocument();
+    expect(screen.getAllByText('9409').length).toBeGreaterThan(0);
     await user.click(screen.getAllByRole('button', { name: /查\s*询/ })[0]);
-    expect(screen.getByText('8888')).toBeInTheDocument();
-    expect(screen.queryByText('9409')).not.toBeInTheDocument();
+    expect(screen.getAllByText('8888').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('9409')).toHaveLength(0);
     await user.click(screen.getAllByRole('button', { name: /重\s*置/ })[0]);
-    expect(await screen.findByText('9409')).toBeInTheDocument();
+    expect((await screen.findAllByText('9409')).length).toBeGreaterThan(0);
 
-    await user.click(screen.getByText('8888'));
+    await user.click(screen.getAllByText('8888')[0]);
     await user.click(screen.getByRole('button', { name: '新增收货人' }));
     const createContactDialog = await screen.findByRole('dialog', { name: '8888-Mira Logistics 新增收货人' });
     await user.type(within(createContactDialog).getByLabelText('收货人'), 'Mira Receiver');
@@ -512,18 +629,24 @@ describe('Settings and admin flows', () => {
     await user.click(screen.getByRole('button', { name: '确认停用' }));
     expect(await screen.findByText('Mira Receiver 已停用')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('Mira Receiver')).not.toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: '修改客户' }));
+    await user.click(screen.getByRole('button', { name: '编辑客户' }));
     const editCustomerDialog = await screen.findByRole('dialog', { name: '编辑客户' });
     await user.clear(within(editCustomerDialog).getByLabelText('客户简称'));
     await user.type(within(editCustomerDialog).getByLabelText('客户简称'), 'Mira CN');
     await user.click(screen.getByRole('button', { name: '保存客户' }));
-    expect(await screen.findByText('Mira CN')).toBeInTheDocument();
-    await user.click(screen.getByText('8888'));
-    await user.click(screen.getByRole('button', { name: '删除客户' }));
+    expect((await screen.findAllByText('Mira CN')).length).toBeGreaterThan(0);
+    await user.click(screen.getAllByText('8888')[0]);
+    const customerBatchBar = screen.getByText(/已选择\s+1\s+项/).closest('div');
+    expect(customerBatchBar).not.toBeNull();
+    await user.click(within(customerBatchBar as HTMLElement).getByRole('button', { name: /停\s*用/ }));
     expect(await screen.findByText('确认停用该客户？')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '确认停用' }));
     expect(await screen.findByText('8888-Mira CN 已停用')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText('确认停用该客户？')).not.toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: '删除客户' }));
+    expect(await screen.findByText('删除客户资料')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '确认删除' }));
+    expect(await screen.findByText('8888-Mira CN 已删除')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '客户列表设置' }));
     expect(await screen.findByRole('dialog', { name: '客户列表设置' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /确\s*定/ }));

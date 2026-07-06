@@ -384,8 +384,9 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.receivables).toHaveLength(1);
         expect(response.body.businessCosts).toHaveLength(1);
-        expect(response.body.payables).toHaveLength(0);
-        expect(response.body.canViewPayables).toBe(false);
+        expect(response.body.payables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '代理成本', amount: 69.9 })]));
+        expect(response.body.payables[0].agentName).toBeUndefined();
+        expect(response.body.canViewPayables).toBe(true);
       });
 
     await request(app.getHttpServer())
@@ -415,7 +416,7 @@ describe('Siyuan API finance', () => {
               volumeCbm: 0.18,
               chargeWeightKg: 30,
               destinationCountry: '美国',
-              salesperson: 'operator',
+              salesperson: 'admin',
               businessChannel: 'DHL HK',
               cargoSummary: expect.objectContaining({ cargoType: '普货', productName: '配件', remark: '提交备注' }),
               entryBy: 'admin',
@@ -429,6 +430,50 @@ describe('Siyuan API finance', () => {
   it('rejects incomplete order-entry submissions and operator payable leakage', async () => {
     const adminToken = await app.loginAs('admin');
     const operatorToken = await app.loginAs('operator');
+
+    const duplicatePackage = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: 'ORDER-ENTRY-DUP',
+        domesticTrackingNo: 'KYENTDUP001',
+        expectedTotalPackageCount: 1,
+        packageIndex: 1,
+        packageCount: 1,
+        weightKg: 6,
+        lengthCm: 50,
+        widthCm: 40,
+        heightCm: 30,
+        scanTime: '2026-06-25T10:15:00.000+08:00'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        shipment: {
+          customerCode: '9409',
+          customerOrderNo: 'ORDER-ENTRY-DUP',
+          systemOrderNo: 'SYGJ06061230001',
+          businessType: 'DEDICATED_LINE',
+          packageType: 'WPX',
+          destinationCountry: '美国',
+          declarationRequired: false,
+          cargoType: '普货',
+          productName: '配件',
+          settlementMethod: '思远阿里'
+        },
+        warehousePackageIds: [duplicatePackage.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '运费', amount: 100, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务员成本', amount: 80, currency: 'RMB' }],
+        submitForReview: true
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('运单号 SYGJ06061230001 已存在');
+      });
 
     await request(app.getHttpServer())
       .post('/api/shipments/order-entry')
@@ -539,6 +584,16 @@ describe('Siyuan API finance', () => {
       .expect(201)
       .expect((response) => {
         expect(response.body).toEqual(expect.objectContaining({ category: 'FEE_NAME', name, currency: 'RMB', enabled: true }));
+      });
+
+    const productName = `录单品名-${Date.now()}`;
+    await request(app.getHttpServer())
+      .post('/api/finance/catalog')
+      .set('Authorization', app.auth(token))
+      .send({ category: 'PRODUCT_NAME', name: productName, enabled: true })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ category: 'PRODUCT_NAME', name: productName, enabled: true }));
       });
 
     await request(app.getHttpServer())
@@ -652,31 +707,74 @@ describe('Siyuan API finance', () => {
 
   it('manages business cost audits and calculates business profit from receivables', async () => {
     const adminToken = await app.loginAs('admin');
-
-    const shipment = await request(app.getHttpServer())
-      .post('/api/shipments')
+    const pkg = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
       .set('Authorization', app.auth(adminToken))
       .send({
-        customerId: 'c-9409',
+        customerCode: '9409',
         customerOrderNo: 'BUSINESS-COST-AUDIT-001',
-        systemOrderNo: 'SYBIZCOST001',
-        businessType: 'DEDICATED_LINE',
-        packageType: 'WPX',
-        destinationCountry: '美国',
+        domesticTrackingNo: 'KYBIZCOST001',
+        expectedTotalPackageCount: 1,
+        packageIndex: 1,
         packageCount: 1,
-        receivableWeightKg: 20,
-        agentWeightKg: 20,
-        channelId: 'ch-dhl-hk',
-        initialStatus: 'DRAFT',
-        latestTracking: '业务成本审核测试单'
+        weightKg: 20,
+        lengthCm: 60,
+        widthCm: 40,
+        heightCm: 30,
+        scanTime: '2026-06-25T09:00:00.000+08:00'
       })
       .expect(201);
 
-    await request(app.getHttpServer())
-      .post(`/api/shipments/${shipment.body.id}/finance-items`)
+    const entry = await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
       .set('Authorization', app.auth(adminToken))
-      .send({ type: 'RECEIVABLE', name: '测试应收', amount: 1000, currency: 'RMB' })
+      .send({
+        shipment: {
+          customerCode: '9409',
+          customerOrderNo: 'BUSINESS-COST-AUDIT-001',
+          systemOrderNo: 'SYBIZCOST001',
+          businessType: 'DEDICATED_LINE',
+          packageType: 'WPX',
+          destinationCountry: '美国',
+          declarationRequired: false,
+          cargoType: '普货',
+          productName: '业务成本审核测试单',
+          settlementMethod: 'RMB月结'
+        },
+        warehousePackageIds: [pkg.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '测试应收', amount: 1000, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '录单业务成本', amount: 200, currency: 'RMB' }],
+        submitForReview: true
+      })
       .expect(201);
+
+    let businessReviewedAt = '';
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${entry.body.shipment.id}/review/approve`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ businessReview: true })
+      .expect(201)
+      .expect((response) => {
+        businessReviewedAt = response.body.shipment.businessReviewedAt;
+        expect(response.body.shipment).toEqual(expect.objectContaining({
+          status: 'WAITING_SORT',
+          businessReviewedBy: 'admin',
+          businessReviewedAt: expect.any(String)
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/finance/receivable-audits?systemOrderNo=SYBIZCOST001')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            systemOrderNo: 'SYBIZCOST001',
+            createdAt: businessReviewedAt
+          })
+        ]));
+      });
 
     const created = await request(app.getHttpServer())
       .post('/api/finance/business-cost-audits')
@@ -701,8 +799,8 @@ describe('Siyuan API finance', () => {
       unitPrice: 30,
       amount: 600,
       receivableTotal: 1000,
-      businessCostTotal: 600,
-      businessProfit: 400,
+      businessCostTotal: 800,
+      businessProfit: 200,
       reconciliationStatus: 'PENDING'
     }));
 
@@ -716,8 +814,8 @@ describe('Siyuan API finance', () => {
             id: created.body.id,
             systemOrderNo: 'SYBIZCOST001',
             receivableTotal: 1000,
-            businessCostTotal: 600,
-            businessProfit: 400
+            businessCostTotal: 800,
+            businessProfit: 200
           })
         ]));
         expect(response.body.totals).toEqual(expect.objectContaining({
@@ -749,7 +847,7 @@ describe('Siyuan API finance', () => {
               id: created.body.id,
               systemOrderNo: 'SYBIZCOST001',
               customerCode: '9409',
-              salesperson: 'operator',
+              salesperson: 'admin',
               name: '业务员成本运费',
               chargeWeightKg: 20,
               unitPrice: 30,
@@ -793,7 +891,7 @@ describe('Siyuan API finance', () => {
               id: created.body.id,
               systemOrderNo: 'SYBIZCOST001',
               customerCode: '9409',
-              salesperson: 'operator',
+              salesperson: 'admin',
               name: '业务员成本运费',
               chargeWeightKg: 20,
               unitPrice: 30,
@@ -814,15 +912,15 @@ describe('Siyuan API finance', () => {
       .put(`/api/finance/business-cost-audits/${created.body.id}`)
       .set('Authorization', app.auth(adminToken))
       .send({ amount: 650 })
-      .expect(200)
+        .expect(200)
       .expect((response) => {
         expect(response.body.amount).toBe(600);
-        expect(response.body.businessCostTotal).toBe(600);
-        expect(response.body.businessProfit).toBe(400);
+        expect(response.body.businessCostTotal).toBe(800);
+        expect(response.body.businessProfit).toBe(200);
       });
 
 	    await request(app.getHttpServer())
-	      .get(`/api/shipments/${shipment.body.id}/finance-detail`)
+	      .get(`/api/shipments/${entry.body.shipment.id}/finance-detail`)
 	      .set('Authorization', app.auth(adminToken))
 	      .expect(200)
       .expect((response) => {
@@ -1886,7 +1984,7 @@ describe('Siyuan API finance', () => {
 	      .set('Authorization', app.auth(adminToken))
 	      .expect(400)
 	      .expect((response) => {
-	        expect(response.body.message).toContain('先在已付款模块反核销');
+	        expect(response.body.message).toContain('先在待支付/已支付模块反核销');
 	      });
 
 	    await request(app.getHttpServer())
@@ -2141,9 +2239,10 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.receivableTotal).toBeGreaterThan(0);
         expect(response.body.businessCostTotal).toBeGreaterThan(0);
-        expect(response.body).not.toHaveProperty('payables');
-        expect(response.body).not.toHaveProperty('payableTotal');
-        expect(response.body).not.toHaveProperty('canViewPayables');
+        expect(response.body.payables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '基础运费' })]));
+        expect(response.body.payables[0].agentName).toBeUndefined();
+        expect(response.body.payableTotal).toBeGreaterThan(0);
+        expect(response.body.canViewPayables).toBe(true);
         expect(response.body.grossProfit).toBeUndefined();
         expect(response.body.agentName).toBeUndefined();
         expect(response.body.businessCosts[0]).toEqual(expect.objectContaining({ name: '基础运费' }));
@@ -2241,9 +2340,10 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.receivables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '空运费' })]));
         expect(response.body.businessCosts).toEqual(expect.arrayContaining([expect.objectContaining({ name: '业务员成本' })]));
-        expect(response.body).not.toHaveProperty('payables');
-        expect(response.body).not.toHaveProperty('payableTotal');
-        expect(response.body).not.toHaveProperty('canViewPayables');
+        expect(response.body.payables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '代理运费', amount: 210 })]));
+        expect(response.body.payables[0].agentName).toBeUndefined();
+        expect(response.body.payableTotal).toBeGreaterThan(0);
+        expect(response.body.canViewPayables).toBe(true);
         expect(JSON.stringify(response.body)).not.toContain('宇环');
         expect(response.body.grossProfit).toBeUndefined();
         expect(response.body).not.toHaveProperty('profitSections');
@@ -2314,12 +2414,13 @@ describe('Siyuan API finance', () => {
     await request(app.getHttpServer())
       .post(`/api/shipments/${shipment.body.id}/review/approve`)
       .set('Authorization', app.auth(adminToken))
+      .send({ businessReview: true })
       .expect(201);
 
     await request(app.getHttpServer())
       .post(`/api/shipments/${shipment.body.id}/route`)
       .set('Authorization', app.auth(adminToken))
-      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan' })
+      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 42, unitPrice: 5, currency: 'RMB' })
       .expect(201)
       .expect((response) => {
         expect(response.body.status).toBe('WAITING_DISPATCH');

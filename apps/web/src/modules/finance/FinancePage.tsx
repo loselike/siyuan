@@ -11,7 +11,7 @@ import {
   Form,
   Input,
   InputNumber,
-  message,
+  App as AntdApp,
   Modal,
   Popconfirm,
   Row,
@@ -37,6 +37,7 @@ import {
   type CustomerStatementSummary,
   type FinanceDashboardItem,
   type FinanceDashboardResponse,
+  type OrderEntryDetailSummary,
   type PayableAuditCreateInput,
   type PendingPaymentListQuery,
   type PayableAuditSummary,
@@ -77,6 +78,7 @@ import { PlaceholderPanel } from '../shared/PlaceholderPanel';
 import { AppActionGroup, AppPage, AppPageHeader, CompactMetricCard as MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 
 const { Text } = Typography;
+const salesScopedRoleKeys = ['OPERATOR', 'UG_MARKET', 'UG_BUSINESS', 'UG_SZ_WUHAN', 'UG_ZZ_SIHUA', 'UG_WH_JIUYULIAN', 'UG_BUSINESS_MANAGER', 'UG_BUSINESS_SUPERVISOR'];
 
 interface ShipmentOperationLog {
   id: string;
@@ -222,6 +224,7 @@ export function FinancePage({
   customerContacts: CustomerContactSummary[];
   onCustomerContactsChange?: (contacts: CustomerContactSummary[]) => void;
 }) {
+  const { message: messageApi, modal } = AntdApp.useApp();
   const defaultSection = menuMode === 'business' ? 'business-dashboard' : menuMode === 'catalog' ? 'fee-names' : 'finance-dashboard';
   const total = receivables.filter((fee) => !fee.voided && fee.reconciliationStatus !== 'CONFIRMED').reduce((sum, fee) => sum + fee.amount, 0);
   const primaryAccount = accounts.find((account) => account.customerId === 'c-9409') ?? accounts[0];
@@ -339,14 +342,14 @@ export function FinancePage({
       setPendingReviewRows(rows);
       setFinanceReviewSelectedShipmentId((current) => current && rows.some((row) => row.id === current) ? current : null);
     } catch (error) {
-      Modal.error({
+      modal.error({
         title: '待审核列表加载失败',
         content: error instanceof Error ? error.message : '请稍后重试'
       });
     } finally {
       setPendingReviewLoading(false);
     }
-  }, [apiClient]);
+  }, [apiClient, modal]);
   const loadDeletedReviewRows = useCallback(async () => {
     if (!canRestoreReviewShipment) return;
     setDeletedReviewLoading(true);
@@ -355,14 +358,14 @@ export function FinancePage({
       setDeletedReviewRows(rows);
       setFinanceReviewSelectedShipmentId((current) => current && rows.some((row) => row.id === current) ? current : null);
     } catch (error) {
-      Modal.error({
+      modal.error({
         title: '已删除订单加载失败',
         content: error instanceof Error ? error.message : '请稍后重试'
       });
     } finally {
       setDeletedReviewLoading(false);
     }
-  }, [apiClient, canRestoreReviewShipment]);
+  }, [apiClient, canRestoreReviewShipment, modal]);
   const filterReviewRows = useCallback((baseRows: Shipment[]) => {
     const includes = (value: string | undefined, keyword: string) => !keyword || (value ?? '').toLowerCase().includes(keyword.toLowerCase());
     const inDateRange = (value: string, from: string, to: string) => {
@@ -402,8 +405,12 @@ export function FinancePage({
   );
   const currentReviewRows = pendingReviewView === 'DELETED' ? deletedReviewShipments : pendingReviewShipments;
   const selectedPendingReviewShipment = financeReviewSelectedShipmentId
-    ? [...pendingReviewShipments, ...deletedReviewShipments].find((shipment) => shipment.id === financeReviewSelectedShipmentId) ?? null
+    ? [...pendingReviewShipments, ...deletedReviewShipments].find((shipment) => shipment.id === financeReviewSelectedShipmentId)
+      ?? (pendingReviewDetail?.shipment.id === financeReviewSelectedShipmentId ? pendingReviewDetail.shipment : null)
     : null;
+  const isSalesScopedRole = salesScopedRoleKeys.includes(role);
+  const canFinalReviewShipment = false;
+  const canBusinessReviewShipment = pendingReviewView === 'ACTIVE' && (isSalesScopedRole || (role === 'ADMIN' && menuMode === 'business'));
   const loadPendingReviewDetail = useCallback(async (shipmentId: string) => {
     setPendingReviewDetailLoading(true);
     try {
@@ -411,14 +418,14 @@ export function FinancePage({
       setPendingReviewDetail(detail);
     } catch (error) {
       setPendingReviewDetail(null);
-      Modal.error({
+      modal.error({
         title: '待审核详情加载失败',
         content: error instanceof Error ? error.message : '请稍后重试'
       });
     } finally {
       setPendingReviewDetailLoading(false);
     }
-  }, [apiClient]);
+  }, [apiClient, modal]);
   useEffect(() => {
     if (activeFinanceSection === 'pending-review' && pendingReviewView === 'ACTIVE') {
       void loadPendingReviewRows();
@@ -505,9 +512,9 @@ export function FinancePage({
     if (!selectedPendingReviewShipment) return;
     try {
       await navigator.clipboard?.writeText(pendingReviewSummaryText);
-      message.success('摘要已复制');
+      messageApi.success('摘要已复制');
     } catch {
-      message.warning('当前浏览器不支持自动复制');
+      messageApi.warning('当前浏览器不支持自动复制');
     }
   };
   const isPendingReviewOverdue = (shipment: Shipment) => {
@@ -530,30 +537,42 @@ export function FinancePage({
   };
   const approvePendingReview = (target = selectedPendingReviewShipment) => {
     if (!target) return;
+    const isBusinessReview = canBusinessReviewShipment && !target.businessReviewedAt;
     confirmDangerousAction({
-      title: '确认审核通过该订单？',
-      content: '审核通过后，该订单会进入待排货队列，费用和货物信息将进入后续财务与仓库流转。',
-      okText: '审核通过',
+      title: isBusinessReview ? '确认自审通过该订单？' : '确认审核通过该订单？',
+      content: isBusinessReview ? '自审通过后，订单进入待排货，并同步进入财务管理的业务成本审核。' : '审核通过后，该订单会进入待排货队列，费用和货物信息将进入后续财务与仓库流转。',
+      okText: isBusinessReview ? '自审通过' : '审核通过',
+      confirm: modal.confirm,
       onOk: async () => {
         setPendingReviewSubmitting(true);
         try {
-          const detail = await apiClient.approveShipmentReview(target.id);
-          message.success('审核通过，已进入待排货');
+          const detail = await apiClient.approveShipmentReview(target.id, isBusinessReview ? { businessReview: true } : undefined);
+          messageApi.success(isBusinessReview ? '自审通过，已进入待排货与业务成本审核' : '审核通过，已进入待排货');
           setFinanceReviewSelectedShipmentId(null);
           setPendingReviewDetail(null);
           await refreshPendingReviewWorkbench(detail);
         } catch (error) {
-          Modal.error({ title: '审核通过失败', content: error instanceof Error ? error.message : '请补齐资料后重试' });
+          modal.error({ title: '审核通过失败', content: error instanceof Error ? error.message : '请补齐资料后重试' });
         } finally {
           setPendingReviewSubmitting(false);
         }
       }
     });
   };
+  const handleOrderEntryCreated = async (detail?: OrderEntryDetailSummary, submittedForReview?: boolean) => {
+    await loadPendingReviewRows();
+    if (!submittedForReview || !detail) return;
+    setPendingReviewView('ACTIVE');
+    setFinanceReviewFilterDraft(emptyFinanceReviewFilters);
+    setFinanceReviewFilters(emptyFinanceReviewFilters);
+    setPendingReviewDetail(null);
+    setFinanceReviewSelectedShipmentId(detail.shipment.id);
+    setActiveFinanceSection('pending-review');
+  };
   const rejectPendingReview = (target = selectedPendingReviewShipment) => {
     if (!target) return;
     let reason = '';
-    Modal.confirm({
+    modal.confirm({
       title: '驳回并退回修改',
       content: <Input.TextArea rows={4} placeholder="请填写驳回原因" onChange={(event) => { reason = event.target.value; }} />,
       okText: '确认驳回',
@@ -561,11 +580,11 @@ export function FinancePage({
       onOk: async () => {
         const trimmed = reason.trim();
         if (!trimmed) {
-          message.warning('驳回必须填写原因');
+          messageApi.warning('驳回必须填写原因');
           throw new Error('驳回必须填写原因');
         }
         const detail = await apiClient.rejectShipmentReview(target.id, { reason: trimmed });
-        message.success('已驳回并退回修改');
+        messageApi.success('已驳回并退回修改');
         setFinanceReviewSelectedShipmentId(null);
         setPendingReviewDetail(null);
         await refreshPendingReviewWorkbench(detail);
@@ -575,7 +594,7 @@ export function FinancePage({
   const deletePendingReview = (target = selectedPendingReviewShipment) => {
     if (!target) return;
     let reason = '';
-    Modal.confirm({
+    modal.confirm({
       title: '删除待审核订单',
       content: <Input.TextArea rows={3} placeholder="可填写删除原因" onChange={(event) => { reason = event.target.value; }} />,
       okText: '确认删除',
@@ -583,7 +602,7 @@ export function FinancePage({
       cancelText: '取消',
       onOk: async () => {
         const detail = await apiClient.deleteShipmentReview(target.id, { reason: reason.trim() || '审核台人工删除' });
-        message.success('已删除，订单可从删除视图恢复');
+        messageApi.success('已删除，订单可从删除视图恢复');
         setFinanceReviewSelectedShipmentId(null);
         setPendingReviewDetail(null);
         await refreshPendingReviewWorkbench(detail);
@@ -605,13 +624,13 @@ export function FinancePage({
         manualCreatedAt: values.mode === 'MANUAL_TIME' ? values.manualCreatedAt : undefined,
         reason: values.reason
       });
-      message.success('订单已恢复');
+      messageApi.success('订单已恢复');
       setReviewRestoreTarget(null);
       setFinanceReviewSelectedShipmentId(null);
       setPendingReviewDetail(null);
       await refreshPendingReviewWorkbench(detail);
     } catch (error) {
-      Modal.error({ title: '恢复失败', content: error instanceof Error ? error.message : '请稍后重试' });
+      modal.error({ title: '恢复失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
       setReviewRestoreSubmitting(false);
     }
@@ -621,9 +640,10 @@ export function FinancePage({
       title: '确认彻底删除该订单？',
       content: '彻底删除后不可恢复，仅管理员可执行。请确认该订单没有后续财务、仓库或付款流转。',
       okText: '彻底删除',
+      confirm: modal.confirm,
       onOk: async () => {
         await apiClient.permanentlyDeleteShipmentReview(shipment.id);
-        message.success('订单已彻底删除');
+        messageApi.success('订单已彻底删除');
         setFinanceReviewSelectedShipmentId(null);
         setPendingReviewDetail(null);
         await loadDeletedReviewRows();
@@ -720,9 +740,14 @@ export function FinancePage({
       ) : (
         <Space size={6}>
           <Button size="small" onClick={(event) => { event.stopPropagation(); setFinanceReviewSelectedShipmentId(record.id); }}>详情</Button>
-          <Button size="small" onClick={(event) => { event.stopPropagation(); rejectPendingReview(record); }}>驳回</Button>
-          <Button size="small" type="primary" onClick={(event) => { event.stopPropagation(); approvePendingReview(record); }}>通过</Button>
-          <Button size="small" danger onClick={(event) => { event.stopPropagation(); deletePendingReview(record); }}>删除</Button>
+          {canBusinessReviewShipment && !record.businessReviewedAt ? <Button size="small" type="primary" onClick={(event) => { event.stopPropagation(); approvePendingReview(record); }}>自审通过</Button> : null}
+          {canFinalReviewShipment ? (
+            <>
+              <Button size="small" onClick={(event) => { event.stopPropagation(); rejectPendingReview(record); }}>驳回</Button>
+              <Button size="small" type="primary" onClick={(event) => { event.stopPropagation(); approvePendingReview(record); }}>审核通过</Button>
+              <Button size="small" danger onClick={(event) => { event.stopPropagation(); deletePendingReview(record); }}>删除</Button>
+            </>
+          ) : null}
         </Space>
       )
     }
@@ -808,9 +833,14 @@ export function FinancePage({
                   <>
                     <Button size="small" onClick={() => onEditShipment(selectedPendingReviewShipment)}>修改</Button>
                     <Button size="small" onClick={() => onViewShipmentLog(selectedPendingReviewShipment)}>操作日志</Button>
-                    <Button size="small" danger onClick={() => deletePendingReview()}>删除</Button>
-                    <Button size="small" onClick={() => rejectPendingReview()}>驳回</Button>
-                    <Button size="small" type="primary" loading={pendingReviewSubmitting} onClick={() => approvePendingReview()}>审核通过</Button>
+                    {canBusinessReviewShipment && !selectedPendingReviewShipment.businessReviewedAt ? <Button size="small" type="primary" loading={pendingReviewSubmitting} onClick={() => approvePendingReview()}>自审通过</Button> : null}
+                    {canFinalReviewShipment ? (
+                      <>
+                        <Button size="small" danger onClick={() => deletePendingReview()}>删除</Button>
+                        <Button size="small" onClick={() => rejectPendingReview()}>驳回</Button>
+                        <Button size="small" type="primary" loading={pendingReviewSubmitting} onClick={() => approvePendingReview()}>审核通过</Button>
+                      </>
+                    ) : null}
                   </>
                 )}
               </Space>
@@ -893,7 +923,7 @@ export function FinancePage({
                         </>
                       )
                     },
-                    { key: 'time', label: '时间', children: renderReviewKeyValues([['创建时间', formatBeijingDateTime(detailShipment?.createdAt ?? '')], ['审单时间', detailShipment?.reviewedAt ? formatBeijingDateTime(detailShipment.reviewedAt) : '-'], ['删除时间', detailShipment?.deletedAt ? formatBeijingDateTime(detailShipment.deletedAt) : '-']]) },
+                    { key: 'time', label: '时间', children: renderReviewKeyValues([['创建时间', formatBeijingDateTime(detailShipment?.createdAt ?? '')], ['业务自审时间', detailShipment?.businessReviewedAt ? formatBeijingDateTime(detailShipment.businessReviewedAt) : '-'], ['终审时间', detailShipment?.reviewedAt ? formatBeijingDateTime(detailShipment.reviewedAt) : '-'], ['删除时间', detailShipment?.deletedAt ? formatBeijingDateTime(detailShipment.deletedAt) : '-']]) },
                     { key: 'logs', label: '日志', children: <Table className="finance-embedded-table" rowKey="id" size="small" columns={reviewEventColumns} dataSource={pendingReviewDetail.events} pagination={false} /> },
                     { key: 'tracking', label: '轨迹', children: <Table className="finance-embedded-table" rowKey="id" size="small" columns={reviewEventColumns} dataSource={pendingReviewDetail.trackingEvents} pagination={false} /> },
                     { key: 'files', label: '文件', children: <Text type="secondary">暂无文件记录</Text> },
@@ -910,6 +940,8 @@ export function FinancePage({
       )}
       <Modal
         title="恢复已删除订单"
+        className="finance-modal"
+        width={680}
         open={Boolean(reviewRestoreTarget)}
         confirmLoading={reviewRestoreSubmitting}
         okText="确认恢复"
@@ -964,11 +996,11 @@ export function FinancePage({
             { key: 'finance-dashboard', label: '财务看板' },
             { key: 'receivables', label: '应收审核' },
             { key: 'business-costs', label: '业务成本审核' },
-            { key: 'payables', label: '应付审核' },
+            { key: 'payables', label: '市场应付审核' },
             { key: 'payment-applications', label: '待付款' },
-            { key: 'paid-verification', label: '已付款' },
+            { key: 'paid-verification', label: '待支付/已支付' },
             { key: 'water-receipts', label: '水单匹配' },
-            { key: 'agent-bill-ai', label: '代理账单核对' }
+            { key: 'agent-bill-ai', label: '代理账单' }
           ];
   useEffect(() => {
     if (!financeSubItems.some((item) => item.key === activeFinanceSection)) {
@@ -995,6 +1027,9 @@ export function FinancePage({
   const openPendingPayments = (nextQuery?: PendingPaymentListQuery) => {
     setPendingPaymentInitialQuery(nextQuery);
     setActiveFinanceSection('payment-applications');
+  };
+  const openAgentBills = () => {
+    setActiveFinanceSection('agent-bill-ai');
   };
   const filteredReceivables = useMemo(() => {
     const inDateRange = (value: string | undefined, from: string, to: string) => {
@@ -1227,7 +1262,7 @@ export function FinancePage({
             ? '录单、待审核运单和运单管理。'
             : menuMode === 'catalog'
               ? '维护费用、结算方式、货物类型、渠道和汇率等业务配置。'
-              : '应收、业务成本、应付、付款、水单和代理账单核对。'
+              : '应收、业务成本、市场应付、付款、水单和代理账单。'
         }
         actions={menuMode === 'finance' ? (
           <AppActionGroup>
@@ -1273,7 +1308,8 @@ export function FinancePage({
               customers={customers}
               customerContacts={customerContacts}
               onCustomerContactsChange={onCustomerContactsChange}
-              onCreated={loadPendingReviewRows}
+              onCatalogChange={financeCatalog.refresh}
+              onCreated={handleOrderEntryCreated}
               preselectedPackageIds={prefillOrderEntryPackageIds}
               onPreselectedPackageIdsConsumed={onOrderEntryPrefillConsumed}
             />
@@ -1310,6 +1346,7 @@ export function FinancePage({
 	              renderShipmentOrderNoLink={renderShipmentOrderNoLink}
 	              onRowsChange={onPayableRowsChange}
                 onGoPendingPayment={openPendingPayments}
+                onGoAgentBill={openAgentBills}
 	            />
 	          ) : null}
 	        </Col>
@@ -1354,6 +1391,8 @@ export function FinancePage({
       </ModuleSubWorkspace>
       <Modal
         title="新增应收"
+        className="finance-modal"
+        width={760}
         open={receivableCreateOpen}
         onCancel={() => setReceivableCreateOpen(false)}
         onOk={submitReceivableCreate}
@@ -1402,6 +1441,8 @@ export function FinancePage({
       </Modal>
       <Modal
         title={businessCostEditor ? '修改业务成本' : '新增业务成本'}
+        className="finance-modal"
+        width={780}
         open={businessCostCreateOpen}
         onCancel={() => {
           setBusinessCostCreateOpen(false);
@@ -1478,6 +1519,8 @@ export function FinancePage({
       </Modal>
       <Modal
         title={payableEditor ? '修改应付' : '新增应付'}
+        className="finance-modal"
+        width={780}
         open={payableCreateOpen}
         onCancel={() => {
           setPayableCreateOpen(false);

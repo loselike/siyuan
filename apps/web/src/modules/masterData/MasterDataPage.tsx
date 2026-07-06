@@ -1,9 +1,9 @@
-import { useEffect, useState, type ClipboardEvent } from 'react';
-import { Bot, FileText, Route, Sparkles, Users } from 'lucide-react';
+import { useEffect, useMemo, useState, type ClipboardEvent } from 'react';
+import { AlertTriangle, Bot, Building2, CheckCircle, Download, Edit, FileText, Plus, Power, Route, Settings, Sparkles, Trash2, Upload as UploadIcon, UserRound, Users } from 'lucide-react';
 import { Alert, Button, Card, Checkbox, Col, Flex, Form, Input, Modal, Popconfirm, Row, Space, Statistic, Table, Tag, Typography, Upload } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { businessTypeLabels, summarizeMasterDataSnapshot, type AgentBankAccountSummary, type AgentChannelSummary, type AgentIntegrationType, type AgentSummary, type BusinessType, type ChannelCategorySummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type MasterDataSnapshot } from '@siyuan/shared';
-import { ApiClient, type PermissionKey } from '../../apiClient';
+import { businessTypeLabels, summarizeMasterDataSnapshot, type AgentBankAccountSummary, type AgentChannelSummary, type AgentIntegrationType, type AgentSummary, type AuditLogSummary, type BusinessType, type ChannelCategorySummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type MasterDataSnapshot, type Shipment } from '@siyuan/shared';
+import { ApiClient, type PermissionKey, type Principal, type RoleKey } from '../../apiClient';
 import { FinanceCatalogPage } from '../finance/FinanceCatalogPage';
 import { useFinanceCatalog } from '../finance/useFinanceCatalog';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
@@ -59,6 +59,7 @@ interface MasterAgentChannelFormValues {
 interface MasterCompanyChannelFormValues {
   name: string;
   carrierId: string;
+  carrierName: string;
   businessType: BusinessType;
   category: string;
   volumeDivisor: string;
@@ -146,27 +147,31 @@ const optionLabel = (options: Array<{ value: string; label: string }>, value?: s
 const currencyNames: Record<string, string> = { USD: '美金', RMB: '人民币', CNY: '人民币', EUR: '欧元', GBP: '英镑', HKD: '港币' };
 const currencyName = (code: string) => currencyNames[code.toUpperCase()] ?? code.toUpperCase();
 const todayDate = () => new Date().toISOString().slice(0, 10);
-
 export function MasterDataPage({
   apiClient,
   masterData,
   permissions,
+  currentUser,
   notice,
   onMasterDataChange,
   onNotice,
   onAiAssist,
-  aiLoading
+  aiLoading,
+  shipments = []
 }: {
   apiClient: ApiClient;
   masterData: MasterDataSnapshot;
   permissions: PermissionKey[];
+  currentUser: Principal;
   notice: string | null;
   onMasterDataChange: (updater: (current: MasterDataSnapshot) => MasterDataSnapshot) => void;
   onNotice: (message: string) => void;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
+  shipments?: Shipment[];
 }) {
   const summary = summarizeMasterDataSnapshot(masterData);
+  const currentSalesperson = currentUser.username;
   const [masterCustomerForm] = Form.useForm<MasterCustomerFormValues>();
   const [masterCustomerContactForm] = Form.useForm<MasterCustomerContactFormValues>();
   const [masterAgentForm] = Form.useForm<MasterAgentFormValues>();
@@ -196,6 +201,7 @@ export function MasterDataPage({
   });
   const [appliedCustomerFilters, setAppliedCustomerFilters] = useState(customerFilters);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [customerAuditLogs, setCustomerAuditLogs] = useState<AuditLogSummary[]>([]);
   const [customerListSettingOpen, setCustomerListSettingOpen] = useState(false);
   const [customerDisableConfirmOpen, setCustomerDisableConfirmOpen] = useState(false);
   const [showCustomerStatus, setShowCustomerStatus] = useState(true);
@@ -227,12 +233,24 @@ export function MasterDataPage({
   const [editingMasterExchangeRate, setEditingMasterExchangeRate] = useState<ExchangeRateSummary | null>(null);
   const [activeMasterSection, setActiveMasterSection] = useState('financeCatalog');
   const financeCatalog = useFinanceCatalog(apiClient);
-  const canReadAgents = permissions.includes('master-data:agents:read');
-  const canWriteAgents = permissions.includes('master-data:agents:write');
-  const canReadChannels = permissions.includes('master-data:channels:read');
-  const canWriteChannels = permissions.includes('master-data:channels:write');
-  const canWriteFinanceCatalog = permissions.includes('master-data:write') || permissions.includes('finance:settle');
-  const canWriteExchangeRates = permissions.includes('master-data:write');
+  const hasMasterPermission = (...keys: PermissionKey[]) => currentUser.role === 'ADMIN' || keys.some((key) => permissions.includes(key));
+  const canReadCustomers = hasMasterPermission('master-data:read', 'master-data:customers:read');
+  const canWriteCustomers = hasMasterPermission('master-data:write', 'master-data:customers:write');
+  const canReadFinanceCatalog = hasMasterPermission('master-data:read', 'master-data:finance:read', 'finance:read');
+  const canWriteFinanceCatalog = hasMasterPermission('master-data:write', 'master-data:finance:write', 'finance:settle');
+  const canReadAgents = hasMasterPermission('master-data:agents:read');
+  const canWriteAgents = hasMasterPermission('master-data:agents:write');
+  const canReadAgentChannels = hasMasterPermission('master-data:agents:read', 'master-data:agent-channels:read');
+  const canWriteAgentChannels = hasMasterPermission('master-data:agents:write', 'master-data:agent-channels:write');
+  const canReadChannels = hasMasterPermission('master-data:channels:read');
+  const canWriteChannels = hasMasterPermission('master-data:channels:write');
+  const canReadChannelCategories = hasMasterPermission('master-data:channels:read', 'master-data:channel-categories:read');
+  const canWriteChannelCategories = hasMasterPermission('master-data:channels:write', 'master-data:channel-categories:write');
+  const canReadRemoteAreas = hasMasterPermission('master-data:read', 'master-data:remote-areas:read');
+  const canWriteRemoteAreas = hasMasterPermission('master-data:write', 'master-data:remote-areas:write');
+  const canReadExchangeRates = hasMasterPermission('master-data:read', 'master-data:exchange-rates:read');
+  const canWriteExchangeRates = hasMasterPermission('master-data:write', 'master-data:exchange-rates:write');
+  const canReadAssistant = hasMasterPermission('master-data:read', 'master-data:assistant:read');
   const canReadAgentBanks = permissions.includes('finance:payable:bank');
   const [agentBankAccounts, setAgentBankAccounts] = useState<AgentBankAccountSummary[]>([]);
   const [remoteAreaFiles, setRemoteAreaFiles] = useState<RemoteAreaAttachment[]>(() => {
@@ -244,20 +262,43 @@ export function MasterDataPage({
     }
   });
   const masterSubItems: ModuleSubNavItem[] = [
-    { key: 'customers', label: '客户资料', description: '客户编码、简称、全称' },
-    { key: 'financeCatalog', label: '财务资料', description: '费用、结算、货物、品名' },
+    ...(canReadCustomers ? [{ key: 'customers', label: '客户资料', description: '客户编码、简称、全称' }] : []),
+    ...(canReadFinanceCatalog ? [{ key: 'financeCatalog', label: '财务资料', description: '费用、结算、货物、品名' }] : []),
     ...(canReadAgents ? [
       { key: 'agents', label: '代理资料', description: '代理编码、简称、详细公司名' },
+    ] : []),
+    ...(canReadAgentChannels ? [
       { key: 'agentChannels', label: '代理渠道', description: '代理与渠道名称' }
     ] : []),
     ...(canReadChannels ? [
       { key: 'companyChannels', label: '公司渠道', description: '公司渠道维护' },
+    ] : []),
+    ...(canReadChannelCategories ? [
       { key: 'channelCategories', label: '渠道类别', description: '渠道分类' }
     ] : []),
-    { key: 'remoteAreas', label: '偏远', description: '偏远规则' },
-    { key: 'exchangeRates', label: '汇率', description: '币种汇率' },
-    { key: 'assistant', label: '资料辅助', description: '体检与快捷维护' }
+    ...(canReadRemoteAreas ? [{ key: 'remoteAreas', label: '偏远', description: '偏远规则' }] : []),
+    ...(canReadExchangeRates ? [{ key: 'exchangeRates', label: '汇率', description: '币种汇率' }] : []),
+    ...(canReadAssistant ? [{ key: 'assistant', label: '资料辅助', description: '体检与快捷维护' }] : [])
   ];
+  useEffect(() => {
+    if (masterSubItems.length && !masterSubItems.some((item) => item.key === activeMasterSection)) {
+      setActiveMasterSection(masterSubItems[0].key);
+    }
+  }, [activeMasterSection, masterSubItems]);
+  useEffect(() => {
+    if (activeMasterSection !== 'customers' || !canReadCustomers) return;
+    let cancelled = false;
+    apiClient.customers()
+      .then((customers) => {
+        if (!cancelled) onMasterDataChange((current) => ({ ...current, customers }));
+      })
+      .catch(() => {
+        if (!cancelled) onNotice('客户资料刷新失败');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeMasterSection, apiClient, canReadCustomers, onMasterDataChange, onNotice]);
   const customerRows = masterData.customers.map((customer) => ({
     ...customer,
     shortName: customer.shortName ?? customer.name,
@@ -272,7 +313,7 @@ export function MasterDataPage({
     const codeKeyword = appliedCustomerFilters.code.trim().toLowerCase();
     const salespersonKeyword = appliedCustomerFilters.salesperson.trim().toLowerCase();
     const sourceKeyword = appliedCustomerFilters.customerSource.trim().toLowerCase();
-    const matchesName = !nameKeyword || `${customer.shortName} ${customer.fullName}`.toLowerCase().includes(nameKeyword);
+    const matchesName = !nameKeyword || `${customer.code} ${customer.shortName} ${customer.fullName}`.toLowerCase().includes(nameKeyword);
     const matchesCode = !codeKeyword || customer.code.toLowerCase().includes(codeKeyword);
     const matchesSalesperson = !salespersonKeyword || customer.salesperson.toLowerCase().includes(salespersonKeyword);
     const matchesSource = !sourceKeyword || customer.customerSource.toLowerCase().includes(sourceKeyword);
@@ -286,23 +327,85 @@ export function MasterDataPage({
   const selectedCustomerContacts = selectedCustomer
     ? masterData.contacts.filter((contact) => contact.customerId === selectedCustomer.id && contact.enabled)
     : [];
+  const customerMetrics = {
+    total: customerRows.length,
+    enabled: customerRows.filter((customer) => customer.enabled).length,
+    missingSettlement: customerRows.filter((customer) => !customer.defaultSettlementMethod).length,
+    contacts: masterData.contacts.filter((contact) => contact.enabled).length
+  };
+  const customerTypeOptions = Array.from(new Set(customerRows.map((customer) => customer.customerType).filter(Boolean)));
+  const salespersonOptions = Array.from(new Set(customerRows.map((customer) => customer.salesperson).filter(Boolean)));
+  const customerContactsById = new Map(customerRows.map((customer) => [
+    customer.id,
+    masterData.contacts.filter((contact) => contact.customerId === customer.id && contact.enabled)
+  ]));
+  const latestShipmentByCustomerId = useMemo(() => {
+    const latest = new Map<string, Shipment>();
+    shipments.forEach((shipment) => {
+      const key = customerRows.find((customer) => shipment.customerCode === customer.code || shipment.customerName?.startsWith(`${customer.code}-`))?.id;
+      if (!key) return;
+      const previous = latest.get(key);
+      const nextTime = Date.parse(shipment.createdAt ?? shipment.entryAt ?? '');
+      const previousTime = previous ? Date.parse(previous.createdAt ?? previous.entryAt ?? '') : 0;
+      if (!previous || nextTime >= previousTime) latest.set(key, shipment);
+    });
+    return latest;
+  }, [customerRows, shipments]);
+  useEffect(() => {
+    if (activeMasterSection !== 'customers') return;
+    if (!filteredCustomerRows.length) {
+      setSelectedCustomerId(null);
+      return;
+    }
+    if (!selectedCustomerId || !filteredCustomerRows.some((customer) => customer.id === selectedCustomerId)) {
+      setSelectedCustomerId(filteredCustomerRows[0].id);
+    }
+  }, [activeMasterSection, filteredCustomerRows, selectedCustomerId]);
+  useEffect(() => {
+    if (activeMasterSection !== 'customers' || !selectedCustomerId) {
+      setCustomerAuditLogs([]);
+      return;
+    }
+    let cancelled = false;
+    apiClient.auditLogs({ target: selectedCustomerId, pageSize: 3 })
+      .then((response) => {
+        if (!cancelled) setCustomerAuditLogs(response.rows);
+      })
+      .catch(() => {
+        if (!cancelled) setCustomerAuditLogs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeMasterSection, apiClient, selectedCustomerId]);
   const customerColumns: ColumnsType<(typeof customerRows)[number]> = [
-    { title: '客户编码', dataIndex: 'code', width: 120, render: (value: string) => <Text strong>{value}</Text> },
-    { title: '客户简称', dataIndex: 'shortName', width: 170, render: (value: string) => <Text strong>{value}</Text> },
-    { title: '客户全称', dataIndex: 'fullName' },
-    { title: '客户来源', dataIndex: 'customerSource', width: 130, render: (value: string) => value || '-' },
-    { title: '结算信息', dataIndex: 'defaultSettlementMethod', width: 140, render: (value: string) => value || '-' },
+    { title: '客户编码', dataIndex: 'code', width: 110, render: (value: string) => <Text strong>{value}</Text> },
+    {
+      title: '客户信息',
+      dataIndex: 'shortName',
+      width: 180,
+      render: (_value: string, record) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{record.shortName}</Text>
+          <Text type="secondary">{record.fullName}</Text>
+          {record.customerSource ? <Text type="secondary">{record.customerSource}</Text> : null}
+        </Space>
+      )
+    },
     ...(showCustomerType
       ? [
           {
             title: '客户类型',
             dataIndex: 'customerType',
-            width: 110,
-            render: (value: string) => <Tag>{value}</Tag>
+            width: 95,
+            render: (value: string) => <Tag color="blue">{value}</Tag>
           }
         ]
       : []),
-    { title: '业务员', dataIndex: 'salesperson', width: 120 },
+    { title: '结算信息', dataIndex: 'defaultSettlementMethod', width: 120, render: (value: string) => value ? <Tag color="green">{value}</Tag> : <Tag color="orange">缺失</Tag> },
+    { title: '业务员', dataIndex: 'salesperson', width: 110 },
+    { title: '收货人', width: 90, render: (_value, record) => customerContactsById.get(record.id)?.length ?? 0 },
+    { title: '最近下单', width: 120, render: (_value, record) => latestShipmentByCustomerId.get(record.id)?.createdAt?.slice(0, 10) ?? '-' },
     ...(showCustomerStatus
       ? [
           {
@@ -312,7 +415,45 @@ export function MasterDataPage({
             render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag>
           }
         ]
-      : [])
+      : []),
+    {
+      title: '操作',
+      width: 230,
+      fixed: 'right',
+      render: (_value, record) => (
+        <Space size={6}>
+          <Button size="small" type="link" onClick={(event) => { event.stopPropagation(); setSelectedCustomerId(record.id); }}>详情</Button>
+          <Button size="small" type="link" disabled={!canWriteCustomers} onClick={(event) => { event.stopPropagation(); void handleEditMasterCustomer(record); }}>编辑</Button>
+          <Popconfirm
+            title={`确认${record.enabled ? '停用' : '启用'}该客户？`}
+            okText={`确认${record.enabled ? '停用' : '启用'}`}
+            cancelText="取消"
+            okButtonProps={{ danger: record.enabled }}
+            disabled={!canWriteCustomers}
+            onConfirm={() => record.enabled ? handleDisableMasterCustomer(record) : handleEnableMasterCustomer(record)}
+            destroyOnHidden
+          >
+            <Button size="small" type="link" danger={record.enabled} disabled={!canWriteCustomers} onClick={(event) => event.stopPropagation()}>
+              {record.enabled ? '停用' : '启用'}
+            </Button>
+          </Popconfirm>
+          <Popconfirm
+            title="删除客户资料"
+            description="删除后不可恢复，请确认该客户无未完成运单、费用或收款记录。"
+            okText="确认删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true }}
+            disabled={!canWriteCustomers}
+            onConfirm={() => handleDeleteMasterCustomer(record)}
+            destroyOnHidden
+          >
+            <Button size="small" type="link" danger disabled={!canWriteCustomers} onClick={(event) => event.stopPropagation()}>
+              删除
+            </Button>
+          </Popconfirm>
+        </Space>
+      )
+    }
   ];
   const customerContactColumns: ColumnsType<CustomerContactSummary> = [
     { title: '收货人', dataIndex: 'name', width: 130, render: (value: string) => <Text strong>{value}</Text> },
@@ -329,7 +470,7 @@ export function MasterDataPage({
       fixed: 'right',
       render: (_value, record) => (
         <Space size={4}>
-          <Button size="small" type="link" onClick={() => handleEditMasterCustomerContact(record)}>
+          <Button size="small" type="link" disabled={!canWriteCustomers} onClick={() => handleEditMasterCustomerContact(record)}>
             修改
           </Button>
           <Popconfirm
@@ -337,10 +478,11 @@ export function MasterDataPage({
             okText="确认停用"
             cancelText="取消"
             okButtonProps={{ danger: true }}
+            disabled={!canWriteCustomers}
             onConfirm={() => void handleDisableMasterCustomerContact(record)}
             destroyOnHidden
           >
-            <Button size="small" type="link" danger>
+            <Button size="small" type="link" danger disabled={!canWriteCustomers}>
               删除
             </Button>
           </Popconfirm>
@@ -424,7 +566,7 @@ export function MasterDataPage({
   }, [remoteAreaFiles]);
 
   async function handleRemoteAreaFile(rule: string, file: File, source: RemoteAreaAttachment['source']) {
-    if (!canWriteChannels) return;
+    if (!canWriteRemoteAreas) return;
     if (!isRemoteAreaFile(file)) {
       onNotice?.('仅支持 xls、xlsx、csv 或图片');
       return;
@@ -530,7 +672,7 @@ export function MasterDataPage({
         const files = remoteAreaFiles.filter((file) => file.rule === rule);
         return (
           <Space direction="vertical" size={8} className="full-width" onPaste={(event) => handleRemoteAreaPaste(rule, event)}>
-            {canWriteChannels ? (
+            {canWriteRemoteAreas ? (
               <Upload
                 accept=".xls,.xlsx,.csv,image/*"
                 showUploadList={false}
@@ -547,7 +689,7 @@ export function MasterDataPage({
                 <a href={file.url} target="_blank" rel="noreferrer">{file.fileName}</a>
                 <Tag>{formatFileSize(file.sizeBytes)}</Tag>
                 <Tag>{file.source === 'paste' ? '粘贴' : '上传'}</Tag>
-                {canWriteChannels ? <Button size="small" onClick={() => setRemoteAreaFiles((current) => current.filter((item) => item.id !== file.id))}>删除</Button> : null}
+                {canWriteRemoteAreas ? <Button size="small" onClick={() => setRemoteAreaFiles((current) => current.filter((item) => item.id !== file.id))}>删除</Button> : null}
               </Space>
             )) : <Text type="secondary">-</Text>}
           </Space>
@@ -630,7 +772,13 @@ export function MasterDataPage({
   async function handleCreateMasterCustomer() {
     setEditingMasterCustomer(null);
     masterCustomerForm.resetFields();
-    masterCustomerForm.setFieldsValue({ customerSource: '', customerType: '直客', defaultSettlementMethod: 'RMB月结', customerEnabled: 'true' });
+    masterCustomerForm.setFieldsValue({
+      customerSource: '',
+      customerType: '直客',
+      salesperson: currentSalesperson,
+      defaultSettlementMethod: 'RMB月结',
+      customerEnabled: 'true'
+    });
     setMasterCustomerOpen(true);
   }
 
@@ -657,7 +805,7 @@ export function MasterDataPage({
       const customerFullName = values.customerFullName.trim();
       const customerType = values.customerType.trim();
       const customerSource = values.customerSource.trim();
-      const salesperson = values.salesperson.trim();
+      const salesperson = currentSalesperson;
       const defaultSettlementMethod = values.defaultSettlementMethod.trim();
       const input = {
         code: customerCode,
@@ -694,6 +842,50 @@ export function MasterDataPage({
       customers: current.customers.map((item) => (item.id === updatedCustomer.id ? updatedCustomer : item))
     }));
     onNotice(`${updatedCustomer.code}-${updatedCustomer.name} 已停用`);
+  }
+
+  async function handleEnableMasterCustomer(customer: CustomerSummary) {
+    const updatedCustomer = await apiClient.updateCustomerEnabled(customer.id, { enabled: true });
+    onMasterDataChange((current) => ({
+      ...current,
+      customers: current.customers.map((item) => (item.id === updatedCustomer.id ? updatedCustomer : item))
+    }));
+    onNotice(`${updatedCustomer.code}-${updatedCustomer.name} 已启用`);
+  }
+
+  async function handleDeleteMasterCustomer(customer: CustomerSummary) {
+    try {
+      const deletedCustomer = await apiClient.deleteCustomer(customer.id);
+      onMasterDataChange((current) => ({
+        ...current,
+        customers: current.customers.filter((item) => item.id !== deletedCustomer.id),
+        contacts: current.contacts.filter((item) => item.customerId !== deletedCustomer.id),
+        customerUsers: current.customerUsers.filter((item) => item.customerId !== deletedCustomer.id)
+      }));
+      setSelectedCustomerId((current) => (current === deletedCustomer.id ? null : current));
+      onNotice(`${deletedCustomer.code}-${deletedCustomer.name} 已删除`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '客户删除失败');
+    }
+  }
+
+  function exportCustomers() {
+    const header = ['客户编码', '客户简称', '客户全称', '客户类型', '结算信息', '业务员', '状态'];
+    const rows = filteredCustomerRows.map((customer) => [
+      customer.code,
+      customer.shortName,
+      customer.fullName,
+      customer.customerType,
+      customer.defaultSettlementMethod || '-',
+      customer.salesperson,
+      customer.enabled ? '启用' : '停用'
+    ]);
+    const csv = [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8;' }));
+    link.download = 'customers.csv';
+    link.click();
+    URL.revokeObjectURL(link.href);
   }
 
   async function handleOpenMasterCustomerContact() {
@@ -806,21 +998,23 @@ export function MasterDataPage({
     setMasterAgentOpen(true);
   }
 
-  async function handleAgentInvoiceImage(file: File) {
-    if (!file.type.startsWith('image/')) {
-      masterAgentForm.setFields([{ name: 'invoiceTemplateUrl', errors: ['请上传图片文件'] }]);
+  async function handleAgentInvoiceTemplate(file: File) {
+    const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+    if (!['.xls', '.xlsx'].includes(extension) || extension === '.xlsm') {
+      masterAgentForm.setFields([{ name: 'invoiceTemplateUrl', errors: ['请上传 .xls/.xlsx 发票模板'] }]);
       return;
     }
-    const dataUrl = await readFileAsDataUrl(file);
-    masterAgentForm.setFieldsValue({ invoiceTemplateName: file.name || '代理上传图片', invoiceTemplateUrl: dataUrl });
+    const uploaded = await apiClient.uploadAgentInvoiceTemplate(file);
+    masterAgentForm.setFieldsValue({ invoiceTemplateName: uploaded.fileName, invoiceTemplateUrl: uploaded.url });
     masterAgentForm.setFields([{ name: 'invoiceTemplateUrl', errors: [] }]);
+    onNotice(`已上传代理发票模板 ${uploaded.fileName}`);
   }
 
   function handleAgentInvoicePaste(event: ClipboardEvent<HTMLElement>) {
-    const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith('image/'));
+    const file = Array.from(event.clipboardData.files).find((item) => ['.xls', '.xlsx'].includes(item.name.slice(item.name.lastIndexOf('.')).toLowerCase()));
     if (!file) return;
     event.preventDefault();
-    void handleAgentInvoiceImage(file);
+    void handleAgentInvoiceTemplate(file);
   }
 
   async function handleSubmitMasterAgent() {
@@ -941,9 +1135,11 @@ export function MasterDataPage({
 
   async function handleCreateMasterCompanyChannel() {
     setEditingMasterCompanyChannel(null);
+    masterCompanyChannelForm.resetFields();
     masterCompanyChannelForm.setFieldsValue({
       name: '',
       carrierId: masterData.carriers[0]?.id ?? '',
+      carrierName: '',
       businessType: 'EXPRESS',
       category: enabledCompanyChannelCategoryOptions[0] ?? 'DHL',
       volumeDivisor: '5000',
@@ -963,6 +1159,7 @@ export function MasterDataPage({
     masterCompanyChannelForm.setFieldsValue({
       name: channel.name,
       carrierId: channel.carrierId,
+      carrierName: channel.carrierName,
       businessType: channel.businessType ?? 'EXPRESS',
       category: channel.category ?? channel.carrierName,
       volumeDivisor: String(channel.volumeDivisor ?? 5000),
@@ -982,6 +1179,7 @@ export function MasterDataPage({
     const input = {
       name: values.name.trim(),
       carrierId: values.carrierId,
+      carrierName: values.carrierName?.trim() || undefined,
       businessType: values.businessType,
       category: values.category.trim(),
       volumeDivisor: Number(values.volumeDivisor) || 5000,
@@ -1125,17 +1323,34 @@ export function MasterDataPage({
 
       {renderNoticeBar(notice)}
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={8}>
-          <MetricCard icon={<Users />} title="客户资料" value={summary.enabledCustomers} extra="客户编码、简称、全称、类型、业务员" />
-        </Col>
-        <Col xs={24} md={8}>
-          <MetricCard icon={<Route />} title="代理资料" value={summary.enabledAgents} extra={`${summary.enabledChannels} 条渠道 / ${summary.enabledCarriers} 个承运商`} />
-        </Col>
-        <Col xs={24} md={8}>
-          <MetricCard icon={<FileText />} title="费用/汇率" value={summary.enabledSurcharges} extra={`${summary.activeExchangeRates} 条启用汇率`} />
-        </Col>
-      </Row>
+      {activeMasterSection === 'customers' ? (
+        <Row gutter={[12, 12]} className="customer-master-metrics">
+          <Col xs={24} md={12} xl={6}>
+            <MetricCard icon={<Users />} title="客户资料" value={customerMetrics.total} extra="客户编码、简称、全称" />
+          </Col>
+          <Col xs={24} md={12} xl={6}>
+            <MetricCard icon={<CheckCircle />} title="启用客户" value={customerMetrics.enabled} extra="当前可用于下单" />
+          </Col>
+          <Col xs={24} md={12} xl={6}>
+            <MetricCard icon={<AlertTriangle />} title="缺结算信息" value={customerMetrics.missingSettlement} extra="需补充币种/月结" />
+          </Col>
+          <Col xs={24} md={12} xl={6}>
+            <MetricCard icon={<UserRound />} title="收货人" value={customerMetrics.contacts} extra="已维护联系人" />
+          </Col>
+        </Row>
+      ) : (
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={8}>
+            <MetricCard icon={<Users />} title="客户资料" value={summary.enabledCustomers} extra="客户编码、简称、全称、类型、业务员" />
+          </Col>
+          <Col xs={24} md={8}>
+            <MetricCard icon={<Route />} title="代理资料" value={summary.enabledAgents} extra={`${summary.enabledChannels} 条渠道 / ${summary.enabledCarriers} 个承运商`} />
+          </Col>
+          <Col xs={24} md={8}>
+            <MetricCard icon={<FileText />} title="费用/汇率" value={summary.enabledSurcharges} extra={`${summary.activeExchangeRates} 条启用汇率`} />
+          </Col>
+        </Row>
+      )}
 
       <ModuleSubWorkspace items={masterSubItems} activeKey={activeMasterSection} onChange={setActiveMasterSection}>
       <Row gutter={[16, 16]} className="main-grid">
@@ -1282,10 +1497,10 @@ export function MasterDataPage({
                 </Col>
               </Row>
               <Space wrap className="surface-strip">
-                <Button size="small" aria-label="新增渠道类别" disabled={!canWriteChannels} onClick={() => void handleCreateMasterChannelCategory()}>
+                <Button size="small" aria-label="新增渠道类别" disabled={!canWriteChannelCategories} onClick={() => void handleCreateMasterChannelCategory()}>
                   新增
                 </Button>
-                <Button size="small" aria-label="修改渠道类别" disabled={!selectedChannelCategory || !canWriteChannels} onClick={() => selectedChannelCategory && void handleEditMasterChannelCategory(selectedChannelCategory)}>
+                <Button size="small" aria-label="修改渠道类别" disabled={!selectedChannelCategory || !canWriteChannelCategories} onClick={() => selectedChannelCategory && void handleEditMasterChannelCategory(selectedChannelCategory)}>
                   修改
                 </Button>
                 <Popconfirm
@@ -1294,10 +1509,10 @@ export function MasterDataPage({
                   okText="确认停用"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
-                  disabled={!selectedChannelCategory || !canWriteChannels}
+                  disabled={!selectedChannelCategory || !canWriteChannelCategories}
                   destroyOnHidden
                   open={channelCategoryDisableConfirmOpen}
-                  onOpenChange={(open) => setChannelCategoryDisableConfirmOpen(Boolean(selectedChannelCategory && canWriteChannels && open))}
+                  onOpenChange={(open) => setChannelCategoryDisableConfirmOpen(Boolean(selectedChannelCategory && canWriteChannelCategories && open))}
                   onConfirm={async () => {
                     if (selectedChannelCategory) {
                       await handleDisableMasterChannelCategory(selectedChannelCategory);
@@ -1306,7 +1521,7 @@ export function MasterDataPage({
                   }}
                   onCancel={() => setChannelCategoryDisableConfirmOpen(false)}
                 >
-                  <Button size="small" aria-label="删除渠道类别" disabled={!selectedChannelCategory || !canWriteChannels}>
+                  <Button size="small" aria-label="删除渠道类别" disabled={!selectedChannelCategory || !canWriteChannelCategories}>
                     删除
                   </Button>
                 </Popconfirm>
@@ -1399,7 +1614,7 @@ export function MasterDataPage({
                 </Col>
               </Row>
               <Space wrap className="surface-strip">
-                <Button size="small" aria-label="增加公司渠道" disabled={!canWriteChannels || masterData.carriers.length === 0} onClick={() => void handleCreateMasterCompanyChannel()}>
+                <Button size="small" aria-label="增加公司渠道" disabled={!canWriteChannels} onClick={() => void handleCreateMasterCompanyChannel()}>
                   增加
                 </Button>
                 <Button size="small" aria-label="修改公司渠道" disabled={!selectedCompanyChannel || !canWriteChannels} onClick={() => selectedCompanyChannel && void handleEditMasterCompanyChannel(selectedCompanyChannel)}>
@@ -1501,10 +1716,10 @@ export function MasterDataPage({
                 </Col>
               </Row>
               <Space wrap className="surface-strip">
-                <Button size="small" aria-label="增加代理渠道" disabled={!canWriteAgents || agentRows.length === 0} onClick={() => void handleCreateMasterAgentChannel()}>
+                <Button size="small" aria-label="增加代理渠道" disabled={!canWriteAgentChannels || agentRows.length === 0} onClick={() => void handleCreateMasterAgentChannel()}>
                   增加
                 </Button>
-                <Button size="small" aria-label="修改代理渠道" disabled={!selectedAgentChannel || !canWriteAgents} onClick={() => selectedAgentChannel && void handleEditMasterAgentChannel(selectedAgentChannel)}>
+                <Button size="small" aria-label="修改代理渠道" disabled={!selectedAgentChannel || !canWriteAgentChannels} onClick={() => selectedAgentChannel && void handleEditMasterAgentChannel(selectedAgentChannel)}>
                   修改
                 </Button>
                 <Popconfirm
@@ -1513,10 +1728,10 @@ export function MasterDataPage({
                   okText="确认停用"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
-                  disabled={!selectedAgentChannel || !canWriteAgents}
+                  disabled={!selectedAgentChannel || !canWriteAgentChannels}
                   destroyOnHidden
                   open={agentChannelDisableConfirmOpen}
-                  onOpenChange={(open) => setAgentChannelDisableConfirmOpen(Boolean(selectedAgentChannel && canWriteAgents && open))}
+                  onOpenChange={(open) => setAgentChannelDisableConfirmOpen(Boolean(selectedAgentChannel && canWriteAgentChannels && open))}
                   onConfirm={async () => {
                     if (selectedAgentChannel) {
                       await handleDisableMasterAgentChannel(selectedAgentChannel);
@@ -1525,7 +1740,7 @@ export function MasterDataPage({
                   }}
                   onCancel={() => setAgentChannelDisableConfirmOpen(false)}
                 >
-                  <Button size="small" aria-label="删除代理渠道" disabled={!selectedAgentChannel || !canWriteAgents}>
+                  <Button size="small" aria-label="删除代理渠道" disabled={!selectedAgentChannel || !canWriteAgentChannels}>
                     删除
                   </Button>
                 </Popconfirm>
@@ -1550,157 +1765,254 @@ export function MasterDataPage({
           </Card>
           ) : null}
           {activeMasterSection === 'customers' ? (
-          <Card className="module-grid" title="客户资料">
-            <Space direction="vertical" size={12} className="ai-list">
-              <Row gutter={[10, 10]} className="module-filter-grid">
-                <Col xs={24} md={8} xl={5}>
-                  {renderFilterField('客户名称', (
-                    <Input
-                      aria-label="客户名称筛选"
-                      value={customerFilters.name}
-                      onChange={(event) => setCustomerFilters((current) => ({ ...current, name: event.target.value }))}
-                    />
-                  ))}
-                </Col>
-                <Col xs={24} md={8} xl={5}>
-                  {renderFilterField('客户编码', (
+          <div className="customer-master-workbench">
+            <Card
+              className="customer-master-card"
+              title={
+                <Space direction="vertical" size={2}>
+                  <Flex align="center" gap={8}>
+                    <FileText size={18} />
+                    <span>客户资料</span>
+                  </Flex>
+                  <Text type="secondary">共 {customerRows.length} 条客户，点击客户查看详情</Text>
+                </Space>
+              }
+              extra={
+                <Space wrap>
+                  <Button type="primary" icon={<Plus size={16} />} aria-label="增加客户" disabled={!canWriteCustomers} onClick={() => void handleCreateMasterCustomer()}>
+                    新增客户
+                  </Button>
+                  <Button icon={<UploadIcon size={16} />} onClick={() => onNotice('客户导入请使用当前模板整理后导入')}>
+                    导入
+                  </Button>
+                  <Button icon={<Download size={16} />} onClick={exportCustomers}>
+                    导出
+                  </Button>
+                  <Button icon={<Settings size={16} />} aria-label="客户列表设置" onClick={() => setCustomerListSettingOpen(true)}>
+                    列表设置
+                  </Button>
+                </Space>
+              }
+            >
+              <Space direction="vertical" size={10} className="customer-master-stack">
+                <div className="customer-master-filter">
+                  <Space.Compact className="customer-master-keyword">
+                    <span>客户名称/编码</span>
                     <Input
                       aria-label="客户编码筛选"
-                      value={customerFilters.code}
-                      onChange={(event) => setCustomerFilters((current) => ({ ...current, code: event.target.value }))}
+                      placeholder="输入客户简称、全称或编码"
+                      value={customerFilters.name}
+                      onChange={(event) => setCustomerFilters((current) => ({ ...current, name: event.target.value, code: '' }))}
                     />
-                  ))}
-                </Col>
-                <Col xs={24} md={8} xl={4}>
-                  {renderFilterField('状态', (
-                    <select
-                      aria-label="客户状态筛选"
-                      className="native-select"
-                      value={customerFilters.status}
-                      onChange={(event) => setCustomerFilters((current) => ({ ...current, status: event.target.value }))}
-                    >
-                      <option value="ALL">--全部--</option>
-                      <option value="ENABLED">启用</option>
-                      <option value="DISABLED">停用</option>
-                    </select>
-                  ))}
-                </Col>
-                <Col xs={24} md={8} xl={5}>
-                  {renderFilterField('客户类型', (
+                  </Space.Compact>
+                  <label className="customer-master-select">
+                    <span>客户类型</span>
                     <select
                       aria-label="客户类型筛选"
                       className="native-select"
                       value={customerFilters.customerType}
                       onChange={(event) => setCustomerFilters((current) => ({ ...current, customerType: event.target.value }))}
                     >
-                      <option value="ALL">--全部--</option>
-                      {[...new Set(customerRows.map((customer) => customer.customerType))].map((type) => (
-                        <option key={type} value={type}>{type}</option>
-                      ))}
+                      <option value="ALL">全部</option>
+                      {customerTypeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
                     </select>
-                  ))}
-                </Col>
-                <Col xs={24} md={8} xl={5}>
-                  {renderFilterField('业务员', (
-                    <Input
+                  </label>
+                  <label className="customer-master-select">
+                    <span>状态</span>
+                    <select
+                      aria-label="客户状态筛选"
+                      className="native-select"
+                      value={customerFilters.status}
+                      onChange={(event) => setCustomerFilters((current) => ({ ...current, status: event.target.value }))}
+                    >
+                      <option value="ALL">全部</option>
+                      <option value="ENABLED">启用</option>
+                      <option value="DISABLED">停用</option>
+                    </select>
+                  </label>
+                  <label className="customer-master-select">
+                    <span>业务员</span>
+                    <select
                       aria-label="业务员筛选"
+                      className="native-select"
                       value={customerFilters.salesperson}
                       onChange={(event) => setCustomerFilters((current) => ({ ...current, salesperson: event.target.value }))}
-                    />
-                  ))}
-                </Col>
-                <Col xs={24} md={8} xl={5}>
-                  {renderFilterField('客户来源', (
-                    <Input
-                      aria-label="客户来源筛选"
-                      value={customerFilters.customerSource}
-                      onChange={(event) => setCustomerFilters((current) => ({ ...current, customerSource: event.target.value }))}
-                    />
-                  ))}
-                </Col>
-                <Col xs={24} md={8} xl={4}>
-                  {renderFilterActions(
-                    () => setAppliedCustomerFilters(customerFilters),
-                    () => {
+                    >
+                      <option value="">全部</option>
+                      {salespersonOptions.map((salesperson) => <option key={salesperson} value={salesperson}>{salesperson}</option>)}
+                    </select>
+                  </label>
+                  <Button type="primary" onClick={() => setAppliedCustomerFilters(customerFilters)}>查询</Button>
+                  <Button
+                    onClick={() => {
                       const emptyFilters = { name: '', code: '', status: 'ALL', customerType: 'ALL', customerSource: '', salesperson: '' };
                       setCustomerFilters(emptyFilters);
                       setAppliedCustomerFilters(emptyFilters);
-                    }
-                  )}
-                </Col>
-              </Row>
-              <Space wrap className="surface-strip">
-                <Button size="small" aria-label="增加客户" onClick={() => void handleCreateMasterCustomer()}>
-                  增加
-                </Button>
-                <Button size="small" aria-label="修改客户" disabled={!selectedCustomer} onClick={() => selectedCustomer && void handleEditMasterCustomer(selectedCustomer)}>
-                  修改
-                </Button>
-                <Popconfirm
-                  title="确认停用该客户？"
-                  description="停用后该客户将不再作为可用客户资料展示，不会物理删除历史数据。"
-                  okText="确认停用"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  disabled={!selectedCustomer}
-                  destroyOnHidden
-                  open={customerDisableConfirmOpen}
-                  onOpenChange={(open) => setCustomerDisableConfirmOpen(Boolean(selectedCustomer && open))}
-                  onConfirm={async () => {
-                    if (selectedCustomer) {
-                      await handleDisableMasterCustomer(selectedCustomer);
-                    }
-                    setCustomerDisableConfirmOpen(false);
-                  }}
-                  onCancel={() => setCustomerDisableConfirmOpen(false)}
-                >
-                  <Button size="small" aria-label="删除客户" disabled={!selectedCustomer}>
-                    删除
-                  </Button>
-                </Popconfirm>
-                <Button size="small" aria-label="客户列表设置" onClick={() => setCustomerListSettingOpen(true)}>
-                  列表设置
-                </Button>
-              </Space>
-              <Table
-                rowKey="id"
-                size="small"
-                pagination={tenRowTablePagination}
-                dataSource={filteredCustomerRows}
-                rowSelection={{
-                  type: 'radio',
-                  selectedRowKeys: selectedCustomerId ? [selectedCustomerId] : [],
-                  onChange: (keys) => setSelectedCustomerId(String(keys[0] ?? ''))
-                }}
-                onRow={(record) => ({
-                  onClick: () => setSelectedCustomerId(record.id)
-                })}
-                columns={customerColumns}
-                scroll={{ x: 1180 }}
-              />
-              <Space direction="vertical" size={8} className="ai-list">
-                <Flex justify="space-between" align="center" gap={12} wrap>
-                  <Text strong>{selectedCustomer ? `${selectedCustomer.code}-${selectedCustomer.name} 收货人` : '收货人'}</Text>
-                  <Button
-                    size="small"
-                    aria-label="新增收货人"
-                    disabled={!selectedCustomer || selectedCustomerContacts.length >= 4}
-                    onClick={() => void handleOpenMasterCustomerContact()}
+                    }}
                   >
-                    新增收货人
+                    重置
                   </Button>
-                </Flex>
+                </div>
+                <div className="customer-master-batch">
+                  <Text>已选择 {selectedCustomer ? 1 : 0} 项</Text>
+                  <Button icon={<Edit size={15} />} disabled={!selectedCustomer || !canWriteCustomers} onClick={() => selectedCustomer && void handleEditMasterCustomer(selectedCustomer)}>
+                    修改
+                  </Button>
+                  <Popconfirm
+                    title={`确认${selectedCustomer?.enabled === false ? '启用' : '停用'}该客户？`}
+                    description={selectedCustomer?.enabled === false ? '启用后可重新用于业务下单。' : '停用保留历史记录，不影响既有业务数据。'}
+                    okText={`确认${selectedCustomer?.enabled === false ? '启用' : '停用'}`}
+                    cancelText="取消"
+                    okButtonProps={{ danger: selectedCustomer?.enabled !== false }}
+                    disabled={!selectedCustomer || !canWriteCustomers}
+                    destroyOnHidden
+                    open={customerDisableConfirmOpen}
+                    onOpenChange={(open) => setCustomerDisableConfirmOpen(Boolean(selectedCustomer && canWriteCustomers && open))}
+                    onConfirm={async () => {
+                      if (selectedCustomer) {
+                        await (selectedCustomer.enabled ? handleDisableMasterCustomer(selectedCustomer) : handleEnableMasterCustomer(selectedCustomer));
+                      }
+                      setCustomerDisableConfirmOpen(false);
+                    }}
+                    onCancel={() => setCustomerDisableConfirmOpen(false)}
+                  >
+                    <Button icon={<Power size={15} />} danger={selectedCustomer?.enabled !== false} disabled={!selectedCustomer || !canWriteCustomers}>
+                      {selectedCustomer?.enabled === false ? '启用' : '停用'}
+                    </Button>
+                  </Popconfirm>
+                  <Popconfirm
+                    title="删除客户资料"
+                    description="删除后不可恢复，请确认该客户无未完成运单、费用或收款记录。"
+                    okText="确认删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    disabled={!selectedCustomer || !canWriteCustomers}
+                    onConfirm={() => selectedCustomer ? handleDeleteMasterCustomer(selectedCustomer) : undefined}
+                    destroyOnHidden
+                  >
+                    <Button icon={<Trash2 size={15} />} danger aria-label="删除客户" disabled={!selectedCustomer || !canWriteCustomers}>
+                      删除
+                    </Button>
+                  </Popconfirm>
+                  <Text type="warning">停用保留历史记录；删除需二次确认</Text>
+                </div>
                 <Table
                   rowKey="id"
                   size="small"
-                  pagination={false}
-                  dataSource={selectedCustomerContacts}
-                  columns={customerContactColumns}
-                  scroll={{ x: 1190 }}
-                  locale={{ emptyText: selectedCustomer ? '暂无收货人' : '请选择客户' }}
+                  className="customer-master-table"
+                  pagination={tenRowTablePagination}
+                  dataSource={filteredCustomerRows}
+                  rowSelection={{
+                    selectedRowKeys: selectedCustomerId ? [selectedCustomerId] : [],
+                    onChange: (keys) => setSelectedCustomerId(String(keys[keys.length - 1] ?? ''))
+                  }}
+                  rowClassName={(record) => record.id === selectedCustomerId ? 'customer-master-row-selected' : ''}
+                  onRow={(record) => ({
+                    onClick: () => setSelectedCustomerId(record.id)
+                  })}
+                  columns={customerColumns}
+                  scroll={{ x: 1120 }}
                 />
               </Space>
-            </Space>
+            </Card>
+            <Card
+              className="customer-detail-panel"
+              title="客户详情"
+              extra={<Button type="text" onClick={() => setSelectedCustomerId(null)}>×</Button>}
+            >
+              {selectedCustomer ? (
+                <Space direction="vertical" size={16} className="customer-detail-stack">
+                  <Flex align="center" gap={14}>
+                    <span className="customer-detail-icon"><Building2 size={30} /></span>
+                    <Space direction="vertical" size={2}>
+                      <Space>
+                        <Title level={4}>{selectedCustomer.name}</Title>
+                        <Tag color={selectedCustomer.enabled ? 'green' : 'default'}>{selectedCustomer.enabled ? '启用' : '停用'}</Tag>
+                        <Tag color="blue">{selectedCustomer.customerType}</Tag>
+                      </Space>
+                      <Text type="secondary">{selectedCustomer.code} · {selectedCustomer.fullName}</Text>
+                    </Space>
+                  </Flex>
+                  <div className="customer-detail-section">
+                    <Text strong>基础信息</Text>
+                    <div className="customer-detail-fields">
+                      <Text type="secondary">客户编码</Text><Text>{selectedCustomer.code}</Text>
+                      <Text type="secondary">业务员</Text><Text>{selectedCustomer.salesperson}</Text>
+                      <Text type="secondary">来源</Text><Text>{selectedCustomer.customerSource || '手工创建'}</Text>
+                      <Text type="secondary">创建时间</Text><Text>{latestShipmentByCustomerId.get(selectedCustomer.id)?.createdAt?.slice(0, 16).replace('T', ' ') ?? '-'}</Text>
+                    </div>
+                  </div>
+                  <div className="customer-detail-section">
+                    <Text strong>结算信息</Text>
+                    <div className="customer-detail-fields">
+                      <Text type="secondary">币种</Text><Text>RMB</Text>
+                      <Text type="secondary">结算方式</Text><Text>{selectedCustomer.defaultSettlementMethod || '缺失'}</Text>
+                      <Text type="secondary">付款周期</Text><Text>{selectedCustomer.defaultSettlementMethod?.includes('月') ? '每月' : '-'}</Text>
+                    </div>
+                  </div>
+                  <div className="customer-detail-section">
+                    <Flex justify="space-between" align="center">
+                      <Text strong>收货人</Text>
+                      <Button
+                        size="small"
+                        icon={<Plus size={14} />}
+                        disabled={!selectedCustomer || !canWriteCustomers || selectedCustomerContacts.length >= 4}
+                        onClick={() => void handleOpenMasterCustomerContact()}
+                      >
+                        新增收货人
+                      </Button>
+                    </Flex>
+                    {selectedCustomerContacts.length ? (
+                      <Table
+                        rowKey="id"
+                        size="small"
+                        className="customer-detail-contact-table"
+                        dataSource={selectedCustomerContacts}
+                        columns={customerContactColumns}
+                        pagination={false}
+                        scroll={{ x: 920 }}
+                      />
+                    ) : <Text type="secondary">暂无维护收货人</Text>}
+                  </div>
+                  <div className="customer-detail-section">
+                    <Text strong>最近订单</Text>
+                    {latestShipmentByCustomerId.get(selectedCustomer.id) ? (
+                      <Flex justify="space-between" align="center">
+                        <Text strong type="success">{latestShipmentByCustomerId.get(selectedCustomer.id)?.systemOrderNo}</Text>
+                        <Text type="secondary">{latestShipmentByCustomerId.get(selectedCustomer.id)?.createdAt?.slice(0, 10)}</Text>
+                      </Flex>
+                    ) : <Text type="secondary">暂无订单</Text>}
+                  </div>
+                  <div className="customer-detail-section">
+                    <Text strong>最近变更</Text>
+                    {customerAuditLogs.length ? customerAuditLogs.map((log) => (
+                      <Space key={log.id} direction="vertical" size={0} className="full-width">
+                        <Text type="success">{log.actionLabel}</Text>
+                        <Text type="secondary">{log.actorUsername} · {log.createdAt.slice(0, 16).replace('T', ' ')}</Text>
+                      </Space>
+                    )) : <Text type="secondary">暂无变更记录</Text>}
+                  </div>
+                  <Flex gap={10}>
+                    <Button onClick={() => void handleEditMasterCustomer(selectedCustomer)} disabled={!canWriteCustomers}>编辑客户</Button>
+                    <Button danger disabled={!canWriteCustomers} onClick={() => selectedCustomer.enabled ? void handleDisableMasterCustomer(selectedCustomer) : void handleEnableMasterCustomer(selectedCustomer)}>
+                      {selectedCustomer.enabled ? '停用' : '启用'}
+                    </Button>
+                    <Popconfirm
+                      title="删除客户资料"
+                      description="删除后不可恢复，请确认该客户无未完成运单、费用或收款记录。"
+                      okText="确认删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => handleDeleteMasterCustomer(selectedCustomer)}
+                      disabled={!canWriteCustomers}
+                      destroyOnHidden
+                    >
+                      <Button danger type="primary" disabled={!canWriteCustomers}>删除</Button>
+                    </Popconfirm>
+                  </Flex>
+                </Space>
+              ) : <Text type="secondary">暂无客户详情</Text>}
+            </Card>
             <Modal
               title="客户列表设置"
               open={customerListSettingOpen}
@@ -1719,7 +2031,7 @@ export function MasterDataPage({
                 </Checkbox>
               </Space>
             </Modal>
-          </Card>
+          </div>
           ) : null}
 
           {activeMasterSection === 'agents' ? (
@@ -1938,13 +2250,19 @@ export function MasterDataPage({
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="carrierId" label="承运商" rules={[{ required: true, message: '请选择承运商' }]}>
-                <select aria-label="公司渠道承运商" className="native-select">
-                  {masterData.carriers.map((carrier) => (
-                    <option key={carrier.id} value={carrier.id}>{carrier.name}</option>
-                  ))}
-                </select>
-              </Form.Item>
+              {masterData.carriers.length > 0 ? (
+                <Form.Item name="carrierId" label="承运商" rules={[{ required: true, message: '请选择承运商' }]}>
+                  <select aria-label="公司渠道承运商" className="native-select">
+                    {masterData.carriers.map((carrier) => (
+                      <option key={carrier.id} value={carrier.id}>{carrier.name}</option>
+                    ))}
+                  </select>
+                </Form.Item>
+              ) : (
+                <Form.Item name="carrierName" label="承运商" rules={[{ required: true, whitespace: true, message: '请输入承运商' }]}>
+                  <Input placeholder="例如 UPS / DHL / FEDEX" />
+                </Form.Item>
+              )}
             </Col>
             <Col xs={24} md={8}>
               <Form.Item name="businessType" label="业务类型" rules={[{ required: true, message: '请选择业务类型' }]}>
@@ -2117,12 +2435,11 @@ export function MasterDataPage({
           <Form.Item name="customerSource" label="客户来源">
             <Input placeholder="例如 展会、转介绍、线上询盘" />
           </Form.Item>
-          <Form.Item
-            name="salesperson"
-            label="业务员"
-            rules={[{ required: true, whitespace: true, message: '请输入业务员' }]}
-          >
-            <Input placeholder="例如 mira" />
+          <Form.Item name="salesperson" hidden>
+            <Input />
+          </Form.Item>
+          <Form.Item label="业务员" htmlFor="salespersonReadonly">
+            <Input id="salespersonReadonly" aria-label="业务员" value={currentSalesperson} disabled />
           </Form.Item>
           <Form.Item
             name="defaultSettlementMethod"
@@ -2261,7 +2578,7 @@ export function MasterDataPage({
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="invoiceTemplateName" label="发票模板名称">
-                <Input placeholder="例如 代理上传图片.png" />
+                <Input placeholder="例如 代理发票模板.xlsx" />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -2270,19 +2587,19 @@ export function MasterDataPage({
                   <Form.Item name="invoiceTemplateUrl" noStyle>
                     <Input
                       aria-label="上传点"
-                      placeholder="上传或粘贴图片后自动填充"
+                      placeholder="上传或粘贴 Excel 后自动填充"
                       onPaste={handleAgentInvoicePaste}
                     />
                   </Form.Item>
                   <Upload
-                    accept="image/*"
+                    accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     showUploadList={false}
                     beforeUpload={(file) => {
-                      void handleAgentInvoiceImage(file as File);
+                      void handleAgentInvoiceTemplate(file as File);
                       return false;
                     }}
                   >
-                    <Button>上传图片</Button>
+                    <Button>上传模板</Button>
                   </Upload>
                 </Space.Compact>
               </Form.Item>

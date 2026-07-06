@@ -1,11 +1,13 @@
-import type { ReactNode } from 'react';
-import { useState } from 'react';
-import { Activity, Banknote, Bot, Boxes, FileInput, FileText, PackageCheck, PackagePlus, Send, Settings, Sparkles, Truck } from 'lucide-react';
-import { Alert, Badge, Button, Card, Col, Flex, Progress, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
+import type { Key, ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Bot, Boxes, ClipboardList, FileInput, PackagePlus, RotateCcw, Search, Send, Settings, ShieldAlert, Sparkles, Truck, Wallet, Warehouse } from 'lucide-react';
+import { Alert, Badge, Button, Card, Col, Flex, Input, Modal, Progress, Row, Select, Space, Table, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { businessTypeLabels, shipmentStatusLabels, type BusinessType, type Shipment, type ShipmentStatus } from '@siyuan/shared';
+import { businessTypeLabels, shipmentStatusLabels, type BusinessType, type LineShipmentPoolQuery, type LineShipmentPoolResponse, type LineShipmentPoolRow, type LineShipmentStatusGroup, type Shipment, type ShipmentStatus } from '@siyuan/shared';
+import type { ApiClient } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, riskLabel, tenRowTablePagination } from '../shared/ui';
+import { formatBeijingDateTime } from '../shared/format';
 
 const { Title, Text } = Typography;
 
@@ -49,31 +51,37 @@ interface ImportValidationSummary {
   errors: Array<{ rowNumber: number; field: string; message: string }>;
 }
 
+function LinePoolStatusButton({ active, danger, children, onClick }: { active: boolean; danger?: boolean; children: ReactNode; onClick: () => void }) {
+  return (
+    <Button type={active ? 'primary' : 'default'} danger={danger && !active} onClick={onClick}>
+      {children}
+    </Button>
+  );
+}
 
+function statusColor(status: ShipmentStatus) {
+  if (['SIGNED', 'OUTBOUNDED', 'DEPARTED'].includes(status)) return 'green';
+  if (['PROBLEM', 'STUCK', 'REVIEW_REJECTED'].includes(status)) return 'red';
+  if (['WAITING_DISPATCH', 'WAITING_SORT', 'WAITING_DEPARTURE'].includes(status)) return 'cyan';
+  return 'blue';
+}
 
 export function OperationsPage({
   businessWorkspaceConfig,
-  businessShipments,
   aiQueue,
   importValidation,
   businessType,
   onAiAssist,
   aiLoading,
-  selectedStatus,
-  onSelectStatus,
-  statusOrder,
-  statusCounts,
-  shipmentColumnOrderMode,
-  onShipmentColumnOrderModeChange,
-  shipmentColumnOrderOptions,
   onOpenColumnSettings,
-  workspaceColumns,
-  visibleShipments,
   activeWorkspaceSection,
   onActiveWorkspaceSectionChange,
   automationPlan,
   moduleSummary,
-  spotlightModules
+  spotlightModules,
+  apiClient,
+  onViewShipment,
+  onProcessShipment
 }: {
   businessWorkspaceConfig: BusinessWorkspaceConfig;
   businessShipments: Shipment[];
@@ -97,7 +105,139 @@ export function OperationsPage({
   automationPlan: AutomationPlanItem[];
   moduleSummary: ModuleSummary;
   spotlightModules: ProductModuleSummary[];
+  apiClient: ApiClient;
+  onViewShipment: (shipment: Shipment) => void;
+  onProcessShipment: (shipment: Shipment) => void;
 }) {
+  const [linePoolQuery, setLinePoolQuery] = useState<LineShipmentPoolQuery>({
+    statusGroup: 'ALL',
+    datePreset: 'TODAY',
+    sortBy: 'createdAt',
+    sortOrder: 'desc',
+    page: 1,
+    pageSize: 20
+  });
+  const [linePoolDraft, setLinePoolDraft] = useState({ keyword: '', datePreset: 'TODAY' as LineShipmentPoolQuery['datePreset'], sortBy: 'createdAt' as LineShipmentPoolQuery['sortBy'] });
+  const [linePoolResponse, setLinePoolResponse] = useState<LineShipmentPoolResponse | null>(null);
+  const [linePoolLoading, setLinePoolLoading] = useState(false);
+  const [selectedLineShipmentIds, setSelectedLineShipmentIds] = useState<Key[]>([]);
+
+  const fetchLinePool = useCallback(async (nextQuery: LineShipmentPoolQuery) => {
+    setLinePoolLoading(true);
+    try {
+      const response = await apiClient.lineShipmentPool(nextQuery);
+      setLinePoolResponse(response);
+      setSelectedLineShipmentIds([]);
+    } finally {
+      setLinePoolLoading(false);
+    }
+  }, [apiClient]);
+
+  useEffect(() => {
+    if (activeWorkspaceSection !== 'shipmentPool') return;
+    void fetchLinePool(linePoolQuery);
+  }, [activeWorkspaceSection, fetchLinePool, linePoolQuery]);
+
+  const linePoolMetrics = linePoolResponse?.metrics;
+  const linePoolRows = linePoolResponse?.rows ?? [];
+  const selectedLineRows = useMemo(
+    () => linePoolRows.filter((row) => selectedLineShipmentIds.includes(row.shipment.id)),
+    [linePoolRows, selectedLineShipmentIds]
+  );
+
+  const openUnavailableAction = useCallback((action: string) => {
+    Modal.info({
+      title: action,
+      content: '该动作后端闭环待接入，当前仅保留入口，不会假装处理成功。'
+    });
+  }, []);
+
+  const handleLinePoolStatus = useCallback((statusGroup: LineShipmentStatusGroup) => {
+    setLinePoolQuery((current) => ({ ...current, statusGroup, page: 1 }));
+  }, []);
+
+  const handleLinePoolSearch = useCallback(() => {
+    setLinePoolQuery((current) => ({
+      ...current,
+      keyword: linePoolDraft.keyword,
+      datePreset: linePoolDraft.datePreset,
+      sortBy: linePoolDraft.sortBy,
+      page: 1
+    }));
+  }, [linePoolDraft]);
+
+  const handleLinePoolReset = useCallback(() => {
+    const nextQuery: LineShipmentPoolQuery = { statusGroup: 'ALL', datePreset: 'TODAY', sortBy: 'createdAt', sortOrder: 'desc', page: 1, pageSize: 20 };
+    setLinePoolDraft({ keyword: '', datePreset: 'TODAY', sortBy: 'createdAt' });
+    setLinePoolQuery(nextQuery);
+  }, []);
+
+  const createSelectedProblem = useCallback(async () => {
+    const shipment = selectedLineRows[0]?.shipment;
+    if (!shipment) return;
+    await apiClient.createProblemTicket(shipment.id, { reason: '运营工作台批量创建问题件', customerVisible: false });
+    message.success('已创建问题件');
+    void fetchLinePool(linePoolQuery);
+  }, [apiClient, fetchLinePool, linePoolQuery, selectedLineRows]);
+
+  const addSelectedTracking = useCallback(async () => {
+    const shipment = selectedLineRows[0]?.shipment;
+    if (!shipment) return;
+    await apiClient.addTrackingEvent(shipment.id, { status: '运营工作台追加轨迹', happenedAt: new Date().toISOString(), visibleToCustomer: false });
+    message.success('已追加轨迹');
+    void fetchLinePool(linePoolQuery);
+  }, [apiClient, fetchLinePool, linePoolQuery, selectedLineRows]);
+
+  const linePoolColumns = useMemo<ColumnsType<LineShipmentPoolRow>>(() => [
+    {
+      title: '创建时间',
+      width: 120,
+      render: (_, row) => {
+        const [date, time] = formatBeijingDateTime(row.shipment.createdAt).split(' ');
+        return <div className="line-pool-cell-stack"><span>{date}</span><Text type="secondary">{time}</Text></div>;
+      }
+    },
+    {
+      title: '客户 / 业务员',
+      width: 170,
+      render: (_, row) => <div className="line-pool-cell-stack"><Text strong>{row.shipment.customerName}</Text><Text type="secondary">{row.shipment.salesperson ?? '-'}</Text></div>
+    },
+    {
+      title: '单号',
+      width: 190,
+      render: (_, row) => <div className="line-pool-cell-stack"><Button type="link" className="line-pool-link" onClick={() => onViewShipment(row.shipment)}>{row.shipment.systemOrderNo}</Button><Text type="secondary">{row.shipment.transferNo || '待获取快递号'}</Text></div>
+    },
+    {
+      title: '路由',
+      width: 220,
+      render: (_, row) => <div className="line-pool-cell-stack"><span>{row.shipment.destinationCountry}</span><span>{row.shipment.channelName || '-'}</span><Text type="secondary">{row.shipment.agentName || '-'}</Text></div>
+    },
+    { title: '状态', width: 100, render: (_, row) => <Tag color={statusColor(row.shipment.status)}>{shipmentStatusLabels[row.shipment.status]}</Tag> },
+    {
+      title: '最新轨迹',
+      width: 210,
+      render: (_, row) => <div className="line-pool-cell-stack"><span>{row.latestTracking || '-'}</span><Text type="secondary">{row.shipment.trackingStaleDays > 0 ? `${row.shipment.trackingStaleDays} 天未更新` : '今日更新'}</Text></div>
+    },
+    {
+      title: '货量 / 费用',
+      width: 145,
+      render: (_, row) => <div className="line-pool-cell-stack"><span>{row.shipment.packageCount}件 / {row.shipment.agentWeightKg.toFixed(3)}kg</span><Text>{row.receivableAmount !== undefined ? `¥${row.receivableAmount.toFixed(2)}` : '费用隐藏'}</Text></div>
+    },
+    { title: '收款', width: 105, render: (_, row) => <Tag color={row.receivableAmount ? 'red' : 'default'}>{row.receivableAmount ? '未收款' : '未知'}</Tag> },
+    { title: '备注', width: 140, render: (_, row) => row.shipment.remark || '无备注' },
+    {
+      title: '操作',
+      width: 130,
+      fixed: 'right',
+      render: (_, row) => (
+        <Space size={8}>
+          <Button size="small" onClick={() => onViewShipment(row.shipment)}>详情</Button>
+          <Button size="small" type="primary" onClick={() => onProcessShipment(row.shipment)}>处理</Button>
+        </Space>
+      )
+    }
+  ], [onProcessShipment, onViewShipment]);
+
   return (
     <AppPage>
       <AppPageHeader
@@ -105,8 +245,13 @@ export function OperationsPage({
         description={businessWorkspaceConfig.description}
         actions={(
           <AppActionGroup>
-            <Button icon={<FileInput size={16} />}>导入运单</Button>
-            <Button icon={<PackagePlus size={16} />}>新建预报</Button>
+            <div className="operations-completion">
+              <span>今日完成率</span>
+              <strong>{linePoolMetrics?.todayCompletionRate ?? 0}%</strong>
+              <Progress percent={linePoolMetrics?.todayCompletionRate ?? 0} showInfo={false} />
+            </div>
+            <Button icon={<FileInput size={16} />} onClick={() => openUnavailableAction('导入运单')}>导入运单</Button>
+            <Button icon={<PackagePlus size={16} />} onClick={() => openUnavailableAction('新建预报')}>新建预报</Button>
             <Button
               type="primary"
               icon={<Bot size={16} />}
@@ -128,21 +273,21 @@ export function OperationsPage({
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12} xl={6}>
-          <MetricCard icon={<Truck />} title={businessWorkspaceConfig.metrics[0].title} value={businessShipments.length} extra={businessWorkspaceConfig.metrics[0].extra} />
+          <MetricCard icon={<Truck />} title="待处理运单" value={linePoolMetrics?.pendingCount ?? 0} extra="待审核/待排货/待出库" />
         </Col>
         <Col xs={24} md={12} xl={6}>
           <MetricCard
-            icon={<Activity />}
-            title={businessWorkspaceConfig.metrics[1].title}
-            value={aiQueue.filter((item) => item.insight.tags.includes('轨迹超时')).length}
-            extra={businessWorkspaceConfig.metrics[1].extra}
+            icon={<ShieldAlert />}
+            title="履约风险"
+            value={linePoolMetrics?.riskCount ?? 0}
+            extra="问题件、轨迹超时、尾程异常"
           />
         </Col>
         <Col xs={24} md={12} xl={6}>
-          <MetricCard icon={<Banknote />} title={businessWorkspaceConfig.metrics[2].title} value="¥ 18,642" extra={businessWorkspaceConfig.metrics[2].extra} />
+          <MetricCard icon={<Warehouse />} title="今日待出库" value={linePoolMetrics?.todayDispatchCount ?? 0} extra="仓库今日处理" />
         </Col>
         <Col xs={24} md={12} xl={6}>
-          <MetricCard icon={<PackageCheck />} title={businessWorkspaceConfig.metrics[3].title} value="92%" extra={<Progress percent={92} showInfo={false} />} />
+          <MetricCard icon={<Wallet />} title="预计应收" value={`¥ ${Math.round(linePoolMetrics?.estimatedReceivable ?? 0).toLocaleString()}`} extra="运费、燃油、偏远和派送费" />
         </Col>
       </Row>
 
@@ -158,63 +303,105 @@ export function OperationsPage({
       >
         {activeWorkspaceSection === 'shipmentPool' ? (
           <Card
-            className="workspace-focus-card"
+            className="workspace-focus-card line-pool-card"
             title={
               <Flex align="center" gap={8}>
-                <FileText size={18} />
-                <span>{businessTypeLabels[businessType]}运单池</span>
+                <ClipboardList size={18} />
+                <span>专线运单池</span>
+                <Text type="secondary">共 {linePoolResponse?.pagination?.totalItems ?? 0} 单 · 后端分页 · 状态数量来自聚合接口</Text>
               </Flex>
             }
-            extra={<Text type="secondary">筛选、状态池、批量动作统一在一个工作面</Text>}
-          >
-            <div className="status-strip">
-              <Button
-                type={selectedStatus === 'ALL' ? 'primary' : 'default'}
-                onClick={() => onSelectStatus('ALL')}
-              >
-                全部 {businessShipments.length}
-              </Button>
-              {statusOrder.map((status) => (
-                <Button
-                  key={status}
-                  type={selectedStatus === status ? 'primary' : 'default'}
-                  onClick={() => onSelectStatus(status)}
-                >
-                  {shipmentStatusLabels[status]} {statusCounts[status] ?? 0}
-                </Button>
-              ))}
-              <Space className="table-column-tools" size={8}>
-                <Select
-                  aria-label="运单列顺序"
-                  className="column-order-select"
-                  value={shipmentColumnOrderMode}
-                  options={shipmentColumnOrderOptions}
-                  onChange={onShipmentColumnOrderModeChange}
-                />
+            extra={(
+              <Space>
+                <Text type="secondary">今日更新 {linePoolMetrics?.todayUpdatedCount ?? 0} 条</Text>
                 <Button icon={<Settings size={16} />} onClick={() => onOpenColumnSettings()}>
                   列设置
                 </Button>
               </Space>
+            )}
+          >
+            <div className="line-pool-status-strip">
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'ALL'} onClick={() => handleLinePoolStatus('ALL')}>全部 {linePoolResponse?.statusCounts?.ALL ?? 0}</LinePoolStatusButton>
+              <Text type="secondary">审核:</Text>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'REVIEW_PENDING'} onClick={() => handleLinePoolStatus('REVIEW_PENDING')}>待审核 {linePoolResponse?.statusCounts?.REVIEW_PENDING ?? 0}</LinePoolStatusButton>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'REVIEW_REJECTED'} onClick={() => handleLinePoolStatus('REVIEW_REJECTED')}>审核不通过 {linePoolResponse?.statusCounts?.REVIEW_REJECTED ?? 0}</LinePoolStatusButton>
+              <Text type="secondary">仓库:</Text>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'WAITING_SORT'} onClick={() => handleLinePoolStatus('WAITING_SORT')}>待排货 {linePoolResponse?.statusCounts?.WAITING_SORT ?? 0}</LinePoolStatusButton>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'WAITING_DISPATCH'} onClick={() => handleLinePoolStatus('WAITING_DISPATCH')}>待出库 {linePoolResponse?.statusCounts?.WAITING_DISPATCH ?? 0}</LinePoolStatusButton>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'OUTBOUNDED'} onClick={() => handleLinePoolStatus('OUTBOUNDED')}>已出库 {linePoolResponse?.statusCounts?.OUTBOUNDED ?? 0}</LinePoolStatusButton>
+              <Text type="secondary">运输:</Text>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'WAITING_DEPARTURE'} onClick={() => handleLinePoolStatus('WAITING_DEPARTURE')}>待离港 {linePoolResponse?.statusCounts?.WAITING_DEPARTURE ?? 0}</LinePoolStatusButton>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'DEPARTED'} onClick={() => handleLinePoolStatus('DEPARTED')}>已离港 {linePoolResponse?.statusCounts?.DEPARTED ?? 0}</LinePoolStatusButton>
+              <Text type="secondary">签收:</Text>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'SIGNED'} onClick={() => handleLinePoolStatus('SIGNED')}>已签收 {linePoolResponse?.statusCounts?.SIGNED ?? 0}</LinePoolStatusButton>
+              <Text type="secondary">异常:</Text>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'PROBLEM'} danger onClick={() => handleLinePoolStatus('PROBLEM')}>问题件 {linePoolResponse?.statusCounts?.PROBLEM ?? 0}</LinePoolStatusButton>
             </div>
 
-            <div className="batch-bar">
-              <Space wrap>
-                {businessWorkspaceConfig.batchActions.map((action) => (
-                  <Button key={action} size="small">
-                    {action}
+            <div className="line-pool-filter-strip">
+              <Input
+                allowClear
+                prefix={<Search size={16} />}
+                value={linePoolDraft.keyword}
+                placeholder="搜索客户 / 运单号 / 转单号 / 渠道 / 代理"
+                onChange={(event) => setLinePoolDraft((current) => ({ ...current, keyword: event.target.value }))}
+              />
+              <Space.Compact>
+                {[
+                  ['TODAY', '今天'],
+                  ['LAST_7_DAYS', '近7天'],
+                  ['ALL', '全部']
+                ].map(([value, label]) => (
+                  <Button key={value} type={linePoolDraft.datePreset === value ? 'primary' : 'default'} onClick={() => setLinePoolDraft((current) => ({ ...current, datePreset: value as LineShipmentPoolQuery['datePreset'] }))}>
+                    {label}
                   </Button>
                 ))}
-              </Space>
+              </Space.Compact>
+              <Select
+                value={linePoolDraft.sortBy}
+                options={[
+                  { value: 'createdAt', label: '默认顺序' },
+                  { value: 'customerName', label: '按客户' },
+                  { value: 'systemOrderNo', label: '按单号' },
+                  { value: 'status', label: '按状态' }
+                ]}
+                onChange={(value) => setLinePoolDraft((current) => ({ ...current, sortBy: value }))}
+              />
+              <Button type="primary" icon={<Search size={16} />} onClick={handleLinePoolSearch}>查询</Button>
+              <Button icon={<RotateCcw size={16} />} onClick={handleLinePoolReset}>重置</Button>
+              <Button type="link">收起</Button>
             </div>
 
-            <ManagedTable
-              className="workspace-table"
-              rowKey="id"
-              columns={workspaceColumns}
-              dataSource={visibleShipments}
+            <div className="line-pool-batch-bar">
+              <Text>已选 {selectedLineShipmentIds.length} 单</Text>
+              <Button type="primary" disabled={!selectedLineShipmentIds.length} onClick={() => openUnavailableAction('批量装板')}>批量装板</Button>
+              <Button type="primary" disabled={!selectedLineShipmentIds.length} onClick={() => openUnavailableAction('排舱确认')}>排舱确认</Button>
+              <Button type="primary" disabled={!selectedLineShipmentIds.length} onClick={() => void createSelectedProblem()}>新建问题</Button>
+              <Button disabled={!selectedLineShipmentIds.length} onClick={() => openUnavailableAction('生成装箱单')}>生成装箱单</Button>
+              <Button disabled={!selectedLineShipmentIds.length} onClick={() => openUnavailableAction('头程发货')}>头程发货</Button>
+              <Button disabled={!selectedLineShipmentIds.length} onClick={() => openUnavailableAction('尾程转单')}>尾程转单</Button>
+              <Button disabled={!selectedLineShipmentIds.length} onClick={() => openUnavailableAction('清关资料审核')}>清关资料审核</Button>
+              <Button disabled={!selectedLineShipmentIds.length} onClick={() => void addSelectedTracking()}>添加轨迹</Button>
+              <Button disabled={!selectedLineShipmentIds.length}>更多操作</Button>
+            </div>
+
+            <Table<LineShipmentPoolRow>
+              className="line-pool-table"
+              rowKey={(row) => row.shipment.id}
+              loading={linePoolLoading}
+              columns={linePoolColumns}
+              dataSource={linePoolRows}
               size="small"
-              pagination={tenRowTablePagination}
-              minimumScrollX={1100}
+              rowSelection={{ selectedRowKeys: selectedLineShipmentIds, onChange: setSelectedLineShipmentIds }}
+              scroll={{ x: 1420 }}
+              locale={{ emptyText: '暂无符合条件的运单' }}
+              pagination={{
+                current: linePoolResponse?.pagination?.page ?? 1,
+                pageSize: linePoolResponse?.pagination?.pageSize ?? 20,
+                total: linePoolResponse?.pagination?.totalItems ?? 0,
+                showSizeChanger: false,
+                onChange: (page, pageSize) => setLinePoolQuery((current) => ({ ...current, page, pageSize }))
+              }}
             />
           </Card>
         ) : null}

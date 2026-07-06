@@ -6,7 +6,12 @@ import { cleanup, employeeShipments, renderAndLogin, shipment } from '../testSup
 async function openOrderManagement(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
   expect(await screen.findByRole('heading', { name: '业务管理' })).toBeInTheDocument();
-  await user.click(screen.getByRole('button', { name: '运单管理' }));
+  let orderManagementButton = await screen.findByRole('button', { name: '运单管理' }).catch(() => null);
+  if (!orderManagementButton) {
+    await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
+    orderManagementButton = await screen.findByRole('button', { name: '运单管理' });
+  }
+  await user.click(orderManagementButton);
   expect(await screen.findByRole('heading', { name: '我的订单中心' })).toBeInTheDocument();
 }
 
@@ -40,9 +45,16 @@ describe('Workspace flows', () => {
     await user.click(screen.getByRole('button', { name: /导入质检/ }));
     expect(await screen.findByText('智能导入质检')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /专线运单池/ }));
-    expect(screen.getByText('SYGJ06061230001')).toBeInTheDocument();
+    expect(await screen.findByText('待处理运单')).toBeInTheDocument();
+    expect(screen.getByText('履约风险')).toBeInTheDocument();
+    expect(screen.getByText('今日待出库')).toBeInTheDocument();
+    expect(screen.getByText('预计应收')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('搜索客户 / 运单号 / 转单号 / 渠道 / 代理')).toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: /全\s*部/ }).at(-1)!);
+    await user.click(screen.getByRole('button', { name: '查询' }));
+    expect(await screen.findByText('SYGJ06061230001')).toBeInTheDocument();
     expect(screen.getAllByText('9409-Daloday').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('2026-06-06 17:40:00').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('2026-06-06').length).toBeGreaterThan(0);
     expect(screen.queryByText('2026-06-06T09:40:00.000Z')).not.toBeInTheDocument();
     const orderRow = screen.getByRole('row', { name: /SYGJ06061230001/ });
     await user.click(within(orderRow).getByRole('button', { name: 'SYGJ06061230001' }));
@@ -90,8 +102,21 @@ describe('Workspace flows', () => {
     expect(within(detailDialog).getByText('¥70.00')).toBeInTheDocument();
     await user.click(within(detailDialog).getByRole('button', { name: '关闭' }));
     const transferRow = screen.getByRole('row', { name: /SYGJ05291344165.*9064656160/ });
-    await user.click(within(transferRow).getByRole('button', { name: 'Copy' }));
-    expect(promptSpy).toHaveBeenCalledWith(expect.any(String), 'SYGJ05291344165\n9064656160');
+    expect(within(transferRow).getByRole('button', { name: 'SYGJ05291344165' })).toBeInTheDocument();
+    expect(within(transferRow).getByRole('button', { name: /详\s*情/ })).toBeInTheDocument();
+    expect(promptSpy).not.toHaveBeenCalled();
+  });
+
+  it('returns to the operations workspace when staff clicks the brand logo', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '报价查价' }));
+    expect(await screen.findByRole('heading', { name: '报价查价中心' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '返回运营工作台' }));
+    expect(await screen.findByRole('heading', { name: 'AI 物流运营工作台' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: '运营工作台' })).toHaveClass('is-active');
   });
 
 
@@ -104,7 +129,7 @@ describe('Workspace flows', () => {
     const agentColumnRow = within(columnSettingsDialog).getByText('代理').closest('.column-settings-row');
     expect(agentColumnRow).not.toBeNull();
     await user.click(within(agentColumnRow as HTMLElement).getByRole('button', { name: /上\s*移/ }));
-    expect(screen.getByText('自定义顺序')).toBeInTheDocument();
+    expect(within(columnSettingsDialog).getByText('代理')).toBeInTheDocument();
   });
 
 
@@ -114,7 +139,9 @@ describe('Workspace flows', () => {
 
     await openOrderManagement(user);
     expect(screen.getByRole('button', { name: '新建出货订单' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: '订单预览' })).toBeInTheDocument();
+    const orderPreviewRegion = screen.getByRole('region', { name: '订单预览' });
+    expect(orderPreviewRegion).toBeInTheDocument();
+    expect(within(orderPreviewRegion).getByRole('columnheader', { name: '轨迹状态' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '新建预报' })).not.toBeInTheDocument();
     expect(screen.getAllByText('收款金额').length).toBeGreaterThan(0);
     expect(screen.getAllByText('收款方式').length).toBeGreaterThan(0);
@@ -547,12 +574,13 @@ describe('Workspace flows', () => {
             chargeWeightKg: 12,
             unitPrice: 8,
             otherFee: 0,
-            currency: 'RMB'
+            currency: 'RMB',
+            shippingMarkRequired: false
           })
         })
       )
     );
-    expect(await screen.findByText('市场排货完成，进入仓库管理待出库')).toBeInTheDocument();
+    expect(await screen.findByText('市场排货完成，已进入已排货')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '已排货' }));
 
     const routedRow = await screen.findByRole('row', { name: /SYGJ06061239998/ });

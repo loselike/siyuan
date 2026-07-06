@@ -44,9 +44,9 @@ function formatMoney(amount?: number, currency = 'RMB') {
 }
 
 function statusTag(status: PaidPaymentSummary['status']) {
-  if (status === 'PAID') return <Tag color="success">已付款</Tag>;
+  if (status === 'PAID') return <Tag color="success">已支付</Tag>;
   if (status === 'CANCELED') return <Tag color="default">已撤回</Tag>;
-  return <Tag color="processing">待确认</Tag>;
+  return <Tag color="processing">待支付</Tag>;
 }
 
 export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoLink }: PaidPaymentPageProps) {
@@ -76,7 +76,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
     try {
       setResponse(await apiClient.paidPayments(nextQuery));
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '加载已付款失败');
+      message.error(error instanceof Error ? error.message : '加载待支付/已支付失败');
     } finally {
       setLoading(false);
     }
@@ -113,13 +113,13 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
       if (confirmReceiptFile && canUploadVoucher) {
         await apiClient.uploadVoucherImage({ file: confirmReceiptFile, context: 'PAID_PAYMENT_RECEIPT', paymentApplicationId: selectedRow.id });
       }
-      message.success('付款已确认');
+      message.success('支付已确认');
       setSelectedRow(undefined);
       setConfirmReceiptFile(undefined);
       confirmForm.resetFields();
       await load();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '确认付款失败');
+      message.error(error instanceof Error ? error.message : '确认支付失败');
     } finally {
       setConfirming(false);
     }
@@ -128,7 +128,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
   const reverse = async (row: PaidPaymentSummary) => {
     try {
       await apiClient.reversePaidPayment(row.id, { reason: '财务反核销' });
-      message.success('已反核销，记录回到待确认');
+      message.success('已反核销，记录回到待支付');
       await load();
     } catch (error) {
       message.error(error instanceof Error ? error.message : '反核销失败');
@@ -153,7 +153,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
         { key: 'paidBy', label: '付款人' },
         { key: 'status', label: '状态' }
       ], result.rows as unknown as Array<Record<string, unknown>>);
-      message.success(`已导出 ${result.rows.length} 条已付款记录`);
+      message.success(`已导出 ${result.rows.length} 条已支付记录`);
     } catch (error) {
       message.error(error instanceof Error ? error.message : '导出失败');
     }
@@ -229,7 +229,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
       width: 260,
       render: (_, row) => (
         <Space size={6}>
-          {row.status === 'WAITING_PAYMENT' && canConfirm ? <Button size="small" type="primary" onClick={() => openConfirm(row)}>确认付款</Button> : null}
+          {row.status === 'WAITING_PAYMENT' && canConfirm ? <Button size="small" type="primary" onClick={() => openConfirm(row)}>确认支付</Button> : null}
           {row.status === 'PAID' && canReverse ? (
             <Popconfirm title="确认反核销？" onConfirm={() => void reverse(row)}>
               <Button size="small">反核销</Button>
@@ -242,9 +242,10 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
   ], [canConfirm, canReverse, renderShipmentOrderNoLink]);
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space direction="vertical" size={12} className="finance-workspace">
       <Card
         title="深圳思远国际货运代理有限公司付款核销单"
+        className="finance-filter-card"
         extra={<Space><Button onClick={() => void load()}>刷新</Button>{canExport ? <Button onClick={() => void exportRows()}>导出</Button> : null}</Space>}
       >
         <Form form={queryForm} layout="vertical" initialValues={defaultQuery} onFinish={(values) => setQuery({ ...defaultQuery, ...values, page: 1 })}>
@@ -256,7 +257,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
             <Col xs={24} md={6}><Form.Item name="feeName" label="应付费用"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="currency" label="币种"><Select options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="amount" label="合计金额"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="status" label="状态"><Select options={[{ label: '全部', value: 'ALL' }, { label: '待确认', value: 'WAITING_PAYMENT' }, { label: '已付款', value: 'PAID' }, { label: '已撤回', value: 'CANCELED' }]} /></Form.Item></Col>
+            <Col xs={24} md={6}><Form.Item name="status" label="状态"><Select options={[{ label: '全部', value: 'ALL' }, { label: '待支付', value: 'WAITING_PAYMENT' }, { label: '已支付', value: 'PAID' }, { label: '已撤回', value: 'CANCELED' }]} /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="payeeName" label="收款方名称"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="payerBank" label="付款方银行信息"><Input allowClear /></Form.Item></Col>
@@ -273,10 +274,10 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
         </Form>
       </Card>
 
-      <Card>
-        <Space size={8} wrap className="finance-work-summary">
-          <Text type="secondary">待确认 {response.totals.waitingPaymentCount}</Text>
-          <Text type="secondary">已付款 {response.totals.paidCount}</Text>
+      <Card className="finance-table-card">
+        <Space size={8} wrap className="finance-work-status-strip finance-work-summary">
+          <Text type="secondary">待支付 {response.totals.waitingPaymentCount}</Text>
+          <Text type="secondary">已支付 {response.totals.paidCount}</Text>
           {response.totals.amountByCurrency.map((item) => <Text key={item.currency} strong>{item.currency} {formatMoney(item.amount, item.currency)}</Text>)}
         </Space>
         <ManagedTable
@@ -298,7 +299,9 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
       </Card>
 
       <Modal
-        title="确认付款"
+        title="确认支付"
+        className="finance-modal"
+        width={760}
         open={Boolean(selectedRow)}
         onCancel={() => setSelectedRow(undefined)}
         onOk={() => void submitConfirm()}
@@ -319,11 +322,11 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
         </Form>
       </Modal>
 
-      <Modal title="凭证预览" open={Boolean(previewUrl)} footer={null} onCancel={() => setPreviewUrl(undefined)} destroyOnHidden>
+      <Modal title="凭证预览" className="finance-modal finance-preview-modal" width={760} open={Boolean(previewUrl)} footer={null} onCancel={() => setPreviewUrl(undefined)} destroyOnHidden>
         {previewUrl ? <Image src={previewUrl} alt="付款凭证" style={{ maxWidth: '100%' }} /> : null}
       </Modal>
 
-      <Modal title="补充付款信息" open={Boolean(supplementRow)} onCancel={() => setSupplementRow(undefined)} onOk={() => void submitSupplement()} okText="保存" cancelText="取消" destroyOnHidden>
+      <Modal title="补充付款信息" className="finance-modal" width={720} open={Boolean(supplementRow)} onCancel={() => setSupplementRow(undefined)} onOk={() => void submitSupplement()} okText="保存" cancelText="取消" destroyOnHidden>
         <Form form={supplementForm} layout="vertical">
           <Form.Item label="付款备注" name="paidRemark"><Input.TextArea rows={2} /></Form.Item>
           {canUploadVoucher ? (

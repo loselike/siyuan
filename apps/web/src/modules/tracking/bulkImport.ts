@@ -1,20 +1,16 @@
 import type { BulkTrackingImportRow } from '@siyuan/shared';
+import { loadExcel, readWorkbook, worksheetToRows, type ExcelModule } from '../shared/excel';
 
-type XlsxModule = typeof import('xlsx');
+export { loadExcel };
 
-export function loadXlsx(): Promise<XlsxModule> {
-  return import('xlsx');
-}
-
-export function parseBulkTrackingWorkbook(arrayBuffer: ArrayBuffer, xlsx: XlsxModule): BulkTrackingImportRow[] {
-  const workbook = xlsx.read(arrayBuffer, { type: 'array', cellDates: false });
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
+export async function parseBulkTrackingWorkbook(arrayBuffer: ArrayBuffer, excel: ExcelModule): Promise<BulkTrackingImportRow[]> {
+  const workbook = await readWorkbook(arrayBuffer, excel);
+  const sheet = workbook.worksheets[0];
+  if (!sheet) {
     throw new Error('轨迹表为空');
   }
 
-  const sheet = workbook.Sheets[sheetName];
-  const rows = xlsx.utils.sheet_to_json<Array<string | number | null>>(sheet, { header: 1, defval: '' });
+  const rows = worksheetToRows(sheet);
   const [headers, ...dataRows] = rows;
   if (!headers?.length) {
     throw new Error('轨迹表缺少表头');

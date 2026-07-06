@@ -38,7 +38,7 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
     ['customerService', isCustomerServiceRole && canAny('tracking:read', 'tracking:write', 'problems:read', 'problems:write')],
     ['logisticsTracking', canAny('tracking:read', 'tracking:write')],
     ['finance', isFinanceRole && canAny('finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:payable:read', 'finance:payable:payment', 'finance:payable:paid-read', 'finance:water-receipt:read')],
-    ['master', canAny('master-data:read', 'master-data:write')],
+    ['master', canAny('master-data:read', 'master-data:write', 'master-data:customers:read', 'master-data:finance:read', 'master-data:agents:read', 'master-data:agent-channels:read', 'master-data:channels:read', 'master-data:channel-categories:read', 'master-data:remote-areas:read', 'master-data:exchange-rates:read', 'master-data:assistant:read')],
     ['settings', permissionSet.has('system:manage')]
   ];
   return rules.filter(([, visible]) => visible).map(([key]) => key);

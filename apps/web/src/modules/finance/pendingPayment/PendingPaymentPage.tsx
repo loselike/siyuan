@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Col, Flex, Form, Image, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Flex, Form, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import { RefreshCw } from 'lucide-react';
 import type {
   PayeeBankAccountInput,
@@ -56,7 +56,20 @@ function formatMoney(amount?: number, currency = 'RMB') {
   return `${currency} ${amount.toFixed(2)}`;
 }
 
+function renderPaymentStatus(status: PendingPaymentSummary['status']) {
+  const statusView = {
+    APPLIED: { color: 'processing', label: '已进入待支付' },
+    INVALIDATED: { color: 'default', label: '已失效' },
+    READY: { color: 'success', label: '资料已完善' },
+    PENDING: { color: 'warning', label: '待付款' },
+    PAID: { color: 'success', label: '已支付' }
+  } satisfies Record<PendingPaymentSummary['status'], { color: string; label: string }>;
+  const view = statusView[status] ?? statusView.PENDING;
+  return <Tag className="finance-payment-status-tag" color={view.color}>{view.label}</Tag>;
+}
+
 export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrderNoLink, initialQuery }: PendingPaymentPageProps) {
+  const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PendingPaymentFormValues>();
   const [applicationForm] = Form.useForm<PaymentApplicationFormValues>();
   const [voucherForm] = Form.useForm<PaymentVoucherFormValues>();
@@ -115,6 +128,13 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     return Array.from(groups.values());
   }, [selectedRows]);
   const hasMultipleApplicationGroups = groupedApplications.length > 1;
+  const selectedAmountByCurrency = useMemo(() => {
+    const amountMap = new Map<string, number>();
+    selectedRows.forEach((row) => {
+      amountMap.set(row.currency, Number(((amountMap.get(row.currency) ?? 0) + row.amount).toFixed(2)));
+    });
+    return Array.from(amountMap.entries()).map(([currency, amount]) => ({ currency, amount }));
+  }, [selectedRows]);
 
   const applyFilters = async () => {
     const values = queryForm.getFieldsValue();
@@ -140,7 +160,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       return;
     }
     if (hasMultipleApplicationGroups) {
-      message.warning('当前选择跨代理、银行或币种，请按同一付款组分开生成付款申请');
+      message.warning('当前选择跨代理、银行或币种，请按同一付款组分开生成待支付申请');
       return;
     }
     const first = selectedRows[0];
@@ -238,6 +258,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
   return (
     <Card
       title="深圳思远国际货运代理有限公司付款申请单"
+      className="finance-work-card"
       extra={(
         <Space>
           <Button disabled={!canExport} onClick={() => void exportRows()}>导出</Button>
@@ -245,35 +266,41 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
         </Space>
       )}
     >
-      <Form form={queryForm} layout="vertical">
-        <Row gutter={[10, 10]} className="finance-filter-bar receivable-filter-grid">
-          <Col xs={24} md={8} xl={3}><Form.Item name="agent" label="代理"><Input allowClear /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="salesperson" label="业务员"><Input allowClear /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="customerCode" label="客户编号"><Input allowClear /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="systemOrderNo" label="运单号"><Input allowClear /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="feeName" label="应付费用"><Input allowClear /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="currency" label="币种"><Select options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="amount" label="合计金额"><InputNumber className="full-width" min={0} /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="remark" label="备注"><Input allowClear /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="payeeName" label="收款方名称"><Input allowClear /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="applicationDateFrom" label="申请付款日期起"><Input type="date" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="applicationDateTo" label="申请付款日期止"><Input type="date" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="status" label="状态"><Select options={[{ label: '全部', value: 'ALL' }, { label: '待付款', value: 'PENDING' }, { label: '资料已完善', value: 'READY' }, { label: '已申请', value: 'APPLIED' }, { label: '已失效', value: 'INVALIDATED' }]} /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item label=" "><Space><Button type="primary" onClick={applyFilters}>查询</Button><Button onClick={resetFilters}>重置</Button></Space></Form.Item></Col>
-        </Row>
+      <Form form={queryForm} layout="vertical" className="finance-pending-filter-card">
+        <div className="finance-pending-filter-bar" role="group" aria-label="待付款筛选条件">
+          <Form.Item name="agent" label="代理"><Input allowClear /></Form.Item>
+          <Form.Item name="salesperson" label="业务员"><Input allowClear /></Form.Item>
+          <Form.Item name="customerCode" label="客户编号"><Input allowClear /></Form.Item>
+          <Form.Item name="systemOrderNo" label="运单号"><Input allowClear /></Form.Item>
+          <Form.Item name="feeName" label="应付费用"><Input allowClear /></Form.Item>
+          <Form.Item name="currency" label="币种"><Select options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item>
+          <Form.Item name="amount" label="合计金额"><InputNumber className="full-width" min={0} /></Form.Item>
+          <Form.Item name="payeeName" label="收款方名称"><Input allowClear /></Form.Item>
+          <Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear /></Form.Item>
+          <Form.Item name="applicationDateFrom" label="申请付款日期起"><Input type="date" /></Form.Item>
+          <Form.Item name="applicationDateTo" label="申请付款日期止"><Input type="date" /></Form.Item>
+          <Form.Item name="status" label="状态"><Select options={[{ label: '全部', value: 'ALL' }, { label: '待付款', value: 'PENDING' }, { label: '资料已完善', value: 'READY' }, { label: '已进入待支付', value: 'APPLIED' }, { label: '已失效', value: 'INVALIDATED' }]} /></Form.Item>
+          <Form.Item name="remark" label="备注" className="finance-pending-filter-wide"><Input allowClear /></Form.Item>
+          <Form.Item label=" " className="finance-pending-filter-actions">
+            <Space>
+              <Button type="primary" onClick={applyFilters}>查询</Button>
+              <Button onClick={resetFilters}>重置</Button>
+            </Space>
+          </Form.Item>
+        </div>
       </Form>
 
-      <Flex justify="space-between" align="center" className="table-toolbar">
-        <Space>
-          <Button type="primary" disabled={!canMaintainPayment || !selectedIds.length || hasMultipleApplicationGroups} onClick={openApplication}>生成付款申请</Button>
+      <div className="finance-payment-command-bar">
+        <Space wrap className="finance-payment-command-primary">
+          <Button type="primary" disabled={!canMaintainPayment || !selectedIds.length || hasMultipleApplicationGroups} onClick={openApplication}>生成待支付申请</Button>
           <Text type="secondary">已选 {selectedIds.length} 条，按代理、银行账号、币种自动合并</Text>
           {hasMultipleApplicationGroups ? <Text type="warning">当前包含多个付款组，请分组提交</Text> : null}
         </Space>
-        <Space wrap className="finance-work-summary">
-          {response.totals.amountByCurrency.map((item) => <Tag key={item.currency}>{item.currency} 合计 {formatMoney(item.amount, item.currency)}</Tag>)}
+        <Space wrap className="finance-payment-command-summary">
+          {selectedAmountByCurrency.map((item) => <Tag color="blue" key={`selected-${item.currency}`}>已选 {item.currency} {formatMoney(item.amount, item.currency)}</Tag>)}
+          {response.totals.amountByCurrency.map((item) => <Tag key={`total-${item.currency}`}>{item.currency} 合计 {formatMoney(item.amount, item.currency)}</Tag>)}
         </Space>
-      </Flex>
+      </div>
 
       <ManagedTable
         className="finance-work-table"
@@ -282,6 +309,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
         loading={loading}
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
         rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.status === 'APPLIED' || row.status === 'INVALIDATED' || row.status === 'PAID' }) }}
+        rowClassName={(row) => selectedIds.includes(row.id) ? 'finance-payment-row-selected' : ''}
         scroll={{ x: 1500 }}
         dataSource={response.rows}
         onChange={(pagination, _, sorter) => {
@@ -304,18 +332,18 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
           { title: '运单号', dataIndex: 'systemOrderNo', width: 190, render: (value?: string) => renderShipmentOrderNoLink(value) },
           { title: '应付费用', dataIndex: 'feeName', width: 140 },
           { title: '币种', dataIndex: 'currency', width: 90 },
-          { title: '合计金额', dataIndex: 'amount', width: 130, align: 'right', sorter: true, render: (value: number, row) => formatMoney(value, row.currency) },
+          { title: '合计金额', dataIndex: 'amount', width: 130, align: 'right', sorter: true, render: (value: number, row) => <Text strong className="finance-payment-amount">{formatMoney(value, row.currency)}</Text> },
           { title: '备注', dataIndex: 'remark', width: 160, ellipsis: true, render: (value?: string) => value ?? '-' },
           {
             title: '对账单凭证',
             dataIndex: 'vouchers',
             width: 150,
             render: (value: PendingPaymentSummary['vouchers'], row) => value.length
-              ? <Button size="small" onDoubleClick={() => setPreviewTarget(row)} onClick={() => setPreviewTarget(row)}>{value.length} 张凭证</Button>
+              ? <Button className="finance-payment-voucher-button" size="small" onDoubleClick={() => setPreviewTarget(row)} onClick={() => setPreviewTarget(row)}>{value.length} 张凭证</Button>
               : <Button size="small" disabled={!canUploadAttachment} onClick={() => setVoucherTarget(row)}>记录凭证</Button>
           },
           { title: '收款方银行信息', dataIndex: 'bankAccount', width: 260, render: (value?: PayeeBankAccountSummary) => value ? `${value.accountName} / ${value.bankName} / ${value.bankAccountNo}` : '待选择' },
-          { title: '状态', dataIndex: 'status', width: 110, render: (value: PendingPaymentSummary['status']) => <Tag color={value === 'APPLIED' ? 'processing' : value === 'INVALIDATED' ? 'default' : 'warning'}>{value === 'APPLIED' ? '已申请' : value === 'INVALIDATED' ? '已失效' : value === 'READY' ? '资料已完善' : '待付款'}</Tag> },
+          { title: '状态', dataIndex: 'status', width: 120, render: renderPaymentStatus },
           {
             title: '操作',
             key: 'action',
@@ -330,64 +358,83 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
         ]}
       />
 
-      <Modal title="生成付款申请" open={applicationOpen} onCancel={() => { setApplicationOpen(false); applicationForm.resetFields(); }} onOk={submitApplication} okText="提交为待支付" cancelText="取消" width={860}>
+      <Modal title="生成待支付申请" className="finance-modal finance-payment-application-modal" open={applicationOpen} onCancel={() => { setApplicationOpen(false); applicationForm.resetFields(); }} onOk={submitApplication} okText="提交为待支付" cancelText="取消" width={920}>
         <Space direction="vertical" className="full-width" size={12}>
           {hasMultipleApplicationGroups ? <Alert type="warning" showIcon message="当前包含多个付款组，请关闭后按同一代理、银行和币种分开提交。" /> : null}
-          <Table
-            className="finance-work-table finance-embedded-table"
-            rowKey="key"
-            size="small"
-            pagination={false}
-            dataSource={groupedApplications}
-            columns={[
-              { title: '代理', dataIndex: 'agentName' },
-              { title: '币种', dataIndex: 'currency', width: 90 },
-              { title: '明细数', dataIndex: 'rows', width: 90, render: (value: PendingPaymentSummary[]) => value.length },
-              { title: '合计金额', dataIndex: 'amount', width: 140, align: 'right', render: (value: number, row) => formatMoney(value, row.currency) },
-              { title: '银行账号', dataIndex: 'bank', render: (value?: PayeeBankAccountSummary) => value ? `${value.bankName} / ${value.bankAccountNo}` : '待选择' }
-            ]}
-          />
+          <section className="finance-payment-modal-section">
+            <div className="finance-payment-section-title">已选付款组摘要</div>
+            <Table
+              className="finance-work-table finance-embedded-table finance-payment-group-table"
+              rowKey="key"
+              size="small"
+              pagination={false}
+              dataSource={groupedApplications}
+              columns={[
+                { title: '代理', dataIndex: 'agentName' },
+                { title: '币种', dataIndex: 'currency', width: 90 },
+                { title: '明细数', dataIndex: 'rows', width: 90, render: (value: PendingPaymentSummary[]) => value.length },
+                { title: '合计金额', dataIndex: 'amount', width: 140, align: 'right', render: (value: number, row) => <Text strong>{formatMoney(value, row.currency)}</Text> },
+                { title: '银行账号', dataIndex: 'bank', render: (value?: PayeeBankAccountSummary) => value ? `${value.bankName} / ${value.bankAccountNo}` : <Text type="warning">待选择</Text> }
+              ]}
+            />
+          </section>
           <Form form={applicationForm} layout="vertical">
-            <Row gutter={12}>
-              <Col xs={24} md={12}><Form.Item name="bankAccountId" label="选择收款银行"><Select allowClear disabled={!canMaintainBank} options={bankOptions.map((item) => ({ value: item.id, label: `${item.currency} / ${item.bankName} / ${item.accountName} / ${item.bankAccountNo}` }))} /></Form.Item></Col>
-              <Col xs={24} md={12}><Form.Item name="currency" label="银行币种"><Select disabled={!canMaintainBank} options={[{ label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
-              <Col xs={24} md={8}><Form.Item name="accountName" label="手动收款方名称"><Input disabled={!canMaintainBank} /></Form.Item></Col>
-              <Col xs={24} md={8}><Form.Item name="bankName" label="手动开户行"><Input disabled={!canMaintainBank} /></Form.Item></Col>
-              <Col xs={24} md={8}><Form.Item name="bankAccountNo" label="手动银行账号"><Input disabled={!canMaintainBank} /></Form.Item></Col>
-              <Col xs={24}>
-                <Form.Item name="saveBank" valuePropName="checked">
-                  <Checkbox disabled={!canMaintainBank}>保存为代理银行，下次复用</Checkbox>
-                </Form.Item>
-              </Col>
-              <Col xs={24}>
-                <Form.Item name="voucherImage" label="供应商账单截图">
-                  <VoucherImageInput
-                    disabled={!canUploadAttachment}
-                    uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: selectedRows[0]?.id }) as Promise<VoucherImageValue>}
-                  />
-                </Form.Item>
-              </Col>
-              <Col xs={24}><Form.Item name="remark" label="备注"><Input.TextArea rows={3} /></Form.Item></Col>
-            </Row>
+            <section className="finance-payment-modal-section">
+              <div className="finance-payment-section-title">收款银行</div>
+              <Row gutter={12}>
+                <Col xs={24} md={12}><Form.Item name="bankAccountId" label="选择收款银行"><Select allowClear disabled={!canMaintainBank} options={bankOptions.map((item) => ({ value: item.id, label: `${item.currency} / ${item.bankName} / ${item.accountName} / ${item.bankAccountNo}` }))} /></Form.Item></Col>
+                <Col xs={24} md={12}><Form.Item name="currency" label="银行币种"><Select disabled={!canMaintainBank} options={[{ label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
+              </Row>
+            </section>
+            <section className="finance-payment-modal-section">
+              <div className="finance-payment-section-title">手动银行信息</div>
+              <Row gutter={12}>
+                <Col xs={24} md={8}><Form.Item name="accountName" label="手动收款方名称"><Input disabled={!canMaintainBank} /></Form.Item></Col>
+                <Col xs={24} md={8}><Form.Item name="bankName" label="手动开户行"><Input disabled={!canMaintainBank} /></Form.Item></Col>
+                <Col xs={24} md={8}><Form.Item name="bankAccountNo" label="手动银行账号"><Input disabled={!canMaintainBank} /></Form.Item></Col>
+                <Col xs={24}>
+                  <Form.Item name="saveBank" valuePropName="checked">
+                    <Checkbox disabled={!canMaintainBank}>保存为代理银行，下次复用</Checkbox>
+                  </Form.Item>
+                </Col>
+              </Row>
+            </section>
+            <section className="finance-payment-modal-section">
+              <div className="finance-payment-section-title">供应商账单截图</div>
+              <Form.Item name="voucherImage" label="供应商账单截图">
+                <VoucherImageInput
+                  disabled={!canUploadAttachment}
+                  uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: selectedRows[0]?.id }) as Promise<VoucherImageValue>}
+                />
+              </Form.Item>
+            </section>
+            <section className="finance-payment-modal-section">
+              <div className="finance-payment-section-title">备注</div>
+              <Form.Item name="remark" label="备注"><Input.TextArea rows={3} /></Form.Item>
+            </section>
           </Form>
         </Space>
       </Modal>
 
-      <Modal title="记录对账单凭证" open={Boolean(voucherTarget)} onCancel={() => { setVoucherTarget(null); voucherForm.resetFields(); }} onOk={submitVoucher} okText="保存凭证" cancelText="取消" destroyOnHidden>
-        <Form form={voucherForm} layout="vertical">
-          <Form.Item name="voucherImage" label="供应商账单截图">
-            <VoucherImageInput
-              disabled={!canUploadAttachment || !voucherTarget}
-              uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: voucherTarget?.id }) as Promise<VoucherImageValue>}
-            />
-          </Form.Item>
+      <Modal title="记录对账单凭证" className="finance-modal" width={720} open={Boolean(voucherTarget)} onCancel={() => { setVoucherTarget(null); voucherForm.resetFields(); }} onOk={submitVoucher} okText="保存凭证" cancelText="取消" destroyOnHidden>
+        <Form form={voucherForm} layout="vertical" className="finance-payment-voucher-form">
+          <section className="finance-payment-modal-section">
+            <div className="finance-payment-section-title">供应商账单截图</div>
+            <Text type="secondary">支持选择、粘贴或拖入图片，保存后会回到当前待付款列表。</Text>
+            <Form.Item name="voucherImage" label="供应商账单截图">
+              <VoucherImageInput
+                disabled={!canUploadAttachment || !voucherTarget}
+                uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: voucherTarget?.id }) as Promise<VoucherImageValue>}
+              />
+            </Form.Item>
+          </section>
         </Form>
       </Modal>
 
-      <Modal title="对账单凭证预览" open={Boolean(previewTarget)} footer={null} onCancel={() => setPreviewTarget(null)} width={720}>
-        <Space direction="vertical" className="full-width">
+      <Modal title="对账单凭证预览" className="finance-modal finance-preview-modal finance-payment-preview-modal" open={Boolean(previewTarget)} footer={null} onCancel={() => setPreviewTarget(null)} width={780}>
+        <Space direction="vertical" className="full-width" size={12}>
           {previewTarget?.vouchers.map((voucher) => (
-            <Card key={voucher.id} size="small" title={voucher.fileName}>
+            <Card key={voucher.id} size="small" title={voucher.fileName} className="finance-payment-preview-card">
               {voucher.url ? <Image src={voucher.url} alt={voucher.fileName} fallback="" /> : <Text type="secondary">{voucher.mimeType ?? '图片凭证'} / {voucher.sizeBytes ?? 0} Bytes</Text>}
             </Card>
           ))}

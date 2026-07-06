@@ -18,7 +18,7 @@ export type FinanceCatalogRow = {
   updatedAt?: Date | string | null;
 };
 
-export const financeCatalogCategories: FinanceCatalogCategory[] = ['FEE_NAME', 'SETTLEMENT_METHOD', 'CARGO_TYPE'];
+export const financeCatalogCategories: FinanceCatalogCategory[] = ['FEE_NAME', 'SETTLEMENT_METHOD', 'CARGO_TYPE', 'PRODUCT_NAME'];
 const financeCatalogCurrencies = ['RMB', 'USD', 'HKD'];
 
 export function normalizeFinanceCurrency(value: string | null | undefined) {

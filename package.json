@@ -35,5 +35,11 @@
     "prettier": "^3.5.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.2"
+  },
+  "overrides": {
+    "@nestjs/platform-express@11.1.27": {
+      "multer": "2.2.0"
+    },
+    "multer": "2.2.0"
   }
 }

@@ -36,6 +36,7 @@ describe('Siyuan API warehouse', () => {
   }
 
   async function approveForRouting(token: string, shipmentId: string, agentName = '仓库测试供应商') {
+    const financeToken = await app.loginAs('finance');
     await request(app.getHttpServer())
       .post(`/api/shipments/${shipmentId}/finance-items`)
       .set('Authorization', app.auth(token))
@@ -48,7 +49,7 @@ describe('Siyuan API warehouse', () => {
       .expect(201);
     await request(app.getHttpServer())
       .post(`/api/shipments/${shipmentId}/review/approve`)
-      .set('Authorization', app.auth(token))
+      .set('Authorization', app.auth(financeToken))
       .expect(201);
   }
 
@@ -291,7 +292,7 @@ describe('Siyuan API warehouse', () => {
 
     const adminToday = await request(app.getHttpServer())
       .get('/api/warehouse/today-receipts')
-      .query({ datePreset: 'CUSTOM', customFrom: '2026-06-12', customTo: '2026-06-12', customerOrderNo: '9409' })
+      .query({ datePreset: 'CUSTOM', customFrom: '2026-06-12', customTo: '2026-06-12', customerOrderNo: '9409', domesticTrackingNo: 'KY-TODAY-001' })
       .set('Authorization', app.auth(adminToken))
       .expect(200);
 
@@ -1287,8 +1288,11 @@ describe('Siyuan API warehouse', () => {
     await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/route`)
       .set('Authorization', app.auth(token))
-      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB' })
-      .expect(201);
+      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB', shippingMarkRequired: true })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.shippingMarkRequired).toBe(true);
+      });
     await approveTransferData(token, created.body.id);
 
     const label = await request(app.getHttpServer())
@@ -1351,10 +1355,19 @@ describe('Siyuan API warehouse', () => {
       .expect(403);
 
     const warehouseToken = await app.loginAs('warehouse');
-    const dispatched = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/dispatch`)
       .set('Authorization', app.auth(warehouseToken))
       .send({})
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('需要贴麦头');
+      });
+
+    const dispatched = await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/dispatch`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ shippingMarkConfirmed: true })
       .expect(201);
     expect(dispatched.body.status).toBe('OUTBOUNDED');
     expect(dispatched.body.transferNo).toBe(label.body.label.transferNo);
@@ -1390,7 +1403,9 @@ describe('Siyuan API warehouse', () => {
               chargeableWeightKg: 4,
               outboundBy: 'warehouse',
               archiveStatus: '已出库归档',
-              outboundAt: expect.any(String)
+              outboundAt: expect.any(String),
+              shippingMarkRequired: true,
+              shippingMarkConfirmed: true
             })
           })
         ]));

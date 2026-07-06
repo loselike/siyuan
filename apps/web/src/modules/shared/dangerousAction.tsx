@@ -7,10 +7,11 @@ type ConfirmDangerousActionOptions = {
   okText: string;
   danger?: boolean;
   onOk: () => Promise<void> | void;
+  confirm?: typeof Modal.confirm;
 };
 
 export function confirmDangerousAction(options: ConfirmDangerousActionOptions) {
-  Modal.confirm({
+  (options.confirm ?? Modal.confirm)({
     title: options.title,
     content: options.content,
     okText: options.okText,

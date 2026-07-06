@@ -40,7 +40,7 @@ describe('finance entry model', () => {
       calculateFinanceEntryFeeAmount({
         id: 'fee-3',
         type: 'PAYABLE',
-        name: '代理成本'
+        name: '出货成本'
       })
     ).toBe(0);
   });
@@ -58,7 +58,7 @@ describe('finance entry model', () => {
     });
     expect(createFinanceEntryFeeDraft('PAYABLE')).toMatchObject({
       type: 'PAYABLE',
-      name: '代理成本',
+      name: '出货成本',
       currency: 'RMB'
     });
   });

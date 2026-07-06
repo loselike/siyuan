@@ -14,7 +14,7 @@ export class FinanceCatalogController {
   constructor(@Inject(FinanceCatalogService) private readonly service: FinanceCatalogService) {}
 
   @Get('finance/catalog')
-  @RequirePermission(['finance:read', 'master-data:read'])
+  @RequirePermission(['finance:read', 'master-data:read', 'master-data:finance:read'])
   async financeCatalogItems(
     @Query('category') category?: FinanceCatalogCategory,
     @Query('keyword') keyword?: string,
@@ -29,25 +29,25 @@ export class FinanceCatalogController {
   }
 
   @Post('finance/catalog')
-  @RequirePermission(['finance:settle', 'master-data:write'])
+  @RequirePermission(['finance:settle', 'master-data:write', 'master-data:finance:write'])
   async createFinanceCatalogItem(@Req() request: { user: Principal }, @Body() body: FinanceCatalogItemInput) {
     return this.service.create(request.user, body);
   }
 
   @Put('finance/catalog/reorder')
-  @RequirePermission(['finance:settle', 'master-data:write'])
+  @RequirePermission(['finance:settle', 'master-data:write', 'master-data:finance:write'])
   async reorderFinanceCatalogItems(@Req() request: { user: Principal }, @Body() body: FinanceCatalogReorderInput) {
     return this.service.reorder(request.user, body);
   }
 
   @Put('finance/catalog/:id')
-  @RequirePermission(['finance:settle', 'master-data:write'])
+  @RequirePermission(['finance:settle', 'master-data:write', 'master-data:finance:write'])
   async updateFinanceCatalogItem(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: Partial<FinanceCatalogItemInput>) {
     return this.service.update(request.user, id, body);
   }
 
   @Delete('finance/catalog/:id')
-  @RequirePermission(['finance:settle', 'master-data:write'])
+  @RequirePermission(['finance:settle', 'master-data:write', 'master-data:finance:write'])
   async disableFinanceCatalogItem(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.service.disable(request.user, id);
   }

@@ -1,12 +1,11 @@
 import type { Key } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { AgentSummary, CustomerContactSummary, CustomerSummary, ExchangeRateSummary, FinanceCatalogItemSummary, FinanceCatalogCategory, OrderEntryCreateInput, ShipmentFinanceItemType, WarehousePackageSummary, WaterReceiptSummary } from '@siyuan/shared';
+import type { AgentSummary, ChannelSummary, CustomerContactSummary, CustomerSummary, ExchangeRateSummary, FinanceCatalogItemSummary, FinanceCatalogCategory, OrderEntryCreateInput, OrderEntryDetailSummary, ShipmentFinanceItemType, WarehousePackageSummary, WaterReceiptSummary } from '@siyuan/shared';
 import type { ApiClient, RoleKey } from '../../../apiClient';
 import { businessTypeLabels } from '@siyuan/shared';
 import { formatBeijingDateTime } from '../../shared/format';
-import { confirmDangerousAction } from '../../shared/dangerousAction';
 import {
   createSettlementMethodOptions,
   financeCatalogCurrencyOptions,
@@ -36,15 +35,18 @@ interface FinanceEntryPageProps {
   customers: CustomerSummary[];
   customerContacts: CustomerContactSummary[];
   onCustomerContactsChange?: (contacts: CustomerContactSummary[]) => void;
-  onCreated?: () => Promise<void> | void;
+  onCatalogChange?: () => Promise<void> | void;
+  onCreated?: (detail?: OrderEntryDetailSummary, submittedForReview?: boolean) => Promise<void> | void;
   preselectedPackageIds?: string[];
   onPreselectedPackageIdsConsumed?: () => void;
 }
 
-export function FinanceEntryPage({ apiClient, role, username, financeCatalogItems, customers, customerContacts, onCustomerContactsChange, onCreated, preselectedPackageIds, onPreselectedPackageIdsConsumed }: FinanceEntryPageProps) {
+export function FinanceEntryPage({ apiClient, role, username, financeCatalogItems, customers, customerContacts, onCustomerContactsChange, onCatalogChange, onCreated, preselectedPackageIds, onPreselectedPackageIdsConsumed }: FinanceEntryPageProps) {
+  const { message: messageApi, modal } = AntdApp.useApp();
   const [form] = Form.useForm<FinanceEntryFormValues>();
   const [packages, setPackages] = useState<WarehousePackageSummary[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const [channels, setChannels] = useState<ChannelSummary[]>([]);
   const [packageLoading, setPackageLoading] = useState(false);
   const [selectedPackageIds, setSelectedPackageIds] = useState<Key[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -59,9 +61,10 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     createFinanceEntryFeeDraft('BUSINESS_COST', { name: '业务员成本' })
   ]);
   const [payables, setPayables] = useState<FinanceEntryFeeDraft[]>([
-    createFinanceEntryFeeDraft('PAYABLE', { name: '代理成本' })
+    createFinanceEntryFeeDraft('PAYABLE')
   ]);
-  const canViewPayables = role === 'ADMIN' || role === 'FINANCE';
+  const canEditOrderEntryPayables = role !== 'WAREHOUSE' && role !== 'CUSTOMER';
+  const canUseAgentFields = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE';
   const canEditEntryAt = role === 'ADMIN' || role === 'FINANCE';
   const settlementRows = useMemo(() => getSettlementMethodRows(financeCatalogItems), [financeCatalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
@@ -73,6 +76,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         value: agent.shortName || agent.name || agent.code
       })),
     [agents]
+  );
+  const businessChannelOptions = useMemo(
+    () => channels
+      .filter((channel) => channel.enabled)
+      .map((channel) => ({ label: channel.name, value: channel.name })),
+    [channels]
   );
   const createdAtText = useMemo(() => formatBeijingDateTime(new Date().toISOString()), []);
   const entryAtDefault = useMemo(() => toDatetimeLocal(new Date()), []);
@@ -91,6 +100,15 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     () => selectedCustomer ? customerContacts.filter((contact) => contact.customerId === selectedCustomer.id && contact.enabled) : [],
     [customerContacts, selectedCustomer]
   );
+  useEffect(() => {
+    if (!selectedCustomer) return;
+    const settlementMethod = form.getFieldValue('settlementMethod') || selectedCustomer.defaultSettlementMethod || settlementRows[0]?.name;
+    form.setFieldsValue({
+      customerName: form.getFieldValue('customerName') || selectedCustomer.name,
+      settlementMethod,
+      currency: settlementMethod ? getSettlementMethodCurrency(settlementRows, settlementMethod) ?? form.getFieldValue('currency') ?? 'RMB' : form.getFieldValue('currency') ?? 'RMB'
+    });
+  }, [form, selectedCustomer, settlementRows]);
   const cargoTypeOptions = useMemo(
     () => financeCatalogItems
       .filter((item) => item.category === 'CARGO_TYPE' && item.enabled)
@@ -143,30 +161,34 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     const exists = category === 'FEE_NAME' ? feeNameSet.has(name) : category === 'CARGO_TYPE' ? cargoTypeSet.has(name) : productNameSet.has(name);
     if (exists) return;
     const label = category === 'FEE_NAME' ? '费用名称' : category === 'CARGO_TYPE' ? '货物类型' : '品名';
-    Modal.confirm({
+    modal.confirm({
       title: `保存新的${label}？`,
       content: `${name} 不在资料库中，是否保存到资料库供下次选择？`,
       okText: '保存',
       cancelText: '暂不保存',
       onOk: async () => {
-        await apiClient.createFinanceCatalogItem({
-          category,
-          name,
-          enabled: true,
-          currency: category === 'FEE_NAME' ? 'RMB' : undefined
-        });
-        message.success('已保存到资料库');
-        await onCreated?.();
+        try {
+          await apiClient.createFinanceCatalogItem({
+            category,
+            name,
+            enabled: true,
+            currency: category === 'FEE_NAME' ? 'RMB' : undefined
+          });
+          messageApi.success('已保存到资料库');
+          await onCatalogChange?.();
+        } catch (error) {
+          messageApi.error(error instanceof Error ? error.message : '保存到资料库失败');
+        }
       }
     });
-  }, [apiClient, cargoTypeSet, feeNameSet, onCreated, productNameSet]);
+  }, [apiClient, cargoTypeSet, feeNameSet, messageApi, onCatalogChange, productNameSet]);
 
   const loadPackages = useCallback(async () => {
     setPackageLoading(true);
     try {
       setPackages(await apiClient.orderEntryPackages());
     } catch (error) {
-      Modal.error({ title: '仓库货物加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
+      modal.error({ title: '仓库货物加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
       setPackageLoading(false);
     }
@@ -182,15 +204,19 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       .then((snapshot) => {
         if (!mounted) return;
         setExchangeRates(snapshot.exchangeRates);
-        if (canViewPayables) setAgents(snapshot.agents);
+        setChannels(snapshot.channels);
+        if (canUseAgentFields) setAgents(snapshot.agents);
       })
       .catch(() => {
-        if (mounted) setAgents([]);
+        if (mounted) {
+          setAgents([]);
+          setChannels([]);
+        }
       });
     return () => {
       mounted = false;
     };
-  }, [apiClient, canViewPayables]);
+  }, [apiClient, canUseAgentFields]);
 
   const selectedPackages = useMemo(() => {
     const ids = new Set(selectedPackageIds.map(String));
@@ -212,7 +238,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     if (!scanTimes.length) return '已选择仓库货物';
     return `${formatBeijingDateTime(scanTimes[0])}${scanTimes.length > 1 ? ` - ${formatBeijingDateTime(scanTimes[scanTimes.length - 1])}` : ''}`;
   }, [selectedPackages]);
-  const matchedSalesperson = selectedPackages.find((pkg) => pkg.salesperson)?.salesperson || (role === 'OPERATOR' ? username : '系统匹配');
+  const matchedSalesperson = username;
 
   const applyReceiverContact = (contactId?: string) => {
     const contact = selectedCustomerContacts.find((item) => item.id === contactId);
@@ -281,15 +307,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   };
 
   const removeFee = (type: ShipmentFinanceItemType, id: string) => {
-    updateRows(type, (rows) => rows.length <= 1 ? rows : rows.filter((row) => row.id !== id));
-  };
-  const confirmRemoveFee = (type: ShipmentFinanceItemType, id: string) => {
-    confirmDangerousAction({
-      title: '确认删除该费用行？',
-      content: '删除后该费用行会从当前录单草稿中移除，提交时不会写入订单费用。',
-      okText: '删除',
-      danger: true,
-      onOk: () => removeFee(type, id)
+    updateRows(type, (rows) => {
+      if (rows.length <= 1) {
+        return rows;
+      }
+      messageApi.success('费用行已删除');
+      return rows.filter((row) => row.id !== id);
     });
   };
 
@@ -299,13 +322,13 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     setSelectedPackageIds([]);
     setReceivables([createFinanceEntryFeeDraft('RECEIVABLE', { name: '运费' })]);
     setBusinessCosts([createFinanceEntryFeeDraft('BUSINESS_COST', { name: '业务员成本' })]);
-    setPayables([createFinanceEntryFeeDraft('PAYABLE', { name: '代理成本' })]);
+    setPayables([createFinanceEntryFeeDraft('PAYABLE')]);
   };
 
   const openReceiptPicker = useCallback(async (row: FinanceEntryFeeDraft) => {
     const customerCode = form.getFieldValue('customerCode')?.trim();
     if (!customerCode) {
-      Modal.warning({ title: '请先填写客户编号', content: '水单匹配只能选择同客户编号下的已到账水单。' });
+      modal.warning({ title: '请先填写客户编号', content: '水单匹配只能选择同客户编号下的已到账水单。' });
       return;
     }
     setReceiptPickerRow(row);
@@ -314,7 +337,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       const response = await apiClient.waterReceipts({ customerCode, status: 'ALL', page: 1, pageSize: 1000 });
       setReceiptRows(response.rows.filter((item) => ['ARRIVED', 'PARTIAL_MATCHED'].includes(item.status) && Number(item.balance) > 0));
     } catch (error) {
-      Modal.error({ title: '水单加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
+      modal.error({ title: '水单加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
       setReceiptLoading(false);
     }
@@ -323,7 +346,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const selectReceiptForRow = useCallback((receipt: WaterReceiptSummary) => {
     if (!receiptPickerRow) return;
     if ((receipt.currency ?? 'RMB') !== getFeeCurrency(receiptPickerRow, 'RECEIVABLE')) {
-      Modal.warning({ title: '币种不一致', content: '水单币种必须与应收费用币种一致。' });
+      modal.warning({ title: '币种不一致', content: '水单币种必须与应收费用币种一致。' });
       return;
     }
     const amount = calculateFinanceEntryFeeAmount(receiptPickerRow);
@@ -418,9 +441,10 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const submit = async (submitForReview: boolean) => {
     const values = await form.validateFields();
     if (!selectedPackages.length) {
-      Modal.warning({ title: '请选择仓库货物', content: '录单需要至少选择一条仓库货物。' });
+      modal.warning({ title: '请选择仓库货物', content: '录单需要至少选择一条仓库货物。' });
       return;
     }
+    const selectedBusinessChannel = channels.find((channel) => channel.id === values.receivingChannel || channel.name === values.receivingChannel);
     const input: OrderEntryCreateInput = {
       shipment: {
         customerCode: values.customerCode,
@@ -432,7 +456,8 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         businessType: values.businessType ?? 'DEDICATED_LINE',
         packageType: values.packageType ?? 'WPX',
         destinationCountry: values.destinationCountry ?? selectedPackages[0].destinationCountry ?? '美国',
-        receivingChannel: values.receivingChannel || values.channelName,
+        receivingChannel: selectedBusinessChannel?.name || values.receivingChannel || values.channelName,
+        channelId: selectedBusinessChannel?.id,
         declarationRequired: Boolean(values.declarationRequired),
         sensitive: Boolean(values.sensitive),
         cargoType: values.cargoType ?? '',
@@ -453,7 +478,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       warehousePackageIds: selectedPackages.map((pkg) => pkg.id),
       receivables: buildFeeRows(receivables, 'RECEIVABLE'),
       businessCosts: buildFeeRows(businessCosts, 'BUSINESS_COST'),
-      payables: canViewPayables ? buildFeeRows(payables, 'PAYABLE') : [],
+      payables: canEditOrderEntryPayables ? buildFeeRows(payables, 'PAYABLE') : [],
       submitForReview
     };
     setSubmitting(true);
@@ -462,17 +487,17 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       try {
         await maybeSaveReceiverContact(values);
       } catch (error) {
-        message.warning(error instanceof Error ? `运单已创建，收货人保存失败：${error.message}` : '运单已创建，收货人保存失败');
+        messageApi.warning(error instanceof Error ? `运单已创建，收货人保存失败：${error.message}` : '运单已创建，收货人保存失败');
       }
-      Modal.success({
+      modal.success({
         title: submitForReview ? '录单已提交审核' : '录单草稿已保存',
         content: `已生成运单 ${detail.shipment.systemOrderNo}`
       });
       reset();
       await loadPackages();
-      await onCreated?.();
+      await onCreated?.(detail, submitForReview);
     } catch (error) {
-      Modal.error({ title: '录单失败', content: error instanceof Error ? error.message : '请稍后重试' });
+      modal.error({ title: '录单失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
       setSubmitting(false);
     }
@@ -564,7 +589,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         { title: '审单日期', width: 120, render: () => renderReadonlyCell(null) },
         { title: '审单人', width: 100, render: () => renderReadonlyCell(null) },
         { title: '备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
-        { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => confirmRemoveFee(type, row.id)}>删除</Button> }
+        { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
       ];
       return (
         <Card className="finance-entry-fee-card" title={title} extra={<Button onClick={() => addFee(type)}>新增项目</Button>}>
@@ -607,7 +632,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
 
     if (type === 'BUSINESS_COST') {
       const columns: ColumnsType<FinanceEntryFeeDraft> = [
-        ...(canViewPayables ? [{
+        ...(canUseAgentFields ? [{
           title: '代理',
           width: 150,
           render: (_: unknown, row: FinanceEntryFeeDraft) => <Select showSearch allowClear value={row.agentName || watchedAgentName} options={agentOptions} onChange={(value) => updateFee(type, row.id, { agentName: value })} />
@@ -625,7 +650,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         { title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
         { title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
         { title: '备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
-        { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => confirmRemoveFee(type, row.id)}>删除</Button> }
+        { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
       ];
       return (
         <Card className="finance-entry-fee-card" title={title} extra={<Button onClick={() => addFee(type)}>新增项目</Button>}>
@@ -655,18 +680,18 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     }
 
     const columns: ColumnsType<FinanceEntryFeeDraft> = [
-      {
+      ...(canUseAgentFields ? [{
         title: '代理',
         width: 150,
         render: (_: unknown, row: FinanceEntryFeeDraft) => <Select showSearch allowClear value={row.agentName || watchedAgentName} options={agentOptions} onChange={(value) => updateFee(type, row.id, { agentName: value })} />
-      },
+      }] : []),
       { title: '费用名称', width: 150, render: (_, row) => <Input value={row.name} onBlur={() => maybeSaveCatalogItem('FEE_NAME', row.name)} onChange={(event) => updateFee(type, row.id, { name: event.target.value })} /> },
       { title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
       { title: '运单号', width: 150, render: () => renderReadonlyCell(watchedSystemOrderNo, '待生成') },
       { title: '转单号', width: 130, render: () => renderReadonlyCell(undefined, '待回填') },
       { title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
       { title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
-      { title: '代理成本单价', width: 125, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
+      { title: '出货成本单价', width: 125, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
       { title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
       { title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{`RMB ${(calculateFinanceEntryFeeAmount(row) * currencyToRmb(getFeeCurrency(row, type))).toFixed(2)}`}</Text> },
       {
@@ -679,7 +704,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       { title: '审单日期', width: 120, render: () => renderReadonlyCell(null) },
       { title: '审单人', width: 100, render: () => renderReadonlyCell(null) },
       { title: '应付备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
-      { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => confirmRemoveFee(type, row.id)}>删除</Button> }
+      { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
     ];
     return (
       <Card className="finance-entry-fee-card" title={title} extra={<Button onClick={() => addFee(type)}>新增项目</Button>}>
@@ -725,7 +750,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
               rowSelection={{ selectedRowKeys: selectedPackageIds, onChange: handlePackageSelection }}
               onRow={(record) => ({
                 onDoubleClick: () => {
-                  Modal.info({
+                  modal.info({
                     title: '仓库货物明细',
                     content: (
                       <div className="finance-entry-package-detail">
@@ -767,7 +792,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                 <Col xs={24} md={8}><Form.Item label="出库日期"><Input readOnly value="仓库出货后自动生成" /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item label="应收审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col>
                 {role !== 'OPERATOR' ? <Col xs={24} md={8}><Form.Item label="业务成本审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
-                {canViewPayables ? <Col xs={24} md={8}><Form.Item label="应付审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
+                {canEditOrderEntryPayables ? <Col xs={24} md={8}><Form.Item label="应付审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
                 <Col xs={24} md={8}><Form.Item name="destinationCountry" label="目的地" rules={[{ required: true, message: '请输入目的地' }]}><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="businessType" label="业务类型"><Select options={Object.entries(businessTypeLabels).map(([value, label]) => ({ value, label }))} /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="packageType" label="包裹类型"><Select options={[{ value: 'WPX', label: '包裹' }, { value: 'PAK', label: '袋装' }, { value: 'DOC', label: '文件' }]} /></Form.Item></Col>
@@ -777,9 +802,9 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                 <Col xs={24} md={8}><Form.Item name="sensitive" label="是否敏感"><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="settlementMethod" label="结算方式" rules={[{ required: true, message: '请选择结算方式' }]}><Select showSearch options={settlementOptions} onChange={(value) => form.setFieldsValue({ currency: getSettlementMethodCurrency(settlementRows, value) ?? form.getFieldValue('currency') ?? 'RMB' })} /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="currency" label="默认币种"><Select options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} /></Form.Item></Col>
-                {canViewPayables ? (
+                {canUseAgentFields ? (
                   <Col xs={24} md={8}>
-                    <Form.Item name="agentName" label="代理渠道">
+                    <Form.Item name="agentName" label="代理">
                       <Select
                         showSearch
                         allowClear
@@ -792,7 +817,16 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                     </Form.Item>
                   </Col>
                 ) : null}
-                <Col xs={24} md={8}><Form.Item name="receivingChannel" label="业务渠道"><Input onBlur={applyCurrentChargeWeightToFees} /></Form.Item></Col>
+                <Col xs={24} md={8}>
+                  <Form.Item name="receivingChannel" label="业务渠道">
+                    <Select
+                      showSearch
+                      allowClear
+                      options={businessChannelOptions}
+                      onChange={() => applyCurrentChargeWeightToFees()}
+                    />
+                  </Form.Item>
+                </Col>
                 <Col xs={24} md={8}><Form.Item name="tradeTerms" label="贸易条款"><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="fbaInboundNo" label="FBA 入仓号"><Input /></Form.Item></Col>
                 <Col xs={24} md={16}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
@@ -843,7 +877,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       <div className="finance-entry-fee-stack">
         {renderFeeTable('RECEIVABLE', '应收费用', receivables)}
         {renderFeeTable('BUSINESS_COST', '业务成本', businessCosts)}
-        {canViewPayables ? renderFeeTable('PAYABLE', '应付费用', payables) : null}
+        {canEditOrderEntryPayables ? renderFeeTable('PAYABLE', '应付费用', payables) : null}
       </div>
       <div className="finance-entry-actions">
         <Button onClick={reset} disabled={submitting}>清空</Button>

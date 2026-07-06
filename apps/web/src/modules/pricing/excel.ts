@@ -1,22 +1,13 @@
-import type * as XLSXModule from 'xlsx';
+import { readWorkbook, worksheetToRows, type ExcelModule, type SimpleWorkbook } from '../shared/excel';
 import type { PriceBookRowSummary, PriceLookupRequest, QuoteSourceType } from '@siyuan/shared';
 
-export type XlsxModule = typeof XLSXModule;
 
 export type ImportedPriceRow = Omit<PriceBookRowSummary, 'priceBookId'> & {
   priceBookId?: string;
   remark?: string;
 };
 
-export type PriceLookupFormValues = PriceLookupRequest & {
-  actualWeightKg?: number;
-  volumeCbm?: number;
-  lengthCm?: number;
-  widthCm?: number;
-  heightCm?: number;
-  packageCount?: number;
-  unitActualWeightKg?: number;
-};
+export type PriceLookupFormValues = PriceLookupRequest;
 
 export const seedImportedPriceRows: ImportedPriceRow[] = [
   {
@@ -124,24 +115,24 @@ export function calculatePriceChargeableWeight(values: Partial<PriceLookupFormVa
   return roundMoney(Math.max(dimensionWeight, volumeWeight, actualWeight));
 }
 
-export function parsePriceWorkbook(arrayBuffer: ArrayBuffer, xlsx: XlsxModule, sourceName?: string): ImportedPriceRow[] {
-  const workbook = xlsx.read(arrayBuffer, { type: 'array', cellDates: false });
-  if (!workbook.SheetNames.length) {
+export async function parsePriceWorkbook(arrayBuffer: ArrayBuffer, excel: ExcelModule, sourceName?: string): Promise<ImportedPriceRow[]> {
+  const workbook = await readWorkbook(arrayBuffer, excel);
+  if (!workbook.worksheets.length) {
     throw new Error('价格表为空');
   }
 
-  const lookupNotes = extractWorkbookLookupNotes(workbook, xlsx);
-  const canonicalRows = parseCanonicalPriceWorkbook(workbook, xlsx);
+  const lookupNotes = extractWorkbookLookupNotes(workbook);
+  const canonicalRows = parseCanonicalPriceWorkbook(workbook);
   if (canonicalRows.length) {
     return attachWorkbookLookupNotes(canonicalRows, lookupNotes);
   }
 
-  const warehouseSummaryRows = parseWarehouseSummaryPriceWorkbook(workbook, xlsx);
+  const warehouseSummaryRows = parseWarehouseSummaryPriceWorkbook(workbook);
   if (warehouseSummaryRows.length) {
     return attachWorkbookLookupNotes(warehouseSummaryRows, lookupNotes);
   }
 
-  const horizontalRows = parseHorizontalTierPriceWorkbook(workbook, xlsx, sourceName);
+  const horizontalRows = parseHorizontalTierPriceWorkbook(workbook, sourceName);
   if (horizontalRows.length) {
     return attachWorkbookLookupNotes(horizontalRows, lookupNotes);
   }
@@ -163,21 +154,21 @@ function shouldAttachWorkbookLookupNotes(row: Pick<ImportedPriceRow, 'agentName'
   return !row.agentName.includes('亿阳');
 }
 
-function extractWorkbookLookupNotes(workbook: XLSXModule.WorkBook, xlsx: XlsxModule): Pick<ImportedPriceRow, 'productSurchargeRemark' | 'specialRemark'> {
-  const productSurchargeRemark = extractSheetRemark(workbook, xlsx, (sheetName) => sheetName.includes('产品附加'));
-  const specialRemark = extractSheetRemark(workbook, xlsx, (sheetName) => sheetName.includes('特别说明') || sheetName.includes('尺寸'));
+function extractWorkbookLookupNotes(workbook: SimpleWorkbook): Pick<ImportedPriceRow, 'productSurchargeRemark' | 'specialRemark'> {
+  const productSurchargeRemark = extractSheetRemark(workbook, (sheetName) => sheetName.includes('产品附加'));
+  const specialRemark = extractSheetRemark(workbook, (sheetName) => sheetName.includes('特别说明') || sheetName.includes('尺寸'));
   return {
     ...(productSurchargeRemark ? { productSurchargeRemark } : {}),
     ...(specialRemark ? { specialRemark } : {})
   };
 }
 
-function extractSheetRemark(workbook: XLSXModule.WorkBook, xlsx: XlsxModule, matcher: (sheetName: string) => boolean) {
-  const sheetName = workbook.SheetNames.find(matcher);
-  if (!sheetName) {
+function extractSheetRemark(workbook: SimpleWorkbook, matcher: (sheetName: string) => boolean) {
+  const sheet = workbook.worksheets.find((worksheet) => matcher(worksheet.name));
+  if (!sheet) {
     return undefined;
   }
-  const rows = sheetToRows(workbook.Sheets[sheetName], xlsx);
+  const rows = worksheetToRows(sheet);
   const lines = rows
     .map((row) => row.map(cellToText).filter(Boolean).join(' / '))
     .map((line) => line.replace(/\s+/g, ' ').trim())
@@ -185,10 +176,10 @@ function extractSheetRemark(workbook: XLSXModule.WorkBook, xlsx: XlsxModule, mat
   return Array.from(new Set(lines)).join('\n').slice(0, 4000) || undefined;
 }
 
-function parseCanonicalPriceWorkbook(workbook: XLSXModule.WorkBook, xlsx: XlsxModule): ImportedPriceRow[] {
-  return workbook.SheetNames.flatMap((sheetName) => {
-    const sheet = workbook.Sheets[sheetName];
-    const rows = sheetToRows(sheet, xlsx);
+function parseCanonicalPriceWorkbook(workbook: SimpleWorkbook): ImportedPriceRow[] {
+  return workbook.worksheets.flatMap((sheet) => {
+    const sheetName = sheet.name;
+    const rows = worksheetToRows(sheet);
     const [headers, ...dataRows] = rows;
     if (!headers?.length) {
       return [];
@@ -233,10 +224,10 @@ function parseCanonicalPriceWorkbook(workbook: XLSXModule.WorkBook, xlsx: XlsxMo
   });
 }
 
-function parseWarehouseSummaryPriceWorkbook(workbook: XLSXModule.WorkBook, xlsx: XlsxModule): ImportedPriceRow[] {
-  return workbook.SheetNames.flatMap((sheetName) => {
-    const sheet = workbook.Sheets[sheetName];
-    const rows = sheetToRows(sheet, xlsx);
+function parseWarehouseSummaryPriceWorkbook(workbook: SimpleWorkbook): ImportedPriceRow[] {
+  return workbook.worksheets.flatMap((sheet) => {
+    const sheetName = sheet.name;
+    const rows = worksheetToRows(sheet);
     const sheetWarehouseCode = findSheetWarehouseCode(rows);
     const headerIndex = rows.findIndex((row, index) => {
       const channelHeaderIndex = findHeaderIndex(row, ['对应渠道', '下单渠道']);
@@ -300,9 +291,10 @@ function parseWarehouseSummaryPriceWorkbook(workbook: XLSXModule.WorkBook, xlsx:
   });
 }
 
-function parseHorizontalTierPriceWorkbook(workbook: XLSXModule.WorkBook, xlsx: XlsxModule, sourceName?: string): ImportedPriceRow[] {
-  return workbook.SheetNames.flatMap((sheetName) => {
-    const rows = sheetToRows(workbook.Sheets[sheetName], xlsx);
+function parseHorizontalTierPriceWorkbook(workbook: SimpleWorkbook, sourceName?: string): ImportedPriceRow[] {
+  return workbook.worksheets.flatMap((sheet) => {
+    const sheetName = sheet.name;
+    const rows = worksheetToRows(sheet);
     return rows.flatMap((headers, headerIndex) => {
       const firstHeader = normalizeHeader(headers[0]);
       if (!['渠道', '目的地', '国家', '国家/重量区间'].includes(firstHeader)) {
@@ -341,7 +333,7 @@ function parseHorizontalTierPriceWorkbook(workbook: XLSXModule.WorkBook, xlsx: X
           const maxWeightKg = range.maxWeightKg ?? (nextRange && nextRange.minWeightKg > range.minWeightKg ? nextRange.minWeightKg - 0.001 : 99999);
           return destinations.map((destinationCountry, destinationIndex) => ({
             id: `import-price-${Date.now()}-${sheetName}-${headerIndex}-${offset}-${columnIndex}-${destinationIndex}`,
-            agentName: inferAgentNameFromWorkbook(workbook.Props?.Title) ?? inferAgentNameFromText(sheetName) ?? inferAgentNameFromText(sourceName ?? '') ?? '未知代理',
+            agentName: inferAgentNameFromText(sheetName) ?? inferAgentNameFromText(sourceName ?? '') ?? '未知代理',
             sourceSheetName: sheetName,
             carrierName: inferPriceCarrierName({ channelName }),
             channelName,
@@ -402,37 +394,6 @@ function inferPriceCarrierName(row: Pick<ImportedPriceRow, 'carrierName' | 'real
     return '专线';
   }
   return '其他';
-}
-
-function sheetToRows(sheet: XLSXModule.WorkSheet, xlsx: XlsxModule): Array<Array<string | number | null>> {
-  const range = getValueRange(sheet, xlsx);
-  if (!range) {
-    return [];
-  }
-  return xlsx.utils.sheet_to_json<Array<string | number | null>>(sheet, { header: 1, defval: '', blankrows: false, range });
-}
-
-function getValueRange(sheet: XLSXModule.WorkSheet, xlsx: XlsxModule) {
-  const cells = Object.keys(sheet)
-    .filter((key) => /^[A-Z]+[0-9]+$/.test(key))
-    .filter((key) => {
-      const value = sheet[key]?.v;
-      return value !== undefined && value !== null && String(value).trim() !== '';
-    })
-    .map((key) => xlsx.utils.decode_cell(key));
-  if (!cells.length) {
-    return undefined;
-  }
-  return {
-    s: {
-      r: Math.min(...cells.map((cell) => cell.r)),
-      c: Math.min(...cells.map((cell) => cell.c))
-    },
-    e: {
-      r: Math.max(...cells.map((cell) => cell.r)),
-      c: Math.max(...cells.map((cell) => cell.c))
-    }
-  };
 }
 
 function normalizeImportedChannelName(value: string) {
@@ -556,10 +517,6 @@ function isHorizontalSectionBreak(value: string) {
 
 function isHorizontalGroupLabel(value: string) {
   return value.replace(/\s+/g, '').replace(/不包税|不含税|包税|含税|PVA/gi, '') === '';
-}
-
-function inferAgentNameFromWorkbook(title?: string) {
-  return title?.trim() || undefined;
 }
 
 function inferAgentNameFromText(value: string) {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag, message } from 'antd';
+import { App as AntdApp, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { PaymentVoucherInput, PaymentVoucherListQuery, PaymentVoucherSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
@@ -24,6 +24,7 @@ const statusLabels: Record<string, string> = {
 };
 
 export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
+  const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PaymentVoucherListQuery>();
   const [form] = Form.useForm<PaymentVoucherInput>();
   const [rows, setRows] = useState<PaymentVoucherSummary[]>([]);
@@ -107,7 +108,7 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
     { title: '应付金额', dataIndex: 'payableAmount', width: 110, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
     { title: '应付费用 id', dataIndex: 'payableFinanceItemId', width: 170, render: (value?: string) => value || '-' },
     { title: '付款申请号', dataIndex: 'paymentApplicationNo', width: 170, render: (value?: string) => value || '-' },
-    { title: '已付款记录', dataIndex: 'paidPaymentId', width: 150, render: (value?: string) => value || '-' },
+    { title: '已支付记录', dataIndex: 'paidPaymentId', width: 150, render: (value?: string) => value || '-' },
     { title: '差异类型', dataIndex: 'differenceType', width: 120, render: (value?: string) => value || '-' },
     { title: '差异金额', dataIndex: 'differenceAmount', width: 110, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
     { title: '差异原因', dataIndex: 'differenceReason', width: 180, render: (value?: string) => value || '-' },
@@ -141,8 +142,8 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
   ];
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-      <Card title="代理账单人工导入">
+    <Space direction="vertical" size={12} className="finance-workspace">
+      <Card title="代理账单人工导入" className="finance-filter-card">
         <Form name="agentBillQuery" form={queryForm} layout="inline" onFinish={loadRows} initialValues={{ currency: 'ALL', status: 'ALL' }}>
           <Form.Item name="billNo" label="账单号筛选"><Input allowClear /></Form.Item>
           <Form.Item name="agentName" label="代理筛选"><Input allowClear /></Form.Item>
@@ -152,7 +153,7 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
         </Form>
       </Card>
 
-      <Card title="登记代理账单">
+      <Card title="登记代理账单" className="finance-work-card">
         <Form name="agentBillImport" form={form} layout="vertical" disabled={!canImport} initialValues={{ currency: 'RMB' }} onFinish={submit}>
           <Row gutter={[12, 0]}>
             <Col xs={24} md={6}><Form.Item name="billNo" label="账单号" rules={[{ required: true, whitespace: true, message: '请输入账单号' }]}><Input /></Form.Item></Col>
@@ -186,7 +187,7 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
         </Form>
       </Card>
 
-      <Card title="代理账单列表">
+      <Card title="代理账单列表" className="finance-table-card">
         <ManagedTable rowKey="id" size="small" loading={loading} columns={columns} dataSource={rows} pagination={{ pageSize: 10 }} scroll={{ x: 4990 }} className="finance-work-table" />
       </Card>
     </Space>

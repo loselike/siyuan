@@ -383,20 +383,18 @@ export function WarehousePage({
   onRoute,
   canRouteShipments = false,
   findShipmentBySystemOrderNo,
-  renderShipmentOrderNoLink,
-  onCreateOrderEntry
+  renderShipmentOrderNoLink
 }: {
   apiClient: ApiClient;
   role: StaffRoleKey;
   canWriteWarehouse?: boolean;
   shipments: Shipment[];
   notice: string | null;
-  onDispatch: (record: Shipment) => Promise<void>;
+  onDispatch: (record: Shipment, options?: { shippingMarkConfirmed?: boolean }) => Promise<void>;
   onRoute?: (record: Shipment) => Promise<void>;
   canRouteShipments?: boolean;
   findShipmentBySystemOrderNo: (systemOrderNo?: string) => Shipment | undefined;
   renderShipmentOrderNoLink: (systemOrderNo?: string, options?: { shipment?: Shipment; subtitle?: string; copyText?: string }) => ReactNode;
-  onCreateOrderEntry?: (packageIds: string[]) => void;
 }) {
   const config = {
     title: '仓库管理中心',
@@ -498,6 +496,7 @@ export function WarehousePage({
   const [warehouseShipmentLabelsByShipmentId, setWarehouseShipmentLabelsByShipmentId] = useState<Record<string, WarehouseOutboundLabel[]>>({});
   const [dispatchedConsolidationIds, setDispatchedConsolidationIds] = useState<string[]>([]);
   const [dispatchingWarehouseShipmentIds, setDispatchingWarehouseShipmentIds] = useState<string[]>([]);
+  const [shippingMarkConfirmations, setShippingMarkConfirmations] = useState<Record<string, boolean>>({});
   const [warehouseNotice, setWarehouseNotice] = useState<string | null>(null);
   const emptyPackageDetailFilters = {
     customerOrderNo: '',
@@ -627,8 +626,7 @@ export function WarehousePage({
   const includesFilter = (value: string | undefined, keyword: string) =>
     !keyword.trim() || (value ?? '').toLowerCase().includes(keyword.trim().toLowerCase());
   const isOperatorView = role === 'OPERATOR';
-  const canCreateOrderEntryFromWarehouse = Boolean(onCreateOrderEntry) && !['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(role);
-  const consolidationActionLabel = canCreateOrderEntryFromWarehouse ? '合票录单' : '合票';
+  const consolidationActionLabel = '合票';
   function filterTodayRows(rows: WarehouseInboundPackage[], filters: WarehouseTodayQuery, currentRole: StaffRoleKey) {
     const keyword = (value: string | undefined, needle: string | undefined) =>
       !needle?.trim() || (value ?? '').toLowerCase().includes(needle.trim().toLowerCase());
@@ -889,9 +887,14 @@ export function WarehousePage({
     setWarehouseNotice(`已出货 ${record.outboundOrderNo}`);
   }
 
-  async function dispatchWarehouseShipment(record: Shipment) {
-    await onDispatch(record);
+  async function dispatchWarehouseShipment(record: Shipment, options: { shippingMarkConfirmed?: boolean } = {}) {
+    await onDispatch(record, options);
     setDispatchingWarehouseShipmentIds((current) => Array.from(new Set([...current, record.id])));
+    setShippingMarkConfirmations((current) => {
+      const next = { ...current };
+      delete next[record.id];
+      return next;
+    });
     setWarehouseNotice(`已出货 ${record.systemOrderNo}`);
   }
 
@@ -917,6 +920,10 @@ export function WarehousePage({
 
   function getWarehouseQueueAgent(row: WarehouseLabelQueueRow) {
     return row.kind === 'shipment' ? row.shipment.agentName || '-' : '-';
+  }
+
+  function renderShippingMarkTag(required?: boolean) {
+    return required ? <Tag color="error">需贴麦头</Tag> : <Text type="secondary">-</Text>;
   }
 
   function getWarehouseQueueStageTime(row: WarehouseLabelQueueRow) {
@@ -1301,7 +1308,6 @@ export function WarehousePage({
       fixed: 'right',
       render: (_, record) => (
         <Space size={6}>
-          {canCreateOrderEntryFromWarehouse ? <Button size="small" onClick={() => onCreateOrderEntry?.([record.id])}>录单</Button> : null}
           {canWriteWarehouse ? (
             <>
               <Button size="small" onClick={() => openWarehouseTallyTask([record.id])}>理货</Button>
@@ -1585,7 +1591,6 @@ export function WarehousePage({
         mode: 'MERGE_ONLY',
         tallyRequirement: tallyRequirementDraft.trim() || undefined
       });
-      const packageIds = [...inStockConsolidationIds];
       const record: WarehouseConsolidationRecord = {
         id: created.id,
         packageIds: created.packageIds,
@@ -1605,10 +1610,7 @@ export function WarehousePage({
       setInStockConsolidationIds([]);
       setTallyRequirementDraft('');
       setInStockFilters((current) => ({ ...current }));
-      setWarehouseNotice(canCreateOrderEntryFromWarehouse ? `已合票 ${record.outboundOrderNo}，已进入录单草稿` : `已合票 ${record.outboundOrderNo}`);
-      if (canCreateOrderEntryFromWarehouse) {
-        onCreateOrderEntry?.(packageIds);
-      }
+      setWarehouseNotice(`已合票 ${record.outboundOrderNo}`);
     } catch (error) {
       setWarehouseNotice(error instanceof Error ? error.message : '合票生成运单失败');
     }
@@ -1937,7 +1939,7 @@ export function WarehousePage({
           width={560}
           open={manualReceiptDrawerOpen}
           onClose={() => setManualReceiptDrawerOpen(false)}
-          destroyOnClose={false}
+          destroyOnHidden={false}
           footer={(
             <Flex justify="space-between" align="center" gap={12} className="warehouse-today-drawer-footer">
               <Space wrap>
@@ -2031,6 +2033,7 @@ export function WarehousePage({
                 <Space direction="vertical" size={2}>
                   <Text strong>{selectedReceiptShipment?.systemOrderNo ?? '暂无待出库订单'}</Text>
                   <Text type="secondary">当前订单：{selectedReceiptShipment?.customerName ?? '暂无'} / {selectedReceiptShipment?.customerOrderNo ?? '-'}</Text>
+                  {selectedReceiptShipment?.shippingMarkRequired ? <Tag color="error">需贴麦头</Tag> : null}
                 </Space>
               </Col>
             </Row>
@@ -2045,6 +2048,7 @@ export function WarehousePage({
               { title: '客户单号', dataIndex: 'customerOrderNo' },
               { title: '客户', dataIndex: 'customerName' },
               { title: '目的地', dataIndex: 'destinationCountry' },
+              { title: '麦头', dataIndex: 'shippingMarkRequired', render: (value?: boolean) => renderShippingMarkTag(value) },
               { title: '状态', dataIndex: 'status', render: (status: ShipmentStatus) => <StatusTag status={status} /> }
             ]}
             dataSource={workQueue}
@@ -2487,23 +2491,32 @@ export function WarehousePage({
 
       {activeReceiveSection === 'queue' ? (
       <Card title="面单队列&待仓库出货">
-        <Table<WarehouseLabelQueueRow>
+        <ManagedTable<WarehouseLabelQueueRow>
           rowKey="id"
           dataSource={warehouseLabelQueueRows}
           size="small"
           pagination={tenRowTablePagination}
-          scroll={{ x: 1320 }}
+          minimumScrollX={2050}
+          className="warehouse-label-queue-table"
+          columnSettings={{
+            storageKey: 'warehouse-label-queue-columns',
+            title: '待出库列设置',
+            buttonLabel: '待出库列设置'
+          }}
           columns={[
-            { title: '出货单号', width: 210, render: (_, record) => renderShipmentOrderNoLink(getWarehouseQueueOutboundNo(record), { shipment: record.kind === 'shipment' ? record.shipment : findShipmentBySystemOrderNo(record.consolidation.outboundOrderNo) }) },
-            { title: '出货国家', width: 120, render: (_, record) => getWarehouseQueueDestination(record) },
-            { title: '出货件数', width: 100, render: (_, record) => `${getWarehouseQueuePackageCount(record)} 件` },
-            { title: '计费重', width: 110, render: (_, record) => `${getWarehouseQueueChargeableWeight(record).toFixed(2)} kg` },
-            { title: '进入待出库时间', width: 170, render: (_, record) => getWarehouseQueueStageTime(record) },
-            { title: '渠道', width: 150, render: (_, record) => getWarehouseQueueChannel(record) },
-            { title: '代理', width: 130, render: (_, record) => getWarehouseQueueAgent(record) },
-            { title: '状态', width: 120, render: () => <Tag color="processing">待仓库出货</Tag> },
+            { key: 'outboundNo', title: '出货单号', width: 210, render: (_, record) => renderShipmentOrderNoLink(getWarehouseQueueOutboundNo(record), { shipment: record.kind === 'shipment' ? record.shipment : findShipmentBySystemOrderNo(record.consolidation.outboundOrderNo) }) },
+            { key: 'destination', title: '出货国家', width: 120, render: (_, record) => getWarehouseQueueDestination(record) },
+            { key: 'packageCount', title: '出货件数', width: 100, render: (_, record) => `${getWarehouseQueuePackageCount(record)} 件` },
+            { key: 'chargeableWeight', title: '计费重', width: 110, render: (_, record) => `${getWarehouseQueueChargeableWeight(record).toFixed(2)} kg` },
+            { key: 'stageTime', title: '进入待出库时间', width: 170, render: (_, record) => getWarehouseQueueStageTime(record) },
+            { key: 'channel', title: '渠道', width: 150, render: (_, record) => getWarehouseQueueChannel(record) },
+            { key: 'agent', title: '代理', width: 130, render: (_, record) => getWarehouseQueueAgent(record) },
+            { key: 'shippingMark', title: '麦头', width: 110, render: (_, record) => record.kind === 'shipment' ? renderShippingMarkTag(record.shipment.shippingMarkRequired) : <Text type="secondary">-</Text> },
+            { key: 'status', title: '状态', width: 120, render: () => <Tag color="processing">待仓库出货</Tag> },
             {
+              key: 'labels',
               title: '面单内容',
+              width: 640,
               render: (_, record) => {
                 const labels = getWarehouseQueueLabels(record);
                 return labels.length ? (
@@ -2518,13 +2531,14 @@ export function WarehousePage({
               }
             },
             {
+              key: 'actions',
               title: '操作',
-              width: 150,
+              width: 160,
               fixed: 'right',
               render: (_, record) => {
                 const hasLabels = Boolean(getWarehouseQueueLabels(record).length);
                 return (
-                  <Space wrap>
+                  <Space className="warehouse-label-actions" wrap={false}>
                     {canWriteWarehouse ? (
                       <>
                         <Button
@@ -2543,12 +2557,25 @@ export function WarehousePage({
                         </Button>
                         <Popconfirm
                           title="确认出货？"
-                          description="确认后该出货单会离开面单队列，后续进入出货后的轨迹跟进。"
+                          description={record.kind === 'shipment' && record.shipment.shippingMarkRequired ? (
+                            <Space direction="vertical" size={8}>
+                              <Text>该票需要贴麦头，请确认仓库已完成贴麦头。</Text>
+                              <Checkbox
+                                checked={shippingMarkConfirmations[record.shipment.id] === true}
+                                onChange={(event) => setShippingMarkConfirmations((current) => ({ ...current, [record.shipment.id]: event.target.checked }))}
+                              >
+                                已贴麦头
+                              </Checkbox>
+                            </Space>
+                          ) : '确认后该出货单会离开面单队列，后续进入出货后的轨迹跟进。'}
                           okText="确认出货"
                           cancelText="取消"
+                          okButtonProps={{
+                            disabled: record.kind === 'shipment' && record.shipment.shippingMarkRequired && shippingMarkConfirmations[record.shipment.id] !== true
+                          }}
                           onConfirm={() => {
                             if (record.kind === 'shipment') {
-                              void dispatchWarehouseShipment(record.shipment);
+                              void dispatchWarehouseShipment(record.shipment, { shippingMarkConfirmed: shippingMarkConfirmations[record.shipment.id] === true });
                               return;
                             }
                             dispatchWarehouseOutbound(record.consolidation);
@@ -2750,11 +2777,11 @@ export function WarehousePage({
           setTallyRequirementDraft('');
         }}
         onOk={() => void consolidateInStockPackages()}
-        okText={canCreateOrderEntryFromWarehouse ? '确认合票并录单' : '确认合票'}
+        okText="确认合票"
         cancelText="取消"
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert type="info" showIcon message={canCreateOrderEntryFromWarehouse ? `已选择 ${inStockConsolidationIds.length} 个在仓包裹，确认后会合票并进入录单草稿。` : `已选择 ${inStockConsolidationIds.length} 个在仓包裹，确认后只做仓库合票。`} />
+          <Alert type="info" showIcon message={`已选择 ${inStockConsolidationIds.length} 个在仓包裹，确认后只做仓库合票。`} />
           <div>
             <Text strong>理货需求</Text>
             <Input.TextArea
@@ -2841,7 +2868,7 @@ function WarehouseInboundLabelCard({
 
 function WarehouseInternalLabelCard({ label }: { label: WarehouseOutboundLabel }) {
   return (
-    <div className="warehouse-internal-label" aria-label={`内部交货面单 ${label.labelNo} ${label.pieceIndex}/${label.totalPackages}`}>
+    <div className="warehouse-internal-label" aria-label={`内部交货面单 ${label.labelNo} ${label.destinationCountry} ${label.pieceIndex}/${label.totalPackages} ${label.outboundOrderNo}`}>
       <Text className="warehouse-label-title" type="secondary">内部交货面单</Text>
       <div className="warehouse-label-barcode" aria-label={`条形码 ${label.labelNo}`}>
         {createWarehouseBarcodeBars(label.labelNo).map((width, index) => (

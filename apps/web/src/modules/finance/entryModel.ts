@@ -82,7 +82,7 @@ export function createFinanceEntryFeeDraft(
   return {
     id: createFinanceEntryDraftId(),
     type,
-    name: patch.name ?? (type === 'RECEIVABLE' ? '运费' : type === 'BUSINESS_COST' ? '业务员成本' : '代理成本'),
+    name: patch.name ?? (type === 'RECEIVABLE' ? '运费' : type === 'BUSINESS_COST' ? '业务员成本' : '出货成本'),
     currency: normalizeFinanceCatalogCurrency(patch.currency) ?? 'RMB',
     amount: patch.amount,
     settlementMethod: patch.settlementMethod,

@@ -4,6 +4,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Flex,
   Form,
@@ -16,7 +17,8 @@ import {
   Statistic,
   Table,
   Tag,
-  Typography
+  Typography,
+  Upload
 } from 'antd';
 import type { FormInstance } from 'antd/es/form';
 import type { ColumnsType } from 'antd/es/table';
@@ -63,6 +65,18 @@ export interface OutboundOrderFormValues {
 export interface EditShipmentOperationalFormValues {
   latestTracking: string;
   transferNo?: string;
+  channelId?: string;
+  customerOrderNo?: string;
+  productName?: string;
+  destinationCountry?: string;
+  packageCount?: number;
+  receivableWeightKg?: number;
+  agentWeightKg?: number;
+  declarationRequired?: boolean;
+  sensitive?: boolean;
+  cargoType?: string;
+  volumeCbm?: number;
+  settlementMethod?: string;
   status: ShipmentStatus;
   etaAt?: string;
   etdAt?: string;
@@ -122,6 +136,7 @@ export function OrdersPage({
   pendingShipmentPayment,
   onConfirmShipmentPayment,
   onCancelPendingShipmentPayment,
+  onUploadShipmentBusinessInvoice,
   logViewingShipment,
   logViewingMode,
   shipmentLogs,
@@ -153,7 +168,7 @@ export function OrdersPage({
   routingAssignmentShipment: Shipment | null;
   routingAssignmentForm: FormInstance<RoutingAssignmentFormValues>;
   masterData: MasterDataSnapshot;
-  onConfirmRoutingAssignment: () => Promise<void>;
+  onConfirmRoutingAssignment: () => Promise<boolean>;
   onCancelRoutingAssignment: () => void;
   collectingShipment: Shipment | null;
   shipmentPaymentForm: FormInstance<ShipmentPaymentFormValues>;
@@ -162,6 +177,7 @@ export function OrdersPage({
   pendingShipmentPayment: { shipment: Shipment; input: ShipmentPaymentUpdateInput } | null;
   onConfirmShipmentPayment: () => Promise<void>;
   onCancelPendingShipmentPayment: () => void;
+  onUploadShipmentBusinessInvoice: (shipment: Shipment, file: File) => Promise<void>;
   logViewingShipment: Shipment | null;
   logViewingMode: ShipmentLogViewMode;
   shipmentLogs: ShipmentOperationLog[];
@@ -173,6 +189,7 @@ export function OrdersPage({
   const orderSubItems = useMemo<ModuleSubNavItem[]>(
     () => [
       { key: 'stageBoard', label: '订单预览', description: '状态池与单票操作' },
+      { key: 'invoiceTasks', label: '待上传发票', description: '下载代理模板并上传业务发票' },
       { key: 'aiAssistant', label: 'AI 订单助手', description: '风险识别与话术建议' }
     ],
     []
@@ -185,6 +202,73 @@ export function OrdersPage({
         .filter((item) => item.advice.priority !== 'normal')
         .slice(0, 5),
     [shipments]
+  );
+
+  const invoiceTaskShipments = useMemo(
+    () =>
+      shipments.filter((shipment) =>
+        Boolean(shipment.agentId || shipment.agentName)
+        && !['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED', 'WAITING_RECEIVE', 'WAITING_SORT', 'CANCELLED'].includes(shipment.status)
+      ),
+    [shipments]
+  );
+
+  const invoiceColumns = useMemo<ColumnsType<Shipment>>(
+    () => [
+      { title: '运单号', dataIndex: 'systemOrderNo', width: 180 },
+      { title: '客户编号', dataIndex: 'customerCode', width: 120, render: (value?: string) => value || '-' },
+      { title: '代理', dataIndex: 'agentName', width: 160, render: (value?: string) => value || '-' },
+      {
+        title: '模板',
+        key: 'template',
+        width: 180,
+        render: (_, shipment) => {
+          const agent = masterData.agents.find((item) => item.id === shipment.agentId || item.name === shipment.agentName || item.shortName === shipment.agentName);
+          if (!agent?.invoiceTemplateUrl) return <Tag color="red">代理未维护模板</Tag>;
+          return <a href={agent.invoiceTemplateUrl} target="_blank" rel="noreferrer">{agent.invoiceTemplateName || '下载模板'}</a>;
+        }
+      },
+      {
+        title: '业务发票',
+        key: 'businessInvoice',
+        width: 190,
+        render: (_, shipment) =>
+          shipment.businessInvoiceUrl ? (
+            <a href={shipment.businessInvoiceUrl} target="_blank" rel="noreferrer">{shipment.businessInvoiceName || '下载发票'}</a>
+          ) : (
+            <Tag color="orange">待业务上传发票</Tag>
+          )
+      },
+      {
+        title: '上传人/时间',
+        key: 'uploaded',
+        width: 210,
+        render: (_, shipment) => shipment.businessInvoiceUploadedAt ? `${shipment.businessInvoiceUploadedBy ?? '-'} / ${formatBeijingDateTime(shipment.businessInvoiceUploadedAt)}` : '-'
+      },
+      {
+        title: '操作',
+        key: 'actions',
+        width: 140,
+        fixed: 'right',
+        render: (_, shipment) => {
+          const agent = masterData.agents.find((item) => item.id === shipment.agentId || item.name === shipment.agentName || item.shortName === shipment.agentName);
+          return (
+            <Upload
+              accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              showUploadList={false}
+              disabled={!agent?.invoiceTemplateUrl}
+              beforeUpload={(file) => {
+                void onUploadShipmentBusinessInvoice(shipment, file as File);
+                return false;
+              }}
+            >
+              <Button size="small" type="primary" disabled={!agent?.invoiceTemplateUrl}>上传发票</Button>
+            </Upload>
+          );
+        }
+      }
+    ],
+    [masterData.agents, onUploadShipmentBusinessInvoice]
   );
 
   useEffect(() => {
@@ -271,6 +355,29 @@ export function OrdersPage({
               size="small"
               pagination={tenRowTablePagination}
               minimumScrollX={1200}
+            />
+          </Card>
+        ) : null}
+
+        {activeSection === 'invoiceTasks' ? (
+          <Card
+            className="fulfillment-board-card"
+            title={
+              <Flex align="center" gap={8}>
+                <FileInput size={18} />
+                <span>待业务上传发票</span>
+              </Flex>
+            }
+            extra={<Text type="secondary">业务下载代理模板，填写后上传 Excel 发票</Text>}
+          >
+            <ManagedTable
+              className="fulfillment-table"
+              rowKey="id"
+              columns={invoiceColumns}
+              dataSource={invoiceTaskShipments}
+              size="small"
+              pagination={tenRowTablePagination}
+              minimumScrollX={1100}
             />
           </Card>
         ) : null}
@@ -417,6 +524,72 @@ export function OrdersPage({
           <Form.Item name="transferNo" label="转单号">
             <Input placeholder="可直接修改或清空快递号" />
           </Form.Item>
+          <Form.Item name="channelId" label="发货渠道">
+            <Select
+              allowClear
+              showSearch
+              placeholder="选择发货渠道"
+              optionFilterProp="label"
+              options={masterData.channels
+                .filter((channel) => channel.enabled)
+                .map((channel) => ({
+                  label: `${channel.name} / ${channel.carrierName}`,
+                  value: channel.id
+              }))}
+            />
+          </Form.Item>
+          <Row gutter={12}>
+            <Col xs={24} md={12}>
+              <Form.Item name="customerOrderNo" label="客户单号">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="productName" label="品名">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="destinationCountry" label="目的地">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="cargoType" label="货物属性">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="packageCount" label="件数">
+                <InputNumber min={0} precision={0} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="receivableWeightKg" label="实重/计费重">
+                <InputNumber min={0} precision={3} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item name="volumeCbm" label="体积 CBM">
+                <InputNumber min={0} precision={3} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="settlementMethod" label="结算方式">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Space size={16}>
+                <Form.Item name="declarationRequired" valuePropName="checked" noStyle>
+                  <Checkbox>报关</Checkbox>
+                </Form.Item>
+                <Form.Item name="sensitive" valuePropName="checked" noStyle>
+                  <Checkbox>敏感</Checkbox>
+                </Form.Item>
+              </Space>
+            </Col>
+          </Row>
           <Row gutter={12}>
             <Col xs={24} md={12}>
               <Form.Item name="etdAt" label="ETD">

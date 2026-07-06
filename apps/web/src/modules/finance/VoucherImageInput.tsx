@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Image, message, Space, Typography } from 'antd';
+import { App as AntdApp, Button, Image, Space, Typography } from 'antd';
 import type { PaymentVoucherInput } from '@siyuan/shared';
 
 const { Text } = Typography;
@@ -17,6 +17,7 @@ type VoucherImageInputProps = {
 const allowedTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
 export function VoucherImageInput({ disabled, value, onChange, onFileChange, uploadFile }: VoucherImageInputProps) {
+  const { message } = AntdApp.useApp();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | undefined>(value?.url);
   const [uploading, setUploading] = useState(false);

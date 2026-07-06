@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react';
+import { Modal } from 'antd';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { employeeShipments, renderAndLogin, shipment } from '../testSupport/appTestHarness';
 
 async function openRoutingFulfillment(user: ReturnType<typeof userEvent.setup>) {
@@ -36,6 +37,22 @@ describe('Routing flows', () => {
         routedAt
       }),
       shipment('s-routing-dashboard-outbound', 'SYGJ06061239991', 'OUT-DASHBOARD-0606', 'OUTBOUNDED', '9409-Daloday', {
+        agentName: '出货代理A',
+        outboundAt: '2026-06-01T10:00:00.000Z',
+        businessType: 'DEDICATED_LINE'
+      }),
+      shipment('s-routing-dashboard-weekly-outbound-1', 'SYGJ06061239990', 'OUT-DASHBOARD-0607', 'OUTBOUNDED', '9409-Daloday', {
+        agentName: '出货代理A',
+        outboundAt: routedAt,
+        businessType: 'DEDICATED_LINE'
+      }),
+      shipment('s-routing-dashboard-weekly-outbound-2', 'SYGJ06061239989', 'OUT-DASHBOARD-0608', 'OUTBOUNDED', '9409-Daloday', {
+        agentName: '出货代理A',
+        outboundAt: routedAt,
+        businessType: 'DEDICATED_LINE'
+      }),
+      shipment('s-routing-dashboard-weekly-outbound-3', 'SYGJ06061239988', 'OUT-DASHBOARD-0609', 'OUTBOUNDED', '9409-Daloday', {
+        agentName: '出货代理B',
         outboundAt: routedAt,
         businessType: 'DEDICATED_LINE'
       })
@@ -56,6 +73,12 @@ describe('Routing flows', () => {
     expect(screen.getByText('本周敏感货物')).toBeInTheDocument();
     expect(screen.getByText('带电/带磁/敏感')).toBeInTheDocument();
     expect(screen.getByText('本周报关货物')).toBeInTheDocument();
+    const weeklyOutboundAgentCard = screen.getByText('本周出货代理数量').closest('.metric-card');
+    expect(weeklyOutboundAgentCard).not.toBeNull();
+    expect(within(weeklyOutboundAgentCard as HTMLElement).getByText('3')).toBeInTheDocument();
+    const weeklyNewAgentCard = screen.getByText('本周新代理').closest('.metric-card');
+    expect(weeklyNewAgentCard).not.toBeNull();
+    expect(within(weeklyNewAgentCard as HTMLElement).getByText('1')).toBeInTheDocument();
     expect(screen.queryByText('待排货概览')).not.toBeInTheDocument();
     expect(screen.queryByRole('row', { name: /SYGJ06061239994/ })).not.toBeInTheDocument();
   });
@@ -175,19 +198,50 @@ describe('Routing flows', () => {
         expect.stringMatching(/\/api\/shipments\/s-routing-log\/route$/),
         expect.objectContaining({
           method: 'POST',
-          body: JSON.stringify({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, otherFee: 5, otherFeeRemark: '偏远费', currency: 'RMB' })
+          body: JSON.stringify({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, otherFee: 5, otherFeeRemark: '偏远费', currency: 'RMB', shippingMarkRequired: false })
         })
       )
     );
-    expect(await screen.findByText('市场排货完成，进入仓库管理待出库')).toBeInTheDocument();
-
-    await user.click(screen.getByRole('button', { name: '已排货' }));
+    expect(await screen.findByText('市场排货完成，已进入已排货')).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: /已排货/ })).toBeInTheDocument();
     const routedRow = await screen.findByRole('row', { name: /SYGJ06061239998/ });
     await user.click(within(routedRow).getByRole('button', { name: '排货日志' }));
     const routingLogDialog = await screen.findByRole('dialog', { name: '排货日志' });
     expect(within(routingLogDialog).getByText(/排货生命周期记录/)).toBeInTheDocument();
     expect(within(routingLogDialog).getByText(/渠道排货：代理/)).toBeInTheDocument();
     expect(within(routingLogDialog).getByText('操作时间')).toBeInTheDocument();
+  });
+
+  it('keeps routing dialog open and shows backend errors when assignment fails', async () => {
+    const user = userEvent.setup();
+    const errorSpy = vi.spyOn(Modal, 'error').mockReturnValue({ destroy: vi.fn(), update: vi.fn() } as never);
+    employeeShipments.unshift(
+      shipment('s-routing-fail', 'SYGJ06061239997', 'SORT-FAIL-0606', 'WAITING_SORT', '9409-Daloday', {
+        businessType: 'DEDICATED_LINE',
+        latestTracking: '收货扫描'
+      })
+    );
+    await renderAndLogin('admin', 'admin123');
+
+    await openRoutingFulfillment(user);
+
+    const routingRow = await screen.findByRole('row', { name: /SYGJ06061239997/ });
+    await user.click(within(routingRow).getByRole('button', { name: /^排\s*货$/ }));
+    const assignmentDialog = await screen.findByRole('dialog', { name: '市场排货' });
+    await user.click(within(assignmentDialog).getByLabelText('代理'));
+    await user.click(await screen.findByText('宇环 / 深圳宇环'));
+    await user.type(within(assignmentDialog).getByLabelText('代理渠道'), '宇环 DHL');
+    await user.type(within(assignmentDialog).getByLabelText('计费重'), '12.5');
+    await user.type(within(assignmentDialog).getByLabelText('单价'), '8');
+
+    const target = employeeShipments.find((item) => item.id === 's-routing-fail');
+    if (target) target.status = 'OUTBOUNDED';
+
+    await user.click(within(assignmentDialog).getByRole('button', { name: '确认排货' }));
+
+    await waitFor(() => expect(errorSpy).toHaveBeenCalledWith(expect.objectContaining({ title: '排货失败', content: '当前状态不允许排货' })));
+    expect(screen.getByRole('dialog', { name: '市场排货' })).toBeInTheDocument();
+    expect(within(assignmentDialog).getByDisplayValue('宇环 DHL')).toBeInTheDocument();
   });
 
   it('returns outbound shipments to pending routing with a reason', async () => {

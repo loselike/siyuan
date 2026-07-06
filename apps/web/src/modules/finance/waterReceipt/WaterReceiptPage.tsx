@@ -300,9 +300,10 @@ export function WaterReceiptPage({ apiClient, permissions, accounts, renderShipm
   ], [apiClient, canArchive, canArrive, canManage, canMatch, canVoid, canVoucher, load, renderShipmentOrderNoLink, voucherForm]);
 
   return (
-    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+    <Space direction="vertical" size={12} className="finance-workspace">
       <Card
         title="收款管理"
+        className="finance-filter-card"
         extra={<Space><Button onClick={() => void load()}>刷新</Button>{canExport ? <Button onClick={() => void exportRows()}>导出</Button> : null}{canManage ? <Button type="primary" onClick={openCreate}>新增水单</Button> : null}</Space>}
       >
         <Form form={queryForm} layout="vertical" initialValues={defaultQuery} onFinish={(values) => setQuery({ ...defaultQuery, ...values, page: 1 })}>
@@ -320,8 +321,8 @@ export function WaterReceiptPage({ apiClient, permissions, accounts, renderShipm
         </Form>
       </Card>
 
-      <Card>
-        <Space size={8} wrap className="finance-work-summary">
+      <Card className="finance-table-card">
+        <Space size={8} wrap className="finance-work-status-strip finance-work-summary">
           <Text type="secondary">水单 {response.totals.count}</Text>
           <Text type="secondary">已到账 {response.totals.arrivedCount}</Text>
           <Text type="secondary">已归档 {response.totals.archivedCount}</Text>
@@ -346,7 +347,7 @@ export function WaterReceiptPage({ apiClient, permissions, accounts, renderShipm
         />
       </Card>
 
-      <Modal title={editing ? '编辑水单' : '新增水单'} open={formOpen} onCancel={() => setFormOpen(false)} onOk={() => void submitForm()} destroyOnHidden>
+      <Modal title={editing ? '编辑水单' : '新增水单'} className="finance-modal" width={760} open={formOpen} onCancel={() => setFormOpen(false)} onOk={() => void submitForm()} destroyOnHidden>
         <Form form={form} layout="vertical">
           <Form.Item name="customerCode" label="客户编号" rules={[{ required: true, message: '请选择客户编号' }]}><Select showSearch options={customerOptions} /></Form.Item>
           <Form.Item name="site" label="站点"><Input /></Form.Item>
@@ -360,7 +361,7 @@ export function WaterReceiptPage({ apiClient, permissions, accounts, renderShipm
         </Form>
       </Modal>
 
-      <Modal title="记录水单凭证" open={Boolean(voucherRow)} onCancel={() => setVoucherRow(null)} onOk={() => void submitVoucher()} destroyOnHidden>
+      <Modal title="记录水单凭证" className="finance-modal" width={720} open={Boolean(voucherRow)} onCancel={() => setVoucherRow(null)} onOk={() => void submitVoucher()} destroyOnHidden>
         <Form form={voucherForm} layout="vertical">
           <Form.Item name="voucherImage" label="水单凭证截图">
             <VoucherImageInput
@@ -371,7 +372,7 @@ export function WaterReceiptPage({ apiClient, permissions, accounts, renderShipm
         </Form>
       </Modal>
 
-      <Modal title="匹配订单应收" open={Boolean(matchRow)} onCancel={() => setMatchRow(null)} onOk={() => void submitMatch()} destroyOnHidden width={760}>
+      <Modal title="匹配订单应收" className="finance-modal" open={Boolean(matchRow)} onCancel={() => setMatchRow(null)} onOk={() => void submitMatch()} destroyOnHidden width={860}>
         <Text type="secondary">可用余额：{formatCurrency(matchRow?.balance ?? 0)}</Text>
         <Form form={matchForm} layout="vertical">
           <Form.List name="rows">
@@ -397,7 +398,7 @@ export function WaterReceiptPage({ apiClient, permissions, accounts, renderShipm
         </Form>
       </Modal>
 
-      <Modal title="水单凭证预览" open={Boolean(previewUrl)} footer={null} onCancel={() => setPreviewUrl(undefined)} destroyOnHidden>
+      <Modal title="水单凭证预览" className="finance-modal finance-preview-modal" width={760} open={Boolean(previewUrl)} footer={null} onCancel={() => setPreviewUrl(undefined)} destroyOnHidden>
         {previewUrl ? <Image src={previewUrl} alt="水单凭证" style={{ maxWidth: '100%' }} /> : null}
       </Modal>
     </Space>

@@ -21,10 +21,9 @@ describe('Finance flows', () => {
 
     expect((await within(detailDialog).findAllByText('应收费用')).length).toBeGreaterThan(0);
     expect((await within(detailDialog).findAllByText('业务成本')).length).toBeGreaterThan(0);
-    expect(within(detailDialog).queryByText('应付费用')).not.toBeInTheDocument();
-    expect(within(detailDialog).queryByText('利润汇总')).not.toBeInTheDocument();
-    expect(within(detailDialog).queryByText('应付费用明细')).not.toBeInTheDocument();
-    expect(within(detailDialog).queryByText('代理运费')).not.toBeInTheDocument();
+    expect((await within(detailDialog).findAllByText('应付费用')).length).toBeGreaterThan(0);
+    expect(await within(detailDialog).findByText('利润汇总')).toBeInTheDocument();
+    expect(await within(detailDialog).findByText('代理运费')).toBeInTheDocument();
     expect(within(detailDialog).queryByText('宇环')).not.toBeInTheDocument();
   });
 
@@ -104,10 +103,10 @@ describe('Finance flows', () => {
     expect(screen.queryByText('功能后续设计')).not.toBeInTheDocument();
     expect(screen.getAllByText('应收审核').length).toBeGreaterThan(0);
     expect(screen.getAllByText('业务成本审核').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('应付审核').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('市场应付审核').length).toBeGreaterThan(0);
     expect(screen.getByText('到账水单有余额')).toBeInTheDocument();
 
-    const quickAgentBill = screen.getAllByRole('button', { name: '代理账单核对' }).at(-1);
+    const quickAgentBill = screen.getAllByRole('button', { name: '代理账单' }).at(-1);
     expect(quickAgentBill).toBeTruthy();
     await user.click(quickAgentBill!);
     expect(await screen.findByText('登记代理账单')).toBeInTheDocument();
@@ -129,6 +128,7 @@ describe('Finance flows', () => {
     expect(screen.queryByText('待审核摘要')).not.toBeInTheDocument();
     expect(screen.queryByText('待审核详情')).not.toBeInTheDocument();
     expect(screen.queryByText('请选择待审核订单')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '审核通过' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '已删除订单' }));
     expect(await screen.findByRole('button', { name: 'SYREVIEWDEL001' })).toBeInTheDocument();
@@ -145,6 +145,25 @@ describe('Finance flows', () => {
     expect(await screen.findByRole('tab', { name: '基本' })).toBeInTheDocument();
     expect(screen.getByText('返回列表')).toBeInTheDocument();
     expect(screen.queryByText('请选择待审核订单')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /修\s*改/ }));
+    const editDialog = await screen.findByRole('dialog', { name: '人工修改轨迹与状态' });
+    expect(within(editDialog).getByLabelText('发货渠道')).toBeInTheDocument();
+    expect(within(editDialog).getByLabelText('品名')).toBeInTheDocument();
+    expect(within(editDialog).getByLabelText('目的地')).toBeInTheDocument();
+    expect(within(editDialog).getByLabelText('件数')).toBeInTheDocument();
+  });
+
+  it('hides final review actions for finance users in the business pending-review page', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('finance', 'finance123');
+
+    await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
+    await user.click(await screen.findByRole('button', { name: '待审核运单' }));
+
+    expect(await screen.findByRole('button', { name: 'SYREVIEW000001' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '审核通过' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '驳回' })).not.toBeInTheDocument();
   });
 
   it('shows order-entry fee fields required by the finance entry spec', async () => {
@@ -173,11 +192,19 @@ describe('Finance flows', () => {
     expect(screen.getAllByText('合计').length).toBeGreaterThan(0);
     expect(screen.getAllByText('制单日期').length).toBeGreaterThan(0);
     expect(screen.getAllByText('制单人').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('代理成本单价').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('代理渠道').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('出货成本单价').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('代理').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('业务渠道').length).toBeGreaterThan(0);
     expect(screen.getAllByText('应付备注').length).toBeGreaterThan(0);
     expect(screen.queryByText('对账状态')).not.toBeInTheDocument();
     expect(screen.getAllByText('admin').length).toBeGreaterThan(0);
+
+    expect(screen.getAllByDisplayValue('运费')).toHaveLength(1);
+    await user.click(screen.getAllByRole('button', { name: '新增项目' })[0]);
+    expect(screen.getAllByDisplayValue('运费')).toHaveLength(2);
+    const deleteButtons = screen.getAllByRole('button', { name: /删\s*除/ }).filter((button) => !(button as HTMLButtonElement).disabled);
+    await user.click(deleteButtons[0]);
+    await waitFor(() => expect(screen.getAllByDisplayValue('运费')).toHaveLength(1));
 
     await user.type(screen.getByLabelText('客户编号'), '9409');
     await user.click(screen.getByLabelText('选择收货人'));
@@ -187,6 +214,63 @@ describe('Finance flows', () => {
     expect(screen.getByDisplayValue('13800000001')).toBeInTheDocument();
     expect(screen.getByDisplayValue('9409 Sample Street')).toBeInTheDocument();
     expect(screen.getByLabelText('保存到客户资料')).toBeInTheDocument();
+
+    const productName = `牙刷测试${Date.now()}`;
+    const productInput = screen.getByLabelText('品名');
+    fireEvent.change(productInput, { target: { value: productName } });
+    fireEvent.blur(productInput);
+    await waitFor(() => expect(screen.getAllByText('保存新的品名？').length).toBeGreaterThan(0));
+    const saveCatalogDialog = screen.getByRole('dialog', { name: '保存新的品名？' });
+    await user.click(within(saveCatalogDialog).getByRole('button', { name: /^保\s*存$/ }));
+    await waitFor(() => {
+      const calls = (fetch as unknown as { mock: { calls: Array<[unknown, RequestInit?]> } }).mock.calls;
+      expect(calls.some(([, init]) => {
+        if (init?.method !== 'POST' || typeof init.body !== 'string') return false;
+        const body = JSON.parse(init.body);
+        return body.category === 'PRODUCT_NAME' && body.name === productName;
+      })).toBe(true);
+    });
+  });
+
+  it('shows the current login username as the order-entry salesperson', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('operator', 'operator123');
+
+    await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
+    await user.click(await screen.findByRole('button', { name: '录单' }));
+
+    expect(await screen.findByText('应收费用')).toBeInTheDocument();
+    expect(screen.getByText('应付费用')).toBeInTheDocument();
+    expect(screen.getAllByText('出货成本单价').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('operator').length).toBeGreaterThan(0);
+    expect(screen.queryByText('系统匹配')).not.toBeInTheDocument();
+  });
+
+  it('moves a submitted business order entry to the operator pending review page', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('operator', 'operator123');
+
+    await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
+    await user.click(await screen.findByRole('button', { name: '录单' }));
+
+    await waitFor(() => expect(screen.getAllByRole('checkbox').length).toBeGreaterThan(1));
+    await user.click(screen.getAllByRole('checkbox')[1]);
+    const orderNo = `SYTEST${Date.now()}`;
+    fireEvent.change(screen.getByLabelText('客户编号'), { target: { value: '9409' } });
+    fireEvent.change(screen.getByLabelText('客户单号'), { target: { value: 'TEST-CUSTOMER-001' } });
+    fireEvent.change(screen.getByLabelText('运单号'), { target: { value: orderNo } });
+    fireEvent.change(screen.getByLabelText('目的地'), { target: { value: '美国' } });
+    fireEvent.change(screen.getByLabelText('货物属性'), { target: { value: '普货' } });
+    fireEvent.change(screen.getByLabelText('品名'), { target: { value: '测试货物' } });
+    await user.click(screen.getByRole('button', { name: '提交审核' }));
+
+    expect(await screen.findByText('待审核摘要')).toBeInTheDocument();
+    expect((await screen.findAllByText(orderNo)).length).toBeGreaterThan(0);
+    expect(await screen.findByRole('button', { name: '自审通过' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '审核通过' })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '自审通过' }));
+    expect(await screen.findByText('自审通过后，订单进入待排货，并同步进入财务管理的业务成本审核。')).toBeInTheDocument();
   });
 
   it('shows pending payments and creates grouped payment applications', async () => {
@@ -194,12 +278,15 @@ describe('Finance flows', () => {
     await renderAndLogin('admin', 'admin123');
 
     await user.click(screen.getByRole('menuitem', { name: '财务管理' }));
-    await clickFinanceSideButton(user, '应付审核');
+    await clickFinanceSideButton(user, '市场应付审核');
     const payableRow = await screen.findByText('代理运费');
     await user.click(within(payableRow.closest('tr')!).getByRole('button', { name: /审\s*核/ }));
-    expect(await screen.findByText('确认审核该应付费用并生成待付款？')).toBeInTheDocument();
+    expect(await screen.findByText('确认审核该市场应付并进入代理账单核对？')).toBeInTheDocument();
     const auditButtons = screen.getAllByRole('button', { name: /审\s*核/ });
     await user.click(auditButtons[auditButtons.length - 1]);
+    expect((await screen.findAllByText('已完成市场应付审核')).length).toBeGreaterThanOrEqual(1);
+    await user.click(screen.getByRole('button', { name: '去代理账单' }));
+    expect(await screen.findByText('登记代理账单')).toBeInTheDocument();
 
     await clickFinanceSideButton(user, '待付款');
     expect(await screen.findByText('深圳思远国际货运代理有限公司付款申请单')).toBeInTheDocument();
@@ -233,10 +320,10 @@ describe('Finance flows', () => {
     const pendingRow = screen.getByText('代理运费').closest('tr');
     expect(pendingRow).toBeTruthy();
     await user.click(within(pendingRow!).getByRole('checkbox'));
-    await waitFor(() => expect(screen.getByRole('button', { name: '生成付款申请' })).not.toBeDisabled());
-    const createButton = screen.getByRole('button', { name: '生成付款申请' });
+    await waitFor(() => expect(screen.getByRole('button', { name: '生成待支付申请' })).not.toBeDisabled());
+    const createButton = screen.getByRole('button', { name: '生成待支付申请' });
     await user.click(createButton);
-    const applicationDialog = await screen.findByRole('dialog', { name: '生成付款申请' });
+    const applicationDialog = await screen.findByRole('dialog', { name: '生成待支付申请' });
     expect(await within(applicationDialog).findByLabelText('手动收款方名称')).toBeInTheDocument();
     expect(within(applicationDialog).getByRole('button', { name: '选择图片' })).toBeInTheDocument();
     expect(within(applicationDialog).queryByText('选择文件')).not.toBeInTheDocument();
@@ -249,7 +336,7 @@ describe('Finance flows', () => {
     expect(bankAccountInput).toBeTruthy();
     await user.type(bankAccountInput!, '6222000000000000');
     await user.click(within(applicationDialog).getByRole('button', { name: '提交为待支付' }));
-    expect(await screen.findByText('已申请')).toBeInTheDocument();
+    expect(await screen.findByText('已进入待支付')).toBeInTheDocument();
   });
 
   it('registers and queries an agent bill manually', async () => {
@@ -257,7 +344,7 @@ describe('Finance flows', () => {
     await renderAndLogin('admin', 'admin123');
 
     await user.click(screen.getByRole('menuitem', { name: '财务管理' }));
-    await clickFinanceSideButton(user, '代理账单核对');
+    await clickFinanceSideButton(user, '代理账单');
 
     await screen.findByText('登记代理账单');
     await user.type(screen.getByLabelText('账单号'), 'AB-9409-WEB');
@@ -297,7 +384,7 @@ describe('Finance flows', () => {
     const differenceButton = screen.getAllByRole('button', { name: '处理差异' }).find((button) => !button.hasAttribute('disabled'));
     expect(differenceButton).toBeTruthy();
     await user.click(differenceButton!);
-    expect(await screen.findByText('差异已处理')).toBeInTheDocument();
+    expect((await screen.findAllByText('差异已处理')).length).toBeGreaterThanOrEqual(1);
     await user.click(screen.getAllByRole('button', { name: /归\s*档/ }).at(-1)!);
     expect(await screen.findByText('已归档')).toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: /反\s*归\s*档/ }).at(-1)!);

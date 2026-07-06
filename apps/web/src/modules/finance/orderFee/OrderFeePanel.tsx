@@ -628,6 +628,7 @@ export function OrderFeePanel({
       </div>
       <Modal
         title={`${editor?.row ? '修改' : '新增'}${editor ? feeTypeTitles[editor.type] : '费用'}`}
+        className="finance-modal"
         open={Boolean(editor)}
         onCancel={() => setEditor(null)}
         onOk={submitEditor}
@@ -681,6 +682,7 @@ export function OrderFeePanel({
       </Modal>
       <Modal
         title="匹配已到账水单"
+        className="finance-modal"
         open={Boolean(receiptMatch)}
         onCancel={() => setReceiptMatch(null)}
         footer={null}

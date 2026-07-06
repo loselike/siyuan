@@ -1,7 +1,7 @@
 import { fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import * as XLSX from 'xlsx';
+import { addRowsWorksheet, createWorkbook, writeWorkbookBuffer } from '../shared/excel';
 import { employeeShipments, renderAndLogin, shipment } from '../testSupport/appTestHarness';
 
 function expectNoWarehouseFinanceText(scope: HTMLElement) {
@@ -140,15 +140,14 @@ describe('Warehouse flows', () => {
     await renderAndLogin('admin', 'admin123');
 
     await user.click(screen.getByRole('menuitem', { name: '报价查价' }));
-    const workbook = XLSX.utils.book_new();
-    const summarySheet = XLSX.utils.aoa_to_sheet([
+    const workbook = createWorkbook();
+    addRowsWorksheet(workbook, '海卡快速查询', [
       ['FBA 仓库代码（右侧红框输入仓库代码查找价格）', '', '', '', '', '', '', 'ONT8'],
       ['收货仓点', '义乌仓', '', '', '深圳（福永/龙岗）仓/广州仓', '', '', '参考时效（不做赔付使用，仅供参考）'],
       ['对应渠道', '12KG+', '51KG+', '100KG+', '12KG+', '51KG+', '100KG+', '参考时效（不做赔付使用，仅供参考）'],
       ['YY美西特惠海卡', 5, 5, '/', 5.5, 4.5, '/', '24-26天左右']
     ]);
-    XLSX.utils.book_append_sheet(workbook, summarySheet, '海卡快速查询');
-    const fileData = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+    const fileData = await writeWorkbookBuffer(workbook);
     const file = new File([fileData], 'origin-transit-price.xlsx', {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     });
@@ -201,6 +200,8 @@ describe('Warehouse flows', () => {
     expect(screen.getAllByText('内部交货面单').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^A\d{6}$/).length).toBeGreaterThan(0);
     expect(screen.getAllByLabelText(/条形码 A\d{6}/).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText(/内部交货面单 A\d{6} 美国 1\/3 1399-OUT001/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '待出库列设置' })).toBeInTheDocument();
     expect(screen.getByText('1/3')).toBeInTheDocument();
     expect(screen.getByText('3/3')).toBeInTheDocument();
     expect(screen.getAllByText('美国').length).toBeGreaterThan(0);
@@ -407,8 +408,8 @@ describe('Warehouse flows', () => {
     await user.click(within(stockRow).getByRole('button', { name: /录\s*单/ }));
 
     expect(await screen.findByText('运单基础信息')).toBeInTheDocument();
-    expect(screen.getAllByDisplayValue('9409').length).toBeGreaterThan(0);
-    expect(screen.getByDisplayValue('KY-ENTRY-001')).toBeInTheDocument();
+    expect((await screen.findAllByDisplayValue('9409')).length).toBeGreaterThan(0);
+    expect(await screen.findByDisplayValue('KY-ENTRY-001')).toBeInTheDocument();
     expect(screen.getByText('已选货物')).toBeInTheDocument();
     expect(screen.getAllByText('2 件').length).toBeGreaterThan(0);
   });
@@ -497,7 +498,9 @@ describe('Warehouse flows', () => {
     expect(screen.getAllByText('件数').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '列设置' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '批量理货' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '合票录单' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /录\s*单/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '合票录单' })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^合\s*票$/ }).length).toBeGreaterThan(0);
 
     await user.type(screen.getByLabelText('在仓组合单号筛选'), '9409-KY-STOCK-075');
     await user.click(screen.getAllByRole('button', { name: /查\s*询/ }).at(-1)!);
@@ -534,13 +537,13 @@ describe('Warehouse flows', () => {
     await user.click(within(firstSplitRow).getByRole('checkbox'));
     await user.click(within(secondSplitRow).getByRole('checkbox'));
     expect(await screen.findByText('已选 2')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: '合票录单' }));
+    await user.click(screen.getAllByRole('button', { name: /^合\s*票$/ })[0]);
     expect(await screen.findByLabelText('合票理货需求')).toBeInTheDocument();
-    await user.type(screen.getByLabelText('合票理货需求'), '合票生成运单，保留原箱唛头');
-    await user.click(screen.getByRole('button', { name: '确认合票并录单' }));
-    expect(await screen.findByText('运单基础信息')).toBeInTheDocument();
-    expect(screen.getByText('已选货物')).toBeInTheDocument();
-    expect(screen.getAllByText('2 条').length).toBeGreaterThan(0);
+    await user.type(screen.getByLabelText('合票理货需求'), '合票保留原箱唛头');
+    await user.click(screen.getByRole('button', { name: '确认合票' }));
+    expect(await screen.findByText(/已合票/)).toBeInTheDocument();
+    expect(screen.queryByText('运单基础信息')).not.toBeInTheDocument();
+    expect(screen.queryByText('已选货物')).not.toBeInTheDocument();
   });
 
 
@@ -568,16 +571,18 @@ describe('Warehouse flows', () => {
     await user.type(within(assignmentDialog).getByLabelText('代理渠道'), '宇环 DHL');
     await user.type(within(assignmentDialog).getByLabelText('计费重'), '12.5');
     await user.type(within(assignmentDialog).getByLabelText('单价'), '8');
+    await user.click(within(assignmentDialog).getByLabelText('需要贴麦头'));
     await user.click(within(assignmentDialog).getByRole('button', { name: '确认排货' }));
-    expect(await screen.findByText('市场排货完成，进入仓库管理待出库')).toBeInTheDocument();
+    expect(await screen.findByText('市场排货完成，已进入已排货')).toBeInTheDocument();
 
     await user.click(screen.getByRole('menuitem', { name: '仓库管理' }));
-    await user.click(screen.getByRole('button', { name: /^待出库$/ }));
+    await user.click(await screen.findByRole('button', { name: /^待出库$/ }));
     const warehouseQueueRow = await screen.findByRole('row', { name: /SYGJ06061239997/ });
 
     expect(within(warehouseQueueRow).getByText('待仓库出货')).toBeInTheDocument();
     expect(within(warehouseQueueRow).getByText('DHL HK')).toBeInTheDocument();
     expect(within(warehouseQueueRow).getByText('深圳宇环')).toBeInTheDocument();
+    expect(within(warehouseQueueRow).getByText('需贴麦头')).toBeInTheDocument();
     expectNoWarehouseFinanceText(warehouseQueueRow);
     expect(within(warehouseQueueRow).getByRole('button', { name: '打单' })).toBeInTheDocument();
     expect(within(warehouseQueueRow).getByRole('button', { name: '出货' })).toBeInTheDocument();
@@ -589,14 +594,18 @@ describe('Warehouse flows', () => {
     expect(screen.getAllByText('内部交货面单').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/^A\d{6}$/).length).toBeGreaterThan(0);
     expect(screen.getByLabelText(/条形码 A\d{6}/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/内部交货面单 A\d{6} 美国 1\/1 SYGJ06061239997/)).toBeInTheDocument();
     expect(screen.getByText('1/1')).toBeInTheDocument();
     expect(screen.getAllByText('美国').length).toBeGreaterThan(0);
     expect(screen.getAllByText('SYGJ06061239997').length).toBeGreaterThan(0);
 
     await user.click(within(warehouseQueueRow).getByRole('button', { name: '出货' }));
     expect(await screen.findByText('确认出货？')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认出货' })).toBeDisabled();
+    await user.click(screen.getByLabelText('已贴麦头'));
     await user.click(screen.getByRole('button', { name: '确认出货' }));
-    expect(await screen.findByText('已出货 SYGJ06061239997')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '客服管理' })).toBeInTheDocument();
+    expect(await screen.findByRole('row', { name: /SYGJ06061239997/ })).toBeInTheDocument();
   });
 
   it('shows the routed time as the warehouse waiting-dispatch stage time', async () => {

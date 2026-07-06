@@ -84,17 +84,30 @@ const permissions = [
   'reports:read',
   'master-data:read',
   'master-data:write',
+  'master-data:customers:read',
+  'master-data:customers:write',
+  'master-data:finance:read',
+  'master-data:finance:write',
   'master-data:agents:read',
   'master-data:agents:write',
+  'master-data:agent-channels:read',
+  'master-data:agent-channels:write',
   'master-data:channels:read',
   'master-data:channels:write',
+  'master-data:channel-categories:read',
+  'master-data:channel-categories:write',
+  'master-data:remote-areas:read',
+  'master-data:remote-areas:write',
+  'master-data:exchange-rates:read',
+  'master-data:exchange-rates:write',
+  'master-data:assistant:read',
   'system:manage'
 ];
 
 const rolePermissions: Record<(typeof roles)[number], string[]> = {
   ADMIN: permissions,
   CUSTOMER_SERVICE: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'master-data:read'],
-  OPERATOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read'],
+  OPERATOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read'],
   WAREHOUSE: ['workspace:access', 'orders:read', 'warehouse:read', 'warehouse:write', 'tracking:read'],
   FINANCE: ['workspace:access', 'orders:read', 'orders:review:restore', 'pricing:lookup', 'finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:audit', 'finance:business-cost:reverse', 'finance:business-cost:void', 'finance:business-cost:export', 'finance:business-cost:view-all', 'finance:business-cost:view-agent', 'finance:business-cost:view-profit', 'finance:order-fee:payable:view', 'finance:order-fee:payable:manage', 'finance:order-fee:profit:receivable-payable', 'finance:order-fee:profit:receivable-business', 'finance:order-fee:profit:business-payable', 'finance:payable:read', 'finance:payable:manage', 'finance:payable:audit', 'finance:payable:reverse', 'finance:payable:void', 'finance:payable:export', 'finance:payable:payment', 'finance:payable:bank', 'finance:payable:attachment', 'finance:payable:view-sensitive', 'finance:payable:view-profit', 'finance:payable:paid-read', 'finance:payable:paid-confirm', 'finance:payable:paid-reverse', 'finance:payable:paid-export', 'finance:payable:paid-voucher', 'finance:payable:paid-bank-view', 'finance:water-receipt:read', 'finance:water-receipt:manage', 'finance:water-receipt:arrive', 'finance:water-receipt:match', 'finance:water-receipt:adjust', 'finance:water-receipt:void', 'finance:water-receipt:archive', 'finance:water-receipt:export', 'finance:water-receipt:voucher', 'finance:water-receipt:view-all', 'reports:read', 'master-data:read', 'master-data:agents:read'],
   CUSTOMER: ['workspace:access', 'orders:read', 'orders:write', 'finance:read', 'problems:read', 'problems:write', 'pricing:lookup'],
@@ -103,13 +116,13 @@ const rolePermissions: Record<(typeof roles)[number], string[]> = {
   UG_CUSTOMER_SERVICE: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'master-data:read'],
   UG_FINANCE: ['workspace:access', 'orders:read', 'orders:review:restore', 'pricing:lookup', 'finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:audit', 'finance:business-cost:reverse', 'finance:business-cost:void', 'finance:business-cost:export', 'finance:business-cost:view-all', 'finance:business-cost:view-agent', 'finance:business-cost:view-profit', 'finance:order-fee:payable:view', 'finance:order-fee:payable:manage', 'finance:order-fee:profit:receivable-payable', 'finance:order-fee:profit:receivable-business', 'finance:order-fee:profit:business-payable', 'finance:payable:read', 'finance:payable:manage', 'finance:payable:audit', 'finance:payable:reverse', 'finance:payable:void', 'finance:payable:export', 'finance:payable:payment', 'finance:payable:bank', 'finance:payable:attachment', 'finance:payable:view-sensitive', 'finance:payable:view-profit', 'finance:payable:paid-read', 'finance:payable:paid-confirm', 'finance:payable:paid-reverse', 'finance:payable:paid-export', 'finance:payable:paid-voucher', 'finance:payable:paid-bank-view', 'finance:water-receipt:read', 'finance:water-receipt:manage', 'finance:water-receipt:arrive', 'finance:water-receipt:match', 'finance:water-receipt:adjust', 'finance:water-receipt:void', 'finance:water-receipt:archive', 'finance:water-receipt:export', 'finance:water-receipt:voucher', 'finance:water-receipt:view-all', 'reports:read', 'master-data:read', 'master-data:agents:read'],
   UG_PAYABLE_FINANCE: ['workspace:access', 'orders:read', 'orders:review:restore', 'pricing:lookup', 'finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:audit', 'finance:business-cost:reverse', 'finance:business-cost:void', 'finance:business-cost:export', 'finance:business-cost:view-all', 'finance:business-cost:view-agent', 'finance:business-cost:view-profit', 'finance:order-fee:payable:view', 'finance:order-fee:payable:manage', 'finance:order-fee:profit:receivable-payable', 'finance:order-fee:profit:receivable-business', 'finance:order-fee:profit:business-payable', 'finance:payable:read', 'finance:payable:manage', 'finance:payable:audit', 'finance:payable:reverse', 'finance:payable:void', 'finance:payable:export', 'finance:payable:payment', 'finance:payable:bank', 'finance:payable:attachment', 'finance:payable:view-sensitive', 'finance:payable:view-profit', 'finance:payable:paid-read', 'finance:payable:paid-confirm', 'finance:payable:paid-reverse', 'finance:payable:paid-export', 'finance:payable:paid-voucher', 'finance:payable:paid-bank-view', 'finance:water-receipt:read', 'finance:water-receipt:manage', 'finance:water-receipt:arrive', 'finance:water-receipt:match', 'finance:water-receipt:adjust', 'finance:water-receipt:void', 'finance:water-receipt:archive', 'finance:water-receipt:export', 'finance:water-receipt:voucher', 'finance:water-receipt:view-all', 'reports:read', 'master-data:read', 'master-data:agents:read'],
-  UG_MARKET: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read'],
-  UG_BUSINESS: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read'],
-  UG_SZ_WUHAN: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read'],
-  UG_ZZ_SIHUA: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read'],
-  UG_WH_JIUYULIAN: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read'],
-  UG_BUSINESS_MANAGER: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read'],
-  UG_BUSINESS_SUPERVISOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read']
+  UG_MARKET: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:channels:read'],
+  UG_BUSINESS: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read'],
+  UG_SZ_WUHAN: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read'],
+  UG_ZZ_SIHUA: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read'],
+  UG_WH_JIUYULIAN: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read'],
+  UG_BUSINESS_MANAGER: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read'],
+  UG_BUSINESS_SUPERVISOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read']
 };
 
 const roleMetadata: Record<(typeof roles)[number], { label: string; description?: string; site?: string; sortOrder: number; systemBuiltin: boolean }> = {
@@ -274,8 +287,8 @@ const seedShipments: SeedShipment[] = [
 ];
 
 const seedAgentMarkupRules = [
-  { id: 'markup-a-default', agentName: 'a代理', markupPerKg: 0.5 },
-  { id: 'markup-b-default', agentName: 'b代理', markupPerKg: 1 }
+  { id: 'markup-a-default', agentName: 'a代理', markupPerKg: 0.5, markupType: 'WEIGHT', markupValue: 0.5, priority: 100 },
+  { id: 'markup-b-default', agentName: 'b代理', markupPerKg: 1, markupType: 'WEIGHT', markupValue: 1, priority: 100 }
 ];
 
 const seedWarehousePackages = [

@@ -61,10 +61,23 @@ export type PermissionKey =
   | 'finance:water-receipt:view-all'
   | 'master-data:read'
   | 'master-data:write'
+  | 'master-data:customers:read'
+  | 'master-data:customers:write'
+  | 'master-data:finance:read'
+  | 'master-data:finance:write'
   | 'master-data:agents:read'
   | 'master-data:agents:write'
+  | 'master-data:agent-channels:read'
+  | 'master-data:agent-channels:write'
   | 'master-data:channels:read'
   | 'master-data:channels:write'
+  | 'master-data:channel-categories:read'
+  | 'master-data:channel-categories:write'
+  | 'master-data:remote-areas:read'
+  | 'master-data:remote-areas:write'
+  | 'master-data:exchange-rates:read'
+  | 'master-data:exchange-rates:write'
+  | 'master-data:assistant:read'
   | 'reports:read'
   | 'system:manage';
 
@@ -132,7 +145,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'finance:order-fee:profit:receivable-payable', label: '单票费用应收应付利润', group: '财务结算' },
   { code: 'finance:order-fee:profit:receivable-business', label: '单票费用应收业务利润', group: '财务结算' },
   { code: 'finance:order-fee:profit:business-payable', label: '单票费用业务应付利润', group: '财务结算' },
-  { code: 'finance:payable:read', label: '应付审核查看', group: '财务结算' },
+  { code: 'finance:payable:read', label: '市场应付审核查看', group: '财务结算' },
   { code: 'finance:payable:manage', label: '应付费用维护', group: '财务结算' },
   { code: 'finance:payable:audit', label: '应付费用审核', group: '财务结算' },
   { code: 'finance:payable:reverse', label: '应付反审核', group: '财务结算' },
@@ -143,10 +156,10 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'finance:payable:attachment', label: '应付账单截图', group: '财务结算' },
   { code: 'finance:payable:view-sensitive', label: '应付敏感字段', group: '财务结算' },
   { code: 'finance:payable:view-profit', label: '应付利润查看', group: '财务结算' },
-  { code: 'finance:payable:paid-read', label: '已付款查看', group: '财务结算' },
+  { code: 'finance:payable:paid-read', label: '待支付/已支付查看', group: '财务结算' },
   { code: 'finance:payable:paid-confirm', label: '确认付款', group: '财务结算' },
-  { code: 'finance:payable:paid-reverse', label: '已付款反核销', group: '财务结算' },
-  { code: 'finance:payable:paid-export', label: '已付款导出', group: '财务结算' },
+  { code: 'finance:payable:paid-reverse', label: '已支付反核销', group: '财务结算' },
+  { code: 'finance:payable:paid-export', label: '已支付导出', group: '财务结算' },
   { code: 'finance:payable:paid-voucher', label: '付款水单维护', group: '财务结算' },
   { code: 'finance:payable:paid-bank-view', label: '付款银行查看', group: '财务结算' },
   { code: 'finance:water-receipt:read', label: '水单查看', group: '财务结算' },
@@ -162,10 +175,23 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'reports:read', label: '统计报表', group: '统计报表' },
   { code: 'master-data:read', label: '基础资料查看', group: '基础资料' },
   { code: 'master-data:write', label: '基础资料维护', group: '基础资料' },
+  { code: 'master-data:customers:read', label: '客户资料查看', group: '基础资料' },
+  { code: 'master-data:customers:write', label: '客户资料维护', group: '基础资料' },
+  { code: 'master-data:finance:read', label: '财务资料查看', group: '基础资料' },
+  { code: 'master-data:finance:write', label: '财务资料维护', group: '基础资料' },
   { code: 'master-data:agents:read', label: '代理资料查看', group: '基础资料' },
   { code: 'master-data:agents:write', label: '代理资料维护', group: '基础资料' },
+  { code: 'master-data:agent-channels:read', label: '代理渠道查看', group: '基础资料' },
+  { code: 'master-data:agent-channels:write', label: '代理渠道维护', group: '基础资料' },
   { code: 'master-data:channels:read', label: '公司渠道查看', group: '基础资料' },
   { code: 'master-data:channels:write', label: '公司渠道维护', group: '基础资料' },
+  { code: 'master-data:channel-categories:read', label: '渠道类别查看', group: '基础资料' },
+  { code: 'master-data:channel-categories:write', label: '渠道类别维护', group: '基础资料' },
+  { code: 'master-data:remote-areas:read', label: '偏远查看', group: '基础资料' },
+  { code: 'master-data:remote-areas:write', label: '偏远维护', group: '基础资料' },
+  { code: 'master-data:exchange-rates:read', label: '汇率查看', group: '基础资料' },
+  { code: 'master-data:exchange-rates:write', label: '汇率维护', group: '基础资料' },
+  { code: 'master-data:assistant:read', label: '资料辅助查看', group: '基础资料' },
   { code: 'system:manage', label: '系统设置', group: '系统设置' }
 ];
 
@@ -200,7 +226,7 @@ export const defaultRoleGroups: Array<{
 export const rolePermissions: Record<BuiltinRoleKey, PermissionKey[]> = {
   ADMIN: allPermissions(),
   CUSTOMER_SERVICE: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'master-data:read'],
-  OPERATOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read'],
+  OPERATOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read'],
   WAREHOUSE: ['workspace:access', 'orders:read', 'warehouse:read', 'warehouse:write', 'tracking:read'],
   FINANCE: ['workspace:access', 'orders:read', 'orders:review:restore', 'pricing:lookup', 'finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:audit', 'finance:business-cost:reverse', 'finance:business-cost:void', 'finance:business-cost:export', 'finance:business-cost:view-all', 'finance:business-cost:view-agent', 'finance:business-cost:view-profit', 'finance:order-fee:payable:view', 'finance:order-fee:payable:manage', 'finance:order-fee:profit:receivable-payable', 'finance:order-fee:profit:receivable-business', 'finance:order-fee:profit:business-payable', 'finance:payable:read', 'finance:payable:manage', 'finance:payable:audit', 'finance:payable:reverse', 'finance:payable:void', 'finance:payable:export', 'finance:payable:payment', 'finance:payable:bank', 'finance:payable:attachment', 'finance:payable:view-sensitive', 'finance:payable:view-profit', 'finance:payable:paid-read', 'finance:payable:paid-confirm', 'finance:payable:paid-reverse', 'finance:payable:paid-export', 'finance:payable:paid-voucher', 'finance:payable:paid-bank-view', 'finance:water-receipt:read', 'finance:water-receipt:manage', 'finance:water-receipt:arrive', 'finance:water-receipt:match', 'finance:water-receipt:adjust', 'finance:water-receipt:void', 'finance:water-receipt:archive', 'finance:water-receipt:export', 'finance:water-receipt:voucher', 'finance:water-receipt:view-all', 'reports:read', 'master-data:read', 'master-data:agents:read'],
   CUSTOMER: ['workspace:access', 'orders:read', 'orders:write', 'finance:read', 'problems:read', 'problems:write', 'pricing:lookup']

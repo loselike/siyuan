@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type Key, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type Key, type ReactNode } from 'react';
 import { Button, Card, Checkbox, Empty, Flex, message as antdMessage, Modal, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig, TableProps } from 'antd/es/table';
 import { Search, Settings } from 'lucide-react';
@@ -12,6 +12,17 @@ export interface NoticeBarPresentation {
   type: NoticeBarType;
   title: string;
   description?: string;
+}
+
+const noticeEventSeparator = '\u2063notice:';
+let noticeEventSequence = 0;
+
+export function createNoticeMessage(message: string | null) {
+  if (!message) {
+    return message;
+  }
+  noticeEventSequence += 1;
+  return `${message}${noticeEventSeparator}${Date.now()}-${noticeEventSequence}`;
 }
 
 export const tenRowTablePagination: TablePaginationConfig = {
@@ -179,7 +190,7 @@ function getTableColumnLabel(columns: ManagedColumnLike[], key: string) {
 }
 
 export function cleanNoticeMessage(message: string): string {
-  const trimmed = message.trim();
+  const trimmed = message.split(noticeEventSeparator)[0].trim();
   if (!trimmed.startsWith('{')) {
     return trimmed;
   }
@@ -209,10 +220,15 @@ export function buildNoticeBarPresentation(message: string): NoticeBarPresentati
     '不能',
     '无法',
     '必须',
+    '已存在',
+    '重复',
+    '冲突',
     '没有匹配',
     '未授权',
     'unauthorized',
     'forbidden',
+    'duplicate',
+    'conflict',
     'bad request',
     'request entity too large',
     'token'
@@ -247,13 +263,11 @@ export function renderNoticeBar(message?: string | null): ReactNode {
 
 function NoticeToast({ message }: { message: string }) {
   const [api, contextHolder] = antdMessage.useMessage();
-  const lastMessageRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!message || lastMessageRef.current === message) {
+    if (!message) {
       return;
     }
-    lastMessageRef.current = message;
     const notice = buildNoticeBarPresentation(message);
     api.open({
       type: notice.type,

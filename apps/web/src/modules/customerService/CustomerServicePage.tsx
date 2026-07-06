@@ -1,5 +1,5 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
-import { Button, Card, Checkbox, Form, Input, Modal, Progress, Space, Typography, message } from 'antd';
+import { Button, Card, Checkbox, Form, Input, Modal, Popconfirm, Progress, Space, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { AuditLogSummary, ProblemTicketSummary, Shipment, ShipmentStatus } from '@siyuan/shared';
 import type { ApiClient } from '../../apiClient';
@@ -11,7 +11,7 @@ const { Text } = Typography;
 
 const statusSections: Record<string, ShipmentStatus[]> = {
   dataConfirm: ['OUTBOUNDED'],
-  transferNo: ['OUTBOUNDED'],
+  transferNo: ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'],
   waitingDeparture: ['WAITING_DEPARTURE'],
   departed: ['DEPARTED'],
   arrivedPort: ['ARRIVED_PORT'],
@@ -217,7 +217,8 @@ export function CustomerServicePage({
   onShipmentUpdated,
   onProblemTicketCreated,
   onProblemTicketUpdated,
-  onNotice
+  onNotice,
+  initialSection = 'service-dashboard'
 }: {
   shipments: Shipment[];
   problemTickets: ProblemTicketSummary[];
@@ -226,8 +227,9 @@ export function CustomerServicePage({
   onProblemTicketCreated?: (ticket: ProblemTicketSummary) => void;
   onProblemTicketUpdated?: (ticket: ProblemTicketSummary) => void;
   onNotice?: (notice: string) => void;
+  initialSection?: string;
 }) {
-  const [activeSection, setActiveSection] = useState('service-dashboard');
+  const [activeSection, setActiveSection] = useState(initialSection);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [departureForm] = Form.useForm<DepartureFormValues>();
   const [problemForm] = Form.useForm<ProblemFormValues>();
@@ -238,6 +240,7 @@ export function CustomerServicePage({
   const [problemShipment, setProblemShipment] = useState<Shipment | null>(null);
   const [transferShipment, setTransferShipment] = useState<Shipment | null>(null);
   const [dataConfirmShipment, setDataConfirmShipment] = useState<Shipment | null>(null);
+  const [dataConfirmDetailShipment, setDataConfirmDetailShipment] = useState<Shipment | null>(null);
   const [labelShipment, setLabelShipment] = useState<Shipment | null>(null);
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
   const [departedColumnSettingsOpen, setDepartedColumnSettingsOpen] = useState(false);
@@ -281,6 +284,9 @@ export function CustomerServicePage({
     { key: 'problems', label: '问题件' },
     { key: 'afterSale', label: '售后' }
   ];
+  useEffect(() => {
+    setActiveSection(initialSection);
+  }, [initialSection]);
   const rows = useMemo(() => {
     const statuses = statusSections[activeSection] ?? [];
     if (!statuses.length) return [];
@@ -322,12 +328,23 @@ export function CustomerServicePage({
       title: '操作',
       key: 'action',
       fixed: 'right',
-      width: 270,
+      width: 380,
       render: (_, row) => (
         <Space size={6}>
-          <Button size="small" type="primary" onClick={() => openDepartureModal(row)}>
-            已离港
+          <Button size="small" onClick={() => openDepartureModal(row)}>
+            修改
           </Button>
+          <Popconfirm
+            title="确认到达已离港？"
+            description="确认后该票进入已离港。"
+            okText="确认到达已离港"
+            cancelText="取消"
+            onConfirm={() => void confirmDeparted(row)}
+          >
+            <Button size="small" type="primary">
+              确认已离港
+            </Button>
+          </Popconfirm>
           <Button size="small" onClick={() => openProblemModal(row)}>
             问题件
           </Button>
@@ -369,11 +386,16 @@ export function CustomerServicePage({
           title: '操作',
           key: 'action',
           fixed: 'right',
-          width: 100,
+          width: 150,
           render: (_, row) => (
-            <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>
-              确认
-            </Button>
+            <Space size={6}>
+              <Button size="small" onClick={() => setDataConfirmDetailShipment(row)}>
+                详情
+              </Button>
+              <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>
+                确认
+              </Button>
+            </Space>
           )
         }
       : waitingColumnMap[key]
@@ -410,15 +432,23 @@ export function CustomerServicePage({
       title: '操作',
       key: 'action',
       fixed: 'right',
-      width: 190,
+      width: 260,
       render: (_, row) => (
         <Space size={6}>
           <Button size="small" onClick={() => openDepartedEditModal(row)}>
             修改
           </Button>
-          <Button size="small" type="primary" onClick={() => void markArrivedPort(row)}>
-            已到港
-          </Button>
+          <Popconfirm
+            title="确认到达已到港？"
+            description="确认后该票进入已到港。"
+            okText="确认到达已到港"
+            cancelText="取消"
+            onConfirm={() => void markArrivedPort(row)}
+          >
+            <Button size="small" type="primary">
+              已到港
+            </Button>
+          </Popconfirm>
           <Button size="small" onClick={() => openProblemModal(row)}>
             问题件
           </Button>
@@ -485,12 +515,9 @@ export function CustomerServicePage({
       title: '操作',
       key: 'action',
       fixed: 'right',
-      width: 270,
+      width: 220,
       render: (_, row) => (
         <Space size={6}>
-          <Button size="small" onClick={() => openProblemModal(row)}>
-            问题件
-          </Button>
           <Button size="small" onClick={() => openTransferModal(row)}>
             修改转单号
           </Button>
@@ -553,7 +580,13 @@ export function CustomerServicePage({
     }).length;
     const openProblemCount = problemTickets.filter((ticket) => ticket.status !== 'CLOSED').length;
     const weeklyProblemCount = problemTickets.filter((ticket) => isCurrentWeek(ticket.createdAt)).length;
+    const weeklyNewCustomerCount = new Set(
+      shipments
+        .filter((shipment) => shipment.systemOrderNo.includes('001') && isCurrentWeek(shipment.entryAt ?? shipment.createdAt))
+        .map((shipment) => shipment.customerCode || shipment.customerName || shipment.systemOrderNo)
+    ).size;
     const weeklyCards = [
+      { key: 'weeklyNewCustomers', label: '本周新客户', value: weeklyNewCustomerCount, section: 'service-dashboard' },
       { key: 'weeklyProblems', label: '本周异常件', value: weeklyProblemCount, section: 'problems' },
       { key: 'weeklyDeparted', label: '本周已离港', value: weeklyStatusCount('DEPARTED'), section: 'departed' },
       { key: 'weeklyArrived', label: '本周已到港', value: weeklyStatusCount('ARRIVED_PORT'), section: 'arrivedPort' },
@@ -607,9 +640,18 @@ export function CustomerServicePage({
           <Button size="small" type="primary" disabled={row.ticket.status === 'CLOSED'} onClick={() => void closeProblem(row.ticket)}>
             问题件已经解决
           </Button>
-          <Button size="small" disabled={row.ticket.status === 'CLOSED'} onClick={() => void requestProblemAssist(row.ticket)}>
-            问题件需协助
-          </Button>
+          <Popconfirm
+            title="确认标记需协助？"
+            description="确认后售后状态会标记为需协助。"
+            okText="确认需协助"
+            cancelText="取消"
+            onConfirm={() => void requestProblemAssist(row.ticket)}
+            disabled={row.ticket.status === 'CLOSED'}
+          >
+            <Button size="small" disabled={row.ticket.status === 'CLOSED'}>
+              问题件需协助
+            </Button>
+          </Popconfirm>
         </Space>
       )
     }
@@ -734,21 +776,35 @@ export function CustomerServicePage({
         return;
       }
       const updated = await apiClient.updateShipmentOperational(departureShipment.id, {
-        status: 'DEPARTED',
-        latestTracking: '已离港',
+        latestTracking: departureShipment.latestTracking,
         etdAt: values.etdAt,
         etaAt: values.etaAt,
         trackingWebsite: values.trackingWebsite,
         trackingWebsiteVisibleToSales: values.trackingWebsiteVisibleToSales ?? false
       });
       onShipmentUpdated?.(updated);
-      onNotice?.(`${updated.systemOrderNo} 已确认离港${values.pushToSales ? '，业务推送待企业微信接入' : ''}`);
+      onNotice?.(`${updated.systemOrderNo} 已修改待离港信息${values.pushToSales ? '，业务推送待企业微信接入' : ''}`);
       setDepartureShipment(null);
       departureForm.resetFields();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '确认离港失败');
+      message.error(error instanceof Error ? error.message : '修改待离港信息失败');
     } finally {
       setSubmittingDeparture(false);
+    }
+  }
+
+  async function confirmDeparted(shipment: Shipment) {
+    if (!apiClient) return;
+    try {
+      const updated = await apiClient.updateShipmentOperational(shipment.id, {
+        status: 'DEPARTED',
+        latestTracking: '已离港'
+      });
+      onShipmentUpdated?.(updated);
+      onNotice?.(`${updated.systemOrderNo} 已确认离港`);
+      setActiveSection('departed');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '确认离港失败');
     }
   }
 
@@ -859,13 +915,18 @@ export function CustomerServicePage({
     const values = await dataConfirmForm.validateFields();
     setSubmittingDataConfirm(true);
     try {
-      const updated = await apiClient.approveShipmentBusinessData(dataConfirmShipment.id, { remark: values.remark });
+      const approved = await apiClient.approveShipmentBusinessData(dataConfirmShipment.id, { remark: values.remark });
+      onShipmentUpdated?.(approved);
+      const updated = await apiClient.updateShipmentOperational(dataConfirmShipment.id, {
+        status: 'WAITING_DEPARTURE',
+        latestTracking: '数据确认完成，待离港'
+      });
       onShipmentUpdated?.(updated);
       await refreshCustomerServiceAuditLogs();
-      onNotice?.(`${updated.systemOrderNo} 数据确认完成，已进入转单号`);
+      onNotice?.(`${updated.systemOrderNo} 数据确认完成，已进入待离港`);
       setDataConfirmShipment(null);
       dataConfirmForm.resetFields();
-      setActiveSection('transferNo');
+      setActiveSection('waitingDeparture');
     } catch (error) {
       message.error(error instanceof Error ? error.message : '数据确认失败');
     } finally {
@@ -1102,14 +1163,14 @@ export function CustomerServicePage({
         ) : null}
       </ModuleSubWorkspace>
       <Modal
-        title={departureModalMode === 'editDeparted' ? '修改' : '确认已离港'}
+        title={departureModalMode === 'editDeparted' ? '修改' : '修改待离港'}
         open={Boolean(departureShipment)}
         onCancel={() => setDepartureShipment(null)}
         onOk={() => void submitDeparture()}
         confirmLoading={submittingDeparture}
         okText="确定"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={departureForm} layout="vertical">
           <Space direction="vertical" size={2} className="full-width">
@@ -1137,6 +1198,23 @@ export function CustomerServicePage({
         </Form>
       </Modal>
       <Modal
+        title="运单详情"
+        open={Boolean(dataConfirmDetailShipment)}
+        onCancel={() => setDataConfirmDetailShipment(null)}
+        footer={<Button onClick={() => setDataConfirmDetailShipment(null)}>关闭</Button>}
+        width={760}
+        destroyOnHidden
+      >
+        <div className="customer-service-detail-grid">
+          {buildDataConfirmDetailItems(dataConfirmDetailShipment).map((item) => (
+            <div className="customer-service-detail-item" key={item.label}>
+              <Text type="secondary">{item.label}</Text>
+              <Text strong>{item.value}</Text>
+            </div>
+          ))}
+        </div>
+      </Modal>
+      <Modal
         title="数据确认"
         open={Boolean(dataConfirmShipment)}
         onCancel={() => setDataConfirmShipment(null)}
@@ -1144,7 +1222,7 @@ export function CustomerServicePage({
         confirmLoading={submittingDataConfirm}
         okText="确认"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={dataConfirmForm} layout="vertical">
           <Space direction="vertical" size={2} className="full-width">
@@ -1179,7 +1257,7 @@ export function CustomerServicePage({
         confirmLoading={submittingTransfer}
         okText="确认"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={transferForm} layout="vertical">
           <Form.Item label="客户编号">
@@ -1207,7 +1285,7 @@ export function CustomerServicePage({
         open={Boolean(labelShipment)}
         onCancel={() => setLabelShipment(null)}
         footer={<Button onClick={() => setLabelShipment(null)}>关闭</Button>}
-        destroyOnClose
+        destroyOnHidden
       >
         <input
           ref={fileInputRef}
@@ -1254,7 +1332,7 @@ export function CustomerServicePage({
         confirmLoading={submittingProblem}
         okText="确定"
         cancelText="取消"
-        destroyOnClose
+        destroyOnHidden
       >
         <Form form={problemForm} layout="vertical">
           <Space direction="vertical" size={2} className="full-width">
@@ -1376,6 +1454,34 @@ function toDatetimeLocalValue(value?: string) {
   return date.toISOString().slice(0, 16);
 }
 
+function buildDataConfirmDetailItems(shipment: Shipment | null): Array<{ label: string; value: string }> {
+  if (!shipment) return [];
+  const value = (input: unknown) => input === undefined || input === null || input === '' ? '-' : String(input);
+  return [
+    { label: '运单创建时间', value: formatBeijingDateTime(shipment.entryAt ?? shipment.createdAt) },
+    { label: '出库时间', value: shipment.outboundAt ? formatBeijingDateTime(shipment.outboundAt) : '-' },
+    { label: '业务员', value: value(shipment.salesperson) },
+    { label: '客户编号', value: value(shipment.customerCode) },
+    { label: '客户名称', value: value(shipment.customerName) },
+    { label: '目的地', value: value(shipment.destinationCountry) },
+    { label: '品名', value: value(shipment.productName) },
+    { label: '件数', value: value(shipment.packageCount) },
+    { label: '实重', value: value(shipment.receivableWeightKg) },
+    { label: '计费重', value: value(shipment.receivableWeightKg) },
+    { label: '代理计费重', value: value(shipment.agentWeightKg) },
+    { label: '报关', value: shipment.declarationRequired ? '是' : '否' },
+    { label: '敏感', value: shipment.sensitive ? '是' : '否' },
+    { label: '代理', value: value(shipment.agentName) },
+    { label: '业务渠道', value: value(shipment.carrier) },
+    { label: '代理渠道', value: value(shipment.channelName) },
+    { label: '出货单号', value: value(shipment.systemOrderNo) },
+    { label: '转单号', value: value(shipment.transferNo) },
+    { label: '状态', value: value(shipment.status) },
+    { label: '最新轨迹', value: value(shipment.latestTracking) },
+    { label: '备注', value: value(shipment.remark) }
+  ];
+}
+
 function formatMaybeDateTime(value?: string) {
   return value ? formatBeijingDateTime(value) : '-';
 }
@@ -1444,10 +1550,10 @@ function problemDwellDays(createdAt: string) {
 }
 
 function getAfterSaleStatus(row: ProblemRow) {
-  if (row.ticket.status === 'CLOSED') return '已解决';
-  if (row.ticket.replies.some((reply) => reply.message.includes('问题件需协助'))) return '处理中';
-  if (/赔付|破损|丢失|少件|退款|补发/.test(row.ticket.reason)) return '需赔付';
-  return '待处理';
+  if (row.ticket.status === 'CLOSED') return <Tag color="green">已解决</Tag>;
+  if (row.ticket.replies.some((reply) => reply.message.includes('问题件需协助'))) return <Tag color="orange">需协助</Tag>;
+  if (/赔付|破损|丢失|少件|退款|补发/.test(row.ticket.reason)) return <Tag color="red">需赔付</Tag>;
+  return <Tag>待处理</Tag>;
 }
 
 function isCurrentWeek(value?: string) {

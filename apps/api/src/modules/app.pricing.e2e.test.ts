@@ -82,7 +82,7 @@ describe('Siyuan API pricing', () => {
       .set('Authorization', app.auth(adminToken))
       .expect(200)
       .expect((response) => {
-        const ids = response.body.map((rule: any) => rule.id);
+        const ids = response.body.rows.map((rule: any) => rule.id);
         expect(ids).not.toContain(lineRule.body.id);
         expect(ids).not.toContain(channelRule.body.id);
       });
@@ -269,7 +269,15 @@ describe('Siyuan API pricing', () => {
       .set('Authorization', app.auth(adminToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: markupRule.body.id, agentName: '规则保留代理' })]));
+        expect(response.body.rows).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'agent:规则保留代理', agentName: '规则保留代理', ruleCount: 1 })]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/markup-rules?detail=true')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([expect.objectContaining({ id: markupRule.body.id, agentName: '规则保留代理' })]));
       });
   });
 
@@ -362,6 +370,16 @@ describe('Siyuan API pricing', () => {
         expect(response.body.markup.markupPerKg).toBe(0.5);
         expect(response.body.recommendations[0].productSurchargeRemark).toContain('带磁');
         expect(response.body.recommendations[0].specialRemark).toContain('超长件');
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/lookup')
+      .set('Authorization', app.auth(adminToken))
+      .send({ destinationCountry: '美国', amazonCode: 'AMZ-US-001', chargeableWeightKg: 1, volumeCbm: 5 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.chargeableWeightKg).toBe(835);
+        expect(response.body.totalSales).toBe(15447.5);
       });
 
     await request(app.getHttpServer())

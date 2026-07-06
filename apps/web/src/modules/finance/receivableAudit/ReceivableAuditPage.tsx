@@ -304,6 +304,7 @@ export function ReceivableAuditPage({
   return (
     <Card
       title="应收审核"
+      className="finance-work-card"
       extra={
         <Space wrap>
           <Button onClick={togglePageSelection}>{isPageSelected ? '取消全选' : '全选本页'}</Button>
@@ -362,7 +363,7 @@ export function ReceivableAuditPage({
         </Row>
       </Form>
 
-      <Flex gap={12} wrap className="finance-audit-summary">
+      <Flex gap={12} wrap className="finance-work-status-strip finance-audit-summary">
         <Tag color="blue">RMB 合计 {formatCurrency(response.totals.rmbTotal)}</Tag>
         <Tag>待审核 {response.totals.pendingCount}</Tag>
         <Tag color="success">已审核 {response.totals.confirmedCount}</Tag>
@@ -407,7 +408,7 @@ export function ReceivableAuditPage({
         )}
       />
 
-      <Modal title="新增应收" open={createOpen} onCancel={() => setCreateOpen(false)} onOk={submitCreate} okText="保存应收" cancelText="取消">
+      <Modal title="新增应收" className="finance-modal" width={760} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={submitCreate} okText="保存应收" cancelText="取消">
         <Form form={form} layout="vertical" initialValues={{ name: '运费', currency: 'RMB' }}>
           <Form.Item name="systemOrderNo" label="运单号"><Input placeholder="按运单号匹配订单" /></Form.Item>
           <Form.Item name="customerOrderNo" label="客户单号"><Input /></Form.Item>
@@ -424,7 +425,7 @@ export function ReceivableAuditPage({
         </Form>
       </Modal>
 
-      <Modal title="匹配水单" open={Boolean(receiptRow)} onCancel={() => { setReceiptRow(null); setReceiptRows([]); }} onOk={submitReceiptMatch} okText="匹配" cancelText="取消">
+      <Modal title="匹配水单" className="finance-modal" width={820} open={Boolean(receiptRow)} onCancel={() => { setReceiptRow(null); setReceiptRows([]); }} onOk={submitReceiptMatch} okText="匹配" cancelText="取消">
         <Form form={receiptForm} layout="vertical">
           <Form.Item name="ledgerId" label="水单编号" rules={[{ required: true, message: '请选择水单' }]}>
             <Select

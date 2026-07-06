@@ -311,6 +311,7 @@ export function BusinessCostAuditPage({
   return (
     <Card
       title="业务员成本"
+      className="finance-work-card"
       extra={
         <Space wrap>
           <Button onClick={togglePageSelection}>{isPageSelected ? '取消全选' : '全选本页'}</Button>
@@ -370,7 +371,7 @@ export function BusinessCostAuditPage({
         </Row>
       </Form>
 
-      <Flex gap={12} wrap className="finance-audit-summary">
+      <Flex gap={12} wrap className="finance-work-status-strip finance-audit-summary">
         <Tag color="blue">RMB 合计 {formatCurrency(response.totals.rmbTotal)}</Tag>
         {canViewProfit ? <Tag color="green">业务利润 {formatCurrency(response.totals.profitTotal ?? 0)}</Tag> : null}
         <Tag>待审核 {response.totals.pendingCount}</Tag>
@@ -386,6 +387,7 @@ export function BusinessCostAuditPage({
         loading={loading}
         dataSource={response.rows}
         columns={columns}
+        locale={{ emptyText: '暂无已自审通过的业务成本待审项' }}
         rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) }}
         scroll={{ x: 2500 }}
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
@@ -403,7 +405,7 @@ export function BusinessCostAuditPage({
         }}
       />
 
-      <Modal title={editingRow ? '修改业务成本' : '添加成本'} open={editorOpen} onCancel={closeEditor} onOk={submitEditor} okText="保存成本" cancelText="取消">
+      <Modal title={editingRow ? '修改业务成本' : '添加成本'} className="finance-modal" width={760} open={editorOpen} onCancel={closeEditor} onOk={submitEditor} okText="保存成本" cancelText="取消">
         <Form
           form={form}
           layout="vertical"

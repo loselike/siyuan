@@ -4,6 +4,10 @@ import type {
   AgentChannelSummary,
   AgentChannelUpdateInput,
   AgentMarkupCreateInput,
+  AgentMarkupExportResponse,
+  AgentMarkupListQuery,
+  AgentMarkupListResponse,
+  AgentMarkupPreviewResponse,
   AgentMarkupSummary,
   AgentMarkupUpdateInput,
   AgentSummary,
@@ -80,6 +84,8 @@ import type {
   PriceBookSummary,
   PriceLookupRequest,
   PriceLookupResponse,
+  LineShipmentPoolQuery,
+  LineShipmentPoolResponse,
   PricingQuoteRequest,
   PricingRuleCreateInput,
   PricingRuleQuoteRequest,
@@ -159,6 +165,7 @@ import type {
   BusinessCostFeeSummary,
   PayableFeeSummary,
   ShipmentFinanceItemUpdateInput,
+  ShipmentDispatchInput,
   ShipmentRestoreInput,
   ShipmentReviewDeleteInput,
   ShipmentReviewDetailSummary,
@@ -248,10 +255,23 @@ export type PermissionKey =
   | 'finance:water-receipt:view-all'
   | 'master-data:read'
   | 'master-data:write'
+  | 'master-data:customers:read'
+  | 'master-data:customers:write'
+  | 'master-data:finance:read'
+  | 'master-data:finance:write'
   | 'master-data:agents:read'
   | 'master-data:agents:write'
+  | 'master-data:agent-channels:read'
+  | 'master-data:agent-channels:write'
   | 'master-data:channels:read'
   | 'master-data:channels:write'
+  | 'master-data:channel-categories:read'
+  | 'master-data:channel-categories:write'
+  | 'master-data:remote-areas:read'
+  | 'master-data:remote-areas:write'
+  | 'master-data:exchange-rates:read'
+  | 'master-data:exchange-rates:write'
+  | 'master-data:assistant:read'
   | 'reports:read'
   | 'system:manage';
 
@@ -408,8 +428,11 @@ export class ApiClient {
     return this.request(`/shipments/${id}/review-detail`);
   }
 
-  async approveShipmentReview(id: string): Promise<ShipmentReviewDetailSummary> {
-    return this.request(`/shipments/${id}/review/approve`, { method: 'POST' });
+  async approveShipmentReview(id: string, input?: { businessReview?: boolean }): Promise<ShipmentReviewDetailSummary> {
+    return this.request(`/shipments/${id}/review/approve`, {
+      method: 'POST',
+      ...(input ? { body: JSON.stringify(input) } : {})
+    });
   }
 
   async rejectShipmentReview(id: string, input: ShipmentReviewRejectInput): Promise<ShipmentReviewDetailSummary> {
@@ -460,7 +483,7 @@ export class ApiClient {
     return this.request(`/shipments/${id}/reroute`, { method: 'POST', body: JSON.stringify(body) });
   }
 
-  async dispatchShipment(id: string, body: { transferNo?: string }): Promise<Shipment> {
+  async dispatchShipment(id: string, body: ShipmentDispatchInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/dispatch`, { method: 'POST', body: JSON.stringify(body) });
   }
 
@@ -514,6 +537,40 @@ export class ApiClient {
     return response.json() as Promise<LabelCreateResponse>;
   }
 
+  async uploadAgentInvoiceTemplate(file: File): Promise<{ fileName: string; url: string }> {
+    const body = new FormData();
+    body.append('file', file);
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(`${API_BASE}/master-data/agent-invoice-template/upload`, { method: 'POST', body, headers });
+    if (response.status === 401) {
+      this.onUnauthorized();
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    if (!response.ok) {
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    return response.json() as Promise<{ fileName: string; url: string }>;
+  }
+
+  async uploadShipmentBusinessInvoice(id: string, file: File): Promise<{ shipment: Shipment; fileName: string; url: string }> {
+    const body = new FormData();
+    body.append('file', file);
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(`${API_BASE}/shipments/${id}/invoice/upload`, { method: 'POST', body, headers });
+    if (response.status === 401) {
+      this.onUnauthorized();
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    if (!response.ok) {
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    return response.json() as Promise<{ shipment: Shipment; fileName: string; url: string }>;
+  }
+
   async addTrackingEvent(id: string, input: TrackingEventInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/tracking-events`, { method: 'POST', body: JSON.stringify(input) });
   }
@@ -536,6 +593,14 @@ export class ApiClient {
 
   async createProblemTicket(id: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
     return this.request(`/shipments/${id}/problem-tickets`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async lineShipmentPool(query: LineShipmentPoolQuery = {}): Promise<LineShipmentPoolResponse> {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
+    });
+    return this.request(`/operations/line-shipments${params.size ? `?${params.toString()}` : ''}`);
   }
 
   async replyProblemTicket(id: string, message: string): Promise<ProblemTicketSummary> {
@@ -586,8 +651,32 @@ export class ApiClient {
     return this.request('/pricing/lookup', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async agentMarkupRules(): Promise<AgentMarkupSummary[]> {
-    return this.request('/pricing/markup-rules');
+  async agentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) {
+        params.set(key, String(value));
+      }
+    });
+    return this.request(`/pricing/markup-rules${params.toString() ? `?${params.toString()}` : ''}`);
+  }
+
+  async previewAgentMarkupRule(id: string): Promise<AgentMarkupPreviewResponse> {
+    return this.request(`/pricing/markup-rules/${id}/preview`);
+  }
+
+  async exportAgentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) {
+        params.set(key, String(value));
+      }
+    });
+    return this.request(`/pricing/markup-rules/export${params.toString() ? `?${params.toString()}` : ''}`);
+  }
+
+  async importAgentMarkupRules(rows: AgentMarkupCreateInput[]): Promise<{ successCount: number; errorRows: Array<{ index: number; reason: string }>; rows: AgentMarkupSummary[] }> {
+    return this.request('/pricing/markup-rules/import', { method: 'POST', body: JSON.stringify({ rows }) });
   }
 
   async createAgentMarkupRule(input: AgentMarkupCreateInput): Promise<AgentMarkupSummary> {
@@ -1056,12 +1145,20 @@ export class ApiClient {
     return this.request('/master-data');
   }
 
+  async customers(): Promise<CustomerSummary[]> {
+    return this.request('/master-data/customers');
+  }
+
   async createCustomer(input: CustomerCreateInput): Promise<CustomerSummary> {
     return this.request('/master-data/customers', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async updateCustomer(id: string, input: CustomerUpdateInput): Promise<CustomerSummary> {
     return this.request(`/master-data/customers/${id}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deleteCustomer(id: string): Promise<CustomerSummary> {
+    return this.request(`/master-data/customers/${id}`, { method: 'DELETE' });
   }
 
   async createCustomerContact(customerId: string, input: CustomerContactCreateInput): Promise<CustomerContactSummary> {
@@ -1206,6 +1303,10 @@ export class ApiClient {
 
   async updateStaffAccount(id: string, input: StaffAccountUpdateInput): Promise<StaffAccountSummary> {
     return this.request(`/system/staff-accounts/${id}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async updateStaffAccountEnabled(id: string, input: { enabled: boolean }): Promise<StaffAccountSummary> {
+    return this.request(`/system/staff-accounts/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
   async deleteStaffAccount(id: string): Promise<StaffAccountSummary> {

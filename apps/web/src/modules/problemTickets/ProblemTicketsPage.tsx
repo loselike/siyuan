@@ -126,8 +126,8 @@ function LowFrequencyModulePage({
                       width: 180,
                       render: () => (
                         <Space>
-                          <Button size="small">查看</Button>
-                          <Button size="small">处理</Button>
+                          <Button size="small" disabled>查看</Button>
+                          <Button size="small" disabled>处理</Button>
                         </Space>
                       )
                     }
@@ -152,8 +152,8 @@ function LowFrequencyModulePage({
                       width: 180,
                       render: () => (
                         <Space>
-                          <Button size="small">查看</Button>
-                          <Button size="small">处理</Button>
+                          <Button size="small" disabled>查看</Button>
+                          <Button size="small" disabled>处理</Button>
                         </Space>
                       )
                     }
@@ -178,10 +178,10 @@ function LowFrequencyModulePage({
             {activeSection === 'actions' ? (
               <Card className="automation-card" title="快捷动作">
                 <Space wrap>
-                  <Button>批量修改</Button>
-                  <Button>生成说明</Button>
-                  <Button>同步客户</Button>
-                  <Button>写入审计</Button>
+                  <Button disabled>批量修改</Button>
+                  <Button disabled>生成说明</Button>
+                  <Button disabled>同步客户</Button>
+                  <Button disabled>写入审计</Button>
                 </Space>
               </Card>
             ) : null}

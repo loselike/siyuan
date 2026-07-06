@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Alert, AutoComplete, Button, Card, Col, Flex, Form, Input, InputNumber, Modal, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
+import { Alert, AutoComplete, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Modal, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
 import type { FormInstance } from 'antd/es/form';
 import type { ColumnsType } from 'antd/es/table';
 import { Activity, Boxes, ClipboardCheck, FileInput, RotateCcw, Sparkles } from 'lucide-react';
@@ -31,6 +31,7 @@ export interface RoutingAssignmentFormValues {
   otherFee?: number;
   otherFeeRemark?: string;
   currency?: string;
+  shippingMarkRequired?: boolean;
 }
 
 export interface RoutingPageConfig {
@@ -122,7 +123,7 @@ export function RoutingPage({
   businessCostAudits?: BusinessCostAuditSummary[];
   onOpenAssignment: (shipment: Shipment) => void;
   onCancelAssignment: () => void;
-  onConfirmAssignment: () => Promise<void>;
+  onConfirmAssignment: () => Promise<boolean>;
   onRerouteShipment: (shipment: Shipment, reason: string) => Promise<void>;
   onEditShipment: (shipment: Shipment) => void;
   onViewRoutingLog: (shipment: Shipment) => void;
@@ -180,6 +181,22 @@ export function RoutingPage({
     () => shipments.filter((shipment) => shipment.outboundAt && new Date(shipment.outboundAt).getTime() >= dayStart),
     [shipments, dayStart]
   );
+  const weeklyOutboundShipmentsWithAgent = useMemo(
+    () => shipments.filter((shipment) => shipment.agentName && shipment.outboundAt && new Date(shipment.outboundAt).getTime() >= weekStart),
+    [shipments, weekStart]
+  );
+  const weeklyNewAgentCount = useMemo(() => {
+    const firstOutboundByAgent = new Map<string, number>();
+    for (const shipment of shipments) {
+      if (!shipment.agentName || !shipment.outboundAt) continue;
+      const outboundTime = new Date(shipment.outboundAt).getTime();
+      const current = firstOutboundByAgent.get(shipment.agentName);
+      if (current === undefined || outboundTime < current) {
+        firstOutboundByAgent.set(shipment.agentName, outboundTime);
+      }
+    }
+    return [...firstOutboundByAgent.values()].filter((firstOutboundAt) => firstOutboundAt >= weekStart).length;
+  }, [shipments, weekStart]);
   const reroutedThisWeek = useMemo(
     () => shipments.filter((shipment) => shipment.routeReturnedAt && new Date(shipment.routeReturnedAt).getTime() >= weekStart),
     [shipments, weekStart]
@@ -373,12 +390,14 @@ export function RoutingPage({
             {activeSection === 'market-dashboard' ? (
               <Space direction="vertical" size={12} className="full-width market-dashboard">
                 <Row gutter={[12, 12]}>
-                  <Col xs={24} md={4}><CompactMetricCard icon={<Boxes />} title="待排货" value={pendingShipments.length} extra="待市场排货" /></Col>
-                  <Col xs={24} md={4}><CompactMetricCard icon={<Activity />} title="已排货" value={routedShipments.length} extra="待仓库出库" /></Col>
-                  <Col xs={24} md={4}><CompactMetricCard icon={<ClipboardCheck />} title="今日排货" value={todayRoutedShipments.length} extra="今天已排票数" /></Col>
-                  <Col xs={24} md={4}><CompactMetricCard icon={<Boxes />} title="今日出货" value={todayOutboundShipments.length} extra="仓库今日出库" /></Col>
-                  <Col xs={24} md={4}><CompactMetricCard icon={<ClipboardCheck />} title="本周排货" value={weeklyRoutedShipments.length} extra="按排货时间" /></Col>
-                  <Col xs={24} md={4}><CompactMetricCard icon={<RotateCcw />} title="退回重排" value={reroutedThisWeek.length} extra="本周退回" /></Col>
+                  <Col xs={24} sm={12} md={6} xl={3}><CompactMetricCard icon={<Boxes />} title="待排货" value={pendingShipments.length} extra="待市场排货" /></Col>
+                  <Col xs={24} sm={12} md={6} xl={3}><CompactMetricCard icon={<Activity />} title="已排货" value={routedShipments.length} extra="待仓库出库" /></Col>
+                  <Col xs={24} sm={12} md={6} xl={3}><CompactMetricCard icon={<ClipboardCheck />} title="今日排货" value={todayRoutedShipments.length} extra="今天已排票数" /></Col>
+                  <Col xs={24} sm={12} md={6} xl={3}><CompactMetricCard icon={<Boxes />} title="今日出货" value={todayOutboundShipments.length} extra="仓库今日出库" /></Col>
+                  <Col xs={24} sm={12} md={6} xl={3}><CompactMetricCard icon={<ClipboardCheck />} title="本周排货" value={weeklyRoutedShipments.length} extra="按排货时间" /></Col>
+                  <Col xs={24} sm={12} md={6} xl={3}><CompactMetricCard icon={<Activity />} title="本周出货代理数量" value={weeklyOutboundShipmentsWithAgent.length} extra="代理出货次数" /></Col>
+                  <Col xs={24} sm={12} md={6} xl={3}><CompactMetricCard icon={<Boxes />} title="本周新代理" value={weeklyNewAgentCount} extra="首次本周出货" /></Col>
+                  <Col xs={24} sm={12} md={6} xl={3}><CompactMetricCard icon={<RotateCcw />} title="退回重排" value={reroutedThisWeek.length} extra="本周退回" /></Col>
                 </Row>
                 <Card className="module-grid market-dashboard-weekly" title="本周排货数据">
                   <Row gutter={[16, 12]}>
@@ -462,7 +481,11 @@ export function RoutingPage({
         okText="确认排货"
         cancelText="取消"
         width={680}
-        onOk={() => void onConfirmAssignment().catch(() => undefined)}
+        onOk={async () => {
+          if (await onConfirmAssignment()) {
+            setActiveSection('routed');
+          }
+        }}
         onCancel={onCancelAssignment}
       >
         <Alert
@@ -540,6 +563,11 @@ export function RoutingPage({
             <Col xs={24} md={12}>
               <Form.Item label="总成本">
                 <Text strong>{Number.isFinite(routeCostPreview) && routeCostPreview > 0 ? `${routeCostPreview.toFixed(2)} ${assignmentForm.getFieldValue('currency') ?? 'RMB'}` : '-'}</Text>
+              </Form.Item>
+            </Col>
+            <Col xs={24}>
+              <Form.Item name="shippingMarkRequired" valuePropName="checked" initialValue={false}>
+                <Checkbox>需要贴麦头</Checkbox>
               </Form.Item>
             </Col>
           </Row>

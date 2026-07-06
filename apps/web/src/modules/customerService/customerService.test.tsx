@@ -1,15 +1,21 @@
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { renderAndLogin } from '../testSupport/appTestHarness';
+import { employeeShipments, renderAndLogin } from '../testSupport/appTestHarness';
 
 describe('Customer service waiting departure module', () => {
   it('shows customer service dashboard metrics and opens status pools', async () => {
     const user = userEvent.setup();
+    const thisWeek = new Date().toISOString();
+    employeeShipments.push(
+      { ...employeeShipments[0], id: 's-new-customer-1', systemOrderNo: 'SYNEW001', customerCode: 'NEW001', customerName: '本周新客户', entryAt: thisWeek, createdAt: thisWeek, status: 'REVIEW_PENDING' },
+      { ...employeeShipments[0], id: 's-new-customer-2', systemOrderNo: 'SYNEW001-02', customerCode: 'NEW001', customerName: '本周新客户', entryAt: thisWeek, createdAt: thisWeek, status: 'REVIEW_PENDING' }
+    );
     await renderAndLogin('admin', 'admin123');
 
     await user.click(screen.getByRole('menuitem', { name: '客服管理' }));
 
+    expect(await screen.findByRole('button', { name: /本周新客户\s+1/ })).toBeInTheDocument();
     expect(await screen.findByText('本周异常件')).toBeInTheDocument();
     expect(screen.getByText('本周已离港')).toBeInTheDocument();
     expect(screen.getByText('本周已派送')).toBeInTheDocument();
@@ -32,6 +38,15 @@ describe('Customer service waiting departure module', () => {
     expect(within(confirmRow).getAllByText('12.5')).toHaveLength(2);
     expect(within(confirmRow).getAllByText('是')).toHaveLength(2);
 
+    await user.click(within(confirmRow).getByRole('button', { name: /详\s*情/ }));
+    const detailDialog = await screen.findByRole('dialog', { name: '运单详情' });
+    expect(within(detailDialog).getByText('SYGJ06061230004')).toBeInTheDocument();
+    expect(within(detailDialog).getByText('美国')).toBeInTheDocument();
+    expect(within(detailDialog).getByText('代理计费重')).toBeInTheDocument();
+    expect(within(detailDialog).getAllByText('12.5').length).toBeGreaterThanOrEqual(2);
+    await user.click(within(detailDialog).getByRole('button', { name: /关\s*闭/ }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '运单详情' })).not.toBeInTheDocument());
+
     await user.click(within(confirmRow).getByRole('button', { name: /确\s*认/ }));
     const dialog = await screen.findByRole('dialog', { name: '数据确认' });
     expect(within(dialog).getByDisplayValue('美国')).toBeInTheDocument();
@@ -43,14 +58,19 @@ describe('Customer service waiting departure module', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '数据确认' })).not.toBeInTheDocument());
     expect(await screen.findByRole('row', { name: /SYGJ06061230004/ })).toBeInTheDocument();
 
+    await user.click(await screen.findByRole('button', { name: '转单号' }));
     const transferRow = await screen.findByRole('row', { name: /SYGJ06061230004/ });
+    expect(within(transferRow).queryByRole('button', { name: '问题件' })).not.toBeInTheDocument();
+    expect(within(transferRow).queryByRole('button', { name: '确认待离港' })).not.toBeInTheDocument();
+    expect(within(transferRow).getByRole('button', { name: '上传面单' })).toBeInTheDocument();
     await user.click(within(transferRow).getByRole('button', { name: '修改转单号' }));
     const transferDialog = await screen.findByRole('dialog', { name: '修改转单号' });
     await user.type(within(transferDialog).getByLabelText('新转单号'), '1ZCONFIRM0606');
     await user.click(within(transferDialog).getByRole('button', { name: /确\s*认/ }));
 
+    expect(await screen.findByRole('row', { name: /1ZCONFIRM0606/ })).toBeInTheDocument();
     await user.click(await screen.findByRole('button', { name: '待离港' }));
-    expect(await screen.findByRole('row', { name: /SYGJ06061230004/ })).toBeInTheDocument();
+    expect(await screen.findByRole('row', { name: /1ZCONFIRM0606/ })).toBeInTheDocument();
   });
 
   it('shows problem categories, filters, and handles problem actions', async () => {
@@ -80,6 +100,8 @@ describe('Customer service waiting departure module', () => {
 
     const visibleRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
     await user.click(within(visibleRow).getByRole('button', { name: '问题件需协助' }));
+    expect(await screen.findByText('确认标记需协助？')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '确认需协助' }));
     expect(await screen.findByText('2026-06-06 20:00:00')).toBeInTheDocument();
     const assistedRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
     await user.click(within(assistedRow).getByRole('button', { name: '问题件已经解决' }));
@@ -96,15 +118,19 @@ describe('Customer service waiting departure module', () => {
     await user.click(await screen.findByRole('button', { name: '待离港' }));
 
     const waitingRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
-    await user.click(within(waitingRow).getByRole('button', { name: '已离港' }));
+    await user.click(within(waitingRow).getByRole('button', { name: /^修\s*改$/ }));
 
-    const dialog = await screen.findByRole('dialog', { name: '确认已离港' });
+    const dialog = await screen.findByRole('dialog', { name: '修改待离港' });
     await user.type(within(dialog).getByLabelText('ETD/ATD'), '2026-06-06T10:00');
     await user.type(within(dialog).getByLabelText('ETA/ATA'), '2026-06-16T10:00');
     await user.click(within(dialog).getByLabelText('查询网站对业务显示'));
     await user.click(within(dialog).getByRole('button', { name: /确\s*定/ }));
 
-    await user.click(await screen.findByRole('button', { name: '已离港' }));
+    const waitingRowAfterEdit = await screen.findByRole('row', { name: /SYGJ05291344165/ });
+    await user.click(within(waitingRowAfterEdit).getByRole('button', { name: '确认已离港' }));
+    expect(await screen.findByText('确认到达已离港？')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '确认到达已离港' }));
+
     expect(await screen.findByRole('row', { name: /SYGJ05291344165/ })).toBeInTheDocument();
   });
 
@@ -116,22 +142,40 @@ describe('Customer service waiting departure module', () => {
     await user.click(await screen.findByRole('button', { name: '待离港' }));
 
     const waitingRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
-    await user.click(within(waitingRow).getByRole('button', { name: '已离港' }));
-    const departureDialog = await screen.findByRole('dialog', { name: '确认已离港' });
+    await user.click(within(waitingRow).getByRole('button', { name: /^修\s*改$/ }));
+    const departureDialog = await screen.findByRole('dialog', { name: '修改待离港' });
     await user.type(within(departureDialog).getByLabelText('ETD/ATD'), '2026-06-06T10:00');
     await user.type(within(departureDialog).getByLabelText('ETA/ATA'), '2026-06-16T10:00');
     await user.type(within(departureDialog).getByLabelText('查询网站'), 'https://track.example/9064656160');
     await user.click(within(departureDialog).getByRole('button', { name: /确\s*定/ }));
 
-    await user.click(await screen.findByRole('button', { name: '已离港' }));
+    const waitingRowAfterEdit = await screen.findByRole('row', { name: /SYGJ05291344165/ });
+    await user.click(within(waitingRowAfterEdit).getByRole('button', { name: '确认已离港' }));
+    await user.click(await screen.findByRole('button', { name: '确认到达已离港' }));
+
+    await waitFor(() => {
+      expect(within(screen.getByRole('row', { name: /SYGJ05291344165/ })).getByRole('button', { name: '已到港' })).toBeInTheDocument();
+    });
     const departedRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
     expect(within(departedRow).getByText('已确认')).toBeInTheDocument();
     expect(await screen.findByText(/屏蔽：https:\/\/track\.example\/9064656160/)).toBeInTheDocument();
     expect(within(departedRow).getByText('admin')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '列设置' })).toBeInTheDocument();
 
-    await user.click(within(departedRow).getByRole('button', { name: /修\s*改/ }));
-    const editDialog = await screen.findByRole('dialog', { name: /修\s*改/ });
+    await user.click(await screen.findByRole('button', { name: '转单号' }));
+    const transferToolRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
+    await user.click(within(transferToolRow).getByRole('button', { name: '修改转单号' }));
+    const transferToolDialog = await screen.findByRole('dialog', { name: '修改转单号' });
+    await user.clear(within(transferToolDialog).getByLabelText('新转单号'));
+    await user.type(within(transferToolDialog).getByLabelText('新转单号'), '1Z-DEPARTED-UPDATED');
+    await user.click(within(transferToolDialog).getByRole('button', { name: /确\s*认/ }));
+    expect(await screen.findByRole('row', { name: /1Z-DEPARTED-UPDATED/ })).toBeInTheDocument();
+    await user.click(await screen.findByRole('button', { name: '已离港' }));
+    expect(await screen.findByRole('row', { name: /1Z-DEPARTED-UPDATED/ })).toBeInTheDocument();
+
+    const departedRowAfterTransfer = await screen.findByRole('row', { name: /SYGJ05291344165/ });
+    await user.click(within(departedRowAfterTransfer).getByRole('button', { name: /^修\s*改$/ }));
+    const editDialog = await screen.findByRole('dialog');
     await user.clear(within(editDialog).getByLabelText('查询网站'));
     await user.type(within(editDialog).getByLabelText('查询网站'), 'https://track.example/updated');
     await user.click(within(editDialog).getByLabelText('查询网站对业务显示'));
@@ -140,23 +184,29 @@ describe('Customer service waiting departure module', () => {
 
     const editedRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
     await user.click(within(editedRow).getByRole('button', { name: '已到港' }));
+    expect(await screen.findByText('确认到达已到港？')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '确认到达已到港' }));
     expect(await screen.findByRole('row', { name: /SYGJ05291344165/ })).toBeInTheDocument();
   });
 
   it('creates a departed problem ticket with destination port tags', async () => {
     const user = userEvent.setup();
+    const targetShipment = employeeShipments.find((item) => item.id === 's-2');
+    if (targetShipment) {
+      Object.assign(targetShipment, {
+        status: 'DEPARTED',
+        latestTracking: '已离港',
+        etdAt: '2026-06-06T10:00:00.000Z',
+        etaAt: '2026-06-16T10:00:00.000Z'
+      });
+    }
     await renderAndLogin('admin', 'admin123');
 
     await user.click(screen.getByRole('menuitem', { name: '客服管理' }));
-    await user.click(await screen.findByRole('button', { name: '待离港' }));
-    const waitingRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
-    await user.click(within(waitingRow).getByRole('button', { name: '已离港' }));
-    const departureDialog = await screen.findByRole('dialog', { name: '确认已离港' });
-    await user.type(within(departureDialog).getByLabelText('ETD/ATD'), '2026-06-06T10:00');
-    await user.type(within(departureDialog).getByLabelText('ETA/ATA'), '2026-06-16T10:00');
-    await user.click(within(departureDialog).getByRole('button', { name: /确\s*定/ }));
-
     await user.click(await screen.findByRole('button', { name: '已离港' }));
+    await waitFor(() => {
+      expect(within(screen.getByRole('row', { name: /SYGJ05291344165/ })).getByRole('button', { name: '已到港' })).toBeInTheDocument();
+    });
     const departedRow = await screen.findByRole('row', { name: /SYGJ05291344165/ });
     await user.click(within(departedRow).getByRole('button', { name: '问题件' }));
     const dialog = await screen.findByRole('dialog', { name: '创建问题件' });
@@ -181,8 +231,8 @@ describe('Customer service waiting departure module', () => {
     expect(within(arrivedRow).getByText('admin')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '列设置' })).toBeInTheDocument();
 
-    await user.click(within(arrivedRow).getByRole('button', { name: /修\s*改/ }));
-    const editDialog = await screen.findByRole('dialog', { name: /修\s*改/ });
+    await user.click(within(arrivedRow).getByRole('button', { name: /^修\s*改$/ }));
+    const editDialog = await screen.findByRole('dialog');
     await user.clear(within(editDialog).getByLabelText('查询网站'));
     await user.type(within(editDialog).getByLabelText('查询网站'), 'https://track.example/arrived-updated');
     await user.click(within(editDialog).getByLabelText('查询网站对业务显示'));
@@ -247,8 +297,10 @@ describe('Customer service waiting departure module', () => {
     expect(within(afterSaleRow).getByRole('button', { name: '问题件需协助' })).toBeInTheDocument();
 
     await user.click(within(afterSaleRow).getByRole('button', { name: '问题件需协助' }));
+    expect(await screen.findByText('确认标记需协助？')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '确认需协助' }));
     await waitFor(() => {
-      expect(within(screen.getByRole('row', { name: /SYGJ06061239999/ })).getByText('处理中')).toBeInTheDocument();
+      expect(within(screen.getByRole('row', { name: /SYGJ06061239999/ })).getByText('需协助')).toBeInTheDocument();
     });
 
     await user.click(within(screen.getByRole('row', { name: /SYGJ06061239999/ })).getByRole('button', { name: '问题件已经解决' }));
