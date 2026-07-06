@@ -34,6 +34,7 @@ import type {
   FuelRateCreateInput,
   OrderEntryCreateInput,
   OrderEntryDraftUpdateInput,
+  OrderEntryWarehousePackageQuery,
   PaymentCreateInput,
   PaymentApplicationCancelInput,
   PaymentApplicationCreateInput,
@@ -62,6 +63,9 @@ import type {
   PaymentVoucherListQuery,
   PriceBookImportInput,
   PriceBookRemarkUpdateInput,
+  LegacyPricingImportInput,
+  LegacyPricingModule,
+  LegacyPricingQuoteRequest,
   PriceLookupRequest,
   PricingQuoteRequest,
   PricingRuleCreateInput,
@@ -97,6 +101,7 @@ import type {
   WarehousePackageUpdateInput,
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCreateInput,
+  WarehouseTallyLabelScanInput,
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskUpdateInput,
   WarehouseTodayQuery,
@@ -133,7 +138,7 @@ export class DataController {
 
   private scopeMasterDataCustomers(principal: Principal, snapshot: MasterDataSnapshot): MasterDataSnapshot {
     if (!isSalesScopedRole(principal.role)) return snapshot;
-    const scope = new Set([principal.username, principal.name, principal.nickname, 'operator', '业务员'].filter((value): value is string => Boolean(value)));
+    const scope = new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value)));
     const customers = snapshot.customers.filter((customer) => customer.salesperson && scope.has(customer.salesperson));
     const customerIds = new Set(customers.map((customer) => customer.id));
     return {
@@ -156,13 +161,18 @@ export class DataController {
   private toWarehousePackageInput(body: MojiaMeasurementInput): WarehousePackageCreateInput {
     const barcode = String(body.barcode ?? body.orderNo ?? '').trim();
     const separatorIndex = barcode.search(/[-－—–]/);
-    if (separatorIndex <= 0) {
-      throw new BadRequestException('orderNo 必须是 客户编号-快递单号');
+    if (!barcode && !body.customerCode) {
+      throw new BadRequestException('请填写条码');
     }
-    const customerOrderNo = String(body.customerCode ?? barcode.slice(0, separatorIndex)).trim();
-    const domesticTrackingNo = String(body.trackingNo ?? barcode.slice(separatorIndex + 1)).trim();
-    const measuredAt = typeof body.measuredAt === 'string' ? body.measuredAt.trim() : undefined;
+    const measuredAt = normalizeMojiaMeasuredAt(body.measuredAt);
     const deviceNo = String(body.deviceNo ?? body.machineNo ?? '').trim();
+    const customerOrderNo = String(
+      body.customerCode ?? (separatorIndex > 0 ? barcode.slice(0, separatorIndex) : '待补客户')
+    ).trim();
+    const parsedTrackingNo = separatorIndex > 0 ? barcode.slice(separatorIndex + 1).trim() : '';
+    const providedTrackingNo = body.trackingNo !== undefined ? String(body.trackingNo).trim() : parsedTrackingNo;
+    const domesticTrackingNo = providedTrackingNo || '待补充';
+    const remark = deviceNo ? `设备号：${deviceNo}` : '';
     return {
       customerCode: customerOrderNo,
       customerOrderNo,
@@ -175,9 +185,9 @@ export class DataController {
       lengthCm: positiveNumber(body.lengthCm ?? body.length, 'length'),
       widthCm: positiveNumber(body.widthCm ?? body.width, 'width'),
       heightCm: positiveNumber(body.heightCm ?? body.height, 'height'),
-      scanTime: measuredAt || undefined,
+      scanTime: measuredAt,
       scanSource: '墨家设备',
-      remark: deviceNo ? `设备号：${deviceNo}` : undefined
+      remark: remark || undefined
     };
   }
 
@@ -208,12 +218,12 @@ export class DataController {
 
   private async findDuplicateMojiaPackage(input: WarehousePackageCreateInput) {
     const combinedOrderNo = input.combinedOrderNo;
-    const scanTime = input.scanTime ? new Date(input.scanTime).getTime() : undefined;
+    const scanTimeSecond = input.scanTime ? Math.floor(new Date(input.scanTime).getTime() / 1000) : undefined;
     const packages = await this.repository.getWarehousePackages(mojiaPrincipal);
     return packages.find((pkg) =>
       pkg.combinedOrderNo === combinedOrderNo
       && pkg.scanSource === '墨家设备'
-      && (!scanTime || (pkg.scanTime && new Date(pkg.scanTime).getTime() === scanTime))
+      && (!scanTimeSecond || (pkg.scanTime && Math.floor(new Date(pkg.scanTime).getTime() / 1000) === scanTimeSecond))
       && (!input.remark || pkg.remark === input.remark)
     );
   }
@@ -250,11 +260,11 @@ export class DataController {
 
   @Get('shipments/order-entry/packages')
   @RequirePermission('orders:read')
-  async orderEntryPackages(@Req() request: { user: Principal }) {
+  async orderEntryPackages(@Req() request: { user: Principal }, @Query() query: OrderEntryWarehousePackageQuery) {
     if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
       throw new ForbiddenException('当前角色不能使用内部录单');
     }
-    return this.repository.getOrderEntryWarehousePackages(request.user);
+    return this.repository.getOrderEntryWarehousePackages(request.user, query);
   }
 
   @Post('shipments/order-entry')
@@ -369,7 +379,7 @@ export class DataController {
   }
 
   @Post('master-data/agent-invoice-template/upload')
-  @RequirePermission('master-data:write')
+  @RequirePermission('master-data:agents:write')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
   async uploadAgentInvoiceTemplate(
     @Req() request: { user: Principal },
@@ -1029,11 +1039,8 @@ export class DataController {
   }
 
   @Get('pricing/books')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async priceBooks(@Req() request: { user: Principal }) {
-    if (request.user.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以查看价格表明细');
-    }
     return this.repository.getPriceBooks(request.user);
   }
 
@@ -1046,72 +1053,126 @@ export class DataController {
     return this.repository.lookupPrice(request.user, body);
   }
 
-  @Get('pricing/markup-rules')
+  @Get('pricing/legacy/quote-meta')
+  @RequirePermission('pricing:lookup')
+  async legacyPricingMeta(@Req() request: { user: Principal }) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能访问内部查价');
+    }
+    return this.repository.getLegacyPricingMeta(request.user);
+  }
+
+  @Post('pricing/legacy/amazon/quote')
+  @RequirePermission('pricing:lookup')
+  async legacyAmazonQuote(@Req() request: { user: Principal }, @Body() body: Omit<LegacyPricingQuoteRequest, 'module'>) {
+    return this.repository.quoteLegacyPricing(request.user, { ...body, module: 'amazon' });
+  }
+
+  @Post('pricing/legacy/inquiry/quote')
+  @RequirePermission('pricing:lookup')
+  async legacyInquiryQuote(@Req() request: { user: Principal }, @Body() body: Omit<LegacyPricingQuoteRequest, 'module'>) {
+    return this.repository.quoteLegacyPricing(request.user, { ...body, module: 'inquiry' });
+  }
+
+  @Post('pricing/legacy/europe-express/quote')
+  @RequirePermission('pricing:lookup')
+  async legacyEuropeExpressQuote(@Req() request: { user: Principal }, @Body() body: Omit<LegacyPricingQuoteRequest, 'module'>) {
+    return this.repository.quoteLegacyPricing(request.user, { ...body, module: 'europeExpress' });
+  }
+
+  @Post('pricing/legacy/south-africa/quote')
+  @RequirePermission('pricing:lookup')
+  async legacySouthAfricaQuote(@Req() request: { user: Principal }, @Body() body: Omit<LegacyPricingQuoteRequest, 'module'>) {
+    return this.repository.quoteLegacyPricing(request.user, { ...body, module: 'southAfrica' });
+  }
+
+  @Get('pricing/legacy/sources')
   @RequirePermission('pricing:manage')
+  async legacyPricingSources(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
+    return this.repository.getLegacyPricingSources(request.user, module);
+  }
+
+  @Post('pricing/legacy/sources/import')
+  @RequirePermission('pricing:manage')
+  async importLegacyPricingSource(@Req() request: { user: Principal }, @Body() body: LegacyPricingImportInput) {
+    return this.repository.importLegacyPricingSource(request.user, body);
+  }
+
+  @Delete('pricing/legacy/sources/:id')
+  @RequirePermission('pricing:manage')
+  async deleteLegacyPricingSource(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.deleteLegacyPricingSource(request.user, id);
+  }
+
+  @Post('pricing/legacy/rebuild')
+  @RequirePermission('pricing:manage')
+  async rebuildLegacyPricing(@Req() request: { user: Principal }, @Body() body: { module?: LegacyPricingModule }) {
+    return this.repository.rebuildLegacyPricing(request.user, body.module);
+  }
+
+  @Get('pricing/legacy/health-report')
+  @RequirePermission('pricing:manage')
+  async legacyPricingHealth(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
+    return this.repository.getLegacyPricingHealth(request.user, module);
+  }
+
+  @Get('pricing/markup-rules')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async agentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
     return this.repository.getAgentMarkupRules(request.user, query);
   }
 
   @Get('pricing/markup-rules/export')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async exportAgentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
     return this.repository.exportAgentMarkupRules(request.user, query);
   }
 
   @Post('pricing/markup-rules/import')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async importAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { rows?: AgentMarkupCreateInput[] }) {
     return this.repository.importAgentMarkupRules(request.user, body);
   }
 
   @Get('pricing/markup-rules/:id/preview')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async previewAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.previewAgentMarkupRule(request.user, id);
   }
 
   @Post('pricing/markup-rules')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async createAgentMarkupRule(@Req() request: { user: Principal }, @Body() body: AgentMarkupCreateInput) {
     return this.repository.createAgentMarkupRule(request.user, body);
   }
 
   @Put('pricing/markup-rules/:id')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async updateAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: AgentMarkupUpdateInput) {
     return this.repository.updateAgentMarkupRule(request.user, id, body);
   }
 
   @Delete('pricing/markup-rules/:id')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async deleteAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deleteAgentMarkupRule(request.user, id);
   }
 
   @Post('pricing/books/import')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async importPriceBook(@Req() request: { user: Principal }, @Body() body: PriceBookImportInput) {
-    if (request.user.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以导入价格表');
-    }
     return this.repository.importPriceBook(request.user, body);
   }
 
   @Put('pricing/books/:id/remark')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async updatePriceBookRemark(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: PriceBookRemarkUpdateInput) {
-    if (request.user.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以维护价格表备注');
-    }
     return this.repository.updatePriceBookRemark(request.user, id, body);
   }
 
   @Delete('pricing/books/:id')
-  @RequirePermission('pricing:manage')
+  @RequirePermission(['pricing:manage', 'routing:write'])
   async deletePriceBook(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以删除价格表');
-    }
     return this.repository.deletePriceBook(request.user, id);
   }
 
@@ -1251,6 +1312,12 @@ export class DataController {
   @RequirePermission('warehouse:write')
   async downloadWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.downloadWarehouseTallyTaskLabel(request.user, id);
+  }
+
+  @Post('warehouse/tally-tasks/label-scan')
+  @RequirePermission('warehouse:write')
+  async applyWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Body() body: WarehouseTallyLabelScanInput) {
+    return this.repository.applyWarehouseTallyTaskLabel(request.user, body);
   }
 
   @Get('finance/business-cost-audits')
@@ -1699,4 +1766,17 @@ function positiveNumber(value: unknown, field: string): number {
 function positiveInt(value: unknown, fallback: number): number {
   const numberValue = Math.floor(Number(value) || fallback);
   return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
+}
+
+function normalizeMojiaMeasuredAt(value: unknown): string | undefined {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  const raw = String(value).trim();
+  if (!raw) return undefined;
+  const numeric = Number(raw);
+  const date = Number.isFinite(numeric)
+    ? new Date(numeric)
+    : new Date(raw);
+  if (Number.isNaN(date.getTime())) return undefined;
+  date.setMilliseconds(0);
+  return date.toISOString();
 }

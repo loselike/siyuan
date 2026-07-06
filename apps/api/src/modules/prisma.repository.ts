@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import type { Permission as PrismaPermission, Role as PrismaRole, Shipment as PrismaShipment } from '@prisma/client';
 import {
   canTransitionShipment,
@@ -107,6 +108,13 @@ import {
   type PriceBooksResponse,
   type PriceBookRowSummary,
   type PriceBookSummary,
+  type LegacyPricingImportInput,
+  type LegacyPricingMetaResponse,
+  type LegacyPricingModule,
+  type LegacyPricingQuoteRequest,
+  type LegacyPricingQuoteResponse,
+  type LegacyPricingRecommendation,
+  type LegacyPricingSourceSummary,
   type PriceLookupRequest,
   type PriceLookupResponse,
   type PriceLookupRecommendation,
@@ -199,6 +207,8 @@ import {
   type WarehousePackageStatus,
   type WarehousePackageSummary,
   type WarehousePackageUpdateInput,
+  type WarehouseTallyLabelScanInput,
+  type WarehouseTallyLabelScanResponse,
   type WarehouseTallyTaskCompleteInput,
   type WarehouseTallyTaskCreateInput,
   type WarehouseTallyTaskListQuery,
@@ -684,7 +694,26 @@ export class PrismaRepository {
 
   async getLineShipmentPool(principal: Principal, query: LineShipmentPoolQuery = {}): Promise<LineShipmentPoolResponse> {
     const allRows = (await this.getShipments(principal)).filter((shipment) => shipment.businessType === 'DEDICATED_LINE');
-    return summarizeLineShipmentPool(allRows, query);
+    const shipmentIds = allRows.map((shipment) => shipment.id);
+    const businessDataApprovedShipmentIds = shipmentIds.length
+      ? (await this.prisma.auditLog.findMany({
+          where: { action: 'customer_service.business_data.approved', target: { in: shipmentIds } },
+          select: { target: true }
+        })).map((row) => row.target)
+      : [];
+    const afterSaleShipmentIds = shipmentIds.length
+      ? (await this.prisma.auditLog.findMany({
+          where: { action: 'customer_service.issue.attach' as any },
+          select: { after: true }
+        }))
+          .flatMap((row) => {
+            const after = row.after as Record<string, unknown> | null;
+            return after?.originalStatusPool === 'SIGNED' && typeof after.shipmentId === 'string' && shipmentIds.includes(after.shipmentId)
+              ? [after.shipmentId]
+              : [];
+          })
+      : [];
+    return summarizeLineShipmentPool(allRows, query, { businessDataApprovedShipmentIds, afterSaleShipmentIds });
   }
 
   async getMasterData(): Promise<MasterDataSnapshot> {
@@ -725,6 +754,7 @@ export class PrismaRepository {
         company: contact.company ?? undefined,
         phone: contact.phone ?? undefined,
         email: contact.email ?? undefined,
+        fbaWarehouseCode: contact.fbaWarehouseCode ?? undefined,
         address: contact.address ?? undefined,
         country: contact.country ?? undefined,
         state: contact.state ?? undefined,
@@ -810,7 +840,8 @@ export class PrismaRepository {
     if (existing) {
       throw new BadRequestException('客户代码已存在');
     }
-    const salesperson = principal.username;
+    const salesScope = this.operatorCustomerScope(principal);
+    const salesperson = salesScope ? principal.username : input.salesperson?.trim() || principal.username;
     const customer = await this.prisma.customer.create({
       data: {
         id: `c-${code}`,
@@ -851,13 +882,14 @@ export class PrismaRepository {
     }
     const before = await this.prisma.customer.findUnique({ where: { id } });
     this.ensureCustomerMasterAccess(principal, before);
+    const salesScope = this.operatorCustomerScope(principal);
     const customer = await this.prisma.customer.update({
       where: { id },
       data: {
         code,
         name: input.name.trim(),
         customerSource: input.customerSource?.trim() || null,
-        salesperson: before?.salesperson ?? principal.username,
+        salesperson: salesScope ? before?.salesperson ?? principal.username : (input.salesperson?.trim() || before?.salesperson || principal.username),
         defaultSettlementMethod: input.defaultSettlementMethod?.trim() || null,
         enabled: typeof input.enabled === 'boolean' ? input.enabled : undefined
       }
@@ -898,6 +930,7 @@ export class PrismaRepository {
         company: input.company?.trim() || null,
         phone: input.phone?.trim(),
         email: input.email?.trim(),
+        fbaWarehouseCode: input.fbaWarehouseCode?.trim() || null,
         address: input.address?.trim() || null,
         country: input.country?.trim() || null,
         state: input.state?.trim() || null,
@@ -912,6 +945,7 @@ export class PrismaRepository {
       company: contact.company ?? undefined,
       phone: contact.phone ?? undefined,
       email: contact.email ?? undefined,
+      fbaWarehouseCode: contact.fbaWarehouseCode ?? undefined,
       address: contact.address ?? undefined,
       country: contact.country ?? undefined,
       state: contact.state ?? undefined,
@@ -938,6 +972,7 @@ export class PrismaRepository {
         company: input.company?.trim() || null,
         phone: input.phone?.trim() || null,
         email: input.email?.trim() || null,
+        fbaWarehouseCode: input.fbaWarehouseCode?.trim() || null,
         address: input.address?.trim() || null,
         country: input.country?.trim() || null,
         state: input.state?.trim() || null,
@@ -954,6 +989,7 @@ export class PrismaRepository {
       company: contact.company ?? undefined,
       phone: contact.phone ?? undefined,
       email: contact.email ?? undefined,
+      fbaWarehouseCode: contact.fbaWarehouseCode ?? undefined,
       address: contact.address ?? undefined,
       country: contact.country ?? undefined,
       state: contact.state ?? undefined,
@@ -2076,8 +2112,119 @@ export class PrismaRepository {
     );
   }
 
+  async getLegacyPricingMeta(principal: Principal): Promise<LegacyPricingMetaResponse> {
+    this.ensureStaffPricingAccess(principal);
+    const rows = await this.loadLegacyPricingRows();
+    return buildLegacyPricingMeta(rows);
+  }
+
+  async quoteLegacyPricing(principal: Principal, input: LegacyPricingQuoteRequest): Promise<LegacyPricingQuoteResponse> {
+    this.ensureStaffPricingAccess(principal);
+    const [rows, books, markupRules] = await Promise.all([
+      this.loadLegacyPricingRows(input.module),
+      (this.prisma as any).priceBook.findMany({ where: { deletedAt: null }, include: { rows: true }, orderBy: { importedAt: 'desc' } }),
+      this.loadAgentMarkupRules()
+    ]);
+    const response = createLegacyPricingQuote(
+      principal,
+      input,
+      rows.length ? rows : books.flatMap((book: any) => book.rows.map(mapPriceBookRow).map(priceBookRowToLegacyPricingRow)),
+      markupRules
+    );
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'pricing.legacy.quote',
+        target: input.module,
+        after: { module: input.module, matchedRows: response.metrics.matchedRows, selected: response.selected?.id }
+      }
+    });
+    return response;
+  }
+
+  async getLegacyPricingSources(principal: Principal, module?: LegacyPricingModule) {
+    this.ensureAdmin(principal, '只有管理员可以查看亮崽报价源');
+    const sources = await (this.prisma as any).legacyPricingSource.findMany({
+      where: { deletedAt: null, ...(module ? { module } : {}) },
+      orderBy: { importedAt: 'desc' }
+    });
+    return { sources: sources.map(mapLegacyPricingSource) };
+  }
+
+  async importLegacyPricingSource(principal: Principal, input: LegacyPricingImportInput) {
+    this.ensureAdmin(principal, '只有管理员可以导入亮崽报价副本');
+    if (!input.module || !input.fileName?.trim() || !Array.isArray(input.rows) || input.rows.length === 0) {
+      throw new BadRequestException('亮崽报价源、文件名和报价行不能为空');
+    }
+    await (this.prisma as any).legacyPricingSource.updateMany({
+      where: { module: input.module, fileName: input.fileName.trim(), deletedAt: null },
+      data: { deletedAt: new Date() }
+    });
+    const normalizedRows = input.rows.map((row) => normalizeLegacyRawRow(input.module, input.fileName, row));
+    const created = await (this.prisma as any).legacyPricingSource.create({
+      data: {
+        module: input.module,
+        fileName: input.fileName.trim(),
+        rowCount: normalizedRows.length,
+        rows: { create: normalizedRows.map((row) => legacyPricingRowCreateData(input.module, row)) }
+      },
+      include: { rows: true }
+    });
+    await this.prisma.auditLog.create({
+      data: { actorId: principal.id, action: 'pricing.legacy.source.import', target: created.id, after: { module: input.module, fileName: created.fileName, rowCount: created.rowCount } }
+    });
+    return { source: mapLegacyPricingSource(created), rowCount: created.rows.length };
+  }
+
+  async deleteLegacyPricingSource(principal: Principal, id: string) {
+    this.ensureAdmin(principal, '只有管理员可以删除亮崽报价副本');
+    const current = await (this.prisma as any).legacyPricingSource.findFirst({ where: { id, deletedAt: null } });
+    if (!current) {
+      throw new NotFoundException('亮崽报价源不存在');
+    }
+    const deleted = await (this.prisma as any).legacyPricingSource.update({ where: { id }, data: { deletedAt: new Date() } });
+    await this.prisma.auditLog.create({
+      data: { actorId: principal.id, action: 'pricing.legacy.source.delete', target: id, before: { ...mapLegacyPricingSource(current) }, after: { deletedAt: deleted.deletedAt } }
+    });
+    return mapLegacyPricingSource(deleted);
+  }
+
+  async rebuildLegacyPricing(principal: Principal, module?: LegacyPricingModule) {
+    this.ensureAdmin(principal, '只有管理员可以重建亮崽报价副本');
+    const rows = await this.loadLegacyPricingRows(module);
+    await this.prisma.auditLog.create({
+      data: { actorId: principal.id, action: 'pricing.legacy.rebuild', target: module ?? 'all', after: { rowCount: rows.length } }
+    });
+    return { module: module ?? 'all', rowCount: rows.length, rebuiltAt: new Date().toISOString() };
+  }
+
+  async getLegacyPricingHealth(principal: Principal, module?: LegacyPricingModule) {
+    this.ensureAdmin(principal, '只有管理员可以查看亮崽报价体检');
+    const rows = await this.loadLegacyPricingRows(module);
+    const missingAgent = rows.filter((row) => !row.agentName).length;
+    const missingChannel = rows.filter((row) => !row.channelName).length;
+    const missingCost = rows.filter((row) => !Number.isFinite(row.costPerKg ?? row.cbmPrice ?? 0)).length;
+    return {
+      module: module ?? 'all',
+      rowCount: rows.length,
+      issues: [
+        ...(missingAgent ? [{ severity: 'error', message: `${missingAgent} 行缺少代理` }] : []),
+        ...(missingChannel ? [{ severity: 'error', message: `${missingChannel} 行缺少渠道` }] : []),
+        ...(missingCost ? [{ severity: 'warn', message: `${missingCost} 行缺少可用价格` }] : [])
+      ]
+    };
+  }
+
+  private async loadLegacyPricingRows(module?: LegacyPricingModule): Promise<LegacyPricingRowInternal[]> {
+    const sources = await (this.prisma as any).legacyPricingSource.findMany({
+      where: { deletedAt: null, ...(module ? { module } : {}) },
+      include: { rows: true }
+    });
+    return sources.flatMap((source: any) => source.rows.map((row: any) => mapLegacyPricingRow(row, source)));
+  }
+
   async getAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
-    this.ensureAdmin(principal, '只有管理员可以查看代理加价规则');
+    this.ensurePricingManager(principal, '只有管理员或市场可以查看代理加价规则');
     const [rules, books] = await Promise.all([
       this.loadAgentMarkupRules(true),
       (this.prisma as any).priceBook.findMany({ where: { deletedAt: null }, include: { rows: true } })
@@ -2086,7 +2233,7 @@ export class PrismaRepository {
   }
 
   async previewAgentMarkupRule(principal: Principal, id: string): Promise<AgentMarkupPreviewResponse> {
-    this.ensureAdmin(principal, '只有管理员可以查看规则命中线路');
+    this.ensurePricingManager(principal, '只有管理员或市场可以查看规则命中线路');
     const [current, books, logs] = await Promise.all([
       (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } }),
       (this.prisma as any).priceBook.findMany({ where: { deletedAt: null }, include: { rows: true } }),
@@ -2099,7 +2246,7 @@ export class PrismaRepository {
   }
 
   async exportAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {
-    this.ensureAdmin(principal, '只有管理员可以导出代理加价规则');
+    this.ensurePricingManager(principal, '只有管理员或市场可以导出代理加价规则');
     const response = await this.getAgentMarkupRules(principal, { ...query, page: 1, pageSize: -1 });
     await this.prisma.auditLog.create({
       data: { actorId: principal.id, action: 'pricing.markup.export', target: 'agent-markup-rules', after: { count: response.rows.length } }
@@ -2108,7 +2255,7 @@ export class PrismaRepository {
   }
 
   async importAgentMarkupRules(principal: Principal, input: { rows?: AgentMarkupCreateInput[] }): Promise<AgentMarkupImportResponse> {
-    this.ensureAdmin(principal, '只有管理员可以导入代理加价规则');
+    this.ensurePricingManager(principal, '只有管理员或市场可以导入代理加价规则');
     const rows = Array.isArray(input.rows) ? input.rows : [];
     const created: AgentMarkupSummary[] = [];
     const errorRows: AgentMarkupImportResponse['errorRows'] = [];
@@ -2126,7 +2273,7 @@ export class PrismaRepository {
   }
 
   async createAgentMarkupRule(principal: Principal, input: AgentMarkupCreateInput): Promise<AgentMarkupSummary> {
-    this.ensureAdmin(principal, '只有管理员可以新增代理加价规则');
+    this.ensurePricingManager(principal, '只有管理员或市场可以新增代理加价规则');
     const normalized = normalizeAgentMarkupInput(input);
     const priceRows = await this.loadPriceBookRowsForMarkupValidation();
     const currentRules = await this.loadAgentMarkupRules(true);
@@ -2155,7 +2302,7 @@ export class PrismaRepository {
   }
 
   async updateAgentMarkupRule(principal: Principal, id: string, input: AgentMarkupUpdateInput): Promise<AgentMarkupSummary> {
-    this.ensureAdmin(principal, '只有管理员可以修改代理加价规则');
+    this.ensurePricingManager(principal, '只有管理员或市场可以修改代理加价规则');
     const current = await (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
@@ -2183,7 +2330,7 @@ export class PrismaRepository {
   }
 
   async deleteAgentMarkupRule(principal: Principal, id: string): Promise<AgentMarkupSummary> {
-    this.ensureAdmin(principal, '只有管理员可以删除代理加价规则');
+    this.ensurePricingManager(principal, '只有管理员或市场可以删除代理加价规则');
     const current = await (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
@@ -2196,21 +2343,25 @@ export class PrismaRepository {
   }
 
   async getPriceBooks(principal: Principal): Promise<PriceBooksResponse> {
-    this.ensureAdmin(principal, '只有管理员可以查看价格表明细');
-    const books = await (this.prisma as any).priceBook.findMany({
-      where: { deletedAt: null },
-      include: { rows: true },
-      orderBy: { importedAt: 'desc' }
-    });
+    this.ensurePricingManager(principal, '只有管理员或市场可以查看价格表明细');
+    const [books, legacySources] = await Promise.all([
+      (this.prisma as any).priceBook.findMany({
+        where: { deletedAt: null },
+        include: { rows: true },
+        orderBy: { importedAt: 'desc' }
+      }),
+      (this.prisma as any).legacyPricingSource.findMany({ where: { deletedAt: null } })
+    ]);
+    const legacyCountsByFile = buildLegacyModuleCountsByFile(legacySources);
 
     return {
-      books: books.map(mapPriceBook),
+      books: books.map((book: any) => mapPriceBook(book, legacyCountsByFile.get(book.fileName))),
       rows: books.flatMap((book: any) => book.rows.map(mapPriceBookRow))
     };
   }
 
   async importPriceBook(principal: Principal, input: PriceBookImportInput): Promise<{ book: PriceBookSummary; rows: PriceBookRowSummary[] }> {
-    this.ensureAdmin(principal, '只有管理员可以导入价格表');
+    this.ensurePricingManager(principal, '只有管理员或市场可以导入价格表');
     if (!input.fileName?.trim()) {
       throw new BadRequestException('价格表名称不能为空');
     }
@@ -2223,48 +2374,93 @@ export class PrismaRepository {
       }
     });
 
-    const created = await (this.prisma as any).priceBook.create({
-      data: {
-        fileName: input.fileName.trim(),
-        rows: {
-          create: input.rows.map((row) => ({
-            agentName: row.agentName.trim(),
-            carrierName: row.carrierName?.trim() || null,
-            sourceSheetName: row.sourceSheetName?.trim() || null,
-            channelName: row.channelName.trim(),
-            businessRouteName: row.businessRouteName?.trim() || null,
-            realChannelName: row.realChannelName?.trim() || row.channelName.trim(),
-            warehouseCode: row.warehouseCode?.trim() || null,
-            destinationCountry: row.destinationCountry.trim(),
-            minWeightKg: row.minWeightKg,
-            maxWeightKg: row.maxWeightKg,
-            costPerKg: row.costPerKg,
-            currency: row.currency?.trim().toUpperCase() || 'RMB',
-            transitDays: row.transitDays ?? null,
-            transitLabel: row.transitLabel?.trim() || null,
-            quoteSourceType: row.quoteSourceType ?? 'local',
-            surchargeFee: row.surchargeFee ?? null,
-            surchargeDetails: row.surchargeDetails ?? [],
-            productSurchargeRemark: row.productSurchargeRemark?.trim() || null,
-            specialRemark: row.specialRemark?.trim() || null
-          }))
-        }
-      },
-      include: { rows: true }
+    const bookId = randomUUID();
+    const created = {
+      id: bookId,
+      fileName: input.fileName.trim(),
+      importedAt: new Date(),
+      deletedAt: null,
+      remark: null
+    };
+    const rows = input.rows.map((row) => ({
+      id: randomUUID(),
+      priceBookId: bookId,
+      agentName: row.agentName.trim(),
+      carrierName: row.carrierName?.trim() || null,
+      sourceSheetName: row.sourceSheetName?.trim() || null,
+      channelName: row.channelName.trim(),
+      businessRouteName: row.businessRouteName?.trim() || null,
+      realChannelName: row.realChannelName?.trim() || row.channelName.trim(),
+      warehouseCode: row.warehouseCode?.trim() || null,
+      destinationCountry: row.destinationCountry.trim(),
+      minWeightKg: row.minWeightKg,
+      maxWeightKg: row.maxWeightKg,
+      costPerKg: row.costPerKg,
+      currency: row.currency?.trim().toUpperCase() || 'RMB',
+      transitDays: row.transitDays ?? null,
+      transitLabel: row.transitLabel?.trim() || null,
+      quoteSourceType: row.quoteSourceType ?? 'local',
+      surchargeFee: row.surchargeFee ?? null,
+      surchargeDetails: row.surchargeDetails ?? [],
+      productSurchargeRemark: row.productSurchargeRemark?.trim() || null,
+      specialRemark: row.specialRemark?.trim() || null
+    }));
+    const createRows = [];
+    for (let index = 0; index < rows.length; index += 1000) {
+      createRows.push((this.prisma as any).priceBookRow.createMany({ data: rows.slice(index, index + 1000) }));
+    }
+    const legacyRowsByModule = groupLegacyRowsByModule(rows.map(mapPriceBookRow), input.fileName.trim());
+    const legacySources = Array.from(legacyRowsByModule.entries()).map(([module, moduleRows]) => ({
+      id: randomUUID(),
+      module,
+      fileName: input.fileName.trim(),
+      rowCount: moduleRows.length,
+      importedAt: created.importedAt,
+      rows: moduleRows
+    }));
+    const legacyCreates = legacySources.flatMap((source) => {
+      const sourceRows = source.rows.map((row) => ({ ...legacyPricingRowCreateData(source.module, row), sourceId: source.id }));
+      const rowCreates = [];
+      for (let index = 0; index < sourceRows.length; index += 1000) {
+        rowCreates.push((this.prisma as any).legacyPricingRow.createMany({ data: sourceRows.slice(index, index + 1000) }));
+      }
+      return [
+        (this.prisma as any).legacyPricingSource.create({
+          data: {
+            id: source.id,
+            module: source.module,
+            fileName: source.fileName,
+            rowCount: source.rowCount,
+            importedAt: source.importedAt
+          }
+        }),
+        ...rowCreates
+      ];
     });
+    await this.prisma.$transaction([
+      (this.prisma as any).legacyPricingSource.updateMany({
+        where: { fileName: input.fileName.trim(), deletedAt: null },
+        data: { deletedAt: created.importedAt }
+      }),
+      (this.prisma as any).priceBook.create({ data: { id: bookId, fileName: created.fileName, importedAt: created.importedAt } }),
+      ...createRows,
+      ...legacyCreates
+    ]);
+    const createdBook = { ...created, rows };
+    const legacyModuleCounts = Object.fromEntries(legacySources.map((source) => [source.module, source.rowCount])) as Partial<Record<LegacyPricingModule, number>>;
     await this.prisma.auditLog.create({
       data: {
         actorId: principal.id,
         action: 'pricing.price_book.import',
         target: created.id,
-        after: { fileName: created.fileName, rowCount: created.rows.length }
+        after: { fileName: created.fileName, rowCount: rows.length, legacyModuleCounts }
       }
     });
-    return { book: mapPriceBook(created), rows: created.rows.map(mapPriceBookRow) };
+    return { book: mapPriceBook(createdBook, legacyModuleCounts), rows: rows.map(mapPriceBookRow) };
   }
 
   async updatePriceBookRemark(principal: Principal, id: string, input: PriceBookRemarkUpdateInput): Promise<PriceBookSummary> {
-    this.ensureAdmin(principal, '只有管理员可以维护价格表备注');
+    this.ensurePricingManager(principal, '只有管理员或市场可以维护价格表备注');
     const current = await (this.prisma as any).priceBook.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('价格表不存在');
@@ -2287,7 +2483,7 @@ export class PrismaRepository {
   }
 
   async deletePriceBook(principal: Principal, id: string): Promise<PriceBookSummary> {
-    this.ensureAdmin(principal, '只有管理员可以删除价格表');
+    this.ensurePricingManager(principal, '只有管理员或市场可以删除价格表');
     const current = await (this.prisma as any).priceBook.findFirst({ where: { id, deletedAt: null }, include: { rows: true } });
     if (!current) {
       throw new NotFoundException('价格表不存在');
@@ -2434,7 +2630,7 @@ export class PrismaRepository {
       throw new ForbiddenException('当前角色不能查看在仓数据');
     }
     const salesScope = this.operatorCustomerScope(principal);
-    const where: any = { status: { notIn: ['CONSOLIDATED', 'SHIPPED'] } };
+    const where: any = { status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] } };
     if (query.site?.trim() && !salesScope) {
       where.site = query.site.trim();
     }
@@ -2890,12 +3086,28 @@ export class PrismaRepository {
     if (query.combinedOrderNo?.trim()) {
       where.sourceCombinedOrderNo = { contains: query.combinedOrderNo.trim(), mode: 'insensitive' };
     }
+    if (query.completedScope === 'RECENT' || query.completedScope === 'HISTORY' || query.completedFrom || query.completedTo) {
+      where.status = 'COMPLETED';
+      const completedAt: Record<string, Date> = {};
+      if (query.completedScope === 'RECENT') {
+        completedAt.gte = resolveWarehouseTallyRecentCutoff();
+      } else if (query.completedScope === 'HISTORY') {
+        completedAt.lt = resolveWarehouseTallyRecentCutoff();
+      }
+      if (query.completedFrom?.trim()) {
+        completedAt.gte = new Date(query.completedFrom.trim());
+      }
+      if (query.completedTo?.trim()) {
+        completedAt.lt = new Date(query.completedTo.trim());
+      }
+      where.completedAt = completedAt;
+    }
     if (scope) {
       where.salesperson = { in: scope };
     }
     const rows = await (this.prisma as any).warehouseTallyTask.findMany({
       where,
-      orderBy: [{ createdAt: 'desc' }]
+      orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
     });
     return rows.map(mapWarehouseTallyTask);
   }
@@ -2911,7 +3123,7 @@ export class PrismaRepository {
       throw new BadRequestException('请填写理货需求');
     }
     const packages = await (this.prisma as any).warehousePackage.findMany({
-      where: { id: { in: packageIds }, status: { notIn: ['CONSOLIDATED', 'SHIPPED'] } },
+      where: { id: { in: packageIds }, status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] } },
       orderBy: [{ createdAt: 'asc' }]
     });
     if (packages.length !== packageIds.length) {
@@ -3064,6 +3276,124 @@ export class PrismaRepository {
 
   async downloadWarehouseTallyTaskLabel(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
     return this.markWarehouseTallyTaskLabelOutput(principal, id, 'download');
+  }
+
+  async applyWarehouseTallyTaskLabel(principal: Principal, input: WarehouseTallyLabelScanInput): Promise<WarehouseTallyLabelScanResponse> {
+    this.ensureWarehouseAccess(principal);
+    const labelNo = input.labelNo?.trim();
+    if (!labelNo) {
+      throw new BadRequestException('请扫描或填写理货标签号');
+    }
+    const existing = await (this.prisma as any).warehouseTallyTask.findFirst({ where: { labelNo } });
+    if (!existing) {
+      throw new NotFoundException('理货标签不存在');
+    }
+    const beforeTask = mapWarehouseTallyTask(existing);
+    if (beforeTask.status !== 'COMPLETED' || beforeTask.labelStatus !== 'GENERATED') {
+      throw new BadRequestException('请先完成理货并生成标签');
+    }
+    if (beforeTask.appliedPackageId) {
+      const applied = await (this.prisma as any).warehousePackage.findUnique({ where: { id: beforeTask.appliedPackageId } });
+      if (applied) {
+        return { task: beforeTask, package: mapWarehousePackage(applied), alreadyApplied: true };
+      }
+    }
+    const sourcePackages = await (this.prisma as any).warehousePackage.findMany({
+      where: { id: { in: beforeTask.packageIds.length ? beforeTask.packageIds : [beforeTask.sourcePackageId] } },
+      orderBy: [{ createdAt: 'asc' }]
+    });
+    const source = sourcePackages.find((pkg: any) => pkg.id === beforeTask.sourcePackageId) ?? sourcePackages[0];
+    if (!source) {
+      throw new BadRequestException('理货来源包裹不存在');
+    }
+    const now = new Date();
+    const completedPackageCount = Math.max(1, beforeTask.completedPackageCount ?? beforeTask.packageCount);
+    const completedWeightKg = beforeTask.completedWeightKg ?? beforeTask.originalWeightKg;
+    const lengthCm = beforeTask.completedLengthCm ?? beforeTask.originalLengthCm;
+    const widthCm = beforeTask.completedWidthCm ?? beforeTask.originalWidthCm;
+    const heightCm = beforeTask.completedHeightCm ?? beforeTask.originalHeightCm;
+    const singleWeightKg = roundWarehouseMeasure(completedWeightKg / completedPackageCount);
+    const singleCbm = roundWarehouseMeasure((lengthCm * widthCm * heightCm) / 1000000);
+    const singleVolumetricWeightKg = roundWarehouseMeasure((lengthCm * widthCm * heightCm) / 6000);
+    const created = await this.prisma.$transaction(async (tx) => {
+      const newPackage = await (tx as any).warehousePackage.create({
+        data: {
+          customerCode: source.customerCode,
+          customerName: source.customerName,
+          site: source.site,
+          salesperson: source.salesperson,
+          customerOrderNo: source.customerOrderNo,
+          domesticTrackingNo: source.domesticTrackingNo,
+          combinedOrderNo: source.combinedOrderNo,
+          labelNo: beforeTask.labelNo,
+          sourcePackageId: source.id,
+          sourcePackageNo: source.combinedOrderNo,
+          tallyTaskId: beforeTask.id,
+          tallyTaskNo: beforeTask.taskNo,
+          receivingChannel: '理货后标签扫描',
+          destinationCountry: source.destinationCountry,
+          expectedTotalPackageCount: completedPackageCount,
+          packageIndex: 1,
+          packageCount: completedPackageCount,
+          weightKg: singleWeightKg,
+          lengthCm,
+          widthCm,
+          heightCm,
+          cbm: singleCbm,
+          volumetricWeightKg: singleVolumetricWeightKg,
+          chargeableWeightKg: roundWarehouseMeasure(Math.max(singleWeightKg, singleVolumetricWeightKg)),
+          divisor: 6000,
+          roundingRule: source.roundingRule ?? 'NONE',
+          scanTime: now,
+          remark: beforeTask.remark ?? source.remark,
+          manualException: source.manualException,
+          scanSource: '理货后标签扫描',
+          status: 'RECEIVED',
+          exceptions: source.exceptions ?? [],
+          createdBy: principal.username
+        }
+      });
+      await (tx as any).warehousePackage.updateMany({
+        where: { id: { in: sourcePackages.map((pkg: any) => pkg.id) } },
+        data: {
+          status: 'TALLIED_ARCHIVED',
+          archivedByPackageId: newPackage.id,
+          archivedByPackageNo: newPackage.combinedOrderNo,
+          archivedReason: '理货后标签扫描覆盖',
+          archivedAt: now
+        }
+      });
+      await (tx as any).warehouseTallyTask.update({
+        where: { id: beforeTask.id },
+        data: {
+          appliedPackageId: newPackage.id,
+          appliedPackageNo: newPackage.combinedOrderNo,
+          labelAppliedAt: now,
+          labelAppliedBy: principal.username
+        }
+      });
+      return newPackage;
+    });
+    const updatedTask = await (this.prisma as any).warehouseTallyTask.findUnique({ where: { id: beforeTask.id } });
+    const packageSummary = mapWarehousePackage(created);
+    const taskSummary = mapWarehouseTallyTask(updatedTask);
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'warehouse.tally.label.apply',
+        target: labelNo,
+        before: toAuditJson({
+          task: beforeTask,
+          sourcePackages: sourcePackages.map(mapWarehousePackage)
+        }),
+        after: toAuditJson({
+          task: taskSummary,
+          package: packageSummary,
+          archivedPackageIds: sourcePackages.map((pkg: any) => pkg.id)
+        })
+      }
+    });
+    return { task: taskSummary, package: packageSummary, alreadyApplied: false };
   }
 
   private async markWarehouseTallyTaskLabelOutput(principal: Principal, id: string, action: 'print' | 'download'): Promise<WarehouseTallyTaskSummary> {
@@ -5207,20 +5537,46 @@ export class PrismaRepository {
     return this.toFinanceItemSummary(item, shipment);
   }
 
-  async getOrderEntryWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
+  async getOrderEntryWarehousePackages(principal: Principal, query: { customerCode?: string; domesticTrackingNo?: string }): Promise<WarehousePackageSummary[]> {
     this.ensureOrderEntryAccess(principal);
-    const where: any = { shipmentId: null, systemOrderNo: null };
+    const customerCode = query.customerCode?.trim();
+    if (!customerCode) {
+      return [];
+    }
     const scope = this.operatorCustomerScope(principal);
-    if (scope) {
-      const customers = await this.prisma.customer.findMany({
-        where: { salesperson: { in: scope } },
-        select: { code: true }
-      });
-      where.customerCode = { in: customers.map((customer) => customer.code) };
+    const customer = await this.prisma.customer.findFirst({
+      where: {
+        code: customerCode,
+        ...(scope ? { salesperson: { in: scope } } : {})
+      },
+      select: { code: true }
+    });
+    if (!customer) {
+      return [];
+    }
+    const draftShipments = await this.prisma.shipment.findMany({
+      where: {
+        deletedAt: null,
+        customer: { code: customer.code }
+      },
+      select: { draftWarehousePackageIds: true }
+    });
+    const draftOccupiedPackageIds = Array.from(new Set(draftShipments.flatMap((shipment) => shipment.draftWarehousePackageIds ?? []).filter(Boolean)));
+    const where: any = {
+      shipmentId: null,
+      systemOrderNo: null,
+      customerCode: customer.code,
+      status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] }
+    };
+    if (draftOccupiedPackageIds.length) {
+      where.id = { notIn: draftOccupiedPackageIds };
+    }
+    if (query.domesticTrackingNo?.trim()) {
+      where.domesticTrackingNo = { contains: query.domesticTrackingNo.trim(), mode: 'insensitive' };
     }
     const rows = await (this.prisma as any).warehousePackage.findMany({
       where,
-      orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
+      orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
     });
     return rows.map(mapWarehousePackage);
   }
@@ -7372,6 +7728,12 @@ export class PrismaRepository {
     }
   }
 
+  private ensurePricingManager(principal: Principal, message = '只有管理员或市场可以执行该操作') {
+    if (!['ADMIN', 'UG_MARKET'].includes(principal.role)) {
+      throw new ForbiddenException(message);
+    }
+  }
+
   private ensureWarehouseAccess(principal: Principal) {
     if (!['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)) {
       throw new ForbiddenException('当前角色不能操作仓库管理');
@@ -7932,10 +8294,28 @@ export class PrismaRepository {
   }
 
   private async nextWaterReceiptNo(receiptDate: Date) {
-    const ymd = receiptDate.toISOString().slice(0, 10).replaceAll('-', '');
+    const ymd = this.waterReceiptDateKey(receiptDate);
     const prefix = `SD${ymd}`;
-    const count = await (this.prisma as any).waterReceipt.count({ where: { receiptNo: { startsWith: prefix } } });
-    return `${prefix}${String(count + 1).padStart(3, '0')}`;
+    const rows = await (this.prisma as any).waterReceipt.findMany({
+      where: { receiptNo: { startsWith: prefix } },
+      select: { receiptNo: true }
+    });
+    const pattern = new RegExp(`^${prefix}(\\d{3})$`);
+    const maxSeq = rows.reduce((max: number, row: { receiptNo?: string }) => {
+      const seq = row.receiptNo?.match(pattern)?.[1];
+      return seq ? Math.max(max, Number(seq)) : max;
+    }, 0);
+    if (maxSeq >= 999) throw new BadRequestException('当天水单编号已超过 999，请调整到账日期');
+    return `${prefix}${String(maxSeq + 1).padStart(3, '0')}`;
+  }
+
+  private waterReceiptDateKey(receiptDate: Date) {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(receiptDate).replaceAll('-', '');
   }
 
   private async findWaterReceiptById(id: string) {
@@ -9503,7 +9883,7 @@ export class PrismaRepository {
     if (!isSalesScopedRole(principal.role)) {
       return undefined;
     }
-    return Array.from(new Set([principal.username, principal.name, principal.nickname, 'operator', '业务员'].filter((value): value is string => Boolean(value))));
+    return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
   }
 
   private ensureCustomerMasterAccess(principal: Principal, customer: { salesperson?: string | null } | null) {
@@ -10046,13 +10426,14 @@ function mapPricingRule(row: any): PricingRuleSummary {
   };
 }
 
-function mapPriceBook(row: any): PriceBookSummary {
+function mapPriceBook(row: any, legacyModuleCounts?: Partial<Record<LegacyPricingModule, number>>): PriceBookSummary {
   return {
     id: row.id,
     fileName: row.fileName,
     rowCount: Array.isArray(row.rows) ? row.rows.length : Number(row.rowCount ?? 0),
     importedAt: row.importedAt.toISOString(),
-    remark: row.remark ?? undefined
+    remark: row.remark ?? undefined,
+    ...(legacyModuleCounts && Object.keys(legacyModuleCounts).length ? { legacyModuleCounts } : {})
   };
 }
 
@@ -10313,6 +10694,12 @@ function mapWarehousePackage(row: any): WarehousePackageSummary {
     labelNo: row.labelNo ?? undefined,
     sourcePackageId: row.sourcePackageId ?? undefined,
     sourcePackageNo: row.sourcePackageNo ?? undefined,
+    archivedByPackageId: row.archivedByPackageId ?? undefined,
+    archivedByPackageNo: row.archivedByPackageNo ?? undefined,
+    archivedReason: row.archivedReason ?? undefined,
+    archivedAt: row.archivedAt?.toISOString?.() ?? undefined,
+    tallyTaskId: row.tallyTaskId ?? undefined,
+    tallyTaskNo: row.tallyTaskNo ?? undefined,
     systemOrderNo: row.systemOrderNo ?? undefined,
     shipmentId: row.shipmentId ?? undefined,
     receivingChannel: row.receivingChannel,
@@ -10340,7 +10727,7 @@ function mapWarehousePackage(row: any): WarehousePackageSummary {
     scanSource: row.scanSource ?? undefined,
     inboundAt: row.scanTime?.toISOString(),
     receiptSourceId: row.sourcePackageId ?? row.id,
-    tallyStatus: row.status === 'RECEIVED' ? '待理货' : '已理货',
+    tallyStatus: row.tallyTaskId || row.tallyTaskNo ? '已理货' : row.status === 'RECEIVED' ? '待理货' : '已理货',
     splitStatus: row.sourcePackageId ? '拆票子票' : '原始票',
     consolidationStatus: row.status === 'CONSOLIDATED' ? '已合票' : '未合票',
     outboundStatus: row.status === 'SHIPPED' ? '已出库' : '未出库',
@@ -10419,7 +10806,8 @@ function buildWarehousePackageData(input: WarehousePackageCreateInput) {
   const heightCm = roundMoney(Number(input.heightCm) || 0);
   const cbm = roundMoney((lengthCm * widthCm * heightCm * packageCount) / 1000000);
   const volumetricWeightKg = roundMoney((lengthCm * widthCm * heightCm * packageCount) / 6000);
-  const scanTime = input.scanTime ? new Date(input.scanTime) : new Date();
+  const parsedScanTime = input.scanTime ? new Date(input.scanTime) : undefined;
+  const scanTime = parsedScanTime && !Number.isNaN(parsedScanTime.getTime()) ? parsedScanTime : new Date();
   return {
     customerCode,
     customerOrderNo,
@@ -10547,7 +10935,11 @@ function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
     labelPrintedAt: row.labelPrintedAt?.toISOString?.() ?? undefined,
     labelPrintedBy: row.labelPrintedBy ?? undefined,
     labelDownloadedAt: row.labelDownloadedAt?.toISOString?.() ?? undefined,
-    labelDownloadedBy: row.labelDownloadedBy ?? undefined
+    labelDownloadedBy: row.labelDownloadedBy ?? undefined,
+    appliedPackageId: row.appliedPackageId ?? undefined,
+    appliedPackageNo: row.appliedPackageNo ?? undefined,
+    labelAppliedAt: row.labelAppliedAt?.toISOString?.() ?? undefined,
+    labelAppliedBy: row.labelAppliedBy ?? undefined
   };
 }
 
@@ -10562,6 +10954,16 @@ function buildWarehouseTallyLabelQrContent(task: WarehouseTallyTaskSummary, labe
     sourcePackageId: task.sourcePackageId,
     sourceCombinedOrderNo: task.sourceCombinedOrderNo
   });
+}
+
+function resolveWarehouseTallyRecentCutoff() {
+  const now = new Date();
+  const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return new Date(Date.UTC(beijingNow.getUTCFullYear(), beijingNow.getUTCMonth() - 1, beijingNow.getUTCDate(), -8, 0, 0, 0));
+}
+
+function roundWarehouseMeasure(value: number) {
+  return Math.round(value * 1000000) / 1000000;
 }
 
 function warehousePackageActualWeightTotal(pkg: Pick<WarehousePackageSummary, 'sourcePackageId' | 'weightKg' | 'packageCount'>): number {
@@ -10646,6 +11048,420 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
+type LegacyPricingRowInternal = {
+  id: string;
+  sourceId?: string;
+  sourceFile?: string;
+  module: LegacyPricingModule;
+  agentName: string;
+  origin?: string;
+  channelName: string;
+  serviceName?: string;
+  warehouseCode?: string;
+  destinationCountry?: string;
+  postalRule?: string;
+  minWeightKg?: number;
+  maxWeightKg?: number;
+  costPerKg?: number;
+  cbmPrice?: number;
+  tierLabel?: string;
+  transitLabel?: string;
+  productSurchargeRemark?: string;
+  specialRemark?: string;
+  remark?: string;
+  raw?: Record<string, unknown>;
+};
+
+const legacyModuleLabels: Record<LegacyPricingModule, string> = {
+  amazon: '亚马逊查询',
+  inquiry: '欧洲海运超大件查询',
+  europeExpress: '欧洲空海运铁路快递查询',
+  southAfrica: '南非专线查询'
+};
+
+function mapLegacyPricingSource(source: any): LegacyPricingSourceSummary {
+  return {
+    id: source.id,
+    module: source.module,
+    fileName: source.fileName,
+    rowCount: source.rowCount ?? source.rows?.length ?? 0,
+    importedAt: source.importedAt instanceof Date ? source.importedAt.toISOString() : String(source.importedAt ?? new Date().toISOString()),
+    status: source.status === 'error' ? 'error' : 'ok',
+    message: source.message ?? undefined
+  };
+}
+
+function mapLegacyPricingRow(row: any, source?: any): LegacyPricingRowInternal {
+  return {
+    id: row.id,
+    sourceId: row.sourceId,
+    sourceFile: source?.fileName,
+    module: row.module,
+    agentName: row.agentName,
+    origin: row.origin ?? undefined,
+    channelName: row.channelName,
+    serviceName: row.serviceName ?? undefined,
+    warehouseCode: row.warehouseCode ?? undefined,
+    destinationCountry: row.destinationCountry ?? undefined,
+    postalRule: row.postalRule ?? undefined,
+    minWeightKg: row.minWeightKg === null || row.minWeightKg === undefined ? undefined : Number(row.minWeightKg),
+    maxWeightKg: row.maxWeightKg === null || row.maxWeightKg === undefined ? undefined : Number(row.maxWeightKg),
+    costPerKg: row.costPerKg === null || row.costPerKg === undefined ? undefined : Number(row.costPerKg),
+    cbmPrice: row.cbmPrice === null || row.cbmPrice === undefined ? undefined : Number(row.cbmPrice),
+    tierLabel: row.tierLabel ?? undefined,
+    transitLabel: row.transitLabel ?? undefined,
+    productSurchargeRemark: row.productSurchargeRemark ?? undefined,
+    specialRemark: row.specialRemark ?? undefined,
+    remark: row.remark ?? undefined,
+    raw: typeof row.raw === 'object' && row.raw ? row.raw : {}
+  };
+}
+
+function normalizeLegacyRawRow(module: LegacyPricingModule, fileName: string, row: Record<string, unknown>): LegacyPricingRowInternal {
+  const raw = row ?? {};
+  const agentName = textValue(raw.agentName ?? raw['代理'] ?? raw.agent ?? raw['代理名称']) || '未知代理';
+  const channelName = textValue(raw.channelName ?? raw.channel ?? raw['渠道'] ?? raw.service ?? raw['服务']) || '未命名渠道';
+  const minWeightKg = numberValue(raw.minWeightKg ?? raw.minKg ?? raw['最小重量'] ?? raw['minKg']);
+  const maxWeightKg = numberValue(raw.maxWeightKg ?? raw.maxKg ?? raw['最大重量'] ?? raw['maxKg']);
+  const costPerKg = numberValue(raw.costPerKg ?? raw.price ?? raw['成本单价'] ?? raw['单价'] ?? raw['12KG+'] ?? raw['51KG+']);
+  return {
+    id: textValue(raw.id) || `legacy-${module}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    module,
+    sourceFile: fileName,
+    agentName,
+    origin: textValue(raw.origin ?? raw['出货仓/报价组']),
+    channelName,
+    serviceName: textValue(raw.serviceName ?? raw.service),
+    warehouseCode: textValue(raw.warehouseCode ?? raw['仓库代码']),
+    destinationCountry: textValue(raw.destinationCountry ?? raw.country ?? raw['国家'] ?? raw['目的地']),
+    postalRule: textValue(raw.postalRule ?? raw['邮编规则']),
+    minWeightKg,
+    maxWeightKg,
+    costPerKg,
+    cbmPrice: numberValue(raw.cbmPrice ?? raw['按方包税'] ?? raw['按方不包税'] ?? raw['按方未标注']),
+    tierLabel: textValue(raw.tierLabel ?? raw.label ?? raw['重量段']),
+    transitLabel: textValue(raw.transitLabel ?? raw['参考时效'] ?? raw['时效']),
+    productSurchargeRemark: textValue(raw.productSurchargeRemark ?? raw['产品附加']),
+    specialRemark: textValue(raw.specialRemark ?? raw['特别说明'] ?? raw['尺寸要求']),
+    remark: textValue(raw.remark ?? raw.notes ?? raw['备注']),
+    raw
+  };
+}
+
+function legacyPricingRowCreateData(module: LegacyPricingModule, row: LegacyPricingRowInternal) {
+  return {
+    module,
+    agentName: row.agentName,
+    origin: row.origin ?? null,
+    channelName: row.channelName,
+    serviceName: row.serviceName ?? null,
+    warehouseCode: row.warehouseCode ?? null,
+    destinationCountry: row.destinationCountry ?? null,
+    postalRule: row.postalRule ?? null,
+    minWeightKg: row.minWeightKg ?? null,
+    maxWeightKg: row.maxWeightKg ?? null,
+    costPerKg: row.costPerKg ?? null,
+    cbmPrice: row.cbmPrice ?? null,
+    tierLabel: row.tierLabel ?? null,
+    transitLabel: row.transitLabel ?? null,
+    productSurchargeRemark: row.productSurchargeRemark ?? null,
+    specialRemark: row.specialRemark ?? null,
+    remark: row.remark ?? null,
+    raw: row.raw ?? {}
+  };
+}
+
+function priceBookRowToLegacyPricingRow(row: PriceBookRowSummary): LegacyPricingRowInternal {
+  const module = inferLegacyModuleFromPriceRow(row);
+  return {
+    id: row.id,
+    sourceId: row.priceBookId,
+    module,
+    agentName: row.agentName,
+    origin: row.sourceSheetName,
+    channelName: row.channelName,
+    serviceName: row.businessRouteName,
+    warehouseCode: row.warehouseCode,
+    destinationCountry: row.destinationCountry,
+    minWeightKg: row.minWeightKg,
+    maxWeightKg: row.maxWeightKg,
+    costPerKg: row.costPerKg,
+    tierLabel: `${row.minWeightKg}KG+`,
+    transitLabel: row.transitLabel,
+    productSurchargeRemark: row.productSurchargeRemark,
+    specialRemark: row.specialRemark,
+    raw: { ...row }
+  };
+}
+
+function groupLegacyRowsByModule(rows: PriceBookRowSummary[], fileName: string) {
+  const grouped = new Map<LegacyPricingModule, LegacyPricingRowInternal[]>();
+  for (const row of rows) {
+    const legacyRow = priceBookRowToLegacyPricingRow(row);
+    legacyRow.id = randomUUID();
+    legacyRow.sourceFile = fileName;
+    const current = grouped.get(legacyRow.module) ?? [];
+    current.push(legacyRow);
+    grouped.set(legacyRow.module, current);
+  }
+  return grouped;
+}
+
+function inferLegacyModuleFromPriceRow(row: PriceBookRowSummary): LegacyPricingModule {
+  const source = `${row.sourceSheetName ?? ''} ${row.channelName ?? ''} ${row.realChannelName ?? ''} ${row.businessRouteName ?? ''} ${row.destinationCountry ?? ''}`.toLowerCase();
+  if (row.warehouseCode?.trim() || /仓库|fba|amazon|亚马逊/.test(source)) return 'amazon';
+  if (/南非|south africa|south-africa/.test(source)) return 'southAfrica';
+  if (!/超大件|大件/.test(source) && /空海运|铁路|快递|空运|空派|express|rail|air|fedex|dhl|ups/.test(source)) return 'europeExpress';
+  if (/超大件|海运|海卡|卡派|卡车|truck|oversize|大件/.test(source)) return 'inquiry';
+  return 'europeExpress';
+}
+
+function buildLegacyModuleCountsByFile(sources: any[]) {
+  const result = new Map<string, Partial<Record<LegacyPricingModule, number>>>();
+  for (const source of sources) {
+    const fileName = String(source.fileName ?? '');
+    if (!fileName) continue;
+    const module = source.module as LegacyPricingModule;
+    const counts = result.get(fileName) ?? {};
+    counts[module] = (counts[module] ?? 0) + Number(source.rowCount ?? source.rows?.length ?? 0);
+    result.set(fileName, counts);
+  }
+  return result;
+}
+
+function buildLegacyPricingMeta(rows: LegacyPricingRowInternal[]): LegacyPricingMetaResponse {
+  const modules = (Object.keys(legacyModuleLabels) as LegacyPricingModule[]).map((key) => {
+    const moduleRows = rows.filter((row) => row.module === key);
+    return {
+      key,
+      label: legacyModuleLabels[key],
+      rowCount: moduleRows.length,
+      sourceCount: new Set(moduleRows.map((row) => row.sourceId ?? row.sourceFile).filter(Boolean)).size
+    };
+  });
+  return {
+    modules,
+    agents: uniqueSorted(rows.map((row) => row.agentName)),
+    origins: uniqueSorted(rows.map((row) => row.origin)),
+    warehouseCodes: uniqueSorted(rows.map((row) => row.warehouseCode)),
+    tiers: uniqueSorted(rows.map((row) => row.tierLabel)).length ? uniqueSorted(rows.map((row) => row.tierLabel)) : ['12KG+', '51KG+', '100KG+', '按方包税', '按方不包税', '按方未标注']
+  };
+}
+
+function createLegacyPricingQuote(
+  principal: Principal,
+  input: LegacyPricingQuoteRequest,
+  rows: LegacyPricingRowInternal[],
+  persistedMarkupRules: AgentMarkupSummary[] = defaultAgentMarkupRules
+): LegacyPricingQuoteResponse {
+  const chargeableWeightKg = calculateLookupChargeableWeight({
+    chargeableWeightKg: input.chargeableWeightKg ?? 0,
+    actualWeightKg: input.actualWeightKg,
+    volumeCbm: input.volumeCbm,
+    lengthCm: input.lengthCm,
+    widthCm: input.widthCm,
+    heightCm: input.heightCm,
+    packageCount: input.packageCount,
+    unitActualWeightKg: input.unitActualWeightKg,
+    destinationCountry: input.destinationCountry ?? ''
+  });
+  const moduleRows = rows.filter((row) => row.module === input.module);
+  const filtered = moduleRows
+    .filter((row) => !input.agentName || row.agentName === input.agentName)
+    .filter((row) => !input.amazonCode?.trim() || normalizeWarehouseCode(row.warehouseCode) === normalizeWarehouseCode(input.amazonCode))
+    .filter((row) => !input.destinationCountry?.trim() || !row.destinationCountry || countryMatches(row.destinationCountry, input.destinationCountry))
+    .filter((row) => legacyChannelMatches(row, input.channel))
+    .filter((row) => legacyWeightMatches(row, chargeableWeightKg, input.volumeCbm))
+    .filter((row) => legacyProductMatches(row, input.productName))
+    .filter((row) => legacyPostalMatches(row, input.postalCode, input.address))
+    .filter((row) => !input.onlyQuotable || Number.isFinite(row.costPerKg ?? row.cbmPrice));
+  const markupRules = (persistedMarkupRules.length ? persistedMarkupRules : defaultAgentMarkupRules).filter((rule) => rule.enabled && !rule.deletedAt);
+  const canViewInternalPricing = canViewPricingInternalRoute(principal.role);
+  const recommendations = filtered
+    .map((row) => legacyRowToRecommendation(row, input, chargeableWeightKg, markupRules, canViewInternalPricing))
+    .filter((row): row is LegacyPricingRecommendation => Boolean(row))
+    .sort((left, right) => left.salesTotal - right.salesTotal || left.salesUnitPrice - right.salesUnitPrice);
+  const fastestRecommendations = recommendations
+    .filter((item) => Number.isFinite(parseTransitDaysFromLabel(item.transitLabel)))
+    .sort((left, right) => parseTransitDaysFromLabel(left.transitLabel) - parseTransitDaysFromLabel(right.transitLabel) || left.salesTotal - right.salesTotal)
+    .slice(0, 3);
+  return {
+    module: input.module,
+    query: input,
+    recommendations,
+    cheapestRecommendations: recommendations.slice(0, 3),
+    fastestRecommendations,
+    selected: recommendations[0],
+    agentErrors: seedAgentQuoteErrors,
+    metrics: {
+      matchedRows: recommendations.length,
+      agents: new Set(recommendations.map((row) => row.agentName)).size,
+      channels: new Set(recommendations.map((row) => row.channelName)).size,
+      sources: new Set(recommendations.map((row) => row.sourceId ?? row.sourceFile).filter(Boolean)).size
+    }
+  };
+}
+
+function legacyRowToRecommendation(
+  row: LegacyPricingRowInternal,
+  input: LegacyPricingQuoteRequest,
+  chargeableWeightKg: number,
+  markupRules: AgentMarkupSummary[],
+  canViewInternalPricing: boolean
+): LegacyPricingRecommendation | null {
+  const kgPrice = Number(row.costPerKg);
+  const cbmPrice = Number(row.cbmPrice);
+  const volumeCbm = Number(input.volumeCbm ?? 0);
+  let quoteMode: LegacyPricingRecommendation['quoteMode'] = 'kg';
+  let costUnitPrice = kgPrice;
+  let costTotal = roundMoney(kgPrice * chargeableWeightKg);
+  if ((!Number.isFinite(costUnitPrice) || costUnitPrice <= 0) && Number.isFinite(cbmPrice) && cbmPrice > 0 && volumeCbm > 0) {
+    quoteMode = 'cbm';
+    costUnitPrice = cbmPrice;
+    costTotal = roundMoney(cbmPrice * volumeCbm);
+  }
+  if (!Number.isFinite(costTotal) || costTotal <= 0 || chargeableWeightKg <= 0) {
+    return null;
+  }
+  const priceLike = legacyRowToPriceBookRow(row, costUnitPrice, chargeableWeightKg);
+  const markup = findBestMarkupRule(markupRules, priceLike);
+  if (!markup) return null;
+  const markupResult = quoteMode === 'kg'
+    ? applyAgentMarkup(costUnitPrice, chargeableWeightKg, markup)
+    : applyAgentMarkup(roundMoney(costTotal / chargeableWeightKg), chargeableWeightKg, markup);
+  const publicCode = publicPricingRouteCode(row.channelName, row.serviceName, row.agentName);
+  return {
+    id: row.id,
+    module: row.module,
+    sourceId: row.sourceId,
+    sourceFile: row.sourceFile,
+    agentName: canViewInternalPricing ? row.agentName : publicCode,
+    origin: canViewInternalPricing ? row.origin : undefined,
+    channelName: canViewInternalPricing ? row.channelName : publicCode,
+    serviceName: canViewInternalPricing ? row.serviceName : publicCode,
+    warehouseCode: row.warehouseCode,
+    destinationCountry: row.destinationCountry,
+    postalRule: row.postalRule,
+    weightSegmentLabel: row.tierLabel || `${row.minWeightKg ?? 0}-${row.maxWeightKg ?? 99999}kg`,
+    quoteMode,
+    tierLabel: row.tierLabel,
+    costUnitPrice: canViewInternalPricing ? costUnitPrice : markupResult.salesRatePerKg,
+    salesUnitPrice: markupResult.salesRatePerKg,
+    costTotal: canViewInternalPricing ? costTotal : markupResult.totalSales,
+    salesTotal: markupResult.totalSales,
+    ...(canViewInternalPricing ? { grossProfit: roundMoney(markupResult.totalSales - costTotal), markup } : {}),
+    chargeableWeightKg,
+    volumeCbm: volumeCbm || undefined,
+    transitLabel: row.transitLabel || '时效待确认',
+    productSurchargeRemark: row.productSurchargeRemark,
+    specialRemark: row.specialRemark,
+    remark: row.remark,
+    raw: canViewInternalPricing ? row.raw : undefined
+  };
+}
+
+function legacyWeightMatches(row: LegacyPricingRowInternal, chargeableWeightKg: number, volumeCbm?: number) {
+  if (row.cbmPrice && Number(volumeCbm ?? 0) > 0) return true;
+  const min = row.minWeightKg ?? 0;
+  const max = row.maxWeightKg ?? 999999;
+  if (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0) return !row.costPerKg;
+  return chargeableWeightKg >= min && chargeableWeightKg <= max;
+}
+
+function legacyChannelMatches(row: LegacyPricingRowInternal, channel?: string) {
+  const query = channel?.trim().toLowerCase();
+  if (!query) return true;
+  const haystack = `${row.channelName} ${row.serviceName ?? ''} ${row.origin ?? ''} ${row.remark ?? ''}`.toLowerCase();
+  if (haystack.includes(query)) return true;
+  if (query.includes('快递')) return /快递|空派|派送|dhl|ups|fedex|express/.test(haystack);
+  if (query.includes('海运')) return /海运|海派|海卡|卡派|卡车|truck/.test(haystack);
+  if (query.includes('铁路')) return /铁路|铁派|rail/.test(haystack);
+  if (query.includes('空运')) return /空运|空派|air/.test(haystack);
+  return false;
+}
+
+function legacyProductMatches(row: LegacyPricingRowInternal, productName?: string) {
+  const query = productName?.trim().toLowerCase();
+  if (!query || row.module !== 'southAfrica') return true;
+  const haystack = `${row.channelName} ${row.serviceName ?? ''} ${row.tierLabel ?? ''} ${row.remark ?? ''} ${row.productSurchargeRemark ?? ''} ${row.specialRemark ?? ''} ${JSON.stringify(row.raw ?? {})}`.toLowerCase();
+  return query.split(/[,，、\s]+/).filter(Boolean).some((word) => haystack.includes(word)) || /衣服|服饰|纺织|textile|clothes|garment/.test(`${query} ${haystack}`);
+}
+
+function legacyPostalMatches(row: LegacyPricingRowInternal, postalCode?: string, address?: string) {
+  const rule = row.postalRule?.trim();
+  if (!rule) return true;
+  const query = `${postalCode ?? ''} ${address ?? ''}`.trim().toLowerCase();
+  if (!query) return true;
+  return rule.toLowerCase().split(/[,，、\s/]+/).filter(Boolean).some((part) => query.includes(part) || part.includes(query));
+}
+
+function legacyRowToPriceBookRow(row: LegacyPricingRowInternal, costPerKg: number, chargeableWeightKg: number): PriceBookRowSummary {
+  return {
+    id: row.id,
+    priceBookId: row.sourceId ?? 'legacy',
+    agentName: row.agentName,
+    carrierName: inferBackendPriceCarrierName({ channelName: row.channelName } as PriceBookRowSummary),
+    sourceSheetName: row.sourceFile,
+    channelName: row.channelName,
+    realChannelName: row.serviceName ?? row.channelName,
+    warehouseCode: row.warehouseCode,
+    destinationCountry: row.destinationCountry ?? '',
+    minWeightKg: row.minWeightKg ?? 0,
+    maxWeightKg: row.maxWeightKg ?? Math.max(chargeableWeightKg, 99999),
+    costPerKg,
+    currency: 'RMB',
+    transitLabel: row.transitLabel,
+    productSurchargeRemark: row.productSurchargeRemark,
+    specialRemark: row.specialRemark
+  };
+}
+
+function uniqueSorted(values: Array<string | undefined>) {
+  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))).sort((left, right) => left.localeCompare(right, 'zh-CN'));
+}
+
+function textValue(value: unknown): string | undefined {
+  const text = String(value ?? '').trim();
+  return text || undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  const number = Number(String(value ?? '').replace(/,/g, '').trim());
+  return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function countryMatches(rowCountry: string, inputCountry?: string) {
+  const left = normalizeLegacyCountry(rowCountry);
+  const right = normalizeLegacyCountry(inputCountry ?? '');
+  return !right || left === right || left.includes(right) || right.includes(left);
+}
+
+function normalizeLegacyCountry(value: string) {
+  const normalized = value.trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    france: '法国',
+    fr: '法国',
+    germany: '德国',
+    de: '德国',
+    italy: '意大利',
+    it: '意大利',
+    spain: '西班牙',
+    es: '西班牙',
+    canada: '加拿大',
+    ca: '加拿大',
+    usa: '美国',
+    us: '美国',
+    'united states': '美国',
+    'south africa': '南非'
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+function parseTransitDaysFromLabel(label?: string) {
+  const match = String(label ?? '').match(/\d+/);
+  return match ? Number(match[0]) : Number.POSITIVE_INFINITY;
+}
+
 function createBackendPriceLookup(
   principal: Principal,
   input: PriceLookupRequest,
@@ -10667,7 +11483,7 @@ function createBackendPriceLookup(
     throw new BadRequestException('没有匹配的代理成本价');
   }
 
-  const isAdmin = principal.role === 'ADMIN';
+  const canViewInternalPricing = canViewPricingInternalRoute(principal.role);
   const recommendations = matchedPrices
     .map<PriceLookupRecommendation | null>((price) => {
       const markup = findBestMarkupRule(markupRules, price);
@@ -10682,13 +11498,15 @@ function createBackendPriceLookup(
       const surchargeFee = roundMoney(price.surchargeFee ?? 0);
       const realChannelName = price.realChannelName?.trim() || price.channelName.trim();
       const businessRouteName = price.businessRouteName?.trim() || undefined;
+      const publicCode = publicPricingRouteCode(price.channelName, realChannelName, businessRouteName, price.agentName);
+      const visiblePrice = canViewInternalPricing ? { ...price } : omitInternalPriceFields(maskPriceRouteForBusiness(price, publicCode));
       return {
-        price: isAdmin ? { ...price } : omitInternalPriceFields(price),
-        ...(isAdmin ? { markup } : {}),
-        channelName: price.channelName,
+        price: visiblePrice,
+        ...(canViewInternalPricing ? { markup } : {}),
+        channelName: canViewInternalPricing ? price.channelName : publicCode,
         carrierName: price.carrierName?.trim() || inferBackendPriceCarrierName(price),
-        agentName: price.agentName,
-        realChannelName,
+        agentName: canViewInternalPricing ? price.agentName : publicCode,
+        realChannelName: canViewInternalPricing ? realChannelName : publicCode,
         isRouteMapped: Boolean(businessRouteName),
         quoteSourceType: price.quoteSourceType ?? 'local',
         weightSegmentLabel: `${price.minWeightKg}-${price.maxWeightKg}kg`,
@@ -10698,13 +11516,13 @@ function createBackendPriceLookup(
         totalFee: roundMoney(totalSales + surchargeFee),
         freightUnitPrice: salesRatePerKg,
         totalUnitPrice: roundMoney((totalSales + surchargeFee) / chargeableWeightKg),
-        ...(isAdmin ? { totalCost, grossProfit: roundMoney(totalSales - totalCost) } : {}),
+        ...(canViewInternalPricing ? { totalCost, grossProfit: roundMoney(totalSales - totalCost) } : {}),
         totalSales,
         transitLabel: price.transitLabel ?? '时效待确认',
         surchargeDetails: price.surchargeDetails ?? [],
         ...(price.productSurchargeRemark ? { productSurchargeRemark: price.productSurchargeRemark } : {}),
         ...(price.specialRemark ? { specialRemark: price.specialRemark } : {}),
-        ...(businessRouteName ? { businessRouteName } : {}),
+        ...(businessRouteName ? { businessRouteName: canViewInternalPricing ? businessRouteName : publicCode } : {}),
         ...(price.priceBookId && priceBookRemarkMap.get(price.priceBookId) ? { remark: priceBookRemarkMap.get(price.priceBookId) } : {})
       };
     })
@@ -10715,7 +11533,10 @@ function createBackendPriceLookup(
   }
 
   const cheapestRecommendations = [...recommendations].sort((left, right) => left.totalSales - right.totalSales || left.salesRatePerKg - right.salesRatePerKg).slice(0, 3);
-  const fastestRecommendations = [...recommendations].sort((left, right) => matchedTransitDays(left) - matchedTransitDays(right) || left.totalSales - right.totalSales).slice(0, 3);
+  const fastestRecommendations = recommendations
+    .filter((item) => Number.isFinite(matchedTransitDays(item)))
+    .sort((left, right) => matchedTransitDays(left) - matchedTransitDays(right) || left.totalSales - right.totalSales)
+    .slice(0, 3);
   const bestRecommendation = cheapestRecommendations[0];
   if (!bestRecommendation) {
     throw new BadRequestException('没有可用报价');
@@ -10723,7 +11544,7 @@ function createBackendPriceLookup(
 
   return {
     price: bestRecommendation.price,
-    ...(isAdmin && bestRecommendation.markup ? { markup: bestRecommendation.markup } : {}),
+    ...(canViewInternalPricing && bestRecommendation.markup ? { markup: bestRecommendation.markup } : {}),
     recommendations,
     cheapestRecommendations,
     fastestRecommendations,
@@ -10737,7 +11558,7 @@ function createBackendPriceLookup(
     chargeableWeightKg,
     weightSegmentLabel: bestRecommendation.weightSegmentLabel,
     salesRatePerKg: bestRecommendation.salesRatePerKg,
-    ...(isAdmin ? { totalCost: bestRecommendation.totalCost, grossProfit: bestRecommendation.grossProfit } : {}),
+    ...(canViewInternalPricing ? { totalCost: bestRecommendation.totalCost, grossProfit: bestRecommendation.grossProfit } : {}),
     totalSales: bestRecommendation.totalSales,
     totalPrice: bestRecommendation.totalSales
   };
@@ -10778,6 +11599,29 @@ function markupSpecificity(rule: AgentMarkupSummary, channel: string, realChanne
 
 function omitInternalPriceFields(price: PriceBookRowSummary): PriceLookupRecommendation['price'] {
   return { ...price, costPerKg: undefined };
+}
+
+function canViewPricingInternalRoute(role: string): boolean {
+  return role === 'ADMIN' || role === 'UG_MARKET';
+}
+
+function publicPricingRouteCode(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const match = value?.trim().match(/[A-Za-z]{2,}(?:[-_][A-Za-z0-9]+)?|[A-Za-z]{2,}[A-Za-z0-9]*/);
+    if (match) return match[0].split(/[-_]/)[0].toUpperCase();
+  }
+  return '推荐线路';
+}
+
+function maskPriceRouteForBusiness(price: PriceBookRowSummary, publicCode: string): PriceBookRowSummary {
+  return {
+    ...price,
+    agentName: publicCode,
+    channelName: publicCode,
+    realChannelName: publicCode,
+    businessRouteName: publicCode,
+    sourceSheetName: undefined
+  };
 }
 
 const amazonWarehouseProfiles: Record<string, { warehouseCodes: string[]; keywords: string[] }> = {

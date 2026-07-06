@@ -328,7 +328,6 @@ export function OrdersPage({
                 <span>订单预览</span>
               </Flex>
             }
-            extra={<Text type="secondary">按当前订单数据展示状态与操作入口</Text>}
           >
             <div className="fulfillment-board-toolbar">
               <div className="status-strip fulfillment-status-strip">
@@ -368,7 +367,6 @@ export function OrdersPage({
                 <span>待业务上传发票</span>
               </Flex>
             }
-            extra={<Text type="secondary">业务下载代理模板，填写后上传 Excel 发票</Text>}
           >
             <ManagedTable
               className="fulfillment-table"
@@ -511,7 +509,7 @@ export function OrdersPage({
           className="notice-bar"
           type="warning"
           showIcon
-          message="人工修改会直接覆盖该票最新轨迹、转单号和状态，并写入后端操作记录。"
+          message="人工修改会直接覆盖该票最新轨迹、转单号和状态，并写入操作记录。"
         />
         <Form form={editShipmentForm} layout="vertical">
           <Form.Item
@@ -692,7 +690,7 @@ export function OrdersPage({
           className="notice-bar"
           type="info"
           showIcon
-          message="未登记前金额和付款方式显示为未知；确认收款后会写入后端并保留操作记录。"
+          message="未登记前金额和付款方式显示为未知；确认收款后会保留操作记录。"
         />
         <Form form={shipmentPaymentForm} layout="vertical">
           <Row gutter={16}>

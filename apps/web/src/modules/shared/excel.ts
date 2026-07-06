@@ -1,9 +1,11 @@
 import type readXlsxFile from 'read-excel-file/browser';
 import type { CellValue as ReadCellValue } from 'read-excel-file/browser';
 import writeXlsxFile from 'write-excel-file/browser';
+import type * as XLSX from '@e965/xlsx';
 
 export type ExcelModule = {
   readXlsxFile: typeof readXlsxFile;
+  xlsx: typeof XLSX;
 };
 export type ExcelCellValue = string | number | null;
 export type SimpleWorksheet = {
@@ -15,21 +17,20 @@ export type SimpleWorkbook = {
 };
 
 export async function loadExcel(): Promise<ExcelModule> {
-  const module = await import('read-excel-file/browser');
-  return { readXlsxFile: module.default };
+  const [readModule, xlsx] = await Promise.all([
+    import('read-excel-file/browser'),
+    import('@e965/xlsx')
+  ]);
+  return { readXlsxFile: readModule.default, xlsx };
 }
 
 export async function readWorkbook(arrayBuffer: ArrayBuffer, excel: ExcelModule): Promise<SimpleWorkbook> {
-  const blob = new Blob([arrayBuffer]);
-  const input =
-    typeof blob.arrayBuffer === 'function'
-      ? blob
-      : Object.assign(blob, { arrayBuffer: async () => arrayBuffer });
-  const sheets = await excel.readXlsxFile(input);
+  const workbook = excel.xlsx.read(new Uint8Array(arrayBuffer), { type: 'array', cellDates: true });
   return {
-    worksheets: sheets.map((sheet) => ({
-      name: sheet.sheet,
-      rows: sheet.data.map((row) => row.map((value) => cellToPrimitive(value)))
+    worksheets: workbook.SheetNames.map((sheetName) => ({
+      name: sheetName,
+      rows: (excel.xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: null }) as unknown[][])
+        .map((row) => row.map((value) => cellToPrimitive(value as ReadCellValue | boolean | null)))
     }))
   };
 }
@@ -85,12 +86,15 @@ export async function downloadWorkbook(workbook: SimpleWorkbook, filename: strin
   URL.revokeObjectURL(url);
 }
 
-function cellToPrimitive(value: ReadCellValue | null): ExcelCellValue {
+function cellToPrimitive(value: ReadCellValue | boolean | null): ExcelCellValue {
   if (value === null || value === undefined) {
     return null;
   }
   if (typeof value === 'string' || typeof value === 'number') {
     return value;
+  }
+  if (typeof value === 'boolean') {
+    return value ? 'TRUE' : 'FALSE';
   }
   if (value instanceof Date) {
     return value.toISOString();

@@ -13,20 +13,17 @@ const { Title, Text } = Typography;
 
 interface MasterCustomerFormValues {
   customerCode: string;
-  customerShortName: string;
-  customerFullName: string;
-  customerType: string;
+  customerName: string;
   customerSource: string;
   salesperson: string;
   defaultSettlementMethod: string;
-  customerEnabled: 'true' | 'false';
 }
 
 interface MasterCustomerContactFormValues {
   receiverName: string;
   receiverCompany?: string;
   receiverPhone?: string;
-  receiverEmail?: string;
+  fbaWarehouseCode?: string;
   receiverAddress?: string;
   receiverCountry?: string;
   receiverState?: string;
@@ -34,7 +31,7 @@ interface MasterCustomerContactFormValues {
 }
 
 interface MasterAgentFormValues {
-  agentCode: string;
+  agentCode?: string;
   agentShortName: string;
   agentName: string;
   warehouseAddress1: string;
@@ -46,8 +43,8 @@ interface MasterAgentFormValues {
   bankAccountName: string;
   bankAccountNo: string;
   bankName: string;
-  agentIntegrationType: AgentIntegrationType;
-  agentEnabled: 'true' | 'false';
+  agentIntegrationType?: AgentIntegrationType;
+  agentEnabled?: 'true' | 'false';
 }
 
 interface MasterAgentChannelFormValues {
@@ -195,7 +192,6 @@ export function MasterDataPage({
     name: '',
     code: '',
     status: 'ALL',
-    customerType: 'ALL',
     customerSource: '',
     salesperson: ''
   });
@@ -205,7 +201,6 @@ export function MasterDataPage({
   const [customerListSettingOpen, setCustomerListSettingOpen] = useState(false);
   const [customerDisableConfirmOpen, setCustomerDisableConfirmOpen] = useState(false);
   const [showCustomerStatus, setShowCustomerStatus] = useState(true);
-  const [showCustomerType, setShowCustomerType] = useState(true);
   const [agentFilters, setAgentFilters] = useState({
     name: '',
     code: '',
@@ -216,8 +211,9 @@ export function MasterDataPage({
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agentListSettingOpen, setAgentListSettingOpen] = useState(false);
   const [agentDisableConfirmOpen, setAgentDisableConfirmOpen] = useState(false);
-  const [showAgentStatus, setShowAgentStatus] = useState(true);
-  const [showAgentIntegrationType, setShowAgentIntegrationType] = useState(true);
+  const [showAgentCode, setShowAgentCode] = useState(false);
+  const [showAgentStatus, setShowAgentStatus] = useState(false);
+  const [showAgentIntegrationType, setShowAgentIntegrationType] = useState(false);
   const [agentChannelFilters, setAgentChannelFilters] = useState({ agentId: 'ALL', channelName: '', status: 'ALL' });
   const [appliedAgentChannelFilters, setAppliedAgentChannelFilters] = useState(agentChannelFilters);
   const [selectedAgentChannelId, setSelectedAgentChannelId] = useState<string | null>(null);
@@ -262,10 +258,10 @@ export function MasterDataPage({
     }
   });
   const masterSubItems: ModuleSubNavItem[] = [
-    ...(canReadCustomers ? [{ key: 'customers', label: '客户资料', description: '客户编码、简称、全称' }] : []),
+    ...(canReadCustomers ? [{ key: 'customers', label: '客户资料', description: '业务员归属、客户编号、客户名称' }] : []),
     ...(canReadFinanceCatalog ? [{ key: 'financeCatalog', label: '财务资料', description: '费用、结算、货物、品名' }] : []),
     ...(canReadAgents ? [
-      { key: 'agents', label: '代理资料', description: '代理编码、简称、详细公司名' },
+      { key: 'agents', label: '代理资料', description: '代理简称、详细公司名、仓库与模板' },
     ] : []),
     ...(canReadAgentChannels ? [
       { key: 'agentChannels', label: '代理渠道', description: '代理与渠道名称' }
@@ -301,9 +297,6 @@ export function MasterDataPage({
   }, [activeMasterSection, apiClient, canReadCustomers, onMasterDataChange, onNotice]);
   const customerRows = masterData.customers.map((customer) => ({
     ...customer,
-    shortName: customer.shortName ?? customer.name,
-    fullName: customer.fullName ?? `${customer.name} Co., Ltd.`,
-    customerType: customer.customerType ?? '直客',
     customerSource: customer.customerSource ?? '',
     salesperson: customer.salesperson || '未分配',
     defaultSettlementMethod: customer.defaultSettlementMethod ?? ''
@@ -313,15 +306,14 @@ export function MasterDataPage({
     const codeKeyword = appliedCustomerFilters.code.trim().toLowerCase();
     const salespersonKeyword = appliedCustomerFilters.salesperson.trim().toLowerCase();
     const sourceKeyword = appliedCustomerFilters.customerSource.trim().toLowerCase();
-    const matchesName = !nameKeyword || `${customer.code} ${customer.shortName} ${customer.fullName}`.toLowerCase().includes(nameKeyword);
+    const matchesName = !nameKeyword || `${customer.code} ${customer.name}`.toLowerCase().includes(nameKeyword);
     const matchesCode = !codeKeyword || customer.code.toLowerCase().includes(codeKeyword);
     const matchesSalesperson = !salespersonKeyword || customer.salesperson.toLowerCase().includes(salespersonKeyword);
     const matchesSource = !sourceKeyword || customer.customerSource.toLowerCase().includes(sourceKeyword);
     const matchesStatus =
       appliedCustomerFilters.status === 'ALL' ||
       (appliedCustomerFilters.status === 'ENABLED' ? customer.enabled : !customer.enabled);
-    const matchesType = appliedCustomerFilters.customerType === 'ALL' || customer.customerType === appliedCustomerFilters.customerType;
-    return matchesName && matchesCode && matchesSalesperson && matchesSource && matchesStatus && matchesType;
+    return matchesName && matchesCode && matchesSalesperson && matchesSource && matchesStatus;
   });
   const selectedCustomer = customerRows.find((customer) => customer.id === selectedCustomerId) ?? null;
   const selectedCustomerContacts = selectedCustomer
@@ -333,7 +325,6 @@ export function MasterDataPage({
     missingSettlement: customerRows.filter((customer) => !customer.defaultSettlementMethod).length,
     contacts: masterData.contacts.filter((contact) => contact.enabled).length
   };
-  const customerTypeOptions = Array.from(new Set(customerRows.map((customer) => customer.customerType).filter(Boolean)));
   const salespersonOptions = Array.from(new Set(customerRows.map((customer) => customer.salesperson).filter(Boolean)));
   const customerContactsById = new Map(customerRows.map((customer) => [
     customer.id,
@@ -379,33 +370,12 @@ export function MasterDataPage({
     };
   }, [activeMasterSection, apiClient, selectedCustomerId]);
   const customerColumns: ColumnsType<(typeof customerRows)[number]> = [
-    { title: '客户编码', dataIndex: 'code', width: 110, render: (value: string) => <Text strong>{value}</Text> },
-    {
-      title: '客户信息',
-      dataIndex: 'shortName',
-      width: 180,
-      render: (_value: string, record) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{record.shortName}</Text>
-          <Text type="secondary">{record.fullName}</Text>
-          {record.customerSource ? <Text type="secondary">{record.customerSource}</Text> : null}
-        </Space>
-      )
-    },
-    ...(showCustomerType
-      ? [
-          {
-            title: '客户类型',
-            dataIndex: 'customerType',
-            width: 95,
-            render: (value: string) => <Tag color="blue">{value}</Tag>
-          }
-        ]
-      : []),
-    { title: '结算信息', dataIndex: 'defaultSettlementMethod', width: 120, render: (value: string) => value ? <Tag color="green">{value}</Tag> : <Tag color="orange">缺失</Tag> },
-    { title: '业务员', dataIndex: 'salesperson', width: 110 },
+    { title: '业务员归属', dataIndex: 'salesperson', width: 120 },
+    { title: '客户编号', dataIndex: 'code', width: 120, render: (value: string) => <Text strong>{value}</Text> },
+    { title: '客户名称', dataIndex: 'name', width: 180, render: (value: string) => <Text strong>{value}</Text> },
+    { title: '客户来源', dataIndex: 'customerSource', width: 140, render: (value?: string) => value || '-' },
+    { title: '结算方式', dataIndex: 'defaultSettlementMethod', width: 130, render: (value: string) => value ? <Tag color="green">{value}</Tag> : <Tag color="orange">缺失</Tag> },
     { title: '收货人', width: 90, render: (_value, record) => customerContactsById.get(record.id)?.length ?? 0 },
-    { title: '最近下单', width: 120, render: (_value, record) => latestShipmentByCustomerId.get(record.id)?.createdAt?.slice(0, 10) ?? '-' },
     ...(showCustomerStatus
       ? [
           {
@@ -456,11 +426,12 @@ export function MasterDataPage({
     }
   ];
   const customerContactColumns: ColumnsType<CustomerContactSummary> = [
-    { title: '收货人', dataIndex: 'name', width: 130, render: (value: string) => <Text strong>{value}</Text> },
-    { title: '公司', dataIndex: 'company', width: 150, render: (value?: string) => value || '-' },
-    { title: '电话', dataIndex: 'phone', width: 140, render: (value?: string) => value || '-' },
-    { title: '邮箱', dataIndex: 'email', width: 170, render: (value?: string) => value || '-' },
-    { title: '地址', dataIndex: 'address', render: (value?: string) => value || '-' },
+    { title: '收货人信息', width: 110, render: (_value, _record, index) => `收货人信息${['一', '二', '三', '四'][index] ?? index + 1}` },
+    { title: '收货人名称', dataIndex: 'name', width: 130, render: (value: string) => <Text strong>{value}</Text> },
+    { title: '收货人公司名称', dataIndex: 'company', width: 150, render: (value?: string) => value || '-' },
+    { title: '收货人电话', dataIndex: 'phone', width: 140, render: (value?: string) => value || '-' },
+    { title: 'FBA仓库代码', dataIndex: 'fbaWarehouseCode', width: 130, render: (value?: string) => value || '-' },
+    { title: '收货人地址', dataIndex: 'address', render: (value?: string) => value || '-' },
     { title: '国家', dataIndex: 'country', width: 90, render: (value?: string) => value || '-' },
     { title: '州/省', dataIndex: 'state', width: 90, render: (value?: string) => value || '-' },
     { title: '邮编', dataIndex: 'postalCode', width: 100, render: (value?: string) => value || '-' },
@@ -509,7 +480,11 @@ export function MasterDataPage({
   });
   const selectedAgent = agentRows.find((agent) => agent.id === selectedAgentId) ?? null;
   const agentColumns: ColumnsType<(typeof agentRows)[number]> = [
-    { title: '代理编码', dataIndex: 'code', width: 140, render: (value: string) => <Text strong>{value}</Text> },
+    ...(showAgentCode
+      ? [
+          { title: '代理编码', dataIndex: 'code', width: 140, render: (value: string) => <Text strong>{value}</Text> }
+        ]
+      : []),
     { title: '代理简称', dataIndex: 'shortName', width: 180, render: (value: string) => <Text strong>{value}</Text> },
     { title: '代理详细公司名', dataIndex: 'name', width: 220 },
     { title: '仓库地址一', dataIndex: 'warehouseAddress1', width: 220, render: (value?: string) => value || '-' },
@@ -773,11 +748,11 @@ export function MasterDataPage({
     setEditingMasterCustomer(null);
     masterCustomerForm.resetFields();
     masterCustomerForm.setFieldsValue({
+      customerCode: '',
+      customerName: '',
       customerSource: '',
-      customerType: '直客',
       salesperson: currentSalesperson,
-      defaultSettlementMethod: 'RMB月结',
-      customerEnabled: 'true'
+      defaultSettlementMethod: 'RMB月结'
     });
     setMasterCustomerOpen(true);
   }
@@ -786,13 +761,10 @@ export function MasterDataPage({
     setEditingMasterCustomer(customer);
     masterCustomerForm.setFieldsValue({
       customerCode: customer.code,
-      customerShortName: customer.shortName ?? customer.name,
-      customerFullName: customer.fullName ?? `${customer.name} Co., Ltd.`,
-      customerType: customer.customerType ?? '直客',
+      customerName: customer.name,
       customerSource: customer.customerSource ?? '',
-      salesperson: customer.salesperson ?? '',
-      defaultSettlementMethod: customer.defaultSettlementMethod ?? '',
-      customerEnabled: customer.enabled ? 'true' : 'false'
+      salesperson: customer.salesperson ?? currentSalesperson,
+      defaultSettlementMethod: customer.defaultSettlementMethod ?? ''
     });
     setMasterCustomerOpen(true);
   }
@@ -801,22 +773,17 @@ export function MasterDataPage({
     const values = await masterCustomerForm.validateFields();
     try {
       const customerCode = values.customerCode.trim();
-      const customerShortName = values.customerShortName.trim();
-      const customerFullName = values.customerFullName.trim();
-      const customerType = values.customerType.trim();
+      const customerName = values.customerName.trim();
       const customerSource = values.customerSource.trim();
-      const salesperson = currentSalesperson;
+      const salesperson = currentUser.role === 'ADMIN' ? values.salesperson.trim() : currentSalesperson;
       const defaultSettlementMethod = values.defaultSettlementMethod.trim();
       const input = {
         code: customerCode,
-        name: customerShortName,
-        shortName: customerShortName,
-        fullName: customerFullName,
-        customerType,
+        name: customerName,
         customerSource: customerSource || undefined,
         salesperson,
         defaultSettlementMethod,
-        enabled: values.customerEnabled === 'true'
+        enabled: editingMasterCustomer?.enabled ?? true
       };
       const wasEditing = Boolean(editingMasterCustomer);
       const customer = editingMasterCustomer
@@ -870,14 +837,13 @@ export function MasterDataPage({
   }
 
   function exportCustomers() {
-    const header = ['客户编码', '客户简称', '客户全称', '客户类型', '结算信息', '业务员', '状态'];
+    const header = ['业务员归属', '客户编号', '客户名称', '客户来源', '结算方式', '状态'];
     const rows = filteredCustomerRows.map((customer) => [
-      customer.code,
-      customer.shortName,
-      customer.fullName,
-      customer.customerType,
-      customer.defaultSettlementMethod || '-',
       customer.salesperson,
+      customer.code,
+      customer.name,
+      customer.customerSource || '-',
+      customer.defaultSettlementMethod || '-',
       customer.enabled ? '启用' : '停用'
     ]);
     const csv = [header, ...rows].map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
@@ -901,7 +867,7 @@ export function MasterDataPage({
       receiverName: contact.name,
       receiverCompany: contact.company ?? '',
       receiverPhone: contact.phone ?? '',
-      receiverEmail: contact.email ?? '',
+      fbaWarehouseCode: contact.fbaWarehouseCode ?? '',
       receiverAddress: contact.address ?? '',
       receiverCountry: contact.country ?? '',
       receiverState: contact.state ?? '',
@@ -915,7 +881,7 @@ export function MasterDataPage({
       name: contact.name,
       company: contact.company,
       phone: contact.phone,
-      email: contact.email,
+      fbaWarehouseCode: contact.fbaWarehouseCode,
       address: contact.address,
       country: contact.country,
       state: contact.state,
@@ -936,7 +902,7 @@ export function MasterDataPage({
       name: values.receiverName.trim(),
       company: values.receiverCompany?.trim() || undefined,
       phone: values.receiverPhone?.trim() || undefined,
-      email: values.receiverEmail?.trim() || undefined,
+      fbaWarehouseCode: values.fbaWarehouseCode?.trim() || undefined,
       address: values.receiverAddress?.trim() || undefined,
       country: values.receiverCountry?.trim() || undefined,
       state: values.receiverState?.trim() || undefined,
@@ -1034,7 +1000,7 @@ export function MasterDataPage({
       return;
     }
     const input = {
-      code: values.agentCode.trim(),
+      code: values.agentCode?.trim() || undefined,
       shortName: values.agentShortName.trim(),
       name: values.agentName.trim(),
       warehouseAddress1: values.warehouseAddress1?.trim(),
@@ -1043,8 +1009,8 @@ export function MasterDataPage({
       warehouseContact: values.warehouseContact?.trim(),
       invoiceTemplateName: values.invoiceTemplateName?.trim(),
       invoiceTemplateUrl: values.invoiceTemplateUrl?.trim(),
-      integrationType: values.agentIntegrationType,
-      enabled: values.agentEnabled === 'true'
+      integrationType: values.agentIntegrationType ?? 'MANUAL',
+      enabled: values.agentEnabled !== 'false'
     };
     const agent = editingMasterAgent
       ? await apiClient.updateAgent(editingMasterAgent.id, input)
@@ -1326,7 +1292,7 @@ export function MasterDataPage({
       {activeMasterSection === 'customers' ? (
         <Row gutter={[12, 12]} className="customer-master-metrics">
           <Col xs={24} md={12} xl={6}>
-            <MetricCard icon={<Users />} title="客户资料" value={customerMetrics.total} extra="客户编码、简称、全称" />
+            <MetricCard icon={<Users />} title="客户资料" value={customerMetrics.total} extra="业务员归属、客户编号、客户名称" />
           </Col>
           <Col xs={24} md={12} xl={6}>
             <MetricCard icon={<CheckCircle />} title="启用客户" value={customerMetrics.enabled} extra="当前可用于下单" />
@@ -1341,7 +1307,7 @@ export function MasterDataPage({
       ) : (
         <Row gutter={[16, 16]}>
           <Col xs={24} md={8}>
-            <MetricCard icon={<Users />} title="客户资料" value={summary.enabledCustomers} extra="客户编码、简称、全称、类型、业务员" />
+            <MetricCard icon={<Users />} title="客户资料" value={summary.enabledCustomers} extra="业务员归属、客户编号、客户名称、结算方式" />
           </Col>
           <Col xs={24} md={8}>
             <MetricCard icon={<Route />} title="代理资料" value={summary.enabledAgents} extra={`${summary.enabledChannels} 条渠道 / ${summary.enabledCarriers} 个承运商`} />
@@ -1797,26 +1763,14 @@ export function MasterDataPage({
               <Space direction="vertical" size={10} className="customer-master-stack">
                 <div className="customer-master-filter">
                   <Space.Compact className="customer-master-keyword">
-                    <span>客户名称/编码</span>
+                    <span>客户名称/编号</span>
                     <Input
-                      aria-label="客户编码筛选"
-                      placeholder="输入客户简称、全称或编码"
+                      aria-label="客户编号筛选"
+                      placeholder="输入客户名称或编号"
                       value={customerFilters.name}
                       onChange={(event) => setCustomerFilters((current) => ({ ...current, name: event.target.value, code: '' }))}
                     />
                   </Space.Compact>
-                  <label className="customer-master-select">
-                    <span>客户类型</span>
-                    <select
-                      aria-label="客户类型筛选"
-                      className="native-select"
-                      value={customerFilters.customerType}
-                      onChange={(event) => setCustomerFilters((current) => ({ ...current, customerType: event.target.value }))}
-                    >
-                      <option value="ALL">全部</option>
-                      {customerTypeOptions.map((type) => <option key={type} value={type}>{type}</option>)}
-                    </select>
-                  </label>
                   <label className="customer-master-select">
                     <span>状态</span>
                     <select
@@ -1845,7 +1799,7 @@ export function MasterDataPage({
                   <Button type="primary" onClick={() => setAppliedCustomerFilters(customerFilters)}>查询</Button>
                   <Button
                     onClick={() => {
-                      const emptyFilters = { name: '', code: '', status: 'ALL', customerType: 'ALL', customerSource: '', salesperson: '' };
+                      const emptyFilters = { name: '', code: '', status: 'ALL', customerSource: '', salesperson: '' };
                       setCustomerFilters(emptyFilters);
                       setAppliedCustomerFilters(emptyFilters);
                     }}
@@ -1894,7 +1848,6 @@ export function MasterDataPage({
                       删除
                     </Button>
                   </Popconfirm>
-                  <Text type="warning">停用保留历史记录；删除需二次确认</Text>
                 </div>
                 <Table
                   rowKey="id"
@@ -1928,31 +1881,23 @@ export function MasterDataPage({
                       <Space>
                         <Title level={4}>{selectedCustomer.name}</Title>
                         <Tag color={selectedCustomer.enabled ? 'green' : 'default'}>{selectedCustomer.enabled ? '启用' : '停用'}</Tag>
-                        <Tag color="blue">{selectedCustomer.customerType}</Tag>
                       </Space>
-                      <Text type="secondary">{selectedCustomer.code} · {selectedCustomer.fullName}</Text>
+                      <Text type="secondary">{selectedCustomer.code}</Text>
                     </Space>
                   </Flex>
                   <div className="customer-detail-section">
                     <Text strong>基础信息</Text>
                     <div className="customer-detail-fields">
-                      <Text type="secondary">客户编码</Text><Text>{selectedCustomer.code}</Text>
-                      <Text type="secondary">业务员</Text><Text>{selectedCustomer.salesperson}</Text>
-                      <Text type="secondary">来源</Text><Text>{selectedCustomer.customerSource || '手工创建'}</Text>
-                      <Text type="secondary">创建时间</Text><Text>{latestShipmentByCustomerId.get(selectedCustomer.id)?.createdAt?.slice(0, 16).replace('T', ' ') ?? '-'}</Text>
-                    </div>
-                  </div>
-                  <div className="customer-detail-section">
-                    <Text strong>结算信息</Text>
-                    <div className="customer-detail-fields">
-                      <Text type="secondary">币种</Text><Text>RMB</Text>
+                      <Text type="secondary">业务员归属</Text><Text>{selectedCustomer.salesperson}</Text>
+                      <Text type="secondary">客户编号</Text><Text>{selectedCustomer.code}</Text>
+                      <Text type="secondary">客户名称</Text><Text>{selectedCustomer.name}</Text>
+                      <Text type="secondary">客户来源</Text><Text>{selectedCustomer.customerSource || '-'}</Text>
                       <Text type="secondary">结算方式</Text><Text>{selectedCustomer.defaultSettlementMethod || '缺失'}</Text>
-                      <Text type="secondary">付款周期</Text><Text>{selectedCustomer.defaultSettlementMethod?.includes('月') ? '每月' : '-'}</Text>
                     </div>
                   </div>
                   <div className="customer-detail-section">
                     <Flex justify="space-between" align="center">
-                      <Text strong>收货人</Text>
+                      <Text strong>收货人信息</Text>
                       <Button
                         size="small"
                         icon={<Plus size={14} />}
@@ -1962,35 +1907,16 @@ export function MasterDataPage({
                         新增收货人
                       </Button>
                     </Flex>
-                    {selectedCustomerContacts.length ? (
-                      <Table
-                        rowKey="id"
-                        size="small"
-                        className="customer-detail-contact-table"
-                        dataSource={selectedCustomerContacts}
-                        columns={customerContactColumns}
-                        pagination={false}
-                        scroll={{ x: 920 }}
-                      />
-                    ) : <Text type="secondary">暂无维护收货人</Text>}
-                  </div>
-                  <div className="customer-detail-section">
-                    <Text strong>最近订单</Text>
-                    {latestShipmentByCustomerId.get(selectedCustomer.id) ? (
-                      <Flex justify="space-between" align="center">
-                        <Text strong type="success">{latestShipmentByCustomerId.get(selectedCustomer.id)?.systemOrderNo}</Text>
-                        <Text type="secondary">{latestShipmentByCustomerId.get(selectedCustomer.id)?.createdAt?.slice(0, 10)}</Text>
-                      </Flex>
-                    ) : <Text type="secondary">暂无订单</Text>}
-                  </div>
-                  <div className="customer-detail-section">
-                    <Text strong>最近变更</Text>
-                    {customerAuditLogs.length ? customerAuditLogs.map((log) => (
-                      <Space key={log.id} direction="vertical" size={0} className="full-width">
-                        <Text type="success">{log.actionLabel}</Text>
-                        <Text type="secondary">{log.actorUsername} · {log.createdAt.slice(0, 16).replace('T', ' ')}</Text>
-                      </Space>
-                    )) : <Text type="secondary">暂无变更记录</Text>}
+                    <Table
+                      rowKey="id"
+                      size="small"
+                      className="customer-detail-contact-table"
+                      dataSource={selectedCustomerContacts}
+                      columns={customerContactColumns}
+                      pagination={false}
+                      scroll={{ x: 1040 }}
+                      locale={{ emptyText: '暂无维护收货人' }}
+                    />
                   </div>
                   <Flex gap={10}>
                     <Button onClick={() => void handleEditMasterCustomer(selectedCustomer)} disabled={!canWriteCustomers}>编辑客户</Button>
@@ -2023,9 +1949,6 @@ export function MasterDataPage({
               onCancel={() => setCustomerListSettingOpen(false)}
             >
               <Space direction="vertical">
-                <Checkbox checked={showCustomerType} onChange={(event) => setShowCustomerType(event.target.checked)}>
-                  显示客户类型
-                </Checkbox>
                 <Checkbox checked={showCustomerStatus} onChange={(event) => setShowCustomerStatus(event.target.checked)}>
                   显示状态
                 </Checkbox>
@@ -2047,15 +1970,6 @@ export function MasterDataPage({
                     />
                   ))}
                 </Col>
-                <Col xs={24} md={8} xl={5}>
-                  {renderFilterField('代理编码', (
-                    <Input
-                      aria-label="代理编码筛选"
-                      value={agentFilters.code}
-                      onChange={(event) => setAgentFilters((current) => ({ ...current, code: event.target.value }))}
-                    />
-                  ))}
-                </Col>
                 <Col xs={24} md={8} xl={4}>
                   {renderFilterField('状态', (
                     <select
@@ -2067,22 +1981,6 @@ export function MasterDataPage({
                       <option value="ALL">--全部--</option>
                       <option value="ENABLED">启用</option>
                       <option value="DISABLED">停用</option>
-                    </select>
-                  ))}
-                </Col>
-                <Col xs={24} md={8} xl={5}>
-                  {renderFilterField('对接类型', (
-                    <select
-                      aria-label="代理对接类型筛选"
-                      className="native-select"
-                      value={agentFilters.integrationType}
-                      onChange={(event) => setAgentFilters((current) => ({ ...current, integrationType: event.target.value }))}
-                    >
-                      <option value="ALL">--全部--</option>
-                      <option value="MANUAL">手工</option>
-                      <option value="API">API 对接</option>
-                      <option value="PLATFORM">平台对接</option>
-                      <option value="OTHER">其他</option>
                     </select>
                   ))}
                 </Col>
@@ -2159,6 +2057,9 @@ export function MasterDataPage({
               <Space direction="vertical">
                 <Checkbox checked={showAgentStatus} onChange={(event) => setShowAgentStatus(event.target.checked)}>
                   显示状态
+                </Checkbox>
+                <Checkbox checked={showAgentCode} onChange={(event) => setShowAgentCode(event.target.checked)}>
+                  显示代理编码
                 </Checkbox>
                 <Checkbox checked={showAgentIntegrationType} onChange={(event) => setShowAgentIntegrationType(event.target.checked)}>
                   显示代理对接类型
@@ -2401,62 +2302,50 @@ export function MasterDataPage({
           className="notice-bar"
           type="info"
           showIcon
-          message="客户资料维护客户主数据、业务员、结算信息和收货人；删除会停用客户，不做物理删除。"
+          message="客户资料维护客户主数据、业务员归属、结算方式和收货人；删除会停用客户，不做物理删除。"
         />
         <Form form={masterCustomerForm} layout="vertical">
           <Form.Item
             name="customerCode"
-            label="客户编码"
-            rules={[{ required: true, whitespace: true, message: '请输入客户编码' }]}
+            label="客户编号"
+            rules={[{ required: true, whitespace: true, message: '请输入客户编号' }]}
           >
             <Input placeholder="例如 9409" />
           </Form.Item>
           <Form.Item
-            name="customerShortName"
-            label="客户简称"
-            rules={[{ required: true, whitespace: true, message: '请输入客户简称' }]}
+            name="customerName"
+            label="客户名称"
+            rules={[{ required: true, whitespace: true, message: '请输入客户名称' }]}
           >
             <Input placeholder="例如 Daloday" />
-          </Form.Item>
-          <Form.Item
-            name="customerFullName"
-            label="客户全称"
-            rules={[{ required: true, whitespace: true, message: '请输入客户全称' }]}
-          >
-            <Input placeholder="例如 Daloday Inc." />
-          </Form.Item>
-          <Form.Item
-            name="customerType"
-            label="客户类型"
-            rules={[{ required: true, whitespace: true, message: '请输入客户类型' }]}
-          >
-            <Input placeholder="例如 直客" />
           </Form.Item>
           <Form.Item name="customerSource" label="客户来源">
             <Input placeholder="例如 展会、转介绍、线上询盘" />
           </Form.Item>
-          <Form.Item name="salesperson" hidden>
-            <Input />
-          </Form.Item>
-          <Form.Item label="业务员" htmlFor="salespersonReadonly">
-            <Input id="salespersonReadonly" aria-label="业务员" value={currentSalesperson} disabled />
-          </Form.Item>
+          {currentUser.role === 'ADMIN' ? (
+            <Form.Item
+              name="salesperson"
+              label="业务员归属"
+              rules={[{ required: true, whitespace: true, message: '请输入业务员归属' }]}
+            >
+              <Input placeholder="例如 operator" />
+            </Form.Item>
+          ) : (
+            <>
+              <Form.Item name="salesperson" hidden>
+                <Input />
+              </Form.Item>
+              <Form.Item label="业务员归属" htmlFor="salespersonReadonly">
+                <Input id="salespersonReadonly" aria-label="业务员归属" value={currentSalesperson} disabled />
+              </Form.Item>
+            </>
+          )}
           <Form.Item
             name="defaultSettlementMethod"
-            label="结算信息"
-            rules={[{ required: true, whitespace: true, message: '请输入结算信息' }]}
+            label="结算方式"
+            rules={[{ required: true, whitespace: true, message: '请输入结算方式' }]}
           >
             <Input placeholder="例如 RMB月结" />
-          </Form.Item>
-          <Form.Item
-            name="customerEnabled"
-            label="状态"
-            rules={[{ required: true, message: '请选择状态' }]}
-          >
-            <select className="native-select" aria-label="客户状态">
-              <option value="true">启用</option>
-              <option value="false">停用</option>
-            </select>
           </Form.Item>
         </Form>
       </Modal>
@@ -2477,21 +2366,21 @@ export function MasterDataPage({
         <Form form={masterCustomerContactForm} layout="vertical">
           <Form.Item
             name="receiverName"
-            label="收货人"
-            rules={[{ required: true, whitespace: true, message: '请输入收货人' }]}
+            label="收货人名称"
+            rules={[{ required: true, whitespace: true, message: '请输入收货人名称' }]}
           >
             <Input placeholder="例如 Daloday Contact" />
           </Form.Item>
-          <Form.Item name="receiverCompany" label="公司">
+          <Form.Item name="receiverCompany" label="收货人公司名称">
             <Input placeholder="例如 Daloday Inc." />
           </Form.Item>
-          <Form.Item name="receiverPhone" label="电话">
+          <Form.Item name="receiverPhone" label="收货人电话">
             <Input placeholder="例如 13800000001" />
           </Form.Item>
-          <Form.Item name="receiverEmail" label="邮箱">
-            <Input placeholder="例如 receiver@example.com" />
+          <Form.Item name="fbaWarehouseCode" label="FBA仓库代码">
+            <Input placeholder="例如 ONT8" />
           </Form.Item>
-          <Form.Item name="receiverAddress" label="地址">
+          <Form.Item name="receiverAddress" label="收货人地址">
             <Input placeholder="例如 9409 Sample Street" />
           </Form.Item>
           <Row gutter={12}>
@@ -2529,15 +2418,6 @@ export function MasterDataPage({
       >
         <Form form={masterAgentForm} layout="vertical">
           <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item
-                name="agentCode"
-                label="代理编码"
-                rules={[{ required: true, whitespace: true, message: '请输入代理编码' }]}
-              >
-                <Input placeholder="例如 SZJST" />
-              </Form.Item>
-            </Col>
             <Col xs={24} md={12}>
               <Form.Item
                 name="agentShortName"
@@ -2626,23 +2506,35 @@ export function MasterDataPage({
                 </Col>
               </>
             ) : null}
-            <Col xs={24} md={12}>
-              <Form.Item name="agentEnabled" label="状态" initialValue="true">
-                <select aria-label="代理状态" className="native-select">
-                  <option value="true">启用</option>
-                  <option value="false">停用</option>
-                </select>
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="agentIntegrationType" label="代理对接类型" initialValue="MANUAL">
-                <select aria-label="代理对接类型" className="native-select">
-                  <option value="MANUAL">手工</option>
-                  <option value="API">API 对接</option>
-                  <option value="PLATFORM">平台对接</option>
-                  <option value="OTHER">其他</option>
-                </select>
-              </Form.Item>
+            <Col xs={24}>
+              <details className="compat-details">
+                <summary>兼容信息</summary>
+                <Row gutter={16}>
+                  <Col xs={24} md={8}>
+                    <Form.Item name="agentCode" label="代理编码">
+                      <Input placeholder="例如 SZJST" />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Form.Item name="agentEnabled" label="状态" initialValue="true">
+                      <select aria-label="代理状态" className="native-select">
+                        <option value="true">启用</option>
+                        <option value="false">停用</option>
+                      </select>
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={8}>
+                    <Form.Item name="agentIntegrationType" label="代理对接类型" initialValue="MANUAL">
+                      <select aria-label="代理对接类型" className="native-select">
+                        <option value="MANUAL">手工</option>
+                        <option value="API">API 对接</option>
+                        <option value="PLATFORM">平台对接</option>
+                        <option value="OTHER">其他</option>
+                      </select>
+                    </Form.Item>
+                  </Col>
+                </Row>
+              </details>
             </Col>
           </Row>
         </Form>

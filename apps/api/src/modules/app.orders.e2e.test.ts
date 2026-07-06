@@ -204,12 +204,20 @@ describe('Siyuan API orders', () => {
 
     await request(app.getHttpServer())
       .get('/api/shipments/order-entry/packages')
+      .query({ customerCode: '9409' })
       .set('Authorization', app.auth(operatorToken))
       .expect(200)
       .expect((response) => {
         expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: ownedPackage.body.id })]));
         expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: otherPackage.body.id })]));
       });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/packages')
+      .query({ customerCode: '1344' })
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect([]);
 
     const baseShipment = {
       customerOrderNo: `UG-ENTRY-${suffix}`,
@@ -2848,17 +2856,16 @@ describe('Siyuan API orders', () => {
       .set('Authorization', app.auth(rSalesLogin.body.accessToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body.length).toBeGreaterThan(0);
-        expect(response.body.every((shipment: { customerName?: string }) => shipment.customerName?.startsWith('9409-'))).toBe(true);
+        expect(response.body).toEqual([]);
       });
     await request(app.getHttpServer())
       .get('/api/master-data/customers')
       .set('Authorization', app.auth(rSalesLogin.body.accessToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409', salesperson: 'operator' })]));
+        expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409', salesperson: 'operator' })]));
         expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '1344' })]));
-        expect(response.body.every((customer: { salesperson?: string }) => ['operator', 'R-sales'].includes(customer.salesperson ?? ''))).toBe(true);
+        expect(response.body.every((customer: { salesperson?: string }) => (customer.salesperson ?? '') === 'R-sales')).toBe(true);
       });
 
     await request(app.getHttpServer())
@@ -2866,8 +2873,9 @@ describe('Siyuan API orders', () => {
       .set('Authorization', app.auth(rSalesLogin.body.accessToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body.customers).toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409', salesperson: 'operator' })]));
+        expect(response.body.customers).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409', salesperson: 'operator' })]));
         expect(response.body.customers).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '1344' })]));
+        expect(response.body.customers.every((customer: { salesperson?: string }) => (customer.salesperson ?? '') === 'R-sales')).toBe(true);
         expect(response.body.channels.length).toBeGreaterThan(0);
         expect(response.body.agents).toEqual([]);
         expect(response.body.agentChannels).toEqual([]);
@@ -3080,6 +3088,23 @@ describe('Siyuan API orders', () => {
           invoiceTemplateUrl: '/templates/m7-invoice.xlsx'
         }));
       });
+    await request(app.getHttpServer())
+      .post('/api/master-data/agent-invoice-template/upload')
+      .set('Authorization', app.auth(adminToken))
+      .attach('file', Buffer.from('PK\x03\x04agent-template'), {
+        filename: 'm7-template.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ fileName: 'm7-template.xlsx' }));
+        expect(response.body.url).toContain('/api/uploads/invoice-templates/');
+      });
+    await request(app.getHttpServer())
+      .post('/api/master-data/agent-invoice-template/upload')
+      .set('Authorization', app.auth(adminToken))
+      .attach('file', Buffer.from('%PDF-1.4'), { filename: 'M7发票模板.pdf', contentType: 'application/pdf' })
+      .expect(400);
     const agentChannel = await request(app.getHttpServer())
       .post('/api/master-data/agent-channels')
       .set('Authorization', app.auth(adminToken))
@@ -3491,6 +3516,14 @@ describe('Siyuan API orders', () => {
       .send({ name: 'Should Fail' })
       .expect(403);
     await request(app.getHttpServer())
+      .post('/api/master-data/agent-invoice-template/upload')
+      .set('Authorization', app.auth(serviceToken))
+      .attach('file', Buffer.from('PK\x03\x04agent-template'), {
+        filename: 'ShouldFail.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      })
+      .expect(403);
+    await request(app.getHttpServer())
       .post('/api/master-data/agent-channels')
       .set('Authorization', app.auth(serviceToken))
       .send({ agentId: agent.body.id, channelName: 'Should Fail' })
@@ -3510,9 +3543,9 @@ describe('Siyuan API orders', () => {
       .set('Authorization', app.auth(rSalesToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409', salesperson: 'operator' })]));
+        expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409', salesperson: 'operator' })]));
         expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '1344' })]));
-        expect(response.body.every((customer: { salesperson?: string }) => ['operator', 'R-sales'].includes(customer.salesperson ?? ''))).toBe(true);
+        expect(response.body.every((customer: { salesperson?: string }) => (customer.salesperson ?? '') === 'R-sales')).toBe(true);
       });
 
     await request(app.getHttpServer())
@@ -3520,8 +3553,9 @@ describe('Siyuan API orders', () => {
       .set('Authorization', app.auth(rSalesToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body.customers).toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409', salesperson: 'operator' })]));
+        expect(response.body.customers).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409', salesperson: 'operator' })]));
         expect(response.body.customers).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '1344' })]));
+        expect(response.body.customers.every((customer: { salesperson?: string }) => (customer.salesperson ?? '') === 'R-sales')).toBe(true);
         expect(response.body.channels.length).toBeGreaterThan(0);
         expect(response.body.agents).toEqual([]);
         expect(response.body.agentChannels).toEqual([]);
@@ -3546,18 +3580,32 @@ describe('Siyuan API orders', () => {
     const ownContact = await request(app.getHttpServer())
       .post(`/api/master-data/customers/${ownCustomer.body.id}/contacts`)
       .set('Authorization', app.auth(rSalesToken))
-      .send({ name: 'R-sales 收货人', phone: '13800000002', address: 'R-sales address' })
-      .expect(201);
+      .send({ name: 'R-sales 收货人', phone: '13800000002', fbaWarehouseCode: 'ONT8', address: 'R-sales address' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ fbaWarehouseCode: 'ONT8' }));
+      });
     await request(app.getHttpServer())
       .put(`/api/master-data/customers/${ownCustomer.body.id}/contacts/${ownContact.body.id}`)
       .set('Authorization', app.auth(rSalesToken))
-      .send({ name: 'R-sales 收货人改', phone: '13800000003', address: 'R-sales address update' })
-      .expect(200);
+      .send({ name: 'R-sales 收货人改', phone: '13800000003', fbaWarehouseCode: 'LAX9', address: 'R-sales address update' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ fbaWarehouseCode: 'LAX9' }));
+      });
     await request(app.getHttpServer())
       .put(`/api/master-data/customers/${ownCustomer.body.id}/enabled`)
       .set('Authorization', app.auth(rSalesToken))
       .send({ enabled: false })
       .expect(200);
+    await request(app.getHttpServer())
+      .get('/api/master-data/customers')
+      .set('Authorization', app.auth(rSalesToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'A5-RS-001', salesperson: 'R-sales', enabled: false })]));
+        expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ code: '9409' })]));
+      });
 
     await request(app.getHttpServer())
       .put('/api/master-data/customers/c-1344')

@@ -9,6 +9,7 @@ const e2eUsers = {
   admin: 'admin123',
   finance: 'finance123',
   operator: 'operator123',
+  market: 'market123',
   warehouse: 'warehouse123',
   customer: 'customer123',
   service: 'service123',

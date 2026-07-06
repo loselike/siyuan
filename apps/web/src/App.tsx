@@ -1266,31 +1266,6 @@ export function App() {
     setNotice(`已上传 ${record.systemOrderNo} 业务发票`);
   }
 
-  async function handleWarehouseRouteShipment(record: Shipment) {
-    const channel = masterData.channels.find((item) => item.name === record.channelName)
-      ?? masterData.channels.find((item) => item.enabled)
-      ?? masterData.channels[0];
-    const agent = masterData.agents.find((item) => item.name === record.agentName || item.shortName === record.agentName)
-      ?? masterData.agents.find((item) => item.enabled)
-      ?? masterData.agents[0];
-
-    if (!channel) {
-      setNotice('请先维护公司渠道后再排货');
-      return;
-    }
-
-    const updated = await apiClient.routeShipment(record.id, { channelId: channel.id, agentId: agent?.id });
-    const patched: Shipment = {
-      ...updated,
-      channelName: channel.name,
-      carrier: channel.carrierName,
-      agentName: agent?.name ?? updated.agentName
-    };
-    setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? patched : shipment)));
-    appendShipmentOperationLog(record.id, `仓库管理：排货到 ${channel.name}`);
-    setNotice(`已排货 ${record.systemOrderNo}，进入待出库`);
-  }
-
   function openRoutingAssignmentModal(record: Shipment) {
     const matchedChannel = masterData.channels.find((channel) => channel.name === record.channelName);
 
@@ -1416,6 +1391,55 @@ export function App() {
         Modal.error({ title: '排货失败', content: error.message });
       }
       return false;
+    }
+  }
+
+  async function handleApprovePendingRouting(record: Shipment) {
+    if (record.status !== 'WAITING_SORT') {
+      setNotice('当前状态不允许审核排货');
+      return;
+    }
+
+    const channel = record.channelId
+      ? masterData.channels.find((item) => item.id === record.channelId)
+      : masterData.channels.find((item) => item.name === record.channelName);
+    const agent = record.agentId
+      ? masterData.agents.find((item) => item.id === record.agentId)
+      : masterData.agents.find((item) => item.name === record.agentName || item.shortName === record.agentName || item.code === record.agentName);
+    const agentChannelName = record.routeAgentChannelName?.trim() || record.channelName?.trim();
+    const chargeWeightKg = record.routeChargeWeightKg ?? record.agentWeightKg ?? record.receivableWeightKg;
+    const unitPrice = record.routeUnitPrice;
+    const otherFee = record.routeOtherFee ?? 0;
+
+    if (!channel || !agent || !agentChannelName || !chargeWeightKg || !unitPrice) {
+      openRoutingAssignmentModal(record);
+      setNotice('请先点击修改补齐代理、代理渠道、计费重和单价，再审核进入已排货/待出库');
+      return;
+    }
+
+    try {
+      const updated = await apiClient.routeShipment(record.id, {
+        channelId: channel.id,
+        agentId: agent.id,
+        agentChannelName,
+        chargeWeightKg,
+        unitPrice,
+        otherFee,
+        otherFeeRemark: record.routeOtherFee && record.routeOtherFee > 0 ? '市场审核保留费用' : undefined,
+        currency: record.routeCurrency ?? 'RMB',
+        shippingMarkRequired: record.shippingMarkRequired === true
+      });
+      const patched: Shipment = {
+        ...updated,
+        channelName: channel.name,
+        carrier: channel.carrierName,
+        agentName: agent.name
+      };
+      setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? patched : shipment)));
+      appendShipmentOperationLog(record.id, `排货审核通过：进入已排货/待出库`);
+      setNotice(`${record.systemOrderNo} 审核通过，已同步进入已排货和待出库`);
+    } catch (error) {
+      Modal.error({ title: '审核失败', content: error instanceof Error ? error.message : '排货审核失败' });
     }
   }
 
@@ -2555,10 +2579,9 @@ export function App() {
                 role={session.user.role}
                 canWriteWarehouse={session.permissions.includes('warehouse:write')}
                 shipments={businessShipments}
+                businessCostAudits={businessCostAudits}
                 notice={notice}
                 onDispatch={handleWarehouseDispatchShipment}
-                onRoute={handleWarehouseRouteShipment}
-                canRouteShipments={session.permissions.includes('routing:write') && !['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(session.user.role)}
                 findShipmentBySystemOrderNo={findShipmentBySystemOrderNo}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
               />
@@ -2597,6 +2620,7 @@ export function App() {
                 masterData={masterData}
                 businessCostAudits={businessCostAudits}
                 onOpenAssignment={openRoutingAssignmentModal}
+                onApproveRouting={handleApprovePendingRouting}
                 onCancelAssignment={() => {
                   setRoutingAssignmentShipment(null);
                   routingAssignmentForm.resetFields();
@@ -2739,7 +2763,7 @@ export function App() {
                   message={
                     editingShipmentSource === 'routing'
                       ? '从渠道排货入口修改会写入排货日志，并同步覆盖该票最新轨迹、转单号和状态。'
-                    : '人工修改会直接覆盖该票最新轨迹、转单号和状态，并写入后端操作记录。'
+                    : '人工修改会直接覆盖该票最新轨迹、转单号和状态，并写入操作记录。'
                 }
               />
               <Form form={editShipmentForm} layout="vertical">

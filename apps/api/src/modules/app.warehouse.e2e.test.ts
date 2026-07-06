@@ -106,6 +106,68 @@ describe('Siyuan API warehouse', () => {
     }
 
     await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send({ ...mojiaPayload, barcode: '9409-KYMJ0002', measuredAt: '1783323455600' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual({ result: 'true', message: '9409-KYMJ0002 录入成功' });
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/today-receipts')
+      .query({ datePreset: 'CUSTOM', customFrom: '2026-07-06', customTo: '2026-07-06', combinedOrderNo: '9409-KYMJ0002' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows[0]).toEqual(expect.objectContaining({
+          combinedOrderNo: '9409-KYMJ0002',
+          scanTime: '2026-07-06T07:37:35.000Z'
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send({ ...mojiaPayload, barcode: '9409-KYMJ0002', measuredAt: '1783323455600' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual({ result: 'true', message: '9409-KYMJ0002 已接收' });
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send({ ...mojiaPayload, barcode: '9409-KYMJ0003', measuredAt: 'bad-time' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual({ result: 'true', message: '9409-KYMJ0003 录入成功' });
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send({ ...mojiaPayload, barcode: 'J721-', measuredAt: '1783322828861' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual({ result: 'true', message: 'J721-待补充 录入成功' });
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/today-receipts')
+      .query({ datePreset: 'CUSTOM', customFrom: '2026-07-06', customTo: '2026-07-06', combinedOrderNo: 'J721-待补充' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows[0]).toEqual(expect.objectContaining({
+          customerCode: 'J721',
+          domesticTrackingNo: '待补充',
+          combinedOrderNo: 'J721-待补充',
+          remark: '设备号：MJ20210327'
+        }));
+      });
+
+    await request(app.getHttpServer())
       .get('/api/warehouse/today-receipts')
       .query({ datePreset: 'CUSTOM', customFrom: '2026-06-12', customTo: '2026-06-12', combinedOrderNo: '9409-KYMJ0001' })
       .set('Authorization', app.auth(adminToken))
@@ -805,6 +867,61 @@ describe('Siyuan API warehouse', () => {
     expect(downloadedLabel.body.labelDownloadedAt).toBeTruthy();
 
     await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks/label-scan')
+      .set('Authorization', app.auth(operatorToken))
+      .send({ labelNo: generatedLabel.body.labelNo })
+      .expect(403);
+
+    const appliedLabel = await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks/label-scan')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ labelNo: generatedLabel.body.labelNo })
+      .expect(201);
+    expect(appliedLabel.body).toEqual(expect.objectContaining({
+      alreadyApplied: false,
+      task: expect.objectContaining({
+        id: tallyTask.body.id,
+        appliedPackageNo: '9409-KY-STOCK-075',
+        labelAppliedBy: 'warehouse'
+      }),
+      package: expect.objectContaining({
+        combinedOrderNo: '9409-KY-STOCK-075',
+        sourcePackageId: created.body.id,
+        sourcePackageNo: '9409-KY-STOCK-075',
+        tallyTaskId: tallyTask.body.id,
+        tallyTaskNo: '9409-KY-STOCK-075-TL001',
+        status: 'RECEIVED',
+        tallyStatus: '已理货',
+        scanSource: '理货后标签扫描'
+      })
+    }));
+    expect(appliedLabel.body.task.labelAppliedAt).toBeTruthy();
+    expectNoWarehousePriceLeak(appliedLabel.body);
+
+    const duplicateAppliedLabel = await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks/label-scan')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ labelNo: generatedLabel.body.labelNo })
+      .expect(201);
+    expect(duplicateAppliedLabel.body.alreadyApplied).toBe(true);
+    expect(duplicateAppliedLabel.body.package.id).toBe(appliedLabel.body.package.id);
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock')
+      .query({ combinedOrderNo: '9409-KY-STOCK-075' })
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: appliedLabel.body.package.id,
+            tallyStatus: '已理货'
+          })
+        ]));
+        expect(response.body.rows.some((row: { id: string }) => row.id === created.body.id)).toBe(false);
+      });
+
+    await request(app.getHttpServer())
       .get('/api/warehouse/tally-tasks')
       .query({ status: 'COMPLETED', combinedOrderNo: '9409-KY-STOCK-075' })
       .set('Authorization', app.auth(adminToken))
@@ -817,7 +934,8 @@ describe('Siyuan API warehouse', () => {
             sourceCombinedOrderNo: '9409-KY-STOCK-075',
             labelNo: '9409-KY-STOCK-075-TL001-LBL',
             labelStatus: 'GENERATED',
-            labelDownloadedBy: 'warehouse'
+            labelDownloadedBy: 'warehouse',
+            appliedPackageNo: '9409-KY-STOCK-075'
           })
         ]));
       });
@@ -933,6 +1051,23 @@ describe('Siyuan API warehouse', () => {
             actorUsername: 'warehouse',
             target: '9409-KY-STOCK-075-TL001-LBL',
             after: expect.objectContaining({ labelDownloadedBy: 'warehouse' })
+          })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=warehouse.tally.label.apply')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'warehouse.tally.label.apply',
+            actorUsername: 'warehouse',
+            target: '9409-KY-STOCK-075-TL001-LBL',
+            after: expect.objectContaining({
+              archivedPackageIds: expect.arrayContaining([created.body.id])
+            })
           })
         ]));
       });
@@ -1179,7 +1314,13 @@ describe('Siyuan API warehouse', () => {
       .query({ combinedOrderNo: '9409-KY-STOCK-075' })
       .set('Authorization', app.auth(adminToken))
       .expect(200);
-    expect(afterMerge.body.rows).toHaveLength(0);
+    expect(afterMerge.body.rows).toHaveLength(1);
+    expect(afterMerge.body.rows[0]).toEqual(expect.objectContaining({
+      id: expect.any(String),
+      combinedOrderNo: '9409-KY-STOCK-075',
+      tallyTaskId: tallyTask.body.id,
+      tallyStatus: '已理货'
+    }));
   });
 
   it('creates inbound warehouse labels and preserves source packages when splitting', async () => {

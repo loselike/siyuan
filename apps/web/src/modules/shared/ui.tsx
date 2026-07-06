@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Key, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Key, type MouseEvent as ReactMouseEvent, type ReactNode, type ThHTMLAttributes } from 'react';
 import { Button, Card, Checkbox, Empty, Flex, message as antdMessage, Modal, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig, TableProps } from 'antd/es/table';
 import { Search, Settings } from 'lucide-react';
@@ -51,6 +51,7 @@ type ManagedTableColumnSettings = {
   title?: string;
   labels?: Record<string, string>;
   defaultHiddenKeys?: string[];
+  defaultColumnOrder?: string[];
   buttonLabel?: string;
 };
 
@@ -58,12 +59,14 @@ type ManagedTableProps<RecordType extends object> = Omit<TableProps<RecordType>,
   columns: ColumnsType<RecordType>;
   minimumScrollX?: number;
   columnSettings?: ManagedTableColumnSettings;
+  resizableColumns?: boolean;
 };
 
 export function ManagedTable<RecordType extends object>({
   columns,
   minimumScrollX = 960,
   columnSettings,
+  resizableColumns = true,
   pagination,
   scroll,
   className,
@@ -77,34 +80,83 @@ export function ManagedTable<RecordType extends object>({
       ),
     [columns]
   );
+  const widthStorageKey = useMemo(() => getManagedTableWidthStorageKey(columns as ManagedColumnLike[], columnSettings, className), [className, columnSettings, columns]);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => {
-    if (!columnSettings) {
-      return [];
-    }
-    try {
-      const saved = JSON.parse(localStorage.getItem(columnSettings.storageKey) ?? 'null');
-      return Array.isArray(saved) ? saved.filter((key): key is string => typeof key === 'string') : columnSettings.defaultHiddenKeys ?? [];
-    } catch {
-      return columnSettings.defaultHiddenKeys ?? [];
-    }
-  });
+  const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => readManagedTableColumnSettings(columnSettings, columnKeys).hiddenKeys);
+  const [columnOrder, setColumnOrder] = useState<string[]>(() => readManagedTableColumnSettings(columnSettings, columnKeys).columnOrder);
+  const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => readManagedTableColumnWidths(widthStorageKey));
+  const resizeCleanupRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (columnSettings) {
-      localStorage.setItem(columnSettings.storageKey, JSON.stringify(hiddenKeys.filter((key) => columnKeys.includes(key))));
+      const normalizedOrder = normalizeManagedTableColumnOrder(columnOrder, columnKeys);
+      localStorage.setItem(columnSettings.storageKey, JSON.stringify({
+        hiddenKeys: hiddenKeys.filter((key) => columnKeys.includes(key)),
+        columnOrder: normalizedOrder
+      }));
     }
-  }, [columnKeys, columnSettings, hiddenKeys]);
+  }, [columnKeys, columnOrder, columnSettings, hiddenKeys]);
+
+  useEffect(() => {
+    setHiddenKeys((current) => current.filter((key) => columnKeys.includes(key)));
+    setColumnOrder((current) => normalizeManagedTableColumnOrder(current.length ? current : columnSettings?.defaultColumnOrder, columnKeys));
+  }, [columnKeys, columnSettings?.defaultColumnOrder]);
+
+  useEffect(() => {
+    if (widthStorageKey) {
+      localStorage.setItem(widthStorageKey, JSON.stringify(Object.fromEntries(Object.entries(columnWidths).filter(([key]) => columnKeys.includes(key)))));
+    }
+  }, [columnKeys, columnWidths, widthStorageKey]);
+
+  useEffect(() => {
+    setColumnWidths(readManagedTableColumnWidths(widthStorageKey));
+  }, [widthStorageKey]);
+
+  useEffect(
+    () => () => {
+      resizeCleanupRef.current?.();
+    },
+    []
+  );
+
+  const startColumnResize = useCallback((key: string, startWidth: number, event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    resizeCleanupRef.current?.();
+    const startX = event.clientX;
+    document.body.classList.add('is-resizing-table-column');
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextWidth = Math.max(72, Math.round(startWidth + moveEvent.clientX - startX));
+      setColumnWidths((current) => ({ ...current, [key]: nextWidth }));
+    };
+    const handleMouseUp = () => {
+      resizeCleanupRef.current?.();
+      resizeCleanupRef.current = null;
+    };
+    const cleanup = () => {
+      document.body.classList.remove('is-resizing-table-column');
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+    resizeCleanupRef.current = cleanup;
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  }, []);
 
   const visibleColumns = useMemo(() => {
-    const nextColumns = columns.filter((column) => {
+    const sourceColumns = columnSettings ? orderManagedTableColumns(columns, columnOrder) : columns;
+    const nextColumns = sourceColumns.filter((column) => {
       const key = getTableColumnKey(column as ManagedColumnLike);
       return !key || !hiddenKeys.includes(key);
     });
     return nextColumns.length ? nextColumns : columns.slice(0, 1);
-  }, [columns, hiddenKeys]);
+  }, [columnOrder, columnSettings, columns, hiddenKeys]);
+  const managedColumns = useMemo(
+    () => applyManagedColumnWidths(visibleColumns, columnWidths, resizableColumns ? startColumnResize : undefined),
+    [columnWidths, resizableColumns, startColumnResize, visibleColumns]
+  );
   const normalizedPagination = pagination === false ? false : { ...tenRowTablePagination, ...pagination };
-  const tableScrollX = scroll?.x ?? getManagedTableScrollX(visibleColumns as ColumnsType<unknown>, minimumScrollX);
+  const tableScrollX = scroll?.x ?? getManagedTableScrollX(managedColumns as ColumnsType<unknown>, minimumScrollX);
 
   return (
     <div className="managed-table-shell">
@@ -117,8 +169,9 @@ export function ManagedTable<RecordType extends object>({
       ) : null}
       <Table<RecordType>
         {...props}
-        className={['managed-table', className].filter(Boolean).join(' ')}
-        columns={visibleColumns}
+        className={['managed-table', resizableColumns ? 'managed-table-resizable' : null, className].filter(Boolean).join(' ')}
+        columns={managedColumns}
+        components={resizableColumns ? { ...props.components, header: { ...props.components?.header, cell: ResizableHeaderCell } } : props.components}
         pagination={normalizedPagination}
         scroll={{ ...scroll, x: tableScrollX }}
         sticky={sticky ?? true}
@@ -133,7 +186,10 @@ export function ManagedTable<RecordType extends object>({
             <Button key="all" onClick={() => setHiddenKeys([])}>
               全选
             </Button>,
-            <Button key="default" onClick={() => setHiddenKeys(columnSettings.defaultHiddenKeys ?? [])}>
+            <Button key="default" onClick={() => {
+              setHiddenKeys(columnSettings.defaultHiddenKeys ?? []);
+              setColumnOrder(normalizeManagedTableColumnOrder(columnSettings.defaultColumnOrder, columnKeys));
+            }}>
               恢复默认
             </Button>,
             <Button key="close" type="primary" onClick={() => setSettingsOpen(false)}>
@@ -141,19 +197,118 @@ export function ManagedTable<RecordType extends object>({
             </Button>
           ]}
         >
-          <Checkbox.Group
-            className="managed-column-settings-grid"
-            value={columnKeys.filter((key) => !hiddenKeys.includes(key))}
-            options={columnKeys.map((key) => ({ label: columnSettings.labels?.[key] ?? getTableColumnLabel(columns as ManagedColumnLike[], key), value: key }))}
-            onChange={(checkedValues) => {
-              const checkedKeys = checkedValues.map(String);
-              setHiddenKeys(columnKeys.filter((key) => !checkedKeys.includes(key)));
-            }}
-          />
+          <div className="managed-column-settings-list">
+            {normalizeManagedTableColumnOrder(columnOrder, columnKeys).map((key, index, keys) => {
+              const visible = !hiddenKeys.includes(key);
+              return (
+                <div className="managed-column-settings-row" key={key}>
+                  <Checkbox
+                    checked={visible}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setHiddenKeys((current) => {
+                        if (checked) {
+                          return current.filter((item) => item !== key);
+                        }
+                        const visibleCount = columnKeys.length - current.length;
+                        if (visibleCount <= 1 && !current.includes(key)) {
+                          return current;
+                        }
+                        return current.includes(key) ? current : [...current, key];
+                      });
+                    }}
+                  >
+                    {columnSettings.labels?.[key] ?? getTableColumnLabel(columns as ManagedColumnLike[], key)}
+                  </Checkbox>
+                  <Space size={6}>
+                    <Button size="small" disabled={index === 0} onClick={() => setColumnOrder((current) => moveManagedTableColumn(current, columnKeys, key, -1))}>
+                      上移
+                    </Button>
+                    <Button size="small" disabled={index === keys.length - 1} onClick={() => setColumnOrder((current) => moveManagedTableColumn(current, columnKeys, key, 1))}>
+                      下移
+                    </Button>
+                  </Space>
+                </div>
+              );
+            })}
+          </div>
         </Modal>
       ) : null}
     </div>
   );
+}
+
+type ResizeHeaderCellProps = ThHTMLAttributes<HTMLTableCellElement> & {
+  resizeColumnKey?: string;
+  resizeColumnWidth?: number;
+  onResizeColumnStart?: (key: string, width: number, event: ReactMouseEvent<HTMLElement>) => void;
+};
+
+function ResizableHeaderCell({ children, className, resizeColumnKey, resizeColumnWidth, onResizeColumnStart, ...props }: ResizeHeaderCellProps) {
+  return (
+    <th {...props} className={[className, resizeColumnKey ? 'managed-table-resizable-cell' : null].filter(Boolean).join(' ')}>
+      {children}
+      {resizeColumnKey && resizeColumnWidth ? (
+        <span
+          aria-hidden="true"
+          className="managed-table-resize-handle"
+          data-testid={`column-resize-handle-${sanitizeColumnKey(resizeColumnKey)}`}
+          onClick={(event) => event.stopPropagation()}
+          onMouseDown={(event) => onResizeColumnStart?.(resizeColumnKey, resizeColumnWidth, event)}
+        />
+      ) : null}
+    </th>
+  );
+}
+
+function applyManagedColumnWidths<RecordType extends object>(
+  columns: ColumnsType<RecordType>,
+  widths: Record<string, number>,
+  onResizeColumnStart?: (key: string, width: number, event: ReactMouseEvent<HTMLElement>) => void
+): ColumnsType<RecordType> {
+  return columns.map((column, index) => {
+    const key = getTableColumnKey(column as ManagedColumnLike) ?? `column-${index}`;
+    const existingWidth = getColumnNumericWidth(column as ManagedColumnLike);
+    const width = widths[key] ?? existingWidth;
+    const nextColumn = {
+      ...column,
+      width,
+      onHeaderCell: (headerColumn: unknown) => {
+        const originalHeaderCell = typeof column.onHeaderCell === 'function' ? column.onHeaderCell(headerColumn as never) : {};
+        return {
+          ...originalHeaderCell,
+          resizeColumnKey: key,
+          resizeColumnWidth: width,
+          onResizeColumnStart
+        };
+      }
+    };
+    if ('children' in column && Array.isArray(column.children)) {
+      return {
+        ...nextColumn,
+        children: applyManagedColumnWidths(column.children as ColumnsType<RecordType>, widths, onResizeColumnStart)
+      };
+    }
+    return nextColumn;
+  });
+}
+
+function getColumnNumericWidth(column: ManagedColumnLike & { width?: number | string }): number {
+  const rawWidth = column.width;
+  if (typeof rawWidth === 'number' && Number.isFinite(rawWidth)) {
+    return rawWidth;
+  }
+  if (typeof rawWidth === 'string') {
+    const parsed = Number(rawWidth.replace('px', ''));
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return 140;
+}
+
+function sanitizeColumnKey(key: string) {
+  return key.replace(/[^a-zA-Z0-9_-]/g, '-');
 }
 
 function normalizeTableColumnKey(key: Key | undefined): string | null {
@@ -187,6 +342,93 @@ function getTableColumnKey(column: ManagedColumnLike): string | null {
 function getTableColumnLabel(columns: ManagedColumnLike[], key: string) {
   const column = columns.find((item) => getTableColumnKey(item) === key);
   return typeof column?.title === 'string' ? column.title : key;
+}
+
+function normalizeManagedTableColumnOrder(order: string[] | undefined, columnKeys: string[]) {
+  const normalized = (order ?? []).filter((key, index, array) => columnKeys.includes(key) && array.indexOf(key) === index);
+  return [...normalized, ...columnKeys.filter((key) => !normalized.includes(key))];
+}
+
+function orderManagedTableColumns<RecordType extends object>(columns: ColumnsType<RecordType>, columnOrder: string[]) {
+  const keyedColumns = new Map<string, ColumnsType<RecordType>[number]>();
+  const keylessColumns: ColumnsType<RecordType> = [];
+  columns.forEach((column) => {
+    const key = getTableColumnKey(column as ManagedColumnLike);
+    if (key) {
+      keyedColumns.set(key, column);
+    } else {
+      keylessColumns.push(column);
+    }
+  });
+  const orderedColumns = normalizeManagedTableColumnOrder(columnOrder, Array.from(keyedColumns.keys()))
+    .map((key) => keyedColumns.get(key))
+    .filter((column): column is ColumnsType<RecordType>[number] => Boolean(column));
+  return [...orderedColumns, ...keylessColumns] as ColumnsType<RecordType>;
+}
+
+function moveManagedTableColumn(currentOrder: string[], columnKeys: string[], key: string, offset: -1 | 1) {
+  const next = normalizeManagedTableColumnOrder(currentOrder, columnKeys);
+  const index = next.indexOf(key);
+  const targetIndex = index + offset;
+  if (index < 0 || targetIndex < 0 || targetIndex >= next.length) {
+    return next;
+  }
+  [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+  return next;
+}
+
+function readManagedTableColumnSettings(columnSettings: ManagedTableColumnSettings | undefined, columnKeys: string[]) {
+  const fallback = {
+    hiddenKeys: columnSettings?.defaultHiddenKeys ?? [],
+    columnOrder: normalizeManagedTableColumnOrder(columnSettings?.defaultColumnOrder, columnKeys)
+  };
+  if (!columnSettings) {
+    return { hiddenKeys: [], columnOrder: columnKeys };
+  }
+  try {
+    const saved = JSON.parse(localStorage.getItem(columnSettings.storageKey) ?? 'null') as unknown;
+    if (Array.isArray(saved)) {
+      return {
+        hiddenKeys: saved.filter((key): key is string => typeof key === 'string' && columnKeys.includes(key)),
+        columnOrder: fallback.columnOrder
+      };
+    }
+    if (saved && typeof saved === 'object') {
+      const stored = saved as { hiddenKeys?: unknown; columnOrder?: unknown };
+      const hiddenKeys = Array.isArray(stored.hiddenKeys)
+        ? stored.hiddenKeys.filter((key): key is string => typeof key === 'string' && columnKeys.includes(key))
+        : fallback.hiddenKeys;
+      const columnOrder = Array.isArray(stored.columnOrder)
+        ? normalizeManagedTableColumnOrder(stored.columnOrder.filter((key): key is string => typeof key === 'string'), columnKeys)
+        : fallback.columnOrder;
+      return { hiddenKeys, columnOrder };
+    }
+    return fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function getManagedTableWidthStorageKey(columns: ManagedColumnLike[], columnSettings: ManagedTableColumnSettings | undefined, className: string | undefined) {
+  if (columnSettings) {
+    return `${columnSettings.storageKey}:widths`;
+  }
+  const keys = columns.map((column, index) => getTableColumnKey(column) ?? `column-${index}`).join('|');
+  return `managed-table-widths:${className ?? 'default'}:${keys}`;
+}
+
+function readManagedTableColumnWidths(storageKey: string) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null') as unknown;
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+      return {};
+    }
+    return Object.fromEntries(
+      Object.entries(saved).filter((entry): entry is [string, number] => typeof entry[0] === 'string' && typeof entry[1] === 'number' && Number.isFinite(entry[1]))
+    );
+  } catch {
+    return {};
+  }
 }
 
 export function cleanNoticeMessage(message: string): string {
@@ -352,7 +594,7 @@ export function AppEmptyState({ title = '暂无数据', description, action }: {
   );
 }
 
-export function MetricCard(props: { icon: ReactNode; title: string; value: string | number; extra: ReactNode }) {
+export function MetricCard(props: { icon: ReactNode; title: string; value: string | number; extra?: ReactNode }) {
   return (
     <Card className="metric-card">
       <Flex justify="space-between" align="start">

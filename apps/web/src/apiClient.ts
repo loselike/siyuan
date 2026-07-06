@@ -82,6 +82,12 @@ import type {
   PriceBookRowSummary,
   PriceBooksResponse,
   PriceBookSummary,
+  LegacyPricingImportInput,
+  LegacyPricingMetaResponse,
+  LegacyPricingModule,
+  LegacyPricingQuoteRequest,
+  LegacyPricingQuoteResponse,
+  LegacyPricingSourcesResponse,
   PriceLookupRequest,
   PriceLookupResponse,
   LineShipmentPoolQuery,
@@ -183,6 +189,8 @@ import type {
   WarehousePackageSplitInput,
   WarehousePackageSplitResponse,
   WarehousePackageSummary,
+  WarehouseTallyLabelScanInput,
+  WarehouseTallyLabelScanResponse,
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCreateInput,
   WarehouseTallyTaskListQuery,
@@ -455,8 +463,12 @@ export class ApiClient {
     return this.request('/shipments', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async orderEntryPackages(): Promise<WarehousePackageSummary[]> {
-    return this.request('/shipments/order-entry/packages');
+  async orderEntryPackages(query: { customerCode: string; domesticTrackingNo?: string }): Promise<WarehousePackageSummary[]> {
+    const params = new URLSearchParams({ customerCode: query.customerCode });
+    if (query.domesticTrackingNo?.trim()) {
+      params.set('domesticTrackingNo', query.domesticTrackingNo.trim());
+    }
+    return this.request(`/shipments/order-entry/packages?${params.toString()}`);
   }
 
   async createOrderEntry(input: OrderEntryCreateInput): Promise<OrderEntryDetailSummary> {
@@ -651,6 +663,43 @@ export class ApiClient {
     return this.request('/pricing/lookup', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async legacyPricingMeta(): Promise<LegacyPricingMetaResponse> {
+    return this.request('/pricing/legacy/quote-meta');
+  }
+
+  async quoteLegacyPricing(input: LegacyPricingQuoteRequest): Promise<LegacyPricingQuoteResponse> {
+    const paths: Record<LegacyPricingModule, string> = {
+      amazon: '/pricing/legacy/amazon/quote',
+      inquiry: '/pricing/legacy/inquiry/quote',
+      europeExpress: '/pricing/legacy/europe-express/quote',
+      southAfrica: '/pricing/legacy/south-africa/quote'
+    };
+    const { module: _module, ...body } = input;
+    return this.request(paths[input.module], { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async legacyPricingSources(module?: LegacyPricingModule): Promise<LegacyPricingSourcesResponse> {
+    const params = module ? `?module=${encodeURIComponent(module)}` : '';
+    return this.request(`/pricing/legacy/sources${params}`);
+  }
+
+  async importLegacyPricingSource(input: LegacyPricingImportInput): Promise<{ source: LegacyPricingSourcesResponse['sources'][number]; rowCount: number }> {
+    return this.request('/pricing/legacy/sources/import', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async deleteLegacyPricingSource(id: string): Promise<LegacyPricingSourcesResponse['sources'][number]> {
+    return this.request(`/pricing/legacy/sources/${id}`, { method: 'DELETE' });
+  }
+
+  async rebuildLegacyPricing(module?: LegacyPricingModule): Promise<{ module: LegacyPricingModule | 'all'; rowCount: number; rebuiltAt: string }> {
+    return this.request('/pricing/legacy/rebuild', { method: 'POST', body: JSON.stringify({ module }) });
+  }
+
+  async legacyPricingHealth(module?: LegacyPricingModule): Promise<{ module: LegacyPricingModule | 'all'; rowCount: number; issues: Array<{ severity: string; message: string }> }> {
+    const params = module ? `?module=${encodeURIComponent(module)}` : '';
+    return this.request(`/pricing/legacy/health-report${params}`);
+  }
+
   async agentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
     const params = new globalThis.URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
@@ -782,6 +831,10 @@ export class ApiClient {
 
   async downloadWarehouseTallyTaskLabel(id: string): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/label/download`, { method: 'POST' });
+  }
+
+  async applyWarehouseTallyTaskLabel(input: WarehouseTallyLabelScanInput): Promise<WarehouseTallyLabelScanResponse> {
+    return this.request('/warehouse/tally-tasks/label-scan', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async createShipmentFinanceItem(id: string, input: ShipmentFinanceItemCreateInput): Promise<ReceivableFeeSummary | PayableFeeSummary | BusinessCostFeeSummary> {

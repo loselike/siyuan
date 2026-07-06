@@ -170,7 +170,7 @@ function LowFrequencyModulePage({
                   <Tag color="blue">硅基流动</Tag>
                   {config.aiEnhancements.map((item) => <Alert key={item} type="info" showIcon message={item} />)}
                   {config.siliconFlowScenarios.map((item) => <Alert key={item} type="success" showIcon message={`硅基流动场景：${item}`} />)}
-                  <Alert type="warning" showIcon message="API Key 仅由后端环境变量读取，前端不保存密钥" />
+                  <Alert type="warning" showIcon message="密钥不在前端保存" />
                 </Space>
               </Card>
             ) : null}

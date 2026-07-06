@@ -2,7 +2,7 @@ import type { Key } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { AgentSummary, ChannelSummary, CustomerContactSummary, CustomerSummary, ExchangeRateSummary, FinanceCatalogItemSummary, FinanceCatalogCategory, OrderEntryCreateInput, OrderEntryDetailSummary, ShipmentFinanceItemType, WarehousePackageSummary, WaterReceiptSummary } from '@siyuan/shared';
+import type { AgentSummary, ChannelSummary, CustomerContactSummary, CustomerSummary, ExchangeRateSummary, FinanceCatalogItemSummary, FinanceCatalogCategory, OrderEntryCreateInput, OrderEntryDetailSummary, OrderEntryWarehousePackageQuery, ShipmentFinanceItemType, WarehousePackageSummary, WaterReceiptSummary } from '@siyuan/shared';
 import type { ApiClient, RoleKey } from '../../../apiClient';
 import { businessTypeLabels } from '@siyuan/shared';
 import { formatBeijingDateTime } from '../../shared/format';
@@ -48,7 +48,10 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
   const [packageLoading, setPackageLoading] = useState(false);
-  const [selectedPackageIds, setSelectedPackageIds] = useState<Key[]>([]);
+  const [selectedPackages, setSelectedPackages] = useState<WarehousePackageSummary[]>([]);
+  const [packageModalOpen, setPackageModalOpen] = useState(false);
+  const [packageTrackingQuery, setPackageTrackingQuery] = useState('');
+  const [packageQuery, setPackageQuery] = useState<OrderEntryWarehousePackageQuery | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [receiptPickerRow, setReceiptPickerRow] = useState<FinanceEntryFeeDraft | null>(null);
   const [receiptRows, setReceiptRows] = useState<WaterReceiptSummary[]>([]);
@@ -183,20 +186,19 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     });
   }, [apiClient, cargoTypeSet, feeNameSet, messageApi, onCatalogChange, productNameSet]);
 
-  const loadPackages = useCallback(async () => {
+  const selectedPackageIds = useMemo<Key[]>(() => selectedPackages.map((pkg) => pkg.id), [selectedPackages]);
+
+  const loadPackages = useCallback(async (query: OrderEntryWarehousePackageQuery) => {
     setPackageLoading(true);
     try {
-      setPackages(await apiClient.orderEntryPackages());
+      setPackages(await apiClient.orderEntryPackages(query));
+      setPackageQuery(query);
     } catch (error) {
       modal.error({ title: '仓库货物加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
       setPackageLoading(false);
     }
   }, [apiClient]);
-
-  useEffect(() => {
-    void loadPackages();
-  }, [loadPackages]);
 
   useEffect(() => {
     let mounted = true;
@@ -218,11 +220,6 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     };
   }, [apiClient, canUseAgentFields]);
 
-  const selectedPackages = useMemo(() => {
-    const ids = new Set(selectedPackageIds.map(String));
-    return packages.filter((pkg) => ids.has(pkg.id));
-  }, [selectedPackageIds, packages]);
-
   const totals = useMemo(() => selectedPackages.reduce(
     (summary, pkg) => ({
       packageCount: summary.packageCount + pkg.packageCount,
@@ -239,6 +236,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     return `${formatBeijingDateTime(scanTimes[0])}${scanTimes.length > 1 ? ` - ${formatBeijingDateTime(scanTimes[scanTimes.length - 1])}` : ''}`;
   }, [selectedPackages]);
   const matchedSalesperson = username;
+  const clearSelectedPackages = useCallback(() => {
+    setSelectedPackages([]);
+    setReceivables((rows) => rows.map((row) => ({ ...row, chargeWeightKg: undefined })));
+    setBusinessCosts((rows) => rows.map((row) => ({ ...row, chargeWeightKg: undefined })));
+    setPayables((rows) => rows.map((row) => ({ ...row, chargeWeightKg: undefined })));
+  }, []);
 
   const applyReceiverContact = (contactId?: string) => {
     const contact = selectedCustomerContacts.find((item) => item.id === contactId);
@@ -247,6 +250,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       receiverName: contact.name,
       receiverCompany: contact.company,
       receiverPhone: contact.phone,
+      fbaWarehouseCode: contact.fbaWarehouseCode,
       receiverAddress: contact.address,
       receiverCountry: contact.country,
       receiverState: contact.state,
@@ -265,16 +269,19 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     if (!name) return;
     const phone = values.receiverPhone?.trim() || '';
     const address = values.receiverAddress?.trim() || '';
+    const fbaWarehouseCode = values.fbaWarehouseCode?.trim() || '';
     const exists = activeContacts.some((contact) =>
       contact.name.trim() === name &&
       (contact.phone?.trim() || '') === phone &&
-      (contact.address?.trim() || '') === address
+      (contact.address?.trim() || '') === address &&
+      (contact.fbaWarehouseCode?.trim() || '') === fbaWarehouseCode
     );
     if (exists) return;
     const contact = await apiClient.createCustomerContact(customer.id, {
       name,
       company: values.receiverCompany?.trim() || undefined,
       phone: phone || undefined,
+      fbaWarehouseCode: fbaWarehouseCode || undefined,
       address: address || undefined,
       country: values.receiverCountry?.trim() || undefined,
       state: values.receiverState?.trim() || undefined,
@@ -319,7 +326,11 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const reset = () => {
     form.resetFields();
     form.setFieldsValue({ entryAt: toDatetimeLocal(new Date()) });
-    setSelectedPackageIds([]);
+    setPackages([]);
+    setPackageQuery(null);
+    setPackageTrackingQuery('');
+    setPackageModalOpen(false);
+    clearSelectedPackages();
     setReceivables([createFinanceEntryFeeDraft('RECEIVABLE', { name: '运费' })]);
     setBusinessCosts([createFinanceEntryFeeDraft('BUSINESS_COST', { name: '业务员成本' })]);
     setPayables([createFinanceEntryFeeDraft('PAYABLE')]);
@@ -371,13 +382,46 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     });
   }, []);
 
+  const openPackageModal = useCallback(async () => {
+    const customerCode = form.getFieldValue('customerCode')?.trim();
+    if (!customerCode) {
+      modal.warning({ title: '请先填写客户编号', content: '仓库数据会按当前客户编号筛选在仓货物。' });
+      return;
+    }
+    if (!selectedCustomer) {
+      modal.warning({ title: '客户资料不存在', content: '请先维护客户资料后再选择仓库数据。' });
+      return;
+    }
+    setPackageTrackingQuery('');
+    setPackageModalOpen(true);
+    await loadPackages({ customerCode });
+  }, [form, loadPackages, modal, selectedCustomer]);
+
+  const searchPackages = useCallback(async () => {
+    const customerCode = form.getFieldValue('customerCode')?.trim();
+    if (!customerCode || !selectedCustomer) {
+      modal.warning({ title: '请先填写客户编号', content: '只有已维护且归属当前业务员的客户才能查看仓库数据。' });
+      return;
+    }
+    await loadPackages({ customerCode, domesticTrackingNo: packageTrackingQuery.trim() || undefined });
+  }, [form, loadPackages, modal, packageTrackingQuery, selectedCustomer]);
+
+  const resetPackageSearch = useCallback(async () => {
+    const customerCode = form.getFieldValue('customerCode')?.trim();
+    if (!customerCode || !selectedCustomer) {
+      return;
+    }
+    setPackageTrackingQuery('');
+    await loadPackages({ customerCode });
+  }, [form, loadPackages, selectedCustomer]);
+
   const applyPackageSelection = useCallback((selectedRows: WarehousePackageSummary[]) => {
     if (!selectedRows.length) return;
     const first = selectedRows[0];
     const totalChargeWeight = roundFinanceNumber(selectedRows.reduce((sum, pkg) => sum + pkg.chargeableWeightKg, 0));
     form.setFieldsValue({
-      customerCode: first.customerCode,
-      customerName: form.getFieldValue('customerName') || `${first.customerCode}-仓库客户`,
+      customerCode: form.getFieldValue('customerCode') || first.customerCode,
+      customerName: form.getFieldValue('customerName') || selectedCustomer?.name || `${first.customerCode}-仓库客户`,
       customerOrderNo: first.customerOrderNo || first.customerCode,
       inboundNo: form.getFieldValue('inboundNo') || first.domesticTrackingNo || first.combinedOrderNo,
       businessType: form.getFieldValue('businessType') || 'DEDICATED_LINE',
@@ -396,11 +440,24 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       chargeWeightKg: row.chargeWeightKg ?? totalChargeWeight,
       agentName: row.agentName || form.getFieldValue('agentName')
     })));
-  }, [form]);
+  }, [form, selectedCustomer?.name]);
 
   const handlePackageSelection = (selectedRowKeys: Key[], selectedRows: WarehousePackageSummary[]) => {
-    setSelectedPackageIds(selectedRowKeys);
-    applyPackageSelection(selectedRows);
+    const visibleIds = new Set(packages.map((pkg) => pkg.id));
+    setSelectedPackages((current) => {
+      const next = new Map(current.map((pkg) => [pkg.id, pkg] as const));
+      visibleIds.forEach((id) => next.delete(id));
+      selectedRows.forEach((row) => next.set(row.id, row));
+      const rows = Array.from(next.values());
+      if (rows.length) {
+        applyPackageSelection(rows);
+      } else {
+        setReceivables((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
+        setBusinessCosts((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
+        setPayables((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
+      }
+      return rows;
+    });
   };
 
   const applyCurrentChargeWeightToFees = useCallback(() => {
@@ -416,10 +473,47 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     const ids = new Set(preselectedPackageIds);
     const rows = packages.filter((pkg) => ids.has(pkg.id));
     if (!rows.length) return;
-    setSelectedPackageIds(rows.map((pkg) => pkg.id));
+    setSelectedPackages(rows);
     applyPackageSelection(rows);
     onPreselectedPackageIdsConsumed?.();
   }, [applyPackageSelection, onPreselectedPackageIdsConsumed, packages, preselectedPackageIds, preselectedPackageKey]);
+
+  useEffect(() => {
+    if (!watchedCustomerCode?.trim()) {
+      setPackages([]);
+      setPackageQuery(null);
+      setPackageTrackingQuery('');
+      setPackageModalOpen(false);
+      if (selectedPackages.length) {
+        clearSelectedPackages();
+      }
+      return;
+    }
+    if (!selectedPackages.length) {
+      return;
+    }
+    const currentCode = watchedCustomerCode.trim();
+    if (selectedPackages.some((pkg) => pkg.customerCode !== currentCode)) {
+      clearSelectedPackages();
+      setPackageModalOpen(false);
+      setPackages([]);
+      setPackageQuery(null);
+      setPackageTrackingQuery('');
+      form.setFieldValue('inboundNo', undefined);
+      messageApi.warning('客户编号已变更，请重新选择仓库数据。');
+    }
+  }, [clearSelectedPackages, form, messageApi, selectedPackages, watchedCustomerCode]);
+
+  useEffect(() => {
+    const customerCode = watchedCustomerCode?.trim();
+    if (!customerCode || !packageQuery || packageQuery.customerCode === customerCode) {
+      return;
+    }
+    setPackageModalOpen(false);
+    setPackages([]);
+    setPackageQuery(null);
+    setPackageTrackingQuery('');
+  }, [packageQuery, watchedCustomerCode]);
 
   const buildFeeRows = (rows: FinanceEntryFeeDraft[], type: ShipmentFinanceItemType) => rows
     .map((row) => ({
@@ -494,7 +588,6 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         content: `已生成运单 ${detail.shipment.systemOrderNo}`
       });
       reset();
-      await loadPackages();
       await onCreated?.(detail, submitForReview);
     } catch (error) {
       modal.error({ title: '录单失败', content: error instanceof Error ? error.message : '请稍后重试' });
@@ -509,7 +602,10 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       width: 230,
       render: (_, record) => (
         <div className="finance-entry-package-cell">
-          <Text strong>{record.combinedOrderNo || `${record.customerOrderNo}-${record.domesticTrackingNo}`}</Text>
+          <Space size={6}>
+            <Text strong>{record.combinedOrderNo || `${record.customerOrderNo}-${record.domesticTrackingNo}`}</Text>
+            {record.tallyTaskId || record.tallyTaskNo || record.tallyStatus === '已理货' ? <Tag color="processing">理</Tag> : null}
+          </Space>
           <Text type="secondary">箱序：{record.packageIndex ?? '-'} / {record.expectedTotalPackageCount ?? '-'}</Text>
         </div>
       )
@@ -736,41 +832,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   return (
     <div className="finance-entry-page">
       <Row gutter={[12, 12]} className="finance-entry-workbench-row">
-        <Col xs={24} xl={9} xxl={8}>
-          <Card className="finance-entry-workbench-card" title="仓库货物" extra={<Button onClick={loadPackages} loading={packageLoading}>刷新</Button>}>
-            <Table<WarehousePackageSummary>
-              className="finance-embedded-table"
-              rowKey="id"
-              size="small"
-              loading={packageLoading}
-              dataSource={packages}
-              columns={packageColumns}
-              pagination={{ pageSize: 10, showSizeChanger: false }}
-              scroll={{ x: 980 }}
-              rowSelection={{ selectedRowKeys: selectedPackageIds, onChange: handlePackageSelection }}
-              onRow={(record) => ({
-                onDoubleClick: () => {
-                  modal.info({
-                    title: '仓库货物明细',
-                    content: (
-                      <div className="finance-entry-package-detail">
-                        <p>客户编号：{record.customerCode}</p>
-                        <p>客户单号：{record.customerOrderNo}</p>
-                        <p>快递单号：{record.domesticTrackingNo || '-'}</p>
-                        <p>件数：{record.packageCount}</p>
-                        <p>实重：{record.weightKg.toFixed(2)} kg</p>
-                        <p>体积：{record.cbm.toFixed(6)} CBM</p>
-                        <p>计费重：{record.chargeableWeightKg.toFixed(2)} kg</p>
-                        <p>扫描时间：{record.scanTime ? formatBeijingDateTime(record.scanTime) : '-'}</p>
-                      </div>
-                    )
-                  });
-                }
-              })}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} xl={15} xxl={16}>
+        <Col xs={24}>
           <Card className="finance-entry-workbench-card finance-entry-form-card" title="运单基础信息">
             <div className="finance-entry-summary-grid">
               <div className="finance-entry-summary-card"><Text type="secondary">已选货物</Text><Text strong>{selectedPackages.length} 条</Text></div>
@@ -781,9 +843,20 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
             </div>
             <Form form={form} layout="vertical" initialValues={{ businessType: 'DEDICATED_LINE', packageType: 'WPX', currency: 'RMB', declarationRequired: false, sensitive: false, entryAt: entryAtDefault }}>
               <Row gutter={12}>
-                <Col xs={24} md={8}><Form.Item name="customerCode" label="客户编号" rules={[{ required: true, message: '请输入客户编号' }]}><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="customerName" label="客户名称"><Input readOnly /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="customerOrderNo" label="客户单号" rules={[{ required: true, message: '请输入客户单号' }]}><Input /></Form.Item></Col>
+                <Col xs={24} md={6}>
+                  <Form.Item name="customerCode" label="客户编号" rules={[{ required: true, message: '请输入客户编号' }]}>
+                    <Input />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={6}>
+                  <Form.Item label="仓库数据">
+                    <Button block onClick={() => void openPackageModal()} disabled={!watchedCustomerCode?.trim()}>
+                      仓库数据
+                    </Button>
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={6}><Form.Item name="customerName" label="客户名称"><Input readOnly /></Form.Item></Col>
+                <Col xs={24} md={6}><Form.Item name="customerOrderNo" label="客户单号" rules={[{ required: true, message: '请输入客户单号' }]}><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="systemOrderNo" label="运单号" rules={[{ required: true, message: '请输入运单号' }]}><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="subOrderNo" label="分单号"><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="inboundNo" label="入仓号"><Input /></Form.Item></Col>
@@ -864,7 +937,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                 <Col xs={24} md={8}><Form.Item name="receiverName" label="收货人名称"><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="receiverCompany" label="收货人公司名称"><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="receiverPhone" label="收货人电话"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="fbaWarehouseCode" label="FBA 仓库代码"><Input /></Form.Item></Col>
+                <Col xs={24} md={8}><Form.Item name="fbaWarehouseCode" label="FBA仓库代码"><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="receiverCountry" label="国家"><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="receiverState" label="州/省"><Input /></Form.Item></Col>
                 <Col xs={24} md={8}><Form.Item name="receiverPostalCode" label="邮编"><Input /></Form.Item></Col>
@@ -884,6 +957,68 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         <Button onClick={() => submit(false)} loading={submitting}>保存草稿</Button>
         <Button type="primary" onClick={() => submit(true)} loading={submitting}>提交审核</Button>
       </div>
+      <Modal
+        title={`仓库数据${watchedCustomerCode?.trim() ? ` · ${watchedCustomerCode.trim()}` : ''}`}
+        open={packageModalOpen}
+        onCancel={() => setPackageModalOpen(false)}
+        footer={<Button onClick={() => setPackageModalOpen(false)}>关闭</Button>}
+        width={980}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={12} className="full-width">
+          <Space wrap>
+            <Input
+              aria-label="快递单号"
+              placeholder="按快递单号筛选"
+              value={packageTrackingQuery}
+              onChange={(event) => setPackageTrackingQuery(event.target.value)}
+              onPressEnter={() => void searchPackages()}
+              style={{ width: 240 }}
+            />
+            <Button onClick={() => void searchPackages()} loading={packageLoading}>查询</Button>
+            <Button onClick={() => void resetPackageSearch()} disabled={packageLoading}>重置</Button>
+            <Button onClick={() => packageQuery ? void loadPackages(packageQuery) : void searchPackages()} loading={packageLoading}>刷新</Button>
+          </Space>
+          <Table<WarehousePackageSummary>
+            className="finance-embedded-table"
+            rowKey="id"
+            size="small"
+            loading={packageLoading}
+            dataSource={packages}
+            columns={packageColumns}
+            pagination={{ pageSize: 8, showSizeChanger: false }}
+            scroll={{ x: 980 }}
+            rowSelection={{ selectedRowKeys: selectedPackageIds, onChange: handlePackageSelection }}
+            locale={{ emptyText: selectedCustomer ? '暂无该客户编号可录单的在仓货物' : '请先维护客户资料' }}
+            onRow={(record) => ({
+              onDoubleClick: () => {
+                modal.info({
+                  title: '仓库货物明细',
+                  content: (
+                    <div className="finance-entry-package-detail">
+                      <p>客户编号：{record.customerCode}</p>
+                      <p>客户单号：{record.customerOrderNo}</p>
+                      <p>快递单号：{record.domesticTrackingNo || '-'}</p>
+                      <p>件数：{record.packageCount}</p>
+                      <p>实重：{record.weightKg.toFixed(2)} kg</p>
+                      <p>体积：{record.cbm.toFixed(6)} CBM</p>
+                      <p>计费重：{record.chargeableWeightKg.toFixed(2)} kg</p>
+                      <p>扫描时间：{record.scanTime ? formatBeijingDateTime(record.scanTime) : '-'}</p>
+                      {(record.tallyTaskId || record.tallyTaskNo || record.tallyStatus === '已理货') ? (
+                        <>
+                          <p>理货标记：已理货</p>
+                          <p>理货任务：{record.tallyTaskNo || record.tallyTaskId || '-'}</p>
+                        </>
+                      ) : null}
+                    </div>
+                  )
+                });
+              }
+            })}
+          />
+          <Text type="secondary">弹窗仅显示当前客户编号名下、且尚未被录单占用的在仓货物。</Text>
+        </Space>
+      </Modal>
       <Modal
         title="选择已到账水单"
         open={Boolean(receiptPickerRow)}

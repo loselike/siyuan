@@ -246,10 +246,13 @@ export type LineShipmentStatusGroup =
   | 'WAITING_SORT'
   | 'WAITING_DISPATCH'
   | 'OUTBOUNDED'
+  | 'DATA_CONFIRM'
+  | 'TRANSFER_NO'
   | 'WAITING_DEPARTURE'
   | 'DEPARTED'
   | 'SIGNED'
-  | 'PROBLEM';
+  | 'PROBLEM'
+  | 'AFTER_SALE';
 
 export type LineShipmentDatePreset = 'TODAY' | 'LAST_7_DAYS' | 'ALL';
 
@@ -288,6 +291,11 @@ export interface LineShipmentPoolResponse {
     pageSize: number;
     totalItems: number;
   };
+}
+
+interface LineShipmentPoolOptions {
+  businessDataApprovedShipmentIds?: string[];
+  afterSaleShipmentIds?: string[];
 }
 
 export interface ShipmentRouteInput {
@@ -589,6 +597,7 @@ export interface PriceBookSummary {
   rowCount: number;
   importedAt: string;
   remark?: string;
+  legacyModuleCounts?: Partial<Record<LegacyPricingModule, number>>;
 }
 
 export interface PriceBooksResponse {
@@ -782,7 +791,108 @@ export interface PriceLookupResponse {
   grossProfit?: number;
 }
 
-export type WarehousePackageStatus = 'PENDING' | 'RECEIVED' | 'CONSOLIDATED' | 'SHIPPED';
+export type LegacyPricingModule = 'amazon' | 'inquiry' | 'europeExpress' | 'southAfrica';
+
+export interface LegacyPricingSourceSummary {
+  id: string;
+  module: LegacyPricingModule;
+  fileName: string;
+  rowCount: number;
+  importedAt: string;
+  status: 'ok' | 'error';
+  message?: string;
+}
+
+export interface LegacyPricingMetaResponse {
+  modules: Array<{ key: LegacyPricingModule; label: string; rowCount: number; sourceCount: number }>;
+  agents: string[];
+  origins: string[];
+  warehouseCodes: string[];
+  tiers: string[];
+}
+
+export interface LegacyPricingQuoteRequest {
+  module: LegacyPricingModule;
+  amazonCode?: string;
+  tier?: string;
+  agentName?: string;
+  origin?: string;
+  productName?: string;
+  destinationCountry?: string;
+  postalCode?: string;
+  address?: string;
+  channel?: string;
+  packageInfo?: string;
+  actualWeightKg?: number;
+  volumeCbm?: number;
+  chargeableWeightKg?: number;
+  lengthCm?: number;
+  widthCm?: number;
+  heightCm?: number;
+  packageCount?: number;
+  unitActualWeightKg?: number;
+  onlyQuotable?: boolean;
+}
+
+export interface LegacyPricingRecommendation {
+  id: string;
+  module: LegacyPricingModule;
+  sourceId?: string;
+  sourceFile?: string;
+  agentName: string;
+  origin?: string;
+  channelName: string;
+  serviceName?: string;
+  warehouseCode?: string;
+  destinationCountry?: string;
+  postalRule?: string;
+  weightSegmentLabel: string;
+  quoteMode: 'kg' | 'cbm' | 'tier';
+  tierLabel?: string;
+  costUnitPrice: number;
+  salesUnitPrice: number;
+  costTotal: number;
+  salesTotal: number;
+  grossProfit?: number;
+  chargeableWeightKg: number;
+  volumeCbm?: number;
+  densityRatio?: number;
+  densityDiscountLabel?: string;
+  transitLabel?: string;
+  markup?: AgentMarkupSummary;
+  productSurchargeRemark?: string;
+  specialRemark?: string;
+  remark?: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface LegacyPricingQuoteResponse {
+  module: LegacyPricingModule;
+  query: LegacyPricingQuoteRequest;
+  recommendations: LegacyPricingRecommendation[];
+  cheapestRecommendations: LegacyPricingRecommendation[];
+  fastestRecommendations: LegacyPricingRecommendation[];
+  selected?: LegacyPricingRecommendation;
+  agentErrors: AgentQuoteErrorSummary[];
+  metrics: {
+    matchedRows: number;
+    agents: number;
+    channels: number;
+    sources: number;
+  };
+}
+
+export interface LegacyPricingImportInput {
+  module: LegacyPricingModule;
+  fileName: string;
+  rows: Array<Record<string, unknown>>;
+}
+
+export interface LegacyPricingSourcesResponse {
+  sources: LegacyPricingSourceSummary[];
+}
+
+export type WarehousePackageStatus = 'PENDING' | 'RECEIVED' | 'CONSOLIDATED' | 'SHIPPED' | 'TALLIED_ARCHIVED';
 export type WarehouseConsolidationMode = 'MERGE_ONLY' | 'MERGE_AND_SHIP';
 export type WarehouseRoundingRule = 'NONE' | 'HALF_UP' | 'INTEGER_UP';
 export type WarehouseTallyTaskStatus = 'PENDING' | 'COMPLETED';
@@ -800,6 +910,12 @@ export interface WarehousePackageSummary {
   labelNo?: string;
   sourcePackageId?: string;
   sourcePackageNo?: string;
+  archivedByPackageId?: string;
+  archivedByPackageNo?: string;
+  archivedReason?: string;
+  archivedAt?: string;
+  tallyTaskId?: string;
+  tallyTaskNo?: string;
   systemOrderNo?: string;
   shipmentId?: string;
   receivingChannel: string;
@@ -997,12 +1113,19 @@ export interface WarehouseTallyTaskSummary {
   labelPrintedBy?: string;
   labelDownloadedAt?: string;
   labelDownloadedBy?: string;
+  appliedPackageId?: string;
+  appliedPackageNo?: string;
+  labelAppliedAt?: string;
+  labelAppliedBy?: string;
 }
 
 export interface WarehouseTallyTaskListQuery {
   status?: WarehouseTallyTaskStatus;
   customerCode?: string;
   combinedOrderNo?: string;
+  completedScope?: 'RECENT' | 'HISTORY' | 'ALL';
+  completedFrom?: string;
+  completedTo?: string;
 }
 
 export interface WarehouseTallyTaskCreateInput {
@@ -1023,6 +1146,16 @@ export interface WarehouseTallyTaskCompleteInput {
   widthCm: number;
   heightCm: number;
   remark?: string;
+}
+
+export interface WarehouseTallyLabelScanInput {
+  labelNo: string;
+}
+
+export interface WarehouseTallyLabelScanResponse {
+  task: WarehouseTallyTaskSummary;
+  package: WarehousePackageSummary;
+  alreadyApplied: boolean;
 }
 
 export interface FeeLineInput {
@@ -2289,6 +2422,11 @@ export interface OrderEntryCreateInput {
 
 export interface OrderEntryDraftUpdateInput extends OrderEntryCreateInput {}
 
+export interface OrderEntryWarehousePackageQuery {
+  customerCode: string;
+  domesticTrackingNo?: string;
+}
+
 export interface OrderEntryDetailSummary {
   shipment: Shipment;
   packages: WarehousePackageSummary[];
@@ -2379,6 +2517,7 @@ export interface CustomerContactSummary {
   company?: string;
   phone?: string;
   email?: string;
+  fbaWarehouseCode?: string;
   address?: string;
   country?: string;
   state?: string;
@@ -2508,6 +2647,7 @@ export interface CustomerContactCreateInput {
   company?: string;
   phone?: string;
   email?: string;
+  fbaWarehouseCode?: string;
   address?: string;
   country?: string;
   state?: string;
@@ -3422,7 +3562,11 @@ export function summarizeStatusCounts(shipments: Shipment[]) {
   );
 }
 
-export function summarizeLineShipmentPool(shipments: Shipment[], query: LineShipmentPoolQuery = {}): LineShipmentPoolResponse {
+export function summarizeLineShipmentPool(
+  shipments: Shipment[],
+  query: LineShipmentPoolQuery = {},
+  options: LineShipmentPoolOptions = {}
+): LineShipmentPoolResponse {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const lastSevenStart = new Date(todayStart);
@@ -3431,6 +3575,8 @@ export function summarizeLineShipmentPool(shipments: Shipment[], query: LineShip
   const keyword = query.keyword?.trim().toLowerCase() ?? '';
   const page = Math.max(1, Number(query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
+  const businessDataApprovedShipmentIds = new Set(options.businessDataApprovedShipmentIds ?? []);
+  const afterSaleShipmentIds = new Set(options.afterSaleShipmentIds ?? []);
 
   const dateFiltered = shipments.filter((shipment) => {
     const createdAt = new Date(shipment.createdAt);
@@ -3456,12 +3602,12 @@ export function summarizeLineShipmentPool(shipments: Shipment[], query: LineShip
   const statusCounts = lineShipmentStatusGroups.reduce(
     (summary, group) => ({
       ...summary,
-      [group]: group === 'ALL' ? keywordFiltered.length : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, group)).length
+      [group]: group === 'ALL' ? keywordFiltered.length : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, group, businessDataApprovedShipmentIds, afterSaleShipmentIds)).length
     }),
     {} as Record<LineShipmentStatusGroup, number>
   );
 
-  const selectedRows = statusGroup === 'ALL' ? keywordFiltered : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, statusGroup));
+  const selectedRows = statusGroup === 'ALL' ? keywordFiltered : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, statusGroup, businessDataApprovedShipmentIds, afterSaleShipmentIds));
   const sortBy = query.sortBy ?? 'createdAt';
   const sortOrder = query.sortOrder ?? 'desc';
   const sortedRows = [...selectedRows].sort((left, right) => {
@@ -3510,24 +3656,38 @@ const lineShipmentStatusGroups: LineShipmentStatusGroup[] = [
   'WAITING_SORT',
   'WAITING_DISPATCH',
   'OUTBOUNDED',
+  'DATA_CONFIRM',
+  'TRANSFER_NO',
   'WAITING_DEPARTURE',
   'DEPARTED',
   'SIGNED',
-  'PROBLEM'
+  'PROBLEM',
+  'AFTER_SALE'
 ];
 
-function lineShipmentBelongsToGroup(shipment: Shipment, group: LineShipmentStatusGroup): boolean {
+function lineShipmentBelongsToGroup(
+  shipment: Shipment,
+  group: LineShipmentStatusGroup,
+  businessDataApprovedShipmentIds: Set<string>,
+  afterSaleShipmentIds: Set<string>
+): boolean {
   if (group === 'ALL') return true;
   if (group === 'REVIEW_PENDING') return shipment.status === 'DRAFT' || shipment.status === 'REVIEW_PENDING';
-  if (group === 'PROBLEM') return lineShipmentHasRisk(shipment);
+  if (group === 'DATA_CONFIRM') return shipment.status === 'OUTBOUNDED' && !businessDataApprovedShipmentIds.has(shipment.id);
+  if (group === 'TRANSFER_NO') return businessDataApprovedShipmentIds.has(shipment.id) && ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status);
+  if (group === 'PROBLEM') return lineShipmentIsProblem(shipment);
+  if (group === 'AFTER_SALE') return afterSaleShipmentIds.has(shipment.id);
   return shipment.status === group;
+}
+
+function lineShipmentIsProblem(shipment: Shipment): boolean {
+  return shipment.status === 'PROBLEM' || shipment.hasProblemTicket;
 }
 
 function lineShipmentHasRisk(shipment: Shipment): boolean {
   return Boolean(
-    shipment.status === 'PROBLEM'
+    lineShipmentIsProblem(shipment)
     || shipment.status === 'STUCK'
-    || shipment.hasProblemTicket
     || shipment.trackingStaleDays > 0
     || shipment.reviewRejectedReason
     || (['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED'].includes(shipment.status) && !shipment.transferNo)

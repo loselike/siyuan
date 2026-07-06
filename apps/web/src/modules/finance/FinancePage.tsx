@@ -75,7 +75,7 @@ import { AgentBillPage } from './agentBill/AgentBillPage';
 import { formatBeijingDateTime, formatCurrency } from '../shared/format';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { PlaceholderPanel } from '../shared/PlaceholderPanel';
-import { AppActionGroup, AppPage, AppPageHeader, CompactMetricCard as MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppPage, AppPageHeader, CompactMetricCard as MetricCard, ManagedTable, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 
 const { Text } = Typography;
 const salesScopedRoleKeys = ['OPERATOR', 'UG_MARKET', 'UG_BUSINESS', 'UG_SZ_WUHAN', 'UG_ZZ_SIHUA', 'UG_WH_JIUYULIAN', 'UG_BUSINESS_MANAGER', 'UG_BUSINESS_SUPERVISOR'];
@@ -674,17 +674,19 @@ export function FinancePage({
     { title: '内容', dataIndex: 'note', render: (value: string | undefined, row) => value || (row.toStatus ? `${row.fromStatus ? shipmentStatusLabels[row.fromStatus] : '-'} -> ${shipmentStatusLabels[row.toStatus]}` : '-') }
   ];
   const pendingReviewColumns: ColumnsType<Shipment> = [
-    { title: '创建时间', dataIndex: 'createdAt', width: 165, render: (value: string) => formatBeijingDateTime(value) },
+    { title: '创建时间', key: 'createdAt', dataIndex: 'createdAt', width: 165, render: (value: string) => formatBeijingDateTime(value) },
     { title: '客户编号', key: 'customerCode', width: 110, render: (_, record) => getPendingReviewCustomerCode(record) },
     {
       title: '客户名称',
+      key: 'customerName',
       dataIndex: 'customerName',
       width: 185,
       render: (value: string) => <Text strong>{formatPendingReviewValue(value)}</Text>
     },
-    { title: '业务员', dataIndex: 'salesperson', width: 120, render: (value?: string) => formatPendingReviewValue(value) },
+    { title: '业务员', key: 'salesperson', dataIndex: 'salesperson', width: 120, render: (value?: string) => formatPendingReviewValue(value) },
     {
       title: '运单号',
+      key: 'systemOrderNo',
       dataIndex: 'systemOrderNo',
       width: 180,
       render: (value: string, record) => (
@@ -700,22 +702,23 @@ export function FinancePage({
         </Button>
       )
     },
-    { title: '转单号', dataIndex: 'transferNo', width: 150, render: (value?: string) => formatPendingReviewValue(value) },
-    { title: '目的地', dataIndex: 'destinationCountry', width: 110, render: (value?: string) => formatPendingReviewValue(value) },
-    { title: '业务渠道', dataIndex: 'channelName', width: 150, render: (_: string, record) => getPendingReviewChannel(record) },
-    { title: '代理渠道', dataIndex: 'agentName', width: 150, render: (value?: string) => formatPendingReviewValue(value) },
-    { title: '件数', dataIndex: 'packageCount', width: 90, render: (value?: number) => formatPendingReviewValue(value) },
+    { title: '转单号', key: 'transferNo', dataIndex: 'transferNo', width: 150, render: (value?: string) => formatPendingReviewValue(value) },
+    { title: '目的地', key: 'destinationCountry', dataIndex: 'destinationCountry', width: 110, render: (value?: string) => formatPendingReviewValue(value) },
+    { title: '业务渠道', key: 'channelName', dataIndex: 'channelName', width: 150, render: (_: string, record) => getPendingReviewChannel(record) },
+    { title: '代理渠道', key: 'agentName', dataIndex: 'agentName', width: 150, render: (value?: string) => formatPendingReviewValue(value) },
+    { title: '件数', key: 'packageCount', dataIndex: 'packageCount', width: 90, render: (value?: number) => formatPendingReviewValue(value) },
     {
       title: '应收/代理计费重',
       key: 'weights',
       width: 170,
       render: (_, record) => `${formatPendingReviewWeight(record.receivableWeightKg)} / ${formatPendingReviewWeight(record.agentWeightKg)}`
     },
-    { title: '产品名称', dataIndex: 'productName', width: 150, render: (value?: string) => formatPendingReviewValue(value) },
-    { title: '报关', dataIndex: 'declarationRequired', width: 90, render: (value?: boolean) => value ? '是' : '否' },
-    { title: '敏感', dataIndex: 'sensitive', width: 90, render: (value?: boolean) => value ? '是' : '否' },
+    { title: '产品名称', key: 'productName', dataIndex: 'productName', width: 150, render: (value?: string) => formatPendingReviewValue(value) },
+    { title: '报关', key: 'declarationRequired', dataIndex: 'declarationRequired', width: 90, render: (value?: boolean) => value ? '是' : '否' },
+    { title: '敏感', key: 'sensitive', dataIndex: 'sensitive', width: 90, render: (value?: boolean) => value ? '是' : '否' },
     {
       title: '状态',
+      key: 'status',
       dataIndex: 'status',
       width: 105,
       render: (value: ShipmentStatus) => <Tag color="gold">{shipmentStatusLabels[value] ?? formatPendingReviewValue(value)}</Tag>
@@ -780,15 +783,21 @@ export function FinancePage({
                 <Button onClick={() => { setFinanceReviewFilterDraft(emptyFinanceReviewFilters); setFinanceReviewFilters(emptyFinanceReviewFilters); }}>重置</Button>
               </Space>
             </div>
-            <Table<Shipment>
+            <ManagedTable<Shipment>
               className="finance-work-table"
               rowKey="id"
               size="small"
               columns={pendingReviewColumns}
+              columnSettings={{
+                storageKey: 'sunny.finance.pending-review.columns',
+                title: '待审核运单列设置',
+                defaultHiddenKeys: ['agentName', 'productName', 'declarationRequired', 'sensitive', 'overdue'],
+                buttonLabel: '列设置'
+              }}
               dataSource={currentReviewRows}
               loading={pendingReviewView === 'DELETED' ? deletedReviewLoading : pendingReviewLoading}
               pagination={tenRowTablePagination}
-              scroll={{ x: 2100 }}
+              minimumScrollX={1600}
               locale={{ emptyText: pendingReviewView === 'DELETED' ? '暂无已删除订单' : '暂无待审核订单' }}
               rowClassName={(record) => record.id === financeReviewSelectedShipmentId ? 'finance-pending-row-selected' : ''}
               onRow={(record) => ({
@@ -1257,13 +1266,6 @@ export function FinancePage({
     <AppPage>
       <AppPageHeader
         title={menuMode === 'business' ? '业务管理' : menuMode === 'catalog' ? '基础资料库' : '财务管理'}
-        description={
-          menuMode === 'business'
-            ? '录单、待审核运单和运单管理。'
-            : menuMode === 'catalog'
-              ? '维护费用、结算方式、货物类型、渠道和汇率等业务配置。'
-              : '应收、业务成本、市场应付、付款、水单和代理账单。'
-        }
         actions={menuMode === 'finance' ? (
           <AppActionGroup>
             <Button icon={<Landmark size={16} />} onClick={onCreateStatement}>

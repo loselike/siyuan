@@ -297,7 +297,7 @@ export const businessWorkspaceConfigs: Record<
   BusinessType,
   {
     description: string;
-    metrics: Array<{ title: string; extra: string }>;
+    metrics: Array<{ title: string; extra?: string }>;
     batchActions: string[];
     assistantCopy: string;
     focusTitle: string;
@@ -307,7 +307,7 @@ export const businessWorkspaceConfigs: Record<
   EXPRESS: {
     description: '快递业务聚焦商业快件、转单号、偏远识别、渠道排货和上网签收时效。',
     metrics: [
-      { title: '待处理运单', extra: '按快递渠道聚合' },
+      { title: '待处理运单' },
       { title: '轨迹风险', extra: 'DHL / FedEx / UPS 自动识别' },
       { title: '预计应收', extra: '含燃油与偏远附加费' },
       { title: '今日签收率', extra: '快件妥投表现' }
@@ -324,13 +324,13 @@ export const businessWorkspaceConfigs: Record<
   SMALL_PACKET: {
     description: '轻小件批量预报、邮袋交接、挂号/平邮转单和上网时效跟进。',
     metrics: [
-      { title: '待处理小包', extra: '按客户批次和邮袋聚合' },
+      { title: '待处理小包' },
       { title: '上网风险', extra: '超过 5 天未上网自动识别' },
-      { title: '预估运费', extra: '按克重段、挂号费、燃油计算' },
+      { title: '预估运费' },
       { title: '今日交邮率', extra: '邮袋交接完成度' }
     ],
     batchActions: ['批量预报', '邮袋交接', '挂号转单号', '平邮批量上网', '重量分段复核', '批量添加轨迹', '新建问题', '客户通知'],
-    assistantCopy: 'AI 可按克重段识别报价异常、提醒未交邮袋批次，并生成客户上网延迟说明。',
+    assistantCopy: '',
     focusTitle: '小包作业重点',
     focusItems: [
       { title: '邮袋交接', description: '按客户批次、邮袋号、目的国集中交邮' },
@@ -339,15 +339,15 @@ export const businessWorkspaceConfigs: Record<
     ]
   },
   DEDICATED_LINE: {
-    description: '专线聚合视图统一承载原快递、小包、专线数据，集中处理渠道履约、清关节点、头程/尾程轨迹和异常风险。',
+    description: '',
     metrics: [
-      { title: '待处理运单', extra: '快递/小包/专线统一聚合' },
+      { title: '待处理运单' },
       { title: '履约风险', extra: '转单、清关、尾程、轨迹异常' },
       { title: '预计应收', extra: '运费、燃油、偏远和派送费合计' },
       { title: '今日完成率', extra: '上网、签收、入仓综合表现' }
     ],
     batchActions: ['批量装板', '排舱确认', '生成装箱单', '头程发货', '尾程转单', '清关资料审核', '新建问题', '添加轨迹'],
-    assistantCopy: 'AI 可解释清关/排舱延误、提示大货成本倒挂，并生成客户节点汇报。',
+    assistantCopy: '',
     focusTitle: '专线聚合作业重点',
     focusItems: [
       { title: '装板/排舱', description: '按航线、板位、仓库批次确认头程计划' },
@@ -479,10 +479,10 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
   },
   pricing: {
     title: '报价查价中心',
-    description: '通过 XLS 导入代理成本价，再按代理维护业务员加价规则并快速查价。',
-    capabilities: ['价格表导入', '代理成本价', '代理加价规则', '业务员报价', '价格查询'],
-    aiEnhancements: ['识别价格表字段', '解释代理加价差异', '提醒低毛利报价'],
-    siliconFlowScenarios: ['解析价格表字段并给出导入建议', '解释代理成本价与业务员报价差异', '识别加价规则异常'],
+    description: '按已维护的代理价格表和加价规则，为业务员快速生成可对外报价。',
+    capabilities: ['亚马逊查价', '欧洲海运超大件查价', '欧洲空海运铁路快递查价', '南非专线查价', '业务员报价'],
+    aiEnhancements: ['解释报价匹配条件', '提醒低毛利报价', '生成客户报价话术'],
+    siliconFlowScenarios: ['解释当前报价匹配依据', '生成客户报价文案', '识别报价条件缺失'],
     stats: [
       { label: '今日试算', value: '34', helper: '客户与销售查价' },
       { label: '报价产品', value: '16', helper: '按渠道/国家/分区' },

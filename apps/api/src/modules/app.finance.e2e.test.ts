@@ -77,6 +77,15 @@ describe('Siyuan API finance', () => {
     expect(draftShipment.body.draftWarehousePackageIds).toEqual([draftPackage.body.id]);
 
     await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/packages')
+      .query({ customerCode: 'DRFT1399' })
+      .set('Authorization', app.auth(token))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: draftPackage.body.id })]));
+      });
+
+    await request(app.getHttpServer())
       .get('/api/warehouse/packages')
       .set('Authorization', app.auth(token))
       .expect(200)

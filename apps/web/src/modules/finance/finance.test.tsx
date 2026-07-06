@@ -122,8 +122,8 @@ describe('Finance flows', () => {
     expect(await screen.findByText('待审核列表')).toBeInTheDocument();
     expect(screen.getAllByText('客户编号').length).toBeGreaterThan(0);
     expect(screen.getAllByText('客户名称').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('代理渠道').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('产品名称').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('业务渠道').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('目的地').length).toBeGreaterThan(0);
     expect(await screen.findByRole('button', { name: 'SYREVIEW000001' })).toBeInTheDocument();
     expect(screen.queryByText('待审核摘要')).not.toBeInTheDocument();
     expect(screen.queryByText('待审核详情')).not.toBeInTheDocument();
@@ -198,6 +198,7 @@ describe('Finance flows', () => {
     expect(screen.getAllByText('应付备注').length).toBeGreaterThan(0);
     expect(screen.queryByText('对账状态')).not.toBeInTheDocument();
     expect(screen.getAllByText('admin').length).toBeGreaterThan(0);
+    expect(screen.queryByText('仓库货物')).not.toBeInTheDocument();
 
     expect(screen.getAllByDisplayValue('运费')).toHaveLength(1);
     await user.click(screen.getAllByRole('button', { name: '新增项目' })[0]);
@@ -207,6 +208,12 @@ describe('Finance flows', () => {
     await waitFor(() => expect(screen.getAllByDisplayValue('运费')).toHaveLength(1));
 
     await user.type(screen.getByLabelText('客户编号'), '9409');
+    await user.click(screen.getByRole('button', { name: '仓库数据' }));
+    const packageDialog = await screen.findByRole('dialog', { name: '仓库数据 · 9409' });
+    await waitFor(() => expect(within(packageDialog).getAllByRole('checkbox').length).toBeGreaterThan(1));
+    await user.click(within(packageDialog).getAllByRole('checkbox')[1]);
+    await user.click(within(packageDialog).getByRole('button', { name: /关\s*闭/ }));
+    expect(screen.getByText('已选货物')).toBeInTheDocument();
     await user.click(screen.getByLabelText('选择收货人'));
     await user.click(await screen.findByText(/Lina/));
     expect(screen.getByDisplayValue('Lina')).toBeInTheDocument();
@@ -253,10 +260,13 @@ describe('Finance flows', () => {
     await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
     await user.click(await screen.findByRole('button', { name: '录单' }));
 
-    await waitFor(() => expect(screen.getAllByRole('checkbox').length).toBeGreaterThan(1));
-    await user.click(screen.getAllByRole('checkbox')[1]);
     const orderNo = `SYTEST${Date.now()}`;
     fireEvent.change(screen.getByLabelText('客户编号'), { target: { value: '9409' } });
+    await user.click(screen.getByRole('button', { name: '仓库数据' }));
+    const packageDialog = await screen.findByRole('dialog', { name: '仓库数据 · 9409' });
+    await waitFor(() => expect(within(packageDialog).getAllByRole('checkbox').length).toBeGreaterThan(1));
+    await user.click(within(packageDialog).getAllByRole('checkbox')[1]);
+    await user.click(within(packageDialog).getByRole('button', { name: /关\s*闭/ }));
     fireEvent.change(screen.getByLabelText('客户单号'), { target: { value: 'TEST-CUSTOMER-001' } });
     fireEvent.change(screen.getByLabelText('运单号'), { target: { value: orderNo } });
     fireEvent.change(screen.getByLabelText('目的地'), { target: { value: '美国' } });

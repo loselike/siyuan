@@ -14,6 +14,7 @@
 - 默认只读取本文件、`.codex-state.md`、`git status --short` 和相关代码。
 - 不主动加载额外流程说明或通用指南；除非用户明确要求、当前任务需要，或系统规则强制要求。
 - 所有判断以当前仓库文件、命令输出、类型和测试为准，不依赖旧聊天历史。
+- 默认不调用 custom agents；命中任务场景时按 `Agent Auto Routing` 选择最小必要 agent。
 
 ## Mandatory Start Protocol
 
@@ -34,10 +35,37 @@
 - 不要为了节省时间跳过验证；优先运行最小相关测试，再按风险扩大验证范围。
 - 先复用现有模块、类型、API、样式和测试，再考虑新增文件或新抽象。
 - 禁止顺手重构无关代码、批量格式化无关文件或改动无关业务流程。
+- 遇到“所有、全局、全部模块、统一改造”类需求时，必须先拆成阶段：先做通用能力，再接入一个代表页面并完成验证，通过后再逐模块推广；禁止一轮横跨全系统落地。
+
+## Reasoning And Review Gates
+
+- 复杂 bug、跨模块数据流、财务/仓库/权限/发布问题，必须先做第一性原理检查：基于当前代码、数据流、权限和业务事实找根因，不只补表层现象。
+- 高风险改动、状态流转、权限裁剪、财务口径和 47 发布前，必须做对抗式审查：主动寻找越权、脏数据、重复提交、异常时间、兼容和发布失败风险。
+- 小型文案、局部样式、字段显隐、测试断言修正不强制展开完整审查；需要详细执行方法时再读取 `docs/dev-thread-rules.md`。
+
+## Agent Auto Routing
+
+- 用户不需要显式点名 agent；Codex 根据任务内容自动选择最小必要 agent 思路。
+- 默认最多选择 1 个主 agent；涉及验证、审查、上线或安全风险时，最多追加 1 个辅助 agent。
+- 禁止因为安装了多个 agents 就全量调用；只有用户明确要求“全局对抗式审查 / 多 Agent 审查 / 并发审查”才扩大范围。
+- 小型文案、局部样式、字段显隐、测试断言修正不调用 custom agents。
+- 新 UI、表格、弹窗、前端交互：先按 `Frontend Design Rule` 确定 sunny 本地 UI/UX 约束；只有需要 React/AntD/状态/性能/可访问性实现判断时，才调用 Frontend Developer。
+- API、Prisma、状态流转、权限裁剪：Backend Architect。
+- 非生产原型或快速验证想法：Rapid Prototyper；不得用于财务正式逻辑、权限、数据库迁移或 47 发布。
+- 新会话理解陌生模块：Codebase Onboarding Engineer，只读不改。
+- 功能完成后的对抗式审查：Code Reviewer。
+- 慢查询、索引、复杂数据量：Database Optimizer。
+- API 权限、状态流转和接口验收：API Tester。
+- UI 截图、字段落地和视觉证据：Evidence Collector；只做截图验收或视觉证据时，不调用 Frontend Developer。
+- 47 线上故障、发布失败、服务异常：Incident Response Commander。
+- 越权、敏感字段、客户/财务/订单数据风险：Application Security Engineer。
 
 ## Frontend Design Rule
 
 - 每次新建前端模块、二级功能、工作台、表单、详情、看板或明显重塑已有页面时，默认先按 `.agents/skills/frontend-design/SKILL.md` 做设计判断，再落代码。
+- sunny 本地 `frontend-design` 是 UI/UX 设计准则最高优先级；Agency Frontend Developer 只作为 React/AntD/状态/性能/可访问性实现辅助，不替代 sunny 后台工作台规范。
+- 禁止同一轮完整展开 `frontend-design` 和 Frontend Developer 两套 UI 规则；只读取和应用当前任务必要部分。
+- 若两者冲突，以 sunny 现有设计系统、AntD 用法、业务字段完整性、权限裁剪和可扫读效率为准。
 - `frontend-design` 覆盖所有用户可见、可点击、可提交或会影响业务状态的界面，不只覆盖一级页面；新增/编辑/详情弹窗，审核/反审/作废/删除/付款/确认弹窗，抽屉详情，表格行操作，批量操作面板，上传/预览，字段或列设置，二级/三级入口，空态、错误态、加载态、无权限态和禁用态都在范围内。
 - Sunny 是跨境物流内部运营系统，使用 `frontend-design` 时必须服务业务效率：字段清楚、表格可扫读、操作路径短、权限状态明确；不得把后台页面做成营销页、装饰页或只追求视觉冲击。
 - 设计落地前要先明确该页面的单一业务任务、目标岗位、核心字段、主要操作和一处可解释的视觉/交互记忆点；视觉特色不能覆盖财务、仓库、订单、权限和审计的一致性。

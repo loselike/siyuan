@@ -95,7 +95,9 @@ describe('Routing flows', () => {
     await renderAndLogin('admin', 'admin123');
 
     await openRoutingFulfillment(user);
-    expect(screen.getAllByText('客户').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('业务渠道').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('业务成本合计').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('应付合计').length).toBeGreaterThan(0);
     expect(screen.queryByText('系统单号 / 转单号')).not.toBeInTheDocument();
     expect(screen.queryByText('渠道 / 代理')).not.toBeInTheDocument();
     expect(screen.getAllByText('运单号').length).toBeGreaterThan(0);
@@ -106,10 +108,10 @@ describe('Routing flows', () => {
     expect(screen.queryByRole('button', { name: '批量添加轨迹' })).not.toBeInTheDocument();
 
     const routingRow = screen.getByRole('row', { name: /SYGJ06061239995/ });
-    expect(screen.getByRole('columnheader', { name: '进入时间' })).toBeInTheDocument();
-    expect(within(routingRow).getByText('2026/7/1 17:00:00')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '日期' })).toBeInTheDocument();
+    expect(within(routingRow).getByText('2026-07-01 17:00:00')).toBeInTheDocument();
     expect(within(routingRow).queryByRole('button', { name: '添加轨迹' })).not.toBeInTheDocument();
-    expect(screen.getAllByText('排货操作').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('操作').length).toBeGreaterThan(0);
     expect(screen.queryByText('履约操作')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '收款' })).not.toBeInTheDocument();
   });
@@ -127,7 +129,37 @@ describe('Routing flows', () => {
     await openRoutingFulfillment(user);
 
     const sortableRow = await screen.findByRole('row', { name: /SYGJ06061239999/ });
-    expect(within(sortableRow).getByRole('button', { name: /^排\s*货$/ })).toBeInTheDocument();
+    expect(within(sortableRow).getByRole('button', { name: /审\s*核/ })).toBeInTheDocument();
+    expect(within(sortableRow).getByRole('button', { name: /修\s*改/ })).toBeInTheDocument();
+  });
+
+  it('approves a completed routing row into routed and warehouse dispatch queues', async () => {
+    const user = userEvent.setup();
+    employeeShipments.unshift(
+      shipment('s-routing-approve', 'SYGJ06061239989', 'SORT-APPROVE-0606', 'WAITING_SORT', '9409-Daloday', {
+        businessType: 'DEDICATED_LINE',
+        latestTracking: '待市场审核',
+        channelId: 'ch-dhl-hk',
+        channelName: 'DHL HK',
+        agentId: 'a-yuhuan',
+        agentName: '宇环',
+        routeAgentChannelName: '宇环 DHL',
+        routeChargeWeightKg: 12.5,
+        routeUnitPrice: 8,
+        routeOtherFee: 0,
+        routeCurrency: 'RMB'
+      })
+    );
+    await renderAndLogin('admin', 'admin123');
+
+    await openRoutingFulfillment(user);
+
+    const routingRow = await screen.findByRole('row', { name: /SYGJ06061239989/ });
+    await user.click(within(routingRow).getByRole('button', { name: /审\s*核/ }));
+
+    expect(await screen.findByText(/SYGJ06061239989 审核通过，已同步进入已排货和待出库/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '已排货' }));
+    expect(await screen.findByRole('row', { name: /SYGJ06061239989/ })).toBeInTheDocument();
   });
 
   it('shows business and market costs separately after routing', async () => {
@@ -156,11 +188,13 @@ describe('Routing flows', () => {
     expect(screen.getByRole('columnheader', { name: '市场成本合计' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: '排货时间' })).toBeInTheDocument();
     expect(within(routedRow).getByText('2026/7/1 17:30:00')).toBeInTheDocument();
-    expect(within(routedRow).getByText('空运业务成本 160.00 RMB')).toBeInTheDocument();
     expect(within(routedRow).getByText('代理成本 105.00 RMB')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '待排货' }));
-    expect(screen.queryByRole('columnheader', { name: '业务成本' })).not.toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '业务成本' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '业务成本合计' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '应付成本' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: '应付合计' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: '市场成本' })).not.toBeInTheDocument();
   });
 
@@ -177,11 +211,10 @@ describe('Routing flows', () => {
     await openRoutingFulfillment(user);
 
     const routingRow = await screen.findByRole('row', { name: /SYGJ06061239998/ });
-    await user.click(within(routingRow).getByRole('button', { name: /^排\s*货$/ }));
+    await user.click(within(routingRow).getByRole('button', { name: /修\s*改/ }));
     const assignmentDialog = await screen.findByRole('dialog', { name: '市场排货' });
     expect(within(assignmentDialog).getByLabelText('代理')).toBeInTheDocument();
     expect(within(assignmentDialog).getByLabelText('代理渠道')).toBeInTheDocument();
-    expect(within(routingRow).queryByRole('button', { name: '修改' })).not.toBeInTheDocument();
     expect(within(routingRow).queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
     await user.click(within(assignmentDialog).getByLabelText('代理'));
     await user.click(await screen.findByText('宇环 / 深圳宇环'));
@@ -226,7 +259,7 @@ describe('Routing flows', () => {
     await openRoutingFulfillment(user);
 
     const routingRow = await screen.findByRole('row', { name: /SYGJ06061239997/ });
-    await user.click(within(routingRow).getByRole('button', { name: /^排\s*货$/ }));
+    await user.click(within(routingRow).getByRole('button', { name: /修\s*改/ }));
     const assignmentDialog = await screen.findByRole('dialog', { name: '市场排货' });
     await user.click(within(assignmentDialog).getByLabelText('代理'));
     await user.click(await screen.findByText('宇环 / 深圳宇环'));

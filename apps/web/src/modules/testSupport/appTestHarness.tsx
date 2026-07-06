@@ -397,6 +397,8 @@ const agentMarkupRules: AgentMarkupSummary[] = [
   { id: 'markup-b', agentName: 'b代理', markupPerKg: 1, enabled: true }
 ];
 const warehousePackages: WarehousePackageSummary[] = [
+  { id: 'wh-9409-1', customerCode: '9409', site: '深圳站', salesperson: 'operator', scanSource: '扫码', customerOrderNo: '9409', domesticTrackingNo: 'KY94090001', combinedOrderNo: '9409-KY94090001', receivingChannel: '仓库接口返回', destinationCountry: '美国', expectedTotalPackageCount: 2, packageCount: 1, weightKg: 11.2, lengthCm: 60, widthCm: 40, heightCm: 35, cbm: 0.084, volumetricWeightKg: 14, chargeableWeightKg: 14, divisor: 6000, roundingRule: 'NONE', scanTime: '2026-06-10T11:08:08.000+08:00', status: 'RECEIVED', exceptions: [], createdAt: '2026-06-10T11:08:08.000+08:00' },
+  { id: 'wh-9409-2', customerCode: '9409', site: '深圳站', salesperson: 'operator', scanSource: '扫码', customerOrderNo: '9409', domesticTrackingNo: 'KY94090002', combinedOrderNo: '9409-KY94090002', receivingChannel: '仓库接口返回', destinationCountry: '美国', expectedTotalPackageCount: 2, packageCount: 1, weightKg: 9.8, lengthCm: 58, widthCm: 39, heightCm: 33, cbm: 0.074646, volumetricWeightKg: 12.44, chargeableWeightKg: 12.44, divisor: 6000, roundingRule: 'NONE', scanTime: '2026-06-10T10:58:08.000+08:00', status: 'RECEIVED', exceptions: [], createdAt: '2026-06-10T10:58:08.000+08:00' },
   { id: 'wh-1399-1', customerCode: '1399', site: '深圳站', salesperson: 'operator', scanSource: '扫码', customerOrderNo: '1399', domesticTrackingNo: 'KY4001036478949', combinedOrderNo: '1399-KY4001036478949', receivingChannel: '仓库接口返回', destinationCountry: '美国', expectedTotalPackageCount: 10, packageCount: 1, weightKg: 14.2, lengthCm: 128, widthCm: 46, heightCm: 51, cbm: 0.300288, volumetricWeightKg: 50.05, chargeableWeightKg: 50.05, divisor: 6000, roundingRule: 'NONE', scanTime: '2026-06-08T10:07:28.000+08:00', remark: '木架，外箱轻微磨损', status: 'RECEIVED', exceptions: ['部分到仓'], createdAt: '2026-06-08T10:07:28.000+08:00' },
   { id: 'wh-1399-2', customerCode: '1399', site: '深圳站', salesperson: 'operator', scanSource: '扫码', customerOrderNo: '1399', domesticTrackingNo: 'KY4001036478949', combinedOrderNo: '1399-KY4001036478949', receivingChannel: '仓库接口返回', destinationCountry: '美国', expectedTotalPackageCount: 10, packageCount: 1, weightKg: 13.9, lengthCm: 130, widthCm: 46, heightCm: 51, cbm: 0.30498, volumetricWeightKg: 50.83, chargeableWeightKg: 50.83, divisor: 6000, roundingRule: 'NONE', scanTime: '2026-06-08T10:08:08.000+08:00', status: 'RECEIVED', exceptions: ['部分到仓'], createdAt: '2026-06-08T10:08:08.000+08:00' },
   { id: 'wh-1399-3', customerCode: '1399', site: '深圳站', salesperson: 'operator', scanSource: '扫码', customerOrderNo: '1399', domesticTrackingNo: 'KY4001036478949', combinedOrderNo: '1399-KY4001036478949', receivingChannel: '仓库接口返回', destinationCountry: '美国', expectedTotalPackageCount: 10, packageCount: 1, weightKg: 14.2, lengthCm: 129, widthCm: 46, heightCm: 51, cbm: 0.302634, volumetricWeightKg: 50.44, chargeableWeightKg: 50.44, divisor: 6000, roundingRule: 'NONE', scanTime: '2026-06-08T10:08:48.000+08:00', status: 'RECEIVED', exceptions: ['部分到仓'], createdAt: '2026-06-08T10:08:48.000+08:00' },
@@ -598,6 +600,7 @@ const staffAccounts: StaffAccountSummary[] = [
   { id: 'u-admin', username: 'admin', name: '系统管理员', nickname: 'admin', role: 'ADMIN', roleLabel: '管理员组', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T15:12:00.000Z' },
   { id: 'u-service', username: 'service', name: '客服专员', nickname: '王五', site: '深圳思远', role: 'UG_CUSTOMER_SERVICE', roleLabel: '客服', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T17:41:00.000Z' },
   { id: 'u-operator', username: 'operator', name: '业务操作员', nickname: '赵六', site: '深圳思远', role: 'UG_BUSINESS', roleLabel: '业务部', enabled: true, mustChangePassword: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T16:58:00.000Z' },
+  { id: 'u-market', username: 'market', name: '市场专员', nickname: '钱八', site: '深圳思远', role: 'UG_MARKET', roleLabel: '市场部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T16:12:00.000Z' },
   { id: 'u-warehouse', username: 'warehouse', name: '仓库操作员', nickname: '刘七', site: '深圳思远', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T13:26:00.000Z' },
   { id: 'u-finance', username: 'finance', name: '财务专员', nickname: '李四', site: '深圳思远', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T18:23:00.000Z' }
 ];
@@ -966,7 +969,7 @@ beforeEach(() => {
     fullName: 'Daloday Inc.',
     customerType: '直客',
     customerSource: '手动录入',
-    salesperson: '何俊妮',
+    salesperson: 'operator',
     enabled: true
   });
   masterData.contacts.splice(0, masterData.contacts.length, { id: 'cc-9409-main', customerId: 'c-9409', customerName: '9409-Daloday', name: 'Lina', company: 'Daloday Inc.', phone: '13800000001', email: 'lina@example.com', address: '9409 Sample Street', country: 'US', state: 'CA', postalCode: '90001', enabled: true });
@@ -1025,6 +1028,7 @@ beforeEach(() => {
     { id: 'u-admin', username: 'admin', role: 'ADMIN', roleLabel: '管理员组', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
     { id: 'u-service', username: 'service', role: 'UG_CUSTOMER_SERVICE', roleLabel: '客服', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
     { id: 'u-operator', username: 'operator', role: 'UG_BUSINESS', roleLabel: '业务部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
+    { id: 'u-market', username: 'market', role: 'UG_MARKET', roleLabel: '市场部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
     { id: 'u-warehouse', username: 'warehouse', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
     { id: 'u-finance', username: 'finance', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' }
   );
@@ -1295,6 +1299,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       admin: 'ADMIN',
       service: 'CUSTOMER_SERVICE',
       operator: 'OPERATOR',
+      market: 'UG_MARKET',
       warehouse: 'WAREHOUSE',
       finance: 'FINANCE',
       customer: 'CUSTOMER'
@@ -2282,7 +2287,17 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
     const rows = token.includes('CUSTOMER') ? customerShipments : employeeShipments;
     const query = Object.fromEntries(new URL(url, 'http://test.local').searchParams.entries());
-    return jsonResponse(summarizeLineShipmentPool(rows, { ...query, datePreset: 'ALL' }));
+    const businessDataApprovedShipmentIds = auditLogs
+      .filter((row) => row.action === 'customer_service.business_data.approved')
+      .map((row) => row.target);
+    const afterSaleShipmentIds = auditLogs
+      .filter((row) => {
+        if (row.action !== 'customer_service.issue.attach') return false;
+        const after = row.after as Record<string, unknown> | null;
+        return after?.originalStatusPool === 'SIGNED' && typeof after.shipmentId === 'string';
+      })
+      .map((row) => (row.after as Record<string, string>).shipmentId);
+    return jsonResponse(summarizeLineShipmentPool(rows, { ...query, datePreset: 'ALL' }, { businessDataApprovedShipmentIds, afterSaleShipmentIds }));
   }
 
   const businessApproveMatch = url.match(/\/api\/shipments\/([^/]+)\/business-data\/approve$/);
@@ -2570,19 +2585,20 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   }
 
   if (url.endsWith('/api/pricing/books/import') && init?.method === 'POST') {
+    const rows: PriceBookRowSummary[] = body.rows.map((row: Omit<PriceBookRowSummary, 'id' | 'priceBookId'>, index: number) => ({
+      ...row,
+      id: `pbr-${importedPriceRows.length + index + 1}`,
+      priceBookId: `pb-${importedPriceBooks.length + 1}`,
+      realChannelName: row.realChannelName ?? row.channelName,
+      quoteSourceType: row.quoteSourceType ?? 'local'
+    }));
     const book: PriceBookSummary = {
       id: `pb-${importedPriceBooks.length + 1}`,
       fileName: body.fileName,
       rowCount: body.rows.length,
-      importedAt: '2026-06-07T13:06:11.000Z'
+      importedAt: '2026-06-07T13:06:11.000Z',
+      legacyModuleCounts: buildTestLegacyModuleCounts(rows)
     };
-    const rows: PriceBookRowSummary[] = body.rows.map((row: Omit<PriceBookRowSummary, 'id' | 'priceBookId'>, index: number) => ({
-      ...row,
-      id: `pbr-${importedPriceRows.length + index + 1}`,
-      priceBookId: book.id,
-      realChannelName: row.realChannelName ?? row.channelName,
-      quoteSourceType: row.quoteSourceType ?? 'local'
-    }));
     importedPriceBooks.unshift(book);
     importedPriceRows.unshift(...rows);
     return jsonResponse({ book, rows });
@@ -2743,9 +2759,88 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     });
   }
 
+  if (url.endsWith('/api/pricing/legacy/quote-meta')) {
+    const rows = [...importedPriceRows, ...backendSeedPriceRows];
+    return jsonResponse({
+      modules: [
+        { key: 'amazon', label: '亚马逊查询', rowCount: rows.filter((row) => row.warehouseCode).length, sourceCount: importedPriceBooks.length },
+        { key: 'inquiry', label: '欧洲海运超大件查询', rowCount: rows.length, sourceCount: importedPriceBooks.length },
+        { key: 'europeExpress', label: '欧洲空海运铁路快递查询', rowCount: rows.length, sourceCount: importedPriceBooks.length },
+        { key: 'southAfrica', label: '南非专线查询', rowCount: rows.filter((row) => row.destinationCountry === '南非').length, sourceCount: importedPriceBooks.length }
+      ],
+      agents: [...new Set(rows.map((row) => row.agentName))],
+      origins: [...new Set(rows.map((row) => row.sourceSheetName).filter(Boolean))],
+      warehouseCodes: [...new Set(rows.map((row) => row.warehouseCode).filter(Boolean))],
+      tiers: ['12KG+', '51KG+', '100KG+']
+    });
+  }
+
+  if (url.match(/\/api\/pricing\/legacy\/(amazon|inquiry|europe-express|south-africa)\/quote$/) && init?.method === 'POST') {
+    const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
+    const canViewInternalPricing = testCanViewPricingInternalRoute(token);
+    const chargeableWeightKg = Number(body.chargeableWeightKg);
+    const warehouseCode = String(body.amazonCode ?? '').trim().toUpperCase();
+    const bookRemarkMap = new Map(importedPriceBooks.map((book) => [book.id, book.remark]));
+    const matchedRows = [...importedPriceRows, ...backendSeedPriceRows].filter(
+      (row) =>
+        (!row.warehouseCode || !warehouseCode || row.warehouseCode.toUpperCase() === warehouseCode) &&
+        row.destinationCountry === body.destinationCountry &&
+        chargeableWeightKg >= row.minWeightKg &&
+        chargeableWeightKg <= row.maxWeightKg
+    );
+    const recommendations = matchedRows
+      .map((row) => {
+        const markup = findBestTestMarkupRule(agentMarkupRules, row);
+        if (!markup) return undefined;
+        const salesUnitPrice = Math.round((row.costPerKg + markup.markupPerKg) * 100) / 100;
+        const costTotal = Math.round(row.costPerKg * chargeableWeightKg * 100) / 100;
+        const salesTotal = Math.round(salesUnitPrice * chargeableWeightKg * 100) / 100;
+        const publicCode = testPublicPricingRouteCode(row.channelName, row.realChannelName, row.businessRouteName, row.agentName);
+        return {
+          id: row.id,
+          module: 'amazon',
+          sourceId: row.priceBookId,
+          agentName: canViewInternalPricing ? row.agentName : publicCode,
+          origin: canViewInternalPricing ? row.sourceSheetName : undefined,
+          channelName: canViewInternalPricing ? row.channelName : publicCode,
+          serviceName: canViewInternalPricing ? row.businessRouteName : publicCode,
+          warehouseCode: row.warehouseCode,
+          destinationCountry: row.destinationCountry,
+          weightSegmentLabel: `${row.minWeightKg}-${row.maxWeightKg}kg`,
+          quoteMode: 'kg',
+          costUnitPrice: canViewInternalPricing ? row.costPerKg : salesUnitPrice,
+          salesUnitPrice,
+          costTotal: canViewInternalPricing ? costTotal : salesTotal,
+          salesTotal,
+          ...(canViewInternalPricing ? { grossProfit: Math.round((salesTotal - costTotal) * 100) / 100, markup } : {}),
+          chargeableWeightKg,
+          transitLabel: row.transitLabel ?? '时效待确认',
+          ...(row.productSurchargeRemark ? { productSurchargeRemark: row.productSurchargeRemark } : {}),
+          ...(row.specialRemark ? { specialRemark: row.specialRemark } : {}),
+          ...(row.priceBookId && bookRemarkMap.get(row.priceBookId) ? { remark: bookRemarkMap.get(row.priceBookId) } : {})
+        };
+      })
+      .filter(Boolean);
+    return jsonResponse({
+      module: 'amazon',
+      query: body,
+      recommendations,
+      cheapestRecommendations: [...recommendations].sort((left: any, right: any) => left.salesTotal - right.salesTotal).slice(0, 3),
+      fastestRecommendations: recommendations.filter((item: any) => /\\d/.test(item.transitLabel)).slice(0, 3),
+      selected: recommendations[0],
+      agentErrors: [],
+      metrics: {
+        matchedRows: recommendations.length,
+        agents: new Set(recommendations.map((row: any) => row.agentName)).size,
+        channels: new Set(recommendations.map((row: any) => row.channelName)).size,
+        sources: new Set(recommendations.map((row: any) => row.sourceId).filter(Boolean)).size
+      }
+    });
+  }
+
   if (url.endsWith('/api/pricing/lookup') && init?.method === 'POST') {
     const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
-    const isAdmin = token.includes('ADMIN');
+    const canViewInternalPricing = testCanViewPricingInternalRoute(token);
     const chargeableWeightKg = Number(body.chargeableWeightKg);
     const warehouseCode = String(body.amazonCode ?? '').trim().toUpperCase();
     const markupRules = agentMarkupRules;
@@ -2766,18 +2861,24 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
         const salesRatePerKg = Math.round((row.costPerKg + markup.markupPerKg) * 100) / 100;
         const totalCost = Math.round(row.costPerKg * chargeableWeightKg * 100) / 100;
         const totalSales = Math.round(salesRatePerKg * chargeableWeightKg * 100) / 100;
+        const publicCode = testPublicPricingRouteCode(row.channelName, row.realChannelName, row.businessRouteName, row.agentName);
         const visiblePrice: Omit<PriceBookRowSummary, 'costPerKg'> & { costPerKg?: number } = { ...row };
-        if (!isAdmin) {
+        if (!canViewInternalPricing) {
           visiblePrice.costPerKg = undefined;
+          visiblePrice.agentName = publicCode;
+          visiblePrice.channelName = publicCode;
+          visiblePrice.realChannelName = publicCode;
+          visiblePrice.businessRouteName = publicCode;
+          visiblePrice.sourceSheetName = undefined;
         }
         return {
           price: visiblePrice,
-          ...(isAdmin ? { markup } : {}),
-          channelName: row.channelName,
+          ...(canViewInternalPricing ? { markup } : {}),
+          channelName: canViewInternalPricing ? row.channelName : publicCode,
           carrierName: row.carrierName ?? '专线',
-          agentName: row.agentName,
-          businessRouteName: row.businessRouteName,
-          realChannelName: row.realChannelName ?? row.channelName,
+          agentName: canViewInternalPricing ? row.agentName : publicCode,
+          businessRouteName: canViewInternalPricing ? row.businessRouteName : publicCode,
+          realChannelName: canViewInternalPricing ? row.realChannelName ?? row.channelName : publicCode,
           isRouteMapped: Boolean(row.businessRouteName),
           quoteSourceType: row.quoteSourceType ?? 'local',
           weightSegmentLabel: `${row.minWeightKg}-${row.maxWeightKg}kg`,
@@ -2787,7 +2888,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
           totalFee: totalSales + (row.surchargeFee ?? 0),
           freightUnitPrice: salesRatePerKg,
           totalUnitPrice: Math.round(((totalSales + (row.surchargeFee ?? 0)) / chargeableWeightKg) * 100) / 100,
-          ...(isAdmin ? { totalCost, grossProfit: Math.round((totalSales - totalCost) * 100) / 100 } : {}),
+          ...(canViewInternalPricing ? { totalCost, grossProfit: Math.round((totalSales - totalCost) * 100) / 100 } : {}),
           totalSales,
           transitLabel: row.transitLabel ?? '时效待确认',
           surchargeDetails: row.surchargeDetails ?? [],
@@ -2798,11 +2899,14 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       })
       .filter(Boolean);
     const cheapestRecommendations = [...recommendations].sort((left: any, right: any) => left.totalSales - right.totalSales).slice(0, 3);
-    const fastestRecommendations = [...recommendations].sort((left: any, right: any) => (left.price.transitDays ?? 99999) - (right.price.transitDays ?? 99999)).slice(0, 3);
+    const fastestRecommendations = recommendations
+      .filter((item: any) => Number.isFinite(item.price.transitDays))
+      .sort((left: any, right: any) => left.price.transitDays - right.price.transitDays || left.totalSales - right.totalSales)
+      .slice(0, 3);
     const best = cheapestRecommendations[0] as any;
     return jsonResponse({
       price: best.price,
-      ...(isAdmin ? { markup: best.markup } : {}),
+      ...(canViewInternalPricing ? { markup: best.markup } : {}),
       recommendations,
       cheapestRecommendations,
       fastestRecommendations,
@@ -2816,7 +2920,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       chargeableWeightKg,
       weightSegmentLabel: best.weightSegmentLabel,
       salesRatePerKg: best.salesRatePerKg,
-      ...(isAdmin ? { totalCost: best.totalCost, grossProfit: best.grossProfit } : {}),
+      ...(canViewInternalPricing ? { totalCost: best.totalCost, grossProfit: best.grossProfit } : {}),
       totalSales: best.totalSales,
       totalPrice: best.totalSales
     });
@@ -2869,8 +2973,34 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse({ freight: 200, fuel: 30, surchargeTotal: 50, total: 280 });
   }
 
-  if (url.endsWith('/api/shipments/order-entry/packages')) {
-    return jsonResponse(warehousePackages.filter((pkg) => !pkg.shipmentId && !pkg.systemOrderNo));
+  if (url.includes('/api/shipments/order-entry/packages')) {
+    const requestUrl = new URL(url, 'http://localhost');
+    const customerCode = requestUrl.searchParams.get('customerCode')?.trim();
+    const domesticTrackingNo = requestUrl.searchParams.get('domesticTrackingNo')?.trim().toLowerCase();
+    const customer = masterData.customers.find((item) => item.code === customerCode);
+    const role = actorRole();
+    if (!customerCode || !customer) {
+      return jsonResponse([]);
+    }
+    if ((role.includes('OPERATOR') || role.includes('UG_BUSINESS')) && customer.salesperson !== actorUsername()) {
+      return jsonResponse([]);
+    }
+    const draftOccupiedPackageIds = new Set(
+      employeeShipments
+        .flatMap((shipment) => shipment.draftWarehousePackageIds ?? [])
+        .filter(Boolean)
+    );
+    return jsonResponse(
+      warehousePackages
+        .filter((pkg) =>
+          pkg.customerCode === customerCode
+          && !pkg.shipmentId
+          && !pkg.systemOrderNo
+          && !draftOccupiedPackageIds.has(pkg.id)
+          && (!domesticTrackingNo || (pkg.domesticTrackingNo ?? '').toLowerCase().includes(domesticTrackingNo))
+        )
+        .sort((left, right) => new Date(right.scanTime ?? 0).getTime() - new Date(left.scanTime ?? 0).getTime())
+    );
   }
 
   if (url.endsWith('/api/shipments/order-entry') && init?.method === 'POST') {
@@ -3048,6 +3178,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const rows = warehousePackages.filter((pkg) =>
       pkg.status !== 'CONSOLIDATED'
       && pkg.status !== 'SHIPPED'
+      && pkg.status !== 'TALLIED_ARCHIVED'
       && (!params.get('site') || pkg.site === params.get('site'))
       && keyword(pkg.customerOrderNo, 'customerOrderNo')
       && keyword(pkg.domesticTrackingNo, 'domesticTrackingNo')
@@ -3079,6 +3210,92 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       && (!combinedOrderNo || task.sourceCombinedOrderNo.includes(combinedOrderNo))
     );
     return jsonResponse(rows.map((task) => ({ ...task, packageIds: [...task.packageIds] })));
+  }
+
+  if (url.endsWith('/api/warehouse/tally-tasks/label-scan') && init?.method === 'POST') {
+    const labelNo = String(body.labelNo ?? '').trim();
+    const index = warehouseTallyTasks.findIndex((task) => task.labelNo === labelNo);
+    if (index < 0) return jsonResponse({ message: '理货标签不存在' }, 404);
+
+    const task = warehouseTallyTasks[index];
+    if (task.appliedPackageId) {
+      const existing = warehousePackages.find((pkg) => pkg.id === task.appliedPackageId);
+      if (existing) {
+        return jsonResponse({ task, package: existing, alreadyApplied: true }, 201);
+      }
+    }
+
+    const sourcePackages = warehousePackages.filter((pkg) => task.packageIds.includes(pkg.id));
+    const source = sourcePackages.find((pkg) => pkg.id === task.sourcePackageId) ?? sourcePackages[0];
+    if (!source) return jsonResponse({ message: '来源包裹不存在' }, 404);
+
+    const packageCount = Math.max(1, Number(task.completedPackageCount ?? task.packageCount ?? 1));
+    const totalWeightKg = Number(task.completedWeightKg ?? task.originalWeightKg ?? source.weightKg * source.packageCount);
+    const lengthCm = Number(task.completedLengthCm ?? task.originalLengthCm ?? source.lengthCm);
+    const widthCm = Number(task.completedWidthCm ?? task.originalWidthCm ?? source.widthCm);
+    const heightCm = Number(task.completedHeightCm ?? task.originalHeightCm ?? source.heightCm);
+    const singleCbm = Number(((lengthCm * widthCm * heightCm) / 1000000).toFixed(6));
+    const totalCbm = Number((singleCbm * packageCount).toFixed(6));
+    const singleVolumetric6000 = Number(((lengthCm * widthCm * heightCm) / 6000).toFixed(2));
+    const singleVolumetric5000 = Number(((lengthCm * widthCm * heightCm) / 5000).toFixed(2));
+    const scanTime = '2026-06-26T12:30:00.000+08:00';
+    const sides = [lengthCm, widthCm, heightCm].sort((a, b) => b - a);
+    const appliedPackage: WarehousePackageSummary = {
+      ...source,
+      id: `wh-tally-applied-${warehousePackages.length + 1}`,
+      labelNo: task.labelNo,
+      sourcePackageId: source.id,
+      sourcePackageNo: source.combinedOrderNo,
+      archivedByPackageId: undefined,
+      archivedByPackageNo: undefined,
+      archivedReason: undefined,
+      archivedAt: undefined,
+      tallyTaskId: task.id,
+      tallyTaskNo: task.taskNo,
+      receivingChannel: '理货后标签扫描',
+      packageCount,
+      weightKg: Number((totalWeightKg / packageCount).toFixed(6)),
+      lengthCm,
+      widthCm,
+      heightCm,
+      girthCm: sides[0] + 2 * (sides[1] + sides[2]),
+      cbm: singleCbm,
+      totalCbm,
+      volumetricWeightKg: singleVolumetric6000,
+      volumetricWeightKg5000: singleVolumetric5000,
+      totalVolumetricWeightKg: Number((singleVolumetric6000 * packageCount).toFixed(2)),
+      totalVolumetricWeightKg5000: Number((singleVolumetric5000 * packageCount).toFixed(2)),
+      chargeableWeightKg: Math.max(Number((totalWeightKg / packageCount).toFixed(6)), singleVolumetric6000),
+      scanTime,
+      inboundAt: scanTime,
+      scanSource: '理货后标签扫描',
+      tallyStatus: '已理货',
+      splitStatus: '原始票',
+      consolidationStatus: '未合票',
+      outboundStatus: '未出库',
+      status: 'RECEIVED',
+      createdBy: 'warehouse',
+      createdAt: scanTime
+    };
+
+    sourcePackages.forEach((pkg) => {
+      pkg.status = 'TALLIED_ARCHIVED';
+      pkg.archivedByPackageId = appliedPackage.id;
+      pkg.archivedByPackageNo = appliedPackage.combinedOrderNo;
+      pkg.archivedReason = '理货标签扫描覆盖';
+      pkg.archivedAt = scanTime;
+    });
+    warehousePackages.unshift(appliedPackage);
+
+    const updated: WarehouseTallyTaskSummary = {
+      ...task,
+      appliedPackageId: appliedPackage.id,
+      appliedPackageNo: appliedPackage.combinedOrderNo,
+      labelAppliedAt: scanTime,
+      labelAppliedBy: 'warehouse'
+    };
+    warehouseTallyTasks[index] = updated;
+    return jsonResponse({ task: updated, package: appliedPackage, alreadyApplied: false }, 201);
   }
 
   if (url.endsWith('/api/warehouse/tally-tasks') && init?.method === 'POST') {
@@ -3181,6 +3398,56 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const updated = { ...warehouseTallyTasks[index], labelDownloadedAt: '2026-06-26T12:20:00.000+08:00', labelDownloadedBy: 'warehouse' };
     warehouseTallyTasks[index] = updated;
     return jsonResponse(updated, 201);
+  }
+
+  if (url.endsWith('/api/warehouse/tally-tasks/label-scan') && init?.method === 'POST') {
+    const taskIndex = warehouseTallyTasks.findIndex((task) => task.labelNo === body.labelNo);
+    if (taskIndex < 0) return jsonResponse({ message: '理货标签不存在' }, 404);
+    const task = warehouseTallyTasks[taskIndex];
+    const existing = warehousePackages.find((pkg) => pkg.combinedOrderNo === task.sourceCombinedOrderNo && pkg.tallyTaskId === task.id);
+    const volume = (task.completedLengthCm ?? task.originalLengthCm) * (task.completedWidthCm ?? task.originalWidthCm) * (task.completedHeightCm ?? task.originalHeightCm) * (task.completedPackageCount ?? task.packageCount);
+    const pkg: WarehousePackageSummary = existing ?? {
+      id: `wh-tallied-${warehousePackages.length + 1}`,
+      customerCode: task.customerCode,
+      customerName: task.customerName ?? `${task.customerCode}-仓库客户`,
+      site: '深圳站',
+      salesperson: task.salesperson,
+      customerOrderNo: task.customerCode,
+      domesticTrackingNo: task.sourceCombinedOrderNo.split('-').slice(1).join('-'),
+      combinedOrderNo: task.sourceCombinedOrderNo,
+      receivingChannel: '理货标签',
+      expectedTotalPackageCount: task.completedPackageCount ?? task.packageCount,
+      packageIndex: 1,
+      packageCount: task.completedPackageCount ?? task.packageCount,
+      weightKg: task.completedWeightKg ?? task.originalWeightKg,
+      lengthCm: task.completedLengthCm ?? task.originalLengthCm,
+      widthCm: task.completedWidthCm ?? task.originalWidthCm,
+      heightCm: task.completedHeightCm ?? task.originalHeightCm,
+      cbm: Number((volume / 1000000).toFixed(6)),
+      totalCbm: Number((volume / 1000000).toFixed(6)),
+      volumetricWeightKg: Number((volume / 6000).toFixed(2)),
+      volumetricWeightKg5000: Number((volume / 5000).toFixed(2)),
+      totalVolumetricWeightKg: Number((volume / 6000).toFixed(2)),
+      totalVolumetricWeightKg5000: Number((volume / 5000).toFixed(2)),
+      chargeableWeightKg: Math.max(task.completedWeightKg ?? task.originalWeightKg, Number((volume / 6000).toFixed(2))),
+      divisor: 6000,
+      roundingRule: 'NONE',
+      scanTime: task.completedAt ?? task.createdAt,
+      inboundAt: task.completedAt ?? task.createdAt,
+      tallyStatus: '已理货',
+      splitStatus: '原始票',
+      consolidationStatus: '未合票',
+      outboundStatus: '未出库',
+      remark: task.remark,
+      status: 'RECEIVED',
+      exceptions: [],
+      tallyTaskId: task.id,
+      createdAt: task.completedAt ?? task.createdAt
+    };
+    if (!existing) warehousePackages.unshift(pkg);
+    const updated = { ...task, labelAppliedAt: '2026-06-26T12:25:00.000+08:00', labelAppliedBy: 'warehouse' };
+    warehouseTallyTasks[taskIndex] = updated;
+    return jsonResponse({ task: updated, package: pkg, alreadyApplied: Boolean(existing) }, 201);
   }
 
   if (url.endsWith('/api/warehouse/packages') && init?.method === 'POST') {
@@ -4525,6 +4792,36 @@ function testMarkupSpecificity(rule: AgentMarkupSummary, channelName: string, re
     score += 1;
   }
   return score;
+}
+
+function testCanViewPricingInternalRoute(token: string): boolean {
+  return token.includes('ADMIN') || token.includes('UG_MARKET');
+}
+
+function testPublicPricingRouteCode(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const match = value?.trim().match(/[A-Za-z]{2,}(?:[-_][A-Za-z0-9]+)?|[A-Za-z]{2,}[A-Za-z0-9]*/);
+    if (match) return match[0].split(/[-_]/)[0].toUpperCase();
+  }
+  return '推荐线路';
+}
+
+function buildTestLegacyModuleCounts(rows: PriceBookRowSummary[]) {
+  const counts: PriceBookSummary['legacyModuleCounts'] = {};
+  for (const row of rows) {
+    const source = `${row.sourceSheetName ?? ''} ${row.channelName ?? ''} ${row.realChannelName ?? ''} ${row.businessRouteName ?? ''} ${row.destinationCountry ?? ''}`.toLowerCase();
+    const module = row.warehouseCode?.trim() || /仓库|fba|amazon|亚马逊/.test(source)
+      ? 'amazon'
+      : /南非|south africa|south-africa/.test(source)
+        ? 'southAfrica'
+        : !/超大件|大件/.test(source) && /空海运|铁路|快递|空运|空派|express|rail|air|fedex|dhl|ups/.test(source)
+          ? 'europeExpress'
+          : /超大件|海运|海卡|卡派|卡车|truck|oversize|大件/.test(source)
+            ? 'inquiry'
+            : 'europeExpress';
+    counts[module] = (counts[module] ?? 0) + 1;
+  }
+  return counts;
 }
 
 export function shipment(

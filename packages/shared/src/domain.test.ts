@@ -22,6 +22,7 @@ import {
   createMockTrackingStatus,
   canAccessStaffMenu,
   getVisibleStaffMenuKeys,
+  summarizeLineShipmentPool,
   type CarrierTaskSummary,
   type AccountLedgerSummary,
   type CustomerAccountSummary,
@@ -540,6 +541,55 @@ describe('fulfillment workflow rules', () => {
     expect(advice.nextAction).toBe('补齐转单号');
     expect(advice.riskReasons).toEqual(expect.arrayContaining(['缺少转单号', '轨迹 7 天未更新', '存在问题件']));
     expect(advice.customerMessage).toContain('我们已优先跟进');
+  });
+
+  it('keeps line-shipment problem filter scoped to real problem shipments', () => {
+    const result = summarizeLineShipmentPool([
+      sampleShipment('problem-status', 'DEDICATED_LINE', 'PROBLEM'),
+      sampleShipment('problem-ticket', 'DEDICATED_LINE', 'DELIVERING', { hasProblemTicket: true }),
+      sampleShipment('stale-only', 'DEDICATED_LINE', 'WAITING_DISPATCH', { trackingStaleDays: 3 }),
+      sampleShipment('missing-transfer', 'DEDICATED_LINE', 'OUTBOUNDED', { transferNo: undefined })
+    ], {
+      statusGroup: 'PROBLEM',
+      datePreset: 'ALL'
+    });
+
+    expect(result.statusCounts.PROBLEM).toBe(2);
+    expect(result.rows.map((row) => row.shipment.id)).toEqual(expect.arrayContaining(['problem-status', 'problem-ticket']));
+    expect(result.metrics.riskCount).toBe(4);
+  });
+
+  it('separates customer-service data confirm and transfer-number pools in line shipments', () => {
+    const shipments = [
+      sampleShipment('data-confirm', 'DEDICATED_LINE', 'OUTBOUNDED'),
+      sampleShipment('transfer-no-outbounded', 'DEDICATED_LINE', 'OUTBOUNDED'),
+      sampleShipment('transfer-no-waiting', 'DEDICATED_LINE', 'WAITING_DEPARTURE', { transferNo: 'TRK-001' }),
+      sampleShipment('other-status', 'DEDICATED_LINE', 'WAITING_SORT')
+    ];
+
+    const options = { businessDataApprovedShipmentIds: ['transfer-no-outbounded', 'transfer-no-waiting'] };
+    const dataConfirm = summarizeLineShipmentPool(shipments, { statusGroup: 'DATA_CONFIRM', datePreset: 'ALL' }, options);
+    const transferNo = summarizeLineShipmentPool(shipments, { statusGroup: 'TRANSFER_NO', datePreset: 'ALL' }, options);
+
+    expect(dataConfirm.statusCounts.DATA_CONFIRM).toBe(1);
+    expect(dataConfirm.rows.map((row) => row.shipment.id)).toEqual(['data-confirm']);
+    expect(transferNo.statusCounts.TRANSFER_NO).toBe(2);
+    expect(transferNo.rows.map((row) => row.shipment.id)).toEqual(expect.arrayContaining(['transfer-no-outbounded', 'transfer-no-waiting']));
+  });
+
+  it('keeps line-shipment after-sale filter scoped to signed problem tickets', () => {
+    const shipments = [
+      sampleShipment('after-sale', 'DEDICATED_LINE', 'SIGNED', { hasProblemTicket: true }),
+      sampleShipment('problem-not-after-sale', 'DEDICATED_LINE', 'DELIVERING', { hasProblemTicket: true }),
+      sampleShipment('signed-no-problem', 'DEDICATED_LINE', 'SIGNED')
+    ];
+
+    const result = summarizeLineShipmentPool(shipments, { statusGroup: 'AFTER_SALE', datePreset: 'ALL' }, {
+      afterSaleShipmentIds: ['after-sale']
+    });
+
+    expect(result.statusCounts.AFTER_SALE).toBe(1);
+    expect(result.rows.map((row) => row.shipment.id)).toEqual(['after-sale']);
   });
 
   it('calculates transit time from dispatch to signature and in-transit duration', () => {

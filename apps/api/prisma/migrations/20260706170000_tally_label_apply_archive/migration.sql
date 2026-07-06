@@ -1,0 +1,13 @@
+ALTER TABLE "WarehousePackage" ADD COLUMN "archivedByPackageId" TEXT;
+ALTER TABLE "WarehousePackage" ADD COLUMN "archivedByPackageNo" TEXT;
+ALTER TABLE "WarehousePackage" ADD COLUMN "archivedReason" TEXT;
+ALTER TABLE "WarehousePackage" ADD COLUMN "archivedAt" TIMESTAMP(3);
+ALTER TABLE "WarehousePackage" ADD COLUMN "tallyTaskId" TEXT;
+ALTER TABLE "WarehousePackage" ADD COLUMN "tallyTaskNo" TEXT;
+ALTER TABLE "WarehouseTallyTask" ADD COLUMN "appliedPackageId" TEXT;
+ALTER TABLE "WarehouseTallyTask" ADD COLUMN "appliedPackageNo" TEXT;
+ALTER TABLE "WarehouseTallyTask" ADD COLUMN "labelAppliedAt" TIMESTAMP(3);
+ALTER TABLE "WarehouseTallyTask" ADD COLUMN "labelAppliedBy" TEXT;
+CREATE INDEX "WarehousePackage_archivedByPackageId_idx" ON "WarehousePackage"("archivedByPackageId");
+CREATE INDEX "WarehousePackage_tallyTaskId_idx" ON "WarehousePackage"("tallyTaskId");
+CREATE INDEX "WarehouseTallyTask_appliedPackageId_idx" ON "WarehouseTallyTask"("appliedPackageId");

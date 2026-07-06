@@ -5,8 +5,9 @@ import { setupE2eApp } from './test-support/e2e-harness.js';
 describe('Siyuan API pricing', () => {
   const app = setupE2eApp();
 
-  it('keeps markup rules admin-only and strips internal price fields for operator lookup', async () => {
+  it('allows admin and market to maintain pricing while stripping internal price fields for operator lookup', async () => {
     const adminToken = await app.loginAs('admin');
+    const marketToken = await app.loginAs('market');
     const operatorToken = await app.loginAs('operator');
 
     await request(app.getHttpServer())
@@ -14,33 +15,38 @@ describe('Siyuan API pricing', () => {
       .set('Authorization', app.auth(operatorToken))
       .expect(403);
 
+    await request(app.getHttpServer())
+      .get('/api/pricing/markup-rules')
+      .set('Authorization', app.auth(marketToken))
+      .expect(200);
+
     const channelRule = await request(app.getHttpServer())
       .post('/api/pricing/markup-rules')
       .set('Authorization', app.auth(adminToken))
-      .send({ agentName: 'a代理', channelName: '海运洛杉矶专线', markupPerKg: 3, enabled: true })
+      .send({ agentName: '权限测试代理', channelName: '权限测试海运专线', markupPerKg: 3, enabled: true })
       .expect(201);
-    expect(channelRule.body.channelName).toBe('海运洛杉矶专线');
+    expect(channelRule.body.channelName).toBe('权限测试海运专线');
 
     const lineRule = await request(app.getHttpServer())
       .post('/api/pricing/markup-rules')
-      .set('Authorization', app.auth(adminToken))
-      .send({ agentName: 'a代理', channelName: 'DHL HK', realChannelName: 'DHL代理', markupPerKg: 2, enabled: true })
+      .set('Authorization', app.auth(marketToken))
+      .send({ agentName: '权限测试代理', channelName: 'DHL HK 权限', realChannelName: 'DHL权限代理', markupPerKg: 2, enabled: true })
       .expect(201);
-    expect(lineRule.body.realChannelName).toBe('DHL代理');
+    expect(lineRule.body.realChannelName).toBe('DHL权限代理');
 
     await request(app.getHttpServer())
       .post('/api/pricing/books/import')
-      .set('Authorization', app.auth(adminToken))
+      .set('Authorization', app.auth(marketToken))
       .send({
         fileName: 'DHL线路测试价格表.xls',
         rows: [
           {
-            agentName: 'a代理',
+            agentName: '权限测试代理',
             carrierName: 'DHL',
             sourceSheetName: 'DHL测试小表',
-            channelName: 'DHL HK',
+            channelName: 'DHL HK 权限',
             businessRouteName: 'HK-DHL',
-            realChannelName: 'DHL代理',
+            realChannelName: 'DHL权限代理',
             destinationCountry: '美国',
             minWeightKg: 0,
             maxWeightKg: 20,
@@ -61,7 +67,10 @@ describe('Siyuan API pricing', () => {
       .expect((response) => {
         expect(JSON.stringify(response.body)).not.toContain('costPerKg');
         expect(JSON.stringify(response.body)).not.toContain('grossProfit');
-        const dhlRecommendation = response.body.recommendations.find((item: any) => item.realChannelName === 'DHL代理');
+        expect(JSON.stringify(response.body)).not.toContain('权限测试代理');
+        expect(JSON.stringify(response.body)).not.toContain('DHL HK 权限');
+        expect(JSON.stringify(response.body)).not.toContain('DHL权限代理');
+        const dhlRecommendation = response.body.recommendations.find((item: any) => item.realChannelName === 'DHL');
         expect(dhlRecommendation.totalSales).toBe(220);
       });
 
@@ -310,6 +319,137 @@ describe('Siyuan API pricing', () => {
       });
   });
 
+  it('feeds price book imports into legacy quote modules with module counts', async () => {
+    const adminToken = await app.loginAs('admin');
+    await request(app.getHttpServer())
+      .post('/api/pricing/markup-rules')
+      .set('Authorization', app.auth(adminToken))
+      .send({ agentName: '亮崽统一代理', markupPerKg: 0.5, enabled: true })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        fileName: '亮崽统一入口价格表.xlsx',
+        rows: [
+          {
+            agentName: '亮崽统一代理',
+            sourceSheetName: '欧洲空海运铁路快递',
+            channelName: '法国快递专线',
+            realChannelName: '法国快递专线',
+            destinationCountry: '法国',
+            minWeightKg: 0,
+            maxWeightKg: 99999,
+            costPerKg: 8,
+            currency: 'RMB',
+            transitLabel: '8-12天'
+          },
+          {
+            agentName: '亮崽统一代理',
+            sourceSheetName: '亚马逊仓库渠道汇总表',
+            channelName: '亚马逊LAX9海卡',
+            realChannelName: '亚马逊LAX9海卡',
+            warehouseCode: 'LAX9',
+            destinationCountry: '美国',
+            minWeightKg: 12,
+            maxWeightKg: 99999,
+            costPerKg: 10,
+            currency: 'RMB'
+          },
+          {
+            agentName: '亮崽统一代理',
+            sourceSheetName: '广州星禾南非海运价格表',
+            channelName: '纺织品 服饰',
+            realChannelName: '南非海运',
+            destinationCountry: '南非',
+            minWeightKg: 0,
+            maxWeightKg: 99999,
+            costPerKg: 6,
+            currency: 'RMB',
+            productSurchargeRemark: '风隐费 ¥1000，文件费 ¥350'
+          }
+        ]
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.book.legacyModuleCounts).toMatchObject({ europeExpress: 1, amazon: 1, southAfrica: 1 });
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/legacy/europe-express/quote')
+      .set('Authorization', app.auth(adminToken))
+      .send({ destinationCountry: '法国', channel: '快递', chargeableWeightKg: 835 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.recommendations).toEqual(expect.arrayContaining([expect.objectContaining({ channelName: '法国快递专线', salesUnitPrice: 8.5 })]));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/legacy/south-africa/quote')
+      .set('Authorization', app.auth(adminToken))
+      .send({ productName: '衣服', destinationCountry: '南非', volumeCbm: 1, chargeableWeightKg: 500 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.recommendations[0]).toEqual(expect.objectContaining({ destinationCountry: '南非', productSurchargeRemark: expect.stringContaining('文件费') }));
+      });
+  });
+
+  it('does not reuse cheapest rows as fastest when transit time is unknown', async () => {
+    const adminToken = await app.loginAs('admin');
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/markup-rules')
+      .set('Authorization', app.auth(adminToken))
+      .send({ agentName: '无时效代理', markupPerKg: 0.5, enabled: true })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        fileName: '无时效价格表.xlsx',
+        rows: [
+          {
+            agentName: '无时效代理',
+            carrierName: 'UPS',
+            channelName: '无时效便宜渠道',
+            realChannelName: '无时效便宜渠道',
+            destinationCountry: '无时效测试国',
+            minWeightKg: 0,
+            maxWeightKg: 99999,
+            costPerKg: 7,
+            currency: 'RMB'
+          },
+          {
+            agentName: '无时效代理',
+            carrierName: 'UPS',
+            channelName: '无时效较贵渠道',
+            realChannelName: '无时效较贵渠道',
+            destinationCountry: '无时效测试国',
+            minWeightKg: 0,
+            maxWeightKg: 99999,
+            costPerKg: 9,
+            currency: 'RMB'
+          }
+        ]
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/pricing/lookup')
+      .set('Authorization', app.auth(adminToken))
+      .send({ destinationCountry: '无时效测试国', chargeableWeightKg: 100 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.cheapestRecommendations.map((item: any) => item.channelName)).toEqual([
+          '无时效便宜渠道',
+          '无时效较贵渠道'
+        ]);
+        expect(response.body.fastestRecommendations).toEqual([]);
+      });
+  });
+
   it('calculates price lookup on the backend and masks internal cost fields for operators', async () => {
     const adminToken = await app.loginAs('admin');
 
@@ -388,7 +528,7 @@ describe('Siyuan API pricing', () => {
       .send({ destinationCountry: '美国', amazonCode: 'AMZ-US-001', chargeableWeightKg: 835 })
       .expect(201)
       .expect((response) => {
-        expect(response.body.channelName).toBe('海运洛杉矶专线');
+        expect(response.body.channelName).toBe('DHK');
         expect(response.body.totalSales).toBe(15447.5);
         expect(response.body.totalCost).toBeUndefined();
         expect(response.body.grossProfit).toBeUndefined();
@@ -396,6 +536,8 @@ describe('Siyuan API pricing', () => {
         expect(response.body.price.costPerKg).toBeUndefined();
         expect(response.body.recommendations[0].price.costPerKg).toBeUndefined();
         expect(response.body.recommendations[0].grossProfit).toBeUndefined();
+        expect(response.body.recommendations[0].agentName).toBe('DHK');
+        expect(response.body.recommendations[0].channelName).toBe('DHK');
         expect(response.body.recommendations[0].productSurchargeRemark).toContain('带磁');
         expect(response.body.recommendations[0].specialRemark).toContain('超长件');
       });

@@ -1176,7 +1176,6 @@ export function SettingsPage({
                   <Users size={18} />
                   <span>员工账号管理</span>
                 </Flex>
-                <Text type="secondary">管理员工账号、站点、用户组与密码状态</Text>
               </Space>
             }
             extra={
@@ -1238,7 +1237,7 @@ export function SettingsPage({
                 </Popconfirm>
                 <Popconfirm
                   title="确认批量重置密码？"
-                  description="选中员工的密码会重置为“用户名@123”，后端立即生效，且下次登录必须修改密码。"
+                  description="选中员工的密码会重置为“用户名@123”，且下次登录必须修改密码。"
                   okText="确认重置"
                   cancelText="取消"
                   disabled={!selectedStaffAccountIds.length}
@@ -1252,10 +1251,6 @@ export function SettingsPage({
             }
           >
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
-              <div className="staff-account-risk-strip">
-                <AlertTriangle size={16} />
-                <span>停用保留历史记录；删除需二次确认</span>
-              </div>
               <div className="staff-account-filter-strip">
                 {renderFilterField('关键字', (
                   <Input
@@ -1503,7 +1498,7 @@ export function SettingsPage({
           <Card className="automation-card" title="AI 接口安全">
             <Space direction="vertical" size={10} className="quality-panel">
               <Tag color="blue">硅基流动</Tag>
-              <Alert type="success" showIcon message="所有 AI 调用统一走后端 /api/ai/assist" />
+              <Alert type="success" showIcon message="AI 调用已统一受控" />
               <Alert type="warning" showIcon message="SILICONFLOW_API_KEY 只读取环境变量，不写入前端代码" />
             </Space>
           </Card>

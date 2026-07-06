@@ -1115,6 +1115,46 @@ a:focus-visible,
   word-break: normal;
 }
 
+.managed-table-resizable .ant-table-thead > tr > th {
+  position: relative;
+}
+
+.managed-table-resizable-cell {
+  user-select: none;
+}
+
+.managed-table-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  z-index: 2;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.managed-table-resize-handle::after {
+  position: absolute;
+  top: 22%;
+  right: 3px;
+  width: 1px;
+  height: 56%;
+  background: transparent;
+  content: '';
+  transition: background 0.16s ease;
+}
+
+.managed-table-resizable-cell:hover .managed-table-resize-handle::after,
+.managed-table-resize-handle:hover::after {
+  background: #2563eb;
+}
+
+body.is-resizing-table-column {
+  cursor: col-resize;
+  user-select: none;
+}
+
 .settings-account-card .ant-card-head {
   align-items: center;
 }
@@ -1430,6 +1470,37 @@ a:focus-visible,
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px 12px;
   width: 100%;
+}
+
+.managed-column-settings-list {
+  display: grid;
+  gap: 8px;
+}
+
+.managed-column-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--sy-border-soft);
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.managed-column-settings-row .ant-checkbox-wrapper {
+  min-width: 0;
+  font-weight: 700;
+}
+
+.managed-column-settings-row .ant-checkbox + span {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
 }
 
 .workspace-table .ant-table-cell,
@@ -2194,6 +2265,23 @@ a:focus-visible,
   min-height: 34px;
 }
 
+.compat-details {
+  padding: 10px 12px 0;
+  border: 1px solid var(--sy-border);
+  border-radius: 6px;
+  background: #fbfcfe;
+}
+
+.compat-details > summary {
+  cursor: pointer;
+  color: var(--sy-muted);
+  font-weight: 600;
+}
+
+.compat-details[open] > summary {
+  margin-bottom: 12px;
+}
+
 .module-card {
   min-height: 126px;
   padding: 14px;
@@ -2297,6 +2385,14 @@ a:focus-visible,
   display: none;
 }
 
+.visually-hidden-file-input {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .warehouse-label-preview-grid {
   display: flex;
   width: 100%;
@@ -2314,6 +2410,100 @@ a:focus-visible,
 
 .warehouse-label-actions {
   min-width: 132px;
+}
+
+.warehouse-agent-handover-preview {
+  width: 100%;
+  min-width: 960px;
+  overflow: auto;
+  color: #000;
+  border: 2px solid #111;
+  background: #fff;
+}
+
+.warehouse-agent-handover-company {
+  padding: 14px 12px;
+  text-align: center;
+  font-family: "Microsoft YaHei", "SimHei", sans-serif;
+  font-size: 36px;
+  font-weight: 900;
+  line-height: 1.15;
+  border-bottom: 2px solid #111;
+}
+
+.warehouse-agent-handover-meta {
+  display: grid;
+  grid-template-columns: 160px minmax(220px, 1fr) 190px minmax(260px, 1fr);
+  min-height: 116px;
+  border-bottom: 2px solid #111;
+}
+
+.warehouse-agent-handover-label,
+.warehouse-agent-handover-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 2px solid #111;
+  word-break: break-word;
+}
+
+.warehouse-agent-handover-label {
+  font-size: 32px;
+  font-weight: 900;
+}
+
+.warehouse-agent-handover-value {
+  padding: 8px 12px;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.warehouse-agent-handover-value:last-child {
+  border-right: 0;
+}
+
+.warehouse-agent-handover-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+}
+
+.warehouse-agent-handover-table th,
+.warehouse-agent-handover-table td {
+  min-height: 50px;
+  padding: 9px 8px;
+  text-align: center;
+  vertical-align: middle;
+  border-right: 2px solid #111;
+  border-bottom: 2px solid #111;
+  word-break: break-word;
+}
+
+.warehouse-agent-handover-table th {
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.warehouse-agent-handover-table td {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.warehouse-agent-handover-table th:last-child,
+.warehouse-agent-handover-table td:last-child {
+  border-right: 0;
+}
+
+.warehouse-agent-handover-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.warehouse-agent-handover-receiver {
+  height: 56px;
+  padding-left: 48%;
+  text-align: left !important;
+  font-size: 24px !important;
+  font-weight: 900 !important;
 }
 
 .warehouse-inbound-label {
@@ -3526,8 +3716,8 @@ a:focus-visible,
 
 .pricing-calculator-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 400px);
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   align-items: stretch;
 }
 
@@ -3553,8 +3743,25 @@ a:focus-visible,
 
 .pricing-form-grid {
   display: grid;
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
   gap: 10px 12px;
   align-items: start;
+}
+
+.pricing-form-grid-amazon {
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
+}
+
+.pricing-form-grid-inquiry {
+  grid-template-columns: repeat(3, minmax(190px, 1fr));
+}
+
+.pricing-form-grid-express {
+  grid-template-columns: repeat(4, minmax(180px, 1fr));
+}
+
+.pricing-form-grid-south-africa {
+  grid-template-columns: repeat(4, minmax(170px, 1fr));
 }
 
 .pricing-form-grid-basic {
@@ -3562,7 +3769,15 @@ a:focus-visible,
 }
 
 .pricing-form-grid-measure {
-  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+}
+
+.pricing-measure-input {
+  min-width: 0;
+}
+
+.pricing-measure-input .ant-input-number-input {
+  padding-right: 8px;
 }
 
 .pricing-form-grid-size {
@@ -3632,6 +3847,58 @@ a:focus-visible,
 
 .pricing-results-shell {
   margin-top: 14px;
+}
+
+.pricing-legacy-module-card {
+  margin-bottom: 14px;
+}
+
+.pricing-legacy-module-card .ant-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pricing-legacy-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.pricing-legacy-result-card {
+  margin-top: 14px;
+}
+
+.pricing-legacy-quote-card {
+  display: grid;
+  width: 100%;
+  min-height: 150px;
+  gap: 6px;
+  padding: 12px;
+  text-align: left;
+  border: 1px solid #dbe5f1;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.pricing-legacy-quote-card:hover {
+  border-color: #2f63d9;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.12);
+}
+
+.pricing-legacy-rank {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: #2557a7;
+  background: #eef4ff;
+  font-weight: 800;
 }
 
 .pricing-workbench {
@@ -3735,12 +4002,19 @@ a:focus-visible,
 }
 
 @media (max-width: 1500px) {
-  .pricing-calculator-grid {
-    grid-template-columns: minmax(0, 1fr) minmax(330px, 360px);
-  }
-
   .pricing-form-grid-basic {
     grid-template-columns: repeat(3, minmax(120px, 1fr));
+  }
+
+  .pricing-form-grid,
+  .pricing-form-grid-amazon,
+  .pricing-form-grid-express,
+  .pricing-form-grid-south-africa {
+    grid-template-columns: repeat(3, minmax(160px, 1fr));
+  }
+
+  .pricing-form-grid-inquiry {
+    grid-template-columns: repeat(3, minmax(170px, 1fr));
   }
 
   .pricing-form-grid-size {
@@ -3782,7 +4056,12 @@ a:focus-visible,
 
   .pricing-form-grid-basic,
   .pricing-form-grid-measure,
-  .pricing-form-grid-size {
+  .pricing-form-grid-size,
+  .pricing-form-grid,
+  .pricing-form-grid-amazon,
+  .pricing-form-grid-inquiry,
+  .pricing-form-grid-express,
+  .pricing-form-grid-south-africa {
     grid-template-columns: repeat(2, minmax(140px, 1fr));
   }
 

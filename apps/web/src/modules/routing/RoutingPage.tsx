@@ -14,6 +14,7 @@ import {
   type ShipmentStatus
 } from '@siyuan/shared';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
+import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
 import { AppActionGroup, AppPageHeader, CompactMetricCard, ManagedTable, MetricCard, RoutingStatusTag, StatusTag, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 
 const { Text } = Typography;
@@ -101,6 +102,7 @@ export function RoutingPage({
   masterData,
   businessCostAudits,
   onOpenAssignment,
+  onApproveRouting,
   onCancelAssignment,
   onConfirmAssignment,
   onRerouteShipment,
@@ -122,6 +124,7 @@ export function RoutingPage({
   masterData: MasterDataSnapshot;
   businessCostAudits?: BusinessCostAuditSummary[];
   onOpenAssignment: (shipment: Shipment) => void;
+  onApproveRouting: (shipment: Shipment) => Promise<void>;
   onCancelAssignment: () => void;
   onConfirmAssignment: () => Promise<boolean>;
   onRerouteShipment: (shipment: Shipment, reason: string) => Promise<void>;
@@ -318,8 +321,13 @@ export function RoutingPage({
     [marketColumns]
   );
   const pendingColumns: ColumnsType<Shipment> = useMemo(
-    () => marketColumns.filter((column) => !['计费重', '单价', '其他费用', '总成本'].includes(String(column.title))),
-    [marketColumns]
+    () => createPendingRoutingColumns({
+      businessCostAudits,
+      mode: 'market',
+      onApprove: (shipment) => void onApproveRouting(shipment),
+      onModify: onOpenAssignment
+    }),
+    [businessCostAudits, onApproveRouting, onOpenAssignment]
   );
   const routedColumns: ColumnsType<Shipment> = useMemo(
     () => {
@@ -430,7 +438,7 @@ export function RoutingPage({
                   columns={pendingColumns}
                   dataSource={pendingShipments}
                   pagination={tenRowTablePagination}
-                  minimumScrollX={1480}
+                  minimumScrollX={2100}
                   columnSettings={{ storageKey: 'sunny.routing.pending.columns', title: '待排货列设置' }}
                 />
               </Card>

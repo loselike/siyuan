@@ -177,7 +177,7 @@ describe('Settings and admin flows', () => {
     expect(screen.getByText('停用账号')).toBeInTheDocument();
     expect(screen.getByText('需改密')).toBeInTheDocument();
     expect(screen.getByText('资料未完善')).toBeInTheDocument();
-    expect(screen.getByText('停用保留历史记录；删除需二次确认')).toBeInTheDocument();
+    expect(screen.queryByText('停用保留历史记录；删除需二次确认')).not.toBeInTheDocument();
     expect(screen.getAllByText('最近登录').length).toBeGreaterThan(0);
     expect(screen.getAllByText('姓名 / 业务员').length).toBeGreaterThan(0);
 
@@ -347,14 +347,13 @@ describe('Settings and admin flows', () => {
     await user.click(within(customerWorkspace).getByRole('button', { name: '增加客户' }));
     const dialog = await screen.findByRole('dialog', { name: '新建客户' });
 
-    const salespersonInput = within(dialog).getByLabelText('业务员');
+    const salespersonInput = within(dialog).getByLabelText('业务员归属');
     expect(salespersonInput).toHaveValue('operator');
     expect(salespersonInput).toBeDisabled();
     expect(within(dialog).queryByPlaceholderText('例如 mira')).not.toBeInTheDocument();
 
-    await user.type(within(dialog).getByLabelText('客户编码'), '8899');
-    await user.type(within(dialog).getByLabelText('客户简称'), 'Operator Customer');
-    await user.type(within(dialog).getByLabelText('客户全称'), 'Operator Customer Inc.');
+    await user.type(within(dialog).getByLabelText('客户编号'), '8899');
+    await user.type(within(dialog).getByLabelText('客户名称'), 'Operator Customer');
     await user.click(screen.getByRole('button', { name: '创建客户' }));
 
     expect(await screen.findByText('8899')).toBeInTheDocument();
@@ -381,12 +380,11 @@ describe('Settings and admin flows', () => {
     expect(screen.getAllByText('客户资料').length).toBeGreaterThan(0);
     expect(screen.getByText('启用客户')).toBeInTheDocument();
     expect(screen.getByText('缺结算信息')).toBeInTheDocument();
-    expect(screen.getAllByText('客户编码').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('客户信息').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('结算信息').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('客户编号').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('客户名称').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('结算方式').length).toBeGreaterThan(0);
     expect(screen.getAllByText('收货人').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('客户类型').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('业务员').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('业务员归属').length).toBeGreaterThan(0);
     expect(screen.getByText('客户详情')).toBeInTheDocument();
     expect(screen.getAllByText('代理资料').length).toBeGreaterThan(0);
     expect(screen.queryByText('客户、联系人与账号')).not.toBeInTheDocument();
@@ -395,18 +393,14 @@ describe('Settings and admin flows', () => {
     expect(screen.queryByText('费用、燃油与汇率')).not.toBeInTheDocument();
     expect(screen.getAllByText('9409').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Daloday').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Daloday Inc.').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('直客').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('何俊妮').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: /代理资料/ }));
-    expect(screen.getAllByText('代理编码').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('columnheader', { name: '代理编码' })).not.toBeInTheDocument();
     expect(screen.getAllByText('代理简称').length).toBeGreaterThan(0);
     expect(screen.getAllByText('代理详细公司名').length).toBeGreaterThan(0);
     expect(screen.getAllByText('仓库地址一').length).toBeGreaterThan(0);
     expect(screen.getAllByText('仓库联系人').length).toBeGreaterThan(0);
     expect(screen.getAllByText('发票模板').length).toBeGreaterThan(0);
-    expect(screen.getByText('YH')).toBeInTheDocument();
     expect(screen.getByText('宇环')).toBeInTheDocument();
     expect(screen.getByText('深圳宇环')).toBeInTheDocument();
     expect(screen.getByText('深圳市宝安区宇环仓一')).toBeInTheDocument();
@@ -416,6 +410,7 @@ describe('Settings and admin flows', () => {
     const createBankAgentDialog = await screen.findByRole('dialog', { name: '新建代理' });
     expect(within(createBankAgentDialog).getByText('收款方银行信息')).toBeInTheDocument();
     expect(within(createBankAgentDialog).getByRole('button', { name: '上传模板' })).toBeInTheDocument();
+    await user.click(within(createBankAgentDialog).getByText('兼容信息'));
     await user.type(within(createBankAgentDialog).getByLabelText('代理编码'), 'JL');
     await user.type(within(createBankAgentDialog).getByLabelText('代理简称'), '鲸链');
     await user.type(within(createBankAgentDialog).getByLabelText('代理详细公司名'), '深圳市鲸链国际物流有限公司');
@@ -564,28 +559,23 @@ describe('Settings and admin flows', () => {
     await user.click(screen.getByRole('button', { name: /客户资料/ }));
     await user.click(screen.getByRole('button', { name: '增加客户' }));
     let createCustomerDialog = await screen.findByRole('dialog', { name: '新建客户' });
-    await user.type(within(createCustomerDialog).getByLabelText('客户编码'), '1399');
-    await user.type(within(createCustomerDialog).getByLabelText('客户简称'), '小慧子');
+    await user.type(within(createCustomerDialog).getByLabelText('客户编号'), '1399');
+    await user.type(within(createCustomerDialog).getByLabelText('客户名称'), '小慧子');
     await user.click(screen.getByRole('button', { name: /取\s*消/ }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '新建客户' })).not.toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: '增加客户' }));
     createCustomerDialog = await screen.findByRole('dialog', { name: '新建客户' });
-    expect(within(createCustomerDialog).getByLabelText('客户编码')).toHaveValue('');
-    expect(within(createCustomerDialog).getByLabelText('客户简称')).toHaveValue('');
-    expect(within(createCustomerDialog).getByLabelText('客户类型')).toHaveValue('直客');
-    expect(within(createCustomerDialog).getByLabelText('结算信息')).toHaveValue('RMB月结');
-    expect(within(createCustomerDialog).getByLabelText('业务员')).toHaveValue('admin');
-    expect(within(createCustomerDialog).getByLabelText('业务员')).toBeDisabled();
-    await user.type(within(createCustomerDialog).getByLabelText('客户编码'), '8888');
-    await user.type(within(createCustomerDialog).getByLabelText('客户简称'), 'Mira Logistics');
-    await user.type(within(createCustomerDialog).getByLabelText('客户全称'), 'Mira Logistics Co., Ltd.');
-    await user.clear(within(createCustomerDialog).getByLabelText('客户类型'));
-    await user.type(within(createCustomerDialog).getByLabelText('客户类型'), '直客');
+    expect(within(createCustomerDialog).getByLabelText('客户编号')).toHaveValue('');
+    expect(within(createCustomerDialog).getByLabelText('客户名称')).toHaveValue('');
+    expect(within(createCustomerDialog).getByLabelText('结算方式')).toHaveValue('RMB月结');
+    expect(within(createCustomerDialog).getByLabelText('业务员归属')).toHaveValue('admin');
+    expect(within(createCustomerDialog).getByLabelText('业务员归属')).toBeEnabled();
+    await user.type(within(createCustomerDialog).getByLabelText('客户编号'), '8888');
+    await user.type(within(createCustomerDialog).getByLabelText('客户名称'), 'Mira Logistics');
     await user.type(within(createCustomerDialog).getByLabelText('客户来源'), '展会');
     await user.click(screen.getByRole('button', { name: '创建客户' }));
     expect((await screen.findAllByText('8888')).length).toBeGreaterThan(0);
     expect(await screen.findByText('Mira Logistics')).toBeInTheDocument();
-    expect(await screen.findByText('Mira Logistics Co., Ltd.')).toBeInTheDocument();
     expect(await screen.findByText('展会')).toBeInTheDocument();
     expect(screen.getAllByText('RMB月结').length).toBeGreaterThan(0);
     expect((await screen.findAllByText('admin')).length).toBeGreaterThan(0);
@@ -593,7 +583,7 @@ describe('Settings and admin flows', () => {
     expect(screen.getByRole('button', { name: '编辑客户' })).toBeEnabled();
     expect(screen.getByRole('button', { name: '删除客户' })).toBeEnabled();
 
-    await user.type(screen.getByLabelText('客户编码筛选'), '8888');
+    await user.type(screen.getByLabelText('客户编号筛选'), '8888');
     expect(screen.getAllByText('9409').length).toBeGreaterThan(0);
     await user.click(screen.getAllByRole('button', { name: /查\s*询/ })[0]);
     expect(screen.getAllByText('8888').length).toBeGreaterThan(0);
@@ -604,10 +594,11 @@ describe('Settings and admin flows', () => {
     await user.click(screen.getAllByText('8888')[0]);
     await user.click(screen.getByRole('button', { name: '新增收货人' }));
     const createContactDialog = await screen.findByRole('dialog', { name: '8888-Mira Logistics 新增收货人' });
-    await user.type(within(createContactDialog).getByLabelText('收货人'), 'Mira Receiver');
-    await user.type(within(createContactDialog).getByLabelText('公司'), 'Mira Receiver LLC');
-    await user.type(within(createContactDialog).getByLabelText('电话'), '13900008888');
-    await user.type(within(createContactDialog).getByLabelText('地址'), '8888 Receiver Street');
+    await user.type(within(createContactDialog).getByLabelText('收货人名称'), 'Mira Receiver');
+    await user.type(within(createContactDialog).getByLabelText('收货人公司名称'), 'Mira Receiver LLC');
+    await user.type(within(createContactDialog).getByLabelText('收货人电话'), '13900008888');
+    await user.type(within(createContactDialog).getByLabelText('FBA仓库代码'), 'ONT8');
+    await user.type(within(createContactDialog).getByLabelText('收货人地址'), '8888 Receiver Street');
     await user.type(within(createContactDialog).getByLabelText('国家'), 'US');
     await user.click(screen.getByRole('button', { name: '保存收货人' }));
     expect(await screen.findByText('Mira Receiver')).toBeInTheDocument();
@@ -617,8 +608,8 @@ describe('Settings and admin flows', () => {
     expect(contactRow).not.toBeNull();
     await user.click(within(contactRow as HTMLElement).getByRole('button', { name: '修改' }));
     const editContactDialog = await screen.findByRole('dialog', { name: '编辑收货人' });
-    await user.clear(within(editContactDialog).getByLabelText('电话'));
-    await user.type(within(editContactDialog).getByLabelText('电话'), '13900009999');
+    await user.clear(within(editContactDialog).getByLabelText('收货人电话'));
+    await user.type(within(editContactDialog).getByLabelText('收货人电话'), '13900009999');
     await user.click(screen.getByRole('button', { name: '保存收货人' }));
     expect(await screen.findByText('13900009999')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog', { name: '编辑收货人' })).not.toBeInTheDocument());
@@ -631,8 +622,8 @@ describe('Settings and admin flows', () => {
     await waitFor(() => expect(screen.queryByText('Mira Receiver')).not.toBeInTheDocument());
     await user.click(screen.getByRole('button', { name: '编辑客户' }));
     const editCustomerDialog = await screen.findByRole('dialog', { name: '编辑客户' });
-    await user.clear(within(editCustomerDialog).getByLabelText('客户简称'));
-    await user.type(within(editCustomerDialog).getByLabelText('客户简称'), 'Mira CN');
+    await user.clear(within(editCustomerDialog).getByLabelText('客户名称'));
+    await user.type(within(editCustomerDialog).getByLabelText('客户名称'), 'Mira CN');
     await user.click(screen.getByRole('button', { name: '保存客户' }));
     expect((await screen.findAllByText('Mira CN')).length).toBeGreaterThan(0);
     await user.click(screen.getAllByText('8888')[0]);
@@ -657,6 +648,7 @@ describe('Settings and admin flows', () => {
     expect(screen.queryByText('宇环 银行账号')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '增加代理' }));
     const createAgentDialog = await screen.findByRole('dialog', { name: '新建代理' });
+    await user.click(within(createAgentDialog).getByText('兼容信息'));
     await user.type(within(createAgentDialog).getByLabelText('代理编码'), 'SZJST');
     await user.type(within(createAgentDialog).getByLabelText('代理简称'), '加时特');
     await user.type(within(createAgentDialog).getByLabelText('代理详细公司名'), '深圳加时特');
@@ -667,7 +659,6 @@ describe('Settings and admin flows', () => {
     await user.type(within(createAgentDialog).getByLabelText('发票模板名称'), '加时特发票模板.xlsx');
     await user.type(within(createAgentDialog).getByLabelText('上传点'), '/templates/jst-invoice.xlsx');
     await user.click(screen.getByRole('button', { name: '创建代理' }));
-    expect(await screen.findByText('SZJST')).toBeInTheDocument();
     expect(await screen.findByText('加时特')).toBeInTheDocument();
     expect(await screen.findByText('深圳加时特')).toBeInTheDocument();
     expect(await screen.findByText('深圳市龙岗区一号仓')).toBeInTheDocument();
@@ -708,22 +699,22 @@ describe('Settings and admin flows', () => {
     expect(await screen.findByText('加时特 UPS 已停用')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /代理资料/ }));
-    await user.type(screen.getByLabelText('代理编码筛选'), 'SZJST');
-    expect(screen.getByText('YH')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('代理详细公司名筛选'), '深圳加时特');
+    expect(screen.getByText('深圳宇环')).toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: /查\s*询/ }).at(-1)!);
-    expect(screen.getByText('SZJST')).toBeInTheDocument();
-    expect(screen.queryByText('YH')).not.toBeInTheDocument();
+    expect(screen.getByText('深圳加时特')).toBeInTheDocument();
+    expect(screen.queryByText('深圳宇环')).not.toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: /重\s*置/ }).at(-1)!);
-    expect(await screen.findByText('YH')).toBeInTheDocument();
+    expect(await screen.findByText('深圳宇环')).toBeInTheDocument();
 
-    await user.click(screen.getByText('SZJST'));
+    await user.click(screen.getByText('深圳加时特'));
     await user.click(screen.getByRole('button', { name: '修改代理' }));
     const editAgentDialog = await screen.findByRole('dialog', { name: '编辑代理' });
     await user.clear(within(editAgentDialog).getByLabelText('代理简称'));
     await user.type(within(editAgentDialog).getByLabelText('代理简称'), '加时特华南');
     await user.click(screen.getByRole('button', { name: '保存代理' }));
     expect(await screen.findByText('加时特华南')).toBeInTheDocument();
-    await user.click(screen.getByText('SZJST'));
+    await user.click(screen.getByText('加时特华南'));
     await user.click(screen.getByRole('button', { name: '删除代理' }));
     expect(await screen.findByText('确认停用该代理？')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '确认停用' }));

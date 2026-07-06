@@ -101,6 +101,7 @@ model CustomerContact {
   company    String?
   phone      String?
   email      String?
+  fbaWarehouseCode String?
   address    String?
   country    String?
   state      String?
@@ -436,6 +437,48 @@ model PriceBookRow {
   @@index([warehouseCode, destinationCountry])
 }
 
+model LegacyPricingSource {
+  id         String             @id @default(cuid())
+  module     String
+  fileName   String
+  rowCount   Int                @default(0)
+  status     String             @default("ok")
+  message    String?
+  importedAt DateTime           @default(now())
+  deletedAt  DateTime?
+  rows       LegacyPricingRow[]
+
+  @@index([module, deletedAt, importedAt])
+}
+
+model LegacyPricingRow {
+  id                 String              @id @default(cuid())
+  sourceId           String
+  module             String
+  agentName          String
+  origin             String?
+  channelName        String
+  serviceName        String?
+  warehouseCode      String?
+  destinationCountry String?
+  postalRule         String?
+  minWeightKg        Decimal?
+  maxWeightKg        Decimal?
+  costPerKg          Decimal?
+  cbmPrice           Decimal?
+  tierLabel          String?
+  transitLabel       String?
+  productSurchargeRemark String?
+  specialRemark      String?
+  remark             String?
+  raw                Json
+  source             LegacyPricingSource @relation(fields: [sourceId], references: [id])
+
+  @@index([module, agentName])
+  @@index([module, warehouseCode])
+  @@index([module, destinationCountry])
+}
+
 model AgentMarkupRule {
   id                 String   @id @default(cuid())
   agentName          String
@@ -467,6 +510,12 @@ model WarehousePackage {
   labelNo                   String?
   sourcePackageId           String?
   sourcePackageNo           String?
+  archivedByPackageId       String?
+  archivedByPackageNo       String?
+  archivedReason            String?
+  archivedAt                DateTime?
+  tallyTaskId               String?
+  tallyTaskNo               String?
   systemOrderNo             String?
   shipmentId                String?
   receivingChannel          String
@@ -498,6 +547,8 @@ model WarehousePackage {
   @@index([shipmentId, createdAt])
   @@index([status, scanTime])
   @@index([combinedOrderNo])
+  @@index([archivedByPackageId])
+  @@index([tallyTaskId])
 }
 
 model WarehouseConsolidation {
@@ -563,11 +614,16 @@ model WarehouseTallyTask {
   labelPrintedBy                String?
   labelDownloadedAt             DateTime?
   labelDownloadedBy             String?
+  appliedPackageId              String?
+  appliedPackageNo              String?
+  labelAppliedAt                DateTime?
+  labelAppliedBy                String?
 
   @@index([status, createdAt])
   @@index([customerCode, createdAt])
   @@index([sourceCombinedOrderNo])
   @@index([labelNo])
+  @@index([appliedPackageId])
 }
 
 model Surcharge {

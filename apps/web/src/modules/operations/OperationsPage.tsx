@@ -1,7 +1,7 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, Boxes, ClipboardList, FileInput, PackagePlus, RotateCcw, Search, Send, Settings, ShieldAlert, Sparkles, Truck, Wallet, Warehouse } from 'lucide-react';
-import { Alert, Badge, Button, Card, Col, Flex, Input, Modal, Progress, Row, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { Alert, Badge, Button, Card, Checkbox, Col, Flex, Input, Modal, Progress, Row, Select, Space, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { businessTypeLabels, shipmentStatusLabels, type BusinessType, type LineShipmentPoolQuery, type LineShipmentPoolResponse, type LineShipmentPoolRow, type LineShipmentStatusGroup, type Shipment, type ShipmentStatus } from '@siyuan/shared';
 import type { ApiClient } from '../../apiClient';
@@ -12,10 +12,11 @@ import { formatBeijingDateTime } from '../shared/format';
 const { Title, Text } = Typography;
 
 type ShipmentColumnOrderMode = 'default' | 'customerFirst' | 'agentFirst' | 'custom';
+type LinePoolColumnKey = 'createdAt' | 'customerSales' | 'orderNo' | 'route' | 'status' | 'latestTracking' | 'volumeFee' | 'payment' | 'remark' | 'action';
 
 interface BusinessWorkspaceConfig {
   description: string;
-  metrics: Array<{ title: string; extra: ReactNode }>;
+  metrics: Array<{ title: string; extra?: ReactNode }>;
   batchActions: string[];
   assistantCopy: string;
   focusItems: Array<{ title: string; description: string }>;
@@ -50,6 +51,22 @@ interface ImportValidationSummary {
   validRows: unknown[];
   errors: Array<{ rowNumber: number; field: string; message: string }>;
 }
+
+const linePoolColumnOrderStorageKey = 'siyuan-line-pool-column-order';
+const linePoolHiddenColumnsStorageKey = 'siyuan-line-pool-hidden-columns';
+const defaultLinePoolColumnOrder: LinePoolColumnKey[] = ['createdAt', 'customerSales', 'orderNo', 'route', 'status', 'latestTracking', 'volumeFee', 'payment', 'remark', 'action'];
+const linePoolColumnLabels: Record<LinePoolColumnKey, string> = {
+  createdAt: '创建时间',
+  customerSales: '客户 / 业务员',
+  orderNo: '单号',
+  route: '路由',
+  status: '状态',
+  latestTracking: '最新轨迹',
+  volumeFee: '货量 / 费用',
+  payment: '收款',
+  remark: '备注',
+  action: '操作'
+};
 
 function LinePoolStatusButton({ active, danger, children, onClick }: { active: boolean; danger?: boolean; children: ReactNode; onClick: () => void }) {
   return (
@@ -121,6 +138,25 @@ export function OperationsPage({
   const [linePoolResponse, setLinePoolResponse] = useState<LineShipmentPoolResponse | null>(null);
   const [linePoolLoading, setLinePoolLoading] = useState(false);
   const [selectedLineShipmentIds, setSelectedLineShipmentIds] = useState<Key[]>([]);
+  const [linePoolColumnSettingsOpen, setLinePoolColumnSettingsOpen] = useState(false);
+  const [linePoolColumnOrder, setLinePoolColumnOrder] = useState<LinePoolColumnKey[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(linePoolColumnOrderStorageKey) ?? 'null');
+      if (!Array.isArray(saved)) return defaultLinePoolColumnOrder;
+      const known = saved.filter((key): key is LinePoolColumnKey => defaultLinePoolColumnOrder.includes(key as LinePoolColumnKey));
+      return [...known, ...defaultLinePoolColumnOrder.filter((key) => !known.includes(key))];
+    } catch {
+      return defaultLinePoolColumnOrder;
+    }
+  });
+  const [hiddenLinePoolColumns, setHiddenLinePoolColumns] = useState<LinePoolColumnKey[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(linePoolHiddenColumnsStorageKey) ?? 'null');
+      return Array.isArray(saved) ? saved.filter((key): key is LinePoolColumnKey => defaultLinePoolColumnOrder.includes(key as LinePoolColumnKey)) : [];
+    } catch {
+      return [];
+    }
+  });
 
   const fetchLinePool = useCallback(async (nextQuery: LineShipmentPoolQuery) => {
     setLinePoolLoading(true);
@@ -145,10 +181,18 @@ export function OperationsPage({
     [linePoolRows, selectedLineShipmentIds]
   );
 
+  useEffect(() => {
+    localStorage.setItem(linePoolColumnOrderStorageKey, JSON.stringify(linePoolColumnOrder));
+  }, [linePoolColumnOrder]);
+
+  useEffect(() => {
+    localStorage.setItem(linePoolHiddenColumnsStorageKey, JSON.stringify(hiddenLinePoolColumns));
+  }, [hiddenLinePoolColumns]);
+
   const openUnavailableAction = useCallback((action: string) => {
     Modal.info({
       title: action,
-      content: '该动作后端闭环待接入，当前仅保留入口，不会假装处理成功。'
+      content: '该动作暂未开放。'
     });
   }, []);
 
@@ -188,8 +232,9 @@ export function OperationsPage({
     void fetchLinePool(linePoolQuery);
   }, [apiClient, fetchLinePool, linePoolQuery, selectedLineRows]);
 
-  const linePoolColumns = useMemo<ColumnsType<LineShipmentPoolRow>>(() => [
-    {
+  const linePoolColumnMap = useMemo<Record<LinePoolColumnKey, ColumnsType<LineShipmentPoolRow>[number]>>(() => ({
+    createdAt: {
+      key: 'createdAt',
       title: '创建时间',
       width: 120,
       render: (_, row) => {
@@ -197,35 +242,41 @@ export function OperationsPage({
         return <div className="line-pool-cell-stack"><span>{date}</span><Text type="secondary">{time}</Text></div>;
       }
     },
-    {
+    customerSales: {
+      key: 'customerSales',
       title: '客户 / 业务员',
       width: 170,
       render: (_, row) => <div className="line-pool-cell-stack"><Text strong>{row.shipment.customerName}</Text><Text type="secondary">{row.shipment.salesperson ?? '-'}</Text></div>
     },
-    {
+    orderNo: {
+      key: 'orderNo',
       title: '单号',
       width: 190,
       render: (_, row) => <div className="line-pool-cell-stack"><Button type="link" className="line-pool-link" onClick={() => onViewShipment(row.shipment)}>{row.shipment.systemOrderNo}</Button><Text type="secondary">{row.shipment.transferNo || '待获取快递号'}</Text></div>
     },
-    {
+    route: {
+      key: 'route',
       title: '路由',
       width: 220,
       render: (_, row) => <div className="line-pool-cell-stack"><span>{row.shipment.destinationCountry}</span><span>{row.shipment.channelName || '-'}</span><Text type="secondary">{row.shipment.agentName || '-'}</Text></div>
     },
-    { title: '状态', width: 100, render: (_, row) => <Tag color={statusColor(row.shipment.status)}>{shipmentStatusLabels[row.shipment.status]}</Tag> },
-    {
+    status: { key: 'status', title: '状态', width: 100, render: (_, row) => <Tag color={statusColor(row.shipment.status)}>{shipmentStatusLabels[row.shipment.status]}</Tag> },
+    latestTracking: {
+      key: 'latestTracking',
       title: '最新轨迹',
       width: 210,
       render: (_, row) => <div className="line-pool-cell-stack"><span>{row.latestTracking || '-'}</span><Text type="secondary">{row.shipment.trackingStaleDays > 0 ? `${row.shipment.trackingStaleDays} 天未更新` : '今日更新'}</Text></div>
     },
-    {
+    volumeFee: {
+      key: 'volumeFee',
       title: '货量 / 费用',
       width: 145,
       render: (_, row) => <div className="line-pool-cell-stack"><span>{row.shipment.packageCount}件 / {row.shipment.agentWeightKg.toFixed(3)}kg</span><Text>{row.receivableAmount !== undefined ? `¥${row.receivableAmount.toFixed(2)}` : '费用隐藏'}</Text></div>
     },
-    { title: '收款', width: 105, render: (_, row) => <Tag color={row.receivableAmount ? 'red' : 'default'}>{row.receivableAmount ? '未收款' : '未知'}</Tag> },
-    { title: '备注', width: 140, render: (_, row) => row.shipment.remark || '无备注' },
-    {
+    payment: { key: 'payment', title: '收款', width: 105, render: (_, row) => <Tag color={row.receivableAmount ? 'red' : 'default'}>{row.receivableAmount ? '未收款' : '未知'}</Tag> },
+    remark: { key: 'remark', title: '备注', width: 140, render: (_, row) => row.shipment.remark || '无备注' },
+    action: {
+      key: 'action',
       title: '操作',
       width: 130,
       fixed: 'right',
@@ -236,13 +287,39 @@ export function OperationsPage({
         </Space>
       )
     }
-  ], [onProcessShipment, onViewShipment]);
+  }), [onProcessShipment, onViewShipment]);
+  const visibleLinePoolColumnKeys = linePoolColumnOrder.filter((key) => !hiddenLinePoolColumns.includes(key));
+  const linePoolColumns = (visibleLinePoolColumnKeys.length ? visibleLinePoolColumnKeys : defaultLinePoolColumnOrder.slice(0, 1)).map((key) => linePoolColumnMap[key]);
+
+  const moveLinePoolColumn = useCallback((key: LinePoolColumnKey, direction: 'up' | 'down') => {
+    setLinePoolColumnOrder((current) => {
+      const next = [...current];
+      const index = next.indexOf(key);
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (index < 0 || targetIndex < 0 || targetIndex >= next.length) return current;
+      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+      return next;
+    });
+  }, []);
+
+  const toggleLinePoolColumn = useCallback((key: LinePoolColumnKey, visible: boolean) => {
+    setHiddenLinePoolColumns((current) => {
+      if (visible) return current.filter((item) => item !== key);
+      const visibleCount = defaultLinePoolColumnOrder.length - current.length;
+      if (visibleCount <= 1 && !current.includes(key)) return current;
+      return current.includes(key) ? current : [...current, key];
+    });
+  }, []);
+
+  const resetLinePoolColumns = useCallback(() => {
+    setLinePoolColumnOrder(defaultLinePoolColumnOrder);
+    setHiddenLinePoolColumns([]);
+  }, []);
 
   return (
     <AppPage>
       <AppPageHeader
         title="AI 物流运营工作台"
-        description={businessWorkspaceConfig.description}
         actions={(
           <AppActionGroup>
             <div className="operations-completion">
@@ -273,21 +350,20 @@ export function OperationsPage({
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12} xl={6}>
-          <MetricCard icon={<Truck />} title="待处理运单" value={linePoolMetrics?.pendingCount ?? 0} extra="待审核/待排货/待出库" />
+          <MetricCard icon={<Truck />} title="待处理运单" value={linePoolMetrics?.pendingCount ?? 0} />
         </Col>
         <Col xs={24} md={12} xl={6}>
           <MetricCard
             icon={<ShieldAlert />}
             title="履约风险"
             value={linePoolMetrics?.riskCount ?? 0}
-            extra="问题件、轨迹超时、尾程异常"
           />
         </Col>
         <Col xs={24} md={12} xl={6}>
-          <MetricCard icon={<Warehouse />} title="今日待出库" value={linePoolMetrics?.todayDispatchCount ?? 0} extra="仓库今日处理" />
+          <MetricCard icon={<Warehouse />} title="今日待出库" value={linePoolMetrics?.todayDispatchCount ?? 0} />
         </Col>
         <Col xs={24} md={12} xl={6}>
-          <MetricCard icon={<Wallet />} title="预计应收" value={`¥ ${Math.round(linePoolMetrics?.estimatedReceivable ?? 0).toLocaleString()}`} extra="运费、燃油、偏远和派送费" />
+          <MetricCard icon={<Wallet />} title="预计应收" value={`¥ ${Math.round(linePoolMetrics?.estimatedReceivable ?? 0).toLocaleString()}`} />
         </Col>
       </Row>
 
@@ -308,13 +384,13 @@ export function OperationsPage({
               <Flex align="center" gap={8}>
                 <ClipboardList size={18} />
                 <span>专线运单池</span>
-                <Text type="secondary">共 {linePoolResponse?.pagination?.totalItems ?? 0} 单 · 后端分页 · 状态数量来自聚合接口</Text>
+                <Text type="secondary">共 {linePoolResponse?.pagination?.totalItems ?? 0} 单</Text>
               </Flex>
             }
             extra={(
               <Space>
                 <Text type="secondary">今日更新 {linePoolMetrics?.todayUpdatedCount ?? 0} 条</Text>
-                <Button icon={<Settings size={16} />} onClick={() => onOpenColumnSettings()}>
+                <Button icon={<Settings size={16} />} onClick={() => setLinePoolColumnSettingsOpen(true)}>
                   列设置
                 </Button>
               </Space>
@@ -329,6 +405,9 @@ export function OperationsPage({
               <LinePoolStatusButton active={linePoolQuery.statusGroup === 'WAITING_SORT'} onClick={() => handleLinePoolStatus('WAITING_SORT')}>待排货 {linePoolResponse?.statusCounts?.WAITING_SORT ?? 0}</LinePoolStatusButton>
               <LinePoolStatusButton active={linePoolQuery.statusGroup === 'WAITING_DISPATCH'} onClick={() => handleLinePoolStatus('WAITING_DISPATCH')}>待出库 {linePoolResponse?.statusCounts?.WAITING_DISPATCH ?? 0}</LinePoolStatusButton>
               <LinePoolStatusButton active={linePoolQuery.statusGroup === 'OUTBOUNDED'} onClick={() => handleLinePoolStatus('OUTBOUNDED')}>已出库 {linePoolResponse?.statusCounts?.OUTBOUNDED ?? 0}</LinePoolStatusButton>
+              <Text type="secondary">客服:</Text>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'DATA_CONFIRM'} onClick={() => handleLinePoolStatus('DATA_CONFIRM')}>数据确认 {linePoolResponse?.statusCounts?.DATA_CONFIRM ?? 0}</LinePoolStatusButton>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'TRANSFER_NO'} onClick={() => handleLinePoolStatus('TRANSFER_NO')}>转单号 {linePoolResponse?.statusCounts?.TRANSFER_NO ?? 0}</LinePoolStatusButton>
               <Text type="secondary">运输:</Text>
               <LinePoolStatusButton active={linePoolQuery.statusGroup === 'WAITING_DEPARTURE'} onClick={() => handleLinePoolStatus('WAITING_DEPARTURE')}>待离港 {linePoolResponse?.statusCounts?.WAITING_DEPARTURE ?? 0}</LinePoolStatusButton>
               <LinePoolStatusButton active={linePoolQuery.statusGroup === 'DEPARTED'} onClick={() => handleLinePoolStatus('DEPARTED')}>已离港 {linePoolResponse?.statusCounts?.DEPARTED ?? 0}</LinePoolStatusButton>
@@ -336,6 +415,7 @@ export function OperationsPage({
               <LinePoolStatusButton active={linePoolQuery.statusGroup === 'SIGNED'} onClick={() => handleLinePoolStatus('SIGNED')}>已签收 {linePoolResponse?.statusCounts?.SIGNED ?? 0}</LinePoolStatusButton>
               <Text type="secondary">异常:</Text>
               <LinePoolStatusButton active={linePoolQuery.statusGroup === 'PROBLEM'} danger onClick={() => handleLinePoolStatus('PROBLEM')}>问题件 {linePoolResponse?.statusCounts?.PROBLEM ?? 0}</LinePoolStatusButton>
+              <LinePoolStatusButton active={linePoolQuery.statusGroup === 'AFTER_SALE'} danger onClick={() => handleLinePoolStatus('AFTER_SALE')}>售后 {linePoolResponse?.statusCounts?.AFTER_SALE ?? 0}</LinePoolStatusButton>
             </div>
 
             <div className="line-pool-filter-strip">
@@ -385,7 +465,7 @@ export function OperationsPage({
               <Button disabled={!selectedLineShipmentIds.length}>更多操作</Button>
             </div>
 
-            <Table<LineShipmentPoolRow>
+            <ManagedTable<LineShipmentPoolRow>
               className="line-pool-table"
               rowKey={(row) => row.shipment.id}
               loading={linePoolLoading}
@@ -393,7 +473,7 @@ export function OperationsPage({
               dataSource={linePoolRows}
               size="small"
               rowSelection={{ selectedRowKeys: selectedLineShipmentIds, onChange: setSelectedLineShipmentIds }}
-              scroll={{ x: 1420 }}
+              minimumScrollX={1420}
               locale={{ emptyText: '暂无符合条件的运单' }}
               pagination={{
                 current: linePoolResponse?.pagination?.page ?? 1,
@@ -446,7 +526,7 @@ export function OperationsPage({
                   <Sparkles size={18} />
                   <Text strong>下一步 AI 赋能</Text>
                 </Flex>
-                <Text type="secondary">{businessWorkspaceConfig.assistantCopy}</Text>
+                {businessWorkspaceConfig.assistantCopy ? <Text type="secondary">{businessWorkspaceConfig.assistantCopy}</Text> : null}
                 <Button
                   type="primary"
                   icon={<Send size={16} />}
@@ -455,7 +535,7 @@ export function OperationsPage({
                     onAiAssist({
                       module: '运营工作台',
                       task: '生成今日处理建议',
-                      prompt: businessWorkspaceConfig.assistantCopy,
+                      prompt: businessWorkspaceConfig.assistantCopy || '请根据当前运单风险和作业重点生成今日处理建议。',
                       context: { automationPlan, focusItems: businessWorkspaceConfig.focusItems }
                     })
                   }
@@ -478,7 +558,6 @@ export function OperationsPage({
                 </Title>
               </Flex>
             }
-            extra={<Text type="secondary">一期先闭环核心业务，二期接入硬件、微信和开放 API</Text>}
           >
             <div className="surface-strip">
               {moduleSummary.surfaces.map((surface) => (
@@ -566,6 +645,54 @@ export function OperationsPage({
           </Row>
         ) : null}
       </ModuleSubWorkspace>
+      <Modal
+        title="专线运单池列设置"
+        open={linePoolColumnSettingsOpen}
+        width={620}
+        onCancel={() => setLinePoolColumnSettingsOpen(false)}
+        footer={[
+          <Button key="show-all" onClick={() => setHiddenLinePoolColumns([])}>
+            全选
+          </Button>,
+          <Button key="reset" onClick={resetLinePoolColumns}>
+            恢复默认
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setLinePoolColumnSettingsOpen(false)}>
+            完成
+          </Button>
+        ]}
+      >
+        <Space direction="vertical" size={12} className="column-settings-panel">
+          <Alert
+            type="info"
+            showIcon
+            message="这里只管理专线运单池当前表格的真实列，不再混入其他模块或其他运单表的字段。"
+          />
+          <div className="column-settings-list">
+            {linePoolColumnOrder.map((key, index) => (
+              <div className="column-settings-row" key={key}>
+                <Space>
+                  <Tag color="blue">{index + 1}</Tag>
+                  <Checkbox
+                    checked={!hiddenLinePoolColumns.includes(key)}
+                    onChange={(event) => toggleLinePoolColumn(key, event.target.checked)}
+                  >
+                    <Text strong>{linePoolColumnLabels[key]}</Text>
+                  </Checkbox>
+                </Space>
+                <Space>
+                  <Button size="small" disabled={index === 0} onClick={() => moveLinePoolColumn(key, 'up')}>
+                    上移
+                  </Button>
+                  <Button size="small" disabled={index === linePoolColumnOrder.length - 1} onClick={() => moveLinePoolColumn(key, 'down')}>
+                    下移
+                  </Button>
+                </Space>
+              </div>
+            ))}
+          </div>
+        </Space>
+      </Modal>
     </AppPage>
   );
 }
