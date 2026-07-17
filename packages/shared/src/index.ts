@@ -3482,6 +3482,7 @@ export interface CustomerUserSummary {
 }
 
 export type AgentIntegrationType = 'MANUAL' | 'API' | 'PLATFORM' | 'OTHER';
+export type AgentSettlementCycle = 'WEEKLY' | 'MONTHLY' | 'PER_SHIPMENT';
 
 export interface AgentSummary {
   id: string;
@@ -3490,6 +3491,7 @@ export interface AgentSummary {
   name: string;
   createdAt: string;
   integrationType?: AgentIntegrationType;
+  settlementCycle?: AgentSettlementCycle;
   warehouseAddress1?: string;
   warehouseAddress2?: string;
   warehouseAddress3?: string;
@@ -3707,6 +3709,7 @@ export interface AgentCreateInput {
   code?: string;
   shortName?: string;
   integrationType?: AgentIntegrationType;
+  settlementCycle?: AgentSettlementCycle;
   warehouseAddress1?: string;
   warehouseAddress2?: string;
   warehouseAddress3?: string;

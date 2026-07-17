@@ -136,6 +136,7 @@ describe('Master data agent bank accounts', () => {
 
     await user.click(screen.getByRole('button', { name: '增加代理' }));
     const dialog = await screen.findByRole('dialog', { name: '新建代理' });
+    expect(within(dialog).getByLabelText('代理账期')).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText('代理简称'), '置顶代理');
     await user.type(within(dialog).getByLabelText('代理全称'), '深圳置顶代理');
     await user.click(screen.getByRole('button', { name: '创建代理' }));

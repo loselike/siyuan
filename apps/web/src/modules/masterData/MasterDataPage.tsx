@@ -46,6 +46,7 @@ interface MasterAgentFormValues {
   agentCode?: string;
   agentShortName: string;
   agentName: string;
+  settlementCycle?: AgentSummary['settlementCycle'];
   warehouseAddress1: string;
   warehouseAddress2: string;
   warehouseAddress3: string;
@@ -180,6 +181,15 @@ const settlementWeightRoundingRuleOptions = [
   { value: 'MIN_HALF', label: '不足0.5的按0.5算' }
 ];
 const remoteAreaRuleOptions = ['DHL偏远', 'UPS偏远', 'FEDEX偏远', '无偏远'];
+const agentSettlementCycleOptions = [
+  { value: 'WEEKLY', label: '周结' },
+  { value: 'MONTHLY', label: '月结' },
+  { value: 'PER_SHIPMENT', label: '单票结算' }
+];
+
+function settlementCycleLabel(value?: AgentSummary['settlementCycle']) {
+  return agentSettlementCycleOptions.find((option) => option.value === value)?.label ?? '-';
+}
 const optionLabel = (options: Array<{ value: string; label: string }>, value?: string) => options.find((item) => item.value === value)?.label ?? value ?? '-';
 const currencyNames: Record<string, string> = { USD: '美金', RMB: '人民币', CNY: '人民币', EUR: '欧元', GBP: '英镑', HKD: '港币' };
 const currencyName = (code: string) => currencyNames[code.toUpperCase()] ?? code.toUpperCase();
@@ -572,6 +582,7 @@ export function MasterDataPage({
       : []),
     { title: '代理简称', dataIndex: 'shortName', width: 180, render: (value: string) => <Text strong>{value}</Text> },
     { title: '代理详细公司名', dataIndex: 'name', width: 220 },
+    { title: '代理账期', dataIndex: 'settlementCycle', width: 130, render: (value?: AgentSummary['settlementCycle']) => settlementCycleLabel(value) },
     { title: '创建时间', dataIndex: 'createdAt', width: 170, render: (value?: string) => formatMasterDateTime(value) },
     { title: '仓库地址一', dataIndex: 'warehouseAddress1', width: 220, render: (value?: string) => value || '-' },
     { title: '仓库地址二', dataIndex: 'warehouseAddress2', width: 220, render: (value?: string) => value || '-' },
@@ -1055,6 +1066,7 @@ export function MasterDataPage({
       agentCode: '',
       agentShortName: '',
       agentName: '',
+      settlementCycle: undefined,
       agentIntegrationType: 'MANUAL',
       agentEnabled: 'true',
       warehouseAddress1: '',
@@ -1092,6 +1104,7 @@ export function MasterDataPage({
       agentCode: agent.code ?? '',
       agentShortName: agent.shortName ?? agent.name,
       agentName: agent.name,
+      settlementCycle: agent.settlementCycle,
       warehouseAddress1: agent.warehouseAddress1 ?? '',
       warehouseAddress2: agent.warehouseAddress2 ?? '',
       warehouseAddress3: agent.warehouseAddress3 ?? '',
@@ -1157,6 +1170,7 @@ export function MasterDataPage({
       code: values.agentCode?.trim() || undefined,
       shortName: values.agentShortName.trim(),
       name: values.agentName.trim(),
+      settlementCycle: values.settlementCycle,
       warehouseAddress1: values.warehouseAddress1?.trim(),
       warehouseAddress2: values.warehouseAddress2?.trim(),
       warehouseAddress3: values.warehouseAddress3?.trim(),
@@ -2735,6 +2749,11 @@ export function MasterDataPage({
                 rules={[{ required: true, whitespace: true, message: '请输入代理全称' }]}
               >
                 <Input placeholder="例如 深圳加时特" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="settlementCycle" label="代理账期">
+                <Select allowClear placeholder="请选择代理账期" options={agentSettlementCycleOptions} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>

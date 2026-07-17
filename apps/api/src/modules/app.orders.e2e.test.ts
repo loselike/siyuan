@@ -3725,6 +3725,33 @@ describe('Siyuan API orders', () => {
       });
   });
 
+  it('stores and updates the selected agent settlement cycle', async () => {
+    const adminToken = await app.loginAs('admin');
+    const agent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '账期测试代理', shortName: '账期测试代理', settlementCycle: 'MONTHLY' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ settlementCycle: 'MONTHLY' }));
+      });
+
+    await request(app.getHttpServer())
+      .put(`/api/master-data/agents/${agent.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '账期测试代理', shortName: '账期测试代理', settlementCycle: 'PER_SHIPMENT' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ settlementCycle: 'PER_SHIPMENT' }));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '非法账期测试代理', shortName: '非法账期测试代理', settlementCycle: 'QUARTERLY' })
+      .expect(400);
+  });
+
   it('lets admins maintain master data and use new agents and channels in fulfillment', async () => {
     const adminToken = await app.loginAs('admin');
     const financeToken = await app.loginAs('finance');
@@ -4118,6 +4145,7 @@ describe('Siyuan API orders', () => {
         code: 'M7A',
         shortName: 'M7代理',
         name: 'M7 Agent Ltd.',
+        settlementCycle: 'MONTHLY',
         warehouseAddress1: '深圳一号仓',
         warehouseAddress2: '深圳二号仓',
         warehouseAddress3: '深圳三号仓',
@@ -4132,6 +4160,7 @@ describe('Siyuan API orders', () => {
           code: 'M7A',
           shortName: 'M7代理',
           name: 'M7 Agent Ltd.',
+          settlementCycle: 'MONTHLY',
           warehouseAddress1: '深圳一号仓',
           warehouseAddress2: '深圳二号仓',
           warehouseAddress3: '深圳三号仓',
@@ -4153,6 +4182,7 @@ describe('Siyuan API orders', () => {
         code: 'M7A',
         shortName: 'M7代理',
         name: 'M7 Agent Ltd.',
+        settlementCycle: 'WEEKLY',
         warehouseAddress1: '深圳一号仓',
         warehouseAddress2: '深圳二号仓',
         warehouseAddress3: '深圳三号仓',
@@ -4164,6 +4194,7 @@ describe('Siyuan API orders', () => {
       .expect(200)
       .expect((response) => {
         expect(response.body.trackingWebsite).toBe('https://track.m7.example/detail/{transferNo}');
+        expect(response.body.settlementCycle).toBe('WEEKLY');
       });
     await request(app.getHttpServer())
       .get(`/api/system/audit-logs?target=${agent.body.id}&pageSize=5`)

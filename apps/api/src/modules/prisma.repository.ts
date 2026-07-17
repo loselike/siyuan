@@ -1228,6 +1228,7 @@ export class PrismaRepository implements OnModuleInit {
         name: agent.name,
         createdAt: ((agent as any).createdAt instanceof Date ? (agent as any).createdAt : new Date()).toISOString(),
         integrationType: (agent.integrationType ?? 'MANUAL') as AgentSummary['integrationType'],
+        settlementCycle: normalizeAgentSettlementCycle(agent.settlementCycle),
         warehouseAddress1: agent.warehouseAddress1 ?? undefined,
         warehouseAddress2: agent.warehouseAddress2 ?? undefined,
         warehouseAddress3: agent.warehouseAddress3 ?? undefined,
@@ -1614,6 +1615,10 @@ export class PrismaRepository implements OnModuleInit {
       throw new BadRequestException('代理详细公司名不能为空');
     }
     const shortName = input.shortName?.trim() || input.name.trim();
+    const settlementCycle = normalizeAgentSettlementCycle(input.settlementCycle);
+    if (input.settlementCycle !== undefined && !settlementCycle) {
+      throw new BadRequestException('代理账期仅支持周结、月结或单票结算');
+    }
     const normalizedShortName = shortName.toLowerCase();
     const existingAgents = await this.prisma.agent.findMany({ select: { name: true, shortName: true } });
     if (existingAgents.some((item) => (item.shortName ?? item.name).trim().toLowerCase() === normalizedShortName)) {
@@ -1626,6 +1631,7 @@ export class PrismaRepository implements OnModuleInit {
         code: input.code?.trim() || input.name.trim().toUpperCase().slice(0, 6),
         shortName,
         integrationType: input.integrationType ?? 'MANUAL',
+        settlementCycle: settlementCycle ?? null,
         warehouseAddress1: input.warehouseAddress1?.trim() || null,
         warehouseAddress2: input.warehouseAddress2?.trim() || null,
         warehouseAddress3: input.warehouseAddress3?.trim() || null,
@@ -1642,6 +1648,7 @@ export class PrismaRepository implements OnModuleInit {
       name: agent.name,
       createdAt: ((agent as any).createdAt instanceof Date ? (agent as any).createdAt : new Date()).toISOString(),
       integrationType: (agent.integrationType ?? 'MANUAL') as AgentSummary['integrationType'],
+      settlementCycle: normalizeAgentSettlementCycle((agent as any).settlementCycle),
       warehouseAddress1: agent.warehouseAddress1 ?? undefined,
       warehouseAddress2: agent.warehouseAddress2 ?? undefined,
       warehouseAddress3: agent.warehouseAddress3 ?? undefined,
@@ -1661,6 +1668,10 @@ export class PrismaRepository implements OnModuleInit {
     }
     const before = await this.prisma.agent.findUnique({ where: { id } });
     const shortName = input.shortName?.trim() || input.name.trim();
+    const settlementCycle = normalizeAgentSettlementCycle(input.settlementCycle);
+    if (input.settlementCycle !== undefined && !settlementCycle) {
+      throw new BadRequestException('代理账期仅支持周结、月结或单票结算');
+    }
     const normalizedShortName = shortName.toLowerCase();
     const currentNormalizedShortName = (before?.shortName ?? before?.name ?? '').trim().toLowerCase();
     if (normalizedShortName !== currentNormalizedShortName) {
@@ -1679,6 +1690,7 @@ export class PrismaRepository implements OnModuleInit {
         code: input.code?.trim() || undefined,
         shortName,
         integrationType: input.integrationType ?? undefined,
+        settlementCycle: settlementCycle ?? null,
         warehouseAddress1: input.warehouseAddress1?.trim() || null,
         warehouseAddress2: input.warehouseAddress2?.trim() || null,
         warehouseAddress3: input.warehouseAddress3?.trim() || null,
@@ -1696,6 +1708,7 @@ export class PrismaRepository implements OnModuleInit {
       name: agent.name,
       createdAt: ((agent as any).createdAt instanceof Date ? (agent as any).createdAt : new Date()).toISOString(),
       integrationType: (agent.integrationType ?? 'MANUAL') as AgentSummary['integrationType'],
+      settlementCycle: normalizeAgentSettlementCycle((agent as any).settlementCycle),
       warehouseAddress1: agent.warehouseAddress1 ?? undefined,
       warehouseAddress2: agent.warehouseAddress2 ?? undefined,
       warehouseAddress3: agent.warehouseAddress3 ?? undefined,
@@ -1719,6 +1732,7 @@ export class PrismaRepository implements OnModuleInit {
       name: agent.name,
       createdAt: ((agent as any).createdAt instanceof Date ? (agent as any).createdAt : new Date()).toISOString(),
       integrationType: (agent.integrationType ?? 'MANUAL') as AgentSummary['integrationType'],
+      settlementCycle: normalizeAgentSettlementCycle((agent as any).settlementCycle),
       warehouseAddress1: agent.warehouseAddress1 ?? undefined,
       warehouseAddress2: agent.warehouseAddress2 ?? undefined,
       warehouseAddress3: agent.warehouseAddress3 ?? undefined,
@@ -1748,6 +1762,7 @@ export class PrismaRepository implements OnModuleInit {
       name: agent.name,
       createdAt: ((agent as any).createdAt instanceof Date ? (agent as any).createdAt : new Date()).toISOString(),
       integrationType: (agent.integrationType ?? 'MANUAL') as AgentSummary['integrationType'],
+      settlementCycle: normalizeAgentSettlementCycle((agent as any).settlementCycle),
       warehouseAddress1: agent.warehouseAddress1 ?? undefined,
       warehouseAddress2: agent.warehouseAddress2 ?? undefined,
       warehouseAddress3: agent.warehouseAddress3 ?? undefined,
@@ -19413,6 +19428,10 @@ function formatDate(date: Date): string {
   const month = String(date.getUTCMonth() + 1).padStart(2, '0');
   const day = String(date.getUTCDate()).padStart(2, '0');
   return `${year}${month}${day}`;
+}
+
+function normalizeAgentSettlementCycle(value: unknown): 'WEEKLY' | 'MONTHLY' | 'PER_SHIPMENT' | undefined {
+  return value === 'WEEKLY' || value === 'MONTHLY' || value === 'PER_SHIPMENT' ? value : undefined;
 }
 
 function internalFlowStage(action: string, after?: unknown) {

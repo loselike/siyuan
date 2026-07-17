@@ -143,6 +143,7 @@ model Agent {
   code      String?
   shortName String?
   integrationType String @default("MANUAL")
+  settlementCycle String?
   warehouseAddress1 String?
   warehouseAddress2 String?
   warehouseAddress3 String?

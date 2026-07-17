@@ -1665,6 +1665,10 @@ export class InMemoryRepository {
     if (this.agents.some((item) => (item.shortName ?? item.name).trim().toLowerCase() === normalizedShortName)) {
       throw new BadRequestException(`代理简称“${shortName}”已存在，不允许重复录入`);
     }
+    const settlementCycle = normalizeAgentSettlementCycle(input.settlementCycle);
+    if (input.settlementCycle !== undefined && !settlementCycle) {
+      throw new BadRequestException('代理账期仅支持周结、月结或单票结算');
+    }
     const agent = {
       id: `a-${this.slug(input.name)}`,
       code: input.code?.trim() || input.name.trim().toUpperCase().slice(0, 6),
@@ -1672,6 +1676,7 @@ export class InMemoryRepository {
       name: input.name.trim(),
       createdAt: new Date().toISOString(),
       integrationType: input.integrationType ?? 'MANUAL',
+      settlementCycle,
       warehouseAddress1: input.warehouseAddress1?.trim() || undefined,
       warehouseAddress2: input.warehouseAddress2?.trim() || undefined,
       warehouseAddress3: input.warehouseAddress3?.trim() || undefined,
@@ -1699,10 +1704,15 @@ export class InMemoryRepository {
       && this.agents.some((item) => item.id !== id && (item.shortName ?? item.name).trim().toLowerCase() === normalizedShortName)) {
       throw new BadRequestException(`代理简称“${shortName}”已存在，不允许重复录入`);
     }
+    const settlementCycle = normalizeAgentSettlementCycle(input.settlementCycle);
+    if (input.settlementCycle !== undefined && !settlementCycle) {
+      throw new BadRequestException('代理账期仅支持周结、月结或单票结算');
+    }
     agent.code = input.code?.trim() || agent.code;
     agent.shortName = shortName;
     agent.name = input.name.trim();
     agent.integrationType = input.integrationType ?? agent.integrationType ?? 'MANUAL';
+    agent.settlementCycle = settlementCycle;
     agent.warehouseAddress1 = input.warehouseAddress1?.trim() || undefined;
     agent.warehouseAddress2 = input.warehouseAddress2?.trim() || undefined;
     agent.warehouseAddress3 = input.warehouseAddress3?.trim() || undefined;
@@ -14705,6 +14715,10 @@ function memoryInternalTrackingSourceModule(action: string): string {
   if (/route|routing/.test(action)) return '待排货';
   if (/finance|payment|payable|cost/.test(action)) return '财务管理';
   return '业务管理';
+}
+
+function normalizeAgentSettlementCycle(value: unknown): 'WEEKLY' | 'MONTHLY' | 'PER_SHIPMENT' | undefined {
+  return value === 'WEEKLY' || value === 'MONTHLY' || value === 'PER_SHIPMENT' ? value : undefined;
 }
 
 function internalFlowStage(action: string, after?: unknown) {
