@@ -16,6 +16,7 @@ import { FinanceCatalogService } from './finance/catalog/finance-catalog.service
 import { FinanceReceivableController } from './finance/receivable/finance-receivable.controller.js';
 import { FinanceReceivableService } from './finance/receivable/finance-receivable.service.js';
 import { InMemoryRepository } from './in-memory.repository.js';
+import { LineageWatcher } from './lineage-watcher.js';
 import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
@@ -38,6 +39,7 @@ const financeCatalogRepositoryProvider = usePrismaRepository
   controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController],
   providers: [
     AiService,
+    LineageWatcher,
     ...repositoryProviders,
     financeCatalogRepositoryProvider,
     FinanceCatalogService,

@@ -10,7 +10,7 @@ import {
   type StaffGender,
   type StaffMenuKey
 } from '@siyuan/shared';
-import { orderAuditStages, type OrdersAuditStageKey } from '../orders/OrdersPage';
+import { orderLifecycleStages, type OrdersLifecycleStageKey } from '../orders/OrdersPage';
 
 export const demoOperationalNow = '2026-06-06T10:00:00.000Z';
 export const appTheme: ThemeConfig = {
@@ -198,7 +198,7 @@ export const shipmentColumnLabels: Record<ShipmentColumnKey, string> = {
   agent: '代理',
   packageCount: '件数',
   weight: '应收/代理计费重',
-  latestTracking: '最新轨迹',
+  latestTracking: '最新物流轨迹',
   status: '状态',
   transitTime: '时效',
   paymentAmount: '收款金额',
@@ -292,6 +292,84 @@ export const importCheckRows = [
 ];
 
 export type MenuKey = StaffMenuKey;
+
+export interface StaffAppRoute {
+  menuKey: MenuKey;
+  sectionKey?: string;
+}
+
+const staffMenuRouteSegments: Record<MenuKey, string> = {
+  workspace: 'workspace',
+  business: 'business',
+  orders: 'business',
+  receive: 'warehouse',
+  market: 'market',
+  routing: 'market',
+  customerService: 'customer-service',
+  tracking: 'tracking',
+  logisticsTracking: 'tracking',
+  problems: 'customer-service',
+  pricing: 'pricing',
+  finance: 'finance',
+  reports: 'workspace',
+  master: 'master',
+  settings: 'settings'
+};
+
+const routeSegmentAliases: Record<string, MenuKey> = {
+  workspace: 'workspace',
+  pricing: 'pricing',
+  business: 'business',
+  warehouse: 'receive',
+  market: 'market',
+  'customer-service': 'customerService',
+  tracking: 'logisticsTracking',
+  finance: 'finance',
+  master: 'master',
+  settings: 'settings'
+};
+
+const sectionRouteAliases: Partial<Record<MenuKey, Record<string, string>>> = {
+  pricing: { lookup: 'quote', priceBooks: 'price-books' },
+  receive: { packages: 'in-stock', consolidation: 'pending-tally', 'completed-consolidation': 'completed-tally', queue: 'pending-dispatch' },
+  finance: { 'payment-applications': 'pending-payment' }
+};
+
+function toRouteSegment(value: string) {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase();
+}
+
+export function getStaffModuleHref(menuKey: MenuKey) {
+  return `/app/${staffMenuRouteSegments[menuKey]}`;
+}
+
+export function getStaffSectionHref(menuKey: MenuKey, sectionKey?: string) {
+  const moduleHref = getStaffModuleHref(menuKey);
+  if (!sectionKey) return moduleHref;
+  const configuredSegment = sectionRouteAliases[menuKey]?.[sectionKey];
+  return `${moduleHref}/${configuredSegment ?? toRouteSegment(sectionKey)}`;
+}
+
+export function parseStaffAppRoute(pathname: string): StaffAppRoute | null {
+  const parts = pathname.split('/').filter(Boolean);
+  if (parts[0] !== 'app' || !parts[1]) return null;
+  const menuKey = routeSegmentAliases[parts[1]];
+  if (!menuKey) return null;
+  return { menuKey, sectionKey: parts[2] };
+}
+
+export function resolveStaffSectionKey(menuKey: MenuKey, sectionSegment: string | undefined, sectionKeys: string[]) {
+  if (!sectionSegment) return undefined;
+  const aliases = sectionRouteAliases[menuKey] ?? {};
+  const aliasMatch = Object.entries(aliases).find(([, segment]) => segment === sectionSegment)?.[0];
+  if (aliasMatch && sectionKeys.includes(aliasMatch)) return aliasMatch;
+  return sectionKeys.find((key) => toRouteSegment(key) === sectionSegment);
+}
+
 export type FulfillmentStageKey = 'all' | 'reviewing' | 'declared' | 'receiving' | 'sorting' | 'dispatching' | 'online' | 'signing' | 'exception';
 export const businessWorkspaceConfigs: Record<
   BusinessType,
@@ -375,8 +453,8 @@ export function getFulfillmentStageCount(summary: ReturnType<typeof summarizeFul
   return summary[stageKey];
 }
 
-export function getFulfillmentAuditStageCount(shipments: Shipment[], stageKey: OrdersAuditStageKey) {
-  const stage = orderAuditStages.find((item) => item.key === stageKey);
+export function getShipmentLifecycleStageCount(shipments: Shipment[], stageKey: OrdersLifecycleStageKey) {
+  const stage = orderLifecycleStages.find((item) => item.key === stageKey);
   return stage ? shipments.filter(stage.predicate).length : 0;
 }
 
@@ -386,9 +464,6 @@ export interface ModulePageConfig {
   capabilities: string[];
   aiEnhancements: string[];
   siliconFlowScenarios: string[];
-  queue: Array<{ item: string; owner: string; status: string }>;
-  stats: Array<{ label: string; value: string; helper: string }>;
-  records: Array<{ primary: string; secondary: string; metric: string; status: string }>;
 }
 
 export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
@@ -398,20 +473,6 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['包裹明细', '理货管理', '面单队列&待仓库出货', '收货交接单'],
     aiEnhancements: ['重量异常识别', '面单信息补全', '重复扫描提醒'],
     siliconFlowScenarios: ['识别预报重量与实重差异', '根据品名补全面单申报要素', '生成异常入库内部说明'],
-    stats: [
-      { label: '待出库', value: '18', helper: '渠道确认后等待仓库处理' },
-      { label: '待理货', value: '9', helper: '分批到仓待合并' },
-      { label: '收货异常', value: '3', helper: '件重尺或资料待复核' }
-    ],
-    records: [
-      { primary: 'OUT-0606-001', secondary: '9409-Daloday / SYGJ06061230001 / 待仓库出库', metric: '实重 2.36kg / 预报 2.10kg', status: '待出库' },
-      { primary: '面单生成批次 LBL-0606-US', secondary: '美国 USPS 小包线 / 6 票', metric: '已生成 4 / 待补 2', status: '待补申报' },
-      { primary: '重量复核 WR-0606-02', secondary: 'SYGJ06059409051 / 德国', metric: '材积重 3.20kg', status: '待复核' }
-    ],
-    queue: [
-      { item: 'SYGJ06061230001', owner: '仓库一组', status: '待扫描' },
-      { item: 'SYGJ06059409051', owner: '仓库二组', status: '待复重' }
-    ]
   },
   routing: {
     title: '渠道排货中心',
@@ -419,20 +480,6 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['规则排货', '手动分配渠道', '代理/承运商选择', '转单号获取', '排货日志'],
     aiEnhancements: ['推荐最优渠道', '批量操作风险提示', '渠道配置建议'],
     siliconFlowScenarios: ['按国家/重量/时效推荐渠道', '解释成本倒挂原因', '生成批量排货风险提示'],
-    stats: [
-      { label: '待排货', value: '21', helper: '需要渠道/代理确认' },
-      { label: '缺转单号', value: '7', helper: '可手工补齐或模拟获取' },
-      { label: '成本预警', value: '2', helper: '报价低于代理成本' }
-    ],
-    records: [
-      { primary: 'DHL HK 优先', secondary: '美国 2-5kg / 时效 4-7 天', metric: '预计利润 ¥38.60/票', status: '推荐' },
-      { primary: 'UPS 加美线', secondary: '加拿大 5-20kg / 代理 宇环', metric: '成本 ¥31.20/kg', status: '待确认' },
-      { primary: 'FedEx AU 促销', secondary: '澳大利亚偏远区需附加费', metric: '偏远费 ¥95.00', status: '需复核' }
-    ],
-    queue: [
-      { item: 'FEDEX AU 促销', owner: '操作主管', status: '待确认成本' },
-      { item: '英国 FBA 空派', owner: '专线组', status: '待排舱' }
-    ]
   },
   tracking: {
     title: '轨迹监控中心',
@@ -440,20 +487,6 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['轨迹列表', '手工添加轨迹', '轨迹未更新监控', '客户可见轨迹', '轨迹规则'],
     aiEnhancements: ['轨迹超时解释', '客户沟通草稿', '接口失败诊断'],
     siliconFlowScenarios: ['解释轨迹超过 3 天未更新', '生成客户可见延误说明', '诊断承运商接口失败原因'],
-    stats: [
-      { label: '未更新', value: '12', helper: '超过 5 天无新轨迹' },
-      { label: '待离港', value: '6', helper: '已出库待补齐离港节点' },
-      { label: '客户可见', value: '48', helper: '今日同步轨迹条数' }
-    ],
-    records: [
-      { primary: '9064656160', secondary: 'SYGJ05291344165 / 客户可见轨迹 / USPS 小包线', metric: '9 天未更新', status: '高风险' },
-      { primary: 'SYGJ06061230003', secondary: '清关延误 / 德国 DHL', metric: '最后轨迹：到达目的国', status: '需说明' },
-      { primary: 'TRK-0606-MANUAL', secondary: '手工轨迹：航班起飞', metric: '同步 14 票', status: '待发布' }
-    ],
-    queue: [
-      { item: 'SYGJ05291344165', owner: '客服组', status: '超时跟进' },
-      { item: 'SYGJ06061230003', owner: '异常组', status: '清关延误' }
-    ]
   },
   problems: {
     title: '问题件中心',
@@ -461,21 +494,6 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['新建问题', '回复查看', '关闭问题', '附件', '客户可见状态'],
     aiEnhancements: ['自动归类问题原因', '生成客户回复', 'SLA 超时提醒'],
     siliconFlowScenarios: ['按原因归类问题件', '生成客户回复草稿', '总结问题件关闭说明'],
-    stats: [
-      { label: '待回复', value: '8', helper: '客户可见问题件' },
-      { label: '待关闭', value: '5', helper: '内部已处理待复核' },
-      { label: 'SLA 超时', value: '2', helper: '超过承诺响应时间' }
-    ],
-    records: [
-      { primary: '轨迹超过3天未更新', secondary: 'SYGJ05291344165 / 客户可见 / 代理待回复', metric: 'SLA 18h', status: '待员工回复' },
-      { primary: '清关资料缺失', secondary: 'SYGJ06061230003 / 客户可见', metric: 'SLA 18h', status: '待客户回复' },
-      { primary: '客户退件：不出', secondary: 'SYGJ06059409051 / 内部处理', metric: '附件 2 个', status: '待关闭' },
-      { primary: '重量差异申诉', secondary: '9409-Daloday / 收货复重', metric: '差异 0.42kg', status: '待员工回复' }
-    ],
-    queue: [
-      { item: '清关资料待客户补充', owner: '客服组', status: '待客户回复' },
-      { item: '客户退件：不出', owner: '操作组', status: '待关闭' }
-    ]
   },
   pricing: {
     title: '报价查价中心',
@@ -483,21 +501,6 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['亚马逊查价', '欧洲海运超大件查价', '欧洲空海运铁路快递查价', '南非专线查价', '业务员报价'],
     aiEnhancements: ['解释报价匹配条件', '提醒低毛利报价', '生成客户报价话术'],
     siliconFlowScenarios: ['解释当前报价匹配依据', '生成客户报价文案', '识别报价条件缺失'],
-    stats: [
-      { label: '今日试算', value: '34', helper: '客户与销售查价' },
-      { label: '报价产品', value: '16', helper: '按渠道/国家/分区' },
-      { label: '待复核价', value: '4', helper: '燃油或偏远费变动' }
-    ],
-    records: [
-      { primary: '美国 2.4kg', secondary: 'DHL HK / 分区 US-2 / 燃油附加费 18%', metric: '¥96.80', status: '可报价' },
-      { primary: '美国 12kg DHL', secondary: '分区 US-2 / 燃油 18%', metric: '¥410.00', status: '可报价' },
-      { primary: '德国 3kg 小包', secondary: 'DHL Paket / 普货', metric: '¥128.50', status: '含挂号费' },
-      { primary: '澳大利亚偏远费', secondary: '邮编 6714 / FedEx AU', metric: '¥95.00', status: '需提示客户' }
-    ],
-    queue: [
-      { item: '美国 DHL 12kg 试算', owner: '销售组', status: '待报价' },
-      { item: '澳大利亚偏远费', owner: '财务组', status: '待复核' }
-    ]
   },
   finance: {
     title: '财务结算中心',
@@ -505,20 +508,6 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['应收费用', '应付费用', '客户对账', '代理对账', '收付款', '核销', '余额流水'],
     aiEnhancements: ['费用差异解释', '欠费风险提示', '对账单摘要'],
     siliconFlowScenarios: ['解释应收应付差异', '生成客户对账单摘要', '识别欠费与超授信风险'],
-    stats: [
-      { label: '应收', value: '¥18,642', helper: '今日已生成费用' },
-      { label: '应付', value: '¥13,908', helper: '代理/承运商成本' },
-      { label: '待核销', value: '11', helper: '收付款未匹配' }
-    ],
-    records: [
-      { primary: 'INV-202606-9409', secondary: '9409-Daloday / 客户对账 / 应收 ¥1,864.20', metric: '利润 ¥356.80', status: '待核销' },
-      { primary: '宇环代理账单', secondary: '代理对账 / DHL HK 38 票', metric: '应付 ¥7,230.60', status: '待确认' },
-      { primary: '客户充值 PAY-0606-01', secondary: '银行转账 / 财务已认领', metric: '¥5,000.00', status: '待入账' }
-    ],
-    queue: [
-      { item: '9409-Daloday 应收', owner: '财务组', status: '待核销' },
-      { item: '宇环代理账单', owner: '财务组', status: '待对账' }
-    ]
   },
   reports: {
     title: '统计报表中心',
@@ -526,20 +515,6 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['运单报表', '收货统计', '发货统计', '应收应付分析', '利润分析'],
     aiEnhancements: ['经营异常洞察', '利润波动解释', '日报生成'],
     siliconFlowScenarios: ['生成运营日报', '解释利润波动', '识别收发货异常趋势'],
-    stats: [
-      { label: '今日发货', value: '46', helper: '快递/小包/专线合计' },
-      { label: '今日收货', value: '58', helper: '仓库扫描完成' },
-      { label: '利润率', value: '18.6%', helper: '按已发货费用估算' }
-    ],
-    records: [
-      { primary: '日报-2026-06-06', secondary: '快递 31 / 小包 10 / 专线 5', metric: '利润率 18.6%', status: '可导出' },
-      { primary: '收货统计 RCV-0606', secondary: '仓库一组 34 / 仓库二组 24', metric: '异常 3 票', status: '已汇总' },
-      { primary: '应收应付分析', secondary: '应收 ¥18,642 / 应付 ¥13,908', metric: '毛利 ¥4,734', status: '待复核' }
-    ],
-    queue: [
-      { item: '今日发货统计', owner: '运营主管', status: '可生成' },
-      { item: '本周利润分析', owner: '管理层', status: '待汇总' }
-    ]
   },
   master: {
     title: '基础资料中心',
@@ -547,20 +522,6 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['客户', '代理', '承运商', '渠道', '国家地区', '费用名称', '汇率'],
     aiEnhancements: ['资料缺失检查', '渠道配置建议', '规则冲突提示'],
     siliconFlowScenarios: ['识别客户资料缺失', '检查渠道配置冲突', '生成资料维护建议'],
-    stats: [
-      { label: '客户', value: '126', helper: '启用 118 / 停用 8' },
-      { label: '渠道', value: '42', helper: '绑定代理与承运商' },
-      { label: '汇率', value: '7.2450', helper: 'USD 对 RMB' }
-    ],
-    records: [
-      { primary: '9409-Daloday', secondary: '客户 / 月结 / 联系人 Lina', metric: '授信 ¥50,000', status: '启用' },
-      { primary: 'HKD01 代理价', secondary: '代理 宇环 / DHL HK 成本', metric: '更新 2026-06-06', status: '待更新' },
-      { primary: 'USPS 小包线', secondary: '承运商 USPS / 国家 美国', metric: '材积 6000', status: '启用' }
-    ],
-    queue: [
-      { item: 'HKD01 成本价更新', owner: '产品组', status: '待更新' },
-      { item: '客户联系人', owner: '客服组', status: '缺资料' }
-    ]
   },
   settings: {
     title: '系统设置中心',
@@ -568,19 +529,5 @@ export const modulePageConfigs: Partial<Record<MenuKey, ModulePageConfig>> = {
     capabilities: ['公司资料', '模板', '通知', '轨迹规则', '状态字典', '权限'],
     aiEnhancements: ['配置健康检查', '规则冲突提示', '权限风险提示'],
     siliconFlowScenarios: ['检查权限冲突', '解释角色权限差异', '生成系统配置变更说明'],
-    stats: [
-      { label: '员工角色', value: '5', helper: '管理员/客服/业务员/仓库/财务' },
-      { label: '模板', value: '14', helper: '面单、通知、对账单' },
-      { label: '审计项', value: '9', helper: '高风险操作写日志' }
-    ],
-    records: [
-      { primary: '状态字典', secondary: '待审核 -> 待排货 -> 待出库 -> 已出库', metric: '新链路状态', status: '启用' },
-      { primary: '转单提醒', secondary: '已出库超过 2 天且缺转单号', metric: '影响 7 票', status: '已开启' },
-      { primary: '财务核销权限', secondary: '仅 ADMIN / FINANCE 可操作', metric: '2 个角色', status: '需审计' }
-    ],
-    queue: [
-      { item: '轨迹规则', owner: '管理员', status: '待检查' },
-      { item: '角色权限', owner: '管理员', status: '待复核' }
-    ]
   }
 };

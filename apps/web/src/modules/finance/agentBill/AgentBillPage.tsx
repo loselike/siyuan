@@ -4,7 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import type { PaymentVoucherInput, PaymentVoucherListQuery, PaymentVoucherSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { formatBeijingDateTime } from '../../shared/format';
-import { ManagedTable } from '../../shared/ui';
+import { AppDatePicker, ManagedTable } from '../../shared/ui';
 
 type AgentBillPageProps = {
   apiClient: ApiClient;
@@ -30,7 +30,9 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
   const [rows, setRows] = useState<PaymentVoucherSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const canImport = hasPermission(permissions, 'finance:payable:attachment');
+  const canImport = hasPermission(permissions, 'finance:agent-bill:import');
+  const canResolveDifference = hasPermission(permissions, 'finance:agent-bill:difference-resolve');
+  const canArchive = hasPermission(permissions, 'finance:agent-bill:archive') || hasPermission(permissions, 'finance:agent-bill:reverse-archive');
 
   const loadRows = async (query: PaymentVoucherListQuery = queryForm.getFieldsValue()) => {
     setLoading(true);
@@ -100,7 +102,7 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
     { title: '账单日期', dataIndex: 'billDate', width: 130, render: (value?: string) => value ? value.slice(0, 10) : '-' },
     { title: '币种', dataIndex: 'currency', width: 90 },
     { title: '账单金额', dataIndex: 'billAmount', width: 120, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
-    { title: '运单号', dataIndex: 'systemOrderNo', width: 150 },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150 },
     { title: '转单号', dataIndex: 'transferNo', width: 140, render: (value?: string) => value || '-' },
     { title: '代理渠道', dataIndex: 'agentChannel', width: 140, render: (value?: string) => value || '-' },
     { title: '计费重', dataIndex: 'chargeWeightKg', width: 100, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
@@ -135,8 +137,8 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
     { title: '导入时间', dataIndex: 'createdAt', width: 170, render: formatBeijingDateTime },
     { title: '操作', key: 'actions', width: 180, fixed: 'right', render: (_, row) => (
       <Space size={6}>
-        <Button size="small" disabled={!canImport || row.status !== 'DIFFERENCE_PENDING'} loading={saving} onClick={() => handleDifference(row)}>处理差异</Button>
-        <Button size="small" disabled={!canImport} loading={saving} onClick={() => handleArchive(row)}>{row.status === 'ARCHIVED' ? '反归档' : '归档'}</Button>
+        <Button size="small" disabled={!canResolveDifference || row.status !== 'DIFFERENCE_PENDING'} loading={saving} onClick={() => handleDifference(row)}>处理差异</Button>
+        <Button size="small" disabled={!canArchive} loading={saving} onClick={() => handleArchive(row)}>{row.status === 'ARCHIVED' ? '反归档' : '归档'}</Button>
       </Space>
     ) }
   ];
@@ -158,7 +160,7 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
           <Row gutter={[12, 0]}>
             <Col xs={24} md={6}><Form.Item name="billNo" label="账单号" rules={[{ required: true, whitespace: true, message: '请输入账单号' }]}><Input /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="agentName" label="代理" rules={[{ required: true, whitespace: true, message: '请输入代理' }]}><Input /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="billDate" label="账单日期" rules={[{ required: true, message: '请选择账单日期' }]}><Input type="date" /></Form.Item></Col>
+            <Col xs={24} md={6}><Form.Item name="billDate" label="账单日期" rules={[{ required: true, message: '请选择账单日期' }]}><AppDatePicker /></Form.Item></Col>
             <Col xs={24} md={3}><Form.Item name="currency" label="币种"><Select options={['RMB', 'USD'].map((value) => ({ label: value, value }))} /></Form.Item></Col>
             <Col xs={24} md={3}><Form.Item name="billAmount" label="账单金额" rules={[{ required: true, message: '请输入金额' }]}><InputNumber min={0} precision={2} style={{ width: '100%' }} /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="differenceType" label="差异类型"><Input /></Form.Item></Col>
@@ -170,7 +172,7 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
             <Col xs={24} md={5}><Form.Item name="extraFeeAgentName" label="杂费代理"><Input /></Form.Item></Col>
             <Col xs={24} md={3}><Form.Item name="extraFeeCustomerCode" label="归属客户"><Input /></Form.Item></Col>
             <Col xs={24} md={5}><Form.Item name="extraFeeSystemOrderNo" label="归属订单"><Input /></Form.Item></Col>
-            <Col xs={24} md={4}><Form.Item name="extraFeeOccurredAt" label="发生日期"><Input type="date" /></Form.Item></Col>
+            <Col xs={24} md={4}><Form.Item name="extraFeeOccurredAt" label="发生日期"><AppDatePicker /></Form.Item></Col>
             <Col xs={24} md={5}><Form.Item name="extraFeeFinanceItemId" label="关联费用 id"><Input /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="extraFeeRemark" label="杂费备注"><Input /></Form.Item></Col>
             <Col xs={24} md={5}><Form.Item name="kuayueBillNo" label="跨越账单号"><Input /></Form.Item></Col>
@@ -178,7 +180,7 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
             <Col xs={24} md={5}><Form.Item name="kuayueSystemOrderNo" label="跨越订单"><Input /></Form.Item></Col>
             <Col xs={24} md={4}><Form.Item name="kuayueAmount" label="跨越金额"><InputNumber min={0} precision={2} style={{ width: '100%' }} /></Form.Item></Col>
             <Col xs={24} md={3}><Form.Item name="kuayueCurrency" label="跨越币种"><Select allowClear options={['RMB', 'USD'].map((value) => ({ label: value, value }))} /></Form.Item></Col>
-            <Col xs={24} md={4}><Form.Item name="kuayueBillDate" label="跨越账单日期"><Input type="date" /></Form.Item></Col>
+            <Col xs={24} md={4}><Form.Item name="kuayueBillDate" label="跨越账单日期"><AppDatePicker /></Form.Item></Col>
             <Col xs={24} md={4}><Form.Item name="kuayueStatus" label="跨越状态"><Select allowClear options={[{ label: '已登记', value: 'REGISTERED' }, { label: '已关联', value: 'LINKED' }, { label: '已归档', value: 'ARCHIVED' }]} /></Form.Item></Col>
             <Col xs={24} md={8}><Form.Item name="fileName" label="明细文件/图片" rules={[{ required: true, whitespace: true, message: '请输入文件名' }]}><Input /></Form.Item></Col>
             <Col xs={24} md={10}><Form.Item name="url" label="文件路径/URL"><Input /></Form.Item></Col>

@@ -1,5 +1,6 @@
 import type {
   AgentCreateInput,
+  AgentDeleteResponse,
   AgentChannelCreateInput,
   AgentChannelSummary,
   AgentChannelUpdateInput,
@@ -10,10 +11,14 @@ import type {
   AgentMarkupPreviewResponse,
   AgentMarkupSummary,
   AgentMarkupUpdateInput,
+  MarkupRoutePreviewInput,
+  MarkupRoutePreviewResponse,
+  MarkupRouteTierReplaceInput,
   AgentSummary,
   AgentUpdateInput,
   AuditLogListResponse,
   AuditLogQuery,
+  AuditLogSummary,
   CustomerStatementCreateInput,
   CustomerStatementSummary,
   CustomerAccountSummary,
@@ -53,6 +58,7 @@ import type {
   OrderEntryCreateInput,
   OrderEntryDetailSummary,
   OrderEntryDraftUpdateInput,
+  OrderEntryWarehousePackageQuery,
   PaymentCreateInput,
   PaymentCreateResponse,
   PaymentApplicationCancelInput,
@@ -78,20 +84,38 @@ import type {
   PayableAuditSummary,
   PayableAuditUpdateInput,
   PriceBookImportInput,
+  PriceBookImportTargetModule,
+  PriceBookImportJobResponse,
+  PriceBookImportResult,
   PriceBookRemarkUpdateInput,
-  PriceBookRowSummary,
+  PriceBookRowsQuery,
+  PriceBookRowsResponse,
   PriceBooksResponse,
   PriceBookSummary,
+  PricingSyncHealthResponse,
+  PricingRuleRefreshProgressResponse,
   LegacyPricingImportInput,
   LegacyPricingMetaResponse,
   LegacyPricingModule,
   LegacyPricingQuoteRequest,
   LegacyPricingQuoteResponse,
   LegacyPricingSourcesResponse,
+  DubaiPriceTableResponse,
+  DubaiPriceDisplayActivateInput,
+  DubaiPriceDisplayResponse,
+  DubaiPriceDisplayVersionListResponse,
+  SouthAfricaLookupRequest,
+  SouthAfricaLookupResponse,
+  SouthAfricaRateRuleInput,
+  SouthAfricaRateRuleListResponse,
+  SouthAfricaRateRuleSummary,
   PriceLookupRequest,
   PriceLookupResponse,
   LineShipmentPoolQuery,
+  ShipmentInternalFlowLogResponse,
   LineShipmentPoolResponse,
+  NavigationReadStateInput,
+  NavigationUnreadBadgesResponse,
   PricingQuoteRequest,
   PricingRuleCreateInput,
   PricingRuleQuoteRequest,
@@ -155,6 +179,7 @@ import type {
   SiteUpdateInput,
   StaffGender,
   StaffAccountCreateInput,
+  DepartmentSummary,
   StaffAccountPasswordResetInput,
   StaffAccountPasswordResetResult,
   StaffAccountQuery,
@@ -164,6 +189,7 @@ import type {
   BulkTrackingApplyResponse,
   Shipment,
   ShipmentCreateInput,
+  ShipmentReviewBasicUpdateInput,
   ShipmentFinanceDetailSummary,
   ShipmentFinanceItemCreateInput,
   ShipmentRerouteInput,
@@ -172,23 +198,32 @@ import type {
   PayableFeeSummary,
   ShipmentFinanceItemUpdateInput,
   ShipmentDispatchInput,
+  WarehouseHandoverPrintInput,
+  WarehouseHandoverPrintResponse,
+  WarehouseHandoverSummary,
   ShipmentRestoreInput,
   ShipmentReviewDeleteInput,
   ShipmentReviewDetailSummary,
   ShipmentReviewRejectInput,
   ShipmentLabelSummary,
   ShipmentOperationalUpdateInput,
+  CustomerServiceTransferBatchInput,
+  CustomerServiceTransferBatchResponse,
   ShipmentPaymentUpdateInput,
   TrackingEventInput,
   WarehouseConsolidationCreateInput,
   WarehouseConsolidationSummary,
   WarehouseInStockQuery,
   WarehouseInStockResponse,
+  WarehouseManualReceiptCreateInput,
+  WarehouseManualReceiptCreateResponse,
   WarehousePackageCreateInput,
+  WarehouseManualReceiptCustomerOption,
   WarehousePackageGroupSummary,
   WarehousePackageSplitInput,
   WarehousePackageSplitResponse,
   WarehousePackageSummary,
+  WarehousePackageUpdateInput,
   WarehouseTallyLabelScanInput,
   WarehouseTallyLabelScanResponse,
   WarehouseTallyTaskCompleteInput,
@@ -203,23 +238,181 @@ import type {
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type RoleKey = BuiltinRoleKey | (string & {});
 export type PermissionKey =
-  | 'workspace:access'
-  | 'orders:read'
-  | 'orders:write'
-  | 'orders:review:restore'
-  | 'orders:review:purge'
-  | 'routing:read'
-  | 'routing:write'
-  | 'warehouse:read'
-  | 'warehouse:write'
-  | 'tracking:read'
-  | 'tracking:write'
-  | 'problems:read'
-  | 'problems:write'
-  | 'pricing:lookup'
-  | 'pricing:manage'
-  | 'finance:read'
-  | 'finance:settle'
+  | `customer-service:${string}`
+  | `tracking:${string}`
+  | `finance:${string}`
+  | `master-data:${string}`
+  | 'operations:line-shipment:view'
+  | 'operations:line-shipment:detail'
+  | 'operations:line-shipment:process'
+  | 'operations:line-shipment:status-update'
+  | 'operations:line-shipment:tracking-add'
+  | 'operations:line-shipment:problem-create'
+  | 'operations:line-shipment:import'
+  | 'operations:line-shipment:internal-log-view'
+  | 'operations:line-shipment:export'
+  | 'operations:ai-queue:view'
+  | 'operations:ai-queue:assist'
+  | 'operations:ai-queue:mark-read'
+  | 'operations:ai-queue:handle'
+  | 'operations:product-map:view'
+  | 'operations:product-map:route-view'
+  | 'operations:product-map:cost-sensitive-view'
+  | 'operations:product-map:export'
+  | 'operations:import-quality:view'
+  | 'operations:import-quality:upload'
+  | 'operations:import-quality:retry'
+  | 'operations:import-quality:error-detail-view'
+  | 'operations:import-quality:confirm'
+  | 'business:dashboard:view'
+  | 'business:dashboard:team-view'
+  | 'business:dashboard:all-view'
+  | 'business:dashboard:trend-view'
+  | 'business:dashboard:pending-review-summary'
+  | 'business:order-entry:view'
+  | 'business:order-entry:warehouse-package-select'
+  | 'business:order-entry:create'
+  | 'business:order-entry:draft-view'
+  | 'business:order-entry:draft-save'
+  | 'business:order-entry:draft-delete'
+  | 'business:order-entry:submit-review'
+  | 'business:order-entry:invoice-upload'
+  | 'business:order-entry:label-upload'
+  | 'business:order-fee:view'
+  | 'business:order-fee:create'
+  | 'business:order-fee:update'
+  | 'business:order-fee:delete'
+  | 'business:order-fee:lock'
+  | 'business:order-fee:unlock'
+  | 'business:order-fee:profit-view'
+  | 'business:review:list'
+  | 'business:review:detail'
+  | 'business:review:deleted-list'
+  | 'business:review:approve'
+  | 'business:review:reject'
+  | 'business:review:reverse'
+  | 'business:review:delete'
+  | 'business:review:restore'
+  | 'business:review:purge'
+  | 'business:review:finance-detail-view'
+  | 'business:review:operation-log-view'
+  | 'business:shipment:list'
+  | 'business:shipment:detail'
+  | 'business:shipment:self-view'
+  | 'business:shipment:team-view'
+  | 'business:shipment:all-view'
+  | 'business:shipment:update-basic'
+  | 'business:shipment:update-operational'
+  | 'business:shipment:delete'
+  | 'business:shipment:payment-record'
+  | 'business:shipment:tracking-add'
+  | 'business:shipment:problem-create'
+  | 'business:shipment:finance-detail-view'
+  | 'business:shipment:receivable-view'
+  | 'business:shipment:payable-view'
+  | 'business:shipment:profit-view'
+  | 'business:shipment:export'
+  | 'business:shipment:column-setting'
+  | 'business:order-ai:view'
+  | 'business:order-ai:assist'
+  | 'business:order-ai:finance-context'
+  | 'business:order-ai:all-order-context'
+  | 'business:order-ai:export-result'
+  | 'market:dashboard:view'
+  | 'market:dashboard:pending-summary'
+  | 'market:dashboard:routed-summary'
+  | 'market:dashboard:weekly-summary'
+  | 'market:dashboard:agent-stats-view'
+  | 'market:dashboard:channel-mode-stats-view'
+  | 'market:dashboard:sensitive-summary-view'
+  | 'market:dashboard:team-view'
+  | 'market:dashboard:all-view'
+  | 'market:pending-routing:view'
+  | 'market:pending-routing:detail'
+  | 'market:pending-routing:assign'
+  | 'market:pending-routing:save-draft'
+  | 'market:pending-routing:confirm'
+  | 'market:pending-routing:audit'
+  | 'market:pending-routing:update'
+  | 'market:pending-routing:delete'
+  | 'market:pending-routing:operation-log-view'
+  | 'market:pending-routing:business-cost-view'
+  | 'market:pending-routing:payable-cost-view'
+  | 'market:pending-routing:agent-channel-view'
+  | 'market:pending-routing:cost-field-view'
+  | 'market:pending-routing:column-setting'
+  | 'market:routed:view'
+  | 'market:routed:detail'
+  | 'market:routed:update'
+  | 'market:routed:reroute'
+  | 'market:routed:log-view'
+  | 'market:routed:agent-cost-view'
+  | 'market:routed:cost-total-view'
+  | 'market:routed:agent-channel-view'
+  | 'market:routed:column-setting'
+  | 'market:weekly-routing:view'
+  | 'market:weekly-routing:detail'
+  | 'market:weekly-routing:agent-stats-view'
+  | 'market:weekly-routing:channel-mode-stats-view'
+  | 'market:weekly-routing:cost-view'
+  | 'market:weekly-routing:reroute-stats-view'
+  | 'market:weekly-routing:sensitive-stats-view'
+  | 'market:weekly-routing:export'
+  | 'market:weekly-routing:column-setting'
+  | 'warehouse:today-receipt:view'
+  | 'warehouse:today-receipt:filter'
+  | 'warehouse:today-receipt:manual-create'
+  | 'warehouse:today-receipt:update'
+  | 'warehouse:today-receipt:remark-update'
+  | 'warehouse:today-receipt:exception-manage'
+  | 'warehouse:today-receipt:device-import'
+  | 'warehouse:today-receipt:device-log-view'
+  | 'warehouse:today-receipt:column-setting'
+  | 'warehouse:in-stock:view'
+  | 'warehouse:in-stock:update'
+  | 'warehouse:in-stock:split'
+  | 'warehouse:in-stock:batch-select'
+  | 'warehouse:in-stock:tally-start'
+  | 'warehouse:in-stock:batch-tally-start'
+  | 'warehouse:in-stock:order-entry-select'
+  | 'warehouse:in-stock:batch-order-entry'
+  | 'warehouse:in-stock:tally-record-view'
+  | 'warehouse:in-stock:column-setting'
+  | 'warehouse:tally-pending:view'
+  | 'warehouse:tally-pending:task-create'
+  | 'warehouse:tally-pending:task-update'
+  | 'warehouse:tally-pending:task-process'
+  | 'warehouse:tally-pending:merge-only'
+  | 'warehouse:tally-pending:merge-and-ship'
+  | 'warehouse:tally-pending:split'
+  | 'warehouse:tally-pending:detail-view'
+  | 'warehouse:tally-pending:history-view'
+  | 'warehouse:tally-pending:filter'
+  | 'warehouse:tally-completed:view'
+  | 'warehouse:tally-completed:history-view'
+  | 'warehouse:tally-completed:detail-view'
+  | 'warehouse:tally-label:generate'
+  | 'warehouse:tally-label:reprint'
+  | 'warehouse:tally-label:print'
+  | 'warehouse:tally-label:download'
+  | 'warehouse:tally-label:scan-apply'
+  | 'warehouse:tally-label:overwrite-package'
+  | 'warehouse:dispatch-pending:view'
+  | 'warehouse:dispatch-pending:batch-select'
+  | 'warehouse:dispatch-pending:handover-preview'
+  | 'warehouse:dispatch-pending:handover-print'
+  | 'warehouse:dispatch-pending:dispatch-confirm'
+  | 'warehouse:dispatch-pending:batch-dispatch-confirm'
+  | 'warehouse:dispatch-pending:shipping-mark-confirm'
+  | 'warehouse:dispatch-pending:label-generate'
+  | 'warehouse:dispatch-pending:label-view'
+  | 'warehouse:dispatch-pending:label-void'
+  | 'warehouse:dispatch-pending:column-setting'
+  | 'warehouse:outbounded:view'
+  | 'warehouse:outbounded:handover-view'
+  | 'warehouse:outbounded:detail-view'
+  | 'warehouse:outbounded:export'
+  | `pricing:${string}`
   | 'finance:business-cost:read'
   | 'finance:business-cost:manage'
   | 'finance:business-cost:audit'
@@ -261,8 +454,7 @@ export type PermissionKey =
   | 'finance:water-receipt:export'
   | 'finance:water-receipt:voucher'
   | 'finance:water-receipt:view-all'
-  | 'master-data:read'
-  | 'master-data:write'
+  | 'finance:customer-account:read'
   | 'master-data:customers:read'
   | 'master-data:customers:write'
   | 'master-data:finance:read'
@@ -280,8 +472,7 @@ export type PermissionKey =
   | 'master-data:exchange-rates:read'
   | 'master-data:exchange-rates:write'
   | 'master-data:assistant:read'
-  | 'reports:read'
-  | 'system:manage';
+  | `system:${string}`;
 
 export interface Principal {
   id: string;
@@ -365,6 +556,14 @@ export interface AiAssistResponse {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001/api';
 
+export function resolveApiAssetUrl(url?: string) {
+  if (!url || /^(?:https?:|data:|blob:)/i.test(url)) return url;
+  const apiUrl = new URL(API_BASE, window.location.origin);
+  if (url.startsWith('/api/')) return new URL(url, apiUrl.origin).toString();
+  if (url.startsWith('/uploads/')) return new URL(`/api${url}`, apiUrl.origin).toString();
+  return url;
+}
+
 function formatApiErrorMessage(body: string, status: number): string {
   if (!body) {
     if (status === 401) {
@@ -385,6 +584,9 @@ function formatApiErrorMessage(body: string, status: number): string {
   } catch {
     if (status === 401) {
       return '用户名或密码错误';
+    }
+    if (status === 502 || status === 504 || /<html[\s>]/i.test(body) || /Gateway Time-out|Bad Gateway/i.test(body)) {
+      return '服务暂不可用，请稍后重试';
     }
     return body;
   }
@@ -408,6 +610,10 @@ export class ApiClient {
     return this.request('/auth/login-logs');
   }
 
+  async accountEvents(): Promise<AuditLogSummary[]> {
+    return this.request('/auth/account-events');
+  }
+
   async me(): Promise<Principal> {
     return this.request('/auth/me');
   }
@@ -424,6 +630,31 @@ export class ApiClient {
     return this.request('/shipments');
   }
 
+  async warehouseDispatchShipments(): Promise<Shipment[]> {
+    return this.request('/warehouse/dispatch-shipments');
+  }
+
+  async navigationUnreadBadges(): Promise<NavigationUnreadBadgesResponse> {
+    return this.request('/navigation/unread-badges');
+  }
+
+  async markNavigationRead(input: NavigationReadStateInput): Promise<{ ok: true; moduleKey: string; sectionKey?: string; readAt: string; watermark: string }> {
+    return this.request('/navigation/read-state', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async reportPageRenderError(input: {
+    errorId: string;
+    route: string;
+    releaseId: string;
+    menuKey?: string;
+    sectionKey?: string;
+    message: string;
+    stack?: string;
+    componentStack?: string;
+  }): Promise<{ ok: true }> {
+    return this.request('/system/client-errors', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async reviewPendingShipments(): Promise<Shipment[]> {
     return this.request('/shipments/review-pending');
   }
@@ -436,6 +667,10 @@ export class ApiClient {
     return this.request(`/shipments/${id}/review-detail`);
   }
 
+  async updateShipmentReviewBasic(id: string, input: ShipmentReviewBasicUpdateInput): Promise<ShipmentReviewDetailSummary> {
+    return this.request(`/shipments/${id}/review-basic`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
   async approveShipmentReview(id: string, input?: { businessReview?: boolean }): Promise<ShipmentReviewDetailSummary> {
     return this.request(`/shipments/${id}/review/approve`, {
       method: 'POST',
@@ -445,6 +680,10 @@ export class ApiClient {
 
   async rejectShipmentReview(id: string, input: ShipmentReviewRejectInput): Promise<ShipmentReviewDetailSummary> {
     return this.request(`/shipments/${id}/review/reject`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async reverseShipmentReview(id: string, input?: { reason?: string }): Promise<ShipmentReviewDetailSummary> {
+    return this.request(`/shipments/${id}/review/reverse`, { method: 'POST', ...(input ? { body: JSON.stringify(input) } : {}) });
   }
 
   async deleteShipmentReview(id: string, input: ShipmentReviewDeleteInput): Promise<ShipmentReviewDetailSummary> {
@@ -463,12 +702,22 @@ export class ApiClient {
     return this.request('/shipments', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async orderEntryPackages(query: { customerCode: string; domesticTrackingNo?: string }): Promise<WarehousePackageSummary[]> {
-    const params = new URLSearchParams({ customerCode: query.customerCode });
+  async orderEntryPackages(query: OrderEntryWarehousePackageQuery): Promise<WarehousePackageSummary[]> {
+    const params = new URLSearchParams();
+    if (query.customerCode?.trim()) {
+      params.set('customerCode', query.customerCode.trim());
+    }
     if (query.domesticTrackingNo?.trim()) {
       params.set('domesticTrackingNo', query.domesticTrackingNo.trim());
     }
+    query.packageIds?.forEach((id) => {
+      if (id.trim()) params.append('packageIds', id.trim());
+    });
     return this.request(`/shipments/order-entry/packages?${params.toString()}`);
+  }
+
+  async orderEntryDrafts(): Promise<Shipment[]> {
+    return this.request('/shipments/order-entry/drafts');
   }
 
   async createOrderEntry(input: OrderEntryCreateInput): Promise<OrderEntryDetailSummary> {
@@ -483,6 +732,10 @@ export class ApiClient {
     return this.request(`/shipments/${id}/order-entry-draft`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
+  async deleteOrderEntryDraft(id: string, input: ShipmentReviewDeleteInput): Promise<OrderEntryDetailSummary> {
+    return this.request(`/shipments/${id}/order-entry-draft`, { method: 'DELETE', body: JSON.stringify(input) });
+  }
+
   async receiveShipment(id: string): Promise<Shipment> {
     return this.request(`/shipments/${id}/receive`, { method: 'POST' });
   }
@@ -495,12 +748,52 @@ export class ApiClient {
     return this.request(`/shipments/${id}/reroute`, { method: 'POST', body: JSON.stringify(body) });
   }
 
+  async deletePendingRoutingShipment(id: string, body: ShipmentReviewDeleteInput): Promise<Shipment> {
+    return this.request(`/shipments/${id}/pending-routing`, { method: 'DELETE', body: JSON.stringify(body) });
+  }
+
   async dispatchShipment(id: string, body: ShipmentDispatchInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/dispatch`, { method: 'POST', body: JSON.stringify(body) });
   }
 
+  async printWarehouseHandover(input: WarehouseHandoverPrintInput): Promise<WarehouseHandoverPrintResponse> {
+    return this.request('/warehouse/handover/print', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async warehouseHandover(shipmentId: string): Promise<WarehouseHandoverSummary> {
+    return this.request(`/warehouse/handover/${shipmentId}`);
+  }
+
   async approveShipmentBusinessData(id: string, body: { remark?: string } = {}): Promise<Shipment> {
     return this.request(`/shipments/${id}/business-data/approve`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async approveShipmentAgentData(id: string, body: { remark?: string } = {}): Promise<Shipment> {
+    return this.request(`/shipments/${id}/agent-data/approve`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async updateShipmentBusinessData(id: string, body: { packageCount: number; weightKg: number; volumeCbm: number; chargeWeightKg: number; remark?: string; pushToSales?: boolean }): Promise<Shipment> {
+    return this.request(`/shipments/${id}/business-data`, { method: 'PATCH', body: JSON.stringify(body) });
+  }
+
+  async updateShipmentAgentData(id: string, body: { packageCount: number; weightKg: number; volumeCbm: number; chargeWeightKg: number; remark?: string }): Promise<Shipment> {
+    return this.request(`/shipments/${id}/agent-data`, { method: 'PATCH', body: JSON.stringify(body) });
+  }
+
+  async reverseShipmentBusinessData(id: string, body: { reason: string }): Promise<Shipment> {
+    return this.request(`/shipments/${id}/business-data/reverse`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async reverseShipmentAgentData(id: string, body: { reason: string }): Promise<Shipment> {
+    return this.request(`/shipments/${id}/agent-data/reverse`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async approveShipmentAllData(id: string, body: { remark?: string } = {}): Promise<Shipment> {
+    return this.request(`/shipments/${id}/data-confirmation/approve-all`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async reverseShipmentAllData(id: string, body: { reason: string }): Promise<Shipment> {
+    return this.request(`/shipments/${id}/data-confirmation/reverse-all`, { method: 'POST', body: JSON.stringify(body) });
   }
 
   async deleteShipment(id: string): Promise<Shipment> {
@@ -509,6 +802,18 @@ export class ApiClient {
 
   async updateShipmentOperational(id: string, input: ShipmentOperationalUpdateInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/operational`, { method: 'PATCH', body: JSON.stringify(input) });
+  }
+
+  async updateOperationShipmentOperational(id: string, input: ShipmentOperationalUpdateInput): Promise<Shipment> {
+    return this.request(`/operations/line-shipments/${id}/operational`, { method: 'PATCH', body: JSON.stringify(input) });
+  }
+
+  async customerServiceTransferShipments(): Promise<Shipment[]> {
+    return this.request('/customer-service/transfer-shipments');
+  }
+
+  async fillCustomerServiceTransferShipments(input: CustomerServiceTransferBatchInput): Promise<CustomerServiceTransferBatchResponse> {
+    return this.request('/customer-service/transfer-shipments/fill', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async registerShipmentPayment(id: string, input: ShipmentPaymentUpdateInput): Promise<Shipment> {
@@ -587,6 +892,10 @@ export class ApiClient {
     return this.request(`/shipments/${id}/tracking-events`, { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async addOperationTrackingEvent(id: string, input: TrackingEventInput): Promise<Shipment> {
+    return this.request(`/operations/line-shipments/${id}/tracking-events`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async carrierTasks(): Promise<CarrierTaskSummary[]> {
     return this.request('/carrier-tasks');
   }
@@ -607,6 +916,10 @@ export class ApiClient {
     return this.request(`/shipments/${id}/problem-tickets`, { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async createOperationProblemTicket(id: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
+    return this.request(`/operations/line-shipments/${id}/problem-tickets`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async lineShipmentPool(query: LineShipmentPoolQuery = {}): Promise<LineShipmentPoolResponse> {
     const params = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
@@ -615,12 +928,20 @@ export class ApiClient {
     return this.request(`/operations/line-shipments${params.size ? `?${params.toString()}` : ''}`);
   }
 
+  async lineShipmentInternalFlowLog(id: string): Promise<ShipmentInternalFlowLogResponse> {
+    return this.request(`/operations/line-shipments/${id}/internal-flow-log`);
+  }
+
   async replyProblemTicket(id: string, message: string): Promise<ProblemTicketSummary> {
     return this.request(`/problem-tickets/${id}/replies`, { method: 'POST', body: JSON.stringify({ message }) });
   }
 
-  async closeProblemTicket(id: string): Promise<ProblemTicketSummary> {
-    return this.request(`/problem-tickets/${id}/close`, { method: 'POST' });
+  async closeProblemTicket(id: string, reason?: string): Promise<ProblemTicketSummary> {
+    return this.request(`/problem-tickets/${id}/close`, { method: 'POST', body: JSON.stringify({ reason }) });
+  }
+
+  async assistProblemTicket(id: string, reason: string): Promise<ProblemTicketSummary> {
+    return this.request(`/problem-tickets/${id}/assist`, { method: 'POST', body: JSON.stringify({ reason }) });
   }
 
   async quote(input: PricingQuoteRequest): Promise<QuoteResponse> {
@@ -643,12 +964,93 @@ export class ApiClient {
     return this.request('/pricing/rules/quote', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async priceBooks(): Promise<PriceBooksResponse> {
-    return this.request('/pricing/books');
+  async priceBooks(options: { includeRows?: boolean; targetModule?: PriceBookImportTargetModule } = {}): Promise<PriceBooksResponse> {
+    const params = new globalThis.URLSearchParams();
+    if (options.includeRows === false) {
+      params.set('includeRows', 'false');
+    }
+    if (options.targetModule) {
+      params.set('targetModule', options.targetModule);
+    }
+    return this.request(`/pricing/books${params.toString() ? `?${params.toString()}` : ''}`);
   }
 
-  async importPriceBook(input: PriceBookImportInput): Promise<{ book: PriceBookSummary; rows: PriceBookRowSummary[] }> {
-    return this.request('/pricing/books/import', { method: 'POST', body: JSON.stringify(input) });
+  async importPriceBook(input: PriceBookImportInput, options: { returnRows?: boolean } = {}): Promise<PriceBookImportResult> {
+    const params = new globalThis.URLSearchParams();
+    if (options.returnRows === false) {
+      params.set('returnRows', 'false');
+    }
+    return this.request(`/pricing/books/import${params.toString() ? `?${params.toString()}` : ''}`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createPriceBookImportJob(file: File, input: Pick<PriceBookImportInput, 'targetModule' | 'agentId' | 'agentShortName'>): Promise<PriceBookImportJobResponse> {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('targetModule', input.targetModule);
+    if (input.agentId) form.append('agentId', input.agentId);
+    if (input.agentShortName) form.append('agentShortName', input.agentShortName);
+    return this.request('/pricing/books/import-jobs', { method: 'POST', body: form });
+  }
+
+  async priceBookImportJob(id: string): Promise<PriceBookImportJobResponse> {
+    return this.request(`/pricing/books/import-jobs/${id}`);
+  }
+
+  async priceBookRows(priceBookId?: string, query: PriceBookRowsQuery = {}): Promise<PriceBookRowsResponse> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) {
+        params.set(key, String(value));
+      }
+    });
+    const path = priceBookId ? `/pricing/books/${priceBookId}/rows` : '/pricing/book-rows';
+    return this.request(`${path}${params.toString() ? `?${params.toString()}` : ''}`);
+  }
+
+  async pricingSyncHealth(query: { page?: number; pageSize?: number; legacyModule?: LegacyPricingModule | 'unclassified' } = {}): Promise<PricingSyncHealthResponse> {
+    const params = new globalThis.URLSearchParams();
+    if (query.page) params.set('page', String(query.page));
+    if (query.pageSize) params.set('pageSize', String(query.pageSize));
+    if (query.legacyModule) params.set('legacyModule', String(query.legacyModule));
+    return this.request(`/pricing/sync-health${params.toString() ? `?${params.toString()}` : ''}`);
+  }
+
+  async priceBookRuleRefreshProgress(): Promise<PricingRuleRefreshProgressResponse> {
+    return this.request('/pricing/books/rule-refresh-progress');
+  }
+
+  async downloadPriceBook(id: string): Promise<{ fileName: string; blob: Blob }> {
+    const path = `/pricing/books/${encodeURIComponent(id)}/download`;
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}${path}`, { headers });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
+        throw new Error('查价请求失败，请检查网络后重试');
+      }
+      throw error;
+    }
+    if (response.status === 401) {
+      this.onUnauthorized();
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    if (!response.ok) {
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    let fileName = '价格表.xlsx';
+    try {
+      fileName = encodedName ? decodeURIComponent(encodedName) : plainName || fileName;
+    } catch {
+      fileName = plainName || fileName;
+    }
+    return { fileName, blob: await response.blob() };
   }
 
   async updatePriceBookRemark(id: string, input: PriceBookRemarkUpdateInput): Promise<PriceBookSummary> {
@@ -672,10 +1074,33 @@ export class ApiClient {
       amazon: '/pricing/legacy/amazon/quote',
       inquiry: '/pricing/legacy/inquiry/quote',
       europeExpress: '/pricing/legacy/europe-express/quote',
-      southAfrica: '/pricing/legacy/south-africa/quote'
+      southAfrica: '/pricing/legacy/south-africa/quote',
+      usaAirSea: '/pricing/legacy/usa-air-sea/quote',
+      canadaAirSea: '/pricing/legacy/canada-air-sea/quote',
+      dubaiAirSea: '/pricing/legacy/dubai-air-sea/quote'
     };
     const { module: _module, ...body } = input;
     return this.request(paths[input.module], { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async dubaiPriceTable(): Promise<DubaiPriceTableResponse> {
+    return this.request('/pricing/legacy/dubai-air-sea/table');
+  }
+
+  async dubaiPriceDisplay(): Promise<DubaiPriceDisplayResponse> {
+    return this.request('/pricing/legacy/dubai-air-sea/display');
+  }
+
+  async dubaiPriceDisplayVersions(): Promise<DubaiPriceDisplayVersionListResponse> {
+    return this.request('/pricing/legacy/dubai-air-sea/display-versions');
+  }
+
+  async activateDubaiPriceDisplayVersion(id: string, input: DubaiPriceDisplayActivateInput): Promise<DubaiPriceDisplayVersionListResponse> {
+    return this.request(`/pricing/legacy/dubai-air-sea/display-versions/${id}/activate`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async retryDubaiPriceDisplayVersion(id: string): Promise<DubaiPriceDisplayVersionListResponse> {
+    return this.request(`/pricing/legacy/dubai-air-sea/display-versions/${id}/retry`, { method: 'POST' });
   }
 
   async legacyPricingSources(module?: LegacyPricingModule): Promise<LegacyPricingSourcesResponse> {
@@ -700,6 +1125,30 @@ export class ApiClient {
     return this.request(`/pricing/legacy/health-report${params}`);
   }
 
+  async southAfricaRateRules(): Promise<SouthAfricaRateRuleListResponse> {
+    return this.request('/pricing/south-africa/rules');
+  }
+
+  async createSouthAfricaRateRule(input: SouthAfricaRateRuleInput): Promise<SouthAfricaRateRuleSummary> {
+    return this.request('/pricing/south-africa/rules', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateSouthAfricaRateRule(id: string, input: SouthAfricaRateRuleInput): Promise<SouthAfricaRateRuleSummary> {
+    return this.request(`/pricing/south-africa/rules/${id}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async updateSouthAfricaRateRuleEnabled(id: string, enabled: boolean): Promise<SouthAfricaRateRuleSummary> {
+    return this.request(`/pricing/south-africa/rules/${id}/enabled`, { method: 'PATCH', body: JSON.stringify({ enabled }) });
+  }
+
+  async deleteSouthAfricaRateRule(id: string): Promise<SouthAfricaRateRuleSummary> {
+    return this.request(`/pricing/south-africa/rules/${id}`, { method: 'DELETE' });
+  }
+
+  async lookupSouthAfricaPricing(input: SouthAfricaLookupRequest): Promise<SouthAfricaLookupResponse> {
+    return this.request('/pricing/south-africa/lookup', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async agentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
     const params = new globalThis.URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
@@ -714,6 +1163,18 @@ export class ApiClient {
     return this.request(`/pricing/markup-rules/${id}/preview`);
   }
 
+  async previewMarkupRoute(input: MarkupRoutePreviewInput): Promise<MarkupRoutePreviewResponse> {
+    return this.request('/pricing/markup-rules/route-preview', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async replaceMarkupRouteTiers(input: MarkupRouteTierReplaceInput): Promise<MarkupRoutePreviewResponse> {
+    return this.request('/pricing/markup-rules/route-tiers', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async migrateLegacyMarkupRouteScopes(): Promise<{ migratedCount: number; archivedCount: number; skippedCount: number }> {
+    return this.request('/pricing/markup-rules/migrate-pricebook-scopes', { method: 'POST' });
+  }
+
   async exportAgentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {
     const params = new globalThis.URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
@@ -726,6 +1187,18 @@ export class ApiClient {
 
   async importAgentMarkupRules(rows: AgentMarkupCreateInput[]): Promise<{ successCount: number; errorRows: Array<{ index: number; reason: string }>; rows: AgentMarkupSummary[] }> {
     return this.request('/pricing/markup-rules/import', { method: 'POST', body: JSON.stringify({ rows }) });
+  }
+
+  async batchUpsertAgentMarkupRules(rows: AgentMarkupCreateInput[]): Promise<{ successCount: number; errorRows: Array<{ index: number; reason: string }>; rows: AgentMarkupSummary[] }> {
+    return this.request('/pricing/markup-rules/batch-upsert', { method: 'POST', body: JSON.stringify({ rows }) });
+  }
+
+  async batchUpdateAgentMarkupRules(input: { ids?: string[]; agentNames?: string[]; scopes?: Array<{ agentName: string; priceBookId?: string; legacyModule?: LegacyPricingModule }>; enabled: boolean }): Promise<{ successCount: number; rows: AgentMarkupSummary[] }> {
+    return this.request('/pricing/markup-rules/batch-status', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async batchDeleteAgentMarkupRules(input: { ids?: string[]; agentNames?: string[]; scopes?: Array<{ agentName: string; priceBookId?: string; legacyModule?: LegacyPricingModule }> }): Promise<{ successCount: number; rows: AgentMarkupSummary[] }> {
+    return this.request('/pricing/markup-rules/batch-delete', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async createAgentMarkupRule(input: AgentMarkupCreateInput): Promise<AgentMarkupSummary> {
@@ -770,12 +1243,24 @@ export class ApiClient {
     return this.request('/warehouse/package-groups');
   }
 
+  async warehouseManualReceiptCustomers(): Promise<WarehouseManualReceiptCustomerOption[]> {
+    return this.request('/warehouse/manual-receipt/customers');
+  }
+
   async createWarehousePackage(input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
     return this.request('/warehouse/packages', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async createWarehouseManualReceipt(input: WarehouseManualReceiptCreateInput): Promise<WarehouseManualReceiptCreateResponse> {
+    return this.request('/warehouse/packages/manual-receipt', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async splitWarehousePackage(id: string, input: WarehousePackageSplitInput): Promise<WarehousePackageSplitResponse> {
     return this.request(`/warehouse/packages/${id}/split`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateWarehousePackage(id: string, input: WarehousePackageUpdateInput): Promise<WarehousePackageSummary> {
+    return this.request(`/warehouse/packages/${id}`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
   async updateWarehousePackageRemark(id: string, input: { remark?: string }): Promise<WarehousePackageSummary> {
@@ -809,6 +1294,10 @@ export class ApiClient {
     return this.request(`/warehouse/tally-tasks${search ? `?${search}` : ''}`);
   }
 
+  async warehouseTallyTaskHistoryChain(packageId: string): Promise<WarehouseTallyTaskSummary[]> {
+    return this.request(`/warehouse/tally-task-history-chain?packageId=${encodeURIComponent(packageId)}`);
+  }
+
   async createWarehouseTallyTask(input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
     return this.request('/warehouse/tally-tasks', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -823,6 +1312,10 @@ export class ApiClient {
 
   async generateWarehouseTallyTaskLabel(id: string): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/label`, { method: 'POST' });
+  }
+
+  async warehouseTallyTaskOutputPackages(id: string): Promise<WarehousePackageSummary[]> {
+    return this.request(`/warehouse/tally-tasks/${id}/output-packages`);
   }
 
   async printWarehouseTallyTaskLabel(id: string): Promise<WarehouseTallyTaskSummary> {
@@ -889,6 +1382,10 @@ export class ApiClient {
   }
 
   async disableFinanceCatalogItem(id: string): Promise<FinanceCatalogItemSummary> {
+    return this.updateFinanceCatalogItem(id, { enabled: false });
+  }
+
+  async deleteFinanceCatalogItem(id: string): Promise<{ id: string; deleted: boolean }> {
     return this.request(`/finance/catalog/${id}`, { method: 'DELETE' });
   }
 
@@ -1114,7 +1611,7 @@ export class ApiClient {
     return this.request('/finance/payment-water-receipts', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async agentBankAccounts(query: { agentName?: string; agentId?: string } = {}): Promise<AgentBankAccountSummary[]> {
+  async agentBankAccounts(query: { agentName?: string; agentId?: string; includeDisabled?: boolean } = {}): Promise<AgentBankAccountSummary[]> {
     return this.request(`/finance/agent-bank-accounts${this.queryString(query)}`);
   }
 
@@ -1186,6 +1683,10 @@ export class ApiClient {
     return this.request(`/finance/water-receipts/${id}/voucher`, { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async deleteWaterReceiptVoucher(id: string): Promise<{ deleted: true }> {
+    return this.request(`/finance/water-receipts/${id}/voucher`, { method: 'DELETE' });
+  }
+
   async exportWaterReceipts(input: WaterReceiptExportRequest): Promise<WaterReceiptExportResponse> {
     return this.request('/finance/water-receipts/export', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1242,6 +1743,14 @@ export class ApiClient {
     return this.request(`/master-data/agents/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
+  async batchUpdateAgentsEnabled(input: { ids: string[]; enabled: boolean }): Promise<{ successCount: number; rows: AgentSummary[] }> {
+    return this.request('/master-data/agents/batch-enabled', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async deleteAgents(input: { ids: string[] }): Promise<AgentDeleteResponse> {
+    return this.request('/master-data/agents/batch-delete', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async createAgentChannel(input: AgentChannelCreateInput): Promise<AgentChannelSummary> {
     return this.request('/master-data/agent-channels', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1252,6 +1761,10 @@ export class ApiClient {
 
   async updateAgentChannelEnabled(id: string, input: EnabledUpdateInput): Promise<AgentChannelSummary> {
     return this.request(`/master-data/agent-channels/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deleteAgentChannel(id: string): Promise<AgentChannelSummary> {
+    return this.request(`/master-data/agent-channels/${id}`, { method: 'DELETE' });
   }
 
   async createCarrier(input: CarrierCreateInput): Promise<CarrierSummary> {
@@ -1274,6 +1787,10 @@ export class ApiClient {
     return this.request(`/master-data/channels/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
+  async deleteChannel(id: string): Promise<ChannelSummary> {
+    return this.request(`/master-data/channels/${id}`, { method: 'DELETE' });
+  }
+
   async createChannelCategory(input: ChannelCategoryCreateInput): Promise<ChannelCategorySummary> {
     return this.request('/master-data/channel-categories', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1284,6 +1801,10 @@ export class ApiClient {
 
   async updateChannelCategoryEnabled(id: string, input: EnabledUpdateInput): Promise<ChannelCategorySummary> {
     return this.request(`/master-data/channel-categories/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deleteChannelCategory(id: string): Promise<ChannelCategorySummary> {
+    return this.request(`/master-data/channel-categories/${id}`, { method: 'DELETE' });
   }
 
   async createSurcharge(input: SurchargeCreateInput): Promise<SurchargeSummary> {
@@ -1332,6 +1853,10 @@ export class ApiClient {
       if (value) params.set(key, String(value));
     });
     return this.request(`/system/staff-accounts${params.toString() ? `?${params.toString()}` : ''}`);
+  }
+
+  async departments(): Promise<DepartmentSummary[]> {
+    return this.request('/system/departments');
   }
 
   async sites(): Promise<SiteSummary[]> {
@@ -1405,13 +1930,25 @@ export class ApiClient {
   }
 
   private async request<T>(path: string, init: RequestInit = {}, authenticated = true): Promise<T> {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init.headers as Record<string, string> | undefined) };
+    const headers: Record<string, string> = {
+      ...(init.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(init.headers as Record<string, string> | undefined)
+    };
     const token = this.getToken();
     if (authenticated && token) {
       headers.Authorization = `Bearer ${token}`;
     }
 
-    const response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}${path}`, { ...init, headers });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
+        throw new Error(path.includes('/pricing/') ? '查价请求失败，请检查网络后重试' : '网络请求失败，请稍后重试');
+      }
+      throw error;
+    }
     if (response.status === 401) {
       if (authenticated) {
         this.onUnauthorized();

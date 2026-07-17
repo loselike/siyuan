@@ -1,6 +1,6 @@
 import { Button, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { BusinessCostAuditSummary, Shipment } from '@siyuan/shared';
+import type { BusinessCostAuditSummary, PayableAuditSummary, Shipment } from '@siyuan/shared';
 import { formatBeijingDateTime } from './format';
 
 const { Text } = Typography;
@@ -17,52 +17,109 @@ function getBusinessCosts(shipment: Shipment, rows: BusinessCostAuditSummary[] =
   return rows.filter((fee) => fee.shipmentId === shipment.id || fee.systemOrderNo === shipment.systemOrderNo);
 }
 
-function renderFeeRows(rows: BusinessCostAuditSummary[]) {
+function getPayableCosts(shipment: Shipment, rows: PayableAuditSummary[] = []) {
+  return rows.filter((fee) => fee.shipmentId === shipment.id || fee.systemOrderNo === shipment.systemOrderNo);
+}
+
+function renderFeeRows(rows: Array<BusinessCostAuditSummary | PayableAuditSummary>) {
   return rows.length ? (
     <Space direction="vertical" size={0}>
-      {rows.map((row) => <Text key={row.id}>{row.name} {formatAmount(row.amount, row.currency)}</Text>)}
+      {rows.map((row) => {
+        const hasWeightFormula = Number(row.chargeWeightKg) > 0 && Number(row.unitPrice) > 0;
+        const formula = hasWeightFormula ? `${Number(row.chargeWeightKg).toFixed(2)} × ${Number(row.unitPrice).toFixed(2)}` : undefined;
+        return <Text key={row.id}>{row.name} {formula ? `${formula} = ` : ''}{formatAmount(row.amount, row.currency)}</Text>;
+      })}
     </Space>
   ) : <Text type="secondary">-</Text>;
 }
 
 export function createPendingRoutingColumns(options: {
   businessCostAudits?: BusinessCostAuditSummary[];
-  mode: 'market' | 'warehouse';
+  payableAudits?: PayableAuditSummary[];
+  mode: 'customerService' | 'market' | 'warehouse';
+  onRoute?: (shipment: Shipment) => void;
   onApprove?: (shipment: Shipment) => void;
   onModify?: (shipment: Shipment) => void;
+  onViewFees?: (shipment: Shipment) => void;
   onViewLog?: (shipment: Shipment) => void;
+  canViewBusinessCost?: boolean;
+  canViewPayableCost?: boolean;
+  canViewAgentChannel?: boolean;
 }): ColumnsType<Shipment> {
-  const { businessCostAudits = [], mode, onApprove, onModify } = options;
+  const { businessCostAudits = [], payableAudits = [], mode, onRoute, onApprove, onModify, onViewFees, onViewLog, canViewBusinessCost: businessCostPermission, canViewPayableCost: payableCostPermission, canViewAgentChannel: agentChannelPermission } = options;
+  // 客服保留只读列位置但不返回敏感金额；仓库不展示成本列。
+  const canViewPayableCost = payableCostPermission ?? mode === 'market';
+  const canViewBusinessCost = businessCostPermission ?? mode !== 'warehouse';
+  const canViewAgentChannel = agentChannelPermission ?? mode === 'market';
+  const businessCostColumns: ColumnsType<Shipment> = canViewBusinessCost ? [
+    { title: '业务成本', width: 180, render: (_, record) => renderFeeRows(getBusinessCosts(record, businessCostAudits)) },
+    {
+      title: '业务成本合计',
+      width: 130,
+      align: 'right',
+      render: (_, record) => {
+        const costs = getBusinessCosts(record, businessCostAudits);
+        const total = costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0);
+        return costs.length ? formatAmount(total) : <Text type="secondary">-</Text>;
+      }
+    }
+  ] : [];
+  const payableCostColumns: ColumnsType<Shipment> = mode !== 'warehouse' ? [
+    {
+      title: '应付成本',
+      width: 150,
+      render: (_, record) => {
+        if (!canViewPayableCost) return <Text type="secondary">-</Text>;
+        const costs = getPayableCosts(record, payableAudits);
+        return costs.length ? renderFeeRows(costs) : record.routeCostTotal ? <Text>代理成本 {formatAmount(record.routeCostTotal, record.routeCurrency)}</Text> : <Text type="secondary">-</Text>;
+      }
+    },
+    {
+      title: '应付合计',
+      width: 120,
+      align: 'right',
+      render: (_, record) => {
+        if (!canViewPayableCost) return <Text type="secondary">-</Text>;
+        const costs = getPayableCosts(record, payableAudits);
+        if (costs.length) return formatAmount(costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
+        return formatAmount(record.routeCostTotal, record.routeCurrency);
+      }
+    }
+  ] : [];
+
   return [
     { title: '日期', width: 170, render: (_, record) => formatBeijingDateTime(getPendingRoutingDate(record)) },
     { title: '站点', dataIndex: 'site', width: 100, render: (value?: string) => value || '-' },
     { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value || '-' },
     { title: '客户编号', dataIndex: 'customerCode', width: 110, render: (value: string | undefined, record) => value || record.customerName.split('-')[0] || '-' },
     { title: '运单号', dataIndex: 'systemOrderNo', width: 170 },
-    { title: '业务渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
-    { title: '货物数据', width: 145, render: (_, record) => `${record.packageCount} 件 / ${record.receivableWeightKg.toFixed(2)} kg` },
-    { title: '业务成本', width: 180, render: (_, record) => renderFeeRows(getBusinessCosts(record, businessCostAudits)) },
+    { title: '公司渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
     {
-      title: '业务成本合计',
-      width: 130,
-      align: 'right',
-      render: (_, record) => formatAmount(getBusinessCosts(record, businessCostAudits).reduce((sum, fee) => sum + fee.amount, 0))
+      title: '国家',
+      dataIndex: 'destinationCountry',
+      width: 100,
+      render: (value?: string) => value?.trim() ? value : <Text type="danger">缺国家</Text>
     },
+    { title: '货物数据', width: 180, render: (_, record) => `${record.packageCount} 件 / 实重 ${(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg / 计费 ${record.receivableWeightKg.toFixed(2)} kg` },
+    ...businessCostColumns,
     {
       title: '选项',
-      width: 120,
-      render: () => mode === 'market' ? <Tag color="blue">待审核</Tag> : <Text type="secondary">待市场排货</Text>
+      width: 84,
+      render: (_, record) => mode === 'market'
+        ? <Button size="small" disabled={!onRoute} onClick={() => onRoute?.(record)}>排货</Button>
+        : <Text type="secondary">待市场排货</Text>
     },
-    { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '待分配' },
-    { title: '代理渠道', dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '待分配' },
-    { title: '应付成本', width: 150, render: (_, record) => record.routeCostTotal ? <Text>代理成本 {formatAmount(record.routeCostTotal, record.routeCurrency)}</Text> : <Text type="secondary">-</Text> },
-    { title: '应付合计', width: 120, align: 'right', render: (_, record) => formatAmount(record.routeCostTotal, record.routeCurrency) },
+    ...(canViewAgentChannel ? [
+      { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '待分配' },
+      { title: '代理渠道', dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '待分配' }
+    ] : []),
+    ...payableCostColumns,
     {
       title: '操作',
-      width: mode === 'market' ? 150 : 90,
+      width: mode === 'market' ? 230 : onViewFees ? 150 : 90,
       fixed: 'right',
       render: (_, record) => mode === 'market' ? (
-        <Space size={6} wrap>
+        <Space size={4} wrap={false} style={{ whiteSpace: 'nowrap' }}>
           {onApprove ? (
             <Button size="small" type="primary" onClick={() => onApprove(record)}>
               审核
@@ -73,8 +130,22 @@ export function createPendingRoutingColumns(options: {
               修改
             </Button>
           ) : null}
+          {onViewLog ? (
+            <Button size="small" onClick={() => onViewLog(record)}>
+              操作日志
+            </Button>
+          ) : null}
         </Space>
-      ) : <Tag>只读</Tag>
+      ) : (
+        <Space size={6} wrap>
+          {onViewFees ? (
+            <Button size="small" onClick={() => onViewFees(record)}>
+              查看费用
+            </Button>
+          ) : null}
+          <Tag>只读</Tag>
+        </Space>
+      )
     }
   ];
 }

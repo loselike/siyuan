@@ -1,6 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { FinanceCatalogCategory, FinanceCatalogListQuery } from '@siyuan/shared';
+import type { Principal } from '../../rbac.js';
 import { PrismaService } from '../../prisma.service.js';
+import { PrismaRepository } from '../../prisma.repository.js';
 import { mapFinanceCatalogItem, normalizeDefaultFinanceCatalogItems, type FinanceCatalogRow } from './finance-catalog.types.js';
 
 export const FINANCE_CATALOG_REPOSITORY = 'FINANCE_CATALOG_REPOSITORY';
@@ -25,8 +27,9 @@ export interface FinanceCatalogRepository {
   nextSortOrder(category: FinanceCatalogCategory): Promise<number>;
   create(data: FinanceCatalogCreateData): Promise<FinanceCatalogRow>;
   update(id: string, data: FinanceCatalogUpdateData): Promise<FinanceCatalogRow>;
+  delete(id: string): Promise<FinanceCatalogRow>;
   reorder(category: FinanceCatalogCategory, orderedIds: string[]): Promise<{ before: FinanceCatalogRow[]; after: FinanceCatalogRow[] }>;
-  writeAudit(input: { actorId: string; action: string; target: string; before?: unknown; after?: unknown }): Promise<void>;
+  writeAudit(input: { actorId: string; principal?: Principal; action: string; target: string; before?: unknown; after?: unknown }): Promise<void>;
 }
 
 @Injectable()
@@ -89,6 +92,10 @@ export class PrismaFinanceCatalogRepository implements FinanceCatalogRepository 
     return (this.prisma as any).financeCatalogItem.update({ where: { id }, data });
   }
 
+  async delete(id: string) {
+    return (this.prisma as any).financeCatalogItem.delete({ where: { id } });
+  }
+
   async reorder(category: FinanceCatalogCategory, orderedIds: string[]) {
     const rows = await (this.prisma as any).financeCatalogItem.findMany({
       where: { category },
@@ -114,7 +121,7 @@ export class PrismaFinanceCatalogRepository implements FinanceCatalogRepository 
     return { before: rows, after: refreshed };
   }
 
-  async writeAudit(input: { actorId: string; action: string; target: string; before?: unknown; after?: unknown }) {
+  async writeAudit(input: { actorId: string; principal?: Principal; action: string; target: string; before?: unknown; after?: unknown }) {
     await this.prisma.auditLog.create({
       data: {
         actorId: input.actorId,
@@ -129,6 +136,8 @@ export class PrismaFinanceCatalogRepository implements FinanceCatalogRepository 
 
 @Injectable()
 export class InMemoryFinanceCatalogRepository implements FinanceCatalogRepository {
+  constructor(@Inject(PrismaRepository) private readonly appRepository: PrismaRepository) {}
+
   private items: FinanceCatalogRow[] = normalizeDefaultFinanceCatalogItems().map((item, index) => ({
     id: `catalog-${index + 1}`,
     ...item,
@@ -195,6 +204,13 @@ export class InMemoryFinanceCatalogRepository implements FinanceCatalogRepositor
     return next;
   }
 
+  async delete(id: string) {
+    const current = await this.findById(id);
+    if (!current) throw new Error('finance catalog row not found');
+    this.items = this.items.filter((item) => item.id !== id);
+    return current;
+  }
+
   async reorder(category: FinanceCatalogCategory, orderedIds: string[]) {
     const before = await this.findMany({ category });
     const rowById = new Map(before.map((row) => [row.id, row]));
@@ -210,8 +226,11 @@ export class InMemoryFinanceCatalogRepository implements FinanceCatalogRepositor
     return { before, after };
   }
 
-  async writeAudit() {
-    return;
+  async writeAudit(input: { actorId: string; principal?: Principal; action: string; target: string; before?: unknown; after?: unknown }) {
+    const audit = (this.appRepository as unknown as { audit?: (action: string, target: string, principal: Principal, before: unknown, after: unknown) => void }).audit;
+    if (audit && input.principal) {
+      audit.call(this.appRepository, input.action, input.target, input.principal, input.before, input.after);
+    }
   }
 }
 

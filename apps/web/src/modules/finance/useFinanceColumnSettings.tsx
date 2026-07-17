@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Button, Flex, Space } from 'antd';
-import { ArrowDown, ArrowUp, Eye, EyeOff, GripVertical } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChevronsUp, Eye, EyeOff, GripVertical } from 'lucide-react';
 import './useFinanceColumnSettings.css';
 
 type StoredColumnSettings<ColumnKey extends string> = {
@@ -136,6 +136,7 @@ export function FinanceColumnSettingsPanel<ColumnKey extends string>({
           />
           <span className="column-settings-title"><GripVertical size={14} />{getColumnTitle(key)}</span>
           <Space size={2}>
+            <Button size="small" aria-label="移到首行" title="移到首行" icon={<ChevronsUp size={14} />} disabled={index === 0} onClick={() => moveColumnTo(key, visibleColumnOrder[0])} />
             <Button size="small" icon={<ArrowUp size={14} />} disabled={index === 0} onClick={() => moveColumn(key, 'up')} />
             <Button size="small" icon={<ArrowDown size={14} />} disabled={index === visibleColumnOrder.length - 1} onClick={() => moveColumn(key, 'down')} />
           </Space>

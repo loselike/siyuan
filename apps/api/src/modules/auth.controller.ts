@@ -74,21 +74,27 @@ export class AuthController {
   }
 
   @Get('me')
-  @RequirePermission('workspace:access')
+  @RequireAuth()
   me(@Req() request: { user: Principal }) {
     return this.repository.getProfile(request.user);
   }
 
   @Put('profile')
-  @RequirePermission('workspace:access')
+  @RequireAuth()
   updateProfile(@Req() request: { user: Principal }, @Body() body: { name?: string; phone?: string; gender?: string; nickname?: string }) {
     return this.repository.updateProfile(request.user, body);
   }
 
   @Get('login-logs')
-  @RequirePermission('workspace:access')
+  @RequireAuth()
   loginLogs(@Req() request: { user: Principal }) {
     return this.repository.getLoginLogs(request.user);
+  }
+
+  @Get('account-events')
+  @RequireAuth()
+  accountEvents(@Req() request: { user: Principal }) {
+    return this.repository.getAccountEvents(request.user);
   }
 
   @Post('change-password')

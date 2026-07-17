@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { AutoComplete, Button, Card, Col, Dropdown, Flex, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
+import { AutoComplete, Button, Card, Col, Flex, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
-import { RefreshCw, Settings, WalletCards } from 'lucide-react';
+import { RefreshCw, WalletCards } from 'lucide-react';
 import type {
   FinanceCatalogItemSummary,
   ReceivableAuditCreateInput,
@@ -11,18 +11,17 @@ import type {
   ReceivableAuditSummary,
   WaterReceiptSummary
 } from '@siyuan/shared';
-import type { ApiClient, RoleKey } from '../../../apiClient';
+import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { applySettlementMethodCurrency, createSettlementMethodOptions, financeCatalogCurrencyOptions, getSettlementMethodRows } from '../catalog';
 import { downloadCsv } from '../exportCsv';
-import { FinanceColumnSettingsPanel, useFinanceColumnSettings } from '../useFinanceColumnSettings';
-import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
+import { formatBeijingDateTime } from '../../shared/format';
 import { ManagedTable } from '../../shared/ui';
 
 const { Text } = Typography;
 
 type ReceivableAuditPageProps = {
   apiClient: ApiClient;
-  role: RoleKey;
+  permissions: PermissionKey[];
   rows: ReceivableAuditSummary[];
   financeCatalogItems: FinanceCatalogItemSummary[];
   renderShipmentOrderNoLink: (systemOrderNo?: string) => ReactNode;
@@ -78,10 +77,13 @@ const defaultColumnOrder: ColumnKey[] = [
 
 const columnStorageKey = 'siyuan.finance.receivableAudit.columns';
 
-function formatMoney(amount?: number, currency = 'RMB') {
+function formatAmount(amount?: number) {
   if (typeof amount !== 'number' || Number.isNaN(amount)) return '-';
-  if (currency === 'RMB' || currency === 'CNY') return formatCurrency(amount);
-  return `${currency} ${amount.toFixed(2)}`;
+  return amount.toFixed(2);
+}
+
+function formatAmountWithCurrency(amount?: number, currency = 'RMB') {
+  return `${currency} ${formatAmount(amount)}`;
 }
 
 function statusTag(value?: string) {
@@ -90,9 +92,20 @@ function statusTag(value?: string) {
   return <Tag color={color}>{status === 'CONFIRMED' ? '已审核' : status === 'VOIDED' ? '已作废' : '待审核'}</Tag>;
 }
 
+function receiptStatusTag(value?: ReceivableAuditSummary['receiptStatus']) {
+  const status = value ?? 'UNPAID';
+  const map: Record<'UNPAID' | 'PARTIAL' | 'RECEIVED', { label: string; color: string }> = {
+    UNPAID: { label: '未匹配', color: 'default' },
+    PARTIAL: { label: '部分匹配', color: 'warning' },
+    RECEIVED: { label: '已匹配', color: 'success' }
+  };
+  const item = map[status];
+  return <Tag color={item.color}>{item.label}</Tag>;
+}
+
 export function ReceivableAuditPage({
   apiClient,
-  role,
+  permissions,
   rows,
   financeCatalogItems,
   renderShipmentOrderNoLink,
@@ -112,7 +125,7 @@ export function ReceivableAuditPage({
   const [createOpen, setCreateOpen] = useState(false);
   const [receiptRow, setReceiptRow] = useState<ReceivableAuditSummary | null>(null);
   const [receiptRows, setReceiptRows] = useState<WaterReceiptSummary[]>([]);
-  const { columnOrder, hiddenColumns, toggleColumn, moveColumn, moveColumnTo, resetColumns } = useFinanceColumnSettings(columnStorageKey, defaultColumnOrder);
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
 
   const feeNameOptions = useMemo(
     () => financeCatalogItems
@@ -122,17 +135,19 @@ export function ReceivableAuditPage({
   );
   const settlementRows = useMemo(() => getSettlementMethodRows(financeCatalogItems), [financeCatalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(financeCatalogItems), [financeCatalogItems]);
-  const canSettle = role === 'ADMIN' || role === 'FINANCE';
-  const canMatchReceipt = (row: ReceivableAuditSummary) => canSettle
-    && row.sourceType === 'MANUAL'
+  const canCreate = permissions.includes('finance:receivable:create');
+  const canAudit = permissions.includes('finance:receivable:audit');
+  const canReverse = permissions.includes('finance:receivable:reverse');
+  const canVoid = permissions.includes('finance:receivable:void');
+  const canBatchAudit = permissions.includes('finance:receivable:batch-audit');
+  const canBatchReverse = permissions.includes('finance:receivable:batch-reverse');
+  const canBatchVoid = permissions.includes('finance:receivable:batch-void');
+  const canExport = permissions.includes('finance:receivable:export');
+  const canMatchReceipt = (row: ReceivableAuditSummary) => permissions.includes('finance:receivable:match-water')
     && row.reconciliationStatus === 'CONFIRMED'
     && !row.voided
     && (row.receiptStatus ?? 'UNPAID') !== 'RECEIVED'
     && (row.receivedAmount ?? 0) < row.amount;
-  const selectablePageIds = response.rows.filter((row) => !row.voided).map((row) => row.id);
-  const isPageSelected = selectablePageIds.length > 0 && selectablePageIds.every((id) => selectedIds.includes(id));
-  const togglePageSelection = () => setSelectedIds(isPageSelected ? [] : selectablePageIds);
-
   const loadRows = async (nextQuery = query) => {
     setLoading(true);
     try {
@@ -178,14 +193,19 @@ export function ReceivableAuditPage({
       : action === 'reverse'
         ? await apiClient.batchReverseAuditReceivables({ ids: selectedIds })
         : await apiClient.batchVoidReceivables({ ids: selectedIds });
-    message.success(`处理完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`);
+    const failureReasons = Array.from(new Set(result.failures.map((item) => item.reason))).slice(0, 3);
+    if (result.failureCount) {
+      message.warning(`处理完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条。${failureReasons.join('；') || '请检查记录状态或权限。'}`);
+    } else {
+      message.success(`处理完成：成功 ${result.successCount} 条`);
+    }
     await loadRows();
   };
 
   const submitCreate = async () => {
     const values = await form.validateFields();
     const feeExists = feeNameOptions.some((option) => option.value === values.name);
-    if (!feeExists && canSettle) {
+    if (!feeExists && canCreate) {
       Modal.confirm({
         title: '保存费用名称到资料库？',
         content: `费用名称「${values.name}」不在资料库中，是否同时保存？`,
@@ -225,7 +245,12 @@ export function ReceivableAuditPage({
         page: 1,
         pageSize: 100
       });
-      setReceiptRows(result.rows.filter((receipt) => receipt.customerId === row.customerId && receipt.balance > 0 && receipt.status !== 'PENDING'));
+      setReceiptRows(result.rows.filter((receipt) =>
+        receipt.customerId === row.customerId
+        && receipt.balance > 0
+        && (receipt.currency ?? 'RMB') === (row.currency ?? 'RMB')
+        && ['ARRIVED', 'PARTIAL_MATCHED'].includes(receipt.status)
+      ));
     } catch (error) {
       message.error(error instanceof Error ? error.message : '加载水单失败');
       setReceiptRows([]);
@@ -236,10 +261,10 @@ export function ReceivableAuditPage({
     salesperson: { title: '业务员', dataIndex: 'salesperson', width: 100, sorter: true, render: (value?: string) => value ?? '-' },
     name: { title: '费用名称', dataIndex: 'name', width: 120, sorter: true },
     customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 110, sorter: true },
-    systemOrderNo: { title: '运单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 180, render: (value?: string) => <Text className="table-compact-text">{value ?? '-'}</Text> },
     currency: { title: '币种', dataIndex: 'currency', width: 80, render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag> },
-    amount: { title: '金额', dataIndex: 'amount', width: 120, align: 'right', sorter: true, render: (value: number, row) => formatMoney(value, row.currency) },
+    amount: { title: '金额', dataIndex: 'amount', width: 120, align: 'right', sorter: true, render: (value: number) => formatAmount(value) },
     settlementMethod: { title: '结算方式', dataIndex: 'settlementMethod', width: 140, render: (value?: string) => value ?? '-' },
     paymentNo: {
       title: '匹配水单编号',
@@ -247,14 +272,15 @@ export function ReceivableAuditPage({
       width: 170,
       render: (value: string | undefined, row) => (
         <Space direction="vertical" size={0}>
+          {receiptStatusTag(row.receiptStatus)}
           {canMatchReceipt(row)
-            ? <Button size="small" type="link" icon={<WalletCards size={14} />} onClick={() => { void openReceiptMatch(row); }}>{value ?? '匹配水单'}</Button>
-            : <Text>{value ?? '-'}</Text>}
-          <Text type="secondary" className="table-compact-text">已收 {formatMoney(row.receivedAmount ?? 0, row.currency)}</Text>
+            ? <Button size="small" type="link" icon={<WalletCards size={14} />} onClick={() => { void openReceiptMatch(row); }}>{row.matchedReceiptNo ?? value ?? '匹配水单'}</Button>
+            : <Text>{row.matchedReceiptNo ?? value ?? '-'}</Text>}
+          <Text type="secondary" className="table-compact-text">匹配金额 {formatAmount(row.receivedAmount ?? 0)}</Text>
         </Space>
       )
     },
-    orderRmbTotal: { title: '合计(RMB)', dataIndex: 'orderRmbTotal', width: 130, align: 'right', sorter: true, render: (value?: number) => formatCurrency(value ?? 0) },
+    orderRmbTotal: { title: '合计', dataIndex: 'orderRmbTotal', width: 130, align: 'right', sorter: true, render: (value?: number) => formatAmount(value ?? 0) },
     createdAt: { title: '制单日期', dataIndex: 'createdAt', width: 155, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     createdBy: { title: '制单人', dataIndex: 'createdBy', width: 100, render: (value?: string) => value ?? '系统' },
     reviewedAt: { title: '审单日期', dataIndex: 'reviewedAt', width: 155, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
@@ -270,36 +296,22 @@ export function ReceivableAuditPage({
         <Space size={4}>
           {row.reconciliationStatus === 'CONFIRMED' ? (
             <Popconfirm title="确认反审核该应收？" onConfirm={async () => { await apiClient.reverseAuditReceivable(row.id); await loadRows(); }} okText="反审核" cancelText="取消">
-              <Button size="small" disabled={!canSettle}>反审核</Button>
+              <Button size="small" disabled={!canReverse}>反审核</Button>
             </Popconfirm>
           ) : (
             <Popconfirm title="确认审核该应收？" onConfirm={async () => { await apiClient.auditReceivable(row.id); await loadRows(); }} okText="审核" cancelText="取消">
-              <Button size="small" type="primary" disabled={!canSettle || row.voided}>审核</Button>
+              <Button size="small" type="primary" disabled={!canAudit || row.voided}>审核</Button>
             </Popconfirm>
           )}
           <Popconfirm title="确认作废该应收？" onConfirm={async () => { await apiClient.deleteReceivableAudit(row.id); await loadRows(); }} okText="作废" cancelText="取消">
-            <Button size="small" danger disabled={!canSettle || row.reconciliationStatus === 'CONFIRMED' || row.voided}>作废</Button>
+            <Button size="small" danger disabled={!canVoid || row.reconciliationStatus === 'CONFIRMED' || row.voided}>作废</Button>
           </Popconfirm>
         </Space>
       )
     }
   };
 
-  const columns = columnOrder
-    .filter((key) => !hiddenColumns.includes(key))
-    .map((key) => baseColumns[key]);
-
-  const columnMenu = (
-    <FinanceColumnSettingsPanel
-      visibleColumnOrder={columnOrder}
-      hiddenColumns={hiddenColumns}
-      getColumnTitle={(key) => String(baseColumns[key].title)}
-      toggleColumn={toggleColumn}
-      moveColumn={moveColumn}
-      moveColumnTo={moveColumnTo}
-      resetColumns={resetColumns}
-    />
-  );
+  const columns = defaultColumnOrder.map((key) => baseColumns[key]);
 
   return (
     <Card
@@ -307,15 +319,14 @@ export function ReceivableAuditPage({
       className="finance-work-card"
       extra={
         <Space wrap>
-          <Button onClick={togglePageSelection}>{isPageSelected ? '取消全选' : '全选本页'}</Button>
-          <Popconfirm title="确认批量审核？" onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canSettle}>批量审核</Button>
+          <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消">
+            <Button disabled={!selectedIds.length || !canBatchAudit}>批量审核</Button>
           </Popconfirm>
-          <Popconfirm title="确认批量反审核？" onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canSettle}>批量反审核</Button>
+          <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消">
+            <Button disabled={!selectedIds.length || !canBatchReverse}>批量反审核</Button>
           </Popconfirm>
-          <Popconfirm title="确认批量作废？" onConfirm={() => void runBatch('void')} okText="批量作废" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canSettle} danger>批量作废</Button>
+          <Popconfirm title={`确认批量作废已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('void')} okText="批量作废" cancelText="取消">
+            <Button disabled={!selectedIds.length || !canBatchVoid} danger>批量作废</Button>
           </Popconfirm>
           <Button onClick={async () => {
             const exported = await apiClient.exportReceivableAudits({ ids: selectedIds.length ? selectedIds : undefined, query });
@@ -334,41 +345,48 @@ export function ReceivableAuditPage({
               { key: 'remark', label: '备注' }
             ], exported.rows as unknown as Array<Record<string, unknown>>);
             message.success(`应收导出已生成：${exported.rows.length} 条`);
-          }}>导出</Button>
-          <Button onClick={() => setCreateOpen(true)} disabled={!canSettle}>新增应收</Button>
+          }} disabled={!canExport}>导出</Button>
+          <Button onClick={() => setCreateOpen(true)} disabled={!canCreate}>新增应收</Button>
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()} />
-          <Dropdown popupRender={() => columnMenu} trigger={['click']}>
-            <Button icon={<Settings size={15} />} />
-          </Dropdown>
         </Space>
       }
     >
       <Form form={queryForm} layout="vertical" initialValues={defaultQuery}>
-        <Row gutter={[10, 10]} className="finance-filter-bar receivable-filter-grid">
-          <Col xs={24} md={8} xl={3}><Form.Item name="systemOrderNo" label="运单号"><Input placeholder="系统单号 / 订单号" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="customer" label="客户"><Input placeholder="客户编号 / 名称" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="transferNo" label="转单号"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="salesperson" label="业务员"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="feeName" label="费用名称"><Select allowClear showSearch options={feeNameOptions} /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="createdBy" label="制单人"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="reviewedBy" label="审核人员"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="paymentNo" label="付款编号"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="status" label="对账状态"><Select options={[{ value: 'ALL', label: '全部' }, { value: 'PENDING', label: '待审核' }, { value: 'CONFIRMED', label: '已审核' }, { value: 'VOIDED', label: '作废' }]} /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="createdFrom" label="制单日起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="createdTo" label="制单日止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="reviewedFrom" label="核单日起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="reviewedTo" label="核单日止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item label=" "><Space><Button type="primary" onClick={() => void applyQuery()}>查询</Button><Button onClick={() => void resetQuery()}>重置</Button></Space></Form.Item></Col>
+        <Row gutter={[10, 10]} className="finance-filter-bar finance-audit-filter-grid">
+          <Col xs={24} md={8} xl={4}><Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="出货单号 / 订单号" /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="customer" label="客户"><Input placeholder="客户编号 / 名称" /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="transferNo" label="转单号"><Input /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="status" label="对账状态"><Select options={[{ value: 'ALL', label: '全部' }, { value: 'PENDING', label: '待审核' }, { value: 'CONFIRMED', label: '已审核' }, { value: 'VOIDED', label: '作废' }]} /></Form.Item></Col>
+          <Col xs={24} md={16} xl={8} className="finance-audit-filter-actions">
+            <Space wrap>
+              <Button type="primary" onClick={() => void applyQuery()}>查询</Button>
+              <Button onClick={() => void resetQuery()}>重置</Button>
+              <Button aria-expanded={advancedFiltersOpen} onClick={() => setAdvancedFiltersOpen((current) => !current)}>{advancedFiltersOpen ? '收起筛选' : '更多筛选'}</Button>
+            </Space>
+          </Col>
         </Row>
+        {advancedFiltersOpen ? (
+          <Row gutter={[10, 10]} className="finance-audit-filter-grid finance-audit-filter-advanced">
+            <Col xs={24} md={8} xl={4}><Form.Item name="salesperson" label="业务员"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="feeName" label="费用名称"><Select allowClear showSearch options={feeNameOptions} /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="createdBy" label="制单人"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedBy" label="审核人员"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="paymentNo" label="付款编号/匹配水单编号"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="createdFrom" label="制单日期起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="createdTo" label="制单日期止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedFrom" label="核单日期起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedTo" label="核单日期止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
+          </Row>
+        ) : null}
       </Form>
 
       <Flex gap={12} wrap className="finance-work-status-strip finance-audit-summary">
-        <Tag color="blue">RMB 合计 {formatCurrency(response.totals.rmbTotal)}</Tag>
+        <Tag color="blue">RMB 合计 {formatAmount(response.totals.rmbTotal)}</Tag>
         <Tag>待审核 {response.totals.pendingCount}</Tag>
         <Tag color="success">已审核 {response.totals.confirmedCount}</Tag>
         <Tag color="default">作废 {response.totals.voidedCount}</Tag>
-        {response.totals.amountByCurrency.map((item) => <Tag key={item.currency}>{item.currency} {item.amount.toFixed(2)}</Tag>)}
+        {response.totals.amountByCurrency.map((item) => <Tag key={item.currency}>{formatAmountWithCurrency(item.amount, item.currency)}</Tag>)}
       </Flex>
 
       <ManagedTable
@@ -379,7 +397,11 @@ export function ReceivableAuditPage({
         dataSource={response.rows}
         columns={columns}
         rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) }}
-        scroll={{ x: 2450 }}
+        columnSettings={{
+          storageKey: columnStorageKey,
+          title: '应收审核列设置',
+          defaultColumnOrder
+        }}
         pagination={{
           current: response.pagination.page,
           pageSize: response.pagination.pageSize,
@@ -402,7 +424,7 @@ export function ReceivableAuditPage({
           <Table.Summary fixed>
             <Table.Summary.Row>
               <Table.Summary.Cell index={0} colSpan={8}>本筛选合计</Table.Summary.Cell>
-              <Table.Summary.Cell index={8} align="right">{formatCurrency(response.totals.rmbTotal)}</Table.Summary.Cell>
+              <Table.Summary.Cell index={8} align="right">{formatAmount(response.totals.rmbTotal)}</Table.Summary.Cell>
             </Table.Summary.Row>
           </Table.Summary>
         )}
@@ -410,7 +432,7 @@ export function ReceivableAuditPage({
 
       <Modal title="新增应收" className="finance-modal" width={760} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={submitCreate} okText="保存应收" cancelText="取消">
         <Form form={form} layout="vertical" initialValues={{ name: '运费', currency: 'RMB' }}>
-          <Form.Item name="systemOrderNo" label="运单号"><Input placeholder="按运单号匹配订单" /></Form.Item>
+          <Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="按出货单号匹配订单" /></Form.Item>
           <Form.Item name="customerOrderNo" label="客户单号"><Input /></Form.Item>
           <Form.Item name="transferNo" label="转单号"><Input /></Form.Item>
           <Form.Item name="customerCode" label="客户编号"><Input /></Form.Item>
@@ -430,7 +452,7 @@ export function ReceivableAuditPage({
           <Form.Item name="ledgerId" label="水单编号" rules={[{ required: true, message: '请选择水单' }]}>
             <Select
               options={receiptRows.map((row) => ({
-                label: `${row.receiptNo} / ${row.customerName ?? row.customerCode ?? '-'} / 可用 ${formatCurrency(row.balance)}`,
+                label: `${row.receiptNo} / ${row.customerName ?? row.customerCode ?? '-'} / 可用 ${formatAmountWithCurrency(row.balance, row.currency ?? 'RMB')}`,
                 value: row.id,
                 disabled: row.balance <= 0
               }))}

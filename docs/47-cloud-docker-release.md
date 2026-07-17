@@ -7,10 +7,28 @@
 - 代码可以同步到 `/opt/siyuan`，但依赖安装、构建、Prisma 命令都必须在 Docker 镜像或 Compose 服务里执行。
 - 线上迁移只运行 `prisma migrate deploy`，通过 `db-migrate` 工具容器执行。
 - 线上禁止运行 `prisma db push`、`prisma migrate reset`、`prisma:seed`、`demo:seed`。
+- 线上禁止在发布链路中自动运行 `pricing:legacy:import`，也不得从 `/opt/quote-app` 或历史 JSON 副本自动导回旧报价数据；该命令只能人工显式传 `--source` 和 `--confirm` 后执行。
 - 线上 `.env`、数据库密码、JWT 密钥、第三方 API key 只保存在服务器，不随代码同步，不写入 Git。
+- 发布前必须先根据 `git status --short`、`git diff --name-only` 和迁移目录自动判定发布范围，不默认全量构建 `db-migrate api web`。
+- 只构建、重启受影响服务；只有 Prisma schema 或 migrations 变化才运行 `db-migrate`。
 - 发布失败时先看实际失败点，不重新规划整条链路；优先从构建、迁移、容器重启、健康检查四段定位。
 
-## 标准发布命令
+## 发布范围自动判断
+
+发布会话必须先读取 `git status --short` 和 `git diff --name-only`，按文件路径判定本轮发布范围，并在执行发布命令前列出判断结果和命中原因。
+
+| 范围 | 触发条件 | 47 构建/重启 |
+| --- | --- | --- |
+| `state/docs-only` | 只改 `.codex-state.md`、`docs/**`、`AGENTS.md` 或不影响运行时代码的说明文件 | 只同步；不构建、不重启 |
+| `web` | `apps/web/**`、Web 依赖、只被前端使用的样式或 helper | `docker compose build web`；重启 `web` |
+| `api` | `apps/api/src/**`、API 依赖、只被后端使用的服务端逻辑 | `docker compose build api`；重启 `api` |
+| `api+migrate` | `apps/api/prisma/schema.prisma` 或 `apps/api/prisma/migrations/**` | `docker compose build db-migrate api`；运行 `db-migrate`；重启 `api` |
+| `web+api` | 前后端都改，或 `packages/shared/**` 同时影响前后端 | 构建/重启 `api web`；有迁移再加 `db-migrate` |
+| `full` | 根依赖、Dockerfile、Compose、发布脚本变化，或无法明确影响面 | 按全量命令执行 |
+
+`package-lock.json`、根 `package.json`、Dockerfile、Compose 和发布脚本变化默认视为可能影响多个服务；除非能明确只影响单个 workspace，否则走 `web+api` 或 `full`。如果包含 Prisma schema/migrations，禁止跳过 `db-migrate`。
+
+## 标准同步命令
 
 从本机同步代码时先 dry-run：
 
@@ -26,7 +44,77 @@ npm run sync:47 -- --apply
 
 同步脚本会排除 `node_modules`、构建产物、`.git`、`scraped_docs`、`outputs`、`.env` 等大目录和敏感文件，避免向 47 传输无关内容。
 
-在 47 云服务器上执行：
+同步脚本还会排除旧亮崽报价源路径，例如 `data/quotes.json`、`inquiry_data/prices.json`、`europe-express-data/`、`europe-truck-data/` 和 `south-africa/*.json`。发布只同步代码和迁移，不携带旧报价数据副本。
+
+## 一键智能发布
+
+日常发布优先执行：
+
+```bash
+npm run deploy:47
+```
+
+脚本根据上一次成功发布记录的 Web、API、Prisma 运行时指纹自动判断范围。测试文件和文档可以同步到 47，但不会触发运行时镜像重建。发布顺序固定为差异检查、源码同步、受影响服务构建、迁移、重启、API 就绪检查、Web 静态资源一致性检查和公网健康检查；任一步失败都会停止并输出最近服务日志。
+
+只查看范围而不发布：
+
+```bash
+npm run deploy:47 -- --dry-run
+```
+
+缓存异常或需要完整重建时：
+
+```bash
+npm run deploy:47 -- --full
+```
+
+`.dockerignore` 排除测试、文档、截图和输出目录，避免非运行时文件使 Docker 构建缓存失效。
+
+47 每周日 `03:30` 清理超过 7 天且未使用的 BuildKit 缓存，将缓存使用量控制在约 6GB，并至少保留 2GB 缓存。cron 调用仓库内的 `scripts/prune-47-build-cache.sh`，日志写入 `/var/log/siyuan-buildkit-prune.log`。清理任务不得执行 `docker system prune --volumes`，不得删除数据库、Redis 或上传文件卷。
+
+## 按范围执行发布
+
+在 47 云服务器上按判定范围执行。下面是常用命令模板：
+
+### `state/docs-only`
+
+只执行 `npm run sync:47 -- --apply`，不进入 Docker 构建、迁移和服务重启。
+
+### `web`
+
+```bash
+set -e
+cd /opt/siyuan
+
+docker compose build web
+docker compose up -d --remove-orphans web
+docker compose ps
+```
+
+### `api`
+
+```bash
+set -e
+cd /opt/siyuan
+
+docker compose build api
+docker compose up -d --remove-orphans api
+docker compose ps
+```
+
+### `api+migrate`
+
+```bash
+set -e
+cd /opt/siyuan
+
+docker compose build db-migrate api
+docker compose --profile tools run --rm db-migrate
+docker compose up -d --remove-orphans api
+docker compose ps
+```
+
+### `web+api` 或 `full`
 
 ```bash
 set -e

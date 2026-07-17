@@ -5,6 +5,9 @@ export default defineConfig({
   plugins: [react()],
   build: {
     chunkSizeWarningLimit: 1100,
+    // Keep production stack traces mappable by release id without advertising
+    // source maps in generated browser bundles.
+    sourcemap: 'hidden',
     rollupOptions: {
       output: {
         manualChunks: {

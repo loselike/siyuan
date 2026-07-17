@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { App as AntdApp, Button, Image, Space, Typography } from 'antd';
 import type { PaymentVoucherInput } from '@siyuan/shared';
+import { resolveApiAssetUrl } from '../../apiClient';
 
 const { Text } = Typography;
 
@@ -11,19 +12,52 @@ type VoucherImageInputProps = {
   value?: VoucherImageValue;
   onChange?: (value?: VoucherImageValue) => void;
   onFileChange?: (file?: File) => void;
+  onUploaded?: (value: VoucherImageValue) => void;
   uploadFile?: (file: File) => Promise<VoucherImageValue>;
 };
 
 const allowedTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
-export function VoucherImageInput({ disabled, value, onChange, onFileChange, uploadFile }: VoucherImageInputProps) {
+function formatVoucherTimestamp(date = new Date()) {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds())
+  ].join('');
+}
+
+function extensionFromImageType(type: string) {
+  if (type === 'image/jpeg') return 'jpg';
+  if (type === 'image/png') return 'png';
+  if (type === 'image/webp') return 'webp';
+  if (type === 'image/gif') return 'gif';
+  return 'jpg';
+}
+
+function isClipboardPlaceholderName(name?: string) {
+  return !name?.trim() || /^image\.(png|jpe?g|webp|gif)$/i.test(name.trim());
+}
+
+function withReadablePastedFileName(file: File) {
+  if (!isClipboardPlaceholderName(file.name)) return file;
+  const readableName = `水单凭证-${formatVoucherTimestamp()}.${extensionFromImageType(file.type)}`;
+  return new File([file], readableName, { type: file.type, lastModified: file.lastModified });
+}
+
+export function VoucherImageInput({ disabled, value, onChange, onFileChange, onUploaded, uploadFile }: VoucherImageInputProps) {
   const { message } = AntdApp.useApp();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | undefined>(value?.url);
+  const [fallbackPreviewUrl, setFallbackPreviewUrl] = useState<string | undefined>();
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     setPreviewUrl(value?.url);
+    setFallbackPreviewUrl(undefined);
   }, [value?.url]);
 
   const handleFile = async (file?: File) => {
@@ -39,6 +73,7 @@ export function VoucherImageInput({ disabled, value, onChange, onFileChange, upl
 
     const localPreview = typeof URL.createObjectURL === 'function' ? URL.createObjectURL(file) : undefined;
     setPreviewUrl(localPreview);
+    setFallbackPreviewUrl(localPreview);
     onFileChange?.(file);
     if (!uploadFile) {
       onChange?.({ fileName: file.name, mimeType: file.type, sizeBytes: file.size, url: localPreview });
@@ -48,9 +83,9 @@ export function VoucherImageInput({ disabled, value, onChange, onFileChange, upl
     setUploading(true);
     try {
       const uploaded = await uploadFile(file);
-      if (localPreview && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(localPreview);
-      setPreviewUrl(uploaded.url);
+      setPreviewUrl(uploaded.url ?? localPreview);
       onChange?.(uploaded);
+      onUploaded?.(uploaded);
       message.success('图片已上传');
     } catch (error) {
       message.error(error instanceof Error ? error.message : '图片上传失败');
@@ -69,7 +104,7 @@ export function VoucherImageInput({ disabled, value, onChange, onFileChange, upl
         const file = Array.from(event.clipboardData.files).find((item) => item.type.startsWith('image/'));
         if (file) {
           event.preventDefault();
-          void handleFile(file);
+          void handleFile(withReadablePastedFileName(file));
         }
       }}
     >
@@ -88,7 +123,21 @@ export function VoucherImageInput({ disabled, value, onChange, onFileChange, upl
         }}
       />
       <Space direction="vertical" className="full-width" size={8}>
-        {previewUrl ? <Image src={previewUrl} alt={value?.fileName ?? '凭证图片'} style={{ maxHeight: 180, objectFit: 'contain' }} /> : null}
+        {previewUrl ? (
+          <Image
+            src={resolveApiAssetUrl(previewUrl)}
+            alt={value?.fileName ?? '凭证图片'}
+            style={{ maxHeight: 180, objectFit: 'contain' }}
+            onError={() => {
+              if (fallbackPreviewUrl && previewUrl !== fallbackPreviewUrl) {
+                setPreviewUrl(fallbackPreviewUrl);
+                message.warning('图片已上传但预览地址不可访问，请联系管理员检查上传目录配置');
+                return;
+              }
+              message.error('图片预览加载失败');
+            }}
+          />
+        ) : null}
         <Space wrap>
           <Button disabled={disabled} loading={uploading} onClick={() => inputRef.current?.click()}>
             选择图片

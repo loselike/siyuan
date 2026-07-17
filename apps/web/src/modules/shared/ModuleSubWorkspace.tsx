@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { createContext, useContext, useEffect } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef } from 'react';
 
 export interface ModuleSubNavItem {
   key: string;
@@ -36,14 +36,46 @@ export function ModuleSubWorkspace({
 }) {
   const sidebarNav = useContext(ModuleSubNavContext);
   const activeItem = items.find((item) => item.key === activeKey) ?? items[0];
+  const itemsSignature = useMemo(() => getModuleSubNavSignature(items), [items]);
+  const onChangeRef = useRef(onChange);
+  const registrationRef = useRef<{
+    parentKey: string;
+    register: ModuleSubNavContextValue['register'];
+    activeKey: string;
+    itemsSignature: string;
+  } | null>(null);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  const handleSidebarChange = useCallback((key: string) => {
+    onChangeRef.current(key);
+  }, []);
 
   useEffect(() => {
     if (!sidebarNav || !activeItem) {
       return;
     }
 
-    sidebarNav.register({ items, activeKey: activeItem.key, onChange });
-  }, [activeItem, activeKey, items, onChange, sidebarNav]);
+    const previous = registrationRef.current;
+    if (
+      previous?.parentKey === sidebarNav.parentKey &&
+      previous.register === sidebarNav.register &&
+      previous.activeKey === activeItem.key &&
+      previous.itemsSignature === itemsSignature
+    ) {
+      return;
+    }
+
+    registrationRef.current = {
+      parentKey: sidebarNav.parentKey,
+      register: sidebarNav.register,
+      activeKey: activeItem.key,
+      itemsSignature
+    };
+    sidebarNav.register({ items, activeKey: activeItem.key, onChange: handleSidebarChange });
+  }, [activeItem?.key, handleSidebarChange, items, itemsSignature, sidebarNav]);
 
   if (!activeItem) {
     return <>{children}</>;

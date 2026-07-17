@@ -24,6 +24,8 @@ CMD ["npm", "run", "prisma:migrate:deploy", "-w", "@siyuan/api"]
 FROM docker.m.daocloud.io/library/node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories \
+  && apk add --no-cache libreoffice poppler-utils python3 py3-pillow font-noto-cjk
 COPY --from=build /app/node_modules node_modules
 COPY --from=build /app/packages/shared/package.json packages/shared/package.json
 COPY --from=build /app/packages/shared/dist packages/shared/dist

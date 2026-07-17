@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { AutoComplete, Button, Card, Col, Dropdown, Flex, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
+import { AutoComplete, Button, Card, Col, Flex, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
-import { RefreshCw, Settings } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import type {
   BusinessCostAuditCreateInput,
   BusinessCostAuditListQuery,
@@ -14,7 +14,6 @@ import type {
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { financeCatalogCurrencyOptions } from '../catalog';
 import { downloadCsv } from '../exportCsv';
-import { FinanceColumnSettingsPanel, useFinanceColumnSettings } from '../useFinanceColumnSettings';
 import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
 import { ManagedTable } from '../../shared/ui';
 
@@ -118,19 +117,18 @@ export function BusinessCostAuditPage({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingRow, setEditingRow] = useState<BusinessCostAuditSummary | null>(null);
-  const { columnOrder, hiddenColumns, toggleColumn, moveColumn, moveColumnTo, resetColumns } = useFinanceColumnSettings(columnStorageKey, defaultColumnOrder);
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
 
   const canManage = hasPermission(permissions, 'finance:business-cost:manage');
   const canAudit = hasPermission(permissions, 'finance:business-cost:audit');
   const canReverse = hasPermission(permissions, 'finance:business-cost:reverse');
   const canVoid = hasPermission(permissions, 'finance:business-cost:void');
+  const canBatchAudit = hasPermission(permissions, 'finance:business-cost:batch-audit');
+  const canBatchReverse = hasPermission(permissions, 'finance:business-cost:batch-reverse');
+  const canBatchVoid = hasPermission(permissions, 'finance:business-cost:batch-void');
   const canExport = hasPermission(permissions, 'finance:business-cost:export');
   const canViewAgent = hasPermission(permissions, 'finance:business-cost:view-agent') || response.rows.some((row) => row.canViewAgent);
   const canViewProfit = hasPermission(permissions, 'finance:business-cost:view-profit') || response.rows.some((row) => row.canViewProfit);
-  const selectablePageIds = response.rows.filter((row) => !row.voided).map((row) => row.id);
-  const isPageSelected = selectablePageIds.length > 0 && selectablePageIds.every((id) => selectedIds.includes(id));
-  const togglePageSelection = () => setSelectedIds(isPageSelected ? [] : selectablePageIds);
-
   const feeNameOptions = useMemo(
     () => financeCatalogItems
       .filter((item) => item.category === 'FEE_NAME' && item.enabled)
@@ -230,7 +228,12 @@ export function BusinessCostAuditPage({
       : action === 'reverse'
         ? await apiClient.batchReverseAuditBusinessCosts({ ids: selectedIds })
         : await apiClient.batchVoidBusinessCosts({ ids: selectedIds });
-    message.success(`处理完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`);
+    const failureReasons = Array.from(new Set(result.failures.map((item) => item.reason))).slice(0, 3);
+    if (result.failureCount) {
+      message.warning(`处理完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条。${failureReasons.join('；') || '请检查记录状态或权限。'}`);
+    } else {
+      message.success(`处理完成：成功 ${result.successCount} 条`);
+    }
     await loadRows();
   };
 
@@ -238,7 +241,7 @@ export function BusinessCostAuditPage({
     agentName: { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value ?? '-' },
     name: { title: '费用名称', dataIndex: 'name', width: 130, sorter: true },
     customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 110, sorter: true },
-    systemOrderNo: { title: '运单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 180, render: (value?: string) => <Text className="table-compact-text">{value ?? '-'}</Text> },
     reconciliationStatus: { title: '对账状态', dataIndex: 'reconciliationStatus', width: 105, fixed: 'right', render: statusTag },
     currency: { title: '币种', dataIndex: 'currency', width: 80, render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag> },
@@ -291,22 +294,9 @@ export function BusinessCostAuditPage({
     ...(!canViewAgent ? ['agentName' as const] : []),
     ...(!canViewProfit ? ['businessProfit' as const] : [])
   ]);
-  const visibleColumnOrder = columnOrder.filter((key) => !unavailableColumns.has(key));
-  const columns = visibleColumnOrder
-    .filter((key) => !hiddenColumns.includes(key))
+  const columns = defaultColumnOrder
+    .filter((key) => !unavailableColumns.has(key))
     .map((key) => baseColumns[key]);
-
-  const columnMenu = (
-    <FinanceColumnSettingsPanel
-      visibleColumnOrder={visibleColumnOrder}
-      hiddenColumns={hiddenColumns}
-      getColumnTitle={(key) => String(baseColumns[key].title)}
-      toggleColumn={toggleColumn}
-      moveColumn={moveColumn}
-      moveColumnTo={moveColumnTo}
-      resetColumns={resetColumns}
-    />
-  );
 
   return (
     <Card
@@ -314,15 +304,14 @@ export function BusinessCostAuditPage({
       className="finance-work-card"
       extra={
         <Space wrap>
-          <Button onClick={togglePageSelection}>{isPageSelected ? '取消全选' : '全选本页'}</Button>
-          <Popconfirm title="确认批量审核？" onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canAudit}>批量审核</Button>
+          <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消">
+            <Button disabled={!selectedIds.length || !canBatchAudit}>批量审核</Button>
           </Popconfirm>
-          <Popconfirm title="确认批量反审核？" onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canReverse}>批量反审核</Button>
+          <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消">
+            <Button disabled={!selectedIds.length || !canBatchReverse}>批量反审核</Button>
           </Popconfirm>
-          <Popconfirm title="确认批量作废？" onConfirm={() => void runBatch('void')} okText="批量作废" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canVoid} danger>批量作废</Button>
+          <Popconfirm title={`确认批量作废已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('void')} okText="批量作废" cancelText="取消">
+            <Button disabled={!selectedIds.length || !canBatchVoid} danger>批量作废</Button>
           </Popconfirm>
           <Button disabled={!canExport} onClick={async () => {
             const exported = await apiClient.exportBusinessCostAudits({ ids: selectedIds.length ? selectedIds : undefined, query });
@@ -346,29 +335,36 @@ export function BusinessCostAuditPage({
           }}>导出</Button>
           <Button type="primary" onClick={() => openEditor()} disabled={!canManage}>添加成本</Button>
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()} />
-          <Dropdown popupRender={() => columnMenu} trigger={['click']}>
-            <Button icon={<Settings size={15} />} />
-          </Dropdown>
         </Space>
       }
     >
       <Form form={queryForm} layout="vertical" initialValues={defaultQuery}>
-        <Row gutter={[10, 10]} className="finance-filter-bar receivable-filter-grid">
-          <Col xs={24} md={8} xl={3}><Form.Item name="systemOrderNo" label="运单号"><Input placeholder="系统单号 / 订单号" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="customer" label="客户"><Input placeholder="客户编号 / 名称" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="salesperson" label="业务员"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="feeName" label="费用名称"><Select allowClear showSearch options={feeNameOptions} /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="createdBy" label="制单人"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="reviewedBy" label="审核人员"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="paymentNo" label="付款编号"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="status" label="对账状态"><Select options={[{ value: 'ALL', label: '全部' }, { value: 'PENDING', label: '待审核' }, { value: 'CONFIRMED', label: '已审核' }, { value: 'VOIDED', label: '作废' }]} /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="createdFrom" label="制单日起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="createdTo" label="制单日止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="reviewedFrom" label="核单日起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="reviewedTo" label="核单日止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
-          <Col xs={24} md={8} xl={3}><Form.Item label=" "><Space><Button type="primary" onClick={() => void applyQuery()}>查询</Button><Button onClick={() => void resetQuery()}>重置</Button></Space></Form.Item></Col>
+        <Row gutter={[10, 10]} className="finance-filter-bar finance-audit-filter-grid">
+          <Col xs={24} md={8} xl={4}><Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="出货单号 / 订单号" /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="customer" label="客户"><Input placeholder="客户编号 / 名称" /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="feeName" label="费用名称"><Select allowClear showSearch options={feeNameOptions} /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="status" label="对账状态"><Select options={[{ value: 'ALL', label: '全部' }, { value: 'PENDING', label: '待审核' }, { value: 'CONFIRMED', label: '已审核' }, { value: 'VOIDED', label: '作废' }]} /></Form.Item></Col>
+          <Col xs={24} md={16} xl={8} className="finance-audit-filter-actions">
+            <Space wrap>
+              <Button type="primary" onClick={() => void applyQuery()}>查询</Button>
+              <Button onClick={() => void resetQuery()}>重置</Button>
+              <Button aria-expanded={advancedFiltersOpen} onClick={() => setAdvancedFiltersOpen((current) => !current)}>{advancedFiltersOpen ? '收起筛选' : '更多筛选'}</Button>
+            </Space>
+          </Col>
         </Row>
+        {advancedFiltersOpen ? (
+          <Row gutter={[10, 10]} className="finance-audit-filter-grid finance-audit-filter-advanced">
+            <Col xs={24} md={8} xl={4}><Form.Item name="salesperson" label="业务员"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="createdBy" label="制单人"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedBy" label="审核人员"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="paymentNo" label="付款编号"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="createdFrom" label="制单日起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="createdTo" label="制单日止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedFrom" label="核单日起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedTo" label="核单日止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
+          </Row>
+        ) : null}
       </Form>
 
       <Flex gap={12} wrap className="finance-work-status-strip finance-audit-summary">
@@ -390,6 +386,11 @@ export function BusinessCostAuditPage({
         locale={{ emptyText: '暂无已自审通过的业务成本待审项' }}
         rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) }}
         scroll={{ x: 2500 }}
+        columnSettings={{
+          storageKey: columnStorageKey,
+          title: '业务成本审核列设置',
+          defaultColumnOrder
+        }}
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
         onChange={(pagination: TablePaginationConfig, _filters, sorter) => {
           const sort = Array.isArray(sorter) ? sorter[0] : sorter;
@@ -414,7 +415,7 @@ export function BusinessCostAuditPage({
         >
           {!editingRow ? (
             <>
-              <Form.Item name="systemOrderNo" label="运单号"><Input placeholder="按运单号匹配订单" /></Form.Item>
+              <Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="按出货单号匹配订单" /></Form.Item>
               <Form.Item name="customerOrderNo" label="客户单号"><Input placeholder="可选，按客户单号匹配" /></Form.Item>
               <Form.Item name="transferNo" label="转单号"><Input placeholder="可选，按转单号匹配" /></Form.Item>
               <Form.Item name="customerCode" label="客户编号"><Input placeholder="可选，按客户编号匹配" /></Form.Item>

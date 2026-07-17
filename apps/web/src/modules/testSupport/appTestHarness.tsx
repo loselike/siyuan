@@ -3,23 +3,28 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, expect, vi } from 'vitest';
 import type {
   AccountLedgerSummary,
+  AgentSummary,
   AgentMarkupSummary,
   AuditLogSummary,
   CarrierTaskSummary,
   CustomerAccountSummary,
+  DepartmentSummary,
   BusinessCostAuditSummary,
   FinanceCatalogItemSummary,
   MasterDataSnapshot,
   AgentBankAccountSummary,
   PayeeBankAccountSummary,
   PaidPaymentSummary,
+  OrderEntryDetailSummary,
   PendingPaymentSummary,
   PaymentApplicationSummary,
   PaymentVoucherSummary,
   PayableAuditSummary,
   ProblemTicketSummary,
+  PriceBookImportJobSummary,
   PriceBookRowSummary,
   PriceBookSummary,
+  LegacyPricingModule,
   PricingRuleSummary,
   ReceivableAuditSummary,
   Shipment,
@@ -71,6 +76,8 @@ export const employeeShipments = [
     declarationRequired: true,
     sensitive: true,
     outboundAt: '2026-06-06T10:00:00.000Z',
+    handoverNo: 'HD-SYGJ06061230004',
+    outboundBy: 'warehouse',
     latestTracking: '仓库已出库，等待客服数据确认'
   }),
   shipment('s-2', 'SYGJ05291344165', 'TILL-0529', 'WAITING_DEPARTURE', '1344-TILL', {
@@ -84,6 +91,8 @@ export const employeeShipments = [
     transferNo: '1ZDELIVERING',
     latestTracking: '已派送，等待业务确认签收',
     outboundAt: '2026-06-02T10:00:00.000Z',
+    handoverNo: 'HD-SYGJ06061239999',
+    outboundBy: 'warehouse',
     etdAt: '2026-06-06T10:00:00.000Z',
     etaAt: '2026-06-16T10:00:00.000Z'
   }),
@@ -91,6 +100,8 @@ export const employeeShipments = [
     transferNo: '1ZARRIVED',
     latestTracking: '已到港，等待派送/提取',
     outboundAt: '2026-06-02T10:00:00.000Z',
+    handoverNo: 'HD-SYGJ06061238888',
+    outboundBy: 'warehouse',
     etdAt: '2026-06-06T10:00:00.000Z',
     etaAt: '2026-06-16T10:00:00.000Z'
   }),
@@ -100,6 +111,10 @@ export const employeeShipments = [
     settlementMethod: '月结',
     declarationRequired: false,
     sensitive: false,
+    weightKg: 18,
+    volumeCbm: 0.12,
+    chargeableWeightKg: 20,
+    receivableRmbTotal: 1000,
     entryBy: 'operator',
     businessReviewedBy: 'operator',
     businessReviewedAt: '2026-06-25T09:30:00.000Z',
@@ -148,7 +163,8 @@ const problemTickets: ProblemTicketSummary[] = [
 ];
 const receivableFees: ReceivableAuditSummary[] = [
   { id: 'rf-1', shipmentId: 's-1', systemOrderNo: 'SYGJ06061230001', customerName: '9409-Daloday', name: '基础运费', amount: 200, settled: false, salesperson: 'Rachel', customerId: 'c-9409', customerCode: '9409', transferNo: 'DHL26060600001', currency: 'USD', settlementMethod: '思远阿里', paymentNo: '4654316987986131', createdAt: '2026-06-17T10:00:00.000Z', createdBy: 'Rachel', reconciliationStatus: 'PENDING', sourceType: 'SYSTEM' },
-  { id: 'rf-2', shipmentId: 's-1', systemOrderNo: 'SYGJ06061230001', customerName: '9409-Daloday', name: '燃油费', amount: 30, settled: false, salesperson: 'Rachel', customerId: 'c-9409', customerCode: '9409', transferNo: 'DHL26060600001', currency: 'USD', settlementMethod: '思远阿里', paymentNo: '4654316987986131', createdAt: '2026-06-17T10:00:00.000Z', createdBy: 'Rachel', reconciliationStatus: 'PENDING', sourceType: 'SYSTEM' }
+  { id: 'rf-2', shipmentId: 's-1', systemOrderNo: 'SYGJ06061230001', customerName: '9409-Daloday', name: '燃油费', amount: 30, settled: false, salesperson: 'Rachel', customerId: 'c-9409', customerCode: '9409', transferNo: 'DHL26060600001', currency: 'USD', settlementMethod: '思远阿里', paymentNo: '4654316987986131', createdAt: '2026-06-17T10:00:00.000Z', createdBy: 'Rachel', reconciliationStatus: 'PENDING', sourceType: 'SYSTEM' },
+  { id: 'rf-3', shipmentId: 's-1', systemOrderNo: 'SYGJ06061230001', customerName: '9409-Daloday', name: '系统匹配费', amount: 120, settled: false, salesperson: 'Rachel', customerId: 'c-9409', customerCode: '9409', transferNo: 'DHL26060600001', currency: 'RMB', settlementMethod: '思远阿里', createdAt: '2026-06-17T10:05:00.000Z', createdBy: 'Rachel', reconciliationStatus: 'PENDING', sourceType: 'SYSTEM' }
 ];
 const businessCostFees: BusinessCostAuditSummary[] = [
   {
@@ -379,14 +395,22 @@ const pricingRules: PricingRuleSummary[] = [
 ];
 const importedPriceBooks: PriceBookSummary[] = [];
 const importedPriceRows: PriceBookRowSummary[] = [];
+const priceBookImportJobs: PriceBookImportJobSummary[] = [];
+const priceBookSourceFiles = new Map<string, File>();
 const backendSeedPriceRows: PriceBookRowSummary[] = [
   { id: 'price-a-la-0-1000', priceBookId: 'seed', agentName: 'a代理', carrierName: 'DHL', sourceSheetName: 'YY美西快线海卡渠道汇总', channelName: '海运洛杉矶专线', businessRouteName: 'HK-DHL', realChannelName: 'DHK03', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 1000, costPerKg: 18, currency: 'RMB', transitDays: 25, transitLabel: '22-28 天' },
   { id: 'price-a-houston-0-1000', priceBookId: 'seed', agentName: 'a代理', carrierName: 'DHL', sourceSheetName: 'YY美中快线海卡渠道汇总', channelName: '海运休斯顿专线', businessRouteName: 'HK-DHL', realChannelName: 'DHK01', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 1000, costPerKg: 19, currency: 'RMB', transitDays: 22, transitLabel: '20-25 天' },
-  { id: 'price-a-air-la-0-1000', priceBookId: 'seed', agentName: 'a代理', carrierName: 'DHL', sourceSheetName: 'YY美西快线海卡渠道汇总', channelName: '空运洛杉矶专线', realChannelName: 'DHL-A', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 1000, costPerKg: 32, currency: 'RMB', transitDays: 7, transitLabel: '5-9 天' }
+  { id: 'price-a-air-la-0-1000', priceBookId: 'seed', agentName: 'a代理', carrierName: 'DHL', sourceSheetName: 'YY美西快线海卡渠道汇总', channelName: '空运洛杉矶专线', realChannelName: 'DHL-A', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 1000, costPerKg: 32, currency: 'RMB', transitDays: 7, transitLabel: '5-9 天' },
+  { id: 'price-public-tpd-12-100', priceBookId: 'seed-public', agentName: '拓普达', carrierName: '海运', sourceSheetName: '华东', channelName: 'TPD-S4-美西组合海卡', realChannelName: 'TPD-S4-美西组合海卡', warehouseCode: 'FTW5', destinationCountry: '业务渠道展示国', minWeightKg: 12, maxWeightKg: 100, costPerKg: 10, currency: 'RMB', transitDays: 24, transitLabel: '22-26 天' },
+  { id: 'price-public-yy-12-100', priceBookId: 'seed-public', agentName: '亿阳国际', carrierName: '海运', sourceSheetName: '华南', channelName: 'YY黄金达海卡', realChannelName: 'YY黄金达海卡', warehouseCode: 'FTW5', destinationCountry: '业务渠道展示国', minWeightKg: 12, maxWeightKg: 100, costPerKg: 11, currency: 'RMB', transitDays: 25, transitLabel: '23-27 天' },
+  { id: 'price-public-english-12-100', priceBookId: 'seed-public', agentName: '英文代理', carrierName: '快递', sourceSheetName: '深圳/广州仓', channelName: 'DHL Express', realChannelName: 'DHL Express', warehouseCode: 'FTW5', destinationCountry: '业务渠道展示国', minWeightKg: 12, maxWeightKg: 100, costPerKg: 12, currency: 'RMB', transitDays: 5, transitLabel: '5-7 天' }
 ];
 const financeCatalogItems: FinanceCatalogItemSummary[] = [
-  { id: 'fc-fee-freight', category: 'FEE_NAME', name: '基础运费', currency: 'RMB', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'fc-fee-fuel', category: 'FEE_NAME', name: '燃油费', currency: 'RMB', sortOrder: 2, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
+  { id: 'fc-fee-freight-default', category: 'FEE_NAME', name: '运费', currency: 'RMB', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
+  { id: 'fc-fee-freight', category: 'FEE_NAME', name: '基础运费', currency: 'RMB', sortOrder: 2, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
+  { id: 'fc-fee-fuel', category: 'FEE_NAME', name: '燃油费', currency: 'RMB', sortOrder: 3, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
+  { id: 'fc-fee-business-cost', category: 'FEE_NAME', name: '业务员成本', currency: 'RMB', sortOrder: 4, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
+  { id: 'fc-fee-disabled', category: 'FEE_NAME', name: '停用费用', currency: 'RMB', sortOrder: 5, enabled: false, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
   { id: 'fc-settlement-monthly', category: 'SETTLEMENT_METHOD', name: '月结', currency: 'RMB', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
   { id: 'fc-cargo-normal', category: 'CARGO_TYPE', name: '普货', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
   { id: 'fc-product-desk', category: 'PRODUCT_NAME', name: '桌子', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' }
@@ -406,6 +430,28 @@ const warehousePackages: WarehousePackageSummary[] = [
 ];
 const initialWarehousePackages = warehousePackages.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }));
 const warehouseTallyTasks: WarehouseTallyTaskSummary[] = [];
+
+function withConfirmedWarehouseTally(packages: WarehousePackageSummary[]) {
+  const completedTaskByPackageId = new Map<string, WarehouseTallyTaskSummary>();
+  const pendingTaskByPackageId = new Map<string, WarehouseTallyTaskSummary>();
+  warehouseTallyTasks
+    .filter((task) => task.status === 'COMPLETED')
+    .forEach((task) => [...task.packageIds, task.appliedPackageId].filter(Boolean).forEach((packageId) => completedTaskByPackageId.set(packageId!, task)));
+  warehouseTallyTasks
+    .filter((task) => task.status === 'PENDING')
+    .forEach((task) => task.packageIds.forEach((packageId) => pendingTaskByPackageId.set(packageId, task)));
+  return packages.map((pkg) => {
+    const pendingTask = pendingTaskByPackageId.get(pkg.id);
+    if (pendingTask) {
+      return { ...pkg, tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false, tallyStatus: '理货中' };
+    }
+    const task = completedTaskByPackageId.get(pkg.id);
+    return task
+      ? { ...pkg, tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true, tallyStatus: '已理货' }
+      : { ...pkg, tallyTaskId: undefined, tallyTaskNo: undefined, tallyCompleted: false, tallyStatus: '待理货' };
+  });
+}
+
 const masterData: MasterDataSnapshot = {
   customers: [{ id: 'c-9409', code: '9409', name: 'Daloday', shortName: 'Daloday', fullName: 'Daloday Inc.', customerType: '直客', salesperson: 'operator', enabled: true }],
   contacts: [{ id: 'cc-9409-main', customerId: 'c-9409', customerName: '9409-Daloday', name: 'Lina', company: 'Daloday Inc.', phone: '13800000001', email: 'lina@example.com', address: '9409 Sample Street', country: 'US', state: 'CA', postalCode: '90001', enabled: true }],
@@ -415,13 +461,43 @@ const masterData: MasterDataSnapshot = {
     code: 'YH',
     shortName: '宇环',
     name: '深圳宇环',
+    createdAt: '2026-06-01T09:00:00.000Z',
     warehouseAddress1: '深圳市宝安区宇环仓一',
     warehouseAddress2: '深圳市宝安区宇环仓二',
     warehouseAddress3: '深圳市宝安区宇环仓三',
     warehouseContact: '宇环仓库',
     invoiceTemplateName: '宇环发票模板.xlsx',
     invoiceTemplateUrl: '/templates/yuhuan-invoice.xlsx',
+    trackingWebsite: 'https://agent-track.example.com?no={transferNo}',
     enabled: true
+  }, {
+    id: 'a-yiyang',
+    code: 'YY',
+    shortName: '亿阳国际',
+    name: '亿阳国际',
+    createdAt: '2026-06-02T09:00:00.000Z',
+    enabled: true
+  }, {
+    id: 'a-topda',
+    code: 'TPD',
+    shortName: '拓普达',
+    name: '拓普达',
+    createdAt: '2026-06-03T09:00:00.000Z',
+    enabled: true
+  }, {
+    id: 'a-zhenyun',
+    code: 'ZY',
+    shortName: '振韵',
+    name: '深圳振韵国际',
+    createdAt: '2026-06-04T09:00:00.000Z',
+    enabled: true
+  }, {
+    id: 'a-disabled',
+    code: 'DIS',
+    shortName: '停用代理',
+    name: '停用代理',
+    createdAt: '2026-05-01T09:00:00.000Z',
+    enabled: false
   }],
   agentChannels: [{ id: 'ach-yuhuan-dhl', agentId: 'a-yuhuan', agentName: '宇环', channelName: '宇环 DHL', enabled: true }],
   carriers: [{ id: 'cr-dhl', name: 'DHL', enabled: true }],
@@ -439,23 +515,150 @@ const masterData: MasterDataSnapshot = {
   exchangeRates: [{ id: 'er-usd-cny', baseCurrency: 'USD', quoteCurrency: 'RMB', rate: 7.245, activeAt: '2026-06-06T00:00:00.000Z', endAt: '2026-12-31T23:59:59.000Z', enabled: true }],
   roles: ['ADMIN', 'WAREHOUSE', 'CUSTOMER']
 };
+const operationPermissionDefinitions = [
+  { code: 'operations:line-shipment:view', label: '查看专线运单池', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:detail', label: '查看运单详情', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:process', label: '处理运单', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:status-update', label: '修改运营状态', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:tracking-add', label: '添加运营轨迹', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:problem-create', label: '新建运营问题件', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:import', label: '导入运单', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:internal-log-view', label: '查看内部流通日志', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:ai-queue:view', label: '查看 AI 优先队列', group: '运营工作台 / AI 优先队列' },
+  { code: 'operations:ai-queue:assist', label: '调用运营 AI 助手', group: '运营工作台 / AI 优先队列' },
+  { code: 'operations:ai-queue:mark-read', label: '标记 AI 队列已读', group: '运营工作台 / AI 优先队列' },
+  { code: 'operations:ai-queue:handle', label: '处理 AI 推荐任务', group: '运营工作台 / AI 优先队列' },
+  { code: 'operations:product-map:view', label: '查看产品地图', group: '运营工作台 / 产品地图' },
+  { code: 'operations:product-map:route-view', label: '查看产品渠道关系', group: '运营工作台 / 产品地图' },
+  { code: 'operations:product-map:cost-sensitive-view', label: '查看产品地图敏感成本', group: '运营工作台 / 产品地图' },
+  { code: 'operations:import-quality:view', label: '查看导入质检', group: '运营工作台 / 导入质检' },
+  { code: 'operations:import-quality:upload', label: '上传运单导入文件', group: '运营工作台 / 导入质检' },
+  { code: 'operations:import-quality:retry', label: '重试导入', group: '运营工作台 / 导入质检' },
+  { code: 'operations:import-quality:error-detail-view', label: '查看导入错误详情', group: '运营工作台 / 导入质检' },
+  { code: 'operations:import-quality:confirm', label: '确认导入结果', group: '运营工作台 / 导入质检' }
+];
+const operationPermissionCodes = operationPermissionDefinitions.map((item) => item.code);
+const businessPermissionDefinitions = [
+  { code: 'business:dashboard:view', label: '查看业务看板', group: '业务管理 / 业务看板' },
+  { code: 'business:dashboard:team-view', label: '查看团队统计', group: '业务管理 / 业务看板' },
+  { code: 'business:dashboard:all-view', label: '查看全部统计', group: '业务管理 / 业务看板' },
+  { code: 'business:dashboard:trend-view', label: '查看录单趋势', group: '业务管理 / 业务看板' },
+  { code: 'business:dashboard:pending-review-summary', label: '查看待审核摘要', group: '业务管理 / 业务看板' },
+  { code: 'business:order-entry:view', label: '进入录单页面', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:warehouse-package-select', label: '选择在仓货物录单', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:create', label: '新建录单', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:draft-view', label: '查看录单草稿', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:draft-save', label: '保存录单草稿', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:draft-delete', label: '删除录单草稿', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:submit-review', label: '提交审核', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:invoice-upload', label: '上传业务发票', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:label-upload', label: '上传业务标签', group: '业务管理 / 录单' },
+  { code: 'business:order-fee:view', label: '查看订单费用', group: '业务管理 / 录单' },
+  { code: 'business:order-fee:create', label: '新增订单费用', group: '业务管理 / 录单' },
+  { code: 'business:order-fee:update', label: '修改订单费用', group: '业务管理 / 录单' },
+  { code: 'business:order-fee:delete', label: '删除订单费用', group: '业务管理 / 录单' },
+  { code: 'business:order-fee:lock', label: '锁定订单费用', group: '业务管理 / 录单' },
+  { code: 'business:order-fee:unlock', label: '解锁订单费用', group: '业务管理 / 录单' },
+  { code: 'business:order-fee:profit-view', label: '查看订单利润', group: '业务管理 / 录单' },
+  { code: 'business:review:list', label: '查看待审核列表', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:detail', label: '查看待审核详情', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:deleted-list', label: '查看已删除订单', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:approve', label: '审核通过', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:reject', label: '审核不通过', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:reverse', label: '反审核', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:delete', label: '删除待审核订单', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:restore', label: '恢复已删除订单', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:purge', label: '彻底删除订单', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:finance-detail-view', label: '查看审核财务明细', group: '业务管理 / 待审核运单' },
+  { code: 'business:review:operation-log-view', label: '查看审核操作日志', group: '业务管理 / 待审核运单' },
+  { code: 'business:shipment:list', label: '查看运单管理列表', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:detail', label: '查看运单详情', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:self-view', label: '查看本人运单', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:team-view', label: '查看团队运单', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:all-view', label: '查看全部运单', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:update-basic', label: '修改运单基础资料', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:update-operational', label: '修改运单运营资料', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:delete', label: '删除运单', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:payment-record', label: '登记收付款信息', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:tracking-add', label: '添加运单轨迹', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:problem-create', label: '创建运单问题件', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:finance-detail-view', label: '查看运单财务明细', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:receivable-view', label: '查看运单应收', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:payable-view', label: '查看运单应付', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:profit-view', label: '查看运单利润', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:export', label: '导出运单', group: '业务管理 / 运单管理' },
+  { code: 'business:shipment:column-setting', label: '保存运单列设置', group: '业务管理 / 运单管理' },
+  { code: 'business:order-ai:view', label: '查看 AI 订单助手', group: '业务管理 / AI 订单助手' },
+  { code: 'business:order-ai:assist', label: '调用 AI 订单助手', group: '业务管理 / AI 订单助手' },
+  { code: 'business:order-ai:finance-context', label: '允许 AI 使用财务上下文', group: '业务管理 / AI 订单助手' },
+  { code: 'business:order-ai:all-order-context', label: '允许 AI 使用全部订单上下文', group: '业务管理 / AI 订单助手' },
+  { code: 'business:order-ai:export-result', label: '导出 AI 订单结果', group: '业务管理 / AI 订单助手' }
+] as const;
+const businessPermissionCodes = businessPermissionDefinitions.map((item) => item.code);
+const warehousePermissionDefinitions = [
+  ['warehouse:today-receipt:view', '查看今日收货', '今日收货'], ['warehouse:today-receipt:filter', '筛选今日收货', '今日收货'], ['warehouse:today-receipt:manual-create', '手动添加收货', '今日收货'], ['warehouse:today-receipt:update', '修改收货入仓数据', '今日收货'], ['warehouse:today-receipt:remark-update', '维护收货备注', '今日收货'], ['warehouse:today-receipt:exception-manage', '维护收货异常', '今日收货'], ['warehouse:today-receipt:device-import', '接收设备推送', '今日收货'], ['warehouse:today-receipt:device-log-view', '查看设备推送日志', '今日收货'], ['warehouse:today-receipt:column-setting', '保存今日收货列设置', '今日收货'],
+  ['warehouse:in-stock:view', '查看在仓数据', '在仓数据'], ['warehouse:in-stock:update', '修改在仓包裹', '在仓数据'], ['warehouse:in-stock:split', '拆分在仓包裹', '在仓数据'], ['warehouse:in-stock:batch-select', '批量勾选在仓包裹', '在仓数据'], ['warehouse:in-stock:tally-start', '发起理货', '在仓数据'], ['warehouse:in-stock:batch-tally-start', '批量发起理货', '在仓数据'], ['warehouse:in-stock:order-entry-select', '选择包裹录单', '在仓数据'], ['warehouse:in-stock:batch-order-entry', '批量录单', '在仓数据'], ['warehouse:in-stock:tally-record-view', '查看理货记录', '在仓数据'], ['warehouse:in-stock:column-setting', '保存在仓列设置', '在仓数据'],
+  ['warehouse:tally-pending:view', '查看未完成理货', '未完成理货'], ['warehouse:tally-pending:task-create', '创建理货任务', '未完成理货'], ['warehouse:tally-pending:task-update', '修改理货任务', '未完成理货'], ['warehouse:tally-pending:task-process', '处理理货', '未完成理货'], ['warehouse:tally-pending:merge-only', '合并成一箱', '未完成理货'], ['warehouse:tally-pending:merge-and-ship', '理货并创建出货单', '未完成理货'], ['warehouse:tally-pending:split', '拆票理货', '未完成理货'], ['warehouse:tally-pending:detail-view', '查看理货明细', '未完成理货'], ['warehouse:tally-pending:history-view', '查看理货记录', '未完成理货'], ['warehouse:tally-pending:filter', '筛选未完成理货', '未完成理货'],
+  ['warehouse:tally-completed:view', '查看已完成理货', '已完成理货'], ['warehouse:tally-completed:history-view', '查看已完成理货历史', '已完成理货'], ['warehouse:tally-completed:detail-view', '查看已完成理货详情', '已完成理货'], ['warehouse:tally-label:generate', '生成理货标签', '已完成理货'], ['warehouse:tally-label:reprint', '重打理货标签', '已完成理货'], ['warehouse:tally-label:print', '打印理货标签', '已完成理货'], ['warehouse:tally-label:download', '下载理货标签', '已完成理货'], ['warehouse:tally-label:scan-apply', '扫描应用理货标签', '已完成理货'], ['warehouse:tally-label:overwrite-package', '标签覆盖在仓包裹', '已完成理货'],
+  ['warehouse:dispatch-pending:view', '查看待出库', '待出库'], ['warehouse:dispatch-pending:batch-select', '勾选待出库订单', '待出库'], ['warehouse:dispatch-pending:handover-preview', '预览代理交接单', '待出库'], ['warehouse:dispatch-pending:handover-print', '打印代理交接单', '待出库'], ['warehouse:dispatch-pending:dispatch-confirm', '确认出库', '待出库'], ['warehouse:dispatch-pending:batch-dispatch-confirm', '批量确认出库', '待出库'], ['warehouse:dispatch-pending:shipping-mark-confirm', '确认贴唛头', '待出库'], ['warehouse:dispatch-pending:label-generate', '生成内部交货面单', '待出库'], ['warehouse:dispatch-pending:label-view', '查看内部交货面单', '待出库'], ['warehouse:dispatch-pending:label-void', '作废内部交货面单', '待出库'], ['warehouse:dispatch-pending:column-setting', '保存待出库列设置', '待出库'],
+  ['warehouse:outbounded:view', '查看已出库历史', '已出库'], ['warehouse:outbounded:handover-view', '查看已出库交接单', '已出库'], ['warehouse:outbounded:detail-view', '查看已出库详情', '已出库'], ['warehouse:outbounded:export', '导出已出库历史', '已出库']
+].map(([code, label, section]) => ({ code, label, group: `仓库管理 / ${section}` }));
+const warehousePermissionCodes = warehousePermissionDefinitions.map((item) => item.code);
+const marketPermissionDefinitions = [
+  ['market:dashboard:view', '查看市场看板', '市场看板'], ['market:dashboard:pending-summary', '查看待排货概览', '市场看板'], ['market:dashboard:routed-summary', '查看已排货概览', '市场看板'], ['market:dashboard:weekly-summary', '查看本周排货概览', '市场看板'], ['market:dashboard:agent-stats-view', '查看代理统计', '市场看板'], ['market:dashboard:channel-mode-stats-view', '查看渠道统计', '市场看板'], ['market:dashboard:sensitive-summary-view', '查看敏感货统计', '市场看板'], ['market:dashboard:team-view', '查看团队数据', '市场看板'], ['market:dashboard:all-view', '查看全部数据', '市场看板'],
+  ['market:pending-routing:view', '查看待排货', '待排货'], ['market:pending-routing:detail', '查看待排货详情', '待排货'], ['market:pending-routing:assign', '分配代理渠道', '待排货'], ['market:pending-routing:save-draft', '保存排货资料', '待排货'], ['market:pending-routing:confirm', '确认排货', '待排货'], ['market:pending-routing:audit', '审核排货', '待排货'], ['market:pending-routing:update', '修改待排货', '待排货'], ['market:pending-routing:delete', '删除待排货', '待排货'], ['market:pending-routing:operation-log-view', '查看待排货操作日志', '待排货'], ['market:pending-routing:business-cost-view', '查看业务成本', '待排货'], ['market:pending-routing:payable-cost-view', '查看应付成本', '待排货'], ['market:pending-routing:agent-channel-view', '查看代理渠道', '待排货'], ['market:pending-routing:cost-field-view', '查看排货成本字段', '待排货'], ['market:pending-routing:column-setting', '保存待排货列设置', '待排货'],
+  ['market:routed:view', '查看已排货', '已排货'], ['market:routed:detail', '查看已排货详情', '已排货'], ['market:routed:update', '修改已排货', '已排货'], ['market:routed:reroute', '退回重排', '已排货'], ['market:routed:log-view', '查看已排货日志', '已排货'], ['market:routed:agent-cost-view', '查看代理成本', '已排货'], ['market:routed:cost-total-view', '查看成本合计', '已排货'], ['market:routed:agent-channel-view', '查看已排货代理渠道', '已排货'], ['market:routed:column-setting', '保存已排货列设置', '已排货'],
+  ['market:weekly-routing:view', '查看本周排货数据', '本周排货数据'], ['market:weekly-routing:detail', '查看本周排货详情', '本周排货数据'], ['market:weekly-routing:agent-stats-view', '查看本周代理统计', '本周排货数据'], ['market:weekly-routing:channel-mode-stats-view', '查看本周渠道统计', '本周排货数据'], ['market:weekly-routing:cost-view', '查看本周成本', '本周排货数据'], ['market:weekly-routing:reroute-stats-view', '查看退回重排统计', '本周排货数据'], ['market:weekly-routing:sensitive-stats-view', '查看本周敏感统计', '本周排货数据'], ['market:weekly-routing:export', '导出本周排货数据', '本周排货数据'], ['market:weekly-routing:column-setting', '保存本周排货列设置', '本周排货数据']
+].map(([code, label, section]) => ({ code, label, group: `市场管理 / ${section}` }));
+const marketPermissionCodes = marketPermissionDefinitions.map((item) => item.code);
+const customerServicePermissionDefinitions = [
+  ['customer-service:dashboard:view', '查看客服看板', '客服看板'], ['customer-service:data-confirm:view', '查看数据确认', '数据确认'], ['customer-service:data-confirm:business-view', '查看业务数据', '数据确认'], ['customer-service:data-confirm:agent-view', '查看代理数据', '数据确认'], ['customer-service:data-confirm:business-update', '修改业务数据', '数据确认'], ['customer-service:data-confirm:agent-update', '修改代理数据', '数据确认'], ['customer-service:data-confirm:business-approve', '审核业务数据', '数据确认'], ['customer-service:data-confirm:agent-approve', '审核代理数据', '数据确认'], ['customer-service:data-confirm:approve-all', '双数据审核通过', '数据确认'], ['customer-service:data-confirm:reverse', '反审核数据确认', '数据确认'],
+  ['customer-service:transfer:view', '查看转单号', '转单号'], ['customer-service:transfer:write', '填写转单号', '转单号'], ['customer-service:transfer:batch-write', '批量填写转单号', '转单号'], ['customer-service:transfer:sub-order-write', '填写分单号', '转单号'], ['customer-service:transfer:push-sales', '推送业务待办', '转单号'], ['customer-service:transfer:view-outbound-time', '查看出库时间', '转单号'], ['customer-service:transfer:view-agent', '查看代理信息', '转单号'], ['customer-service:transfer:view-agent-data', '查看代理数据', '转单号'], ['customer-service:transfer:view-sensitive', '查看敏感字段', '转单号'], ['customer-service:transfer:view-all', '查看全部授权订单', '转单号'],
+  ['customer-service:pending-routing:view', '查看待排货', '待排货'], ['customer-service:waiting-departure:view', '查看待离港', '待离港'], ['customer-service:waiting-departure:update-info', '修改待离港资料', '待离港'], ['customer-service:waiting-departure:update-transfer-no', '修改转单号', '待离港'], ['customer-service:waiting-departure:update-etd-eta', '修改 ETD/ETA', '待离港'], ['customer-service:waiting-departure:confirm-departure', '确认离港', '待离港'], ['customer-service:departed:view', '查看已离港', '已离港'], ['customer-service:departed:confirm-arrived-port', '确认到港', '已离港'], ['customer-service:arrived-port:view', '查看已到港', '已到港'], ['customer-service:arrived-port:confirm-delivering', '确认派送', '已到港'], ['customer-service:delivering:view', '查看已派送', '已派送'], ['customer-service:delivering:confirm-signed', '确认签收', '已派送'], ['customer-service:signed:view', '查看已签收', '已签收 / 售后'], ['customer-service:problem:view', '查看问题件', '问题件'], ['customer-service:problem:create', '创建问题件', '问题件'], ['customer-service:problem:reply', '回复问题件', '问题件'], ['customer-service:problem:close', '关闭问题件', '问题件'], ['customer-service:problem:assist', '标记需协助', '问题件'], ['customer-service:problem:after-sale-view', '查看需协助问题件', '问题件']
+].map(([code, label, section]) => ({ code, label, group: `客服管理 / ${section}` }));
+const customerServicePermissionCodes = customerServicePermissionDefinitions.map((item) => item.code);
+const trackingPermissionDefinitions = [
+  ['tracking:carrier-task:view', '查看承运商任务', '承运商任务'], ['tracking:carrier-task:detail', '查看任务详情', '承运商任务'], ['tracking:carrier-task:run', '手动同步轨迹', '承运商任务'], ['tracking:carrier-task:retry', '重试失败任务', '承运商任务'], ['tracking:carrier-task:error-view', '查看失败原因', '承运商任务'], ['tracking:carrier-task:log-view', '查看同步日志', '承运商任务'], ['tracking:carrier-task:column-setting', '保存任务列设置', '承运商任务'],
+  ['tracking:external:view', '查看外部物流轨迹', '外部物流轨迹'], ['tracking:external:latest-view', '查看最新物流轨迹', '外部物流轨迹'], ['tracking:external:stale-days-view', '查看未更新天数', '外部物流轨迹'], ['tracking:external:detail', '查看轨迹详情', '外部物流轨迹'], ['tracking:external:single-add', '单票添加轨迹', '外部物流轨迹'], ['tracking:external:import-upload', '上传轨迹表', '外部物流轨迹'], ['tracking:external:import-preview', '查看导入预览', '外部物流轨迹'], ['tracking:external:import-confirm', '确认导入轨迹', '外部物流轨迹'], ['tracking:external:import-error-view', '查看失败行', '外部物流轨迹'], ['tracking:external:unmatched-view', '查看未匹配单号', '外部物流轨迹'], ['tracking:external:overwrite', '覆盖最新物流轨迹', '外部物流轨迹'], ['tracking:external:customer-visible-update', '更新客户可见轨迹', '外部物流轨迹'], ['tracking:external:column-setting', '保存轨迹列设置', '外部物流轨迹'], ['tracking:external:export', '导出轨迹列表', '外部物流轨迹']
+].map(([code, label, section]) => ({ code, label, group: `物流轨迹管理 / ${section}` }));
+const trackingPermissionCodes = trackingPermissionDefinitions.map((item) => item.code);
+const masterPermissionDefinitions = [
+  ['master-data:customers:read', '查看客户资料', '客户资料'], ['master-data:customers:view-own', '查看本人客户', '客户资料'], ['master-data:customers:view-all', '查看全部客户', '客户资料'], ['master-data:customers:detail', '查看客户详情', '客户资料'], ['master-data:customers:create', '新增客户', '客户资料'], ['master-data:customers:update', '修改客户', '客户资料'], ['master-data:customers:assign-salesperson', '分配业务员', '客户资料'], ['master-data:customers:enable', '启停客户', '客户资料'], ['master-data:customers:delete', '删除客户', '客户资料'], ['master-data:customers:import', '导入客户', '客户资料'], ['master-data:customers:export', '导出客户', '客户资料'], ['master-data:customers:contacts-view', '查看联系人', '客户资料'], ['master-data:customers:contacts-manage', '维护联系人', '客户资料'], ['master-data:customers:contacts-disable', '停用联系人', '客户资料'], ['master-data:customers:user-create', '创建客户账号', '客户资料'], ['master-data:customers:view-sensitive', '查看客户敏感资料', '客户资料'], ['master-data:customers:list-setting', '保存客户列设置', '客户资料'],
+  ['master-data:finance:read', '查看财务资料', '财务资料'], ['master-data:finance:fee-name:create', '新增费用名称', '财务资料'], ['master-data:finance:fee-name:update', '修改费用名称', '财务资料'], ['master-data:finance:fee-name:delete', '删除费用名称', '财务资料'], ['master-data:finance:fee-name:reorder', '调整费用名称排序', '财务资料'], ['master-data:finance:settlement:create', '新增结算方式', '财务资料'], ['master-data:finance:settlement:update', '修改结算方式', '财务资料'], ['master-data:finance:settlement:delete', '删除结算方式', '财务资料'], ['master-data:finance:cargo-type:create', '新增货物类型', '财务资料'], ['master-data:finance:cargo-type:update', '修改货物类型', '财务资料'], ['master-data:finance:cargo-type:delete', '删除货物类型', '财务资料'], ['master-data:finance:product-name:create', '新增品名', '财务资料'], ['master-data:finance:product-name:update', '修改品名', '财务资料'], ['master-data:finance:product-name:delete', '删除品名', '财务资料'], ['master-data:finance:surcharge-manage', '维护附加费', '财务资料'], ['master-data:finance:surcharge-enable', '启停附加费', '财务资料'], ['master-data:finance:fuel-rate-manage', '维护燃油费率', '财务资料'], ['master-data:finance:view-sensitive', '查看财务敏感资料', '财务资料'],
+  ['master-data:agents:read', '查看代理资料', '代理资料'], ['master-data:agents:detail', '查看代理详情', '代理资料'], ['master-data:agents:create', '新增代理', '代理资料'], ['master-data:agents:update', '修改代理', '代理资料'], ['master-data:agents:enable', '启停代理', '代理资料'], ['master-data:agents:batch-enable', '批量启停代理', '代理资料'], ['master-data:agents:delete', '删除代理', '代理资料'], ['master-data:agents:batch-delete', '批量删除代理', '代理资料'], ['master-data:agents:warehouse-view', '查看代理仓库', '代理资料'], ['master-data:agents:tracking-site-view', '查看轨迹站点', '代理资料'], ['master-data:agents:invoice-template-view', '查看发票模板', '代理资料'], ['master-data:agents:invoice-template-manage', '维护发票模板', '代理资料'], ['master-data:agents:bank-view', '查看代理银行', '代理资料'], ['master-data:agents:bank-manage', '维护代理银行', '代理资料'], ['master-data:agents:integration-type-view', '查看集成类型', '代理资料'], ['master-data:agents:list-setting', '保存代理列设置', '代理资料'],
+  ['master-data:agent-channels:read', '查看代理渠道', '代理渠道'], ['master-data:agent-channels:filter-agent', '按代理筛选', '代理渠道'], ['master-data:agent-channels:create', '新增代理渠道', '代理渠道'], ['master-data:agent-channels:update', '修改代理渠道', '代理渠道'], ['master-data:agent-channels:enable', '启停代理渠道', '代理渠道'], ['master-data:agent-channels:delete', '删除代理渠道', '代理渠道'],
+  ['master-data:channels:read', '查看公司渠道', '公司渠道'], ['master-data:channels:create', '新增公司渠道', '公司渠道'], ['master-data:channels:update', '修改公司渠道', '公司渠道'], ['master-data:channels:enable', '启停公司渠道', '公司渠道'], ['master-data:channels:delete', '删除公司渠道', '公司渠道'], ['master-data:channels:carrier-manage', '维护承运商', '公司渠道'], ['master-data:channels:carrier-enable', '启停承运商', '公司渠道'], ['master-data:channels:business-type-manage', '维护业务类型', '公司渠道'], ['master-data:channels:category-manage', '维护渠道类别', '公司渠道'], ['master-data:channels:volume-rule-manage', '维护除材积规则', '公司渠道'], ['master-data:channels:weight-rule-manage', '维护多件重量规则', '公司渠道'], ['master-data:channels:settlement-rule-manage', '维护结算重量规则', '公司渠道'], ['master-data:channels:large-cargo-rule-manage', '维护大货规则', '公司渠道'], ['master-data:channels:remote-rule-manage', '维护偏远规则', '公司渠道'],
+  ['master-data:channel-categories:read', '查看渠道类别', '渠道类别'], ['master-data:channel-categories:create', '新增渠道类别', '渠道类别'], ['master-data:channel-categories:update', '修改渠道类别', '渠道类别'], ['master-data:channel-categories:enable', '启停渠道类别', '渠道类别'], ['master-data:channel-categories:delete', '删除渠道类别', '渠道类别'],
+  ['master-data:remote-areas:read', '查看偏远', '偏远'], ['master-data:remote-areas:file-view', '查看偏远文件', '偏远'], ['master-data:remote-areas:upload', '上传偏远文件', '偏远'], ['master-data:remote-areas:delete', '删除偏远文件', '偏远'], ['master-data:remote-areas:file-paste-upload', '粘贴上传偏远文件', '偏远'], ['master-data:remote-areas:rule-manage', '维护偏远规则', '偏远'],
+  ['master-data:exchange-rates:read', '查看汇率', '汇率'], ['master-data:exchange-rates:history-view', '查看汇率历史', '汇率'], ['master-data:exchange-rates:create', '新增汇率', '汇率'], ['master-data:exchange-rates:update', '修改汇率', '汇率'], ['master-data:exchange-rates:disable', '停用汇率', '汇率'], ['master-data:exchange-rates:period-view', '查看期间汇率', '汇率'], ['master-data:exchange-rates:export', '导出汇率', '汇率'],
+  ['master-data:assistant:read', '查看资料辅助', '资料辅助'], ['master-data:assistant:ai-check', '执行 AI 校验', '资料辅助'], ['master-data:assistant:missing-warning-view', '查看缺失预警', '资料辅助'], ['master-data:assistant:stats-view', '查看资料统计', '资料辅助'], ['master-data:assistant:suggestion-generate', '生成资料建议', '资料辅助']
+].map(([code, label, section]) => ({ code, label, group: `基础资料库 / ${section}` }));
+const masterPermissionCodes = masterPermissionDefinitions.map((item) => item.code);
+const systemPermissionDefinitions = [
+  ['system:user-groups:read', '查看用户组', '用户组'], ['system:accounts:read', '查看员工账号', '用户名'], ['system:sites:read', '查看站点', '站点'], ['system:audit:read', '查看操作日志', '操作日志'], ['system:audit:ip-view', '查看 IP 地址', '操作日志'], ['system:audit:detail-view', '查看审计详情', '操作日志'], ['system:audit:before-after-view', '查看变更前后', '操作日志'], ['system:audit:raw-request-view', '查看原始请求', '操作日志'], ['system:role-permissions:read', '查看角色权限分配', '角色权限分配'], ['system:security:read', '查看权限安全区', '权限安全区'], ['system:ai-security:read', '查看 AI 接口安全', 'AI 接口安全'], ['system:ai-security:permission-check', '执行 AI 权限体检', 'AI 接口安全'], ['system:base-config:read', '查看系统基础配置', '系统基础配置']
+].map(([code, label, section]) => ({ code, label, group: `系统管理 / ${section}` }));
+const systemPermissionCodes = systemPermissionDefinitions.map((item) => item.code);
+const financePermissionDefinitions = [
+  'finance:dashboard:view', 'finance:receivable:read', 'finance:receivable:detail', 'finance:receivable:create', 'finance:receivable:update', 'finance:receivable:audit', 'finance:receivable:batch-audit', 'finance:receivable:reverse', 'finance:receivable:batch-reverse', 'finance:receivable:void', 'finance:receivable:batch-void', 'finance:receivable:match-water', 'finance:receivable:export', 'finance:receivable:view-sensitive', 'finance:receivable:view-all',
+  'finance:business-cost:detail', 'finance:business-cost:batch-audit', 'finance:business-cost:batch-reverse', 'finance:business-cost:batch-void', 'finance:business-cost:view-sensitive',
+  'finance:payable:detail', 'finance:payable:match-shipment', 'finance:payable:batch-audit', 'finance:payable:batch-reverse', 'finance:payable:batch-void',
+  'finance:pending-payment:read', 'finance:pending-payment:create', 'finance:pending-payment:update', 'finance:pending-payment:cancel', 'finance:pending-payment:bank-select', 'finance:pending-payment:bank-manage', 'finance:pending-payment:export',
+  'finance:paid-payment:read', 'finance:paid-payment:confirm', 'finance:paid-payment:update', 'finance:paid-payment:reverse', 'finance:paid-payment:voucher-upload', 'finance:paid-payment:bank-view', 'finance:paid-payment:export',
+  'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete',
+  'finance:water-match:read', 'finance:water-match:receivable-view', 'finance:water-match:create', 'finance:water-match:cancel',
+  'finance:agent-bill:read', 'finance:agent-bill:import', 'finance:agent-bill:difference-manage', 'finance:agent-bill:difference-resolve', 'finance:agent-bill:archive', 'finance:agent-bill:reverse-archive'
+].map((code) => ({ code, label: code, group: `财务管理 / ${code.split(':')[1]}` }));
+const financePermissionCodes = financePermissionDefinitions.map((item) => item.code);
 const systemRoleMatrix = {
   availablePermissions: [
-    { code: 'workspace:access', label: '运营工作台', group: '工作台' },
-    { code: 'orders:read', label: '运单查看', group: '我的订单' },
-    { code: 'orders:write', label: '运单操作', group: '我的订单' },
-    { code: 'routing:read', label: '渠道排货查看', group: '渠道排货' },
-    { code: 'routing:write', label: '渠道排货操作', group: '渠道排货' },
-    { code: 'warehouse:read', label: '仓库查看', group: '仓库管理' },
-    { code: 'warehouse:write', label: '仓库操作', group: '仓库管理' },
-    { code: 'tracking:read', label: '轨迹查看', group: '轨迹监控' },
-    { code: 'tracking:write', label: '轨迹操作', group: '轨迹监控' },
-    { code: 'problems:read', label: '问题件查看', group: '问题件' },
-    { code: 'problems:write', label: '问题件处理', group: '问题件' },
-    { code: 'pricing:lookup', label: '报价查询', group: '报价查价' },
-    { code: 'pricing:manage', label: '报价管理', group: '报价查价' },
-    { code: 'finance:read', label: '财务查看', group: '财务结算' },
-    { code: 'finance:settle', label: '财务核销', group: '财务结算' },
+    { code: 'pricing:lookup:view', label: '进入报价查询', group: '报价查价 / 查价' },
+    { code: 'pricing:lookup:amazon', label: '亚马逊查询', group: '报价查价 / 查价' },
+    { code: 'pricing:lookup:south-africa', label: '南非专线查询', group: '报价查价 / 查价' },
+    { code: 'pricing:lookup:south-africa-table-view', label: '查看南非专线报价表', group: '报价查价 / 查价' },
+    { code: 'pricing:lookup:copy-quote', label: '复制报价文案', group: '报价查价 / 查价' },
+    { code: 'pricing:south-africa:rules-read', label: '查看南非专线规则', group: '报价查价 / 南非专线规则' },
+    { code: 'pricing:price-books:read', label: '查看价格表管理', group: '报价查价 / 价格表管理' },
+    { code: 'pricing:price-books:list-view', label: '查看价格表列表', group: '报价查价 / 价格表管理' },
     { code: 'finance:business-cost:read', label: '业务员成本查看', group: '财务结算' },
     { code: 'finance:business-cost:manage', label: '业务员成本维护', group: '财务结算' },
     { code: 'finance:business-cost:audit', label: '业务员成本审核', group: '财务结算' },
@@ -481,33 +684,15 @@ const systemRoleMatrix = {
     { code: 'finance:payable:attachment', label: '应付账单截图', group: '财务结算' },
     { code: 'finance:payable:view-sensitive', label: '应付敏感字段', group: '财务结算' },
     { code: 'finance:payable:view-profit', label: '应付利润查看', group: '财务结算' },
-    { code: 'finance:payable:paid-read', label: '已付款查看', group: '财务结算' },
-    { code: 'finance:payable:paid-confirm', label: '确认付款', group: '财务结算' },
-    { code: 'finance:payable:paid-reverse', label: '已付款反核销', group: '财务结算' },
-    { code: 'finance:payable:paid-export', label: '已付款导出', group: '财务结算' },
-    { code: 'finance:payable:paid-voucher', label: '付款水单维护', group: '财务结算' },
-    { code: 'finance:payable:paid-bank-view', label: '付款银行查看', group: '财务结算' },
-    { code: 'reports:read', label: '统计报表', group: '统计报表' },
-    { code: 'master-data:read', label: '基础资料查看', group: '基础资料' },
-    { code: 'master-data:write', label: '基础资料维护', group: '基础资料' },
-    { code: 'master-data:customers:read', label: '客户资料查看', group: '基础资料' },
-    { code: 'master-data:customers:write', label: '客户资料维护', group: '基础资料' },
-    { code: 'master-data:finance:read', label: '财务资料查看', group: '基础资料' },
-    { code: 'master-data:finance:write', label: '财务资料维护', group: '基础资料' },
-    { code: 'master-data:agents:read', label: '代理资料查看', group: '基础资料' },
-    { code: 'master-data:agents:write', label: '代理资料维护', group: '基础资料' },
-    { code: 'master-data:agent-channels:read', label: '代理渠道查看', group: '基础资料' },
-    { code: 'master-data:agent-channels:write', label: '代理渠道维护', group: '基础资料' },
-    { code: 'master-data:channels:read', label: '公司渠道查看', group: '基础资料' },
-    { code: 'master-data:channels:write', label: '公司渠道维护', group: '基础资料' },
-    { code: 'master-data:channel-categories:read', label: '渠道类别查看', group: '基础资料' },
-    { code: 'master-data:channel-categories:write', label: '渠道类别维护', group: '基础资料' },
-    { code: 'master-data:remote-areas:read', label: '偏远查看', group: '基础资料' },
-    { code: 'master-data:remote-areas:write', label: '偏远维护', group: '基础资料' },
-    { code: 'master-data:exchange-rates:read', label: '汇率查看', group: '基础资料' },
-    { code: 'master-data:exchange-rates:write', label: '汇率维护', group: '基础资料' },
-    { code: 'master-data:assistant:read', label: '资料辅助查看', group: '基础资料' },
-    { code: 'system:manage', label: '系统设置', group: '系统设置' }
+    ...operationPermissionDefinitions,
+    ...businessPermissionDefinitions,
+    ...warehousePermissionDefinitions,
+    ...marketPermissionDefinitions,
+    ...customerServicePermissionDefinitions,
+    ...trackingPermissionDefinitions,
+    ...masterPermissionDefinitions,
+    ...systemPermissionDefinitions,
+    ...financePermissionDefinitions
   ],
   roles: [
     {
@@ -515,7 +700,7 @@ const systemRoleMatrix = {
       label: '管理员组',
       account: 'admin',
       scope: '全局数据',
-      permissions: ['workspace:access', 'orders:read', 'orders:write', 'orders:review:restore', 'orders:review:purge', 'routing:read', 'routing:write', 'warehouse:read', 'warehouse:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'pricing:manage', 'finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:audit', 'finance:business-cost:reverse', 'finance:business-cost:void', 'finance:business-cost:export', 'finance:business-cost:view-all', 'finance:business-cost:view-agent', 'finance:business-cost:view-profit', 'finance:order-fee:payable:view', 'finance:order-fee:payable:manage', 'finance:order-fee:profit:receivable-payable', 'finance:order-fee:profit:receivable-business', 'finance:order-fee:profit:business-payable', 'finance:payable:read', 'finance:payable:manage', 'finance:payable:audit', 'finance:payable:reverse', 'finance:payable:void', 'finance:payable:export', 'finance:payable:payment', 'finance:payable:bank', 'finance:payable:attachment', 'finance:payable:view-sensitive', 'finance:payable:view-profit', 'finance:payable:paid-read', 'finance:payable:paid-confirm', 'finance:payable:paid-reverse', 'finance:payable:paid-export', 'finance:payable:paid-voucher', 'finance:payable:paid-bank-view', 'reports:read', 'master-data:read', 'master-data:write', 'master-data:agents:read', 'master-data:agents:write', 'master-data:channels:read', 'master-data:channels:write', 'system:manage'],
+      permissions: ['workspace:access', 'orders:read', 'orders:write', 'orders:review:restore', 'orders:review:purge', 'routing:read', 'routing:write', 'warehouse:read', 'warehouse:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'pricing:manage', 'finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:audit', 'finance:business-cost:reverse', 'finance:business-cost:void', 'finance:business-cost:export', 'finance:business-cost:view-all', 'finance:business-cost:view-agent', 'finance:business-cost:view-profit', 'finance:order-fee:payable:view', 'finance:order-fee:payable:manage', 'finance:order-fee:profit:receivable-payable', 'finance:order-fee:profit:receivable-business', 'finance:order-fee:profit:business-payable', 'finance:payable:read', 'finance:payable:manage', 'finance:payable:audit', 'finance:payable:reverse', 'finance:payable:void', 'finance:payable:export', 'finance:payable:payment', 'finance:payable:bank', 'finance:payable:attachment', 'finance:payable:view-sensitive', 'finance:payable:view-profit', 'finance:payable:paid-read', 'finance:payable:paid-confirm', 'finance:payable:paid-reverse', 'finance:payable:paid-export', 'finance:payable:paid-voucher', 'finance:payable:paid-bank-view', 'reports:read', 'master-data:read', 'master-data:write', 'master-data:agents:read', 'master-data:agents:write', 'master-data:channels:read', 'master-data:channels:write', 'system:manage', ...operationPermissionCodes, ...businessPermissionCodes, ...warehousePermissionCodes, ...marketPermissionCodes, ...customerServicePermissionCodes, ...trackingPermissionCodes, ...masterPermissionCodes, ...systemPermissionCodes, ...financePermissionCodes],
       restriction: '全部权限'
     },
     {
@@ -523,7 +708,7 @@ const systemRoleMatrix = {
       label: '客服',
       account: 'service',
       scope: '客户与问题件',
-      permissions: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'master-data:read'],
+      permissions: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'tracking:write', 'pricing:lookup', 'master-data:read', ...customerServicePermissionCodes],
       restriction: '不能核销、不能改系统权限'
     },
     {
@@ -531,7 +716,7 @@ const systemRoleMatrix = {
       label: '业务员',
       account: 'operator',
       scope: '客户出货与渠道排货',
-      permissions: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:view-profit', 'finance:order-fee:profit:receivable-business', 'master-data:read', 'master-data:write'],
+      permissions: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'pricing:lookup', 'pricing:lookup:view', 'pricing:lookup:amazon', 'pricing:lookup:south-africa', 'pricing:lookup:south-africa-table-view', 'pricing:lookup:copy-quote', 'pricing:south-africa:rules-read', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:view-profit', 'finance:order-fee:profit:receivable-business', 'master-data:read', 'master-data:write', ...operationPermissionCodes, 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-save', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:order-fee:view', 'business:order-fee:create', 'business:order-fee:update', 'business:order-fee:delete', 'business:review:list', 'business:review:detail', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:shipment:column-setting', 'business:order-ai:view', 'business:order-ai:assist'],
       restriction: '不能改财务、不能改权限'
     },
     {
@@ -539,7 +724,7 @@ const systemRoleMatrix = {
       label: '仓库',
       account: 'warehouse',
       scope: '入库、理货、打单、出货',
-      permissions: ['workspace:access', 'orders:read', 'warehouse:read', 'warehouse:write', 'tracking:read'],
+      permissions: ['workspace:access', 'orders:read', 'tracking:read', ...warehousePermissionCodes],
       restriction: '不能访问报价管理、财务和系统设置'
     },
     {
@@ -547,7 +732,7 @@ const systemRoleMatrix = {
       label: '财务',
       account: 'finance',
       scope: '财务数据',
-      permissions: ['workspace:access', 'orders:read', 'orders:review:restore', 'pricing:lookup', 'finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:audit', 'finance:business-cost:reverse', 'finance:business-cost:void', 'finance:business-cost:export', 'finance:business-cost:view-all', 'finance:business-cost:view-agent', 'finance:business-cost:view-profit', 'finance:order-fee:payable:view', 'finance:order-fee:payable:manage', 'finance:order-fee:profit:receivable-payable', 'finance:order-fee:profit:receivable-business', 'finance:order-fee:profit:business-payable', 'finance:payable:read', 'finance:payable:manage', 'finance:payable:audit', 'finance:payable:reverse', 'finance:payable:void', 'finance:payable:export', 'finance:payable:payment', 'finance:payable:bank', 'finance:payable:attachment', 'finance:payable:view-sensitive', 'finance:payable:view-profit', 'finance:payable:paid-read', 'finance:payable:paid-confirm', 'finance:payable:paid-reverse', 'finance:payable:paid-export', 'finance:payable:paid-voucher', 'finance:payable:paid-bank-view', 'reports:read', 'master-data:read'],
+      permissions: ['workspace:access', 'orders:read', 'orders:review:restore', 'pricing:lookup', 'finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:business-cost:audit', 'finance:business-cost:reverse', 'finance:business-cost:void', 'finance:business-cost:export', 'finance:business-cost:view-all', 'finance:business-cost:view-agent', 'finance:business-cost:view-profit', 'finance:order-fee:payable:view', 'finance:order-fee:payable:manage', 'finance:order-fee:profit:receivable-payable', 'finance:order-fee:profit:receivable-business', 'finance:order-fee:profit:business-payable', 'finance:payable:read', 'finance:payable:manage', 'finance:payable:audit', 'finance:payable:reverse', 'finance:payable:void', 'finance:payable:export', 'finance:payable:payment', 'finance:payable:bank', 'finance:payable:attachment', 'finance:payable:view-sensitive', 'finance:payable:view-profit', 'finance:payable:paid-read', 'finance:payable:paid-confirm', 'finance:payable:paid-reverse', 'finance:payable:paid-export', 'finance:payable:paid-voucher', 'finance:payable:paid-bank-view', 'reports:read', 'master-data:read', ...financePermissionCodes],
       restriction: '不能改系统权限'
     },
     {
@@ -560,7 +745,29 @@ const systemRoleMatrix = {
     }
   ]
 };
+const testWaterReceiptPermissions = [
+  { code: 'finance:water-receipt:read', label: '水单查看', group: '财务结算' },
+  { code: 'finance:water-receipt:manage', label: '水单维护', group: '财务结算' },
+  { code: 'finance:water-receipt:arrive', label: '水单到账确认', group: '财务结算' },
+  { code: 'finance:water-receipt:match', label: '水单匹配应收', group: '财务结算' },
+  { code: 'finance:water-receipt:adjust', label: '已到账金额调整', group: '财务结算' },
+  { code: 'finance:water-receipt:void', label: '水单作废', group: '财务结算' },
+  { code: 'finance:water-receipt:archive', label: '水单归档', group: '财务结算' },
+  { code: 'finance:water-receipt:export', label: '水单导出', group: '财务结算' },
+  { code: 'finance:water-receipt:voucher', label: '水单凭证维护', group: '财务结算' },
+  { code: 'finance:water-receipt:view-all', label: '水单查看全部', group: '财务结算' }
+];
+testWaterReceiptPermissions.forEach((permission) => {
+  if (!systemRoleMatrix.availablePermissions.some((item) => item.code === permission.code)) {
+    systemRoleMatrix.availablePermissions.push(permission);
+  }
+});
 systemRoleMatrix.roles.forEach((role, index) => {
+  if (['ADMIN', 'FINANCE'].includes(role.key)) {
+    testWaterReceiptPermissions.forEach((permission) => {
+      if (!role.permissions.includes(permission.code)) role.permissions.push(permission.code);
+    });
+  }
   (role as Record<string, unknown>).sortOrder = role.key === 'CUSTOMER' ? 106 : 100 + index;
   (role as Record<string, unknown>).enabled = true;
   (role as Record<string, unknown>).systemBuiltin = true;
@@ -596,15 +803,75 @@ systemRoleMatrix.roles.forEach((role, index) => {
     systemBuiltin: false
   });
 });
+const mockMarketRole = systemRoleMatrix.roles.find((role) => role.key === 'UG_MARKET');
+if (mockMarketRole) {
+  mockMarketRole.permissions = [
+    'workspace:access',
+    'orders:read',
+    'master-data:read',
+    ...marketPermissionCodes
+  ];
+}
+const departments: DepartmentSummary[] = [
+  { id: 'department-business', name: '业务部', enabled: true },
+  { id: 'department-market', name: '市场部', enabled: true },
+  { id: 'department-warehouse', name: '仓储部', enabled: true },
+  { id: 'department-customer-service', name: '客服部', enabled: true },
+  { id: 'department-finance', name: '财务部', enabled: true },
+  { id: 'department-system', name: '系统管理部', enabled: true }
+];
 const staffAccounts: StaffAccountSummary[] = [
-  { id: 'u-admin', username: 'admin', name: '系统管理员', nickname: 'admin', role: 'ADMIN', roleLabel: '管理员组', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T15:12:00.000Z' },
-  { id: 'u-service', username: 'service', name: '客服专员', nickname: '王五', site: '深圳思远', role: 'UG_CUSTOMER_SERVICE', roleLabel: '客服', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T17:41:00.000Z' },
-  { id: 'u-operator', username: 'operator', name: '业务操作员', nickname: '赵六', site: '深圳思远', role: 'UG_BUSINESS', roleLabel: '业务部', enabled: true, mustChangePassword: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T16:58:00.000Z' },
-  { id: 'u-market', username: 'market', name: '市场专员', nickname: '钱八', site: '深圳思远', role: 'UG_MARKET', roleLabel: '市场部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T16:12:00.000Z' },
-  { id: 'u-warehouse', username: 'warehouse', name: '仓库操作员', nickname: '刘七', site: '深圳思远', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T13:26:00.000Z' },
-  { id: 'u-finance', username: 'finance', name: '财务专员', nickname: '李四', site: '深圳思远', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T18:23:00.000Z' }
+  { id: 'u-admin', username: 'admin', name: '系统管理员', nickname: 'admin', departmentId: 'department-system', department: '系统管理部', role: 'ADMIN', roleLabel: '管理员组', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T15:12:00.000Z' },
+  { id: 'u-service', username: 'service', name: '客服专员', nickname: '王五', departmentId: 'department-customer-service', department: '客服部', site: '深圳思远', role: 'UG_CUSTOMER_SERVICE', roleLabel: '客服', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T17:41:00.000Z' },
+  { id: 'u-operator', username: 'operator', name: '业务操作员', nickname: '赵六', departmentId: 'department-business', department: '业务部', site: '深圳思远', role: 'UG_BUSINESS', roleLabel: '业务部', enabled: true, mustChangePassword: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T16:58:00.000Z' },
+  { id: 'u-market', username: 'market', name: '市场专员', nickname: '钱八', departmentId: 'department-market', department: '市场部', site: '深圳思远', role: 'UG_MARKET', roleLabel: '市场部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T16:12:00.000Z' },
+  { id: 'u-warehouse', username: 'warehouse', name: '仓库操作员', nickname: '刘七', departmentId: 'department-warehouse', department: '仓储部', site: '深圳思远', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T13:26:00.000Z' },
+  { id: 'u-finance', username: 'finance', name: '财务专员', nickname: '李四', departmentId: 'department-finance', department: '财务部', site: '深圳思远', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T18:23:00.000Z' }
 ];
 const auditLogs: AuditLogSummary[] = [
+  {
+    id: 'audit-auth-profile-admin',
+    actorId: 'u-admin',
+    actorUsername: 'admin',
+    action: 'auth.profile.update',
+    actionLabel: '修改个人资料',
+    module: 'auth',
+    moduleLabel: '认证登录',
+    target: 'user:u-admin',
+    result: 'SUCCESS',
+    resultLabel: '成功',
+    before: { name: '系统管理员' },
+    after: { name: '系统管理员' },
+    createdAt: '2026-06-28T10:10:00.000Z'
+  },
+  {
+    id: 'audit-auth-password-admin',
+    actorId: 'u-admin',
+    actorUsername: 'admin',
+    action: 'auth.password.change',
+    actionLabel: '修改登录密码',
+    module: 'auth',
+    moduleLabel: '认证登录',
+    target: 'user:u-admin',
+    result: 'SUCCESS',
+    resultLabel: '成功',
+    after: { username: 'admin' },
+    createdAt: '2026-06-28T10:08:00.000Z'
+  },
+  {
+    id: 'audit-auth-password-service',
+    actorId: 'u-service',
+    actorUsername: 'service',
+    action: 'auth.password.change',
+    actionLabel: '修改登录密码',
+    module: 'auth',
+    moduleLabel: '认证登录',
+    target: 'user:u-service',
+    result: 'SUCCESS',
+    resultLabel: '成功',
+    after: { username: 'service' },
+    createdAt: '2026-06-28T10:07:00.000Z'
+  },
   {
     id: 'audit-master-channel-update',
     actorId: 'u-admin',
@@ -618,6 +885,7 @@ const auditLogs: AuditLogSummary[] = [
     resultLabel: '成功',
     before: { name: 'DHL HK', enabled: true },
     after: { name: 'DHL HK', enabled: false },
+    ipAddress: '203.0.113.10',
     createdAt: '2026-06-28T10:00:00.000Z'
   },
   {
@@ -633,6 +901,7 @@ const auditLogs: AuditLogSummary[] = [
     resultLabel: '失败',
     before: { permissions: ['system:manage'] },
     after: { granted: false },
+    ipAddress: '198.51.100.7',
     createdAt: '2026-06-28T10:05:00.000Z'
   },
   {
@@ -801,6 +1070,8 @@ const auditLogs: AuditLogSummary[] = [
     createdAt: '2026-06-06T10:00:00Z'
   }
 ];
+const initialAuditLogs = auditLogs.map((row) => structuredClone(row));
+const navigationReadStates = new Set<string>();
 
 function buildAuditDashboard(rows: AuditLogSummary[]) {
   const isImportant = (row: AuditLogSummary) => row.result === 'FAILED' || /(delete|void|audit|review|permission|role|finance|payment|voucher|receipt|import|export)/i.test(row.action);
@@ -820,6 +1091,8 @@ function buildAuditDashboard(rows: AuditLogSummary[]) {
 
 beforeEach(() => {
   localStorage.clear();
+  navigationReadStates.clear();
+  auditLogs.splice(0, auditLogs.length, ...initialAuditLogs.map((row) => structuredClone(row)));
   employeeShipments.splice(
     0,
     employeeShipments.length,
@@ -832,6 +1105,8 @@ beforeEach(() => {
       declarationRequired: true,
       sensitive: true,
       outboundAt: '2026-06-06T10:00:00.000Z',
+      handoverNo: 'HD-SYGJ06061230004',
+      outboundBy: 'warehouse',
       latestTracking: '仓库已出库，等待客服数据确认'
     }),
     shipment('s-2', 'SYGJ05291344165', 'TILL-0529', 'WAITING_DEPARTURE', '1344-TILL', {
@@ -845,6 +1120,8 @@ beforeEach(() => {
       transferNo: '1ZDELIVERING',
       latestTracking: '已派送，等待业务确认签收',
       outboundAt: '2026-06-02T10:00:00.000Z',
+      handoverNo: 'HD-SYGJ06061239999',
+      outboundBy: 'warehouse',
       etdAt: '2026-06-06T10:00:00.000Z',
       etaAt: '2026-06-16T10:00:00.000Z'
     }),
@@ -852,6 +1129,8 @@ beforeEach(() => {
       transferNo: '1ZARRIVED',
       latestTracking: '已到港，等待派送/提取',
       outboundAt: '2026-06-02T10:00:00.000Z',
+      handoverNo: 'HD-SYGJ06061238888',
+      outboundBy: 'warehouse',
       etdAt: '2026-06-06T10:00:00.000Z',
       etaAt: '2026-06-16T10:00:00.000Z'
     }),
@@ -861,6 +1140,10 @@ beforeEach(() => {
       settlementMethod: '月结',
       declarationRequired: false,
       sensitive: false,
+      weightKg: 18,
+      volumeCbm: 0.12,
+      chargeableWeightKg: 20,
+      receivableRmbTotal: 1000,
       entryBy: 'operator',
       businessReviewedBy: 'operator',
       businessReviewedAt: '2026-06-25T09:30:00.000Z',
@@ -908,6 +1191,10 @@ beforeEach(() => {
     fee.reconciliationStatus = 'PENDING';
     fee.reviewedAt = undefined;
     fee.reviewedBy = undefined;
+    fee.receivedAmount = 0;
+    fee.receiptStatus = 'UNPAID';
+    fee.receivedAt = undefined;
+    fee.paymentNo = fee.id === 'rf-3' ? undefined : '4654316987986131';
   });
   businessCostFees.splice(0, businessCostFees.length, {
     id: 'bc-1',
@@ -949,6 +1236,26 @@ beforeEach(() => {
     note: '期初余额',
     createdAt: '2026-06-01T10:00:00.000Z'
   });
+  waterReceipts.splice(0, waterReceipts.length, {
+    id: 'wr-seed-1',
+    receiptNo: 'SD20260601001',
+    site: '思远收款',
+    customerId: 'c-9409',
+    customerCode: '9409',
+    customerName: '9409-Daloday',
+    salesperson: 'Rachel',
+    receiptMethod: '对公',
+    receiptDate: '2026-06-01T10:00:00.000Z',
+    currency: 'RMB',
+    amount: 10000,
+    matchedAmount: 0,
+    balance: 10000,
+    paymentNo: 'PAY-WR-001',
+    status: 'ARRIVED',
+    matches: [],
+    createdAt: '2026-06-01T10:00:00.000Z',
+    updatedAt: '2026-06-01T10:00:00.000Z'
+  });
   payeeBankAccounts.splice(0, payeeBankAccounts.length, {
     id: 'payee-bank-yuhuan-rmb',
     agentId: 'a-yuhuan',
@@ -979,13 +1286,43 @@ beforeEach(() => {
     code: 'YH',
     shortName: '宇环',
     name: '深圳宇环',
+    createdAt: '2026-06-01T09:00:00.000Z',
     warehouseAddress1: '深圳市宝安区宇环仓一',
     warehouseAddress2: '深圳市宝安区宇环仓二',
     warehouseAddress3: '深圳市宝安区宇环仓三',
     warehouseContact: '宇环仓库',
     invoiceTemplateName: '宇环发票模板.xlsx',
     invoiceTemplateUrl: '/templates/yuhuan-invoice.xlsx',
+    trackingWebsite: 'https://agent-track.example.com?no={transferNo}',
     enabled: true
+  }, {
+    id: 'a-yiyang',
+    code: 'YY',
+    shortName: '亿阳国际',
+    name: '亿阳国际',
+    createdAt: '2026-06-02T09:00:00.000Z',
+    enabled: true
+  }, {
+    id: 'a-topda',
+    code: 'TPD',
+    shortName: '拓普达',
+    name: '拓普达',
+    createdAt: '2026-06-03T09:00:00.000Z',
+    enabled: true
+  }, {
+    id: 'a-zhenyun',
+    code: 'ZY',
+    shortName: '振韵',
+    name: '深圳振韵国际',
+    createdAt: '2026-06-04T09:00:00.000Z',
+    enabled: true
+  }, {
+    id: 'a-disabled',
+    code: 'DIS',
+    shortName: '停用代理',
+    name: '停用代理',
+    createdAt: '2026-05-01T09:00:00.000Z',
+    enabled: false
   });
   masterData.agentChannels.splice(0, masterData.agentChannels.length, { id: 'ach-yuhuan-dhl', agentId: 'a-yuhuan', agentName: '宇环', channelName: '宇环 DHL', enabled: true });
   masterData.carriers.splice(0, masterData.carriers.length, { id: 'cr-dhl', name: 'DHL', enabled: true });
@@ -1025,12 +1362,12 @@ beforeEach(() => {
   staffAccounts.splice(
     0,
     staffAccounts.length,
-    { id: 'u-admin', username: 'admin', role: 'ADMIN', roleLabel: '管理员组', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-    { id: 'u-service', username: 'service', role: 'UG_CUSTOMER_SERVICE', roleLabel: '客服', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-    { id: 'u-operator', username: 'operator', role: 'UG_BUSINESS', roleLabel: '业务部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-    { id: 'u-market', username: 'market', role: 'UG_MARKET', roleLabel: '市场部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-    { id: 'u-warehouse', username: 'warehouse', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
-    { id: 'u-finance', username: 'finance', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' }
+    { id: 'u-admin', username: 'admin', departmentId: 'department-system', department: '系统管理部', role: 'ADMIN', roleLabel: '管理员组', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
+    { id: 'u-service', username: 'service', departmentId: 'department-customer-service', department: '客服部', role: 'UG_CUSTOMER_SERVICE', roleLabel: '客服', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
+    { id: 'u-operator', username: 'operator', departmentId: 'department-business', department: '业务部', role: 'UG_BUSINESS', roleLabel: '业务部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
+    { id: 'u-market', username: 'market', departmentId: 'department-market', department: '市场部', role: 'UG_MARKET', roleLabel: '市场部', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
+    { id: 'u-warehouse', username: 'warehouse', departmentId: 'department-warehouse', department: '仓储部', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
+    { id: 'u-finance', username: 'finance', departmentId: 'department-finance', department: '财务部', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' }
   );
   sites.splice(
     0,
@@ -1042,6 +1379,8 @@ beforeEach(() => {
   );
   importedPriceBooks.splice(0, importedPriceBooks.length);
   importedPriceRows.splice(0, importedPriceRows.length);
+  priceBookImportJobs.splice(0, priceBookImportJobs.length);
+  priceBookSourceFiles.clear();
   financeCatalogItems.splice(0, financeCatalogItems.length, ...initialFinanceCatalogItems.map((item) => ({ ...item })));
   Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:test-download') });
   Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
@@ -1088,14 +1427,15 @@ function buildReceivableAuditResponse(rows: ReceivableAuditSummary[], url = 'htt
   });
   const decorated = filteredRows.map((row) => {
     const currency = row.currency ?? 'RMB';
-    const rmbAmount = currency === 'USD' ? Number((row.amount * 6.6).toFixed(2)) : row.amount;
-    const ledger = row.paymentNo ? accountLedger.find((entry) => entry.id === row.paymentNo) : undefined;
-    return {
-      ...row,
-      rmbAmount,
-      matchedReceiptNo: row.paymentNo,
-      receiptBalance: ledger?.balance
-    };
+	    const rmbAmount = currency === 'USD' ? Number((row.amount * 6.6).toFixed(2)) : row.amount;
+	    const ledger = row.paymentNo ? accountLedger.find((entry) => entry.id === row.paymentNo) : undefined;
+	    const receipt = row.paymentNo ? waterReceipts.find((entry) => entry.id === row.paymentNo || entry.receiptNo === row.paymentNo) : undefined;
+	    return {
+	      ...row,
+	      rmbAmount,
+	      matchedReceiptNo: row.paymentNo,
+	      receiptBalance: receipt?.balance ?? ledger?.balance
+	    };
   });
   const orderTotals = decorated.reduce((map, row) => {
     if (row.voided) return map;
@@ -1153,6 +1493,33 @@ function buildWaterReceiptResponse(rows: WaterReceiptSummary[], url = 'http://te
     },
     pagination: { page: 1, pageSize: 10, totalItems: filtered.length }
   };
+}
+
+function waterReceiptDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(date).replaceAll('-', '');
+}
+
+function nextWaterReceiptNoForMock() {
+  const key = waterReceiptDateKey();
+  const prefix = `SD${key}`;
+  const pattern = new RegExp(`^${prefix}(\\d{3})$`);
+  const maxSeq = waterReceipts.reduce((max, row) => {
+    const seq = row.receiptNo.match(pattern)?.[1];
+    return seq ? Math.max(max, Number(seq)) : max;
+  }, 0);
+  return `${prefix}${String(maxSeq + 1).padStart(3, '0')}`;
+}
+
+function sanitizeManualPaymentNoForMock(value?: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const cleaned = String(value).replace(/[\u0000-\u001f\u007f<>]/g, '').trim();
+  if (!cleaned) return undefined;
+  return cleaned.slice(0, 80);
 }
 
 function buildBusinessCostAuditResponse(rows: BusinessCostAuditSummary[], url = 'http://test.local') {
@@ -1284,8 +1651,47 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   const actorRole = () => String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '').replace('Bearer ', '').replace('-token', '');
   const actorUsername = () => {
     const token = actorRole();
-    return token.includes('CUSTOMER_SERVICE') ? 'service' : token.includes('OPERATOR') ? 'operator' : 'admin';
+    if (token.includes('CUSTOMER_SERVICE')) return 'service';
+    if (token.includes('OPERATOR')) return 'operator';
+    if (token.includes('WAREHOUSE')) return 'warehouse';
+    if (token.includes('FINANCE')) return 'finance';
+    if (token.includes('UG_MARKET')) return 'market';
+    return 'admin';
   };
+  const actorAccount = () => staffAccounts.find((account) => account.username === actorUsername()) ?? staffAccounts[0];
+
+  if (url.endsWith('/api/navigation/unread-badges')) {
+    const read = (moduleKey: string, sectionKey?: string) => navigationReadStates.has(`${actorUsername()}:${moduleKey}:${sectionKey ?? ''}`);
+    const item = (moduleKey: string, sectionKey?: string, count = 0) => ({ moduleKey, sectionKey, unreadCount: read(moduleKey, sectionKey) ? 0 : count, displayCount: String(read(moduleKey, sectionKey) ? 0 : count) });
+    return jsonResponse({ items: [
+      item('customerService', 'pending-routing', 1),
+      item('customerService', 'waitingDeparture', 1),
+      item('customerService', 'departed', 0),
+      item('customerService', 'problems', 1),
+      item('receive', 'consolidation', 1),
+      item('receive', 'packages', 1),
+      item('receive', 'queue', 1),
+      item('workspace', 'shipmentPool', 1),
+      item('business', 'order-entry-drafts', 1),
+      item('business', 'pending-review', 1),
+      item('business', 'order-management', 1),
+      item('market', 'pending-routing', 1),
+      item('market', 'routed', 1),
+      item('finance', 'receivables', 1),
+      item('finance', 'payment-applications', 1),
+      item('customerService', undefined, 3),
+      item('receive', undefined, 3),
+      item('workspace', undefined, 1),
+      item('business', undefined, 3),
+      item('market', undefined, 2),
+      item('finance', undefined, 2)
+    ] });
+  }
+
+  if (url.endsWith('/api/navigation/read-state') && init?.method === 'POST') {
+    navigationReadStates.add(`${actorUsername()}:${body.moduleKey}:${body.sectionKey ?? ''}`);
+    return jsonResponse({ ok: true, moduleKey: body.moduleKey, sectionKey: body.sectionKey, readAt: new Date().toISOString(), watermark: new Date().toISOString() });
+  }
 
   if (url.endsWith('/api/auth/captcha')) {
     return jsonResponse({
@@ -1311,6 +1717,67 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       user: { id: `u-${body.username}`, username: body.username, role, customerId: role === 'CUSTOMER' ? 'c-9409' : undefined, mustChangePassword: body.username === 'firstlogin' },
       permissions
     });
+  }
+
+  if (url.endsWith('/api/auth/me')) {
+    const account = actorAccount();
+    return jsonResponse({
+      id: account.id,
+      username: account.username,
+      role: account.role,
+      name: account.name,
+      phone: account.phone,
+      gender: account.gender,
+      nickname: account.nickname,
+      mustChangePassword: account.mustChangePassword
+    });
+  }
+
+  if (url.endsWith('/api/auth/profile') && init?.method === 'PUT') {
+    const account = actorAccount();
+    const before = { name: account.name, phone: account.phone, gender: account.gender, nickname: account.nickname };
+    account.name = body.name;
+    account.phone = body.phone;
+    account.gender = body.gender;
+    account.nickname = body.nickname;
+    const after = { name: account.name, phone: account.phone, gender: account.gender, nickname: account.nickname };
+    auditLogs.unshift({
+      id: `audit-auth-profile-${auditLogs.length + 1}`,
+      actorId: account.id,
+      actorUsername: account.username,
+      action: 'auth.profile.update',
+      actionLabel: '修改个人资料',
+      module: 'auth',
+      moduleLabel: '认证登录',
+      target: `user:${account.id}`,
+      result: 'SUCCESS',
+      resultLabel: '成功',
+      before,
+      after,
+      createdAt: '2026-07-09T10:00:00.000Z'
+    });
+    return jsonResponse({
+      id: account.id,
+      username: account.username,
+      role: account.role,
+      name: account.name,
+      phone: account.phone,
+      gender: account.gender,
+      nickname: account.nickname,
+      mustChangePassword: account.mustChangePassword
+    });
+  }
+
+  if (url.endsWith('/api/auth/account-events')) {
+    const account = actorAccount();
+    const rows = auditLogs.filter((row) => {
+      if (row.action.startsWith('auth.login.')) return false;
+      if (['auth.profile.update', 'auth.password.change'].includes(row.action)) {
+        return row.actorId === account.id && row.target === `user:${account.id}`;
+      }
+      return row.action.startsWith('system.staff.') && row.target.includes(account.id);
+    });
+    return jsonResponse(rows);
   }
 
   if (url.endsWith('/api/auth/login-logs')) {
@@ -1463,6 +1930,54 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(employeeShipments[shipmentIndex]);
   }
 
+  const pendingRoutingDeleteMatch = url.match(/\/api\/shipments\/([^/]+)\/pending-routing$/);
+  if (pendingRoutingDeleteMatch && init?.method === 'DELETE') {
+    const shipmentIndex = employeeShipments.findIndex((shipment) => shipment.id === pendingRoutingDeleteMatch[1]);
+    const currentShipment = employeeShipments[shipmentIndex];
+    if (!currentShipment) {
+      return jsonResponse({ message: '运单不存在' }, 404);
+    }
+    if (currentShipment.status !== 'WAITING_SORT') {
+      return jsonResponse({ message: '只有待排货运单可以删除' }, 400);
+    }
+    const reason = String(body.reason ?? '').trim();
+    if (!reason) {
+      return jsonResponse({ message: '请填写删除原因' }, 400);
+    }
+    const actor = actorUsername();
+    const deletedAt = new Date().toISOString();
+    const updated = {
+      ...currentShipment,
+      deletedAt,
+      deletedBy: actor,
+      deletedReason: reason,
+      deleteType: 'MANUAL' as const
+    };
+    employeeShipments[shipmentIndex] = updated;
+    auditLogs.unshift({
+      id: `audit-route-delete-${auditLogs.length + 1}`,
+      actorId: `u-${actor}`,
+      actorUsername: actor,
+      action: 'shipment.route.delete',
+      actionLabel: '删除待排货',
+      module: 'shipment',
+      moduleLabel: '运单',
+      target: currentShipment.id,
+      result: 'SUCCESS',
+      resultLabel: '成功',
+      before: currentShipment,
+      after: {
+        ...updated,
+        statusBefore: currentShipment.status,
+        deleteReason: reason,
+        deletedBy: actor,
+        deletedAt
+      },
+      createdAt: deletedAt
+    });
+    return jsonResponse(updated);
+  }
+
   const trackingEventMatch = url.match(/\/api\/shipments\/([^/]+)\/tracking-events$/);
   if (trackingEventMatch) {
     const shipmentIndex = employeeShipments.findIndex((shipment) => shipment.id === trackingEventMatch[1]);
@@ -1486,6 +2001,12 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(shipmentLabels);
   }
 
+  const labelListMatch = url.match(/\/api\/shipments\/([^/]+)\/labels$/);
+  if (labelListMatch && (!init?.method || init.method === 'GET')) {
+    const shipmentId = decodeURIComponent(labelListMatch[1]);
+    return jsonResponse(shipmentLabels.filter((label) => label.shipmentId === shipmentId && label.status === 'CREATED'));
+  }
+
   const dispatchMatch = url.match(/\/api\/shipments\/([^/]+)\/dispatch$/);
   if (dispatchMatch && init?.method === 'POST') {
     const shipmentId = decodeURIComponent(dispatchMatch[1]);
@@ -1504,7 +2025,10 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       latestTracking: '仓库已出库，等待客服补齐转单号',
       dispatchedAt: '2026-06-06T10:00:00.000Z',
       outboundAt: '2026-06-06T10:00:00.000Z',
-      transferNo: body.transferNo ?? current.transferNo
+      transferNo: body.transferNo ?? current.transferNo,
+      handoverNo: body.handoverNo,
+      outboundBy: 'warehouse',
+      batchDispatchSource: body.batchDispatchSource
     };
     employeeShipments[index] = updated;
     return jsonResponse(updated, 201);
@@ -1646,6 +2170,10 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse([...sites].sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)));
   }
 
+  if (url.endsWith('/api/system/departments')) {
+    return jsonResponse(departments);
+  }
+
   if (url.endsWith('/api/system/staff-accounts') && init?.method === 'POST') {
     const role = body.role ?? 'OPERATOR';
     const roleLabel = systemRoleMatrix.roles.find((item) => item.key === role)?.label ?? '员工';
@@ -1656,6 +2184,8 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       phone: body.phone,
       gender: body.gender,
       nickname: body.nickname,
+      departmentId: body.departmentId,
+      department: departments.find((department) => department.id === body.departmentId)?.name,
       site: body.site,
       role,
       roleLabel,
@@ -1683,6 +2213,10 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     if (body.phone !== undefined) account.phone = body.phone || undefined;
     if (body.gender !== undefined) account.gender = body.gender;
     if (body.nickname !== undefined) account.nickname = body.nickname || undefined;
+    if (body.departmentId !== undefined) {
+      account.departmentId = body.departmentId || undefined;
+      account.department = departments.find((department) => department.id === body.departmentId)?.name;
+    }
     if (body.site !== undefined) account.site = body.site || undefined;
     if (body.enabled !== undefined) account.enabled = body.enabled === true;
     if (body.role) {
@@ -1725,11 +2259,13 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (url.includes('/api/system/staff-accounts')) {
     const requestUrl = new URL(url, 'http://localhost');
     const keyword = requestUrl.searchParams.get('keyword')?.toLowerCase();
+    const departmentId = requestUrl.searchParams.get('departmentId');
     const site = requestUrl.searchParams.get('site');
     const role = requestUrl.searchParams.get('role');
     const status = requestUrl.searchParams.get('status') ?? 'ALL';
     return jsonResponse(staffAccounts.filter((account) =>
-      (!keyword || [account.username, account.name, account.nickname, account.roleLabel].some((value) => value?.toLowerCase().includes(keyword)))
+      (!keyword || [account.username, account.name, account.department, account.roleLabel].some((value) => value?.toLowerCase().includes(keyword)))
+      && (!departmentId || account.departmentId === departmentId)
       && (!site || account.site === site)
       && (!role || account.role === role)
       && (status === 'ALL' || (status === 'ENABLED' ? account.enabled : !account.enabled))
@@ -1814,11 +2350,14 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   }
 
   if (url.endsWith('/api/master-data/agents') && init?.method === 'POST') {
+    const baseId = `a-${String(body.code ?? body.shortName ?? body.name ?? 'm7').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')}`;
+    const id = masterData.agents.some((agent) => agent.id === baseId) ? `${baseId}-${masterData.agents.length + 1}` : baseId;
     const agent = {
-      id: `a-${body.code ?? 'm7'}`,
+      id,
       code: body.code ?? 'M7',
       shortName: body.shortName ?? body.name,
       name: body.name ?? 'M7 Agent',
+      createdAt: new Date().toISOString(),
       integrationType: body.integrationType ?? 'MANUAL',
       warehouseAddress1: body.warehouseAddress1,
       warehouseAddress2: body.warehouseAddress2,
@@ -1826,10 +2365,54 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       warehouseContact: body.warehouseContact,
       invoiceTemplateName: body.invoiceTemplateName,
       invoiceTemplateUrl: body.invoiceTemplateUrl,
+      trackingWebsite: body.trackingWebsite,
       enabled: true
     };
     masterData.agents.push(agent);
     return jsonResponse(agent);
+  }
+
+  if (url.endsWith('/api/master-data/agents/batch-enabled') && init?.method === 'POST') {
+    const ids = Array.from(new Set((body.ids ?? []).map((id: string) => String(id))));
+    const rows = ids
+      .map((id) => masterData.agents.find((agent) => agent.id === id))
+      .filter(Boolean) as AgentSummary[];
+    rows.forEach((agent) => {
+      agent.enabled = body.enabled === true;
+    });
+    return jsonResponse({ successCount: rows.length, rows });
+  }
+
+  if (url.endsWith('/api/master-data/agents/batch-delete') && init?.method === 'POST') {
+    const ids = Array.from(new Set((body.ids ?? []).map((id: string) => String(id))));
+    const rows = ids
+      .map((id) => masterData.agents.find((agent) => agent.id === id))
+      .filter(Boolean) as AgentSummary[];
+    const referenced = rows.filter((agent) =>
+      masterData.agentChannels.some((channel) => channel.agentId === agent.id) ||
+      employeeShipments.some((shipment) => shipment.agentId === agent.id || shipment.agentName === agent.name || shipment.agentName === agent.shortName)
+    );
+    if (referenced.length) {
+      return jsonResponse({ message: `代理资料存在业务引用，不能物理删除：${referenced.map((agent) => agent.shortName ?? agent.name).join('、')}（代理渠道引用或运单引用）` }, 400);
+    }
+    masterData.agents = masterData.agents.filter((agent) => !ids.includes(agent.id));
+    agentBankAccounts.splice(0, agentBankAccounts.length, ...agentBankAccounts.filter((bank) => !ids.includes(bank.agentId ?? '')));
+    auditLogs.unshift({
+      id: `audit-agent-delete-${auditLogs.length + 1}`,
+      actorId: 'u-admin',
+      actorUsername: actorUsername(),
+      action: 'master_data.agent.delete',
+      actionLabel: '物理删除代理资料',
+      module: 'master_data',
+      moduleLabel: '基础资料',
+      target: 'master-data/agents',
+      result: 'SUCCESS',
+      resultLabel: '成功',
+      before: { agents: rows },
+      after: { deletedCount: rows.length, agentIds: rows.map((agent) => agent.id), agentShortNames: rows.map((agent) => agent.shortName ?? agent.name), hardDelete: true, deletedAt: new Date().toISOString() },
+      createdAt: new Date().toISOString()
+    });
+    return jsonResponse({ successCount: rows.length, deletedAgents: rows, failures: [], hardDelete: true });
   }
 
   const agentUpdateMatch = url.match(/\/api\/master-data\/agents\/([^/]+)$/);
@@ -1849,6 +2432,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       warehouseContact: body.warehouseContact,
       invoiceTemplateName: body.invoiceTemplateName,
       invoiceTemplateUrl: body.invoiceTemplateUrl,
+      trackingWebsite: body.trackingWebsite,
       enabled: body.enabled ?? agent.enabled
     });
     return jsonResponse(agent);
@@ -1903,6 +2487,14 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(channel);
   }
 
+  const agentChannelDeleteMatch = url.match(/\/api\/master-data\/agent-channels\/([^/]+)$/);
+  if (agentChannelDeleteMatch && init?.method === 'DELETE') {
+    const channel = masterData.agentChannels.find((item) => item.id === agentChannelDeleteMatch[1]);
+    if (!channel) return jsonResponse({ message: '代理渠道不存在' }, 404);
+    masterData.agentChannels = masterData.agentChannels.filter((item) => item.id !== channel.id);
+    return jsonResponse(channel);
+  }
+
   const contactUpdateMatch = url.match(/\/api\/master-data\/customers\/([^/]+)\/contacts\/([^/]+)$/);
   if (contactUpdateMatch && init?.method === 'PUT') {
     const contact = masterData.contacts.find((item) => item.customerId === contactUpdateMatch[1] && item.id === contactUpdateMatch[2]);
@@ -1927,9 +2519,6 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (contactMatch && init?.method === 'POST') {
     const customerId = contactMatch[1];
     const customer = masterData.customers.find((item) => item.id === customerId);
-    if (masterData.contacts.filter((item) => item.customerId === customerId && item.enabled).length >= 4) {
-      return Promise.resolve(new Response('最多维护 4 组收货人', { status: 400 }));
-    }
     const contactName = body.name ?? 'M7 Contact';
     const contact = {
       id: `cc-${contactName}`,
@@ -1939,6 +2528,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       company: body.company ?? undefined,
       phone: body.phone ?? '13900000007',
       email: body.email ?? 'm7@example.com',
+      fbaWarehouseCode: body.fbaWarehouseCode ?? undefined,
       address: body.address ?? undefined,
       country: body.country ?? undefined,
       state: body.state ?? undefined,
@@ -2023,6 +2613,17 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(channel);
   }
 
+  const channelDeleteMatch = url.match(/\/api\/master-data\/channels\/([^/]+)$/);
+  if (channelDeleteMatch && init?.method === 'DELETE') {
+    const channel = masterData.channels.find((item) => item.id === channelDeleteMatch[1]);
+    if (!channel) return jsonResponse({ message: '渠道不存在' }, 404);
+    if (employeeShipments.some((shipment) => shipment.channelId === channel.id) || pricingRules.some((rule) => rule.channelId === channel.id) || masterData.fuelRates.some((rate) => rate.channelId === channel.id)) {
+      return jsonResponse({ message: '该公司渠道存在运单引用、报价规则引用或燃油费率引用，不能删除' }, 400);
+    }
+    masterData.channels = masterData.channels.filter((item) => item.id !== channel.id);
+    return jsonResponse(channel);
+  }
+
   if (url.endsWith('/api/master-data/channel-categories') && init?.method === 'POST') {
     const name = String(body.name ?? '').trim();
     if (!name) return jsonResponse({ message: '类别名称不能为空' }, 400);
@@ -2048,6 +2649,17 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const category = masterData.channelCategories.find((item) => item.id === channelCategoryEnabledMatch[1]);
     if (!category) return jsonResponse({ message: 'Not found' }, 404);
     category.enabled = body.enabled === true;
+    return jsonResponse(category);
+  }
+
+  const channelCategoryDeleteMatch = url.match(/\/api\/master-data\/channel-categories\/([^/]+)$/);
+  if (channelCategoryDeleteMatch && init?.method === 'DELETE') {
+    const category = masterData.channelCategories.find((item) => item.id === channelCategoryDeleteMatch[1]);
+    if (!category) return jsonResponse({ message: '类别不存在' }, 404);
+    if (masterData.channels.some((channel) => channel.category === category.name)) {
+      return jsonResponse({ message: '该渠道类别已被公司渠道引用，不能删除' }, 400);
+    }
+    masterData.channelCategories = masterData.channelCategories.filter((item) => item.id !== category.id);
     return jsonResponse(category);
   }
 
@@ -2189,7 +2801,37 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       if (role === 'FINANCE' || role === 'UG_FINANCE') return jsonResponse({ message: '待审核运单不再支持财务终审，请在业务成本审核处理' }, 403);
       return jsonResponse({ message: '当前角色不能终审运单' }, 403);
     }
-    return jsonResponse({ shipment, packages: [], finance: { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, receivables: [], payables: [], businessCosts: [], receivableTotal: 0, payableTotal: 0 }, events: [], trackingEvents: [], problemTickets: [], files: [], approvalWarnings: [], overdue: false });
+    return jsonResponse({ shipment, packages: [], finance: { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, receivables: [], payables: [], businessCosts: [], receivableTotal: 0, payableTotal: 0 }, events: [], internalTrackingEvents: [], logisticsTrackingEvents: [], problemTickets: [], files: [], approvalWarnings: [], overdue: false });
+  }
+
+  const reviewBasicMatch = url.match(/\/api\/shipments\/([^/]+)\/review-basic$/);
+  if (reviewBasicMatch && init?.method === 'PUT') {
+    const shipment = employeeShipments.find((item) => item.id === reviewBasicMatch[1]);
+    if (!shipment) return jsonResponse({ message: '运单不存在' }, 404);
+    Object.assign(shipment, {
+      customerCode: body.customerCode,
+      customerOrderNo: body.customerOrderNo,
+      channelName: body.companyChannelName,
+      inboundNo: body.inboundNo || undefined,
+      productName: body.productName,
+      destinationCountry: body.destinationCountry,
+      declarationRequired: body.declarationRequired,
+      cargoType: body.cargoType,
+      subOrderNo: body.subOrderNo || undefined,
+      fbaInboundNo: body.fbaInboundNo || undefined,
+      settlementMethod: body.settlementMethod,
+      remark: body.remark || undefined,
+      receiverName: body.receiverName || undefined,
+      receiverCompany: body.receiverCompany || undefined,
+      receiverPhone: body.receiverPhone || undefined,
+      receiverAddress: body.receiverAddress || undefined,
+      receiverCountry: body.receiverCountry || undefined,
+      receiverState: body.receiverState || undefined,
+      receiverPostalCode: body.receiverPostalCode || undefined,
+      fbaWarehouseCode: body.fbaWarehouseCode || undefined,
+      latestTracking: '待审核资料已修改'
+    });
+    return jsonResponse({ shipment, packages: [], finance: { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, receivables: [], payables: [], businessCosts: [], receivableTotal: 0, payableTotal: 0 }, events: [], internalTrackingEvents: [], logisticsTrackingEvents: [], problemTickets: [], files: [], approvalWarnings: [], overdue: false });
   }
 
   const reviewDeleteMatch = url.match(/\/api\/shipments\/([^/]+)\/review$/);
@@ -2204,7 +2846,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       deletedReason: body.reason || '审核台人工删除',
       deleteType: 'MANUAL'
     });
-    return jsonResponse({ shipment, packages: [], finance: { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, receivables: [], payables: [], businessCosts: [], receivableTotal: 0, payableTotal: 0 }, events: [], trackingEvents: [], problemTickets: [], files: [], approvalWarnings: [], overdue: false });
+    return jsonResponse({ shipment, packages: [], finance: { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, receivables: [], payables: [], businessCosts: [], receivableTotal: 0, payableTotal: 0 }, events: [], internalTrackingEvents: [], logisticsTrackingEvents: [], problemTickets: [], files: [], approvalWarnings: [], overdue: false });
   }
 
   const reviewRestoreMatch = url.match(/\/api\/shipments\/([^/]+)\/restore$/);
@@ -2223,7 +2865,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       restoreMode: body.mode ?? 'KEEP_ORIGINAL_TIME',
       createdAt: body.mode === 'MANUAL_TIME' ? body.manualCreatedAt : shipment.createdAt
     });
-    return jsonResponse({ shipment, packages: [], finance: { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, receivables: [], payables: [], businessCosts: [], receivableTotal: 0, payableTotal: 0 }, events: [], trackingEvents: [], problemTickets: [], files: [], approvalWarnings: [], overdue: false });
+    return jsonResponse({ shipment, packages: [], finance: { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, receivables: [], payables: [], businessCosts: [], receivableTotal: 0, payableTotal: 0 }, events: [], internalTrackingEvents: [], logisticsTrackingEvents: [], problemTickets: [], files: [], approvalWarnings: [], overdue: false });
   }
 
   const reviewDetailMatch = url.match(/\/api\/shipments\/([^/]+)\/review-detail$/);
@@ -2269,13 +2911,21 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
         grossProfit: shipmentReceivables.reduce((sum, fee) => sum + fee.amount, 0) - shipmentBusinessCosts.reduce((sum, fee) => sum + fee.amount, 0)
       },
       events: [{ id: 'review-log-1', type: 'AUDIT', title: '提交审核', note: '财务录单创建，待审核', createdAt: shipment.createdAt, operator: shipment.entryBy }],
-      trackingEvents: [{ id: 'review-track-1', type: 'TRACKING', title: '待审核', note: shipment.latestTracking, createdAt: shipment.createdAt }],
+      internalTrackingEvents: [{ id: 'review-internal-1', type: 'STATUS', title: '提交审核', stage: '待审核', sourceModule: '业务录单', action: '提交审核', note: '财务录单创建，待审核', createdAt: shipment.createdAt, operator: shipment.entryBy }],
+      logisticsTrackingEvents: [],
       problemTickets: [],
       files: [],
       approvalWarnings: shipment.productName ? [] : ['产品名称缺失'],
       overdue: false
     };
     return jsonResponse(detail);
+  }
+
+  if (url.endsWith('/api/customer-service/transfer-shipments')) {
+    const approved = (shipmentId: string, kind: 'business' | 'agent') => auditLogs
+      .filter((row) => row.target === shipmentId && [`customer_service.${kind}_data.approved`, `customer_service.${kind}_data.reversed`].includes(row.action))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0]?.action === `customer_service.${kind}_data.approved`;
+    return jsonResponse(employeeShipments.filter((shipment) => shipment.status === 'OUTBOUNDED' && approved(shipment.id, 'business') && approved(shipment.id, 'agent')));
   }
 
   if (url.endsWith('/api/shipments')) {
@@ -2300,47 +2950,52 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(summarizeLineShipmentPool(rows, { ...query, datePreset: 'ALL' }, { businessDataApprovedShipmentIds, afterSaleShipmentIds }));
   }
 
-  const businessApproveMatch = url.match(/\/api\/shipments\/([^/]+)\/business-data\/approve$/);
-  if (businessApproveMatch && init?.method === 'POST') {
-    const shipment = employeeShipments.find((item) => item.id === businessApproveMatch[1]);
+  const dataApproveMatch = url.match(/\/api\/shipments\/([^/]+)\/(business-data|agent-data)\/approve$/);
+  const allDataApproveMatch = url.match(/\/api\/shipments\/([^/]+)\/data-confirmation\/approve-all$/);
+  if ((dataApproveMatch || allDataApproveMatch) && init?.method === 'POST') {
+    const shipmentId = dataApproveMatch?.[1] ?? allDataApproveMatch?.[1];
+    const shipment = employeeShipments.find((item) => item.id === shipmentId);
     if (!shipment) {
       return jsonResponse({ message: '运单不存在' }, 404);
     }
     const actor = actorUsername();
     const now = new Date().toISOString();
-    auditLogs.unshift({
-      id: `audit-business-data-${auditLogs.length + 1}`,
-      actorId: `u-${actor}`,
-      actorUsername: actor,
-      action: 'customer_service.business_data.approved',
-      actionLabel: '业务数据审核通过',
-      module: 'customer_service',
-      moduleLabel: '客服管理',
-      target: shipment.id,
-      result: 'SUCCESS',
-      resultLabel: '成功',
-      before: { status: shipment.status, businessDataReviewStatus: 'PENDING' },
-      after: {
-        status: shipment.status,
-        statusFrom: shipment.status,
-        statusTo: shipment.status,
-        businessDataReviewStatus: 'APPROVED',
-        reviewer: actor,
-        reviewedBy: actor,
-        reviewedAt: now,
-        differenceFeedback: body.remark?.trim() || undefined,
-        remark: body.remark?.trim() || undefined,
-        customerCode: shipment.customerCode,
-        systemOrderNo: shipment.systemOrderNo,
-        destinationCountry: shipment.destinationCountry,
-        packageCount: shipment.packageCount,
-        chargeableWeightKg: shipment.receivableWeightKg,
-        declarationRequired: shipment.declarationRequired,
-        sensitive: shipment.sensitive,
-        customerServiceReceiveStatus: 'BUSINESS_DATA_APPROVED'
-      },
-      createdAt: now
-    });
+    const reviewKinds = allDataApproveMatch ? ['business', 'agent'] as const : [dataApproveMatch![2] === 'business-data' ? 'business' : 'agent'] as const;
+    for (const kind of reviewKinds) {
+      auditLogs.unshift({
+        id: `audit-${kind}-data-${auditLogs.length + 1}`,
+        actorId: `u-${actor}`,
+        actorUsername: actor,
+        action: `customer_service.${kind}_data.approved`,
+        actionLabel: `${kind === 'business' ? '业务' : '代理'}数据审核通过`,
+        module: 'customer_service',
+        moduleLabel: '客服管理',
+        target: shipment.id,
+        result: 'SUCCESS',
+        resultLabel: '成功',
+        before: { status: shipment.status, [`${kind}DataReviewStatus`]: 'PENDING' },
+        after: {
+          status: shipment.status,
+          statusFrom: shipment.status,
+          statusTo: shipment.status,
+          [`${kind}DataReviewStatus`]: 'APPROVED',
+          reviewer: actor,
+          reviewedBy: actor,
+          reviewedAt: now,
+          differenceFeedback: body.remark?.trim() || undefined,
+          remark: body.remark?.trim() || undefined,
+          customerCode: shipment.customerCode,
+          systemOrderNo: shipment.systemOrderNo,
+          destinationCountry: shipment.destinationCountry,
+          packageCount: shipment.packageCount,
+          chargeableWeightKg: kind === 'business' ? shipment.receivableWeightKg : shipment.agentWeightKg,
+          declarationRequired: shipment.declarationRequired,
+          sensitive: shipment.sensitive,
+          customerServiceReceiveStatus: `${kind.toUpperCase()}_DATA_APPROVED`
+        },
+        createdAt: now
+      });
+    }
     return jsonResponse(shipment, 201);
   }
 
@@ -2569,39 +3224,169 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   }
 
   if (url.endsWith('/api/shipments/tracking-events/import') && init?.method === 'POST') {
-    const updated = (body.updates ?? []).map((item: { shipmentId: string; latestTracking: string }) => {
-      const shipment = employeeShipments.find((current) => current.id === item.shipmentId);
+    const latestByShipmentId = new Map<string, { latestTracking: string; trackingDate: string | number }>();
+    (body.updates ?? []).forEach((item: { shipmentId: string; latestTracking: string; trackingDate: string | number }) => {
+      const current = latestByShipmentId.get(item.shipmentId);
+      if (!current || Number(new Date(String(item.trackingDate).replace(/\//g, '-')).getTime()) >= Number(new Date(String(current.trackingDate).replace(/\//g, '-')).getTime())) {
+        latestByShipmentId.set(item.shipmentId, item);
+      }
+    });
+    const updated = [...latestByShipmentId.entries()].map(([shipmentId, item]) => {
+      const shipment = employeeShipments.find((current) => current.id === shipmentId);
       if (!shipment) {
         return undefined;
       }
-      Object.assign(shipment, { latestTracking: item.latestTracking, trackingStaleDays: 0 });
+      Object.assign(shipment, { latestTracking: item.latestTracking, latestTrackingUpdatedAt: new Date(String(item.trackingDate).replace(/\//g, '-')).toISOString(), trackingStaleDays: 0 });
       return shipment;
     }).filter(Boolean);
-    return jsonResponse({ updated });
+    return jsonResponse({
+      updated,
+      importedCount: updated.length,
+      importedRowCount: body.updates?.length ?? 0,
+      failedRowCount: body.failedRowCount ?? 0,
+      unmatchedCount: body.unmatchedOrderNos?.length ?? 0,
+      affectedShipmentCount: updated.length
+    });
   }
 
   if (url.endsWith('/api/problem-tickets')) {
     return jsonResponse(problemTickets);
   }
 
-  if (url.endsWith('/api/pricing/books/import') && init?.method === 'POST') {
+  if (new URL(url, 'http://test.local').pathname.endsWith('/api/pricing/books/import-jobs') && init?.method === 'POST') {
+    const file = body.file as File | undefined;
+    const targetModule = body.targetModule as PriceBookImportJobSummary['targetModule'] | undefined;
+    if (!file) {
+      return jsonResponse({ message: '请选择价格表文件' }, 400);
+    }
+    if (!targetModule) {
+      return jsonResponse({ message: '请选择本次导入适用的查价模块' }, 400);
+    }
+    const boundAgent = resolveTestEnabledPriceBookAgent(body);
+    if (!boundAgent) {
+      return jsonResponse({ message: '请选择所属代理' }, 400);
+    }
+    const priceBookId = `pb-${importedPriceBooks.length + 1}`;
+    const isTopda = file.name.includes('拓普达');
+    const isZhenyun = file.name.includes('振韵');
+    const isEuropeExpress = file.name.includes('欧洲快递');
+    const agentName = boundAgent.shortName;
+    const channelName = isTopda ? '拓普达美线' : isZhenyun ? '欧洲空派快递派' : `${agentName}渠道`;
+    const destinationCountry = isZhenyun ? '法国' : '美国';
+    const rows: PriceBookRowSummary[] = isEuropeExpress ? [
+      {
+        id: `pbr-${importedPriceRows.length + 1}`,
+        priceBookId,
+        agentName,
+        carrierName: '专线',
+        sourceSheetName: '欧洲空海运铁路快递',
+        channelName: '欧洲快递高价',
+        realChannelName: '欧洲快递高价',
+        destinationCountry: '法国',
+        minWeightKg: 0,
+        maxWeightKg: 10,
+        costPerKg: 30,
+        currency: 'RMB',
+        quoteSourceType: 'local'
+      },
+      {
+        id: `pbr-${importedPriceRows.length + 2}`,
+        priceBookId,
+        agentName,
+        carrierName: '专线',
+        sourceSheetName: '欧洲空海运铁路快递',
+        channelName: '欧洲快递低价',
+        realChannelName: '欧洲快递低价',
+        destinationCountry: '法国',
+        minWeightKg: 50,
+        maxWeightKg: 100,
+        costPerKg: 20,
+        currency: 'RMB',
+        quoteSourceType: 'local'
+      }
+    ] : [{
+      id: `pbr-${importedPriceRows.length + 1}`,
+      priceBookId,
+      agentName,
+      carrierName: '专线',
+      sourceSheetName: '价格表',
+      channelName,
+      realChannelName: channelName,
+      destinationCountry,
+      minWeightKg: 0,
+      maxWeightKg: 1000,
+      costPerKg: isZhenyun ? 26.5 : 18,
+      currency: 'RMB',
+      quoteSourceType: 'local'
+    }];
+    const book: PriceBookSummary = {
+      id: priceBookId,
+      fileName: file.name,
+      agentId: boundAgent.id,
+      agentShortName: boundAgent.shortName,
+      rowCount: rows.length,
+      importedAt: '2026-06-07T13:06:11.000Z',
+      legacyModuleCounts: { [targetModule]: rows.length }
+    };
+    importedPriceBooks.unshift(book);
+    importedPriceRows.unshift(...rows);
+    priceBookSourceFiles.set(priceBookId, file);
+    const now = '2026-06-07T13:06:12.000Z';
+    const job: PriceBookImportJobSummary = {
+      id: `pb-job-${priceBookImportJobs.length + 1}`,
+      fileName: file.name,
+      targetModule,
+      agentId: boundAgent.id,
+      agentShortName: boundAgent.shortName,
+      status: 'SUCCESS',
+      processedRows: rows.length,
+      totalRows: rows.length,
+      failedRows: 0,
+      message: `导入完成：${rows.length} 行`,
+      book,
+      createdAt: now,
+      updatedAt: now,
+      completedAt: now
+    };
+    priceBookImportJobs.unshift(job);
+    return jsonResponse({ job });
+  }
+
+  const priceBookImportJobMatch = url.match(/\/api\/pricing\/books\/import-jobs\/([^/?]+)$/);
+  if (priceBookImportJobMatch && init?.method !== 'POST') {
+    const job = priceBookImportJobs.find((item) => item.id === priceBookImportJobMatch[1]);
+    return job ? jsonResponse({ job }) : jsonResponse({ message: '价格表导入任务不存在' }, 404);
+  }
+
+  if (new URL(url, 'http://test.local').pathname.endsWith('/api/pricing/books/import') && init?.method === 'POST') {
+    if (!body.targetModule) {
+      return jsonResponse({ message: '请选择本次导入适用的查价模块' }, 400);
+    }
+    const boundAgent = resolveTestEnabledPriceBookAgent(body);
+    if (!boundAgent) {
+      return jsonResponse({ message: '请选择所属代理' }, 400);
+    }
     const rows: PriceBookRowSummary[] = body.rows.map((row: Omit<PriceBookRowSummary, 'id' | 'priceBookId'>, index: number) => ({
       ...row,
       id: `pbr-${importedPriceRows.length + index + 1}`,
       priceBookId: `pb-${importedPriceBooks.length + 1}`,
+      agentName: boundAgent.shortName,
       realChannelName: row.realChannelName ?? row.channelName,
       quoteSourceType: row.quoteSourceType ?? 'local'
     }));
     const book: PriceBookSummary = {
       id: `pb-${importedPriceBooks.length + 1}`,
       fileName: body.fileName,
+      agentId: boundAgent.id,
+      agentShortName: boundAgent.shortName,
       rowCount: body.rows.length,
       importedAt: '2026-06-07T13:06:11.000Z',
-      legacyModuleCounts: buildTestLegacyModuleCounts(rows)
+      legacyModuleCounts: { [body.targetModule]: rows.length }
     };
     importedPriceBooks.unshift(book);
     importedPriceRows.unshift(...rows);
-    return jsonResponse({ book, rows });
+    const returnRows = new URL(url, 'http://test.local').searchParams.get('returnRows') !== 'false';
+    return jsonResponse({ book, rowCount: rows.length, legacyModuleCounts: book.legacyModuleCounts, rows: returnRows ? rows : [] });
   }
 
   const priceBookRemarkMatch = url.match(/\/api\/pricing\/books\/([^/]+)\/remark$/);
@@ -2629,8 +3414,201 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(book);
   }
 
-  if (url.endsWith('/api/pricing/books')) {
-    return jsonResponse({ books: importedPriceBooks, rows: importedPriceRows });
+  if (url.includes('/api/pricing/books?') || url.endsWith('/api/pricing/books')) {
+    const includeRows = new URL(url, 'http://test.local').searchParams.get('includeRows') === 'true';
+    return jsonResponse({ books: importedPriceBooks, rows: includeRows ? importedPriceRows.slice(0, 200) : [] });
+  }
+
+  const priceBookDownloadMatch = url.match(/\/api\/pricing\/books\/([^/]+)\/download$/);
+  if (priceBookDownloadMatch) {
+    const file = priceBookSourceFiles.get(priceBookDownloadMatch[1]);
+    if (!file) return jsonResponse({ message: '原始价格表文件不可用，无法下载' }, 400);
+    return new Response(file, {
+      headers: {
+        'Content-Type': file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="price-book.xlsx"; filename*=UTF-8''${encodeURIComponent(file.name)}`
+      }
+    });
+  }
+
+  const priceBookRowsMatch = url.match(/\/api\/pricing\/books\/([^/]+)\/rows/);
+  if (priceBookRowsMatch || url.includes('/api/pricing/book-rows')) {
+    const requestUrl = new URL(url, 'http://test.local');
+    const page = Math.max(1, Number(requestUrl.searchParams.get('page') ?? 1));
+    const pageSize = Math.max(1, Number(requestUrl.searchParams.get('pageSize') ?? 100));
+    const agentName = requestUrl.searchParams.get('agentName') ?? '';
+    const channelName = requestUrl.searchParams.get('channelName') ?? '';
+    const sourceSheetName = requestUrl.searchParams.get('sourceSheetName') ?? '';
+    const filtered = importedPriceRows
+      .filter((row) => !priceBookRowsMatch || row.priceBookId === priceBookRowsMatch[1])
+      .filter((row) => !agentName || row.agentName.includes(agentName))
+      .filter((row) => !channelName || row.channelName.includes(channelName))
+      .filter((row) => !sourceSheetName || (row.sourceSheetName ?? row.channelName).includes(sourceSheetName));
+    return jsonResponse({
+      rows: filtered.slice((page - 1) * pageSize, page * pageSize),
+      pagination: { page, pageSize, totalItems: filtered.length }
+    });
+  }
+
+  if (url.includes('/api/pricing/sync-health')) {
+    const requestUrl = new URL(url, 'http://test.local');
+    const page = Math.max(1, Number(requestUrl.searchParams.get('page') ?? 1));
+    const pageSize = Math.max(1, Number(requestUrl.searchParams.get('pageSize') ?? 50));
+    const bookById = new Map(importedPriceBooks.map((book) => [book.id, book]));
+    const groups = new Map<string, { id: string; fileName: string; agentName: string; lineCount: number; sheetNames: Set<string>; countries: Set<string>; markupRule?: AgentMarkupSummary; status: 'synced' | 'default' | 'disabled' | 'missing' }>();
+    importedPriceRows.forEach((row) => {
+      const book = bookById.get(row.priceBookId);
+      if (!book) return;
+      const key = `${row.priceBookId}\u0001${row.agentName}`;
+      const rule = agentMarkupRules.find((item) => !item.deletedAt && item.agentName === row.agentName && !item.channelName && !item.realChannelName && !item.destinationCountry);
+      const current = groups.get(key) ?? {
+        id: key,
+        fileName: book.fileName,
+        agentName: row.agentName,
+        lineCount: 0,
+        sheetNames: new Set<string>(),
+        countries: new Set<string>(),
+        markupRule: rule ?? { id: `price-agent:${row.agentName}`, agentName: row.agentName, markupPerKg: 0.5, markupType: 'WEIGHT', markupValue: 0.5, enabled: true },
+        status: rule ? (rule.enabled ? 'synced' : 'disabled') : 'default'
+      };
+      current.lineCount += 1;
+      if (row.sourceSheetName) current.sheetNames.add(row.sourceSheetName);
+      current.countries.add(row.destinationCountry);
+      groups.set(key, current);
+    });
+    const rows = Array.from(groups.values()).map((row) => ({
+      id: row.id,
+      fileName: row.fileName,
+      agentName: row.agentName,
+      lineCount: row.lineCount,
+      sheetCount: row.sheetNames.size,
+      countryCount: row.countries.size,
+      markupRule: row.markupRule,
+      status: row.status
+    }));
+    const activeAgents = new Set(rows.map((row) => row.agentName));
+    return jsonResponse({
+      rows: rows.slice((page - 1) * pageSize, page * pageSize),
+      orphanRules: agentMarkupRules.filter((rule) => !rule.deletedAt && !rule.channelName && !rule.realChannelName && !rule.destinationCountry && !activeAgents.has(rule.agentName)),
+      stats: {
+        sources: new Set(rows.map((row) => row.fileName)).size,
+        agents: activeAgents.size,
+        lines: rows.reduce((sum, row) => sum + row.lineCount, 0),
+        activeAgents: rows.filter((row) => row.markupRule?.enabled).length
+      },
+      pagination: { page, pageSize, totalItems: rows.length }
+    });
+  }
+
+  const routePreviewPath = '/api/pricing/markup-rules/route-preview';
+  const routeTiersPath = '/api/pricing/markup-rules/route-tiers';
+  const buildRoutePreview = (input: any) => {
+    const realChannelName = input.realChannelName || input.channelName;
+    const routeRows = importedPriceRows.filter((row) => row.priceBookId === input.priceBookId
+      && row.channelName === input.channelName
+      && (row.realChannelName ?? row.channelName) === realChannelName
+      && row.destinationCountry === input.destinationCountry
+      && (input.markupUnit === 'CBM' ? Number(row.cbmPrice ?? 0) > 0 : Number(row.cbmPrice ?? 0) <= 0));
+    if (!routeRows.length) return jsonResponse({ message: '当前价格表未找到该真实线路' }, 404);
+    const chargeableValue = Number(input.chargeableValue ?? 0);
+    const selected = routeRows.find((row) => chargeableValue >= row.minWeightKg && chargeableValue < row.maxWeightKg) ?? routeRows[0];
+    const tier = agentMarkupRules.filter((rule) => !rule.deletedAt && rule.enabled && rule.priceBookId === input.priceBookId
+      && rule.agentName === input.agentName && rule.channelName === input.channelName
+      && (rule.realChannelName ?? rule.channelName) === realChannelName && rule.destinationCountry === input.destinationCountry
+      && rule.markupUnit === input.markupUnit && chargeableValue >= Number(rule.minChargeableValue ?? 0)
+      && (rule.maxChargeableValue === undefined || chargeableValue < Number(rule.maxChargeableValue)))
+      .sort((left, right) => Number(left.minChargeableValue ?? 0) - Number(right.minChargeableValue ?? 0))[0];
+    const unitPrice = input.markupUnit === 'CBM' ? Number(selected.cbmPrice ?? 0) : Number(selected.costPerKg);
+    const configuredValue = Number(tier?.markupValue ?? tier?.markupPerKg ?? 0.5);
+    const totalMarkup = configuredValue * chargeableValue;
+    return jsonResponse({
+      route: { ...input, realChannelName, sourceSheets: Array.from(new Set(routeRows.map((row) => row.sourceSheetName).filter(Boolean))) },
+      rows: routeRows,
+      rules: agentMarkupRules.filter((rule) => !rule.deletedAt && rule.enabled && rule.priceBookId === input.priceBookId && rule.agentName === input.agentName && rule.channelName === input.channelName && (rule.realChannelName ?? rule.channelName) === realChannelName && rule.destinationCountry === input.destinationCountry && rule.markupUnit === input.markupUnit),
+      selectedCostRowId: selected.id,
+      calculation: {
+        chargeable: { unit: input.markupUnit, value: chargeableValue },
+        cost: { priceBookId: selected.priceBookId, sourceSheetName: selected.sourceSheetName, weightSegmentLabel: `${selected.minWeightKg}-${selected.maxWeightKg}${input.markupUnit}`, unitPrice },
+        markup: { source: tier ? 'LINE_TIER' : 'VIRTUAL_DEFAULT', ruleId: tier?.id, rangeLabel: tier ? `${tier.minChargeableValue}-${tier.maxChargeableValue ?? '不限'}${input.markupUnit}` : undefined, type: 'WEIGHT', configuredValue, effectiveUnitMarkup: configuredValue, totalMarkup },
+        sale: { unitPrice: unitPrice + configuredValue, totalPrice: (unitPrice + configuredValue) * chargeableValue }
+      }
+    });
+  };
+  if (url.endsWith(routePreviewPath) && init?.method === 'POST') return buildRoutePreview(body);
+  if (url.endsWith(routeTiersPath) && init?.method === 'POST') {
+    const realChannelName = body.realChannelName || body.channelName;
+    for (let index = agentMarkupRules.length - 1; index >= 0; index -= 1) {
+      const rule = agentMarkupRules[index];
+      if (rule.priceBookId === body.priceBookId && rule.agentName === body.agentName && rule.channelName === body.channelName
+        && (rule.realChannelName ?? rule.channelName) === realChannelName && rule.destinationCountry === body.destinationCountry && rule.markupUnit === body.markupUnit) agentMarkupRules.splice(index, 1);
+    }
+    (body.tiers ?? []).forEach((tier: any, index: number) => agentMarkupRules.unshift({ id: `markup-route-${Date.now()}-${index}`, priceBookId: body.priceBookId, agentName: body.agentName, channelName: body.channelName, realChannelName: realChannelName === body.channelName ? undefined : realChannelName, destinationCountry: body.destinationCountry, markupType: 'WEIGHT', markupValue: Number(tier.markupValue), markupPerKg: Number(tier.markupValue), markupUnit: body.markupUnit, minChargeableValue: Number(tier.minChargeableValue), maxChargeableValue: tier.maxChargeableValue, priority: 10, enabled: true }));
+    return buildRoutePreview(body);
+  }
+  if (url.endsWith('/api/pricing/markup-rules/migrate-pricebook-scopes') && init?.method === 'POST') return jsonResponse({ migratedCount: 0, archivedCount: 0, skippedCount: 0 });
+
+  if (url.endsWith('/api/pricing/markup-rules/batch-upsert') && init?.method === 'POST') {
+    const rows = Array.isArray(body?.rows) ? body.rows : [];
+    const savedRows = rows.map((row: any) => {
+      const priority = row.priority ?? 100;
+      const existing = agentMarkupRules.find((item) =>
+        item.agentName === row.agentName &&
+        (item.channelName ?? '') === (row.channelName ?? '') &&
+        (item.realChannelName ?? '') === (row.realChannelName ?? '') &&
+        (item.destinationCountry ?? '') === (row.destinationCountry ?? '') &&
+        (item.priority ?? 100) === priority
+      );
+      if (existing) {
+        Object.assign(existing, {
+          agentName: row.agentName,
+          channelName: row.channelName,
+          realChannelName: row.realChannelName,
+          destinationCountry: row.destinationCountry,
+          markupType: row.markupType ?? 'WEIGHT',
+          markupValue: row.markupValue ?? row.markupPerKg,
+          markupPerKg: row.markupPerKg,
+          priority,
+          enabled: row.enabled !== false
+        });
+        return { ...existing };
+      }
+      const rule: AgentMarkupSummary = {
+        id: `markup-${agentMarkupRules.length + 1}`,
+        agentName: row.agentName,
+        channelName: row.channelName,
+        realChannelName: row.realChannelName,
+        destinationCountry: row.destinationCountry,
+        markupType: row.markupType ?? 'WEIGHT',
+        markupValue: row.markupValue ?? row.markupPerKg,
+        markupPerKg: row.markupPerKg,
+        priority,
+        enabled: row.enabled !== false
+      };
+      agentMarkupRules.unshift(rule);
+      return { ...rule };
+    });
+    return jsonResponse({ successCount: savedRows.length, errorRows: [], rows: savedRows });
+  }
+
+  if (url.endsWith('/api/pricing/markup-rules/batch-status') && init?.method === 'POST') {
+    const ids = new Set(Array.isArray(body?.ids) ? body.ids : []);
+    const agentNames = new Set(Array.isArray(body?.agentNames) ? body.agentNames : []);
+    const rows = agentMarkupRules.filter((rule) => !rule.deletedAt && (ids.has(rule.id) || agentNames.has(rule.agentName)));
+    rows.forEach((rule) => {
+      rule.enabled = body.enabled === true;
+    });
+    return jsonResponse({ successCount: rows.length, rows });
+  }
+
+  if (url.endsWith('/api/pricing/markup-rules/batch-delete') && init?.method === 'POST') {
+    const ids = new Set(Array.isArray(body?.ids) ? body.ids : []);
+    const agentNames = new Set(Array.isArray(body?.agentNames) ? body.agentNames : []);
+    const rows = agentMarkupRules.filter((rule) => !rule.deletedAt && (ids.has(rule.id) || agentNames.has(rule.agentName)));
+    rows.forEach((rule) => {
+      rule.enabled = false;
+      rule.deletedAt = '2026-07-07T00:00:00.000Z';
+    });
+    return jsonResponse({ successCount: rows.length, rows });
   }
 
   if (url.endsWith('/api/pricing/markup-rules') && init?.method === 'POST') {
@@ -2709,7 +3687,25 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const detail = parsedUrl.searchParams.get('detail') === 'true';
     const status = parsedUrl.searchParams.get('status') ?? 'ALL';
     const agentName = parsedUrl.searchParams.get('agentName') ?? '';
-    const visibleRules = agentMarkupRules
+    const syncedAgentMarkupRules = [...agentMarkupRules];
+    const agentsWithRule = new Set(syncedAgentMarkupRules.filter((rule) => !rule.deletedAt).map((rule) => rule.agentName));
+    Array.from(new Set(importedPriceRows.map((row) => row.agentName))).forEach((priceAgentName) => {
+      if (!priceAgentName || agentsWithRule.has(priceAgentName)) {
+        return;
+      }
+      syncedAgentMarkupRules.push({
+        id: `price-agent:${priceAgentName}`,
+        agentName: priceAgentName,
+        markupPerKg: 0.5,
+        markupType: 'WEIGHT',
+        markupValue: 0.5,
+        priority: 100,
+        enabled: true
+      });
+      agentsWithRule.add(priceAgentName);
+    });
+    const visibleRules = syncedAgentMarkupRules
+      .filter((rule) => !rule.deletedAt)
       .filter((rule) => !agentName || rule.agentName.includes(agentName))
       .filter((rule) => status === 'ENABLED' ? rule.enabled : status === 'DISABLED' ? !rule.enabled : true);
     const groupedRules = Array.from(
@@ -2745,9 +3741,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const rows = detail ? visibleRules : groupedRules;
     return jsonResponse({
       metrics: {
-        totalRules: agentMarkupRules.length,
-        enabledRules: agentMarkupRules.filter((rule) => rule.enabled).length,
-        disabledRules: agentMarkupRules.filter((rule) => !rule.enabled).length,
+        totalRules: syncedAgentMarkupRules.length,
+        enabledRules: syncedAgentMarkupRules.filter((rule) => rule.enabled).length,
+        disabledRules: syncedAgentMarkupRules.filter((rule) => !rule.enabled).length,
         unmatchedQuotes: 0
       },
       rows,
@@ -2760,7 +3756,10 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   }
 
   if (url.endsWith('/api/pricing/legacy/quote-meta')) {
+    const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
+    const canViewInternalPricing = testCanViewPricingInternalRoute(token);
     const rows = [...importedPriceRows, ...backendSeedPriceRows];
+    const amazonRows = rows.filter((row) => row.warehouseCode || /亚马逊|amazon|fba/i.test(`${row.sourceSheetName ?? ''} ${row.channelName}`));
     return jsonResponse({
       modules: [
         { key: 'amazon', label: '亚马逊查询', rowCount: rows.filter((row) => row.warehouseCode).length, sourceCount: importedPriceBooks.length },
@@ -2768,8 +3767,8 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
         { key: 'europeExpress', label: '欧洲空海运铁路快递查询', rowCount: rows.length, sourceCount: importedPriceBooks.length },
         { key: 'southAfrica', label: '南非专线查询', rowCount: rows.filter((row) => row.destinationCountry === '南非').length, sourceCount: importedPriceBooks.length }
       ],
-      agents: [...new Set(rows.map((row) => row.agentName))],
-      origins: [...new Set(rows.map((row) => row.sourceSheetName).filter(Boolean))],
+      agents: canViewInternalPricing ? [...new Set(rows.map((row) => row.agentName))] : [],
+      origins: testUniqueAmazonOriginWarehouseNames(amazonRows.map((row) => row.sourceSheetName)),
       warehouseCodes: [...new Set(rows.map((row) => row.warehouseCode).filter(Boolean))],
       tiers: ['12KG+', '51KG+', '100KG+']
     });
@@ -2779,50 +3778,57 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
     const canViewInternalPricing = testCanViewPricingInternalRoute(token);
     const chargeableWeightKg = Number(body.chargeableWeightKg);
+    const moduleKey: LegacyPricingModule = url.includes('/europe-express/') ? 'europeExpress' : url.includes('/south-africa/') ? 'southAfrica' : url.includes('/inquiry/') ? 'inquiry' : 'amazon';
+    const unitPreview = moduleKey === 'europeExpress' && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0);
     const warehouseCode = String(body.amazonCode ?? '').trim().toUpperCase();
+    const requestedWeightBand = moduleKey === 'amazon' ? testNormalizeAmazonWeightBand(body.weightBand ?? body.tier) : undefined;
+    const requestedOrigin = moduleKey === 'amazon' ? testNormalizeAmazonOriginWarehouseName(body.origin) : undefined;
     const bookRemarkMap = new Map(importedPriceBooks.map((book) => [book.id, book.remark]));
     const matchedRows = [...importedPriceRows, ...backendSeedPriceRows].filter(
       (row) =>
         (!row.warehouseCode || !warehouseCode || row.warehouseCode.toUpperCase() === warehouseCode) &&
         row.destinationCountry === body.destinationCountry &&
-        chargeableWeightKg >= row.minWeightKg &&
+        (!requestedOrigin || testNormalizeAmazonOriginWarehouseName(row.sourceSheetName) === requestedOrigin) &&
+        (!requestedWeightBand || testInferAmazonWeightBandFromMin(row.minWeightKg) === requestedWeightBand) &&
+        (unitPreview || chargeableWeightKg >= row.minWeightKg) &&
         chargeableWeightKg <= row.maxWeightKg
     );
     const recommendations = matchedRows
       .map((row) => {
-        const markup = findBestTestMarkupRule(agentMarkupRules, row);
-        if (!markup) return undefined;
+        const markup = findBestTestMarkupRule(agentMarkupRules, row) ?? createDefaultTestMarkupRule(row.agentName);
+        const quoteWeightKg = unitPreview ? 1 : chargeableWeightKg;
         const salesUnitPrice = Math.round((row.costPerKg + markup.markupPerKg) * 100) / 100;
-        const costTotal = Math.round(row.costPerKg * chargeableWeightKg * 100) / 100;
-        const salesTotal = Math.round(salesUnitPrice * chargeableWeightKg * 100) / 100;
-        const publicCode = testPublicPricingRouteCode(row.channelName, row.realChannelName, row.businessRouteName, row.agentName);
+        const costTotal = Math.round(row.costPerKg * quoteWeightKg * 100) / 100;
+        const salesTotal = Math.round(salesUnitPrice * quoteWeightKg * 100) / 100;
+        const publicCode = testPublicPricingRouteCode(row.channelName, row.realChannelName, row.businessRouteName);
         return {
           id: row.id,
-          module: 'amazon',
-          sourceId: row.priceBookId,
+          module: moduleKey,
+          ...(canViewInternalPricing ? { sourceId: row.priceBookId } : {}),
           agentName: canViewInternalPricing ? row.agentName : publicCode,
           origin: canViewInternalPricing ? row.sourceSheetName : undefined,
           channelName: canViewInternalPricing ? row.channelName : publicCode,
           serviceName: canViewInternalPricing ? row.businessRouteName : publicCode,
           warehouseCode: row.warehouseCode,
           destinationCountry: row.destinationCountry,
-          weightSegmentLabel: `${row.minWeightKg}-${row.maxWeightKg}kg`,
+          weightSegmentLabel: requestedWeightBand ?? `${row.minWeightKg}-${row.maxWeightKg}kg`,
           quoteMode: 'kg',
-          costUnitPrice: canViewInternalPricing ? row.costPerKg : salesUnitPrice,
+          ...(canViewInternalPricing ? { costUnitPrice: row.costPerKg } : {}),
           salesUnitPrice,
-          costTotal: canViewInternalPricing ? costTotal : salesTotal,
+          ...(canViewInternalPricing ? { costTotal } : {}),
           salesTotal,
           ...(canViewInternalPricing ? { grossProfit: Math.round((salesTotal - costTotal) * 100) / 100, markup } : {}),
-          chargeableWeightKg,
+          chargeableWeightKg: unitPreview ? 0 : chargeableWeightKg,
           transitLabel: row.transitLabel ?? '时效待确认',
           ...(row.productSurchargeRemark ? { productSurchargeRemark: row.productSurchargeRemark } : {}),
           ...(row.specialRemark ? { specialRemark: row.specialRemark } : {}),
           ...(row.priceBookId && bookRemarkMap.get(row.priceBookId) ? { remark: bookRemarkMap.get(row.priceBookId) } : {})
         };
       })
-      .filter(Boolean);
+      .filter(Boolean)
+      .sort((left: any, right: any) => unitPreview ? left.salesUnitPrice - right.salesUnitPrice : left.salesTotal - right.salesTotal);
     return jsonResponse({
-      module: 'amazon',
+      module: moduleKey,
       query: body,
       recommendations,
       cheapestRecommendations: [...recommendations].sort((left: any, right: any) => left.salesTotal - right.salesTotal).slice(0, 3),
@@ -2861,15 +3867,18 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
         const salesRatePerKg = Math.round((row.costPerKg + markup.markupPerKg) * 100) / 100;
         const totalCost = Math.round(row.costPerKg * chargeableWeightKg * 100) / 100;
         const totalSales = Math.round(salesRatePerKg * chargeableWeightKg * 100) / 100;
-        const publicCode = testPublicPricingRouteCode(row.channelName, row.realChannelName, row.businessRouteName, row.agentName);
+        const publicCode = testPublicPricingRouteCode(row.channelName, row.realChannelName, row.businessRouteName);
         const visiblePrice: Omit<PriceBookRowSummary, 'costPerKg'> & { costPerKg?: number } = { ...row };
         if (!canViewInternalPricing) {
+          visiblePrice.priceBookId = '';
           visiblePrice.costPerKg = undefined;
           visiblePrice.agentName = publicCode;
           visiblePrice.channelName = publicCode;
           visiblePrice.realChannelName = publicCode;
           visiblePrice.businessRouteName = publicCode;
           visiblePrice.sourceSheetName = undefined;
+          visiblePrice.lineMarkupPerKg = undefined;
+          visiblePrice.markupSource = undefined;
         }
         return {
           price: visiblePrice,
@@ -2977,12 +3986,16 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const requestUrl = new URL(url, 'http://localhost');
     const customerCode = requestUrl.searchParams.get('customerCode')?.trim();
     const domesticTrackingNo = requestUrl.searchParams.get('domesticTrackingNo')?.trim().toLowerCase();
-    const customer = masterData.customers.find((item) => item.code === customerCode);
+    const packageIds = Array.from(new Set(requestUrl.searchParams.getAll('packageIds').flatMap((item) => item.split(',')).map((item) => item.trim()).filter(Boolean)));
+    const customer = customerCode ? masterData.customers.find((item) => item.code === customerCode) : undefined;
     const role = actorRole();
-    if (!customerCode || !customer) {
+    if (!customerCode && !packageIds.length) {
       return jsonResponse([]);
     }
-    if ((role.includes('OPERATOR') || role.includes('UG_BUSINESS')) && customer.salesperson !== actorUsername()) {
+    if (customerCode && !customer) {
+      return jsonResponse([]);
+    }
+    if (customer && (role.includes('OPERATOR') || role.includes('UG_BUSINESS')) && customer.salesperson !== actorUsername()) {
       return jsonResponse([]);
     }
     const draftOccupiedPackageIds = new Set(
@@ -2991,15 +4004,29 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
         .filter(Boolean)
     );
     return jsonResponse(
-      warehousePackages
+      withConfirmedWarehouseTally(warehousePackages
         .filter((pkg) =>
-          pkg.customerCode === customerCode
+          (!customerCode || pkg.customerCode === customerCode)
+          && (!packageIds.length || packageIds.includes(pkg.id))
           && !pkg.shipmentId
           && !pkg.systemOrderNo
+          && pkg.measurementStatus !== 'PENDING_REMEASURE'
           && !draftOccupiedPackageIds.has(pkg.id)
+          && !['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'].includes(pkg.status)
+          && (!(role.includes('OPERATOR') || role.includes('UG_BUSINESS')) || masterData.customers.find((item) => item.code === pkg.customerCode)?.salesperson === actorUsername())
           && (!domesticTrackingNo || (pkg.domesticTrackingNo ?? '').toLowerCase().includes(domesticTrackingNo))
         )
-        .sort((left, right) => new Date(right.scanTime ?? 0).getTime() - new Date(left.scanTime ?? 0).getTime())
+        .sort((left, right) => new Date(right.scanTime ?? 0).getTime() - new Date(left.scanTime ?? 0).getTime()))
+    );
+  }
+
+  if (url.endsWith('/api/shipments/order-entry/drafts')) {
+    const role = actorRole();
+    const username = actorUsername();
+    return jsonResponse(
+      employeeShipments
+        .filter((shipment) => ['DRAFT', 'REVIEW_REJECTED'].includes(shipment.status))
+        .filter((shipment) => !(role.includes('OPERATOR') || role.includes('UG_BUSINESS')) || shipment.entryBy === username || shipment.salesperson === username)
     );
   }
 
@@ -3030,6 +4057,14 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       settlementMethod: body.shipment?.settlementMethod,
       tradeTerms: body.shipment?.tradeTerms,
       fbaInboundNo: body.shipment?.fbaInboundNo,
+      fbaWarehouseCode: body.shipment?.fbaWarehouseCode,
+      receiverName: body.shipment?.receiverName,
+      receiverCompany: body.shipment?.receiverCompany,
+      receiverPhone: body.shipment?.receiverPhone,
+      receiverAddress: body.shipment?.receiverAddress,
+      receiverCountry: body.shipment?.receiverCountry,
+      receiverState: body.shipment?.receiverState,
+      receiverPostalCode: body.shipment?.receiverPostalCode,
       entryBy: actor,
       businessReviewedBy: undefined,
       businessReviewedAt: undefined,
@@ -3141,6 +4176,93 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     }, 201);
   }
 
+  const orderEntryDetailMatch = url.match(/\/api\/shipments\/([^/]+)\/order-entry$/);
+  if (orderEntryDetailMatch && (!init?.method || init.method === 'GET')) {
+    const shipmentId = orderEntryDetailMatch[1];
+    const shipment = employeeShipments.find((item) => item.id === shipmentId);
+    if (!shipment) return jsonResponse({ message: '录单不存在' }, 404);
+    const draftPackageIds = new Set(shipment.draftWarehousePackageIds ?? []);
+    const packages = warehousePackages.filter((pkg) => pkg.shipmentId === shipment.id || draftPackageIds.has(pkg.id));
+    return jsonResponse({
+      shipment,
+      packages,
+      receivables: receivableFees.filter((fee) => fee.shipmentId === shipment.id),
+      businessCosts: businessCostFees.filter((fee) => fee.shipmentId === shipment.id),
+      payables: ['ADMIN', 'FINANCE', 'UG_FINANCE'].includes(actorRole())
+        ? payableAuditFees.filter((fee) => fee.shipmentId === shipment.id)
+        : [],
+      canViewPayables: ['ADMIN', 'FINANCE', 'UG_FINANCE'].includes(actorRole())
+    } satisfies OrderEntryDetailSummary);
+  }
+
+  const orderEntryDraftUpdateMatch = url.match(/\/api\/shipments\/([^/]+)\/order-entry-draft$/);
+  if (orderEntryDraftUpdateMatch && init?.method === 'PUT') {
+    const shipmentId = orderEntryDraftUpdateMatch[1];
+    const current = employeeShipments.find((item) => item.id === shipmentId);
+    if (!current) return jsonResponse({ message: '录单草稿不存在' }, 404);
+    if (!['DRAFT', 'REVIEW_REJECTED'].includes(current.status)) {
+      return jsonResponse({ message: '只有草稿或退回修改的录单可以继续编辑' }, 400);
+    }
+    const selectedPackages = warehousePackages.filter((pkg) => body.warehousePackageIds?.includes(pkg.id));
+    const packageCount = selectedPackages.reduce((sum, pkg) => sum + pkg.packageCount, 0) || selectedPackages.length;
+    const chargeWeightKg = selectedPackages.reduce((sum, pkg) => sum + pkg.chargeableWeightKg, 0);
+    Object.assign(current, {
+      customerCode: body.shipment?.customerCode ?? current.customerCode,
+      customerName: `${body.shipment?.customerCode ?? current.customerCode}-${body.shipment?.customerCode === '9409' ? 'Daloday' : '仓库客户'}`,
+      customerOrderNo: body.shipment?.customerOrderNo ?? current.customerOrderNo,
+      systemOrderNo: body.shipment?.systemOrderNo ?? current.systemOrderNo,
+      subOrderNo: body.shipment?.subOrderNo,
+      draftWarehousePackageIds: body.submitForReview ? [] : body.warehousePackageIds,
+      productName: body.shipment?.productName,
+      declarationRequired: body.shipment?.declarationRequired,
+      sensitive: body.shipment?.sensitive,
+      cargoType: body.shipment?.cargoType,
+      volumeCbm: selectedPackages.reduce((sum, pkg) => sum + pkg.cbm, 0),
+      settlementMethod: body.shipment?.settlementMethod,
+      tradeTerms: body.shipment?.tradeTerms,
+      fbaInboundNo: body.shipment?.fbaInboundNo,
+      fbaWarehouseCode: body.shipment?.fbaWarehouseCode,
+      receiverName: body.shipment?.receiverName,
+      receiverCompany: body.shipment?.receiverCompany,
+      receiverPhone: body.shipment?.receiverPhone,
+      receiverAddress: body.shipment?.receiverAddress,
+      receiverCountry: body.shipment?.receiverCountry,
+      receiverState: body.shipment?.receiverState,
+      receiverPostalCode: body.shipment?.receiverPostalCode,
+      entryBy: actorUsername(),
+      salesperson: actorUsername(),
+      status: body.submitForReview ? 'REVIEW_PENDING' : 'DRAFT',
+      channelName: body.shipment?.receivingChannel ?? current.channelName,
+      carrier: body.shipment?.receivingChannel ?? current.carrier,
+      destinationCountry: body.shipment?.destinationCountry ?? current.destinationCountry,
+      packageCount,
+      receivableWeightKg: chargeWeightKg,
+      agentWeightKg: chargeWeightKg,
+      latestTracking: body.submitForReview ? '财务录单提交审核' : '财务录单草稿已更新'
+    });
+    if (body.submitForReview) {
+      selectedPackages.forEach((pkg) => {
+        pkg.shipmentId = current.id;
+        pkg.systemOrderNo = current.systemOrderNo;
+      });
+    }
+    const packages = selectedPackages;
+    return jsonResponse({
+      shipment: current,
+      packages,
+      receivables: receivableFees.filter((fee) => fee.shipmentId === current.id),
+      businessCosts: businessCostFees.filter((fee) => fee.shipmentId === current.id),
+      payables: ['ADMIN', 'FINANCE', 'UG_FINANCE'].includes(actorRole()) ? payableAuditFees.filter((fee) => fee.shipmentId === current.id) : [],
+      canViewPayables: ['ADMIN', 'FINANCE', 'UG_FINANCE'].includes(actorRole())
+    } satisfies OrderEntryDetailSummary);
+  }
+
+  if (url.endsWith('/api/warehouse/manual-receipt/customers')) {
+    return jsonResponse(masterData.customers
+      .filter((customer) => customer.enabled)
+      .map((customer) => ({ code: customer.code, name: customer.name })));
+  }
+
   if (url.includes('/api/warehouse/today-receipts')) {
     const params = new URL(url, 'http://test.local').searchParams;
     const keyword = (value: string | undefined, key: string) => {
@@ -3153,19 +4275,20 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       && keyword(pkg.domesticTrackingNo, 'domesticTrackingNo')
       && keyword(pkg.combinedOrderNo, 'combinedOrderNo')
     );
+    const confirmedRows = withConfirmedWarehouseTally(rows);
     const grouped = new Map<string, WarehousePackageSummary[]>();
-    rows.forEach((row) => grouped.set(row.combinedOrderNo, [...(grouped.get(row.combinedOrderNo) ?? []), row]));
+    confirmedRows.forEach((row) => grouped.set(row.combinedOrderNo, [...(grouped.get(row.combinedOrderNo) ?? []), row]));
     return jsonResponse({
       totals: {
         receiptTickets: grouped.size,
-        totalPackages: rows.reduce((sum, row) => sum + row.packageCount, 0),
-        totalWeightKg: Number(rows.reduce((sum, row) => sum + row.weightKg * row.packageCount, 0).toFixed(2)),
-        totalCbm: Number(rows.reduce((sum, row) => sum + row.cbm, 0).toFixed(3)),
+        totalPackages: confirmedRows.reduce((sum, row) => sum + row.packageCount, 0),
+        totalWeightKg: Number(confirmedRows.reduce((sum, row) => sum + row.weightKg * row.packageCount, 0).toFixed(2)),
+        totalCbm: Number(confirmedRows.reduce((sum, row) => sum + row.cbm, 0).toFixed(3)),
         waitingDispatchTickets: employeeShipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH').length,
         pendingTallyTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.status === 'RECEIVED')).length,
         exceptionTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.manualException || item.exceptions.length)).length
       },
-      rows
+      rows: confirmedRows
     });
   }
 
@@ -3175,30 +4298,67 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       const needle = params.get(key);
       return !needle || (value ?? '').toLowerCase().includes(needle.toLowerCase());
     };
+    const archivedOnly = params.get('status') === 'TALLIED_ARCHIVED';
     const rows = warehousePackages.filter((pkg) =>
-      pkg.status !== 'CONSOLIDATED'
-      && pkg.status !== 'SHIPPED'
-      && pkg.status !== 'TALLIED_ARCHIVED'
+      (archivedOnly
+        ? pkg.status === 'TALLIED_ARCHIVED'
+        : pkg.status !== 'CONSOLIDATED'
+          && pkg.status !== 'SHIPPED'
+          && pkg.status !== 'TALLIED_ARCHIVED')
       && (!params.get('site') || pkg.site === params.get('site'))
       && keyword(pkg.customerOrderNo, 'customerOrderNo')
       && keyword(pkg.domesticTrackingNo, 'domesticTrackingNo')
       && keyword(pkg.combinedOrderNo, 'combinedOrderNo')
       && keyword(`${pkg.remark ?? ''} ${pkg.manualException ?? ''} ${pkg.exceptions.join(' ')}`, 'operationKeyword')
     );
+    const confirmedRows = withConfirmedWarehouseTally(rows);
     const grouped = new Map<string, WarehousePackageSummary[]>();
-    rows.forEach((row) => grouped.set(row.combinedOrderNo, [...(grouped.get(row.combinedOrderNo) ?? []), row]));
+    confirmedRows.forEach((row) => grouped.set(row.combinedOrderNo, [...(grouped.get(row.combinedOrderNo) ?? []), row]));
     return jsonResponse({
       totals: {
         receiptTickets: grouped.size,
-        totalPackages: rows.reduce((sum, row) => sum + row.packageCount, 0),
-        totalWeightKg: Number(rows.reduce((sum, row) => sum + row.weightKg * row.packageCount, 0).toFixed(2)),
-        totalCbm: Number(rows.reduce((sum, row) => sum + row.cbm, 0).toFixed(3)),
+        totalPackages: confirmedRows.reduce((sum, row) => sum + row.packageCount, 0),
+        totalWeightKg: Number(confirmedRows.reduce((sum, row) => sum + row.weightKg * row.packageCount, 0).toFixed(2)),
+        totalCbm: Number(confirmedRows.reduce((sum, row) => sum + row.cbm, 0).toFixed(3)),
         waitingDispatchTickets: employeeShipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH').length,
         pendingTallyTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.status === 'RECEIVED')).length,
         exceptionTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.manualException || item.exceptions.length)).length
       },
-      rows
+      rows: confirmedRows
     });
+  }
+
+  if (url.includes('/api/warehouse/tally-task-history-chain')) {
+    const packageId = new URL(url, 'http://test.local').searchParams.get('packageId') ?? '';
+    const visited = new Set<string>();
+    const chain: WarehouseTallyTaskSummary[] = [];
+    let currentPackageId: string | undefined = packageId;
+    while (currentPackageId && chain.length < 20) {
+      const lookupPackageId: string = currentPackageId;
+      const pkg: WarehousePackageSummary | undefined = warehousePackages.find((item) => item.id === lookupPackageId);
+      const task: WarehouseTallyTaskSummary | undefined = warehouseTallyTasks
+        .filter((item) => item.status === 'COMPLETED' && !visited.has(item.id))
+        .filter((item) => item.id === pkg?.tallyTaskId
+          || item.taskNo === pkg?.tallyTaskNo
+          || item.appliedPackageId === lookupPackageId
+          || item.sourcePackageId === lookupPackageId
+          || item.packageIds.includes(lookupPackageId))
+        .sort((left, right) => new Date(right.completedAt ?? right.createdAt).getTime() - new Date(left.completedAt ?? left.createdAt).getTime())[0];
+      if (!task) break;
+      visited.add(task.id);
+      chain.push({ ...task, packageIds: [...task.packageIds] });
+      currentPackageId = task.sourcePackageId;
+    }
+    return jsonResponse(chain.reverse());
+  }
+
+  if (url.match(/\/api\/warehouse\/tally-tasks\/[^/]+\/output-packages/)) {
+    const id = url.split('/').at(-2) ?? '';
+    const task = warehouseTallyTasks.find((item) => item.id === id);
+    if (!task) return jsonResponse({ message: '理货任务不存在' }, 404);
+    const sourceIds = new Set(task.packageIds);
+    const outputs = warehousePackages.filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id));
+    return jsonResponse(outputs.length ? outputs : warehousePackages.filter((pkg) => sourceIds.has(pkg.id)));
   }
 
   if (url.includes('/api/warehouse/tally-tasks') && init?.method !== 'POST' && init?.method !== 'PATCH') {
@@ -3209,7 +4369,17 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       (!status || task.status === status)
       && (!combinedOrderNo || task.sourceCombinedOrderNo.includes(combinedOrderNo))
     );
-    return jsonResponse(rows.map((task) => ({ ...task, packageIds: [...task.packageIds] })));
+    return jsonResponse(rows.map((task) => {
+      const sourceIds = new Set(task.packageIds);
+      const outputPackages = task.status === 'COMPLETED'
+        ? warehousePackages.filter((pkg) => pkg.tallyTaskId === task.id && !sourceIds.has(pkg.id))
+        : [];
+      return {
+        ...task,
+        packageIds: [...task.packageIds],
+        outputPackages: outputPackages.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }))
+      };
+    }));
   }
 
   if (url.endsWith('/api/warehouse/tally-tasks/label-scan') && init?.method === 'POST') {
@@ -3284,6 +4454,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       pkg.archivedByPackageNo = appliedPackage.combinedOrderNo;
       pkg.archivedReason = '理货标签扫描覆盖';
       pkg.archivedAt = scanTime;
+      pkg.tallyTaskId = task.id;
+      pkg.tallyTaskNo = task.taskNo;
+      pkg.tallyStatus = '理货归档';
     });
     warehousePackages.unshift(appliedPackage);
 
@@ -3300,10 +4473,30 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
 
   if (url.endsWith('/api/warehouse/tally-tasks') && init?.method === 'POST') {
     const selected = warehousePackages.filter((pkg) => body.packageIds.includes(pkg.id));
+    if (selected.some((pkg) => pkg.measurementStatus === 'PENDING_REMEASURE')) {
+      return jsonResponse({ message: '理货后包裹待重新过机，完成测量后才能再次理货' }, 400);
+    }
+    const retallyPackages = selected.filter((pkg) => pkg.tallyTaskId || pkg.tallyTaskNo || pkg.tallyStatus === '已理货');
+    if (retallyPackages.length && (selected.length !== 1 || retallyPackages.length !== 1)) {
+      return jsonResponse({ message: '二次理货一次只能选择一个已完成理货的包裹' }, 400);
+    }
+    const existingTask = warehouseTallyTasks.find((task) => task.status === 'PENDING' && selected.some((pkg) => task.packageIds.includes(pkg.id)));
+    if (existingTask) {
+      return jsonResponse({ message: '包裹已有未完成理货任务' }, 400);
+    }
     const first = selected[0];
+    const previousTask = warehouseTallyTasks.find((task) => task.id === first?.tallyTaskId || task.taskNo === first?.tallyTaskNo);
+    const previousBase = previousTask
+      ? previousTask.taskNo.match(/^(.*LH)\d{2}$/)?.[1] ?? (previousTask.taskNo.endsWith('LH') ? previousTask.taskNo : `${previousTask.taskNo}LH`)
+      : undefined;
+    const retallySequence = previousBase
+      ? Math.max(1, ...warehouseTallyTasks.map((task) => Number(task.taskNo.match(new RegExp(`^${previousBase}(\\d{2})$`))?.[1]) || (task.taskNo === previousBase ? 1 : 0))) + 1
+      : 0;
     const task: WarehouseTallyTaskSummary = {
       id: `wht-${warehouseTallyTasks.length + 1}`,
-      taskNo: `${first?.combinedOrderNo ?? 'WH'}-TL${String(warehouseTallyTasks.length + 1).padStart(3, '0')}`,
+      taskNo: previousBase
+        ? `${previousBase}${String(Math.max(2, retallySequence)).padStart(2, '0')}`
+        : `${first?.combinedOrderNo ?? 'WH'}-TL${String(warehouseTallyTasks.length + 1).padStart(3, '0')}`,
       status: 'PENDING',
       packageIds: selected.map((pkg) => pkg.id),
       sourcePackageId: first?.id ?? '',
@@ -3333,6 +4526,69 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const index = warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) return jsonResponse({ message: '理货任务不存在' }, 404);
     const task = warehouseTallyTasks[index];
+    if (Array.isArray(body.results) && body.results.length) {
+      const sources = warehousePackages.filter((pkg) => task.packageIds.includes(pkg.id));
+      const completedAt = '2026-06-26T12:00:00.000+08:00';
+      const outputs: WarehousePackageSummary[] = body.results.map((result: { sourcePackageIds: string[]; packageCount: number }, resultIndex: number) => {
+        const source = sources.find((pkg) => result.sourcePackageIds.includes(pkg.id)) ?? sources[0];
+        const totalOutputs = body.results.length;
+        return {
+          ...source,
+          id: `wh-tally-${task.id}-${resultIndex + 1}`,
+          labelNo: totalOutputs === 1 ? task.taskNo : `${task.taskNo}-${String(resultIndex + 1).padStart(2, '0')}`,
+          sourcePackageId: source.id,
+          sourcePackageNo: source.sourcePackageNo ?? source.combinedOrderNo,
+          tallyTaskId: task.id,
+          tallyTaskNo: task.taskNo,
+          expectedTotalPackageCount: totalOutputs,
+          packageIndex: resultIndex + 1,
+          packageCount: Number(result.packageCount),
+          weightKg: 0,
+          lengthCm: 0,
+          widthCm: 0,
+          heightCm: 0,
+          cbm: 0,
+          volumetricWeightKg: 0,
+          chargeableWeightKg: 0,
+          scanTime: undefined,
+          scanSource: '理货待重新过机',
+          measurementStatus: 'PENDING_REMEASURE',
+          tallyStatus: '已理货',
+          status: 'RECEIVED',
+          createdAt: completedAt
+        };
+      });
+      sources.forEach((source) => {
+        source.status = 'TALLIED_ARCHIVED';
+        source.archivedByPackageId = outputs[0].id;
+        source.archivedByPackageNo = outputs[0].combinedOrderNo;
+        source.archivedReason = '理货完成';
+        source.archivedAt = completedAt;
+        source.tallyTaskId ??= task.id;
+        source.tallyTaskNo ??= task.taskNo;
+      });
+      warehousePackages.unshift(...outputs);
+      const completed: WarehouseTallyTaskSummary = {
+        ...task,
+        status: 'COMPLETED',
+        completedPackageCount: outputs.reduce((sum, pkg) => sum + pkg.packageCount, 0),
+        completedWeightKg: undefined,
+        completedLengthCm: undefined,
+        completedWidthCm: undefined,
+        completedHeightCm: undefined,
+        completedVolumetricWeightKg: undefined,
+        completedVolumetricWeightKg5000: undefined,
+        completedBy: 'warehouse',
+        completedAt,
+        remark: body.remark || task.remark,
+        labelStatus: 'GENERATED',
+        labelNo: task.taskNo,
+        labelGeneratedAt: completedAt,
+        labelGeneratedBy: 'warehouse'
+      };
+      warehouseTallyTasks[index] = completed;
+      return jsonResponse(completed, 201);
+    }
     const packageCount = Number(body.packageCount ?? task.packageCount);
     const lengthCm = Number(body.lengthCm ?? task.originalLengthCm);
     const widthCm = Number(body.widthCm ?? task.originalWidthCm);
@@ -3352,6 +4608,13 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       remark: body.remark || task.remark
     };
     warehouseTallyTasks[index] = completed;
+    warehousePackages.forEach((pkg) => {
+      if (task.packageIds.includes(pkg.id)) {
+        pkg.tallyTaskId = completed.id;
+        pkg.tallyTaskNo = completed.taskNo;
+        pkg.tallyStatus = '已理货';
+      }
+    });
     return jsonResponse(completed, 201);
   }
 
@@ -3360,7 +4623,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const index = warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) return jsonResponse({ message: '理货任务不存在' }, 404);
     const task = warehouseTallyTasks[index];
-    const labelNo = task.labelNo ?? `${task.taskNo}-LBL`;
+    const labelNo = task.taskNo;
     const updated: WarehouseTallyTaskSummary = {
       ...task,
       labelStatus: 'GENERATED',
@@ -3450,8 +4713,77 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse({ task: updated, package: pkg, alreadyApplied: Boolean(existing) }, 201);
   }
 
+  if (url.endsWith('/api/warehouse/packages/manual-receipt') && init?.method === 'POST') {
+    const customerCode = body.customerCode ?? body.customerOrderNo ?? String(body.combinedOrderNo ?? '').split('-')[0];
+    const customer = masterData.customers.find((item) => item.code === customerCode && item.enabled);
+    if (!customer) {
+      return jsonResponse({ message: '客户编号不存在，请从客户资料中选择' }, 400);
+    }
+    const customerOrderNo = body.customerOrderNo ?? customerCode;
+    const domesticTrackingNo = body.domesticTrackingNo ?? String(body.combinedOrderNo ?? '').slice(String(body.combinedOrderNo ?? '').indexOf('-') + 1);
+    const cartonSpecs = Array.isArray(body.cartonSpecs) ? body.cartonSpecs : [];
+    const packages: WarehousePackageSummary[] = cartonSpecs.map((spec: any, index: number) => {
+      const packageCount = spec.packageCount ?? 1;
+      const volume = spec.lengthCm * spec.widthCm * spec.heightCm * packageCount;
+      const sides = [spec.lengthCm, spec.widthCm, spec.heightCm].sort((a: number, b: number) => b - a);
+      const pkg: WarehousePackageSummary = {
+        id: `wh-created-${warehousePackages.length + index + 1}`,
+        customerCode,
+        customerName: `${customer.code}-${customer.name}`,
+        site: '深圳站',
+        salesperson: 'operator',
+        manualException: body.manualException,
+        scanSource: body.scanSource,
+        customerOrderNo,
+        domesticTrackingNo,
+        combinedOrderNo: `${customerOrderNo}-${domesticTrackingNo}`,
+        labelNo: `${customerCode}-${domesticTrackingNo}-${index + 1}/${cartonSpecs.length}`,
+        expectedTotalPackageCount: cartonSpecs.length,
+        packageIndex: index + 1,
+        receivingChannel: '外部标签识别',
+        packageCount,
+        weightKg: spec.weightKg,
+        lengthCm: spec.lengthCm,
+        widthCm: spec.widthCm,
+        heightCm: spec.heightCm,
+        girthCm: sides[0] + 2 * (sides[1] + sides[2]),
+        cbm: Number((volume / 1000000).toFixed(6)),
+        totalCbm: Number((volume / 1000000).toFixed(6)),
+        volumetricWeightKg: Number((volume / 6000).toFixed(2)),
+        volumetricWeightKg5000: Number((volume / 5000).toFixed(2)),
+        totalVolumetricWeightKg: Number((volume / 6000).toFixed(2)),
+        totalVolumetricWeightKg5000: Number((volume / 5000).toFixed(2)),
+        chargeableWeightKg: Math.max(spec.weightKg * packageCount, Number((volume / 6000).toFixed(2))),
+        divisor: 6000,
+        roundingRule: 'NONE',
+        scanTime: body.scanTime,
+        inboundAt: body.scanTime,
+        tallyStatus: '待理货',
+        splitStatus: '原始票',
+        consolidationStatus: '未合票',
+        outboundStatus: '未出库',
+        remark: body.remark,
+        status: 'RECEIVED',
+        exceptions: [],
+        createdAt: body.scanTime
+      };
+      pkg.receiptSourceId = pkg.id;
+      return pkg;
+    });
+    warehousePackages.unshift(...packages);
+    return jsonResponse({
+      packages,
+      totalCartonSpecs: packages.length,
+      totalPackages: packages.reduce((sum: number, pkg: WarehousePackageSummary) => sum + pkg.packageCount, 0)
+    }, 201);
+  }
+
   if (url.endsWith('/api/warehouse/packages') && init?.method === 'POST') {
     const customerCode = body.customerCode ?? body.customerOrderNo ?? String(body.combinedOrderNo ?? '').split('-')[0];
+    const customer = masterData.customers.find((item) => item.code === customerCode && item.enabled);
+    if (body.scanSource === '手动添加' && !customer) {
+      return jsonResponse({ message: '客户编号不存在，请从客户资料中选择' }, 400);
+    }
     const customerOrderNo = body.customerOrderNo ?? customerCode;
     const domesticTrackingNo = body.domesticTrackingNo ?? String(body.combinedOrderNo ?? '').slice(String(body.combinedOrderNo ?? '').indexOf('-') + 1);
     const packageCount = body.packageCount ?? 1;
@@ -3460,7 +4792,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const pkg: WarehousePackageSummary = {
       id: `wh-created-${warehousePackages.length + 1}`,
       customerCode,
-      customerName: customerCode === '9409' ? '9409-Daloday' : `${customerCode}-仓库客户`,
+      customerName: customer ? `${customer.code}-${customer.name}` : `${customerCode}-仓库客户`,
       site: '深圳站',
       salesperson: 'operator',
       manualException: body.manualException,
@@ -3501,6 +4833,57 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     pkg.receiptSourceId = pkg.id;
     warehousePackages.unshift(pkg);
     return jsonResponse(pkg, 201);
+  }
+
+  const warehousePackageUpdateMatch = url.match(/\/api\/warehouse\/packages\/([^/]+)$/);
+  if (warehousePackageUpdateMatch && init?.method === 'PATCH') {
+    const pkg = warehousePackages.find((item) => item.id === warehousePackageUpdateMatch[1]);
+    if (!pkg) {
+      return jsonResponse({ message: '仓库包裹不存在' }, 404);
+    }
+    if (pkg.status !== 'RECEIVED' || pkg.shipmentId) {
+      return jsonResponse({ message: '已合票、已出库、已归档或已绑定运单的包裹不能直接修改' }, 400);
+    }
+    const combinedValue = String(body.combinedOrderNo ?? '');
+    const splitIndex = combinedValue.indexOf('-');
+    const customerCode = String(body.customerCode ?? body.customerOrderNo ?? (splitIndex > 0 ? combinedValue.slice(0, splitIndex) : pkg.customerCode)).trim();
+    const customerOrderNo = String(body.customerOrderNo ?? body.customerCode ?? (splitIndex > 0 ? combinedValue.slice(0, splitIndex) : pkg.customerOrderNo)).trim();
+    const domesticTrackingNo = String(body.domesticTrackingNo ?? (splitIndex > 0 ? combinedValue.slice(splitIndex + 1) : pkg.domesticTrackingNo)).trim();
+    const packageCount = Math.max(1, Number(body.packageCount ?? pkg.packageCount));
+    const weightKg = Number(body.weightKg ?? pkg.weightKg);
+    const lengthCm = Number(body.lengthCm ?? pkg.lengthCm);
+    const widthCm = Number(body.widthCm ?? pkg.widthCm);
+    const heightCm = Number(body.heightCm ?? pkg.heightCm);
+    const volume = lengthCm * widthCm * heightCm * packageCount;
+    const sides = [lengthCm, widthCm, heightCm].sort((left, right) => right - left);
+    Object.assign(pkg, {
+      customerCode,
+      customerName: customerCode === '9409' ? '9409-Daloday' : `${customerCode}-仓库客户`,
+      customerOrderNo,
+      domesticTrackingNo,
+      combinedOrderNo: `${customerOrderNo}-${domesticTrackingNo}`,
+      expectedTotalPackageCount: Math.max(1, Number(body.expectedTotalPackageCount ?? pkg.expectedTotalPackageCount ?? packageCount)),
+      packageIndex: Math.max(1, Number(body.packageIndex ?? pkg.packageIndex ?? 1)),
+      packageCount,
+      weightKg,
+      lengthCm,
+      widthCm,
+      heightCm,
+      girthCm: sides[0] + 2 * (sides[1] + sides[2]),
+      cbm: Number((volume / 1000000).toFixed(6)),
+      totalCbm: Number((volume / 1000000).toFixed(6)),
+      volumetricWeightKg: Number((volume / 6000).toFixed(2)),
+      volumetricWeightKg5000: Number((volume / 5000).toFixed(2)),
+      totalVolumetricWeightKg: Number((volume / 6000).toFixed(2)),
+      totalVolumetricWeightKg5000: Number((volume / 5000).toFixed(2)),
+      chargeableWeightKg: Math.max(weightKg, Number((volume / 6000).toFixed(2))),
+      scanTime: body.scanTime ?? pkg.scanTime,
+      inboundAt: body.scanTime ?? pkg.inboundAt,
+      remark: body.remark || undefined,
+      manualException: body.manualException || undefined
+    });
+    pkg.labelNo = `${pkg.customerCode}-${pkg.domesticTrackingNo}-${pkg.packageIndex ?? 1}/${pkg.expectedTotalPackageCount ?? pkg.packageCount}`;
+    return jsonResponse(pkg);
   }
 
   const warehousePackageExceptionMatch = url.match(/\/api\/warehouse\/packages\/([^/]+)\/exception$/);
@@ -3669,10 +5052,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     if (init?.method === 'POST') {
       const customer = masterData.customers.find((item) => item.id === body.customerId || item.code === body.customerCode);
       const receiptDate = body.receiptDate ?? '2026-06-18T10:00:00.000Z';
-      const sameDayCount = waterReceipts.filter((row) => row.receiptNo.startsWith(`SD${receiptDate.slice(0, 10).replaceAll('-', '')}`)).length;
       const row: WaterReceiptSummary = {
         id: `wr-${waterReceipts.length + 1}`,
-        receiptNo: `SD${receiptDate.slice(0, 10).replaceAll('-', '')}${String(sameDayCount + 1).padStart(3, '0')}`,
+        receiptNo: nextWaterReceiptNoForMock(),
         site: body.site || '思远收款',
         customerId: customer?.id,
         customerCode: customer?.code ?? body.customerCode,
@@ -3684,7 +5066,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
         amount: Number(body.amount ?? 0),
         matchedAmount: 0,
         balance: Number(body.amount ?? 0),
-        paymentNo: body.paymentNo,
+        paymentNo: sanitizeManualPaymentNoForMock(body.paymentNo),
         status: 'PENDING',
         remark: body.remark,
         matches: [],
@@ -3705,6 +5087,12 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   }
 
   const waterReceiptAction = url.match(/\/api\/finance\/water-receipts\/([^/]+)\/(mark-arrived|match-orders|unmatch|archive|void|voucher)$/);
+  if (waterReceiptAction && init?.method === 'DELETE' && waterReceiptAction[2] === 'voucher') {
+    const receipt = waterReceipts.find((row) => row.id === waterReceiptAction[1] || row.receiptNo === waterReceiptAction[1]);
+    if (!receipt) return jsonResponse({ message: '水单不存在' }, 404);
+    receipt.voucher = undefined;
+    return jsonResponse({ deleted: true });
+  }
   if (waterReceiptAction && init?.method === 'POST') {
     const receipt = waterReceipts.find((row) => row.id === waterReceiptAction[1] || row.receiptNo === waterReceiptAction[1]);
     if (!receipt) return jsonResponse({ message: '水单不存在' }, 404);
@@ -3717,6 +5105,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       return jsonResponse(receipt, 201);
     }
     if (action === 'match-orders') {
+      if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(receipt.status)) {
+        return jsonResponse({ message: '水单未到账，不能匹配订单' }, 400);
+      }
       const matches = body.matches ?? [];
       const amount = Number(matches.reduce((sum: number, item: { amount: number }) => sum + Number(item.amount), 0).toFixed(2));
       matches.forEach((match: { receivableFinanceItemId: string; amount: number }) => {
@@ -3777,7 +5168,10 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (waterReceiptUpdate && init?.method === 'PUT') {
     const receipt = waterReceipts.find((row) => row.id === waterReceiptUpdate[1] || row.receiptNo === waterReceiptUpdate[1]);
     if (!receipt) return jsonResponse({ message: '水单不存在' }, 404);
-    Object.assign(receipt, body, { updatedAt: '2026-06-18T10:00:00.000Z' });
+    Object.assign(receipt, body, {
+      paymentNo: body.paymentNo === undefined ? receipt.paymentNo : sanitizeManualPaymentNoForMock(body.paymentNo),
+      updatedAt: '2026-06-18T10:00:00.000Z'
+    });
     return jsonResponse(receipt);
   }
 
@@ -4296,10 +5690,32 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (new URL(url, 'http://test.local').pathname === '/api/finance/paid-payments') {
     const search = new URL(url, 'http://test.local').searchParams;
     let rows = paymentApplications.filter((app) => app.status === 'WAITING_PAYMENT' || app.status === 'PAID').map(toPaidPayment);
+    const keyword = (value: string | undefined, needle: string | null) => !needle || (value ?? '').toLowerCase().includes(needle.toLowerCase());
+    const dateInRange = (value: string | undefined, from: string | null, to: string | null) => {
+      if (!value) return !from && !to;
+      const timestamp = new Date(value).getTime();
+      if (from && timestamp < new Date(`${from}T00:00:00`).getTime()) return false;
+      if (to && timestamp > new Date(`${to}T23:59:59`).getTime()) return false;
+      return true;
+    };
     const status = search.get('status');
     if (status && status !== 'ALL') rows = rows.filter((row) => row.status === status);
     const currency = search.get('currency');
     if (currency && currency !== 'ALL') rows = rows.filter((row) => row.currency === currency);
+    rows = rows.filter((row) =>
+      keyword(row.agentName, search.get('agent'))
+      && keyword(row.salesperson, search.get('salesperson'))
+      && keyword(row.customerCode, search.get('customerCode'))
+      && keyword(row.systemOrderNo, search.get('systemOrderNo'))
+      && keyword(row.feeName, search.get('feeName'))
+      && keyword(row.remark, search.get('remark'))
+      && keyword(row.payeeBankAccount?.accountName, search.get('payeeName'))
+      && keyword(row.payeeBankAccount?.bankAccountNo, search.get('bankAccountNo'))
+      && keyword(row.payerBankName, search.get('payerBank'))
+      && (!search.get('amount') || row.totalAmount === Number(search.get('amount')))
+      && dateInRange(row.date, search.get('applicationDateFrom'), search.get('applicationDateTo'))
+      && dateInRange(row.paidAt, search.get('paidDateFrom'), search.get('paidDateTo'))
+    );
     const totals = rows.reduce((acc, row) => {
       if (row.status === 'WAITING_PAYMENT') acc.waitingPaymentCount += 1;
       if (row.status === 'PAID') acc.paidCount += 1;
@@ -4308,7 +5724,10 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       else acc.amountByCurrency.push({ currency: row.currency, amount: row.totalAmount });
       return acc;
     }, { count: rows.length, waitingPaymentCount: 0, paidCount: 0, amountByCurrency: [] as Array<{ currency: 'RMB' | 'USD'; amount: number }> });
-    return jsonResponse({ rows, totals, pagination: { page: 1, pageSize: 100, totalItems: rows.length } });
+    const page = Number(search.get('page') ?? 1);
+    const pageSize = Number(search.get('pageSize') ?? 10);
+    const pagedRows = pageSize > 0 ? rows.slice((page - 1) * pageSize, page * pageSize) : rows;
+    return jsonResponse({ rows: pagedRows, totals, pagination: { page, pageSize: pageSize > 0 ? pageSize : rows.length, totalItems: rows.length } });
   }
 
   const confirmPaidMatch = url.match(/\/api\/finance\/payment-applications\/([^/]+)\/confirm-paid$/);
@@ -4467,11 +5886,39 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   if (new URL(url, 'http://test.local').pathname === '/api/finance/agent-bank-accounts') {
     if (init?.method === 'POST') {
       const payload = JSON.parse(String(init.body ?? '{}'));
-      const bank: AgentBankAccountSummary = { id: `bank-${agentBankAccounts.length + 1}`, enabled: true, createdAt: '2026-06-17T12:45:00.000Z', updatedAt: '2026-06-17T12:45:00.000Z', ...payload };
-      agentBankAccounts.push(bank);
+      const existing = payload.id ? agentBankAccounts.find((item) => item.id === payload.id) : undefined;
+      const bank: AgentBankAccountSummary = {
+        id: existing?.id ?? `bank-${agentBankAccounts.length + 1}`,
+        enabled: payload.enabled ?? true,
+        createdAt: existing?.createdAt ?? '2026-06-17T12:45:00.000Z',
+        updatedAt: '2026-06-17T12:45:00.000Z',
+        ...payload
+      };
+      if (existing) Object.assign(existing, bank);
+      else agentBankAccounts.push(bank);
+      const payee = payeeBankAccounts.find((item) =>
+        ((bank.agentId && item.agentId === bank.agentId) || item.agentName === bank.agentName)
+        && item.bankAccountNo === bank.bankAccountNo
+      );
+      const payeePayload: PayeeBankAccountSummary = {
+        id: payee?.id ?? `payee-bank-${payeeBankAccounts.length + 1}`,
+        agentId: bank.agentId,
+        agentName: bank.agentName,
+        accountName: bank.accountName,
+        bankName: bank.bankName,
+        bankAccountNo: bank.bankAccountNo,
+        currency: bank.currency === 'USD' ? 'USD' : 'RMB',
+        remark: bank.remark,
+        enabled: bank.enabled,
+        createdAt: payee?.createdAt ?? '2026-06-17T12:45:00.000Z',
+        updatedAt: '2026-06-17T12:45:00.000Z'
+      };
+      if (payee) Object.assign(payee, payeePayload);
+      else payeeBankAccounts.push(payeePayload);
       return jsonResponse(bank);
     }
-    return jsonResponse(agentBankAccounts);
+    const includeDisabled = new URL(url, 'http://test.local').searchParams.get('includeDisabled') === 'true';
+    return jsonResponse(agentBankAccounts.filter((item) => includeDisabled || item.enabled));
   }
 
 	  const receivableAuditActionMatch = url.match(/\/api\/finance\/receivable-audits\/([^/]+)\/(audit|reverse-audit)$/);
@@ -4765,6 +6212,39 @@ function upsertMockShipment(collection: Shipment[], shipment: Shipment) {
   }
 }
 
+function deriveTestPriceBookAgentName(fileName?: string) {
+  const baseName = String(fileName ?? '')
+    .replace(/^.*[\\/]/, '')
+    .replace(/\.(xlsx|xls)$/i, '')
+    .trim();
+  return baseName
+    .replace(/^\d+(?:\.\d+)*(?:\s*[-_—–－]\s*)?/, '')
+    .replace(/^(?:自定义|custom)[-_—–－\s]*/i, '')
+    .trim();
+}
+
+function cleanTestOldOriginalAgentName(fileName: string | undefined, agentName: string) {
+  const ownerAgentName = deriveTestPriceBookAgentName(fileName);
+  const originalAgentName = String(agentName ?? '').trim();
+  if (originalAgentName === '亿阳国际' && ownerAgentName === '拓普达') {
+    return ownerAgentName;
+  }
+  if (originalAgentName === '深圳振韵国际' && ownerAgentName === '振韵') {
+    return ownerAgentName;
+  }
+  return agentName;
+}
+
+function resolveTestEnabledPriceBookAgent(input: { agentId?: string; agentShortName?: string } | Record<string, unknown>) {
+  const agentId = typeof input.agentId === 'string' ? input.agentId.trim() : '';
+  const agentShortName = typeof input.agentShortName === 'string' ? input.agentShortName.trim() : '';
+  const agent = masterData.agents.find((item) =>
+    item.enabled &&
+    ((agentId && item.id === agentId) || (agentShortName && (item.shortName ?? item.name) === agentShortName))
+  );
+  return agent ? { id: agent.id, shortName: agent.shortName ?? agent.name } : null;
+}
+
 function findBestTestMarkupRule(markupRules: AgentMarkupSummary[], row: PriceBookRowSummary): AgentMarkupSummary | undefined {
   const channelName = row.channelName.trim();
   const realChannelName = row.realChannelName?.trim() || channelName;
@@ -4778,6 +6258,18 @@ function findBestTestMarkupRule(markupRules: AgentMarkupSummary[], row: PriceBoo
       const countryMatches = !rule.destinationCountry || rule.destinationCountry === destinationCountry;
       return channelMatches && realChannelMatches && countryMatches;
     });
+}
+
+function createDefaultTestMarkupRule(agentName: string): AgentMarkupSummary {
+  return {
+    id: `price-agent:${agentName}`,
+    agentName,
+    markupPerKg: 0.5,
+    markupType: 'WEIGHT',
+    markupValue: 0.5,
+    priority: 100,
+    enabled: true
+  };
 }
 
 function testMarkupSpecificity(rule: AgentMarkupSummary, channelName: string, realChannelName: string, destinationCountry: string) {
@@ -4794,16 +6286,96 @@ function testMarkupSpecificity(rule: AgentMarkupSummary, channelName: string, re
   return score;
 }
 
+function testNormalizeAmazonWeightBand(value?: string | number | null): '12KG+' | '50KG+' | '100KG+' | undefined {
+  const text = String(value ?? '').trim().toUpperCase().replace(/\s+/g, '');
+  const match = text.match(/(\d+(?:\.\d+)?)/);
+  if (!match) return undefined;
+  const weight = Number(match[1]);
+  if (!Number.isFinite(weight)) return undefined;
+  if (weight >= 100) return '100KG+';
+  if (weight >= 50) return '50KG+';
+  return '12KG+';
+}
+
+function testInferAmazonWeightBandFromMin(minWeightKg?: number | null): '12KG+' | '50KG+' | '100KG+' | undefined {
+  const min = Number(minWeightKg ?? 0);
+  if (!Number.isFinite(min)) return undefined;
+  if (min >= 100) return '100KG+';
+  if (min >= 50) return '50KG+';
+  return '12KG+';
+}
+
 function testCanViewPricingInternalRoute(token: string): boolean {
   return token.includes('ADMIN') || token.includes('UG_MARKET');
 }
 
 function testPublicPricingRouteCode(...values: Array<string | undefined>): string {
   for (const value of values) {
-    const match = value?.trim().match(/[A-Za-z]{2,}(?:[-_][A-Za-z0-9]+)?|[A-Za-z]{2,}[A-Za-z0-9]*/);
-    if (match) return match[0].split(/[-_]/)[0].toUpperCase();
+    const displayName = testExtractChinesePricingRouteName(value);
+    if (displayName) return displayName;
   }
-  return '推荐线路';
+  return '可报价线路';
+}
+
+const testAmazonOriginWarehouseNames = [
+  '义乌仓',
+  '华东',
+  '华南',
+  '厦门/泉州/福州',
+  '天津/南昌/石家庄',
+  '武汉/长沙/成都',
+  '汕头',
+  '济南/潍坊',
+  '深圳/广州仓',
+  '西安/沧州/保定',
+  '重庆',
+  '青岛/郑州/温州/台州/连云港/南京/合肥'
+];
+
+function testNormalizeAmazonOriginWarehouseName(value: unknown): string | undefined {
+  const text = String(value ?? '')
+    .replace(/[／｜|、，,；;]/g, '/')
+    .replace(/\s+/g, '')
+    .replace(/^(?:出货仓|起运仓|发货仓|发货地|起运地|来源地|仓库区域|揽收区域|报价组)[:：]?/, '')
+    .trim();
+  if (!text) return undefined;
+  const compact = text.replace(/[()（）]/g, '');
+  const matched = testAmazonOriginWarehouseNames.find((name) => compact.includes(name.replace(/[()（）]/g, '')));
+  if (matched) return matched;
+  if (/欧洲|西班牙|英国|铁路|空派|快递|海运|专线|渠道|DHL|UPS|FEDEX|美西|美东|包税|双清|卡派|海卡/i.test(compact)) {
+    return undefined;
+  }
+  if (/(仓|华东|华南|义乌|深圳|广州|汕头|厦门|泉州|福州|天津|南昌|石家庄|武汉|长沙|成都|济南|潍坊|西安|沧州|保定|重庆|青岛|郑州|温州|台州|连云港|南京|合肥)/.test(compact)) {
+    return compact.slice(0, 30);
+  }
+  return undefined;
+}
+
+function testUniqueAmazonOriginWarehouseNames(values: Array<unknown>): string[] {
+  const unique = new Set(values.map(testNormalizeAmazonOriginWarehouseName).filter((value): value is string => Boolean(value)));
+  return [...unique].sort((left, right) => {
+    const leftIndex = testAmazonOriginWarehouseNames.indexOf(left);
+    const rightIndex = testAmazonOriginWarehouseNames.indexOf(right);
+    if (leftIndex !== -1 || rightIndex !== -1) {
+      return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
+    }
+    return left.localeCompare(right, 'zh-CN');
+  });
+}
+
+function testExtractChinesePricingRouteName(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  const cleaned = text
+    .replace(/[A-Za-z0-9_]+/g, '')
+    .replace(/[－–—]/g, '-')
+    .replace(/[^\u3400-\u9FFF\s\-、，,（）()]/g, '')
+    .replace(/\s*-\s*/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[-\s,，、]+|[-\s,，、]+$/g, '')
+    .trim();
+  return /[\u3400-\u9FFF]/.test(cleaned) ? cleaned : undefined;
 }
 
 function buildTestLegacyModuleCounts(rows: PriceBookRowSummary[]) {
@@ -4847,6 +6419,7 @@ export function shipment(
     receivableWeightKg: 18,
     agentWeightKg: 18,
     latestTracking: '客户已预报',
+    latestTrackingUpdatedAt: '2026-06-06T09:40:00.000Z',
     trackingStaleDays: 0,
     isRemoteArea: false,
     status,

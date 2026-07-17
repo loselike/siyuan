@@ -1,0 +1,4 @@
+ALTER TABLE "Shipment"
+  ADD COLUMN "actualWeightKg" DECIMAL,
+  ADD COLUMN "cargoDataSource" TEXT NOT NULL DEFAULT 'AUTO_MATCHED',
+  ADD COLUMN "chargeWeightOverridden" BOOLEAN NOT NULL DEFAULT false;

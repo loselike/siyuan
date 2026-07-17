@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popover, Select, Space, Table, Tag, Typography, message } from 'antd';
+import { Button, Checkbox, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popover, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   defaultFinanceCatalogItems,
@@ -19,12 +19,19 @@ import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { confirmDangerousAction } from '../../shared/dangerousAction';
 import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
 import { tenRowTablePagination } from '../../shared/ui';
+import { Settings } from 'lucide-react';
 import { createSettlementMethodOptions, financeCatalogCurrencyOptions, getSettlementMethodRows } from '../catalog';
 
 const { Text } = Typography;
 
 type OrderFeeRow = ReceivableFeeSummary | PayableFeeSummary | BusinessCostFeeSummary;
 type OrderFeeTableType = ShipmentFinanceItemType;
+type OrderFeeDraftRow = ShipmentFinanceItemCreateInput & {
+  id: string;
+  isDraft: true;
+  type: OrderFeeTableType;
+};
+type OrderFeeDisplayRow = OrderFeeRow | OrderFeeDraftRow;
 
 interface OrderFeeEditorState {
   type: OrderFeeTableType;
@@ -123,7 +130,7 @@ function canManageType(role: RoleKey, type: OrderFeeTableType, permissions?: Per
   if (type === 'BUSINESS_COST') {
     return hasUiPermission(role, permissions, 'finance:business-cost:manage');
   }
-  return hasUiPermission(role, permissions, 'finance:settle');
+  return hasUiPermission(role, permissions, 'finance:receivable:update');
 }
 
 function calculateAmountOverride(row: { amount?: number; chargeWeightKg?: number; unitPrice?: number }) {
@@ -133,6 +140,10 @@ function calculateAmountOverride(row: { amount?: number; chargeWeightKg?: number
 
 function hasChargePricing(row: OrderFeeRow): row is PayableFeeSummary | BusinessCostFeeSummary {
   return 'chargeWeightKg' in row || 'unitPrice' in row;
+}
+
+function isDraftRow(row: OrderFeeDisplayRow): row is OrderFeeDraftRow {
+  return 'isDraft' in row && row.isDraft;
 }
 
 function resolveDefaultColumnOrder(type: OrderFeeTableType, keys: string[]) {
@@ -162,6 +173,11 @@ export function OrderFeePanel({
     BUSINESS_COST: [],
     PAYABLE: []
   });
+  const [draftRows, setDraftRows] = useState<Record<OrderFeeTableType, OrderFeeDraftRow | null>>({
+    RECEIVABLE: null,
+    BUSINESS_COST: null,
+    PAYABLE: null
+  });
   const [columnPreferences, setColumnPreferences] = useState<Record<OrderFeeTableType, ColumnPreference>>({
     RECEIVABLE: { visible: [], order: [] },
     BUSINESS_COST: { visible: [], order: [] },
@@ -173,14 +189,15 @@ export function OrderFeePanel({
   const [receiptRows, setReceiptRows] = useState<WaterReceiptSummary[]>([]);
   const [receiptLoading, setReceiptLoading] = useState(false);
 
-  const visiblePayables = detail?.canViewPayables
+  const roleCanViewPayables = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE' || role === 'BOSS' || role === 'OWNER';
+  const visiblePayables = roleCanViewPayables && (detail?.canViewPayables
     ?? (
       hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
       || hasUiPermission(role, permissions, 'finance:payable:view-sensitive')
-    );
-  const canViewBusinessCostAgent = hasUiPermission(role, permissions, 'finance:business-cost:view-agent')
+    ));
+  const canViewBusinessCostAgent = roleCanViewPayables && (hasUiPermission(role, permissions, 'finance:business-cost:view-agent')
     || hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
-    || hasUiPermission(role, permissions, 'finance:payable:view-sensitive');
+    || hasUiPermission(role, permissions, 'finance:payable:view-sensitive'));
   const receivableRows = detail?.receivables ?? [];
   const businessCostRows = detail?.businessCosts ?? [];
   const payableRows = visiblePayables ? detail?.payables ?? [] : [];
@@ -246,6 +263,97 @@ export function OrderFeePanel({
       setReceiptLoading(false);
     }
   }, [apiClient, shipment.customerName]);
+
+  const focusDraftRow = useCallback((type: OrderFeeTableType) => {
+    window.setTimeout(() => {
+      const target = document.querySelector<HTMLElement>(`[data-order-fee-draft="${type}"] input, [data-order-fee-draft="${type}"] .ant-select-selector`);
+      target?.focus();
+    }, 0);
+  }, []);
+
+  const createDefaultDraft = useCallback((type: OrderFeeTableType): OrderFeeDraftRow => ({
+    id: `draft-${type}`,
+    isDraft: true,
+    type,
+    name: type === 'RECEIVABLE' ? '运费' : '',
+    amount: 0,
+    currency: 'RMB',
+    reconciliationStatus: 'PENDING',
+    agentName: type === 'PAYABLE' ? shipment.agentName : undefined
+  }), [shipment.agentName]);
+
+  const openDraft = useCallback((type: OrderFeeTableType) => {
+    if (draftRows[type]) {
+      message.info('请先保存或取消当前新增行');
+      focusDraftRow(type);
+      return;
+    }
+    setDraftRows((current) => ({ ...current, [type]: createDefaultDraft(type) }));
+    focusDraftRow(type);
+  }, [createDefaultDraft, draftRows, focusDraftRow]);
+
+  const updateDraft = useCallback((type: OrderFeeTableType, patch: Partial<OrderFeeDraftRow>) => {
+    setDraftRows((current) => ({
+      ...current,
+      [type]: current[type] ? { ...current[type], ...patch } : current[type]
+    }));
+  }, []);
+
+  const cancelDraft = useCallback((type: OrderFeeTableType) => {
+    setDraftRows((current) => ({ ...current, [type]: null }));
+  }, []);
+
+  const saveDraft = useCallback(async (type: OrderFeeTableType) => {
+    const draft = draftRows[type];
+    if (!draft) return;
+    const name = draft.name?.trim();
+    if (!name) {
+      message.warning('请选择或输入费用名称');
+      focusDraftRow(type);
+      return;
+    }
+    if (!draft.currency) {
+      message.warning('请选择币种');
+      focusDraftRow(type);
+      return;
+    }
+    const shouldCalculateAmount = (type === 'BUSINESS_COST' || type === 'PAYABLE')
+      && draft.chargeWeightKg !== undefined
+      && draft.unitPrice !== undefined;
+    const amount = shouldCalculateAmount
+      ? Number((Number(draft.chargeWeightKg) * Number(draft.unitPrice)).toFixed(2))
+      : Number(draft.amount ?? 0);
+    if (Number.isNaN(amount)) {
+      message.warning('请输入金额');
+      focusDraftRow(type);
+      return;
+    }
+    const input: ShipmentFinanceItemCreateInput = {
+      type,
+      name,
+      amount,
+      currency: draft.currency ?? 'RMB',
+      settlementMethod: draft.settlementMethod,
+      paymentNo: type === 'RECEIVABLE' ? draft.paymentNo : undefined,
+      reconciliationStatus: draft.reconciliationStatus ?? 'PENDING',
+      agentName: type === 'PAYABLE' ? draft.agentName : undefined,
+      chargeWeightKg: type === 'BUSINESS_COST' || type === 'PAYABLE' ? draft.chargeWeightKg : undefined,
+      unitPrice: type === 'BUSINESS_COST' || type === 'PAYABLE' ? draft.unitPrice : undefined,
+      amountOverridden: type === 'BUSINESS_COST' || type === 'PAYABLE'
+        ? calculateAmountOverride({ amount, chargeWeightKg: draft.chargeWeightKg, unitPrice: draft.unitPrice })
+        : false,
+      remark: draft.remark
+    };
+    setSubmitting(true);
+    try {
+      await apiClient.createShipmentFinanceItem(shipment.id, input);
+      setDraftRows((current) => ({ ...current, [type]: null }));
+      await reload();
+      message.success('费用已新增');
+    } finally {
+      setSubmitting(false);
+    }
+  }, [apiClient, draftRows, focusDraftRow, reload, shipment.id]);
 
   const submitReceiptMatch = useCallback(async (receipt: WaterReceiptSummary) => {
     if (!receiptMatch) return;
@@ -359,7 +467,7 @@ export function OrderFeePanel({
     const count = rows.length;
     const actionText = action === 'delete' ? '删除' : action === 'lock' ? '锁定' : action === 'unlock' ? '解锁' : '重算';
     const contentMap = {
-      delete: '删除后该费用会作废或从订单费用中移除，并影响对应审核总表。',
+      delete: '删除后不可恢复；已被付款申请、付款记录、凭证或水单匹配引用的费用不能删除。',
       lock: '锁定后该费用不可直接编辑，需要解锁后才能修改。',
       unlock: '解锁后该费用会恢复可编辑，请确认下游审核或付款状态允许回退。',
       recalc: '重算会按当前计费重和单价覆盖金额，请确认费用口径正确。'
@@ -391,12 +499,23 @@ export function OrderFeePanel({
     }
   }, [apiClient, reload, shipment.agentName, shipment.id]);
 
-  const renderStatus = (row: OrderFeeRow) => {
+  const renderStatus = (row: OrderFeeDisplayRow) => {
+    if (isDraftRow(row)) {
+      return (
+        <Select
+          size="small"
+          value={row.reconciliationStatus ?? 'PENDING'}
+          options={Object.entries(financeStatusLabel).filter(([value]) => value !== 'VOIDED').map(([value, label]) => ({ label, value }))}
+          onChange={(value) => updateDraft(row.type, { reconciliationStatus: value as OrderFeeDraftRow['reconciliationStatus'] })}
+          style={{ minWidth: 96 }}
+        />
+      );
+    }
     const status = getStatus(row);
     return <Tag color={financeStatusColor[status] ?? 'gold'}>{financeStatusLabel[status] ?? status}</Tag>;
   };
 
-  const renderColumnSettings = (type: OrderFeeTableType, allColumns: ColumnsType<OrderFeeRow>) => {
+  const renderColumnSettings = (type: OrderFeeTableType, allColumns: ColumnsType<OrderFeeDisplayRow>) => {
     const keys = allColumns.map((column) => String(column.key)).filter((key) => key !== 'select');
     const preference = columnPreferences[type];
     const visible = preference.visible.length ? preference.visible : resolveDefaultVisibleColumns(type, keys);
@@ -408,6 +527,10 @@ export function OrderFeePanel({
       if (index < 0 || targetIndex < 0 || targetIndex >= nextOrder.length) return;
       [nextOrder[index], nextOrder[targetIndex]] = [nextOrder[targetIndex], nextOrder[index]];
       persistColumnPreference(type, { visible, order: nextOrder });
+    };
+    const moveToFirst = (key: string) => {
+      if (order[0] === key) return;
+      persistColumnPreference(type, { visible, order: [key, ...order.filter((item) => item !== key)] });
     };
     return (
       <Popover
@@ -429,6 +552,7 @@ export function OrderFeePanel({
                     {String(column?.title ?? key)}
                   </Checkbox>
                   <Space size={4}>
+                    <Button size="small" disabled={order[0] === key} onClick={() => moveToFirst(key)}>移到首行</Button>
                     <Button size="small" onClick={() => move(key, -1)}>上移</Button>
                     <Button size="small" onClick={() => move(key, 1)}>下移</Button>
                   </Space>
@@ -439,13 +563,19 @@ export function OrderFeePanel({
           </div>
         )}
       >
-        <Button size="small">列设置</Button>
+        <Tooltip title="列设置">
+          <Button className="managed-table-settings-button" size="small" aria-label="列设置" icon={<Settings size={16} />} />
+        </Tooltip>
       </Popover>
     );
   };
 
-  const createColumns = (type: OrderFeeTableType): ColumnsType<OrderFeeRow> => {
-    const renderReceiptNo = (row: OrderFeeRow) => {
+  const createColumns = (type: OrderFeeTableType): ColumnsType<OrderFeeDisplayRow> => {
+    const renderReceiptNo = (row: OrderFeeDisplayRow) => {
+      if (isDraftRow(row)) {
+        if (type !== 'RECEIVABLE') return row.paymentNo || '-';
+        return <Input size="small" value={row.paymentNo} placeholder="付款编号" onChange={(event) => updateDraft(type, { paymentNo: event.target.value })} />;
+      }
       if (type !== 'RECEIVABLE') return 'paymentNo' in row ? row.paymentNo || '-' : '-';
       const receivable = row as ReceivableFeeSummary;
       const canMatch = getStatus(receivable) === 'CONFIRMED' && receivable.receiptStatus !== 'RECEIVED';
@@ -456,36 +586,88 @@ export function OrderFeePanel({
         </Button>
       );
     };
-    const base: ColumnsType<OrderFeeRow> = [
-      { title: '序号', key: 'index', width: 70, fixed: 'left', render: (_value, _row, index) => index + 1 },
-      { title: '费用名称', dataIndex: 'name', key: 'name', width: 150, fixed: 'left', sorter: (a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN') },
+    const base: ColumnsType<OrderFeeDisplayRow> = [
+      { title: '序号', key: 'index', width: 70, fixed: 'left', render: (_value, row, index) => isDraftRow(row) ? <Tag color="blue">新增</Tag> : index + 1 },
+      {
+        title: '费用名称',
+        dataIndex: 'name',
+        key: 'name',
+        width: 150,
+        fixed: 'left',
+        sorter: (a, b) => isDraftRow(a) || isDraftRow(b) ? 0 : a.name.localeCompare(b.name, 'zh-Hans-CN'),
+        render: (_value, row) => isDraftRow(row)
+          ? <Select size="small" showSearch options={feeNameOptions} placeholder="选择费用名称" value={row.name || undefined} onChange={(value) => updateDraft(type, { name: value })} style={{ minWidth: 128 }} />
+          : row.name
+      },
       { title: '客户编号', key: 'customerCode', width: 120, render: () => parseCustomerCode(shipment.customerName) },
-      { title: '运单号', key: 'systemOrderNo', width: 200, render: () => renderShipmentOrderNoLink(shipment.systemOrderNo, { shipment }) },
+      { title: '出货单号', key: 'systemOrderNo', width: 200, render: () => renderShipmentOrderNoLink(shipment.systemOrderNo, { shipment }) },
       { title: '转单号', key: 'transferNo', width: 170, render: () => shipment.transferNo || '-' },
-      { title: '对账状态', key: 'status', width: 110, render: (_, row) => renderStatus(row), sorter: (a, b) => getStatus(a).localeCompare(getStatus(b)) },
-      { title: '币种', key: 'currency', width: 90, render: (_, row) => <Tag>{row.currency ?? 'RMB'}</Tag> },
-      { title: '金额', key: 'amount', width: 130, align: 'right', render: (_, row) => formatFinanceAmount(row.amount, row.currency), sorter: (a, b) => a.amount - b.amount },
-      { title: '合计', key: 'rmbAmount', width: 130, align: 'right', render: (_, row) => formatCurrency(row.rmbAmount ?? row.amount) },
-      { title: '结算方式', key: 'settlementMethod', width: 140, render: (_, row) => row.settlementMethod || '-' },
+      { title: '对账状态', key: 'status', width: 110, render: (_, row) => renderStatus(row), sorter: (a, b) => isDraftRow(a) || isDraftRow(b) ? 0 : getStatus(a).localeCompare(getStatus(b)) },
+      {
+        title: '币种',
+        key: 'currency',
+        width: 100,
+        render: (_, row) => isDraftRow(row)
+          ? <Select size="small" value={row.currency ?? 'RMB'} options={financeCatalogCurrencyOptions.map((item) => ({ label: item, value: item }))} onChange={(value) => updateDraft(type, { currency: value })} style={{ minWidth: 82 }} />
+          : <Tag>{row.currency ?? 'RMB'}</Tag>
+      },
+      {
+        title: '金额',
+        key: 'amount',
+        width: 130,
+        align: 'right',
+        render: (_, row) => isDraftRow(row)
+          ? <InputNumber size="small" min={0} precision={2} value={row.amount} onChange={(value) => updateDraft(type, { amount: value ?? undefined })} style={{ width: 104 }} />
+          : formatFinanceAmount(row.amount, row.currency),
+        sorter: (a, b) => isDraftRow(a) || isDraftRow(b) ? 0 : a.amount - b.amount
+      },
+      { title: '合计', key: 'rmbAmount', width: 130, align: 'right', render: (_, row) => isDraftRow(row) ? formatCurrency(Number(row.amount ?? 0)) : formatCurrency(row.rmbAmount ?? row.amount) },
+      {
+        title: '结算方式',
+        key: 'settlementMethod',
+        width: 150,
+        render: (_, row) => isDraftRow(row)
+          ? <Select size="small" allowClear options={settlementOptions} placeholder="结算方式" value={row.settlementMethod} onChange={(value) => updateDraft(type, { settlementMethod: value })} style={{ minWidth: 128 }} />
+          : row.settlementMethod || '-'
+      },
       { title: type === 'RECEIVABLE' ? '匹配水单编号' : '付款编号', key: 'paymentNo', width: 170, render: (_, row) => renderReceiptNo(row) },
-      { title: '已收金额', key: 'receivedAmount', width: 120, align: 'right', render: (_, row) => 'receivedAmount' in row ? formatFinanceAmount(Number(row.receivedAmount ?? 0), row.currency) : '-' },
-      { title: '收款状态', key: 'receiptStatus', width: 110, render: (_, row) => 'receiptStatus' in row ? <Tag color={row.receiptStatus === 'RECEIVED' ? 'green' : row.receiptStatus === 'PARTIAL' ? 'gold' : 'default'}>{row.receiptStatus === 'RECEIVED' ? '已收款' : row.receiptStatus === 'PARTIAL' ? '部分收款' : '未收款'}</Tag> : '-' },
-      { title: '计费重', key: 'chargeWeightKg', width: 110, render: (_, row) => 'chargeWeightKg' in row && row.chargeWeightKg !== undefined ? `${row.chargeWeightKg} kg` : '-' },
-      { title: '单价', key: 'unitPrice', width: 110, render: (_, row) => 'unitPrice' in row && row.unitPrice !== undefined ? `${formatFinanceAmount(row.unitPrice, row.currency)}/kg` : '-' },
+      { title: '已收金额', key: 'receivedAmount', width: 120, align: 'right', render: (_, row) => !isDraftRow(row) && 'receivedAmount' in row ? formatFinanceAmount(Number(row.receivedAmount ?? 0), row.currency) : '-' },
+      { title: '收款状态', key: 'receiptStatus', width: 110, render: (_, row) => !isDraftRow(row) && 'receiptStatus' in row ? <Tag color={row.receiptStatus === 'RECEIVED' ? 'green' : row.receiptStatus === 'PARTIAL' ? 'gold' : 'default'}>{row.receiptStatus === 'RECEIVED' ? '已收款' : row.receiptStatus === 'PARTIAL' ? '部分收款' : '未收款'}</Tag> : '-' },
+      {
+        title: '计费重',
+        key: 'chargeWeightKg',
+        width: 120,
+        render: (_, row) => isDraftRow(row)
+          ? <InputNumber size="small" min={0} precision={3} value={row.chargeWeightKg} onChange={(value) => updateDraft(type, { chargeWeightKg: value ?? undefined })} style={{ width: 106 }} />
+          : 'chargeWeightKg' in row && row.chargeWeightKg !== undefined ? `${row.chargeWeightKg} kg` : '-'
+      },
+      {
+        title: '单价',
+        key: 'unitPrice',
+        width: 120,
+        render: (_, row) => isDraftRow(row)
+          ? <InputNumber size="small" min={0} precision={2} value={row.unitPrice} onChange={(value) => updateDraft(type, { unitPrice: value ?? undefined })} style={{ width: 104 }} />
+          : 'unitPrice' in row && row.unitPrice !== undefined ? `${formatFinanceAmount(row.unitPrice, row.currency)}/kg` : '-'
+      },
       { title: '人工覆盖', key: 'amountOverridden', width: 110, render: (_, row) => row.amountOverridden ? <Tag color="orange">人工覆盖</Tag> : '-' },
-      { title: '代理', key: 'agentName', width: 140, render: (_, row) => 'agentName' in row ? row.agentName || shipment.agentName || '-' : '-' },
-      { title: '业务利润', key: 'businessProfit', width: 130, align: 'right', render: (_, row) => 'businessProfit' in row && row.businessProfit !== undefined ? formatCurrency(row.businessProfit) : '-' },
-      { title: '制单日期', key: 'createdAt', width: 160, render: (_, row) => formatOptionalDate(row.createdAt) },
-      { title: '制单人', key: 'createdBy', width: 110, render: (_, row) => row.createdBy || '-' },
-      { title: '审单日期', key: 'reviewedAt', width: 160, render: (_, row) => formatOptionalDate(row.reviewedAt) },
-      { title: '审单人', key: 'reviewedBy', width: 110, render: (_, row) => row.reviewedBy || '-' },
-      { title: '备注', key: 'remark', width: 180, ellipsis: true, render: (_, row) => <Text title={row.remark}>{row.remark || '-'}</Text> },
+      { title: '代理', key: 'agentName', width: 150, render: (_, row) => isDraftRow(row) ? <Input size="small" value={row.agentName} placeholder="代理名称" onChange={(event) => updateDraft(type, { agentName: event.target.value })} /> : 'agentName' in row ? row.agentName || shipment.agentName || '-' : '-' },
+      { title: '业务利润', key: 'businessProfit', width: 130, align: 'right', render: (_, row) => !isDraftRow(row) && 'businessProfit' in row && row.businessProfit !== undefined ? formatCurrency(row.businessProfit) : '-' },
+      { title: '制单日期', key: 'createdAt', width: 160, render: (_, row) => isDraftRow(row) ? '待保存' : formatOptionalDate(row.createdAt) },
+      { title: '制单人', key: 'createdBy', width: 110, render: (_, row) => isDraftRow(row) ? '-' : row.createdBy || '-' },
+      { title: '审单日期', key: 'reviewedAt', width: 160, render: (_, row) => isDraftRow(row) ? '-' : formatOptionalDate(row.reviewedAt) },
+      { title: '审单人', key: 'reviewedBy', width: 110, render: (_, row) => isDraftRow(row) ? '-' : row.reviewedBy || '-' },
+      { title: '备注', key: 'remark', width: 180, ellipsis: true, render: (_, row) => isDraftRow(row) ? <Input size="small" value={row.remark} placeholder="备注" onChange={(event) => updateDraft(type, { remark: event.target.value })} /> : <Text title={row.remark}>{row.remark || '-'}</Text> },
       {
         title: '操作',
         key: 'actions',
         width: 240,
         fixed: 'right',
-        render: (_, row) => row.sourceType === 'MANUAL' && canManageType(role, type, permissions) ? (
+        render: (_, row) => isDraftRow(row) ? (
+          <Space size={6}>
+            <Button size="small" type="primary" loading={submitting} onClick={() => saveDraft(type)}>保存</Button>
+            <Button size="small" disabled={submitting} onClick={() => cancelDraft(type)}>取消</Button>
+          </Space>
+        ) : row.sourceType === 'MANUAL' && canManageType(role, type, permissions) ? (
           <Space size={6}>
             <Button size="small" onClick={() => openEditor(type, row)} disabled={!isManualEditable(row)}>修改</Button>
             <Button size="small" onClick={() => confirmRunRows(type, row.locked ? 'unlock' : 'lock', [row])}>{row.locked ? '解锁' : '锁定'}</Button>
@@ -500,21 +682,35 @@ export function OrderFeePanel({
     return base.filter((column) => !['paymentNo', 'receivedAmount', 'receiptStatus', 'businessProfit'].includes(String(column.key)));
   };
 
+  const draftRequiredColumns: Record<OrderFeeTableType, string[]> = {
+    RECEIVABLE: ['name', 'currency', 'settlementMethod', 'status', 'paymentNo', 'amount', 'remark', 'actions'],
+    BUSINESS_COST: ['name', 'currency', 'status', 'chargeWeightKg', 'unitPrice', 'amount', 'remark', 'actions'],
+    PAYABLE: ['agentName', 'name', 'currency', 'status', 'chargeWeightKg', 'unitPrice', 'amount', 'remark', 'actions']
+  };
+
   const renderTable = (type: OrderFeeTableType, rows: OrderFeeRow[]) => {
     const canManage = canManageType(role, type, permissions);
     const allColumns = createColumns(type);
     const keys = allColumns.map((column) => String(column.key));
     const preference = columnPreferences[type];
-    const visible = preference.visible.length ? preference.visible : resolveDefaultVisibleColumns(type, keys);
-    const order = preference.order.length ? preference.order.filter((key) => keys.includes(key)) : resolveDefaultColumnOrder(type, keys);
+    const draft = draftRows[type];
+    const baseVisible = preference.visible.length ? preference.visible : resolveDefaultVisibleColumns(type, keys);
+    const visible = draft
+      ? Array.from(new Set([...baseVisible, ...draftRequiredColumns[type].filter((key) => keys.includes(key))]))
+      : baseVisible;
+    const baseOrder = preference.order.length ? preference.order.filter((key) => keys.includes(key)) : resolveDefaultColumnOrder(type, keys);
+    const order = draft
+      ? [...baseOrder, ...draftRequiredColumns[type].filter((key) => keys.includes(key) && !baseOrder.includes(key))]
+      : baseOrder;
     const orderedColumns = order
       .map((key) => allColumns.find((column) => String(column.key) === key))
-      .filter((column): column is ColumnsType<OrderFeeRow>[number] => Boolean(column));
+      .filter(Boolean) as ColumnsType<OrderFeeDisplayRow>;
     const visibleColumns = orderedColumns.filter((column) => visible.includes(String(column.key)));
     const selected = selectedRowKeys[type];
     const selectedRows = rows.filter((row) => selected.includes(row.id));
     const total = rows.reduce((sum, row) => sum + (row.rmbAmount ?? row.amount), 0);
     const chargeWeightTotal = rows.reduce((sum, row) => sum + ('chargeWeightKg' in row && row.chargeWeightKg ? row.chargeWeightKg : 0), 0);
+    const dataSource: OrderFeeDisplayRow[] = draft ? [draft, ...rows] : rows;
 
     return (
       <div className="shipment-finance-table-card order-fee-table-card" key={type}>
@@ -525,14 +721,14 @@ export function OrderFeePanel({
           </div>
           <Space wrap>
             {renderColumnSettings(type, allColumns)}
-            {canManage ? <Button size="small" type="primary" onClick={() => openEditor(type)}>添加</Button> : null}
+            {canManage ? <Button size="small" type="primary" onClick={() => openDraft(type)}>添加</Button> : null}
           </Space>
         </div>
         <Table
           className="finance-work-table finance-embedded-table"
           rowKey="id"
           columns={visibleColumns}
-          dataSource={rows}
+          dataSource={dataSource}
           size="small"
           scroll={{ x: Math.max(1500, visibleColumns.reduce((sum, column) => sum + Number(column.width ?? 120), 0)) }}
           loading={loading}
@@ -540,14 +736,22 @@ export function OrderFeePanel({
           rowSelection={{
             selectedRowKeys: selected,
             onChange: (next) => setSelectedRowKeys((current) => ({ ...current, [type]: next.map(String) })),
-            getCheckboxProps: (row) => ({ disabled: !canManage || row.sourceType !== 'MANUAL' })
+            columnWidth: 56,
+            fixed: true,
+            getCheckboxProps: (row) => ({ disabled: !canManage || isDraftRow(row) || row.sourceType !== 'MANUAL' })
           }}
+          onRow={(row) => isDraftRow(row) ? { 'data-order-fee-draft': type, className: 'order-fee-draft-row' } : {}}
           expandable={{
+            rowExpandable: (row) => !isDraftRow(row),
             expandedRowRender: (row) => (
               <div className="order-fee-expanded-row">
-                <span>制单：{row.createdBy || '-'} / {formatOptionalDate(row.createdAt)}</span>
-                <span>审单：{row.reviewedBy || '-'} / {formatOptionalDate(row.reviewedAt)}</span>
-                <span>备注：{row.remark || '-'}</span>
+                {!isDraftRow(row) ? (
+                  <>
+                    <span>制单：{row.createdBy || '-'} / {formatOptionalDate(row.createdAt)}</span>
+                    <span>审单：{row.reviewedBy || '-'} / {formatOptionalDate(row.reviewedAt)}</span>
+                    <span>备注：{row.remark || '-'}</span>
+                  </>
+                ) : null}
               </div>
             )
           }}
@@ -591,7 +795,7 @@ export function OrderFeePanel({
     </div>
   );
 
-  const profitSections = detail?.profitSections ?? [];
+  const profitSections = roleCanViewPayables ? detail?.profitSections ?? [] : [];
 
   return (
     <section className="shipment-detail-section shipment-detail-finance-section">

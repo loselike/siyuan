@@ -45,6 +45,8 @@ export interface StaffAccountSummary {
   phone?: string;
   gender?: StaffGender;
   nickname?: string;
+  departmentId?: string;
+  department?: string;
   site?: string;
   role: StaffAccountRoleKey;
   roleLabel: string;
@@ -61,6 +63,7 @@ export interface StaffAccountCreateInput {
   phone?: string;
   gender?: StaffGender;
   nickname?: string;
+  departmentId?: string;
   site?: string;
   enabled?: boolean;
   role: StaffAccountRoleKey;
@@ -73,6 +76,7 @@ export interface StaffAccountUpdateInput {
   phone?: string;
   gender?: StaffGender;
   nickname?: string;
+  departmentId?: string;
   site?: string;
   enabled?: boolean;
   role?: StaffAccountRoleKey;
@@ -80,6 +84,7 @@ export interface StaffAccountUpdateInput {
 
 export interface StaffAccountQuery {
   keyword?: string;
+  departmentId?: string;
   site?: string;
   role?: StaffAccountRoleKey;
   status?: 'ALL' | 'ENABLED' | 'DISABLED';
@@ -111,6 +116,12 @@ export interface SiteUpdateInput extends SiteCreateInput {
   enabled?: boolean;
 }
 
+export interface DepartmentSummary {
+  id: string;
+  name: string;
+  enabled: boolean;
+}
+
 export interface RoleGroupInput {
   label: string;
   description?: string;
@@ -130,6 +141,8 @@ export type ShipmentStatus =
   | 'OUTBOUNDED'
   | 'WAITING_DEPARTURE'
   | 'DEPARTED'
+  | 'ARRIVED_PORT'
+  | 'DELIVERING'
   | 'ARRIVED_PORT'
   | 'DELIVERING'
   | 'WAITING_ONLINE'
@@ -166,18 +179,25 @@ export interface Shipment {
   customerCode?: string;
   salesperson?: string;
   customerOrderNo: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   transferNo?: string;
   subOrderNo?: string;
   draftWarehousePackageIds?: string[];
   inboundNo?: string;
   outboundAt?: string;
+  handoverNo?: string;
+  outboundBy?: string;
+  batchDispatchSource?: string;
   productName?: string;
   site?: string;
   declarationRequired?: boolean;
   sensitive?: boolean;
   cargoType?: string;
   volumeCbm?: number;
+  actualWeightKg?: number;
+  cargoDataSource?: 'AUTO_MATCHED' | 'MANUAL_ADJUSTED';
+  chargeWeightOverridden?: boolean;
   settlementMethod?: string;
   tradeTerms?: string;
   fbaInboundNo?: string;
@@ -210,9 +230,14 @@ export interface Shipment {
   destinationCountry: string;
   carrier: string;
   packageCount: number;
+  weightKg?: number;
+  chargeableWeightKg?: number;
   receivableWeightKg: number;
   agentWeightKg: number;
+  receivableRmbTotal?: number;
+  receivableRmbTotalError?: string;
   latestTracking: string;
+  latestTrackingUpdatedAt?: string;
   trackingStaleDays: number;
   isRemoteArea: boolean;
   status: ShipmentStatus;
@@ -239,6 +264,37 @@ export interface Shipment {
   hasProblemTicket: boolean;
 }
 
+export type CustomerServiceDataReviewStatus = 'PENDING' | 'APPROVED';
+
+export interface CustomerServiceDataSnapshot {
+  packageCount: number;
+  weightKg: number;
+  volumeCbm: number;
+  chargeWeightKg: number;
+}
+
+export interface CustomerServiceDataReviewSummary {
+  shipmentId: string;
+  business: CustomerServiceDataSnapshot & { status: CustomerServiceDataReviewStatus; reviewedBy?: string; reviewedAt?: string; remark?: string };
+  agent: CustomerServiceDataSnapshot & { status: CustomerServiceDataReviewStatus; reviewedBy?: string; reviewedAt?: string; remark?: string };
+}
+
+export interface CustomerServiceDataUpdateInput extends CustomerServiceDataSnapshot {
+  remark?: string;
+  pushToSales?: boolean;
+  version?: number;
+}
+
+export interface CustomerServiceDataReviewInput {
+  remark?: string;
+  version?: number;
+}
+
+export interface CustomerServiceDataReverseInput {
+  reason: string;
+  version?: number;
+}
+
 export type LineShipmentStatusGroup =
   | 'ALL'
   | 'REVIEW_PENDING'
@@ -250,11 +306,13 @@ export type LineShipmentStatusGroup =
   | 'TRANSFER_NO'
   | 'WAITING_DEPARTURE'
   | 'DEPARTED'
+  | 'ARRIVED_PORT'
+  | 'DELIVERING'
   | 'SIGNED'
   | 'PROBLEM'
   | 'AFTER_SALE';
 
-export type LineShipmentDatePreset = 'TODAY' | 'LAST_7_DAYS' | 'ALL';
+export type LineShipmentDatePreset = 'TODAY' | 'LAST_7_DAYS' | 'LAST_30_DAYS' | 'ALL';
 
 export interface LineShipmentPoolQuery {
   statusGroup?: LineShipmentStatusGroup;
@@ -275,11 +333,20 @@ export interface LineShipmentPoolMetrics {
   todayUpdatedCount: number;
 }
 
+export interface LineShipmentPackageSummary {
+  packageCount: number;
+  totalWeightKg: number;
+  totalCbm: number;
+  domesticTrackingNos: string[];
+  combinedOrderNos: string[];
+}
+
 export interface LineShipmentPoolRow {
   shipment: Shipment;
   latestTracking?: string;
   receivableAmount?: number;
   hasProblem?: boolean;
+  packageSummary?: LineShipmentPackageSummary;
 }
 
 export interface LineShipmentPoolResponse {
@@ -295,7 +362,9 @@ export interface LineShipmentPoolResponse {
 
 interface LineShipmentPoolOptions {
   businessDataApprovedShipmentIds?: string[];
+  agentDataApprovedShipmentIds?: string[];
   afterSaleShipmentIds?: string[];
+  packageSummariesByShipmentId?: Record<string, LineShipmentPackageSummary>;
 }
 
 export interface ShipmentRouteInput {
@@ -308,11 +377,38 @@ export interface ShipmentRouteInput {
   otherFeeRemark?: string;
   currency?: string;
   shippingMarkRequired?: boolean;
+  /** false only saves market routing data and keeps the shipment in WAITING_SORT. */
+  approve?: boolean;
 }
 
 export interface ShipmentDispatchInput {
   transferNo?: string;
   shippingMarkConfirmed?: boolean;
+  handoverNo?: string;
+  batchDispatchSource?: string;
+}
+
+export interface WarehouseHandoverPrintInput {
+  shipmentIds: string[];
+}
+
+export interface WarehouseHandoverSummary {
+  shipmentId: string;
+  systemOrderNo: string;
+  handoverNo: string;
+  agentId: string;
+  agentShortName: string;
+  agentFullName: string;
+  agentChannelName: string;
+  packageCount: number;
+  printedBy: string;
+  firstPrintedAt: string;
+  lastPrintedAt: string;
+  printCount: number;
+}
+
+export interface WarehouseHandoverPrintResponse {
+  rows: WarehouseHandoverSummary[];
 }
 
 export interface ShipmentInvoiceUploadResponse {
@@ -330,6 +426,7 @@ export interface BulkTrackingImportRow {
   date: string | number;
   description: string;
   location?: string;
+  rowNumber?: number;
 }
 
 export interface BulkTrackingUpdate {
@@ -337,11 +434,26 @@ export interface BulkTrackingUpdate {
   customerOrderNo: string;
   trackingDate: string | number;
   latestTracking: string;
+  description?: string;
+  location?: string;
+  rowNumber?: number;
 }
 
 export interface BulkTrackingImportResult {
   updates: BulkTrackingUpdate[];
   unmatchedOrderNos: string[];
+  conflictOrderNos?: string[];
+  errorRows?: Array<{ rowNumber: number; customerOrderNo?: string; reason: string }>;
+  shipmentPreviews?: Array<{
+    shipmentId: string;
+    systemOrderNo: string;
+    matchedOrderNo: string;
+    trackingCount: number;
+    latestTracking: string;
+    latestTrackingDate: string | number;
+  }>;
+  rawRowCount?: number;
+  matchedShipmentCount?: number;
 }
 
 export interface ShipmentOperationalUpdateInput {
@@ -365,6 +477,30 @@ export interface ShipmentOperationalUpdateInput {
   status?: ShipmentStatus;
   etaAt?: string;
   etdAt?: string;
+  statusRemark?: string;
+}
+
+export interface CustomerServiceTransferFillRow {
+  shipmentId: string;
+  transferNo: string;
+  subOrderNo?: string;
+  pushToSales?: boolean;
+}
+
+export interface CustomerServiceTransferBatchInput {
+  rows: CustomerServiceTransferFillRow[];
+}
+
+export interface CustomerServiceTransferBatchResult {
+  shipmentId: string;
+  systemOrderNo?: string;
+  success: boolean;
+  shipment?: Shipment;
+  reason?: string;
+}
+
+export interface CustomerServiceTransferBatchResponse {
+  results: CustomerServiceTransferBatchResult[];
 }
 
 export interface ShipmentPaymentUpdateInput {
@@ -375,10 +511,19 @@ export interface ShipmentPaymentUpdateInput {
 
 export interface BulkTrackingApplyRequest {
   updates: BulkTrackingUpdate[];
+  fileName?: string;
+  rawRowCount?: number;
+  failedRowCount?: number;
+  unmatchedOrderNos?: string[];
 }
 
 export interface BulkTrackingApplyResponse {
   updated: Shipment[];
+  importedCount?: number;
+  importedRowCount?: number;
+  failedRowCount?: number;
+  unmatchedCount?: number;
+  affectedShipmentCount?: number;
 }
 
 export type AuditLogResult = 'SUCCESS' | 'FAILED';
@@ -408,6 +553,7 @@ export interface AuditLogSummary {
   resultLabel: string;
   before?: unknown;
   after?: unknown;
+  ipAddress?: string;
   createdAt: string;
 }
 
@@ -567,6 +713,165 @@ export interface PricingRuleQuoteResponse extends QuoteResponse {
 
 export type QuoteSourceType = 'local' | 'agentApi';
 
+export interface WarehouseCodeRuleParseResult {
+  exactCodes: string[];
+  prefixRules: string[];
+  invalidSegments: string[];
+}
+
+/** Normalizes a FBA warehouse code without conflating ranges with exact codes. */
+export function normalizeWarehouseCodeRule(value?: string | null): string {
+  return String(value ?? '').replace(/\s+/g, '').toUpperCase();
+}
+
+/**
+ * Parses supplier warehouse cells such as YYZ1-YYZ9, YYZ1+YYZ2 and YYZ.
+ * Invalid ranges are deliberately omitted from the matching set so imports
+ * cannot turn an ambiguous supplier cell into a broad quote match.
+ */
+export function parseWarehouseCodeRules(value?: string | null): WarehouseCodeRuleParseResult {
+  const normalized = normalizeWarehouseCodeRule(value)
+    .replace(/[（）()【】\[\]]/g, '')
+    // Supplier cells often wrap codes with a Chinese warehouse-region label,
+    // for example “多伦多（YYZ/YHM1/YOO1）”. The label must be a separator,
+    // otherwise the first bare prefix becomes “多伦多YYZ” and is discarded.
+    .replace(/[\u3400-\u9FFF]+/g, ' ')
+    .replace(/[，、,;；/|+\n\r]+/g, ' ')
+    .trim();
+  const exactCodes = new Set<string>();
+  const prefixRules = new Set<string>();
+  const invalidSegments: string[] = [];
+
+  if (!normalized) return { exactCodes: [], prefixRules: [], invalidSegments: [] };
+
+  for (const segment of normalized.split(/\s+/).filter(Boolean)) {
+    const range = segment.match(/^([A-Z]+)(\d+)-([A-Z]+)(\d+)$/);
+    if (range) {
+      const [, startPrefix, startText, endPrefix, endText] = range;
+      const start = Number(startText);
+      const end = Number(endText);
+      if (startPrefix !== endPrefix || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || end - start > 999) {
+        invalidSegments.push(segment);
+        continue;
+      }
+      for (let index = start; index <= end; index += 1) {
+        exactCodes.add(`${startPrefix}${index}`);
+      }
+      continue;
+    }
+    if (segment.includes('-')) {
+      invalidSegments.push(segment);
+      continue;
+    }
+    if (/^[A-Z]{2,8}$/.test(segment)) {
+      prefixRules.add(segment);
+      continue;
+    }
+    if (/^[A-Z]{2,8}\d[A-Z0-9]*$/.test(segment) || /^(?:[IX]US[A-Z]|IUTE)$/.test(segment)) {
+      exactCodes.add(segment);
+      continue;
+    }
+    invalidSegments.push(segment);
+  }
+
+  return {
+    exactCodes: [...exactCodes],
+    prefixRules: [...prefixRules],
+    invalidSegments
+  };
+}
+
+export function expandWarehouseCodeRules(value?: string | null): string[] {
+  const parsed = parseWarehouseCodeRules(value);
+  return [...parsed.exactCodes, ...parsed.prefixRules];
+}
+
+const invalidWarehouseCodeRulePrefix = '__INVALID_WAREHOUSE_RULE__:';
+
+/**
+ * Internal row scopes written by the Canada importer. They intentionally live
+ * in `warehouseCode` so the existing price-book/legacy-row schema can retain
+ * the address matching rule without a migration.
+ */
+export const CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE = '__CANADA_PRIVATE_ADDRESS__';
+export const CANADA_AMAZON_UNMAPPED_WAREHOUSE_CODE = '__CANADA_AMAZON_UNMAPPED__';
+export const CANADA_ADDRESS_SCOPE_UNSPECIFIED_WAREHOUSE_CODE = '__CANADA_ADDRESS_SCOPE_UNSPECIFIED__';
+
+export function normalizeCanadaAddressType(value?: string | null): CanadaAddressType {
+  return String(value ?? '').trim().toUpperCase() === 'AMAZON' ? 'AMAZON' : 'PRIVATE';
+}
+
+/** Canada FBA matching is deliberately by the warehouse's first three letters. */
+export function normalizeCanadaAmazonWarehousePrefix(value?: string | null): string | undefined {
+  const normalized = String(value ?? '').trim().replace(/\s+/g, '').toUpperCase();
+  return /^[A-Z]{3}$/.test(normalized) ? normalized : undefined;
+}
+
+export function isCanadaAddressScopeWarehouseCode(value?: string | null): boolean {
+  const normalized = normalizeWarehouseCodeRule(value);
+  return normalized === CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE
+    || normalized === CANADA_AMAZON_UNMAPPED_WAREHOUSE_CODE
+    || normalized === CANADA_ADDRESS_SCOPE_UNSPECIFIED_WAREHOUSE_CODE;
+}
+
+/**
+ * Keeps an invalid supplier cell traceable in import health without allowing it
+ * to behave like a general warehouse quote.
+ */
+export function warehouseCodeRulesForImport(value?: string | null): string[] {
+  const parsed = parseWarehouseCodeRules(value);
+  const rules = [...parsed.exactCodes, ...parsed.prefixRules];
+  // Keep every invalid fragment beside the valid rules.  Dropping it makes a
+  // partially malformed supplier cell look healthy in import diagnostics.
+  return [...rules, ...parsed.invalidSegments.map((segment) => `${invalidWarehouseCodeRulePrefix}${segment}`)];
+}
+
+export function isInvalidWarehouseCodeRule(value?: string | null): boolean {
+  return normalizeWarehouseCodeRule(value).startsWith(invalidWarehouseCodeRulePrefix);
+}
+
+/** Returns lower rank for the more specific warehouse rule. */
+export function matchWarehouseCodeRule(ruleValue: string | undefined | null, inputValue: string | undefined | null): 0 | 1 | undefined {
+  const rule = normalizeWarehouseCodeRule(ruleValue);
+  const input = normalizeWarehouseCodeRule(inputValue);
+  if (!rule || !input) return undefined;
+  if (rule === input) return 0;
+  const parsed = parseWarehouseCodeRules(rule);
+  if (parsed.exactCodes.includes(input)) return 0;
+  return parsed.prefixRules.some((prefix) => input.startsWith(prefix) && /^\d/.test(input.slice(prefix.length))) ? 1 : undefined;
+}
+
+/**
+ * Canada uses a supplier convention that is different from Amazon's normal
+ * full warehouse-code matching: `非亚马逊地址` is a dedicated private-address
+ * line, while FBA lines are keyed by a three-letter warehouse prefix.
+ */
+export function canadaAddressTypeMatchesWarehouseCode(
+  rowWarehouseCode: string | undefined | null,
+  addressType?: CanadaAddressType | string | null,
+  amazonCode?: string | null
+): boolean {
+  const rowCode = normalizeWarehouseCodeRule(rowWarehouseCode);
+  const normalizedAddressType = normalizeCanadaAddressType(addressType);
+  if (normalizedAddressType === 'PRIVATE') {
+    // The empty-value fallback keeps manually-maintained pre-v4 Canada rows
+    // usable until their retained workbook is refreshed.
+    return !rowCode || rowCode === CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE;
+  }
+
+  const warehousePrefix = normalizeCanadaAmazonWarehousePrefix(amazonCode);
+  if (!warehousePrefix || !rowCode || isCanadaAddressScopeWarehouseCode(rowCode)) {
+    return false;
+  }
+  return matchWarehouseCodeRule(rowCode, warehousePrefix) !== undefined;
+}
+
+export function warehouseCodePrefixCandidates(value?: string | null): string[] {
+  const code = normalizeWarehouseCodeRule(value);
+  const prefix = code.match(/^[A-Z]+/)?.[0] ?? '';
+  return Array.from({ length: Math.max(0, prefix.length - 1) }, (_, index) => prefix.slice(0, index + 2));
+}
+
 export interface PriceBookRowSummary {
   id: string;
   priceBookId: string;
@@ -576,11 +881,22 @@ export interface PriceBookRowSummary {
   channelName: string;
   businessRouteName?: string;
   realChannelName?: string;
+  /** 欧洲线路查询使用的结构化运输方式。仅价格表管理/体检使用。 */
+  transportMode?: EuropeTransportMode;
+  /** 无法依据工作表、价格组和原始线路归类时的管理员体检原因。 */
+  transportClassificationIssue?: string;
+  /** 欧洲超大件线路的货物属性；用于避免把电池专线推荐给普货。 */
+  cargoType?: EuropeOversizeCargoType;
   warehouseCode?: string;
   destinationCountry: string;
+  /** 美国空海运价格行适用的 ZIP 规则（精确、区间、前缀或全国通用）。 */
+  postalRule?: string;
   minWeightKg: number;
   maxWeightKg: number;
   costPerKg: number;
+  cbmPrice?: number;
+  priceTierLabel?: string;
+  densityDiscountRules?: Array<{ ratio: number; discount: number; label?: string }>;
   currency: string;
   transitDays?: number;
   transitLabel?: string;
@@ -589,14 +905,36 @@ export interface PriceBookRowSummary {
   surchargeDetails?: Array<{ name: string; amount: number }>;
   productSurchargeRemark?: string;
   specialRemark?: string;
+  productCategory?: string;
+  region?: string;
+  serviceContent?: string;
+  inboundRequirement?: string;
+  channelCode?: string;
+  lineMarkupPerKg?: number;
+  markupSource?: PriceBookRowMarkupSource;
 }
+
+export type EuropeTransportMode = 'AIR' | 'SEA' | 'RAIL' | 'SEA_RAIL' | 'UNCLASSIFIED';
+/** 欧洲超大件货物属性。普货默认不会命中电池专线。 */
+export type EuropeOversizeCargoType = 'GENERAL' | 'BATTERY';
 
 export interface PriceBookSummary {
   id: string;
   fileName: string;
+  agentId?: string;
+  agentShortName?: string;
   rowCount: number;
   importedAt: string;
+  /** 价格表管理员填写的内部自定义备注，不属于渠道要求。 */
+  customRemark?: string;
+  /** @deprecated 使用 customRemark。保留用于旧客户端兼容。 */
   remark?: string;
+  targetModule?: PriceBookImportTargetModule;
+  /** Parser/normalizer revision applied to the current active rows. */
+  parserRuleVersion?: number;
+  /** Automatic background rule synchronization state for the retained workbook. */
+  refreshStatus?: 'CURRENT' | 'PENDING' | 'RUNNING' | 'FAILED' | 'UNAVAILABLE';
+  lastRuleRefreshAt?: string;
   legacyModuleCounts?: Partial<Record<LegacyPricingModule, number>>;
 }
 
@@ -605,24 +943,158 @@ export interface PriceBooksResponse {
   rows: PriceBookRowSummary[];
 }
 
+export interface PriceBookRowsQuery {
+  page?: number;
+  pageSize?: number;
+  targetModule?: PriceBookImportTargetModule;
+  agentName?: string;
+  channelName?: string;
+  sourceSheetName?: string;
+  destinationCountry?: string;
+  markupAmount?: string;
+  markupSource?: PriceBookRowMarkupSource | 'ALL';
+  markupSort?: 'ASC' | 'DESC' | 'NONE';
+}
+
+export interface PriceBookRowsResponse {
+  rows: PriceBookRowSummary[];
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+export interface PricingOldOriginalAgentCleanupDetail {
+  sourceType: 'PRICE_BOOK_ROW' | 'LEGACY_PRICING_ROW';
+  oldAgentName: string;
+  newAgentName: string;
+  fileName: string;
+  priceBookId?: string;
+  legacySourceId?: string;
+  affectedRows: number;
+}
+
+export interface PricingOldOriginalAgentCleanupResponse {
+  dryRun: boolean;
+  affectedRows: number;
+  totalPriceBookRows: number;
+  totalLegacyRows: number;
+  details: PricingOldOriginalAgentCleanupDetail[];
+  executedAt: string;
+}
+
+export type PriceBookImportTargetModule = LegacyPricingModule;
+
 export interface PriceBookImportInput {
   fileName: string;
+  targetModule: PriceBookImportTargetModule;
+  agentId?: string;
+  agentShortName?: string;
   rows: Omit<PriceBookRowSummary, 'id' | 'priceBookId'>[];
 }
 
+export type PriceBookImportJobStatus = 'PENDING' | 'PARSING' | 'IMPORTING' | 'SUCCESS' | 'PARTIAL_FAILED' | 'FAILED';
+
+export interface PriceBookImportJobSummary {
+  id: string;
+  fileName: string;
+  targetModule?: PriceBookImportTargetModule;
+  agentId?: string;
+  agentShortName?: string;
+  status: PriceBookImportJobStatus;
+  processedRows: number;
+  totalRows: number;
+  failedRows: number;
+  message?: string;
+  errorSummary?: Array<{ index: number; reason: string }>;
+  book?: PriceBookSummary;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+}
+
+export interface PriceBookImportJobResponse {
+  job: PriceBookImportJobSummary;
+}
+
+export interface PriceBookImportResult {
+  job?: PriceBookImportJobSummary;
+  book: PriceBookSummary;
+  rowCount: number;
+  legacyModuleCounts?: Partial<Record<LegacyPricingModule, number>>;
+  errorSummary?: Array<{ index: number; reason: string }>;
+  rows: PriceBookRowSummary[];
+}
+
+export interface PricingSyncHealthRow {
+  id: string;
+  legacyModule?: LegacyPricingModule | 'unclassified';
+  fileName: string;
+  agentName: string;
+  lineCount: number;
+  sheetCount: number;
+  countryCount: number;
+  markupRule?: AgentMarkupSummary;
+  status: 'synced' | 'default' | 'disabled' | 'missing';
+  issues?: string[];
+}
+
+export interface PricingSyncHealthResponse {
+  rows: PricingSyncHealthRow[];
+  orphanRules: AgentMarkupSummary[];
+  stats: { sources: number; agents: number; lines: number; activeAgents: number; issueCount?: number };
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+/**
+ * Module-level state for rebuilding retained price books after a parser or
+ * matcher rule revision is deployed. Counts are price-book based so the UI
+ * can show deterministic progress while a large workbook is being parsed.
+ */
+export interface PricingRuleRefreshModuleProgress {
+  module: PriceBookImportTargetModule;
+  ruleVersion: number;
+  totalBooks: number;
+  currentBooks: number;
+  pendingBooks: number;
+  runningBooks: number;
+  failedBooks: number;
+  unavailableBooks: number;
+  progressPercent: number;
+  latestRuleApplied: boolean;
+  updatedAt?: string;
+}
+
+export interface PricingRuleRefreshProgressResponse {
+  generatedAt: string;
+  modules: PricingRuleRefreshModuleProgress[];
+}
+
 export interface PriceBookRemarkUpdateInput {
+  /** 价格表管理员填写的内部自定义备注，不属于渠道要求。 */
+  customRemark?: string;
+  /** @deprecated 使用 customRemark。保留用于旧客户端兼容。 */
   remark?: string;
 }
 
 export interface AgentMarkupSummary {
   id: string;
+  legacyModule?: LegacyPricingModule | 'unclassified';
+  priceBookId?: string;
   agentName: string;
   channelName?: string;
   realChannelName?: string;
   destinationCountry?: string;
+  sourcePriceBooks?: Array<{ priceBookId: string; fileName: string; lineCount: number }>;
+  activeLineCount?: number;
+  retainedOnly?: boolean;
+  markupDisplayMode?: AgentMarkupDisplayMode;
+  defaultMarkupDisplay?: string;
+  markupRange?: string;
+  markupBuckets?: AgentMarkupBucket[];
   markupPerKg: number;
   markupType?: AgentMarkupType;
   markupValue?: number;
+  markupUnit?: AgentMarkupUnit;
+  minChargeableValue?: number;
+  maxChargeableValue?: number;
   priority?: number;
   ruleCount?: number;
   hitCount?: number;
@@ -633,9 +1105,97 @@ export interface AgentMarkupSummary {
 }
 
 export type AgentMarkupType = 'WEIGHT' | 'PER_SHIPMENT' | 'FIXED' | 'PERCENT';
+export type AgentMarkupUnit = 'KG' | 'CBM';
 export type AgentMarkupStatusFilter = 'ALL' | 'ENABLED' | 'DISABLED';
+export type AgentMarkupDisplayMode = 'UNIFORM' | 'MIXED' | 'RETAINED_ONLY';
+export type PriceBookRowMarkupSource = 'LINE_CUSTOM' | 'AGENT_DEFAULT' | 'VIRTUAL_DEFAULT';
+
+/** 管理员查价及线路阶梯工作台使用的可解释报价链路；业务员响应不得返回。 */
+export interface PricingCalculationBreakdown {
+  chargeable: { unit: AgentMarkupUnit; value: number };
+  cost: {
+    priceBookId: string;
+    sourceSheetName?: string;
+    weightSegmentLabel: string;
+    unitPrice: number;
+  };
+  markup: {
+    source: 'LINE_TIER' | 'AGENT_DEFAULT' | 'VIRTUAL_DEFAULT';
+    ruleId?: string;
+    rangeLabel?: string;
+    type: AgentMarkupType;
+    configuredValue: number;
+    effectiveUnitMarkup?: number;
+    totalMarkup: number;
+  };
+  sale: { unitPrice: number; totalPrice: number };
+}
+
+export interface MarkupRoutePreviewInput {
+  priceBookId: string;
+  agentName: string;
+  channelName: string;
+  realChannelName?: string;
+  destinationCountry: string;
+  markupUnit: AgentMarkupUnit;
+  chargeableValue: number;
+}
+
+export interface MarkupRoutePreviewResponse {
+  route: {
+    priceBookId: string;
+    agentName: string;
+    channelName: string;
+    realChannelName: string;
+    destinationCountry: string;
+    markupUnit: AgentMarkupUnit;
+    sourceSheets: string[];
+  };
+  rows: PriceBookRowSummary[];
+  rules: AgentMarkupSummary[];
+  selectedCostRowId?: string;
+  calculation?: PricingCalculationBreakdown;
+}
+
+export interface MarkupRouteTierInput {
+  minChargeableValue: number;
+  maxChargeableValue?: number;
+  markupValue: number;
+}
+
+export interface MarkupRouteTierReplaceInput extends MarkupRoutePreviewInput {
+  tiers: MarkupRouteTierInput[];
+}
+
+export interface AgentMarkupBucket {
+  markupPerKg: number;
+  lineCount: number;
+}
+
+export interface AgentChannelCustomRemarkSummary {
+  id: string;
+  legacyModule: LegacyPricingModule;
+  agentName: string;
+  channelName: string;
+  realChannelName?: string;
+  content: string;
+  enabled: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AgentChannelCustomRemarkInput {
+  legacyModule: LegacyPricingModule;
+  agentName: string;
+  channelName: string;
+  realChannelName?: string;
+  content: string;
+  enabled?: boolean;
+}
 
 export interface AgentMarkupCreateInput {
+  legacyModule?: LegacyPricingModule;
+  priceBookId?: string;
   agentName: string;
   channelName?: string;
   realChannelName?: string;
@@ -643,11 +1203,16 @@ export interface AgentMarkupCreateInput {
   markupPerKg: number;
   markupType?: AgentMarkupType;
   markupValue?: number;
+  markupUnit?: AgentMarkupUnit;
+  minChargeableValue?: number;
+  maxChargeableValue?: number;
   priority?: number;
   enabled?: boolean;
 }
 
 export interface AgentMarkupUpdateInput {
+  legacyModule?: LegacyPricingModule;
+  priceBookId?: string;
   agentName?: string;
   channelName?: string;
   realChannelName?: string;
@@ -655,17 +1220,23 @@ export interface AgentMarkupUpdateInput {
   markupPerKg?: number;
   markupType?: AgentMarkupType;
   markupValue?: number;
+  markupUnit?: AgentMarkupUnit;
+  minChargeableValue?: number;
+  maxChargeableValue?: number;
   priority?: number;
   enabled?: boolean;
 }
 
 export interface AgentMarkupListQuery {
+  legacyModule?: LegacyPricingModule | 'unclassified';
+  priceBookId?: string;
   agentName?: string;
   channelName?: string;
   realChannelName?: string;
   destinationCountry?: string;
   status?: AgentMarkupStatusFilter;
   detail?: boolean;
+  includeHits?: boolean;
   page?: number;
   pageSize?: number;
 }
@@ -732,12 +1303,15 @@ export interface PriceLookupRequest {
   heightCm?: number;
   packageCount?: number;
   unitActualWeightKg?: number;
+  weightBand?: string;
   markupRules?: AgentMarkupSummary[];
 }
 
 export interface PriceLookupRecommendation {
   price: Omit<PriceBookRowSummary, 'costPerKg'> & { costPerKg?: number };
   markup?: AgentMarkupSummary;
+  /** 仅具备成本与加价拆分权限的内部角色返回。 */
+  calculation?: PricingCalculationBreakdown;
   channelName: string;
   carrierName: string;
   agentName: string;
@@ -760,6 +1334,7 @@ export interface PriceLookupRecommendation {
   remark?: string;
   productSurchargeRemark?: string;
   specialRemark?: string;
+  customRemark?: string;
 }
 
 export interface AgentQuoteErrorSummary {
@@ -791,7 +1366,74 @@ export interface PriceLookupResponse {
   grossProfit?: number;
 }
 
-export type LegacyPricingModule = 'amazon' | 'inquiry' | 'europeExpress' | 'southAfrica';
+export type LegacyPricingModule = 'amazon' | 'inquiry' | 'europeExpress' | 'southAfrica' | 'usaAirSea' | 'canadaAirSea' | 'dubaiAirSea';
+
+/** 加拿大空海查询的收货地址类型。私人地址与亚马逊仓价格必须互斥匹配。 */
+export type CanadaAddressType = 'PRIVATE' | 'AMAZON';
+
+export interface DubaiPriceTableRow {
+  id: string;
+  mode: 'AIR' | 'SEA';
+  productCategory?: string;
+  region?: string;
+  serviceContent?: string;
+  priceTierLabel: string;
+  businessUnitPrice: number;
+  unit: 'RMB/KG' | 'RMB/CBM';
+  inboundRequirement?: string;
+  channelCode?: string;
+  transitLabel?: string;
+  channelRequirement?: string;
+}
+
+export interface DubaiPriceTableResponse {
+  air: DubaiPriceTableRow[];
+  sea: DubaiPriceTableRow[];
+  generatedAt: string;
+}
+
+export type DubaiPriceSheetMode = 'AIR' | 'SEA' | 'UNASSIGNED';
+export type DubaiPriceDisplayVersionStatus = 'PROCESSING' | 'READY' | 'FAILED';
+
+export interface DubaiPriceDisplayPageSummary {
+  id: string;
+  mode: Exclude<DubaiPriceSheetMode, 'UNASSIGNED'>;
+  sheetName: string;
+  pageNo: number;
+  url: string;
+}
+
+export interface DubaiPriceDisplayResponse {
+  airPages: DubaiPriceDisplayPageSummary[];
+  seaPages: DubaiPriceDisplayPageSummary[];
+  airUpdatedAt?: string;
+  seaUpdatedAt?: string;
+  updatedAt?: string;
+}
+
+export interface DubaiPriceDisplayVersionSummary {
+  id: string;
+  priceBookId?: string;
+  originalName: string;
+  status: DubaiPriceDisplayVersionStatus;
+  isActive: boolean;
+  isActiveAir: boolean;
+  isActiveSea: boolean;
+  salesSafe: boolean;
+  message?: string;
+  unassignedSheets?: string[];
+  createdAt: string;
+  updatedAt: string;
+  pages: Array<{ id: string; mode: DubaiPriceSheetMode; sheetName: string; pageNo: number }>;
+}
+
+export interface DubaiPriceDisplayVersionListResponse {
+  versions: DubaiPriceDisplayVersionSummary[];
+}
+
+export interface DubaiPriceDisplayActivateInput {
+  salesSafe: boolean;
+}
 
 export interface LegacyPricingSourceSummary {
   id: string;
@@ -814,6 +1456,8 @@ export interface LegacyPricingMetaResponse {
 export interface LegacyPricingQuoteRequest {
   module: LegacyPricingModule;
   amazonCode?: string;
+  /** 加拿大空海查询：私人地址默认匹配“非亚马逊”价格行，亚马逊仓才使用仓库前三位。 */
+  canadaAddressType?: CanadaAddressType;
   tier?: string;
   agentName?: string;
   origin?: string;
@@ -822,16 +1466,250 @@ export interface LegacyPricingQuoteRequest {
   postalCode?: string;
   address?: string;
   channel?: string;
+  /** 欧洲超大件综合查询的货物属性；未传时不过滤货物属性。 */
+  cargoType?: EuropeOversizeCargoType;
+  /** 仅用于包税/不包税并存的价格表；未传时保留全部税务口径。 */
+  taxInclusion?: 'INCLUDED' | 'EXCLUDED';
   packageInfo?: string;
   actualWeightKg?: number;
   volumeCbm?: number;
   chargeableWeightKg?: number;
+  weightBand?: string;
   lengthCm?: number;
   widthCm?: number;
   heightCm?: number;
   packageCount?: number;
   unitActualWeightKg?: number;
   onlyQuotable?: boolean;
+}
+
+export interface UsPostalRuleMatch {
+  /** 精确邮编 < 最小区间 < 前缀 < 全国通用。 */
+  priority: 1 | 2 | 3 | 4;
+  /** 同一优先级下用于选择最精确规则的值；越小越优先。 */
+  specificity: number;
+  matchedLabel: string;
+}
+
+interface UsPostalPrefixRange {
+  prefixLength: number;
+  start: number;
+  end: number;
+  matchedLabel: string;
+}
+
+/** 将 ZIP+4 规范为五位美国邮编；格式不合法时返回 undefined。 */
+export function normalizeUsPostalCode(value?: string | null): string | undefined {
+  const normalized = String(value ?? '').trim();
+  const match = normalized.match(/^(\d{5})(?:-\d{4})?$/);
+  return match?.[1];
+}
+
+/**
+ * 解析美国价格表常见的邮编规则，并返回该规则对指定 ZIP 的命中优先级。
+ * 支持：90001、90000-90999、90* / 90xxx / 邮编前缀90，以及全国通用。
+ */
+export function matchUsPostalRule(rule: string | undefined | null, postalCode: string | undefined | null): UsPostalRuleMatch | undefined {
+  const zip = normalizeUsPostalCode(postalCode);
+  const source = String(rule ?? '').trim();
+  if (!zip || !source) return undefined;
+  const normalized = source.replace(/[－—–~至到]/g, '-');
+  const zipNumber = Number(zip);
+  const candidates: UsPostalRuleMatch[] = [];
+
+  for (const match of normalized.matchAll(/\b(\d{5})(?:-\d{4})?\b/g)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    const isRangeBoundary = normalized[start - 1] === '-' || normalized[end] === '-';
+    if (!isRangeBoundary && match[1] === zip) candidates.push({ priority: 1, specificity: 0, matchedLabel: match[0] });
+  }
+  for (const match of normalized.matchAll(/\b(\d{5})\s*-\s*(\d{5})\b/g)) {
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    if (start <= end && zipNumber >= start && zipNumber <= end) {
+      candidates.push({ priority: 2, specificity: end - start, matchedLabel: match[0] });
+    }
+  }
+  for (const match of normalized.matchAll(/(?:邮编前缀\s*[:：]?\s*)?(\d{1,4})(?:\s*(?:\*|x{1,4}|X{1,4}|前缀))/g)) {
+    const prefix = match[1];
+    if (zip.startsWith(prefix)) candidates.push({ priority: 3, specificity: 5 - prefix.length, matchedLabel: match[0] });
+  }
+  for (const range of extractUsPostalPrefixRanges(normalized)) {
+    const prefix = Number(zip.slice(0, range.prefixLength));
+    if (prefix >= range.start && prefix <= range.end) {
+      candidates.push({ priority: 3, specificity: 5 - range.prefixLength, matchedLabel: range.matchedLabel });
+    }
+  }
+  if (/(?:全国通用|美国全境|全美通用|全美|nationwide|all\s*(?:us|usa|united\s*states))/i.test(normalized)) {
+    candidates.push({ priority: 4, specificity: 0, matchedLabel: '全国通用' });
+  }
+  return candidates.sort((left, right) => left.priority - right.priority || left.specificity - right.specificity)[0];
+}
+
+/**
+ * Matches the European postcode expressions used by supplier price tables.
+ * European tables normally list two-digit postcode prefixes (for example
+ * `20 22 33`), while a small number of routes use a full range such as
+ * `10000-50999`. `全境` deliberately has no postcode restriction.
+ */
+export function matchesEuropeanPostalRule(rule: string | undefined | null, postalCode: string | undefined | null): boolean {
+  const source = String(rule ?? '').trim().replace(/[－—–~至到]/g, '-');
+  if (!source || /(?:全境|全国通用|不限邮编|全欧)/i.test(source)) return true;
+  const digits = String(postalCode ?? '').replace(/\D/g, '');
+  // A caller may use a table without postcode input. Do not turn that into a
+  // false negative; the UI requires it where the selected route needs it.
+  if (!digits) return true;
+
+  const excludedRange = source.match(/(?:非|其他)\s*(\d{4,6})\s*-\s*(\d{4,6})/);
+  if (excludedRange) {
+    const width = excludedRange[1].length;
+    const value = Number(digits.slice(0, width));
+    return value < Number(excludedRange[1]) || value > Number(excludedRange[2]);
+  }
+
+  const fullRanges = Array.from(source.matchAll(/(?<!\d)(\d{4,6})\s*-\s*(\d{4,6})(?!\d)/g));
+  if (fullRanges.length) {
+    return fullRanges.some((match) => {
+      const width = match[1].length;
+      const value = Number(digits.slice(0, width));
+      return digits.length >= width && value >= Number(match[1]) && value <= Number(match[2]);
+    });
+  }
+
+  const prefix = digits.slice(0, 2);
+  if (!/^\d{2}$/.test(prefix)) return false;
+  const prefixes = Array.from(source.matchAll(/(?<!\d)(\d{2})(?!\d)/g)).map((match) => match[1]);
+  return prefixes.length ? prefixes.includes(prefix) : true;
+}
+
+/** 供导入体检使用：仅允许可解释的 ZIP 精确值、区间、前缀或全国通用。 */
+export function isUsPostalRuleSyntax(rule: string | undefined | null): boolean {
+  const value = String(rule ?? '').trim().replace(/[－—–~至到]/g, '-');
+  if (!value) return false;
+  if (/(?:全国通用|美国全境|全美通用|全美|nationwide|all\s*(?:us|usa|united\s*states))/i.test(value)) return true;
+  return usPostalRuleIntervals(value, 0).length > 0;
+}
+
+/** 供导入体检使用：检测两个或更多美国 ZIP 规则是否覆盖同一邮编区间。 */
+export function hasUsPostalRuleOverlap(rules: Array<string | undefined | null>): boolean {
+  const nationwide = /(?:全国通用|美国全境|全美通用|全美|nationwide|all\s*(?:us|usa|united\s*states))/i;
+  const scopedRules = rules.filter((rule) => !nationwide.test(String(rule ?? '')));
+  if (rules.filter((rule) => nationwide.test(String(rule ?? ''))).length > 1) return true;
+  const intervals = scopedRules.flatMap((rule, ruleIndex) => usPostalRuleIntervals(String(rule ?? ''), ruleIndex));
+  for (let left = 0; left < intervals.length; left += 1) {
+    for (let right = left + 1; right < intervals.length; right += 1) {
+      if (intervals[left].ruleIndex !== intervals[right].ruleIndex
+        && intervals[left].start <= intervals[right].end
+        && intervals[right].start <= intervals[left].end) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Postal regions are intentionally repeated across weight tiers.  They only
+ * compete when the same display channel, price group and weight interval each
+ * provide overlapping regions.  This keeps a normal 12/45/101KG table from
+ * being marked unhealthy merely because every tier serves the same ZIP zone.
+ */
+export function hasScopedUsPostalRuleOverlap(rows: Array<{
+  postalRule?: string | null;
+  channelName?: string | null;
+  businessRouteName?: string | null;
+  realChannelName?: string | null;
+  minWeightKg?: number | null;
+  maxWeightKg?: number | null;
+}>): boolean {
+  const scopes = new Map<string, Array<string | undefined | null>>();
+  for (const row of rows) {
+    const scope = [
+      String(row.channelName ?? '').trim(),
+      String(row.businessRouteName ?? row.realChannelName ?? '').trim(),
+      Number(row.minWeightKg ?? 0),
+      Number(row.maxWeightKg ?? 99999)
+    ].join('\u0001');
+    const rules = scopes.get(scope) ?? [];
+    rules.push(row.postalRule);
+    scopes.set(scope, rules);
+  }
+  return Array.from(scopes.values()).some((rules) => hasUsPostalRuleOverlap(rules));
+}
+
+function usPostalRuleIntervals(rule: string, ruleIndex: number) {
+  const normalized = rule.trim().replace(/[－—–~至到]/g, '-');
+  if (!normalized) return [] as Array<{ ruleIndex: number; start: number; end: number }>;
+  const intervals: Array<{ ruleIndex: number; start: number; end: number }> = [];
+  if (/(?:全国通用|美国全境|全美通用|全美|nationwide|all\s*(?:us|usa|united\s*states))/i.test(normalized)) {
+    intervals.push({ ruleIndex, start: 0, end: 99999 });
+  }
+  for (const match of normalized.matchAll(/\b(\d{5})\s*-\s*(\d{5})\b/g)) {
+    const start = Number(match[1]);
+    const end = Number(match[2]);
+    if (start <= end) intervals.push({ ruleIndex, start, end });
+  }
+  for (const match of normalized.matchAll(/\b(\d{5})(?:-\d{4})?\b/g)) {
+    const startAt = match.index ?? 0;
+    const endAt = startAt + match[0].length;
+    if (normalized[startAt - 1] === '-' || normalized[endAt] === '-') continue;
+    const value = Number(match[1]);
+    intervals.push({ ruleIndex, start: value, end: value });
+  }
+  for (const match of normalized.matchAll(/(?:邮编前缀\s*[:：]?\s*)?(\d{1,4})(?:\s*(?:\*|x{1,4}|X{1,4}|前缀))/g)) {
+    const prefix = match[1];
+    intervals.push({ ruleIndex, start: Number(prefix.padEnd(5, '0')), end: Number(prefix.padEnd(5, '9')) });
+  }
+  for (const range of extractUsPostalPrefixRanges(normalized)) {
+    const padding = 5 - range.prefixLength;
+    intervals.push({
+      ruleIndex,
+      start: range.start * (10 ** padding),
+      end: range.end * (10 ** padding) + (10 ** padding - 1)
+    });
+  }
+  return intervals;
+}
+
+/**
+ * 美国表常把五位 ZIP 的前缀写成“5-7（邮编）”“4、5、6、7邮编”或“96-99 邮编”。
+ * 仅在带邮编上下文，或整格就是该表达式时识别，避免把时效“5-7天”当作邮编规则。
+ */
+function extractUsPostalPrefixRanges(value: string): UsPostalPrefixRange[] {
+  const normalized = value.trim().replace(/[－—–~至到]/g, '-');
+  const ranges: UsPostalPrefixRange[] = [];
+  const expressionPattern = /(?:邮编\s*)?(\d{1,4}(?:\s*[-、]\s*\d{1,4})+(?:\s*[,，/\n]\s*\d{1,4}(?:\s*[-、]\s*\d{1,4})+)*)(?:\s*(?:[（(]\s*邮编(?:开头|段)?\s*[）)]|邮编(?:开头|段)?|开头|段))?/g;
+
+  for (const match of normalized.matchAll(expressionPattern)) {
+    const matchedLabel = match[0].trim();
+    const hasPostalContext = /邮编|开头|段/.test(matchedLabel) || matchedLabel === normalized;
+    if (!hasPostalContext) continue;
+    for (const part of match[1].split(/[,，/\n]/).map((item) => item.trim()).filter(Boolean)) {
+      const values = part.split(/[-、]/).map((item) => item.trim()).filter(Boolean);
+      if (values.length < 2 || values.some((item) => !/^\d{1,4}$/.test(item))) continue;
+      if (values.length === 2 && part.includes('-') && !part.includes('、')) {
+        const [startText, endText] = values;
+        const start = Number(startText);
+        const end = Number(endText);
+        if (start > end) continue;
+        // Supplier shorthand such as 8-96 means 80000-96999. The two
+        // endpoints intentionally may have different prefix lengths.
+        ranges.push({ prefixLength: Math.max(startText.length, endText.length), start, end, matchedLabel: part });
+        continue;
+      }
+      for (const prefixText of new Set(values)) {
+        const prefix = Number(prefixText);
+        ranges.push({ prefixLength: prefixText.length, start: prefix, end: prefix, matchedLabel: part });
+      }
+    }
+  }
+
+  const singlePrefixPattern = /(?:邮编\s*)?(\d{1,4})(?:\s*(?:[（(]\s*邮编(?:开头|段)?\s*[）)]|邮编(?:开头|段)?|开头|段))/g;
+  for (const match of normalized.matchAll(singlePrefixPattern)) {
+    const matchedLabel = match[0].trim();
+    const prefix = Number(match[1]);
+    ranges.push({ prefixLength: match[1].length, start: prefix, end: prefix, matchedLabel });
+  }
+
+  return ranges;
 }
 
 export interface LegacyPricingRecommendation {
@@ -843,15 +1721,17 @@ export interface LegacyPricingRecommendation {
   origin?: string;
   channelName: string;
   serviceName?: string;
+  transportMode?: EuropeTransportMode;
+  cargoType?: EuropeOversizeCargoType;
   warehouseCode?: string;
   destinationCountry?: string;
   postalRule?: string;
   weightSegmentLabel: string;
   quoteMode: 'kg' | 'cbm' | 'tier';
   tierLabel?: string;
-  costUnitPrice: number;
+  costUnitPrice?: number;
   salesUnitPrice: number;
-  costTotal: number;
+  costTotal?: number;
   salesTotal: number;
   grossProfit?: number;
   chargeableWeightKg: number;
@@ -860,8 +1740,11 @@ export interface LegacyPricingRecommendation {
   densityDiscountLabel?: string;
   transitLabel?: string;
   markup?: AgentMarkupSummary;
+  /** 仅具备成本与加价拆分权限的内部角色返回。 */
+  calculation?: PricingCalculationBreakdown;
   productSurchargeRemark?: string;
   specialRemark?: string;
+  customRemark?: string;
   remark?: string;
   raw?: Record<string, unknown>;
 }
@@ -892,11 +1775,98 @@ export interface LegacyPricingSourcesResponse {
   sources: LegacyPricingSourceSummary[];
 }
 
+export interface SouthAfricaRateImageSummary {
+  id: string;
+  fileName: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  url?: string;
+  uploadedBy?: string;
+  createdAt: string;
+}
+
+export interface SouthAfricaRateImageListResponse {
+  images: SouthAfricaRateImageSummary[];
+}
+
+export interface SouthAfricaRateRuleSummary {
+  id: string;
+  category: string;
+  name: string;
+  keywords: string[];
+  ratePerCbm?: number;
+  consult: boolean;
+  remark?: string;
+  sourceImageId?: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SouthAfricaRateRuleInput {
+  category: string;
+  name: string;
+  keywords?: string[];
+  ratePerCbm?: number;
+  consult?: boolean;
+  remark?: string;
+  sourceImageId?: string;
+  enabled?: boolean;
+}
+
+export interface SouthAfricaRateRuleListResponse {
+  rules: SouthAfricaRateRuleSummary[];
+}
+
+export interface SouthAfricaLookupRequest {
+  productName: string;
+  volumeCbm: number;
+  actualWeightKg?: number;
+  category?: string;
+  packageInfo?: string;
+}
+
+export interface SouthAfricaLookupResult {
+  id: string;
+  category: string;
+  materialName: string;
+  matchedKeywords: string[];
+  consult: boolean;
+  ratePerCbm?: number;
+  volumeCbm: number;
+  actualWeightKg?: number;
+  chargeableCbm: number;
+  freightFee?: number;
+  riskFee?: number;
+  documentFee?: number;
+  totalFee?: number;
+  formulaText: string;
+  remark?: string;
+  sourceImage?: SouthAfricaRateImageSummary;
+  quoteText: string;
+}
+
+export interface SouthAfricaLookupResponse {
+  query: SouthAfricaLookupRequest;
+  result?: SouthAfricaLookupResult;
+  recommendations: SouthAfricaLookupResult[];
+  pendingReview?: {
+    id: string;
+    productName: string;
+    volumeCbm: number;
+    actualWeightKg?: number;
+    packageInfo?: string;
+    createdAt: string;
+  };
+}
+
 export type WarehousePackageStatus = 'PENDING' | 'RECEIVED' | 'CONSOLIDATED' | 'SHIPPED' | 'TALLIED_ARCHIVED';
 export type WarehouseConsolidationMode = 'MERGE_ONLY' | 'MERGE_AND_SHIP';
 export type WarehouseRoundingRule = 'NONE' | 'HALF_UP' | 'INTEGER_UP';
 export type WarehouseTallyTaskStatus = 'PENDING' | 'COMPLETED';
 export type WarehouseTallyLabelStatus = 'NOT_GENERATED' | 'GENERATED';
+export type WarehouseMeasurementStatus = 'MEASURED' | 'PENDING_REMEASURE';
 
 export interface WarehousePackageSummary {
   id: string;
@@ -916,6 +1886,9 @@ export interface WarehousePackageSummary {
   archivedAt?: string;
   tallyTaskId?: string;
   tallyTaskNo?: string;
+  /** Only true when a matching warehouse tally task has actually completed. */
+  tallyCompleted?: boolean;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   shipmentId?: string;
   receivingChannel: string;
@@ -941,6 +1914,9 @@ export interface WarehousePackageSummary {
   remark?: string;
   manualException?: string;
   scanSource?: string;
+  measurementStatus?: WarehouseMeasurementStatus;
+  measurementMatchedAt?: string;
+  measurementMatchedBy?: string;
   inboundAt?: string;
   receiptSourceId?: string;
   tallyStatus?: string;
@@ -971,7 +1947,36 @@ export interface WarehousePackageCreateInput {
   scanSource?: string;
 }
 
+export interface WarehouseManualReceiptCartonSpecInput {
+  weightKg: number;
+  lengthCm: number;
+  widthCm: number;
+  heightCm: number;
+  packageCount: number;
+}
+
+export interface WarehouseManualReceiptCreateInput extends Omit<WarehousePackageCreateInput, 'expectedTotalPackageCount' | 'packageIndex' | 'packageCount' | 'weightKg' | 'lengthCm' | 'widthCm' | 'heightCm'> {
+  cartonSpecs: WarehouseManualReceiptCartonSpecInput[];
+}
+
+export interface WarehouseManualReceiptCreateResponse {
+  packages: WarehousePackageSummary[];
+  totalCartonSpecs: number;
+  totalPackages: number;
+}
+
+export interface WarehouseManualReceiptCustomerOption {
+  code: string;
+  name: string;
+}
+
 export interface WarehousePackageUpdateInput {
+  customerCode?: string;
+  customerOrderNo?: string;
+  domesticTrackingNo?: string;
+  combinedOrderNo?: string;
+  expectedTotalPackageCount?: number;
+  packageIndex?: number;
   packageCount?: number;
   weightKg?: number;
   lengthCm?: number;
@@ -1015,6 +2020,7 @@ export interface WarehouseInStockQuery {
   domesticTrackingNo?: string;
   combinedOrderNo?: string;
   operationKeyword?: string;
+  status?: WarehousePackageStatus;
 }
 
 export type WarehouseInStockTotals = WarehouseTodayTotals;
@@ -1059,6 +2065,7 @@ export interface WarehouseConsolidationSummary {
   consolidationNo: string;
   mode: WarehouseConsolidationMode;
   shipmentId?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   packageIds: string[];
   totalPackages: number;
@@ -1117,6 +2124,7 @@ export interface WarehouseTallyTaskSummary {
   appliedPackageNo?: string;
   labelAppliedAt?: string;
   labelAppliedBy?: string;
+  outputPackages?: WarehousePackageSummary[];
 }
 
 export interface WarehouseTallyTaskListQuery {
@@ -1141,11 +2149,24 @@ export interface WarehouseTallyTaskUpdateInput {
 
 export interface WarehouseTallyTaskCompleteInput {
   packageCount: number;
-  weightKg: number;
-  lengthCm: number;
-  widthCm: number;
-  heightCm: number;
+  weightKg?: number;
+  lengthCm?: number;
+  widthCm?: number;
+  heightCm?: number;
   remark?: string;
+  /**
+   * 任务内每个最终包裹的来源与确认后件重尺。省略时保留兼容旧的单一完成动作。
+   */
+  results?: WarehouseTallyTaskPackageResultInput[];
+}
+
+export interface WarehouseTallyTaskPackageResultInput {
+  sourcePackageIds: string[];
+  packageCount: number;
+  weightKg?: number;
+  lengthCm?: number;
+  widthCm?: number;
+  heightCm?: number;
 }
 
 export interface WarehouseTallyLabelScanInput {
@@ -1227,6 +2248,13 @@ export const defaultFinanceCatalogItems: Array<Omit<FinanceCatalogItemSummary, '
   { category: 'FEE_NAME', sortOrder: 16, name: '叉车', currency: 'RMB', enabled: true },
   { category: 'FEE_NAME', sortOrder: 17, name: '送货费销', currency: 'RMB', enabled: true },
   { category: 'FEE_NAME', sortOrder: 18, name: '其他工具', currency: 'RMB', enabled: true },
+  { category: 'FEE_NAME', sortOrder: 19, name: '基础运费', currency: 'RMB', enabled: true },
+  { category: 'FEE_NAME', sortOrder: 20, name: '客户运费', currency: 'RMB', enabled: true },
+  { category: 'FEE_NAME', sortOrder: 21, name: '业务员成本', currency: 'RMB', enabled: true },
+  { category: 'FEE_NAME', sortOrder: 22, name: '业务成本', currency: 'RMB', enabled: true },
+  { category: 'FEE_NAME', sortOrder: 23, name: 'USD 附加费', currency: 'USD', enabled: true },
+  { category: 'FEE_NAME', sortOrder: 24, name: '出货成本', currency: 'RMB', enabled: true },
+  { category: 'FEE_NAME', sortOrder: 25, name: '代理运费', currency: 'RMB', enabled: true },
   { category: 'SETTLEMENT_METHOD', sortOrder: 1, name: '思远阿里', currency: 'USD', enabled: true },
   { category: 'SETTLEMENT_METHOD', sortOrder: 2, name: '科沃尔阿里', currency: 'USD', enabled: true },
   { category: 'SETTLEMENT_METHOD', sortOrder: 3, name: '华侨银行', currency: 'USD', enabled: true },
@@ -1257,6 +2285,8 @@ export interface ShipmentFinanceItemCommon {
   reconciliationStatus?: ShipmentFinanceItemStatus;
   receivedAmount?: number;
   receiptStatus?: 'UNPAID' | 'PARTIAL' | 'RECEIVED';
+  receiptMatchSource?: 'AUTO' | 'MANUAL';
+  receiptMatchHint?: string;
   receivedAt?: string;
   rmbAmount?: number;
   createdAt?: string;
@@ -1273,6 +2303,7 @@ export interface ShipmentFinanceItemCommon {
 export interface ReceivableFeeSummary {
   id: string;
   shipmentId: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   customerName: string;
   salesperson?: string;
@@ -1288,6 +2319,8 @@ export interface ReceivableFeeSummary {
   reconciliationStatus?: ShipmentFinanceItemStatus;
   receivedAmount?: number;
   receiptStatus?: 'UNPAID' | 'PARTIAL' | 'RECEIVED';
+  receiptMatchSource?: 'AUTO' | 'MANUAL';
+  receiptMatchHint?: string;
   receivedAt?: string;
   createdAt?: string;
   createdBy?: string;
@@ -1314,6 +2347,7 @@ export interface ReceivableAuditSummary extends ReceivableFeeSummary {
 }
 
 export interface ReceivableAuditListQuery {
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   customer?: string;
   customerCode?: string;
@@ -1357,6 +2391,7 @@ export interface ReceivableAuditListResponse {
 
 export interface ReceivableAuditCreateInput {
   shipmentId?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   customerOrderNo?: string;
   transferNo?: string;
@@ -1410,6 +2445,7 @@ export type FinanceDashboardSectionKey =
   | 'payables'
   | 'payment-applications'
   | 'paid-verification'
+  | 'water-receipt-arrivals'
   | 'water-receipts'
   | 'agent-bill-ai';
 
@@ -1449,10 +2485,12 @@ export interface WaterReceiptMatchSummary {
   waterReceiptId: string;
   receivableFinanceItemId: string;
   shipmentId: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   customerCode: string;
   feeName: string;
   amount: number;
+  source?: 'AUTO' | 'MANUAL';
   voided?: boolean;
   voidedAt?: string;
   createdAt?: string;
@@ -1526,11 +2564,11 @@ export interface WaterReceiptCreateInput {
   customerId?: string;
   customerCode?: string;
   site?: string;
-  receiptMethod?: string;
+  receiptMethod: string;
   receiptDate: string;
   currency?: string;
   amount: number;
-  paymentNo?: string;
+  paymentNo: string;
   remark?: string;
 }
 
@@ -1542,7 +2580,7 @@ export interface WaterReceiptUpdateInput {
   receiptDate?: string;
   currency?: string;
   amount?: number;
-  paymentNo?: string;
+  paymentNo: string;
   remark?: string;
   adjustReason?: string;
 }
@@ -1610,6 +2648,7 @@ export interface PayableAuditSummary extends PayableFeeSummary {
   customerCode: string;
   customerName: string;
   customerOrderNo?: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   transferNo?: string;
   agentChannel?: string;
@@ -1623,6 +2662,7 @@ export interface PayableAuditSummary extends PayableFeeSummary {
 }
 
 export interface PayableAuditListQuery {
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   customer?: string;
   customerCode?: string;
@@ -1665,6 +2705,7 @@ export interface PayableAuditListResponse {
 
 export interface PayableAuditCreateInput {
   shipmentId?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   customerOrderNo?: string;
   transferNo?: string;
@@ -1681,6 +2722,7 @@ export interface PayableAuditCreateInput {
 
 export interface PayableAuditShipmentMatchInput {
   shipmentId?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   customerOrderNo?: string;
   transferNo?: string;
@@ -1692,6 +2734,7 @@ export interface PayableAuditShipmentMatchSummary {
   customerCode: string;
   customerName: string;
   customerOrderNo?: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   transferNo?: string;
   salesperson?: string;
@@ -1746,6 +2789,7 @@ export interface AgentBankAccountSummary {
 }
 
 export interface AgentBankAccountInput {
+  id?: string;
   agentId?: string;
   agentName: string;
   accountName: string;
@@ -1753,6 +2797,7 @@ export interface AgentBankAccountInput {
   bankAccountNo: string;
   currency?: string;
   remark?: string;
+  enabled?: boolean;
   saveToAgent?: boolean;
 }
 
@@ -1786,6 +2831,7 @@ export interface PaymentVoucherSummary {
   pendingPaymentId?: string;
   voucherType?: 'BILL' | 'PAYMENT_RECEIPT';
   payableFinanceItemId?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   transferNo?: string;
   agentChannel?: string;
@@ -1899,6 +2945,7 @@ export interface PendingPaymentSummary {
   salesperson?: string;
   customerCode: string;
   customerName: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   transferNo?: string;
   feeName: string;
@@ -1917,6 +2964,7 @@ export interface PendingPaymentListQuery {
   agent?: string;
   salesperson?: string;
   customerCode?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   feeName?: string;
   currency?: 'ALL' | 'RMB' | 'USD';
@@ -1947,6 +2995,7 @@ export interface PaymentApplicationItemSummary {
   pendingPaymentId: string;
   payableFinanceItemId: string;
   shipmentId: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   customerCode: string;
   feeName: string;
@@ -2017,6 +3066,7 @@ export interface PaidPaymentSummary {
   agentName: string;
   salesperson?: string;
   customerCode?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   feeName?: string;
   currency: 'RMB' | 'USD';
@@ -2039,6 +3089,7 @@ export interface PaidPaymentListQuery {
   agent?: string;
   salesperson?: string;
   customerCode?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   feeName?: string;
   currency?: 'ALL' | 'RMB' | 'USD';
@@ -2158,6 +3209,7 @@ export interface BusinessCostAuditSummary extends BusinessCostFeeSummary {
   customerCode: string;
   customerName: string;
   customerOrderNo?: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   transferNo?: string;
   agentName?: string;
@@ -2171,6 +3223,7 @@ export interface BusinessCostAuditSummary extends BusinessCostFeeSummary {
 }
 
 export interface BusinessCostAuditListQuery {
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   customer?: string;
   customerCode?: string;
@@ -2215,6 +3268,7 @@ export interface BusinessCostAuditListResponse {
 
 export interface BusinessCostAuditCreateInput {
   shipmentId?: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   customerOrderNo?: string;
   transferNo?: string;
@@ -2265,6 +3319,7 @@ export interface BusinessCostAuditExportResponse {
 
 export interface ShipmentFinanceDetailSummary {
   shipmentId: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   agentName?: string;
   receivables: ReceivableFeeSummary[];
@@ -2305,10 +3360,24 @@ export interface ShipmentReviewEventSummary {
   type: 'STATUS' | 'TRACKING' | 'AUDIT';
   title: string;
   note?: string;
+  stage?: string;
+  sourceModule?: string;
+  action?: string;
   fromStatus?: ShipmentStatus;
   toStatus?: ShipmentStatus;
   createdAt: string;
   operator?: string;
+}
+
+export interface ShipmentLogisticsTrackingEventSummary {
+  id: string;
+  trackingAt: string;
+  node: string;
+  location?: string;
+  carrier?: string;
+  transferNo?: string;
+  rawContent?: string;
+  source: string;
 }
 
 export interface ShipmentReviewDetailSummary {
@@ -2316,11 +3385,39 @@ export interface ShipmentReviewDetailSummary {
   packages: ShipmentReviewPackageSummary[];
   finance: ShipmentFinanceDetailSummary;
   events: ShipmentReviewEventSummary[];
-  trackingEvents: ShipmentReviewEventSummary[];
+  internalTrackingEvents: ShipmentReviewEventSummary[];
+  logisticsTrackingEvents: ShipmentLogisticsTrackingEventSummary[];
   problemTickets: ProblemTicketSummary[];
   files: Array<{ id: string; name: string; type: string; url?: string; createdAt?: string }>;
   approvalWarnings: string[];
   overdue: boolean;
+}
+
+/**
+ * 待审核详情页允许直接修正的基础资料。
+ * 不包含状态、重量费用、代理及审核字段，避免绕过既有审核和财务流程。
+ */
+export interface ShipmentReviewBasicUpdateInput {
+  customerCode: string;
+  customerOrderNo: string;
+  companyChannelName: string;
+  inboundNo?: string;
+  productName: string;
+  destinationCountry: string;
+  declarationRequired: boolean;
+  cargoType: string;
+  subOrderNo?: string;
+  fbaInboundNo?: string;
+  settlementMethod: string;
+  remark?: string;
+  receiverName?: string;
+  receiverCompany?: string;
+  receiverPhone?: string;
+  receiverAddress?: string;
+  receiverCountry?: string;
+  receiverState?: string;
+  receiverPostalCode?: string;
+  fbaWarehouseCode?: string;
 }
 
 export interface ShipmentReviewRejectInput {
@@ -2375,6 +3472,7 @@ export interface OrderEntryShipmentInput {
   customerId?: string;
   customerCode?: string;
   customerOrderNo: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   entryAt?: string;
   outboundAt?: string;
@@ -2403,6 +3501,13 @@ export interface OrderEntryShipmentInput {
   receiverPostalCode?: string;
   fbaWarehouseCode?: string;
   remark?: string;
+  packageCount?: number;
+  actualWeightKg?: number;
+  volumeCbm?: number;
+  chargeableWeightKg?: number;
+  cargoDataSource?: 'AUTO_MATCHED' | 'MANUAL_ADJUSTED';
+  chargeWeightOverridden?: boolean;
+  reviewValidationError?: string;
 }
 
 export interface OrderEntryFinanceItemInput extends ShipmentFinanceItemCreateInput {
@@ -2423,8 +3528,9 @@ export interface OrderEntryCreateInput {
 export interface OrderEntryDraftUpdateInput extends OrderEntryCreateInput {}
 
 export interface OrderEntryWarehousePackageQuery {
-  customerCode: string;
+  customerCode?: string;
   domesticTrackingNo?: string;
+  packageIds?: string[];
 }
 
 export interface OrderEntryDetailSummary {
@@ -2540,6 +3646,7 @@ export interface AgentSummary {
   code?: string;
   shortName?: string;
   name: string;
+  createdAt: string;
   integrationType?: AgentIntegrationType;
   warehouseAddress1?: string;
   warehouseAddress2?: string;
@@ -2547,7 +3654,22 @@ export interface AgentSummary {
   warehouseContact?: string;
   invoiceTemplateName?: string;
   invoiceTemplateUrl?: string;
+  trackingWebsite?: string;
   enabled: boolean;
+}
+
+export interface AgentDeleteFailure {
+  id: string;
+  shortName?: string;
+  name?: string;
+  reasons: string[];
+}
+
+export interface AgentDeleteResponse {
+  successCount: number;
+  deletedAgents: AgentSummary[];
+  failures: AgentDeleteFailure[];
+  hardDelete: true;
 }
 
 export interface CarrierSummary {
@@ -2571,6 +3693,81 @@ export interface ChannelSummary {
   largeCargoThresholdKg?: number;
   remoteAreaRule: string;
   enabled: boolean;
+}
+
+export interface CompanyChannelWeightPackage {
+  packageCount: number;
+  /** Actual weight of one package. */
+  weightKg: number;
+  lengthCm: number;
+  widthCm: number;
+  heightCm: number;
+}
+
+export interface CompanyChannelCargoData {
+  packageCount: number;
+  actualWeightKg: number;
+  volumeCbm: number;
+}
+
+export function calculateCompanyChannelChargeWeight(
+  channel: Pick<ChannelSummary, 'volumeDivisor' | 'multiPieceWeightRule' | 'singleWeightRoundingRule' | 'settlementWeightRule' | 'settlementWeightRoundingRule' | 'largeCargoThresholdKg'>,
+  packages: CompanyChannelWeightPackage[]
+): number {
+  const divisor = Math.max(1, Number(channel.volumeDivisor) || 5000);
+  const rounding = (weight: number) => {
+    if (channel.singleWeightRoundingRule === 'CEIL') return Math.ceil(weight);
+    if (channel.singleWeightRoundingRule === 'HALF_BELOW_HALF_UP') return Math.ceil(weight * 2) / 2;
+    return weight;
+  };
+  const rows = packages.map((pkg) => {
+    const packageCount = Math.max(1, Number(pkg.packageCount) || 1);
+    // Warehouse rows record the actual weight and dimensions of one package;
+    // a row's packageCount therefore applies to both actual and volumetric weight.
+    const actual = Math.max(0, Number(pkg.weightKg) || 0) * packageCount;
+    const volumetric = Math.max(0, (Number(pkg.lengthCm) || 0) * (Number(pkg.widthCm) || 0) * (Number(pkg.heightCm) || 0) * packageCount / divisor);
+    const compared = channel.settlementWeightRule === 'ACTUAL_ONLY' ? actual : Math.max(actual, volumetric);
+    return { actual, volumetric, compared };
+  });
+  const actualTotal = rows.reduce((sum, row) => sum + row.actual, 0);
+  const volumetricTotal = rows.reduce((sum, row) => sum + row.volumetric, 0);
+  let weight: number;
+  if (channel.multiPieceWeightRule === 'COMPARE_ROUND_THEN_SUM') {
+    weight = rows.reduce((sum, row) => sum + rounding(row.compared), 0);
+  } else if (channel.multiPieceWeightRule === 'COMPARE_THEN_SUM') {
+    weight = rows.reduce((sum, row) => sum + row.compared, 0);
+  } else {
+    weight = channel.settlementWeightRule === 'ACTUAL_ONLY' ? actualTotal : Math.max(actualTotal, volumetricTotal);
+    if (channel.multiPieceWeightRule === 'SUM_THEN_COMPARE_ROUND') weight = rounding(weight);
+  }
+  const largeThreshold = Math.max(0, Number(channel.largeCargoThresholdKg) || 21);
+  if (channel.settlementWeightRoundingRule === 'LARGE_1_SMALL_0_5') {
+    weight = weight >= largeThreshold ? Math.ceil(weight) : Math.ceil(weight * 2) / 2;
+  } else if (channel.settlementWeightRoundingRule === 'LARGE_0_1_SMALL_NONE' && weight >= largeThreshold) {
+    weight = Math.ceil(weight * 10) / 10;
+  } else if (channel.settlementWeightRoundingRule === 'MIN_HALF') {
+    weight = Math.max(0.5, weight);
+  }
+  return Math.round(weight * 100) / 100;
+}
+
+/**
+ * Manual order-entry cargo is an aggregate record. Its declared CBM is
+ * compared as one batch while retaining the selected company-channel rules.
+ */
+export function calculateCompanyChannelChargeWeightFromCargo(
+  channel: Pick<ChannelSummary, 'volumeDivisor' | 'multiPieceWeightRule' | 'singleWeightRoundingRule' | 'settlementWeightRule' | 'settlementWeightRoundingRule' | 'largeCargoThresholdKg'>,
+  cargo: CompanyChannelCargoData
+): number {
+  const volumeCbm = Math.max(0, Number(cargo.volumeCbm) || 0);
+  return calculateCompanyChannelChargeWeight(channel, [{
+    packageCount: 1,
+    weightKg: Math.max(0, Number(cargo.actualWeightKg) || 0),
+    // 1 CBM = 1,000,000 cubic centimetres.
+    lengthCm: volumeCbm * 1_000_000,
+    widthCm: 1,
+    heightCm: 1
+  }]);
 }
 
 export interface AgentChannelSummary {
@@ -2674,6 +3871,7 @@ export interface AgentCreateInput {
   warehouseContact?: string;
   invoiceTemplateName?: string;
   invoiceTemplateUrl?: string;
+  trackingWebsite?: string;
 }
 
 export interface AgentUpdateInput extends AgentCreateInput {
@@ -2815,6 +4013,7 @@ export interface ShipmentImportValidationResult {
 export interface ShipmentCreateInput {
   customerId?: string;
   customerOrderNo: string;
+  outboundOrderNo?: string;
   systemOrderNo?: string;
   entryAt?: string;
   transferNo?: string;
@@ -2830,6 +4029,7 @@ export interface ShipmentCreateInput {
   receivableWeightKg: number;
   agentWeightKg?: number;
   channelId?: string;
+  agentId?: string;
   receivingChannel?: string;
   initialStatus?: ShipmentStatus;
   latestTracking?: string;
@@ -2838,6 +4038,10 @@ export interface ShipmentCreateInput {
   sensitive?: boolean;
   cargoType?: string;
   volumeCbm?: number;
+  actualWeightKg?: number;
+  cargoDataSource?: 'AUTO_MATCHED' | 'MANUAL_ADJUSTED';
+  chargeWeightOverridden?: boolean;
+  reviewValidationError?: string;
   settlementMethod?: string;
   tradeTerms?: string;
   fbaInboundNo?: string;
@@ -2868,15 +4072,53 @@ export interface ShipmentActionResponse {
   message: string;
 }
 
+export interface ShipmentInternalFlowLogItem {
+  key: string;
+  stage: string;
+  happenedAt?: string;
+  operator?: string;
+  summary: string;
+}
+
+export interface ShipmentInternalFlowLogResponse {
+  shipmentId: string;
+  systemOrderNo: string;
+  items: ShipmentInternalFlowLogItem[];
+}
+
+export interface NavigationUnreadBadgeItem {
+  moduleKey: string;
+  sectionKey?: string;
+  unreadCount: number;
+  displayCount: string;
+  latestWatermark?: string;
+}
+
+export interface NavigationUnreadBadgesResponse {
+  items: NavigationUnreadBadgeItem[];
+}
+
+export interface NavigationReadStateInput {
+  moduleKey: string;
+  sectionKey?: string;
+}
+
 export interface TrackingEventInput {
   status: string;
   happenedAt: string;
   visibleToCustomer?: boolean;
+  location?: string;
+  carrier?: string;
+  transferNo?: string;
+  rawContent?: string;
+  source?: 'CARRIER_API' | 'THIRD_PARTY' | 'MANUAL_IMPORT' | 'MANUAL_ENTRY';
 }
 
 export interface ProblemTicketCreateInput {
   reason: string;
   customerVisible?: boolean;
+  tags?: string[];
+  pushToSales?: boolean;
 }
 
 export interface ProblemTicketSummary {
@@ -2889,7 +4131,21 @@ export interface ProblemTicketSummary {
   customerVisible: boolean;
   createdAt: string;
   closedAt?: string;
+  closedBy?: string;
+  closeReason?: string;
+  assistanceReason?: string;
+  assistanceRequestedAt?: string;
+  tagSnapshot?: string[];
   replies: Array<{ id: string; author: string; message: string; createdAt: string }>;
+}
+
+export interface CommonTagSummary {
+  id: string;
+  name: string;
+  scene: 'PROBLEM_TICKET';
+  enabled: boolean;
+  customerVisibleAllowed: boolean;
+  sortOrder: number;
 }
 
 export type AutomationPriority = 'urgent' | 'high' | 'normal';
@@ -2982,7 +4238,7 @@ export const productModules: ProductModule[] = [
     name: '仓库管理',
     surface: '员工端',
     phase: 'phase-one',
-    capabilities: ['待出库订单', '包裹明细', '理货管理', '面单队列&待仓库出货', '收货交接单'],
+    capabilities: ['待出库订单', '包裹明细', '理货管理', '面单队列&待仓库出货', '已出库'],
     aiEnhancements: ['重量异常识别', '理货风险提示', '收货资料补全']
   },
   {
@@ -3441,43 +4697,82 @@ export function calculateTransitTimeLabel(shipment: Shipment, now: string | Date
 }
 
 export function createBulkTrackingImportResult(rows: BulkTrackingImportRow[], shipments: Shipment[]): BulkTrackingImportResult {
-  const latestRowsByOrderNo = new Map<string, BulkTrackingImportRow>();
+  const updates: BulkTrackingUpdate[] = [];
+  const unmatchedOrderNos: string[] = [];
+  const conflictOrderNos: string[] = [];
+  const errorRows: Array<{ rowNumber: number; customerOrderNo?: string; reason: string }> = [];
+  const latestByShipmentId = new Map<string, BulkTrackingUpdate>();
+  const previewMetaByShipmentId = new Map<string, { systemOrderNo: string; matchedOrderNo: string; trackingCount: number }>();
+  const addUnique = (list: string[], value: string) => {
+    if (!list.includes(value)) list.push(value);
+  };
 
   for (const row of rows) {
     const orderNo = String(row.customerOrderNo ?? '').trim();
     const description = String(row.description ?? '').trim();
-    if (!orderNo || !description) {
+    const rowNumber = row.rowNumber ?? rows.indexOf(row) + 2;
+    const trackingTime = parseTrackingDateValue(row.date);
+    if (!orderNo || !String(row.date ?? '').trim() || !description) {
+      errorRows.push({ rowNumber, customerOrderNo: orderNo || undefined, reason: '缺少运单号、轨迹日期时间或轨迹信息' });
+      continue;
+    }
+    if (!trackingTime) {
+      errorRows.push({ rowNumber, customerOrderNo: orderNo, reason: '轨迹日期时间无法识别' });
       continue;
     }
 
-    const current = latestRowsByOrderNo.get(orderNo);
-    if (!current || compareTrackingDate(row.date, current.date) > 0) {
-      latestRowsByOrderNo.set(orderNo, { ...row, customerOrderNo: orderNo, description });
-    }
-  }
-
-  const updates: BulkTrackingUpdate[] = [];
-  const unmatchedOrderNos: string[] = [];
-
-  for (const [orderNo, row] of latestRowsByOrderNo) {
-    const shipment = shipments.find((item) =>
-      [item.customerOrderNo, item.systemOrderNo, item.transferNo].filter(Boolean).some((value) => String(value).trim() === orderNo)
+    const matchedShipments = shipments.filter((item) =>
+      [item.systemOrderNo, item.customerOrderNo, item.transferNo, item.subOrderNo].filter(Boolean).some((value) => String(value).trim() === orderNo)
     );
-
-    if (!shipment) {
-      unmatchedOrderNos.push(orderNo);
+    if (matchedShipments.length === 0) {
+      addUnique(unmatchedOrderNos, orderNo);
+      continue;
+    }
+    if (matchedShipments.length > 1) {
+      addUnique(conflictOrderNos, orderNo);
       continue;
     }
 
-    updates.push({
+    const shipment = matchedShipments[0];
+    const update: BulkTrackingUpdate = {
       shipmentId: shipment.id,
       customerOrderNo: orderNo,
       trackingDate: row.date,
-      latestTracking: formatImportedTracking(row.description, row.location)
-    });
+      latestTracking: formatImportedTracking(description, row.location),
+      description,
+      location: row.location,
+      rowNumber
+    };
+    updates.push(update);
+    const currentLatest = latestByShipmentId.get(shipment.id);
+    if (!currentLatest || compareTrackingDate(update.trackingDate, currentLatest.trackingDate) > 0) {
+      latestByShipmentId.set(shipment.id, update);
+    }
+    const meta = previewMetaByShipmentId.get(shipment.id) ?? { systemOrderNo: shipment.systemOrderNo, matchedOrderNo: orderNo, trackingCount: 0 };
+    previewMetaByShipmentId.set(shipment.id, { ...meta, trackingCount: meta.trackingCount + 1 });
   }
 
-  return { updates, unmatchedOrderNos };
+  const shipmentPreviews = [...latestByShipmentId.entries()].map(([shipmentId, latest]) => {
+    const meta = previewMetaByShipmentId.get(shipmentId);
+    return {
+      shipmentId,
+      systemOrderNo: meta?.systemOrderNo ?? latest.customerOrderNo,
+      matchedOrderNo: meta?.matchedOrderNo ?? latest.customerOrderNo,
+      trackingCount: meta?.trackingCount ?? 1,
+      latestTracking: latest.latestTracking,
+      latestTrackingDate: latest.trackingDate
+    };
+  });
+
+  return {
+    updates,
+    unmatchedOrderNos,
+    conflictOrderNos,
+    errorRows,
+    shipmentPreviews,
+    rawRowCount: rows.length,
+    matchedShipmentCount: shipmentPreviews.length
+  };
 }
 
 function formatImportedTracking(description: string, location?: string): string {
@@ -3494,11 +4789,14 @@ function compareTrackingDate(left: string | number, right: string | number): num
 
 function parseTrackingDateValue(value: string | number): number {
   if (typeof value === 'number') {
-    return value;
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    const excelEpoch = Date.UTC(1899, 11, 30);
+    return excelEpoch + value * 24 * 60 * 60 * 1000;
   }
 
   const trimmed = value.trim();
-  const normalized = trimmed.replace(/\./g, '-').replace(/\//g, '-');
+  if (!trimmed) return 0;
+  const normalized = trimmed.replace(/\//g, '-');
   const parsed = new Date(normalized).getTime();
   return Number.isNaN(parsed) ? 0 : parsed;
 }
@@ -3571,43 +4869,52 @@ export function summarizeLineShipmentPool(
   todayStart.setHours(0, 0, 0, 0);
   const lastSevenStart = new Date(todayStart);
   lastSevenStart.setDate(lastSevenStart.getDate() - 6);
+  const lastThirtyStart = new Date(todayStart);
+  lastThirtyStart.setDate(lastThirtyStart.getDate() - 29);
   const statusGroup = query.statusGroup ?? 'ALL';
   const keyword = query.keyword?.trim().toLowerCase() ?? '';
   const page = Math.max(1, Number(query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
   const businessDataApprovedShipmentIds = new Set(options.businessDataApprovedShipmentIds ?? []);
+  const agentDataApprovedShipmentIds = new Set(options.agentDataApprovedShipmentIds ?? []);
   const afterSaleShipmentIds = new Set(options.afterSaleShipmentIds ?? []);
 
   const dateFiltered = shipments.filter((shipment) => {
     const createdAt = new Date(shipment.createdAt);
     if (query.datePreset === 'TODAY') return createdAt >= todayStart;
     if (query.datePreset === 'LAST_7_DAYS') return createdAt >= lastSevenStart;
+    if (query.datePreset === 'LAST_30_DAYS') return createdAt >= lastThirtyStart;
     return true;
   });
   const keywordFiltered = dateFiltered.filter((shipment) => {
     if (!keyword) return true;
+    const packageSummary = options.packageSummariesByShipmentId?.[shipment.id];
     return [
       shipment.customerName,
       shipment.customerCode,
       shipment.salesperson,
       shipment.systemOrderNo,
+      shipment.customerOrderNo,
       shipment.transferNo,
+      shipment.subOrderNo,
       shipment.channelName,
       shipment.agentName,
       shipment.destinationCountry,
-      shipment.latestTracking
+      shipment.latestTracking,
+      ...(packageSummary?.domesticTrackingNos ?? []),
+      ...(packageSummary?.combinedOrderNos ?? [])
     ].some((value) => value?.toLowerCase().includes(keyword));
   });
 
   const statusCounts = lineShipmentStatusGroups.reduce(
     (summary, group) => ({
       ...summary,
-      [group]: group === 'ALL' ? keywordFiltered.length : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, group, businessDataApprovedShipmentIds, afterSaleShipmentIds)).length
+      [group]: group === 'ALL' ? keywordFiltered.length : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, group, businessDataApprovedShipmentIds, agentDataApprovedShipmentIds, afterSaleShipmentIds)).length
     }),
     {} as Record<LineShipmentStatusGroup, number>
   );
 
-  const selectedRows = statusGroup === 'ALL' ? keywordFiltered : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, statusGroup, businessDataApprovedShipmentIds, afterSaleShipmentIds));
+  const selectedRows = statusGroup === 'ALL' ? keywordFiltered : keywordFiltered.filter((shipment) => lineShipmentBelongsToGroup(shipment, statusGroup, businessDataApprovedShipmentIds, agentDataApprovedShipmentIds, afterSaleShipmentIds));
   const sortBy = query.sortBy ?? 'createdAt';
   const sortOrder = query.sortOrder ?? 'desc';
   const sortedRows = [...selectedRows].sort((left, right) => {
@@ -3635,7 +4942,8 @@ export function summarizeLineShipmentPool(
       shipment,
       latestTracking: shipment.latestTracking,
       receivableAmount: shipment.paymentAmountCny ?? (shipment.paymentAmountUsd !== undefined ? round2(shipment.paymentAmountUsd * 7) : undefined),
-      hasProblem: lineShipmentHasRisk(shipment)
+      hasProblem: lineShipmentHasRisk(shipment),
+      packageSummary: options.packageSummariesByShipmentId?.[shipment.id]
     })),
     pagination: {
       page,
@@ -3669,12 +4977,14 @@ function lineShipmentBelongsToGroup(
   shipment: Shipment,
   group: LineShipmentStatusGroup,
   businessDataApprovedShipmentIds: Set<string>,
+  agentDataApprovedShipmentIds: Set<string>,
   afterSaleShipmentIds: Set<string>
 ): boolean {
   if (group === 'ALL') return true;
   if (group === 'REVIEW_PENDING') return shipment.status === 'DRAFT' || shipment.status === 'REVIEW_PENDING';
-  if (group === 'DATA_CONFIRM') return shipment.status === 'OUTBOUNDED' && !businessDataApprovedShipmentIds.has(shipment.id);
-  if (group === 'TRANSFER_NO') return businessDataApprovedShipmentIds.has(shipment.id) && ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status);
+  if (group === 'OUTBOUNDED') return shipment.status === 'OUTBOUNDED' && !businessDataApprovedShipmentIds.has(shipment.id) && !agentDataApprovedShipmentIds.has(shipment.id);
+  if (group === 'DATA_CONFIRM') return shipment.status === 'OUTBOUNDED' && !(businessDataApprovedShipmentIds.has(shipment.id) && agentDataApprovedShipmentIds.has(shipment.id));
+  if (group === 'TRANSFER_NO') return shipment.status === 'OUTBOUNDED' && businessDataApprovedShipmentIds.has(shipment.id) && agentDataApprovedShipmentIds.has(shipment.id) && !shipment.transferNo;
   if (group === 'PROBLEM') return lineShipmentIsProblem(shipment);
   if (group === 'AFTER_SALE') return afterSaleShipmentIds.has(shipment.id);
   return shipment.status === group;

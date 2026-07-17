@@ -30,16 +30,39 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
   const isFinanceRole = role === 'FINANCE' || role === 'UG_FINANCE' || role === 'UG_FINANCE_CASHIER';
   const canAny = (...keys: PermissionKey[]) => keys.some((key) => permissionSet.has(key));
   const rules: Array<[StaffMenuKey, boolean]> = [
-    ['workspace', permissionSet.has('workspace:access')],
-    ['pricing', canAny('pricing:lookup', 'pricing:manage')],
-    ['business', role !== 'CUSTOMER' && canAny('orders:read', 'orders:write')],
-    ['receive', canAny('warehouse:read', 'warehouse:write')],
-    ['market', canAny('routing:read', 'routing:write')],
-    ['customerService', isCustomerServiceRole && canAny('tracking:read', 'tracking:write', 'problems:read', 'problems:write')],
-    ['logisticsTracking', canAny('tracking:read', 'tracking:write')],
-    ['finance', isFinanceRole && canAny('finance:read', 'finance:settle', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:payable:read', 'finance:payable:payment', 'finance:payable:paid-read', 'finance:water-receipt:read')],
-    ['master', canAny('master-data:read', 'master-data:write', 'master-data:customers:read', 'master-data:finance:read', 'master-data:agents:read', 'master-data:agent-channels:read', 'master-data:channels:read', 'master-data:channel-categories:read', 'master-data:remote-areas:read', 'master-data:exchange-rates:read', 'master-data:assistant:read')],
-    ['settings', permissionSet.has('system:manage')]
+    ['workspace', canAny(
+      'operations:line-shipment:view',
+      'operations:ai-queue:view',
+      'operations:product-map:view',
+      'operations:import-quality:view'
+    )],
+    ['pricing', canAny('pricing:lookup:view', 'pricing:markup:read', 'pricing:price-books:read')],
+    ['business', role !== 'CUSTOMER' && canAny(
+      'business:dashboard:view',
+      'business:order-entry:view',
+      'business:review:list',
+      'business:shipment:list',
+      'business:order-ai:view'
+    )],
+    ['receive', canAny(
+      'warehouse:today-receipt:view',
+      'warehouse:in-stock:view',
+      'warehouse:tally-pending:view',
+      'warehouse:tally-completed:view',
+      'warehouse:dispatch-pending:view',
+      'warehouse:outbounded:view'
+    )],
+    ['market', canAny(
+      'market:dashboard:view',
+      'market:pending-routing:view',
+      'market:routed:view',
+      'market:weekly-routing:view'
+    )],
+    ['customerService', isCustomerServiceRole && canAny('customer-service:dashboard:view', 'customer-service:data-confirm:view', 'customer-service:transfer:view', 'customer-service:pending-routing:view', 'customer-service:waiting-departure:view', 'customer-service:departed:view', 'customer-service:arrived-port:view', 'customer-service:delivering:view', 'customer-service:signed:view', 'customer-service:problem:view')],
+    ['logisticsTracking', canAny('tracking:carrier-task:view', 'tracking:external:view')],
+    ['finance', (isFinanceRole && canAny('finance:dashboard:view', 'finance:receivable:read', 'finance:business-cost:read', 'finance:payable:read', 'finance:pending-payment:read', 'finance:paid-payment:read', 'finance:water-receipt:read', 'finance:water-match:read', 'finance:agent-bill:read'))],
+    ['master', canAny('master-data:customers:read', 'master-data:finance:read', 'master-data:agents:read', 'master-data:agent-channels:read', 'master-data:channels:read', 'master-data:channel-categories:read', 'master-data:remote-areas:read', 'master-data:exchange-rates:read', 'master-data:assistant:read')],
+    ['settings', canAny('system:user-groups:read', 'system:accounts:read', 'system:sites:read', 'system:audit:read', 'system:role-permissions:read', 'system:security:read', 'system:ai-security:read', 'system:base-config:read')]
   ];
   return rules.filter(([, visible]) => visible).map(([key]) => key);
 }

@@ -27,12 +27,28 @@ export async function loadExcel(): Promise<ExcelModule> {
 export async function readWorkbook(arrayBuffer: ArrayBuffer, excel: ExcelModule): Promise<SimpleWorkbook> {
   const workbook = excel.xlsx.read(new Uint8Array(arrayBuffer), { type: 'array', cellDates: true });
   return {
-    worksheets: workbook.SheetNames.map((sheetName) => ({
-      name: sheetName,
-      rows: (excel.xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1, raw: true, defval: null }) as unknown[][])
-        .map((row) => row.map((value) => cellToPrimitive(value as ReadCellValue | boolean | null)))
-    }))
+    worksheets: workbook.SheetNames.map((sheetName) => {
+      const worksheet = workbook.Sheets[sheetName];
+      restoreNumericCachedFormulaErrors(worksheet);
+      return {
+        name: sheetName,
+        rows: (excel.xlsx.utils.sheet_to_json(worksheet, { header: 1, raw: true, defval: null }) as unknown[][])
+          .map((row) => row.map((value) => cellToPrimitive(value as ReadCellValue | boolean | null)))
+      };
+    })
   };
+}
+
+function restoreNumericCachedFormulaErrors(worksheet: XLSX.WorkSheet) {
+  for (const address of Object.keys(worksheet)) {
+    if (address.startsWith('!')) continue;
+    const cell = worksheet[address];
+    if (cell?.t === 'e' && typeof cell.v === 'number' && Number.isFinite(cell.v)) {
+      cell.t = 'n';
+      delete cell.f;
+      delete cell.w;
+    }
+  }
 }
 
 export function createWorkbook(): SimpleWorkbook {

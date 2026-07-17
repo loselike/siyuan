@@ -2,9 +2,8 @@ import type { Key } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { AgentSummary, ChannelSummary, CustomerContactSummary, CustomerSummary, ExchangeRateSummary, FinanceCatalogItemSummary, FinanceCatalogCategory, OrderEntryCreateInput, OrderEntryDetailSummary, OrderEntryWarehousePackageQuery, ShipmentFinanceItemType, WarehousePackageSummary, WaterReceiptSummary } from '@siyuan/shared';
+import { calculateCompanyChannelChargeWeight, calculateCompanyChannelChargeWeightFromCargo, type AgentSummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type FinanceCatalogItemSummary, type FinanceCatalogCategory, type OrderEntryCreateInput, type OrderEntryDetailSummary, type OrderEntryWarehousePackageQuery, type ShipmentFinanceItemType, type WarehousePackageSummary, type WarehouseTallyTaskSummary, type WaterReceiptSummary } from '@siyuan/shared';
 import type { ApiClient, RoleKey } from '../../../apiClient';
-import { businessTypeLabels } from '@siyuan/shared';
 import { formatBeijingDateTime } from '../../shared/format';
 import {
   createSettlementMethodOptions,
@@ -20,11 +19,32 @@ import {
   type FinanceEntryFeeDraft,
   type FinanceEntryFormValues
 } from './entryModel';
+import { countryOptions as builtInCountryOptions, filterLocationOption, getStateOptions } from './countryStateOptions';
+import { WarehouseTallyHistoryChain } from '../../warehouse/WarehouseTallyHistoryChain';
 
 const { Text } = Typography;
 
 function toDatetimeLocal(value: Date) {
   return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+function getDefaultFeeName(items: FinanceCatalogItemSummary[], preferred: string) {
+  return items.find((item) => item.category === 'FEE_NAME' && item.enabled && item.name === preferred)?.name ?? '';
+}
+
+function summarizeWarehouseCargo(packages: WarehousePackageSummary[]) {
+  return packages.reduce(
+    (total, pkg) => {
+      const packageCount = Math.max(1, Number(pkg.packageCount) || 1);
+      return {
+        packageCount: total.packageCount + packageCount,
+        // 仓库记录中的重量是单件实重，方数已是该行全部件数的总方数。
+        weightKg: total.weightKg + Math.max(0, Number(pkg.weightKg) || 0) * packageCount,
+        cbm: total.cbm + Math.max(0, Number(pkg.totalCbm ?? pkg.cbm) || 0)
+      };
+    },
+    { packageCount: 0, weightKg: 0, cbm: 0 }
+  );
 }
 
 interface FinanceEntryPageProps {
@@ -37,11 +57,18 @@ interface FinanceEntryPageProps {
   onCustomerContactsChange?: (contacts: CustomerContactSummary[]) => void;
   onCatalogChange?: () => Promise<void> | void;
   onCreated?: (detail?: OrderEntryDetailSummary, submittedForReview?: boolean) => Promise<void> | void;
+  draftId?: string;
+  initialDraftDetail?: OrderEntryDetailSummary;
+  canCreateOrderEntry: boolean;
+  canSaveDraft: boolean;
+  canSubmitForReview: boolean;
+  canUseAgentFields: boolean;
+  onDraftClosed?: () => void;
   preselectedPackageIds?: string[];
   onPreselectedPackageIdsConsumed?: () => void;
 }
 
-export function FinanceEntryPage({ apiClient, role, username, financeCatalogItems, customers, customerContacts, onCustomerContactsChange, onCatalogChange, onCreated, preselectedPackageIds, onPreselectedPackageIdsConsumed }: FinanceEntryPageProps) {
+export function FinanceEntryPage({ apiClient, role, username, financeCatalogItems, customers, customerContacts, onCustomerContactsChange, onCatalogChange, onCreated, draftId, initialDraftDetail, canCreateOrderEntry, canSaveDraft, canSubmitForReview, canUseAgentFields, onDraftClosed, preselectedPackageIds, onPreselectedPackageIdsConsumed }: FinanceEntryPageProps) {
   const { message: messageApi, modal } = AntdApp.useApp();
   const [form] = Form.useForm<FinanceEntryFormValues>();
   const [packages, setPackages] = useState<WarehousePackageSummary[]>([]);
@@ -49,26 +76,35 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const [channels, setChannels] = useState<ChannelSummary[]>([]);
   const [packageLoading, setPackageLoading] = useState(false);
   const [selectedPackages, setSelectedPackages] = useState<WarehousePackageSummary[]>([]);
+  const [packagePickerSelected, setPackagePickerSelected] = useState<WarehousePackageSummary[]>([]);
   const [packageModalOpen, setPackageModalOpen] = useState(false);
   const [packageTrackingQuery, setPackageTrackingQuery] = useState('');
   const [packageQuery, setPackageQuery] = useState<OrderEntryWarehousePackageQuery | null>(null);
+  const [preselectedPackageLoadKey, setPreselectedPackageLoadKey] = useState('');
+  const [tallyHistoryPackage, setTallyHistoryPackage] = useState<WarehousePackageSummary | null>(null);
+  const [tallyHistoryTasks, setTallyHistoryTasks] = useState<WarehouseTallyTaskSummary[]>([]);
+  const [tallyHistoryLoading, setTallyHistoryLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [receiptPickerRow, setReceiptPickerRow] = useState<FinanceEntryFeeDraft | null>(null);
   const [receiptRows, setReceiptRows] = useState<WaterReceiptSummary[]>([]);
   const [exchangeRates, setExchangeRates] = useState<ExchangeRateSummary[]>([]);
   const [receiptLoading, setReceiptLoading] = useState(false);
+  const [draftLoading, setDraftLoading] = useState(false);
   const [receivables, setReceivables] = useState<FinanceEntryFeeDraft[]>([
-    createFinanceEntryFeeDraft('RECEIVABLE', { name: '运费' })
+    createFinanceEntryFeeDraft('RECEIVABLE', { name: getDefaultFeeName(financeCatalogItems, '运费') })
   ]);
   const [businessCosts, setBusinessCosts] = useState<FinanceEntryFeeDraft[]>([
-    createFinanceEntryFeeDraft('BUSINESS_COST', { name: '业务员成本' })
+    createFinanceEntryFeeDraft('BUSINESS_COST', { name: getDefaultFeeName(financeCatalogItems, '业务员成本') })
   ]);
   const [payables, setPayables] = useState<FinanceEntryFeeDraft[]>([
     createFinanceEntryFeeDraft('PAYABLE')
   ]);
-  const canEditOrderEntryPayables = role !== 'WAREHOUSE' && role !== 'CUSTOMER';
-  const canUseAgentFields = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE';
-  const canEditEntryAt = role === 'ADMIN' || role === 'FINANCE';
+  const [cargoDataSource, setCargoDataSource] = useState<'AUTO_MATCHED' | 'MANUAL_ADJUSTED'>('AUTO_MATCHED');
+  const [chargeWeightOverridden, setChargeWeightOverridden] = useState(false);
+  const [receiverContactEdited, setReceiverContactEdited] = useState(false);
+  const canEditOrderEntryPayables = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE';
+  const canViewFinanceAuditFields = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE' || role === 'BOSS' || role === 'OWNER';
+  const canEditEntryAt = role === 'ADMIN' || role === 'BOSS' || role === 'OWNER';
   const settlementRows = useMemo(() => getSettlementMethodRows(financeCatalogItems), [financeCatalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
   const agentOptions = useMemo(
@@ -83,14 +119,24 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const businessChannelOptions = useMemo(
     () => channels
       .filter((channel) => channel.enabled)
-      .map((channel) => ({ label: channel.name, value: channel.name })),
+      .map((channel) => ({ label: channel.name, value: channel.id })),
     [channels]
   );
   const createdAtText = useMemo(() => formatBeijingDateTime(new Date().toISOString()), []);
   const entryAtDefault = useMemo(() => toDatetimeLocal(new Date()), []);
-  const watchedSystemOrderNo = Form.useWatch('systemOrderNo', form);
+  const watchedCustomerOrderNo = Form.useWatch('customerOrderNo', form);
   const watchedAgentName = Form.useWatch('agentName', form);
   const watchedCustomerCode = Form.useWatch('customerCode', form);
+  const watchedReceiverCountry = Form.useWatch('receiverCountry', form);
+  const watchedReceivingChannel = Form.useWatch('receivingChannel', form);
+  const watchedPackageCount = Form.useWatch('packageCount', form);
+  const watchedActualWeightKg = Form.useWatch('actualWeightKg', form);
+  const watchedVolumeCbm = Form.useWatch('volumeCbm', form);
+  const watchedChargeableWeightKg = Form.useWatch('chargeableWeightKg', form);
+  const selectedCompanyChannel = useMemo(
+    () => channels.find((channel) => channel.id === watchedReceivingChannel || channel.name === watchedReceivingChannel),
+    [channels, watchedReceivingChannel]
+  );
   const selectedCustomer = useMemo(
     () => {
       const customerCode = watchedCustomerCode?.trim();
@@ -103,15 +149,26 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     () => selectedCustomer ? customerContacts.filter((contact) => contact.customerId === selectedCustomer.id && contact.enabled) : [],
     [customerContacts, selectedCustomer]
   );
+  const selectedReceiverContactId = Form.useWatch('receiverContactId', form);
+  const selectedReceiverContact = useMemo(
+    () => selectedCustomerContacts.find((contact) => contact.id === selectedReceiverContactId),
+    [selectedCustomerContacts, selectedReceiverContactId]
+  );
+  const countryOptions = useMemo(() => builtInCountryOptions, []);
+  const stateOptions = useMemo(() => getStateOptions(watchedReceiverCountry), [watchedReceiverCountry]);
   useEffect(() => {
-    if (!selectedCustomer) return;
-    const settlementMethod = form.getFieldValue('settlementMethod') || selectedCustomer.defaultSettlementMethod || settlementRows[0]?.name;
+    const settlementMethod = form.getFieldValue('settlementMethod') || selectedCustomer?.defaultSettlementMethod || settlementRows[0]?.name;
     form.setFieldsValue({
-      customerName: form.getFieldValue('customerName') || selectedCustomer.name,
+      // 客户名称只由客户编号对应的资料库记录带出，避免编号变更后保留旧名称。
+      customerName: selectedCustomer?.name ?? '',
       settlementMethod,
       currency: settlementMethod ? getSettlementMethodCurrency(settlementRows, settlementMethod) ?? form.getFieldValue('currency') ?? 'RMB' : form.getFieldValue('currency') ?? 'RMB'
     });
   }, [form, selectedCustomer, settlementRows]);
+  useEffect(() => {
+    form.setFieldsValue({ receiverContactId: undefined, saveReceiverToCustomer: false });
+    setReceiverContactEdited(false);
+  }, [form, selectedCustomer?.id]);
   const cargoTypeOptions = useMemo(
     () => financeCatalogItems
       .filter((item) => item.category === 'CARGO_TYPE' && item.enabled)
@@ -119,10 +176,28 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       .map((item) => ({ label: item.name, value: item.name })),
     [financeCatalogItems]
   );
+  const feeNameOptions = useMemo(
+    () => financeCatalogItems
+      .filter((item) => item.category === 'FEE_NAME' && item.enabled)
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-Hans-CN'))
+      .map((item) => ({ label: item.name, value: item.name })),
+    [financeCatalogItems]
+  );
+  const receivableDefaultFeeName = useMemo(() => getDefaultFeeName(financeCatalogItems, '运费'), [financeCatalogItems]);
+  const businessCostDefaultFeeName = useMemo(() => getDefaultFeeName(financeCatalogItems, '业务员成本'), [financeCatalogItems]);
   const feeNameSet = useMemo(
     () => new Set(financeCatalogItems.filter((item) => item.category === 'FEE_NAME').map((item) => item.name.trim())),
     [financeCatalogItems]
   );
+
+  useEffect(() => {
+    if (receivableDefaultFeeName) {
+      setReceivables((rows) => rows.map((row) => row.name ? row : { ...row, name: receivableDefaultFeeName }));
+    }
+    if (businessCostDefaultFeeName) {
+      setBusinessCosts((rows) => rows.map((row) => row.name ? row : { ...row, name: businessCostDefaultFeeName }));
+    }
+  }, [businessCostDefaultFeeName, receivableDefaultFeeName]);
   const cargoTypeSet = useMemo(
     () => new Set(financeCatalogItems.filter((item) => item.category === 'CARGO_TYPE').map((item) => item.name.trim())),
     [financeCatalogItems]
@@ -186,7 +261,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     });
   }, [apiClient, cargoTypeSet, feeNameSet, messageApi, onCatalogChange, productNameSet]);
 
-  const selectedPackageIds = useMemo<Key[]>(() => selectedPackages.map((pkg) => pkg.id), [selectedPackages]);
+  const packagePickerSelectedIds = useMemo<Key[]>(() => packagePickerSelected.map((pkg) => pkg.id), [packagePickerSelected]);
 
   const loadPackages = useCallback(async (query: OrderEntryWarehousePackageQuery) => {
     setPackageLoading(true);
@@ -220,32 +295,89 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     };
   }, [apiClient, canUseAgentFields]);
 
-  const totals = useMemo(() => selectedPackages.reduce(
-    (summary, pkg) => ({
-      packageCount: summary.packageCount + pkg.packageCount,
-      weightKg: summary.weightKg + pkg.weightKg,
-      cbm: summary.cbm + pkg.cbm,
-      chargeWeightKg: summary.chargeWeightKg + pkg.chargeableWeightKg
-    }),
-    { packageCount: 0, weightKg: 0, cbm: 0, chargeWeightKg: 0 }
-  ), [selectedPackages]);
-  const matchedWarehouseText = useMemo(() => {
-    if (!selectedPackages.length) return '-';
-    const scanTimes = selectedPackages.flatMap((pkg) => (pkg.scanTime ? [pkg.scanTime] : [])).sort();
-    if (!scanTimes.length) return '已选择仓库货物';
-    return `${formatBeijingDateTime(scanTimes[0])}${scanTimes.length > 1 ? ` - ${formatBeijingDateTime(scanTimes[scanTimes.length - 1])}` : ''}`;
-  }, [selectedPackages]);
+  const matchedCargoTotals = useMemo(() => {
+    const summary = summarizeWarehouseCargo(selectedPackages);
+    const chargeWeightKg = selectedCompanyChannel
+      ? calculateCompanyChannelChargeWeight(selectedCompanyChannel, selectedPackages)
+      : selectedPackages.reduce((sum, pkg) => sum + pkg.chargeableWeightKg, 0);
+    return { ...summary, chargeWeightKg: roundFinanceNumber(chargeWeightKg) };
+  }, [selectedCompanyChannel, selectedPackages]);
+  const totals = useMemo(() => ({
+    packageCount: Number(watchedPackageCount ?? matchedCargoTotals.packageCount) || 0,
+    weightKg: Number(watchedActualWeightKg ?? matchedCargoTotals.weightKg) || 0,
+    cbm: Number(watchedVolumeCbm ?? matchedCargoTotals.cbm) || 0,
+    chargeWeightKg: Number(watchedChargeableWeightKg ?? matchedCargoTotals.chargeWeightKg) || 0
+  }), [matchedCargoTotals, watchedActualWeightKg, watchedChargeableWeightKg, watchedPackageCount, watchedVolumeCbm]);
+  const syncCargoChargeWeightToFees = useCallback((chargeWeightKg: number) => {
+    const patch = { chargeWeightKg: chargeWeightKg > 0 ? roundFinanceNumber(chargeWeightKg) : undefined };
+    setReceivables((rows) => rows.map((row) => ({ ...row, ...patch })));
+    setBusinessCosts((rows) => rows.map((row) => ({ ...row, ...patch })));
+    setPayables((rows) => rows.map((row) => ({ ...row, ...patch })));
+  }, []);
+  const calculateCurrentCargoChargeWeight = useCallback((values: Pick<FinanceEntryFormValues, 'packageCount' | 'actualWeightKg' | 'volumeCbm'>, channel = selectedCompanyChannel) => {
+    const actualWeightKg = Number(values.actualWeightKg ?? 0);
+    const volumeCbm = Number(values.volumeCbm ?? 0);
+    if (channel) {
+      return roundFinanceNumber(calculateCompanyChannelChargeWeightFromCargo(channel, {
+        packageCount: Number(values.packageCount ?? 0),
+        actualWeightKg,
+        volumeCbm
+      }));
+    }
+    return roundFinanceNumber(Math.max(actualWeightKg, volumeCbm > 0 ? volumeCbm * 200 : 0));
+  }, [selectedCompanyChannel]);
+  const updateCargoMetric = useCallback((field: 'packageCount' | 'actualWeightKg' | 'volumeCbm' | 'chargeableWeightKg', value: number | null) => {
+    const nextValue = value === null ? undefined : Number(value);
+    form.setFieldValue(field, nextValue);
+    setCargoDataSource('MANUAL_ADJUSTED');
+    if (field === 'chargeableWeightKg') {
+      setChargeWeightOverridden(true);
+      syncCargoChargeWeightToFees(nextValue ?? 0);
+      return;
+    }
+    const values = { ...form.getFieldsValue(true), [field]: nextValue } as FinanceEntryFormValues;
+    if (!chargeWeightOverridden) {
+      const chargeWeightKg = calculateCurrentCargoChargeWeight(values);
+      form.setFieldValue('chargeableWeightKg', chargeWeightKg);
+      syncCargoChargeWeightToFees(chargeWeightKg);
+    }
+  }, [calculateCurrentCargoChargeWeight, chargeWeightOverridden, form, syncCargoChargeWeightToFees]);
+  const recalculateCargoChargeWeight = useCallback((channelValue?: string) => {
+    const channel = channelValue === undefined
+      ? selectedCompanyChannel
+      : channels.find((item) => item.id === channelValue || item.name === channelValue);
+    const warehouseCargo = summarizeWarehouseCargo(selectedPackages);
+    const useWarehouseCargo = selectedPackages.length > 0 && cargoDataSource === 'AUTO_MATCHED';
+    const chargeWeightKg = useWarehouseCargo
+      ? roundFinanceNumber(channel
+        ? calculateCompanyChannelChargeWeight(channel, selectedPackages)
+        : selectedPackages.reduce((sum, pkg) => sum + pkg.chargeableWeightKg, 0))
+      : calculateCurrentCargoChargeWeight(form.getFieldsValue(true), channel);
+    if (useWarehouseCargo) {
+      form.setFieldsValue({
+        packageCount: warehouseCargo.packageCount,
+        actualWeightKg: roundFinanceNumber(warehouseCargo.weightKg),
+        volumeCbm: roundFinanceNumber(warehouseCargo.cbm, 6)
+      });
+    }
+    form.setFieldValue('chargeableWeightKg', chargeWeightKg);
+    setChargeWeightOverridden(false);
+    syncCargoChargeWeightToFees(chargeWeightKg);
+  }, [calculateCurrentCargoChargeWeight, cargoDataSource, channels, form, selectedCompanyChannel, selectedPackages, syncCargoChargeWeightToFees]);
   const matchedSalesperson = username;
   const clearSelectedPackages = useCallback(() => {
     setSelectedPackages([]);
-    setReceivables((rows) => rows.map((row) => ({ ...row, chargeWeightKg: undefined })));
-    setBusinessCosts((rows) => rows.map((row) => ({ ...row, chargeWeightKg: undefined })));
-    setPayables((rows) => rows.map((row) => ({ ...row, chargeWeightKg: undefined })));
-  }, []);
+    form.setFieldsValue({ packageCount: undefined, actualWeightKg: undefined, volumeCbm: undefined, chargeableWeightKg: undefined });
+    setChargeWeightOverridden(false);
+    syncCargoChargeWeightToFees(0);
+  }, [form, syncCargoChargeWeightToFees]);
 
   const applyReceiverContact = (contactId?: string) => {
     const contact = selectedCustomerContacts.find((item) => item.id === contactId);
-    if (!contact) return;
+    if (!contact) {
+      setReceiverContactEdited(false);
+      return;
+    }
     form.setFieldsValue({
       receiverName: contact.name,
       receiverCompany: contact.company,
@@ -254,8 +386,26 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       receiverAddress: contact.address,
       receiverCountry: contact.country,
       receiverState: contact.state,
-      receiverPostalCode: contact.postalCode
+      receiverPostalCode: contact.postalCode,
+      saveReceiverToCustomer: false
     });
+    setReceiverContactEdited(false);
+  };
+
+  const handleEntryValuesChange = (changedValues: Partial<FinanceEntryFormValues>) => {
+    if (!selectedReceiverContact || !Object.keys(changedValues).some((field) => [
+      'receiverName',
+      'receiverCompany',
+      'receiverPhone',
+      'fbaWarehouseCode',
+      'receiverAddress',
+      'receiverCountry',
+      'receiverState',
+      'receiverPostalCode'
+    ].includes(field))) {
+      return;
+    }
+    setReceiverContactEdited(true);
   };
 
   const maybeSaveReceiverContact = async (values: FinanceEntryFormValues) => {
@@ -264,7 +414,6 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     const customer = customers.find((item) => item.code === customerCode || item.id === customerCode);
     if (!customer) return;
     const activeContacts = customerContacts.filter((contact) => contact.customerId === customer.id && contact.enabled);
-    if (activeContacts.length >= 4) return;
     const name = values.receiverName?.trim();
     if (!name) return;
     const phone = values.receiverPhone?.trim() || '';
@@ -274,7 +423,11 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       contact.name.trim() === name &&
       (contact.phone?.trim() || '') === phone &&
       (contact.address?.trim() || '') === address &&
-      (contact.fbaWarehouseCode?.trim() || '') === fbaWarehouseCode
+      (contact.fbaWarehouseCode?.trim() || '') === fbaWarehouseCode &&
+      (contact.company?.trim() || '') === (values.receiverCompany?.trim() || '') &&
+      (contact.country?.trim() || '') === (values.receiverCountry?.trim() || '') &&
+      (contact.state?.trim() || '') === (values.receiverState?.trim() || '') &&
+      (contact.postalCode?.trim() || '') === (values.receiverPostalCode?.trim() || '')
     );
     if (exists) return;
     const contact = await apiClient.createCustomerContact(customer.id, {
@@ -306,6 +459,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     updateRows(type, (rows) => [
       ...rows,
       createFinanceEntryFeeDraft(type, {
+        name: type === 'RECEIVABLE' ? receivableDefaultFeeName : type === 'BUSINESS_COST' ? businessCostDefaultFeeName : undefined,
         currency: type === 'PAYABLE' ? 'RMB' : formCurrency,
         agentName: type !== 'RECEIVABLE' ? form.getFieldValue('agentName') : undefined,
         chargeWeightKg
@@ -331,10 +485,93 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     setPackageTrackingQuery('');
     setPackageModalOpen(false);
     clearSelectedPackages();
-    setReceivables([createFinanceEntryFeeDraft('RECEIVABLE', { name: '运费' })]);
-    setBusinessCosts([createFinanceEntryFeeDraft('BUSINESS_COST', { name: '业务员成本' })]);
+    setReceivables([createFinanceEntryFeeDraft('RECEIVABLE', { name: receivableDefaultFeeName })]);
+    setBusinessCosts([createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })]);
     setPayables([createFinanceEntryFeeDraft('PAYABLE')]);
+    onDraftClosed?.();
   };
+
+  const hydrateDraftDetail = useCallback((detail: OrderEntryDetailSummary) => {
+    const shipment = detail.shipment;
+    const toFeeDraft = (type: ShipmentFinanceItemType, row: typeof detail.receivables[number] | typeof detail.businessCosts[number] | typeof detail.payables[number]) =>
+      createFinanceEntryFeeDraft(type, {
+        name: row.name,
+        currency: row.currency,
+        amount: row.amount,
+        settlementMethod: row.settlementMethod,
+        paymentNo: row.paymentNo,
+        agentName: canUseAgentFields && 'agentName' in row ? row.agentName : undefined,
+        chargeWeightKg: 'chargeWeightKg' in row ? row.chargeWeightKg : undefined,
+        unitPrice: 'unitPrice' in row ? row.unitPrice : undefined,
+        remark: row.remark
+      });
+    form.setFieldsValue({
+      entryAt: shipment.entryAt ? toDatetimeLocal(new Date(shipment.entryAt)) : undefined,
+      customerCode: shipment.customerCode,
+      customerName: shipment.customerName,
+      customerOrderNo: shipment.customerOrderNo,
+      transferNo: shipment.transferNo,
+      subOrderNo: shipment.subOrderNo,
+      inboundNo: shipment.inboundNo,
+      destinationCountry: shipment.destinationCountry,
+      receivingChannel: shipment.channelId || shipment.channelName || shipment.carrier || detail.packages[0]?.receivingChannel,
+      agentName: canUseAgentFields ? shipment.agentName : undefined,
+      declarationRequired: shipment.declarationRequired,
+      sensitive: shipment.sensitive,
+      cargoType: shipment.cargoType,
+      packageCount: shipment.packageCount,
+      actualWeightKg: shipment.actualWeightKg ?? shipment.weightKg,
+      volumeCbm: shipment.volumeCbm,
+      chargeableWeightKg: shipment.chargeableWeightKg ?? shipment.receivableWeightKg,
+      productName: shipment.productName,
+      settlementMethod: shipment.settlementMethod,
+      fbaInboundNo: shipment.fbaInboundNo,
+      receiverName: shipment.receiverName,
+      receiverCompany: shipment.receiverCompany,
+      receiverPhone: shipment.receiverPhone,
+      receiverAddress: shipment.receiverAddress,
+      receiverCountry: shipment.receiverCountry,
+      receiverState: shipment.receiverState,
+      receiverPostalCode: shipment.receiverPostalCode,
+      fbaWarehouseCode: shipment.fbaWarehouseCode,
+      remark: shipment.remark
+    });
+    setPackages(detail.packages);
+    setPackageQuery(detail.shipment.customerCode ? { customerCode: detail.shipment.customerCode } : null);
+    setSelectedPackages(detail.packages);
+    setCargoDataSource(shipment.cargoDataSource ?? 'AUTO_MATCHED');
+    setChargeWeightOverridden(Boolean(shipment.chargeWeightOverridden));
+    setReceivables(detail.receivables.length ? detail.receivables.map((row) => toFeeDraft('RECEIVABLE', row)) : [createFinanceEntryFeeDraft('RECEIVABLE', { name: receivableDefaultFeeName })]);
+    setBusinessCosts(detail.businessCosts.length ? detail.businessCosts.map((row) => toFeeDraft('BUSINESS_COST', row)) : [createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })]);
+    setPayables(detail.payables.length ? detail.payables.map((row) => toFeeDraft('PAYABLE', row)) : [createFinanceEntryFeeDraft('PAYABLE')]);
+  }, [businessCostDefaultFeeName, canUseAgentFields, form, receivableDefaultFeeName]);
+
+  useEffect(() => {
+    if (!draftId) return;
+    if (initialDraftDetail?.shipment.id === draftId) {
+      hydrateDraftDetail(initialDraftDetail);
+      setDraftLoading(false);
+      return;
+    }
+    let active = true;
+    setDraftLoading(true);
+    apiClient.orderEntryDetail(draftId)
+      .then((detail) => {
+        if (!active) return;
+        hydrateDraftDetail(detail);
+      })
+      .catch((error) => {
+        if (!active) return;
+        modal.error({ title: '草稿加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
+        onDraftClosed?.();
+      })
+      .finally(() => {
+        if (active) setDraftLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [apiClient, draftId, hydrateDraftDetail, initialDraftDetail, modal, onDraftClosed]);
 
   const openReceiptPicker = useCallback(async (row: FinanceEntryFeeDraft) => {
     const customerCode = form.getFieldValue('customerCode')?.trim();
@@ -393,9 +630,10 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       return;
     }
     setPackageTrackingQuery('');
+    setPackagePickerSelected(selectedPackages);
     setPackageModalOpen(true);
     await loadPackages({ customerCode });
-  }, [form, loadPackages, modal, selectedCustomer]);
+  }, [form, loadPackages, modal, selectedCustomer, selectedPackages]);
 
   const searchPackages = useCallback(async () => {
     const customerCode = form.getFieldValue('customerCode')?.trim();
@@ -418,56 +656,94 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const applyPackageSelection = useCallback((selectedRows: WarehousePackageSummary[]) => {
     if (!selectedRows.length) return;
     const first = selectedRows[0];
-    const totalChargeWeight = roundFinanceNumber(selectedRows.reduce((sum, pkg) => sum + pkg.chargeableWeightKg, 0));
+    const currentChannelValue = form.getFieldValue('receivingChannel');
+    // A person-selected company channel takes precedence. If it has not yet
+    // been selected, retain the former warehouse-channel prefill behaviour.
+    const companyChannel = channels.find((channel) => channel.id === currentChannelValue || channel.name === currentChannelValue)
+      ?? channels.find((channel) => channel.id === first.receivingChannel || channel.name === first.receivingChannel);
+    const warehouseCargo = summarizeWarehouseCargo(selectedRows);
+    const totalChargeWeight = roundFinanceNumber(companyChannel
+      ? calculateCompanyChannelChargeWeight(companyChannel, selectedRows)
+      : selectedRows.reduce((sum, pkg) => sum + pkg.chargeableWeightKg, 0));
     form.setFieldsValue({
       customerCode: form.getFieldValue('customerCode') || first.customerCode,
-      customerName: form.getFieldValue('customerName') || selectedCustomer?.name || `${first.customerCode}-仓库客户`,
+      customerName: selectedCustomer?.name ?? '',
       customerOrderNo: first.customerOrderNo || first.customerCode,
       inboundNo: form.getFieldValue('inboundNo') || first.domesticTrackingNo || first.combinedOrderNo,
       businessType: form.getFieldValue('businessType') || 'DEDICATED_LINE',
       packageType: form.getFieldValue('packageType') || 'WPX',
       destinationCountry: first.destinationCountry || form.getFieldValue('destinationCountry') || '美国',
-      receivingChannel: first.receivingChannel || form.getFieldValue('receivingChannel')
+      receivingChannel: companyChannel?.id || currentChannelValue || first.receivingChannel,
+      packageCount: warehouseCargo.packageCount,
+      actualWeightKg: roundFinanceNumber(warehouseCargo.weightKg),
+      volumeCbm: roundFinanceNumber(warehouseCargo.cbm, 6),
+      chargeableWeightKg: totalChargeWeight
     });
-    setReceivables((rows) => rows.map((row) => ({ ...row, chargeWeightKg: row.chargeWeightKg ?? totalChargeWeight })));
+    setCargoDataSource('AUTO_MATCHED');
+    setChargeWeightOverridden(false);
+    setReceivables((rows) => rows.map((row) => ({ ...row, chargeWeightKg: totalChargeWeight })));
     setBusinessCosts((rows) => rows.map((row) => ({
       ...row,
-      chargeWeightKg: row.chargeWeightKg ?? totalChargeWeight,
+      chargeWeightKg: totalChargeWeight,
       agentName: row.agentName || form.getFieldValue('agentName')
     })));
     setPayables((rows) => rows.map((row) => ({
       ...row,
-      chargeWeightKg: row.chargeWeightKg ?? totalChargeWeight,
+      chargeWeightKg: totalChargeWeight,
       agentName: row.agentName || form.getFieldValue('agentName')
     })));
-  }, [form, selectedCustomer?.name]);
+  }, [channels, form, selectedCustomer?.name]);
+
+  useEffect(() => {
+    if (!selectedCompanyChannel || chargeWeightOverridden) return;
+    const values = form.getFieldsValue(true) as FinanceEntryFormValues;
+    if (!values.actualWeightKg && !values.volumeCbm && !selectedPackages.length) return;
+    const chargeWeightKg = selectedPackages.length && cargoDataSource === 'AUTO_MATCHED'
+      ? matchedCargoTotals.chargeWeightKg
+      : calculateCurrentCargoChargeWeight(values);
+    form.setFieldValue('chargeableWeightKg', chargeWeightKg);
+    syncCargoChargeWeightToFees(chargeWeightKg);
+  }, [calculateCurrentCargoChargeWeight, cargoDataSource, chargeWeightOverridden, form, matchedCargoTotals.chargeWeightKg, selectedCompanyChannel, selectedPackages.length, syncCargoChargeWeightToFees]);
 
   const handlePackageSelection = (selectedRowKeys: Key[], selectedRows: WarehousePackageSummary[]) => {
     const visibleIds = new Set(packages.map((pkg) => pkg.id));
-    setSelectedPackages((current) => {
+    setPackagePickerSelected((current) => {
       const next = new Map(current.map((pkg) => [pkg.id, pkg] as const));
       visibleIds.forEach((id) => next.delete(id));
       selectedRows.forEach((row) => next.set(row.id, row));
-      const rows = Array.from(next.values());
-      if (rows.length) {
-        applyPackageSelection(rows);
-      } else {
-        setReceivables((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
-        setBusinessCosts((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
-        setPayables((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
-      }
-      return rows;
+      return Array.from(next.values());
     });
   };
 
-  const applyCurrentChargeWeightToFees = useCallback(() => {
-    const chargeWeightKg = totals.chargeWeightKg ? roundFinanceNumber(totals.chargeWeightKg) : undefined;
-    setReceivables((rows) => rows.map((row) => ({ ...row, chargeWeightKg })));
-    setBusinessCosts((rows) => rows.map((row) => ({ ...row, chargeWeightKg })));
-    setPayables((rows) => rows.map((row) => ({ ...row, chargeWeightKg })));
-  }, [totals.chargeWeightKg]);
+  const closePackageModal = useCallback(() => {
+    setPackagePickerSelected(selectedPackages);
+    setPackageModalOpen(false);
+  }, [selectedPackages]);
+
+  const confirmPackageSelection = useCallback(() => {
+    setSelectedPackages(packagePickerSelected);
+    if (packagePickerSelected.length) {
+      applyPackageSelection(packagePickerSelected);
+    } else {
+      setReceivables((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
+      setBusinessCosts((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
+      setPayables((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
+    }
+    setPackageModalOpen(false);
+  }, [applyPackageSelection, packagePickerSelected]);
 
   const preselectedPackageKey = (preselectedPackageIds ?? []).join('|');
+  useEffect(() => {
+    if (!preselectedPackageIds?.length) return;
+    const ids = new Set(preselectedPackageIds);
+    const hasAllPreselectedPackages = preselectedPackageIds.every((id) => packages.some((pkg) => pkg.id === id));
+    if (!hasAllPreselectedPackages && preselectedPackageLoadKey !== preselectedPackageKey) {
+      setPreselectedPackageLoadKey(preselectedPackageKey);
+      void loadPackages({ packageIds: Array.from(ids) });
+      return;
+    }
+  }, [loadPackages, packages, preselectedPackageIds, preselectedPackageKey, preselectedPackageLoadKey]);
+
   useEffect(() => {
     if (!preselectedPackageIds?.length || !packages.length) return;
     const ids = new Set(preselectedPackageIds);
@@ -475,11 +751,14 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     if (!rows.length) return;
     setSelectedPackages(rows);
     applyPackageSelection(rows);
+    setPreselectedPackageLoadKey('');
     onPreselectedPackageIdsConsumed?.();
   }, [applyPackageSelection, onPreselectedPackageIdsConsumed, packages, preselectedPackageIds, preselectedPackageKey]);
 
   useEffect(() => {
-    if (!watchedCustomerCode?.trim()) {
+    if (draftLoading) return;
+    const currentCode = watchedCustomerCode?.trim() || form.getFieldValue('customerCode')?.trim();
+    if (!currentCode) {
       setPackages([]);
       setPackageQuery(null);
       setPackageTrackingQuery('');
@@ -492,7 +771,6 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     if (!selectedPackages.length) {
       return;
     }
-    const currentCode = watchedCustomerCode.trim();
     if (selectedPackages.some((pkg) => pkg.customerCode !== currentCode)) {
       clearSelectedPackages();
       setPackageModalOpen(false);
@@ -502,7 +780,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       form.setFieldValue('inboundNo', undefined);
       messageApi.warning('客户编号已变更，请重新选择仓库数据。');
     }
-  }, [clearSelectedPackages, form, messageApi, selectedPackages, watchedCustomerCode]);
+  }, [clearSelectedPackages, draftLoading, form, messageApi, selectedPackages, watchedCustomerCode]);
 
   useEffect(() => {
     const customerCode = watchedCustomerCode?.trim();
@@ -523,7 +801,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       currency: normalizeFinanceCatalogCurrency(row.currency) ?? normalizeFinanceCatalogCurrency(form.getFieldValue('currency')) ?? 'RMB',
       settlementMethod: row.settlementMethod || form.getFieldValue('settlementMethod'),
       paymentNo: row.paymentNo,
-      agentName: type !== 'RECEIVABLE' ? (row.agentName || form.getFieldValue('agentName')) : undefined,
+      agentName: canUseAgentFields && type !== 'RECEIVABLE' ? (row.agentName || form.getFieldValue('agentName')) : undefined,
       chargeWeightKg: row.chargeWeightKg,
       unitPrice: row.unitPrice,
       receiptId: type === 'RECEIVABLE' ? row.receiptId : undefined,
@@ -533,31 +811,48 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     .filter((row) => row.name && row.amount > 0);
 
   const submit = async (submitForReview: boolean) => {
-    const values = await form.validateFields();
-    if (!selectedPackages.length) {
-      modal.warning({ title: '请选择仓库货物', content: '录单需要至少选择一条仓库货物。' });
+    if (!canSaveDraft) {
+      modal.warning({ title: '没有保存草稿权限', content: '请联系管理员授予“保存录单草稿”权限后再编辑。' });
+      return;
+    }
+    if (!draftId && !canCreateOrderEntry) {
+      modal.warning({ title: '没有新建录单权限', content: '当前账号只能编辑已有草稿，不能新建录单。' });
+      return;
+    }
+    if (submitForReview && !canSubmitForReview) {
+      modal.warning({ title: '没有提交审核权限', content: '草稿可以继续保存，但不能提交审核。' });
+      return;
+    }
+    const values = submitForReview
+      ? await form.validateFields()
+      : form.getFieldsValue(true);
+    const firstPackage = selectedPackages[0];
+    const customerCode = values.customerCode?.trim() || firstPackage?.customerCode;
+    if (!customerCode) {
+      modal.warning({ title: '请填写客户编号', content: '保存草稿至少需要客户编号。' });
       return;
     }
     const selectedBusinessChannel = channels.find((channel) => channel.id === values.receivingChannel || channel.name === values.receivingChannel);
     const input: OrderEntryCreateInput = {
       shipment: {
-        customerCode: values.customerCode,
-          customerOrderNo: values.customerOrderNo || values.customerCode || selectedPackages[0].customerOrderNo,
-          systemOrderNo: values.systemOrderNo,
-          entryAt: values.entryAt,
+        customerCode,
+        customerOrderNo: values.customerOrderNo || customerCode || firstPackage?.customerOrderNo || '',
+        outboundOrderNo: values.customerOrderNo?.trim(),
+        systemOrderNo: values.customerOrderNo?.trim(),
+        entryAt: values.entryAt,
+        transferNo: values.transferNo,
         subOrderNo: values.subOrderNo,
         inboundNo: values.inboundNo,
-        businessType: values.businessType ?? 'DEDICATED_LINE',
-        packageType: values.packageType ?? 'WPX',
-        destinationCountry: values.destinationCountry ?? selectedPackages[0].destinationCountry ?? '美国',
+        businessType: 'DEDICATED_LINE',
+        packageType: 'WPX',
+        destinationCountry: values.destinationCountry ?? firstPackage?.destinationCountry ?? '',
         receivingChannel: selectedBusinessChannel?.name || values.receivingChannel || values.channelName,
         channelId: selectedBusinessChannel?.id,
-        declarationRequired: Boolean(values.declarationRequired),
+        declarationRequired: values.declarationRequired ?? false,
         sensitive: Boolean(values.sensitive),
         cargoType: values.cargoType ?? '',
         productName: values.productName ?? '',
         settlementMethod: values.settlementMethod ?? '',
-        tradeTerms: values.tradeTerms,
         fbaInboundNo: values.fbaInboundNo,
         receiverName: values.receiverName,
         receiverCompany: values.receiverCompany,
@@ -567,7 +862,13 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         receiverState: values.receiverState,
         receiverPostalCode: values.receiverPostalCode,
         fbaWarehouseCode: values.fbaWarehouseCode,
-        remark: values.remark
+        remark: values.remark,
+        packageCount: totals.packageCount,
+        actualWeightKg: totals.weightKg,
+        volumeCbm: totals.cbm,
+        chargeableWeightKg: totals.chargeWeightKg,
+        cargoDataSource,
+        chargeWeightOverridden
       },
       warehousePackageIds: selectedPackages.map((pkg) => pkg.id),
       receivables: buildFeeRows(receivables, 'RECEIVABLE'),
@@ -577,23 +878,77 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     };
     setSubmitting(true);
     try {
-      const detail = await apiClient.createOrderEntry(input);
+      const detail = draftId ? await apiClient.updateOrderEntryDraft(draftId, input) : await apiClient.createOrderEntry(input);
       try {
         await maybeSaveReceiverContact(values);
       } catch (error) {
         messageApi.warning(error instanceof Error ? `运单已创建，收货人保存失败：${error.message}` : '运单已创建，收货人保存失败');
       }
-      modal.success({
-        title: submitForReview ? '录单已提交审核' : '录单草稿已保存',
-        content: `已生成运单 ${detail.shipment.systemOrderNo}`
+      const savedForCompletion = submitForReview && detail.shipment.status === 'DRAFT' && detail.shipment.reviewRejectedReason;
+      (savedForCompletion ? modal.warning : modal.success)({
+        title: savedForCompletion ? '提交未通过，已保存到草稿箱' : submitForReview ? '录单已提交审核' : '录单草稿已保存',
+        content: savedForCompletion
+          ? `待完善原因：${detail.shipment.reviewRejectedReason}`
+          : submitForReview
+          ? `已生成出货单号 ${detail.shipment.outboundOrderNo || detail.shipment.systemOrderNo}`
+          : `草稿已保存，可在录单草稿箱继续编辑。草稿号/出货单号：${detail.shipment.outboundOrderNo || detail.shipment.systemOrderNo}`
       });
       reset();
-      await onCreated?.(detail, submitForReview);
+      await onCreated?.(detail, submitForReview && !savedForCompletion);
     } catch (error) {
       modal.error({ title: '录单失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const isTalliedPackage = (record: Pick<WarehousePackageSummary, 'tallyCompleted'>) => record.tallyCompleted === true;
+
+  const openTallyHistory = useCallback(async (record: WarehousePackageSummary) => {
+    if (!isTalliedPackage(record)) return;
+    setTallyHistoryPackage(record);
+    setTallyHistoryTasks([]);
+    setTallyHistoryLoading(true);
+    try {
+      setTallyHistoryTasks(await apiClient.warehouseTallyTaskHistoryChain(record.id));
+    } catch {
+      setTallyHistoryTasks([]);
+    } finally {
+      setTallyHistoryLoading(false);
+    }
+  }, [apiClient]);
+
+  const renderPackageNoWithTally = (record: WarehousePackageSummary) => {
+    const packageNo = record.combinedOrderNo || `${record.customerOrderNo}-${record.domesticTrackingNo}`;
+    const tallied = isTalliedPackage(record);
+    if (!tallied) {
+      return <Text strong>{packageNo}</Text>;
+    }
+    return (
+      <Space size={4} className="finance-entry-tally-inline">
+        <Button
+          type="link"
+          size="small"
+          className="finance-entry-package-link"
+          onClick={(event) => {
+            event.stopPropagation();
+            void openTallyHistory(record);
+          }}
+        >
+          {packageNo}
+        </Button>
+        <Tag
+          color="processing"
+          className="finance-entry-tally-tag"
+          onClick={(event) => {
+            event.stopPropagation();
+            void openTallyHistory(record);
+          }}
+        >
+          理
+        </Tag>
+      </Space>
+    );
   };
 
   const packageColumns: ColumnsType<WarehousePackageSummary> = [
@@ -602,15 +957,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       width: 230,
       render: (_, record) => (
         <div className="finance-entry-package-cell">
-          <Space size={6}>
-            <Text strong>{record.combinedOrderNo || `${record.customerOrderNo}-${record.domesticTrackingNo}`}</Text>
-            {record.tallyTaskId || record.tallyTaskNo || record.tallyStatus === '已理货' ? <Tag color="processing">理</Tag> : null}
-          </Space>
+          {renderPackageNoWithTally(record)}
           <Text type="secondary">箱序：{record.packageIndex ?? '-'} / {record.expectedTotalPackageCount ?? '-'}</Text>
         </div>
       )
     },
-    { title: '系统单号', dataIndex: 'systemOrderNo', width: 150, render: (value?: string) => value || '-' },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150, render: (value?: string) => value || '-' },
     { title: '件数', dataIndex: 'packageCount', width: 80 },
     { title: '实重', dataIndex: 'weightKg', width: 100, render: (value: number) => `${value.toFixed(2)} kg` },
     { title: '6000材积', dataIndex: 'volumetricWeightKg', width: 110, render: (value: number) => `${value.toFixed(2)} kg` },
@@ -644,14 +996,27 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       .filter((row) => getFeeCurrency(row, 'RECEIVABLE') === currency)
       .reduce((sum, row) => sum + calculateFinanceEntryFeeAmount(row), 0)
   }));
+  const renderFeeNameSelect = (type: ShipmentFinanceItemType, row: FinanceEntryFeeDraft, label: string) => (
+    <Select
+      aria-label={`${label}费用名称`}
+      showSearch
+      allowClear
+      placeholder="选择费用名称"
+      value={row.name || undefined}
+      options={feeNameOptions}
+      optionFilterProp="label"
+      notFoundContent="暂无启用费用名称"
+      onChange={(value) => updateFee(type, row.id, { name: value ?? '' })}
+    />
+  );
 
   const renderFeeTable = (type: ShipmentFinanceItemType, title: string, rows: FinanceEntryFeeDraft[]) => {
     if (type === 'RECEIVABLE') {
       const columns: ColumnsType<FinanceEntryFeeDraft> = [
         { title: '业务员', width: 100, render: () => renderReadonlyCell(matchedSalesperson) },
-        { title: '费用名称', width: 150, render: (_, row) => <Input value={row.name} onBlur={() => maybeSaveCatalogItem('FEE_NAME', row.name)} onChange={(event) => updateFee(type, row.id, { name: event.target.value })} /> },
+        { title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
         { title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
-        { title: '运单号', width: 150, render: () => renderReadonlyCell(watchedSystemOrderNo, '待生成') },
+        { title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
         { title: '转单号', width: 130, render: () => renderReadonlyCell(undefined, '待回填') },
         { title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
         {
@@ -659,7 +1024,8 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
           width: 260,
           render: (_, row) => (
             <Space size={6} wrap>
-              {row.receiptNo ? <Tag color="blue">{row.receiptNo}</Tag> : <Text type="secondary">未匹配</Text>}
+              {row.receiptNo ? <Tag color={row.receiptMatchSource === 'AUTO' ? 'green' : 'blue'}>{row.receiptNo}{row.receiptMatchSource === 'AUTO' ? '（自动）' : ''}</Tag> : <Text type="secondary">未匹配</Text>}
+              {!row.receiptNo && row.receiptMatchHint ? <Text type="warning">{row.receiptMatchHint}</Text> : null}
               {row.receiptId ? <InputNumber min={0} max={row.receiptBalance} precision={2} value={row.receiptMatchAmount} onChange={(value) => updateFee(type, row.id, { receiptMatchAmount: value ?? undefined })} /> : null}
               <Button size="small" onClick={() => openReceiptPicker(row)}>选择</Button>
               {row.receiptId ? <Button size="small" onClick={() => clearReceiptForRow(row)}>清除</Button> : null}
@@ -727,22 +1093,25 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     }
 
     if (type === 'BUSINESS_COST') {
+      const profitColumns: ColumnsType<FinanceEntryFeeDraft> = canViewFinanceAuditFields ? [
+        { title: '业务利润', width: 120, align: 'right', render: () => <Text>{(getFeeRmbTotal(receivables, 'RECEIVABLE') - getFeeRmbTotal(businessCosts, 'BUSINESS_COST')).toFixed(2)}</Text> }
+      ] : [];
       const columns: ColumnsType<FinanceEntryFeeDraft> = [
         ...(canUseAgentFields ? [{
           title: '代理',
           width: 150,
           render: (_: unknown, row: FinanceEntryFeeDraft) => <Select showSearch allowClear value={row.agentName || watchedAgentName} options={agentOptions} onChange={(value) => updateFee(type, row.id, { agentName: value })} />
         }] : []),
-        { title: '费用名称', width: 150, render: (_, row) => <Input value={row.name} onBlur={() => maybeSaveCatalogItem('FEE_NAME', row.name)} onChange={(event) => updateFee(type, row.id, { name: event.target.value })} /> },
+        { title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
         { title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
-        { title: '运单号', width: 150, render: () => renderReadonlyCell(watchedSystemOrderNo, '待生成') },
+        { title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
         { title: '转单号', width: 130, render: () => renderReadonlyCell(undefined, '待回填') },
         { title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
         { title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
         { title: '单价', width: 120, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
         { title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
         { title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{`RMB ${(calculateFinanceEntryFeeAmount(row) * currencyToRmb(getFeeCurrency(row, type))).toFixed(2)}`}</Text> },
-        { title: '业务利润', width: 120, align: 'right', render: () => <Text>{(getFeeRmbTotal(receivables, 'RECEIVABLE') - getFeeRmbTotal(businessCosts, 'BUSINESS_COST')).toFixed(2)}</Text> },
+        ...profitColumns,
         { title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
         { title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
         { title: '备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
@@ -781,9 +1150,9 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         width: 150,
         render: (_: unknown, row: FinanceEntryFeeDraft) => <Select showSearch allowClear value={row.agentName || watchedAgentName} options={agentOptions} onChange={(value) => updateFee(type, row.id, { agentName: value })} />
       }] : []),
-      { title: '费用名称', width: 150, render: (_, row) => <Input value={row.name} onBlur={() => maybeSaveCatalogItem('FEE_NAME', row.name)} onChange={(event) => updateFee(type, row.id, { name: event.target.value })} /> },
+      { title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
       { title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
-      { title: '运单号', width: 150, render: () => renderReadonlyCell(watchedSystemOrderNo, '待生成') },
+      { title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
       { title: '转单号', width: 130, render: () => renderReadonlyCell(undefined, '待回填') },
       { title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
       { title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
@@ -833,7 +1202,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     <div className="finance-entry-page">
       <Row gutter={[12, 12]} className="finance-entry-workbench-row">
         <Col xs={24}>
-          <Card className="finance-entry-workbench-card finance-entry-form-card" title="运单基础信息">
+          <Card className="finance-entry-workbench-card finance-entry-form-card" title={draftId ? '继续编辑录单草稿' : '运单基础信息'} loading={draftLoading}>
             <div className="finance-entry-summary-grid">
               <div className="finance-entry-summary-card"><Text type="secondary">已选货物</Text><Text strong>{selectedPackages.length} 条</Text></div>
               <div className="finance-entry-summary-card"><Text type="secondary">总件数</Text><Text strong>{totals.packageCount} 件</Text></div>
@@ -841,108 +1210,159 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
               <div className="finance-entry-summary-card"><Text type="secondary">方数</Text><Text strong>{totals.cbm.toFixed(6)} CBM</Text></div>
               <div className="finance-entry-summary-card"><Text type="secondary">计费重</Text><Text strong>{totals.chargeWeightKg.toFixed(2)} kg</Text></div>
             </div>
-            <Form form={form} layout="vertical" initialValues={{ businessType: 'DEDICATED_LINE', packageType: 'WPX', currency: 'RMB', declarationRequired: false, sensitive: false, entryAt: entryAtDefault }}>
-              <Row gutter={12}>
-                <Col xs={24} md={6}>
-                  <Form.Item name="customerCode" label="客户编号" rules={[{ required: true, message: '请输入客户编号' }]}>
-                    <Input />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={6}>
-                  <Form.Item label="仓库数据">
-                    <Button block onClick={() => void openPackageModal()} disabled={!watchedCustomerCode?.trim()}>
-                      仓库数据
-                    </Button>
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={6}><Form.Item name="customerName" label="客户名称"><Input readOnly /></Form.Item></Col>
-                <Col xs={24} md={6}><Form.Item name="customerOrderNo" label="客户单号" rules={[{ required: true, message: '请输入客户单号' }]}><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="systemOrderNo" label="运单号" rules={[{ required: true, message: '请输入运单号' }]}><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="subOrderNo" label="分单号"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="inboundNo" label="入仓号"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="entryAt" label="运单录入日期"><Input type="datetime-local" readOnly={!canEditEntryAt} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item label="仓库入库匹配"><Input readOnly value={matchedWarehouseText} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item label="出库日期"><Input readOnly value="仓库出货后自动生成" /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item label="应收审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col>
-                {role !== 'OPERATOR' ? <Col xs={24} md={8}><Form.Item label="业务成本审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
-                {canEditOrderEntryPayables ? <Col xs={24} md={8}><Form.Item label="应付审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
-                <Col xs={24} md={8}><Form.Item name="destinationCountry" label="目的地" rules={[{ required: true, message: '请输入目的地' }]}><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="businessType" label="业务类型"><Select options={Object.entries(businessTypeLabels).map(([value, label]) => ({ value, label }))} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="packageType" label="包裹类型"><Select options={[{ value: 'WPX', label: '包裹' }, { value: 'PAK', label: '袋装' }, { value: 'DOC', label: '文件' }]} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="cargoType" label="货物属性" rules={[{ required: true, message: '请选择货物属性' }]}><AutoComplete options={cargoTypeOptions} onBlur={() => maybeSaveCatalogItem('CARGO_TYPE', form.getFieldValue('cargoType'))} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="productName" label="品名" rules={[{ required: true, message: '请输入品名' }]}><AutoComplete options={productNameOptions} onBlur={() => maybeSaveCatalogItem('PRODUCT_NAME', form.getFieldValue('productName'))} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="declarationRequired" label="是否报关" rules={[{ required: true, message: '请选择是否报关' }]}><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="sensitive" label="是否敏感"><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="settlementMethod" label="结算方式" rules={[{ required: true, message: '请选择结算方式' }]}><Select showSearch options={settlementOptions} onChange={(value) => form.setFieldsValue({ currency: getSettlementMethodCurrency(settlementRows, value) ?? form.getFieldValue('currency') ?? 'RMB' })} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="currency" label="默认币种"><Select options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} /></Form.Item></Col>
-                {canUseAgentFields ? (
-                  <Col xs={24} md={8}>
-                    <Form.Item name="agentName" label="代理">
-                      <Select
-                        showSearch
+            {selectedPackages.length ? (
+              <div className="finance-entry-selected-packages" aria-label="已选货物列表">
+                {selectedPackages.map((pkg) => (
+                  <div className="finance-entry-selected-package" key={pkg.id}>
+                    {renderPackageNoWithTally(pkg)}
+                    <Text type="secondary">{pkg.packageCount} 件 / {pkg.weightKg.toFixed(2)} kg / {pkg.cbm.toFixed(6)} CBM</Text>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <Form
+              form={form}
+              layout="vertical"
+              initialValues={{ currency: 'RMB', declarationRequired: false, sensitive: false, entryAt: entryAtDefault, saveReceiverToCustomer: false }}
+              onValuesChange={handleEntryValuesChange}
+            >
+              <section className="finance-entry-field-panel finance-entry-primary-panel">
+                <div className="finance-entry-form-subtitle">录入与货物</div>
+                <Row gutter={12}>
+                  <Col xs={24} md={12} xl={6}><Form.Item name="entryAt" label="运单录入日期"><Input type="datetime-local" readOnly={!canEditEntryAt} /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={6}><Form.Item label="仓库数据"><Button block onClick={() => void openPackageModal()} disabled={!watchedCustomerCode?.trim()}>仓库数据</Button></Form.Item></Col>
+                  <Col xs={24} md={12} xl={6}><Form.Item name="customerCode" label="客户编号" rules={[{ required: true, message: '请输入客户编号' }]}><Input /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={6}><Form.Item name="customerName" label="客户名称"><Input readOnly placeholder={watchedCustomerCode?.trim() ? '未匹配客户资料' : '填写客户编号后自动带出'} /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={6}><Form.Item name="customerOrderNo" label="出货单号" rules={[{ required: true, message: '请输入出货单号' }]}><Input /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={6}>
+                    <Form.Item name="receivingChannel" label="公司渠道" rules={[{ required: true, message: '请选择公司渠道' }]}>
+                      <Select showSearch allowClear options={businessChannelOptions} onChange={(value) => recalculateCargoChargeWeight(value)} />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} md={12} xl={6}>
+                    <Form.Item name="destinationCountry" label="国家" rules={[{ required: true, message: '请选择或输入国家' }]}>
+                      <AutoComplete
                         allowClear
-                        options={agentOptions}
-	                        onChange={(value) => {
-	                          setPayables((rows) => rows.map((row) => ({ ...row, agentName: row.agentName || value })));
-	                          setBusinessCosts((rows) => rows.map((row) => ({ ...row, agentName: row.agentName || value })));
-	                        }}
+                        options={countryOptions}
+                        filterOption={filterLocationOption}
+                        placeholder="例如 美国"
+                        popupMatchSelectWidth={320}
                       />
                     </Form.Item>
                   </Col>
-                ) : null}
-                <Col xs={24} md={8}>
-                  <Form.Item name="receivingChannel" label="业务渠道">
-                    <Select
-                      showSearch
-                      allowClear
-                      options={businessChannelOptions}
-                      onChange={() => applyCurrentChargeWeightToFees()}
-                    />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={8}><Form.Item name="tradeTerms" label="贸易条款"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="fbaInboundNo" label="FBA 入仓号"><Input /></Form.Item></Col>
-                <Col xs={24} md={16}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
-              </Row>
-              <div className="finance-entry-form-subtitle">收货人信息</div>
-              <Row gutter={12}>
-                <Col xs={24} md={8}>
-                  <Form.Item name="receiverContactId" label="选择收货人">
-                    <Select
-                      allowClear
-                      disabled={!selectedCustomer}
-                      placeholder={selectedCustomer ? '选择已有收货人' : '先输入客户编号'}
-                      options={selectedCustomerContacts.map((contact) => ({
-                        value: contact.id,
-                        label: [contact.name, contact.company, contact.phone].filter(Boolean).join(' / ')
-                      }))}
-                      onChange={applyReceiverContact}
-                    />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={8}>
-                  <Form.Item name="saveReceiverToCustomer" valuePropName="checked" label="保存收货人">
-                    <Checkbox disabled={!selectedCustomer || selectedCustomerContacts.length >= 4}>
-                      保存到客户资料
-                    </Checkbox>
-                  </Form.Item>
-                </Col>
-                {selectedCustomer && selectedCustomerContacts.length >= 4 ? (
-                  <Col xs={24} md={8}>
-                    <Form.Item label="保存状态">
-                      <Input readOnly value="该客户已有 4 组收货人" />
-                    </Form.Item>
-                  </Col>
-                ) : null}
-                <Col xs={24} md={8}><Form.Item name="receiverName" label="收货人名称"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="receiverCompany" label="收货人公司名称"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="receiverPhone" label="收货人电话"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="fbaWarehouseCode" label="FBA仓库代码"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="receiverCountry" label="国家"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="receiverState" label="州/省"><Input /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="receiverPostalCode" label="邮编"><Input /></Form.Item></Col>
-                <Col xs={24} md={16}><Form.Item name="receiverAddress" label="收货人地址"><Input /></Form.Item></Col>
-              </Row>
+                  <Col xs={24} md={12} xl={6}><Form.Item name="transferNo" label="转单号"><Input /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={6}><Form.Item name="inboundNo" label="入仓号"><Input /></Form.Item></Col>
+                  <Col xs={24}><Form.Item name="productName" label="品名" rules={[{ required: true, message: '请输入品名' }]}><AutoComplete options={productNameOptions} onBlur={() => maybeSaveCatalogItem('PRODUCT_NAME', form.getFieldValue('productName'))} /></Form.Item></Col>
+                </Row>
+                <div className="finance-entry-cargo-metrics" aria-label="货物数据">
+                  <div className="finance-entry-cargo-toolbar">
+                    <Space wrap align="center">
+                      <Text strong>货物数据</Text>
+                      <Tag color={cargoDataSource === 'MANUAL_ADJUSTED' ? 'gold' : 'blue'}>{cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '仓库自动汇总'}</Tag>
+                      {chargeWeightOverridden ? <Tag color="orange">计费重已手动覆盖</Tag> : null}
+                    </Space>
+                    <Button size="small" onClick={() => recalculateCargoChargeWeight()} disabled={!selectedCompanyChannel && !totals.weightKg && !totals.cbm}>按公司渠道重新计算</Button>
+                  </div>
+                  <div className="finance-entry-cargo-grid">
+                    <Form.Item name="packageCount" label="件数"><InputNumber min={0} precision={0} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('packageCount', value)} /></Form.Item>
+                    <Form.Item name="actualWeightKg" label="实重 kg"><div className="finance-entry-cargo-unit-input"><InputNumber min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('actualWeightKg', value)} /><span>kg</span></div></Form.Item>
+                    <Form.Item name="volumeCbm" label="体积 CBM"><div className="finance-entry-cargo-unit-input"><InputNumber min={0} precision={6} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('volumeCbm', value)} /><span>CBM</span></div></Form.Item>
+                    <Form.Item name="chargeableWeightKg" label="计费重 kg"><div className="finance-entry-cargo-unit-input"><InputNumber min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('chargeableWeightKg', value)} /><span>kg</span></div></Form.Item>
+                  </div>
+                  {selectedCompanyChannel ? <Text type="secondary">已按 {selectedCompanyChannel.name} 计算：除材积 {selectedCompanyChannel.volumeDivisor} / {selectedCompanyChannel.multiPieceWeightRule} / {selectedCompanyChannel.settlementWeightRule}</Text> : <Text type="secondary">请选择公司渠道；仓库货物会按该渠道规则计算计费重。</Text>}
+                </div>
+              </section>
+              <div className="finance-entry-two-column-layout">
+                <section className="finance-entry-field-panel finance-entry-receiver-panel">
+                  <div className="finance-entry-form-subtitle">收货信息</div>
+                  <Row gutter={12}>
+                    <Col xs={24} md={12}><Form.Item name="receiverName" label="收货人名称"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="receiverCompany" label="收货人公司名称"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="receiverPhone" label="收货人电话"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="fbaWarehouseCode" label="FBA仓库代码"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="receiverPostalCode" label="邮编"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="receiverCountry" label="收货国家">
+                        <AutoComplete
+                          allowClear
+                          options={countryOptions}
+                          filterOption={filterLocationOption}
+                          popupMatchSelectWidth={320}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="receiverState" label="州/省">
+                        <AutoComplete
+                          allowClear
+                          options={stateOptions}
+                          filterOption={filterLocationOption}
+                          popupMatchSelectWidth={320}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24}><Form.Item name="receiverAddress" label="收货人地址"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item name="receiverContactId" label="已有收货地址">
+                        <Select
+                          allowClear
+                          disabled={!selectedCustomer}
+                          placeholder={selectedCustomer ? selectedCustomerContacts.length ? '选择后自动带入，可继续修改' : '该客户暂无已保存收货地址' : '先输入客户编号'}
+                          options={selectedCustomerContacts.map((contact) => ({
+                            value: contact.id,
+                            label: [contact.name, contact.company, contact.phone, contact.address, contact.country].filter(Boolean).join(' / ')
+                          }))}
+                          onChange={applyReceiverContact}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} md={12}>
+                      <Form.Item
+                        name="saveReceiverToCustomer"
+                        valuePropName="checked"
+                        label={receiverContactEdited ? '保存为新地址' : '保存到客户地址库'}
+                        extra={receiverContactEdited
+                          ? '已修改已选地址；勾选后会新增一条收货地址，不会覆盖原资料。'
+                          : selectedReceiverContact
+                            ? '可继续手动修改；如需保留修改后的地址，请勾选后另存为新地址。'
+                            : '手动填写后可按需保存；默认不保存，避免写入无效地址。'}
+                      >
+                        <Checkbox disabled={!selectedCustomer}>
+                          {receiverContactEdited ? '保存为新地址' : '保存到客户地址库'}
+                        </Checkbox>
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                </section>
+                <section className="finance-entry-field-panel finance-entry-audit-panel">
+                  <div className="finance-entry-form-subtitle">出库与审核</div>
+                  <Row gutter={12}>
+                    <Col xs={24} md={12}><Form.Item label="出库日期"><Input readOnly value="仓库出货后自动生成" /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="fbaInboundNo" label="FBA 入仓单号"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="destinationCountry" label="目的地" rules={[{ required: true, message: '请输入目的地' }]}><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="declarationRequired" label="报关" rules={[{ required: true, message: '请选择报关' }]}><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="cargoType" label="货物类型" rules={[{ required: true, message: '请选择货物类型' }]}><AutoComplete options={cargoTypeOptions} onBlur={() => maybeSaveCatalogItem('CARGO_TYPE', form.getFieldValue('cargoType'))} /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="sensitive" label="是否敏感"><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
+                    {canUseAgentFields ? (
+                      <Col xs={24} md={12}>
+                        <Form.Item name="agentName" label="代理渠道">
+                          <Select showSearch allowClear options={agentOptions} onChange={(value) => {
+                            setPayables((rows) => rows.map((row) => ({ ...row, agentName: row.agentName || value })));
+                            setBusinessCosts((rows) => rows.map((row) => ({ ...row, agentName: row.agentName || value })));
+                          }} />
+                        </Form.Item>
+                      </Col>
+                    ) : null}
+                    <Col xs={24} md={12}><Form.Item name="subOrderNo" label="分单号"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item name="settlementMethod" label="结算方式" rules={[{ required: true, message: '请选择结算方式' }]}><Select showSearch options={settlementOptions} onChange={(value) => form.setFieldsValue({ currency: getSettlementMethodCurrency(settlementRows, value) ?? form.getFieldValue('currency') ?? 'RMB' })} /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item label="应收总额"><Input aria-label="应收总额" readOnly value={`RMB ${getFeeRmbTotal(receivables, 'RECEIVABLE').toFixed(2)}`} /></Form.Item></Col>
+                    <Col xs={24}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12}><Form.Item label="应收审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col>
+                    {canViewFinanceAuditFields ? <Col xs={24} md={12}><Form.Item label="业务成本审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
+                    {canViewFinanceAuditFields ? <Col xs={24} md={12}><Form.Item label="应付审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
+                  </Row>
+                </section>
+              </div>
             </Form>
           </Card>
         </Col>
@@ -953,15 +1373,22 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         {canEditOrderEntryPayables ? renderFeeTable('PAYABLE', '应付费用', payables) : null}
       </div>
       <div className="finance-entry-actions">
-        <Button onClick={reset} disabled={submitting}>清空</Button>
-        <Button onClick={() => submit(false)} loading={submitting}>保存草稿</Button>
-        <Button type="primary" onClick={() => submit(true)} loading={submitting}>提交审核</Button>
+        <Button onClick={reset} disabled={submitting || draftLoading}>清空</Button>
+        <Button onClick={() => submit(false)} loading={submitting} disabled={draftLoading || !canSaveDraft || (!draftId && !canCreateOrderEntry)}>保存草稿</Button>
+        <Button type="primary" onClick={() => submit(true)} loading={submitting} disabled={draftLoading || !canSaveDraft || !canSubmitForReview || (!draftId && !canCreateOrderEntry)}>提交审核</Button>
       </div>
       <Modal
         title={`仓库数据${watchedCustomerCode?.trim() ? ` · ${watchedCustomerCode.trim()}` : ''}`}
         open={packageModalOpen}
-        onCancel={() => setPackageModalOpen(false)}
-        footer={<Button onClick={() => setPackageModalOpen(false)}>关闭</Button>}
+        onCancel={closePackageModal}
+        footer={(
+          <Space>
+            <Button onClick={closePackageModal}>关闭</Button>
+            <Button type="primary" disabled={!packagePickerSelected.length} onClick={confirmPackageSelection}>
+              确认选择这些包裹 ({packagePickerSelected.length})
+            </Button>
+          </Space>
+        )}
         width={980}
         destroyOnHidden
       >
@@ -988,7 +1415,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
             columns={packageColumns}
             pagination={{ pageSize: 8, showSizeChanger: false }}
             scroll={{ x: 980 }}
-            rowSelection={{ selectedRowKeys: selectedPackageIds, onChange: handlePackageSelection }}
+            rowSelection={{ selectedRowKeys: packagePickerSelectedIds, onChange: handlePackageSelection, columnWidth: 56, fixed: true }}
             locale={{ emptyText: selectedCustomer ? '暂无该客户编号可录单的在仓货物' : '请先维护客户资料' }}
             onRow={(record) => ({
               onDoubleClick: () => {
@@ -1004,7 +1431,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                       <p>体积：{record.cbm.toFixed(6)} CBM</p>
                       <p>计费重：{record.chargeableWeightKg.toFixed(2)} kg</p>
                       <p>扫描时间：{record.scanTime ? formatBeijingDateTime(record.scanTime) : '-'}</p>
-                      {(record.tallyTaskId || record.tallyTaskNo || record.tallyStatus === '已理货') ? (
+                      {isTalliedPackage(record) ? (
                         <>
                           <p>理货标记：已理货</p>
                           <p>理货任务：{record.tallyTaskNo || record.tallyTaskId || '-'}</p>
@@ -1018,6 +1445,26 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
           />
           <Text type="secondary">弹窗仅显示当前客户编号名下、且尚未被录单占用的在仓货物。</Text>
         </Space>
+      </Modal>
+      <Modal
+        title="理货历史详情"
+        open={Boolean(tallyHistoryPackage)}
+        onCancel={() => {
+          setTallyHistoryPackage(null);
+          setTallyHistoryTasks([]);
+        }}
+        footer={<Button onClick={() => {
+          setTallyHistoryPackage(null);
+          setTallyHistoryTasks([]);
+        }}>关闭</Button>}
+        width={760}
+        destroyOnHidden
+      >
+        {tallyHistoryPackage ? (
+          <Space direction="vertical" size={12} className="full-width">
+            {tallyHistoryLoading ? <Text type="secondary">正在加载理货历史...</Text> : <WarehouseTallyHistoryChain tasks={tallyHistoryTasks} />}
+          </Space>
+        ) : null}
       </Modal>
       <Modal
         title="选择已到账水单"

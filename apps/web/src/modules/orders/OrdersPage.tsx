@@ -15,7 +15,6 @@ import {
   Select,
   Space,
   Statistic,
-  Table,
   Tag,
   Typography,
   Upload
@@ -40,14 +39,24 @@ import type { RoutingAssignmentFormValues } from '../routing/RoutingPage';
 
 const { Text } = Typography;
 
-export type OrdersAuditStageKey = 'all' | 'reviewing' | 'approved' | 'rejected';
+export type OrdersLifecycleStageKey = 'all' | 'review' | 'warehouse' | 'inTransit' | 'problem' | 'completed';
 
-export const orderAuditStages: Array<{ key: OrdersAuditStageKey; label: string; predicate: (shipment: Shipment) => boolean }> = [
+export const orderLifecycleStages: Array<{ key: OrdersLifecycleStageKey; label: string; predicate: (shipment: Shipment) => boolean }> = [
   { key: 'all', label: '全部', predicate: () => true },
-  { key: 'reviewing', label: '待审核', predicate: (shipment) => shipment.status === 'DRAFT' },
-  { key: 'approved', label: '审核通过', predicate: (shipment) => !['DRAFT', 'REVIEW_REJECTED', 'CANCELLED'].includes(shipment.status) },
-  { key: 'rejected', label: '审核不通过', predicate: (shipment) => shipment.status === 'REVIEW_REJECTED' }
+  { key: 'review', label: '审核处理', predicate: (shipment) => ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status) },
+  { key: 'warehouse', label: '仓内待出', predicate: (shipment) => ['DECLARED', 'WAITING_RECEIVE', 'WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment.status) },
+  { key: 'inTransit', label: '运输中', predicate: (shipment) => ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'WAITING_ONLINE', 'WAITING_SIGNED', 'WAITING_RETURN'].includes(shipment.status) },
+  { key: 'problem', label: '问题件', predicate: (shipment) => ['PROBLEM', 'STUCK'].includes(shipment.status) || shipment.hasProblemTicket },
+  { key: 'completed', label: '已完成', predicate: (shipment) => ['SIGNED', 'CANCELLED'].includes(shipment.status) }
 ];
+
+export function lifecycleStatusColor(status: ShipmentStatus) {
+  if (status === 'SIGNED') return 'success';
+  if (status === 'CANCELLED') return 'default';
+  if (['PROBLEM', 'STUCK', 'REVIEW_REJECTED'].includes(status)) return 'error';
+  if (['DRAFT', 'REVIEW_PENDING', 'WAITING_RECEIVE', 'WAITING_SORT', 'WAITING_DISPATCH'].includes(status)) return 'warning';
+  return 'processing';
+}
 
 export interface OutboundOrderFormValues {
   customerName: string;
@@ -143,15 +152,17 @@ export function OrdersPage({
   onCloseShipmentLog,
   formatPaymentSummary,
   onAiAssist,
-  aiLoading
+  aiLoading,
+  permissions,
+  role
 }: {
   notice?: string | null;
   shipments: Shipment[];
   visibleShipments: Shipment[];
   columns: ColumnsType<Shipment>;
   metricCards: Array<{ title: string; value: string | number; extra: ReactNode; icon: ReactNode }>;
-  selectedStage: OrdersAuditStageKey;
-  onSelectStage: (stage: OrdersAuditStageKey) => void;
+  selectedStage: OrdersLifecycleStageKey;
+  onSelectStage: (stage: OrdersLifecycleStageKey) => void;
   activeSection: string;
   onActiveSectionChange: (section: string) => void;
   outboundOrderOpen: boolean;
@@ -185,7 +196,26 @@ export function OrdersPage({
   formatPaymentSummary: (usd?: number, cny?: number) => string;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
+  permissions: import('../../apiClient').PermissionKey[];
+  role: import('../../apiClient').RoleKey;
 }) {
+  const hasBusinessPermission = (permission: import('../../apiClient').PermissionKey) => role === 'ADMIN' || permissions.includes(permission);
+  const [createdFrom, setCreatedFrom] = useState<string>();
+  const [createdTo, setCreatedTo] = useState<string>();
+  const [customerKeyword, setCustomerKeyword] = useState('');
+  const filteredShipments = useMemo(() => {
+    const keyword = customerKeyword.trim().toLowerCase();
+    return shipments.filter((shipment) => {
+      const createdAt = shipment.createdAt.slice(0, 10);
+      if (createdFrom && createdAt < createdFrom) return false;
+      if (createdTo && createdAt > createdTo) return false;
+      return !keyword || [shipment.customerCode, shipment.customerName].some((value) => value?.toLowerCase().includes(keyword));
+    });
+  }, [createdFrom, createdTo, customerKeyword, shipments]);
+  const filteredStageShipments = useMemo(() => {
+    const stage = orderLifecycleStages.find((item) => item.key === selectedStage);
+    return stage ? filteredShipments.filter(stage.predicate) : filteredShipments;
+  }, [filteredShipments, selectedStage]);
   const orderSubItems = useMemo<ModuleSubNavItem[]>(
     () => [
       { key: 'stageBoard', label: '订单预览', description: '状态池与单票操作' },
@@ -215,7 +245,7 @@ export function OrdersPage({
 
   const invoiceColumns = useMemo<ColumnsType<Shipment>>(
     () => [
-      { title: '运单号', dataIndex: 'systemOrderNo', width: 180 },
+      { title: '出货单号', dataIndex: 'systemOrderNo', width: 180 },
       { title: '客户编号', dataIndex: 'customerCode', width: 120, render: (value?: string) => value || '-' },
       { title: '代理', dataIndex: 'agentName', width: 160, render: (value?: string) => value || '-' },
       {
@@ -280,21 +310,21 @@ export function OrdersPage({
   return (
     <AppPage>
       <AppPageHeader
-        title="我的订单中心"
-        description="围绕预报、入库、排货、发货、转单号和异常处理的前端闭环工作台。"
+        title="我的运单生命周期"
+        description="本人录入或归属的运单始终保留在这里；审核、仓内、运输、签收和问题件按当前节点更新。"
         actions={
           <AppActionGroup>
-            <Button icon={<FileInput size={16} />}>导入履约运单</Button>
-            <Button icon={<PackagePlus size={16} />} onClick={onOpenOutboundOrder}>新建出货订单</Button>
-            <Button
+            {hasBusinessPermission('business:order-entry:invoice-upload') ? <Button icon={<FileInput size={16} />}>导入履约运单</Button> : null}
+            {hasBusinessPermission('business:order-entry:create') ? <Button icon={<PackagePlus size={16} />} onClick={onOpenOutboundOrder}>新建出货订单</Button> : null}
+            {hasBusinessPermission('business:order-ai:assist') ? <Button
               type="primary"
               icon={<Sparkles size={16} />}
               loading={aiLoading}
               onClick={() =>
                 onAiAssist({
-                  module: '我的订单',
+                  module: '业务管理',
                   task: '批量履约处理建议',
-                  prompt: '请根据待审核、审核通过、审核不通过和收款状态，输出订单审核优先级、资料风险提醒和客户沟通话术。',
+                  prompt: '请根据本人运单的当前生命周期节点、最新物流轨迹、问题件和超时风险，输出处理优先级与客户沟通话术。',
                   context: {
                     auditMetrics: metricCards.map(({ title, value }) => ({ title, value })),
                     samples: shipments.slice(0, 5)
@@ -303,7 +333,7 @@ export function OrdersPage({
               }
             >
               AI 批量处理
-            </Button>
+            </Button> : null}
           </AppActionGroup>
         }
       />
@@ -325,14 +355,14 @@ export function OrdersPage({
             title={
               <Flex align="center" gap={8}>
                 <Boxes size={18} />
-                <span>订单预览</span>
+                <span>全生命周期运单</span>
               </Flex>
             }
           >
             <div className="fulfillment-board-toolbar">
               <div className="status-strip fulfillment-status-strip">
-                {orderAuditStages.map((stage) => {
-                  const count = shipments.filter(stage.predicate).length;
+                {orderLifecycleStages.map((stage) => {
+                  const count = filteredShipments.filter(stage.predicate).length;
                   return (
                     <Button
                       key={stage.key}
@@ -345,12 +375,18 @@ export function OrdersPage({
                 })}
               </div>
             </div>
+            <Space wrap className="fulfillment-board-filters">
+              <Input type="date" aria-label="开始日期" value={createdFrom} onChange={(event) => setCreatedFrom(event.target.value || undefined)} />
+              <Input type="date" aria-label="结束日期" value={createdTo} onChange={(event) => setCreatedTo(event.target.value || undefined)} />
+              <Input allowClear aria-label="客户编号或客户名称" placeholder="客户编号 / 客户名称" value={customerKeyword} onChange={(event) => setCustomerKeyword(event.target.value)} />
+              <Button onClick={() => { setCreatedFrom(undefined); setCreatedTo(undefined); setCustomerKeyword(''); onSelectStage('all'); }}>重置</Button>
+            </Space>
 
             <ManagedTable
               className="fulfillment-table"
               rowKey="id"
               columns={columns}
-              dataSource={visibleShipments}
+              dataSource={filteredStageShipments}
               size="small"
               pagination={tenRowTablePagination}
               minimumScrollX={1200}
@@ -358,7 +394,7 @@ export function OrdersPage({
           </Card>
         ) : null}
 
-        {activeSection === 'invoiceTasks' ? (
+        {activeSection === 'invoiceTasks' && hasBusinessPermission('business:order-entry:invoice-upload') ? (
           <Card
             className="fulfillment-board-card"
             title={
@@ -380,7 +416,7 @@ export function OrdersPage({
           </Card>
         ) : null}
 
-        {activeSection === 'aiAssistant' ? (
+        {activeSection === 'aiAssistant' && hasBusinessPermission('business:order-ai:view') ? (
           <Card
             className="fulfillment-ai-card"
             title={
@@ -443,7 +479,7 @@ export function OrdersPage({
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="systemOrderNo" label="系统单号">
+              <Form.Item name="systemOrderNo" label="出货单号">
                 <Input />
               </Form.Item>
             </Col>
@@ -496,7 +532,7 @@ export function OrdersPage({
       </Modal>
 
       <Modal
-        title="人工修改轨迹与状态"
+        title="人工修改物流轨迹与状态"
         open={Boolean(editingShipment)}
         destroyOnHidden
         okText="确认修改"
@@ -509,13 +545,13 @@ export function OrdersPage({
           className="notice-bar"
           type="warning"
           showIcon
-          message="人工修改会直接覆盖该票最新轨迹、转单号和状态，并写入操作记录。"
+          message="人工修改会直接覆盖该票最新物流轨迹、转单号和状态；内部生命周期节点不会写入物流轨迹。"
         />
         <Form form={editShipmentForm} layout="vertical">
           <Form.Item
             name="latestTracking"
-            label="最新轨迹"
-            rules={[{ required: true, whitespace: true, message: '请输入最新轨迹' }]}
+            label="最新物流轨迹"
+            rules={[{ required: true, whitespace: true, message: '请输入最新物流轨迹' }]}
           >
             <Input.TextArea rows={3} />
           </Form.Item>
@@ -760,7 +796,7 @@ export function OrdersPage({
                 : '单票全生命周期操作记录'
           }
         />
-        <Table
+        <ManagedTable
           rowKey="id"
           size="small"
           pagination={tenRowTablePagination}

@@ -128,6 +128,15 @@ export function useFinanceCatalog(apiClient: ApiClient) {
     }
   };
 
+  const remove = async (item: FinanceCatalogItemSummary) => {
+    try {
+      await apiClient.deleteFinanceCatalogItem(item.id);
+      await refresh();
+    } catch (error) {
+      showError('财务资料删除失败', error);
+    }
+  };
+
   const move = async (category: FinanceCatalogCategory, id: string, direction: -1 | 1) => {
     const rows = getCategoryRows(category);
     const index = rows.findIndex((item) => item.id === id);
@@ -165,6 +174,7 @@ export function useFinanceCatalog(apiClient: ApiClient) {
     openCreate,
     openEdit,
     toggle,
+    remove,
     move,
     closeEditor: () => setEditorOpen(false),
     pageProps: {
@@ -181,6 +191,7 @@ export function useFinanceCatalog(apiClient: ApiClient) {
       onCreate: openCreate,
       onEdit: openEdit,
       onToggle: toggle,
+      onDelete: remove,
       onMove: move,
       onCloseEditor: () => setEditorOpen(false),
       onSubmit: submit

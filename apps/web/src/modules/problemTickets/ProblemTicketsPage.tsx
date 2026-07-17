@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Bot, ClipboardCheck, FileInput, Sparkles } from 'lucide-react';
-import { Alert, Button, Card, Col, Flex, Row, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Flex, Row, Space, Statistic, Tag, Typography } from 'antd';
+import type { ProblemTicketSummary } from '@siyuan/shared';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
-import { AppActionGroup, AppPageHeader, MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppPageHeader, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 
 const { Text } = Typography;
 
@@ -13,20 +14,19 @@ export interface LowFrequencyModuleConfig {
   capabilities: string[];
   aiEnhancements: string[];
   siliconFlowScenarios: string[];
-  queue: Array<{ item: string; owner: string; status: string }>;
-  stats: Array<{ label: string; value: string; helper: string }>;
-  records: Array<{ primary: string; secondary: string; metric: string; status: string }>;
 }
 
 
 
 function LowFrequencyModulePage({
   config,
+  tickets,
   notice,
   onAiAssist,
   aiLoading
 }: {
   config?: LowFrequencyModuleConfig;
+  tickets: ProblemTicketSummary[];
   notice?: string | null;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
@@ -50,6 +50,26 @@ function LowFrequencyModulePage({
 
   if (!config) return null;
 
+  const openTickets = tickets.filter((ticket) => ticket.status !== 'CLOSED');
+  const closedTickets = tickets.filter((ticket) => ticket.status === 'CLOSED');
+  const customerVisibleTickets = tickets.filter((ticket) => ticket.customerVisible);
+  const stats = [
+    { label: '待处理', value: openTickets.length, helper: '当前未关闭问题件' },
+    { label: '已关闭', value: closedTickets.length, helper: '已完成处理的问题件' },
+    { label: '客户可见', value: customerVisibleTickets.length, helper: '客户可跟进的问题件' }
+  ];
+  const records = tickets.map((ticket) => ({
+    primary: ticket.systemOrderNo,
+    secondary: `${ticket.customerName} / ${ticket.reason}`,
+    metric: new Date(ticket.createdAt).toLocaleString('zh-CN', { hour12: false }),
+    status: ticket.status === 'CLOSED' ? '已关闭' : '待处理'
+  }));
+  const queue = openTickets.map((ticket) => ({
+    item: `${ticket.systemOrderNo} ${ticket.reason}`,
+    owner: ticket.customerVisible ? '客服跟进' : '内部处理',
+    status: '待处理'
+  }));
+
   return (
     <>
       <AppPageHeader
@@ -69,9 +89,9 @@ function LowFrequencyModulePage({
                   task: 'AI 辅助处理',
                   prompt: `请围绕${config.title}的核心能力，输出当前优先处理事项、风险说明和可发给客户或内部同事的沟通建议。`,
                   context: {
-                    stats: config.stats,
-                    records: config.records,
-                    queue: config.queue,
+                    stats,
+                    records,
+                    queue,
                     scenarios: config.siliconFlowScenarios
                   }
                 })
@@ -86,7 +106,7 @@ function LowFrequencyModulePage({
       {renderNoticeBar(notice)}
 
       <Row gutter={[16, 16]}>
-        {config.stats.map((stat) => (
+        {stats.map((stat) => (
           <Col xs={24} md={8} key={stat.label}>
             <MetricCard icon={<Activity />} title={stat.label} value={stat.value} extra={stat.helper} />
           </Col>
@@ -98,11 +118,11 @@ function LowFrequencyModulePage({
           <Col xs={24}>
             {activeSection === 'records' ? (
               <Card className="module-grid" title="业务数据">
-                <Table
+                <ManagedTable
                   rowKey="primary"
                   size="small"
                   pagination={tenRowTablePagination}
-                  dataSource={config.records}
+                  dataSource={records}
                   columns={[
                     {
                       title: '业务对象',
@@ -138,11 +158,11 @@ function LowFrequencyModulePage({
 
             {activeSection === 'queue' ? (
               <Card className="module-grid" title="模块待办">
-                <Table
+                <ManagedTable
                   rowKey="item"
                   size="small"
                   pagination={tenRowTablePagination}
-                  dataSource={config.queue}
+                  dataSource={queue}
                   columns={[
                     { title: '事项', dataIndex: 'item' },
                     { title: '负责人', dataIndex: 'owner', width: 120 },
@@ -192,6 +212,6 @@ function LowFrequencyModulePage({
   );
 }
 
-export function ProblemTicketsPage(props: { config?: LowFrequencyModuleConfig; notice?: string | null; onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>; aiLoading: boolean }) {
+export function ProblemTicketsPage(props: { config?: LowFrequencyModuleConfig; tickets: ProblemTicketSummary[]; notice?: string | null; onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>; aiLoading: boolean }) {
   return <LowFrequencyModulePage {...props} />;
 }

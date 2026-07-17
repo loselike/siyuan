@@ -11,7 +11,15 @@ type ImportPlanItem = {
 
 const prisma = new PrismaClient();
 
-const sourceRoot = getArg('--source') ?? process.env.LEGACY_QUOTE_APP_PATH ?? '/opt/quote-app';
+const resolvedSourceRoot = getArg('--source') ?? process.env.LEGACY_QUOTE_APP_PATH;
+const confirmed = hasFlag('--confirm') || process.env.LEGACY_PRICING_IMPORT_CONFIRM === 'true';
+if (!resolvedSourceRoot) {
+  throw new Error('pricing:legacy:import 需要显式传入 --source 或 LEGACY_QUOTE_APP_PATH，禁止默认读取 /opt/quote-app');
+}
+if (!confirmed) {
+  throw new Error('pricing:legacy:import 会写入旧报价数据，必须显式传入 --confirm 或 LEGACY_PRICING_IMPORT_CONFIRM=true');
+}
+const sourceRoot = resolvedSourceRoot;
 
 const importPlan: ImportPlanItem[] = [
   { module: 'amazon', files: ['data/quotes.json'] },
@@ -77,12 +85,10 @@ async function importPricingFile(module: LegacyModule, relativePath: string, fil
   return rows.length;
 }
 
-function chunkRows<T>(rows: T[], size: number) {
-  const chunks: T[][] = [];
+function* chunkRows<T>(rows: T[], size: number) {
   for (let index = 0; index < rows.length; index += size) {
-    chunks.push(rows.slice(index, index + size));
+    yield rows.slice(index, index + size);
   }
-  return chunks;
 }
 
 function extractRows(value: unknown, context: Record<string, unknown> = {}): Array<Record<string, unknown>> {
@@ -127,6 +133,10 @@ function normalizeRow(module: LegacyModule, fileName: string, raw: Record<string
 function getArg(name: string) {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+function hasFlag(name: string) {
+  return process.argv.includes(name);
 }
 
 function textValue(value: unknown) {

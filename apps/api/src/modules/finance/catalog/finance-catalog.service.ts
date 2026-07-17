@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type {
   FinanceCatalogCategory,
   FinanceCatalogItemInput,
@@ -36,7 +36,6 @@ export class FinanceCatalogService {
   }
 
   async create(principal: Principal, input: FinanceCatalogItemInput) {
-    this.ensureManageAccess(principal);
     const data = normalizeFinanceCatalogInput(input, { requireCategory: true, requireName: true });
     const category = data.category as FinanceCatalogCategory;
     const name = data.name as string;
@@ -51,6 +50,7 @@ export class FinanceCatalogService {
     const summary = mapFinanceCatalogItem(row);
     await this.repository.writeAudit({
       actorId: principal.id,
+      principal,
       action: 'finance.catalog.create',
       target: `financeCatalogItem:${row.id}`,
       after: toAuditJson(summary)
@@ -59,7 +59,6 @@ export class FinanceCatalogService {
   }
 
   async update(principal: Principal, id: string, input: Partial<FinanceCatalogItemInput>) {
-    this.ensureManageAccess(principal);
     const current = await this.repository.findById(id);
     if (!current) {
       throw new NotFoundException('财务资料不存在');
@@ -79,6 +78,7 @@ export class FinanceCatalogService {
     const enabledChanged = input.enabled !== undefined && input.enabled !== current.enabled;
     await this.repository.writeAudit({
       actorId: principal.id,
+      principal,
       action: enabledChanged ? (summary.enabled ? 'finance.catalog.enable' : 'finance.catalog.disable') : 'finance.catalog.update',
       target: `financeCatalogItem:${id}`,
       before: toAuditJson(mapFinanceCatalogItem(current)),
@@ -88,7 +88,6 @@ export class FinanceCatalogService {
   }
 
   async disable(principal: Principal, id: string) {
-    this.ensureManageAccess(principal);
     const current = await this.repository.findById(id);
     if (!current) {
       throw new NotFoundException('财务资料不存在');
@@ -97,6 +96,7 @@ export class FinanceCatalogService {
     const summary = mapFinanceCatalogItem(row);
     await this.repository.writeAudit({
       actorId: principal.id,
+      principal,
       action: 'finance.catalog.disable',
       target: `financeCatalogItem:${id}`,
       before: toAuditJson(mapFinanceCatalogItem(current)),
@@ -105,8 +105,24 @@ export class FinanceCatalogService {
     return summary;
   }
 
+  async delete(principal: Principal, id: string) {
+    const current = await this.repository.findById(id);
+    if (!current) {
+      throw new NotFoundException('财务资料不存在');
+    }
+    const deleted = await this.repository.delete(id);
+    const summary = mapFinanceCatalogItem(deleted);
+    await this.repository.writeAudit({
+      actorId: principal.id,
+      principal,
+      action: 'finance.catalog.delete',
+      target: `financeCatalogItem:${id}`,
+      before: toAuditJson(summary)
+    });
+    return { id, deleted: true };
+  }
+
   async reorder(principal: Principal, input: FinanceCatalogReorderInput): Promise<FinanceCatalogListResponse> {
-    this.ensureManageAccess(principal);
     if (!financeCatalogCategories.includes(input.category)) {
       throw new BadRequestException('财务资料库分类不正确');
     }
@@ -123,17 +139,13 @@ export class FinanceCatalogService {
     const result = await this.repository.reorder(input.category, input.orderedIds);
     await this.repository.writeAudit({
       actorId: principal.id,
+      principal,
       action: 'finance.catalog.reorder',
       target: `financeCatalogCategory:${input.category}`,
       before: toAuditJson(mapFinanceCatalogRows(result.before)),
       after: toAuditJson(mapFinanceCatalogRows(result.after))
     });
     return { items: mapFinanceCatalogRows(result.after) };
-  }
-
-  private ensureManageAccess(principal: Principal) {
-    if (principal.role === 'ADMIN' || principal.role === 'FINANCE') return;
-    throw new ForbiddenException('当前角色不能维护该类单票费用');
   }
 
   private async ensureUniqueName(category: FinanceCatalogCategory, name: string, excludeId?: string) {

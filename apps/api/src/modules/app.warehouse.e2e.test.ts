@@ -35,8 +35,145 @@ describe('Siyuan API warehouse', () => {
     sensitiveWarehouseKeys.forEach((key) => expect(keys.has(key)).toBe(false));
   }
 
+  it('allows an unregistered customer code to be received first and matches it when the customer is created', async () => {
+    const adminToken = await app.loginAs('admin');
+    const customerCode = `P${String(Date.now()).slice(-5)}`;
+    const trackingNo = `KY-PENDING-${Date.now()}`;
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/manual-receipt/customers')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.arrayContaining([
+          expect.objectContaining({ code: '9409', name: 'Daloday' })
+        ]));
+        expect(response.body.every((customer: Record<string, unknown>) => Object.keys(customer).every((key) => ['code', 'name'].includes(key)))).toBe(true);
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode,
+        customerOrderNo: customerCode,
+        domesticTrackingNo: trackingNo,
+        combinedOrderNo: `${customerCode}-${trackingNo}`,
+        cartonSpecs: [{ weightKg: 5, lengthCm: 40, widthCm: 30, heightCm: 20, packageCount: 1 }]
+      })
+      .expect(201)
+      .expect((response) => {
+        const pendingPackage = response.body.packages.find((pkg: { customerCode: string }) => pkg.customerCode === customerCode);
+        expect(pendingPackage).toBeDefined();
+        expect(pendingPackage).not.toHaveProperty('customerName');
+        expect(pendingPackage).not.toHaveProperty('salesperson');
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/customers')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: customerCode, name: '待匹配收货客户', salesperson: 'operator' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ customerCode, customerName: `${customerCode}-待匹配收货客户`, salesperson: 'operator' })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=master_data.customer.match_pending_packages&pageSize=20')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ action: 'master_data.customer.match_pending_packages', after: expect.objectContaining({ customerCode, matchedPackageCount: 1 }) })
+        ]));
+      });
+  });
+
+  it('manual receipt creates multi carton warehouse package rows atomically and blocks duplicate submissions', async () => {
+    const adminToken = await app.loginAs('admin');
+    const trackingNo = `KY-MULTI-${Date.now()}`;
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: trackingNo,
+        combinedOrderNo: `9409-${trackingNo}`,
+        cartonSpecs: [
+          { weightKg: 29.9, lengthCm: 67, widthCm: 49, heightCm: 48, packageCount: 3 },
+          { weightKg: 10.6, lengthCm: 51, widthCm: 44, heightCm: 36, packageCount: 1 }
+        ],
+        scanTime: '2026-06-12T09:00:00.000+08:00',
+        scanSource: '手动添加',
+        remark: '多箱规收货'
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.totalCartonSpecs).toBe(2);
+        expect(response.body.totalPackages).toBe(4);
+        expect(response.body.packages).toEqual(expect.arrayContaining([
+          expect.objectContaining({ combinedOrderNo: `9409-${trackingNo}`, weightKg: 29.9, lengthCm: 67, widthCm: 49, heightCm: 48, packageCount: 3, exceptions: [] }),
+          expect.objectContaining({ combinedOrderNo: `9409-${trackingNo}`, weightKg: 10.6, lengthCm: 51, widthCm: 44, heightCm: 36, packageCount: 1, exceptions: [] })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: trackingNo,
+        combinedOrderNo: `9409-${trackingNo}`,
+        cartonSpecs: [
+          { weightKg: 29.9, lengthCm: 67, widthCm: 49, heightCm: 48, packageCount: 3 }
+        ]
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('已入仓');
+      });
+
+    const invalidTrackingNo = `KY-MULTI-BAD-${Date.now()}`;
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: invalidTrackingNo,
+        combinedOrderNo: `9409-${invalidTrackingNo}`,
+        cartonSpecs: [
+          { weightKg: 8, lengthCm: 42, widthCm: 33, heightCm: 23, packageCount: 1 },
+          { weightKg: 0, lengthCm: 36, widthCm: 26, heightCm: 17, packageCount: 1 }
+        ]
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('第 2 条箱规重量必须大于 0');
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        const rows = response.body.rows as Array<{ combinedOrderNo: string }>;
+        expect(rows.filter((row) => row.combinedOrderNo === `9409-${trackingNo}`)).toHaveLength(2);
+        expect(rows.some((row) => row.combinedOrderNo === `9409-${invalidTrackingNo}`)).toBe(false);
+      });
+  });
+
   async function approveForRouting(token: string, shipmentId: string, agentName = '仓库测试供应商') {
-    const financeToken = await app.loginAs('finance');
     await request(app.getHttpServer())
       .post(`/api/shipments/${shipmentId}/finance-items`)
       .set('Authorization', app.auth(token))
@@ -49,14 +186,136 @@ describe('Siyuan API warehouse', () => {
       .expect(201);
     await request(app.getHttpServer())
       .post(`/api/shipments/${shipmentId}/review/approve`)
-      .set('Authorization', app.auth(financeToken))
+      .set('Authorization', app.auth(token))
+      .send({ businessReview: true })
       .expect(201);
   }
 
-  async function approveTransferData(token: string, shipmentId: string) {
-    await request(app.getHttpServer()).post(`/api/shipments/${shipmentId}/business-data/approve`).set('Authorization', app.auth(token)).send({}).expect(201);
-    await request(app.getHttpServer()).post(`/api/shipments/${shipmentId}/agent-data/approve`).set('Authorization', app.auth(token)).send({}).expect(201);
+  async function printWarehouseHandover(token: string, shipmentId: string) {
+    const response = await request(app.getHttpServer())
+      .post('/api/warehouse/handover/print')
+      .set('Authorization', app.auth(token))
+      .send({ shipmentIds: [shipmentId] })
+      .expect(201);
+    return response.body.rows[0] as { handoverNo: string };
   }
+
+  it('updates warehouse package inbound data, remark, and exception fields', async () => {
+    const adminToken = await app.loginAs('admin');
+    const operatorToken = await app.loginAs('operator');
+
+    const created = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: 'KY-EDIT-001',
+        expectedTotalPackageCount: 3,
+        packageIndex: 1,
+        packageCount: 1,
+        weightKg: 5,
+        lengthCm: 40,
+        widthCm: 30,
+        heightCm: 20,
+        scanTime: '2026-06-12T09:00:00.000+08:00',
+        remark: '入仓待复核'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${created.body.id}`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({ weightKg: 7 })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${created.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '1399',
+        customerOrderNo: '1399',
+        domesticTrackingNo: 'KY-EDIT-002',
+        combinedOrderNo: '1399-KY-EDIT-002',
+        expectedTotalPackageCount: 4,
+        packageIndex: 2,
+        packageCount: 2,
+        weightKg: 6.5,
+        lengthCm: 50,
+        widthCm: 40,
+        heightCm: 30,
+        scanTime: '2026-06-12T10:30:00.000+08:00',
+        remark: '修改后备注',
+        manualException: '人工异常复核'
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          customerCode: '1399',
+          customerOrderNo: '1399',
+          domesticTrackingNo: 'KY-EDIT-002',
+          combinedOrderNo: '1399-KY-EDIT-002',
+          labelNo: '1399-KY-EDIT-002-2/4',
+          expectedTotalPackageCount: 4,
+          packageIndex: 2,
+          packageCount: 2,
+          weightKg: 6.5,
+          cbm: 0.12,
+          volumetricWeightKg: 20,
+          volumetricWeightKg5000: 24,
+          chargeableWeightKg: 20,
+          remark: '修改后备注',
+          manualException: '人工异常复核'
+        }));
+        expectNoWarehousePriceLeak(response.body);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock')
+      .query({ customerOrderNo: '1399', domesticTrackingNo: 'KY-EDIT-002' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.totals).toEqual(expect.objectContaining({
+          receiptTickets: 1,
+          totalPackages: 2,
+          totalWeightKg: 13,
+          totalCbm: 0.12,
+          exceptionTickets: 1
+        }));
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: created.body.id,
+            combinedOrderNo: '1399-KY-EDIT-002',
+            remark: '修改后备注',
+            manualException: '人工异常复核'
+          })
+        ]));
+        expectNoWarehousePriceLeak(response.body);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=warehouse.package.update')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'warehouse.package.update',
+            target: created.body.id,
+            before: expect.objectContaining({ customerCode: '9409', domesticTrackingNo: 'KY-EDIT-001' }),
+            after: expect.objectContaining({
+              customerCode: '1399',
+              combinedOrderNo: '1399-KY-EDIT-002',
+              packageCount: 2,
+              weightKg: 6.5,
+              remark: '修改后备注',
+              manualException: '人工异常复核'
+            })
+          })
+        ]));
+      });
+  });
 
   it('accepts Mojia device measurements and lands them in today receipts', async () => {
     process.env.MOJIA_DEVICE_TOKEN = 'test-mojia-token';
@@ -84,6 +343,30 @@ describe('Siyuan API warehouse', () => {
       measuredAt: '2026-06-12 11:00:00',
       deviceNo: 'MJ20210327'
     };
+
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send({ ...mojiaPayload, barcode: '9409-KYMJ-BAD', weightKg: 0 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual({ result: 'false', message: 'weight 必须是大于 0 的数字' });
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=warehouse.request.write.failed')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'warehouse.request.write.failed',
+            target: 'POST /api/integrations/mojia/measurements',
+            result: 'FAILED',
+            after: expect.objectContaining({ errorMessage: 'weight 必须是大于 0 的数字' })
+          })
+        ]));
+      });
 
     await request(app.getHttpServer())
       .post('/api/integrations/mojia/measurements')
@@ -138,6 +421,38 @@ describe('Siyuan API warehouse', () => {
     await request(app.getHttpServer())
       .post('/api/integrations/mojia/measurements')
       .set('X-Device-Token', 'test-mojia-token')
+      .send({
+        barcode: 'SHB056-KK000034086467',
+        lengthCm: 24,
+        widthCm: 15,
+        heightCm: 9,
+        weightKg: 0.7,
+        measuredAt: '1783323455600',
+        deviceNo: 'MJ20210327'
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual({ result: 'true', message: 'SHB056-KK000034086467 录入成功' });
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/today-receipts')
+      .query({ datePreset: 'CUSTOM', customFrom: '2026-07-06', customTo: '2026-07-06', combinedOrderNo: 'SHB056-KK000034086467' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows[0]).toEqual(expect.objectContaining({
+          customerCode: 'SHB056',
+          domesticTrackingNo: 'KK000034086467',
+          combinedOrderNo: 'SHB056-KK000034086467',
+          scanTime: '2026-07-06T07:37:35.000Z',
+          remark: '设备号：MJ20210327'
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
       .send({ ...mojiaPayload, barcode: '9409-KYMJ0003', measuredAt: 'bad-time' })
       .expect(201)
       .expect((response) => {
@@ -164,6 +479,27 @@ describe('Siyuan API warehouse', () => {
           domesticTrackingNo: '待补充',
           combinedOrderNo: 'J721-待补充',
           remark: '设备号：MJ20210327'
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send({ ...mojiaPayload, barcode: 'A286-302169950419001', measuredAt: '2026.07.06/17:15:56' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual({ result: 'true', message: 'A286-302169950419001 录入成功' });
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/today-receipts')
+      .query({ datePreset: 'CUSTOM', customFrom: '2026-07-06', customTo: '2026-07-06', combinedOrderNo: 'A286-302169950419001' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows[0]).toEqual(expect.objectContaining({
+          combinedOrderNo: 'A286-302169950419001',
+          scanTime: '2026-07-06T09:15:56.000Z'
         }));
       });
 
@@ -271,6 +607,7 @@ describe('Siyuan API warehouse', () => {
       .post('/api/warehouse/packages')
       .set('Authorization', app.auth(adminToken))
       .send({
+        customerCode: '9409',
         customerOrderNo: '9409',
         domesticTrackingNo: 'KY-TODAY-001',
         expectedTotalPackageCount: 2,
@@ -280,7 +617,7 @@ describe('Siyuan API warehouse', () => {
         lengthCm: 100,
         widthCm: 50,
         heightCm: 40,
-        scanTime: '2026-06-12T10:00:00.000+08:00',
+        scanTime: '2026-07-16T10:00:00.000+08:00',
         scanSource: '扫码'
       })
       .expect(201);
@@ -338,6 +675,7 @@ describe('Siyuan API warehouse', () => {
       .post('/api/warehouse/packages')
       .set('Authorization', app.auth(adminToken))
       .send({
+        customerCode: '9409',
         customerOrderNo: '9409',
         domesticTrackingNo: 'KY-TODAY-001',
         expectedTotalPackageCount: 2,
@@ -347,14 +685,14 @@ describe('Siyuan API warehouse', () => {
         lengthCm: 40,
         widthCm: 30,
         heightCm: 20,
-        scanTime: '2026-06-12T10:01:00.000+08:00',
+        scanTime: '2026-07-16T10:01:00.000+08:00',
         scanSource: '扫码'
       })
       .expect(201);
 
     const adminToday = await request(app.getHttpServer())
       .get('/api/warehouse/today-receipts')
-      .query({ datePreset: 'CUSTOM', customFrom: '2026-06-12', customTo: '2026-06-12', customerOrderNo: '9409', domesticTrackingNo: 'KY-TODAY-001' })
+      .query({ datePreset: 'CUSTOM', customFrom: '2026-07-16', customTo: '2026-07-16', customerOrderNo: '9409', domesticTrackingNo: 'KY-TODAY-001' })
       .set('Authorization', app.auth(adminToken))
       .expect(200);
 
@@ -406,17 +744,11 @@ describe('Siyuan API warehouse', () => {
         expect(response.body.exceptions).toContain('部分到仓');
       });
 
-    const operatorToday = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .get('/api/warehouse/today-receipts')
       .query({ datePreset: 'CUSTOM', customFrom: '2026-06-12', customTo: '2026-06-12' })
       .set('Authorization', app.auth(operatorToken))
-      .expect(200);
-
-    expect(operatorToday.body.rows.length).toBeGreaterThan(0);
-    expect(operatorToday.body.rows.every((row: { customerCode: string }) => row.customerCode === '9409')).toBe(true);
-    expect(operatorToday.body.rows.every((row: { site?: string }) => row.site === undefined)).toBe(true);
-    expect(operatorToday.body.totals.exceptionTickets).toBeGreaterThan(0);
-    expectNoWarehousePriceLeak(operatorToday.body);
+      .expect(403);
 
     await request(app.getHttpServer())
       .post('/api/warehouse/packages')
@@ -461,9 +793,9 @@ describe('Siyuan API warehouse', () => {
             expect.objectContaining({
               action: 'security.permission.denied',
               actorUsername: 'operator',
-              target: expect.stringContaining('/api/warehouse/packages'),
+              target: expect.stringContaining('/api/warehouse/today-receipts'),
               result: 'FAILED',
-              after: expect.objectContaining({ permissions: ['warehouse:write'] })
+              after: expect.objectContaining({ permissions: expect.arrayContaining(['warehouse:today-receipt:view']) })
             })
           ])
         );
@@ -473,53 +805,85 @@ describe('Siyuan API warehouse', () => {
   it('groups warehouse API packages and creates draft shipments from consolidation', async () => {
     const adminToken = await app.loginAs('admin');
     const token = adminToken;
+    const suffix = `${Date.now()}`.slice(-6);
+    const mergeTrackingNo = `LIN-M-${suffix}`;
+    const shipTrackingNo = `LIN-S-${suffix}`;
+
+    const mergePackageIds: string[] = [];
+    for (const packageIndex of [1, 2, 3]) {
+      const created = await request(app.getHttpServer())
+        .post('/api/warehouse/packages')
+        .set('Authorization', app.auth(token))
+        .send({
+          customerCode: '9409',
+          customerOrderNo: '9409',
+          domesticTrackingNo: mergeTrackingNo,
+          expectedTotalPackageCount: 10,
+          packageIndex,
+          packageCount: 1,
+          weightKg: 1,
+          lengthCm: 10,
+          widthCm: 10,
+          heightCm: 10
+        })
+        .expect(201);
+      mergePackageIds.push(created.body.id);
+    }
+    const shipPackageIds: string[] = [];
+    for (const packageIndex of [1, 2]) {
+      const created = await request(app.getHttpServer())
+        .post('/api/warehouse/packages')
+        .set('Authorization', app.auth(token))
+        .send({
+          customerCode: '9409',
+          customerOrderNo: '9409',
+          domesticTrackingNo: shipTrackingNo,
+          expectedTotalPackageCount: 2,
+          packageIndex,
+          packageCount: 1,
+          weightKg: 1,
+          lengthCm: 10,
+          widthCm: 10,
+          heightCm: 10
+        })
+        .expect(201);
+      shipPackageIds.push(created.body.id);
+    }
 
     const groups = await request(app.getHttpServer())
       .get('/api/warehouse/package-groups')
       .set('Authorization', app.auth(token))
       .expect(200);
 
-    const group1399 = groups.body.find((row: { customerOrderNo: string }) => row.customerOrderNo === '1399');
-    expect(group1399).toEqual(expect.objectContaining({
-      combinedOrderNo: '1399-KY4001036478949',
+    const mergeGroupNo = `9409-${mergeTrackingNo}`;
+    const group = groups.body.find((row: { combinedOrderNo: string }) => row.combinedOrderNo === mergeGroupNo);
+    expect(group).toEqual(expect.objectContaining({
+      combinedOrderNo: mergeGroupNo,
       expectedTotalPackageCount: 10,
       arrivedPackageCount: 3,
       remainingPackageCount: 7
     }));
 
-    const packages = await request(app.getHttpServer())
-      .get('/api/warehouse/packages')
-      .set('Authorization', app.auth(token))
-      .expect(200);
-    const packageIds = packages.body
-      .filter((row: { customerOrderNo: string }) => row.customerOrderNo === '1399')
-      .slice(0, 2)
-      .map((row: { id: string }) => row.id);
-
     const mergeOnly = await request(app.getHttpServer())
       .post('/api/warehouse/consolidations')
       .set('Authorization', app.auth(token))
-      .send({ packageIds, mode: 'MERGE_ONLY' })
+      .send({ packageIds: mergePackageIds.slice(0, 2), mode: 'MERGE_ONLY' })
       .expect(201);
-    expect(mergeOnly.body.consolidationNo).toBe('1399-MERGE001');
+    expect(mergeOnly.body.consolidationNo).toMatch(/^9409-MERGE\d+$/);
     expect(mergeOnly.body.systemOrderNo).toBeUndefined();
 
-    const remainingPackageIds = packages.body
-      .filter((row: { customerOrderNo: string; id: string }) => row.customerOrderNo === 'P710')
-      .slice(0, 2)
-      .map((row: { id: string }) => row.id);
     const mergeAndShip = await request(app.getHttpServer())
       .post('/api/warehouse/consolidations')
       .set('Authorization', app.auth(token))
-      .send({ packageIds: remainingPackageIds, mode: 'MERGE_AND_SHIP' })
+      .send({ packageIds: shipPackageIds, mode: 'MERGE_AND_SHIP' })
       .expect(201);
-    expect(mergeAndShip.body.systemOrderNo).toBe('P710-OUT001');
+    expect(mergeAndShip.body.systemOrderNo).toMatch(/^9409-OUT\d+$/);
 
     const draftShipment = await request(app.getHttpServer())
       .get('/api/shipments')
       .set('Authorization', app.auth(token))
       .expect(200)
-      .then((response) => response.body.find((shipment: { systemOrderNo: string }) => shipment.systemOrderNo === 'P710-OUT001'));
+      .then((response) => response.body.find((shipment: { systemOrderNo: string }) => shipment.systemOrderNo === mergeAndShip.body.systemOrderNo));
     expect(draftShipment).toEqual(expect.objectContaining({ status: 'DRAFT' }));
 
     await request(app.getHttpServer())
@@ -529,8 +893,8 @@ describe('Siyuan API warehouse', () => {
       .expect((response) => {
         expect(response.body).toEqual(
           expect.arrayContaining(
-            remainingPackageIds.map((id: string) =>
-              expect.objectContaining({ id, shipmentId: draftShipment.id, systemOrderNo: 'P710-OUT001', status: 'CONSOLIDATED' })
+            shipPackageIds.map((id: string) =>
+              expect.objectContaining({ id, shipmentId: draftShipment.id, systemOrderNo: mergeAndShip.body.systemOrderNo, status: 'CONSOLIDATED' })
             )
           )
         );
@@ -543,7 +907,7 @@ describe('Siyuan API warehouse', () => {
       .expect((response) => {
         expect(response.body).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ systemOrderNo: 'P710-OUT001', status: 'DRAFT' })
+            expect.objectContaining({ systemOrderNo: mergeAndShip.body.systemOrderNo, status: 'DRAFT' })
           ])
         );
       });
@@ -728,14 +1092,11 @@ describe('Siyuan API warehouse', () => {
         ]));
       });
 
-    const operatorInStock = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .get('/api/warehouse/in-stock')
       .query({ combinedOrderNo: '9409-KY-STOCK-075' })
       .set('Authorization', app.auth(operatorToken))
-      .expect(200);
-    expect(operatorInStock.body.rows.length).toBeGreaterThan(0);
-    expect(operatorInStock.body.rows.every((row: { site?: string }) => row.site === undefined)).toBe(true);
-    expectNoWarehousePriceLeak(operatorInStock.body);
+      .expect(403);
 
     const tallyTask = await request(app.getHttpServer())
       .post('/api/warehouse/tally-tasks')
@@ -747,7 +1108,7 @@ describe('Siyuan API warehouse', () => {
       })
       .expect(201);
     expect(tallyTask.body).toEqual(expect.objectContaining({
-      taskNo: expect.stringMatching(/^9409-KY-STOCK-075-TL001$/),
+      taskNo: expect.stringMatching(/^9409\d{4}(?:\d{2,})?LH$/),
       status: 'PENDING',
       sourcePackageId: created.body.id,
       sourceCombinedOrderNo: '9409-KY-STOCK-075',
@@ -767,20 +1128,30 @@ describe('Siyuan API warehouse', () => {
     expectNoWarehousePriceLeak(tallyTask.body);
 
     await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock')
+      .query({ combinedOrderNo: '9409-KY-STOCK-075' })
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: created.body.id,
+            tallyTaskId: tallyTask.body.id,
+            tallyTaskNo: tallyTask.body.taskNo,
+            tallyCompleted: false,
+            tallyStatus: '理货中'
+          })
+        ]));
+        const row = response.body.rows.find((item: { id: string }) => item.id === created.body.id);
+        expect(row.tallyTaskId).toBe(tallyTask.body.id);
+        expect(row.tallyTaskNo).toBe(tallyTask.body.taskNo);
+      });
+
+    await request(app.getHttpServer())
       .get('/api/warehouse/tally-tasks')
       .query({ status: 'PENDING', combinedOrderNo: '9409-KY-STOCK-075' })
       .set('Authorization', app.auth(operatorToken))
-      .expect(200)
-      .expect((response) => {
-        expect(response.body).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            id: tallyTask.body.id,
-            status: 'PENDING',
-            tallyRequirement: '拆分 50/25，保留原箱唛头'
-          })
-        ]));
-        expectNoWarehousePriceLeak(response.body);
-      });
+      .expect(403);
 
     await request(app.getHttpServer())
       .post(`/api/warehouse/tally-tasks/${tallyTask.body.id}/complete`)
@@ -823,6 +1194,56 @@ describe('Siyuan API warehouse', () => {
       labelStatus: 'NOT_GENERATED'
     }));
     expect(completedTallyTask.body.completedAt).toBeTruthy();
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock')
+      .query({ combinedOrderNo: '9409-KY-STOCK-075' })
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: created.body.id,
+            tallyTaskId: tallyTask.body.id,
+            tallyTaskNo: tallyTask.body.taskNo,
+            tallyCompleted: true,
+            tallyStatus: '已理货'
+          })
+        ]));
+        expectNoWarehousePriceLeak(response.body);
+      });
+
+    const retallyTask = await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({
+        packageIds: [created.body.id],
+        tallyRequirement: '同一包裹二次理货'
+      })
+      .expect(201);
+    expect(retallyTask.body).toEqual(expect.objectContaining({
+      status: 'PENDING',
+      packageIds: [created.body.id],
+      taskNo: `${tallyTask.body.taskNo}02`,
+      tallyRequirement: '同一包裹二次理货'
+    }));
+
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${retallyTask.body.id}/complete`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ packageCount: 70, weightKg: 74, lengthCm: 99, widthCm: 49, heightCm: 39 })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/tally-task-history-chain')
+      .query({ packageId: created.body.id })
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.map((task: { taskNo: string }) => task.taskNo)).toEqual([
+          tallyTask.body.taskNo,
+          retallyTask.body.taskNo
+        ]);
+      });
 
     await request(app.getHttpServer())
       .post(`/api/warehouse/tally-tasks/${tallyTask.body.id}/label`)
@@ -836,7 +1257,7 @@ describe('Siyuan API warehouse', () => {
     expect(generatedLabel.body).toEqual(expect.objectContaining({
       id: tallyTask.body.id,
       labelStatus: 'GENERATED',
-      labelNo: '9409-KY-STOCK-075-TL001-LBL',
+      labelNo: tallyTask.body.taskNo,
       labelGeneratedBy: 'warehouse'
     }));
     expect(generatedLabel.body.labelGeneratedAt).toBeTruthy();
@@ -851,7 +1272,7 @@ describe('Siyuan API warehouse', () => {
       .set('Authorization', app.auth(warehouseToken))
       .expect(201);
     expect(printedLabel.body).toEqual(expect.objectContaining({
-      labelNo: '9409-KY-STOCK-075-TL001-LBL',
+      labelNo: tallyTask.body.taskNo,
       labelPrintedBy: 'warehouse'
     }));
     expect(printedLabel.body.labelPrintedAt).toBeTruthy();
@@ -861,7 +1282,7 @@ describe('Siyuan API warehouse', () => {
       .set('Authorization', app.auth(warehouseToken))
       .expect(201);
     expect(downloadedLabel.body).toEqual(expect.objectContaining({
-      labelNo: '9409-KY-STOCK-075-TL001-LBL',
+      labelNo: tallyTask.body.taskNo,
       labelDownloadedBy: 'warehouse'
     }));
     expect(downloadedLabel.body.labelDownloadedAt).toBeTruthy();
@@ -878,24 +1299,18 @@ describe('Siyuan API warehouse', () => {
       .send({ labelNo: generatedLabel.body.labelNo })
       .expect(201);
     expect(appliedLabel.body).toEqual(expect.objectContaining({
-      alreadyApplied: false,
+      alreadyApplied: true,
       task: expect.objectContaining({
-        id: tallyTask.body.id,
-        appliedPackageNo: '9409-KY-STOCK-075',
-        labelAppliedBy: 'warehouse'
+        id: tallyTask.body.id
       }),
       package: expect.objectContaining({
+        id: created.body.id,
         combinedOrderNo: '9409-KY-STOCK-075',
-        sourcePackageId: created.body.id,
-        sourcePackageNo: '9409-KY-STOCK-075',
         tallyTaskId: tallyTask.body.id,
-        tallyTaskNo: '9409-KY-STOCK-075-TL001',
-        status: 'RECEIVED',
-        tallyStatus: '已理货',
-        scanSource: '理货后标签扫描'
+        tallyTaskNo: tallyTask.body.taskNo,
+        status: 'RECEIVED'
       })
     }));
-    expect(appliedLabel.body.task.labelAppliedAt).toBeTruthy();
     expectNoWarehousePriceLeak(appliedLabel.body);
 
     const duplicateAppliedLabel = await request(app.getHttpServer())
@@ -918,7 +1333,7 @@ describe('Siyuan API warehouse', () => {
             tallyStatus: '已理货'
           })
         ]));
-        expect(response.body.rows.some((row: { id: string }) => row.id === created.body.id)).toBe(false);
+        expect(response.body.rows.some((row: { id: string }) => row.id === created.body.id)).toBe(true);
       });
 
     await request(app.getHttpServer())
@@ -932,10 +1347,9 @@ describe('Siyuan API warehouse', () => {
             id: tallyTask.body.id,
             status: 'COMPLETED',
             sourceCombinedOrderNo: '9409-KY-STOCK-075',
-            labelNo: '9409-KY-STOCK-075-TL001-LBL',
+            labelNo: tallyTask.body.taskNo,
             labelStatus: 'GENERATED',
-            labelDownloadedBy: 'warehouse',
-            appliedPackageNo: '9409-KY-STOCK-075'
+            labelDownloadedBy: 'warehouse'
           })
         ]));
       });
@@ -1015,9 +1429,9 @@ describe('Siyuan API warehouse', () => {
           expect.objectContaining({
             action: 'warehouse.tally.label.generate',
             actorUsername: 'warehouse',
-            target: '9409-KY-STOCK-075-TL001-LBL',
+            target: tallyTask.body.taskNo,
             after: expect.objectContaining({
-              labelNo: '9409-KY-STOCK-075-TL001-LBL',
+              labelNo: tallyTask.body.taskNo,
               labelStatus: 'GENERATED',
               labelQrContent: expect.stringContaining(`"sourcePackageId":"${created.body.id}"`)
             })
@@ -1034,7 +1448,7 @@ describe('Siyuan API warehouse', () => {
           expect.objectContaining({
             action: 'warehouse.tally.label.print',
             actorUsername: 'warehouse',
-            target: '9409-KY-STOCK-075-TL001-LBL',
+            target: tallyTask.body.taskNo,
             after: expect.objectContaining({ labelPrintedBy: 'warehouse' })
           })
         ]));
@@ -1049,25 +1463,8 @@ describe('Siyuan API warehouse', () => {
           expect.objectContaining({
             action: 'warehouse.tally.label.download',
             actorUsername: 'warehouse',
-            target: '9409-KY-STOCK-075-TL001-LBL',
+            target: tallyTask.body.taskNo,
             after: expect.objectContaining({ labelDownloadedBy: 'warehouse' })
-          })
-        ]));
-      });
-
-    await request(app.getHttpServer())
-      .get('/api/system/audit-logs?action=warehouse.tally.label.apply')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
-      .expect((response) => {
-        expect(response.body.rows).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            action: 'warehouse.tally.label.apply',
-            actorUsername: 'warehouse',
-            target: '9409-KY-STOCK-075-TL001-LBL',
-            after: expect.objectContaining({
-              archivedPackageIds: expect.arrayContaining([created.body.id])
-            })
           })
         ]));
       });
@@ -1314,13 +1711,202 @@ describe('Siyuan API warehouse', () => {
       .query({ combinedOrderNo: '9409-KY-STOCK-075' })
       .set('Authorization', app.auth(adminToken))
       .expect(200);
-    expect(afterMerge.body.rows).toHaveLength(1);
-    expect(afterMerge.body.rows[0]).toEqual(expect.objectContaining({
-      id: expect.any(String),
-      combinedOrderNo: '9409-KY-STOCK-075',
-      tallyTaskId: tallyTask.body.id,
-      tallyStatus: '已理货'
+    expect(afterMerge.body.rows).toHaveLength(0);
+  });
+
+  it('creates pending remeasure tally outputs and applies machine or manual measurements without duplicate packages', async () => {
+    process.env.MOJIA_DEVICE_TOKEN = 'test-mojia-token';
+    const adminToken = await app.loginAs('admin');
+    const warehouseToken = await app.loginAs('warehouse');
+    const source = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: 'KY-TALLY-REMEASURE',
+        expectedTotalPackageCount: 8,
+        packageIndex: 1,
+        packageCount: 8,
+        weightKg: 10,
+        lengthCm: 40,
+        widthCm: 30,
+        heightCm: 20
+      })
+      .expect(201);
+    const task = await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ packageIds: [source.body.id], tallyRequirement: '拆成 5 件和 3 件后重新过机' })
+      .expect(201);
+    const completed = await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/complete`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({
+        packageCount: 8,
+        results: [
+          { sourcePackageIds: [source.body.id], packageCount: 5 },
+          { sourcePackageIds: [source.body.id], packageCount: 3 }
+        ]
+      })
+      .expect(201);
+    expect(completed.body).toEqual(expect.objectContaining({
+      status: 'COMPLETED',
+      completedPackageCount: 8,
+      labelStatus: 'GENERATED',
+      labelNo: task.body.taskNo
     }));
+
+    const outputs = await request(app.getHttpServer())
+      .get(`/api/warehouse/tally-tasks/${task.body.id}/output-packages`)
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200);
+    expect(outputs.body).toEqual([
+      expect.objectContaining({ labelNo: `${task.body.taskNo}-01`, packageIndex: 1, packageCount: 5, measurementStatus: 'PENDING_REMEASURE', weightKg: 0 }),
+      expect.objectContaining({ labelNo: `${task.body.taskNo}-02`, packageIndex: 2, packageCount: 3, measurementStatus: 'PENDING_REMEASURE', weightKg: 0 })
+    ]);
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/label/print`)
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(201)
+      .expect((response) => expect(response.body).toEqual(expect.objectContaining({
+        labelNo: task.body.taskNo,
+        labelPrintedBy: 'warehouse'
+      })));
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/packages')
+      .query({ packageIds: outputs.body.map((pkg: { id: string }) => pkg.id) })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => expect(response.body).toEqual([]));
+    await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ packageIds: [outputs.body[0].id], tallyRequirement: '尚未复测时再次理货' })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toContain('待重新过机'));
+    await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks/label-scan')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ labelNo: outputs.body[0].labelNo })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toContain('待重新过机'));
+
+    const machinePayload = {
+      barcode: outputs.body[0].labelNo,
+      weightKg: 25,
+      lengthCm: 60,
+      widthCm: 50,
+      heightCm: 40,
+      measuredAt: '2026-07-16T09:00:00.000+08:00',
+      deviceNo: 'MJ-TALLY-01'
+    };
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send(machinePayload)
+      .expect(201)
+      .expect((response) => expect(response.body).toEqual({ result: 'true', message: `${outputs.body[0].labelNo} 复测覆盖成功` }));
+    await request(app.getHttpServer())
+      .get('/api/warehouse/tally-tasks')
+      .query({ status: 'COMPLETED' })
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => {
+        const refreshedTask = response.body.find((row: { id: string }) => row.id === task.body.id);
+        expect(refreshedTask.outputPackages).toEqual([
+          expect.objectContaining({ id: outputs.body[0].id, measurementStatus: 'MEASURED', weightKg: 25, lengthCm: 60, widthCm: 50, heightCm: 40 }),
+          expect.objectContaining({ id: outputs.body[1].id, measurementStatus: 'PENDING_REMEASURE', weightKg: 0 })
+        ]);
+      });
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send(machinePayload)
+      .expect(201)
+      .expect((response) => expect(response.body).toEqual({ result: 'true', message: `${outputs.body[0].labelNo} 已接收` }));
+    await request(app.getHttpServer())
+      .post('/api/integrations/mojia/measurements')
+      .set('X-Device-Token', 'test-mojia-token')
+      .send({ ...machinePayload, weightKg: 26 })
+      .expect(201)
+      .expect((response) => expect(response.body).toEqual(expect.objectContaining({ result: 'false', message: expect.stringContaining('人工确认') })));
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${outputs.body[1].id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ weightKg: 18, lengthCm: 55, widthCm: 45, heightCm: 35 })
+      .expect(200)
+      .expect((response) => expect(response.body).toEqual(expect.objectContaining({
+        measurementStatus: 'MEASURED',
+        measurementMatchedBy: 'admin',
+        scanSource: '人工录入-理货复测'
+      })));
+
+    const measuredOutputs = await request(app.getHttpServer())
+      .get(`/api/warehouse/tally-tasks/${task.body.id}/output-packages`)
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200);
+    expect(measuredOutputs.body).toEqual([
+      expect.objectContaining({ id: outputs.body[0].id, measurementStatus: 'MEASURED', measurementMatchedBy: '墨家设备:MJ-TALLY-01' }),
+      expect.objectContaining({ id: outputs.body[1].id, measurementStatus: 'MEASURED', measurementMatchedBy: 'admin' })
+    ]);
+    await request(app.getHttpServer())
+      .get('/api/warehouse/tally-tasks')
+      .query({ status: 'COMPLETED' })
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => {
+        const refreshedTask = response.body.find((row: { id: string }) => row.id === task.body.id);
+        expect(refreshedTask).toEqual(expect.objectContaining({
+          completedWeightKg: 43,
+          outputPackages: [
+            expect.objectContaining({ id: outputs.body[0].id, measurementStatus: 'MEASURED', measurementMatchedBy: '墨家设备:MJ-TALLY-01' }),
+            expect.objectContaining({ id: outputs.body[1].id, measurementStatus: 'MEASURED', measurementMatchedBy: 'admin' })
+          ]
+        }));
+      });
+    await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks/label-scan')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ labelNo: outputs.body[0].labelNo })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.alreadyApplied).toBe(true);
+        expect(response.body.package.id).toBe(outputs.body[0].id);
+      });
+
+    const retally = await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ packageIds: [outputs.body[0].id], tallyRequirement: '同一包裹第二次理货' })
+      .expect(201);
+    expect(retally.body.taskNo).toBe(`${task.body.taskNo}02`);
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${retally.body.id}/complete`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({
+        packageCount: 5,
+        results: [{ sourcePackageIds: [outputs.body[0].id], packageCount: 5 }]
+      })
+      .expect(201);
+    const retallyOutputs = await request(app.getHttpServer())
+      .get(`/api/warehouse/tally-tasks/${retally.body.id}/output-packages`)
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200);
+    expect(retallyOutputs.body).toEqual([
+      expect.objectContaining({ labelNo: `${task.body.taskNo}02`, measurementStatus: 'PENDING_REMEASURE' })
+    ]);
+    await request(app.getHttpServer())
+      .get('/api/warehouse/tally-task-history-chain')
+      .query({ packageId: retallyOutputs.body[0].id })
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => expect(response.body.map((row: { taskNo: string }) => row.taskNo)).toEqual([
+        task.body.taskNo,
+        `${task.body.taskNo}02`
+      ]));
   });
 
   it('creates inbound warehouse labels and preserves source packages when splitting', async () => {
@@ -1331,8 +1917,8 @@ describe('Siyuan API warehouse', () => {
       .post('/api/warehouse/packages')
       .set('Authorization', app.auth(token))
       .send({
-        customerCode: 'WHSYA006',
-        customerOrderNo: 'WHSYA006',
+        customerCode: '9409',
+        customerOrderNo: '9409',
         domesticTrackingNo: 'SF1561933636038',
         expectedTotalPackageCount: 8,
         packageIndex: 5,
@@ -1341,16 +1927,16 @@ describe('Siyuan API warehouse', () => {
         lengthCm: 60,
         widthCm: 50,
         heightCm: 40,
-        scanTime: '2026-06-12T19:49:48.000+08:00',
+        scanTime: '2026-07-16T09:49:48.000+08:00',
         remark: '木架'
       })
       .expect(201);
 
     expect(created.body).toEqual(expect.objectContaining({
-      customerCode: 'WHSYA006',
-      customerOrderNo: 'WHSYA006',
+      customerCode: '9409',
+      customerOrderNo: '9409',
       domesticTrackingNo: 'SF1561933636038',
-      combinedOrderNo: 'WHSYA006-SF1561933636038',
+      combinedOrderNo: '9409-SF1561933636038',
       expectedTotalPackageCount: 8,
       packageIndex: 5,
       divisor: 6000,
@@ -1358,7 +1944,7 @@ describe('Siyuan API warehouse', () => {
       chargeableWeightKg: 20,
       remark: '木架'
     }));
-    expect(created.body.labelNo).toContain('WHSYA006');
+    expect(created.body.labelNo).toContain('9409');
 
     await request(app.getHttpServer())
       .get('/api/warehouse/packages')
@@ -1389,14 +1975,14 @@ describe('Siyuan API warehouse', () => {
     expect(split.body.packages).toEqual(expect.arrayContaining([
       expect.objectContaining({
         sourcePackageId: created.body.id,
-        sourcePackageNo: 'WHSYA006-SF1561933636038',
+        sourcePackageNo: '9409-SF1561933636038',
         packageIndex: 1,
         expectedTotalPackageCount: 2,
         divisor: 6000
       }),
       expect.objectContaining({
         sourcePackageId: created.body.id,
-        sourcePackageNo: 'WHSYA006-SF1561933636038',
+        sourcePackageNo: '9409-SF1561933636038',
         packageIndex: 2,
         expectedTotalPackageCount: 2,
         divisor: 6000
@@ -1404,7 +1990,7 @@ describe('Siyuan API warehouse', () => {
     ]));
   });
 
-  it('creates mock carrier labels, reuses active labels, dispatches with generated transfer number, and protects staff-only label details', async () => {
+  it('creates mock carrier labels, reuses active labels, dispatches with generated transfer number, handover audit, and outbounded archive data, and protects staff-only label details', async () => {
     const adminToken = await app.loginAs('admin');
     const token = adminToken;
 
@@ -1434,8 +2020,6 @@ describe('Siyuan API warehouse', () => {
       .expect((response) => {
         expect(response.body.shippingMarkRequired).toBe(true);
       });
-    await approveTransferData(token, created.body.id);
-
     const label = await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/labels`)
       .set('Authorization', app.auth(token))
@@ -1446,6 +2030,22 @@ describe('Siyuan API warehouse', () => {
     expect(label.body.label.labelUrl).toBe(`/mock-labels/${label.body.label.labelNo}.pdf`);
     expect(label.body.shipment.transferNo).toBe(label.body.label.transferNo);
     expect(label.body.shipment.latestTracking).toBe('已生成面单');
+
+    const warehouseToken = await app.loginAs('warehouse');
+    await request(app.getHttpServer())
+      .get('/api/warehouse/dispatch-shipments')
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => {
+        const row = response.body.find((shipment: { id: string }) => shipment.id === created.body.id);
+        expect(row).toEqual(expect.objectContaining({
+          status: 'WAITING_DISPATCH',
+          agentName: '深圳宇环',
+          routeAgentChannelName: '宇环 DHL'
+        }));
+        expect(row).not.toHaveProperty('paymentAmountCny');
+        expect(row).not.toHaveProperty('paymentAmountUsd');
+      });
 
     await request(app.getHttpServer())
       .get('/api/system/audit-logs?action=shipment.label.create')
@@ -1495,7 +2095,7 @@ describe('Siyuan API warehouse', () => {
       .set('Authorization', app.auth(customerToken))
       .expect(403);
 
-    const warehouseToken = await app.loginAs('warehouse');
+    const printedHandover = await printWarehouseHandover(warehouseToken, created.body.id);
     await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/dispatch`)
       .set('Authorization', app.auth(warehouseToken))
@@ -1508,19 +2108,28 @@ describe('Siyuan API warehouse', () => {
     const dispatched = await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/dispatch`)
       .set('Authorization', app.auth(warehouseToken))
-      .send({ shippingMarkConfirmed: true })
+      .send({
+        shippingMarkConfirmed: true,
+        batchDispatchSource: 'warehouse.batch_dispatch_handover'
+      })
       .expect(201);
     expect(dispatched.body.status).toBe('OUTBOUNDED');
     expect(dispatched.body.transferNo).toBe(label.body.label.transferNo);
     expect(dispatched.body.outboundAt).toBeTruthy();
 
     await request(app.getHttpServer())
-      .get('/api/shipments')
+      .get('/api/warehouse/dispatch-shipments')
       .set('Authorization', app.auth(warehouseToken))
       .expect(200)
       .expect((response) => {
         const row = response.body.find((shipment: { id: string }) => shipment.id === created.body.id);
         expect(row).toBeTruthy();
+        expect(row).toEqual(expect.objectContaining({
+          handoverNo: printedHandover.handoverNo,
+          outboundBy: 'warehouse',
+          batchDispatchSource: 'warehouse.batch_dispatch_handover',
+          outboundAt: expect.any(String)
+        }));
         expect(row).not.toHaveProperty('receivableAmount');
         expect(row).not.toHaveProperty('payableAmount');
         expect(row).not.toHaveProperty('profit');
@@ -1537,12 +2146,13 @@ describe('Siyuan API warehouse', () => {
             target: created.body.id,
             after: expect.objectContaining({
               outboundOrderNo: dispatched.body.systemOrderNo,
-              handoverNo: `HD-${dispatched.body.systemOrderNo}`,
+              handoverNo: printedHandover.handoverNo,
               agentName: expect.stringContaining('宇环'),
               channelName: expect.any(String),
               packageCount: 1,
               chargeableWeightKg: 4,
               outboundBy: 'warehouse',
+              batchDispatchSource: 'warehouse.batch_dispatch_handover',
               archiveStatus: '已出库归档',
               outboundAt: expect.any(String),
               shippingMarkRequired: true,
@@ -1585,8 +2195,6 @@ describe('Siyuan API warehouse', () => {
       .set('Authorization', app.auth(token))
       .send({ channelId: 'ch-ups-ca', agentId: 'a-canada', agentChannelName: '加美 UPS', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB' })
       .expect(201);
-    await approveTransferData(token, created.body.id);
-
     const label = await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/labels`)
       .set('Authorization', app.auth(token))
@@ -1601,6 +2209,8 @@ describe('Siyuan API warehouse', () => {
         expect(response.body.status).toBe('VOIDED');
         expect(response.body.voidedAt).toBeTruthy();
       });
+
+    await printWarehouseHandover(token, created.body.id);
 
     await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/dispatch`)
@@ -1640,8 +2250,8 @@ describe('Siyuan API warehouse', () => {
       .set('Authorization', app.auth(token))
       .send({ channelId: 'ch-ups-ca', agentId: 'a-canada', agentChannelName: '加美 UPS', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB' })
       .expect(201);
-    await approveTransferData(token, created.body.id);
     await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/labels`).set('Authorization', app.auth(token)).expect(201);
+    await printWarehouseHandover(token, created.body.id);
     await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/dispatch`).set('Authorization', app.auth(token)).send({}).expect(201);
 
     const tasks = await request(app.getHttpServer())
@@ -1709,8 +2319,8 @@ describe('Siyuan API warehouse', () => {
       .set('Authorization', app.auth(token))
       .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB' })
       .expect(201);
-    await approveTransferData(token, created.body.id);
     await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/labels`).set('Authorization', app.auth(token)).expect(201);
+    await printWarehouseHandover(token, created.body.id);
     await request(app.getHttpServer()).post(`/api/shipments/${created.body.id}/dispatch`).set('Authorization', app.auth(token)).send({}).expect(201);
 
     const tasks = await request(app.getHttpServer()).get('/api/carrier-tasks').set('Authorization', app.auth(token)).expect(200);

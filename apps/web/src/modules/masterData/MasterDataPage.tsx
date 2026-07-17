@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState, type ClipboardEvent } from 'react';
 import { AlertTriangle, Bot, Building2, CheckCircle, Download, Edit, FileText, Plus, Power, Route, Settings, Sparkles, Trash2, Upload as UploadIcon, UserRound, Users } from 'lucide-react';
-import { Alert, Button, Card, Checkbox, Col, Flex, Form, Input, Modal, Popconfirm, Row, Space, Statistic, Table, Tag, Typography, Upload } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Tag, Typography, Upload } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { businessTypeLabels, summarizeMasterDataSnapshot, type AgentBankAccountSummary, type AgentChannelSummary, type AgentIntegrationType, type AgentSummary, type AuditLogSummary, type BusinessType, type ChannelCategorySummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type MasterDataSnapshot, type Shipment } from '@siyuan/shared';
+import { businessTypeLabels, summarizeMasterDataSnapshot, type AgentBankAccountSummary, type AgentChannelSummary, type AgentIntegrationType, type AgentSummary, type AuditLogSummary, type BusinessType, type ChannelCategorySummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type MasterDataSnapshot, type Shipment, type StaffAccountSummary } from '@siyuan/shared';
 import { ApiClient, type PermissionKey, type Principal, type RoleKey } from '../../apiClient';
 import { FinanceCatalogPage } from '../finance/FinanceCatalogPage';
 import { useFinanceCatalog } from '../finance/useFinanceCatalog';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
-import { AppActionGroup, AppPage, AppPageHeader, MetricCard, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedTable, MetricCard, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 
 const { Title, Text } = Typography;
 
@@ -15,9 +15,21 @@ interface MasterCustomerFormValues {
   customerCode: string;
   customerName: string;
   customerSource: string;
-  salesperson: string;
+  salesperson?: string;
   defaultSettlementMethod: string;
+  contacts?: MasterCustomerContactFormValues[];
 }
+
+const customerSalespersonRoles = new Set([
+  'OPERATOR',
+  'UG_MARKET',
+  'UG_BUSINESS',
+  'UG_SZ_WUHAN',
+  'UG_ZZ_SIHUA',
+  'UG_WH_JIUYULIAN',
+  'UG_BUSINESS_MANAGER',
+  'UG_BUSINESS_SUPERVISOR'
+]);
 
 interface MasterCustomerContactFormValues {
   receiverName: string;
@@ -40,11 +52,23 @@ interface MasterAgentFormValues {
   warehouseContact: string;
   invoiceTemplateName: string;
   invoiceTemplateUrl: string;
+  trackingWebsite: string;
   bankAccountName: string;
   bankAccountNo: string;
   bankName: string;
+  bankAccounts: MasterAgentBankAccountFormValues[];
   agentIntegrationType?: AgentIntegrationType;
   agentEnabled?: 'true' | 'false';
+}
+
+interface MasterAgentBankAccountFormValues {
+  id?: string;
+  accountName?: string;
+  bankName?: string;
+  bankAccountNo?: string;
+  currency?: string;
+  remark?: string;
+  enabled?: 'true' | 'false';
 }
 
 interface MasterAgentChannelFormValues {
@@ -118,6 +142,22 @@ function formatFileSize(sizeBytes: number) {
   return `${Math.max(1, Math.round(sizeBytes / 1024))} KB`;
 }
 
+function formatMasterDateTime(value?: string) {
+  if (!value) return '-';
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return '-';
+  return new Date(time).toLocaleString('zh-CN', {
+    hour12: false,
+    timeZone: 'Asia/Shanghai'
+  });
+}
+
+function compareMasterCreatedAt(left?: string, right?: string) {
+  const leftTime = left ? Date.parse(left) : 0;
+  const rightTime = right ? Date.parse(right) : 0;
+  return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+}
+
 const multiPieceWeightRuleOptions = [
   { value: 'SUM_THEN_COMPARE', label: '先累加再比较' },
   { value: 'COMPARE_ROUND_THEN_SUM', label: '先比较进位再累加' },
@@ -144,6 +184,16 @@ const optionLabel = (options: Array<{ value: string; label: string }>, value?: s
 const currencyNames: Record<string, string> = { USD: '美金', RMB: '人民币', CNY: '人民币', EUR: '欧元', GBP: '英镑', HKD: '港币' };
 const currencyName = (code: string) => currencyNames[code.toUpperCase()] ?? code.toUpperCase();
 const todayDate = () => new Date().toISOString().slice(0, 10);
+const emptyAgentBankAccounts = (): MasterAgentBankAccountFormValues[] => Array.from({ length: 3 }, () => ({ currency: 'RMB', enabled: 'true' }));
+function agentBankAccountTime(row: AgentBankAccountSummary) {
+  return Date.parse(row.updatedAt ?? row.createdAt ?? '') || 0;
+}
+function matchesAgentBank(agent: AgentSummary, bank: AgentBankAccountSummary) {
+  return bank.agentId === agent.id || bank.agentName === agent.name || bank.agentName === agent.shortName;
+}
+function sortAgentBanks(rows: AgentBankAccountSummary[]) {
+  return [...rows].sort((left, right) => agentBankAccountTime(right) - agentBankAccountTime(left));
+}
 export function MasterDataPage({
   apiClient,
   masterData,
@@ -177,6 +227,8 @@ export function MasterDataPage({
   const [masterChannelCategoryForm] = Form.useForm<MasterChannelCategoryFormValues>();
   const [masterExchangeRateForm] = Form.useForm<MasterExchangeRateFormValues>();
   const [masterCustomerOpen, setMasterCustomerOpen] = useState(false);
+  const [salespersonAccounts, setSalespersonAccounts] = useState<StaffAccountSummary[]>([]);
+  const [salespersonAccountsLoading, setSalespersonAccountsLoading] = useState(false);
   const [masterAgentOpen, setMasterAgentOpen] = useState(false);
   const [masterAgentChannelOpen, setMasterAgentChannelOpen] = useState(false);
   const [masterCompanyChannelOpen, setMasterCompanyChannelOpen] = useState(false);
@@ -197,6 +249,7 @@ export function MasterDataPage({
   });
   const [appliedCustomerFilters, setAppliedCustomerFilters] = useState(customerFilters);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
   const [customerAuditLogs, setCustomerAuditLogs] = useState<AuditLogSummary[]>([]);
   const [customerListSettingOpen, setCustomerListSettingOpen] = useState(false);
   const [customerDisableConfirmOpen, setCustomerDisableConfirmOpen] = useState(false);
@@ -208,7 +261,7 @@ export function MasterDataPage({
     integrationType: 'ALL'
   });
   const [appliedAgentFilters, setAppliedAgentFilters] = useState(agentFilters);
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([]);
   const [agentListSettingOpen, setAgentListSettingOpen] = useState(false);
   const [agentDisableConfirmOpen, setAgentDisableConfirmOpen] = useState(false);
   const [showAgentCode, setShowAgentCode] = useState(false);
@@ -217,37 +270,57 @@ export function MasterDataPage({
   const [agentChannelFilters, setAgentChannelFilters] = useState({ agentId: 'ALL', channelName: '', status: 'ALL' });
   const [appliedAgentChannelFilters, setAppliedAgentChannelFilters] = useState(agentChannelFilters);
   const [selectedAgentChannelId, setSelectedAgentChannelId] = useState<string | null>(null);
-  const [agentChannelDisableConfirmOpen, setAgentChannelDisableConfirmOpen] = useState(false);
   const [companyChannelFilters, setCompanyChannelFilters] = useState({ keyword: '', businessType: 'ALL', category: 'ALL', status: 'ALL' });
   const [appliedCompanyChannelFilters, setAppliedCompanyChannelFilters] = useState(companyChannelFilters);
   const [selectedCompanyChannelId, setSelectedCompanyChannelId] = useState<string | null>(null);
-  const [companyChannelDisableConfirmOpen, setCompanyChannelDisableConfirmOpen] = useState(false);
   const [channelCategoryFilters, setChannelCategoryFilters] = useState({ name: '', status: 'ALL' });
   const [appliedChannelCategoryFilters, setAppliedChannelCategoryFilters] = useState(channelCategoryFilters);
   const [selectedChannelCategoryId, setSelectedChannelCategoryId] = useState<string | null>(null);
-  const [channelCategoryDisableConfirmOpen, setChannelCategoryDisableConfirmOpen] = useState(false);
   const [editingMasterExchangeRate, setEditingMasterExchangeRate] = useState<ExchangeRateSummary | null>(null);
   const [activeMasterSection, setActiveMasterSection] = useState('financeCatalog');
   const financeCatalog = useFinanceCatalog(apiClient);
   const hasMasterPermission = (...keys: PermissionKey[]) => currentUser.role === 'ADMIN' || keys.some((key) => permissions.includes(key));
-  const canReadCustomers = hasMasterPermission('master-data:read', 'master-data:customers:read');
-  const canWriteCustomers = hasMasterPermission('master-data:write', 'master-data:customers:write');
-  const canReadFinanceCatalog = hasMasterPermission('master-data:read', 'master-data:finance:read', 'finance:read');
-  const canWriteFinanceCatalog = hasMasterPermission('master-data:write', 'master-data:finance:write', 'finance:settle');
+  const canReadCustomers = hasMasterPermission('master-data:customers:read');
+  const canWriteCustomers = hasMasterPermission('master-data:customers:create', 'master-data:customers:update');
+  const canManageCustomerContacts = hasMasterPermission('master-data:customers:contacts-manage');
+  const canAssignCustomerSalesperson = hasMasterPermission('master-data:customers:assign-salesperson');
+
+  useEffect(() => {
+    if (!masterCustomerOpen || !canAssignCustomerSalesperson) return undefined;
+    let active = true;
+    setSalespersonAccountsLoading(true);
+    void apiClient.staffAccounts({ status: 'ENABLED' })
+      .then((rows) => {
+        if (!active) return;
+        setSalespersonAccounts(rows.filter((account) => account.enabled && customerSalespersonRoles.has(account.role)));
+      })
+      .catch((error) => {
+        if (active) onNotice(error instanceof Error ? `业务员选项加载失败：${error.message}` : '业务员选项加载失败');
+      })
+      .finally(() => {
+        if (active) setSalespersonAccountsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [apiClient, canAssignCustomerSalesperson, masterCustomerOpen, onNotice]);
+  const canReadFinanceCatalog = hasMasterPermission('master-data:finance:read');
+  const canWriteFinanceCatalog = hasMasterPermission('master-data:finance:fee-name:create', 'master-data:finance:fee-name:update', 'master-data:finance:settlement:create', 'master-data:finance:settlement:update');
   const canReadAgents = hasMasterPermission('master-data:agents:read');
-  const canWriteAgents = hasMasterPermission('master-data:agents:write');
-  const canReadAgentChannels = hasMasterPermission('master-data:agents:read', 'master-data:agent-channels:read');
-  const canWriteAgentChannels = hasMasterPermission('master-data:agents:write', 'master-data:agent-channels:write');
+  const canWriteAgents = hasMasterPermission('master-data:agents:create', 'master-data:agents:update');
+  const canReadAgentChannels = hasMasterPermission('master-data:agent-channels:read');
+  const canWriteAgentChannels = hasMasterPermission('master-data:agent-channels:create', 'master-data:agent-channels:update');
   const canReadChannels = hasMasterPermission('master-data:channels:read');
-  const canWriteChannels = hasMasterPermission('master-data:channels:write');
-  const canReadChannelCategories = hasMasterPermission('master-data:channels:read', 'master-data:channel-categories:read');
-  const canWriteChannelCategories = hasMasterPermission('master-data:channels:write', 'master-data:channel-categories:write');
-  const canReadRemoteAreas = hasMasterPermission('master-data:read', 'master-data:remote-areas:read');
-  const canWriteRemoteAreas = hasMasterPermission('master-data:write', 'master-data:remote-areas:write');
-  const canReadExchangeRates = hasMasterPermission('master-data:read', 'master-data:exchange-rates:read');
-  const canWriteExchangeRates = hasMasterPermission('master-data:write', 'master-data:exchange-rates:write');
-  const canReadAssistant = hasMasterPermission('master-data:read', 'master-data:assistant:read');
-  const canReadAgentBanks = permissions.includes('finance:payable:bank');
+  const canWriteChannels = hasMasterPermission('master-data:channels:create', 'master-data:channels:update');
+  const canReadChannelCategories = hasMasterPermission('master-data:channel-categories:read');
+  const canWriteChannelCategories = hasMasterPermission('master-data:channel-categories:create', 'master-data:channel-categories:update');
+  const canReadRemoteAreas = hasMasterPermission('master-data:remote-areas:read');
+  const canWriteRemoteAreas = hasMasterPermission('master-data:remote-areas:rule-manage');
+  const canReadExchangeRates = hasMasterPermission('master-data:exchange-rates:read');
+  const canWriteExchangeRates = hasMasterPermission('master-data:exchange-rates:create', 'master-data:exchange-rates:update');
+  const canReadAssistant = hasMasterPermission('master-data:assistant:read');
+  const canReadAgentBanks = hasMasterPermission('master-data:agents:bank-view');
+  const canWriteAgentBanks = hasMasterPermission('master-data:agents:bank-manage');
   const [agentBankAccounts, setAgentBankAccounts] = useState<AgentBankAccountSummary[]>([]);
   const [remoteAreaFiles, setRemoteAreaFiles] = useState<RemoteAreaAttachment[]>(() => {
     if (typeof window === 'undefined') return [];
@@ -316,6 +389,9 @@ export function MasterDataPage({
     return matchesName && matchesCode && matchesSalesperson && matchesSource && matchesStatus;
   });
   const selectedCustomer = customerRows.find((customer) => customer.id === selectedCustomerId) ?? null;
+  const selectedCustomerForAction = selectedCustomerIds.length === 1
+    ? customerRows.find((customer) => customer.id === selectedCustomerIds[0]) ?? null
+    : null;
   const selectedCustomerContacts = selectedCustomer
     ? masterData.contacts.filter((contact) => contact.customerId === selectedCustomer.id && contact.enabled)
     : [];
@@ -325,7 +401,7 @@ export function MasterDataPage({
     missingSettlement: customerRows.filter((customer) => !customer.defaultSettlementMethod).length,
     contacts: masterData.contacts.filter((contact) => contact.enabled).length
   };
-  const salespersonOptions = Array.from(new Set(customerRows.map((customer) => customer.salesperson).filter(Boolean)));
+  const salespersonFilterOptions = Array.from(new Set(customerRows.map((customer) => customer.salesperson).filter(Boolean)));
   const customerContactsById = new Map(customerRows.map((customer) => [
     customer.id,
     masterData.contacts.filter((contact) => contact.customerId === customer.id && contact.enabled)
@@ -346,8 +422,13 @@ export function MasterDataPage({
     if (activeMasterSection !== 'customers') return;
     if (!filteredCustomerRows.length) {
       setSelectedCustomerId(null);
+      setSelectedCustomerIds((current) => current.length ? [] : current);
       return;
     }
+    setSelectedCustomerIds((current) => {
+      const nextIds = current.filter((id) => filteredCustomerRows.some((customer) => customer.id === id));
+      return nextIds.length === current.length ? current : nextIds;
+    });
     if (!selectedCustomerId || !filteredCustomerRows.some((customer) => customer.id === selectedCustomerId)) {
       setSelectedCustomerId(filteredCustomerRows[0].id);
     }
@@ -426,13 +507,13 @@ export function MasterDataPage({
     }
   ];
   const customerContactColumns: ColumnsType<CustomerContactSummary> = [
-    { title: '收货人信息', width: 110, render: (_value, _record, index) => `收货人信息${['一', '二', '三', '四'][index] ?? index + 1}` },
+    { title: '收货信息', width: 110, render: (_value, _record, index) => `收货信息${['一', '二', '三', '四'][index] ?? index + 1}` },
     { title: '收货人名称', dataIndex: 'name', width: 130, render: (value: string) => <Text strong>{value}</Text> },
     { title: '收货人公司名称', dataIndex: 'company', width: 150, render: (value?: string) => value || '-' },
     { title: '收货人电话', dataIndex: 'phone', width: 140, render: (value?: string) => value || '-' },
     { title: 'FBA仓库代码', dataIndex: 'fbaWarehouseCode', width: 130, render: (value?: string) => value || '-' },
     { title: '收货人地址', dataIndex: 'address', render: (value?: string) => value || '-' },
-    { title: '国家', dataIndex: 'country', width: 90, render: (value?: string) => value || '-' },
+    { title: '收货国家', dataIndex: 'country', width: 90, render: (value?: string) => value || '-' },
     { title: '州/省', dataIndex: 'state', width: 90, render: (value?: string) => value || '-' },
     { title: '邮编', dataIndex: 'postalCode', width: 100, render: (value?: string) => value || '-' },
     {
@@ -454,19 +535,22 @@ export function MasterDataPage({
             destroyOnHidden
           >
             <Button size="small" type="link" danger disabled={!canWriteCustomers}>
-              删除
+              停用
             </Button>
           </Popconfirm>
         </Space>
       )
     }
   ];
-  const agentRows = masterData.agents.map((agent) => ({
-    ...agent,
-    code: agent.code ?? agent.name.toUpperCase().slice(0, 6),
-    shortName: agent.shortName ?? agent.name,
-    integrationType: agent.integrationType ?? 'MANUAL'
-  }));
+  const agentRows = masterData.agents
+    .map((agent) => ({
+      ...agent,
+      code: agent.code ?? agent.name.toUpperCase().slice(0, 6),
+      shortName: agent.shortName ?? agent.name,
+      integrationType: agent.integrationType ?? 'MANUAL',
+      bankAccounts: sortAgentBanks(agentBankAccounts.filter((bank) => bank.enabled && matchesAgentBank(agent, bank))).slice(0, 3)
+    }))
+    .sort((left, right) => compareMasterCreatedAt(left.createdAt, right.createdAt) || left.name.localeCompare(right.name, 'zh-CN'));
   const filteredAgentRows = agentRows.filter((agent) => {
     const nameKeyword = appliedAgentFilters.name.trim().toLowerCase();
     const codeKeyword = appliedAgentFilters.code.trim().toLowerCase();
@@ -478,7 +562,8 @@ export function MasterDataPage({
     const matchesType = appliedAgentFilters.integrationType === 'ALL' || agent.integrationType === appliedAgentFilters.integrationType;
     return matchesName && matchesCode && matchesStatus && matchesType;
   });
-  const selectedAgent = agentRows.find((agent) => agent.id === selectedAgentId) ?? null;
+  const selectedAgents = agentRows.filter((agent) => selectedAgentIds.includes(agent.id));
+  const selectedAgent = selectedAgents.length === 1 ? selectedAgents[0] : null;
   const agentColumns: ColumnsType<(typeof agentRows)[number]> = [
     ...(showAgentCode
       ? [
@@ -487,9 +572,32 @@ export function MasterDataPage({
       : []),
     { title: '代理简称', dataIndex: 'shortName', width: 180, render: (value: string) => <Text strong>{value}</Text> },
     { title: '代理详细公司名', dataIndex: 'name', width: 220 },
+    { title: '创建时间', dataIndex: 'createdAt', width: 170, render: (value?: string) => formatMasterDateTime(value) },
     { title: '仓库地址一', dataIndex: 'warehouseAddress1', width: 220, render: (value?: string) => value || '-' },
     { title: '仓库地址二', dataIndex: 'warehouseAddress2', width: 220, render: (value?: string) => value || '-' },
     { title: '仓库地址三', dataIndex: 'warehouseAddress3', width: 220, render: (value?: string) => value || '-' },
+    {
+      title: '查询网站',
+      dataIndex: 'trackingWebsite',
+      width: 260,
+      render: (value?: string) => value ? <Text copyable>{value}</Text> : '-'
+    },
+    ...(canReadAgentBanks ? [0, 1, 2].map((index) => ({
+      title: `收款银行账户${['一', '二', '三'][index]}`,
+      key: `bankAccount${index + 1}`,
+      dataIndex: 'bankAccounts',
+      width: 260,
+      render: (banks: AgentBankAccountSummary[]) => {
+        const bank = banks[index];
+        return bank ? (
+          <Space direction="vertical" size={2}>
+            <Text>{`${bank.accountName} / ${bank.bankName}`}</Text>
+            <Text type="secondary">{`${bank.bankAccountNo} / ${bank.currency ?? 'RMB'}`}</Text>
+            {!bank.enabled ? <Tag>停用</Tag> : null}
+          </Space>
+        ) : '-';
+      }
+    })) : []),
     { title: '仓库联系人', dataIndex: 'warehouseContact', width: 140, render: (value?: string) => value || '-' },
     {
       title: '发票模板',
@@ -525,7 +633,7 @@ export function MasterDataPage({
       return;
     }
     let alive = true;
-    apiClient.agentBankAccounts().then((rows) => {
+    apiClient.agentBankAccounts({ includeDisabled: true }).then((rows) => {
       if (alive) setAgentBankAccounts(rows);
     }).catch(() => {
       if (alive) setAgentBankAccounts([]);
@@ -722,7 +830,7 @@ export function MasterDataPage({
             destroyOnHidden
           >
             <Button size="small" type="link" danger disabled={!canWriteExchangeRates}>
-              删除
+              停用
             </Button>
           </Popconfirm>
         </Space>
@@ -751,8 +859,9 @@ export function MasterDataPage({
       customerCode: '',
       customerName: '',
       customerSource: '',
-      salesperson: currentSalesperson,
-      defaultSettlementMethod: 'RMB月结'
+      salesperson: canAssignCustomerSalesperson ? undefined : currentSalesperson,
+      defaultSettlementMethod: undefined,
+      contacts: []
     });
     setMasterCustomerOpen(true);
   }
@@ -763,8 +872,9 @@ export function MasterDataPage({
       customerCode: customer.code,
       customerName: customer.name,
       customerSource: customer.customerSource ?? '',
-      salesperson: customer.salesperson ?? currentSalesperson,
-      defaultSettlementMethod: customer.defaultSettlementMethod ?? ''
+      salesperson: canAssignCustomerSalesperson ? customer.salesperson : currentSalesperson,
+      defaultSettlementMethod: customer.defaultSettlementMethod ?? '',
+      contacts: []
     });
     setMasterCustomerOpen(true);
   }
@@ -775,28 +885,46 @@ export function MasterDataPage({
       const customerCode = values.customerCode.trim();
       const customerName = values.customerName.trim();
       const customerSource = values.customerSource.trim();
-      const salesperson = currentUser.role === 'ADMIN' ? values.salesperson.trim() : currentSalesperson;
+      const salesperson = canAssignCustomerSalesperson ? values.salesperson?.trim() || undefined : currentSalesperson;
       const defaultSettlementMethod = values.defaultSettlementMethod.trim();
       const input = {
         code: customerCode,
         name: customerName,
         customerSource: customerSource || undefined,
-        salesperson,
+        salesperson: salesperson ?? '',
         defaultSettlementMethod,
         enabled: editingMasterCustomer?.enabled ?? true
       };
+      const contactInputs = (editingMasterCustomer ? [] : values.contacts ?? []).map((contact) => ({
+        name: contact.receiverName.trim(),
+        company: contact.receiverCompany?.trim() || undefined,
+        phone: contact.receiverPhone?.trim() || undefined,
+        fbaWarehouseCode: contact.fbaWarehouseCode?.trim() || undefined,
+        address: contact.receiverAddress?.trim() || undefined,
+        country: contact.receiverCountry?.trim() || undefined,
+        state: contact.receiverState?.trim() || undefined,
+        postalCode: contact.receiverPostalCode?.trim() || undefined
+      }));
       const wasEditing = Boolean(editingMasterCustomer);
       const customer = editingMasterCustomer
         ? await apiClient.updateCustomer(editingMasterCustomer.id, input)
         : await apiClient.createCustomer(input);
+      const contacts = contactInputs.length
+        ? await Promise.all(contactInputs.map((contact) => apiClient.createCustomerContact(customer.id, contact)))
+        : [];
       onMasterDataChange((current) => ({
         ...current,
-        customers: [...current.customers.filter((item) => item.id !== customer.id), customer]
+        customers: [...current.customers.filter((item) => item.id !== customer.id), customer],
+        contacts: contacts.length
+          ? [...current.contacts.filter((item) => item.customerId !== customer.id), ...contacts]
+          : current.contacts
       }));
       setMasterCustomerOpen(false);
       setEditingMasterCustomer(null);
       masterCustomerForm.resetFields();
-      onNotice(wasEditing ? `${customer.code}-${customer.name} 已更新` : `已创建客户 ${customer.code}-${customer.name}，业务员 ${salesperson}`);
+      onNotice(wasEditing
+        ? `${customer.code}-${customer.name} 已更新`
+        : `已创建客户 ${customer.code}-${customer.name}${contacts.length ? `，并新增 ${contacts.length} 位收货人` : ''}，业务员 ${salesperson ?? '未指派'}`);
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '客户保存失败');
     }
@@ -935,16 +1063,31 @@ export function MasterDataPage({
       warehouseContact: '',
       invoiceTemplateName: '',
       invoiceTemplateUrl: '',
+      trackingWebsite: '',
       bankAccountName: '',
       bankAccountNo: '',
-      bankName: ''
+      bankName: '',
+      bankAccounts: emptyAgentBankAccounts()
     });
     setMasterAgentOpen(true);
   }
 
   async function handleEditMasterAgent(agent: AgentSummary) {
     setEditingMasterAgent(agent);
-    const bank = agentBankAccounts.find((item) => item.agentId === agent.id || item.agentName === agent.name || item.agentName === agent.shortName);
+    const banks = sortAgentBanks(agentBankAccounts.filter((item) => matchesAgentBank(agent, item))).slice(0, 3);
+    const bankForms: MasterAgentBankAccountFormValues[] = emptyAgentBankAccounts().map((empty, index): MasterAgentBankAccountFormValues => {
+      const bank = banks[index];
+      return bank ? {
+        id: bank.id,
+        accountName: bank.accountName,
+        bankAccountNo: bank.bankAccountNo,
+        bankName: bank.bankName,
+        currency: bank.currency ?? 'RMB',
+        remark: bank.remark ?? '',
+        enabled: bank.enabled ? 'true' : 'false'
+      } : empty;
+    });
+    const bank = banks[0];
     masterAgentForm.setFieldsValue({
       agentCode: agent.code ?? '',
       agentShortName: agent.shortName ?? agent.name,
@@ -955,9 +1098,11 @@ export function MasterDataPage({
       warehouseContact: agent.warehouseContact ?? '',
       invoiceTemplateName: agent.invoiceTemplateName ?? '',
       invoiceTemplateUrl: agent.invoiceTemplateUrl ?? '',
+      trackingWebsite: agent.trackingWebsite ?? '',
       bankAccountName: bank?.accountName ?? '',
       bankAccountNo: bank?.bankAccountNo ?? '',
       bankName: bank?.bankName ?? '',
+      bankAccounts: bankForms,
       agentIntegrationType: agent.integrationType ?? 'MANUAL',
       agentEnabled: agent.enabled ? 'true' : 'false'
     });
@@ -985,18 +1130,27 @@ export function MasterDataPage({
 
   async function handleSubmitMasterAgent() {
     const values = await masterAgentForm.validateFields();
-    const bankValues = {
-      accountName: values.bankAccountName?.trim(),
-      bankAccountNo: values.bankAccountNo?.trim(),
-      bankName: values.bankName?.trim()
-    };
-    const hasBankValue = Boolean(bankValues.accountName || bankValues.bankAccountNo || bankValues.bankName);
-    if (hasBankValue && (!bankValues.accountName || !bankValues.bankAccountNo || !bankValues.bankName)) {
-      masterAgentForm.setFields([
-        { name: 'bankAccountName', errors: bankValues.accountName ? [] : ['请输入收款方'] },
-        { name: 'bankAccountNo', errors: bankValues.bankAccountNo ? [] : ['请输入银行账号'] },
-        { name: 'bankName', errors: bankValues.bankName ? [] : ['请输入开户银行'] }
-      ]);
+    const bankInputs = (values.bankAccounts ?? []).slice(0, 3).map((bank) => ({
+      id: bank.id,
+      accountName: bank.accountName?.trim() ?? '',
+      bankAccountNo: bank.bankAccountNo?.trim() ?? '',
+      bankName: bank.bankName?.trim() ?? '',
+      currency: (bank.currency?.trim() || 'RMB').toUpperCase(),
+      remark: bank.remark?.trim() || undefined,
+      enabled: bank.enabled !== 'false'
+    }));
+    const bankErrors: Parameters<typeof masterAgentForm.setFields>[0] = [];
+    bankInputs.forEach((bank, index) => {
+      const hasBankValue = Boolean(bank.accountName || bank.bankAccountNo || bank.bankName || bank.remark);
+      if (hasBankValue && (!bank.accountName || !bank.bankAccountNo || !bank.bankName || !bank.currency)) {
+        if (!bank.accountName) bankErrors.push({ name: ['bankAccounts', index, 'accountName'], errors: [`第 ${index + 1} 组请输入收款方`] });
+        if (!bank.bankAccountNo) bankErrors.push({ name: ['bankAccounts', index, 'bankAccountNo'], errors: [`第 ${index + 1} 组请输入银行账号`] });
+        if (!bank.bankName) bankErrors.push({ name: ['bankAccounts', index, 'bankName'], errors: [`第 ${index + 1} 组请输入开户银行`] });
+        if (!bank.currency) bankErrors.push({ name: ['bankAccounts', index, 'currency'], errors: [`第 ${index + 1} 组请输入币种`] });
+      }
+    });
+    if (bankErrors.length) {
+      masterAgentForm.setFields(bankErrors);
       return;
     }
     const input = {
@@ -1009,49 +1163,80 @@ export function MasterDataPage({
       warehouseContact: values.warehouseContact?.trim(),
       invoiceTemplateName: values.invoiceTemplateName?.trim(),
       invoiceTemplateUrl: values.invoiceTemplateUrl?.trim(),
+      trackingWebsite: values.trackingWebsite?.trim(),
       integrationType: values.agentIntegrationType ?? 'MANUAL',
       enabled: values.agentEnabled !== 'false'
     };
-    const agent = editingMasterAgent
-      ? await apiClient.updateAgent(editingMasterAgent.id, input)
-      : await apiClient.createAgent(input);
-    if (canReadAgentBanks && hasBankValue && bankValues.accountName && bankValues.bankAccountNo && bankValues.bankName) {
-      const exists = agentBankAccounts.some((bank) =>
-        (bank.agentId === agent.id || bank.agentName === agent.name || bank.agentName === agent.shortName)
-        && bank.accountName === bankValues.accountName
-        && bank.bankAccountNo === bankValues.bankAccountNo
-        && bank.bankName === bankValues.bankName
-      );
-      if (!exists) {
+    let agent: AgentSummary;
+    try {
+      agent = editingMasterAgent
+        ? await apiClient.updateAgent(editingMasterAgent.id, input)
+        : await apiClient.createAgent(input);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '代理资料保存失败');
+      return;
+    }
+    if (canWriteAgentBanks) {
+      const savedBanks: AgentBankAccountSummary[] = [];
+      for (const bankInput of bankInputs) {
+        const hasBankValue = Boolean(bankInput.accountName || bankInput.bankAccountNo || bankInput.bankName || bankInput.remark);
+        const existingBank = bankInput.id ? agentBankAccounts.find((bank) => bank.id === bankInput.id) : undefined;
+        if (!hasBankValue && !existingBank) continue;
         const bank = await apiClient.saveAgentBankAccount({
+          id: bankInput.id,
           agentId: agent.id,
           agentName: agent.name,
-          accountName: bankValues.accountName,
-          bankAccountNo: bankValues.bankAccountNo,
-          bankName: bankValues.bankName,
-          currency: 'RMB'
+          accountName: hasBankValue ? bankInput.accountName : existingBank?.accountName ?? '',
+          bankAccountNo: hasBankValue ? bankInput.bankAccountNo : existingBank?.bankAccountNo ?? '',
+          bankName: hasBankValue ? bankInput.bankName : existingBank?.bankName ?? '',
+          currency: hasBankValue ? bankInput.currency : existingBank?.currency ?? 'RMB',
+          remark: hasBankValue ? bankInput.remark : existingBank?.remark,
+          enabled: hasBankValue ? bankInput.enabled : false
         });
-        setAgentBankAccounts((current) => [bank, ...current.filter((item) => item.id !== bank.id)]);
+        savedBanks.push(bank);
+      }
+      if (savedBanks.length) {
+        setAgentBankAccounts((current) => [
+          ...savedBanks,
+          ...current.filter((item) => !savedBanks.some((bank) => bank.id === item.id))
+        ]);
       }
     }
     onMasterDataChange((current) => ({
       ...current,
       agents: [...current.agents.filter((item) => item.id !== agent.id), agent]
     }));
-    setSelectedAgentId(agent.id);
+    setSelectedAgentIds([agent.id]);
     setMasterAgentOpen(false);
     setEditingMasterAgent(null);
     masterAgentForm.resetFields();
     onNotice(editingMasterAgent ? `${agent.name} 已更新` : `${agent.name} 已创建`);
   }
 
-  async function handleDisableMasterAgent(agent: AgentSummary) {
-    const updatedAgent = await apiClient.updateAgentEnabled(agent.id, { enabled: false });
-    onMasterDataChange((current) => ({
-      ...current,
-      agents: current.agents.map((item) => (item.id === updatedAgent.id ? updatedAgent : item))
-    }));
-    onNotice(`${updatedAgent.name} 已停用`);
+  async function handleDeleteSelectedMasterAgents() {
+    if (!selectedAgentIds.length) return;
+    try {
+      const result = await apiClient.deleteAgents({ ids: selectedAgentIds });
+      onMasterDataChange((current) => ({
+        ...current,
+        agents: current.agents.filter((item) => !result.deletedAgents.some((row) => row.id === item.id))
+      }));
+      const deletedIds = new Set(result.deletedAgents.map((agent) => agent.id));
+      setAgentBankAccounts((current) => current.filter((item) => !deletedIds.has(item.agentId ?? '')));
+      setSelectedAgentIds(result.failures.map((failure) => failure.id));
+      const failureText = result.failures
+        .map((failure) => `${failure.shortName ?? failure.name ?? failure.id}（${failure.reasons.join('、')}）`)
+        .join('；');
+      if (result.successCount > 0 && result.failures.length > 0) {
+        onNotice(`部分代理资料删除失败：已删除 ${result.successCount} 条；${result.failures.length} 条未删除：${failureText}`);
+      } else if (result.failures.length > 0) {
+        onNotice(`代理资料删除失败：存在业务引用，未删除：${failureText}`);
+      } else {
+        onNotice(`已物理删除 ${result.successCount} 条代理资料`);
+      }
+    } catch (error) {
+      onNotice(`代理资料删除失败：${error instanceof Error ? error.message : '未知错误'}`);
+    }
   }
 
   async function handleCreateMasterAgentChannel() {
@@ -1090,13 +1275,18 @@ export function MasterDataPage({
     onNotice(editingMasterAgentChannel ? `${channel.channelName} 已更新` : `${channel.channelName} 已创建`);
   }
 
-  async function handleDisableMasterAgentChannel(channel: AgentChannelSummary) {
-    const updatedChannel = await apiClient.updateAgentChannelEnabled(channel.id, { enabled: false });
-    onMasterDataChange((current) => ({
-      ...current,
-      agentChannels: current.agentChannels.map((item) => (item.id === updatedChannel.id ? updatedChannel : item))
-    }));
-    onNotice(`${updatedChannel.channelName} 已停用`);
+  async function handleDeleteMasterAgentChannel(channel: AgentChannelSummary) {
+    try {
+      const deletedChannel = await apiClient.deleteAgentChannel(channel.id);
+      onMasterDataChange((current) => ({
+        ...current,
+        agentChannels: current.agentChannels.filter((item) => item.id !== deletedChannel.id)
+      }));
+      setSelectedAgentChannelId((current) => (current === deletedChannel.id ? null : current));
+      onNotice(`${deletedChannel.channelName} 已删除`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '代理渠道删除失败');
+    }
   }
 
   async function handleCreateMasterCompanyChannel() {
@@ -1170,13 +1360,18 @@ export function MasterDataPage({
     onNotice(editingMasterCompanyChannel ? `${channel.name} 已更新` : `${channel.name} 已创建`);
   }
 
-  async function handleDisableMasterCompanyChannel(channel: ChannelSummary) {
-    const updatedChannel = await apiClient.updateChannelEnabled(channel.id, { enabled: false });
-    onMasterDataChange((current) => ({
-      ...current,
-      channels: current.channels.map((item) => (item.id === updatedChannel.id ? updatedChannel : item))
-    }));
-    onNotice(`${updatedChannel.name} 已停用`);
+  async function handleDeleteMasterCompanyChannel(channel: ChannelSummary) {
+    try {
+      const deletedChannel = await apiClient.deleteChannel(channel.id);
+      onMasterDataChange((current) => ({
+        ...current,
+        channels: current.channels.filter((item) => item.id !== deletedChannel.id)
+      }));
+      setSelectedCompanyChannelId((current) => (current === deletedChannel.id ? null : current));
+      onNotice(`${deletedChannel.name} 已删除`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '公司渠道删除失败');
+    }
   }
 
   async function handleCreateMasterChannelCategory() {
@@ -1207,13 +1402,18 @@ export function MasterDataPage({
     onNotice(editingMasterChannelCategory ? `${category.name} 已更新` : `${category.name} 已创建`);
   }
 
-  async function handleDisableMasterChannelCategory(category: ChannelCategorySummary) {
-    const updatedCategory = await apiClient.updateChannelCategoryEnabled(category.id, { enabled: false });
-    onMasterDataChange((current) => ({
-      ...current,
-      channelCategories: current.channelCategories.map((item) => (item.id === updatedCategory.id ? updatedCategory : item))
-    }));
-    onNotice(`${updatedCategory.name} 已停用`);
+  async function handleDeleteMasterChannelCategory(category: ChannelCategorySummary) {
+    try {
+      const deletedCategory = await apiClient.deleteChannelCategory(category.id);
+      onMasterDataChange((current) => ({
+        ...current,
+        channelCategories: current.channelCategories.filter((item) => item.id !== deletedCategory.id)
+      }));
+      setSelectedChannelCategoryId((current) => (current === deletedCategory.id ? null : current));
+      onNotice(`${deletedCategory.name} 已删除`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '渠道类别删除失败');
+    }
   }
 
   function openEditMasterExchangeRate(rate: ExchangeRateSummary) {
@@ -1331,7 +1531,7 @@ export function MasterDataPage({
           ) : null}
           {activeMasterSection === 'remoteAreas' ? (
             <Card className="module-grid" title="偏远">
-              <Table
+              <ManagedTable
                 rowKey="id"
                 size="small"
                 pagination={false}
@@ -1346,7 +1546,7 @@ export function MasterDataPage({
             <Card className="module-grid" title="汇率">
               <Space direction="vertical" size={12} className="ai-list">
                 <Text strong>当前汇率</Text>
-                <Table
+                <ManagedTable
                   rowKey="id"
                   size="small"
                   pagination={tenRowTablePagination}
@@ -1371,7 +1571,7 @@ export function MasterDataPage({
                     </Form.Item>
                     <Col xs={24} md={6}>
                       <Form.Item name="activeAt" label="开始日期" rules={[{ required: true, message: '请选择开始日期' }]}>
-                        <Input type="date" />
+                        <AppDatePicker />
                       </Form.Item>
                     </Col>
                     <Col xs={24} md={6}>
@@ -1388,7 +1588,7 @@ export function MasterDataPage({
                     </Col>
                     <Col xs={24} md={6}>
                       <Form.Item name="endAt" label="结束日期" rules={[{ required: true, message: '请选择结束日期' }]}>
-                        <Input type="date" />
+                        <AppDatePicker />
                       </Form.Item>
                     </Col>
                     <Col xs={24}>
@@ -1412,7 +1612,7 @@ export function MasterDataPage({
                   </Row>
                 </Form>
                 <Text strong>历史汇率:列表</Text>
-                <Table
+                <ManagedTable
                   rowKey="id"
                   size="small"
                   pagination={tenRowTablePagination}
@@ -1470,29 +1670,21 @@ export function MasterDataPage({
                   修改
                 </Button>
                 <Popconfirm
-                  title="确认停用该渠道类别？"
-                  description="停用后不再作为公司渠道可选类别，不会影响历史公司渠道。"
-                  okText="确认停用"
+                  title="确认删除该渠道类别？"
+                  description="删除后不可恢复；已被公司渠道引用时不能删除。"
+                  okText="确认删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
                   disabled={!selectedChannelCategory || !canWriteChannelCategories}
                   destroyOnHidden
-                  open={channelCategoryDisableConfirmOpen}
-                  onOpenChange={(open) => setChannelCategoryDisableConfirmOpen(Boolean(selectedChannelCategory && canWriteChannelCategories && open))}
-                  onConfirm={async () => {
-                    if (selectedChannelCategory) {
-                      await handleDisableMasterChannelCategory(selectedChannelCategory);
-                    }
-                    setChannelCategoryDisableConfirmOpen(false);
-                  }}
-                  onCancel={() => setChannelCategoryDisableConfirmOpen(false)}
+                  onConfirm={() => selectedChannelCategory && handleDeleteMasterChannelCategory(selectedChannelCategory)}
                 >
                   <Button size="small" aria-label="删除渠道类别" disabled={!selectedChannelCategory || !canWriteChannelCategories}>
                     删除
                   </Button>
                 </Popconfirm>
               </Space>
-              <Table
+              <ManagedTable
                 rowKey="id"
                 size="small"
                 pagination={tenRowTablePagination}
@@ -1587,29 +1779,21 @@ export function MasterDataPage({
                   修改
                 </Button>
                 <Popconfirm
-                  title="确认停用该公司渠道？"
-                  description="停用后该公司渠道不再作为可用渠道展示，不会物理删除历史引用。"
-                  okText="确认停用"
+                  title="确认删除该公司渠道？"
+                  description="删除后不可恢复；已被运单、报价规则或燃油费率引用时不能删除。"
+                  okText="确认删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
                   disabled={!selectedCompanyChannel || !canWriteChannels}
                   destroyOnHidden
-                  open={companyChannelDisableConfirmOpen}
-                  onOpenChange={(open) => setCompanyChannelDisableConfirmOpen(Boolean(selectedCompanyChannel && canWriteChannels && open))}
-                  onConfirm={async () => {
-                    if (selectedCompanyChannel) {
-                      await handleDisableMasterCompanyChannel(selectedCompanyChannel);
-                    }
-                    setCompanyChannelDisableConfirmOpen(false);
-                  }}
-                  onCancel={() => setCompanyChannelDisableConfirmOpen(false)}
+                  onConfirm={() => selectedCompanyChannel && handleDeleteMasterCompanyChannel(selectedCompanyChannel)}
                 >
                   <Button size="small" aria-label="删除公司渠道" disabled={!selectedCompanyChannel || !canWriteChannels}>
                     删除
                   </Button>
                 </Popconfirm>
               </Space>
-              <Table
+              <ManagedTable
                 rowKey="id"
                 size="small"
                 pagination={tenRowTablePagination}
@@ -1689,29 +1873,21 @@ export function MasterDataPage({
                   修改
                 </Button>
                 <Popconfirm
-                  title="确认停用该代理渠道？"
-                  description="停用后该渠道将不再作为可用代理渠道展示，不会物理删除历史数据。"
-                  okText="确认停用"
+                  title="确认删除该代理渠道？"
+                  description="删除后不可恢复。"
+                  okText="确认删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
                   disabled={!selectedAgentChannel || !canWriteAgentChannels}
                   destroyOnHidden
-                  open={agentChannelDisableConfirmOpen}
-                  onOpenChange={(open) => setAgentChannelDisableConfirmOpen(Boolean(selectedAgentChannel && canWriteAgentChannels && open))}
-                  onConfirm={async () => {
-                    if (selectedAgentChannel) {
-                      await handleDisableMasterAgentChannel(selectedAgentChannel);
-                    }
-                    setAgentChannelDisableConfirmOpen(false);
-                  }}
-                  onCancel={() => setAgentChannelDisableConfirmOpen(false)}
+                  onConfirm={() => selectedAgentChannel && handleDeleteMasterAgentChannel(selectedAgentChannel)}
                 >
                   <Button size="small" aria-label="删除代理渠道" disabled={!selectedAgentChannel || !canWriteAgentChannels}>
                     删除
                   </Button>
                 </Popconfirm>
               </Space>
-              <Table
+              <ManagedTable
                 rowKey="id"
                 size="small"
                 pagination={tenRowTablePagination}
@@ -1793,7 +1969,7 @@ export function MasterDataPage({
                       onChange={(event) => setCustomerFilters((current) => ({ ...current, salesperson: event.target.value }))}
                     >
                       <option value="">全部</option>
-                      {salespersonOptions.map((salesperson) => <option key={salesperson} value={salesperson}>{salesperson}</option>)}
+                      {salespersonFilterOptions.map((salesperson) => <option key={salesperson} value={salesperson}>{salesperson}</option>)}
                     </select>
                   </label>
                   <Button type="primary" onClick={() => setAppliedCustomerFilters(customerFilters)}>查询</Button>
@@ -1808,30 +1984,30 @@ export function MasterDataPage({
                   </Button>
                 </div>
                 <div className="customer-master-batch">
-                  <Text>已选择 {selectedCustomer ? 1 : 0} 项</Text>
-                  <Button icon={<Edit size={15} />} disabled={!selectedCustomer || !canWriteCustomers} onClick={() => selectedCustomer && void handleEditMasterCustomer(selectedCustomer)}>
+                  <Text>已选择 {selectedCustomerIds.length} 项</Text>
+                  <Button icon={<Edit size={15} />} disabled={!selectedCustomerForAction || !canWriteCustomers} onClick={() => selectedCustomerForAction && void handleEditMasterCustomer(selectedCustomerForAction)}>
                     修改
                   </Button>
                   <Popconfirm
-                    title={`确认${selectedCustomer?.enabled === false ? '启用' : '停用'}该客户？`}
-                    description={selectedCustomer?.enabled === false ? '启用后可重新用于业务下单。' : '停用保留历史记录，不影响既有业务数据。'}
-                    okText={`确认${selectedCustomer?.enabled === false ? '启用' : '停用'}`}
+                    title={`确认${selectedCustomerForAction?.enabled === false ? '启用' : '停用'}该客户？`}
+                    description={selectedCustomerForAction?.enabled === false ? '启用后可重新用于业务下单。' : '停用保留历史记录，不影响既有业务数据。'}
+                    okText={`确认${selectedCustomerForAction?.enabled === false ? '启用' : '停用'}`}
                     cancelText="取消"
-                    okButtonProps={{ danger: selectedCustomer?.enabled !== false }}
-                    disabled={!selectedCustomer || !canWriteCustomers}
+                    okButtonProps={{ danger: selectedCustomerForAction?.enabled !== false }}
+                    disabled={!selectedCustomerForAction || !canWriteCustomers}
                     destroyOnHidden
                     open={customerDisableConfirmOpen}
-                    onOpenChange={(open) => setCustomerDisableConfirmOpen(Boolean(selectedCustomer && canWriteCustomers && open))}
+                    onOpenChange={(open) => setCustomerDisableConfirmOpen(Boolean(selectedCustomerForAction && canWriteCustomers && open))}
                     onConfirm={async () => {
-                      if (selectedCustomer) {
-                        await (selectedCustomer.enabled ? handleDisableMasterCustomer(selectedCustomer) : handleEnableMasterCustomer(selectedCustomer));
+                      if (selectedCustomerForAction) {
+                        await (selectedCustomerForAction.enabled ? handleDisableMasterCustomer(selectedCustomerForAction) : handleEnableMasterCustomer(selectedCustomerForAction));
                       }
                       setCustomerDisableConfirmOpen(false);
                     }}
                     onCancel={() => setCustomerDisableConfirmOpen(false)}
                   >
-                    <Button icon={<Power size={15} />} danger={selectedCustomer?.enabled !== false} disabled={!selectedCustomer || !canWriteCustomers}>
-                      {selectedCustomer?.enabled === false ? '启用' : '停用'}
+                    <Button icon={<Power size={15} />} danger={selectedCustomerForAction?.enabled !== false} disabled={!selectedCustomerForAction || !canWriteCustomers}>
+                      {selectedCustomerForAction?.enabled === false ? '启用' : '停用'}
                     </Button>
                   </Popconfirm>
                   <Popconfirm
@@ -1840,28 +2016,38 @@ export function MasterDataPage({
                     okText="确认删除"
                     cancelText="取消"
                     okButtonProps={{ danger: true }}
-                    disabled={!selectedCustomer || !canWriteCustomers}
-                    onConfirm={() => selectedCustomer ? handleDeleteMasterCustomer(selectedCustomer) : undefined}
+                    disabled={!selectedCustomerForAction || !canWriteCustomers}
+                    onConfirm={() => selectedCustomerForAction ? handleDeleteMasterCustomer(selectedCustomerForAction) : undefined}
                     destroyOnHidden
                   >
-                    <Button icon={<Trash2 size={15} />} danger aria-label="删除客户" disabled={!selectedCustomer || !canWriteCustomers}>
+                    <Button icon={<Trash2 size={15} />} danger aria-label="删除客户" disabled={!selectedCustomerForAction || !canWriteCustomers}>
                       删除
                     </Button>
                   </Popconfirm>
                 </div>
-                <Table
+                <ManagedTable
                   rowKey="id"
                   size="small"
                   className="customer-master-table"
                   pagination={tenRowTablePagination}
                   dataSource={filteredCustomerRows}
                   rowSelection={{
-                    selectedRowKeys: selectedCustomerId ? [selectedCustomerId] : [],
-                    onChange: (keys) => setSelectedCustomerId(String(keys[keys.length - 1] ?? ''))
+                    selectedRowKeys: selectedCustomerIds,
+                    onChange: (keys) => {
+                      const nextIds = keys.map(String);
+                      setSelectedCustomerIds(nextIds);
+                      if (nextIds.length && !nextIds.includes(selectedCustomerId ?? '')) {
+                        setSelectedCustomerId(nextIds[nextIds.length - 1]);
+                      }
+                    }
                   }}
                   rowClassName={(record) => record.id === selectedCustomerId ? 'customer-master-row-selected' : ''}
                   onRow={(record) => ({
-                    onClick: () => setSelectedCustomerId(record.id)
+                    onClick: (event) => {
+                      const target = event.target as HTMLElement;
+                      if (target.closest('.ant-checkbox') || target.closest('.ant-checkbox-wrapper')) return;
+                      setSelectedCustomerId(record.id);
+                    }
                   })}
                   columns={customerColumns}
                   scroll={{ x: 1120 }}
@@ -1897,17 +2083,18 @@ export function MasterDataPage({
                   </div>
                   <div className="customer-detail-section">
                     <Flex justify="space-between" align="center">
-                      <Text strong>收货人信息</Text>
+                      <Text strong>收货信息</Text>
                       <Button
                         size="small"
+                        type="text"
                         icon={<Plus size={14} />}
-                        disabled={!selectedCustomer || !canWriteCustomers || selectedCustomerContacts.length >= 4}
+                        aria-label="新增收货人"
+                        title="新增收货人"
+                        disabled={!selectedCustomer || !canManageCustomerContacts || selectedCustomerContacts.length >= 4}
                         onClick={() => void handleOpenMasterCustomerContact()}
-                      >
-                        新增收货人
-                      </Button>
+                      />
                     </Flex>
-                    <Table
+                    <ManagedTable
                       rowKey="id"
                       size="small"
                       className="customer-detail-contact-table"
@@ -1962,9 +2149,9 @@ export function MasterDataPage({
             <Space direction="vertical" size={12} className="ai-list">
               <Row gutter={[10, 10]} className="module-filter-grid">
                 <Col xs={24} md={8} xl={5}>
-                  {renderFilterField('代理详细公司名', (
+                  {renderFilterField('代理全称', (
                     <Input
-                      aria-label="代理详细公司名筛选"
+                      aria-label="代理全称筛选"
                       value={agentFilters.name}
                       onChange={(event) => setAgentFilters((current) => ({ ...current, name: event.target.value }))}
                     />
@@ -1996,31 +2183,29 @@ export function MasterDataPage({
                 </Col>
               </Row>
               <Space wrap className="surface-strip">
+                <Text type="secondary">已选 {selectedAgentIds.length} 条</Text>
                 <Button size="small" aria-label="增加代理" disabled={!canWriteAgents} onClick={() => void handleCreateMasterAgent()}>
                   增加
                 </Button>
-                <Button size="small" aria-label="修改代理" disabled={!selectedAgent || !canWriteAgents} onClick={() => selectedAgent && void handleEditMasterAgent(selectedAgent)}>
+                <Button size="small" aria-label="修改代理" disabled={!selectedAgent || selectedAgentIds.length !== 1 || !canWriteAgents} onClick={() => selectedAgent && void handleEditMasterAgent(selectedAgent)}>
                   修改
                 </Button>
                 <Popconfirm
-                  title="确认停用该代理？"
-                  description="停用后该代理将不再作为可用代理资料展示，不会物理删除历史数据。"
-                  okText="确认停用"
+                  title="是否确认删除？"
+                  okText="确认删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
-                  disabled={!selectedAgent || !canWriteAgents}
+                  disabled={!selectedAgentIds.length || !canWriteAgents}
                   destroyOnHidden
                   open={agentDisableConfirmOpen}
-                  onOpenChange={(open) => setAgentDisableConfirmOpen(Boolean(selectedAgent && canWriteAgents && open))}
+                  onOpenChange={(open) => setAgentDisableConfirmOpen(Boolean(selectedAgentIds.length && canWriteAgents && open))}
                   onConfirm={async () => {
-                    if (selectedAgent) {
-                      await handleDisableMasterAgent(selectedAgent);
-                    }
+                    await handleDeleteSelectedMasterAgents();
                     setAgentDisableConfirmOpen(false);
                   }}
                   onCancel={() => setAgentDisableConfirmOpen(false)}
                 >
-                  <Button size="small" aria-label="删除代理" disabled={!selectedAgent || !canWriteAgents}>
+                  <Button size="small" aria-label="删除代理" disabled={!selectedAgentIds.length || !canWriteAgents}>
                     删除
                   </Button>
                 </Popconfirm>
@@ -2028,21 +2213,17 @@ export function MasterDataPage({
                   列表设置
                 </Button>
               </Space>
-              <Table
+              <ManagedTable
                 rowKey="id"
                 size="small"
                 pagination={tenRowTablePagination}
                 dataSource={filteredAgentRows}
                 rowSelection={{
-                  type: 'radio',
-                  selectedRowKeys: selectedAgentId ? [selectedAgentId] : [],
-                  onChange: (keys) => setSelectedAgentId(String(keys[0] ?? ''))
+                  selectedRowKeys: selectedAgentIds,
+                  onChange: (keys) => setSelectedAgentIds(keys.map(String))
                 }}
-                onRow={(record) => ({
-                  onClick: () => setSelectedAgentId(record.id)
-                })}
                 columns={agentColumns}
-                scroll={{ x: 1400 }}
+                scroll={{ x: canReadAgentBanks ? 2370 : 1570 }}
               />
             </Space>
             <Modal
@@ -2290,7 +2471,8 @@ export function MasterDataPage({
         destroyOnHidden
         okText={editingMasterCustomer ? '保存客户' : '创建客户'}
         cancelText="取消"
-        width={560}
+        width={1180}
+        className="customer-editor-modal"
         onOk={() => void handleSubmitMasterCustomer()}
         onCancel={() => {
           setMasterCustomerOpen(false);
@@ -2302,51 +2484,170 @@ export function MasterDataPage({
           className="notice-bar"
           type="info"
           showIcon
-          message="客户资料维护客户主数据、业务员归属、结算方式和收货人；删除会停用客户，不做物理删除。"
+          message="客户资料维护客户主数据、业务员归属、结算方式和收货人；删除会物理删除无业务引用客户，存在引用时会被阻止。"
         />
         <Form form={masterCustomerForm} layout="vertical">
-          <Form.Item
-            name="customerCode"
-            label="客户编号"
-            rules={[{ required: true, whitespace: true, message: '请输入客户编号' }]}
-          >
-            <Input placeholder="例如 9409" />
-          </Form.Item>
-          <Form.Item
-            name="customerName"
-            label="客户名称"
-            rules={[{ required: true, whitespace: true, message: '请输入客户名称' }]}
-          >
-            <Input placeholder="例如 Daloday" />
-          </Form.Item>
-          <Form.Item name="customerSource" label="客户来源">
-            <Input placeholder="例如 展会、转介绍、线上询盘" />
-          </Form.Item>
-          {currentUser.role === 'ADMIN' ? (
-            <Form.Item
-              name="salesperson"
-              label="业务员归属"
-              rules={[{ required: true, whitespace: true, message: '请输入业务员归属' }]}
-            >
-              <Input placeholder="例如 operator" />
-            </Form.Item>
-          ) : (
-            <>
-              <Form.Item name="salesperson" hidden>
-                <Input />
-              </Form.Item>
-              <Form.Item label="业务员归属" htmlFor="salespersonReadonly">
-                <Input id="salespersonReadonly" aria-label="业务员归属" value={currentSalesperson} disabled />
-              </Form.Item>
-            </>
-          )}
-          <Form.Item
-            name="defaultSettlementMethod"
-            label="结算方式"
-            rules={[{ required: true, whitespace: true, message: '请输入结算方式' }]}
-          >
-            <Input placeholder="例如 RMB月结" />
-          </Form.Item>
+          <section className="customer-editor-section">
+            <div className="customer-editor-section-heading">客户基础信息</div>
+            <Row gutter={[16, 0]}>
+              <Col xs={24} md={12} lg={8}>
+                <Form.Item
+                  name="customerCode"
+                  label="客户编号"
+                  rules={[{ required: true, whitespace: true, message: '请输入客户编号' }]}
+                >
+                  <Input placeholder="例如 9409" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12} lg={8}>
+                <Form.Item
+                  name="customerName"
+                  label="客户名称"
+                  rules={[{ required: true, whitespace: true, message: '请输入客户名称' }]}
+                >
+                  <Input placeholder="例如 Daloday" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12} lg={8}>
+                <Form.Item name="customerSource" label="客户来源">
+                  <Input placeholder="例如 展会、转介绍、线上询盘" />
+                </Form.Item>
+              </Col>
+              {canAssignCustomerSalesperson ? (
+                <Col xs={24} md={12} lg={12}>
+                  {editingMasterCustomer?.salesperson && !salespersonAccounts.some((account) => account.username === editingMasterCustomer.salesperson) ? (
+                    <Alert
+                      className="customer-editor-salesperson-warning"
+                      type="warning"
+                      showIcon
+                      message={`当前归属 ${editingMasterCustomer.salesperson} 已停用或不再具备业务员职责，请改派给启用业务员或清空归属。`}
+                    />
+                  ) : null}
+                  <Form.Item name="salesperson" label="业务员归属">
+                    <Select
+                      allowClear
+                      showSearch
+                      loading={salespersonAccountsLoading}
+                      optionFilterProp="label"
+                      placeholder="选择启用业务员；留空表示未指派"
+                      options={[
+                        ...salespersonAccounts.map((account) => ({
+                          value: account.username,
+                          label: `${account.username}${account.name || account.nickname ? ` · ${account.name || account.nickname}` : ''}${account.site ? ` · ${account.site}` : ''} · 启用`
+                        })),
+                        ...(editingMasterCustomer?.salesperson && !salespersonAccounts.some((account) => account.username === editingMasterCustomer.salesperson)
+                          ? [{ value: editingMasterCustomer.salesperson, label: `${editingMasterCustomer.salesperson} · 已停用/非业务员`, disabled: true }]
+                          : [])
+                      ]}
+                    />
+                  </Form.Item>
+                </Col>
+              ) : (
+                <Col xs={24} md={12} lg={12}>
+                  <Form.Item name="salesperson" hidden>
+                    <Input />
+                  </Form.Item>
+                  <Form.Item label="业务员归属" htmlFor="salespersonReadonly">
+                    <Input id="salespersonReadonly" aria-label="业务员归属" value={currentSalesperson} disabled />
+                  </Form.Item>
+                </Col>
+              )}
+              <Col xs={24} md={12} lg={12}>
+                <Form.Item
+                  name="defaultSettlementMethod"
+                  label="结算方式"
+                  rules={[{ required: true, message: '请选择结算方式' }]}
+                >
+                  <Select
+                    showSearch
+                    optionFilterProp="label"
+                    loading={financeCatalog.loading}
+                    options={financeCatalog.settlementOptions}
+                    placeholder="请选择资料库结算方式"
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          </section>
+          {!editingMasterCustomer && canManageCustomerContacts ? (
+            <Form.List name="contacts">
+              {(fields, { add, remove }) => (
+                <section className="customer-editor-section customer-editor-contacts-section">
+                  <Flex justify="space-between" align="center" className="customer-editor-contact-heading">
+                    <Space size={8}>
+                      <div className="customer-editor-section-heading">收货信息</div>
+                      <Text type="secondary">可选，最多 4 位</Text>
+                    </Space>
+                    <Button
+                      type="text"
+                      icon={<Plus size={18} />}
+                      aria-label="新增收货人"
+                      title="新增收货人"
+                      disabled={fields.length >= 4}
+                      onClick={() => add({ receiverName: '', receiverCompany: '', receiverPhone: '', fbaWarehouseCode: '', receiverAddress: '', receiverCountry: '', receiverState: '', receiverPostalCode: '' })}
+                    />
+                  </Flex>
+                  {fields.length ? fields.map((field, index) => (
+                    <div className="customer-editor-contact-row" key={field.key}>
+                      <Flex justify="space-between" align="center" className="customer-editor-contact-row-heading">
+                        <Text strong>收货人 {index + 1}</Text>
+                        <Button
+                          type="text"
+                          danger
+                          icon={<Trash2 size={16} />}
+                          aria-label={`删除收货人 ${index + 1}`}
+                          title="删除收货人"
+                          onClick={() => remove(field.name)}
+                        />
+                      </Flex>
+                      <Row gutter={[12, 0]}>
+                        <Col xs={24} md={12} lg={4}>
+                          <Form.Item name={[field.name, 'receiverName']} label="收货人名称" rules={[{ required: true, whitespace: true, message: '请输入收货人名称' }]}>
+                            <Input placeholder="姓名" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12} lg={4}>
+                          <Form.Item name={[field.name, 'receiverCompany']} label="收货人公司名称">
+                            <Input placeholder="公司名称" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12} lg={4}>
+                          <Form.Item name={[field.name, 'receiverPhone']} label="收货人电话">
+                            <Input placeholder="联系电话" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={12} lg={3}>
+                          <Form.Item name={[field.name, 'fbaWarehouseCode']} label="FBA仓库代码">
+                            <Input placeholder="例如 ONT8" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={8} lg={3}>
+                          <Form.Item name={[field.name, 'receiverCountry']} label="收货国家">
+                            <Input placeholder="US" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={8} lg={3}>
+                          <Form.Item name={[field.name, 'receiverState']} label="州/省">
+                            <Input placeholder="CA" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24} md={8} lg={3}>
+                          <Form.Item name={[field.name, 'receiverPostalCode']} label="邮编">
+                            <Input placeholder="90001" />
+                          </Form.Item>
+                        </Col>
+                        <Col xs={24}>
+                          <Form.Item name={[field.name, 'receiverAddress']} label="收货人地址">
+                            <Input placeholder="详细收货地址" />
+                          </Form.Item>
+                        </Col>
+                      </Row>
+                    </div>
+                  )) : <div className="customer-editor-contact-empty">点击右侧 + 添加收货信息</div>}
+                </section>
+              )}
+            </Form.List>
+          ) : null}
         </Form>
       </Modal>
       <Modal
@@ -2385,7 +2686,7 @@ export function MasterDataPage({
           </Form.Item>
           <Row gutter={12}>
             <Col xs={24} md={8}>
-              <Form.Item name="receiverCountry" label="国家">
+              <Form.Item name="receiverCountry" label="收货国家">
                 <Input placeholder="US" />
               </Form.Item>
             </Col>
@@ -2430,8 +2731,8 @@ export function MasterDataPage({
             <Col xs={24}>
               <Form.Item
                 name="agentName"
-                label="代理详细公司名"
-                rules={[{ required: true, whitespace: true, message: '请输入代理详细公司名' }]}
+                label="代理全称"
+                rules={[{ required: true, whitespace: true, message: '请输入代理全称' }]}
               >
                 <Input placeholder="例如 深圳加时特" />
               </Form.Item>
@@ -2454,6 +2755,11 @@ export function MasterDataPage({
             <Col xs={24} md={12}>
               <Form.Item name="warehouseContact" label="仓库联系人">
                 <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24}>
+              <Form.Item name="trackingWebsite" label="查询网站">
+                <Input placeholder="例如 https://track.example.com?no={transferNo}" />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -2487,23 +2793,57 @@ export function MasterDataPage({
             {canReadAgentBanks ? (
               <>
                 <Col xs={24}>
-                  <Title level={5}>收款方银行信息</Title>
+                  <Title level={5}>收款银行账户一 / 二 / 三</Title>
                 </Col>
-                <Col xs={24}>
-                  <Form.Item name="bankAccountName" label="收款方">
-                    <Input placeholder="例如 深圳市鲸链国际物流有限公司" />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Form.Item name="bankAccountNo" label="银行账号">
-                    <Input placeholder="例如 755972950810001" />
-                  </Form.Item>
-                </Col>
-                <Col xs={24} md={12}>
-                  <Form.Item name="bankName" label="开户银行">
-                    <Input placeholder="例如 招商银行深圳福永支行" />
-                  </Form.Item>
-                </Col>
+                <Form.List name="bankAccounts">
+                  {(fields) => fields.slice(0, 3).map((field, index) => (
+                    <Col xs={24} key={field.key}>
+                      <Card size="small" title={`收款银行账户${['一', '二', '三'][index]}`}>
+                        <Form.Item name={[field.name, 'id']} hidden>
+                          <Input />
+                        </Form.Item>
+                        <Row gutter={12}>
+                          <Col xs={24} md={8}>
+                            <Form.Item name={[field.name, 'accountName']} label="收款方">
+                              <Input disabled={!canWriteAgentBanks} placeholder="例如 深圳市鲸链国际物流有限公司" />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Form.Item name={[field.name, 'bankName']} label="开户银行">
+                              <Input disabled={!canWriteAgentBanks} placeholder="例如 招商银行深圳福永支行" />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Form.Item name={[field.name, 'bankAccountNo']} label="银行账号">
+                              <Input disabled={!canWriteAgentBanks} placeholder="例如 755972950810001" />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Form.Item name={[field.name, 'currency']} label="币种" initialValue="RMB">
+                              <select aria-label={`收款银行账户${index + 1}币种`} className="native-select" disabled={!canWriteAgentBanks}>
+                                <option value="RMB">RMB</option>
+                                <option value="USD">USD</option>
+                              </select>
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Form.Item name={[field.name, 'enabled']} label="状态" initialValue="true">
+                              <select aria-label={`收款银行账户${index + 1}状态`} className="native-select" disabled={!canWriteAgentBanks}>
+                                <option value="true">启用</option>
+                                <option value="false">停用</option>
+                              </select>
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={8}>
+                            <Form.Item name={[field.name, 'remark']} label="备注">
+                              <Input disabled={!canWriteAgentBanks} placeholder="例如 默认付款账户" />
+                            </Form.Item>
+                          </Col>
+                        </Row>
+                      </Card>
+                    </Col>
+                  ))}
+                </Form.List>
               </>
             ) : null}
             <Col xs={24}>

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import type {
   ReceivableAuditBatchInput,
   ReceivableAuditCreateInput,
@@ -16,11 +16,24 @@ import type {
   WaterReceiptVoucherInput
 } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
+import { FinanceCatalogService } from '../catalog/finance-catalog.service.js';
 import type { Principal } from '../../rbac.js';
 
 @Injectable()
 export class FinanceReceivableService {
-  constructor(@Inject(PrismaRepository) private readonly repository: PrismaRepository) {}
+  constructor(
+    @Inject(PrismaRepository) private readonly repository: PrismaRepository,
+    @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService
+  ) {}
+
+  private async ensureWaterReceiptSettlementMethod(input: { receiptMethod?: string }) {
+    const receiptMethod = input.receiptMethod?.trim();
+    if (!receiptMethod) throw new BadRequestException('结算方式不能为空');
+    const { items } = await this.financeCatalogService.list({ category: 'SETTLEMENT_METHOD', enabledOnly: true });
+    if (!items.some((item) => item.name === receiptMethod)) {
+      throw new BadRequestException('结算方式不存在或已停用');
+    }
+  }
 
   receivables(principal: Principal) {
     return this.repository.getReceivables(principal);
@@ -74,11 +87,13 @@ export class FinanceReceivableService {
     return this.repository.getWaterReceipts(principal, query);
   }
 
-  createWaterReceipt(principal: Principal, input: WaterReceiptCreateInput) {
+  async createWaterReceipt(principal: Principal, input: WaterReceiptCreateInput) {
+    await this.ensureWaterReceiptSettlementMethod(input);
     return this.repository.createWaterReceipt(principal, input);
   }
 
-  updateWaterReceipt(principal: Principal, id: string, input: WaterReceiptUpdateInput) {
+  async updateWaterReceipt(principal: Principal, id: string, input: WaterReceiptUpdateInput) {
+    if (input.receiptMethod !== undefined) await this.ensureWaterReceiptSettlementMethod(input);
     return this.repository.updateWaterReceipt(principal, id, input);
   }
 
@@ -108,6 +123,10 @@ export class FinanceReceivableService {
 
   uploadWaterReceiptVoucher(principal: Principal, id: string, input: WaterReceiptVoucherInput) {
     return this.repository.uploadWaterReceiptVoucher(principal, id, input);
+  }
+
+  deleteWaterReceiptVoucher(principal: Principal, id: string) {
+    return this.repository.deleteWaterReceiptVoucher(principal, id);
   }
 
   exportWaterReceipts(principal: Principal, input: WaterReceiptExportRequest) {

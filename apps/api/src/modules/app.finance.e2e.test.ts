@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { setupE2eApp } from './test-support/e2e-harness.js';
 
 describe('Siyuan API finance', () => {
@@ -52,7 +52,7 @@ describe('Siyuan API finance', () => {
         scanTime: '2026-06-12T10:00:00.000+08:00',
         remark: '草稿快照测试'
       })
-      .expect(201);
+      .expect((response) => expect(response.status, response.body.message).toBe(201));
 
     const draftShipment = await request(app.getHttpServer())
       .post('/api/shipments')
@@ -150,6 +150,97 @@ describe('Siyuan API finance', () => {
       });
   });
 
+  it('auto-matches a later arrived water receipt to one unmatched order receivable', async () => {
+    const adminToken = await app.loginAs('admin');
+    const suffix = Date.now();
+    const customer = await request(app.getHttpServer())
+      .post('/api/master-data/customers')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: `AUTO${suffix}`, name: '水单自动匹配客户' })
+      .expect(201);
+    const order = await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        shipment: {
+          customerCode: customer.body.code,
+          customerOrderNo: `AUTO-ORDER-${suffix}`,
+          systemOrderNo: `SYAUTO${suffix}`,
+          businessType: 'EXPRESS',
+          packageType: 'WPX',
+          destinationCountry: '美国',
+          channelId: 'ch-dhl-hk',
+          declarationRequired: false,
+          cargoType: '普货',
+          productName: '后置水单匹配货物',
+          settlementMethod: 'RMB月结',
+          packageCount: 1,
+          actualWeightKg: 5,
+          volumeCbm: 0.01,
+          chargeableWeightKg: 5,
+          cargoDataSource: 'MANUAL_ADJUSTED',
+          chargeWeightOverridden: true
+        },
+        warehousePackageIds: [],
+        receivables: [{ type: 'RECEIVABLE', name: '运费', amount: 321, currency: 'RMB', settlementMethod: 'RMB月结' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务员成本', amount: 100, currency: 'RMB' }],
+        submitForReview: true
+      })
+      .expect(201);
+    expect(order.body.receivables[0]).toEqual(expect.objectContaining({ receiptStatus: 'UNPAID' }));
+    const receipt = await request(app.getHttpServer())
+      .post('/api/finance/water-receipts')
+      .set('Authorization', app.auth(adminToken))
+      .send({ customerCode: customer.body.code, receiptMethod: '思远阿里', receiptDate: '2026-07-12', currency: 'RMB', amount: 321, paymentNo: `AUTO-RECEIPT-${suffix}` })
+      .expect(201);
+    const arrived = await request(app.getHttpServer())
+      .post(`/api/finance/water-receipts/${receipt.body.id}/mark-arrived`)
+      .set('Authorization', app.auth(adminToken))
+      .send({})
+      .expect(201);
+    expect(arrived.body).toEqual(expect.objectContaining({ balance: 0, status: 'ARCHIVED' }));
+    expect(arrived.body.matches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ receivableFinanceItemId: order.body.receivables[0].id, amount: 321, source: 'AUTO' })
+    ]));
+    await request(app.getHttpServer())
+      .get(`/api/shipments/${order.body.shipment.id}/order-entry`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.receivables).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: order.body.receivables[0].id, paymentNo: receipt.body.receiptNo, receiptMatchSource: 'AUTO', receiptStatus: 'RECEIVED' })
+        ]));
+      });
+  });
+
+  it('submits an order entry for review when company-channel pricing is missing', async () => {
+    const adminToken = await app.loginAs('admin');
+    const suffix = Date.now();
+    const response = await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        shipment: {
+          customerCode: '9409', customerOrderNo: `DRAFT-RATE-${suffix}`, systemOrderNo: `SYDRAFTRATE${suffix}`,
+          businessType: 'EXPRESS', packageType: 'WPX', destinationCountry: '美国', channelId: 'ch-usps',
+          declarationRequired: false, cargoType: '普货', productName: '费率待完善货物', settlementMethod: 'RMB月结',
+          packageCount: 1, actualWeightKg: 2, volumeCbm: 0.01, chargeableWeightKg: 2, cargoDataSource: 'MANUAL_ADJUSTED', chargeWeightOverridden: true
+        },
+        warehousePackageIds: [],
+        receivables: [{ type: 'RECEIVABLE', name: '运费', amount: 50, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务员成本', amount: 20, currency: 'RMB' }],
+        submitForReview: true
+      })
+      .expect(201);
+    expect(response.body.shipment).toEqual(expect.objectContaining({ status: 'REVIEW_PENDING' }));
+    expect(response.body.shipment).not.toHaveProperty('reviewRejectedReason');
+    await request(app.getHttpServer())
+      .get('/api/shipments/review-pending')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((pending) => expect(pending.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: response.body.shipment.id })])));
+  });
+
   it('creates order-entry drafts without binding packages and submits complete entries to review', async () => {
     const adminToken = await app.loginAs('admin');
     const operatorToken = await app.loginAs('operator');
@@ -233,7 +324,7 @@ describe('Siyuan API finance', () => {
       .set('Authorization', app.auth(token))
       .send({
         customerCode: '9409',
-        receiptMethod: '录单匹配测试',
+        receiptMethod: '招商银行',
         receiptDate: '2026-06-25T10:05:00.000+08:00',
         amount: 500,
         currency: 'USD',
@@ -481,7 +572,7 @@ describe('Siyuan API finance', () => {
       })
       .expect(400)
       .expect((response) => {
-        expect(response.body.message).toContain('运单号 SYGJ06061230001 已存在');
+        expect(response.body.message).toContain('出货单号 SYGJ06061230001 已存在');
       });
 
     await request(app.getHttpServer())
@@ -503,7 +594,11 @@ describe('Siyuan API finance', () => {
         businessCosts: [],
         submitForReview: true
       })
-      .expect(400);
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.shipment).toEqual(expect.objectContaining({ status: 'DRAFT' }));
+        expect(response.body.shipment.reviewRejectedReason).toBeTruthy();
+      });
 
     const operatorPackage = await request(app.getHttpServer())
       .post('/api/warehouse/packages')
@@ -561,6 +656,7 @@ describe('Siyuan API finance', () => {
 
   it('keeps finance catalog endpoints stable after moving them out of DataController', async () => {
     const token = await app.loginAs('admin');
+    const financeToken = await app.loginAs('finance');
     const operatorToken = await app.loginAs('operator');
     const name = `架构拆分测试费用-${Date.now()}`;
 
@@ -574,11 +670,16 @@ describe('Siyuan API finance', () => {
 
     await request(app.getHttpServer())
       .get('/api/finance/catalog?category=FEE_NAME&enabledOnly=true')
-      .set('Authorization', app.auth(operatorToken))
+      .set('Authorization', app.auth(financeToken))
       .expect(200)
       .expect((response) => {
         expect(response.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ category: 'FEE_NAME', name: '运费' })]));
       });
+
+    await request(app.getHttpServer())
+      .get('/api/finance/catalog?category=FEE_NAME&enabledOnly=true')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(403);
 
     await request(app.getHttpServer())
       .post('/api/finance/catalog')
@@ -596,7 +697,7 @@ describe('Siyuan API finance', () => {
       });
 
     const productName = `录单品名-${Date.now()}`;
-    await request(app.getHttpServer())
+    const product = await request(app.getHttpServer())
       .post('/api/finance/catalog')
       .set('Authorization', app.auth(token))
       .send({ category: 'PRODUCT_NAME', name: productName, enabled: true })
@@ -606,12 +707,114 @@ describe('Siyuan API finance', () => {
       });
 
     await request(app.getHttpServer())
+      .delete(`/api/finance/catalog/${encodeURIComponent(product.body.id)}`)
+      .set('Authorization', app.auth(operatorToken))
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .delete(`/api/finance/catalog/${encodeURIComponent(product.body.id)}`)
+      .set('Authorization', app.auth(token))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual({ id: product.body.id, deleted: true });
+      });
+
+    await request(app.getHttpServer())
+      .get(`/api/finance/catalog?category=PRODUCT_NAME&keyword=${encodeURIComponent(productName)}`)
+      .set('Authorization', app.auth(token))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.items).toEqual([]);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=finance.catalog.delete')
+      .set('Authorization', app.auth(token))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'finance.catalog.delete',
+            target: `financeCatalogItem:${product.body.id}`,
+            before: expect.objectContaining({ category: 'PRODUCT_NAME', name: productName })
+          })
+        ]));
+      });
+
+    await request(app.getHttpServer())
       .get(`/api/finance/catalog?category=FEE_NAME&keyword=${encodeURIComponent(name)}`)
       .set('Authorization', app.auth(token))
       .expect(200)
       .expect((response) => {
         expect(response.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ name })]));
       });
+  });
+
+  it('syncs agent bank accounts to payee bank accounts for payment applications 收款银行', async () => {
+    const adminToken = await app.loginAs('admin');
+    const warehouseToken = await app.loginAs('warehouse');
+    const agentName = `三账代理-${Date.now()}`;
+
+    const savedBank = await request(app.getHttpServer())
+      .post('/api/finance/agent-bank-accounts')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        agentName,
+        accountName: '三账代理 RMB 户',
+        bankName: '招商银行深圳分行',
+        bankAccountNo: 'RMB-AGENT-001',
+        currency: 'RMB',
+        remark: '代理资料账户一'
+      })
+      .expect(201);
+    expect(savedBank.body.enabled).toBe(true);
+    expect(savedBank.body.bankAccountNo).toBe('RMB-AGENT-001');
+
+    const payeeBanks = await request(app.getHttpServer())
+      .get(`/api/finance/payee-bank-accounts?agentName=${encodeURIComponent(agentName)}&currency=RMB`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    expect(payeeBanks.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ agentName, accountName: '三账代理 RMB 户', bankAccountNo: 'RMB-AGENT-001', currency: 'RMB', enabled: true })
+    ]));
+
+    await request(app.getHttpServer())
+      .post('/api/finance/agent-bank-accounts')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({
+        agentName,
+        accountName: '越权户',
+        bankName: '越权银行',
+        bankAccountNo: 'DENIED-001',
+        currency: 'RMB'
+      })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/finance/agent-bank-accounts')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        ...savedBank.body,
+        enabled: false
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.enabled).toBe(false);
+      });
+
+    const activePayeeBanks = await request(app.getHttpServer())
+      .get(`/api/finance/payee-bank-accounts?agentName=${encodeURIComponent(agentName)}&currency=RMB`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    expect(activePayeeBanks.body).toEqual([]);
+
+    const allAgentBanks = await request(app.getHttpServer())
+      .get(`/api/finance/agent-bank-accounts?agentName=${encodeURIComponent(agentName)}&includeDisabled=true`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    expect(allAgentBanks.body).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: savedBank.body.id, enabled: false, bankAccountNo: 'RMB-AGENT-001' })
+    ]));
   });
 
   it('audits and reverse-audits receivable rows from the finance review center', async () => {
@@ -655,6 +858,81 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.reconciliationStatus).toBe('PENDING');
         expect(response.body.reviewedBy).toBeUndefined();
+      });
+  });
+
+  it('matches system generated receivables with arrived water receipts and blocks reverse before unmatch', async () => {
+    const adminToken = await app.loginAs('admin');
+
+    const audits = await request(app.getHttpServer())
+      .get('/api/finance/receivable-audits?systemOrderNo=SYGJ06059409051')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    const systemReceivable = audits.body.rows.find((row: { sourceType?: string; receiptStatus?: string }) => row.sourceType === 'SYSTEM' && row.receiptStatus !== 'RECEIVED');
+    expect(systemReceivable).toBeTruthy();
+    if (!systemReceivable) throw new Error('未找到系统自动应收');
+
+    await request(app.getHttpServer())
+      .post(`/api/finance/receivable-audits/${systemReceivable.id}/audit`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/finance/water-receipts/wr-al-seed-9409/match-orders')
+      .set('Authorization', app.auth(adminToken))
+      .send({ matches: [{ receivableFinanceItemId: systemReceivable.id, amount: 100 }] })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.matches).toEqual(expect.arrayContaining([
+          expect.objectContaining({ receivableFinanceItemId: systemReceivable.id, amount: 100 })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/finance/receivable-audits?systemOrderNo=SYGJ06059409051')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: systemReceivable.id,
+            sourceType: 'SYSTEM',
+            paymentNo: 'SD20260601001',
+            matchedReceiptNo: 'SD20260601001',
+            receivedAmount: 100,
+            receiptStatus: 'PARTIAL'
+          })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/finance/receivable-audits/${systemReceivable.id}/reverse-audit`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('撤销匹配');
+      });
+
+    const receiptRows = await request(app.getHttpServer())
+      .get('/api/finance/water-receipts?receiptNo=SD20260601001&status=ALL')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    const matchIds = receiptRows.body.rows[0].matches
+      .filter((match: { receivableFinanceItemId: string }) => match.receivableFinanceItemId === systemReceivable.id)
+      .map((match: { id: string }) => match.id);
+    await request(app.getHttpServer())
+      .post('/api/finance/water-receipts/wr-al-seed-9409/unmatch')
+      .set('Authorization', app.auth(adminToken))
+      .send({ matchIds, reason: '系统应收匹配回归' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/api/finance/receivable-audits/${systemReceivable.id}/reverse-audit`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.reconciliationStatus).toBe('PENDING');
+        expect(response.body.receiptStatus).toBe('UNPAID');
       });
   });
 
@@ -748,11 +1026,12 @@ describe('Siyuan API finance', () => {
           declarationRequired: false,
           cargoType: '普货',
           productName: '业务成本审核测试单',
-          settlementMethod: 'RMB月结'
+          settlementMethod: 'RMB月结',
+          channelId: 'ch-dhl-hk'
         },
         warehousePackageIds: [pkg.body.id],
-        receivables: [{ type: 'RECEIVABLE', name: '测试应收', amount: 1000, currency: 'RMB' }],
-        businessCosts: [{ type: 'BUSINESS_COST', name: '录单业务成本', amount: 200, currency: 'RMB' }],
+        receivables: [{ type: 'RECEIVABLE', name: '运费', amount: 1000, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务员成本', amount: 200, currency: 'RMB' }],
         submitForReview: true
       })
       .expect(201);
@@ -856,7 +1135,7 @@ describe('Siyuan API finance', () => {
               id: created.body.id,
               systemOrderNo: 'SYBIZCOST001',
               customerCode: '9409',
-              salesperson: 'admin',
+              salesperson: 'operator',
               name: '业务员成本运费',
               chargeWeightKg: 20,
               unitPrice: 30,
@@ -900,7 +1179,7 @@ describe('Siyuan API finance', () => {
               id: created.body.id,
               systemOrderNo: 'SYBIZCOST001',
               customerCode: '9409',
-              salesperson: 'admin',
+              salesperson: 'operator',
               name: '业务员成本运费',
               chargeWeightKg: 20,
               unitPrice: 30,
@@ -1584,19 +1863,32 @@ describe('Siyuan API finance', () => {
 	      .attach('file', Buffer.concat([tinyPng, Buffer.alloc(10 * 1024 * 1024)]), { filename: 'too-large.png', contentType: 'image/png' });
 	    expect([400, 413]).toContain(tooLargeUpload.status);
 
-	    const savedUsdBank = await request(app.getHttpServer())
+    const savedRmbBank = await request(app.getHttpServer())
+      .post('/api/finance/payee-bank-accounts')
+      .set('Authorization', app.auth(adminToken))
+      .send({ agentName: '宇环', accountName: '宇环 RMB 户', bankName: '招商银行', bankAccountNo: 'RMB-001', currency: 'RMB' })
+      .expect(201);
+    expect(savedRmbBank.body.currency).toBe('RMB');
+    await expectAudit('finance.payment.bank.save', savedRmbBank.body.id);
+
+    const savedUsdBank = await request(app.getHttpServer())
       .post('/api/finance/payee-bank-accounts')
       .set('Authorization', app.auth(adminToken))
       .send({ agentName: '宇环', accountName: '宇环 USD 户', bankName: 'HSBC', bankAccountNo: 'USD-001', currency: 'USD' })
       .expect(201);
     expect(savedUsdBank.body.currency).toBe('USD');
     await expectAudit('finance.payment.bank.save', savedUsdBank.body.id);
-    const wrongAgentBank = await request(app.getHttpServer())
-      .post('/api/finance/payee-bank-accounts')
+    await request(app.getHttpServer())
+      .post('/api/finance/payment-applications')
       .set('Authorization', app.auth(adminToken))
-      .send({ agentName: '其他代理', accountName: '其他代理 RMB 户', bankName: '招商银行', bankAccountNo: 'OTHER-RMB-001', currency: 'RMB' })
-      .expect(201);
-    await expectAudit('finance.payment.bank.save', wrongAgentBank.body.id);
+      .send({
+        pendingPaymentIds: [applicationId],
+        voucher: { fileName: 'missing-bank-bill.png', mimeType: 'image/png', url: '/uploads/missing-bank-bill.png' }
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('收款银行');
+      });
     await request(app.getHttpServer())
       .post('/api/finance/payment-applications')
       .set('Authorization', app.auth(adminToken))
@@ -1605,34 +1897,35 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.message).toContain('币种');
       });
-    await request(app.getHttpServer())
-      .post('/api/finance/payment-applications')
-      .set('Authorization', app.auth(adminToken))
-      .send({ pendingPaymentIds: [applicationId], bankAccountId: wrongAgentBank.body.id })
-      .expect(400)
-      .expect((response) => {
-        expect(response.body.message).toContain('代理');
-      });
-
-    const paymentApps = await request(app.getHttpServer())
+    const rmbPaymentApps = await request(app.getHttpServer())
       .post('/api/finance/payment-applications')
       .set('Authorization', app.auth(adminToken))
       .send({
-        pendingPaymentIds: pending.body.rows.map((row: { id: string }) => row.id),
+        pendingPaymentIds: [applicationId],
+        bankAccountId: savedRmbBank.body.id,
         remark: '本次付款申请',
         voucher: { fileName: 'merged-bill.png', mimeType: 'image/png', url: '/uploads/merged-bill.png' }
-      })
-      .expect(201);
-    expect(paymentApps.body).toHaveLength(2);
-	    expect(paymentApps.body).toEqual(expect.arrayContaining([
-	      expect.objectContaining({ currency: 'RMB', totalAmount: 120, status: 'WAITING_PAYMENT' }),
-	      expect.objectContaining({ currency: 'USD', totalAmount: 50, status: 'WAITING_PAYMENT' })
-	    ]));
+      });
+    expect(rmbPaymentApps.status, JSON.stringify(rmbPaymentApps.body)).toBe(201);
+    const usdPaymentApps = await request(app.getHttpServer())
+      .post('/api/finance/payment-applications')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        pendingPaymentIds: [usdApplicationId],
+        bankAccountId: savedUsdBank.body.id,
+        remark: '本次付款申请',
+        voucher: { fileName: 'merged-bill.png', mimeType: 'image/png', url: '/uploads/merged-bill.png' }
+      });
+    expect(usdPaymentApps.status, JSON.stringify(usdPaymentApps.body)).toBe(201);
+    expect(rmbPaymentApps.body).toHaveLength(1);
+    expect(usdPaymentApps.body).toHaveLength(1);
+    expect(rmbPaymentApps.body[0]).toEqual(expect.objectContaining({ agentName: '宇环', currency: 'RMB', totalAmount: 120, status: 'WAITING_PAYMENT' }));
+    expect(usdPaymentApps.body[0]).toEqual(expect.objectContaining({ currency: 'USD', totalAmount: 50, status: 'WAITING_PAYMENT' }));
+    await expectAudit('finance.payment.bank.select', savedRmbBank.body.id);
+    await expectAudit('finance.payment.bank.select', savedUsdBank.body.id);
 
-	    const usdPaymentApp = paymentApps.body.find((row: { currency: string }) => row.currency === 'USD');
-	    const rmbPaymentApp = paymentApps.body.find((row: { currency: string }) => row.currency === 'RMB');
-	    expect(usdPaymentApp).toBeTruthy();
-	    expect(rmbPaymentApp).toBeTruthy();
+	    const rmbPaymentApp = rmbPaymentApps.body[0];
+	    const usdPaymentApp = usdPaymentApps.body[0];
 	    expect(rmbPaymentApp.vouchers).toEqual(expect.arrayContaining([
 	      expect.objectContaining({ pendingPaymentId: applicationId, fileName: 'pending-voucher.png' }),
 	      expect.objectContaining({ pendingPaymentId: applicationId, fileName: 'supplier-bill.png' }),
@@ -1734,7 +2027,7 @@ describe('Siyuan API finance', () => {
 	            after: expect.objectContaining({
 	              paymentApplicationId: usdPaymentApp.id,
 	              paymentApplicationNo: usdPaymentApp.applicationNo,
-	              bankAccountNo: 'USD-ONCE-001',
+		              bankAccountNo: '********-001',
 	              bankName: 'HSBC',
 	              currency: 'USD',
 	              totalAmount: 50,
@@ -1757,7 +2050,7 @@ describe('Siyuan API finance', () => {
 	      .set('Authorization', app.auth(adminToken))
 	      .send({
 	        payerBankName: '思远付款银行',
-	        payerBankAccountNo: '888800001111',
+		        payerBankAccountNo: '888800001111',
 	        paidAt: '2026-06-25',
 	        waterReceipt: { fileName: 'paid-receipt.png', mimeType: 'image/png', url: '/uploads/paid-receipt.png' }
 	      })
@@ -1811,7 +2104,7 @@ describe('Siyuan API finance', () => {
 	              paymentAmount: 50,
 	              totalAmount: 50,
 	              payerBankName: '思远付款银行',
-	              payerBankAccountNo: '888800001111',
+		              payerBankAccountNo: '********1111',
 	              paidAt: '2026-06-25',
 	              paidBy: 'admin',
 	              statusFrom: 'WAITING_PAYMENT',
@@ -1993,7 +2286,7 @@ describe('Siyuan API finance', () => {
 	      .set('Authorization', app.auth(adminToken))
 	      .expect(400)
 	      .expect((response) => {
-	        expect(response.body.message).toContain('先在待支付/已支付模块反核销');
+	        expect(response.body.message).toContain('先在已付款模块反核销');
 	      });
 
 	    await request(app.getHttpServer())
@@ -2120,58 +2413,10 @@ describe('Siyuan API finance', () => {
 	    await request(app.getHttpServer())
 	      .post(`/api/finance/payable-audits/${created.body.id}/reverse-audit`)
       .set('Authorization', app.auth(adminToken))
-      .expect(201);
-    await request(app.getHttpServer())
-      .get('/api/system/audit-logs?action=finance.payable.reverse_audit')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
+      .expect(400)
       .expect((response) => {
-        expect(response.body.rows).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            action: 'finance.payable.reverse_audit',
-            target: created.body.id,
-            after: expect.objectContaining({
-              id: created.body.id,
-              systemOrderNo: 'SYPAYABLEAUDIT001',
-              customerCode: '9409',
-              realAgentName: expect.any(String),
-              agentChannel: expect.any(String),
-              chargeWeightKg: 20,
-              unitPrice: 6,
-              amount: 120,
-              currency: 'RMB',
-              routingSource: 'ROUTING',
-              supplierBillNo: 'PAYABLE-001',
-              pendingPaymentStatus: 'INVALIDATED',
-              statusFrom: 'CONFIRMED',
-              statusTo: 'PENDING',
-              reviewStatus: 'PENDING',
-              reversedBy: 'admin',
-              reversedAt: expect.any(String),
-              locked: false
-            })
-          })
-        ]));
+        expect(response.body.message).toContain('已生成付款凭证');
       });
-    await request(app.getHttpServer())
-      .get('/api/finance/pending-payments?systemOrderNo=SYPAYABLEAUDIT001&status=INVALIDATED&currency=ALL')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
-      .expect((response) => {
-	        expect(response.body.rows).toEqual(expect.arrayContaining([expect.objectContaining({ id: applicationId, status: 'INVALIDATED' })]));
-	      });
-
-	    await request(app.getHttpServer())
-	      .post(`/api/finance/payable-audits/${created.body.id}/audit`)
-	      .set('Authorization', app.auth(adminToken))
-	      .expect(201);
-	    await request(app.getHttpServer())
-	      .get('/api/finance/pending-payments?systemOrderNo=SYPAYABLEAUDIT001&status=PENDING&currency=ALL')
-	      .set('Authorization', app.auth(adminToken))
-	      .expect(200)
-	      .expect((response) => {
-	        expect(response.body.rows).toEqual(expect.arrayContaining([expect.objectContaining({ id: applicationId, status: 'PENDING' })]));
-	      });
 
 	    await request(app.getHttpServer())
 	      .post('/api/finance/payment-applications')
@@ -2195,7 +2440,12 @@ describe('Siyuan API finance', () => {
 	      .set('Authorization', app.auth(adminToken))
 	      .expect(200)
 	      .expect((response) => {
-	        expect(response.body).toEqual([]);
+	        expect(response.body).toEqual(expect.arrayContaining([
+	          expect.objectContaining({ id: savedRmbBank.body.id })
+	        ]));
+	        expect(response.body).not.toEqual(expect.arrayContaining([
+	          expect.objectContaining({ bankAccountNo: 'TEMP-ONCE-001' })
+	        ]));
 	      });
 	  });
 
@@ -2248,10 +2498,9 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.receivableTotal).toBeGreaterThan(0);
         expect(response.body.businessCostTotal).toBeGreaterThan(0);
-        expect(response.body.payables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '基础运费' })]));
-        expect(response.body.payables[0].agentName).toBeUndefined();
-        expect(response.body.payableTotal).toBeGreaterThan(0);
-        expect(response.body.canViewPayables).toBe(true);
+        expect(response.body.payables).toBeUndefined();
+        expect(response.body.payableTotal).toBeUndefined();
+        expect(response.body.canViewPayables).toBeUndefined();
         expect(response.body.grossProfit).toBeUndefined();
         expect(response.body.agentName).toBeUndefined();
         expect(response.body.businessCosts[0]).toEqual(expect.objectContaining({ name: '基础运费' }));
@@ -2349,10 +2598,9 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.receivables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '空运费' })]));
         expect(response.body.businessCosts).toEqual(expect.arrayContaining([expect.objectContaining({ name: '业务员成本' })]));
-        expect(response.body.payables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '代理运费', amount: 210 })]));
-        expect(response.body.payables[0].agentName).toBeUndefined();
-        expect(response.body.payableTotal).toBeGreaterThan(0);
-        expect(response.body.canViewPayables).toBe(true);
+        expect(response.body.payables).toBeUndefined();
+        expect(response.body.payableTotal).toBeUndefined();
+        expect(response.body.canViewPayables).toBeUndefined();
         expect(JSON.stringify(response.body)).not.toContain('宇环');
         expect(response.body.grossProfit).toBeUndefined();
         expect(response.body).not.toHaveProperty('profitSections');
@@ -2502,6 +2750,20 @@ describe('Siyuan API finance', () => {
       .expect(200);
 
     await request(app.getHttpServer())
+      .get(`/api/system/audit-logs?action=shipment.finance_item.delete&target=${receivable.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'shipment.finance_item.delete',
+            target: receivable.body.id,
+            after: expect.objectContaining({ hardDelete: true })
+          })
+        ]));
+      });
+
+    await request(app.getHttpServer())
       .get(`/api/shipments/${shipment.body.id}/finance-detail`)
       .set('Authorization', app.auth(adminToken))
       .expect(200)
@@ -2509,6 +2771,330 @@ describe('Siyuan API finance', () => {
         expect(response.body.receivables).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: receivable.body.id })]));
         expect(response.body.businessCosts).toEqual(expect.arrayContaining([expect.objectContaining({ id: operatorBusinessCost.body.id, name: '业务补录成本' })]));
       });
+  });
+
+  it('physically deletes unreferenced payable fees and blocks payment-referenced fees', async () => {
+    const adminToken = await app.loginAs('admin');
+    const shipment = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerId: 'c-9409',
+        customerOrderNo: 'HARD-DELETE-PAYABLE-001',
+        systemOrderNo: 'SYHARDDELETEPAYABLE001',
+        businessType: 'EXPRESS',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        channelId: 'ch-dhl-hk',
+        agentId: 'a-yuhuan',
+        packageCount: 1,
+        receivableWeightKg: 10,
+        agentWeightKg: 10
+      })
+      .expect(201);
+
+    const deletable = await request(app.getHttpServer())
+      .post('/api/finance/payable-audits')
+      .set('Authorization', app.auth(adminToken))
+      .send({ shipmentId: shipment.body.id, name: '可删除应付', amount: 88, currency: 'RMB', agentName: '宇环' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .delete(`/api/finance/payable-audits/${deletable.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get(`/api/system/audit-logs?action=finance.payable.delete&target=${deletable.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ after: expect.objectContaining({ hardDelete: true }) })
+        ]));
+      });
+
+    const referenced = await request(app.getHttpServer())
+      .post('/api/finance/payable-audits')
+      .set('Authorization', app.auth(adminToken))
+      .send({ shipmentId: shipment.body.id, name: '付款引用应付', amount: 99, currency: 'RMB', agentName: '宇环' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/api/finance/payable-audits/${referenced.body.id}/audit`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/api/finance/payable-audits/${referenced.body.id}/reverse-audit`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .delete(`/api/shipments/${shipment.body.id}/finance-items/${referenced.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('付款申请');
+      });
+  });
+
+  it('water receipt generates strict Beijing daily receipt numbers and ignores custom receiptNo', async () => {
+    const adminToken = await app.loginAs('admin');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-06-21T16:05:00.000Z'));
+    try {
+      const createdReceipts: Array<{ id: string; receiptNo: string }> = [];
+      for (let index = 0; index < 5; index += 1) {
+        const response = await request(app.getHttpServer())
+          .post('/api/finance/water-receipts')
+          .set('Authorization', app.auth(adminToken))
+          .send({
+            receiptNo: `MANUAL-${index + 1}`,
+            customerCode: '9409',
+            receiptMethod: '招商银行',
+            receiptDate: '2026-06-01T11:05:00.000+08:00',
+            amount: 100 + index,
+            currency: 'RMB',
+            paymentNo: `WATER-NO-STRICT-${index + 1}`
+          })
+          .expect(201);
+        expect(response.body.receiptNo).toBe(`SD20260622${String(index + 1).padStart(3, '0')}`);
+        expect(response.body.receiptNo).toHaveLength(13);
+        createdReceipts.push(response.body);
+      }
+
+      await request(app.getHttpServer())
+        .post(`/api/finance/water-receipts/${createdReceipts[0].id}/void`)
+        .set('Authorization', app.auth(adminToken))
+        .send({ reason: '编号不复用测试' })
+        .expect(201);
+
+      await request(app.getHttpServer())
+        .post('/api/finance/water-receipts')
+        .set('Authorization', app.auth(adminToken))
+        .send({
+          receiptNo: 'SHOULD-NOT-BE-USED',
+          customerCode: '9409',
+          receiptMethod: '招商银行',
+          receiptDate: '2026-06-01T11:10:00.000+08:00',
+          amount: 200,
+          currency: 'RMB',
+          paymentNo: 'WATER-NO-STRICT-6'
+        })
+        .expect(201)
+        .expect((response) => {
+          expect(response.body.receiptNo).toBe('SD20260622006');
+          expect(response.body.receiptNo).toHaveLength(13);
+        });
+
+      await request(app.getHttpServer())
+        .get('/api/system/audit-logs?action=finance.water_receipt.create')
+        .set('Authorization', app.auth(adminToken))
+        .expect(200)
+        .expect((response) => {
+          expect(response.body.rows).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+              target: createdReceipts[0].id,
+              after: expect.objectContaining({ receiptNo: 'SD20260622001' })
+            })
+          ]));
+        });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('water receipt keeps paymentNo as a manually edited field', async () => {
+    const adminToken = await app.loginAs('admin');
+    const created = await request(app.getHttpServer())
+      .post('/api/finance/water-receipts')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        receiptMethod: '招商银行',
+        receiptDate: '2026-06-22T11:05:00.000+08:00',
+        amount: 940.9,
+        currency: 'RMB',
+        paymentNo: '  MANUAL-PAY-001  '
+      })
+      .expect(201);
+    expect(created.body.paymentNo).toBe('MANUAL-PAY-001');
+    expect(created.body.paymentNo).not.toMatch(/^SD\d{11}$/);
+
+    await request(app.getHttpServer())
+      .post('/api/finance/water-receipts')
+      .set('Authorization', app.auth(adminToken))
+      .send({ customerCode: '9409', receiptMethod: '招商银行', receiptDate: '2026-06-22T11:06:00.000+08:00', amount: 1, currency: 'RMB' })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('付款编号不能为空'));
+
+    await request(app.getHttpServer())
+      .post('/api/finance/water-receipts')
+      .set('Authorization', app.auth(adminToken))
+      .send({ customerCode: '9409', receiptMethod: '招商银行', receiptDate: '2026-06-22T11:07:00.000+08:00', amount: 1, currency: 'RMB', paymentNo: 'MANUAL-\u200bPAY-001' })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('付款编号已存在，不能重复录入'));
+
+    await request(app.getHttpServer())
+      .put(`/api/finance/water-receipts/${created.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ paymentNo: 'MANUAL-PAY-001' })
+      .expect(200);
+
+    const another = await request(app.getHttpServer())
+      .post('/api/finance/water-receipts')
+      .set('Authorization', app.auth(adminToken))
+      .send({ customerCode: '9409', receiptMethod: '招商银行', receiptDate: '2026-06-22T11:08:00.000+08:00', amount: 1, currency: 'RMB', paymentNo: 'MANUAL-PAY-SECOND' })
+      .expect(201);
+    expect(another.body.paymentNo).toBe('MANUAL-PAY-SECOND');
+
+    await request(app.getHttpServer())
+      .put(`/api/finance/water-receipts/${created.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ paymentNo: 'MANUAL-PAY-SECOND' })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('付款编号已存在，不能重复录入'));
+
+    const updated = await request(app.getHttpServer())
+      .put(`/api/finance/water-receipts/${created.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ paymentNo: '  MANUAL-PAY-EDITED  ', remark: '付款编号手动修改' })
+      .expect(200);
+    expect(updated.body.paymentNo).toBe('MANUAL-PAY-EDITED');
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=finance.water_receipt.update')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            target: created.body.id,
+            before: expect.objectContaining({ paymentNo: 'MANUAL-PAY-001' }),
+            after: expect.objectContaining({ paymentNo: 'MANUAL-PAY-EDITED' })
+          })
+        ]));
+      });
+  });
+
+  it('water receipt voucher upload returns accessible preview url and redacts unauthorized list response', async () => {
+    const adminToken = await app.loginAs('admin');
+    const operatorToken = await app.loginAs('operator');
+    const created = await request(app.getHttpServer())
+      .post('/api/finance/water-receipts')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        receiptMethod: '招商银行',
+        receiptDate: '2026-07-09T10:00:00.000Z',
+        amount: 321,
+        currency: 'RMB',
+        paymentNo: 'WATER-VOUCHER-PREVIEW'
+      })
+      .expect(201);
+
+    const uploaded = await request(app.getHttpServer())
+      .post('/api/finance/voucher-images')
+      .set('Authorization', app.auth(adminToken))
+      .field('context', 'WATER_RECEIPT')
+      .field('waterReceiptId', created.body.id)
+      .attach('file', tinyPng, { filename: 'receipt-initial.png', contentType: 'image/png' })
+      .expect(201);
+    expect(uploaded.body).toEqual(expect.objectContaining({
+      waterReceiptId: created.body.id,
+      fileName: 'receipt-initial.png',
+      mimeType: 'image/png',
+      sizeBytes: tinyPng.length
+    }));
+    expect(uploaded.body.url).toMatch(/^\/api\/uploads\/vouchers\/\d{8}-[0-9a-f-]+\.png$/);
+    expect(uploaded.body.url).not.toContain('/api/uploads/uploads/');
+    await request(app.getHttpServer())
+      .get(uploaded.body.url)
+      .expect(200)
+      .expect('Content-Type', /image\/png/);
+
+    await request(app.getHttpServer())
+      .get('/api/finance/water-receipts?paymentNo=WATER-VOUCHER-PREVIEW&status=ALL')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: created.body.id,
+            voucher: expect.objectContaining({
+              fileName: 'receipt-initial.png',
+              url: uploaded.body.url
+            })
+          })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/finance/water-receipts?paymentNo=WATER-VOUCHER-PREVIEW&status=ALL')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        const row = response.body.rows.find((item: { id: string }) => item.id === created.body.id);
+        expect(row).toEqual(expect.objectContaining({
+          voucher: expect.objectContaining({ fileName: 'receipt-initial.png', url: uploaded.body.url })
+        }));
+      });
+
+    const replaced = await request(app.getHttpServer())
+      .post('/api/finance/voucher-images')
+      .set('Authorization', app.auth(adminToken))
+      .field('context', 'WATER_RECEIPT')
+      .field('waterReceiptId', created.body.id)
+      .attach('file', tinyPng, { filename: 'receipt-replaced.png', contentType: 'image/png' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=finance.water_receipt.voucher')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'finance.water_receipt.voucher',
+            target: created.body.id,
+            before: expect.objectContaining({
+              receiptNo: created.body.receiptNo,
+              fileName: 'receipt-initial.png'
+            }),
+            after: expect.objectContaining({
+              receiptNo: created.body.receiptNo,
+              fileName: 'receipt-replaced.png',
+              sizeBytes: tinyPng.length,
+              mimeType: 'image/png',
+              previousFileName: 'receipt-initial.png'
+            })
+          })
+        ]));
+      });
+    await request(app.getHttpServer())
+      .get(replaced.body.url)
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .delete(`/api/finance/water-receipts/${created.body.id}/voucher`)
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect({ deleted: true });
+    await request(app.getHttpServer())
+      .get('/api/finance/water-receipts?paymentNo=WATER-VOUCHER-PREVIEW&status=ALL')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        const row = response.body.rows.find((item: { id: string }) => item.id === created.body.id);
+        expect(row.voucher).toBeUndefined();
+      });
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=finance.water_receipt.voucher.delete')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => expect(response.body.rows).toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: 'finance.water_receipt.voucher.delete', target: created.body.id })
+      ])));
   });
 
   it('auto-fills receivable settlement method and persists editable payment numbers', async () => {
@@ -2587,13 +3173,18 @@ describe('Siyuan API finance', () => {
       .set('Authorization', app.auth(adminToken))
       .expect(200);
     const beforeReceiptBalance = beforeReceiptAccounts.body.find((account: { customerId: string; currency: string; balance: number }) => account.customerId === 'c-9409' && account.currency === 'RMB')?.balance ?? 0;
+    const beforeAutoMatchAudit = await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=finance.water_receipt.auto_match')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    const previousAutoMatchIds = new Set(beforeAutoMatchAudit.body.rows.map((row: { id: string }) => row.id));
 
 	    const createdReceipt = await request(app.getHttpServer())
 	      .post('/api/finance/water-receipts')
 	      .set('Authorization', app.auth(adminToken))
 	      .send({
 	        customerCode: '9409',
-	        receiptMethod: '应收匹配测试',
+	        receiptMethod: '招商银行',
 	        receiptDate: '2026-06-25T11:05:00.000+08:00',
 	        amount: 300,
 	        currency: 'RMB',
@@ -2609,7 +3200,14 @@ describe('Siyuan API finance', () => {
       .get('/api/finance/customer-accounts')
       .set('Authorization', app.auth(adminToken))
       .expect(200);
-    expect(afterReceiptAccounts.body.find((account: { customerId: string; currency: string; balance: number }) => account.customerId === 'c-9409' && account.currency === 'RMB')?.balance).toBe(beforeReceiptBalance + 300);
+    const afterAutoMatchAudit = await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=finance.water_receipt.auto_match')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    const autoMatchedAmount = afterAutoMatchAudit.body.rows
+      .filter((row: { id: string }) => !previousAutoMatchIds.has(row.id))
+      .reduce((sum: number, row: { after?: { amount?: number } }) => sum + Number(row.after?.amount ?? 0), 0);
+    expect(afterReceiptAccounts.body.find((account: { customerId: string; currency: string; balance: number }) => account.customerId === 'c-9409' && account.currency === 'RMB')?.balance).toBe(beforeReceiptBalance + 300 - autoMatchedAmount);
 	    await request(app.getHttpServer())
 	      .post('/api/finance/voucher-images')
 	      .set('Authorization', app.auth(adminToken))
@@ -2638,6 +3236,15 @@ describe('Siyuan API finance', () => {
             action: 'finance.water_receipt.arrive',
             target: receipt.body.id,
             after: expect.objectContaining({
+              receiptNo: receipt.body.receiptNo,
+              paymentNo: 'RECV-AUTO-RECEIPT',
+              customerCode: '9409',
+              amount: 300,
+              currency: 'RMB',
+              statusBefore: 'PENDING',
+              statusAfter: 'ARRIVED',
+              operatedBy: 'admin',
+              operatedAt: expect.any(String),
               arrivedAmount: 300,
               accountBalanceBefore: beforeReceiptBalance,
               accountBalanceAfter: beforeReceiptBalance + 300,
@@ -2646,6 +3253,13 @@ describe('Siyuan API finance', () => {
           })
         ]));
       });
+
+    const matchedFinanceDetail = await request(app.getHttpServer())
+      .get(`/api/shipments/${shipment.body.id}/finance-detail`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    const matchedReceivable = matchedFinanceDetail.body.receivables.find((item: { id: string }) => item.id === created.body.id);
+    const waterReceiptMatched = matchedReceivable.receiptStatus === 'RECEIVED';
 
 	    await request(app.getHttpServer())
 	      .post('/api/finance/receivable-audits/batch-audit')
@@ -2673,11 +3287,11 @@ describe('Siyuan API finance', () => {
               name: '测试运费',
               amount: 540,
               currency: 'RMB',
-              paymentNo: 'PAY-RECV-001',
-              matchedReceiptNo: 'PAY-RECV-001',
-              receivedAmount: 0,
-              receiptStatus: 'UNPAID',
-              waterReceiptMatched: false,
+              paymentNo: matchedReceivable.paymentNo,
+              matchedReceiptNo: matchedReceivable.paymentNo,
+              receivedAmount: matchedReceivable.receivedAmount,
+              receiptStatus: matchedReceivable.receiptStatus,
+              waterReceiptMatched,
               statusFrom: 'PENDING',
               statusTo: 'CONFIRMED',
               reviewStatus: 'CONFIRMED',
@@ -2694,10 +3308,11 @@ describe('Siyuan API finance', () => {
 	      .set('Authorization', app.auth(adminToken))
 	      .send({
 	        customerCode: '9409',
-	        receiptMethod: '未到账匹配守门',
+	        receiptMethod: '招商银行',
 	        receiptDate: '2026-06-25T11:06:00.000+08:00',
 	        amount: 50,
-	        currency: 'RMB'
+	        currency: 'RMB',
+	        paymentNo: 'PENDING-MATCH-GUARD-001'
 	      })
 	      .expect(201);
 	    await request(app.getHttpServer())
@@ -2706,42 +3321,74 @@ describe('Siyuan API finance', () => {
 	      .send({ matches: [{ receivableFinanceItemId: created.body.id, amount: 10 }] })
 	      .expect(400)
 	      .expect((response) => {
-	        expect(response.body.message).toContain('只有已到账水单可以匹配订单');
+	        expect(response.body.message).toContain('水单未到账，不能匹配订单');
 	      });
 
-	    await request(app.getHttpServer())
-	      .post(`/api/finance/receivable-audits/${created.body.id}/match-receipt`)
-	      .set('Authorization', app.auth(adminToken))
-	      .send({ ledgerId: receipt.body.id, amount: 100 })
-	      .expect(201)
-	      .expect((response) => {
-	        expect(response.body.paymentNo).toMatch(/^SD\d{11}$/);
-	        expect(response.body.receiptBalance).toBe(receipt.body.balance - 100);
-	        expect(response.body.receiptStatus).toBe('PARTIAL');
-	      });
+    const archiveReceivable = await request(app.getHttpServer())
+      .post('/api/finance/receivable-audits')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        systemOrderNo: 'SYRECV_AUTO_001',
+        name: '归档闭环应收',
+        amount: 45,
+        currency: 'RMB'
+      })
+      .expect(201);
     await request(app.getHttpServer())
-      .get('/api/system/audit-logs?action=finance.water_receipt.match')
+      .post(`/api/finance/receivable-audits/${archiveReceivable.body.id}/audit`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(201);
+    const archiveReceipt = await request(app.getHttpServer())
+      .post('/api/finance/water-receipts')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        receiptMethod: '招商银行',
+        receiptDate: '2026-06-25T11:07:00.000+08:00',
+        amount: 45,
+        currency: 'RMB',
+        paymentNo: 'ARCHIVE-CLOSE-LOOP-001'
+      })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/finance/water-receipts/${archiveReceipt.body.id}/mark-arrived`)
+      .set('Authorization', app.auth(adminToken))
+      .send({})
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/finance/water-receipts/${archiveReceipt.body.id}/match-orders`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ matches: [{ receivableFinanceItemId: archiveReceivable.body.id, amount: 45 }] })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.balance).toBe(0);
+        expect(response.body.status).toBe('ARCHIVED');
+      });
+    await request(app.getHttpServer())
+      .get(`/api/finance/water-receipts?receiptNo=${archiveReceipt.body.receiptNo}&status=ALL`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows.some((row: { id: string }) => row.id === archiveReceipt.body.id)).toBe(false);
+      });
+    await request(app.getHttpServer())
+      .get(`/api/finance/water-receipts?receiptNo=${archiveReceipt.body.receiptNo}&status=ARCHIVED`)
       .set('Authorization', app.auth(adminToken))
       .expect(200)
       .expect((response) => {
         expect(response.body.rows).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            action: 'finance.water_receipt.match',
-            target: receipt.body.id,
-            after: expect.objectContaining({
-              matchedBy: 'admin',
-              matchedAt: expect.any(String),
-              matchedAmountDelta: 100,
-              receiptBalanceBefore: 300,
-              receiptBalanceAfter: 200,
-              accountBalanceBefore: beforeReceiptBalance + 300,
-              accountBalanceAfter: beforeReceiptBalance + 200,
-              customerAccountBalance: beforeReceiptBalance + 200
-            })
-          })
+          expect.objectContaining({ id: archiveReceipt.body.id, status: 'ARCHIVED' })
         ]));
       });
-
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=finance.water_receipt.archive')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ action: 'finance.water_receipt.archive', target: archiveReceipt.body.id })
+        ]));
+      });
 	    await request(app.getHttpServer())
 	      .post('/api/finance/receivable-audits/batch-reverse-audit')
 	      .set('Authorization', app.auth(adminToken))
@@ -2753,20 +3400,14 @@ describe('Siyuan API finance', () => {
 	        expect(response.body.failures[0].reason).toContain('撤销匹配');
 	      });
 
-	    const waterReceipts = await request(app.getHttpServer())
+	    await request(app.getHttpServer())
 	      .get('/api/finance/water-receipts?customerCode=9409&status=ALL')
-	      .set('Authorization', app.auth(adminToken))
-	      .expect(200);
-		    const matchedReceipt = waterReceipts.body.rows.find((row: { matches: Array<{ receivableFinanceItemId: string }> }) => row.matches.some((match) => match.receivableFinanceItemId === created.body.id));
-		    expect(matchedReceipt).toBeTruthy();
-		    await request(app.getHttpServer())
-		      .get('/api/finance/water-receipts?customerCode=9409&status=ALL')
 		      .set('Authorization', app.auth(operatorToken))
 		      .expect(200)
-		      .expect((response) => {
-		        expect(response.body.rows.some((row: { customerCode: string }) => row.customerCode === '9409')).toBe(true);
-		      });
-		    await request(app.getHttpServer())
+	      .expect((response) => {
+	        expect(response.body.rows.some((row: { customerCode: string }) => row.customerCode === '9409')).toBe(true);
+	      });
+	    await request(app.getHttpServer())
 		      .get('/api/finance/water-receipts?customerCode=9409&status=ALL')
 		      .set('Authorization', app.auth(warehouseToken))
 		      .expect(403);
@@ -2775,21 +3416,27 @@ describe('Siyuan API finance', () => {
 		      .set('Authorization', app.auth(operatorToken))
 		      .send({
 		        customerCode: '9409',
-		        receiptMethod: '越权创建测试',
+		        receiptMethod: '招商银行',
 		        receiptDate: '2026-06-25T11:10:00.000+08:00',
 		        amount: 1,
-		        currency: 'RMB'
+		        currency: 'RMB',
+		        paymentNo: 'FORBIDDEN-WATER-RECEIPT-001'
 		      })
-		      .expect(403);
-		    await request(app.getHttpServer())
-		      .post(`/api/finance/water-receipts/${matchedReceipt.id}/match-orders`)
-		      .set('Authorization', app.auth(operatorToken))
-		      .send({ matches: [{ receivableFinanceItemId: created.body.id, amount: 1 }] })
-		      .expect(403);
-		    await request(app.getHttpServer())
-		      .post('/api/finance/water-receipts/export')
-		      .set('Authorization', app.auth(operatorToken))
-		      .send({ ids: [matchedReceipt.id] })
+		      .expect(201);
+	    await request(app.getHttpServer())
+	      .post(`/api/finance/water-receipts/${archiveReceipt.body.id}/match-orders`)
+	      .set('Authorization', app.auth(operatorToken))
+	      .send({ matches: [{ receivableFinanceItemId: created.body.id, amount: 1 }] })
+	      .expect(403);
+	    await request(app.getHttpServer())
+	      .post(`/api/finance/water-receipts/${archiveReceipt.body.id}/mark-arrived`)
+	      .set('Authorization', app.auth(operatorToken))
+	      .send({})
+	      .expect(403);
+	    await request(app.getHttpServer())
+	      .post('/api/finance/water-receipts/export')
+	      .set('Authorization', app.auth(operatorToken))
+	      .send({ ids: [archiveReceipt.body.id] })
 		      .expect(403);
 		    await request(app.getHttpServer())
 		      .get('/api/system/audit-logs?action=security.permission.denied')
@@ -2804,86 +3451,8 @@ describe('Siyuan API finance', () => {
 		            result: 'FAILED',
 		            after: expect.objectContaining({ permissions: ['finance:water-receipt:read'] })
 		          }),
-		          expect.objectContaining({
-		            action: 'security.permission.denied',
-		            actorUsername: 'operator',
-		            target: expect.stringContaining('/api/finance/water-receipts'),
-		            result: 'FAILED'
-		          })
-		        ]));
-		      });
-		    const restoredBalance = matchedReceipt.balance + matchedReceipt.matches.reduce((total: number, match: { amount: number }) => total + match.amount, 0);
-		    await request(app.getHttpServer())
-		      .post(`/api/finance/water-receipts/${matchedReceipt.id}/unmatch`)
-		      .set('Authorization', app.auth(adminToken))
-		      .send({ matchIds: matchedReceipt.matches.map((match: { id: string }) => match.id), reason: '测试撤销匹配' })
-		      .expect(201)
-		      .expect((response) => {
-		        expect(response.body.balance).toBe(restoredBalance);
-		      });
-		    await request(app.getHttpServer())
-		      .get('/api/finance/receivable-audits')
-		      .set('Authorization', app.auth(adminToken))
-		      .expect(200)
-		      .expect((response) => {
-		        expect(response.body.rows).toEqual(expect.arrayContaining([
-		          expect.objectContaining({
-		            id: created.body.id,
-		            receivedAmount: 0,
-		            receiptStatus: 'UNPAID'
-		          })
-		        ]));
-		      });
-		    await request(app.getHttpServer())
-		      .get('/api/system/audit-logs?action=finance.water_receipt.unmatch')
-		      .set('Authorization', app.auth(adminToken))
-		      .expect(200)
-		      .expect((response) => {
-		        expect(response.body.rows).toEqual(expect.arrayContaining([
-		          expect.objectContaining({ action: 'finance.water_receipt.unmatch', target: matchedReceipt.id })
-		        ]));
-		      });
-
-	    await request(app.getHttpServer())
-	      .post('/api/finance/receivable-audits/batch-reverse-audit')
-	      .set('Authorization', app.auth(adminToken))
-	      .send({ ids: [created.body.id] })
-	      .expect(201)
-	      .expect((response) => {
-	        expect(response.body.successCount).toBe(1);
-	        expect(response.body.rows[0].reconciliationStatus).toBe('PENDING');
+	        ]));
 	      });
-    await request(app.getHttpServer())
-      .get('/api/system/audit-logs?action=finance.receivable.reverse_audit')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
-      .expect((response) => {
-        expect(response.body.rows).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            action: 'finance.receivable.reverse_audit',
-            target: created.body.id,
-            after: expect.objectContaining({
-              id: created.body.id,
-              systemOrderNo: 'SYRECV_AUTO_001',
-              customerCode: '9409',
-              amount: 540,
-              currency: 'RMB',
-              paymentNo: expect.stringMatching(/^SD\d{11}$/),
-              matchedReceiptNo: expect.stringMatching(/^SD\d{11}$/),
-              receivedAmount: 0,
-              receiptStatus: 'UNPAID',
-              waterReceiptMatched: false,
-              statusFrom: 'CONFIRMED',
-              statusTo: 'PENDING',
-              reviewStatus: 'PENDING',
-              reversedBy: 'admin',
-              reversedAt: expect.any(String),
-              locked: false
-            })
-          })
-        ]));
-      });
-
     const usdReceivable = await request(app.getHttpServer())
       .post('/api/finance/receivable-audits')
       .set('Authorization', app.auth(adminToken))
@@ -2899,8 +3468,8 @@ describe('Siyuan API finance', () => {
       .post(`/api/finance/receivable-audits/${usdReceivable.body.id}/audit`)
       .set('Authorization', app.auth(adminToken))
       .expect(201);
-    await request(app.getHttpServer())
-      .post(`/api/finance/water-receipts/${matchedReceipt.id}/match-orders`)
+	    await request(app.getHttpServer())
+	      .post(`/api/finance/water-receipts/${receipt.body.id}/match-orders`)
       .set('Authorization', app.auth(adminToken))
       .send({ matches: [{ receivableFinanceItemId: usdReceivable.body.id, amount: 10 }] })
       .expect(400)
@@ -2917,7 +3486,7 @@ describe('Siyuan API finance', () => {
       .set('Authorization', app.auth(adminToken))
       .send({
         customerCode: '9409',
-        receiptMethod: 'USD 应收匹配测试',
+        receiptMethod: '招商银行',
         receiptDate: '2026-06-25T12:05:00.000+08:00',
         amount: 300,
         currency: 'USD',
@@ -2937,39 +3506,20 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.message).toContain('匹配金额不能超过水单余额');
       });
-    await request(app.getHttpServer())
-      .post(`/api/finance/water-receipts/${usdWaterReceipt.body.id}/match-orders`)
-      .set('Authorization', app.auth(adminToken))
-      .send({ matches: [{ receivableFinanceItemId: usdReceivable.body.id, amount: 80 }] })
-      .expect(201);
-    await request(app.getHttpServer())
-      .get('/api/system/audit-logs?action=finance.water_receipt.match')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
-      .expect((response) => {
-        expect(response.body.rows).toEqual(expect.arrayContaining([
-          expect.objectContaining({ action: 'finance.water_receipt.match', target: usdWaterReceipt.body.id })
-        ]));
-      });
-    const afterUsdMatchAccounts = await request(app.getHttpServer())
-      .get('/api/finance/customer-accounts')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200);
-    expect(afterUsdMatchAccounts.body.find((account: { customerId: string; currency: string; balance: number }) => account.customerId === 'c-9409' && account.currency === 'USD')?.balance).toBe(beforeUsdBalance + 220);
     const usdReceiptRows = await request(app.getHttpServer())
       .get(`/api/finance/water-receipts?receiptNo=${usdWaterReceipt.body.receiptNo}&status=ALL`)
       .set('Authorization', app.auth(adminToken))
       .expect(200);
-    await request(app.getHttpServer())
-      .post(`/api/finance/water-receipts/${usdWaterReceipt.body.id}/unmatch`)
-      .set('Authorization', app.auth(adminToken))
-      .send({ matchIds: usdReceiptRows.body.rows[0].matches.map((match: { id: string }) => match.id), reason: 'USD 撤销匹配' })
-      .expect(201);
-    const afterUsdUnmatchAccounts = await request(app.getHttpServer())
+    expect(usdReceiptRows.body.rows[0]).toEqual(expect.objectContaining({
+      status: 'PARTIAL_MATCHED',
+      balance: 100,
+      matches: expect.arrayContaining([expect.objectContaining({ receivableFinanceItemId: usdReceivable.body.id, amount: 200, source: 'AUTO' })])
+    }));
+    const afterUsdMatchAccounts = await request(app.getHttpServer())
       .get('/api/finance/customer-accounts')
       .set('Authorization', app.auth(adminToken))
       .expect(200);
-    expect(afterUsdUnmatchAccounts.body.find((account: { customerId: string; currency: string; balance: number }) => account.customerId === 'c-9409' && account.currency === 'USD')?.balance).toBe(beforeUsdBalance + 300);
+    expect(afterUsdMatchAccounts.body.find((account: { customerId: string; currency: string; balance: number }) => account.customerId === 'c-9409' && account.currency === 'USD')?.balance).toBe(beforeUsdBalance + usdReceiptRows.body.rows[0].balance);
 	  });
 
   it('quotes generates adjusts and drafts customer statements with visibility rules', async () => {

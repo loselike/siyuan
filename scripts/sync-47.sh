@@ -16,12 +16,21 @@ if [[ "${MODE}" == "--apply" ]]; then
   RSYNC_MODE=()
 fi
 
-rsync -az --delete ${RSYNC_MODE+"${RSYNC_MODE[@]}"} \
+rsync -azc --delete --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} \
   --exclude='.git/' \
+  --exclude='.siyuan-release-state' \
   --exclude='node_modules/' \
   --exclude='dist/' \
   --exclude='apps/*/dist/' \
   --exclude='packages/*/dist/' \
+  --exclude='apps/api/uploads/' \
+  --exclude='backups/' \
+  --exclude='data/quotes.json' \
+  --exclude='inquiry_data/prices.json' \
+  --exclude='europe-express-data/' \
+  --exclude='europe-truck-data/' \
+  --exclude='south-africa/prices.json' \
+  --exclude='south-africa/data.json' \
   --exclude='scraped_docs/' \
   --exclude='outputs/' \
   --exclude='screenshots/' \

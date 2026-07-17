@@ -2,8 +2,10 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { Activity, AlertTriangle, Building2, ClipboardCheck, Edit, FileInput, FileText, LockKeyhole, PlusCircle, Power, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users } from 'lucide-react';
-import { Alert, Button, Card, Checkbox, Col, DatePicker, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
-import type { AuditLogDashboardSummary, AuditLogListResponse, AuditLogQuery, AuditLogSummary, SiteSummary, StaffAccountCreateInput, StaffAccountQuery, StaffAccountRoleKey, StaffAccountSummary, StaffGender } from '@siyuan/shared';
+import { Alert, Button, Card, Checkbox, Col, DatePicker, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
+import type { DatePickerProps } from 'antd/es/date-picker';
+import zhCNDatePickerLocale from 'antd/es/date-picker/locale/zh_CN';
+import type { AuditLogDashboardSummary, AuditLogListResponse, AuditLogQuery, AuditLogSummary, DepartmentSummary, SiteSummary, StaffAccountCreateInput, StaffAccountQuery, StaffAccountRoleKey, StaffAccountSummary, StaffGender } from '@siyuan/shared';
 import { ApiClient, type PermissionKey, type RoleGroupInput, type RoleKey, type RolePermissionMatrix, type RolePermissionRow } from '../../apiClient';
 import { getPasswordStrengthErrorForUi } from '../appShell/config';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
@@ -13,6 +15,7 @@ import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, creat
 
 const { Text } = Typography;
 const auditDateTimeFormat = 'YYYY-MM-DD HH:mm';
+const auditDatePickerLocale = { ...zhCNDatePickerLocale, lang: { ...zhCNDatePickerLocale.lang, ok: '确认' } } as DatePickerProps['locale'];
 
 function getAuditDateTimeValue(value?: string) {
   const parsed = value ? dayjs(value) : null;
@@ -50,10 +53,10 @@ function getStaffGenderLabel(gender?: string) {
 }
 
 function isStaffProfileIncomplete(account: StaffAccountSummary) {
-  return !account.name?.trim() || !account.nickname?.trim() || !account.site?.trim() || !account.roleLabel?.trim();
+  return !account.name?.trim() || !account.departmentId || !account.site?.trim() || !account.roleLabel?.trim();
 }
 
-const staffImportHeaders = ['账户', '密码', '业务员', '中文名', '性别', '所属站点', '状态', '所属用户组'];
+const staffImportHeaders = ['账户', '密码', '部门', '中文名', '性别', '所属站点', '状态', '所属用户组'];
 
 function getImportCell(row: Record<string, unknown>, key: string) {
   return String(row[key] ?? '').trim();
@@ -125,6 +128,10 @@ function formatJsonBlock(value: unknown) {
   return value ? JSON.stringify(value, null, 2) : '无记录';
 }
 
+function getAuditIpText(row?: AuditLogSummary | null) {
+  return row?.ipAddress?.trim() || '-';
+}
+
 function toLocalDateTimeInput(date: Date) {
   const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000);
   return offsetDate.toISOString().slice(0, 16);
@@ -174,11 +181,15 @@ function AuditMetricCard({ icon, title, metric, tone }: { icon: ReactNode; title
 export function SettingsPage({
   apiClient,
   onAiAssist,
-  aiLoading
+  aiLoading,
+  permissions,
+  onNavigateToSection
 }: {
   apiClient: ApiClient;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
+  permissions: PermissionKey[];
+  onNavigateToSection: (sectionKey: string) => void;
 }) {
   const [settingsNotice, setSettingsNoticeState] = useState<string | null>(null);
   const setSettingsNotice = useCallback((message: string | null) => {
@@ -195,6 +206,7 @@ export function SettingsPage({
   const [auditDraftFilters, setAuditDraftFilters] = useState<AuditLogQuery>({});
   const [auditAppliedFilters, setAuditAppliedFilters] = useState<AuditLogQuery>({});
   const [selectedAuditLogId, setSelectedAuditLogId] = useState<string | null>(null);
+  const [auditDetailOpen, setAuditDetailOpen] = useState(false);
   const [auditAdvancedOpen, setAuditAdvancedOpen] = useState(false);
   const [staffAccounts, setStaffAccounts] = useState<StaffAccountSummary[]>([]);
   const [staffAccountsLoading, setStaffAccountsLoading] = useState(false);
@@ -205,6 +217,8 @@ export function SettingsPage({
   const [editingStaffAccount, setEditingStaffAccount] = useState<StaffAccountSummary | null>(null);
   const [staffCreateForm] = Form.useForm<StaffAccountCreateInput>();
   const staffImportInputRef = useRef<HTMLInputElement | null>(null);
+  const [departments, setDepartments] = useState<DepartmentSummary[]>([]);
+  const [departmentsLoading, setDepartmentsLoading] = useState(false);
   const [sites, setSites] = useState<SiteSummary[]>([]);
   const [sitesLoading, setSitesLoading] = useState(false);
   const [siteFilters, setSiteFilters] = useState({ name: '', status: 'ALL' });
@@ -223,16 +237,19 @@ export function SettingsPage({
   const [roleGroupDisableConfirmOpen, setRoleGroupDisableConfirmOpen] = useState(false);
   const [roleGroupForm] = Form.useForm<RoleGroupFormValues>();
   const [selectedPermissionRoleKey, setSelectedPermissionRoleKey] = useState<RoleKey | null>(null);
+  const [selectedPermissionWorkspace, setSelectedPermissionWorkspace] = useState<'operations' | 'pricing' | 'business' | 'warehouse' | 'market' | 'customerService' | 'tracking' | 'finance' | 'master' | 'system'>('operations');
+  const [selectedWorkspacePermissionGroup, setSelectedWorkspacePermissionGroup] = useState<string | null>(null);
+  const hasSystemPermission = (...keys: PermissionKey[]) => keys.some((key) => permissions.includes(key));
   const settingsSubItems: ModuleSubNavItem[] = [
-    { key: 'userGroups', label: '用户组', description: '组织与角色组' },
-    { key: 'accounts', label: '用户名', description: '账号与数据范围' },
-    { key: 'sites', label: '站点', description: '站点资料' },
-    { key: 'audit', label: '操作日志', description: '操作记录' },
-    { key: 'rolePermissions', label: '角色权限分配', description: '员工端权限' },
-    { key: 'security', label: '权限安全区', description: '风险边界提示' },
-    { key: 'aiSecurity', label: 'AI 接口安全', description: '密钥与调用入口' },
-    { key: 'baseConfig', label: '系统基础配置', description: '模板与状态字典' }
-  ];
+    hasSystemPermission('system:user-groups:read') && { key: 'userGroups', label: '用户组', description: '组织与角色组' },
+    hasSystemPermission('system:accounts:read') && { key: 'accounts', label: '用户名', description: '账号与数据范围' },
+    hasSystemPermission('system:sites:read') && { key: 'sites', label: '站点', description: '站点资料' },
+    hasSystemPermission('system:audit:read') && { key: 'audit', label: '操作日志', description: '操作记录' },
+    hasSystemPermission('system:role-permissions:read') && { key: 'rolePermissions', label: '角色权限分配', description: '员工端权限' },
+    hasSystemPermission('system:security:read') && { key: 'security', label: '权限安全区', description: '风险边界提示' },
+    hasSystemPermission('system:ai-security:read') && { key: 'aiSecurity', label: 'AI 接口安全', description: '密钥与调用入口' },
+    hasSystemPermission('system:base-config:read') && { key: 'baseConfig', label: '系统基础配置', description: '模板与状态字典' }
+  ].filter(Boolean) as ModuleSubNavItem[];
   const builtinStaffRoleOptions: Array<{ label: string; value: StaffAccountRoleKey }> = [
     { label: '系统管理员', value: 'ADMIN' },
     { label: '客服', value: 'CUSTOMER_SERVICE' },
@@ -244,6 +261,12 @@ export function SettingsPage({
   const handleSettingAction = (message: string) => {
     setSettingsNotice(message);
   };
+
+  function openRolePermissions(roleKey: RoleKey) {
+    setSelectedPermissionRoleKey(roleKey);
+    setActiveSettingsSection('rolePermissions');
+    onNavigateToSection('rolePermissions');
+  }
 
   const loadStaffAccounts = useCallback(async () => {
     setStaffAccountsLoading(true);
@@ -270,6 +293,19 @@ export function SettingsPage({
       setSitesLoading(false);
     }
   }, [apiClient]);
+
+  const loadDepartments = useCallback(async () => {
+    setDepartmentsLoading(true);
+    try {
+      const rows = await apiClient.departments();
+      setDepartments(Array.isArray(rows) ? rows : []);
+    } catch (error) {
+      setSettingsNotice(error instanceof Error ? error.message : '部门加载失败');
+      setDepartments([]);
+    } finally {
+      setDepartmentsLoading(false);
+    }
+  }, [apiClient, setSettingsNotice]);
 
   async function submitSite() {
     const values = await siteForm.validateFields();
@@ -344,7 +380,7 @@ export function SettingsPage({
       ? {
           username: account.username,
           name: account.name,
-          nickname: account.nickname,
+          departmentId: account.departmentId,
           phone: account.phone,
           gender: account.gender ?? 'UNKNOWN',
           site: account.site,
@@ -415,6 +451,11 @@ export function SettingsPage({
   }, [activeSettingsSection, apiClient, loadStaffAccounts, setSettingsNotice]);
 
   useEffect(() => {
+    if (activeSettingsSection !== 'accounts') return;
+    void loadDepartments();
+  }, [activeSettingsSection, loadDepartments]);
+
+  useEffect(() => {
     if (!['accounts', 'sites', 'userGroups'].includes(activeSettingsSection)) {
       return;
     }
@@ -457,7 +498,7 @@ export function SettingsPage({
 
   const allRoleRows = useMemo(() => roleMatrix?.roles ?? [], [roleMatrix]);
   const selectedAuditLog = useMemo(
-    () => auditLogs.find((row) => row.id === selectedAuditLogId) ?? auditLogs[0] ?? null,
+    () => auditLogs.find((row) => row.id === selectedAuditLogId) ?? null,
     [auditLogs, selectedAuditLogId]
   );
   const roleRows = useMemo(() => allRoleRows.filter((role) => role.key !== 'CUSTOMER'), [allRoleRows]);
@@ -469,6 +510,10 @@ export function SettingsPage({
     ?? null;
   const userGroupRows = useMemo(() => roleRows.filter((role) => !role.systemBuiltin), [roleRows]);
   const enabledSiteOptions = useMemo(() => sites.filter((site) => site.enabled).map((site) => ({ label: site.name, value: site.name })), [sites]);
+  const departmentOptions = useMemo(
+    () => departments.map((department) => ({ label: department.name, value: department.id, disabled: !department.enabled })),
+    [departments]
+  );
   const roleGroupSiteOptions = useMemo(
     () => [...new Set([...userGroupRows.map((role) => role.site).filter(Boolean), ...enabledSiteOptions.map((site) => site.value)])].map((site) => ({ label: site as string, value: site as string })),
     [enabledSiteOptions, userGroupRows]
@@ -499,6 +544,47 @@ export function SettingsPage({
       return acc;
     }, {})
   );
+  const duplicatePermissionCodes = useMemo(() => {
+    const seen = new Set<string>();
+    return (roleMatrix?.availablePermissions ?? [])
+      .filter((permission) => {
+        if (seen.has(permission.code)) return true;
+        seen.add(permission.code);
+        return false;
+      })
+      .map((permission) => permission.code);
+  }, [roleMatrix]);
+  useEffect(() => {
+    if (import.meta.env.DEV && duplicatePermissionCodes.length) {
+      console.warn('角色权限矩阵包含重复 permission code', duplicatePermissionCodes);
+    }
+  }, [duplicatePermissionCodes]);
+  const permissionWorkspace = selectedPermissionWorkspace === 'system'
+    ? { key: 'system', label: '系统管理', prefix: '系统管理 / ' }
+    : selectedPermissionWorkspace === 'pricing'
+      ? { key: 'pricing' as const, label: '报价查价', prefix: '报价查价 / ' }
+    : selectedPermissionWorkspace === 'business'
+    ? { key: 'business' as const, label: '业务管理', prefix: '业务管理 / ' }
+    : selectedPermissionWorkspace === 'warehouse'
+      ? { key: 'warehouse' as const, label: '仓库管理', prefix: '仓库管理 / ' }
+      : selectedPermissionWorkspace === 'market'
+        ? { key: 'market' as const, label: '市场管理', prefix: '市场管理 / ' }
+        : selectedPermissionWorkspace === 'customerService'
+          ? { key: 'customerService' as const, label: '客服管理', prefix: '客服管理 / ' }
+          : selectedPermissionWorkspace === 'tracking'
+            ? { key: 'tracking' as const, label: '物流轨迹管理', prefix: '物流轨迹管理 / ' }
+            : selectedPermissionWorkspace === 'finance'
+              ? { key: 'finance' as const, label: '财务管理', prefix: '财务管理 / ' }
+              : selectedPermissionWorkspace === 'master'
+                ? { key: 'master' as const, label: '基础资料库', prefix: '基础资料库 / ' }
+        : { key: 'operations' as const, label: '运营工作台', prefix: '运营工作台 / ' };
+  const workspacePermissionGroups = useMemo(
+    () => permissionGroups.filter(([group]) => group.startsWith(permissionWorkspace.prefix)),
+    [permissionGroups, permissionWorkspace.prefix]
+  );
+  const selectedWorkspacePermissions = workspacePermissionGroups.find(([group]) => group === selectedWorkspacePermissionGroup)
+    ?? workspacePermissionGroups[0]
+    ?? null;
   const filteredSites = sites.filter((site) => {
     const keyword = siteAppliedFilters.name.trim().toLowerCase();
     const matchesName = !keyword || site.name.toLowerCase().includes(keyword);
@@ -525,6 +611,14 @@ export function SettingsPage({
   }, [activeSettingsSection, filteredUserGroupRows]);
 
   useEffect(() => {
+    setSelectedWorkspacePermissionGroup((current) => (
+      current && workspacePermissionGroups.some(([group]) => group === current)
+        ? current
+        : workspacePermissionGroups[0]?.[0] ?? null
+    ));
+  }, [workspacePermissionGroups]);
+
+  useEffect(() => {
     if (activeSettingsSection !== 'userGroups' || !selectedRoleGroup) {
       setRoleGroupAuditLogs([]);
       return;
@@ -545,7 +639,7 @@ export function SettingsPage({
     const defaultRole = staffRoleOptions.find((role) => role.value === 'OPERATOR') ?? staffRoleOptions[0];
     addRowsWorksheet(workbook, '用户名导入模板', [
       staffImportHeaders,
-      ['import001', 'Import@123', '张三', '张三', '男', enabledSiteOptions[0]?.value ?? '', '在职', defaultRole?.label ?? '业务员']
+      ['import001', 'Import@123', departmentOptions.find((department) => !department.disabled)?.label ?? '', '张三', '男', enabledSiteOptions[0]?.value ?? '', '在职', defaultRole?.label ?? '业务员']
     ]);
     await downloadWorkbook(workbook, '用户名批量导入模板.xlsx');
   }
@@ -562,6 +656,8 @@ export function SettingsPage({
       Object.fromEntries((headers ?? []).map((header, index) => [String(header ?? '').trim(), row[index] ?? '']))
     );
     const roleByText = new Map(staffRoleOptions.flatMap((role) => [[role.label, role.value], [role.value, role.value]]));
+    const availableDepartments = departments.length ? departments : await apiClient.departments();
+    const departmentIdByText = new Map(availableDepartments.flatMap((department) => [[department.name, department.id], [department.id, department.id]]));
     const genderByText = new Map<string, StaffGender>([
       ['男', 'MALE'], ['女', 'FEMALE'], ['其他', 'OTHER'], ['未填写', 'UNKNOWN'],
       ['MALE', 'MALE'], ['FEMALE', 'FEMALE'], ['OTHER', 'OTHER'], ['UNKNOWN', 'UNKNOWN']
@@ -572,10 +668,13 @@ export function SettingsPage({
       if (!Object.values(row).some((value) => String(value ?? '').trim())) continue;
       const username = getImportCell(row, '账户');
       try {
+        const departmentText = getImportCell(row, '部门');
+        const departmentId = departmentText ? departmentIdByText.get(departmentText) : undefined;
+        if (departmentText && !departmentId) throw new Error(`部门“${departmentText}”不存在`);
         await apiClient.createStaffAccount({
           username,
           password: getImportCell(row, '密码') || undefined,
-          nickname: getImportCell(row, '业务员') || undefined,
+          departmentId,
           name: getImportCell(row, '中文名') || undefined,
           gender: genderByText.get(getImportCell(row, '性别')) ?? 'UNKNOWN',
           site: getImportCell(row, '所属站点') || undefined,
@@ -622,6 +721,7 @@ export function SettingsPage({
     const rows = auditLogs.map((row) => ({
         时间: formatBeijingDateTime(row.createdAt),
         操作人: row.actorUsername,
+        'IP 地址': getAuditIpText(row),
         模块: row.moduleLabel,
         动作: row.actionLabel,
         动作编码: row.action,
@@ -631,7 +731,7 @@ export function SettingsPage({
         变更前: row.before ? JSON.stringify(row.before) : '',
         变更后: row.after ? JSON.stringify(row.after) : ''
       }));
-    const headers = ['时间', '操作人', '模块', '动作', '动作编码', '对象', '接口', '结果', '变更前', '变更后'];
+    const headers = ['时间', '操作人', 'IP 地址', '模块', '动作', '动作编码', '对象', '接口', '结果', '变更前', '变更后'];
     addRowsWorksheet(workbook, '高危操作审计', [
       headers,
       ...rows.map((row) => headers.map((header) => row[header as keyof typeof row]))
@@ -656,6 +756,7 @@ export function SettingsPage({
           id: row.actorId,
           username: row.actorUsername
         },
+        ipAddress: getAuditIpText(row),
         module: {
           code: row.module,
           label: row.moduleLabel
@@ -675,6 +776,11 @@ export function SettingsPage({
       null,
       2
     );
+  }
+
+  function openAuditDetail(row: AuditLogSummary) {
+    setSelectedAuditLogId(row.id);
+    setAuditDetailOpen(true);
   }
 
   function openRoleGroupEditor(role: RolePermissionRow | null) {
@@ -796,10 +902,10 @@ export function SettingsPage({
             <MetricCard icon={<ShieldCheck />} title="管理员权限" value="100%" extra="菜单、按钮、数据范围、系统参数" />
           </Col>
           <Col xs={24} md={8}>
-            <MetricCard icon={<Users />} title="员工角色" value={roleRows.length || 5} extra="管理员/客服/业务员/仓库/财务" />
+            <MetricCard icon={<Users />} title="员工角色" value={roleRows.length} extra="当前权限矩阵中的内部角色" />
           </Col>
           <Col xs={24} md={8}>
-            <MetricCard icon={<Activity />} title="审计项" value="9" extra="权限修改必须写入 audit_logs" />
+            <MetricCard icon={<Activity />} title="重要审计" value={auditDashboard?.metrics.important.value ?? '-'} extra="重要操作以审计看板实时统计为准" />
           </Col>
         </Row>
       )}
@@ -887,7 +993,7 @@ export function SettingsPage({
                     重置
                   </Button>
                 </div>
-                <Table
+                <ManagedTable
                   className="user-group-table"
                   rowKey="key"
                   size="small"
@@ -917,8 +1023,7 @@ export function SettingsPage({
                         <Space size={4}>
                           <Button type="link" size="small" onClick={(event) => {
                             event.stopPropagation();
-                            setSelectedPermissionRoleKey(role.key);
-                            setActiveSettingsSection('rolePermissions');
+                            openRolePermissions(role.key);
                           }}>查看权限</Button>
                           <Button type="link" size="small" onClick={(event) => {
                             event.stopPropagation();
@@ -983,8 +1088,7 @@ export function SettingsPage({
                     <Flex justify="space-between" align="center">
                       <Text strong>菜单权限</Text>
                       <Button type="link" size="small" onClick={() => {
-                        setSelectedPermissionRoleKey(selectedRoleGroup.key);
-                        setActiveSettingsSection('rolePermissions');
+                        openRolePermissions(selectedRoleGroup.key);
                       }}>查看全部</Button>
                     </Flex>
                     <Text type="secondary">共 {selectedRoleGroup.permissions.length} 个菜单，已授权 {selectedRoleGroup.permissions.length} 个</Text>
@@ -994,8 +1098,7 @@ export function SettingsPage({
                     <Flex justify="space-between" align="center">
                       <Text strong>数据范围</Text>
                       <Button type="link" size="small" onClick={() => {
-                        setSelectedPermissionRoleKey(selectedRoleGroup.key);
-                        setActiveSettingsSection('rolePermissions');
+                        openRolePermissions(selectedRoleGroup.key);
                       }}>查看全部</Button>
                     </Flex>
                     <Text>{selectedRoleGroup.scope || selectedRoleGroup.restriction || '按用户组权限执行'}</Text>
@@ -1101,7 +1204,7 @@ export function SettingsPage({
                   重置
                 </Button>
               </div>
-              <Table<SiteSummary>
+              <ManagedTable<SiteSummary>
                 rowKey="id"
                 size="small"
                 className="settings-site-table"
@@ -1255,7 +1358,7 @@ export function SettingsPage({
                 {renderFilterField('关键字', (
                   <Input
                     aria-label="员工账号关键字"
-                    placeholder="账户 / 中文名 / 业务员"
+                    placeholder="账户 / 中文名 / 部门"
                     suffix={<Search size={16} />}
                     value={staffFilters.keyword}
                     onChange={(event) => setStaffFilters((current) => ({ ...current, keyword: event.target.value }))}
@@ -1268,6 +1371,16 @@ export function SettingsPage({
                     value={staffFilters.site}
                     onChange={(value) => setStaffFilters((current) => ({ ...current, site: value }))}
                     placeholder="全部站点"
+                  />
+                ))}
+                {renderFilterField('部门', (
+                  <Select
+                    allowClear
+                    loading={departmentsLoading}
+                    options={departmentOptions}
+                    value={staffFilters.departmentId}
+                    onChange={(value) => setStaffFilters((current) => ({ ...current, departmentId: value }))}
+                    placeholder="全部部门"
                   />
                 ))}
                 {renderFilterField('状态', (
@@ -1326,12 +1439,12 @@ export function SettingsPage({
               columns={[
                 { title: '账号', dataIndex: 'username', width: 140, render: (value: string) => <Text code>{value}</Text> },
                 {
-                  title: '姓名 / 业务员',
+                  title: '姓名 / 部门',
                   width: 180,
                   render: (_, record?: StaffAccountSummary) => record ? (
                     <Space direction="vertical" size={0}>
-                      <Text strong>{record.name || record.nickname || '-'}</Text>
-                      <Text type="secondary">{record.nickname || '-'} / {record.roleLabel}</Text>
+                      <Text strong>{record.name || '-'}</Text>
+                      <Text type="secondary">{record.department || '未分配部门'} / {record.roleLabel}</Text>
                     </Space>
                   ) : null
                 },
@@ -1400,10 +1513,14 @@ export function SettingsPage({
           ) : null}
 
           {activeSettingsSection === 'rolePermissions' ? (
-          <Card className="module-grid" title="角色权限分配">
+          <Card className="module-grid role-permission-card" title="角色权限分配" extra={<Text type="secondary">基于功能点配置，未勾选即无权限</Text>}>
             {roleMatrix && selectedPermissionRole ? (
-              <div className="role-permission-editor">
+              <div className="role-permission-editor role-permission-console">
                 <aside className="role-permission-roles" aria-label="角色列表">
+                  <div className="role-permission-pane-title">
+                    <Text strong>选择角色</Text>
+                    <Text type="secondary">已授权数量</Text>
+                  </div>
                   {rolePermissionRows.map((role) => {
                     const selected = role.key === selectedPermissionRole.key;
                     const permissionCount = (draftPermissions[role.key] ?? role.permissions).length;
@@ -1423,51 +1540,96 @@ export function SettingsPage({
                     );
                   })}
                 </aside>
+                <aside className="role-permission-modules" aria-label="权限模块">
+                  <div className="role-permission-pane-title">
+                    <Text strong>权限模块</Text>
+                    <Text type="secondary">功能权限</Text>
+                  </div>
+                  <div className="role-permission-workspace-switch" role="tablist" aria-label="业务模块树">
+                    {(['operations', 'pricing', 'business', 'warehouse', 'market', 'customerService', 'tracking', 'finance', 'master', 'system'] as const).map((workspace) => (
+                      <button
+                        type="button"
+                        role="tab"
+                        aria-selected={selectedPermissionWorkspace === workspace}
+                        className={selectedPermissionWorkspace === workspace ? 'is-active' : ''}
+                        key={workspace}
+                        onClick={() => setSelectedPermissionWorkspace(workspace)}
+                      >
+                        {workspace === 'pricing' ? '报价查价' : workspace === 'business' ? '业务管理' : workspace === 'warehouse' ? '仓库管理' : workspace === 'market' ? '市场管理' : workspace === 'customerService' ? '客服管理' : workspace === 'tracking' ? '物流轨迹管理' : workspace === 'finance' ? '财务管理' : workspace === 'master' ? '基础资料库' : workspace === 'system' ? '系统管理' : '运营工作台'}
+                      </button>
+                    ))}
+                  </div>
+                  <Text type="secondary" className="role-permission-tree-root">{permissionWorkspace.label}</Text>
+                  {workspacePermissionGroups.map(([group, permissions]) => {
+                    const selected = selectedWorkspacePermissions?.[0] === group;
+                    const granted = permissions.filter((permission) => (draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).includes(permission.code)).length;
+                    return (
+                      <button
+                        key={group}
+                        type="button"
+                        className={`role-permission-module${selected ? ' is-active' : ''}`}
+                        onClick={() => setSelectedWorkspacePermissionGroup(group)}
+                      >
+                        <span>{group.replace(permissionWorkspace.prefix, '')}</span>
+                        <Tag>{granted}/{permissions.length}</Tag>
+                      </button>
+                    );
+                  })}
+                </aside>
                 <section className="role-permission-detail" aria-label={`${selectedPermissionRole.label}权限`}>
                   <Flex justify="space-between" align="center" className="role-permission-detail-header">
                     <Space direction="vertical" size={2}>
-                      <Text strong>{selectedPermissionRole.label}</Text>
-                      <Text type="secondary">{selectedPermissionRole.description || selectedPermissionRole.scope}</Text>
+                      <Text strong>{selectedWorkspacePermissions?.[0]?.replace(permissionWorkspace.prefix, '') ?? '功能权限'}</Text>
+                      <Text type="secondary">{selectedPermissionRole.label} · {selectedPermissionRole.description || selectedPermissionRole.scope}</Text>
                     </Space>
-                    <Button size="small" disabled={selectedPermissionRole.key === 'ADMIN'} onClick={() => saveRolePermissions(selectedPermissionRole)}>
-                      保存{selectedPermissionRole.label.replace('系统管理员', '管理员')}{selectedPermissionRole.systemBuiltin ? '' : '用户组'}权限
-                    </Button>
+                    <Space className="role-permission-detail-actions">
+                      <Button
+                        size="small"
+                        disabled={selectedPermissionRole.key === 'ADMIN' || !selectedWorkspacePermissions}
+                        onClick={() => selectedWorkspacePermissions?.[1].forEach((permission) => toggleRolePermission(selectedPermissionRole.key, permission.code, true))}
+                      >
+                        全选当前目录
+                      </Button>
+                      <Button
+                        size="small"
+                        disabled={selectedPermissionRole.key === 'ADMIN' || !selectedWorkspacePermissions}
+                        onClick={() => selectedWorkspacePermissions?.[1].forEach((permission) => toggleRolePermission(selectedPermissionRole.key, permission.code, false))}
+                      >
+                        清空当前目录
+                      </Button>
+                      <Button size="small" type="primary" disabled={selectedPermissionRole.key === 'ADMIN'} onClick={() => saveRolePermissions(selectedPermissionRole)}>
+                        保存权限
+                      </Button>
+                    </Space>
                   </Flex>
-                  {selectedPermissionRole.key === 'ADMIN' ? (
-                    <Space wrap className="role-permission-admin-tags">
-                      {selectedPermissionRole.permissions.map((permission) => (
-                        <Tag key={permission} color="red">{roleMatrix.availablePermissions.find((item) => item.code === permission)?.label ?? permission}</Tag>
-                      ))}
-                    </Space>
-                  ) : (
-                    <div className="role-permission-groups">
-                      {permissionGroups.map(([group, permissions]) => (
-                        <div key={group} className="role-permission-group">
-                          <Flex justify="space-between" align="center" className="role-permission-group-title">
-                            <Text strong>{group}</Text>
-                            <Text type="secondary">
-                              {permissions.filter((permission) => (draftPermissions[selectedPermissionRole.key] ?? []).includes(permission.code)).length}/{permissions.length}
-                            </Text>
-                          </Flex>
-                          <div className="role-permission-options">
-                            {permissions.map((permission) => (
-                              <Checkbox
-                                key={permission.code}
-                                checked={(draftPermissions[selectedPermissionRole.key] ?? []).includes(permission.code)}
-                                onChange={(event) => toggleRolePermission(selectedPermissionRole.key, permission.code, event.target.checked)}
-                              >
-                                {permission.label}
-                              </Checkbox>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="role-permission-option-grid" data-testid="role-permission-option-grid">
+                    {(selectedWorkspacePermissions?.[1] ?? []).map((permission) => (
+                      <div className="role-permission-option" key={permission.code}>
+                        <Text strong>{permission.label}</Text>
+                        <Checkbox
+                          aria-label={`允许${permission.label}`}
+                          disabled={selectedPermissionRole.key === 'ADMIN'}
+                          checked={(draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).includes(permission.code)}
+                          onChange={(event) => toggleRolePermission(selectedPermissionRole.key, permission.code, event.target.checked)}
+                        >
+                          允许
+                        </Checkbox>
+                      </div>
+                    ))}
+                  </div>
                 </section>
+                <aside className="role-permission-summary" aria-label="当前角色权限概览">
+                  <Text strong>当前角色权限概览</Text>
+                  <div className="role-permission-summary-metrics">
+                    <Statistic title="已授权" value={(draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).length} />
+                    <Statistic title="未授权" value={roleMatrix.availablePermissions.length - (draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).length} />
+                    <Statistic title="高风险权限" value={(draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).filter((permission) => /:process$|:status-update$|:import$|:upload$|:assist$|:confirm$/.test(permission)).length} />
+                  </div>
+                  <Text type="secondary">保存后由后端立即执行权限裁剪，并记录权限变更审计。</Text>
+                </aside>
               </div>
             ) : (
-              <Table rowKey="key" size="small" pagination={false} dataSource={[]} loading />
+              <ManagedTable rowKey="key" size="small" pagination={false} dataSource={[]} columns={[]} loading />
             )}
           </Card>
           ) : null}
@@ -1649,6 +1811,15 @@ export function SettingsPage({
                         value={getAuditDateTimeValue(auditDraftFilters.startedAt)}
                         placeholder="选择开始时间"
                         className="full-width-control"
+                        locale={auditDatePickerLocale}
+                        needConfirm
+                        renderExtraFooter={() => (
+                          <div className="app-date-picker-confirm-footer">
+                            <Button type="link" size="small" onMouseDown={(event) => event.preventDefault()} onClick={() => setAuditDraftFilters((current) => ({ ...current, startedAt: undefined }))}>
+                              清除
+                            </Button>
+                          </div>
+                        )}
                         onChange={(_value, value) => setAuditDraftFilters((current) => ({ ...current, startedAt: getAuditDateTimeFilterValue(value) }))}
                       />
                     ))}
@@ -1661,6 +1832,15 @@ export function SettingsPage({
                         value={getAuditDateTimeValue(auditDraftFilters.endedAt)}
                         placeholder="选择结束时间"
                         className="full-width-control"
+                        locale={auditDatePickerLocale}
+                        needConfirm
+                        renderExtraFooter={() => (
+                          <div className="app-date-picker-confirm-footer">
+                            <Button type="link" size="small" onMouseDown={(event) => event.preventDefault()} onClick={() => setAuditDraftFilters((current) => ({ ...current, endedAt: undefined }))}>
+                              清除
+                            </Button>
+                          </div>
+                        )}
                         onChange={(_value, value) => setAuditDraftFilters((current) => ({ ...current, endedAt: getAuditDateTimeFilterValue(value) }))}
                       />
                     ))}
@@ -1669,7 +1849,7 @@ export function SettingsPage({
               ) : null}
 
               <div className="audit-workbench-layout">
-                <Table
+                <ManagedTable
                   className="audit-log-table"
                   rowKey="id"
                   size="small"
@@ -1688,7 +1868,7 @@ export function SettingsPage({
                     pageSize: pagination.pageSize ?? current.pageSize
                   }))}
                   onRow={(row) => ({
-                    onClick: () => setSelectedAuditLogId(row.id)
+                    onClick: () => openAuditDetail(row)
                   })}
                   rowClassName={(row) => (row.id === selectedAuditLog?.id ? 'audit-row-selected' : '')}
                   columns={[
@@ -1708,6 +1888,7 @@ export function SettingsPage({
                       }
                     },
                     { title: '操作人', dataIndex: 'actorUsername', width: 88, ellipsis: true },
+                    ...(hasSystemPermission('system:audit:ip-view') ? [{ title: 'IP 地址', dataIndex: 'ipAddress', width: 118, render: (_value: string | undefined, row: AuditLogSummary) => getAuditIpText(row) }] : []),
                     {
                       title: '模块',
                       dataIndex: 'moduleLabel',
@@ -1745,7 +1926,7 @@ export function SettingsPage({
                           size="small"
                           onClick={(event) => {
                             event.stopPropagation();
-                            setSelectedAuditLogId(row.id);
+                            openAuditDetail(row);
                           }}
                         >
                           查看详情
@@ -1753,39 +1934,37 @@ export function SettingsPage({
                       )
                     }
                   ]}
-                  scroll={{ x: 1250 }}
+                  scroll={{ x: 1370 }}
                 />
-                <Card size="small" className="audit-detail-panel" title="审计详情">
-                  {selectedAuditLog ? (
-                    <Space direction="vertical" size={12} className="quality-panel">
-                      <Space>
-                        <Tag color={selectedAuditLog.result === 'SUCCESS' ? 'green' : 'red'}>{selectedAuditLog.resultLabel}</Tag>
-                        <Text type="secondary">{formatBeijingDateTime(selectedAuditLog.createdAt)}</Text>
-                      </Space>
-                      <div className="audit-detail-fields">
-                        <Text type="secondary">操作人</Text><Text>{selectedAuditLog.actorUsername}</Text>
-                        <Text type="secondary">模块</Text><Text>{selectedAuditLog.moduleLabel}</Text>
-                        <Text type="secondary">操作动作</Text><Text>{selectedAuditLog.actionLabel}</Text>
-                        <Text type="secondary">操作对象</Text><Text>{getAuditTargetDisplay(selectedAuditLog).label}</Text>
-                      </div>
-                      <div>
-                        <Text strong>变更前</Text>
-                        <pre className="audit-detail-code">{formatJsonBlock(selectedAuditLog.before)}</pre>
-                      </div>
-                      <div>
-                        <Text strong>变更后</Text>
-                        <pre className="audit-detail-code">{formatJsonBlock(selectedAuditLog.after)}</pre>
-                      </div>
-                      <div>
-                        <Text strong>原始请求</Text>
-                        <pre className="audit-detail-code">{buildAuditRawLog(selectedAuditLog)}</pre>
-                      </div>
-                    </Space>
-                  ) : (
-                    <Text type="secondary">暂无审计日志</Text>
-                  )}
-                </Card>
               </div>
+              <Modal
+                title="审计详情"
+                open={auditDetailOpen}
+                width={860}
+                className="audit-detail-modal"
+                footer={<Button type="primary" onClick={() => setAuditDetailOpen(false)}>关闭</Button>}
+                onCancel={() => setAuditDetailOpen(false)}
+              >
+                {selectedAuditLog ? (
+                  <Space direction="vertical" size={12} className="quality-panel full-width-control">
+                    <Space>
+                      <Tag color={selectedAuditLog.result === 'SUCCESS' ? 'green' : 'red'}>{selectedAuditLog.resultLabel}</Tag>
+                      <Text type="secondary">{formatBeijingDateTime(selectedAuditLog.createdAt)}</Text>
+                    </Space>
+                    <div className="audit-detail-fields">
+                      <Text type="secondary">操作人</Text><Text>{selectedAuditLog.actorUsername}</Text>
+                      <Text type="secondary">IP 地址</Text><Text>{getAuditIpText(selectedAuditLog)}</Text>
+                      <Text type="secondary">模块</Text><Text>{selectedAuditLog.moduleLabel}</Text>
+                      <Text type="secondary">操作动作</Text><Text>{selectedAuditLog.actionLabel}</Text>
+                      <Text type="secondary">操作对象</Text><Text>{getAuditTargetDisplay(selectedAuditLog).label}</Text>
+                    </div>
+                    {hasSystemPermission('system:audit:before-after-view') ? <><div><Text strong>变更前</Text><pre className="audit-detail-code">{formatJsonBlock(selectedAuditLog.before)}</pre></div><div><Text strong>变更后</Text><pre className="audit-detail-code">{formatJsonBlock(selectedAuditLog.after)}</pre></div></> : null}
+                    {hasSystemPermission('system:audit:raw-request-view') ? <div><Text strong>原始请求</Text><pre className="audit-detail-code">{buildAuditRawLog(selectedAuditLog)}</pre></div> : null}
+                  </Space>
+                ) : (
+                  <Text type="secondary">暂无审计日志</Text>
+                )}
+              </Modal>
             </Space>
           </Card>
           ) : null}
@@ -1917,8 +2096,13 @@ export function SettingsPage({
             </Form.Item>
             <Row gutter={12}>
               <Col xs={24} md={12}>
-                <Form.Item name="nickname" label="业务员" rules={[{ max: 40, message: '业务员最多 40 个字符' }]}>
-                  <Input placeholder="例如 张三" />
+                <Form.Item name="departmentId" label="部门">
+                  <Select
+                    allowClear
+                    loading={departmentsLoading}
+                    options={departmentOptions}
+                    placeholder="请选择部门"
+                  />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>

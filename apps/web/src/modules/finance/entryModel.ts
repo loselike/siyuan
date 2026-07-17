@@ -22,6 +22,12 @@ export interface FinanceEntryFormValues {
   agentName?: string;
   channelName?: string;
   cargoType?: string;
+  packageCount?: number;
+  actualWeightKg?: number;
+  volumeCbm?: number;
+  chargeableWeightKg?: number;
+  cargoDataSource?: 'AUTO_MATCHED' | 'MANUAL_ADJUSTED';
+  chargeWeightOverridden?: boolean;
   productName?: string;
   declarationRequired?: boolean;
   sensitive?: boolean;
@@ -52,6 +58,8 @@ export interface FinanceEntryFeeDraft {
   receiptNo?: string;
   receiptBalance?: number;
   receiptMatchAmount?: number;
+  receiptMatchSource?: 'AUTO' | 'MANUAL';
+  receiptMatchHint?: string;
   agentName?: string;
   chargeWeightKg?: number;
   unitPrice?: number;
@@ -91,6 +99,8 @@ export function createFinanceEntryFeeDraft(
     receiptNo: patch.receiptNo,
     receiptBalance: patch.receiptBalance,
     receiptMatchAmount: patch.receiptMatchAmount,
+    receiptMatchSource: patch.receiptMatchSource,
+    receiptMatchHint: patch.receiptMatchHint,
     agentName: patch.agentName,
     chargeWeightKg: patch.chargeWeightKg,
     unitPrice: patch.unitPrice,

@@ -16,23 +16,23 @@ export async function parseBulkTrackingWorkbook(arrayBuffer: ArrayBuffer, excel:
     throw new Error('轨迹表缺少表头');
   }
 
-  const orderIndex = findHeaderIndex(headers, ['客户单号或者转单号', '客户单号或转单号', '内部单号或者快递号', '内部单号或快递号', '客户单号', '内部单号', '转单号', '快递号', '单号', '订单号']);
-  const dateIndex = findHeaderIndex(headers, ['日期', '时间', '轨迹时间', '扫描时间']);
-  const descriptionIndex = findHeaderIndex(headers, ['描述', '轨迹描述', '内容', '轨迹内容']);
+  const orderIndex = findHeaderIndex(headers, ['运单号', '系统单号', '客户单号或者转单号', '客户单号或转单号', '内部单号或者快递号', '内部单号或快递号', '客户单号', '内部单号', '转单号', '子单号', '快递号', '单号', '订单号']);
+  const dateIndex = findHeaderIndex(headers, ['轨迹日期时间', '轨迹时间', '日期时间', '日期', '时间', '扫描时间']);
+  const descriptionIndex = findHeaderIndex(headers, ['轨迹信息', '轨迹内容', '描述', '轨迹描述', '内容']);
   const locationIndex = findHeaderIndex(headers, ['位置', '地点', 'location', '国家']);
 
   if (orderIndex < 0 || dateIndex < 0 || descriptionIndex < 0) {
-    throw new Error('轨迹表必须包含客户单号或者转单号、日期、描述');
+    throw new Error('轨迹表必须包含运单号、轨迹日期时间、轨迹信息');
   }
 
   return dataRows
-    .map((row) => ({
+    .map((row, index) => ({
       customerOrderNo: cellToText(row[orderIndex]),
       date: typeof row[dateIndex] === 'number' ? row[dateIndex] : cellToText(row[dateIndex]),
       description: cellToText(row[descriptionIndex]),
-      location: locationIndex >= 0 ? cellToText(row[locationIndex]) : undefined
-    }))
-    .filter((row) => row.customerOrderNo && row.description);
+      location: locationIndex >= 0 ? cellToText(row[locationIndex]) : undefined,
+      rowNumber: index + 2
+    }));
 }
 
 export function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {

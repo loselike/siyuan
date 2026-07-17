@@ -1,6 +1,7 @@
 import type { PrismaClient } from '@prisma/client';
 import type { BusinessType, ShipmentStatus } from '@siyuan/shared';
 import { hashPassword } from './password.js';
+import { allPermissions, defaultPermissionsForRole } from './rbac.js';
 
 const roles = [
   'ADMIN',
@@ -22,7 +23,9 @@ const roles = [
   'UG_BUSINESS_MANAGER',
   'UG_BUSINESS_SUPERVISOR'
 ] as const;
-const permissions = [
+const permissions = allPermissions();
+
+/* Retired static matrix retained below only as migration-era source context.
   'workspace:access',
   'orders:read',
   'orders:write',
@@ -124,6 +127,11 @@ const rolePermissions: Record<(typeof roles)[number], string[]> = {
   UG_BUSINESS_MANAGER: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read'],
   UG_BUSINESS_SUPERVISOR: ['workspace:access', 'orders:read', 'orders:write', 'routing:read', 'routing:write', 'warehouse:read', 'tracking:read', 'pricing:lookup', 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'master-data:read', 'master-data:write', 'master-data:channels:read']
 };
+
+*/
+const rolePermissions: Record<(typeof roles)[number], string[]> = Object.fromEntries(
+  roles.map((role) => [role, defaultPermissionsForRole(role)])
+) as Record<(typeof roles)[number], string[]>;
 
 const roleMetadata: Record<(typeof roles)[number], { label: string; description?: string; site?: string; sortOrder: number; systemBuiltin: boolean }> = {
   ADMIN: { label: '管理员组', description: '系统管理员', sortOrder: 0, systemBuiltin: false },
@@ -323,6 +331,7 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
   await (prisma as any).agentMarkupRule.deleteMany();
   await prisma.shipment.deleteMany();
   await prisma.user.deleteMany();
+  await prisma.department.deleteMany();
   await prisma.customerContact.deleteMany();
   await prisma.customerAccount.deleteMany();
   await prisma.customer.deleteMany();
@@ -355,6 +364,17 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
     });
   }
 
+  await prisma.department.createMany({
+    data: [
+      { id: 'department-business', name: '业务部', enabled: true },
+      { id: 'department-market', name: '市场部', enabled: true },
+      { id: 'department-warehouse', name: '仓储部', enabled: true },
+      { id: 'department-customer-service', name: '客服部', enabled: true },
+      { id: 'department-finance', name: '财务部', enabled: true },
+      { id: 'department-system', name: '系统管理部', enabled: true }
+    ]
+  });
+
   await prisma.customer.createMany({
     data: [
       { id: 'c-9409', code: '9409', name: 'Daloday', customerSource: '手动录入', salesperson: 'operator', defaultSettlementMethod: 'RMB月结' },
@@ -386,18 +406,18 @@ export async function resetAndSeedDatabase(prisma: PrismaClient) {
 
   await prisma.user.createMany({
     data: [
-      { id: 'u-admin', username: 'admin', passwordHash: hashPassword('admin123'), roleId: 'r-admin' },
-      { id: 'u-cs', username: 'service', passwordHash: hashPassword('service123'), roleId: 'r-customer_service' },
-      { id: 'u-op', username: 'operator', passwordHash: hashPassword('operator123'), roleId: 'r-operator' },
-      { id: 'u-market', username: 'market', passwordHash: hashPassword('market123'), roleId: 'r-ug_market', name: 'market' },
-      { id: 'u-warehouse', username: 'warehouse', passwordHash: hashPassword('warehouse123'), roleId: 'r-warehouse' },
-      { id: 'u-finance', username: 'finance', passwordHash: hashPassword('finance123'), roleId: 'r-finance' },
-      { id: 'u-r-admin', username: 'R-admin', passwordHash: hashPassword('R-admin@123'), roleId: 'r-admin', name: 'R-admin' },
-      { id: 'u-r-sales', username: 'R-sales', passwordHash: hashPassword('R-sales@123'), roleId: 'r-operator', name: 'R-sales', site: '深圳站' },
-      { id: 'u-r-market', username: 'R-market', passwordHash: hashPassword('R-market@123'), roleId: 'r-operator', name: 'R-market' },
-      { id: 'u-r-warehouse', username: 'R-warehouse', passwordHash: hashPassword('R-warehouse@123'), roleId: 'r-warehouse', name: 'R-warehouse', site: '深圳站' },
-      { id: 'u-r-service', username: 'R-service', passwordHash: hashPassword('R-service@123'), roleId: 'r-customer_service', name: 'R-service' },
-      { id: 'u-r-finance', username: 'R-finance', passwordHash: hashPassword('R-finance@123'), roleId: 'r-finance', name: 'R-finance' },
+      { id: 'u-admin', username: 'admin', passwordHash: hashPassword('admin123'), roleId: 'r-admin', departmentId: 'department-system' },
+      { id: 'u-cs', username: 'service', passwordHash: hashPassword('service123'), roleId: 'r-customer_service', departmentId: 'department-customer-service' },
+      { id: 'u-op', username: 'operator', passwordHash: hashPassword('operator123'), roleId: 'r-operator', departmentId: 'department-business' },
+      { id: 'u-market', username: 'market', passwordHash: hashPassword('market123'), roleId: 'r-ug_market', name: 'market', departmentId: 'department-market' },
+      { id: 'u-warehouse', username: 'warehouse', passwordHash: hashPassword('warehouse123'), roleId: 'r-warehouse', departmentId: 'department-warehouse' },
+      { id: 'u-finance', username: 'finance', passwordHash: hashPassword('finance123'), roleId: 'r-finance', departmentId: 'department-finance' },
+      { id: 'u-r-admin', username: 'R-admin', passwordHash: hashPassword('R-admin@123'), roleId: 'r-admin', name: 'R-admin', departmentId: 'department-system' },
+      { id: 'u-r-sales', username: 'R-sales', passwordHash: hashPassword('R-sales@123'), roleId: 'r-operator', name: 'R-sales', site: '深圳站', departmentId: 'department-business' },
+      { id: 'u-r-market', username: 'R-market', passwordHash: hashPassword('R-market@123'), roleId: 'r-operator', name: 'R-market', departmentId: 'department-market' },
+      { id: 'u-r-warehouse', username: 'R-warehouse', passwordHash: hashPassword('R-warehouse@123'), roleId: 'r-warehouse', name: 'R-warehouse', site: '深圳站', departmentId: 'department-warehouse' },
+      { id: 'u-r-service', username: 'R-service', passwordHash: hashPassword('R-service@123'), roleId: 'r-customer_service', name: 'R-service', departmentId: 'department-customer-service' },
+      { id: 'u-r-finance', username: 'R-finance', passwordHash: hashPassword('R-finance@123'), roleId: 'r-finance', name: 'R-finance', departmentId: 'department-finance' },
       {
         id: 'u-customer',
         username: 'customer',

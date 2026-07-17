@@ -12,10 +12,10 @@
     "prisma:generate": "prisma generate --schema prisma/schema.prisma",
     "prisma:migrate:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
     "prisma:push": "prisma db push --schema prisma/schema.prisma",
-    "prisma:seed": "tsx prisma/seed.ts",
-    "pricing:legacy:import": "tsx scripts/import-legacy-pricing.ts"
+    "prisma:seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@e965/xlsx": "^0.20.3",
     "@nestjs/common": "^11.1.27",
     "@nestjs/core": "^11.1.27",
     "@nestjs/platform-express": "^11.1.27",

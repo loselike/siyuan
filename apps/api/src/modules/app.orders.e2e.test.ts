@@ -13,6 +13,7 @@ describe('Siyuan API orders', () => {
     result: string;
     before?: unknown;
     after?: unknown;
+    ipAddress?: string;
     createdAt: string;
   };
 
@@ -52,6 +53,72 @@ describe('Siyuan API orders', () => {
       });
   });
 
+  it('requires granular business permissions for order entry and review queues', async () => {
+    const financeToken = await app.loginAs('finance');
+    const operatorToken = await app.loginAs('operator');
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/packages')
+      .set('Authorization', app.auth(financeToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/drafts')
+      .set('Authorization', app.auth(financeToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .get('/api/shipments/review-pending')
+      .set('Authorization', app.auth(financeToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/packages')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200);
+  });
+
+  it('keeps navigation unread badges per user read state and permission scope', async () => {
+    const adminToken = await app.loginAs('admin');
+    const operatorToken = await app.loginAs('operator');
+    const before = await request(app.getHttpServer())
+      .get('/api/navigation/unread-badges')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    expect(before.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ moduleKey: 'customerService', sectionKey: 'pending-routing', unreadCount: expect.any(Number) }),
+      expect.objectContaining({ moduleKey: 'receive', sectionKey: 'queue', unreadCount: expect.any(Number) }),
+      expect.objectContaining({ moduleKey: 'workspace', sectionKey: 'shipmentPool', unreadCount: expect.any(Number) }),
+      expect.objectContaining({ moduleKey: 'business', sectionKey: 'pending-review', unreadCount: expect.any(Number) }),
+      expect.objectContaining({ moduleKey: 'market', sectionKey: 'pending-routing', unreadCount: expect.any(Number) })
+    ]));
+    await request(app.getHttpServer())
+      .post('/api/navigation/read-state')
+      .set('Authorization', app.auth(adminToken))
+      .send({ moduleKey: 'customerService', sectionKey: 'pending-routing' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/navigation/read-state')
+      .set('Authorization', app.auth(adminToken))
+      .send({ moduleKey: 'business', sectionKey: 'pending-review' })
+      .expect(201);
+    const after = await request(app.getHttpServer())
+      .get('/api/navigation/unread-badges')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    expect(after.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ moduleKey: 'customerService', sectionKey: 'pending-routing', unreadCount: 0 }),
+      expect.objectContaining({ moduleKey: 'business', sectionKey: 'pending-review', unreadCount: 0 })
+    ]));
+    const operator = await request(app.getHttpServer())
+      .get('/api/navigation/unread-badges')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200);
+    expect(operator.body.items.some((item: { moduleKey: string }) => item.moduleKey === 'customerService')).toBe(false);
+    expect(operator.body.items.some((item: { moduleKey: string }) => item.moduleKey === 'finance')).toBe(false);
+    expect(operator.body.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ moduleKey: 'business', sectionKey: 'pending-review' })
+    ]));
+    expect(operator.body.items.some((item: { moduleKey: string }) => item.moduleKey === 'market')).toBe(false);
+  });
+
   it('returns a clear username or password error for failed login', async () => {
     await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -74,11 +141,45 @@ describe('Siyuan API orders', () => {
       });
   });
 
+  it('returns only current user account events and excludes login logs', async () => {
+    const adminToken = await app.loginAs('admin');
+    const serviceToken = await app.loginAs('service');
+
+    await request(app.getHttpServer())
+      .put('/api/auth/profile')
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '系统管理员', phone: '13800000000', gender: 'UNKNOWN', nickname: 'admin' })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .put('/api/auth/profile')
+      .set('Authorization', app.auth(serviceToken))
+      .send({ name: '客服专员', phone: '13900000000', gender: 'UNKNOWN', nickname: 'service' })
+      .expect(200);
+
+    const adminEvents = await request(app.getHttpServer())
+      .get('/api/auth/account-events')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+    expect(adminEvents.body.some((row: TestAuditLogRow) => row.action === 'auth.profile.update' && row.target === 'user:u-admin')).toBe(true);
+    expect(adminEvents.body.some((row: TestAuditLogRow) => row.target === 'user:u-cs')).toBe(false);
+    expect(adminEvents.body.some((row: TestAuditLogRow) => row.action.startsWith('auth.login.'))).toBe(false);
+
+    const serviceEvents = await request(app.getHttpServer())
+      .get('/api/auth/account-events')
+      .set('Authorization', app.auth(serviceToken))
+      .expect(200);
+    expect(serviceEvents.body.some((row: TestAuditLogRow) => row.action === 'auth.profile.update' && row.target === 'user:u-cs')).toBe(true);
+    expect(serviceEvents.body.some((row: TestAuditLogRow) => row.target === 'user:u-admin')).toBe(false);
+    expect(serviceEvents.body.some((row: TestAuditLogRow) => row.action.startsWith('auth.login.'))).toBe(false);
+  });
+
   it('accepts 8 character staff passwords and rejects shorter passwords', async () => {
     const adminToken = await app.loginAs('admin');
     await request(app.getHttpServer())
       .post('/api/system/staff-accounts')
       .set('Authorization', app.auth(adminToken))
+      .set('x-forwarded-for', '203.0.113.88, 10.0.0.12')
       .send({ username: 'pw8ok', password: 'Aa123@45', role: 'UG_BUSINESS' })
       .expect(201);
     await request(app.getHttpServer())
@@ -87,6 +188,11 @@ describe('Siyuan API orders', () => {
       .expect(200)
       .expect((response) => {
         expect(response.body.rows.some((row: TestAuditLogRow) => row.target === 'POST /api/system/staff-accounts')).toBe(true);
+        const createdAudit = response.body.rows.find((row: TestAuditLogRow) => row.target === 'POST /api/system/staff-accounts');
+        expect(createdAudit).toEqual(expect.objectContaining({
+          ipAddress: '203.0.113.88',
+          after: expect.objectContaining({ ipAddress: '203.0.113.88' })
+        }));
       });
     await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -112,7 +218,7 @@ describe('Siyuan API orders', () => {
     await request(app.getHttpServer())
       .put(`/api/system/roles/${role.body.key}/permissions`)
       .set('Authorization', app.auth(adminToken))
-      .send({ permissions: ['pricing:lookup'] })
+      .send({ permissions: ['pricing:lookup:view'] })
       .expect(200);
     await request(app.getHttpServer())
       .post('/api/system/staff-accounts')
@@ -135,12 +241,13 @@ describe('Siyuan API orders', () => {
       });
   });
 
-  it('scopes operator shipment data to owned customers while warehouse can see all sales ownership', async () => {
+  it('scopes operator shipment data to owned customers while keeping warehouse out of the business list', async () => {
     const adminToken = await app.loginAs('admin');
     const operatorToken = await app.loginAs('operator');
     const financeToken = await app.loginAs('finance');
     const serviceToken = await app.loginAs('service');
     const warehouseToken = await app.loginAs('warehouse');
+    const marketToken = await app.loginAs('market');
 
     await request(app.getHttpServer())
       .put('/api/system/staff-accounts/u-op/site')
@@ -152,16 +259,20 @@ describe('Siyuan API orders', () => {
       .get('/api/shipments')
       .set('Authorization', app.auth(operatorToken))
       .expect(200);
-    const warehouseShipments = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .get('/api/shipments')
       .set('Authorization', app.auth(warehouseToken))
+      .expect(403);
+    const marketShipments = await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', app.auth(marketToken))
       .expect(200);
 
     expect(operatorShipments.body.length).toBeGreaterThan(0);
     expect(operatorShipments.body.every((shipment: { salesperson?: string }) => shipment.salesperson === 'operator')).toBe(true);
     expect(operatorShipments.body.every((shipment: { site?: string }) => shipment.site === '深圳思远')).toBe(true);
-    expect(warehouseShipments.body.length).toBeGreaterThan(operatorShipments.body.length);
-    expect(warehouseShipments.body).toEqual(expect.arrayContaining([expect.objectContaining({ salesperson: 'jylannie' })]));
+    expect(marketShipments.body.length).toBeGreaterThan(operatorShipments.body.length);
+    expect(marketShipments.body).toEqual(expect.arrayContaining([expect.objectContaining({ salesperson: 'jylannie' })]));
   });
 
   it('prevents operators from updating shipments outside their customer scope by id', async () => {
@@ -181,7 +292,162 @@ describe('Siyuan API orders', () => {
       .patch(`/api/shipments/${outsideScopeShipment.body.id}/operational`)
       .set('Authorization', app.auth(operatorToken))
       .send({ latestTracking: '业务员越权修改' })
-      .expect(404);
+      .expect(403);
+  });
+
+  it('operations line shipment search matches order and tracking numbers within operator scope', async () => {
+    const adminToken = await app.loginAs('admin');
+    const operatorToken = await app.loginAs('operator');
+    const suffix = Date.now();
+
+    const ownedPackage = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send(warehousePackageInput({ customerCode: '9409', customerOrderNo: `OPS-OWN-CUST-${suffix}`, domesticTrackingNo: `KYOPSOWN${suffix}` }))
+      .expect(201);
+    const otherPackage = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send(warehousePackageInput({ customerCode: '1344', customerOrderNo: `OPS-OTHER-CUST-${suffix}`, domesticTrackingNo: `KYOPSOTHER${suffix}` }))
+      .expect(201);
+
+    const baseShipment = {
+      businessType: 'DEDICATED_LINE',
+      packageType: 'WPX',
+      destinationCountry: '美国',
+      channelId: 'ch-europe-truck',
+      declarationRequired: false,
+      cargoType: '普货',
+      productName: '运营搜索测试货物',
+      settlementMethod: 'RMB月结'
+    };
+
+    const ownedEntryResponse = await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(operatorToken))
+      .send({
+        shipment: {
+          ...baseShipment,
+          customerCode: '9409',
+          customerOrderNo: `OPS-OWN-CUST-${suffix}`,
+          systemOrderNo: `SYOPSOWN${suffix}`
+        },
+        warehousePackageIds: [ownedPackage.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
+        submitForReview: true
+      });
+    expect(ownedEntryResponse.status, JSON.stringify(ownedEntryResponse.body)).toBe(201);
+    const ownedEntry = ownedEntryResponse;
+    const otherEntry = await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        shipment: {
+          ...baseShipment,
+          customerCode: '1344',
+          customerOrderNo: `OPS-OTHER-CUST-${suffix}`,
+          systemOrderNo: `SYOPSOTHER${suffix}`
+        },
+        warehousePackageIds: [otherPackage.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 120, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 90, currency: 'RMB' }],
+        submitForReview: true
+      })
+      .expect(201);
+
+    const expectAdminSearch = async (keyword: string, shipmentId: string, options: { requirePackageSummary?: boolean } = {}) => {
+      await request(app.getHttpServer())
+        .get('/api/operations/line-shipments')
+        .query({ datePreset: 'ALL', keyword })
+        .set('Authorization', app.auth(adminToken))
+        .expect(200)
+        .expect((response) => {
+          const matched = response.body.rows.find((row: { shipment: { id: string } }) => row.shipment.id === shipmentId);
+          expect(matched).toBeTruthy();
+          if (options.requirePackageSummary) {
+            expect(matched.packageSummary).toEqual(expect.objectContaining({
+              packageCount: 1,
+              domesticTrackingNos: expect.any(Array),
+              combinedOrderNos: expect.any(Array)
+            }));
+          }
+          expect(JSON.stringify(response.body)).not.toContain('routeCostTotal');
+          expect(JSON.stringify(response.body)).not.toContain('payableTotal');
+          expect(JSON.stringify(response.body)).not.toContain('grossProfit');
+        });
+    };
+
+    await expectAdminSearch(`SYOPSOWN${suffix}`, ownedEntry.body.shipment.id);
+    await expectAdminSearch(`OPS-OWN-CUST-${suffix}`, ownedEntry.body.shipment.id);
+    await expectAdminSearch(`KYOPSOWN${suffix}`, ownedEntry.body.shipment.id, { requirePackageSummary: true });
+    await expectAdminSearch(ownedPackage.body.combinedOrderNo, ownedEntry.body.shipment.id, { requirePackageSummary: true });
+    await expectAdminSearch(`SYOPSOTHER${suffix}`, otherEntry.body.shipment.id);
+
+    await request(app.getHttpServer())
+      .get('/api/operations/line-shipments')
+      .query({ datePreset: 'ALL', keyword: `KYOPSOWN${suffix}` })
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual([
+          expect.objectContaining({ shipment: expect.objectContaining({ id: ownedEntry.body.shipment.id }) })
+        ]);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/operations/line-shipments')
+      .query({ datePreset: 'ALL', keyword: `KYOPSOTHER${suffix}` })
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual([]);
+        expect(JSON.stringify(response.body)).not.toContain(`SYOPSOTHER${suffix}`);
+      });
+  });
+
+  it('enforces dedicated operations permissions for internal logs and operating actions', async () => {
+    const warehouseToken = await app.loginAs('warehouse');
+    const serviceToken = await app.loginAs('service');
+
+    await request(app.getHttpServer())
+      .get('/api/operations/line-shipments')
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get('/api/operations/line-shipments/s-1/internal-flow-log')
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .patch('/api/operations/line-shipments/s-1/operational')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ latestTracking: '仓库不应通过运营入口修改' })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/operations/line-shipments/s-1/tracking-events')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ status: '仓库不应通过运营入口追加', happenedAt: new Date().toISOString() })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/operations/line-shipments/s-1/problem-tickets')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ reason: '仓库不应通过运营入口创建问题件' })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/import')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ rows: [] })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .get('/api/operations/line-shipments/s-1/internal-flow-log')
+      .set('Authorization', app.auth(serviceToken))
+      .expect(403);
   });
 
   it('lets business role groups create order entries only for owned customers', async () => {
@@ -200,6 +466,16 @@ describe('Siyuan API orders', () => {
       .post('/api/warehouse/packages')
       .set('Authorization', app.auth(adminToken))
       .send(warehousePackageInput({ customerCode: '1344', customerOrderNo: `UG-OTHER-${suffix}`, domesticTrackingNo: `KYUGOTH${suffix}` }))
+      .expect(201);
+    const draftPackage = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send(warehousePackageInput({ customerCode: '9409', customerOrderNo: `UG-DRAFT-${suffix}`, domesticTrackingNo: `KYUGDRAFT${suffix}` }))
+      .expect(201);
+    const deleteDraftPackage = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send(warehousePackageInput({ customerCode: '9409', customerOrderNo: `UG-DEL-DRAFT-${suffix}`, domesticTrackingNo: `KYUGDELDRAFT${suffix}` }))
       .expect(201);
 
     await request(app.getHttpServer())
@@ -238,11 +514,167 @@ describe('Siyuan API orders', () => {
       .send({
         shipment: { ...baseShipment, customerCode: '1344' },
         warehousePackageIds: [otherPackage.body.id],
-        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+        receivables: [
+          { type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' },
+          { type: 'RECEIVABLE', name: 'USD 附加费', amount: 20, currency: 'USD' }
+        ],
         businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
         submitForReview: true
       })
       .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(operatorToken))
+      .send({
+        shipment: { ...baseShipment, customerCode: '9409', customerOrderNo: `UG-PAYABLE-${suffix}`, systemOrderNo: `SYUGPAY${suffix}` },
+        warehousePackageIds: [ownedPackage.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
+        payables: [{ type: 'PAYABLE', name: '出货成本', chargeWeightKg: 10, unitPrice: 9, currency: 'RMB' }],
+        submitForReview: true
+      })
+      .expect(403)
+      .expect((response) => {
+        expect(response.body.message).toContain('当前角色不能录入应付费用');
+      });
+
+    const draftEntry = await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(operatorToken))
+      .send({
+        shipment: { ...baseShipment, customerCode: '9409', customerOrderNo: `UG-DRAFT-${suffix}`, systemOrderNo: `SYUGDRAFT${suffix}` },
+        warehousePackageIds: [draftPackage.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
+        submitForReview: false
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.payables).toEqual([]);
+        expect(response.body.canViewPayables).toBe(false);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/drafts')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: draftEntry.body.shipment.id,
+            status: 'DRAFT',
+            customerOrderNo: `UG-DRAFT-${suffix}`,
+            receivableRmbTotal: 100
+          })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .get(`/api/shipments/${draftEntry.body.shipment.id}/order-entry`)
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.packages).toEqual(expect.arrayContaining([expect.objectContaining({ id: draftPackage.body.id })]));
+        expect(response.body.receivables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '客户运费' })]));
+        expect(response.body.businessCosts).toEqual(expect.arrayContaining([expect.objectContaining({ name: '业务成本' })]));
+        expect(response.body.payables).toEqual([]);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/packages')
+      .query({ packageIds: draftPackage.body.id })
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect([]);
+
+    const deleteDraftEntry = await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(operatorToken))
+      .send({
+        shipment: { ...baseShipment, customerCode: '9409', customerOrderNo: `UG-DEL-DRAFT-${suffix}`, systemOrderNo: `SYUGDELDRAFT${suffix}` },
+        warehousePackageIds: [deleteDraftPackage.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
+        submitForReview: false
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .delete(`/api/shipments/${deleteDraftEntry.body.shipment.id}/order-entry-draft`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({ reason: '测试删除草稿' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.shipment).toEqual(expect.objectContaining({ id: deleteDraftEntry.body.shipment.id }));
+        expect(response.body.shipment.deletedAt).toBeFalsy();
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/drafts')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: deleteDraftEntry.body.shipment.id })]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/packages')
+      .query({ packageIds: deleteDraftPackage.body.id })
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: deleteDraftPackage.body.id })]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=shipment.order_entry.draft_delete')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ action: 'shipment.order_entry.draft_delete', target: expect.stringContaining(deleteDraftEntry.body.shipment.id), after: expect.objectContaining({ hardDelete: true }) })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .put(`/api/shipments/${draftEntry.body.shipment.id}/order-entry-draft`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({
+        shipment: { ...baseShipment, customerCode: '9409', customerOrderNo: `UG-DRAFT-${suffix}`, systemOrderNo: `SYUGDRAFT${suffix}` },
+        warehousePackageIds: [draftPackage.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
+        payables: [{ type: 'PAYABLE', name: '出货成本', chargeWeightKg: 10, unitPrice: 9, currency: 'RMB' }],
+        submitForReview: false
+      })
+      .expect(403)
+      .expect((response) => {
+        expect(response.body.message).toContain('当前角色不能录入应付费用');
+      });
+
+    await request(app.getHttpServer())
+      .put(`/api/shipments/${draftEntry.body.shipment.id}/order-entry-draft`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({
+        shipment: { ...baseShipment, customerCode: '9409', customerOrderNo: `UG-DRAFT-${suffix}`, systemOrderNo: `SYUGDRAFT${suffix}` },
+        warehousePackageIds: [draftPackage.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
+        submitForReview: true
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.shipment).toEqual(expect.objectContaining({ id: draftEntry.body.shipment.id, status: 'REVIEW_PENDING' }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/order-entry/drafts')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: draftEntry.body.shipment.id })]));
+      });
 
     const createdEntry = await request(app.getHttpServer())
       .post('/api/shipments/order-entry')
@@ -250,9 +682,11 @@ describe('Siyuan API orders', () => {
       .send({
         shipment: { ...baseShipment, customerCode: '9409' },
         warehousePackageIds: [ownedPackage.body.id],
-        receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+        receivables: [
+          { type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' },
+          { type: 'RECEIVABLE', name: 'USD 附加费', amount: 20, currency: 'USD' }
+        ],
         businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
-        payables: [{ type: 'PAYABLE', name: '出货成本', chargeWeightKg: 10, unitPrice: 9, currency: 'RMB' }],
         submitForReview: true
       })
       .expect(201)
@@ -260,9 +694,9 @@ describe('Siyuan API orders', () => {
         expect(response.body.shipment).toEqual(expect.objectContaining({ salesperson: 'operator', entryBy: 'operator' }));
         expect(response.body.receivables).toEqual(expect.arrayContaining([expect.objectContaining({ salesperson: 'operator' })]));
         expect(response.body.businessCosts).toEqual(expect.arrayContaining([expect.objectContaining({ salesperson: 'operator' })]));
-        expect(response.body.payables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '出货成本', amount: 90, reconciliationStatus: 'PENDING' })]));
+        expect(response.body.payables).toEqual([]);
+        expect(response.body.canViewPayables).toBe(false);
       });
-    const businessPayable = createdEntry.body.payables.find((row: { name: string }) => row.name === '出货成本');
 
     await request(app.getHttpServer())
       .post(`/api/shipments/${createdEntry.body.shipment.id}/review/approve`)
@@ -277,7 +711,13 @@ describe('Siyuan API orders', () => {
       .set('Authorization', app.auth(operatorToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: createdEntry.body.shipment.id, salesperson: 'operator' })]));
+        expect(response.body).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            id: createdEntry.body.shipment.id,
+            salesperson: 'operator',
+            receivableRmbTotal: 244.9
+          })
+        ]));
       });
 
     await request(app.getHttpServer())
@@ -323,30 +763,16 @@ describe('Siyuan API orders', () => {
     await request(app.getHttpServer())
       .post(`/api/shipments/${createdEntry.body.shipment.id}/review/approve`)
       .set('Authorization', app.auth(financeToken))
-      .expect(400)
-      .expect((response) => {
-        expect(response.body.message).toContain('只有待审核运单可以审核通过');
-      });
+      .expect(403);
 
     await request(app.getHttpServer())
       .get(`/api/finance/payable-audits?systemOrderNo=${createdEntry.body.shipment.systemOrderNo}`)
       .set('Authorization', app.auth(financeToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body.rows).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: businessPayable.id })]));
+        expect(response.body.rows).toEqual([]);
       });
 
-    await request(app.getHttpServer())
-      .post(`/api/finance/payable-audits/${businessPayable.id}/audit`)
-      .set('Authorization', app.auth(financeToken))
-      .expect(400)
-      .expect((response) => {
-        expect(response.body.message).toContain('客服确认数据后才能审核该应付费用');
-      });
-    await request(app.getHttpServer())
-      .post(`/api/finance/payable-audits/${businessPayable.id}/audit`)
-      .set('Authorization', app.auth(operatorToken))
-      .expect(403);
     await request(app.getHttpServer())
       .post(`/api/shipments/${createdEntry.body.shipment.id}/business-data/approve`)
       .set('Authorization', app.auth(serviceToken))
@@ -370,6 +796,175 @@ describe('Siyuan API orders', () => {
           requiresAfter: true
         });
         expect(row?.after).toEqual(expect.objectContaining({ salesperson: 'operator', entryBy: 'operator' }));
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${createdEntry.body.shipment.id}/review/reverse`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({ reason: '补充资料后重新审核' })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=shipment.review.reverse')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).not.toEqual(expect.arrayContaining([
+          expect.objectContaining({ target: createdEntry.body.shipment.id, action: 'shipment.review.reverse' })
+        ]));
+      });
+  });
+
+  it('order entries reject fee names that are not enabled in finance catalog', async () => {
+    const adminToken = await app.loginAs('admin');
+    const suffix = Date.now();
+    const disabledFeeName = `停用录单费-${suffix}`;
+    const disabledFee = await request(app.getHttpServer())
+      .post('/api/finance/catalog')
+      .set('Authorization', app.auth(adminToken))
+      .send({ category: 'FEE_NAME', name: disabledFeeName, currency: 'RMB' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .put(`/api/finance/catalog/${disabledFee.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ enabled: false })
+      .expect(200);
+    const pkg = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send(warehousePackageInput({ customerCode: '9409', customerOrderNo: `FEE-CATALOG-${suffix}`, domesticTrackingNo: `KYFEECATALOG${suffix}` }))
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        shipment: {
+          customerCode: '9409',
+          customerOrderNo: `FEE-CATALOG-${suffix}`,
+          systemOrderNo: `SYFEECATALOG${suffix}`,
+          businessType: 'EXPRESS',
+          packageType: 'WPX',
+          destinationCountry: '美国',
+          channelId: 'ch-dhl-hk',
+          declarationRequired: false,
+          cargoType: '普货',
+          productName: '费用名称校验货物',
+          settlementMethod: 'RMB月结'
+        },
+        warehousePackageIds: [pkg.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: disabledFeeName, amount: 100, currency: 'RMB' }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务员成本', amount: 80, currency: 'RMB' }],
+        submitForReview: true
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain(disabledFeeName);
+        expect(response.body.message).toContain('启用的费用名称资料库');
+      });
+  });
+
+  it('calculates warehouse cargo from the selected company channel instead of stale form totals', async () => {
+    const adminToken = await app.loginAs('admin');
+    const suffix = Date.now();
+    const pkg = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: `CHANNEL-CARGO-${suffix}`,
+        domesticTrackingNo: `CHANNEL-CARGO-${suffix}`,
+        expectedTotalPackageCount: 2,
+        packageIndex: 1,
+        packageCount: 2,
+        weightKg: 8,
+        lengthCm: 10,
+        widthCm: 10,
+        heightCm: 10
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        shipment: {
+          customerCode: '9409',
+          customerOrderNo: `CHANNEL-CARGO-${suffix}`,
+          systemOrderNo: `SYCHANNEL${suffix}`,
+          businessType: 'EXPRESS',
+          packageType: 'WPX',
+          destinationCountry: '美国',
+          channelId: 'ch-dhl-hk',
+          declarationRequired: false,
+          cargoType: '普货',
+          productName: '渠道规则货物',
+          settlementMethod: 'RMB月结',
+          // These are deliberately stale. AUTO_MATCHED must use the selected
+          // warehouse records and the selected company-channel rule instead.
+          packageCount: 1,
+          actualWeightKg: 8,
+          volumeCbm: 0.001,
+          chargeableWeightKg: 8,
+          cargoDataSource: 'AUTO_MATCHED'
+        },
+        warehousePackageIds: [pkg.body.id],
+        receivables: [{ type: 'RECEIVABLE', name: '运费', amount: 160, currency: 'RMB', unitPrice: 10 }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务员成本', amount: 80, currency: 'RMB', unitPrice: 5 }],
+        submitForReview: true
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.shipment).toEqual(expect.objectContaining({
+          packageCount: 2,
+          actualWeightKg: 16,
+          chargeableWeightKg: 16,
+          cargoDataSource: 'AUTO_MATCHED'
+        }));
+      });
+  });
+
+  it('accepts manual cargo data without a matched warehouse package and keeps its source', async () => {
+    const adminToken = await app.loginAs('admin');
+    const suffix = Date.now();
+    await request(app.getHttpServer())
+      .post('/api/shipments/order-entry')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        shipment: {
+          customerCode: '9409',
+          customerOrderNo: `MANUAL-CARGO-${suffix}`,
+          systemOrderNo: `SYMANUAL${suffix}`,
+          businessType: 'EXPRESS',
+          packageType: 'WPX',
+          destinationCountry: '美国',
+          channelId: 'ch-dhl-hk',
+          declarationRequired: false,
+          cargoType: '普货',
+          productName: '手工货物数据',
+          settlementMethod: 'RMB月结',
+          packageCount: 2,
+          actualWeightKg: 8,
+          volumeCbm: 0.12,
+          chargeableWeightKg: 24,
+          cargoDataSource: 'MANUAL_ADJUSTED',
+          chargeWeightOverridden: true
+        },
+        warehousePackageIds: [],
+        receivables: [{ type: 'RECEIVABLE', name: '运费', amount: 120, currency: 'RMB', chargeWeightKg: 24, unitPrice: 5 }],
+        businessCosts: [{ type: 'BUSINESS_COST', name: '业务员成本', amount: 72, currency: 'RMB', chargeWeightKg: 24, unitPrice: 3 }],
+        submitForReview: true
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.shipment).toEqual(expect.objectContaining({
+          packageCount: 2,
+          actualWeightKg: 8,
+          chargeableWeightKg: 24,
+          cargoDataSource: 'MANUAL_ADJUSTED',
+          chargeWeightOverridden: true
+        }));
+        expect(response.body.receivables[0]).toEqual(expect.objectContaining({ amount: 120 }));
       });
   });
 
@@ -421,6 +1016,164 @@ describe('Siyuan API orders', () => {
           status: 'WAITING_SORT',
           businessReviewedBy: 'admin',
           businessReviewedAt: expect.any(String)
+        }));
+      });
+  });
+
+  it('deletes only waiting-sort routing shipments with delete reason and audit trail', async () => {
+    const adminToken = await app.loginAs('admin');
+    const warehouseToken = await app.loginAs('warehouse');
+    const operatorToken = await app.loginAs('operator');
+    const suffix = Date.now();
+
+    const createWaitingSortShipment = async (key: string) => {
+      const pkg = await request(app.getHttpServer())
+        .post('/api/warehouse/packages')
+        .set('Authorization', app.auth(adminToken))
+        .send(warehousePackageInput({
+          customerCode: '9409',
+          customerOrderNo: `ROUTE-DEL-${key}-${suffix}`,
+          domesticTrackingNo: `KYRTDEL${key}${suffix}`
+        }))
+        .expect(201);
+
+      const created = await request(app.getHttpServer())
+        .post('/api/shipments/order-entry')
+        .set('Authorization', app.auth(adminToken))
+        .send({
+          shipment: {
+            customerCode: '9409',
+            customerOrderNo: `ROUTE-DEL-${key}-${suffix}`,
+            systemOrderNo: `SYRTDEL${key}${suffix}`,
+            businessType: 'EXPRESS',
+            packageType: 'WPX',
+            destinationCountry: '美国',
+            channelId: 'ch-dhl-hk',
+            declarationRequired: false,
+            cargoType: '普货',
+            productName: '待排货删除测试货物',
+            settlementMethod: 'RMB月结'
+          },
+          warehousePackageIds: [pkg.body.id],
+          receivables: [{ type: 'RECEIVABLE', name: '客户运费', amount: 100, currency: 'RMB' }],
+          businessCosts: [{ type: 'BUSINESS_COST', name: '业务成本', amount: 80, currency: 'RMB' }],
+          submitForReview: true
+        })
+        .expect(201);
+
+      const approved = await request(app.getHttpServer())
+        .post(`/api/shipments/${created.body.shipment.id}/review/approve`)
+        .set('Authorization', app.auth(adminToken))
+        .send({ businessReview: true })
+        .expect(201);
+
+      expect(approved.body.shipment.status).toBe('WAITING_SORT');
+      return approved.body.shipment as { id: string; status: string; systemOrderNo: string };
+    };
+
+    const deletable = await createWaitingSortShipment('OK');
+    const nonWaitingSort = await createWaitingSortShipment('Routed');
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${deletable.id}/route`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB', approve: false })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .delete(`/api/shipments/${deletable.id}/pending-routing`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ reason: '仓库不应删除' })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .delete(`/api/shipments/${deletable.id}/pending-routing`)
+      .set('Authorization', app.auth(adminToken))
+      .send({})
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('请填写删除原因');
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${nonWaitingSort.id}/route`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB', approve: false })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.status).toBe('WAITING_SORT');
+        expect(response.body.routeCostTotal).toBe(100);
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${nonWaitingSort.id}/route`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.status).toBe('WAITING_DISPATCH');
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${nonWaitingSort.id}/route`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 12.5, unitPrice: 8, currency: 'RMB' })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('当前状态不允许排货');
+      });
+
+    await request(app.getHttpServer())
+      .delete(`/api/shipments/${nonWaitingSort.id}/pending-routing`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ reason: '已排货不能删除' })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('只有待排货运单可以删除');
+      });
+
+    await request(app.getHttpServer())
+      .delete(`/api/shipments/${deletable.id}/pending-routing`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ reason: '客户取消出货' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          id: deletable.id,
+          deletedAt: expect.any(String),
+          deletedBy: 'admin',
+          deletedReason: '客户取消出货'
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: deletable.id })]));
+        expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: nonWaitingSort.id })]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=shipment.route.delete')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        const row = (response.body.rows as TestAuditLogRow[]).find((item) => item.target === deletable.id);
+        expectAuditTrailRow(row, {
+          action: 'shipment.route.delete',
+          target: deletable.id,
+          actorUsername: 'admin',
+          requiresBefore: true,
+          requiresAfter: true
+        });
+        expect(row?.before).toEqual(expect.objectContaining({ status: 'WAITING_SORT' }));
+        expect(row?.after).toEqual(expect.objectContaining({
+          statusBefore: 'WAITING_SORT',
+          deleteReason: '客户取消出货',
+          deletedBy: 'admin',
+          deletedAt: expect.any(String)
         }));
       });
   });
@@ -491,13 +1244,49 @@ describe('Siyuan API orders', () => {
         expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: created.body.id })]));
       });
 
-    await request(app.getHttpServer())
+    const reviewDetail = await request(app.getHttpServer())
       .get(`/api/shipments/${created.body.id}/review-detail`)
       .set('Authorization', app.auth(token))
       .expect(200)
       .expect((response) => {
         expect(response.body.shipment.status).toBe('REVIEW_PENDING');
         expect(response.body.approvalWarnings).toEqual(expect.arrayContaining(['产品名称缺失', '应收费用缺失', '业务成本缺失']));
+      });
+
+    await request(app.getHttpServer())
+      .put(`/api/shipments/${created.body.id}/review-basic`)
+      .set('Authorization', app.auth(token))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: 'REVIEW-PENDING-EDITED',
+        companyChannelName: reviewDetail.body.shipment.channelName,
+        inboundNo: 'INBOUND-EDITED',
+        productName: '待审核修改品名',
+        destinationCountry: '美国',
+        declarationRequired: false,
+        cargoType: '普货',
+        settlementMethod: '对公',
+        receiverName: '收货人',
+        receiverAddress: 'Test address'
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.shipment).toEqual(expect.objectContaining({
+          status: 'REVIEW_PENDING',
+          customerOrderNo: 'REVIEW-PENDING-EDITED',
+          productName: '待审核修改品名',
+          latestTracking: '待审核资料已修改'
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=shipment.review.basic_update')
+      .set('Authorization', app.auth(token))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ action: 'shipment.review.basic_update', target: created.body.id })
+        ]));
       });
 
     await request(app.getHttpServer())
@@ -509,16 +1298,22 @@ describe('Siyuan API orders', () => {
       .post(`/api/shipments/${created.body.id}/review/reject`)
       .set('Authorization', app.auth(financeToken))
       .send({ reason: '' })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/review/reject`)
+      .set('Authorization', app.auth(token))
+      .send({ reason: '' })
       .expect(400);
 
     await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/review/reject`)
-      .set('Authorization', app.auth(financeToken))
+      .set('Authorization', app.auth(token))
       .send({ reason: '费用资料不完整' })
       .expect(201)
       .expect((response) => {
         expect(response.body.shipment.status).toBe('REVIEW_REJECTED');
-        expect(response.body.shipment.reviewedBy).toBe('finance');
+        expect(response.body.shipment.reviewedBy).toBe('admin');
         expect(response.body.shipment.reviewedAt).toBeTruthy();
         expect(response.body.shipment.reviewRejectedReason).toBe('费用资料不完整');
       });
@@ -536,14 +1331,14 @@ describe('Siyuan API orders', () => {
               reviewStatus: 'REJECTED',
               statusFrom: 'REVIEW_PENDING',
               statusTo: 'REVIEW_REJECTED',
-              reviewer: 'finance',
-              reviewedBy: 'finance',
+              reviewer: 'admin',
+              reviewedBy: 'admin',
               reviewedAt: expect.any(String),
               rejectReason: '费用资料不完整',
               receivableTotal: 0,
               businessCostTotal: 0,
               payableTotal: 0,
-              approvalWarnings: expect.arrayContaining(['产品名称缺失', '应收费用缺失', '业务成本缺失'])
+              approvalWarnings: expect.arrayContaining(['应收费用缺失', '业务成本缺失'])
             })
           })
         ]));
@@ -621,6 +1416,11 @@ describe('Siyuan API orders', () => {
     await request(app.getHttpServer())
       .get('/api/shipments/review-deleted')
       .set('Authorization', app.auth(financeToken))
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .get('/api/shipments/review-deleted')
+      .set('Authorization', app.auth(adminToken))
       .expect(200)
       .expect((response) => {
         expect(response.body).toEqual(expect.arrayContaining([expect.objectContaining({ id: createdId, deleteType: 'MANUAL' })]));
@@ -628,7 +1428,7 @@ describe('Siyuan API orders', () => {
 
     await request(app.getHttpServer())
       .post(`/api/shipments/${createdId}/restore`)
-      .set('Authorization', app.auth(financeToken))
+      .set('Authorization', app.auth(adminToken))
       .send({ mode: 'MANUAL_TIME', manualCreatedAt: '2026-06-20T09:30:00.000Z', reason: '恢复验证' })
       .expect(201)
       .expect((response) => {
@@ -650,7 +1450,7 @@ describe('Siyuan API orders', () => {
               reviewStatus: 'RESTORED',
               statusFrom: 'REVIEW_PENDING',
               statusTo: 'REVIEW_PENDING',
-              reviewer: 'finance',
+              reviewer: 'admin',
               restoreReason: '恢复验证'
             })
           })
@@ -703,7 +1503,7 @@ describe('Siyuan API orders', () => {
             expect.objectContaining({
               key: 'ADMIN',
               account: 'admin',
-              permissions: expect.arrayContaining(['system:manage', 'finance:settle', 'pricing:manage'])
+              permissions: expect.arrayContaining(['system:role-permissions:save', 'finance:receivable:audit', 'pricing:markup:read'])
             }),
             expect.objectContaining({ key: 'CUSTOMER_SERVICE', account: 'service' }),
             expect.objectContaining({ key: 'OPERATOR', label: '业务员', account: 'operator' }),
@@ -721,7 +1521,7 @@ describe('Siyuan API orders', () => {
     await request(app.getHttpServer())
       .put('/api/system/roles/OPERATOR/permissions')
       .set('Authorization', app.auth(financeToken))
-      .send({ permissions: ['orders:read'] })
+      .send({ permissions: ['business:shipment:list'] })
       .expect(403);
 
     await request(app.getHttpServer())
@@ -739,7 +1539,7 @@ describe('Siyuan API orders', () => {
       .expect((response) => {
         createdRole = response.body.key;
         expect(response.body).toEqual(expect.objectContaining({ label: 'A5测试用户组', site: '深圳思远', enabled: true, systemBuiltin: false }));
-        expect(response.body.permissions).toEqual(expect.arrayContaining(['warehouse:read', 'warehouse:write']));
+        expect(response.body.permissions).toEqual(expect.arrayContaining(['warehouse:today-receipt:view', 'warehouse:dispatch-pending:view']));
       });
 
     await request(app.getHttpServer())
@@ -754,10 +1554,10 @@ describe('Siyuan API orders', () => {
     await request(app.getHttpServer())
       .put(`/api/system/roles/${createdRole}/permissions`)
       .set('Authorization', app.auth(adminToken))
-      .send({ permissions: ['workspace:access', 'warehouse:read'] })
+      .send({ permissions: ['warehouse:today-receipt:view', 'warehouse:dispatch-pending:view'] })
       .expect(200)
       .expect((response) => {
-        expect(response.body.permissions).toEqual(['workspace:access', 'warehouse:read']);
+        expect(response.body.permissions).toEqual(['warehouse:today-receipt:view', 'warehouse:dispatch-pending:view']);
       });
 
     await request(app.getHttpServer())
@@ -772,10 +1572,10 @@ describe('Siyuan API orders', () => {
     await request(app.getHttpServer())
       .put('/api/system/roles/UG_CUSTOMER_SERVICE/permissions')
       .set('Authorization', app.auth(adminToken))
-      .send({ permissions: ['orders:read', 'pricing:lookup', 'master-data:read'] })
+      .send({ permissions: ['customer-service:dashboard:view', 'pricing:lookup:view', 'master-data:customers:read'] })
       .expect(200)
       .expect((response) => {
-        expect(response.body.permissions).toEqual(['orders:read', 'pricing:lookup', 'master-data:read']);
+        expect(response.body.permissions).toEqual(['customer-service:dashboard:view', 'pricing:lookup:view', 'master-data:customers:read']);
       });
 
     await request(app.getHttpServer())
@@ -820,7 +1620,7 @@ describe('Siyuan API orders', () => {
           expect.objectContaining({
             action: 'system.role_permissions.update',
             target: 'role:UG_CUSTOMER_SERVICE',
-            after: ['orders:read', 'pricing:lookup', 'master-data:read']
+            after: ['customer-service:dashboard:view', 'pricing:lookup:view', 'master-data:customers:read']
           })
         ]));
       });
@@ -828,7 +1628,7 @@ describe('Siyuan API orders', () => {
     await request(app.getHttpServer())
       .put('/api/system/roles/UG_CUSTOMER_SERVICE/permissions')
       .set('Authorization', app.auth(adminToken))
-      .send({ permissions: ['workspace:access', 'orders:read', 'orders:write', 'tracking:read', 'tracking:write', 'problems:read', 'problems:write', 'pricing:lookup', 'master-data:read'] })
+      .send({ permissions: ['customer-service:dashboard:view', 'customer-service:problem:view', 'customer-service:problem:create', 'tracking:external:view', 'pricing:lookup:view', 'master-data:customers:read'] })
       .expect(200);
   });
 
@@ -863,6 +1663,51 @@ describe('Siyuan API orders', () => {
         expect(response.body.some((shipment: { customerOrderNo: string }) => shipment.customerOrderNo === 'CUST-NEW-001')).toBe(
           true
         );
+      });
+  });
+
+  it('uploads water receipt voucher images with readable UTF-8 file names', async () => {
+    const adminToken = await app.loginAs('admin');
+    const suffix = Date.now();
+    const tinyPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    const readableName = '水单凭证_测试.jpg';
+    const mojibakeName = Buffer.from(readableName, 'utf8').toString('latin1');
+
+    const waterReceipt = await request(app.getHttpServer())
+      .post('/api/finance/water-receipts')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        receiptMethod: '招商银行',
+        receiptDate: '2026-07-09T10:00:00.000Z',
+        amount: 188,
+        currency: 'RMB',
+        paymentNo: `VOUCHER-API-${suffix}`
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/finance/voucher-images')
+      .set('Authorization', app.auth(adminToken))
+      .field('context', 'WATER_RECEIPT')
+      .field('waterReceiptId', waterReceipt.body.id)
+      .attach('file', tinyPng, { filename: mojibakeName, contentType: 'image/png' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.fileName).toBe(readableName);
+        expect(response.body.fileName).not.toMatch(/[åæ]/);
+        expect(response.body.url).toMatch(/\/api\/uploads\/vouchers\/\d{8}-[0-9a-f-]+\.png/);
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/finance/voucher-images')
+      .set('Authorization', app.auth(adminToken))
+      .field('context', 'WATER_RECEIPT')
+      .field('waterReceiptId', waterReceipt.body.id)
+      .attach('file', Buffer.from('not an image'), { filename: '水单凭证_测试.xlsx', contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('仅支持');
       });
   });
 
@@ -1062,7 +1907,7 @@ describe('Siyuan API orders', () => {
       .expect(400);
   });
 
-  it('moves shipments through audit, routing, warehouse outbound, business data, departure, arrival, delivery, and signature', async () => {
+  it('moves shipments through customer service transfer operational ETA ETD audit, routing, warehouse outbound, business data, departure, arrival, delivery, and signature', async () => {
     const loginToken = await app.loginAs('admin');
     const operatorToken = await app.loginAs('operator');
     const warehouseToken = await app.loginAs('warehouse');
@@ -1243,7 +2088,7 @@ describe('Siyuan API orders', () => {
 
     const routed = await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/route`)
-      .set('Authorization', app.auth(operatorToken))
+      .set('Authorization', app.auth(token))
       .send({ channelId: 'ch-ups-ca', agentId: 'a-canada', agentChannelName: '加美 UPS 自动沉淀', chargeWeightKg: 12.5, unitPrice: 8, otherFee: 5, otherFeeRemark: '偏远费', currency: 'RMB' })
       .expect(201);
     expect(routed.body.status).toBe('WAITING_DISPATCH');
@@ -1461,6 +2306,15 @@ describe('Siyuan API orders', () => {
         ]));
       });
 
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/agent-data/approve`)
+      .set('Authorization', app.auth(serviceToken))
+      .send({ remark: '代理数据已核对' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.status).toBe('OUTBOUNDED');
+      });
+
     const waitingDeparture = await request(app.getHttpServer())
       .patch(`/api/shipments/${created.body.id}/operational`)
       .set('Authorization', app.auth(serviceToken))
@@ -1490,7 +2344,25 @@ describe('Siyuan API orders', () => {
     await request(app.getHttpServer())
       .post('/api/finance/payment-applications')
       .set('Authorization', app.auth(token))
-      .send({ pendingPaymentIds: [routePendingPayment.id], remark: '市场代理成本付款申请' })
+      .send({
+        pendingPaymentIds: [routePendingPayment.id],
+        remark: '市场代理成本付款申请',
+        manualBankAccount: {
+          agentName: '深圳加美代理',
+          accountName: '深圳加美代理',
+          bankName: '招商银行深圳分行',
+          bankAccountNo: '6222000000000529',
+          currency: 'RMB'
+        },
+        saveManualBankAccount: false,
+        voucher: {
+          voucherType: 'BILL',
+          fileName: 'supplier-bill.png',
+          mimeType: 'image/png',
+          sizeBytes: 1024,
+          url: '/api/uploads/payment-vouchers/supplier-bill.png'
+        }
+      })
       .expect(201)
       .expect((response) => {
         expect(response.body[0]).toEqual(expect.objectContaining({ totalAmount: 105, currency: 'RMB' }));
@@ -1516,6 +2388,13 @@ describe('Siyuan API orders', () => {
     expect(withTransferNo.body.transferNo).toBe('1Z999');
 
     const labelPng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00]);
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${created.body.id}/labels/upload`)
+      .set('Authorization', app.auth(operatorToken))
+      .field('transferNo', '1Z999')
+      .attach('file', labelPng, { filename: 'label.png', contentType: 'image/png' })
+      .expect(403);
+
     const uploadedLabel = await request(app.getHttpServer())
       .post(`/api/shipments/${created.body.id}/labels/upload`)
       .set('Authorization', app.auth(serviceToken))
@@ -1533,6 +2412,27 @@ describe('Siyuan API orders', () => {
       transferNo: '1Z999',
       latestTracking: '已上传面单'
     }));
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=shipment.label.upload')
+      .set('Authorization', app.auth(token))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              action: 'shipment.label.upload',
+              target: created.body.id,
+              actorUsername: 'service',
+              after: expect.objectContaining({
+                fileName: 'label.png',
+                transferNo: '1Z999',
+                uploadedBy: 'service'
+              })
+            })
+          ])
+        );
+      });
 
     await request(app.getHttpServer())
       .get('/api/system/audit-logs?action=shipment.operational.update')
@@ -1572,9 +2472,26 @@ describe('Siyuan API orders', () => {
       .patch(`/api/shipments/${created.body.id}/operational`)
       .set('Authorization', app.auth(token))
       .send({ status: 'DEPARTED', latestTracking: '已离港' })
-      .expect(400);
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('确认离港前必须填写 ETA 和 ETD');
+      });
 
-    const departed = await request(app.getHttpServer())
+    await request(app.getHttpServer())
+      .patch(`/api/shipments/${created.body.id}/operational`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({
+        status: 'DEPARTED',
+        latestTracking: '业务员尝试确认离港',
+        etdAt: '2026-06-06T10:00:00.000Z',
+        etaAt: '2026-06-16T10:00:00.000Z'
+      })
+      .expect(403)
+      .expect((response) => {
+        expect(response.body.message).toContain('只有客服或管理员可以确认离港');
+      });
+
+    await request(app.getHttpServer())
       .patch(`/api/shipments/${created.body.id}/operational`)
       .set('Authorization', app.auth(token))
       .send({
@@ -1583,8 +2500,32 @@ describe('Siyuan API orders', () => {
         etdAt: '2026-06-06T10:00:00.000Z',
         etaAt: '2026-06-16T10:00:00.000Z'
       })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('确认离港请填写离港批注');
+      });
+
+    const departed = await request(app.getHttpServer())
+      .patch(`/api/shipments/${created.body.id}/operational`)
+      .set('Authorization', app.auth(token))
+      .send({
+        status: 'DEPARTED',
+        latestTracking: '已离港',
+        etdAt: '2026-06-06T10:00:00.000Z',
+        etaAt: '2026-06-16T10:00:00.000Z',
+        statusRemark: '离港批注'
+      })
       .expect(200);
     expect(departed.body.status).toBe('DEPARTED');
+
+    await request(app.getHttpServer())
+      .patch(`/api/shipments/${created.body.id}/operational`)
+      .set('Authorization', app.auth(token))
+      .send({ status: 'DEPARTED', latestTracking: '重复确认离港' })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('不能重复确认离港');
+      });
 
     await request(app.getHttpServer())
       .get('/api/system/audit-logs?action=customer_service.eta.update')
@@ -1603,6 +2544,29 @@ describe('Siyuan API orders', () => {
             })
           ])
         );
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=customer_service.status.update')
+      .set('Authorization', app.auth(token))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'customer_service.status.update',
+            target: created.body.id,
+            before: expect.objectContaining({ status: 'WAITING_DEPARTURE' }),
+            after: expect.objectContaining({
+              status: 'DEPARTED',
+              statusFrom: 'WAITING_DEPARTURE',
+              statusTo: 'DEPARTED',
+              changedBy: 'admin',
+              statusRemark: '离港批注',
+              remark: '离港批注',
+              comment: '离港批注'
+            })
+          })
+        ]));
       });
 
     const departedEdited = await request(app.getHttpServer())
@@ -1638,14 +2602,14 @@ describe('Siyuan API orders', () => {
     const arrived = await request(app.getHttpServer())
       .patch(`/api/shipments/${created.body.id}/operational`)
       .set('Authorization', app.auth(token))
-      .send({ status: 'ARRIVED_PORT', latestTracking: '已到港' })
+      .send({ status: 'ARRIVED_PORT', latestTracking: '已到港', statusRemark: '到港批注' })
       .expect(200);
     expect(arrived.body.status).toBe('ARRIVED_PORT');
 
     const delivering = await request(app.getHttpServer())
       .patch(`/api/shipments/${created.body.id}/operational`)
       .set('Authorization', app.auth(token))
-      .send({ status: 'DELIVERING', latestTracking: '已派送' })
+      .send({ status: 'DELIVERING', latestTracking: '已派送', statusRemark: '派送批注' })
       .expect(200);
     expect(delivering.body.status).toBe('DELIVERING');
 
@@ -1666,7 +2630,10 @@ describe('Siyuan API orders', () => {
                 statusTo: 'DELIVERING',
                 statusAt: expect.any(String),
                 dwellHours: expect.any(Number),
-                changedBy: 'admin'
+                changedBy: 'admin',
+                statusRemark: '派送批注',
+                remark: '派送批注',
+                comment: '派送批注'
               })
             })
           ])
@@ -1733,11 +2700,17 @@ describe('Siyuan API orders', () => {
     const signed = await request(app.getHttpServer())
       .patch(`/api/shipments/${created.body.id}/operational`)
       .set('Authorization', app.auth(token))
-      .send({ status: 'SIGNED', latestTracking: '已签收' })
+      .send({ status: 'SIGNED', latestTracking: '已签收', statusRemark: '签收批注' })
       .expect(200);
     expect(signed.body.status).toBe('SIGNED');
     expect(signed.body.transferNo).toBe('1Z999');
     expect(signed.body.outboundAt).toBeTruthy();
+
+    await request(app.getHttpServer())
+      .patch(`/api/shipments/${created.body.id}/operational`)
+      .set('Authorization', app.auth(token))
+      .send({ status: 'SIGNED', latestTracking: '已签收', statusRemark: '   ' })
+      .expect(200);
 
     await request(app.getHttpServer())
       .get('/api/system/audit-logs?action=shipment.sign')
@@ -1771,7 +2744,10 @@ describe('Siyuan API orders', () => {
                 signatureConfirmedBy: 'admin',
                 signedAt: expect.any(String),
                 signatureConfirmedAt: expect.any(String),
-                transferNo: '1Z999'
+                transferNo: '1Z999',
+                statusRemark: '签收批注',
+                remark: '签收批注',
+                comment: '签收批注'
               })
             })
           ])
@@ -1823,7 +2799,7 @@ describe('Siyuan API orders', () => {
       .set('Authorization', app.auth(token))
       .send({
         customerCode: '9409',
-        receiptMethod: '同链路水单',
+        receiptMethod: '招商银行',
         receiptDate: '2026-06-06T12:00:00.000+08:00',
         amount: 120,
         currency: 'RMB',
@@ -1865,7 +2841,25 @@ describe('Siyuan API orders', () => {
     const paymentApplications = await request(app.getHttpServer())
       .post('/api/finance/payment-applications')
       .set('Authorization', app.auth(token))
-      .send({ pendingPaymentIds: [pendingPayment.id], remark: '同链路付款申请' })
+      .send({
+        pendingPaymentIds: [pendingPayment.id],
+        remark: '同链路付款申请',
+        manualBankAccount: {
+          agentName: '深圳加美代理',
+          accountName: '深圳加美代理',
+          bankName: '招商银行深圳分行',
+          bankAccountNo: '6222000000000607',
+          currency: 'RMB'
+        },
+        saveManualBankAccount: false,
+        voucher: {
+          voucherType: 'BILL',
+          fileName: 'flow-supplier-bill.png',
+          mimeType: 'image/png',
+          sizeBytes: 1024,
+          url: '/api/uploads/payment-vouchers/flow-supplier-bill.png'
+        }
+      })
       .expect(201);
     expect(paymentApplications.body).toHaveLength(1);
     const paidApplication = await request(app.getHttpServer())
@@ -2206,7 +3200,7 @@ describe('Siyuan API orders', () => {
               paymentApplicationNo: paymentApplications.body[0].applicationNo,
               currency: 'RMB',
               paymentAmount: 60,
-              payerBankAccountNo: 'FLOW-PAYER-001',
+              payerBankAccountNo: expect.stringMatching(/^\*+-001$/),
               paidBy: 'admin',
               statusFrom: 'WAITING_PAYMENT',
               statusTo: 'PAID',
@@ -2482,23 +3476,40 @@ describe('Siyuan API orders', () => {
       .post('/api/shipments/tracking-events/import')
       .set('Authorization', app.auth(token))
       .send({
+        fileName: '手动轨迹导入.xlsx',
+        rawRowCount: 3,
+        failedRowCount: 1,
+        unmatchedOrderNos: ['MISS-TRACK-001'],
         updates: [
           {
             shipmentId: created.body.id,
             customerOrderNo: 'BACKEND-ACTION-001',
             trackingDate: '2026-06-08T10:00:00.000Z',
+            latestTracking: '批量轨迹已揽收'
+          },
+          {
+            shipmentId: created.body.id,
+            customerOrderNo: 'SYBACKENDACTION001',
+            trackingDate: '2026/06/09 11:30:00',
             latestTracking: '批量轨迹已签收'
           }
         ]
       })
       .expect(201)
       .expect((response) => {
+	        expect(response.body.importedCount).toBe(1);
+	        expect(response.body.importedRowCount).toBe(2);
+	        expect(response.body.failedRowCount).toBe(1);
+	        expect(response.body.unmatchedCount).toBe(1);
+	        expect(response.body.affectedShipmentCount).toBe(1);
         expect(response.body.updated).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
-              id: created.body.id,
-              latestTracking: '批量轨迹已签收',
-              trackingStaleDays: 0
+	              id: created.body.id,
+	              latestTracking: '批量轨迹已签收',
+	              latestTrackingUpdatedAt: expect.any(String),
+	              trackingStaleDays: 0,
+	              status: 'DRAFT'
             })
           ])
         );
@@ -2512,14 +3523,37 @@ describe('Siyuan API orders', () => {
         expect(response.body).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
-              id: created.body.id,
-              latestTracking: '批量轨迹已签收',
-              paymentAmountUsd: 128,
-              paymentAmountCny: 927.36,
-              paymentMethod: '对公'
+	              id: created.body.id,
+	              latestTracking: '批量轨迹已签收',
+	              latestTrackingUpdatedAt: expect.any(String),
+	              status: 'DRAFT'
             })
           ])
         );
+        const row = response.body.find((shipment: { id: string }) => shipment.id === created.body.id);
+        expect(row).not.toHaveProperty('paymentAmountUsd');
+        expect(row).not.toHaveProperty('paymentAmountCny');
+        expect(row).not.toHaveProperty('paymentMethod');
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=tracking.manual_import')
+      .set('Authorization', app.auth(token))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows[0]).toEqual(expect.objectContaining({
+          action: 'tracking.manual_import',
+          target: 'shipments/tracking-events/import',
+          after: expect.objectContaining({
+            fileName: '手动轨迹导入.xlsx',
+            rawRowCount: 3,
+	            successCount: 1,
+	            successRowCount: 2,
+            failedRowCount: 1,
+            unmatchedCount: 1,
+            affectedShipmentCount: 1
+          })
+        }));
       });
   });
 
@@ -2648,9 +3682,9 @@ describe('Siyuan API orders', () => {
           expect.objectContaining({
             action: 'security.permission.denied',
             actorUsername: 'warehouse',
-            target: expect.stringContaining('/api/shipments/s-seed-2/problem-tickets'),
+            target: 'SERVER customer-service granular action',
             result: 'FAILED',
-            after: expect.objectContaining({ permissions: ['problems:write'] })
+            after: expect.objectContaining({ permissions: expect.arrayContaining(['customer-service:problem:create']) })
           })
         ]));
       });
@@ -2835,7 +3869,23 @@ describe('Siyuan API orders', () => {
       .set('Authorization', app.auth(adminToken))
       .expect(200)
       .expect((response) => {
-        expect(response.body.enabled).toBe(false);
+        expect(response.body).toEqual(expect.objectContaining({ id: staffAccount.body.id, enabled: true }));
+      });
+    await request(app.getHttpServer())
+      .get('/api/system/staff-accounts?keyword=a5staff2')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: staffAccount.body.id })]));
+      });
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=system.staff.delete&pageSize=20')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ action: 'system.staff.delete', target: `user:${staffAccount.body.id}`, after: expect.objectContaining({ hardDelete: true }) })
+        ]));
       });
 
     const rSalesLogin = await request(app.getHttpServer()).post('/api/auth/login').send({ username: 'R-sales', password: 'R-sales@123' }).expect(201);
@@ -2907,7 +3957,8 @@ describe('Siyuan API orders', () => {
       .send({ code: '7777', name: 'M7-Test', customerSource: '展会' })
       .expect(201)
       .expect((response) => {
-        expect(response.body).toEqual(expect.objectContaining({ code: '7777', customerSource: '展会', salesperson: 'admin' }));
+        expect(response.body).toEqual(expect.objectContaining({ code: '7777', customerSource: '展会' }));
+        expect(response.body.salesperson).toBeUndefined();
       });
 
     const customerContact = await request(app.getHttpServer())
@@ -3072,7 +4123,8 @@ describe('Siyuan API orders', () => {
         warehouseAddress3: '深圳三号仓',
         warehouseContact: 'M7仓库',
         invoiceTemplateName: 'M7发票模板.xlsx',
-        invoiceTemplateUrl: '/templates/m7-invoice.xlsx'
+        invoiceTemplateUrl: '/templates/m7-invoice.xlsx',
+        trackingWebsite: 'https://track.m7.example?no={transferNo}'
       })
       .expect(201)
       .expect((response) => {
@@ -3085,8 +4137,40 @@ describe('Siyuan API orders', () => {
           warehouseAddress3: '深圳三号仓',
           warehouseContact: 'M7仓库',
           invoiceTemplateName: 'M7发票模板.xlsx',
-          invoiceTemplateUrl: '/templates/m7-invoice.xlsx'
+          invoiceTemplateUrl: '/templates/m7-invoice.xlsx',
+          trackingWebsite: 'https://track.m7.example?no={transferNo}'
         }));
+      });
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(financeToken))
+      .send({ code: 'NOAUTH', shortName: '无权代理', name: '无权代理', trackingWebsite: 'https://noauth.example/{transferNo}' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .put(`/api/master-data/agents/${agent.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        code: 'M7A',
+        shortName: 'M7代理',
+        name: 'M7 Agent Ltd.',
+        warehouseAddress1: '深圳一号仓',
+        warehouseAddress2: '深圳二号仓',
+        warehouseAddress3: '深圳三号仓',
+        warehouseContact: 'M7仓库',
+        invoiceTemplateName: 'M7发票模板.xlsx',
+        invoiceTemplateUrl: '/templates/m7-invoice.xlsx',
+        trackingWebsite: 'https://track.m7.example/detail/{transferNo}'
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.trackingWebsite).toBe('https://track.m7.example/detail/{transferNo}');
+      });
+    await request(app.getHttpServer())
+      .get(`/api/system/audit-logs?target=${agent.body.id}&pageSize=5`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([expect.objectContaining({ action: 'master_data.agent.update', target: agent.body.id })]));
       });
     await request(app.getHttpServer())
       .post('/api/master-data/agent-invoice-template/upload')
@@ -3534,6 +4618,394 @@ describe('Siyuan API orders', () => {
       .expect(403);
   });
 
+  it('rejects duplicate master data agent short names on create and update', async () => {
+    const adminToken = await app.loginAs('admin');
+
+    const firstAgent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'UNQ1', shortName: 'Unique Agent', name: '唯一代理一' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'UNQ2', shortName: ' unique agent ', name: '唯一代理二' })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('代理简称“unique agent”已存在');
+      });
+
+    const secondAgent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'UNQ3', shortName: '另一个代理', name: '唯一代理三' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .put(`/api/master-data/agents/${secondAgent.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'UNQ3', shortName: 'Unique Agent', name: '唯一代理三' })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .put(`/api/master-data/agents/${firstAgent.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'UNQ1', shortName: 'Unique Agent', name: '唯一代理一更新' })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.shortName).toBe('Unique Agent');
+      });
+  });
+
+  it('keeps new master data agents first by createdAt and batch disables selected agents with permission audit', async () => {
+    const adminToken = await app.loginAs('admin');
+    const financeToken = await app.loginAs('finance');
+
+    const firstAgent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'BAT1', shortName: '批量代理一', name: '批量代理一' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ shortName: '批量代理一', createdAt: expect.any(String), enabled: true }));
+        expect(Number.isNaN(Date.parse(response.body.createdAt))).toBe(false);
+      });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const secondAgent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'BAT2', shortName: '批量代理二', name: '批量代理二' })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ shortName: '批量代理二', createdAt: expect.any(String), enabled: true }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body[0]).toEqual(expect.objectContaining({ id: secondAgent.body.id, createdAt: secondAgent.body.createdAt }));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents/batch-enabled')
+      .set('Authorization', app.auth(financeToken))
+      .send({ ids: [firstAgent.body.id, secondAgent.body.id], enabled: false })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents/batch-enabled')
+      .set('Authorization', app.auth(adminToken))
+      .send({ ids: [firstAgent.body.id, secondAgent.body.id], enabled: false })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body.successCount).toBe(2);
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: firstAgent.body.id, enabled: false }),
+          expect.objectContaining({ id: secondAgent.body.id, enabled: false })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=master_data.agent.update&pageSize=50')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ target: firstAgent.body.id, before: expect.objectContaining({ enabled: true }), after: expect.objectContaining({ enabled: false }) }),
+          expect.objectContaining({ target: secondAgent.body.id, before: expect.objectContaining({ enabled: true }), after: expect.objectContaining({ enabled: false }) })
+        ]));
+      });
+  });
+
+  it('physically deletes unreferenced master data agents and blocks referenced agents with audit', async () => {
+    const adminToken = await app.loginAs('admin');
+    const financeToken = await app.loginAs('finance');
+
+    const firstAgent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'HD1', shortName: '物理删除一', name: '物理删除一' })
+      .expect(201);
+    const secondAgent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'HD2', shortName: '物理删除二', name: '物理删除二' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents/batch-delete')
+      .set('Authorization', app.auth(financeToken))
+      .send({ ids: [firstAgent.body.id] })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents/batch-delete')
+      .set('Authorization', app.auth(adminToken))
+      .send({ ids: [firstAgent.body.id, secondAgent.body.id] })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          successCount: 2,
+          hardDelete: true,
+          failures: []
+        }));
+        expect(response.body.deletedAgents).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: firstAgent.body.id, shortName: '物理删除一' }),
+          expect.objectContaining({ id: secondAgent.body.id, shortName: '物理删除二' })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).not.toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: firstAgent.body.id }),
+          expect.objectContaining({ id: secondAgent.body.id })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=master_data.agent.delete&pageSize=20')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'master_data.agent.delete',
+            before: expect.objectContaining({
+              agents: expect.arrayContaining([expect.objectContaining({ id: firstAgent.body.id })])
+            }),
+            after: expect.objectContaining({
+              deletedCount: 2,
+              agentIds: expect.arrayContaining([firstAgent.body.id, secondAgent.body.id]),
+              agentShortNames: expect.arrayContaining(['物理删除一', '物理删除二']),
+              hardDelete: true
+            })
+          })
+        ]));
+      });
+
+    const referencedAgent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'HDR', shortName: '引用代理', name: '引用代理' })
+      .expect(201);
+    const unreferencedAgent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'HDU', shortName: '无引用代理', name: '无引用代理' })
+      .expect(201);
+    const importedPriceBook = await request(app.getHttpServer())
+      .post('/api/pricing/books/import')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        fileName: '引用代理价格表.xlsx',
+        targetModule: 'amazon',
+        agentId: referencedAgent.body.id,
+        agentShortName: '引用代理',
+        rows: [
+          { agentName: 'Excel代理', channelName: '引用代理 DHL', destinationCountry: '美国', minWeightKg: 0, maxWeightKg: 100, costPerKg: 10, currency: 'RMB' }
+        ]
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents/batch-delete')
+      .set('Authorization', app.auth(adminToken))
+      .send({ ids: [referencedAgent.body.id, unreferencedAgent.body.id] })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toContain('代理资料存在业务引用，不能删除');
+        expect(response.body.message).toContain('引用代理（价格表引用');
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: referencedAgent.body.id, enabled: true }),
+          expect.objectContaining({ id: unreferencedAgent.body.id, enabled: true })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .delete(`/api/pricing/books/${importedPriceBook.body.book.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post('/api/master-data/agents/batch-delete')
+      .set('Authorization', app.auth(adminToken))
+      .send({ ids: [referencedAgent.body.id, unreferencedAgent.body.id] })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({ successCount: 2, hardDelete: true }));
+      });
+  });
+
+  it('physically deletes unreferenced master data channels and categories while preserving referenced rows', async () => {
+    const adminToken = await app.loginAs('admin');
+    const financeToken = await app.loginAs('finance');
+
+    const carrier = await request(app.getHttpServer())
+      .post('/api/master-data/carriers')
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '删除语义承运商' })
+      .expect(201);
+    const category = await request(app.getHttpServer())
+      .post('/api/master-data/channel-categories')
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '删除语义类别' })
+      .expect(201);
+    const channel = await request(app.getHttpServer())
+      .post('/api/master-data/channels')
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '删除语义公司渠道', carrierId: carrier.body.id, category: category.body.name })
+      .expect(201);
+    const agent = await request(app.getHttpServer())
+      .post('/api/master-data/agents')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'DELACH', shortName: '删除渠道代理', name: '删除渠道代理' })
+      .expect(201);
+    const agentChannel = await request(app.getHttpServer())
+      .post('/api/master-data/agent-channels')
+      .set('Authorization', app.auth(adminToken))
+      .send({ agentId: agent.body.id, channelName: '删除语义代理渠道' })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .delete(`/api/master-data/agent-channels/${agentChannel.body.id}`)
+      .set('Authorization', app.auth(financeToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .delete(`/api/master-data/channel-categories/${category.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(400)
+      .expect((response) => expect(response.body.message).toContain('公司渠道引用'));
+
+    await request(app.getHttpServer())
+      .delete(`/api/master-data/agent-channels/${agentChannel.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => expect(response.body).toEqual(expect.objectContaining({ id: agentChannel.body.id, enabled: true })));
+    await request(app.getHttpServer())
+      .delete(`/api/master-data/channels/${channel.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => expect(response.body).toEqual(expect.objectContaining({ id: channel.body.id, enabled: true })));
+    await request(app.getHttpServer())
+      .delete(`/api/master-data/channel-categories/${category.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => expect(response.body).toEqual(expect.objectContaining({ id: category.body.id, enabled: true })));
+
+    const referencedCategory = await request(app.getHttpServer())
+      .post('/api/master-data/channel-categories')
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '受引用删除语义类别' })
+      .expect(201);
+    const referencedChannel = await request(app.getHttpServer())
+      .post('/api/master-data/channels')
+      .set('Authorization', app.auth(adminToken))
+      .send({ name: '受引用删除语义公司渠道', carrierId: carrier.body.id, category: referencedCategory.body.name })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post('/api/master-data/fuel-rates')
+      .set('Authorization', app.auth(adminToken))
+      .send({ channelId: referencedChannel.body.id, rate: 0.1, activeAt: '2026-07-10T00:00:00.000Z' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .delete(`/api/master-data/channels/${referencedChannel.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .expect(400)
+      .expect((response) => expect(response.body.message).toContain('燃油费率引用'));
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=master_data.&pageSize=50')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({ action: 'master_data.agent_channel.delete', target: agentChannel.body.id }),
+          expect.objectContaining({ action: 'master_data.channel.delete', target: channel.body.id }),
+          expect.objectContaining({ action: 'master_data.channel_category.delete', target: category.body.id })
+        ]));
+      });
+  });
+
+  it('assigns a customer to an enabled salesperson and scopes existing and future shipments by the assignment', async () => {
+    const adminToken = await app.loginAs('admin');
+    const operatorToken = await app.loginAs('operator');
+    const suffix = Date.now();
+    const code = `ASG${suffix}`;
+    const customer = await request(app.getHttpServer())
+      .post('/api/master-data/customers')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code, name: '客户归属测试', defaultSettlementMethod: 'RMB月结' })
+      .expect(201)
+      .expect((response) => expect(response.body.salesperson).toBeUndefined());
+
+    const existingShipment = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', app.auth(adminToken))
+      .send(shipmentInput({ customerId: customer.body.id, customerOrderNo: `ASG-OLD-${suffix}` }))
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .put(`/api/master-data/customers/${customer.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ code, name: '客户归属测试', salesperson: 'operator', defaultSettlementMethod: 'RMB月结' })
+      .expect(200)
+      .expect((response) => expect(response.body.salesperson).toBe('operator'));
+
+    await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.arrayContaining([
+          expect.objectContaining({ id: existingShipment.body.id, salesperson: 'operator' })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', app.auth(adminToken))
+      .send(shipmentInput({ customerId: customer.body.id, customerOrderNo: `ASG-NEW-${suffix}` }))
+      .expect(201)
+      .expect((response) => expect(response.body.salesperson).toBe('operator'));
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=master_data.customer.assign_salesperson&pageSize=20')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'master_data.customer.assign_salesperson',
+            target: customer.body.id,
+            after: expect.objectContaining({ salesperson: 'operator', affectedShipmentCount: 1 })
+          })
+        ]));
+      });
+
+    await request(app.getHttpServer())
+      .put(`/api/master-data/customers/${customer.body.id}`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ code, name: '客户归属测试', salesperson: 'admin', defaultSettlementMethod: 'RMB月结' })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toContain('启用状态的业务员账号'));
+  });
+
   it('lets business users maintain only their own customer master data', async () => {
     const rSalesLogin = await request(app.getHttpServer()).post('/api/auth/login').send({ username: 'R-sales', password: 'R-sales@123' }).expect(201);
     const rSalesToken = rSalesLogin.body.accessToken as string;
@@ -3560,6 +5032,15 @@ describe('Siyuan API orders', () => {
         expect(response.body.agents).toEqual([]);
         expect(response.body.agentChannels).toEqual([]);
       });
+
+    await request(app.getHttpServer())
+      .get('/api/master-data/agents')
+      .set('Authorization', app.auth(rSalesToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .get('/api/master-data/agent-channels')
+      .set('Authorization', app.auth(rSalesToken))
+      .expect(403);
 
     const ownCustomer = await request(app.getHttpServer())
       .post('/api/master-data/customers')

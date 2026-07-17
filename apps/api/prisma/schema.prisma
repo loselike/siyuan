@@ -45,13 +45,31 @@ model User {
   phone        String?
   gender       String?
   nickname     String?
+  departmentId String?
   site         String?
   mustChangePassword Boolean @default(false)
   enabled      Boolean  @default(true)
   createdAt    DateTime @default(now())
   role         Role     @relation(fields: [roleId], references: [id])
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   customer     Customer? @relation(fields: [customerId], references: [id])
   loginLogs    LoginLog[]
+  moduleReadStates UserModuleReadState[]
+}
+
+model UserModuleReadState {
+  id         String   @id @default(cuid())
+  userId     String
+  moduleKey  String
+  sectionKey String   @default("")
+  readAt     DateTime @default(now())
+  watermark  DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, moduleKey, sectionKey])
+  @@index([userId, moduleKey])
 }
 
 model Role {
@@ -77,6 +95,7 @@ model Department {
   id      String @id @default(cuid())
   name    String
   enabled Boolean @default(true)
+  users   User[]
 }
 
 model Customer {
@@ -130,6 +149,8 @@ model Agent {
   warehouseContact String?
   invoiceTemplateName String?
   invoiceTemplateUrl String?
+  trackingWebsite String?
+  createdAt DateTime @default(now())
   enabled   Boolean    @default(true)
   shipments Shipment[]
   bankAccounts AgentBankAccount[]
@@ -208,6 +229,9 @@ model Shipment {
   sensitive           Boolean           @default(false)
   cargoType           String?
   volumeCbm           Decimal?
+  actualWeightKg      Decimal?
+  cargoDataSource     String            @default("AUTO_MATCHED")
+  chargeWeightOverridden Boolean         @default(false)
   settlementMethod    String?
   tradeTerms          String?
   fbaInboundNo        String?
@@ -335,7 +359,15 @@ model TrackingEvent {
   status             String
   happenedAt         DateTime
   visibleToCustomer  Boolean  @default(true)
+  location           String?
+  carrier            String?
+  transferNo         String?
+  rawContent         String?
+  source             String   @default("MANUAL_ENTRY")
+  kind               String   @default("LOGISTICS")
   shipment           Shipment @relation(fields: [shipmentId], references: [id])
+
+  @@index([shipmentId, kind, happenedAt])
 }
 
 model ProblemTicket {
@@ -346,8 +378,28 @@ model ProblemTicket {
   customerVisible    Boolean        @default(true)
   createdAt          DateTime       @default(now())
   closedAt           DateTime?
+  closedBy           String?
+  closeReason        String?
+  assistanceReason   String?
+  assistanceAt       DateTime?
+  tagSnapshot        Json?
   shipment           Shipment       @relation(fields: [shipmentId], references: [id])
   replies            ProblemReply[]
+}
+
+model CommonTag {
+  id                     String   @id @default(cuid())
+  name                   String
+  scene                  String
+  enabled                Boolean  @default(true)
+  customerVisibleAllowed Boolean  @default(true)
+  sortOrder              Int      @default(0)
+  createdBy              String?
+  updatedBy              String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+  @@unique([scene, name])
+  @@index([scene, enabled, sortOrder])
 }
 
 model ProblemReply {
@@ -398,14 +450,92 @@ model PricingRule {
 }
 
 model PriceBook {
-  id         String         @id @default(cuid())
-  fileName   String
-  remark     String?
-  importedAt DateTime       @default(now())
-  deletedAt  DateTime?
-  rows       PriceBookRow[]
+  id                 String         @id @default(cuid())
+  fileName           String
+  agentId            String?
+  agentShortName     String?
+  targetModule       String?
+  remark             String?
+  // The parser/normalizer revision used to build the current rows. A new
+  // revision is rebuilt from the retained original file by the background
+  // worker; it never requires an operator to upload the workbook again.
+  parserRuleVersion  Int            @default(0)
+  refreshStatus      String         @default("CURRENT")
+  lastRuleRefreshAt  DateTime?
+  importedAt         DateTime       @default(now())
+  deletedAt          DateTime?
+  rows               PriceBookRow[]
+  legacySources      LegacyPricingSource[]
 
-  @@index([deletedAt, importedAt])
+  @@index([deletedAt, targetModule, importedAt])
+  @@index([deletedAt, targetModule, parserRuleVersion])
+}
+
+model PriceBookImportJob {
+  id             String    @id @default(cuid())
+  fileName       String
+  agentId        String?
+  agentShortName String?
+  status         String    @default("PENDING")
+  filePath       String?
+  priceBookId    String?
+  targetModule   String?
+  // IMPORT is the user upload flow. RULE_REFRESH is an idempotent,
+  // server-side rebuild from the retained original workbook.
+  kind           String    @default("IMPORT")
+  parserRuleVersion Int?
+  dedupeKey      String?   @unique
+  totalRows      Int       @default(0)
+  processedRows  Int       @default(0)
+  failedRows     Int       @default(0)
+  message        String?
+  errorSummary   Json?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  completedAt    DateTime?
+
+  @@index([status, createdAt])
+  @@index([priceBookId])
+  @@index([kind, status, createdAt])
+}
+
+model DubaiPriceDisplayVersion {
+  id           String   @id @default(cuid())
+  priceBookId  String?
+  originalName String
+  status       String   @default("PROCESSING")
+  isActive     Boolean  @default(false)
+  isActiveAir  Boolean  @default(false)
+  isActiveSea  Boolean  @default(false)
+  salesSafe    Boolean  @default(false)
+  message      String?
+  unassignedSheets Json?
+  createdBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  pages        DubaiPriceDisplayPage[]
+
+  @@index([isActive, status, createdAt])
+  @@index([isActiveAir, status, updatedAt])
+  @@index([isActiveSea, status, updatedAt])
+  @@index([priceBookId])
+}
+
+model DubaiPriceDisplayPage {
+  id        String   @id @default(cuid())
+  versionId String
+  mode      String
+  sheetName String
+  pageNo    Int
+  fileName  String
+  mimeType  String   @default("image/png")
+  sizeBytes Int
+  createdAt DateTime @default(now())
+  version   DubaiPriceDisplayVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@unique([versionId, sheetName, pageNo])
+  @@index([versionId, mode, sheetName, pageNo])
 }
 
 model PriceBookRow {
@@ -419,6 +549,7 @@ model PriceBookRow {
   realChannelName    String?
   warehouseCode      String?
   destinationCountry String
+  postalRule        String?
   minWeightKg        Decimal
   maxWeightKg        Decimal
   costPerKg          Decimal
@@ -434,11 +565,15 @@ model PriceBookRow {
 
   @@index([priceBookId])
   @@index([destinationCountry, minWeightKg, maxWeightKg])
+  @@index([destinationCountry, postalRule])
   @@index([warehouseCode, destinationCountry])
+  @@index([priceBookId, destinationCountry, minWeightKg])
+  @@index([destinationCountry, warehouseCode, minWeightKg])
 }
 
 model LegacyPricingSource {
   id         String             @id @default(cuid())
+  priceBookId String?
   module     String
   fileName   String
   rowCount   Int                @default(0)
@@ -447,8 +582,10 @@ model LegacyPricingSource {
   importedAt DateTime           @default(now())
   deletedAt  DateTime?
   rows       LegacyPricingRow[]
+  priceBook  PriceBook?         @relation(fields: [priceBookId], references: [id])
 
   @@index([module, deletedAt, importedAt])
+  @@index([priceBookId, deletedAt])
 }
 
 model LegacyPricingRow {
@@ -477,10 +614,19 @@ model LegacyPricingRow {
   @@index([module, agentName])
   @@index([module, warehouseCode])
   @@index([module, destinationCountry])
+  @@index([sourceId, module])
+  @@index([sourceId, agentName, minWeightKg])
+  @@index([sourceId, channelName])
+  @@index([sourceId, destinationCountry, minWeightKg])
+  @@index([module, destinationCountry, minWeightKg])
+  @@index([module, agentName, minWeightKg])
+  @@index([module, warehouseCode, minWeightKg])
 }
 
 model AgentMarkupRule {
   id                 String   @id @default(cuid())
+  legacyModule       String?
+  priceBookId        String?
   agentName          String
   channelName        String?
   realChannelName    String?
@@ -488,14 +634,84 @@ model AgentMarkupRule {
   markupPerKg        Decimal
   markupType         String   @default("WEIGHT")
   markupValue        Decimal  @default(0)
+  markupUnit         String?
+  minChargeableValue Decimal?
+  maxChargeableValue Decimal?
   priority           Int      @default(100)
   enabled            Boolean  @default(true)
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
   deletedAt          DateTime?
 
+  @@index([legacyModule, priceBookId, agentName, enabled, deletedAt])
+  @@index([legacyModule, agentName, enabled, deletedAt])
+  @@index([priceBookId, agentName, enabled, deletedAt])
   @@index([agentName, enabled, deletedAt])
+  @@index([legacyModule, agentName, channelName, markupUnit, enabled, deletedAt])
   @@index([priority])
+}
+
+model AgentChannelCustomRemark {
+  id              String   @id @default(cuid())
+  legacyModule    String
+  agentName       String
+  channelName     String
+  realChannelName String?
+  content         String
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([legacyModule, agentName, channelName])
+  @@index([legacyModule, agentName, channelName, enabled])
+}
+
+model SouthAfricaRateImage {
+  id           String    @id @default(cuid())
+  fileName     String
+  originalName String
+  mimeType     String
+  sizeBytes    Int
+  storagePath  String?
+  url          String?
+  uploadedBy   String?
+  createdAt    DateTime  @default(now())
+  deletedAt    DateTime?
+
+  @@index([deletedAt, createdAt])
+}
+
+model SouthAfricaRateRule {
+  id            String    @id @default(cuid())
+  category      String
+  name          String
+  keywords      String[]
+  ratePerCbm    Decimal?
+  consult       Boolean   @default(false)
+  remark        String?
+  sourceImageId String?
+  enabled       Boolean   @default(true)
+  createdBy     String?
+  updatedBy     String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  deletedAt     DateTime?
+
+  @@index([enabled, deletedAt])
+  @@index([category, name])
+}
+
+model SouthAfricaLookupPendingReview {
+  id             String   @id @default(cuid())
+  productName    String
+  volumeCbm      Decimal
+  actualWeightKg Decimal?
+  packageInfo    String?
+  createdBy      String?
+  status         String   @default("PENDING")
+  createdAt      DateTime @default(now())
+
+  @@index([status, createdAt])
 }
 
 model WarehousePackage {
@@ -536,6 +752,9 @@ model WarehousePackage {
   remark                    String?
   manualException           String?
   scanSource                String?
+  measurementStatus         String    @default("MEASURED")
+  measurementMatchedAt      DateTime?
+  measurementMatchedBy      String?
   status                    String    @default("RECEIVED")
   exceptions                String[]
   createdBy                 String?
@@ -549,6 +768,7 @@ model WarehousePackage {
   @@index([combinedOrderNo])
   @@index([archivedByPackageId])
   @@index([tallyTaskId])
+  @@index([labelNo, measurementStatus])
 }
 
 model WarehouseConsolidation {
@@ -695,6 +915,8 @@ model ShipmentFinanceItem {
   reconciliationStatus String   @default("PENDING")
   receivedAmount       Decimal  @default(0)
   receiptStatus        String   @default("UNPAID")
+  receiptMatchSource   String?
+  receiptMatchHint     String?
   receivedAt           DateTime?
   agentName            String?
   chargeWeightKg       Decimal?
@@ -1002,6 +1224,7 @@ model WaterReceiptMatch {
   receivableFinanceItemId  String
   shipmentId               String
   amount                   Decimal
+  source                   String   @default("MANUAL")
   voided                   Boolean  @default(false)
   voidedAt                 DateTime?
   voidedBy                 String?

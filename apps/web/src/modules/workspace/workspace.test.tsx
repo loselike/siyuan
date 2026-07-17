@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { cleanup, employeeShipments, renderAndLogin, shipment } from '../testSupport/appTestHarness';
+import { formatLinePoolPackageSummary } from '../operations/OperationsPage';
 
 async function openOrderManagement(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
@@ -23,6 +24,92 @@ async function openMarketFulfillment(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('Workspace flows', () => {
+  it('renders legacy package summaries with missing numeric fields safely', () => {
+    const legacyRow = {
+      shipment: { packageCount: undefined, agentWeightKg: undefined, chargeableWeightKg: undefined, receivableWeightKg: undefined, weightKg: undefined },
+      packageSummary: { packageCount: undefined, totalWeightKg: undefined, totalCbm: undefined, domesticTrackingNos: undefined }
+    } as unknown as Parameters<typeof formatLinePoolPackageSummary>[0];
+
+    expect(formatLinePoolPackageSummary(legacyRow)).toBe('—件 / —kg / —方');
+  });
+
+  it('导航支持稳定链接并能从 URL 恢复对应二级页', async () => {
+    window.history.replaceState(null, '', '/app/pricing/quote');
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    const pricingNav = await screen.findByRole('menuitem', { name: '报价查价' });
+    expect(pricingNav).toHaveAttribute('href', '/app/pricing');
+    expect(await screen.findByRole('heading', { name: '报价查价中心' })).toBeInTheDocument();
+
+    const quoteNav = await screen.findByRole('button', { name: '查价' });
+    expect(quoteNav).toHaveAttribute('href', '/app/pricing/quote');
+    expect(window.location.pathname).toBe('/app/pricing/quote');
+
+    const priceBooksNav = document.querySelector<HTMLAnchorElement>('a[href="/app/pricing/price-books"]');
+    expect(priceBooksNav).not.toBeNull();
+    expect(priceBooksNav).toHaveClass('side-sub-nav-item');
+    await user.click(priceBooksNav!);
+    await waitFor(() => expect(window.location.pathname).toBe('/app/pricing/price-books'));
+
+    let ctrlClickPreventedByApp: boolean | undefined;
+    const preventJsdomNavigation = (event: MouseEvent) => {
+      ctrlClickPreventedByApp = event.defaultPrevented;
+      event.preventDefault();
+    };
+    document.addEventListener('click', preventJsdomNavigation);
+    fireEvent.click(priceBooksNav!, { ctrlKey: true });
+    document.removeEventListener('click', preventJsdomNavigation);
+    expect(ctrlClickPreventedByApp).toBe(false);
+    expect(window.location.pathname).toBe('/app/pricing/price-books');
+
+    window.history.replaceState(null, '', '/app/pricing/quote');
+    window.dispatchEvent(new PopStateEvent('popstate'));
+    await waitFor(() => expect(screen.getByRole('button', { name: '查价' })).toHaveAttribute('aria-current', 'page'));
+
+    cleanup();
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('无权限 URL 会回退到当前账号可访问模块', async () => {
+    window.history.replaceState(null, '', '/app/finance/pending-payment');
+    await renderAndLogin('service', 'service123');
+
+    await waitFor(() => expect(window.location.pathname).toBe('/app/customer-service'));
+    expect(screen.queryByRole('menuitem', { name: '财务管理' })).not.toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: '客服管理' })).toBeInTheDocument();
+
+    cleanup();
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('shows a module unread increment and clears the current section after entry', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+    await user.click(screen.getByRole('menuitem', { name: '客服管理' }));
+    const pendingRoutingNav = await screen.findByRole('button', { name: '待排货' });
+    expect(pendingRoutingNav.querySelector('.side-sub-nav-unread-count')).toHaveTextContent('1');
+    await user.click(pendingRoutingNav);
+    await waitFor(() => expect(pendingRoutingNav.querySelector('.side-sub-nav-unread-count')).toBeNull());
+  });
+
+  it('shows and clears unread increments for business and market work queues', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
+    const pendingReviewNav = await screen.findByRole('button', { name: '待审核运单' });
+    expect(pendingReviewNav.querySelector('.side-sub-nav-unread-count')).toHaveTextContent('1');
+    await user.click(pendingReviewNav);
+    await waitFor(() => expect(pendingReviewNav.querySelector('.side-sub-nav-unread-count')).toBeNull());
+
+    await user.click(screen.getByRole('menuitem', { name: '市场管理' }));
+    const pendingRoutingNav = await screen.findByRole('button', { name: '待排货' });
+    expect(pendingRoutingNav.querySelector('.side-sub-nav-unread-count')).toHaveTextContent('1');
+    await user.click(pendingRoutingNav);
+    await waitFor(() => expect(pendingRoutingNav.querySelector('.side-sub-nav-unread-count')).toBeNull());
+  });
+
   it('logs in staff and loads API shipments into the existing workspace', async () => {
     const user = userEvent.setup();
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('');
@@ -52,7 +139,7 @@ describe('Workspace flows', () => {
     expect(screen.getByRole('button', { name: /数据确认\s+\d+/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /转单号\s+\d+/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /售后\s+\d+/ })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('搜索客户 / 运单号 / 转单号 / 渠道 / 代理')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('搜索客户 / 运单号 / 快递号 / 转单号 / 渠道 / 代理')).toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: /全\s*部/ }).at(-1)!);
     await user.click(screen.getByRole('button', { name: '查询' }));
     expect(await screen.findByText('SYGJ06061230001')).toBeInTheDocument();
@@ -68,6 +155,8 @@ describe('Workspace flows', () => {
     expect(within(detailDialog).getByRole('tab', { name: '基本信息' })).toBeInTheDocument();
     expect(within(detailDialog).getByRole('tab', { name: '单件明细' })).toBeInTheDocument();
     expect(within(detailDialog).getByRole('tab', { name: '费用明细' })).toBeInTheDocument();
+    expect(within(detailDialog).getByRole('tab', { name: '内部轨迹' })).toBeInTheDocument();
+    expect(within(detailDialog).getByRole('tab', { name: '物流轨迹' })).toBeInTheDocument();
     expectDetailText('客户单号');
     expect(within(detailDialog).getByText('RCV-0606')).toBeInTheDocument();
     expectDetailText('渠道');
@@ -78,7 +167,7 @@ describe('Workspace flows', () => {
     expectDetailText('转单号');
     expectDetailText('目的地');
     expectDetailText('代理');
-    expectDetailText('最新轨迹');
+    expectDetailText('最新物流轨迹');
     expectDetailText('状态');
     expectDetailText('时效');
     expectDetailText('备注');
@@ -108,6 +197,22 @@ describe('Workspace flows', () => {
     expect(within(transferRow).getByRole('button', { name: 'SYGJ05291344165' })).toBeInTheDocument();
     expect(within(transferRow).getByRole('button', { name: /详\s*情/ })).toBeInTheDocument();
     expect(promptSpy).not.toHaveBeenCalled();
+  });
+
+  it('专线运单池支持按运单号搜索并可重置关键字', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    const searchInput = await screen.findByPlaceholderText('搜索客户 / 运单号 / 快递号 / 转单号 / 渠道 / 代理');
+    await user.clear(searchInput);
+    await user.type(searchInput, 'SYGJ06061230001');
+    await user.click(screen.getByRole('button', { name: '查询' }));
+
+    expect(await screen.findByText('SYGJ06061230001')).toBeInTheDocument();
+    expect(screen.queryByText('SYGJ06061230002')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '重置' }));
+    expect(searchInput).toHaveValue('');
   });
 
   it('returns to the operations workspace when staff clicks the brand logo', async () => {
@@ -175,8 +280,8 @@ describe('Workspace flows', () => {
     expect(screen.queryByLabelText('代理')).not.toBeInTheDocument();
     await user.clear(screen.getByLabelText('客户单号'));
     await user.type(screen.getByLabelText('客户单号'), 'TEST-ORDER-001');
-    await user.clear(screen.getByLabelText('系统单号'));
-    await user.type(screen.getByLabelText('系统单号'), 'SYTEST0606001');
+    await user.clear(screen.getByLabelText('出货单号'));
+    await user.type(screen.getByLabelText('出货单号'), 'SYTEST0606001');
     await user.clear(screen.getByLabelText('目的地'));
     await user.type(screen.getByLabelText('目的地'), '德国');
     expect(screen.queryByLabelText('承运商')).not.toBeInTheDocument();
@@ -205,8 +310,8 @@ describe('Workspace flows', () => {
     expect(await screen.findByRole('dialog', { name: '新建出货订单' })).toBeInTheDocument();
     await user.clear(screen.getByLabelText('客户单号'));
     await user.type(screen.getByLabelText('客户单号'), 'CUSTOM-CHANNEL-001');
-    await user.clear(screen.getByLabelText('系统单号'));
-    await user.type(screen.getByLabelText('系统单号'), 'SYCUSTOM0606001');
+    await user.clear(screen.getByLabelText('出货单号'));
+    await user.type(screen.getByLabelText('出货单号'), 'SYCUSTOM0606001');
     await user.click(screen.getByRole('button', { name: '创建订单' }));
     expect(await screen.findByText('SYCUSTOM0606001')).toBeInTheDocument();
     expect(screen.getAllByText('快递').length).toBeGreaterThan(0);
@@ -293,8 +398,8 @@ describe('Workspace flows', () => {
     expect(await screen.findByRole('dialog', { name: '新建出货订单' })).toBeInTheDocument();
     await user.clear(screen.getByLabelText('客户单号'));
     await user.type(screen.getByLabelText('客户单号'), 'REJECT-ORDER-001');
-    await user.clear(screen.getByLabelText('系统单号'));
-    await user.type(screen.getByLabelText('系统单号'), 'SYREJECT0606001');
+    await user.clear(screen.getByLabelText('出货单号'));
+    await user.type(screen.getByLabelText('出货单号'), 'SYREJECT0606001');
     await user.click(screen.getByRole('button', { name: '创建订单' }));
 
     const reviewRow = await screen.findByRole('row', { name: /SYREJECT0606001/ });
@@ -397,13 +502,14 @@ describe('Workspace flows', () => {
 
     await user.click(screen.getByRole('menuitem', { name: '物流轨迹管理' }));
     expect(await screen.findByRole('heading', { name: '轨迹监控中心' })).toBeInTheDocument();
+    await user.click(screen.getAllByRole('button', { name: '承运商任务' })[0]);
     expect(screen.getAllByText('承运商任务').length).toBeGreaterThan(0);
     expect(screen.getAllByText('SYGJ05291344165').length).toBeGreaterThan(0);
     expect(screen.getAllByText('SYGJ06061230003').length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole('button', { name: '同步轨迹' }));
     expect(await screen.findByText('轨迹同步成功：DHL 已揽收 9064656160')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: /最新轨迹/ }));
+    await user.click(screen.getByRole('button', { name: /外部物流轨迹/ }));
     expect(screen.getByText('DHL 已揽收 9064656160')).toBeInTheDocument();
   });
 
@@ -413,6 +519,7 @@ describe('Workspace flows', () => {
     await renderAndLogin('admin', 'admin123');
 
     await user.click(screen.getByRole('menuitem', { name: '物流轨迹管理' }));
+    await user.click(screen.getAllByRole('button', { name: '承运商任务' })[0]);
     expect(await screen.findByText('模拟承运商接口失败')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /重\s*试/ }));
@@ -423,6 +530,38 @@ describe('Workspace flows', () => {
     await renderAndLogin('customer', 'customer123');
     expect(screen.queryByRole('button', { name: '同步轨迹' })).not.toBeInTheDocument();
     expect(screen.queryByText('承运商任务')).not.toBeInTheDocument();
+  });
+
+  it('keeps 物流轨迹管理 最新轨迹导入入口 scoped by 权限', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('service', 'service123');
+    await user.click(screen.getByRole('menuitem', { name: '物流轨迹管理' }));
+    expect(await screen.findByRole('heading', { name: '轨迹监控中心' })).toBeInTheDocument();
+    expect(screen.getByText('导入轨迹')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '手动添加轨迹' })).not.toBeInTheDocument();
+
+    cleanup();
+    localStorage.clear();
+    await renderAndLogin('operator', 'operator123');
+    await user.click(screen.getByRole('menuitem', { name: '物流轨迹管理' }));
+    expect(await screen.findByRole('heading', { name: '轨迹监控中心' })).toBeInTheDocument();
+    expect(screen.queryByText('导入轨迹')).not.toBeInTheDocument();
+    expect(screen.queryByText('手动添加轨迹')).not.toBeInTheDocument();
+
+    cleanup();
+    localStorage.clear();
+    await renderAndLogin('warehouse', 'warehouse123');
+    await user.click(screen.getByRole('menuitem', { name: '物流轨迹管理' }));
+    expect(await screen.findByRole('heading', { name: '轨迹监控中心' })).toBeInTheDocument();
+    expect(screen.queryByText('导入轨迹')).not.toBeInTheDocument();
+    expect(screen.queryByText('手动添加轨迹')).not.toBeInTheDocument();
+
+    cleanup();
+    localStorage.clear();
+    await renderAndLogin('customer', 'customer123');
+    expect(screen.queryByRole('menuitem', { name: '物流轨迹管理' })).not.toBeInTheDocument();
+    expect(screen.queryByText('手动添加轨迹')).not.toBeInTheDocument();
+    expect(screen.queryByText('导入轨迹')).not.toBeInTheDocument();
   });
 
 
@@ -454,7 +593,7 @@ describe('Workspace flows', () => {
     await openMarketFulfillment(user);
     expect(screen.getAllByText('待排货').length).toBeGreaterThan(0);
     expect(screen.getAllByText('客户编号').length).toBeGreaterThan(0);
-    expect(screen.queryByText('系统单号 / 转单号')).not.toBeInTheDocument();
+    expect(screen.queryByText('出货单号 / 转单号')).not.toBeInTheDocument();
     expect(screen.queryByText('渠道 / 代理')).not.toBeInTheDocument();
     expect(screen.getAllByText('运单号').length).toBeGreaterThan(0);
     expect(screen.getAllByText('代理').length).toBeGreaterThan(0);
@@ -535,8 +674,8 @@ describe('Workspace flows', () => {
     expect(await screen.findByRole('dialog', { name: '新建出货订单' })).toBeInTheDocument();
     await user.clear(screen.getByLabelText('客户单号'));
     await user.type(screen.getByLabelText('客户单号'), 'ROUTE-DRAFT-001');
-    await user.clear(screen.getByLabelText('系统单号'));
-    await user.type(screen.getByLabelText('系统单号'), 'SYDRAFTROUTE001');
+    await user.clear(screen.getByLabelText('出货单号'));
+    await user.type(screen.getByLabelText('出货单号'), 'SYDRAFTROUTE001');
     await user.click(screen.getByRole('button', { name: '创建订单' }));
     expect(await screen.findByText('SYDRAFTROUTE001')).toBeInTheDocument();
 

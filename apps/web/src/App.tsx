@@ -1,8 +1,7 @@
-import type { ChangeEvent, Key, ReactNode } from 'react';
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import type { ChangeEvent, ErrorInfo, Key, MouseEvent, ReactNode } from 'react';
+import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Badge,
   Button,
   Card,
   Checkbox,
@@ -22,7 +21,6 @@ import {
   Select,
   Space,
   Statistic,
-  Table,
   Tabs,
   Tag,
   Typography
@@ -77,6 +75,8 @@ import {
   type PayableAuditCreateInput,
   type PayableAuditSummary,
   type PayableAuditUpdateInput,
+  type PayableFeeSummary,
+  type BusinessCostFeeSummary,
   type ReceivableAuditCreateInput,
   type ReceivableAuditSummary,
   type ReceivableFeeSummary,
@@ -85,6 +85,9 @@ import {
   type ShipmentFinanceDetailSummary,
   type ShipmentPaymentUpdateInput,
   type ShipmentPaymentMethod,
+  type ShipmentReviewDetailSummary,
+  type ShipmentReviewEventSummary,
+  type ShipmentLogisticsTrackingEventSummary,
   type StaffGender,
   type StaffRoleKey,
   type StaffMenuKey,
@@ -93,7 +96,7 @@ import {
   type WarehousePackageStatus,
   type WarehousePackageSummary
 } from '@siyuan/shared';
-import { ApiClient, type AiAssistResponse, type LoginLogSummary, type PermissionKey, type Principal, type ProfileUpdateInput, type RoleKey, type Session } from './apiClient';
+import { ApiClient, type AiAssistResponse, type PermissionKey, type Principal, type ProfileUpdateInput, type RoleKey, type Session } from './apiClient';
 import { LoginPage } from './modules/auth/LoginPage';
 import {
   appTheme,
@@ -103,13 +106,17 @@ import {
   demoOperationalNow,
   editableShipmentStatuses,
   emptyMasterData,
-  getFulfillmentAuditStageCount,
+  getShipmentLifecycleStageCount,
+  getStaffModuleHref,
+  getStaffSectionHref,
   getRouteCategory,
   importCheckRows,
   isShipmentColumnOrderMode,
   menuItems,
   modulePageConfigs,
   passwordStrengthRule,
+  parseStaffAppRoute,
+  resolveStaffSectionKey,
   routingFulfillmentStages,
   sanitizeShipmentColumnOrder,
   sanitizeHiddenShipmentColumns,
@@ -137,9 +144,10 @@ import { OrderFeePanel } from './modules/finance/orderFee/OrderFeePanel';
 import { OperationsPage } from './modules/operations/OperationsPage';
 import {
   OrdersPage,
-  orderAuditStages,
+  lifecycleStatusColor,
+  orderLifecycleStages,
   type EditShipmentOperationalFormValues,
-  type OrdersAuditStageKey,
+  type OrdersLifecycleStageKey,
   type OutboundOrderFormValues,
   type ShipmentPaymentFormValues
 } from './modules/orders/OrdersPage';
@@ -161,11 +169,98 @@ import { TrackingPage } from './modules/tracking/TrackingPage';
 import { loadExcel } from './modules/shared/excel';
 import { formatTrackingImportDate, parseBulkTrackingWorkbook, readFileAsArrayBuffer } from './modules/tracking/bulkImport';
 import { formatBeijingDateTime, formatCurrency, formatUsd } from './modules/shared/format';
-import { MetricCard, StatusTag, createNoticeMessage, renderFilterActions, renderFilterField, renderNoticeBar, riskLabel, riskWeight, tenRowTablePagination } from './modules/shared/ui';
+import { ManagedTable, MetricCard, StatusTag, createNoticeMessage, renderFilterActions, renderFilterField, renderNoticeBar, riskLabel, riskWeight, tenRowTablePagination } from './modules/shared/ui';
+import { clientReleaseId } from './releaseInfo';
 
 const CustomerServicePage = lazy(() => import('./modules/customerService/CustomerServicePage').then((module) => ({ default: module.CustomerServicePage })));
 const FinancePage = lazy(() => import('./modules/finance/FinancePage').then((module) => ({ default: module.FinancePage })));
 const WarehousePage = lazy(() => import('./modules/warehouse/WarehousePage').then((module) => ({ default: module.WarehousePage })));
+
+type PageRenderErrorReport = {
+  errorId: string;
+  route: string;
+  releaseId: string;
+  menuKey: string;
+  sectionKey?: string;
+  message: string;
+  stack?: string;
+  componentStack?: string;
+};
+
+function createPageRenderErrorId() {
+  return `render-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+class AppPageErrorBoundary extends Component<{
+  children: ReactNode;
+  resetKey: string;
+  menuKey: string;
+  sectionKey?: string;
+  onReport: (report: PageRenderErrorReport) => void;
+}, { error: Error | null; errorId: string | null }> {
+  state = { error: null as Error | null, errorId: null as string | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error, errorId: createPageRenderErrorId() };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Sunny page render failed', error, info);
+    this.props.onReport({
+      errorId: this.state.errorId ?? createPageRenderErrorId(),
+      route: window.location.pathname,
+      releaseId: clientReleaseId,
+      menuKey: this.props.menuKey,
+      sectionKey: this.props.sectionKey,
+      message: error.message,
+      stack: error.stack,
+      componentStack: info.componentStack ?? undefined
+    });
+  }
+
+  componentDidUpdate(previousProps: { resetKey: string }) {
+    if (previousProps.resetKey !== this.props.resetKey && this.state.error) {
+      this.setState({ error: null, errorId: null });
+    }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <Card className="app-page-recovery-card">
+          <Space direction="vertical" size={12}>
+            <Alert
+              type="error"
+              showIcon
+              message="页面加载失败"
+              description={this.state.errorId ? `当前模块渲染异常，已拦截白屏。错误编号：${this.state.errorId}；请重试加载，若仍出现请把该编号反馈给管理员。` : '当前模块渲染异常，已拦截白屏。请重试加载，或刷新页面后继续操作。'}
+            />
+            <Space wrap>
+              <Button htmlType="button" type="primary" onClick={() => this.setState({ error: null, errorId: null })}>
+                重试加载
+              </Button>
+              <Button htmlType="button" onClick={() => window.location.reload()}>
+                刷新页面
+              </Button>
+            </Space>
+          </Space>
+        </Card>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function PageLoadingFallback() {
+  return (
+    <Card className="app-page-loading-card">
+      <Space direction="vertical" size={8}>
+        <Text strong>模块加载中</Text>
+        <Text type="secondary">正在准备当前页面，请稍候。</Text>
+      </Space>
+    </Card>
+  );
+}
 
 
 const { Header, Sider, Content } = Layout;
@@ -184,7 +279,14 @@ interface ShipmentOperationLog {
 }
 
 type ShipmentLogViewMode = 'operation' | 'routing';
-type ShipmentEditSource = 'operation' | 'routing';
+type ShipmentEditSource = 'operation' | 'operationsPool' | 'routing';
+type PendingRoutingDeleteFormValues = {
+  reason?: string;
+};
+
+function formatNavigationUnreadCount(count: number) {
+  return count > 999 ? '999+' : String(count);
+}
 
 export function App() {
   const [outboundOrderForm] = Form.useForm<OutboundOrderFormValues>();
@@ -192,18 +294,22 @@ export function App() {
   const [editShipmentForm] = Form.useForm<EditShipmentOperationalFormValues>();
   const [shipmentPaymentForm] = Form.useForm<ShipmentPaymentFormValues>();
   const [routingAssignmentForm] = Form.useForm<RoutingAssignmentFormValues>();
+  const [pendingRoutingDeleteForm] = Form.useForm<PendingRoutingDeleteFormValues>();
   const [session, setSession] = useState<Session | null>(() => {
     const raw = localStorage.getItem('siyuan-session');
     return raw ? (JSON.parse(raw) as Session) : null;
   });
+  const [requestedAppRoute, setRequestedAppRoute] = useState(() => parseStaffAppRoute(window.location.pathname));
+  const pendingNavigationRouteRef = useRef<ReturnType<typeof parseStaffAppRoute>>(null);
   const [activeMenuKey, setActiveMenuKey] = useState<MenuKey>('workspace');
   const [expandedMenuKey, setExpandedMenuKey] = useState<MenuKey | null>('workspace');
   const [sidebarSubNav, setSidebarSubNav] = useState<SidebarSubNavState | null>(null);
+  const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['navigationUnreadBadges']>>['items']>([]);
   const businessType: BusinessType = 'DEDICATED_LINE';
   const [selectedStatus, setSelectedStatus] = useState<ShipmentStatus | 'ALL'>('ALL');
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState('shipmentPool');
   const [activeFulfillmentSection, setActiveFulfillmentSection] = useState('stageBoard');
-  const [selectedFulfillmentStage, setSelectedFulfillmentStage] = useState<OrdersAuditStageKey>('all');
+  const [selectedFulfillmentStage, setSelectedFulfillmentStage] = useState<OrdersLifecycleStageKey>('all');
   const [selectedRoutingStage, setSelectedRoutingStage] = useState<RoutingStageKey>('all');
   const [shipmentColumnOrderMode, setShipmentColumnOrderMode] = useState<ShipmentColumnOrderMode>(() => {
     const saved = localStorage.getItem(shipmentColumnOrderStorageKey);
@@ -244,27 +350,31 @@ export function App() {
   const [editingShipment, setEditingShipment] = useState<Shipment | null>(null);
   const [editingShipmentSource, setEditingShipmentSource] = useState<ShipmentEditSource>('operation');
   const [routingAssignmentShipment, setRoutingAssignmentShipment] = useState<Shipment | null>(null);
+  const [pendingRoutingApprovalShipment, setPendingRoutingApprovalShipment] = useState<Shipment | null>(null);
+  const [pendingRoutingDeleteShipment, setPendingRoutingDeleteShipment] = useState<Shipment | null>(null);
   const [collectingShipment, setCollectingShipment] = useState<Shipment | null>(null);
   const [detailViewingShipment, setDetailViewingShipment] = useState<Shipment | null>(null);
   const [shipmentFinanceDetails, setShipmentFinanceDetails] = useState<Record<string, ShipmentFinanceDetailSummary>>({});
   const [shipmentFinanceLoading, setShipmentFinanceLoading] = useState(false);
+  const [shipmentReviewDetails, setShipmentReviewDetails] = useState<Record<string, ShipmentReviewDetailSummary>>({});
+  const [shipmentReviewDetailLoading, setShipmentReviewDetailLoading] = useState(false);
   const [pendingShipmentPayment, setPendingShipmentPayment] = useState<{
     shipment: Shipment;
     input: ShipmentPaymentUpdateInput;
   } | null>(null);
   const [logViewingShipment, setLogViewingShipment] = useState<Shipment | null>(null);
   const [logViewingMode, setLogViewingMode] = useState<ShipmentLogViewMode>('operation');
-  const [bulkTrackingOpen, setBulkTrackingOpen] = useState(false);
   const [bulkTrackingFileName, setBulkTrackingFileName] = useState<string | null>(null);
   const [bulkTrackingRows, setBulkTrackingRows] = useState<BulkTrackingImportRow[]>([]);
   const [bulkTrackingResult, setBulkTrackingResult] = useState<BulkTrackingImportResult | null>(null);
   const [bulkTrackingError, setBulkTrackingError] = useState<string | null>(null);
+  const [bulkTrackingImporting, setBulkTrackingImporting] = useState(false);
   const [customerServiceInitialSection, setCustomerServiceInitialSection] = useState('service-dashboard');
+  const [prefillOrderEntryPackageIds, setPrefillOrderEntryPackageIds] = useState<string[]>([]);
   const [aiResult, setAiResult] = useState<AiResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [personalCenterOpen, setPersonalCenterOpen] = useState(false);
-  const [loginLogs, setLoginLogs] = useState<LoginLogSummary[]>([]);
-  const [loginLogsLoading, setLoginLogsLoading] = useState(false);
+  const [logoutConfirmOpen, setLogoutConfirmOpen] = useState(false);
   const [passwordForm] = Form.useForm();
   const [profileForm] = Form.useForm<ProfileUpdateInput>();
   const [forcePasswordForm] = Form.useForm();
@@ -277,8 +387,17 @@ export function App() {
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
     [session?.accessToken]
   );
+  const reportPageRenderError = useCallback((report: PageRenderErrorReport) => {
+    void apiClient.reportPageRenderError(report).catch(() => undefined);
+  }, [apiClient]);
   const settlementMethodRows = useMemo(() => getSettlementMethodRows(settlementCatalogItems), [settlementCatalogItems]);
   const settlementMethodOptions = useMemo(() => createSettlementMethodOptions(settlementMethodRows), [settlementMethodRows]);
+  function openOrderEntryFromWarehouse(packageIds: string[]) {
+    const ids = Array.from(new Set(packageIds.map((id) => id.trim()).filter(Boolean)));
+    if (!ids.length) return;
+    setPrefillOrderEntryPackageIds(ids);
+    navigateToAppRoute('business', 'finance-entry');
+  }
   const visibleMenuKeys = useMemo(
     () => (session && session.user.role !== 'CUSTOMER' ? getVisibleStaffMenuKeysByPermissions(session.permissions ?? [], session.user.role) : []),
     [session]
@@ -287,6 +406,10 @@ export function App() {
     () => menuItems.filter((item) => visibleMenuKeys.includes(item.key)),
     [visibleMenuKeys]
   );
+  const navigationUnreadByKey = useMemo(
+    () => new Map(navigationUnreadBadges.map((item) => [`${item.moduleKey}:${item.sectionKey ?? ''}`, item.unreadCount])),
+    [navigationUnreadBadges]
+  );
   const currentMenuKey = useMemo<MenuKey>(
     () =>
       session && session.user.role !== 'CUSTOMER' && visibleMenuKeys.includes(activeMenuKey)
@@ -294,6 +417,7 @@ export function App() {
         : visibleMenuKeys[0] ?? 'workspace',
     [activeMenuKey, session, visibleMenuKeys]
   );
+  const activeSectionKey = sidebarSubNav?.parentKey === currentMenuKey ? sidebarSubNav.activeKey : undefined;
   const registerSidebarSubNav = useCallback(
     (state: Omit<SidebarSubNavState, 'parentKey' | 'signature'>) => {
       const signature = getModuleSubNavSignature(state.items);
@@ -329,18 +453,34 @@ export function App() {
     }),
     [clearSidebarSubNav, currentMenuKey, registerSidebarSubNav]
   );
-  const handlePrimaryMenuClick = (key: MenuKey) => {
+  const navigateToAppRoute = useCallback((menuKey: MenuKey, sectionKey?: string) => {
+    const href = getStaffSectionHref(menuKey, sectionKey);
+    const route = parseStaffAppRoute(href) ?? { menuKey, sectionKey };
+    pendingNavigationRouteRef.current = route;
+    if (window.location.pathname !== href) {
+      window.history.pushState(null, '', href);
+    }
+    setRequestedAppRoute(route);
     setNotice(null);
-    if (key === 'customerService') {
+    if (menuKey === 'customerService' && !sectionKey) {
       setCustomerServiceInitialSection('service-dashboard');
     }
-    setActiveMenuKey(key);
-    setExpandedMenuKey((current) => (currentMenuKey === key && current === key ? null : key));
-  };
+    setActiveMenuKey(menuKey);
+    setExpandedMenuKey(menuKey);
+  }, [setNotice]);
+  const handlePrimaryMenuClick = useCallback((event: MouseEvent<HTMLAnchorElement>, key: MenuKey) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigateToAppRoute(key);
+  }, [navigateToAppRoute]);
+  const handleSecondaryMenuClick = useCallback((event: MouseEvent<HTMLAnchorElement>, menuKey: MenuKey, sectionKey: string, onChange: (key: string) => void) => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigateToAppRoute(menuKey, sectionKey);
+    onChange(sectionKey);
+  }, [navigateToAppRoute]);
   const handleBrandClick = () => {
-    setNotice(null);
-    setActiveMenuKey('workspace');
-    setExpandedMenuKey('workspace');
+    navigateToAppRoute('workspace', 'shipmentPool');
     setActiveWorkspaceSection('shipmentPool');
   };
   const canViewShipmentFinanceDetail = session?.user.role === 'ADMIN' || session?.user.role === 'FINANCE' || session?.user.role === 'OPERATOR';
@@ -362,17 +502,142 @@ export function App() {
     if (!session || session.user.mustChangePassword) {
       return;
     }
-    void refreshWorkspace(apiClient);
+    void refreshWorkspace(apiClient, session.user, session.permissions ?? []);
   }, [apiClient, session]);
+
+  useEffect(() => {
+    if (!session || session.user.role === 'CUSTOMER') {
+      setNavigationUnreadBadges([]);
+      return;
+    }
+    let cancelled = false;
+    apiClient.navigationUnreadBadges().then((response) => {
+      if (!cancelled) setNavigationUnreadBadges(response.items);
+    }).catch(() => {
+      if (!cancelled) setNavigationUnreadBadges([]);
+    });
+    return () => { cancelled = true; };
+  }, [apiClient, session]);
+
+  useEffect(() => {
+    if (!session || session.user.role === 'CUSTOMER' || !sidebarSubNav || sidebarSubNav.parentKey !== currentMenuKey) return;
+    const sectionKey = sidebarSubNav.activeKey;
+    void apiClient.markNavigationRead({ moduleKey: currentMenuKey, sectionKey }).then(() => {
+      setNavigationUnreadBadges((current) => current.map((item) => {
+        if (item.moduleKey === currentMenuKey && item.sectionKey === sectionKey) return { ...item, unreadCount: 0, displayCount: '0' };
+        if (item.moduleKey === currentMenuKey && !item.sectionKey) {
+          const childTotal = current
+            .filter((child) => child.moduleKey === currentMenuKey && child.sectionKey && child.sectionKey !== sectionKey)
+            .reduce((total, child) => total + child.unreadCount, 0);
+          return { ...item, unreadCount: childTotal, displayCount: childTotal > 999 ? '999+' : String(childTotal) };
+        }
+        return item;
+      }));
+    }).catch(() => undefined);
+  }, [apiClient, currentMenuKey, session, sidebarSubNav]);
 
   useEffect(() => {
     if (!session || session.user.role === 'CUSTOMER') {
       return;
     }
-    if (!visibleMenuKeys.includes(activeMenuKey)) {
-      setActiveMenuKey(visibleMenuKeys[0] ?? 'workspace');
+    const requestedMenuKey = requestedAppRoute?.menuKey;
+    const nextMenuKey = requestedMenuKey && visibleMenuKeys.includes(requestedMenuKey)
+      ? requestedMenuKey
+      : visibleMenuKeys[0] ?? 'workspace';
+    if (activeMenuKey !== nextMenuKey) {
+      setActiveMenuKey(nextMenuKey);
     }
-  }, [activeMenuKey, session, visibleMenuKeys]);
+    if (requestedMenuKey && !visibleMenuKeys.includes(requestedMenuKey)) {
+      const fallbackHref = getStaffModuleHref(nextMenuKey);
+      if (window.location.pathname !== fallbackHref) {
+        window.history.replaceState(null, '', fallbackHref);
+      }
+      setRequestedAppRoute({ menuKey: nextMenuKey });
+      setNotice('当前账号无权限访问该模块，已跳转至可访问模块。');
+    }
+  }, [activeMenuKey, requestedAppRoute, session, setNotice, visibleMenuKeys]);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      const route = parseStaffAppRoute(window.location.pathname);
+      pendingNavigationRouteRef.current = route;
+      setRequestedAppRoute(route);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Browser location is the navigation source of truth. This also repairs a
+  // stale in-memory menu after a failed render before a module has mounted its
+  // secondary navigation, which previously allowed URL and rendered module to
+  // describe different pages.
+  useEffect(() => {
+    if (!session || session.user.role === 'CUSTOMER') return;
+    const route = parseStaffAppRoute(window.location.pathname);
+    if (!route || route.menuKey === currentMenuKey) return;
+    pendingNavigationRouteRef.current = route;
+    setRequestedAppRoute(route);
+    setActiveMenuKey(route.menuKey);
+  }, [currentMenuKey, session]);
+
+  useEffect(() => {
+    const targetRoute = pendingNavigationRouteRef.current ?? requestedAppRoute;
+    if (!session || session.user.role === 'CUSTOMER' || !targetRoute?.sectionKey) return;
+    if (targetRoute.menuKey !== currentMenuKey || sidebarSubNav?.parentKey !== currentMenuKey) return;
+    const sectionKey = resolveStaffSectionKey(
+      currentMenuKey,
+      targetRoute.sectionKey,
+      sidebarSubNav.items.map((item) => item.key)
+    );
+    if (sectionKey && sectionKey !== sidebarSubNav.activeKey) {
+      sidebarSubNav.onChange(sectionKey);
+      return;
+    }
+    if (sectionKey === sidebarSubNav.activeKey) {
+      pendingNavigationRouteRef.current = null;
+      return;
+    }
+    if (!sectionKey) {
+      pendingNavigationRouteRef.current = null;
+      const href = getStaffSectionHref(currentMenuKey, sidebarSubNav.activeKey);
+      if (window.location.pathname !== href) {
+        window.history.replaceState(null, '', href);
+      }
+      setRequestedAppRoute({ menuKey: currentMenuKey, sectionKey: sidebarSubNav.activeKey });
+    }
+  }, [currentMenuKey, requestedAppRoute, session, sidebarSubNav]);
+
+  useEffect(() => {
+    if (!session || session.user.role === 'CUSTOMER' || sidebarSubNav?.parentKey !== currentMenuKey) return;
+    const pendingRoute = pendingNavigationRouteRef.current;
+    if (pendingRoute?.menuKey === currentMenuKey && !pendingRoute.sectionKey) {
+      pendingNavigationRouteRef.current = null;
+    }
+    const pendingSectionKey = pendingRoute?.menuKey === currentMenuKey
+      ? resolveStaffSectionKey(currentMenuKey, pendingRoute.sectionKey, sidebarSubNav.items.map((item) => item.key))
+      : undefined;
+    if (pendingSectionKey && pendingSectionKey !== sidebarSubNav.activeKey) {
+      return;
+    }
+    if (pendingSectionKey === sidebarSubNav.activeKey) {
+      pendingNavigationRouteRef.current = null;
+    }
+    const href = getStaffSectionHref(currentMenuKey, sidebarSubNav.activeKey);
+    const requestedSectionKey = requestedAppRoute?.menuKey === currentMenuKey ? requestedAppRoute.sectionKey : undefined;
+    const resolvedRequestedSection = resolveStaffSectionKey(
+      currentMenuKey,
+      requestedSectionKey,
+      sidebarSubNav.items.map((item) => item.key)
+    );
+    if (resolvedRequestedSection && resolvedRequestedSection !== sidebarSubNav.activeKey) {
+      return;
+    }
+    if (resolvedRequestedSection === sidebarSubNav.activeKey && window.location.pathname === href) {
+      return;
+    }
+    window.history.replaceState(null, '', href);
+    setRequestedAppRoute({ menuKey: currentMenuKey, sectionKey: sidebarSubNav.activeKey });
+  }, [currentMenuKey, requestedAppRoute, session, sidebarSubNav]);
 
   useEffect(() => {
     if (!session || session.user.role === 'CUSTOMER') {
@@ -433,6 +698,26 @@ export function App() {
     };
   }, [apiClient, canViewShipmentFinanceDetail, detailViewingShipment, shipmentFinanceDetails]);
 
+  useEffect(() => {
+    if (!detailViewingShipment || shipmentReviewDetails[detailViewingShipment.id]) {
+      return;
+    }
+    let cancelled = false;
+    setShipmentReviewDetailLoading(true);
+    apiClient
+      .shipmentReviewDetail(detailViewingShipment.id)
+      .then((detail) => {
+        if (!cancelled) setShipmentReviewDetails((current) => ({ ...current, [detail.shipment.id]: detail }));
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setShipmentReviewDetailLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, detailViewingShipment, shipmentReviewDetails]);
+
   async function reloadShipmentFinanceDetail(shipmentId: string) {
     setShipmentFinanceLoading(true);
     try {
@@ -482,27 +767,34 @@ export function App() {
     forcePasswordForm.resetFields();
   }
 
-  async function refreshWorkspace(client = apiClient, user = session?.user) {
-    const canReadFinance = user?.role === 'ADMIN' || user?.role === 'FINANCE' || user?.role === 'CUSTOMER';
-    const canReadBusinessCosts = user?.role === 'ADMIN' || user?.role === 'FINANCE' || user?.role === 'OPERATOR';
-    const canReadInternalFinance = user?.role === 'ADMIN' || user?.role === 'FINANCE';
-    const canReadCarrierTasks = user?.role === 'ADMIN' || user?.role === 'CUSTOMER_SERVICE' || user?.role === 'OPERATOR' || user?.role === 'WAREHOUSE';
-    const canReadMasterData = user?.role === 'ADMIN' || user?.role === 'CUSTOMER_SERVICE' || user?.role === 'OPERATOR' || user?.role === 'FINANCE';
-    const canReadProblems = user?.role === 'ADMIN' || user?.role === 'CUSTOMER_SERVICE' || user?.role === 'OPERATOR' || user?.role === 'CUSTOMER';
+  async function refreshWorkspace(client = apiClient, user = session?.user, permissions = session?.permissions ?? []) {
+    const permissionSet = new Set(permissions);
+    const canReadFinance = permissions.some((permission) => permission.startsWith('finance:'));
+    const canReadBusinessCosts = permissionSet.has('finance:business-cost:read');
+    const canReadInternalFinance = permissionSet.has('finance:payable:read');
+    const canReadCarrierTasks = permissionSet.has('tracking:carrier-task:view') && user?.role !== 'CUSTOMER';
+    const canReadMasterData = permissions.some((permission) => permission.startsWith('master-data:') && permission.endsWith(':read'));
+    const canReadProblems = permissionSet.has('customer-service:problem:view');
+    const canReadBusinessShipments = permissionSet.has('business:shipment:list');
+    const canReadWarehouseDispatch = permissionSet.has('warehouse:dispatch-pending:view') || permissionSet.has('warehouse:outbounded:view');
     const [nextShipments, nextTickets] = await Promise.all([
-      client.shipments(),
+      canReadBusinessShipments
+        ? client.shipments()
+        : canReadWarehouseDispatch
+          ? client.warehouseDispatchShipments()
+          : Promise.resolve([]),
       canReadProblems ? client.problemTickets() : Promise.resolve([])
     ]);
     setLocalShipments(nextShipments);
     setProblemTickets(nextTickets);
     if (canReadFinance || canReadBusinessCosts) {
       const [nextReceivables, nextBusinessCosts, nextPayables, nextStatements, nextAccounts, nextLedger] = await Promise.all([
-        canReadFinance ? client.receivableAudits({ pageSize: 100 }) : Promise.resolve({ rows: [] }),
-        canReadBusinessCosts ? client.businessCostAudits({ pageSize: 100 }) : Promise.resolve({ rows: [] }),
-        canReadInternalFinance ? client.payableAudits({ pageSize: 100 }) : Promise.resolve({ rows: [] }),
-        canReadFinance ? client.customerStatements() : Promise.resolve([]),
-        canReadFinance ? client.customerAccounts() : Promise.resolve([]),
-        canReadFinance ? client.accountLedger() : Promise.resolve([])
+        canReadFinance ? client.receivableAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+        canReadBusinessCosts ? client.businessCostAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+        canReadInternalFinance ? client.payableAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+        canReadFinance ? client.customerStatements().catch(() => []) : Promise.resolve([]),
+        canReadFinance ? client.customerAccounts().catch(() => []) : Promise.resolve([]),
+        canReadFinance ? client.accountLedger().catch(() => []) : Promise.resolve([])
       ]);
       setReceivables(nextReceivables.rows);
       setBusinessCostAudits(nextBusinessCosts.rows);
@@ -538,20 +830,23 @@ export function App() {
     const nextSession = await apiClient.login(username, password, captchaId, captchaCode);
     localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
     setSession(nextSession);
-    setActiveMenuKey(getVisibleStaffMenuKeysByPermissions(nextSession.permissions ?? [], nextSession.user.role)[0] ?? 'workspace');
+    const visibleKeys = getVisibleStaffMenuKeysByPermissions(nextSession.permissions ?? [], nextSession.user.role);
+    setActiveMenuKey(
+      requestedAppRoute?.menuKey && visibleKeys.includes(requestedAppRoute.menuKey)
+        ? requestedAppRoute.menuKey
+        : visibleKeys[0] ?? 'workspace'
+    );
     setPersonalCenterOpen(false);
     const requiresPasswordChange = Boolean(nextSession.user.mustChangePassword);
     setForcePasswordChangeOpen(requiresPasswordChange);
     setForcePasswordChangeError(null);
-    setLoginLogs([]);
-    setLoginLogsLoading(false);
     setAiResult(null);
     setNotice(null);
     if (requiresPasswordChange) {
       return;
     }
     const loginClient = new ApiClient(() => nextSession.accessToken, handleUnauthorized);
-    await refreshWorkspace(loginClient, nextSession.user);
+    await refreshWorkspace(loginClient, nextSession.user, nextSession.permissions ?? []);
   }
 
   async function openPersonalCenter() {
@@ -567,12 +862,6 @@ export function App() {
       });
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '个人资料加载失败');
-    }
-    setLoginLogsLoading(true);
-    try {
-      setLoginLogs(await apiClient.loginLogs());
-    } finally {
-      setLoginLogsLoading(false);
     }
   }
 
@@ -609,7 +898,7 @@ export function App() {
       if (session) {
         const nextUser = { ...session.user, mustChangePassword: false };
         mergeSessionUser(nextUser);
-        await refreshWorkspace(apiClient, nextUser);
+        await refreshWorkspace(apiClient, nextUser, session.permissions ?? []);
       }
       setNotice('密码已修改，可以继续使用系统');
     } catch (error) {
@@ -715,32 +1004,32 @@ export function App() {
   const fulfillmentStageSummary = summarizeFulfillmentStages(localShipments, 'ALL');
   const fulfillmentAuditMetricCards = [
     {
-      title: '待审核',
-      value: getFulfillmentAuditStageCount(businessShipments, 'reviewing'),
-      extra: '新建出货订单待确认',
+      title: '全部运单',
+      value: getShipmentLifecycleStageCount(businessShipments, 'all'),
+      extra: '本人全生命周期运单',
       icon: <ClipboardCheck />
     },
     {
-      title: '审核通过',
-      value: getFulfillmentAuditStageCount(businessShipments, 'approved'),
-      extra: '可进入后续仓库/排货流程',
+      title: '仓内待出',
+      value: getShipmentLifecycleStageCount(businessShipments, 'warehouse'),
+      extra: '入库、排货或待出库',
       icon: <ShieldCheck />
     },
     {
-      title: '审核不通过',
-      value: getFulfillmentAuditStageCount(businessShipments, 'rejected'),
-      extra: '需修改资料后重新处理',
+      title: '运输中',
+      value: getShipmentLifecycleStageCount(businessShipments, 'inTransit'),
+      extra: '已出库至签收前',
       icon: <TicketCheck />
     },
     {
-      title: '已收款',
-      value: businessShipments.filter((shipment) => shipment.paymentAmountUsd !== undefined || shipment.paymentAmountCny !== undefined).length,
-      extra: '已登记收款金额或方式',
+      title: '问题件',
+      value: getShipmentLifecycleStageCount(businessShipments, 'problem'),
+      extra: '需要持续跟进处理',
       icon: <CircleDollarSign />
     }
   ];
   const fulfillmentShipments = useMemo(() => {
-    const activeStage = orderAuditStages.find((stage) => stage.key === selectedFulfillmentStage);
+    const activeStage = orderLifecycleStages.find((stage) => stage.key === selectedFulfillmentStage);
     return activeStage ? businessShipments.filter(activeStage.predicate) : businessShipments;
   }, [businessShipments, selectedFulfillmentStage]);
   const routingFulfillmentShipments = useMemo(() => {
@@ -758,19 +1047,27 @@ export function App() {
     [businessShipments]
   );
   const allShipmentLogs = logViewingShipment
-    ? shipmentOperationLogs[logViewingShipment.id] ?? [
+    ? [
         {
           id: `initial-${logViewingShipment.id}`,
           operatedAt: logViewingShipment.createdAt,
           operator: '系统',
           action: '创建/导入运单'
-        }
+        },
+        ...(logViewingShipment.status === 'WAITING_SORT' || logViewingShipment.routedAt || logViewingShipment.routeReturnedAt
+          ? [{
+              id: `routing-enter-${logViewingShipment.id}`,
+              operatedAt: logViewingShipment.reviewedAt ?? logViewingShipment.businessReviewedAt ?? logViewingShipment.createdAt,
+              operator: logViewingShipment.reviewedBy ?? logViewingShipment.businessReviewedBy ?? '系统',
+              action: '渠道排货：进入待排货'
+            }]
+          : []),
+        ...(shipmentOperationLogs[logViewingShipment.id] ?? [])
       ]
     : [];
-  const shipmentLogs =
-    logViewingMode === 'routing'
-      ? allShipmentLogs.filter((log) => log.action.startsWith('渠道排货：'))
-      : allShipmentLogs;
+  const shipmentLogs = logViewingMode === 'routing'
+    ? allShipmentLogs.filter((log) => log.action.startsWith('渠道排货：'))
+    : allShipmentLogs;
 
   function openShipmentLogModal(record: Shipment, mode: ShipmentLogViewMode) {
     setLogViewingMode(mode);
@@ -886,7 +1183,7 @@ export function App() {
     },
     latestTracking: {
       key: 'latestTracking',
-      title: '最新轨迹',
+      title: '最新物流轨迹',
       dataIndex: 'latestTracking',
       width: 160,
       render: (value: string, record) => (
@@ -1007,7 +1304,7 @@ export function App() {
     key: 'trackingStatus',
     title: '轨迹状态'
   };
-  const fulfillmentBaseColumns = columns.filter((column) => column.key !== 'latestTracking');
+  const fulfillmentBaseColumns = columns.filter((column) => column.key !== 'latestTracking' && column.key !== 'status');
   const fulfillmentTrackingInsertIndex = fulfillmentBaseColumns.findIndex((column) => column.key === 'channel');
   const fulfillmentDisplayColumns =
     fulfillmentTrackingInsertIndex >= 0
@@ -1021,7 +1318,7 @@ export function App() {
     title: '审核状态',
     width: 110,
     render: (_, record) => {
-      if (record.status === 'DRAFT') {
+      if (record.status === 'DRAFT' || record.status === 'REVIEW_PENDING') {
         return <Tag color="warning">待审核</Tag>;
       }
       if (record.status === 'REVIEW_REJECTED') {
@@ -1030,9 +1327,23 @@ export function App() {
       return <Tag color="green">已通过</Tag>;
     }
   };
+  const lifecycleStatusColumn: ColumnsType<Shipment>[number] = {
+    key: 'lifecycleStatus',
+    title: '当前节点',
+    width: 126,
+    render: (_, record) => (
+      <Space direction="vertical" size={2}>
+        <Tag color={record.hasProblemTicket && !['PROBLEM', 'STUCK'].includes(record.status) ? 'error' : lifecycleStatusColor(record.status)}>
+          {record.hasProblemTicket && !['PROBLEM', 'STUCK'].includes(record.status) ? '有问题件' : shipmentStatusLabels[record.status]}
+        </Tag>
+        <Text type="secondary">{record.hasProblemTicket ? '需持续跟进' : '按流转自动更新'}</Text>
+      </Space>
+    )
+  };
 
   const fulfillmentColumns: ColumnsType<Shipment> = [
     ...fulfillmentDisplayColumns,
+    lifecycleStatusColumn,
     auditStatusColumn,
     {
       title: 'AI 下一步',
@@ -1048,16 +1359,13 @@ export function App() {
       }
     },
     {
-      title: '履约操作',
-      width: 250,
+      title: '操作',
+      width: 160,
       fixed: 'right',
       render: (_, record) => (
         <Space wrap>
 	          {(() => {
-            const actions = getAvailableFulfillmentActions({
-	            status: record.status,
-	            hasTransferNo: Boolean(record.transferNo)
-	          }).filter((action) => !['confirm-receive', 'assign-route', 'mark-return', 'create-problem', 'fill-transfer-no', 'confirm-dispatch', 'add-tracking'].includes(action)).slice(0, 3);
+            const actions: FulfillmentAction[] = [];
             return (
               <>
                 {actions.map((action) =>
@@ -1103,29 +1411,14 @@ export function App() {
                     </Button>
                   )
                 )}
-                {record.status === 'DRAFT' ? (
-                  <Button size="small" onClick={() => openEditShipmentOperationalModal(record)}>
-                    修改
-                  </Button>
+                {record.status === 'WAITING_SORT' && (session?.user.role === 'ADMIN' || session?.permissions.includes('business:review:reverse') || session?.permissions.includes('market:pending-routing:update')) ? (
+                  <Popconfirm title="确认反审核该运单？" description="订单将回到待审核运单，待排货草稿会一并解除。" okText="反审核" cancelText="取消" onConfirm={() => void handleReverseShipmentReview(record)}>
+                    <Button size="small" danger>反审核</Button>
+                  </Popconfirm>
                 ) : null}
-                <Button size="small" onClick={() => openShipmentPaymentModal(record)}>
-                  收款
-                </Button>
                 <Button size="small" onClick={() => openShipmentLogModal(record, 'operation')}>
                   操作日志
                 </Button>
-                <Popconfirm
-                  title="确认删除该运单？"
-                  description="删除后该运单会从当前工作台移除，请确认这不是仍需处理的业务单。"
-                  okText="删除"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => handleDeleteShipment(record)}
-                >
-                  <Button size="small" danger>
-                    删除
-                  </Button>
-                </Popconfirm>
               </>
             );
           })()}
@@ -1242,16 +1535,26 @@ export function App() {
     setNotice(actionResult.message);
   }
 
-  async function handleWarehouseDispatchShipment(record: Shipment, options: { shippingMarkConfirmed?: boolean } = {}) {
-    const updated = await apiClient.dispatchShipment(record.id, { shippingMarkConfirmed: options.shippingMarkConfirmed });
+  async function handleReverseShipmentReview(record: Shipment) {
+    try {
+      const detail = await apiClient.reverseShipmentReview(record.id);
+      setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? detail.shipment : shipment)));
+      appendShipmentOperationLog(record.id, '反审核：待排货 -> 待审核');
+      setNotice(`已反审核 ${record.systemOrderNo}，订单已回到待审核`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : '反审核失败');
+    }
+  }
+
+  async function handleWarehouseDispatchShipment(record: Shipment, options: { shippingMarkConfirmed?: boolean; handoverNo?: string; batchDispatchSource?: string } = {}) {
+    const updated = await apiClient.dispatchShipment(record.id, {
+      shippingMarkConfirmed: options.shippingMarkConfirmed,
+      handoverNo: options.handoverNo,
+      batchDispatchSource: options.batchDispatchSource
+    });
     setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
     appendShipmentOperationLog(record.id, '仓库管理：确认出库');
     setNotice(`仓库已确认 ${record.systemOrderNo} 出库，已进入客服数据确认`);
-    if (visibleMenuKeys.includes('customerService')) {
-      setCustomerServiceInitialSection('dataConfirm');
-      setActiveMenuKey('customerService');
-      setExpandedMenuKey('customerService');
-    }
   }
 
   async function handleUploadShipmentBusinessInvoice(record: Shipment, file: File) {
@@ -1275,13 +1578,18 @@ export function App() {
       channelId: matchedChannel?.id ?? masterData.channels.find((channel) => channel.enabled)?.id,
       manualChannelName: undefined,
       agentChannelName: undefined,
+      destinationCountry: record.destinationCountry,
       chargeWeightKg: record.routeChargeWeightKg,
       unitPrice: record.routeUnitPrice,
       otherFee: record.routeOtherFee ?? 0,
       currency: record.routeCurrency ?? 'RMB',
-      shippingMarkRequired: false
+      shippingMarkRequired: false,
+      saveAgentChannelToMasterData: false
     });
     setRoutingAssignmentShipment(record);
+    void apiClient.shipmentFinanceDetail(record.id)
+      .then((detail) => setShipmentFinanceDetails((current) => ({ ...current, [record.id]: detail })))
+      .catch(() => undefined);
   }
 
   async function resolveRoutingAgent(values: RoutingAssignmentFormValues) {
@@ -1331,7 +1639,7 @@ export function App() {
     return createdChannel;
   }
 
-  async function handleConfirmRoutingAssignment() {
+  async function handleConfirmRoutingAssignment(approve = true) {
     if (!routingAssignmentShipment) {
       return false;
     }
@@ -1342,6 +1650,16 @@ export function App() {
 
     try {
       const values = await routingAssignmentForm.validateFields();
+      const destinationCountry = values.destinationCountry?.trim();
+      if (!destinationCountry) {
+        setNotice('请先填写国家，再保存或排货');
+        return false;
+      }
+      if (destinationCountry !== routingAssignmentShipment.destinationCountry) {
+        const updatedCountry = await apiClient.updateShipmentOperational(routingAssignmentShipment.id, { destinationCountry });
+        setLocalShipments((current) => current.map((shipment) => (shipment.id === updatedCountry.id ? updatedCountry : shipment)));
+        appendShipmentOperationLog(routingAssignmentShipment.id, `渠道排货：修改国家为 ${destinationCountry}`);
+      }
       const agent = await resolveRoutingAgent(values);
       const channel = await resolveRoutingChannel(values);
 
@@ -1352,6 +1670,11 @@ export function App() {
       if (!channel) {
         setNotice('请填写代理渠道');
         return false;
+      }
+      const agentChannelName = values.agentChannelName?.trim();
+      if (values.saveAgentChannelToMasterData && agentChannelName && !masterData.agentChannels.some((item) => item.agentId === agent.id && item.channelName === agentChannelName)) {
+        const createdAgentChannel = await apiClient.createAgentChannel({ agentId: agent.id, channelName: agentChannelName });
+        setMasterData((current) => ({ ...current, agentChannels: [...current.agentChannels, createdAgentChannel] }));
       }
 
       const otherFee = Number(values.otherFee || 0);
@@ -1365,7 +1688,8 @@ export function App() {
         otherFee,
         otherFeeRemark: values.otherFeeRemark?.trim() || undefined,
         currency: values.currency ?? 'RMB',
-        shippingMarkRequired: values.shippingMarkRequired === true
+        shippingMarkRequired: values.shippingMarkRequired === true,
+        approve
       });
       const patched: Shipment = {
         ...updated,
@@ -1379,9 +1703,14 @@ export function App() {
       }
       void apiClient.masterData().then(setMasterData).catch(() => undefined);
       appendShipmentOperationLog(routingAssignmentShipment.id, `渠道排货：代理 ${agent.name}，渠道 ${channel.name}，成本 ${routeCostTotal.toFixed(2)} ${values.currency ?? 'RMB'}`);
-      setRoutingAssignmentShipment(null);
-      routingAssignmentForm.resetFields();
-      setNotice('市场排货完成，已进入已排货');
+      if (approve) {
+        setRoutingAssignmentShipment(null);
+        routingAssignmentForm.resetFields();
+        setNotice('市场排货审核通过，已进入待出库');
+      } else {
+        setRoutingAssignmentShipment(patched);
+        setNotice('排货信息已保存，尚未审核进入待出库');
+      }
       return true;
     } catch (error) {
       if (error && typeof error === 'object' && 'errorFields' in error) {
@@ -1394,9 +1723,15 @@ export function App() {
     }
   }
 
-  async function handleApprovePendingRouting(record: Shipment) {
+  async function handleApprovePendingRouting(record: Shipment, confirmed = false) {
     if (record.status !== 'WAITING_SORT') {
       setNotice('当前状态不允许审核排货');
+      return;
+    }
+
+    if (!record.destinationCountry?.trim()) {
+      openRoutingAssignmentModal(record);
+      setNotice('请先点击排货或修改补齐国家，再审核进入已排货/待出库');
       return;
     }
 
@@ -1414,6 +1749,11 @@ export function App() {
     if (!channel || !agent || !agentChannelName || !chargeWeightKg || !unitPrice) {
       openRoutingAssignmentModal(record);
       setNotice('请先点击修改补齐代理、代理渠道、计费重和单价，再审核进入已排货/待出库');
+      return;
+    }
+
+    if (!confirmed) {
+      setPendingRoutingApprovalShipment(record);
       return;
     }
 
@@ -1440,6 +1780,99 @@ export function App() {
       setNotice(`${record.systemOrderNo} 审核通过，已同步进入已排货和待出库`);
     } catch (error) {
       Modal.error({ title: '审核失败', content: error instanceof Error ? error.message : '排货审核失败' });
+    }
+  }
+
+  async function confirmPendingRoutingApproval() {
+    const record = pendingRoutingApprovalShipment;
+    if (!record) return;
+    setPendingRoutingApprovalShipment(null);
+    await handleApprovePendingRouting(record, true);
+  }
+
+  async function handleSavePendingRoutingCost(
+    shipment: Shipment,
+    type: 'BUSINESS_COST' | 'PAYABLE',
+    feeId: string | undefined,
+    input: { name: string; currency: string; chargeWeightKg?: number; unitPrice?: number; amount?: number }
+  ) {
+    const payload = {
+      type,
+      name: input.name,
+      currency: input.currency,
+      chargeWeightKg: input.chargeWeightKg,
+      unitPrice: input.unitPrice,
+      amount: input.amount ?? 0
+    };
+    const savedItem = feeId
+      ? await apiClient.updateShipmentFinanceItem(shipment.id, feeId, payload)
+      : await apiClient.createShipmentFinanceItem(shipment.id, payload);
+    setShipmentFinanceDetails((current) => {
+      const detail = current[shipment.id];
+      if (!detail) return current;
+      if (type === 'BUSINESS_COST') {
+        const savedBusinessCost = savedItem as BusinessCostFeeSummary;
+        const businessCosts = feeId
+          ? (detail.businessCosts ?? []).map((item) => item.id === savedBusinessCost.id ? savedBusinessCost : item)
+          : [...(detail.businessCosts ?? []), savedBusinessCost];
+        return { ...current, [shipment.id]: { ...detail, businessCosts } };
+      }
+      const savedPayable = savedItem as PayableFeeSummary;
+      const payables = feeId
+        ? (detail.payables ?? []).map((item) => item.id === savedPayable.id ? savedPayable : item)
+        : [...(detail.payables ?? []), savedPayable];
+      return { ...current, [shipment.id]: { ...detail, payables } };
+    });
+    await refreshWorkspace();
+    appendShipmentOperationLog(shipment.id, `渠道排货：${type === 'BUSINESS_COST' ? '修改业务成本' : '修改应付成本'} ${input.name}`);
+    setNotice(`已保存${type === 'BUSINESS_COST' ? '业务成本' : '应付成本'}`);
+  }
+
+  async function handleDeletePendingRoutingCost(shipment: Shipment, feeId: string) {
+    await apiClient.deleteShipmentFinanceItem(shipment.id, feeId);
+    setShipmentFinanceDetails((current) => {
+      const detail = current[shipment.id];
+      if (!detail) return current;
+      return {
+        ...current,
+        [shipment.id]: {
+          ...detail,
+          businessCosts: (detail.businessCosts ?? []).filter((item) => item.id !== feeId),
+          payables: (detail.payables ?? []).filter((item) => item.id !== feeId)
+        }
+      };
+    });
+    await refreshWorkspace();
+    appendShipmentOperationLog(shipment.id, '渠道排货：删除成本费用');
+    setNotice('已删除成本费用');
+  }
+
+  function openPendingRoutingDeleteModal(record: Shipment) {
+    setPendingRoutingDeleteShipment(record);
+    pendingRoutingDeleteForm.setFieldsValue({ reason: undefined });
+  }
+
+  async function handleDeletePendingRouting() {
+    if (!pendingRoutingDeleteShipment) {
+      return;
+    }
+    try {
+      const values = await pendingRoutingDeleteForm.validateFields();
+      const reason = values.reason?.trim() ?? '';
+      await apiClient.deletePendingRoutingShipment(pendingRoutingDeleteShipment.id, { reason });
+      setLocalShipments((current) => current.filter((shipment) => shipment.id !== pendingRoutingDeleteShipment.id));
+      appendShipmentOperationLog(pendingRoutingDeleteShipment.id, `渠道排货：删除待排货（${reason}）`);
+      if (logViewingShipment?.id === pendingRoutingDeleteShipment.id) {
+        setLogViewingShipment(null);
+      }
+      setNotice(`${pendingRoutingDeleteShipment.systemOrderNo} 已从待排货删除`);
+      setPendingRoutingDeleteShipment(null);
+      pendingRoutingDeleteForm.resetFields();
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'errorFields' in error) {
+        return;
+      }
+      Modal.error({ title: '删除失败', content: error instanceof Error ? error.message : '待排货删除失败' });
     }
   }
 
@@ -1482,7 +1915,7 @@ export function App() {
     const values = await editShipmentForm.validateFields();
     const oldTransferNo = editingShipment.transferNo ?? '空';
     const nextTransferNo = values.transferNo?.trim() || undefined;
-    const updated = await apiClient.updateShipmentOperational(editingShipment.id, {
+    const operationalInput = {
       latestTracking: values.latestTracking.trim(),
       transferNo: nextTransferNo,
       channelId: values.channelId || undefined,
@@ -1500,14 +1933,17 @@ export function App() {
       status: values.status,
       etaAt: values.etaAt?.trim() || undefined,
       etdAt: values.etdAt?.trim() || undefined
-    });
+    };
+    const updated = editingShipmentSource === 'operationsPool'
+      ? await apiClient.updateOperationShipmentOperational(editingShipment.id, operationalInput)
+      : await apiClient.updateShipmentOperational(editingShipment.id, operationalInput);
     setLocalShipments((current) => current.map((shipment) => (shipment.id === editingShipment.id ? updated : shipment)));
     const logPrefix = editingShipmentSource === 'routing' ? '渠道排货：' : '';
     if (oldTransferNo !== (nextTransferNo ?? '空')) {
       appendShipmentOperationLog(editingShipment.id, `${logPrefix}更新转单号：${oldTransferNo} -> ${nextTransferNo ?? '空'}`);
     }
     if (editingShipment.latestTracking !== updated.latestTracking) {
-      appendShipmentOperationLog(editingShipment.id, `${logPrefix}更新最新轨迹：${updated.latestTracking}`);
+      appendShipmentOperationLog(editingShipment.id, `${logPrefix}更新最新物流轨迹：${updated.latestTracking}`);
     }
     if (editingShipment.status !== updated.status) {
       appendShipmentOperationLog(editingShipment.id, `${logPrefix}更新状态：${shipmentStatusLabels[editingShipment.status]} -> ${shipmentStatusLabels[updated.status]}`);
@@ -1568,14 +2004,6 @@ export function App() {
     setNotice(`已登记收款 ${updated.systemOrderNo}：${formatPaymentSummary(updated.paymentAmountUsd, updated.paymentAmountCny)} / ${updated.paymentMethod ?? '未登记'}`);
   }
 
-  function openBulkTrackingImportModal() {
-    setBulkTrackingOpen(true);
-    setBulkTrackingFileName(null);
-    setBulkTrackingRows([]);
-    setBulkTrackingResult(null);
-    setBulkTrackingError(null);
-  }
-
   async function handleBulkTrackingFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) {
@@ -1605,14 +2033,27 @@ export function App() {
       return;
     }
 
-    const response = await apiClient.importTrackingEvents({ updates: bulkTrackingResult.updates });
-    const updatedByShipmentId = new Map(response.updated.map((shipment) => [shipment.id, shipment]));
-    setLocalShipments((current) => current.map((shipment) => updatedByShipmentId.get(shipment.id) ?? shipment));
-    bulkTrackingResult.updates.forEach((update) => {
-      appendShipmentOperationLog(update.shipmentId, `批量添加轨迹：${formatTrackingImportDate(update.trackingDate)} ${update.latestTracking}`);
-    });
-    setBulkTrackingOpen(false);
-    setNotice(`已批量导入轨迹 ${bulkTrackingResult.updates.length} 票，未匹配 ${bulkTrackingResult.unmatchedOrderNos.length} 个单号`);
+    setBulkTrackingImporting(true);
+    try {
+      const response = await apiClient.importTrackingEvents({
+        updates: bulkTrackingResult.updates,
+        fileName: bulkTrackingFileName ?? undefined,
+        rawRowCount: bulkTrackingResult.rawRowCount ?? bulkTrackingRows.length,
+        failedRowCount: (bulkTrackingResult.errorRows?.length ?? 0) + (bulkTrackingResult.conflictOrderNos?.length ?? 0),
+        unmatchedOrderNos: bulkTrackingResult.unmatchedOrderNos
+      });
+      const updatedByShipmentId = new Map(response.updated.map((shipment) => [shipment.id, shipment]));
+      setLocalShipments((current) => current.map((shipment) => updatedByShipmentId.get(shipment.id) ?? shipment));
+      bulkTrackingResult.updates.forEach((update) => {
+        appendShipmentOperationLog(update.shipmentId, `批量覆盖轨迹：${formatTrackingImportDate(update.trackingDate)} ${update.latestTracking}`);
+      });
+      setNotice(`已覆盖轨迹 ${response.importedCount ?? response.affectedShipmentCount ?? bulkTrackingResult.shipmentPreviews?.length ?? 0} 票，未匹配 ${response.unmatchedCount ?? bulkTrackingResult.unmatchedOrderNos.length} 个单号，失败行 ${response.failedRowCount ?? bulkTrackingResult.errorRows?.length ?? 0} 行`);
+      setBulkTrackingError(null);
+    } catch (error) {
+      setBulkTrackingError(error instanceof Error ? error.message : '轨迹导入失败');
+    } finally {
+      setBulkTrackingImporting(false);
+    }
   }
 
   async function handleRunCarrierTask(task: CarrierTaskSummary) {
@@ -1887,6 +2328,7 @@ export function App() {
 
   const renderShipmentDetailContent = (shipment: Shipment) => {
     const transferNo = getDetailText(shipment.transferNo, '待获取快递号');
+    const canViewShipmentSensitiveFields = ['ADMIN', 'FINANCE', 'UG_FINANCE', 'BOSS', 'OWNER'].includes(session?.user.role ?? '');
     const agentName = getDetailText(shipment.agentName, '未指定代理');
     const paymentCurrency = getShipmentPaymentCurrencyLabel(shipment);
     const paymentAmount = formatPaymentSummary(shipment.paymentAmountUsd, shipment.paymentAmountCny);
@@ -1894,53 +2336,90 @@ export function App() {
     const latestTracking = getDetailText(shipment.latestTracking, '暂无轨迹');
     const remark = getDetailText(shipment.remark, '无备注');
     const financeDetail = shipmentFinanceDetails[shipment.id];
+    const reviewDetail = shipmentReviewDetails[shipment.id];
+    const internalTrackingColumns: ColumnsType<ShipmentReviewEventSummary> = [
+      { title: '时间', dataIndex: 'createdAt', width: 170, render: (value: string) => formatBeijingDateTime(value) },
+      { title: '阶段', dataIndex: 'stage', width: 110, render: (value?: string) => value || '-' },
+      { title: '操作人', dataIndex: 'operator', width: 110, render: (value?: string) => value || '系统' },
+      { title: '来源模块', dataIndex: 'sourceModule', width: 120, render: (value?: string) => value || '-' },
+      { title: '动作', dataIndex: 'action', width: 120, render: (value: string | undefined, row) => value || row.title },
+      { title: '内容', dataIndex: 'note', width: 280, render: (value?: string) => value || '-' }
+    ];
+    const logisticsTrackingColumns: ColumnsType<ShipmentLogisticsTrackingEventSummary> = [
+      { title: '轨迹时间', dataIndex: 'trackingAt', width: 170, render: (value: string) => formatBeijingDateTime(value) },
+      { title: '物流节点', dataIndex: 'node', width: 140 },
+      { title: '地点', dataIndex: 'location', width: 110, render: (value?: string) => value || '-' },
+      { title: '承运商', dataIndex: 'carrier', width: 110, render: (value?: string) => value || '-' },
+      { title: '转单号 / 物流单号', dataIndex: 'transferNo', width: 170, render: (value?: string) => value || '-' },
+      { title: '原始内容', dataIndex: 'rawContent', width: 240, render: (value?: string) => value || '-' },
+      { title: '来源', dataIndex: 'source', width: 110 }
+    ];
+
+    const cargoDataText = [
+      `件数 ${shipment.packageCount}`,
+      `实重 ${(shipment.weightKg ?? shipment.receivableWeightKg).toFixed(3)} kg`,
+      `体积 ${shipment.volumeCbm === undefined ? '-' : `${shipment.volumeCbm.toFixed(3)} m³`}`,
+      `计费重 ${(shipment.chargeableWeightKg ?? shipment.agentWeightKg ?? shipment.receivableWeightKg).toFixed(3)} kg`,
+      `来源 ${shipment.cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '自动匹配'}`
+    ].join(' / ');
 
     const basicInfo = (
-      <>
+      <div className="shipment-detail-business-layout">
         <section className="shipment-detail-section">
-          <div className="shipment-detail-section-title">单号信息</div>
+          <div className="shipment-detail-section-title">录入与货物</div>
           <div className="shipment-detail-grid">
-            {renderShipmentDetailField('运单号', shipment.systemOrderNo, { copyText: shipment.systemOrderNo })}
-            {renderShipmentDetailField('客户单号', shipment.customerOrderNo, { copyText: shipment.customerOrderNo })}
-            {renderShipmentDetailField('转单号', transferNo, shipment.transferNo ? { copyText: shipment.transferNo } : { muted: true })}
-          </div>
-        </section>
-
-        <section className="shipment-detail-section">
-          <div className="shipment-detail-section-title">客户与目的地</div>
-          <div className="shipment-detail-grid">
+            {renderShipmentDetailField('运单录入日期', shipment.entryAt ? formatBeijingDateTime(shipment.entryAt) : formatBeijingDateTime(shipment.createdAt))}
+            {renderShipmentDetailField('客户编号', getDetailText(shipment.customerCode, '-'))}
             {renderShipmentDetailField('客户名称', shipment.customerName)}
-            {renderShipmentDetailField('目的地', shipment.destinationCountry)}
-            {renderShipmentDetailField('创建时间', formatBeijingDateTime(shipment.createdAt))}
+            {renderShipmentDetailField('出货单号', shipment.outboundOrderNo || shipment.systemOrderNo, { copyText: shipment.outboundOrderNo || shipment.systemOrderNo })}
+            {renderShipmentDetailField('公司渠道', getDetailText(shipment.channelName || shipment.carrier, '-'))}
+            {renderShipmentDetailField('转单号', transferNo, shipment.transferNo ? { copyText: shipment.transferNo } : { muted: true })}
+            {renderShipmentDetailField('入仓号', getDetailText(shipment.inboundNo, '-'), { muted: !shipment.inboundNo })}
+            {renderShipmentDetailField('品名', getDetailText(shipment.productName, '-'))}
+            {renderShipmentDetailField('货物数据', cargoDataText, { wide: true })}
+            {renderShipmentDetailField('收货人名称', getDetailText(shipment.receiverName, '-'))}
+            {renderShipmentDetailField('FBA仓库代码', getDetailText(shipment.fbaWarehouseCode, '-'))}
+            {renderShipmentDetailField('国家', getDetailText(shipment.receiverCountry, '-'))}
+            {renderShipmentDetailField('收货人公司名称', getDetailText(shipment.receiverCompany, '-'))}
+            {renderShipmentDetailField('收货人地址', getDetailText(shipment.receiverAddress, '-'), { wide: true })}
+            {renderShipmentDetailField('州/省', getDetailText(shipment.receiverState, '-'))}
+            {renderShipmentDetailField('收货人电话', getDetailText(shipment.receiverPhone, '-'))}
+            {renderShipmentDetailField('邮编', getDetailText(shipment.receiverPostalCode, '-'))}
           </div>
         </section>
 
         <section className="shipment-detail-section">
-          <div className="shipment-detail-section-title">渠道与代理</div>
+          <div className="shipment-detail-section-title">出库与审核</div>
           <div className="shipment-detail-grid">
-            {renderShipmentDetailField('渠道', getDetailText(shipment.channelName || shipment.carrier, '-'))}
-            {renderShipmentDetailField('代理', agentName, { muted: !shipment.agentName })}
+            {renderShipmentDetailField('出库日期', shipment.outboundAt ? formatBeijingDateTime(shipment.outboundAt) : '-')}
+            {renderShipmentDetailField('目的地', shipment.destinationCountry)}
+            {renderShipmentDetailField('报关', shipment.declarationRequired ? '是' : '否')}
+            {renderShipmentDetailField('货物类型', getDetailText(shipment.cargoType, '-'))}
+            {renderShipmentDetailField('是否敏感', shipment.sensitive ? '是' : '否')}
+            {canViewShipmentSensitiveFields ? renderShipmentDetailField('代理渠道', agentName, { muted: !shipment.agentName }) : null}
+            {renderShipmentDetailField('分单号', getDetailText(shipment.subOrderNo, '-'))}
+            {renderShipmentDetailField('FBA 入仓单号', getDetailText(shipment.fbaInboundNo, '-'))}
+            {renderShipmentDetailField('结算方式', getDetailText(shipment.settlementMethod, '-'))}
+            {canViewShipmentFinanceDetail ? renderShipmentDetailField('应收总额', financeDetail ? formatCurrency(financeDetail.receivableTotal) : '待加载') : null}
+            {renderShipmentDetailField('备注', remark, { wide: true, muted: remark === '无备注' })}
+            {renderShipmentDetailField('应收审核日期', shipment.reviewedAt ? formatBeijingDateTime(shipment.reviewedAt) : '-')}
+            {canViewShipmentSensitiveFields ? renderShipmentDetailField('业务成本审核日期', shipment.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-') : null}
+            {canViewShipmentSensitiveFields ? renderShipmentDetailField('应付审核日期', '-') : null}
           </div>
         </section>
 
-        <section className="shipment-detail-section">
+        <section className="shipment-detail-section shipment-detail-section-wide">
           <div className="shipment-detail-section-title">履约与轨迹</div>
           <div className="shipment-detail-grid">
+            {renderShipmentDetailField('出货单号', shipment.outboundOrderNo || shipment.systemOrderNo, { copyText: shipment.outboundOrderNo || shipment.systemOrderNo })}
             {renderShipmentDetailField('状态', <StatusTag status={shipment.status} />)}
             {renderShipmentDetailField('时效', calculateTransitTimeLabel(shipment, demoOperationalNow))}
             {renderShipmentDetailField('ETD', shipment.etdAt ? formatBeijingDateTime(shipment.etdAt) : '未填写', { muted: !shipment.etdAt })}
             {renderShipmentDetailField('ETA', shipment.etaAt ? formatBeijingDateTime(shipment.etaAt) : '未填写', { muted: !shipment.etaAt })}
-            {renderShipmentDetailField('最新轨迹', latestTracking, { wide: true })}
+            {renderShipmentDetailField('最新物流轨迹', latestTracking, { wide: true })}
           </div>
         </section>
-
-        <section className="shipment-detail-section">
-          <div className="shipment-detail-section-title">备注</div>
-          <div className="shipment-detail-grid">
-            {renderShipmentDetailField('备注', remark, { wide: true, muted: remark === '无备注' })}
-          </div>
-        </section>
-      </>
+      </div>
     );
 
     const packageDetail = (
@@ -1973,9 +2452,9 @@ export function App() {
       <div className="shipment-detail-layout">
         <section className="shipment-detail-hero">
           <div className="shipment-detail-hero-main">
-            <span className="shipment-detail-eyebrow">运单号</span>
-            <Text className="shipment-detail-order-no" copyable={{ text: shipment.systemOrderNo }}>
-              {shipment.systemOrderNo}
+            <span className="shipment-detail-eyebrow">出货单号</span>
+            <Text className="shipment-detail-order-no" copyable={{ text: shipment.outboundOrderNo || shipment.systemOrderNo }}>
+              {shipment.outboundOrderNo || shipment.systemOrderNo}
             </Text>
             <Text className="shipment-detail-customer">{shipment.customerName}</Text>
           </div>
@@ -1991,7 +2470,25 @@ export function App() {
           items={[
             { key: 'basic', label: '基本信息', children: <div className="shipment-detail-tab-panel">{basicInfo}</div> },
             { key: 'package', label: '单件明细', children: <div className="shipment-detail-tab-panel">{packageDetail}</div> },
-            { key: 'finance', label: '费用明细', children: <div className="shipment-detail-tab-panel">{financeDetailContent}</div> }
+            ...(canViewShipmentFinanceDetail ? [{ key: 'finance', label: '费用明细', children: <div className="shipment-detail-tab-panel">{financeDetailContent}</div> }] : []),
+            {
+              key: 'internal-tracking',
+              label: '内部轨迹',
+              children: reviewDetail ? (
+                reviewDetail.internalTrackingEvents.length
+                  ? <ManagedTable rowKey="id" size="small" columns={internalTrackingColumns} dataSource={reviewDetail.internalTrackingEvents} pagination={false} scroll={{ x: 920 }} sticky={false} resizableColumns={false} columnSettings={false} />
+                  : <Text type="secondary">暂无公司内部生命周期记录</Text>
+              ) : (shipmentReviewDetailLoading ? <Text type="secondary">正在加载内部轨迹…</Text> : <Text type="secondary">暂无公司内部生命周期记录</Text>)
+            },
+            {
+              key: 'logistics-tracking',
+              label: '物流轨迹',
+              children: reviewDetail ? (
+                reviewDetail.logisticsTrackingEvents.length
+                  ? <ManagedTable rowKey="id" size="small" columns={logisticsTrackingColumns} dataSource={reviewDetail.logisticsTrackingEvents} pagination={false} scroll={{ x: 1120 }} sticky={false} resizableColumns={false} columnSettings={false} />
+                  : <Text type="secondary">暂无外部物流轨迹</Text>
+              ) : (shipmentReviewDetailLoading ? <Text type="secondary">正在加载物流轨迹…</Text> : <Text type="secondary">暂无外部物流轨迹</Text>)
+            }
           ]}
         />
       </div>
@@ -2045,40 +2542,57 @@ export function App() {
               const subNav = sidebarSubNav?.parentKey === item.key ? sidebarSubNav : null;
               const hasSubNav = Boolean(subNav?.items.length);
               const isExpanded = isActive && expandedMenuKey === item.key && hasSubNav;
+              const moduleUnreadCount = navigationUnreadByKey.get(`${item.key}:`) ?? 0;
 
               return (
                 <div className="side-nav-group" key={item.key}>
-                  <button
-                    type="button"
+                  <a
+                    href={getStaffModuleHref(item.key)}
                     role="menuitem"
                     className={`side-nav-item${isActive ? ' is-active' : ''}`}
                     aria-label={item.label}
                     aria-expanded={hasSubNav ? isExpanded : undefined}
-                    onClick={() => handlePrimaryMenuClick(item.key)}
+                    onClick={(event) => handlePrimaryMenuClick(event, item.key)}
                   >
                     <span className="side-nav-icon">{item.icon}</span>
                     <span className="side-nav-label">{item.label}</span>
-                    {hasSubNav ? (
-                      <span className="side-nav-chevron" aria-hidden="true">
-                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      </span>
-                    ) : null}
-                  </button>
+                    <span className="side-nav-meta" aria-hidden="true">
+                      {moduleUnreadCount > 0 && !isExpanded ? (
+                        <span className="side-nav-unread-dot" title={`${formatNavigationUnreadCount(moduleUnreadCount)} 条未读变化`} />
+                      ) : null}
+                      {hasSubNav ? (
+                        <span className="side-nav-chevron">
+                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        </span>
+                      ) : null}
+                    </span>
+                  </a>
                   {isExpanded && subNav ? (
                     <div className="side-sub-nav" role="group" aria-label={`${item.label}二级功能`}>
                       {subNav.items.map((subItem) => (
-                        <button
-                          type="button"
-                          key={subItem.key}
-                          className={`side-sub-nav-item${subItem.key === subNav.activeKey ? ' is-active' : ''}`}
-                          aria-current={subItem.key === subNav.activeKey ? 'page' : undefined}
-                          onClick={() => {
-                            subNav.onChange(subItem.key);
-                            setExpandedMenuKey(item.key);
-                          }}
-                        >
-                          <span>{subItem.label}</span>
-                        </button>
+                        (() => {
+                          const unreadCount = navigationUnreadByKey.get(`${item.key}:${subItem.key}`) ?? 0;
+                          return (
+                            <a
+                              href={getStaffSectionHref(item.key, subItem.key)}
+                              key={subItem.key}
+                              role="button"
+                              className={`side-sub-nav-item${subItem.key === subNav.activeKey ? ' is-active' : ''}`}
+                              aria-current={subItem.key === subNav.activeKey ? 'page' : undefined}
+                              onClick={(event) => {
+                                handleSecondaryMenuClick(event, item.key, subItem.key, subNav.onChange);
+                                setExpandedMenuKey(item.key);
+                              }}
+                            >
+                              <span className="side-sub-nav-label">{subItem.label}</span>
+                              {unreadCount > 0 ? (
+                                <span className="side-sub-nav-unread-count" aria-hidden="true" title={`${formatNavigationUnreadCount(unreadCount)} 条未读变化`}>
+                                  {formatNavigationUnreadCount(unreadCount)}
+                                </span>
+                              ) : null}
+                            </a>
+                          );
+                        })()
                       ))}
                     </div>
                   ) : null}
@@ -2121,7 +2635,7 @@ export function App() {
               <Button icon={<UserCircle size={16} />} onClick={() => void openPersonalCenter()}>
                 个人中心
               </Button>
-              <Button icon={<LogOut size={16} />} onClick={handleUnauthorized}>
+              <Button icon={<LogOut size={16} />} onClick={() => setLogoutConfirmOpen(true)}>
                 退出登录
               </Button>
               <Button icon={<ShieldCheck size={16} />}>权限视图</Button>
@@ -2144,109 +2658,112 @@ export function App() {
             </Space>
           </Header>
           <Modal
+            title="确认退出登录"
+            open={logoutConfirmOpen}
+            okText="确认退出"
+            cancelText="取消"
+            onOk={() => {
+              setLogoutConfirmOpen(false);
+              handleUnauthorized();
+            }}
+            onCancel={() => setLogoutConfirmOpen(false)}
+          >
+            <p>退出后需要重新登录才能继续使用系统。</p>
+          </Modal>
+          <Modal
             title="个人中心"
             open={personalCenterOpen}
-            width={920}
+            width={980}
             destroyOnHidden
             footer={(
               <Button onClick={() => setPersonalCenterOpen(false)}>关闭</Button>
             )}
             onCancel={() => setPersonalCenterOpen(false)}
           >
-            <Row gutter={[16, 16]}>
-              <Col xs={24} lg={8}>
-                <Card size="small" title="账号信息">
-                  <Form
-                    form={profileForm}
-                    layout="vertical"
-                    initialValues={{
-                      name: session.user.name,
-                      phone: session.user.phone,
-                      gender: (session.user.gender ?? 'UNKNOWN') as StaffGender,
-                      nickname: session.user.nickname
-                    }}
-                  >
-                    <Form.Item label="员工账号">
-                      <Input value={session.user.username} disabled />
-                    </Form.Item>
-                    <Form.Item label="当前角色">
-                      <Tag color={session.user.role === 'ADMIN' ? 'red' : 'blue'}>{getRoleDisplayName(session.user.role)}</Tag>
-                    </Form.Item>
-                    <Form.Item name="name" label="姓名" rules={[{ max: 40, message: '姓名最多 40 个字符' }]}>
-                      <Input placeholder="请输入姓名" />
-                    </Form.Item>
-                    <Form.Item name="phone" label="手机号" rules={[{ max: 30, message: '手机号最多 30 个字符' }]}>
-                      <Input placeholder="请输入手机号" />
-                    </Form.Item>
-                    <Form.Item name="gender" label="性别">
-                      <Select options={staffGenderOptions} />
-                    </Form.Item>
-                    <Form.Item name="nickname" label="昵称" rules={[{ max: 40, message: '昵称最多 40 个字符' }]}>
-                      <Input placeholder="请输入昵称" />
-                    </Form.Item>
-                    <Button block onClick={() => void submitProfileUpdate()}>
-                      保存个人资料
-                    </Button>
-                  </Form>
-                </Card>
-                <Card size="small" title="修改密码" className="personal-center-card">
-                  <Form form={passwordForm} layout="vertical">
-                    <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
-                      <Input.Password />
-                    </Form.Item>
-                    <Form.Item
-                      name="newPassword"
-                      label="新密码"
-                      rules={[
-                        { required: true, message: '请输入新密码' },
-                        passwordStrengthRule()
-                      ]}
-                      extra="密码长度需大于或等于 8 位，且至少包含大写字母、小写字母、数字、特殊字符中的 3 类。"
-                    >
-                      <Input.Password />
-                    </Form.Item>
-                    <Form.Item
-                      name="confirmPassword"
-                      label="确认新密码"
-                      dependencies={['newPassword']}
-                      rules={[
-                        { required: true, message: '请再次输入新密码' },
-                        ({ getFieldValue }) => ({
-                          validator(_, value) {
-                            if (!value || getFieldValue('newPassword') === value) {
-                              return Promise.resolve();
+            <Space direction="vertical" size={16} className="personal-center-shell">
+              <Card size="small" title="账号资料" className="personal-center-profile">
+                <div className="personal-center-readonly-grid" aria-label="只读账号信息">
+                  <div>
+                    <span>员工账号</span>
+                    <strong>{session.user.username}</strong>
+                  </div>
+                  <div>
+                    <span>当前角色</span>
+                    <Tag color={session.user.role === 'ADMIN' ? 'red' : 'blue'}>{getRoleDisplayName(session.user.role)}</Tag>
+                  </div>
+                </div>
+                <Form
+                  form={profileForm}
+                  layout="vertical"
+                  className="personal-center-profile-form"
+                  initialValues={{
+                    name: session.user.name,
+                    phone: session.user.phone,
+                    gender: (session.user.gender ?? 'UNKNOWN') as StaffGender,
+                    nickname: session.user.nickname
+                  }}
+                >
+                  <Form.Item name="name" label="姓名" rules={[{ max: 40, message: '姓名最多 40 个字符' }]}>
+                    <Input placeholder="请输入姓名" />
+                  </Form.Item>
+                  <Form.Item name="phone" label="手机号" rules={[{ max: 30, message: '手机号最多 30 个字符' }]}>
+                    <Input placeholder="请输入手机号" />
+                  </Form.Item>
+                  <Form.Item name="gender" label="性别">
+                    <Select options={staffGenderOptions} />
+                  </Form.Item>
+                  <Form.Item name="nickname" label="昵称" rules={[{ max: 40, message: '昵称最多 40 个字符' }]}>
+                    <Input placeholder="请输入昵称" />
+                  </Form.Item>
+                  <Button type="primary" onClick={() => void submitProfileUpdate()}>
+                    保存个人资料
+                  </Button>
+                </Form>
+              </Card>
+              <Row gutter={[16, 16]}>
+                <Col xs={24}>
+                  <Card size="small" title="修改密码" className="personal-center-card">
+                    <Form form={passwordForm} layout="vertical">
+                      <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
+                        <Input.Password />
+                      </Form.Item>
+                      <Form.Item
+                        name="newPassword"
+                        label="新密码"
+                        rules={[
+                          { required: true, message: '请输入新密码' },
+                          passwordStrengthRule()
+                        ]}
+                        extra="密码长度需大于或等于 8 位，且至少包含大写字母、小写字母、数字、特殊字符中的 3 类。"
+                      >
+                        <Input.Password />
+                      </Form.Item>
+                      <Form.Item
+                        name="confirmPassword"
+                        label="确认新密码"
+                        dependencies={['newPassword']}
+                        rules={[
+                          { required: true, message: '请再次输入新密码' },
+                          ({ getFieldValue }) => ({
+                            validator(_, value) {
+                              if (!value || getFieldValue('newPassword') === value) {
+                                return Promise.resolve();
+                              }
+                              return Promise.reject(new Error('两次输入的新密码不一致'));
                             }
-                            return Promise.reject(new Error('两次输入的新密码不一致'));
-                          }
-                        })
-                      ]}
-                    >
-                      <Input.Password />
-                    </Form.Item>
-                    <Button type="primary" block onClick={() => void submitPasswordChange()}>
-                      保存新密码
-                    </Button>
-                  </Form>
-                </Card>
-              </Col>
-              <Col xs={24} lg={16}>
-                <Card size="small" title="登录日志">
-                  <Table<LoginLogSummary>
-                    rowKey="id"
-                    size="small"
-                    loading={loginLogsLoading}
-                    pagination={tenRowTablePagination}
-                    dataSource={loginLogs}
-                    columns={[
-                      { title: '登录时间', dataIndex: 'createdAt', width: 170, render: (value: string) => formatBeijingDateTime(value) },
-                      { title: 'IP', dataIndex: 'ip', width: 140 },
-                      { title: '地区', dataIndex: 'region', width: 140 },
-                      { title: '设备', dataIndex: 'userAgent', ellipsis: true, render: (value?: string) => value ?? '-' }
-                    ]}
-                  />
-                </Card>
-              </Col>
-            </Row>
+                          })
+                        ]}
+                      >
+                        <Input.Password />
+                      </Form.Item>
+                      <Button type="primary" block onClick={() => void submitPasswordChange()}>
+                        保存新密码
+                      </Button>
+                    </Form>
+                  </Card>
+                </Col>
+              </Row>
+            </Space>
           </Modal>
           <Modal
             title="首次登录需要修改密码"
@@ -2357,6 +2874,11 @@ export function App() {
                       </Checkbox>
                     </Space>
                     <Space>
+                      <Button size="small" disabled={index === 0} onClick={() => {
+                        setCustomShipmentColumnOrder((current) => [key, ...current.filter((item) => item !== key)]);
+                      }}>
+                        移到首行
+                      </Button>
                       <Button size="small" disabled={index === 0} onClick={() => moveShipmentColumn(key, 'up')}>
                         上移
                       </Button>
@@ -2391,7 +2913,13 @@ export function App() {
                 }
               />
             ) : null}
-            <Suspense fallback={null}>
+            <AppPageErrorBoundary
+              resetKey={`${currentMenuKey}:${activeSectionKey ?? ''}`}
+              menuKey={currentMenuKey}
+              sectionKey={activeSectionKey}
+              onReport={reportPageRenderError}
+            >
+            <Suspense fallback={<PageLoadingFallback />}>
             {currentMenuKey === 'business' || currentMenuKey === 'orders' ? (
               <FinancePage
                 menuMode="business"
@@ -2444,6 +2972,8 @@ export function App() {
                 renderShipmentFinancePanel={renderShipmentFinancePanel}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
                 apiClient={apiClient}
+                prefillOrderEntryPackageIds={prefillOrderEntryPackageIds}
+                onOrderEntryPrefillConsumed={() => setPrefillOrderEntryPackageIds([])}
                 customers={masterData.customers}
                 customerContacts={masterData.contacts}
                 onCustomerContactsChange={(contacts) => setMasterData((current) => ({ ...current, contacts }))}
@@ -2492,11 +3022,19 @@ export function App() {
                     formatPaymentSummary={formatPaymentSummary}
                     onAiAssist={handleAiAssist}
                     aiLoading={aiLoading}
+                    permissions={session.permissions}
+                    role={session.user.role}
                   />
                 )}
               />
             ) : currentMenuKey === 'settings' ? (
-              <SettingsPage apiClient={apiClient} onAiAssist={handleAiAssist} aiLoading={aiLoading} />
+              <SettingsPage
+                apiClient={apiClient}
+                onAiAssist={handleAiAssist}
+                aiLoading={aiLoading}
+                permissions={session.permissions}
+                onNavigateToSection={(sectionKey) => navigateToAppRoute('settings', sectionKey)}
+              />
             ) : currentMenuKey === 'master' ? (
               <MasterDataPage
                 apiClient={apiClient}
@@ -2514,6 +3052,7 @@ export function App() {
               <PricingPage
                 apiClient={apiClient}
                 role={session.user.role}
+                permissions={session.permissions}
                 notice={notice}
                 onNotice={setNotice}
               />
@@ -2577,11 +3116,17 @@ export function App() {
               <WarehousePage
                 apiClient={apiClient}
                 role={session.user.role}
-                canWriteWarehouse={session.permissions.includes('warehouse:write')}
+                permissions={session.permissions}
                 shipments={businessShipments}
                 businessCostAudits={businessCostAudits}
                 notice={notice}
                 onDispatch={handleWarehouseDispatchShipment}
+                canCreateOrderEntry={session.user.role === 'ADMIN' || (
+                  session.permissions.includes('business:order-entry:view')
+                  && session.permissions.includes('business:order-entry:create')
+                  && session.permissions.includes('warehouse:in-stock:order-entry-select')
+                )}
+                onCreateOrderEntryFromWarehouse={openOrderEntryFromWarehouse}
                 findShipmentBySystemOrderNo={findShipmentBySystemOrderNo}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
               />
@@ -2589,7 +3134,10 @@ export function App() {
               <CustomerServicePage
                 shipments={businessShipments}
                 problemTickets={problemTickets}
+                businessCostAudits={businessCostAudits}
+                agents={masterData.agents}
                 apiClient={apiClient}
+                permissions={session.permissions}
                 onShipmentUpdated={upsertLocalShipment}
                 onProblemTicketCreated={(ticket) => setProblemTickets((current) => [ticket, ...current])}
                 onProblemTicketUpdated={(ticket) => setProblemTickets((current) => current.map((item) => item.id === ticket.id ? ticket : item))}
@@ -2601,6 +3149,14 @@ export function App() {
                 shipments={businessShipments}
                 tasks={carrierTasks}
                 notice={notice}
+                permissions={session.permissions}
+                bulkTrackingFileName={bulkTrackingFileName}
+                bulkTrackingRows={bulkTrackingRows}
+                bulkTrackingResult={bulkTrackingResult}
+                bulkTrackingError={bulkTrackingError}
+                bulkTrackingImporting={bulkTrackingImporting}
+                onBulkTrackingFileChange={(event) => void handleBulkTrackingFileChange(event)}
+                onConfirmBulkTrackingImport={handleConfirmBulkTrackingImport}
                 onRunTask={handleRunCarrierTask}
                 onRetryTask={handleRetryCarrierTask}
                 onViewShipment={setDetailViewingShipment}
@@ -2619,6 +3175,9 @@ export function App() {
                 assignmentForm={routingAssignmentForm}
                 masterData={masterData}
                 businessCostAudits={businessCostAudits}
+                payableAudits={payableAudits}
+                assignmentFinanceDetail={routingAssignmentShipment ? shipmentFinanceDetails[routingAssignmentShipment.id] : undefined}
+                permissions={session.permissions}
                 onOpenAssignment={openRoutingAssignmentModal}
                 onApproveRouting={handleApprovePendingRouting}
                 onCancelAssignment={() => {
@@ -2629,12 +3188,16 @@ export function App() {
                 onRerouteShipment={handleRerouteShipment}
                 onEditShipment={(record) => openEditShipmentOperationalModal(record, 'routing')}
                 onViewRoutingLog={(record) => openShipmentLogModal(record, 'routing')}
+                onViewPendingRoutingLog={(record) => openShipmentLogModal(record, 'operation')}
+                onSavePendingRoutingCost={handleSavePendingRoutingCost}
+                onDeletePendingRoutingCost={handleDeletePendingRoutingCost}
                 onAiAssist={handleAiAssist}
                 aiLoading={aiLoading}
               />
             ) : currentMenuKey === 'problems' ? (
               <ProblemTicketsPage
                 config={modulePageConfigs.problems}
+                tickets={problemTickets}
                 notice={notice}
                 onAiAssist={handleAiAssist}
                 aiLoading={aiLoading}
@@ -2675,73 +3238,14 @@ export function App() {
                 moduleSummary={moduleSummary}
                 spotlightModules={spotlightModules}
                 apiClient={apiClient}
+                permissions={session.permissions}
+                role={session.user.role}
                 onViewShipment={setDetailViewingShipment}
-                onProcessShipment={openEditShipmentOperationalModal}
+                onProcessShipment={(shipment) => openEditShipmentOperationalModal(shipment, 'operationsPool')}
               />
             )}
             </Suspense>
-            <Modal
-              title="批量添加轨迹"
-              open={bulkTrackingOpen && currentMenuKey !== 'orders'}
-              destroyOnHidden
-              okText="确认导入"
-              cancelText="取消"
-              width={760}
-              okButtonProps={{ disabled: !bulkTrackingResult || bulkTrackingResult.updates.length === 0 }}
-              onOk={() => void handleConfirmBulkTrackingImport().catch((error) => {
-                setBulkTrackingError(error instanceof Error ? error.message : '轨迹导入失败');
-              })}
-              onCancel={() => setBulkTrackingOpen(false)}
-            >
-              <Alert
-                className="notice-bar"
-                type="info"
-                showIcon
-                message="客户单号为内部单号，转单号为快递号；支持按任一单号匹配。同一单号多条轨迹只取日期最新的一条。"
-              />
-              <Space direction="vertical" size={12} className="ai-list">
-                <div>
-                  <label className="upload-label" htmlFor="bulk-tracking-upload-global">
-                    导入轨迹表
-                  </label>
-                  <input
-                    id="bulk-tracking-upload-global"
-                    aria-label="导入轨迹表"
-                    className="file-input"
-                    type="file"
-                    accept=".xls,.xlsx"
-                    onChange={(event) => void handleBulkTrackingFileChange(event)}
-                  />
-                </div>
-                {bulkTrackingFileName ? <Text type="secondary">{bulkTrackingFileName}</Text> : null}
-                {bulkTrackingError ? <Alert type="error" showIcon message={bulkTrackingError} /> : null}
-                {bulkTrackingResult ? (
-                  <>
-                    <Space wrap>
-                      <Tag color="default">原始轨迹 {bulkTrackingRows.length} 行</Tag>
-                      <Tag color="blue">待更新 {bulkTrackingResult.updates.length} 票</Tag>
-                      <Tag color={bulkTrackingResult.unmatchedOrderNos.length ? 'orange' : 'green'}>
-                        未匹配 {bulkTrackingResult.unmatchedOrderNos.length} 个单号
-                      </Tag>
-                    </Space>
-                    {bulkTrackingResult.unmatchedOrderNos.length ? (
-                      <Text type="secondary">未匹配：{bulkTrackingResult.unmatchedOrderNos.join('、')}</Text>
-                    ) : null}
-                    <Table
-                      rowKey="shipmentId"
-                      size="small"
-                      pagination={tenRowTablePagination}
-                      dataSource={bulkTrackingResult.updates.slice(0, 6)}
-                      columns={[
-                        { title: '匹配单号', dataIndex: 'customerOrderNo' },
-                        { title: '轨迹日期', dataIndex: 'trackingDate', render: (value) => formatTrackingImportDate(value) },
-                        { title: '将写入最新轨迹', dataIndex: 'latestTracking' }
-                      ]}
-                    />
-                  </>
-                ) : null}
-              </Space>
-            </Modal>
+            </AppPageErrorBoundary>
             <Modal
               title="人工修改轨迹与状态"
               open={Boolean(editingShipment) && currentMenuKey !== 'orders'}
@@ -2762,15 +3266,15 @@ export function App() {
                 showIcon
                   message={
                     editingShipmentSource === 'routing'
-                      ? '从渠道排货入口修改会写入排货日志，并同步覆盖该票最新轨迹、转单号和状态。'
-                    : '人工修改会直接覆盖该票最新轨迹、转单号和状态，并写入操作记录。'
+                      ? '从渠道排货入口修改会写入排货日志，并同步覆盖该票最新物流轨迹、转单号和状态。'
+                    : '人工修改会直接覆盖该票最新物流轨迹、转单号和状态；内部生命周期节点不会写入物流轨迹。'
                 }
               />
               <Form form={editShipmentForm} layout="vertical">
                 <Form.Item
                   name="latestTracking"
-                  label="最新轨迹"
-                  rules={[{ required: true, whitespace: true, message: '请输入最新轨迹' }]}
+                  label="最新物流轨迹"
+                  rules={[{ required: true, whitespace: true, message: '请输入最新物流轨迹' }]}
                 >
                   <Input.TextArea rows={3} />
                 </Form.Item>
@@ -2855,6 +3359,53 @@ export function App() {
               </Form>
             </Modal>
             <Modal
+              title="确认审核排货"
+              open={Boolean(pendingRoutingApprovalShipment)}
+              destroyOnHidden
+              okText="确认审核"
+              cancelText="取消"
+              onOk={() => void confirmPendingRoutingApproval()}
+              onCancel={() => setPendingRoutingApprovalShipment(null)}
+            >
+              <Alert
+                className="notice-bar"
+                type="warning"
+                showIcon
+                message={pendingRoutingApprovalShipment
+                  ? `${pendingRoutingApprovalShipment.systemOrderNo} 审核通过后将进入已排货，并同步进入仓库待出库。`
+                  : '确认后将进入仓库待出库。'}
+              />
+            </Modal>
+            <Modal
+              title="删除待排货"
+              open={Boolean(pendingRoutingDeleteShipment)}
+              destroyOnHidden
+              okText="确认删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              onOk={() => void handleDeletePendingRouting()}
+              onCancel={() => {
+                setPendingRoutingDeleteShipment(null);
+                pendingRoutingDeleteForm.resetFields();
+              }}
+            >
+              <Alert
+                className="notice-bar"
+                type="warning"
+                showIcon
+                message={
+                  pendingRoutingDeleteShipment
+                    ? `${pendingRoutingDeleteShipment.systemOrderNo} 将从待排货移除，不进入仓库待出库。`
+                    : '待排货删除需要填写原因。'
+                }
+              />
+              <Form form={pendingRoutingDeleteForm} layout="vertical">
+                <Form.Item name="reason" label="删除原因" rules={[{ required: true, whitespace: true, message: '请填写删除原因' }]}>
+                  <Input.TextArea rows={4} placeholder="例如客户取消出货、资料重复创建等" />
+                </Form.Item>
+              </Form>
+            </Modal>
+            <Modal
               title={<span id="shipment-operation-log-title-global">{logViewingMode === 'routing' ? '排货日志' : '操作日志'}</span>}
               aria-labelledby="shipment-operation-log-title-global"
               open={Boolean(logViewingShipment) && currentMenuKey !== 'orders'}
@@ -2875,11 +3426,15 @@ export function App() {
                       : '单票全生命周期操作记录'
                 }
               />
-              <Table
+              <ManagedTable
                 rowKey="id"
                 size="small"
                 pagination={tenRowTablePagination}
                 dataSource={shipmentLogs}
+                sticky={false}
+                minimumScrollX={0}
+                resizableColumns={false}
+                columnSettings={false}
                 columns={[
                   { title: '操作时间', dataIndex: 'operatedAt', width: 210, render: (value: string) => formatBeijingDateTime(value) },
                   { title: '操作人员', dataIndex: 'operator', width: 130 },

@@ -12,3 +12,12 @@ packages/*/dist
 scraped_docs
 worktrees
 .worktrees
+docs
+outputs
+screenshots
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/__tests__
+.siyuan-release-state

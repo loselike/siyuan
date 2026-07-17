@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useState } from 'react';
-import { Alert, Button, Card, Col, ConfigProvider, Flex, Input, Layout, Modal, Row, Space, Table, Typography } from 'antd';
+import { Alert, Button, Card, Col, ConfigProvider, Flex, Input, Layout, Modal, Row, Space, Typography } from 'antd';
 import type { ThemeConfig } from 'antd/es/config-provider/context';
 import {
   shipmentStatusLabels,
@@ -14,7 +14,7 @@ import {
 } from '@siyuan/shared';
 import type { Principal } from '../../apiClient';
 import { formatCurrency } from '../shared/format';
-import { AppActionGroup, AppPageHeader, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppPageHeader, ManagedTable, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
@@ -145,15 +145,19 @@ export function CustomerPortal({
             </Col>
             <Col xs={24} lg={16}>
               <Card title="我的运单">
-                <Table
+                <ManagedTable
                   size="small"
                   rowKey="id"
                   dataSource={shipments}
                   pagination={tenRowTablePagination}
+                  sticky={false}
+                  minimumScrollX={0}
+                  resizableColumns={false}
+                  columnSettings={false}
                   columns={[
                     { title: '客户单号', dataIndex: 'customerOrderNo' },
                     {
-                      title: '系统单号',
+                      title: '出货单号',
                       dataIndex: 'systemOrderNo',
                       render: (value: string, record) => (
                         <Space direction="vertical" size={0}>
@@ -170,7 +174,7 @@ export function CustomerPortal({
                     { title: '转单号', dataIndex: 'transferNo', render: (value?: string) => value ?? '待生成' },
                     { title: '目的地', dataIndex: 'destinationCountry' },
                     { title: '状态', dataIndex: 'status', render: (status: ShipmentStatus) => shipmentStatusLabels[status] },
-                    { title: '最新轨迹', dataIndex: 'latestTracking' }
+                    { title: '最新物流轨迹', dataIndex: 'latestTracking' }
                   ]}
                 />
               </Card>
@@ -261,7 +265,7 @@ export function CustomerPortal({
                 )}
                 {renderCustomerShipmentDetailField('目的地', customerDetailShipment.destinationCountry)}
                 {renderCustomerShipmentDetailField('状态', shipmentStatusLabels[customerDetailShipment.status])}
-                {renderCustomerShipmentDetailField('最新轨迹', customerDetailShipment.latestTracking, { wide: true })}
+                {renderCustomerShipmentDetailField('最新物流轨迹', customerDetailShipment.latestTracking, { wide: true })}
               </div>
             ) : null}
           </Modal>

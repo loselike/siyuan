@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   calculateChargeableWeight,
+  calculateCompanyChannelChargeWeight,
+  calculateCompanyChannelChargeWeightFromCargo,
   calculateQuote,
   quoteWithPricingRules,
   createFeeLinesFromQuote,
@@ -20,6 +22,9 @@ import {
   createSystemOrderNo,
   createMockTransferNo,
   createMockTrackingStatus,
+  hasUsPostalRuleOverlap,
+  isUsPostalRuleSyntax,
+  matchUsPostalRule,
   canAccessStaffMenu,
   getVisibleStaffMenuKeys,
   summarizeLineShipmentPool,
@@ -34,6 +39,26 @@ import {
   type Shipment,
   ShipmentStatus
 } from './index';
+
+describe('US postal-code pricing rules', () => {
+  it('matches five-digit ZIP codes by the documented leading-digit groups', () => {
+    expect(matchUsPostalRule('5-7（邮编）', '65644')).toEqual(expect.objectContaining({ priority: 3, matchedLabel: '5-7（邮编）' }));
+    expect(matchUsPostalRule('4、5、6、7邮编', '65644')).toEqual(expect.objectContaining({ priority: 3 }));
+    expect(matchUsPostalRule('0-1-2-4（邮编）', '35644')).toBeUndefined();
+    expect(matchUsPostalRule('0-1-2-4（邮编）', '25644')).toEqual(expect.objectContaining({ priority: 3 }));
+    expect(matchUsPostalRule('96-99（邮编）', '98101')).toEqual(expect.objectContaining({ specificity: 3 }));
+    expect(matchUsPostalRule('美西-邮编8-9', '90155')).toEqual(expect.objectContaining({ priority: 3 }));
+    expect(matchUsPostalRule('80000-99999', '90155')).toEqual(expect.objectContaining({ priority: 2 }));
+  });
+
+  it('keeps postal-rule validation and overlap checks aligned with matching', () => {
+    expect(isUsPostalRuleSyntax('5-7（邮编）')).toBe(true);
+    expect(isUsPostalRuleSyntax('4、5、6、7邮编')).toBe(true);
+    expect(isUsPostalRuleSyntax('96-99（邮编）')).toBe(true);
+    expect(isUsPostalRuleSyntax('时效 5-7天')).toBe(false);
+    expect(hasUsPostalRuleOverlap(['5-7（邮编）', '6（邮编）'])).toBe(true);
+  });
+});
 
 describe('role menu access', () => {
   it('keeps system settings admin-only and separates operation from finance menus', () => {
@@ -93,6 +118,48 @@ describe('shipment weight and quote calculations', () => {
 
     expect(result.volumetricWeightKg).toBe(24);
     expect(result.chargeableWeightKg).toBe(24);
+  });
+
+  it('uses the selected company channel divisor and settlement rounding rules', () => {
+    const packages = [{ packageCount: 1, weightKg: 8.1, lengthCm: 60, widthCm: 50, heightCm: 40 }];
+    const common = {
+      multiPieceWeightRule: 'SUM_THEN_COMPARE',
+      singleWeightRoundingRule: 'ACTUAL',
+      settlementWeightRule: 'MAX_ACTUAL_VOLUME',
+      settlementWeightRoundingRule: 'NONE'
+    } as const;
+
+    expect(calculateCompanyChannelChargeWeight({ ...common, volumeDivisor: 5000 }, packages)).toBe(24);
+    expect(calculateCompanyChannelChargeWeight({ ...common, volumeDivisor: 6000, settlementWeightRoundingRule: 'LARGE_1_SMALL_0_5' }, packages)).toBe(20);
+  });
+
+  it('applies package count to both single-package actual weight and volume', () => {
+    const rule = {
+      volumeDivisor: 5000,
+      multiPieceWeightRule: 'SUM_THEN_COMPARE',
+      singleWeightRoundingRule: 'ACTUAL',
+      settlementWeightRule: 'MAX_ACTUAL_VOLUME',
+      settlementWeightRoundingRule: 'NONE'
+    } as const;
+
+    expect(calculateCompanyChannelChargeWeight(rule, [{
+      packageCount: 3,
+      weightKg: 10,
+      lengthCm: 20,
+      widthCm: 20,
+      heightCm: 20
+    }])).toBe(30);
+  });
+
+  it('recalculates aggregate manual cargo with the selected company channel divisor', () => {
+    const rule = {
+      volumeDivisor: 5000,
+      multiPieceWeightRule: 'SUM_THEN_COMPARE',
+      singleWeightRoundingRule: 'ACTUAL',
+      settlementWeightRule: 'MAX_ACTUAL_VOLUME',
+      settlementWeightRoundingRule: 'NONE'
+    } as const;
+    expect(calculateCompanyChannelChargeWeightFromCargo(rule, { packageCount: 2, actualWeightKg: 8, volumeCbm: 0.12 })).toBe(24);
   });
 
   it('calculates receivable quote with fuel and surcharges', () => {
@@ -368,7 +435,7 @@ describe('API DTO helpers', () => {
         { id: 'u-customer', customerId: 'c-9409', customerName: '9409-Daloday', username: 'customer', enabled: true }
       ],
       agents: [
-        { id: 'a-yuhuan', name: '宇环', enabled: true }
+        { id: 'a-yuhuan', name: '宇环', createdAt: '2026-06-01T00:00:00.000Z', enabled: true }
       ],
       agentChannels: [
         { id: 'ach-yuhuan-dhl', agentId: 'a-yuhuan', agentName: '宇环', channelName: '宇环 DHL', enabled: true }
@@ -559,6 +626,23 @@ describe('fulfillment workflow rules', () => {
     expect(result.metrics.riskCount).toBe(4);
   });
 
+  it('filters line shipments to the latest 30 calendar days', () => {
+    const withinThirtyDays = new Date();
+    withinThirtyDays.setDate(withinThirtyDays.getDate() - 29);
+    const beforeThirtyDays = new Date();
+    beforeThirtyDays.setDate(beforeThirtyDays.getDate() - 30);
+
+    const result = summarizeLineShipmentPool([
+      sampleShipment('within-thirty-days', 'DEDICATED_LINE', 'WAITING_SORT', { createdAt: withinThirtyDays.toISOString() }),
+      sampleShipment('before-thirty-days', 'DEDICATED_LINE', 'WAITING_SORT', { createdAt: beforeThirtyDays.toISOString() })
+    ], {
+      statusGroup: 'ALL',
+      datePreset: 'LAST_30_DAYS'
+    });
+
+    expect(result.rows.map((row) => row.shipment.id)).toEqual(['within-thirty-days']);
+  });
+
   it('separates customer-service data confirm and transfer-number pools in line shipments', () => {
     const shipments = [
       sampleShipment('data-confirm', 'DEDICATED_LINE', 'OUTBOUNDED'),
@@ -643,17 +727,36 @@ describe('fulfillment workflow rules', () => {
       {
         shipmentId: 'a',
         customerOrderNo: 'OUT-1001',
+        trackingDate: '2026-06-01 09:00',
+        latestTracking: '到达处理中心（深圳）',
+        description: '到达处理中心',
+        location: '深圳',
+        rowNumber: 2
+      },
+      {
+        shipmentId: 'a',
+        customerOrderNo: 'OUT-1001',
         trackingDate: '2026-06-03 18:00',
-        latestTracking: '航班已起飞（香港）'
+        latestTracking: '航班已起飞（香港）',
+        description: '航班已起飞',
+        location: '香港',
+        rowNumber: 3
       },
       {
         shipmentId: 'b',
         customerOrderNo: 'OUT-1002',
         trackingDate: '2026-06-02',
-        latestTracking: '已揽收（广州）'
+        latestTracking: '已揽收（广州）',
+        description: '已揽收',
+        location: '广州',
+        rowNumber: 4
       }
     ]);
     expect(result.unmatchedOrderNos).toEqual(['MISS-1']);
+    expect(result.shipmentPreviews).toEqual(expect.arrayContaining([
+      expect.objectContaining({ shipmentId: 'a', trackingCount: 2, latestTracking: '航班已起飞（香港）' }),
+      expect.objectContaining({ shipmentId: 'b', trackingCount: 1, latestTracking: '已揽收（广州）' })
+    ]));
   });
 });
 
