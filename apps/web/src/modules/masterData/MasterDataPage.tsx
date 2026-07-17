@@ -47,9 +47,7 @@ interface MasterAgentFormValues {
   agentShortName: string;
   agentName: string;
   settlementCycle?: AgentSummary['settlementCycle'];
-  warehouseAddress1: string;
-  warehouseAddress2: string;
-  warehouseAddress3: string;
+  warehouseAddresses: string[];
   warehouseContact: string;
   invoiceTemplateName: string;
   invoiceTemplateUrl: string;
@@ -194,7 +192,16 @@ const optionLabel = (options: Array<{ value: string; label: string }>, value?: s
 const currencyNames: Record<string, string> = { USD: '美金', RMB: '人民币', CNY: '人民币', EUR: '欧元', GBP: '英镑', HKD: '港币' };
 const currencyName = (code: string) => currencyNames[code.toUpperCase()] ?? code.toUpperCase();
 const todayDate = () => new Date().toISOString().slice(0, 10);
-const emptyAgentBankAccounts = (): MasterAgentBankAccountFormValues[] => Array.from({ length: 3 }, () => ({ currency: 'RMB', enabled: 'true' }));
+const MAX_AGENT_WAREHOUSES = 3;
+const MAX_AGENT_BANK_ACCOUNTS = 3;
+const agentItemOrdinals = ['一', '二', '三'];
+const emptyAgentBankAccounts = (): MasterAgentBankAccountFormValues[] => [{ currency: 'RMB', enabled: 'true' }];
+function agentWarehouseAddresses(agent?: AgentSummary): string[] {
+  const addresses = [agent?.warehouseAddress1, agent?.warehouseAddress2, agent?.warehouseAddress3]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value));
+  return addresses.length ? addresses : [''];
+}
 function agentBankAccountTime(row: AgentBankAccountSummary) {
   return Date.parse(row.updatedAt ?? row.createdAt ?? '') || 0;
 }
@@ -1069,9 +1076,7 @@ export function MasterDataPage({
       settlementCycle: undefined,
       agentIntegrationType: 'MANUAL',
       agentEnabled: 'true',
-      warehouseAddress1: '',
-      warehouseAddress2: '',
-      warehouseAddress3: '',
+      warehouseAddresses: [''],
       warehouseContact: '',
       invoiceTemplateName: '',
       invoiceTemplateUrl: '',
@@ -1086,10 +1091,9 @@ export function MasterDataPage({
 
   async function handleEditMasterAgent(agent: AgentSummary) {
     setEditingMasterAgent(agent);
-    const banks = sortAgentBanks(agentBankAccounts.filter((item) => matchesAgentBank(agent, item))).slice(0, 3);
-    const bankForms: MasterAgentBankAccountFormValues[] = emptyAgentBankAccounts().map((empty, index): MasterAgentBankAccountFormValues => {
-      const bank = banks[index];
-      return bank ? {
+    const banks = sortAgentBanks(agentBankAccounts.filter((item) => matchesAgentBank(agent, item))).slice(0, MAX_AGENT_BANK_ACCOUNTS);
+    const bankForms: MasterAgentBankAccountFormValues[] = banks.length
+      ? banks.map((bank) => ({
         id: bank.id,
         accountName: bank.accountName,
         bankAccountNo: bank.bankAccountNo,
@@ -1097,17 +1101,15 @@ export function MasterDataPage({
         currency: bank.currency ?? 'RMB',
         remark: bank.remark ?? '',
         enabled: bank.enabled ? 'true' : 'false'
-      } : empty;
-    });
+      }))
+      : emptyAgentBankAccounts();
     const bank = banks[0];
     masterAgentForm.setFieldsValue({
       agentCode: agent.code ?? '',
       agentShortName: agent.shortName ?? agent.name,
       agentName: agent.name,
       settlementCycle: agent.settlementCycle,
-      warehouseAddress1: agent.warehouseAddress1 ?? '',
-      warehouseAddress2: agent.warehouseAddress2 ?? '',
-      warehouseAddress3: agent.warehouseAddress3 ?? '',
+      warehouseAddresses: agentWarehouseAddresses(agent),
       warehouseContact: agent.warehouseContact ?? '',
       invoiceTemplateName: agent.invoiceTemplateName ?? '',
       invoiceTemplateUrl: agent.invoiceTemplateUrl ?? '',
@@ -1143,7 +1145,8 @@ export function MasterDataPage({
 
   async function handleSubmitMasterAgent() {
     const values = await masterAgentForm.validateFields();
-    const bankInputs = (values.bankAccounts ?? []).slice(0, 3).map((bank) => ({
+    const warehouseAddresses = (values.warehouseAddresses ?? []).map((address) => address.trim()).filter(Boolean).slice(0, MAX_AGENT_WAREHOUSES);
+    const bankInputs = (values.bankAccounts ?? []).slice(0, MAX_AGENT_BANK_ACCOUNTS).map((bank) => ({
       id: bank.id,
       accountName: bank.accountName?.trim() ?? '',
       bankAccountNo: bank.bankAccountNo?.trim() ?? '',
@@ -1171,9 +1174,9 @@ export function MasterDataPage({
       shortName: values.agentShortName.trim(),
       name: values.agentName.trim(),
       settlementCycle: values.settlementCycle,
-      warehouseAddress1: values.warehouseAddress1?.trim(),
-      warehouseAddress2: values.warehouseAddress2?.trim(),
-      warehouseAddress3: values.warehouseAddress3?.trim(),
+      warehouseAddress1: warehouseAddresses[0],
+      warehouseAddress2: warehouseAddresses[1],
+      warehouseAddress3: warehouseAddresses[2],
       warehouseContact: values.warehouseContact?.trim(),
       invoiceTemplateName: values.invoiceTemplateName?.trim(),
       invoiceTemplateUrl: values.invoiceTemplateUrl?.trim(),
@@ -1192,6 +1195,10 @@ export function MasterDataPage({
     }
     if (canWriteAgentBanks) {
       const savedBanks: AgentBankAccountSummary[] = [];
+      const existingEditableBanks = editingMasterAgent
+        ? sortAgentBanks(agentBankAccounts.filter((bank) => matchesAgentBank(editingMasterAgent, bank))).slice(0, MAX_AGENT_BANK_ACCOUNTS)
+        : [];
+      const submittedBankIds = new Set(bankInputs.flatMap((bank) => bank.id ? [bank.id] : []));
       for (const bankInput of bankInputs) {
         const hasBankValue = Boolean(bankInput.accountName || bankInput.bankAccountNo || bankInput.bankName || bankInput.remark);
         const existingBank = bankInput.id ? agentBankAccounts.find((bank) => bank.id === bankInput.id) : undefined;
@@ -1208,6 +1215,19 @@ export function MasterDataPage({
           enabled: hasBankValue ? bankInput.enabled : false
         });
         savedBanks.push(bank);
+      }
+      for (const removedBank of existingEditableBanks.filter((bank) => !submittedBankIds.has(bank.id))) {
+        savedBanks.push(await apiClient.saveAgentBankAccount({
+          id: removedBank.id,
+          agentId: agent.id,
+          agentName: agent.name,
+          accountName: removedBank.accountName,
+          bankAccountNo: removedBank.bankAccountNo,
+          bankName: removedBank.bankName,
+          currency: removedBank.currency ?? 'RMB',
+          remark: removedBank.remark,
+          enabled: false
+        }));
       }
       if (savedBanks.length) {
         setAgentBankAccounts((current) => [
@@ -2756,20 +2776,53 @@ export function MasterDataPage({
                 <Input placeholder="例如 深圳加时特" />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="warehouseAddress1" label="仓库地址一">
-                <Input />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="warehouseAddress2" label="仓库地址二">
-                <Input />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="warehouseAddress3" label="仓库地址三">
-                <Input />
-              </Form.Item>
+            <Col xs={24}>
+              <Form.List name="warehouseAddresses">
+                {(fields, { add, remove }) => (
+                  <Card
+                    size="small"
+                    title="仓库地址"
+                    extra={
+                      <Space size={4}>
+                        <Text type="secondary">{`${fields.length}/${MAX_AGENT_WAREHOUSES}`}</Text>
+                        <Button
+                          aria-label="新增仓库地址"
+                          disabled={fields.length >= MAX_AGENT_WAREHOUSES}
+                          icon={<Plus size={16} />}
+                          onClick={() => add('')}
+                          size="small"
+                          type="text"
+                        />
+                      </Space>
+                    }
+                  >
+                    <Row gutter={12}>
+                      {fields.map((field, index) => (
+                        <Col xs={24} md={12} key={field.key}>
+                          <Form.Item
+                            label={fields.length === 1 ? '仓库地址' : `仓库地址${agentItemOrdinals[index]}`}
+                            name={field.name}
+                          >
+                            <Input
+                              addonAfter={fields.length > 1 ? (
+                                <Button
+                                  aria-label={`删除仓库地址${agentItemOrdinals[index]}`}
+                                  danger
+                                  icon={<Trash2 size={15} />}
+                                  onClick={() => remove(field.name)}
+                                  size="small"
+                                  type="text"
+                                />
+                              ) : undefined}
+                              placeholder="请输入仓库地址"
+                            />
+                          </Form.Item>
+                        </Col>
+                      ))}
+                    </Row>
+                  </Card>
+                )}
+              </Form.List>
             </Col>
             <Col xs={24} md={12}>
               <Form.Item name="warehouseContact" label="仓库联系人">
@@ -2811,57 +2864,91 @@ export function MasterDataPage({
             </Col>
             {canReadAgentBanks ? (
               <>
-                <Col xs={24}>
-                  <Title level={5}>收款银行账户一 / 二 / 三</Title>
-                </Col>
                 <Form.List name="bankAccounts">
-                  {(fields) => fields.slice(0, 3).map((field, index) => (
-                    <Col xs={24} key={field.key}>
-                      <Card size="small" title={`收款银行账户${['一', '二', '三'][index]}`}>
-                        <Form.Item name={[field.name, 'id']} hidden>
-                          <Input />
-                        </Form.Item>
-                        <Row gutter={12}>
-                          <Col xs={24} md={8}>
-                            <Form.Item name={[field.name, 'accountName']} label="收款方">
-                              <Input disabled={!canWriteAgentBanks} placeholder="例如 深圳市鲸链国际物流有限公司" />
-                            </Form.Item>
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Form.Item name={[field.name, 'bankName']} label="开户银行">
-                              <Input disabled={!canWriteAgentBanks} placeholder="例如 招商银行深圳福永支行" />
-                            </Form.Item>
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Form.Item name={[field.name, 'bankAccountNo']} label="银行账号">
-                              <Input disabled={!canWriteAgentBanks} placeholder="例如 755972950810001" />
-                            </Form.Item>
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Form.Item name={[field.name, 'currency']} label="币种" initialValue="RMB">
-                              <select aria-label={`收款银行账户${index + 1}币种`} className="native-select" disabled={!canWriteAgentBanks}>
-                                <option value="RMB">RMB</option>
-                                <option value="USD">USD</option>
-                              </select>
-                            </Form.Item>
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Form.Item name={[field.name, 'enabled']} label="状态" initialValue="true">
-                              <select aria-label={`收款银行账户${index + 1}状态`} className="native-select" disabled={!canWriteAgentBanks}>
-                                <option value="true">启用</option>
-                                <option value="false">停用</option>
-                              </select>
-                            </Form.Item>
-                          </Col>
-                          <Col xs={24} md={8}>
-                            <Form.Item name={[field.name, 'remark']} label="备注">
-                              <Input disabled={!canWriteAgentBanks} placeholder="例如 默认付款账户" />
-                            </Form.Item>
-                          </Col>
-                        </Row>
+                  {(fields, { add, remove }) => (
+                    <Col xs={24}>
+                      <Card
+                        size="small"
+                        title="收款银行账户"
+                        extra={
+                          <Space size={4}>
+                            <Text type="secondary">{`${fields.length}/${MAX_AGENT_BANK_ACCOUNTS}`}</Text>
+                            <Button
+                              aria-label="新增收款银行账户"
+                              disabled={!canWriteAgentBanks || fields.length >= MAX_AGENT_BANK_ACCOUNTS}
+                              icon={<Plus size={16} />}
+                              onClick={() => add({ currency: 'RMB', enabled: 'true' })}
+                              size="small"
+                              type="text"
+                            />
+                          </Space>
+                        }
+                      >
+                        <Space className="full-width" direction="vertical" size={12}>
+                          {fields.map((field, index) => (
+                            <Card
+                              key={field.key}
+                              size="small"
+                              title={fields.length === 1 ? '收款银行账户' : `收款银行账户${agentItemOrdinals[index]}`}
+                              extra={fields.length > 1 ? (
+                                <Button
+                                  aria-label={`删除收款银行账户${agentItemOrdinals[index]}`}
+                                  danger
+                                  disabled={!canWriteAgentBanks}
+                                  icon={<Trash2 size={15} />}
+                                  onClick={() => remove(field.name)}
+                                  size="small"
+                                  type="text"
+                                />
+                              ) : undefined}
+                            >
+                              <Form.Item name={[field.name, 'id']} hidden>
+                                <Input />
+                              </Form.Item>
+                              <Row gutter={12}>
+                                <Col xs={24} md={8}>
+                                  <Form.Item name={[field.name, 'accountName']} label="收款方">
+                                    <Input disabled={!canWriteAgentBanks} placeholder="例如 深圳市鲸链国际物流有限公司" />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} md={8}>
+                                  <Form.Item name={[field.name, 'bankName']} label="开户银行">
+                                    <Input disabled={!canWriteAgentBanks} placeholder="例如 招商银行深圳福永支行" />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} md={8}>
+                                  <Form.Item name={[field.name, 'bankAccountNo']} label="银行账号">
+                                    <Input disabled={!canWriteAgentBanks} placeholder="例如 755972950810001" />
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} md={8}>
+                                  <Form.Item name={[field.name, 'currency']} label="币种">
+                                    <select aria-label={`收款银行账户${index + 1}币种`} className="native-select" disabled={!canWriteAgentBanks}>
+                                      <option value="RMB">RMB</option>
+                                      <option value="USD">USD</option>
+                                    </select>
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} md={8}>
+                                  <Form.Item name={[field.name, 'enabled']} label="状态">
+                                    <select aria-label={`收款银行账户${index + 1}状态`} className="native-select" disabled={!canWriteAgentBanks}>
+                                      <option value="true">启用</option>
+                                      <option value="false">停用</option>
+                                    </select>
+                                  </Form.Item>
+                                </Col>
+                                <Col xs={24} md={8}>
+                                  <Form.Item name={[field.name, 'remark']} label="备注">
+                                    <Input disabled={!canWriteAgentBanks} placeholder="例如 默认付款账户" />
+                                  </Form.Item>
+                                </Col>
+                              </Row>
+                            </Card>
+                          ))}
+                        </Space>
                       </Card>
                     </Col>
-                  ))}
+                  )}
                 </Form.List>
               </>
             ) : null}
