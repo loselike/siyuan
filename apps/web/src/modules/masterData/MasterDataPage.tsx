@@ -2742,6 +2742,11 @@ export function MasterDataPage({
                 <Input placeholder="例如 加时特" />
               </Form.Item>
             </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="settlementCycle" label="代理账期">
+                <Select allowClear placeholder="请选择代理账期" options={agentSettlementCycleOptions} />
+              </Form.Item>
+            </Col>
             <Col xs={24}>
               <Form.Item
                 name="agentName"
@@ -2749,11 +2754,6 @@ export function MasterDataPage({
                 rules={[{ required: true, whitespace: true, message: '请输入代理全称' }]}
               >
                 <Input placeholder="例如 深圳加时特" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="settlementCycle" label="代理账期">
-                <Select allowClear placeholder="请选择代理账期" options={agentSettlementCycleOptions} />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
