@@ -22,6 +22,8 @@ import {
   hasScopedUsPostalRuleOverlap,
   normalizeUsPostalCode,
   canadaAddressTypeMatchesWarehouseCode,
+  sanitizePricingChannelRequirement,
+  sanitizePricingTransitLabel,
   isCanadaAddressScopeWarehouseCode,
   normalizeCanadaAddressType,
   normalizeCanadaAmazonWarehousePrefix,
@@ -291,7 +293,7 @@ import {
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
 import { getPasswordStrengthError, hashPassword } from './password.js';
-import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, sanitizePricingChannelRequirement, sanitizePricingTransitLabel, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
+import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { renderDubaiWorkbookSheets } from './dubai-price-sheet-renderer.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
 import { buildLineShipmentPackageSummaries } from './line-shipment-packages.js';

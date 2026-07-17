@@ -1,3 +1,5 @@
+import type { CanadaAddressType } from './pricing-rule-engine.js';
+
 export type BusinessType = 'EXPRESS' | 'SMALL_PACKET' | 'DEDICATED_LINE';
 
 export type BuiltinStaffRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
@@ -713,164 +715,7 @@ export interface PricingRuleQuoteResponse extends QuoteResponse {
 
 export type QuoteSourceType = 'local' | 'agentApi';
 
-export interface WarehouseCodeRuleParseResult {
-  exactCodes: string[];
-  prefixRules: string[];
-  invalidSegments: string[];
-}
-
-/** Normalizes a FBA warehouse code without conflating ranges with exact codes. */
-export function normalizeWarehouseCodeRule(value?: string | null): string {
-  return String(value ?? '').replace(/\s+/g, '').toUpperCase();
-}
-
-/**
- * Parses supplier warehouse cells such as YYZ1-YYZ9, YYZ1+YYZ2 and YYZ.
- * Invalid ranges are deliberately omitted from the matching set so imports
- * cannot turn an ambiguous supplier cell into a broad quote match.
- */
-export function parseWarehouseCodeRules(value?: string | null): WarehouseCodeRuleParseResult {
-  const normalized = normalizeWarehouseCodeRule(value)
-    .replace(/[（）()【】\[\]]/g, '')
-    // Supplier cells often wrap codes with a Chinese warehouse-region label,
-    // for example “多伦多（YYZ/YHM1/YOO1）”. The label must be a separator,
-    // otherwise the first bare prefix becomes “多伦多YYZ” and is discarded.
-    .replace(/[\u3400-\u9FFF]+/g, ' ')
-    .replace(/[，、,;；/|+\n\r]+/g, ' ')
-    .trim();
-  const exactCodes = new Set<string>();
-  const prefixRules = new Set<string>();
-  const invalidSegments: string[] = [];
-
-  if (!normalized) return { exactCodes: [], prefixRules: [], invalidSegments: [] };
-
-  for (const segment of normalized.split(/\s+/).filter(Boolean)) {
-    const range = segment.match(/^([A-Z]+)(\d+)-([A-Z]+)(\d+)$/);
-    if (range) {
-      const [, startPrefix, startText, endPrefix, endText] = range;
-      const start = Number(startText);
-      const end = Number(endText);
-      if (startPrefix !== endPrefix || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start || end - start > 999) {
-        invalidSegments.push(segment);
-        continue;
-      }
-      for (let index = start; index <= end; index += 1) {
-        exactCodes.add(`${startPrefix}${index}`);
-      }
-      continue;
-    }
-    if (segment.includes('-')) {
-      invalidSegments.push(segment);
-      continue;
-    }
-    if (/^[A-Z]{2,8}$/.test(segment)) {
-      prefixRules.add(segment);
-      continue;
-    }
-    if (/^[A-Z]{2,8}\d[A-Z0-9]*$/.test(segment) || /^(?:[IX]US[A-Z]|IUTE)$/.test(segment)) {
-      exactCodes.add(segment);
-      continue;
-    }
-    invalidSegments.push(segment);
-  }
-
-  return {
-    exactCodes: [...exactCodes],
-    prefixRules: [...prefixRules],
-    invalidSegments
-  };
-}
-
-export function expandWarehouseCodeRules(value?: string | null): string[] {
-  const parsed = parseWarehouseCodeRules(value);
-  return [...parsed.exactCodes, ...parsed.prefixRules];
-}
-
-const invalidWarehouseCodeRulePrefix = '__INVALID_WAREHOUSE_RULE__:';
-
-/**
- * Internal row scopes written by the Canada importer. They intentionally live
- * in `warehouseCode` so the existing price-book/legacy-row schema can retain
- * the address matching rule without a migration.
- */
-export const CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE = '__CANADA_PRIVATE_ADDRESS__';
-export const CANADA_AMAZON_UNMAPPED_WAREHOUSE_CODE = '__CANADA_AMAZON_UNMAPPED__';
-export const CANADA_ADDRESS_SCOPE_UNSPECIFIED_WAREHOUSE_CODE = '__CANADA_ADDRESS_SCOPE_UNSPECIFIED__';
-
-export function normalizeCanadaAddressType(value?: string | null): CanadaAddressType {
-  return String(value ?? '').trim().toUpperCase() === 'AMAZON' ? 'AMAZON' : 'PRIVATE';
-}
-
-/** Canada FBA matching is deliberately by the warehouse's first three letters. */
-export function normalizeCanadaAmazonWarehousePrefix(value?: string | null): string | undefined {
-  const normalized = String(value ?? '').trim().replace(/\s+/g, '').toUpperCase();
-  return /^[A-Z]{3}$/.test(normalized) ? normalized : undefined;
-}
-
-export function isCanadaAddressScopeWarehouseCode(value?: string | null): boolean {
-  const normalized = normalizeWarehouseCodeRule(value);
-  return normalized === CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE
-    || normalized === CANADA_AMAZON_UNMAPPED_WAREHOUSE_CODE
-    || normalized === CANADA_ADDRESS_SCOPE_UNSPECIFIED_WAREHOUSE_CODE;
-}
-
-/**
- * Keeps an invalid supplier cell traceable in import health without allowing it
- * to behave like a general warehouse quote.
- */
-export function warehouseCodeRulesForImport(value?: string | null): string[] {
-  const parsed = parseWarehouseCodeRules(value);
-  const rules = [...parsed.exactCodes, ...parsed.prefixRules];
-  // Keep every invalid fragment beside the valid rules.  Dropping it makes a
-  // partially malformed supplier cell look healthy in import diagnostics.
-  return [...rules, ...parsed.invalidSegments.map((segment) => `${invalidWarehouseCodeRulePrefix}${segment}`)];
-}
-
-export function isInvalidWarehouseCodeRule(value?: string | null): boolean {
-  return normalizeWarehouseCodeRule(value).startsWith(invalidWarehouseCodeRulePrefix);
-}
-
-/** Returns lower rank for the more specific warehouse rule. */
-export function matchWarehouseCodeRule(ruleValue: string | undefined | null, inputValue: string | undefined | null): 0 | 1 | undefined {
-  const rule = normalizeWarehouseCodeRule(ruleValue);
-  const input = normalizeWarehouseCodeRule(inputValue);
-  if (!rule || !input) return undefined;
-  if (rule === input) return 0;
-  const parsed = parseWarehouseCodeRules(rule);
-  if (parsed.exactCodes.includes(input)) return 0;
-  return parsed.prefixRules.some((prefix) => input.startsWith(prefix) && /^\d/.test(input.slice(prefix.length))) ? 1 : undefined;
-}
-
-/**
- * Canada uses a supplier convention that is different from Amazon's normal
- * full warehouse-code matching: `非亚马逊地址` is a dedicated private-address
- * line, while FBA lines are keyed by a three-letter warehouse prefix.
- */
-export function canadaAddressTypeMatchesWarehouseCode(
-  rowWarehouseCode: string | undefined | null,
-  addressType?: CanadaAddressType | string | null,
-  amazonCode?: string | null
-): boolean {
-  const rowCode = normalizeWarehouseCodeRule(rowWarehouseCode);
-  const normalizedAddressType = normalizeCanadaAddressType(addressType);
-  if (normalizedAddressType === 'PRIVATE') {
-    // The empty-value fallback keeps manually-maintained pre-v4 Canada rows
-    // usable until their retained workbook is refreshed.
-    return !rowCode || rowCode === CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE;
-  }
-
-  const warehousePrefix = normalizeCanadaAmazonWarehousePrefix(amazonCode);
-  if (!warehousePrefix || !rowCode || isCanadaAddressScopeWarehouseCode(rowCode)) {
-    return false;
-  }
-  return matchWarehouseCodeRule(rowCode, warehousePrefix) !== undefined;
-}
-
-export function warehouseCodePrefixCandidates(value?: string | null): string[] {
-  const code = normalizeWarehouseCodeRule(value);
-  const prefix = code.match(/^[A-Z]+/)?.[0] ?? '';
-  return Array.from({ length: Math.max(0, prefix.length - 1) }, (_, index) => prefix.slice(0, index + 2));
-}
+export * from './pricing-rule-engine.js';
 
 export interface PriceBookRowSummary {
   id: string;
@@ -1367,9 +1212,6 @@ export interface PriceLookupResponse {
 }
 
 export type LegacyPricingModule = 'amazon' | 'inquiry' | 'europeExpress' | 'southAfrica' | 'usaAirSea' | 'canadaAirSea' | 'dubaiAirSea';
-
-/** 加拿大空海查询的收货地址类型。私人地址与亚马逊仓价格必须互斥匹配。 */
-export type CanadaAddressType = 'PRIVATE' | 'AMAZON';
 
 export interface DubaiPriceTableRow {
   id: string;

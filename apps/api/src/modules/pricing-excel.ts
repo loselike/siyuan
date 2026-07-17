@@ -1,6 +1,11 @@
 import * as xlsx from '@e965/xlsx';
 import {
   isInvalidWarehouseCodeRule,
+  CANADA_ADDRESS_SCOPE_UNSPECIFIED_WAREHOUSE_CODE,
+  CANADA_AMAZON_UNMAPPED_WAREHOUSE_CODE,
+  CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE,
+  sanitizePricingChannelRequirement as sanitizePricingChannelRequirementRule,
+  sanitizePricingTransitLabel as sanitizePricingTransitLabelRule,
   warehouseCodeRulesForImport,
   type EuropeOversizeCargoType,
   type EuropeTransportMode,
@@ -9,12 +14,6 @@ import {
   type PriceLookupRequest,
   type QuoteSourceType
 } from '@siyuan/shared';
-
-// Keep the importer compatible with retained workbooks before shared Canada
-// address helpers are deployed. These values are persisted in warehouseCode.
-const CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE = '__CANADA_PRIVATE_ADDRESS__';
-const CANADA_AMAZON_UNMAPPED_WAREHOUSE_CODE = '__CANADA_AMAZON_UNMAPPED__';
-const CANADA_ADDRESS_SCOPE_UNSPECIFIED_WAREHOUSE_CODE = '__CANADA_ADDRESS_SCOPE_UNSPECIFIED__';
 
 export type ExcelCellValue = string | number | null;
 export type SimpleWorksheet = {
@@ -189,7 +188,7 @@ export function inferEuropeOversizeCargoType(row: Pick<PricingImportDisplayRow, 
  * rule. This deliberately accepts only time statements and removes fee or
  * compensation clauses that frequently share the same spreadsheet cell.
  */
-export function sanitizePricingTransitLabel(value?: string | number | null): string | undefined {
+function legacySanitizePricingTransitLabel(value?: string | number | null): string | undefined {
   const source = cellToText(value)
     .replace(/[：:]/g, ':')
     .replace(/[－—–]/g, '-')
@@ -271,7 +270,7 @@ export function sanitizePricingTransitLabel(value?: string | number | null): str
  * boundary helper so internal price-book management can retain the original
  * source while every quote response can use the same safe text.
  */
-export function sanitizePricingChannelRequirement(
+function legacySanitizePricingChannelRequirement(
   value?: string | number | null,
   agentNames: Array<string | null | undefined> = []
 ): string | undefined {
@@ -313,6 +312,10 @@ export function sanitizePricingChannelRequirement(
 
   return lines.length ? lines.join('\n') : undefined;
 }
+
+/** Shared rule exports retained for importer compatibility. */
+export const sanitizePricingTransitLabel = sanitizePricingTransitLabelRule;
+export const sanitizePricingChannelRequirement = sanitizePricingChannelRequirementRule;
 
 function cleanEuropePriceGroup(value?: string, sheetName?: string) {
   let text = String(value ?? '')
