@@ -12,3 +12,10 @@
 - 用 `.codex-state.md` 抢锁或声明当前任务。
 
 新会话复制 `_template.md` 的结构，并使用唯一业务 slug 命名。状态只允许：`in_progress`、`blocked`、`handed_off`、`complete`。
+
+## 长会话轮换
+
+- 第 2 次观察到上下文压缩时，只刷新本会话状态文件中的检查点，继续当前会话。
+- 第 3 次压缩、出现记忆偏差、或用户明确说“切换新会话”时，按 `../session-context-rotation.md` 执行轮换。
+- 旧会话使用 `_handoff-template.md` 补齐交接内容并标为 `handed_off`；新会话必须创建新的唯一状态文件，不得继续改写旧会话文件。
+- 新会话确认接管成功后才归档旧会话；失败时旧会话恢复 `in_progress`。

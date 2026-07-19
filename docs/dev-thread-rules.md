@@ -130,48 +130,124 @@
 - 大功能优先落地“展示/读取”或“单类 CRUD”，再做批量操作、权限矩阵、列设置、通知、导入导出等增强。
 - 同一轮不要同时做多阶段功能、47 发布、巨型模块重构、数据库大迁移；除非用户明确要求。
 
-## Agency Agent Routing Details
+## GPT-5.6 Agent Routing Details
 
-本项目已安装 10 个 Agency custom agents，但它们不是默认启动上下文。调用策略是自动最小匹配：按任务内容选 1 个主 agent，必要时再叠加 1 个验证/审查/安全 agent。
+### Operating Model
 
-路由规则：
+- 项目主线程固定为 `gpt-5.6-sol` High。它负责理解用户目标、读取真实仓库状态、判断风险、决定是否委派、划定文件所有权、处理升级、整合结果和最终验收。
+- 子代理是固定的“模型 + 推理等级 + 职责 + 权限”组合，不允许执行中临时改模型。项目级配置位于 `.codex/config.toml` 和 `.codex/agents/*.toml`，从而避免全局默认模型或未来默认路由变化影响 Sunny。
+- 推理等级不等于权限等级。Luna/Terra 可以调查或实施边界明确的任务，但不能独立决定权限、数据库、财务、公共契约、生产或不可逆操作。
+- 所有任务都要经过路由判断，但不要求都委派。`NO_DELEGATION` 是正常且优先检查的结果。
 
-- Frontend Developer：只在本地 `frontend-design` 已明确 UI/UX 约束后，用于 React/AntD 组件实现、状态管理、性能和可访问性判断；小型文案、局部样式、字段显隐、列宽调整不调用。
-- Backend Architect：新增或修改 API、Prisma、Repository、状态流转、权限裁剪、跨模块数据流。
-- Rapid Prototyper：只用于非生产原型、功能形态探索和快速效果验证；不得直接用于财务正式逻辑、权限、数据库迁移和 47 发布。
-- Codebase Onboarding Engineer：新会话接手或陌生模块梳理；只读代码，输出模块地图、入口、数据流和风险，不改文件。
-- Code Reviewer：功能完成后、上线前或用户要求对抗式审查时，检查正确性、维护性、安全和性能。
-- Database Optimizer：慢查询、索引、Prisma 查询复杂、数据量增长、导入大数据和统计聚合性能问题。
-- API Tester：接口验收、API e2e、权限接口、状态流转、财务/仓库/订单接口验证。
-- Evidence Collector：UI 截图验收、字段落地检查、表格可读性、按钮/弹窗/隐藏入口视觉证据。
-- Incident Response Commander：47 线上故障、发布失败、服务异常、数据未同步、健康检查失败。
-- Application Security Engineer：越权、敏感字段、客户/财务/订单数据泄露、上传、鉴权、审计和安全边界。
+### Route Decision
 
-组合规则：
+路由前先按真实代码回答五个问题：
 
-- 前端功能：先按 `frontend-design` 做 sunny 本地设计约束；需要实现判断时调用 Frontend Developer；需要截图验收时追加 Evidence Collector。
-- 后端功能：Backend Architect；需要接口验收时追加 API Tester。
-- 前后端闭环：按风险选择 Frontend Developer 或 Backend Architect 作为主 agent，不同时展开两个长上下文；必要时只引用另一个的检查维度。
-- 高风险财务/仓库/订单流转：Backend Architect + Code Reviewer，涉及越权再换成 Application Security Engineer。
-- 47 事故：Incident Response Commander；涉及数据泄露或权限问题再追加 Application Security Engineer。
-- 新会话接手：Codebase Onboarding Engineer，完成模块地图后再切换到具体实施 agent。
+1. 当前范围和入口是否已经明确？
+2. 预期修改是前端、后端、共享契约、数据库、生产状态，还是只读调查？
+3. 是否命中高风险触发器？
+4. 验证是否能由一条 focused command 闭环，还是需要独立证据？
+5. 委派或并行能否减少主线程噪声/等待，收益是否高于上下文交接成本？
+
+内部记录统一使用：
+
+```md
+ROUTE_DECISION
+- result: NO_DELEGATION | sunny_mapper | sunny_frontend | sunny_backend | sunny_verifier | sunny_reviewer | sunny_risk_reviewer
+- reason:
+- risk: low | medium | high
+- model_effort:
+- validation:
+- review:
+```
+
+只有发生委派、升级或用户询问路由时才需要在最终回复中说明该记录，避免给小任务增加过程噪声。
+
+### Fixed Roles
+
+- `NO_DELEGATION`：范围和位置已知、无高风险面、改动很小、主线程已有上下文且一次 focused validation 可闭环。典型：文案、明确值、局部样式、字段显隐、单个测试断言、读取一个已知文件。
+- `sunny_mapper`：Luna Medium，只读。用于陌生模块地图、大范围跨文件定位、依赖/调用链梳理、长日志归纳和并行证据收集；不做最终根因、安全或业务结论。简单查找由主线程直接 `rg`，不为使用 Luna 而委派。
+- `sunny_frontend`：Terra Medium，可写。用于方案已明确的 React/AntD 页面、表格、弹窗、状态与交互实施；不得自行改变 API、权限、财务或数据库。
+- `sunny_backend`：Terra High，可写。用于 Sol 已明确不变量、风险边界和文件范围的 API、DTO、Repository、服务端状态处理或查询实现；高推理强度不赋予高风险决策权。
+- `sunny_verifier`：Terra Medium，验证专用。顺序执行安全测试、类型检查、构建、只读接口或浏览器证据；可生成工具必需产物，但不得修改源码或自动修复。
+- `sunny_reviewer`：Sol High，只读。对完成后的 diff 做独立正确性、回归、兼容、并发/幂等和测试缺口审查。
+- `sunny_risk_reviewer`：Sol XHigh，只读。对鉴权、权限、数据库、财务、敏感数据、公共契约、核心状态机、删除/上传、47 和不可逆操作做独立风险审查。
+
+不配置 Luna Low 和 Terra Low：Sunny 中真正极小的定位与修改由主线程直接完成，额外代理的上下文交接通常比模型节省更贵。不配置 Sol 架构实施子代理：架构与复杂根因分析由 Sol 主线程承担，保留 Reviewer/Risk Reviewer 作为独立第二视角。
+
+### Risk Ownership
+
+下列任一项出现时，Sol 主线程必须亲自确认业务事实、授权边界和最小正确闭环：
+
+- Auth、JWT、登录、RBAC、菜单与操作权限、租户或对象归属、数据范围、字段裁剪。
+- Prisma schema、migration、历史数据回填、事务和数据兼容。
+- 财务金额、币种、汇率、应收应付、付款、核销、反审、作废和审计。
+- 上传、下载、预览、敏感文件、客户/订单/员工隐私字段。
+- 公共 API、`packages/shared` 契约、跨模块核心业务状态机。
+- 删除、恢复、批量写入、外部通知、47 生产环境、密钥和不可逆操作。
+
+高风险不等于禁止委派实现；只有 Sol 已明确方案、授权文件和验证门后，才可把机械实施交给 `sunny_backend` 或 `sunny_frontend`，随后必须用 `sunny_risk_reviewer` 或由主线程完成等价对抗式审查。
+
+### Assignment And Escalation Contract
+
+每个写任务的委派消息必须包含：
+
+```md
+目标：
+允许修改：
+禁止范围：
+已知事实：
+验收标准：
+安全验证命令：
+升级触发器：
+```
+
+代理发现真实范围超过最初边界、方案不成立、需要未授权文件或进入新的高风险面时，必须停止扩大修改并返回：
+
+```md
+ESCALATE_TO_SOL
+- 发现的事实：
+- 已执行的操作和改动：
+- 尚未处理的内容：
+- 超出边界的原因：
+- 可能受影响的文件或状态：
+```
+
+Sol 收到升级后必须重新读取相关 diff/状态，决定收回主线程、重划范围、改派固定角色或向用户请求必要授权；不得让原代理以“顺便完成”为由继续扩改。
+
+### Concurrency And Handoff
+
+- `.codex/config.toml` 固定 `max_threads = 3`、`max_depth = 1`，只允许主线程直接管理一层子代理。
+- 默认同一时刻只有 1 个写代理。`sunny_mapper` 的多个互不依赖只读调查可以并行；`sunny_verifier`、`sunny_reviewer` 和 `sunny_risk_reviewer` 通常在实现完成后顺序运行。
+- 两个写任务只有在不同 worktree、不同分支、文件所有权完全不重叠且主线程明确授权时才可并行。共享工作区只切分支不构成隔离。
+- 子代理必须知道自己不是唯一操作者：不得还原、覆盖、清理或格式化其他会话改动；主线程验收时必须重新检查 `git status` 和实际 diff。
 
 ### Frontend Rule Priority
 
-- sunny 本地 `frontend-design` 是 UI/UX 设计准则最高优先级；Agency Frontend Developer 只补 React/AntD、状态管理、组件拆分、性能和可访问性。
-- 小型文案、局部样式、字段显隐、列宽调整：只按现有 sunny 规则处理，不调用 Frontend Developer。
-- 新建页面、二级功能、复杂弹窗、抽屉或表格重构：先按 `frontend-design` 明确业务任务、目标岗位、核心字段、布局密度和隐藏入口，再按需调用 Frontend Developer 实现。
-- 只做视觉审查、截图验收或字段落地证据：优先 Evidence Collector，不调用 Frontend Developer。
-- 冲突时以 sunny 现有设计系统、AntD 用法、业务字段完整性、权限裁剪和可扫读效率为准。
-- 禁止同一轮完整展开两个 UI 规则；只读取和应用当前任务必要部分。
+- Sunny 本地 `frontend-design` 和业务 UI 原则是 UI/UX 最高优先级；`sunny_frontend` 只补 React/AntD、状态管理、组件拆分、性能和可访问性实现。
+- 小型文案、局部样式、字段显隐、列宽调整优先 `NO_DELEGATION`。
+- 新建页面、二级功能、复杂弹窗、抽屉或表格重构：先明确业务任务、目标岗位、核心字段、布局密度和隐藏入口，再按需调用 `sunny_frontend`。
+- 视觉截图和字段落地证据属于验证手段，可由主线程或 `sunny_verifier` 完成，不需要额外前端实施代理。
+- 冲突时以 Sunny 现有设计系统、AntD 用法、业务字段完整性、权限裁剪和可扫读效率为准。
+
+### Routing Evaluation
+
+先运行 2 周或累计 10 个有代表性的任务，再决定是否增加固定角色。样本至少覆盖：小型 UI、常规前端、报价导入/规则、仓库状态流转、财务水单/应收匹配、RBAC 或 migration、47 发布检查。
+
+每个样本记录：路由结果、实际模型/推理等级、总耗时、首轮验证是否通过、返工次数、是否升级、是否发生无效委派或文件冲突。优化目标按优先级排序：事故与越权风险不增加；首轮通过率不下降；主线程上下文噪声明显减少；总耗时和模型消耗下降。若某角色连续产生交接成本、返工或越界升级而无稳定收益，先收紧触发条件，不急于增加更多代理。
+
+```md
+| 日期/任务 | 路由结果 | 模型/推理 | 总耗时 | 首轮通过 | 返工 | 升级 | 无效委派/冲突 | 结论 |
+| --- | --- | --- | ---: | --- | ---: | --- | --- | --- |
+```
 
 禁止规则：
 
-- 禁止每轮默认读取或运行全部 agents。
-- 禁止因为 agent 建议而扩大用户未要求的业务范围。
-- 禁止 Rapid Prototyper 直接修改线上发布、财务口径、权限模型或数据库结构。
-- 禁止审查 agent 借题做全仓库重构；只输出 P0/P1/P2 风险和最小阻断动作。
-- 小型文案、局部样式、字段显隐、测试断言修正不调用 custom agents。
+- 禁止默认读取或运行全部代理，禁止按任务名称机械路由。
+- 禁止为了“多 Agent”拆分一个主线程可直接闭环的小任务。
+- 禁止写代理自行扩展文件所有权、业务范围或权限。
+- 禁止并行修改同一文件、同一状态机、同一 API 契约或同一数据库结构。
+- 禁止审查代理借题做全仓库重构；只输出 P0/P1/P2 和最小阻断动作。
 
 ## First Principles Gate
 
@@ -312,6 +388,30 @@
 - 重构完成后至少验证页面能打开、弹窗能打开、表单能输入、关键按钮不遮挡、角色字段不越权，以及相关构建或测试通过。
 - 未经用户确认，不执行 47 发布、不迁移线上数据库、不清洗线上数据。
 
+### 本地已登录页面验收流程
+
+需要查看登录后的页面布局、弹窗、抽屉、表格、权限状态或响应式效果时，统一使用本地开发会话，不把图片验证码识别作为验收链路的一部分。
+
+当前可执行流程：
+
+1. 启动本地 Web 和 API，API 只服务本机开发数据；仅对本地 API 进程设置 `DISABLE_LOGIN_CAPTCHA=true`，不得写入 Compose、47 `.env` 或生产构建参数。
+2. 使用与目标页面岗位一致的本地账号直接调用 `/api/auth/login`，一次性取得完整 `Session`；响应只在当前自动化进程或权限受限的临时文件中处理，不输出 token。
+3. 把完整 `Session` 写入目标浏览器的 `localStorage['siyuan-session']`，刷新后进入目标路由。Sunny 前端依赖 `accessToken`、`user` 和 `permissions` 三部分，不能只塞入 JWT。
+4. 数据准备、状态推进、字段返回和权限断言优先通过本地 API 完成；浏览器集中检查实际渲染、尺寸、遮挡、滚动、按钮、弹窗和交互结果。
+5. 管理员可用于快速布局初检；涉及仓库、业务、市场、客服或财务时，至少再使用对应角色验证真实可见字段、操作入口和 403/字段裁剪边界。
+6. 会话失效只重新获取一次；仍失败时停止重试并记录“实现完成但登录态效果未验收”，不得循环刷新验证码或连续撞登录接口。
+7. 验收结束后清理临时 Session 文件和不再需要的浏览器登录态；不得把 token、密码、JWT 密钥写进 URL、命令输出、截图、文档、源码或 Git。
+
+后续如果实现专用本地开发会话接口或 `dev:ui-qa` 启动命令，应替代上述“关闭本地验证码 + 调用登录接口”的步骤，但必须保持以下安全不变量：仅非 production、显式开启、只接受回环请求、服务端固定账号或允许名单、签发普通 JWT、继续经过现有 RBAC/字段裁剪、生产路由不可用、生产 Web 包不包含自动会话逻辑。
+
+禁止方案：
+
+- 本地全局关闭鉴权或修改 `RbacGuard` 放行。
+- 使用匿名管理员、伪造权限数组或只在前端隐藏字段。
+- 把 47 token 或 `JWT_SECRET` 复制到本地浏览器。
+- 把 token 放进查询参数、`VITE_*` 变量、终端日志或可持久化测试报告。
+- 为了截图在 47 反复请求验证码和登录；47 只复用已登录浏览器会话，或在容器内使用不输出密钥的短期 JWT 做接口验收。
+
 ## Commands And Verification
 
 常用命令：
@@ -320,24 +420,30 @@
 npm run dev
 npm run dev:api
 npm run build
-npm test
-npm run test:web
-npm run test:api
+npm run test:shared:safe -- --run <测试文件或模式>
+npm run test:api:safe -- --run <测试文件或模式> -t <用例名>
+npm run test:web:safe -- --run <测试文件或模式> -t <用例名>
+npm run test:all:safe
 npm run lint
 npm run typecheck
+npm run governance:check
 npm run sync:47
 ```
 
 验证优先级：
 
-1. 修改共享领域逻辑时，优先跑 `npm run test -w @siyuan/shared`
-2. 修改 API 时，优先跑 API 相关测试、类型检查或局部请求验证
-3. 修改前端时，优先跑 Web 测试，并启动页面做浏览器验证
-4. 跨模块改动后，再跑根目录 `npm test`、`npm run typecheck` 或 `npm run build`
+1. 修改共享领域逻辑时，优先跑 `npm run test:shared:safe -- --run <测试文件或模式>`。
+2. 修改 API 时，优先跑 `npm run test:api:safe -- --run <测试文件或模式> -t <用例名>`、类型检查或局部请求验证。
+3. 修改前端时，优先跑 `npm run test:web:safe -- --run <测试文件或模式> -t <用例名>`，并启动页面做浏览器验证。
+4. 跨模块且确实需要完整回归时，再运行 `npm run test:all:safe`、`npm run typecheck` 或 `npm run build`。
+5. 修改 Agent、测试安全入口或发布规则时，运行 `npm run governance:check`；Shell 发布脚本另执行 `bash -n`。
 
 快速验证入口：
 
-- Web 分域集成测试：`npm run test:web`
-- API e2e 测试：`npm run test:api`
+- Shared 定向测试：`npm run test:shared:safe -- --run <测试文件或模式>`
+- Web 分域集成测试：`npm run test:web:safe -- --run <模块测试文件或模式>`
+- API e2e 测试：`npm run test:api:safe -- --run <e2e 测试文件或模式>`
+- 完整安全回归：`npm run test:all:safe`
+- 开发治理检查：`npm run governance:check`
 - 47 同步预演：`npm run sync:47`
 - 47 真实同步：`npm run sync:47 -- --apply`

@@ -25,6 +25,7 @@ rsync -azc --delete --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} \
   --exclude='packages/*/dist/' \
   --exclude='apps/api/uploads/' \
   --exclude='backups/' \
+  --exclude='.release-backups/' \
   --exclude='data/quotes.json' \
   --exclude='inquiry_data/prices.json' \
   --exclude='europe-express-data/' \
@@ -33,6 +34,9 @@ rsync -azc --delete --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} \
   --exclude='south-africa/data.json' \
   --exclude='scraped_docs/' \
   --exclude='outputs/' \
+  --exclude='.codex/artifacts/' \
+  --exclude='.codex/runtime/' \
+  --exclude='.codex/tmp/' \
   --exclude='screenshots/' \
   --exclude='worktrees/' \
   --exclude='.worktrees/' \

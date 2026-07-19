@@ -9,6 +9,7 @@
 - 线上禁止运行 `prisma db push`、`prisma migrate reset`、`prisma:seed`、`demo:seed`。
 - 线上禁止在发布链路中自动运行 `pricing:legacy:import`，也不得从 `/opt/quote-app` 或历史 JSON 副本自动导回旧报价数据；该命令只能人工显式传 `--source` 和 `--confirm` 后执行。
 - 线上 `.env`、数据库密码、JWT 密钥、第三方 API key 只保存在服务器，不随代码同步，不写入 Git。
+- 本地 UI 验收使用的 `DISABLE_LOGIN_CAPTCHA`、开发会话接口开关、自动 Session 注入和相关 `VITE_*` 参数不得进入 47 `.env`、Compose 或生产 Web 构建；47 必须保持正常验证码、JWT 与 RBAC 链路，发现本地鉴权旁路配置时立即停止发布。
 - 发布前必须先根据 `git status --short`、`git diff --name-only` 和迁移目录自动判定发布范围，不默认全量构建 `db-migrate api web`。
 - 只构建、重启受影响服务；只有 Prisma schema 或 migrations 变化才运行 `db-migrate`。
 - 发布失败时先看实际失败点，不重新规划整条链路；优先从构建、迁移、容器重启、健康检查四段定位。
@@ -23,8 +24,10 @@
 | `web` | `apps/web/**`、Web 依赖、只被前端使用的样式或 helper | `docker compose build web`；重启 `web` |
 | `api` | `apps/api/src/**`、API 依赖、只被后端使用的服务端逻辑 | `docker compose build api`；重启 `api` |
 | `api+migrate` | `apps/api/prisma/schema.prisma` 或 `apps/api/prisma/migrations/**` | `docker compose build db-migrate api`；运行 `db-migrate`；重启 `api` |
-| `web+api` | 前后端都改，或 `packages/shared/**` 同时影响前后端 | 构建/重启 `api web`；有迁移再加 `db-migrate` |
-| `full` | 根依赖、Dockerfile、Compose、发布脚本变化，或无法明确影响面 | 按全量命令执行 |
+| `web+api` | 前后端都改，或 `packages/shared/**` 同时影响前后端，但 Prisma 无变化 | 只构建/重启 `api web`，不运行 `db-migrate` |
+| `web+api+migrate` | 前后端和 Prisma 同时变化 | 构建 `db-migrate api web`；运行迁移；重启 `api web` |
+| `full-no-migrate` | 根依赖、Dockerfile、Compose、发布脚本变化，但 Prisma 指纹不变 | 完整重建受影响运行服务，不运行 `db-migrate` |
+| `full+migrate` | 全量影响面且 Prisma 指纹变化 | 完整构建、运行 `db-migrate`、重启受影响服务 |
 
 `package-lock.json`、根 `package.json`、Dockerfile、Compose 和发布脚本变化默认视为可能影响多个服务；除非能明确只影响单个 workspace，否则走 `web+api` 或 `full`。如果包含 Prisma schema/migrations，禁止跳过 `db-migrate`。
 
@@ -42,7 +45,7 @@ npm run sync:47
 npm run sync:47 -- --apply
 ```
 
-同步脚本会排除 `node_modules`、构建产物、`.git`、`scraped_docs`、`outputs`、`.env` 等大目录和敏感文件，避免向 47 传输无关内容。
+同步脚本会排除 `node_modules`、构建产物、`.git`、`.release-backups`、`scraped_docs`、`outputs`、`.env` 等大目录、远端发布备份和敏感文件，避免向 47 传输无关内容或因 `rsync --delete` 删除远端备份。
 
 同步脚本还会排除旧亮崽报价源路径，例如 `data/quotes.json`、`inquiry_data/prices.json`、`europe-express-data/`、`europe-truck-data/` 和 `south-africa/*.json`。发布只同步代码和迁移，不携带旧报价数据副本。
 
@@ -56,6 +59,8 @@ npm run deploy:47
 
 脚本根据上一次成功发布记录的 Web、API、Prisma 运行时指纹自动判断范围。测试文件和文档可以同步到 47，但不会触发运行时镜像重建。发布顺序固定为差异检查、源码同步、受影响服务构建、迁移、重启、API 就绪检查、Web 静态资源一致性检查和公网健康检查；任一步失败都会停止并输出最近服务日志。
 
+一键 apply 只允许运行时代码工作树干净的已验证候选；只要 Web、API、Shared、Prisma、根运行时依赖或 Docker 配置存在未提交修改，脚本就输出 `DIRTY_RUNTIME_COUNT` 并拒绝 apply。当前这类多任务脏工作树必须继续使用“以 47 当前文件为基线生成白名单补丁”的精确发布流程，不能通过全仓同步或跳过守卫绕开。
+
 只查看范围而不发布：
 
 ```bash
@@ -67,6 +72,8 @@ npm run deploy:47 -- --dry-run
 ```bash
 npm run deploy:47 -- --full
 ```
+
+`--full` 只强制重建 Web/API，不会把 `MIGRATION_REQUIRED` 改为 `true`；是否迁移仍只由 Prisma schema/migrations 指纹决定。dry-run 必须明确输出 `RELEASE_SCOPE` 和 `MIGRATION_REQUIRED`，两者与候选文件不一致时停止发布。
 
 `.dockerignore` 排除测试、文档、截图和输出目录，避免非运行时文件使 Docker 构建缓存失效。
 
@@ -114,7 +121,18 @@ docker compose up -d --remove-orphans api
 docker compose ps
 ```
 
-### `web+api` 或 `full`
+### `web+api` 或 `full-no-migrate`
+
+```bash
+set -e
+cd /opt/siyuan
+
+docker compose build api web
+docker compose up -d --no-deps --remove-orphans api web
+docker compose ps
+```
+
+### `web+api+migrate` 或 `full+migrate`
 
 ```bash
 set -e

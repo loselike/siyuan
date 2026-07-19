@@ -15,3 +15,6 @@ scraped_docs
 uploads
 apps/api/uploads
 outputs
+.codex/artifacts/
+.codex/runtime/
+.codex/tmp/

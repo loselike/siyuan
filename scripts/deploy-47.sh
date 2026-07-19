@@ -42,6 +42,19 @@ matches_scope() {
   esac
 }
 
+dirty_runtime_files() {
+  {
+    git diff --name-only
+    git ls-files --others --exclude-standard
+  } | LC_ALL=C sort -u | while IFS= read -r path; do
+    [[ -n "$path" ]] || continue
+    is_test_file "$path" && continue
+    if matches_scope web "$path" || matches_scope api "$path" || matches_scope migrate "$path"; then
+      printf '%s\n' "$path"
+    fi
+  done
+}
+
 fingerprint() {
   local scope="$1"
   while IFS= read -r path; do
@@ -89,12 +102,32 @@ MIGRATE_CHANGED=false
 if [[ "$FORCE_FULL" == true ]]; then
   WEB_CHANGED=true
   API_CHANGED=true
-  MIGRATE_CHANGED=true
 fi
 
 SYNC_PREVIEW="$(npm run sync:47 2>&1)"
 SYNC_CHANGES="$(printf '%s\n' "$SYNC_PREVIEW" | LC_ALL=C sed -n -e '/^\*deleting /p' -e '/^[<>ch\.][^[:space:]]/p')"
+DIRTY_RUNTIME_FILES="$(dirty_runtime_files)"
+DIRTY_RUNTIME_COUNT=0
+if [[ -n "$DIRTY_RUNTIME_FILES" ]]; then
+  DIRTY_RUNTIME_COUNT="$(printf '%s\n' "$DIRTY_RUNTIME_FILES" | wc -l | tr -d ' ')"
+fi
 
+if [[ "$WEB_CHANGED" == true && "$API_CHANGED" == true ]]; then
+  RELEASE_SCOPE="web+api"
+elif [[ "$WEB_CHANGED" == true ]]; then
+  RELEASE_SCOPE="web"
+elif [[ "$API_CHANGED" == true ]]; then
+  RELEASE_SCOPE="api"
+elif [[ "$MIGRATE_CHANGED" == true ]]; then
+  RELEASE_SCOPE="migrate-only"
+else
+  RELEASE_SCOPE="state/docs-only"
+fi
+[[ "$MIGRATE_CHANGED" == true ]] && RELEASE_SCOPE="${RELEASE_SCOPE}+migrate"
+
+echo "RELEASE_SCOPE=$RELEASE_SCOPE"
+echo "MIGRATION_REQUIRED=$MIGRATE_CHANGED"
+echo "DIRTY_RUNTIME_COUNT=$DIRTY_RUNTIME_COUNT"
 echo "Release scope: web=$WEB_CHANGED api=$API_CHANGED migrate=$MIGRATE_CHANGED"
 if [[ -n "$SYNC_CHANGES" ]]; then
   printf '%s\n' "$SYNC_CHANGES"
@@ -103,7 +136,18 @@ else
 fi
 
 if [[ "$MODE" == "dry-run" ]]; then
+  if [[ -n "$DIRTY_RUNTIME_FILES" ]]; then
+    echo "Dirty runtime files (apply will be blocked):"
+    printf '%s\n' "$DIRTY_RUNTIME_FILES"
+  fi
   exit 0
+fi
+
+if [[ -n "$DIRTY_RUNTIME_FILES" ]]; then
+  echo "Refusing deploy:47 apply because the runtime worktree is dirty." >&2
+  echo "Commit an independently verified release candidate, or use the documented 47-baseline whitelist patch flow." >&2
+  printf '%s\n' "$DIRTY_RUNTIME_FILES" >&2
+  exit 3
 fi
 
 if [[ -n "$SYNC_CHANGES" ]]; then
