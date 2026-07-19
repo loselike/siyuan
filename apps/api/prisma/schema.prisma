@@ -570,6 +570,7 @@ model PriceBookRow {
   @@index([warehouseCode, destinationCountry])
   @@index([priceBookId, destinationCountry, minWeightKg])
   @@index([destinationCountry, warehouseCode, minWeightKg])
+  @@index([priceBookId, channelName, realChannelName, destinationCountry, minWeightKg], map: "PriceBookRow_markup_route_lookup_idx")
 }
 
 model LegacyPricingSource {
@@ -649,6 +650,7 @@ model AgentMarkupRule {
   @@index([priceBookId, agentName, enabled, deletedAt])
   @@index([agentName, enabled, deletedAt])
   @@index([legacyModule, agentName, channelName, markupUnit, enabled, deletedAt])
+  @@index([priceBookId, agentName, channelName, realChannelName, destinationCountry, markupUnit, enabled, deletedAt, minChargeableValue], map: "AgentMarkupRule_route_tiers_lookup_idx")
   @@index([priority])
 }
 
@@ -881,6 +883,11 @@ model ReceivableFee {
   settlementMethod     String?
   paymentNo            String?
   reconciliationStatus String   @default("PENDING")
+  receivedAmount       Decimal  @default(0)
+  receiptStatus        String   @default("UNPAID")
+  receiptMatchSource   String?
+  receiptMatchHint     String?
+  receivedAt           DateTime?
   createdBy            String?
   reviewedBy           String?
   reviewedAt           DateTime?
@@ -890,6 +897,7 @@ model ReceivableFee {
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
   shipment             Shipment @relation(fields: [shipmentId], references: [id])
+  waterReceiptMatches  WaterReceiptMatch[]
 
   @@index([shipmentId, createdAt])
   @@index([voided, reconciliationStatus, createdAt])
@@ -1222,7 +1230,9 @@ model WaterReceipt {
 model WaterReceiptMatch {
   id                      String   @id @default(cuid())
   waterReceiptId           String
-  receivableFinanceItemId  String
+  receivableFinanceItemId  String?
+  receivableFeeId          String?
+  receivableSourceType     String   @default("MANUAL")
   shipmentId               String
   amount                   Decimal
   source                   String   @default("MANUAL")
@@ -1232,11 +1242,13 @@ model WaterReceiptMatch {
   voidReason               String?
   createdAt                DateTime @default(now())
   waterReceipt             WaterReceipt @relation(fields: [waterReceiptId], references: [id])
-  receivableFinanceItem    ShipmentFinanceItem @relation(fields: [receivableFinanceItemId], references: [id])
+  receivableFinanceItem    ShipmentFinanceItem? @relation(fields: [receivableFinanceItemId], references: [id])
+  receivableFee            ReceivableFee? @relation(fields: [receivableFeeId], references: [id])
   shipment                 Shipment @relation(fields: [shipmentId], references: [id])
 
   @@index([waterReceiptId, createdAt])
   @@index([receivableFinanceItemId, voided])
+  @@index([receivableFeeId, voided])
   @@index([shipmentId])
 }
 
