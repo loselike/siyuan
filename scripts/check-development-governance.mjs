@@ -38,8 +38,11 @@ for (const [path, content, requiredText] of [
   ['AGENTS.md', agentRules, '代码修改 -> 本地最小效果与安全验证 -> 必要审查 -> 精确发布 47 -> 47 线上 API/代码/容器验证 -> 汇报结果'],
   ['AGENTS.md', agentRules, 'Codex 不操作浏览器、不做截图验收'],
   ['AGENTS.md', agentRules, '由用户进行最终视觉验收'],
+  ['AGENTS.md', agentRules, '验证码和浏览器点击耗时高、稳定性差'],
+  ['AGENTS.md', agentRules, '定位根因 -> 修改代码 -> 最小相关本地验证 -> 重新精确发布 -> 重新线上验证'],
   ['docs/dev-thread-rules.md', devRules, '无浏览器验收与 47 验证流程'],
-  ['docs/47-cloud-docker-release.md', releaseRules, '发布后验收只使用服务端和代码证据']
+  ['docs/47-cloud-docker-release.md', releaseRules, '发布后验收只使用服务端和代码证据'],
+  ['docs/47-cloud-docker-release.md', releaseRules, '线上验证失败不结束任务']
 ]) {
   if (!content.includes(requiredText)) failures.push(`${path} is missing acceptance rule: ${requiredText}`);
 }
