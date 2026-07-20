@@ -26,9 +26,32 @@ for (const path of [...requiredAgentFiles, ...requiredMigrationFiles]) {
 }
 
 const devRules = readFileSync('docs/dev-thread-rules.md', 'utf8');
+const agentRules = readFileSync('AGENTS.md', 'utf8');
+const releaseRules = readFileSync('docs/47-cloud-docker-release.md', 'utf8');
 for (const forbiddenLine of ['npm test', 'npm run test:web', 'npm run test:api']) {
   if (devRules.split(/\r?\n/).some((line) => line.trim() === forbiddenLine)) {
     failures.push(`unsafe command remains in docs/dev-thread-rules.md: ${forbiddenLine}`);
+  }
+}
+
+for (const [path, content, requiredText] of [
+  ['AGENTS.md', agentRules, '代码修改 -> 本地最小效果与安全验证 -> 必要审查 -> 精确发布 47 -> 47 线上 API/代码/容器验证 -> 汇报结果'],
+  ['AGENTS.md', agentRules, 'Codex 不操作浏览器、不做截图验收'],
+  ['AGENTS.md', agentRules, '由用户进行最终视觉验收'],
+  ['docs/dev-thread-rules.md', devRules, '无浏览器验收与 47 验证流程'],
+  ['docs/47-cloud-docker-release.md', releaseRules, '发布后验收只使用服务端和代码证据']
+]) {
+  if (!content.includes(requiredText)) failures.push(`${path} is missing acceptance rule: ${requiredText}`);
+}
+
+for (const forbiddenText of [
+  '必须检查实际渲染页面或截图',
+  'UI 重构默认只落本地',
+  '并启动页面做浏览器验证',
+  '未经用户确认直接发布 UI 重构到 47'
+]) {
+  if (agentRules.includes(forbiddenText) || devRules.includes(forbiddenText)) {
+    failures.push(`obsolete browser/hold-before-release rule remains: ${forbiddenText}`);
   }
 }
 
