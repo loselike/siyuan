@@ -284,7 +284,7 @@ export function SettingsPage({
   const loadSites = useCallback(async () => {
     setSitesLoading(true);
     try {
-      const rows = await apiClient.sites();
+      const rows = await apiClient.systemDirectory.sites();
       setSites(Array.isArray(rows) ? rows : []);
     } catch (error) {
       setSettingsNotice(error instanceof Error ? error.message : '站点加载失败');
@@ -297,7 +297,7 @@ export function SettingsPage({
   const loadDepartments = useCallback(async () => {
     setDepartmentsLoading(true);
     try {
-      const rows = await apiClient.departments();
+      const rows = await apiClient.systemDirectory.departments();
       setDepartments(Array.isArray(rows) ? rows : []);
     } catch (error) {
       setSettingsNotice(error instanceof Error ? error.message : '部门加载失败');
@@ -310,7 +310,9 @@ export function SettingsPage({
   async function submitSite() {
     const values = await siteForm.validateFields();
     const input = { name: values.name.trim(), sortOrder: Number(values.sortOrder) || 0, enabled: values.enabled === 'true' };
-    const site = editingSite ? await apiClient.updateSite(editingSite.id, input) : await apiClient.createSite(input);
+    const site = editingSite
+      ? await apiClient.systemDirectory.updateSite(editingSite.id, input)
+      : await apiClient.systemDirectory.createSite(input);
     setSites((current) => [...current.filter((item) => item.id !== site.id), site].sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name)));
     setSiteCreateOpen(false);
     setEditingSite(null);
@@ -319,7 +321,7 @@ export function SettingsPage({
   }
 
   async function updateSiteEnabled(site: SiteSummary, enabled: boolean) {
-    const updated = await apiClient.updateSiteEnabled(site.id, { enabled });
+    const updated = await apiClient.systemDirectory.updateSiteEnabled(site.id, { enabled });
     setSites((current) => current.map((item) => (item.id === updated.id ? updated : item)));
     setSettingsNotice(`${updated.name} 已${enabled ? '启用' : '停用'}`);
   }
@@ -656,7 +658,7 @@ export function SettingsPage({
       Object.fromEntries((headers ?? []).map((header, index) => [String(header ?? '').trim(), row[index] ?? '']))
     );
     const roleByText = new Map(staffRoleOptions.flatMap((role) => [[role.label, role.value], [role.value, role.value]]));
-    const availableDepartments = departments.length ? departments : await apiClient.departments();
+    const availableDepartments = departments.length ? departments : await apiClient.systemDirectory.departments();
     const departmentIdByText = new Map(availableDepartments.flatMap((department) => [[department.name, department.id], [department.id, department.id]]));
     const genderByText = new Map<string, StaffGender>([
       ['男', 'MALE'], ['女', 'FEMALE'], ['其他', 'OTHER'], ['未填写', 'UNKNOWN'],

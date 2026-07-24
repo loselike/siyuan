@@ -234,6 +234,7 @@ import type {
   WarehouseTodayQuery,
   WarehouseTodayResponse
 } from '@siyuan/shared';
+import { SystemDirectoryClient } from './api/systemDirectoryClient';
 
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type RoleKey = BuiltinRoleKey | (string & {});
@@ -593,6 +594,10 @@ function formatApiErrorMessage(body: string, status: number): string {
 }
 
 export class ApiClient {
+  readonly systemDirectory = new SystemDirectoryClient(<T>(path: string, init?: RequestInit) =>
+    this.request<T>(path, init)
+  );
+
   constructor(
     private readonly getToken: () => string | null,
     private readonly onUnauthorized: () => void
@@ -1855,25 +1860,15 @@ export class ApiClient {
     return this.request(`/system/staff-accounts${params.toString() ? `?${params.toString()}` : ''}`);
   }
 
-  async departments(): Promise<DepartmentSummary[]> {
-    return this.request('/system/departments');
-  }
+  async departments(): Promise<DepartmentSummary[]> { return this.systemDirectory.departments(); }
 
-  async sites(): Promise<SiteSummary[]> {
-    return this.request('/system/sites');
-  }
+  async sites(): Promise<SiteSummary[]> { return this.systemDirectory.sites(); }
 
-  async createSite(input: SiteCreateInput): Promise<SiteSummary> {
-    return this.request('/system/sites', { method: 'POST', body: JSON.stringify(input) });
-  }
+  async createSite(input: SiteCreateInput): Promise<SiteSummary> { return this.systemDirectory.createSite(input); }
 
-  async updateSite(id: string, input: SiteUpdateInput): Promise<SiteSummary> {
-    return this.request(`/system/sites/${id}`, { method: 'PUT', body: JSON.stringify(input) });
-  }
+  async updateSite(id: string, input: SiteUpdateInput): Promise<SiteSummary> { return this.systemDirectory.updateSite(id, input); }
 
-  async updateSiteEnabled(id: string, input: EnabledUpdateInput): Promise<SiteSummary> {
-    return this.request(`/system/sites/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
-  }
+  async updateSiteEnabled(id: string, input: EnabledUpdateInput): Promise<SiteSummary> { return this.systemDirectory.updateSiteEnabled(id, input); }
 
   async createStaffAccount(input: StaffAccountCreateInput): Promise<StaffAccountSummary> {
     return this.request('/system/staff-accounts', { method: 'POST', body: JSON.stringify(input) });
