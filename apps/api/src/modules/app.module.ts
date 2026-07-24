@@ -21,8 +21,9 @@ import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
 import { SystemDirectoryController } from './system/directory/system-directory.controller.js';
+import { LegacySystemDirectoryRepository } from './system/directory/legacy-system-directory.repository.js';
 import {
-  LegacySystemDirectoryRepository,
+  PrismaSystemDirectoryRepository,
   SYSTEM_DIRECTORY_REPOSITORY
 } from './system/directory/system-directory.repository.js';
 import { SystemDirectoryService } from './system/directory/system-directory.service.js';
@@ -41,6 +42,10 @@ const financeCatalogRepositoryProvider = usePrismaRepository
   ? { provide: FINANCE_CATALOG_REPOSITORY, useClass: PrismaFinanceCatalogRepository }
   : { provide: FINANCE_CATALOG_REPOSITORY, useClass: InMemoryFinanceCatalogRepository };
 
+const systemDirectoryRepositoryProvider = usePrismaRepository
+  ? { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: PrismaSystemDirectoryRepository }
+  : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
+
 @Module({
   controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController, SystemDirectoryController],
   providers: [
@@ -50,10 +55,7 @@ const financeCatalogRepositoryProvider = usePrismaRepository
     financeCatalogRepositoryProvider,
     FinanceCatalogService,
     FinanceReceivableService,
-    {
-      provide: SYSTEM_DIRECTORY_REPOSITORY,
-      useClass: LegacySystemDirectoryRepository
-    },
+    systemDirectoryRepositoryProvider,
     SystemDirectoryService,
     {
       provide: APP_GUARD,

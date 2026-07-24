@@ -93,7 +93,6 @@ import {
   type CustomerUpdateInput,
   type CustomerUserCreateInput,
   type CustomerUserSummary,
-  DepartmentSummary,
   type EnabledUpdateInput,
   type ExchangeRateCreateInput,
   type ExchangeRateUpdateInput,
@@ -298,6 +297,7 @@ import { renderDubaiWorkbookSheets } from './dubai-price-sheet-renderer.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
 import { buildLineShipmentPackageSummaries } from './line-shipment-packages.js';
 import { PrismaService } from './prisma.service.js';
+import { PrismaSystemDirectoryRepository } from './system/directory/system-directory.repository.js';
 import { nextWarehouseRetallyTaskNo, nextWarehouseTallyTaskNo } from './warehouse-tally-task-number.js';
 import { createWarehouseTallyPackageLabelNo } from './warehouse-tally-label.js';
 import { canUpdateUnenteredWarehousePackage } from './warehouse-package-editability.js';
@@ -2301,16 +2301,12 @@ export class PrismaRepository implements OnModuleInit {
     }));
   }
 
-  async getDepartments(principal: Principal): Promise<DepartmentSummary[]> {
-    this.ensureAdmin(principal, '只有管理员可以查看部门');
-    const departments = await this.prisma.department.findMany({ orderBy: [{ enabled: 'desc' }, { name: 'asc' }] });
-    return departments.map((department) => ({ id: department.id, name: department.name, enabled: department.enabled }));
+  async getDepartments(principal: Principal) {
+    return new PrismaSystemDirectoryRepository(this.prisma).getDepartments(principal);
   }
 
-  async getSites(principal: Principal): Promise<SiteSummary[]> {
-    this.ensureAdmin(principal, '只有管理员可以查看站点');
-    const sites = await this.prisma.site.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
-    return sites.map(mapSite);
+  async getSites(principal: Principal) {
+    return new PrismaSystemDirectoryRepository(this.prisma).getSites(principal);
   }
 
   async createSite(principal: Principal, input: SiteCreateInput): Promise<SiteSummary> {
