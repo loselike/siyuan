@@ -234,6 +234,7 @@ import type {
   WarehouseTodayQuery,
   WarehouseTodayResponse
 } from '@siyuan/shared';
+import { AppShellClient } from './api/appShellClient';
 import { SystemDirectoryClient } from './api/systemDirectoryClient';
 
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
@@ -594,6 +595,7 @@ function formatApiErrorMessage(body: string, status: number): string {
 }
 
 export class ApiClient {
+  readonly appShell = new AppShellClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly systemDirectory = new SystemDirectoryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
   );
@@ -639,13 +641,9 @@ export class ApiClient {
     return this.request('/warehouse/dispatch-shipments');
   }
 
-  async navigationUnreadBadges(): Promise<NavigationUnreadBadgesResponse> {
-    return this.request('/navigation/unread-badges');
-  }
+  async navigationUnreadBadges(): Promise<NavigationUnreadBadgesResponse> { return this.appShell.navigationUnreadBadges(); }
 
-  async markNavigationRead(input: NavigationReadStateInput): Promise<{ ok: true; moduleKey: string; sectionKey?: string; readAt: string; watermark: string }> {
-    return this.request('/navigation/read-state', { method: 'POST', body: JSON.stringify(input) });
-  }
+  async markNavigationRead(input: NavigationReadStateInput): Promise<{ ok: true; moduleKey: string; sectionKey?: string; readAt: string; watermark: string }> { return this.appShell.markNavigationRead(input); }
 
   async reportPageRenderError(input: {
     errorId: string;
@@ -657,7 +655,7 @@ export class ApiClient {
     stack?: string;
     componentStack?: string;
   }): Promise<{ ok: true }> {
-    return this.request('/system/client-errors', { method: 'POST', body: JSON.stringify(input) });
+    return this.appShell.reportPageRenderError(input);
   }
 
   async reviewPendingShipments(): Promise<Shipment[]> {

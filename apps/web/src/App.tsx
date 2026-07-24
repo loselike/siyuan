@@ -304,7 +304,7 @@ export function App() {
   const [activeMenuKey, setActiveMenuKey] = useState<MenuKey>('workspace');
   const [expandedMenuKey, setExpandedMenuKey] = useState<MenuKey | null>('workspace');
   const [sidebarSubNav, setSidebarSubNav] = useState<SidebarSubNavState | null>(null);
-  const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['navigationUnreadBadges']>>['items']>([]);
+  const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['appShell']['navigationUnreadBadges']>>['items']>([]);
   const businessType: BusinessType = 'DEDICATED_LINE';
   const [selectedStatus, setSelectedStatus] = useState<ShipmentStatus | 'ALL'>('ALL');
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState('shipmentPool');
@@ -388,7 +388,7 @@ export function App() {
     [session?.accessToken]
   );
   const reportPageRenderError = useCallback((report: PageRenderErrorReport) => {
-    void apiClient.reportPageRenderError(report).catch(() => undefined);
+    void apiClient.appShell.reportPageRenderError(report).catch(() => undefined);
   }, [apiClient]);
   const settlementMethodRows = useMemo(() => getSettlementMethodRows(settlementCatalogItems), [settlementCatalogItems]);
   const settlementMethodOptions = useMemo(() => createSettlementMethodOptions(settlementMethodRows), [settlementMethodRows]);
@@ -511,7 +511,7 @@ export function App() {
       return;
     }
     let cancelled = false;
-    apiClient.navigationUnreadBadges().then((response) => {
+    apiClient.appShell.navigationUnreadBadges().then((response) => {
       if (!cancelled) setNavigationUnreadBadges(response.items);
     }).catch(() => {
       if (!cancelled) setNavigationUnreadBadges([]);
@@ -522,7 +522,7 @@ export function App() {
   useEffect(() => {
     if (!session || session.user.role === 'CUSTOMER' || !sidebarSubNav || sidebarSubNav.parentKey !== currentMenuKey) return;
     const sectionKey = sidebarSubNav.activeKey;
-    void apiClient.markNavigationRead({ moduleKey: currentMenuKey, sectionKey }).then(() => {
+    void apiClient.appShell.markNavigationRead({ moduleKey: currentMenuKey, sectionKey }).then(() => {
       setNavigationUnreadBadges((current) => current.map((item) => {
         if (item.moduleKey === currentMenuKey && item.sectionKey === sectionKey) return { ...item, unreadCount: 0, displayCount: '0' };
         if (item.moduleKey === currentMenuKey && !item.sectionKey) {

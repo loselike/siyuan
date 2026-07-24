@@ -36,3 +36,33 @@ describe('ApiClient system directory compatibility', () => {
     expect(updateSiteEnabled).toHaveBeenCalledWith('site-new', { enabled: false });
   });
 });
+
+describe('ApiClient app shell compatibility', () => {
+  it('forwards legacy methods to the app shell client', async () => {
+    const client = new ApiClient(() => null, vi.fn());
+    const badges = vi.spyOn(client.appShell, 'navigationUnreadBadges').mockResolvedValue({ items: [] });
+    const markRead = vi.spyOn(client.appShell, 'markNavigationRead').mockResolvedValue({
+      ok: true,
+      moduleKey: 'warehouse',
+      sectionKey: 'today-receipts',
+      readAt: '2026-07-24T10:00:00.000Z',
+      watermark: '2026-07-24T10:00:00.000Z'
+    });
+    const reportError = vi.spyOn(client.appShell, 'reportPageRenderError').mockResolvedValue({ ok: true });
+    const readInput = { moduleKey: 'warehouse', sectionKey: 'today-receipts' };
+    const errorInput = {
+      errorId: 'render-error-1',
+      route: '/app/warehouse/today-receipts',
+      releaseId: 'release-1',
+      message: 'render failed'
+    };
+
+    await client.navigationUnreadBadges();
+    await client.markNavigationRead(readInput);
+    await client.reportPageRenderError(errorInput);
+
+    expect(badges).toHaveBeenCalledOnce();
+    expect(markRead).toHaveBeenCalledWith(readInput);
+    expect(reportError).toHaveBeenCalledWith(errorInput);
+  });
+});
