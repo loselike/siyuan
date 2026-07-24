@@ -20,6 +20,12 @@ import { LineageWatcher } from './lineage-watcher.js';
 import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
+import { SystemDirectoryController } from './system/directory/system-directory.controller.js';
+import {
+  LegacySystemDirectoryRepository,
+  SYSTEM_DIRECTORY_REPOSITORY
+} from './system/directory/system-directory.repository.js';
+import { SystemDirectoryService } from './system/directory/system-directory.service.js';
 
 const usePrismaRepository =
   process.env.USE_PRISMA_REPOSITORY === 'false'
@@ -36,7 +42,7 @@ const financeCatalogRepositoryProvider = usePrismaRepository
   : { provide: FINANCE_CATALOG_REPOSITORY, useClass: InMemoryFinanceCatalogRepository };
 
 @Module({
-  controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController],
+  controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController, SystemDirectoryController],
   providers: [
     AiService,
     LineageWatcher,
@@ -44,6 +50,11 @@ const financeCatalogRepositoryProvider = usePrismaRepository
     financeCatalogRepositoryProvider,
     FinanceCatalogService,
     FinanceReceivableService,
+    {
+      provide: SYSTEM_DIRECTORY_REPOSITORY,
+      useClass: LegacySystemDirectoryRepository
+    },
+    SystemDirectoryService,
     {
       provide: APP_GUARD,
       useClass: RbacGuard

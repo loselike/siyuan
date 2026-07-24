@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "capturedAt": "2026-07-24",
+  "policy": "Legacy architecture hotspots may shrink but must not grow.",
+  "files": {
+    "apps/api/src/modules/prisma.repository.ts": 22911,
+    "apps/api/src/modules/in-memory.repository.ts": 16482,
+    "apps/api/src/modules/data.controller.ts": 2735,
+    "apps/web/src/apiClient.ts": 2150,
+    "apps/web/src/App.tsx": 3641,
+    "apps/web/src/styles.css": 12129,
+    "packages/shared/src/index.ts": 5225,
+    "apps/web/src/modules/pricing/PricingPage.tsx": 4756,
+    "apps/web/src/modules/warehouse/WarehousePage.tsx": 4386
+  }
+}

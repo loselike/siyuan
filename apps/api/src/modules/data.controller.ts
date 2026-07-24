@@ -34,7 +34,6 @@ import type {
   CustomerCreateInput,
   CustomerUpdateInput,
   CustomerUserCreateInput,
-  DepartmentSummary,
   EnabledUpdateInput,
   ExchangeRateCreateInput,
   ExchangeRateUpdateInput,
@@ -1410,18 +1409,6 @@ export class DataController {
   @RequirePermission('system:accounts:read')
   async systemStaffAccounts(@Req() request: { user: Principal }, @Query() query: StaffAccountQuery) {
     return this.repository.getStaffAccounts(request.user, query);
-  }
-
-  @Get('system/departments')
-  @RequirePermission('system:accounts:read')
-  async systemDepartments(@Req() request: { user: Principal }): Promise<DepartmentSummary[]> {
-    return this.repository.getDepartments(request.user);
-  }
-
-  @Get('system/sites')
-  @RequirePermission('system:sites:read')
-  async systemSites(@Req() request: { user: Principal }) {
-    return this.repository.getSites(request.user);
   }
 
   @Post('system/sites')

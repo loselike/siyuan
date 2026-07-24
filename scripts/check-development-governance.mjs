@@ -20,9 +20,31 @@ const requiredMigrationFiles = [
 ];
 
 const failures = [];
+const architectureSizeBaselinePath = 'scripts/architecture-size-baseline.json';
 
-for (const path of [...requiredAgentFiles, ...requiredMigrationFiles]) {
+for (const path of [...requiredAgentFiles, ...requiredMigrationFiles, architectureSizeBaselinePath]) {
   if (!existsSync(path)) failures.push(`required file is missing: ${path}`);
+}
+
+if (existsSync(architectureSizeBaselinePath)) {
+  try {
+    const baseline = JSON.parse(readFileSync(architectureSizeBaselinePath, 'utf8'));
+    for (const [path, maxLines] of Object.entries(baseline.files ?? {})) {
+      if (!existsSync(path)) {
+        failures.push(`architecture hotspot is missing: ${path}`);
+        continue;
+      }
+      const content = readFileSync(path, 'utf8');
+      const lineCount = content.split(/\r?\n/).length - (content.endsWith('\n') ? 1 : 0);
+      if (!Number.isInteger(maxLines) || maxLines <= 0) {
+        failures.push(`architecture hotspot baseline is invalid: ${path}`);
+      } else if (lineCount > maxLines) {
+        failures.push(`architecture hotspot grew: ${path} (${lineCount} > ${maxLines})`);
+      }
+    }
+  } catch (error) {
+    failures.push(`architecture size baseline is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 const devRules = readFileSync('docs/dev-thread-rules.md', 'utf8');
