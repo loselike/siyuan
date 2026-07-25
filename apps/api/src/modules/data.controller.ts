@@ -122,7 +122,6 @@ import type {
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCreateInput,
   WarehouseTallyLabelScanInput,
-  WarehouseTallyTaskListQuery,
   WarehouseTallyTaskUpdateInput,
   MasterDataSnapshot,
   NavigationReadStateInput
@@ -2003,24 +2002,6 @@ export class DataController {
     return this.repository.createShipmentFromWarehouseConsolidation(request.user, id);
   }
 
-  @Get('warehouse/consolidations/:id/items')
-  @RequirePermission('warehouse:tally-pending:detail-view')
-  async warehouseConsolidationItems(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.getWarehouseConsolidationItems(request.user, id);
-  }
-
-  @Get('warehouse/tally-tasks')
-  @RequirePermission(['warehouse:tally-pending:view', 'warehouse:tally-completed:view'])
-  async warehouseTallyTasks(@Req() request: { user: Principal }, @Query() query: WarehouseTallyTaskListQuery) {
-    return this.repository.getWarehouseTallyTasks(request.user, query);
-  }
-
-  @Get('warehouse/tally-task-history-chain')
-  @RequirePermission('warehouse:tally-completed:view')
-  async warehouseTallyTaskHistoryChain(@Req() request: { user: Principal }, @Query('packageId') packageId: string) {
-    return this.repository.getWarehouseTallyTaskHistoryChain(request.user, packageId);
-  }
-
   @Post('warehouse/tally-tasks')
   @RequirePermission('warehouse:tally-pending:task-create')
   async createWarehouseTallyTask(@Req() request: { user: Principal }, @Body() body: WarehouseTallyTaskCreateInput) {
@@ -2043,12 +2024,6 @@ export class DataController {
   @RequirePermission('warehouse:tally-label:generate')
   async generateWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.generateWarehouseTallyTaskLabel(request.user, id);
-  }
-
-  @Get('warehouse/tally-tasks/:id/output-packages')
-  @RequirePermission('warehouse:tally-completed:view')
-  async warehouseTallyTaskOutputPackages(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.getWarehouseTallyTaskOutputPackages(request.user, id);
   }
 
   @Post('warehouse/tally-tasks/:id/label/print')
