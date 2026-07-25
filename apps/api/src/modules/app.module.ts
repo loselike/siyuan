@@ -36,6 +36,11 @@ import {
 import { SystemDirectoryService } from './system/directory/system-directory.service.js';
 import { WarehouseDispatchQueryController } from './warehouse/dispatch/warehouse-dispatch-query.controller.js';
 import { WarehouseInventoryQueryController } from './warehouse/inventory/warehouse-inventory-query.controller.js';
+import { LegacyWarehouseTallyQueryRepository } from './warehouse/tally/legacy-warehouse-tally-query.repository.js';
+import {
+  PrismaWarehouseTallyQueryRepository,
+  WAREHOUSE_TALLY_QUERY_REPOSITORY
+} from './warehouse/tally/warehouse-tally-query.repository.js';
 import { WarehouseTallyQueryController } from './warehouse/tally/warehouse-tally-query.controller.js';
 
 const usePrismaRepository =
@@ -56,6 +61,10 @@ const systemDirectoryRepositoryProvider = usePrismaRepository
   ? { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: PrismaSystemDirectoryRepository }
   : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
 
+const warehouseTallyQueryRepositoryProvider = usePrismaRepository
+  ? { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: PrismaWarehouseTallyQueryRepository }
+  : { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: LegacyWarehouseTallyQueryRepository };
+
 @Module({
   controllers: [AuthController, DataController, AiController, CustomerServiceQueryController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, OperationsLineShipmentQueryController, OrderEntryQueryController, PriceBookQueryController, ShipmentFulfillmentQueryController, ShipmentOverviewQueryController, SystemDirectoryController, WarehouseDispatchQueryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
   providers: [
@@ -67,6 +76,7 @@ const systemDirectoryRepositoryProvider = usePrismaRepository
     FinanceReceivableService,
     systemDirectoryRepositoryProvider,
     SystemDirectoryService,
+    warehouseTallyQueryRepositoryProvider,
     {
       provide: APP_GUARD,
       useClass: RbacGuard

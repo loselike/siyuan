@@ -273,7 +273,6 @@ import {
   type WarehouseTallyTaskCompleteInput,
   type WarehouseTallyTaskPackageResultInput,
   type WarehouseTallyTaskCreateInput,
-  type WarehouseTallyTaskListQuery,
   type WarehouseTallyTaskSummary,
   type WarehouseTallyTaskUpdateInput,
   type WarehouseTodayQuery,
@@ -300,6 +299,12 @@ import { PrismaService } from './prisma.service.js';
 import { nextWarehouseRetallyTaskNo, nextWarehouseTallyTaskNo } from './warehouse-tally-task-number.js';
 import { createWarehouseTallyPackageLabelNo } from './warehouse-tally-label.js';
 import { canUpdateUnenteredWarehousePackage } from './warehouse-package-editability.js';
+import {
+  loadWarehouseTallyTaskOutputPackages,
+  mapWarehousePackage,
+  mapWarehouseTallyTask,
+  resolveWarehouseTallyRecentCutoff
+} from './warehouse/warehouse-query.shared.js';
 import {
   allPermissions,
   buildRolePermissionRow,
@@ -6226,116 +6231,6 @@ export class PrismaRepository implements OnModuleInit {
     return mapWarehouseConsolidation(updated, updated.items.map((item: any) => item.packageId));
   }
 
-  async getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    this.ensureWarehouseAccess(principal);
-    const items = await (this.prisma as any).warehouseConsolidationItem.findMany({
-      where: { consolidationId: id },
-      include: { package: true },
-      orderBy: { id: 'asc' }
-    });
-    return items.map((item: any) => mapWarehousePackage(item.package));
-  }
-
-  async getWarehouseTallyTasks(principal: Principal, query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-pending:view', 'warehouse:tally-completed:view']))) {
-      throw new ForbiddenException('当前角色不能查看理货任务');
-    }
-    const scope = this.operatorCustomerScope(principal);
-    const where: any = {};
-    if (query.status) {
-      where.status = query.status;
-    }
-    if (query.customerCode?.trim()) {
-      where.customerCode = { contains: query.customerCode.trim(), mode: 'insensitive' };
-    }
-    if (query.combinedOrderNo?.trim()) {
-      where.sourceCombinedOrderNo = { contains: query.combinedOrderNo.trim(), mode: 'insensitive' };
-    }
-    if (query.completedScope === 'RECENT' || query.completedScope === 'HISTORY' || query.completedFrom || query.completedTo) {
-      where.status = 'COMPLETED';
-      const completedAt: Record<string, Date> = {};
-      if (query.completedScope === 'RECENT') {
-        completedAt.gte = resolveWarehouseTallyRecentCutoff();
-      } else if (query.completedScope === 'HISTORY') {
-        completedAt.lt = resolveWarehouseTallyRecentCutoff();
-      }
-      if (query.completedFrom?.trim()) {
-        completedAt.gte = new Date(query.completedFrom.trim());
-      }
-      if (query.completedTo?.trim()) {
-        completedAt.lt = new Date(query.completedTo.trim());
-      }
-      where.completedAt = completedAt;
-    }
-    if (scope) {
-      where.salesperson = { in: scope };
-    }
-    const rows = await (this.prisma as any).warehouseTallyTask.findMany({
-      where,
-      orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
-    });
-    const completedRows = rows.filter((row: any) => row.status === 'COMPLETED');
-    const outputRows = completedRows.length
-      ? await (this.prisma as any).warehousePackage.findMany({
-        where: { tallyTaskId: { in: completedRows.map((row: any) => row.id) } },
-        orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
-      })
-      : [];
-    const sourceIdsByTask = new Map<string, Set<string>>(completedRows.map((row: any) => [row.id, new Set<string>(row.packageIds ?? [])]));
-    const outputsByTask = new Map<string, WarehousePackageSummary[]>();
-    outputRows.forEach((output: any) => {
-      if (sourceIdsByTask.get(output.tallyTaskId)?.has(output.id)) return;
-      outputsByTask.set(output.tallyTaskId, [...(outputsByTask.get(output.tallyTaskId) ?? []), mapWarehousePackage(output)]);
-    });
-    return rows.map((row: any) => ({
-      ...mapWarehouseTallyTask(row),
-      outputPackages: outputsByTask.get(row.id) ?? []
-    }));
-  }
-
-  async getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string): Promise<WarehouseTallyTaskSummary[]> {
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
-      throw new ForbiddenException('当前角色不能查看理货历史');
-    }
-    const normalizedPackageId = packageId.trim();
-    if (!normalizedPackageId) {
-      throw new BadRequestException('缺少仓库包裹编号');
-    }
-    const scope = this.operatorCustomerScope(principal);
-    const visitedTaskIds: string[] = [];
-    const chain: WarehouseTallyTaskSummary[] = [];
-    let currentPackageId: string | undefined = normalizedPackageId;
-
-    while (currentPackageId && chain.length < 20) {
-      const lookupPackageId = currentPackageId;
-      const currentPackage: { tallyTaskId?: string | null; tallyTaskNo?: string | null } | null = await (this.prisma as any).warehousePackage.findUnique({
-        where: { id: lookupPackageId },
-        select: { tallyTaskId: true, tallyTaskNo: true }
-      });
-      const task: any = await (this.prisma as any).warehouseTallyTask.findFirst({
-        where: {
-          status: 'COMPLETED',
-          ...(visitedTaskIds.length ? { id: { notIn: visitedTaskIds } } : {}),
-          ...(scope ? { salesperson: { in: scope } } : {}),
-          OR: [
-            ...(currentPackage?.tallyTaskId ? [{ id: currentPackage.tallyTaskId }] : []),
-            ...(currentPackage?.tallyTaskNo ? [{ taskNo: currentPackage.tallyTaskNo }] : []),
-            { appliedPackageId: lookupPackageId },
-            { sourcePackageId: lookupPackageId },
-            { packageIds: { has: lookupPackageId } }
-          ]
-        },
-        orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
-      });
-      if (!task) break;
-      visitedTaskIds.push(task.id);
-      chain.push(mapWarehouseTallyTask(task));
-      currentPackageId = task.sourcePackageId;
-    }
-
-    return chain.reverse();
-  }
-
   async createWarehouseTallyTask(principal: Principal, input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
     this.ensureWarehouseAccess(principal);
     const packageIds = Array.from(new Set((input.packageIds ?? []).map((id) => id.trim()).filter(Boolean)));
@@ -6739,7 +6634,10 @@ export class PrismaRepository implements OnModuleInit {
     }
     const labelNo = before.taskNo;
     const labelQrContent = buildWarehouseTallyLabelQrContent(before, labelNo);
-    const outputRows = await this.getWarehouseTallyTaskOutputPackages(principal, id);
+    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
+      throw new ForbiddenException('当前角色不能查看理货结果包裹');
+    }
+    const outputRows = await loadWarehouseTallyTaskOutputPackages(this.prisma, id);
     await Promise.all(outputRows.map((pkg, index) => (this.prisma as any).warehousePackage.update({
       where: { id: pkg.id },
       data: { labelNo: createWarehouseTallyPackageLabelNo(before.taskNo, index + 1, outputRows.length) }
@@ -6779,24 +6677,6 @@ export class PrismaRepository implements OnModuleInit {
       metrics: { labelCount: 1 }
     });
     return updatedSummary;
-  }
-
-  async getWarehouseTallyTaskOutputPackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
-      throw new ForbiddenException('当前角色不能查看理货结果包裹');
-    }
-    const task = await (this.prisma as any).warehouseTallyTask.findUnique({ where: { id } });
-    if (!task) throw new NotFoundException('理货任务不存在');
-    const rows = await (this.prisma as any).warehousePackage.findMany({
-      where: { tallyTaskId: id, id: { notIn: task.packageIds } },
-      orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
-    });
-    if (rows.length) return rows.map(mapWarehousePackage);
-    const legacyRows = await (this.prisma as any).warehousePackage.findMany({
-      where: { id: { in: task.packageIds } },
-      orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
-    });
-    return legacyRows.map(mapWarehousePackage);
   }
 
   async applyWarehouseTallyMeasurementByBarcode(
@@ -17005,75 +16885,6 @@ function applyAgentMarkup(costPerKg: number, chargeableWeightKg: number, rule: A
   return { totalSales: roundMoney(salesRatePerKg * chargeableWeightKg), salesRatePerKg };
 }
 
-function mapWarehousePackage(row: any): WarehousePackageSummary {
-  const packageCount = Number(row.packageCount);
-  const lengthCm = Number(row.lengthCm);
-  const widthCm = Number(row.widthCm);
-  const heightCm = Number(row.heightCm);
-  const sides = [lengthCm, widthCm, heightCm].sort((left, right) => right - left);
-  const girthCm = roundMoney((sides[0] ?? 0) + 2 * ((sides[1] ?? 0) + (sides[2] ?? 0)));
-  const totalVolumetricWeightKg5000 = roundMoney((lengthCm * widthCm * heightCm * packageCount) / 5000);
-  return {
-    id: row.id,
-    customerCode: row.customerCode,
-    customerName: row.customerName ?? undefined,
-    site: row.site ?? undefined,
-    salesperson: row.salesperson ?? undefined,
-    customerOrderNo: row.customerOrderNo,
-    domesticTrackingNo: row.domesticTrackingNo,
-    combinedOrderNo: row.combinedOrderNo,
-    labelNo: row.labelNo ?? undefined,
-    sourcePackageId: row.sourcePackageId ?? undefined,
-    sourcePackageNo: row.sourcePackageNo ?? undefined,
-    archivedByPackageId: row.archivedByPackageId ?? undefined,
-    archivedByPackageNo: row.archivedByPackageNo ?? undefined,
-    archivedReason: row.archivedReason ?? undefined,
-    archivedAt: row.archivedAt?.toISOString?.() ?? undefined,
-    tallyTaskId: undefined,
-    tallyTaskNo: undefined,
-    tallyCompleted: false,
-    outboundOrderNo: row.systemOrderNo ?? undefined,
-    systemOrderNo: row.systemOrderNo ?? undefined,
-    shipmentId: row.shipmentId ?? undefined,
-    receivingChannel: row.receivingChannel,
-    destinationCountry: row.destinationCountry ?? undefined,
-    expectedTotalPackageCount: row.expectedTotalPackageCount ?? undefined,
-    packageIndex: row.packageIndex ?? undefined,
-    packageCount,
-    weightKg: Number(row.weightKg),
-    lengthCm,
-    widthCm,
-    heightCm,
-    girthCm,
-    cbm: Number(row.cbm),
-    totalCbm: Number(row.cbm),
-    volumetricWeightKg: Number(row.volumetricWeightKg),
-    volumetricWeightKg5000: totalVolumetricWeightKg5000,
-    totalVolumetricWeightKg: Number(row.volumetricWeightKg),
-    totalVolumetricWeightKg5000,
-    chargeableWeightKg: Number(row.chargeableWeightKg),
-    divisor: row.divisor,
-    roundingRule: row.roundingRule,
-    scanTime: row.scanTime?.toISOString(),
-    remark: row.remark ?? undefined,
-    manualException: row.manualException ?? undefined,
-    scanSource: row.scanSource ?? undefined,
-    measurementStatus: row.measurementStatus ?? 'MEASURED',
-    measurementMatchedAt: row.measurementMatchedAt?.toISOString?.() ?? undefined,
-    measurementMatchedBy: row.measurementMatchedBy ?? undefined,
-    inboundAt: row.scanTime?.toISOString(),
-    receiptSourceId: row.sourcePackageId ?? row.id,
-    tallyStatus: '待理货',
-    splitStatus: row.sourcePackageId ? '拆票子票' : '原始票',
-    consolidationStatus: row.status === 'CONSOLIDATED' ? '已合票' : '未合票',
-    outboundStatus: row.status === 'SHIPPED' ? '已出库' : '未出库',
-    status: row.status as WarehousePackageStatus,
-    exceptions: row.exceptions ?? [],
-    createdBy: row.createdBy ?? undefined,
-    createdAt: row.createdAt.toISOString()
-  };
-}
-
 function mapShipmentReviewWarehousePackage(row: any): ShipmentReviewPackageSummary {
   return {
     id: row.id,
@@ -17276,53 +17087,6 @@ function mapWarehouseConsolidation(row: any, packageIds: string[]): WarehouseCon
   };
 }
 
-function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
-  return {
-    id: row.id,
-    taskNo: row.taskNo,
-    status: row.status,
-    packageIds: [...(row.packageIds ?? [])],
-    sourcePackageId: row.sourcePackageId,
-    sourceCombinedOrderNo: row.sourceCombinedOrderNo,
-    customerCode: row.customerCode,
-    customerName: row.customerName ?? undefined,
-    salesperson: row.salesperson ?? undefined,
-    packageCount: row.packageCount,
-    originalWeightKg: Number(row.originalWeightKg),
-    originalLengthCm: Number(row.originalLengthCm),
-    originalWidthCm: Number(row.originalWidthCm),
-    originalHeightCm: Number(row.originalHeightCm),
-    originalVolumetricWeightKg: Number(row.originalVolumetricWeightKg),
-    originalVolumetricWeightKg5000: Number(row.originalVolumetricWeightKg5000),
-    tallyRequirement: row.tallyRequirement,
-    remark: row.remark ?? undefined,
-    createdBy: row.createdBy ?? undefined,
-    createdAt: row.createdAt.toISOString(),
-    completedPackageCount: row.completedPackageCount ?? undefined,
-    completedWeightKg: row.completedWeightKg === null || row.completedWeightKg === undefined ? undefined : Number(row.completedWeightKg),
-    completedLengthCm: row.completedLengthCm === null || row.completedLengthCm === undefined ? undefined : Number(row.completedLengthCm),
-    completedWidthCm: row.completedWidthCm === null || row.completedWidthCm === undefined ? undefined : Number(row.completedWidthCm),
-    completedHeightCm: row.completedHeightCm === null || row.completedHeightCm === undefined ? undefined : Number(row.completedHeightCm),
-    completedVolumetricWeightKg: row.completedVolumetricWeightKg === null || row.completedVolumetricWeightKg === undefined ? undefined : Number(row.completedVolumetricWeightKg),
-    completedVolumetricWeightKg5000: row.completedVolumetricWeightKg5000 === null || row.completedVolumetricWeightKg5000 === undefined ? undefined : Number(row.completedVolumetricWeightKg5000),
-    completedBy: row.completedBy ?? undefined,
-    completedAt: row.completedAt?.toISOString?.() ?? undefined,
-    labelStatus: row.labelStatus ?? 'NOT_GENERATED',
-    labelNo: row.labelNo ?? undefined,
-    labelQrContent: row.labelQrContent ?? undefined,
-    labelGeneratedAt: row.labelGeneratedAt?.toISOString?.() ?? undefined,
-    labelGeneratedBy: row.labelGeneratedBy ?? undefined,
-    labelPrintedAt: row.labelPrintedAt?.toISOString?.() ?? undefined,
-    labelPrintedBy: row.labelPrintedBy ?? undefined,
-    labelDownloadedAt: row.labelDownloadedAt?.toISOString?.() ?? undefined,
-    labelDownloadedBy: row.labelDownloadedBy ?? undefined,
-    appliedPackageId: row.appliedPackageId ?? undefined,
-    appliedPackageNo: row.appliedPackageNo ?? undefined,
-    labelAppliedAt: row.labelAppliedAt?.toISOString?.() ?? undefined,
-    labelAppliedBy: row.labelAppliedBy ?? undefined
-  };
-}
-
 function buildWarehouseTallyLabelQrContent(task: WarehouseTallyTaskSummary, labelNo: string): string {
   return JSON.stringify({
     type: 'WAREHOUSE_TALLY_LABEL',
@@ -17334,12 +17098,6 @@ function buildWarehouseTallyLabelQrContent(task: WarehouseTallyTaskSummary, labe
     sourcePackageId: task.sourcePackageId,
     sourceCombinedOrderNo: task.sourceCombinedOrderNo
   });
-}
-
-function resolveWarehouseTallyRecentCutoff() {
-  const now = new Date();
-  const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
-  return new Date(Date.UTC(beijingNow.getUTCFullYear(), beijingNow.getUTCMonth() - 1, beijingNow.getUTCDate(), -8, 0, 0, 0));
 }
 
 function normalizeOrderEntryPackageIds(value?: string | string[]): string[] {
