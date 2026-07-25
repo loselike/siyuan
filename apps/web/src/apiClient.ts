@@ -222,6 +222,7 @@ import type {
 import { AppShellClient } from './api/appShellClient';
 import { AuditQueryClient } from './api/auditQueryClient';
 import { CarrierTaskQueryClient } from './api/carrierTaskQueryClient';
+import { MarkupQueryClient } from './api/markupQueryClient';
 import { PriceBookQueryClient } from './api/priceBookQueryClient';
 import { SystemDirectoryClient } from './api/systemDirectoryClient';
 import { WarehouseQueryClient } from './api/warehouseQueryClient';
@@ -578,6 +579,9 @@ export class ApiClient {
   readonly appShell = new AppShellClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly auditQuery = new AuditQueryClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly carrierTaskQuery = new CarrierTaskQueryClient(<T>(path: string, init?: RequestInit) =>
+    this.request<T>(path, init)
+  );
+  readonly markupQuery = new MarkupQueryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
   );
   readonly priceBookQuery = new PriceBookQueryClient(<T>(path: string, init?: RequestInit) =>
@@ -1096,17 +1100,11 @@ export class ApiClient {
   }
 
   async agentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
-    const params = new globalThis.URLSearchParams();
-    Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && String(value).trim()) {
-        params.set(key, String(value));
-      }
-    });
-    return this.request(`/pricing/markup-rules${params.toString() ? `?${params.toString()}` : ''}`);
+    return this.markupQuery.agentMarkupRules(query);
   }
 
   async previewAgentMarkupRule(id: string): Promise<AgentMarkupPreviewResponse> {
-    return this.request(`/pricing/markup-rules/${id}/preview`);
+    return this.markupQuery.previewAgentMarkupRule(id);
   }
 
   async previewMarkupRoute(input: MarkupRoutePreviewInput): Promise<MarkupRoutePreviewResponse> {
@@ -1122,13 +1120,7 @@ export class ApiClient {
   }
 
   async exportAgentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {
-    const params = new globalThis.URLSearchParams();
-    Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && String(value).trim()) {
-        params.set(key, String(value));
-      }
-    });
-    return this.request(`/pricing/markup-rules/export${params.toString() ? `?${params.toString()}` : ''}`);
+    return this.markupQuery.exportAgentMarkupRules(query);
   }
 
   async importAgentMarkupRules(rows: AgentMarkupCreateInput[]): Promise<{ successCount: number; errorRows: Array<{ index: number; reason: string }>; rows: AgentMarkupSummary[] }> {

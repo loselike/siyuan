@@ -1,6 +1,6 @@
 # 代码瘦身治理第十阶段
 
-- 状态：`completed`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜10`
 - 续接自：`docs/dev-now/codebase-slimming-phase-9.md`
 - 上下文状态：`green`
@@ -61,3 +61,4 @@
 - 剩余风险：五个旧方法仍处于兼容窗口，尚未形成代码净删除；仓库外未纳管调用方无法由本仓扫描覆盖。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-10`。
 - 准确下一步：把这五个旧入口加入生产零调用清单；继续扫描另一个包含多个纯 GET 的窄领域，兼容窗口结束后再单独删除转发和兼容测试。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-11.md`

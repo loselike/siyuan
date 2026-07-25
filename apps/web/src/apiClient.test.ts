@@ -61,3 +61,38 @@ describe('ApiClient price-book query compatibility', () => {
     expect(priceBookImportJob).toHaveBeenCalledWith('job-1');
   });
 });
+
+describe('ApiClient markup query compatibility', () => {
+  it('forwards legacy read methods to the markup query client', async () => {
+    const client = new ApiClient(() => null, vi.fn());
+    const listResponse = {
+      metrics: {
+        totalRules: 0,
+        enabledRules: 0,
+        disabledRules: 0,
+        unmatchedQuotes: 0
+      },
+      rows: [],
+      pagination: { page: 1, pageSize: 20, totalItems: 0 }
+    };
+    const agentMarkupRules = vi.spyOn(client.markupQuery, 'agentMarkupRules').mockResolvedValue(listResponse);
+    const previewAgentMarkupRule = vi.spyOn(client.markupQuery, 'previewAgentMarkupRule').mockResolvedValue({
+      rule: { id: 'markup-1' },
+      scope: {},
+      stats: {},
+      examples: [],
+      recentChanges: []
+    } as never);
+    const exportResponse = { rows: [], exportedAt: '2026-07-25T00:00:00.000Z' };
+    const exportAgentMarkupRules = vi.spyOn(client.markupQuery, 'exportAgentMarkupRules').mockResolvedValue(exportResponse);
+    const query = { legacyModule: 'inquiry' as const, agentName: '测试代理', page: 1, pageSize: 20 };
+
+    await client.agentMarkupRules(query);
+    await client.previewAgentMarkupRule('markup-1');
+    await client.exportAgentMarkupRules(query);
+
+    expect(agentMarkupRules).toHaveBeenCalledWith(query);
+    expect(previewAgentMarkupRule).toHaveBeenCalledWith('markup-1');
+    expect(exportAgentMarkupRules).toHaveBeenCalledWith(query);
+  });
+});

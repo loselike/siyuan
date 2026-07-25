@@ -1076,8 +1076,8 @@ export function PricingPage({
     }
     Promise.all([
       canViewPriceBooks ? apiClient.priceBookQuery.priceBooks({ includeRows: false }) : Promise.resolve({ books: [] as PriceBookSummary[] }),
-      canViewMarkupDetails ? apiClient.agentMarkupRules({ page: 1, pageSize: 200, status: 'ALL', includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
-      canViewTierMarkup ? apiClient.agentMarkupRules({ page: 1, pageSize: 500, status: 'ALL', detail: true, includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
+      canViewMarkupDetails ? apiClient.markupQuery.agentMarkupRules({ page: 1, pageSize: 200, status: 'ALL', includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
+      canViewTierMarkup ? apiClient.markupQuery.agentMarkupRules({ page: 1, pageSize: 500, status: 'ALL', detail: true, includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
       apiClient.masterData().catch(() => ({ agents: [] } as Partial<MasterDataSnapshot>))
     ])
       .then(([response, rules, detailRules, masterData]) => {
@@ -1170,7 +1170,7 @@ export function PricingPage({
   }
 
   async function loadMarkupDetailRules(agentName?: string, priceBookId?: string) {
-    const response = await apiClient.agentMarkupRules({
+    const response = await apiClient.markupQuery.agentMarkupRules({
       ...(priceBookId ? { priceBookId } : {}),
       ...(agentName ? { agentName } : {}),
       page: 1,
@@ -1189,7 +1189,7 @@ export function PricingPage({
   }
 
   function reloadMarkupRules(nextFilters: AgentMarkupListQuery = markupFilters) {
-    return apiClient.agentMarkupRules({ ...nextFilters, legacyModule: markupModule, page: 1, pageSize: 200, includeHits: false }).then((response) => {
+    return apiClient.markupQuery.agentMarkupRules({ ...nextFilters, legacyModule: markupModule, page: 1, pageSize: 200, includeHits: false }).then((response) => {
       const rows = readAgentMarkupRows(response);
       setMarkupRules(rows);
       setMarkupMetrics(readAgentMarkupMetrics(response));
@@ -1204,7 +1204,7 @@ export function PricingPage({
   }
 
   async function reloadChannelTierRules() {
-    const response = await apiClient.agentMarkupRules({
+    const response = await apiClient.markupQuery.agentMarkupRules({
       legacyModule: markupModule,
       page: 1,
       pageSize: 500,
@@ -1931,7 +1931,7 @@ export function PricingPage({
   }
 
   function exportMarkupRules() {
-    void apiClient.exportAgentMarkupRules({ ...markupFilters, legacyModule: markupModule })
+    void apiClient.markupQuery.exportAgentMarkupRules({ ...markupFilters, legacyModule: markupModule })
       .then((response) => onNotice(`已导出 ${response.rows.length} 条代理加价规则`))
       .catch((error) => onNotice(error instanceof Error ? error.message : '导出规则失败'));
   }
@@ -2055,7 +2055,7 @@ export function PricingPage({
       setSelectedPriceBookIds([]);
       invalidatePricingResult();
       try {
-        const latestMarkupRules = readAgentMarkupRows(await apiClient.agentMarkupRules({ includeHits: false }));
+        const latestMarkupRules = readAgentMarkupRows(await apiClient.markupQuery.agentMarkupRules({ includeHits: false }));
         setMarkupRules(latestMarkupRules);
         setSelectedMarkupRuleIds((current) => current.filter((id) => latestMarkupRules.some((rule) => rule.id === id)));
       } catch {
