@@ -93,8 +93,6 @@ import type {
   RoleGroupInput,
   BulkTrackingApplyRequest,
   ShipmentCreateInput,
-  LineShipmentPoolQuery,
-  ShipmentInternalFlowLogResponse,
   ShipmentFinanceItemCreateInput,
   ShipmentFinanceItemUpdateInput,
   ShipmentImportRequest,
@@ -428,19 +426,6 @@ export class DataController {
   @RequirePermission(['warehouse:dispatch-pending:view', 'warehouse:outbounded:view'])
   async warehouseDispatchShipments(@Req() request: { user: Principal }) {
     return this.repository.getWarehouseDispatchShipments(request.user);
-  }
-
-  @Get('operations/line-shipments')
-  @RequirePermission('operations:line-shipment:view')
-  async lineShipments(@Req() request: { user: Principal }, @Query() query: LineShipmentPoolQuery) {
-    return this.repository.getLineShipmentPool(request.user, query);
-  }
-
-  @Get('operations/line-shipments/:id/internal-flow-log')
-  @RequirePermission('operations:line-shipment:internal-log-view')
-  async lineShipmentInternalFlowLog(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能查看内部流通日志');
-    return this.repository.getShipmentInternalFlowLog(request.user, id);
   }
 
   @Post('navigation/read-state')
