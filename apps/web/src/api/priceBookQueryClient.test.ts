@@ -8,7 +8,8 @@ import type {
   PriceBookRowsResponse,
   PriceBooksResponse,
   PricingRuleRefreshProgressResponse,
-  PricingSyncHealthResponse
+  PricingSyncHealthResponse,
+  SouthAfricaRateRuleListResponse
 } from '@siyuan/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { PriceBookQueryClient, type LegacyPricingHealthResponse, type PriceBookQueryRequest } from './priceBookQueryClient';
@@ -138,6 +139,16 @@ describe('PriceBookQueryClient', () => {
     expect(request).toHaveBeenNthCalledWith(3, '/pricing/legacy/sources');
     expect(request).toHaveBeenNthCalledWith(4, '/pricing/legacy/health-report?module=europeExpress');
     expect(request).toHaveBeenNthCalledWith(5, '/pricing/legacy/health-report');
+  });
+
+  it('keeps the South Africa rate-rule read unchanged', async () => {
+    const response = { rules: [] } as SouthAfricaRateRuleListResponse;
+    const request = vi.fn().mockResolvedValue(response) as PriceBookQueryRequest;
+    const client = new PriceBookQueryClient(request);
+
+    await expect(client.southAfricaRateRules()).resolves.toBe(response);
+
+    expect(request).toHaveBeenCalledWith('/pricing/south-africa/rules');
   });
 
   it('passes query errors through without changing their message', async () => {

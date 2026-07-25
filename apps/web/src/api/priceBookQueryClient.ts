@@ -11,7 +11,8 @@ import type {
   PriceBookRowsResponse,
   PriceBooksResponse,
   PricingRuleRefreshProgressResponse,
-  PricingSyncHealthResponse
+  PricingSyncHealthResponse,
+  SouthAfricaRateRuleListResponse
 } from '@siyuan/shared';
 
 export interface PricingSyncHealthQuery {
@@ -98,5 +99,9 @@ export class PriceBookQueryClient {
   legacyPricingHealth(module?: LegacyPricingModule): Promise<LegacyPricingHealthResponse> {
     const params = module ? `?module=${encodeURIComponent(module)}` : '';
     return this.request(`/pricing/legacy/health-report${params}`);
+  }
+
+  southAfricaRateRules(): Promise<SouthAfricaRateRuleListResponse> {
+    return this.request('/pricing/south-africa/rules');
   }
 }

@@ -1008,7 +1008,7 @@ export function PricingPage({
         .catch(() => undefined);
     }
     if (canReadSouthAfricaRules) {
-      apiClient.southAfricaRateRules()
+      apiClient.priceBookQuery.southAfricaRateRules()
         .then((southAfrica) => {
           if (!alive) return;
           setSouthAfricaRules(Array.isArray(southAfrica?.rules) ? southAfrica.rules : []);
@@ -1218,7 +1218,7 @@ export function PricingPage({
   }
 
   async function reloadSouthAfricaRateRules() {
-    const response = await apiClient.southAfricaRateRules();
+    const response = await apiClient.priceBookQuery.southAfricaRateRules();
     const rules = Array.isArray(response?.rules) ? response.rules : [];
     setSouthAfricaRules(rules);
     return rules;

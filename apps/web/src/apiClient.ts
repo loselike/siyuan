@@ -1015,7 +1015,7 @@ export class ApiClient {
   }
 
   async southAfricaRateRules(): Promise<SouthAfricaRateRuleListResponse> {
-    return this.request('/pricing/south-africa/rules');
+    return this.priceBookQuery.southAfricaRateRules();
   }
 
   async createSouthAfricaRateRule(input: SouthAfricaRateRuleInput): Promise<SouthAfricaRateRuleSummary> {
