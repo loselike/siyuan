@@ -237,6 +237,7 @@ import type {
 import { AppShellClient } from './api/appShellClient';
 import { AuditQueryClient } from './api/auditQueryClient';
 import { SystemDirectoryClient } from './api/systemDirectoryClient';
+import { WarehouseQueryClient } from './api/warehouseQueryClient';
 
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type RoleKey = BuiltinRoleKey | (string & {});
@@ -599,6 +600,9 @@ export class ApiClient {
   readonly appShell = new AppShellClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly auditQuery = new AuditQueryClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly systemDirectory = new SystemDirectoryClient(<T>(path: string, init?: RequestInit) =>
+    this.request<T>(path, init)
+  );
+  readonly warehouseQuery = new WarehouseQueryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
   );
 
@@ -1215,29 +1219,15 @@ export class ApiClient {
   }
 
   async warehousePackages(): Promise<WarehousePackageSummary[]> {
-    return this.request('/warehouse/packages');
+    return this.warehouseQuery.warehousePackages();
   }
 
   async warehouseTodayReceipts(query: WarehouseTodayQuery = {}): Promise<WarehouseTodayResponse> {
-    const params = new globalThis.URLSearchParams();
-    Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && String(value).trim()) {
-        params.set(key, String(value));
-      }
-    });
-    const search = params.toString();
-    return this.request(`/warehouse/today-receipts${search ? `?${search}` : ''}`);
+    return this.warehouseQuery.warehouseTodayReceipts(query);
   }
 
   async warehouseInStock(query: WarehouseInStockQuery = {}): Promise<WarehouseInStockResponse> {
-    const params = new globalThis.URLSearchParams();
-    Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && String(value).trim()) {
-        params.set(key, String(value));
-      }
-    });
-    const search = params.toString();
-    return this.request(`/warehouse/in-stock${search ? `?${search}` : ''}`);
+    return this.warehouseQuery.warehouseInStock(query);
   }
 
   async warehousePackageGroups(): Promise<WarehousePackageGroupSummary[]> {

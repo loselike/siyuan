@@ -89,3 +89,34 @@ describe('ApiClient audit query compatibility', () => {
     expect(auditLogs).toHaveBeenCalledWith(query);
   });
 });
+
+describe('ApiClient warehouse query compatibility', () => {
+  it('forwards legacy read methods to the warehouse query client', async () => {
+    const client = new ApiClient(() => null, vi.fn());
+    const packages = vi.spyOn(client.warehouseQuery, 'warehousePackages').mockResolvedValue([]);
+    const response = {
+      totals: {
+        receiptTickets: 0,
+        totalPackages: 0,
+        totalWeightKg: 0,
+        totalCbm: 0,
+        waitingDispatchTickets: 0,
+        pendingTallyTickets: 0,
+        exceptionTickets: 0
+      },
+      rows: []
+    };
+    const todayReceipts = vi.spyOn(client.warehouseQuery, 'warehouseTodayReceipts').mockResolvedValue(response);
+    const inStock = vi.spyOn(client.warehouseQuery, 'warehouseInStock').mockResolvedValue(response);
+    const todayQuery = { datePreset: 'TODAY' as const, site: '上海仓' };
+    const inStockQuery = { status: 'TALLIED_ARCHIVED' as const, operationKeyword: 'alice' };
+
+    await client.warehousePackages();
+    await client.warehouseTodayReceipts(todayQuery);
+    await client.warehouseInStock(inStockQuery);
+
+    expect(packages).toHaveBeenCalledOnce();
+    expect(todayReceipts).toHaveBeenCalledWith(todayQuery);
+    expect(inStock).toHaveBeenCalledWith(inStockQuery);
+  });
+});

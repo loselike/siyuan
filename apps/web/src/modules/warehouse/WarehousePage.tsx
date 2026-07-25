@@ -750,7 +750,7 @@ export function WarehousePage({
       return;
     }
     let alive = true;
-    apiClient.warehousePackages()
+    apiClient.warehouseQuery.warehousePackages()
       .then((rows) => {
         if (!alive) return;
         setWarehousePackages(withWarehouseCustomerProgress(rows.map(mapWarehouseApiPackageToInbound)));
@@ -769,7 +769,7 @@ export function WarehousePage({
       return;
     }
     let alive = true;
-    apiClient.warehouseTodayReceipts(todayFilters)
+    apiClient.warehouseQuery.warehouseTodayReceipts(todayFilters)
       .then((response) => {
         if (!alive) return;
         setTodayReceiptRows(response.rows.map(mapWarehouseApiPackageToInbound));
@@ -795,7 +795,7 @@ export function WarehousePage({
       return;
     }
     let alive = true;
-    apiClient.warehouseInStock(inStockFilters)
+    apiClient.warehouseQuery.warehouseInStock(inStockFilters)
       .then((response) => {
         if (!alive) return;
         setInStockRows(response.rows.map(mapWarehouseApiPackageToInbound));
@@ -821,7 +821,7 @@ export function WarehousePage({
       return;
     }
     let alive = true;
-    apiClient.warehouseInStock({ status: 'TALLIED_ARCHIVED' })
+    apiClient.warehouseQuery.warehouseInStock({ status: 'TALLIED_ARCHIVED' })
       .then((response) => {
         if (!alive) return;
         setCompletedTallyArchiveRows(response.rows.map(mapWarehouseApiPackageToInbound).filter(isRecentWarehouseTallyArchive));
@@ -2371,7 +2371,7 @@ export function WarehousePage({
       const printStarted = printWarehouseTallyLabelHtml(createWarehouseTallyLabelHtml(printed, outputPackages), printWindow);
       setTallyTasks((current) => current.map((task) => (task.id === completed.id ? printed : task)));
       try {
-        const refreshedInStock = await apiClient.warehouseInStock(inStockFilters);
+        const refreshedInStock = await apiClient.warehouseQuery.warehouseInStock(inStockFilters);
         setInStockRows(refreshedInStock.rows.map(mapWarehouseApiPackageToInbound).map((pkg) => completed.packageIds.includes(pkg.id)
           ? pkg
           : pkg));
