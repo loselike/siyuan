@@ -1246,12 +1246,6 @@ export class DataController {
     return this.repository.deleteAgentChannel(request.user, id);
   }
 
-  @Get('master-data/carriers')
-  @RequirePermission('master-data:channels:read')
-  async masterDataCarriers() {
-    return (await this.repository.getMasterData()).carriers;
-  }
-
   @Post('master-data/carriers')
   @RequirePermission('master-data:channels:carrier-manage')
   async createMasterDataCarrier(@Req() request: { user: Principal }, @Body() body: CarrierCreateInput) {
@@ -1262,12 +1256,6 @@ export class DataController {
   @RequirePermission('master-data:channels:carrier-enable')
   async updateMasterDataCarrierEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateCarrierEnabled(request.user, id, body);
-  }
-
-  @Get('master-data/channels')
-  @RequirePermission('master-data:channels:read')
-  async masterDataChannels() {
-    return (await this.repository.getMasterData()).channels;
   }
 
   @Post('master-data/channels')
@@ -1292,12 +1280,6 @@ export class DataController {
   @RequirePermission('master-data:channels:delete')
   async deleteMasterDataChannel(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deleteChannel(request.user, id);
-  }
-
-  @Get('master-data/channel-categories')
-  @RequirePermission('master-data:channel-categories:read')
-  async masterDataChannelCategories() {
-    return (await this.repository.getMasterData()).channelCategories;
   }
 
   @Post('master-data/channel-categories')
