@@ -1075,7 +1075,7 @@ export function PricingPage({
       };
     }
     Promise.all([
-      canViewPriceBooks ? apiClient.priceBooks({ includeRows: false }) : Promise.resolve({ books: [] as PriceBookSummary[] }),
+      canViewPriceBooks ? apiClient.priceBookQuery.priceBooks({ includeRows: false }) : Promise.resolve({ books: [] as PriceBookSummary[] }),
       canViewMarkupDetails ? apiClient.agentMarkupRules({ page: 1, pageSize: 200, status: 'ALL', includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
       canViewTierMarkup ? apiClient.agentMarkupRules({ page: 1, pageSize: 500, status: 'ALL', detail: true, includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
       apiClient.masterData().catch(() => ({ agents: [] } as Partial<MasterDataSnapshot>))
@@ -1111,7 +1111,7 @@ export function PricingPage({
     }, 8000);
     setPriceBookManagementLoading(true);
     setSelectedPriceBookIds([]);
-    apiClient.priceBooks({ includeRows: false, targetModule: priceBookManagementModule })
+    apiClient.priceBookQuery.priceBooks({ includeRows: false, targetModule: priceBookManagementModule })
       .then((response) => {
         if (alive) setManagedPriceBooks(response.books);
       })
@@ -1131,7 +1131,7 @@ export function PricingPage({
     if (!can('pricing:price-books:sync-health-view') || activePricingSection !== 'priceBooks') return;
     let alive = true;
     let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
-    const load = () => apiClient.priceBookRuleRefreshProgress()
+    const load = () => apiClient.priceBookQuery.priceBookRuleRefreshProgress()
       .then((response) => {
         if (!alive) return;
         setPriceBookRuleRefreshProgress(response);
@@ -1151,7 +1151,7 @@ export function PricingPage({
   async function loadPricingSyncHealth(page = 1, pageSize = pricingSyncHealthPagination.pageSize) {
     setPricingSyncHealthLoading(true);
     try {
-      const response = await apiClient.pricingSyncHealth({ page, pageSize, legacyModule: priceBookManagementModule });
+      const response = await apiClient.priceBookQuery.pricingSyncHealth({ page, pageSize, legacyModule: priceBookManagementModule });
       setPricingSyncHealthRows(response.rows);
       setPricingSyncOrphanRules(response.orphanRules);
       setPricingSyncHealthStats(response.stats);
@@ -1315,10 +1315,10 @@ export function PricingPage({
     setChannelTierLoading(true);
     try {
       const books = markupModulePriceBooks.filter((book) => book.agentShortName === normalizedAgentName);
-      const firstPages = await Promise.all(books.map((book) => apiClient.priceBookRows(book.id, { page: 1, pageSize: 500 })));
+      const firstPages = await Promise.all(books.map((book) => apiClient.priceBookQuery.priceBookRows(book.id, { page: 1, pageSize: 500 })));
       const remainingPages = await Promise.all(firstPages.flatMap((firstPage, bookIndex) => {
         const totalPages = Math.ceil(firstPage.pagination.totalItems / firstPage.pagination.pageSize);
-        return Array.from({ length: Math.max(0, totalPages - 1) }, (_, index) => apiClient.priceBookRows(books[bookIndex].id, { page: index + 2, pageSize: firstPage.pagination.pageSize }));
+        return Array.from({ length: Math.max(0, totalPages - 1) }, (_, index) => apiClient.priceBookQuery.priceBookRows(books[bookIndex].id, { page: index + 2, pageSize: firstPage.pagination.pageSize }));
       }));
       const rows = [...firstPages, ...remainingPages].flatMap((page) => page.rows).filter((row) => row.agentName === normalizedAgentName || books.some((book) => book.id === row.priceBookId && book.agentShortName === normalizedAgentName));
       const options = new Map<string, ChannelTierOption>();
@@ -1488,7 +1488,7 @@ export function PricingPage({
     setMarkupChannelRowsError('');
     const boundedPageSize = Math.min(200, Math.max(1, pageSize));
     try {
-      const response = await apiClient.priceBookRows(
+      const response = await apiClient.priceBookQuery.priceBookRows(
         rule.priceBookId,
         {
           page,
@@ -1617,7 +1617,7 @@ export function PricingPage({
 
   async function loadAllMarkupChannelRowsForBatch(rule: MarkupDisplayRule) {
     const pageSize = 200;
-    const first = await apiClient.priceBookRows(
+    const first = await apiClient.priceBookQuery.priceBookRows(
       rule.priceBookId,
       {
         page: 1,
@@ -1635,7 +1635,7 @@ export function PricingPage({
     }
     const rest = await Promise.all(
       Array.from({ length: totalPages - 1 }, (_, index) => index + 2).map((page) =>
-        apiClient.priceBookRows(
+        apiClient.priceBookQuery.priceBookRows(
           rule.priceBookId,
           {
             page,
@@ -2030,7 +2030,7 @@ export function PricingPage({
 
   async function waitForPriceBookImportJob(jobId: string): Promise<PriceBookImportJobSummary> {
     for (let attempt = 0; attempt < 300; attempt += 1) {
-      const response = await apiClient.priceBookImportJob(jobId);
+      const response = await apiClient.priceBookQuery.priceBookImportJob(jobId);
       setPriceBookImportJob(response.job);
       if (isTerminalImportJob(response.job)) {
         return response.job;

@@ -222,6 +222,7 @@ import type {
 import { AppShellClient } from './api/appShellClient';
 import { AuditQueryClient } from './api/auditQueryClient';
 import { CarrierTaskQueryClient } from './api/carrierTaskQueryClient';
+import { PriceBookQueryClient } from './api/priceBookQueryClient';
 import { SystemDirectoryClient } from './api/systemDirectoryClient';
 import { WarehouseQueryClient } from './api/warehouseQueryClient';
 
@@ -579,6 +580,9 @@ export class ApiClient {
   readonly carrierTaskQuery = new CarrierTaskQueryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
   );
+  readonly priceBookQuery = new PriceBookQueryClient(<T>(path: string, init?: RequestInit) =>
+    this.request<T>(path, init)
+  );
   readonly systemDirectory = new SystemDirectoryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
   );
@@ -925,14 +929,7 @@ export class ApiClient {
   }
 
   async priceBooks(options: { includeRows?: boolean; targetModule?: PriceBookImportTargetModule } = {}): Promise<PriceBooksResponse> {
-    const params = new globalThis.URLSearchParams();
-    if (options.includeRows === false) {
-      params.set('includeRows', 'false');
-    }
-    if (options.targetModule) {
-      params.set('targetModule', options.targetModule);
-    }
-    return this.request(`/pricing/books${params.toString() ? `?${params.toString()}` : ''}`);
+    return this.priceBookQuery.priceBooks(options);
   }
 
   async importPriceBook(input: PriceBookImportInput, options: { returnRows?: boolean } = {}): Promise<PriceBookImportResult> {
@@ -953,30 +950,19 @@ export class ApiClient {
   }
 
   async priceBookImportJob(id: string): Promise<PriceBookImportJobResponse> {
-    return this.request(`/pricing/books/import-jobs/${id}`);
+    return this.priceBookQuery.priceBookImportJob(id);
   }
 
   async priceBookRows(priceBookId?: string, query: PriceBookRowsQuery = {}): Promise<PriceBookRowsResponse> {
-    const params = new globalThis.URLSearchParams();
-    Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && String(value).trim()) {
-        params.set(key, String(value));
-      }
-    });
-    const path = priceBookId ? `/pricing/books/${priceBookId}/rows` : '/pricing/book-rows';
-    return this.request(`${path}${params.toString() ? `?${params.toString()}` : ''}`);
+    return this.priceBookQuery.priceBookRows(priceBookId, query);
   }
 
   async pricingSyncHealth(query: { page?: number; pageSize?: number; legacyModule?: LegacyPricingModule | 'unclassified' } = {}): Promise<PricingSyncHealthResponse> {
-    const params = new globalThis.URLSearchParams();
-    if (query.page) params.set('page', String(query.page));
-    if (query.pageSize) params.set('pageSize', String(query.pageSize));
-    if (query.legacyModule) params.set('legacyModule', String(query.legacyModule));
-    return this.request(`/pricing/sync-health${params.toString() ? `?${params.toString()}` : ''}`);
+    return this.priceBookQuery.pricingSyncHealth(query);
   }
 
   async priceBookRuleRefreshProgress(): Promise<PricingRuleRefreshProgressResponse> {
-    return this.request('/pricing/books/rule-refresh-progress');
+    return this.priceBookQuery.priceBookRuleRefreshProgress();
   }
 
   async downloadPriceBook(id: string): Promise<{ fileName: string; blob: Blob }> {

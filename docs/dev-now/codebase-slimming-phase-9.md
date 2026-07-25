@@ -1,6 +1,6 @@
 # 代码瘦身治理第九阶段
 
-- 状态：`completed`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜09`
 - 续接自：`docs/dev-now/codebase-slimming-phase-8.md`
 - 上下文状态：`green`
@@ -57,3 +57,4 @@
 - 剩余风险：仓库外部若存在直接实例化 `ApiClient` 并调用旧方法的未纳管消费者，本仓和 47 源码扫描无法覆盖；当前 Web 生产构建与源码均已确认零调用。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-9`。
 - 准确下一步：扫描一个包含多个纯只读查询的高密度领域，优先减少 `ApiClient` 聚合体积；继续避开财务、账号、状态流转和审计实现，不再创建单方法领域客户端。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-10.md`

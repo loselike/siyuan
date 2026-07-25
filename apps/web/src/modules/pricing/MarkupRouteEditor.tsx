@@ -106,10 +106,10 @@ export function MarkupRouteEditor({ apiClient, permissions, onNotice }: { apiCli
         setTiers(nextTiers);
         setSavedTierKey(JSON.stringify(nextTiers));
       } else if (initial.priceBookId) {
-        const page = await apiClient.priceBookRows(initial.priceBookId, { page: 1, pageSize: 200 });
+        const page = await apiClient.priceBookQuery.priceBookRows(initial.priceBookId, { page: 1, pageSize: 200 });
         if (!alive) return;
         const pageCount = Math.ceil(page.pagination.totalItems / page.pagination.pageSize);
-        const remaining = await Promise.all(Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) => apiClient.priceBookRows(initial.priceBookId!, { page: index + 2, pageSize: page.pagination.pageSize })));
+        const remaining = await Promise.all(Array.from({ length: Math.max(0, pageCount - 1) }, (_, index) => apiClient.priceBookQuery.priceBookRows(initial.priceBookId!, { page: index + 2, pageSize: page.pagination.pageSize })));
         if (!alive) return;
         setRows([ ...page.rows, ...remaining.flatMap((item) => item.rows) ]);
       } else {
