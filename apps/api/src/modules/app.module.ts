@@ -18,6 +18,7 @@ import { FinanceReceivableService } from './finance/receivable/finance-receivabl
 import { InMemoryRepository } from './in-memory.repository.js';
 import { LineageWatcher } from './lineage-watcher.js';
 import { MasterDataChannelQueryController } from './master-data/channel/master-data-channel-query.controller.js';
+import { PriceBookQueryController } from './pricing/price-book/price-book-query.controller.js';
 import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
@@ -50,7 +51,7 @@ const systemDirectoryRepositoryProvider = usePrismaRepository
   : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
 
 @Module({
-  controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, SystemDirectoryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
+  controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, PriceBookQueryController, SystemDirectoryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
   providers: [
     AiService,
     LineageWatcher,
