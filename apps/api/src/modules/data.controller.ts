@@ -40,7 +40,6 @@ import type {
   FuelRateCreateInput,
   OrderEntryCreateInput,
   OrderEntryDraftUpdateInput,
-  OrderEntryWarehousePackageQuery,
   PaymentCreateInput,
   PaymentApplicationCancelInput,
   PaymentApplicationCreateInput,
@@ -447,15 +446,6 @@ export class DataController {
     return this.repository.getReviewDeletedShipments(request.user);
   }
 
-  @Get('shipments/order-entry/packages')
-  @RequirePermission('business:order-entry:warehouse-package-select')
-  async orderEntryPackages(@Req() request: { user: Principal }, @Query() query: OrderEntryWarehousePackageQuery) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
-      throw new ForbiddenException('当前角色不能使用内部录单');
-    }
-    return this.repository.getOrderEntryWarehousePackages(request.user, query);
-  }
-
   @Get('shipments/order-entry/drafts')
   @RequirePermission('business:order-entry:draft-view')
   async orderEntryDrafts(@Req() request: { user: Principal }) {
@@ -479,15 +469,6 @@ export class DataController {
     await this.repository.ensureOrderEntryInputAccess(request.user, body);
     await this.ensureOrderEntryFeeNamesEnabled(body);
     return this.repository.createOrderEntry(request.user, body);
-  }
-
-  @Get('shipments/:id/order-entry')
-  @RequirePermission('business:order-entry:view')
-  async orderEntryDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
-      throw new ForbiddenException('当前角色不能使用内部录单');
-    }
-    return this.repository.getOrderEntryDetail(request.user, id);
   }
 
   @Put('shipments/:id/order-entry-draft')
