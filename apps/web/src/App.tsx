@@ -1,5 +1,5 @@
-import type { ChangeEvent, ErrorInfo, Key, MouseEvent, ReactNode } from 'react';
-import { Component, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ChangeEvent, Key, MouseEvent, ReactNode } from 'react';
+import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -98,6 +98,7 @@ import {
 } from '@siyuan/shared';
 import { ApiClient, type AiAssistResponse, type PermissionKey, type Principal, type ProfileUpdateInput, type RoleKey, type Session } from './apiClient';
 import { LoginPage } from './modules/auth/LoginPage';
+import { AppPageBoundary, type PageRenderErrorReport } from './modules/appShell/AppPageBoundary';
 import {
   appTheme,
   businessWorkspaceConfigs,
@@ -170,98 +171,10 @@ import { loadExcel } from './modules/shared/excel';
 import { formatTrackingImportDate, parseBulkTrackingWorkbook, readFileAsArrayBuffer } from './modules/tracking/bulkImport';
 import { formatBeijingDateTime, formatCurrency, formatUsd } from './modules/shared/format';
 import { ManagedTable, MetricCard, StatusTag, createNoticeMessage, renderFilterActions, renderFilterField, renderNoticeBar, riskLabel, riskWeight, tenRowTablePagination } from './modules/shared/ui';
-import { clientReleaseId } from './releaseInfo';
 
 const CustomerServicePage = lazy(() => import('./modules/customerService/CustomerServicePage').then((module) => ({ default: module.CustomerServicePage })));
 const FinancePage = lazy(() => import('./modules/finance/FinancePage').then((module) => ({ default: module.FinancePage })));
 const WarehousePage = lazy(() => import('./modules/warehouse/WarehousePage').then((module) => ({ default: module.WarehousePage })));
-
-type PageRenderErrorReport = {
-  errorId: string;
-  route: string;
-  releaseId: string;
-  menuKey: string;
-  sectionKey?: string;
-  message: string;
-  stack?: string;
-  componentStack?: string;
-};
-
-function createPageRenderErrorId() {
-  return `render-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-class AppPageErrorBoundary extends Component<{
-  children: ReactNode;
-  resetKey: string;
-  menuKey: string;
-  sectionKey?: string;
-  onReport: (report: PageRenderErrorReport) => void;
-}, { error: Error | null; errorId: string | null }> {
-  state = { error: null as Error | null, errorId: null as string | null };
-
-  static getDerivedStateFromError(error: Error) {
-    return { error, errorId: createPageRenderErrorId() };
-  }
-
-  componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error('Sunny page render failed', error, info);
-    this.props.onReport({
-      errorId: this.state.errorId ?? createPageRenderErrorId(),
-      route: window.location.pathname,
-      releaseId: clientReleaseId,
-      menuKey: this.props.menuKey,
-      sectionKey: this.props.sectionKey,
-      message: error.message,
-      stack: error.stack,
-      componentStack: info.componentStack ?? undefined
-    });
-  }
-
-  componentDidUpdate(previousProps: { resetKey: string }) {
-    if (previousProps.resetKey !== this.props.resetKey && this.state.error) {
-      this.setState({ error: null, errorId: null });
-    }
-  }
-
-  render() {
-    if (this.state.error) {
-      return (
-        <Card className="app-page-recovery-card">
-          <Space direction="vertical" size={12}>
-            <Alert
-              type="error"
-              showIcon
-              message="页面加载失败"
-              description={this.state.errorId ? `当前模块渲染异常，已拦截白屏。错误编号：${this.state.errorId}；请重试加载，若仍出现请把该编号反馈给管理员。` : '当前模块渲染异常，已拦截白屏。请重试加载，或刷新页面后继续操作。'}
-            />
-            <Space wrap>
-              <Button htmlType="button" type="primary" onClick={() => this.setState({ error: null, errorId: null })}>
-                重试加载
-              </Button>
-              <Button htmlType="button" onClick={() => window.location.reload()}>
-                刷新页面
-              </Button>
-            </Space>
-          </Space>
-        </Card>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-function PageLoadingFallback() {
-  return (
-    <Card className="app-page-loading-card">
-      <Space direction="vertical" size={8}>
-        <Text strong>模块加载中</Text>
-        <Text type="secondary">正在准备当前页面，请稍候。</Text>
-      </Space>
-    </Card>
-  );
-}
-
 
 const { Header, Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -2913,13 +2826,12 @@ export function App() {
                 }
               />
             ) : null}
-            <AppPageErrorBoundary
+            <AppPageBoundary
               resetKey={`${currentMenuKey}:${activeSectionKey ?? ''}`}
               menuKey={currentMenuKey}
               sectionKey={activeSectionKey}
               onReport={reportPageRenderError}
             >
-            <Suspense fallback={<PageLoadingFallback />}>
             {currentMenuKey === 'business' || currentMenuKey === 'orders' ? (
               <FinancePage
                 menuMode="business"
@@ -3244,8 +3156,7 @@ export function App() {
                 onProcessShipment={(shipment) => openEditShipmentOperationalModal(shipment, 'operationsPool')}
               />
             )}
-            </Suspense>
-            </AppPageErrorBoundary>
+            </AppPageBoundary>
             <Modal
               title="人工修改轨迹与状态"
               open={Boolean(editingShipment) && currentMenuKey !== 'orders'}
