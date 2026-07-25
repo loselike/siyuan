@@ -1,6 +1,6 @@
 # 代码瘦身治理第十八阶段
 
-- 状态：`completed`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜18`
 - 续接自：`docs/dev-now/codebase-slimming-phase-17.md`
 - 上下文状态：`green`
@@ -37,7 +37,7 @@
 - 下一候选为仓库理货历史链 `warehouseTallyTaskHistoryChain(packageId)`。
 - 它是 `GET /warehouse/tally-task-history-chain?packageId=...`，只读取仓库理货历史，权限为 `warehouse:tally-completed:view`，不写财务、不推进状态、不写审计。
 - 可扩展现有 `WarehouseQueryClient`，无需新建客户端。
-- 当前本地有五处生产调用，分布在 `WarehousePage` 和 `FinanceEntryPage`；47 当前源码有两处生产调用。财务录单页面仅消费仓库历史数组，本候选不触碰财务接口或金额逻辑。
+- 实施前当前分支有两处生产调用，分布在 `WarehousePage` 和 `FinanceEntryPage`；47 当前源码有三处生产调用，其中一处为 47 独有的重复理货批次历史入口。财务录单页面仅消费仓库历史数组，本候选不触碰财务接口或金额逻辑。
 - 下一阶段若实施：只新增领域客户端封装与路径测试，迁移上述调用，旧 `ApiClient` 方法暂时保留转发。
 
 ## 验证

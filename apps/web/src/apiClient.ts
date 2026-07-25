@@ -1106,7 +1106,7 @@ export class ApiClient {
   }
 
   async warehouseTallyTaskHistoryChain(packageId: string): Promise<WarehouseTallyTaskSummary[]> {
-    return this.request(`/warehouse/tally-task-history-chain?packageId=${encodeURIComponent(packageId)}`);
+    return this.warehouseQuery.warehouseTallyTaskHistoryChain(packageId);
   }
 
   async createWarehouseTallyTask(input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {

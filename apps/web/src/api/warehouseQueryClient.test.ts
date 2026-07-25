@@ -74,6 +74,16 @@ describe('WarehouseQueryClient', () => {
     expect(request).toHaveBeenNthCalledWith(2, '/warehouse/tally-tasks');
   });
 
+  it('keeps the tally-task history-chain path and package ID encoding unchanged', async () => {
+    const response: WarehouseTallyTaskSummary[] = [];
+    const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;
+    const client = new WarehouseQueryClient(request);
+
+    await expect(client.warehouseTallyTaskHistoryChain('pkg 1/a')).resolves.toBe(response);
+
+    expect(request).toHaveBeenCalledWith('/warehouse/tally-task-history-chain?packageId=pkg%201%2Fa');
+  });
+
   it('keeps today-receipt query serialization unchanged', async () => {
     const response: WarehouseTodayResponse = { totals: emptyTotals, rows: [] };
     const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;

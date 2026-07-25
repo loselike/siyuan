@@ -910,7 +910,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     setTallyHistoryTasks([]);
     setTallyHistoryLoading(true);
     try {
-      setTallyHistoryTasks(await apiClient.warehouseTallyTaskHistoryChain(record.id));
+      setTallyHistoryTasks(await apiClient.warehouseQuery.warehouseTallyTaskHistoryChain(record.id));
     } catch {
       setTallyHistoryTasks([]);
     } finally {

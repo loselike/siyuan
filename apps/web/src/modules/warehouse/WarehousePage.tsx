@@ -2440,7 +2440,7 @@ export function WarehousePage({
 
   async function openTallyTaskDetailForPackage(record: WarehouseInboundPackage) {
     try {
-      const chain = await apiClient.warehouseTallyTaskHistoryChain(record.id);
+      const chain = await apiClient.warehouseQuery.warehouseTallyTaskHistoryChain(record.id);
       if (chain.length) {
         setTallyTasks((current) => [...chain, ...current.filter((item) => !chain.some((task) => task.id === item.id))]);
         setSelectedTallyTaskDetails(chain);
