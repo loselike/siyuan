@@ -5,10 +5,6 @@ import type {
   AgentChannelSummary,
   AgentChannelUpdateInput,
   AgentMarkupCreateInput,
-  AgentMarkupExportResponse,
-  AgentMarkupListQuery,
-  AgentMarkupListResponse,
-  AgentMarkupPreviewResponse,
   AgentMarkupSummary,
   AgentMarkupUpdateInput,
   MarkupRoutePreviewInput,
@@ -80,16 +76,10 @@ import type {
   PayableAuditSummary,
   PayableAuditUpdateInput,
   PriceBookImportInput,
-  PriceBookImportTargetModule,
   PriceBookImportJobResponse,
   PriceBookImportResult,
   PriceBookRemarkUpdateInput,
-  PriceBookRowsQuery,
-  PriceBookRowsResponse,
-  PriceBooksResponse,
   PriceBookSummary,
-  PricingSyncHealthResponse,
-  PricingRuleRefreshProgressResponse,
   LegacyPricingImportInput,
   LegacyPricingMetaResponse,
   LegacyPricingModule,
@@ -206,7 +196,6 @@ import type {
   WarehouseManualReceiptCreateInput,
   WarehouseManualReceiptCreateResponse,
   WarehousePackageCreateInput,
-  WarehousePackageGroupSummary,
   WarehousePackageSplitInput,
   WarehousePackageSplitResponse,
   WarehousePackageSummary,
@@ -215,7 +204,6 @@ import type {
   WarehouseTallyLabelScanResponse,
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCreateInput,
-  WarehouseTallyTaskListQuery,
   WarehouseTallyTaskSummary,
   WarehouseTallyTaskUpdateInput,
 } from '@siyuan/shared';
@@ -932,10 +920,6 @@ export class ApiClient {
     return this.request('/pricing/rules/quote', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async priceBooks(options: { includeRows?: boolean; targetModule?: PriceBookImportTargetModule } = {}): Promise<PriceBooksResponse> {
-    return this.priceBookQuery.priceBooks(options);
-  }
-
   async importPriceBook(input: PriceBookImportInput, options: { returnRows?: boolean } = {}): Promise<PriceBookImportResult> {
     const params = new globalThis.URLSearchParams();
     if (options.returnRows === false) {
@@ -951,22 +935,6 @@ export class ApiClient {
     if (input.agentId) form.append('agentId', input.agentId);
     if (input.agentShortName) form.append('agentShortName', input.agentShortName);
     return this.request('/pricing/books/import-jobs', { method: 'POST', body: form });
-  }
-
-  async priceBookImportJob(id: string): Promise<PriceBookImportJobResponse> {
-    return this.priceBookQuery.priceBookImportJob(id);
-  }
-
-  async priceBookRows(priceBookId?: string, query: PriceBookRowsQuery = {}): Promise<PriceBookRowsResponse> {
-    return this.priceBookQuery.priceBookRows(priceBookId, query);
-  }
-
-  async pricingSyncHealth(query: { page?: number; pageSize?: number; legacyModule?: LegacyPricingModule | 'unclassified' } = {}): Promise<PricingSyncHealthResponse> {
-    return this.priceBookQuery.pricingSyncHealth(query);
-  }
-
-  async priceBookRuleRefreshProgress(): Promise<PricingRuleRefreshProgressResponse> {
-    return this.priceBookQuery.priceBookRuleRefreshProgress();
   }
 
   async downloadPriceBook(id: string): Promise<{ fileName: string; blob: Blob }> {
@@ -1099,14 +1067,6 @@ export class ApiClient {
     return this.request('/pricing/south-africa/lookup', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async agentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
-    return this.markupQuery.agentMarkupRules(query);
-  }
-
-  async previewAgentMarkupRule(id: string): Promise<AgentMarkupPreviewResponse> {
-    return this.markupQuery.previewAgentMarkupRule(id);
-  }
-
   async previewMarkupRoute(input: MarkupRoutePreviewInput): Promise<MarkupRoutePreviewResponse> {
     return this.request('/pricing/markup-rules/route-preview', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1117,10 +1077,6 @@ export class ApiClient {
 
   async migrateLegacyMarkupRouteScopes(): Promise<{ migratedCount: number; archivedCount: number; skippedCount: number }> {
     return this.request('/pricing/markup-rules/migrate-pricebook-scopes', { method: 'POST' });
-  }
-
-  async exportAgentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {
-    return this.markupQuery.exportAgentMarkupRules(query);
   }
 
   async importAgentMarkupRules(rows: AgentMarkupCreateInput[]): Promise<{ successCount: number; errorRows: Array<{ index: number; reason: string }>; rows: AgentMarkupSummary[] }> {
@@ -1149,10 +1105,6 @@ export class ApiClient {
 
   async deleteAgentMarkupRule(id: string): Promise<AgentMarkupSummary> {
     return this.request(`/pricing/markup-rules/${id}`, { method: 'DELETE' });
-  }
-
-  async warehousePackageGroups(): Promise<WarehousePackageGroupSummary[]> {
-    return this.warehouseQuery.warehousePackageGroups();
   }
 
   async createWarehousePackage(input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
@@ -1187,14 +1139,6 @@ export class ApiClient {
     return this.request(`/warehouse/consolidations/${id}/create-shipment`, { method: 'POST' });
   }
 
-  async warehouseConsolidationItems(id: string): Promise<WarehousePackageSummary[]> {
-    return this.warehouseQuery.warehouseConsolidationItems(id);
-  }
-
-  async warehouseTallyTasks(query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {
-    return this.warehouseQuery.warehouseTallyTasks(query);
-  }
-
   async warehouseTallyTaskHistoryChain(packageId: string): Promise<WarehouseTallyTaskSummary[]> {
     return this.request(`/warehouse/tally-task-history-chain?packageId=${encodeURIComponent(packageId)}`);
   }
@@ -1213,10 +1157,6 @@ export class ApiClient {
 
   async generateWarehouseTallyTaskLabel(id: string): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/label`, { method: 'POST' });
-  }
-
-  async warehouseTallyTaskOutputPackages(id: string): Promise<WarehousePackageSummary[]> {
-    return this.warehouseQuery.warehouseTallyTaskOutputPackages(id);
   }
 
   async printWarehouseTallyTaskLabel(id: string): Promise<WarehouseTallyTaskSummary> {
