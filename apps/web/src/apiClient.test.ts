@@ -30,3 +30,20 @@ describe('ApiClient Dubai price query compatibility', () => {
     expect(dubaiPriceDisplayVersions).toHaveBeenCalledOnce();
   });
 });
+
+describe('ApiClient legacy pricing query compatibility', () => {
+  it('forwards legacy metadata, source, and health reads to the price-book query client', async () => {
+    const client = new ApiClient(() => null, vi.fn());
+    const legacyPricingMeta = vi.spyOn(client.priceBookQuery, 'legacyPricingMeta').mockResolvedValue({} as never);
+    const legacyPricingSources = vi.spyOn(client.priceBookQuery, 'legacyPricingSources').mockResolvedValue({ sources: [] } as never);
+    const legacyPricingHealth = vi.spyOn(client.priceBookQuery, 'legacyPricingHealth').mockResolvedValue({ module: 'all', rowCount: 0, issues: [] });
+
+    await client.legacyPricingMeta();
+    await client.legacyPricingSources('dubaiAirSea');
+    await client.legacyPricingHealth('europeExpress');
+
+    expect(legacyPricingMeta).toHaveBeenCalledOnce();
+    expect(legacyPricingSources).toHaveBeenCalledWith('dubaiAirSea');
+    expect(legacyPricingHealth).toHaveBeenCalledWith('europeExpress');
+  });
+});

@@ -984,7 +984,7 @@ export class ApiClient {
   }
 
   async legacyPricingMeta(): Promise<LegacyPricingMetaResponse> {
-    return this.request('/pricing/legacy/quote-meta');
+    return this.priceBookQuery.legacyPricingMeta();
   }
 
   async quoteLegacyPricing(input: LegacyPricingQuoteRequest): Promise<LegacyPricingQuoteResponse> {
@@ -1022,8 +1022,7 @@ export class ApiClient {
   }
 
   async legacyPricingSources(module?: LegacyPricingModule): Promise<LegacyPricingSourcesResponse> {
-    const params = module ? `?module=${encodeURIComponent(module)}` : '';
-    return this.request(`/pricing/legacy/sources${params}`);
+    return this.priceBookQuery.legacyPricingSources(module);
   }
 
   async importLegacyPricingSource(input: LegacyPricingImportInput): Promise<{ source: LegacyPricingSourcesResponse['sources'][number]; rowCount: number }> {
@@ -1039,8 +1038,7 @@ export class ApiClient {
   }
 
   async legacyPricingHealth(module?: LegacyPricingModule): Promise<{ module: LegacyPricingModule | 'all'; rowCount: number; issues: Array<{ severity: string; message: string }> }> {
-    const params = module ? `?module=${encodeURIComponent(module)}` : '';
-    return this.request(`/pricing/legacy/health-report${params}`);
+    return this.priceBookQuery.legacyPricingHealth(module);
   }
 
   async southAfricaRateRules(): Promise<SouthAfricaRateRuleListResponse> {

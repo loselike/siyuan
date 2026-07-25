@@ -2,7 +2,9 @@ import type {
   DubaiPriceDisplayResponse,
   DubaiPriceDisplayVersionListResponse,
   DubaiPriceTableResponse,
+  LegacyPricingMetaResponse,
   LegacyPricingModule,
+  LegacyPricingSourcesResponse,
   PriceBookImportJobResponse,
   PriceBookImportTargetModule,
   PriceBookRowsQuery,
@@ -16,6 +18,12 @@ export interface PricingSyncHealthQuery {
   page?: number;
   pageSize?: number;
   legacyModule?: LegacyPricingModule | 'unclassified';
+}
+
+export interface LegacyPricingHealthResponse {
+  module: LegacyPricingModule | 'all';
+  rowCount: number;
+  issues: Array<{ severity: string; message: string }>;
 }
 
 export type PriceBookQueryRequest = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -76,5 +84,19 @@ export class PriceBookQueryClient {
 
   dubaiPriceDisplayVersions(): Promise<DubaiPriceDisplayVersionListResponse> {
     return this.request('/pricing/legacy/dubai-air-sea/display-versions');
+  }
+
+  legacyPricingMeta(): Promise<LegacyPricingMetaResponse> {
+    return this.request('/pricing/legacy/quote-meta');
+  }
+
+  legacyPricingSources(module?: LegacyPricingModule): Promise<LegacyPricingSourcesResponse> {
+    const params = module ? `?module=${encodeURIComponent(module)}` : '';
+    return this.request(`/pricing/legacy/sources${params}`);
+  }
+
+  legacyPricingHealth(module?: LegacyPricingModule): Promise<LegacyPricingHealthResponse> {
+    const params = module ? `?module=${encodeURIComponent(module)}` : '';
+    return this.request(`/pricing/legacy/health-report${params}`);
   }
 }

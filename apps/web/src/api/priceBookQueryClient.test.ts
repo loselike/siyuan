@@ -2,6 +2,8 @@ import type {
   DubaiPriceDisplayResponse,
   DubaiPriceDisplayVersionListResponse,
   DubaiPriceTableResponse,
+  LegacyPricingMetaResponse,
+  LegacyPricingSourcesResponse,
   PriceBookImportJobResponse,
   PriceBookRowsResponse,
   PriceBooksResponse,
@@ -9,7 +11,7 @@ import type {
   PricingSyncHealthResponse
 } from '@siyuan/shared';
 import { describe, expect, it, vi } from 'vitest';
-import { PriceBookQueryClient, type PriceBookQueryRequest } from './priceBookQueryClient';
+import { PriceBookQueryClient, type LegacyPricingHealthResponse, type PriceBookQueryRequest } from './priceBookQueryClient';
 
 describe('PriceBookQueryClient', () => {
   it('keeps price-book list query serialization unchanged', async () => {
@@ -111,6 +113,31 @@ describe('PriceBookQueryClient', () => {
     expect(request).toHaveBeenNthCalledWith(1, '/pricing/legacy/dubai-air-sea/table');
     expect(request).toHaveBeenNthCalledWith(2, '/pricing/legacy/dubai-air-sea/display');
     expect(request).toHaveBeenNthCalledWith(3, '/pricing/legacy/dubai-air-sea/display-versions');
+  });
+
+  it('keeps legacy quote metadata, source, and health-report queries unchanged', async () => {
+    const metadata = {} as LegacyPricingMetaResponse;
+    const sources = { sources: [] } as LegacyPricingSourcesResponse;
+    const health = { module: 'all', rowCount: 0, issues: [] } satisfies LegacyPricingHealthResponse;
+    const request = vi.fn()
+      .mockResolvedValueOnce(metadata)
+      .mockResolvedValueOnce(sources)
+      .mockResolvedValueOnce(sources)
+      .mockResolvedValueOnce(health)
+      .mockResolvedValueOnce(health) as PriceBookQueryRequest;
+    const client = new PriceBookQueryClient(request);
+
+    await expect(client.legacyPricingMeta()).resolves.toBe(metadata);
+    await expect(client.legacyPricingSources('dubaiAirSea')).resolves.toBe(sources);
+    await expect(client.legacyPricingSources()).resolves.toBe(sources);
+    await expect(client.legacyPricingHealth('europeExpress')).resolves.toBe(health);
+    await expect(client.legacyPricingHealth()).resolves.toBe(health);
+
+    expect(request).toHaveBeenNthCalledWith(1, '/pricing/legacy/quote-meta');
+    expect(request).toHaveBeenNthCalledWith(2, '/pricing/legacy/sources?module=dubaiAirSea');
+    expect(request).toHaveBeenNthCalledWith(3, '/pricing/legacy/sources');
+    expect(request).toHaveBeenNthCalledWith(4, '/pricing/legacy/health-report?module=europeExpress');
+    expect(request).toHaveBeenNthCalledWith(5, '/pricing/legacy/health-report');
   });
 
   it('passes query errors through without changing their message', async () => {

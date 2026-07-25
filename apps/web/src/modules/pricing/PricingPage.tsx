@@ -1000,7 +1000,7 @@ export function PricingPage({
   useEffect(() => {
     let alive = true;
     if (can('pricing:lookup:meta-view')) {
-      apiClient.legacyPricingMeta()
+      apiClient.priceBookQuery.legacyPricingMeta()
         .then((meta) => {
           if (!alive) return;
           setLegacyMeta(meta);
