@@ -1002,15 +1002,15 @@ export class ApiClient {
   }
 
   async dubaiPriceTable(): Promise<DubaiPriceTableResponse> {
-    return this.request('/pricing/legacy/dubai-air-sea/table');
+    return this.priceBookQuery.dubaiPriceTable();
   }
 
   async dubaiPriceDisplay(): Promise<DubaiPriceDisplayResponse> {
-    return this.request('/pricing/legacy/dubai-air-sea/display');
+    return this.priceBookQuery.dubaiPriceDisplay();
   }
 
   async dubaiPriceDisplayVersions(): Promise<DubaiPriceDisplayVersionListResponse> {
-    return this.request('/pricing/legacy/dubai-air-sea/display-versions');
+    return this.priceBookQuery.dubaiPriceDisplayVersions();
   }
 
   async activateDubaiPriceDisplayVersion(id: string, input: DubaiPriceDisplayActivateInput): Promise<DubaiPriceDisplayVersionListResponse> {

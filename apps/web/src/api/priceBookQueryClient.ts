@@ -1,4 +1,7 @@
 import type {
+  DubaiPriceDisplayResponse,
+  DubaiPriceDisplayVersionListResponse,
+  DubaiPriceTableResponse,
   LegacyPricingModule,
   PriceBookImportJobResponse,
   PriceBookImportTargetModule,
@@ -61,5 +64,17 @@ export class PriceBookQueryClient {
 
   priceBookRuleRefreshProgress(): Promise<PricingRuleRefreshProgressResponse> {
     return this.request('/pricing/books/rule-refresh-progress');
+  }
+
+  dubaiPriceTable(): Promise<DubaiPriceTableResponse> {
+    return this.request('/pricing/legacy/dubai-air-sea/table');
+  }
+
+  dubaiPriceDisplay(): Promise<DubaiPriceDisplayResponse> {
+    return this.request('/pricing/legacy/dubai-air-sea/display');
+  }
+
+  dubaiPriceDisplayVersions(): Promise<DubaiPriceDisplayVersionListResponse> {
+    return this.request('/pricing/legacy/dubai-air-sea/display-versions');
   }
 }

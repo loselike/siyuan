@@ -1,4 +1,7 @@
 import type {
+  DubaiPriceDisplayResponse,
+  DubaiPriceDisplayVersionListResponse,
+  DubaiPriceTableResponse,
   PriceBookImportJobResponse,
   PriceBookRowsResponse,
   PriceBooksResponse,
@@ -89,6 +92,25 @@ describe('PriceBookQueryClient', () => {
 
     expect(request).toHaveBeenNthCalledWith(1, '/pricing/books/import-jobs/job-1');
     expect(request).toHaveBeenNthCalledWith(2, '/pricing/books/rule-refresh-progress');
+  });
+
+  it('keeps Dubai table, active display, and display-version paths unchanged', async () => {
+    const table = {} as DubaiPriceTableResponse;
+    const display = {} as DubaiPriceDisplayResponse;
+    const versions = { versions: [] } as DubaiPriceDisplayVersionListResponse;
+    const request = vi.fn()
+      .mockResolvedValueOnce(table)
+      .mockResolvedValueOnce(display)
+      .mockResolvedValueOnce(versions) as PriceBookQueryRequest;
+    const client = new PriceBookQueryClient(request);
+
+    await expect(client.dubaiPriceTable()).resolves.toBe(table);
+    await expect(client.dubaiPriceDisplay()).resolves.toBe(display);
+    await expect(client.dubaiPriceDisplayVersions()).resolves.toBe(versions);
+
+    expect(request).toHaveBeenNthCalledWith(1, '/pricing/legacy/dubai-air-sea/table');
+    expect(request).toHaveBeenNthCalledWith(2, '/pricing/legacy/dubai-air-sea/display');
+    expect(request).toHaveBeenNthCalledWith(3, '/pricing/legacy/dubai-air-sea/display-versions');
   });
 
   it('passes query errors through without changing their message', async () => {

@@ -1039,7 +1039,7 @@ export function PricingPage({
     setDubaiPriceDisplayLoading(true);
     setDubaiPriceDisplayError(null);
     setDubaiDisplayPageIndexes({ AIR: 0, SEA: 0 });
-    apiClient.dubaiPriceDisplay()
+    apiClient.priceBookQuery.dubaiPriceDisplay()
       .then((response) => {
         if (alive) setDubaiPriceDisplay(response);
       })
@@ -1059,7 +1059,7 @@ export function PricingPage({
   useEffect(() => {
     if (!can('pricing:dubai-display:versions-view') || activePricingSection !== 'priceBooks' || priceBookManagementModule !== 'dubaiAirSea') return;
     let alive = true;
-    apiClient.dubaiPriceDisplayVersions()
+    apiClient.priceBookQuery.dubaiPriceDisplayVersions()
       .then((response) => { if (alive) setDubaiDisplayVersions(response.versions); })
       .catch(() => { if (alive) setDubaiDisplayVersions([]); });
     return () => { alive = false; };

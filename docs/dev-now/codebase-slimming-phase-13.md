@@ -1,6 +1,6 @@
 # 代码瘦身治理第十三阶段
 
-- 状态：`completed`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜13`
 - 续接自：`docs/dev-now/codebase-slimming-phase-12.md`
 - 上下文状态：`green`
@@ -54,3 +54,4 @@
 - 剩余风险：仓库外未纳管消费者无法由本仓和 47 源码扫描覆盖；完整 Web typecheck 的既有错误仍需另行治理。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-13`。
 - 准确下一步：扫描另一个包含多个纯 GET 查询、且可扩展现有领域客户端的窄切片；继续避开财务、账号写入、状态流转和审计实现。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-14.md`
