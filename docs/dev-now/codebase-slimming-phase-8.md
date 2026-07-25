@@ -1,6 +1,6 @@
 # 代码瘦身治理第八阶段
 
-- 状态：`complete`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜08`
 - 续接自：`docs/dev-now/codebase-slimming-phase-7.md`
 - 上下文状态：`green`
@@ -75,3 +75,4 @@
 - 剩余风险：47 没有启用且具备承运商任务查看权限的非管理员探针账号，允许路径使用 ADMIN 验证；兼容期内微型单方法客户端会暂时增加 `ApiClient` 组合代码。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-8`。
 - 准确下一步：暂停继续创建单方法客户端；先明确兼容窗口结束条件并再次复扫，随后单独批量删除当前 16 个零生产调用转发，再选择包含多个只读查询的高密度领域。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-9.md`

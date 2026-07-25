@@ -16,16 +16,12 @@ import type {
   MarkupRouteTierReplaceInput,
   AgentSummary,
   AgentUpdateInput,
-  AuditLogListResponse,
-  AuditLogQuery,
-  AuditLogSummary,
   CustomerStatementCreateInput,
   CustomerStatementSummary,
   CustomerAccountSummary,
   CarrierCreateInput,
   CarrierSummary,
   CarrierTaskRunResponse,
-  CarrierTaskSummary,
   AccountLedgerSummary,
   ChannelCreateInput,
   ChannelCategoryCreateInput,
@@ -114,8 +110,6 @@ import type {
   LineShipmentPoolQuery,
   ShipmentInternalFlowLogResponse,
   LineShipmentPoolResponse,
-  NavigationReadStateInput,
-  NavigationUnreadBadgesResponse,
   PricingQuoteRequest,
   PricingRuleCreateInput,
   PricingRuleQuoteRequest,
@@ -174,12 +168,8 @@ import type {
   VoucherImageUploadResponse,
   SurchargeCreateInput,
   SurchargeSummary,
-  SiteCreateInput,
-  SiteSummary,
-  SiteUpdateInput,
   StaffGender,
   StaffAccountCreateInput,
-  DepartmentSummary,
   StaffAccountPasswordResetInput,
   StaffAccountPasswordResetResult,
   StaffAccountQuery,
@@ -213,12 +203,9 @@ import type {
   TrackingEventInput,
   WarehouseConsolidationCreateInput,
   WarehouseConsolidationSummary,
-  WarehouseInStockQuery,
-  WarehouseInStockResponse,
   WarehouseManualReceiptCreateInput,
   WarehouseManualReceiptCreateResponse,
   WarehousePackageCreateInput,
-  WarehouseManualReceiptCustomerOption,
   WarehousePackageGroupSummary,
   WarehousePackageSplitInput,
   WarehousePackageSplitResponse,
@@ -231,8 +218,6 @@ import type {
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskSummary,
   WarehouseTallyTaskUpdateInput,
-  WarehouseTodayQuery,
-  WarehouseTodayResponse
 } from '@siyuan/shared';
 import { AppShellClient } from './api/appShellClient';
 import { AuditQueryClient } from './api/auditQueryClient';
@@ -538,15 +523,6 @@ export interface RoleGroupInput {
   templateRole?: RoleKey;
 }
 
-export interface LoginLogSummary {
-  id: string;
-  username: string;
-  ip: string;
-  region: string;
-  userAgent?: string;
-  createdAt: string;
-}
-
 export interface CaptchaChallenge {
   captchaId: string;
   image: string;
@@ -623,10 +599,6 @@ export class ApiClient {
     return this.request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password, captchaId, captchaCode }) }, false);
   }
 
-  async loginLogs(): Promise<LoginLogSummary[]> { return this.auditQuery.loginLogs(); }
-
-  async accountEvents(): Promise<AuditLogSummary[]> { return this.auditQuery.accountEvents(); }
-
   async me(): Promise<Principal> {
     return this.request('/auth/me');
   }
@@ -645,23 +617,6 @@ export class ApiClient {
 
   async warehouseDispatchShipments(): Promise<Shipment[]> {
     return this.request('/warehouse/dispatch-shipments');
-  }
-
-  async navigationUnreadBadges(): Promise<NavigationUnreadBadgesResponse> { return this.appShell.navigationUnreadBadges(); }
-
-  async markNavigationRead(input: NavigationReadStateInput): Promise<{ ok: true; moduleKey: string; sectionKey?: string; readAt: string; watermark: string }> { return this.appShell.markNavigationRead(input); }
-
-  async reportPageRenderError(input: {
-    errorId: string;
-    route: string;
-    releaseId: string;
-    menuKey?: string;
-    sectionKey?: string;
-    message: string;
-    stack?: string;
-    componentStack?: string;
-  }): Promise<{ ok: true }> {
-    return this.appShell.reportPageRenderError(input);
   }
 
   async reviewPendingShipments(): Promise<Shipment[]> {
@@ -903,10 +858,6 @@ export class ApiClient {
 
   async addOperationTrackingEvent(id: string, input: TrackingEventInput): Promise<Shipment> {
     return this.request(`/operations/line-shipments/${id}/tracking-events`, { method: 'POST', body: JSON.stringify(input) });
-  }
-
-  async carrierTasks(): Promise<CarrierTaskSummary[]> {
-    return this.carrierTaskQuery.carrierTasks();
   }
 
   async runCarrierTask(id: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
@@ -1222,24 +1173,8 @@ export class ApiClient {
     return this.request(`/pricing/markup-rules/${id}`, { method: 'DELETE' });
   }
 
-  async warehousePackages(): Promise<WarehousePackageSummary[]> {
-    return this.warehouseQuery.warehousePackages();
-  }
-
-  async warehouseTodayReceipts(query: WarehouseTodayQuery = {}): Promise<WarehouseTodayResponse> {
-    return this.warehouseQuery.warehouseTodayReceipts(query);
-  }
-
-  async warehouseInStock(query: WarehouseInStockQuery = {}): Promise<WarehouseInStockResponse> {
-    return this.warehouseQuery.warehouseInStock(query);
-  }
-
   async warehousePackageGroups(): Promise<WarehousePackageGroupSummary[]> {
     return this.request('/warehouse/package-groups');
-  }
-
-  async warehouseManualReceiptCustomers(): Promise<WarehouseManualReceiptCustomerOption[]> {
-    return this.warehouseQuery.warehouseManualReceiptCustomers();
   }
 
   async createWarehousePackage(input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
@@ -1850,16 +1785,6 @@ export class ApiClient {
     return this.request(`/system/staff-accounts${params.toString() ? `?${params.toString()}` : ''}`);
   }
 
-  async departments(): Promise<DepartmentSummary[]> { return this.systemDirectory.departments(); }
-
-  async sites(): Promise<SiteSummary[]> { return this.systemDirectory.sites(); }
-
-  async createSite(input: SiteCreateInput): Promise<SiteSummary> { return this.systemDirectory.createSite(input); }
-
-  async updateSite(id: string, input: SiteUpdateInput): Promise<SiteSummary> { return this.systemDirectory.updateSite(id, input); }
-
-  async updateSiteEnabled(id: string, input: EnabledUpdateInput): Promise<SiteSummary> { return this.systemDirectory.updateSiteEnabled(id, input); }
-
   async createStaffAccount(input: StaffAccountCreateInput): Promise<StaffAccountSummary> {
     return this.request('/system/staff-accounts', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1887,8 +1812,6 @@ export class ApiClient {
   async updateRolePermissions(role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
     return this.request(`/system/roles/${role}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions }) });
   }
-
-  async auditLogs(query: AuditLogQuery = {}): Promise<AuditLogListResponse> { return this.auditQuery.auditLogs(query); }
 
   async aiAssist(input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }): Promise<AiAssistResponse> {
     return this.request('/ai/assist', { method: 'POST', body: JSON.stringify(input) });
