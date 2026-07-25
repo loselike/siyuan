@@ -297,7 +297,6 @@ import { renderDubaiWorkbookSheets } from './dubai-price-sheet-renderer.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
 import { buildLineShipmentPackageSummaries } from './line-shipment-packages.js';
 import { PrismaService } from './prisma.service.js';
-import { PrismaSystemDirectoryRepository } from './system/directory/system-directory.repository.js';
 import { nextWarehouseRetallyTaskNo, nextWarehouseTallyTaskNo } from './warehouse-tally-task-number.js';
 import { createWarehouseTallyPackageLabelNo } from './warehouse-tally-label.js';
 import { canUpdateUnenteredWarehousePackage } from './warehouse-package-editability.js';
@@ -2299,14 +2298,6 @@ export class PrismaRepository implements OnModuleInit {
       ...mapStaffAccount(user),
       lastLoginAt: lastLoginByUserId.get(user.id),
     }));
-  }
-
-  async getDepartments(principal: Principal) {
-    return new PrismaSystemDirectoryRepository(this.prisma).getDepartments(principal);
-  }
-
-  async getSites(principal: Principal) {
-    return new PrismaSystemDirectoryRepository(this.prisma).getSites(principal);
   }
 
   async createSite(principal: Principal, input: SiteCreateInput): Promise<SiteSummary> {

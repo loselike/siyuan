@@ -1,6 +1,5 @@
 import { Test } from '@nestjs/testing';
 import { describe, expect, it, vi } from 'vitest';
-import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import type { Principal } from './rbac.js';
 import { PrismaSystemDirectoryRepository } from './system/directory/system-directory.repository.js';
@@ -56,27 +55,5 @@ describe('PrismaSystemDirectoryRepository', () => {
     await expect(repository.getSites(operator)).rejects.toThrow('只有管理员可以查看站点');
     expect(departmentFindMany).not.toHaveBeenCalled();
     expect(siteFindMany).not.toHaveBeenCalled();
-  });
-
-  it('keeps legacy PrismaRepository methods as compatibility forwarding', async () => {
-    const departmentFindMany = vi.fn().mockResolvedValue([
-      { id: 'department-business', name: '业务部', enabled: true }
-    ]);
-    const siteFindMany = vi.fn().mockResolvedValue([
-      { id: 'site-shenzhen', name: '深圳站', enabled: true, sortOrder: 2 }
-    ]);
-    const facade = new PrismaRepository({
-      department: { findMany: departmentFindMany },
-      site: { findMany: siteFindMany }
-    } as unknown as PrismaService);
-
-    await expect(facade.getDepartments(admin)).resolves.toEqual([
-      { id: 'department-business', name: '业务部', enabled: true }
-    ]);
-    await expect(facade.getSites(admin)).resolves.toEqual([
-      { id: 'site-shenzhen', name: '深圳站', enabled: true, sortOrder: 2 }
-    ]);
-    expect(departmentFindMany).toHaveBeenCalledOnce();
-    expect(siteFindMany).toHaveBeenCalledOnce();
   });
 });

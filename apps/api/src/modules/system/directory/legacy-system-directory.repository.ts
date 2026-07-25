@@ -5,7 +5,7 @@ import type { SystemDirectoryRepository } from './system-directory.repository.js
 
 @Injectable()
 export class LegacySystemDirectoryRepository implements SystemDirectoryRepository {
-  constructor(@Inject(PrismaRepository) private readonly repository: PrismaRepository) {}
+  constructor(@Inject(PrismaRepository) private readonly repository: SystemDirectoryRepository) {}
 
   getDepartments(principal: Principal) {
     return this.repository.getDepartments(principal);
