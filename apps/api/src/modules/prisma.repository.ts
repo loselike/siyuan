@@ -262,7 +262,6 @@ import {
   type WarehouseManualReceiptCreateInput,
   type WarehouseManualReceiptCreateResponse,
   type WarehousePackageCreateInput,
-  type WarehousePackageGroupSummary,
   type WarehousePackageSplitInput,
   type WarehousePackageSplitResponse,
   type WarehousePackageStatus,
@@ -302,6 +301,7 @@ import { canUpdateUnenteredWarehousePackage } from './warehouse-package-editabil
 import {
   loadWarehouseTallyTaskOutputPackages,
   mapWarehousePackage,
+  mapWarehousePackagesWithConfirmedTally,
   mapWarehouseTallyTask,
   resolveWarehouseTallyRecentCutoff
 } from './warehouse/warehouse-query.shared.js';
@@ -5355,54 +5355,6 @@ export class PrismaRepository implements OnModuleInit {
     return this.quoteFromRules(input);
   }
 
-  async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
-    this.ensureWarehouseAccess(principal);
-    const rows = await (this.prisma as any).warehousePackage.findMany({ orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }] });
-    return this.mapWarehousePackagesWithConfirmedTally(rows);
-  }
-
-  private async mapWarehousePackagesWithConfirmedTally(rows: any[]): Promise<WarehousePackageSummary[]> {
-    const rowIds = rows.map((row) => row.id);
-    const tallyTasks = rowIds.length
-      ? await (this.prisma as any).warehouseTallyTask.findMany({
-        where: {
-          OR: [
-            { packageIds: { hasSome: rowIds } },
-            { appliedPackageId: { in: rowIds } },
-            { id: { in: rows.map((row) => row.tallyTaskId).filter(Boolean) } }
-          ]
-        },
-        select: { id: true, taskNo: true, status: true, packageIds: true, appliedPackageId: true }
-      })
-      : [];
-    const completedTaskByPackageId = new Map<string, { id: string; taskNo: string }>();
-    const pendingTaskByPackageId = new Map<string, { id: string; taskNo: string }>();
-    const taskById = new Map<string, { id: string; taskNo: string; status: string }>(
-      tallyTasks.map((task: any) => [task.id, { id: task.id, taskNo: task.taskNo, status: task.status }])
-    );
-    tallyTasks.forEach((task: any) => {
-      const packageIds = task.status === 'PENDING' ? task.packageIds : [...task.packageIds, task.appliedPackageId].filter(Boolean);
-      packageIds.forEach((packageId: string) => {
-        const target = task.status === 'PENDING' ? pendingTaskByPackageId : completedTaskByPackageId;
-        target.set(packageId, { id: task.id, taskNo: task.taskNo });
-      });
-    });
-    return rows.map((row) => {
-      const summary = mapWarehousePackage(row);
-      const directTask = row.tallyTaskId ? taskById.get(row.tallyTaskId) : undefined;
-      const pendingTask = pendingTaskByPackageId.get(row.id)
-        ?? (directTask?.status === 'PENDING' ? { id: directTask.id, taskNo: directTask.taskNo } : undefined);
-      if (pendingTask) {
-        return { ...summary, tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false, tallyStatus: '理货中' };
-      }
-      const task = completedTaskByPackageId.get(row.id)
-        ?? (row.tallyTaskId && row.tallyTaskNo ? { id: row.tallyTaskId, taskNo: row.tallyTaskNo } : undefined);
-      return task
-        ? { ...summary, tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true, tallyStatus: '已理货' }
-        : { ...summary, tallyTaskId: undefined, tallyTaskNo: undefined, tallyCompleted: false, tallyStatus: '待理货' };
-    });
-  }
-
   async getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery): Promise<WarehouseTodayResponse> {
     if (!(await this.hasPermission(principal.role, 'warehouse:today-receipt:view'))) {
       throw new ForbiddenException('当前角色不能查看今日收货');
@@ -5540,7 +5492,7 @@ export class PrismaRepository implements OnModuleInit {
       where,
       orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
     });
-    const summaries = await this.mapWarehousePackagesWithConfirmedTally(rows);
+    const summaries = await mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
     const visibleRows = salesScope
       ? summaries.map(({ site: _site, ...row }) => row)
       : summaries;
@@ -5576,21 +5528,6 @@ export class PrismaRepository implements OnModuleInit {
       }
     });
     return response;
-  }
-
-  async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {
-    const packages = await this.getWarehousePackages(principal);
-    return summarizeWarehousePackageGroups(packages);
-  }
-
-  async getWarehouseManualReceiptCustomers(principal: Principal) {
-    this.ensureWarehouseAccess(principal);
-    const customers = await this.prisma.customer.findMany({
-      where: { enabled: true },
-      select: { code: true, name: true },
-      orderBy: { code: 'asc' }
-    });
-    return customers.map((customer) => ({ code: customer.code, name: customer.name }));
   }
 
   async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string) {
@@ -9756,7 +9693,7 @@ export class PrismaRepository implements OnModuleInit {
       where,
       orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
     });
-    return this.mapWarehousePackagesWithConfirmedTally(rows);
+    return mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
   }
 
   async createOrderEntry(principal: Principal, input: OrderEntryCreateInput): Promise<OrderEntryDetailSummary> {
@@ -17121,37 +17058,6 @@ function warehousePackageSplitTotals(packages: WarehousePackageSummary[]) {
     volumetricWeightKg: roundMoney(packages.reduce((sum, pkg) => sum + pkg.volumetricWeightKg, 0)),
     volumetricWeightKg5000: roundMoney(packages.reduce((sum, pkg) => sum + (pkg.volumetricWeightKg5000 ?? 0), 0))
   };
-}
-
-function summarizeWarehousePackageGroups(packages: WarehousePackageSummary[]): WarehousePackageGroupSummary[] {
-  const groups = new Map<string, WarehousePackageSummary[]>();
-  for (const pkg of packages) {
-    const key = `${pkg.customerOrderNo}__${pkg.domesticTrackingNo}`;
-    groups.set(key, [...(groups.get(key) ?? []), pkg]);
-  }
-  return Array.from(groups.values()).map((items) => {
-    const first = items[0];
-    const expected = Math.max(...items.map((item) => item.expectedTotalPackageCount ?? items.length));
-    const maxByVolume = items.reduce((best, item) => (item.volumetricWeightKg > best.volumetricWeightKg ? item : best), first);
-    return {
-      id: `${first.customerOrderNo}-${first.domesticTrackingNo}`,
-      customerCode: first.customerCode,
-      customerOrderNo: first.customerOrderNo,
-      domesticTrackingNo: first.domesticTrackingNo,
-      combinedOrderNo: first.combinedOrderNo,
-      expectedTotalPackageCount: expected,
-      arrivedPackageCount: items.length,
-      remainingPackageCount: Math.max(expected - items.length, 0),
-      totalActualWeightKg: roundMoney(items.reduce((total, item) => total + item.weightKg * item.packageCount, 0)),
-      totalCbm: roundMoney(items.reduce((total, item) => total + item.cbm, 0)),
-      maxLengthCm: maxByVolume.lengthCm,
-      maxWidthCm: maxByVolume.widthCm,
-      maxHeightCm: maxByVolume.heightCm,
-      maxVolumetricWeightKg: maxByVolume.volumetricWeightKg,
-      totalChargeableWeightKg: roundMoney(items.reduce((total, item) => total + item.chargeableWeightKg, 0)),
-      latestScanTime: items.map((item) => item.scanTime).filter(Boolean).sort().at(-1)
-    };
-  });
 }
 
 function toCarrierAdapterCode(carrier: string): CarrierAdapterCode {

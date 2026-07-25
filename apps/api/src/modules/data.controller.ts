@@ -128,6 +128,10 @@ import { FinanceCatalogService } from './finance/catalog/finance-catalog.service
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { isBusinessAgentRestrictedRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
+import {
+  WAREHOUSE_INVENTORY_QUERY_REPOSITORY,
+  type WarehouseInventoryQueryRepository
+} from './warehouse/inventory/warehouse-inventory-query.repository.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -136,7 +140,9 @@ const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export class DataController {
   constructor(
     @Inject(PrismaRepository) private readonly repository: PrismaRepository,
-    @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService
+    @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService,
+    @Inject(WAREHOUSE_INVENTORY_QUERY_REPOSITORY)
+    private readonly warehouseInventoryQueries: WarehouseInventoryQueryRepository
   ) {}
 
   private readonly imageMimeExtensions: Record<string, string> = {
@@ -412,7 +418,7 @@ export class DataController {
   private async findDuplicateMojiaPackage(input: WarehousePackageCreateInput) {
     const combinedOrderNo = input.combinedOrderNo;
     const scanTimeSecond = input.scanTime ? Math.floor(new Date(input.scanTime).getTime() / 1000) : undefined;
-    const packages = await this.repository.getWarehousePackages(mojiaPrincipal);
+    const packages = await this.warehouseInventoryQueries.getWarehousePackages(mojiaPrincipal);
     return packages.find((pkg) =>
       pkg.combinedOrderNo === combinedOrderNo
       && pkg.scanSource === '墨家设备'

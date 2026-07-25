@@ -36,6 +36,11 @@ import {
 import { SystemDirectoryService } from './system/directory/system-directory.service.js';
 import { WarehouseDispatchQueryController } from './warehouse/dispatch/warehouse-dispatch-query.controller.js';
 import { WarehouseInventoryQueryController } from './warehouse/inventory/warehouse-inventory-query.controller.js';
+import { LegacyWarehouseInventoryQueryRepository } from './warehouse/inventory/legacy-warehouse-inventory-query.repository.js';
+import {
+  PrismaWarehouseInventoryQueryRepository,
+  WAREHOUSE_INVENTORY_QUERY_REPOSITORY
+} from './warehouse/inventory/warehouse-inventory-query.repository.js';
 import { LegacyWarehouseTallyQueryRepository } from './warehouse/tally/legacy-warehouse-tally-query.repository.js';
 import {
   PrismaWarehouseTallyQueryRepository,
@@ -65,6 +70,10 @@ const warehouseTallyQueryRepositoryProvider = usePrismaRepository
   ? { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: PrismaWarehouseTallyQueryRepository }
   : { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: LegacyWarehouseTallyQueryRepository };
 
+const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
+  ? { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: PrismaWarehouseInventoryQueryRepository }
+  : { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: LegacyWarehouseInventoryQueryRepository };
+
 @Module({
   controllers: [AuthController, DataController, AiController, CustomerServiceQueryController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, OperationsLineShipmentQueryController, OrderEntryQueryController, PriceBookQueryController, ShipmentFulfillmentQueryController, ShipmentOverviewQueryController, SystemDirectoryController, WarehouseDispatchQueryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
   providers: [
@@ -76,6 +85,7 @@ const warehouseTallyQueryRepositoryProvider = usePrismaRepository
     FinanceReceivableService,
     systemDirectoryRepositoryProvider,
     SystemDirectoryService,
+    warehouseInventoryQueryRepositoryProvider,
     warehouseTallyQueryRepositoryProvider,
     {
       provide: APP_GUARD,

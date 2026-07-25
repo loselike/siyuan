@@ -3,10 +3,19 @@ import type { WarehouseInStockQuery, WarehouseTodayQuery } from '@siyuan/shared'
 import { PrismaRepository } from '../../prisma.repository.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
+import {
+  WAREHOUSE_INVENTORY_QUERY_REPOSITORY,
+  type WarehouseInventoryQueryRepository
+} from './warehouse-inventory-query.repository.js';
 
 @Controller()
 export class WarehouseInventoryQueryController {
-  constructor(@Inject(PrismaRepository) private readonly repository: PrismaRepository) {}
+  constructor(
+    @Inject(WAREHOUSE_INVENTORY_QUERY_REPOSITORY)
+    private readonly repository: WarehouseInventoryQueryRepository,
+    @Inject(PrismaRepository)
+    private readonly auditedRepository: PrismaRepository
+  ) {}
 
   @Get('warehouse/packages')
   @RequirePermission(['warehouse:today-receipt:view', 'warehouse:in-stock:view'])
@@ -17,13 +26,13 @@ export class WarehouseInventoryQueryController {
   @Get('warehouse/today-receipts')
   @RequirePermission('warehouse:today-receipt:view')
   warehouseTodayReceipts(@Req() request: { user: Principal }, @Query() query: WarehouseTodayQuery) {
-    return this.repository.getWarehouseTodayReceipts(request.user, query);
+    return this.auditedRepository.getWarehouseTodayReceipts(request.user, query);
   }
 
   @Get('warehouse/in-stock')
   @RequirePermission('warehouse:in-stock:view')
   warehouseInStock(@Req() request: { user: Principal }, @Query() query: WarehouseInStockQuery) {
-    return this.repository.getWarehouseInStock(request.user, query);
+    return this.auditedRepository.getWarehouseInStock(request.user, query);
   }
 
   @Get('warehouse/package-groups')
