@@ -66,3 +66,26 @@ describe('ApiClient app shell compatibility', () => {
     expect(reportError).toHaveBeenCalledWith(errorInput);
   });
 });
+
+describe('ApiClient audit query compatibility', () => {
+  it('forwards legacy read methods to the audit query client', async () => {
+    const client = new ApiClient(() => null, vi.fn());
+    const loginLogs = vi.spyOn(client.auditQuery, 'loginLogs').mockResolvedValue([]);
+    const accountEvents = vi.spyOn(client.auditQuery, 'accountEvents').mockResolvedValue([]);
+    const response = {
+      rows: [],
+      suspiciousDeleteWarnings: [],
+      pagination: { page: 1, pageSize: 20, totalItems: 0 }
+    };
+    const auditLogs = vi.spyOn(client.auditQuery, 'auditLogs').mockResolvedValue(response);
+    const query = { module: 'system', page: 1, pageSize: 20 };
+
+    await client.loginLogs();
+    await client.accountEvents();
+    await client.auditLogs(query);
+
+    expect(loginLogs).toHaveBeenCalledOnce();
+    expect(accountEvents).toHaveBeenCalledOnce();
+    expect(auditLogs).toHaveBeenCalledWith(query);
+  });
+});

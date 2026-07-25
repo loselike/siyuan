@@ -456,7 +456,7 @@ export function MasterDataPage({
       return;
     }
     let cancelled = false;
-    apiClient.auditLogs({ target: selectedCustomerId, pageSize: 3 })
+    apiClient.auditQuery.auditLogs({ target: selectedCustomerId, pageSize: 3 })
       .then((response) => {
         if (!cancelled) setCustomerAuditLogs(response.rows);
       })

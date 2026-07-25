@@ -235,6 +235,7 @@ import type {
   WarehouseTodayResponse
 } from '@siyuan/shared';
 import { AppShellClient } from './api/appShellClient';
+import { AuditQueryClient } from './api/auditQueryClient';
 import { SystemDirectoryClient } from './api/systemDirectoryClient';
 
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
@@ -596,6 +597,7 @@ function formatApiErrorMessage(body: string, status: number): string {
 
 export class ApiClient {
   readonly appShell = new AppShellClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
+  readonly auditQuery = new AuditQueryClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly systemDirectory = new SystemDirectoryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
   );
@@ -613,13 +615,9 @@ export class ApiClient {
     return this.request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password, captchaId, captchaCode }) }, false);
   }
 
-  async loginLogs(): Promise<LoginLogSummary[]> {
-    return this.request('/auth/login-logs');
-  }
+  async loginLogs(): Promise<LoginLogSummary[]> { return this.auditQuery.loginLogs(); }
 
-  async accountEvents(): Promise<AuditLogSummary[]> {
-    return this.request('/auth/account-events');
-  }
+  async accountEvents(): Promise<AuditLogSummary[]> { return this.auditQuery.accountEvents(); }
 
   async me(): Promise<Principal> {
     return this.request('/auth/me');
@@ -1896,16 +1894,7 @@ export class ApiClient {
     return this.request(`/system/roles/${role}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions }) });
   }
 
-  async auditLogs(query: AuditLogQuery = {}): Promise<AuditLogListResponse> {
-    const params = new globalThis.URLSearchParams();
-    Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && String(value).trim()) {
-        params.set(key, String(value));
-      }
-    });
-    const search = params.toString();
-    return this.request(`/system/audit-logs${search ? `?${search}` : ''}`);
-  }
+  async auditLogs(query: AuditLogQuery = {}): Promise<AuditLogListResponse> { return this.auditQuery.auditLogs(query); }
 
   async aiAssist(input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }): Promise<AiAssistResponse> {
     return this.request('/ai/assist', { method: 'POST', body: JSON.stringify(input) });

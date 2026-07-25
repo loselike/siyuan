@@ -862,18 +862,18 @@ export function CustomerServicePage({
   async function refreshCustomerServiceAuditLogs() {
     if (!apiClient) return;
     const responses = await Promise.all([
-      apiClient.auditLogs({ action: 'customer_service.status.update' }),
-      apiClient.auditLogs({ action: 'customer_service.business_data.approved' }),
-      apiClient.auditLogs({ action: 'customer_service.agent_data.approved' }),
-      apiClient.auditLogs({ action: 'customer_service.business_data.reversed' }),
-      apiClient.auditLogs({ action: 'customer_service.agent_data.reversed' }),
-      apiClient.auditLogs({ action: 'customer_service.business_data.updated' }),
-      apiClient.auditLogs({ action: 'customer_service.agent_data.updated' }),
-      apiClient.auditLogs({ action: 'shipment.operational.update' }),
-      apiClient.auditLogs({ action: 'customer_service.signature.confirm' }),
-      apiClient.auditLogs({ action: 'customer_service.issue.attach' }),
-      apiClient.auditLogs({ action: 'customer_service.issue.update' }),
-      apiClient.auditLogs({ action: 'customer_service.issue.close' })
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.status.update' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.business_data.approved' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.agent_data.approved' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.business_data.reversed' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.agent_data.reversed' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.business_data.updated' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.agent_data.updated' }),
+      apiClient.auditQuery.auditLogs({ action: 'shipment.operational.update' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.signature.confirm' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.attach' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.update' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.close' })
     ]);
     setCustomerServiceAuditLogs(responses.flatMap((response) => response.rows));
   }

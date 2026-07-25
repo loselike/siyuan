@@ -470,7 +470,7 @@ export function SettingsPage({
     }
     let mounted = true;
     setAuditLoading(true);
-    void apiClient
+    void apiClient.auditQuery
       .auditLogs({ page: auditPagination.page, pageSize: auditPagination.pageSize, ...auditAppliedFilters })
       .then((response) => {
         if (!mounted) {
@@ -626,7 +626,7 @@ export function SettingsPage({
       return;
     }
     let mounted = true;
-    void apiClient.auditLogs({ target: selectedRoleGroup.key, page: 1, pageSize: 5 }).then((response) => {
+    void apiClient.auditQuery.auditLogs({ target: selectedRoleGroup.key, page: 1, pageSize: 5 }).then((response) => {
       if (mounted) setRoleGroupAuditLogs(response.rows);
     }).catch(() => {
       if (mounted) setRoleGroupAuditLogs([]);
