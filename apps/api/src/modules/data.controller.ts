@@ -421,12 +421,6 @@ export class DataController {
     );
   }
 
-  @Get('warehouse/dispatch-shipments')
-  @RequirePermission(['warehouse:dispatch-pending:view', 'warehouse:outbounded:view'])
-  async warehouseDispatchShipments(@Req() request: { user: Principal }) {
-    return this.repository.getWarehouseDispatchShipments(request.user);
-  }
-
   @Post('navigation/read-state')
   @RequirePermission('business:shipment:list')
   async markNavigationRead(@Req() request: { user: Principal }, @Body() input: NavigationReadStateInput) {
@@ -619,12 +613,6 @@ export class DataController {
   @RequirePermission('warehouse:dispatch-pending:handover-print')
   async printWarehouseHandover(@Req() request: { user: Principal }, @Body() body: WarehouseHandoverPrintInput) {
     return this.repository.printWarehouseHandover(request.user, body);
-  }
-
-  @Get('warehouse/handover/:shipmentId')
-  @RequirePermission('warehouse:dispatch-pending:handover-preview')
-  async warehouseHandover(@Req() request: { user: Principal }, @Param('shipmentId') shipmentId: string) {
-    return this.repository.getWarehouseHandover(request.user, shipmentId);
   }
 
   @Post('master-data/agent-invoice-template/upload')

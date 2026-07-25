@@ -33,6 +33,7 @@ import {
   SYSTEM_DIRECTORY_REPOSITORY
 } from './system/directory/system-directory.repository.js';
 import { SystemDirectoryService } from './system/directory/system-directory.service.js';
+import { WarehouseDispatchQueryController } from './warehouse/dispatch/warehouse-dispatch-query.controller.js';
 import { WarehouseInventoryQueryController } from './warehouse/inventory/warehouse-inventory-query.controller.js';
 import { WarehouseTallyQueryController } from './warehouse/tally/warehouse-tally-query.controller.js';
 
@@ -55,7 +56,7 @@ const systemDirectoryRepositoryProvider = usePrismaRepository
   : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
 
 @Module({
-  controllers: [AuthController, DataController, AiController, CustomerServiceQueryController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, OperationsLineShipmentQueryController, OrderEntryQueryController, PriceBookQueryController, ShipmentOverviewQueryController, SystemDirectoryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
+  controllers: [AuthController, DataController, AiController, CustomerServiceQueryController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, OperationsLineShipmentQueryController, OrderEntryQueryController, PriceBookQueryController, ShipmentOverviewQueryController, SystemDirectoryController, WarehouseDispatchQueryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
   providers: [
     AiService,
     LineageWatcher,
