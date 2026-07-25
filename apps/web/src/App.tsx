@@ -812,7 +812,7 @@ export function App() {
     }
     if (canReadCarrierTasks) {
       try {
-        setCarrierTasks(await client.carrierTasks());
+        setCarrierTasks(await client.carrierTaskQuery.carrierTasks());
       } catch {
         setCarrierTasks([]);
       }

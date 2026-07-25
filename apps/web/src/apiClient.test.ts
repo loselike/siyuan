@@ -123,3 +123,14 @@ describe('ApiClient warehouse query compatibility', () => {
     expect(inStock).toHaveBeenCalledWith(inStockQuery);
   });
 });
+
+describe('ApiClient carrier task query compatibility', () => {
+  it('forwards the legacy read method to the carrier task query client', async () => {
+    const client = new ApiClient(() => null, vi.fn());
+    const carrierTasks = vi.spyOn(client.carrierTaskQuery, 'carrierTasks').mockResolvedValue([]);
+
+    await client.carrierTasks();
+
+    expect(carrierTasks).toHaveBeenCalledOnce();
+  });
+});

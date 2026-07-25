@@ -1,6 +1,6 @@
 # 代码瘦身治理第七阶段
 
-- 状态：`complete`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜07`
 - 续接自：`docs/dev-now/codebase-slimming-phase-6.md`
 - 上下文状态：`green`
@@ -58,3 +58,4 @@
 - 剩余风险：47 没有启用的 WAREHOUSE 探针账号，允许路径使用 ADMIN 验证；兼容方法仍保留在巨型 `ApiClient`。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-7`。
 - 准确下一步：停止继续拆与状态链紧邻的仓库查询，转而扫描另一个纯只读领域；兼容窗口结束前先建立旧入口生产调用清单，再集中删除零调用转发。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-8.md`

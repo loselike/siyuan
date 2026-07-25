@@ -236,6 +236,7 @@ import type {
 } from '@siyuan/shared';
 import { AppShellClient } from './api/appShellClient';
 import { AuditQueryClient } from './api/auditQueryClient';
+import { CarrierTaskQueryClient } from './api/carrierTaskQueryClient';
 import { SystemDirectoryClient } from './api/systemDirectoryClient';
 import { WarehouseQueryClient } from './api/warehouseQueryClient';
 
@@ -599,6 +600,9 @@ function formatApiErrorMessage(body: string, status: number): string {
 export class ApiClient {
   readonly appShell = new AppShellClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly auditQuery = new AuditQueryClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
+  readonly carrierTaskQuery = new CarrierTaskQueryClient(<T>(path: string, init?: RequestInit) =>
+    this.request<T>(path, init)
+  );
   readonly systemDirectory = new SystemDirectoryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
   );
@@ -902,7 +906,7 @@ export class ApiClient {
   }
 
   async carrierTasks(): Promise<CarrierTaskSummary[]> {
-    return this.request('/carrier-tasks');
+    return this.carrierTaskQuery.carrierTasks();
   }
 
   async runCarrierTask(id: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
