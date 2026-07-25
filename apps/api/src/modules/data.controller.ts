@@ -765,12 +765,6 @@ export class DataController {
     return this.repository.updateShipmentOperational(request.user, id, body);
   }
 
-  @Get('customer-service/transfer-shipments')
-  @RequirePermission('customer-service:transfer:view')
-  async customerServiceTransferShipments(@Req() request: { user: Principal }) {
-    return this.repository.customerServiceTransferShipments(request.user);
-  }
-
   @Post('customer-service/transfer-shipments/fill')
   @RequireAuth()
   async fillCustomerServiceTransferShipments(@Req() request: { user: Principal }, @Body() body: CustomerServiceTransferBatchInput) {
@@ -1003,12 +997,6 @@ export class DataController {
   @RequirePermission('operations:line-shipment:tracking-add')
   async addOperationTrackingEvent(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: TrackingEventInput) {
     return this.repository.addTrackingEvent(request.user, id, body);
-  }
-
-  @Get('problem-tickets')
-  @RequirePermission('customer-service:problem:view')
-  async problemTickets(@Req() request: { user: Principal }) {
-    return this.repository.getProblemTickets(request.user);
   }
 
   @Post('shipments/:id/problem-tickets')

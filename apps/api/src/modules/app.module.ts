@@ -4,6 +4,7 @@ import { AiController } from './ai.controller.js';
 import { AiService } from './ai.service.js';
 import { AuditInterceptor } from './audit.interceptor.js';
 import { AuthController } from './auth.controller.js';
+import { CustomerServiceQueryController } from './customer-service/query/customer-service-query.controller.js';
 import { DataController } from './data.controller.js';
 import { DatabaseSeedService } from './database-seed.service.js';
 import { FinanceCatalogController } from './finance/catalog/finance-catalog.controller.js';
@@ -52,7 +53,7 @@ const systemDirectoryRepositoryProvider = usePrismaRepository
   : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
 
 @Module({
-  controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, PriceBookQueryController, ShipmentOverviewQueryController, SystemDirectoryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
+  controllers: [AuthController, DataController, AiController, CustomerServiceQueryController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, PriceBookQueryController, ShipmentOverviewQueryController, SystemDirectoryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
   providers: [
     AiService,
     LineageWatcher,
