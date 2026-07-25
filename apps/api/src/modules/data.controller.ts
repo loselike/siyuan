@@ -424,12 +424,6 @@ export class DataController {
     );
   }
 
-  @Get('shipments')
-  @RequirePermission('business:shipment:list')
-  async shipments(@Req() request: { user: Principal }) {
-    return this.repository.getShipments(request.user);
-  }
-
   @Get('warehouse/dispatch-shipments')
   @RequirePermission(['warehouse:dispatch-pending:view', 'warehouse:outbounded:view'])
   async warehouseDispatchShipments(@Req() request: { user: Principal }) {
@@ -447,19 +441,6 @@ export class DataController {
   async lineShipmentInternalFlowLog(@Req() request: { user: Principal }, @Param('id') id: string) {
     if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能查看内部流通日志');
     return this.repository.getShipmentInternalFlowLog(request.user, id);
-  }
-
-  @Get('shipments/status-counts')
-  @RequirePermission('business:shipment:list')
-  async shipmentStatusCounts(@Req() request: { user: Principal }) {
-    return this.repository.getShipmentStatusCounts(request.user);
-  }
-
-  @Get('navigation/unread-badges')
-  @RequirePermission('business:shipment:list')
-  async navigationUnreadBadges(@Req() request: { user: Principal }) {
-    if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不使用员工端导航角标');
-    return this.repository.getNavigationUnreadBadges(request.user);
   }
 
   @Post('navigation/read-state')

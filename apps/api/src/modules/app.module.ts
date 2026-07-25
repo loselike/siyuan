@@ -22,6 +22,7 @@ import { PriceBookQueryController } from './pricing/price-book/price-book-query.
 import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
+import { ShipmentOverviewQueryController } from './shipment/overview/shipment-overview-query.controller.js';
 import { SystemDirectoryController } from './system/directory/system-directory.controller.js';
 import { LegacySystemDirectoryRepository } from './system/directory/legacy-system-directory.repository.js';
 import {
@@ -51,7 +52,7 @@ const systemDirectoryRepositoryProvider = usePrismaRepository
   : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
 
 @Module({
-  controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, PriceBookQueryController, SystemDirectoryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
+  controllers: [AuthController, DataController, AiController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, PriceBookQueryController, ShipmentOverviewQueryController, SystemDirectoryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
   providers: [
     AiService,
     LineageWatcher,
