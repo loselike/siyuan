@@ -81,14 +81,11 @@ import type {
   PriceBookRemarkUpdateInput,
   PriceBookSummary,
   LegacyPricingImportInput,
-  LegacyPricingMetaResponse,
   LegacyPricingModule,
   LegacyPricingQuoteRequest,
   LegacyPricingQuoteResponse,
   LegacyPricingSourcesResponse,
-  DubaiPriceTableResponse,
   DubaiPriceDisplayActivateInput,
-  DubaiPriceDisplayResponse,
   DubaiPriceDisplayVersionListResponse,
   SouthAfricaLookupRequest,
   SouthAfricaLookupResponse,
@@ -983,10 +980,6 @@ export class ApiClient {
     return this.request('/pricing/lookup', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async legacyPricingMeta(): Promise<LegacyPricingMetaResponse> {
-    return this.priceBookQuery.legacyPricingMeta();
-  }
-
   async quoteLegacyPricing(input: LegacyPricingQuoteRequest): Promise<LegacyPricingQuoteResponse> {
     const paths: Record<LegacyPricingModule, string> = {
       amazon: '/pricing/legacy/amazon/quote',
@@ -1001,28 +994,12 @@ export class ApiClient {
     return this.request(paths[input.module], { method: 'POST', body: JSON.stringify(body) });
   }
 
-  async dubaiPriceTable(): Promise<DubaiPriceTableResponse> {
-    return this.priceBookQuery.dubaiPriceTable();
-  }
-
-  async dubaiPriceDisplay(): Promise<DubaiPriceDisplayResponse> {
-    return this.priceBookQuery.dubaiPriceDisplay();
-  }
-
-  async dubaiPriceDisplayVersions(): Promise<DubaiPriceDisplayVersionListResponse> {
-    return this.priceBookQuery.dubaiPriceDisplayVersions();
-  }
-
   async activateDubaiPriceDisplayVersion(id: string, input: DubaiPriceDisplayActivateInput): Promise<DubaiPriceDisplayVersionListResponse> {
     return this.request(`/pricing/legacy/dubai-air-sea/display-versions/${id}/activate`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
   async retryDubaiPriceDisplayVersion(id: string): Promise<DubaiPriceDisplayVersionListResponse> {
     return this.request(`/pricing/legacy/dubai-air-sea/display-versions/${id}/retry`, { method: 'POST' });
-  }
-
-  async legacyPricingSources(module?: LegacyPricingModule): Promise<LegacyPricingSourcesResponse> {
-    return this.priceBookQuery.legacyPricingSources(module);
   }
 
   async importLegacyPricingSource(input: LegacyPricingImportInput): Promise<{ source: LegacyPricingSourcesResponse['sources'][number]; rowCount: number }> {
@@ -1035,10 +1012,6 @@ export class ApiClient {
 
   async rebuildLegacyPricing(module?: LegacyPricingModule): Promise<{ module: LegacyPricingModule | 'all'; rowCount: number; rebuiltAt: string }> {
     return this.request('/pricing/legacy/rebuild', { method: 'POST', body: JSON.stringify({ module }) });
-  }
-
-  async legacyPricingHealth(module?: LegacyPricingModule): Promise<{ module: LegacyPricingModule | 'all'; rowCount: number; issues: Array<{ severity: string; message: string }> }> {
-    return this.priceBookQuery.legacyPricingHealth(module);
   }
 
   async southAfricaRateRules(): Promise<SouthAfricaRateRuleListResponse> {

@@ -1,6 +1,6 @@
 # 代码瘦身治理第十五阶段
 
-- 状态：`completed`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜15`
 - 续接自：`docs/dev-now/codebase-slimming-phase-14.md`
 - 上下文状态：`green`
@@ -58,3 +58,4 @@
 - 剩余风险：三个旧报价兼容方法与三个迪拜兼容方法仍处于兼容窗口；仓库外未纳管消费者无法由本仓和 47 源码扫描覆盖；完整 Web typecheck 仍有既有基线错误。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-15`。
 - 准确下一步：继续扫描可扩展现有客户端的多 GET 窄切片；兼容窗口明确结束后再次复扫，再批量删除零调用转发和对应兼容测试。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-16.md`

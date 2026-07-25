@@ -13,37 +13,3 @@ describe('ApiClient gateway errors', () => {
     await expect(client.shipments()).rejects.toThrow('服务暂不可用，请稍后重试');
   });
 });
-
-describe('ApiClient Dubai price query compatibility', () => {
-  it('forwards legacy JSON read methods to the price-book query client', async () => {
-    const client = new ApiClient(() => null, vi.fn());
-    const dubaiPriceTable = vi.spyOn(client.priceBookQuery, 'dubaiPriceTable').mockResolvedValue({} as never);
-    const dubaiPriceDisplay = vi.spyOn(client.priceBookQuery, 'dubaiPriceDisplay').mockResolvedValue({} as never);
-    const dubaiPriceDisplayVersions = vi.spyOn(client.priceBookQuery, 'dubaiPriceDisplayVersions').mockResolvedValue({ versions: [] } as never);
-
-    await client.dubaiPriceTable();
-    await client.dubaiPriceDisplay();
-    await client.dubaiPriceDisplayVersions();
-
-    expect(dubaiPriceTable).toHaveBeenCalledOnce();
-    expect(dubaiPriceDisplay).toHaveBeenCalledOnce();
-    expect(dubaiPriceDisplayVersions).toHaveBeenCalledOnce();
-  });
-});
-
-describe('ApiClient legacy pricing query compatibility', () => {
-  it('forwards legacy metadata, source, and health reads to the price-book query client', async () => {
-    const client = new ApiClient(() => null, vi.fn());
-    const legacyPricingMeta = vi.spyOn(client.priceBookQuery, 'legacyPricingMeta').mockResolvedValue({} as never);
-    const legacyPricingSources = vi.spyOn(client.priceBookQuery, 'legacyPricingSources').mockResolvedValue({ sources: [] } as never);
-    const legacyPricingHealth = vi.spyOn(client.priceBookQuery, 'legacyPricingHealth').mockResolvedValue({ module: 'all', rowCount: 0, issues: [] });
-
-    await client.legacyPricingMeta();
-    await client.legacyPricingSources('dubaiAirSea');
-    await client.legacyPricingHealth('europeExpress');
-
-    expect(legacyPricingMeta).toHaveBeenCalledOnce();
-    expect(legacyPricingSources).toHaveBeenCalledWith('dubaiAirSea');
-    expect(legacyPricingHealth).toHaveBeenCalledWith('europeExpress');
-  });
-});
