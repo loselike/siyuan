@@ -130,7 +130,7 @@ import { PrismaRepository } from './prisma.repository.js';
 import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
-import { type PermissionKey, type Principal, type RoleKey } from './rbac.js';
+import { isBusinessAgentRestrictedRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -1156,15 +1156,6 @@ export class DataController {
     return this.repository.deleteCustomer(request.user, id);
   }
 
-  @Get('master-data/agents')
-  @RequirePermission('master-data:agents:read')
-  async masterDataAgents(@Req() request: { user: Principal }) {
-    if (isBusinessAgentRestrictedRole(request.user.role)) {
-      throw new ForbiddenException('业务角色不能查看真实代理资料');
-    }
-    return (await this.repository.getMasterData()).agents;
-  }
-
   @Post('master-data/agents')
   @RequirePermission('master-data:agents:create')
   async createMasterDataAgent(@Req() request: { user: Principal }, @Body() body: AgentCreateInput) {
@@ -1211,15 +1202,6 @@ export class DataController {
   @RequirePermission('master-data:agents:delete')
   async deleteMasterDataAgent(@Req() request: { user: Principal }, @Param('id') id: string): Promise<AgentDeleteResponse> {
     return this.repository.deleteAgents(request.user, [id]);
-  }
-
-  @Get('master-data/agent-channels')
-  @RequirePermission('master-data:agent-channels:read')
-  async masterDataAgentChannels(@Req() request: { user: Principal }) {
-    if (isBusinessAgentRestrictedRole(request.user.role)) {
-      throw new ForbiddenException('业务角色不能查看真实代理渠道');
-    }
-    return (await this.repository.getMasterData()).agentChannels;
   }
 
   @Post('master-data/agent-channels')
@@ -2372,23 +2354,6 @@ function normalizeUploadedFileName(fileName: string) {
   }
   const normalized = candidates.find((candidate) => /[\u4e00-\u9fff]/.test(candidate) && !candidate.includes('�')) ?? raw;
   return normalized.replace(/[\\/:\0]/g, '_').trim() || '未命名文件';
-}
-
-function isSalesScopedRole(role: string): boolean {
-  return [
-    'OPERATOR',
-    'UG_MARKET',
-    'UG_BUSINESS',
-    'UG_SZ_WUHAN',
-    'UG_ZZ_SIHUA',
-    'UG_WH_JIUYULIAN',
-    'UG_BUSINESS_MANAGER',
-    'UG_BUSINESS_SUPERVISOR'
-  ].includes(role);
-}
-
-function isBusinessAgentRestrictedRole(role: string): boolean {
-  return isSalesScopedRole(role) && role !== 'UG_MARKET';
 }
 
 type MojiaMeasurementInput = {

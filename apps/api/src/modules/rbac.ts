@@ -956,6 +956,23 @@ export function allPermissions(): PermissionKey[] {
   return getPermissionDefinitions().map((item) => item.code);
 }
 
+export function isSalesScopedRole(role: string): boolean {
+  return [
+    'OPERATOR',
+    'UG_MARKET',
+    'UG_BUSINESS',
+    'UG_SZ_WUHAN',
+    'UG_ZZ_SIHUA',
+    'UG_WH_JIUYULIAN',
+    'UG_BUSINESS_MANAGER',
+    'UG_BUSINESS_SUPERVISOR'
+  ].includes(role);
+}
+
+export function isBusinessAgentRestrictedRole(role: string): boolean {
+  return isSalesScopedRole(role) && role !== 'UG_MARKET';
+}
+
 export function hasPermission(role: RoleKey, permission: PermissionKey): boolean {
   if (role === 'ADMIN') {
     return true;
