@@ -1,6 +1,6 @@
 # 代码瘦身治理第十一阶段
 
-- 状态：`completed`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜11`
 - 续接自：`docs/dev-now/codebase-slimming-phase-10.md`
 - 上下文状态：`green`
@@ -65,3 +65,4 @@
 - 剩余风险：价格表五个和加价规则三个旧方法仍处于兼容窗口；仓库外未纳管消费者无法由本仓与 47 源码扫描覆盖。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-11`。
 - 准确下一步：把三个加价规则旧入口加入零调用清单；下一阶段优先扫描并扩展现有领域客户端，而不是继续增加微型客户端，兼容窗口结束后统一删除这八个转发和两组兼容测试。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-12.md`

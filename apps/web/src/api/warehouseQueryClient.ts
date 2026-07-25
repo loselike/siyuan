@@ -2,7 +2,10 @@ import type {
   WarehouseInStockQuery,
   WarehouseInStockResponse,
   WarehouseManualReceiptCustomerOption,
+  WarehousePackageGroupSummary,
   WarehousePackageSummary,
+  WarehouseTallyTaskListQuery,
+  WarehouseTallyTaskSummary,
   WarehouseTodayQuery,
   WarehouseTodayResponse
 } from '@siyuan/shared';
@@ -16,8 +19,16 @@ export class WarehouseQueryClient {
     return this.request('/warehouse/packages');
   }
 
+  warehousePackageGroups(): Promise<WarehousePackageGroupSummary[]> {
+    return this.request('/warehouse/package-groups');
+  }
+
   warehouseManualReceiptCustomers(): Promise<WarehouseManualReceiptCustomerOption[]> {
     return this.request('/warehouse/manual-receipt/customers');
+  }
+
+  warehouseConsolidationItems(id: string): Promise<WarehousePackageSummary[]> {
+    return this.request(`/warehouse/consolidations/${id}/items`);
   }
 
   warehouseTodayReceipts(query: WarehouseTodayQuery = {}): Promise<WarehouseTodayResponse> {
@@ -40,5 +51,20 @@ export class WarehouseQueryClient {
     });
     const search = params.toString();
     return this.request(`/warehouse/in-stock${search ? `?${search}` : ''}`);
+  }
+
+  warehouseTallyTasks(query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const search = params.toString();
+    return this.request(`/warehouse/tally-tasks${search ? `?${search}` : ''}`);
+  }
+
+  warehouseTallyTaskOutputPackages(id: string): Promise<WarehousePackageSummary[]> {
+    return this.request(`/warehouse/tally-tasks/${id}/output-packages`);
   }
 }

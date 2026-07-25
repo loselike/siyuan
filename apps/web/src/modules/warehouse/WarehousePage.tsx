@@ -841,7 +841,7 @@ export function WarehousePage({
     }
     let alive = true;
     const loadTallyTasks = () => {
-      void apiClient.warehouseTallyTasks()
+      void apiClient.warehouseQuery.warehouseTallyTasks()
         .then((rows) => {
           if (!alive) return;
           setTallyTasks(rows);
@@ -2366,7 +2366,7 @@ export function WarehousePage({
         results
       });
       completedTask = completed;
-      const outputPackages = await apiClient.warehouseTallyTaskOutputPackages(completed.id);
+      const outputPackages = await apiClient.warehouseQuery.warehouseTallyTaskOutputPackages(completed.id);
       const printed = await apiClient.printWarehouseTallyTaskLabel(completed.id);
       const printStarted = printWarehouseTallyLabelHtml(createWarehouseTallyLabelHtml(printed, outputPackages), printWindow);
       setTallyTasks((current) => current.map((task) => (task.id === completed.id ? printed : task)));
@@ -2417,7 +2417,7 @@ export function WarehousePage({
     try {
       const printWindow = window.open('', '_blank', 'noopener,noreferrer');
       const updated = await apiClient.printWarehouseTallyTaskLabel(task.id);
-      const outputPackages = await apiClient.warehouseTallyTaskOutputPackages(task.id);
+      const outputPackages = await apiClient.warehouseQuery.warehouseTallyTaskOutputPackages(task.id);
       replaceTallyTask(updated);
       printWarehouseTallyLabelHtml(createWarehouseTallyLabelHtml(updated, outputPackages), printWindow);
       setWarehouseNotice(`已记录理货标签打印 ${updated.labelNo ?? updated.taskNo}`);
@@ -2429,7 +2429,7 @@ export function WarehousePage({
   async function downloadWarehouseTallyLabel(task: WarehouseTallyTaskSummary) {
     try {
       const updated = await apiClient.downloadWarehouseTallyTaskLabel(task.id);
-      const outputPackages = await apiClient.warehouseTallyTaskOutputPackages(task.id);
+      const outputPackages = await apiClient.warehouseQuery.warehouseTallyTaskOutputPackages(task.id);
       replaceTallyTask(updated);
       downloadHtmlFile(createWarehouseTallyLabelHtml(updated, outputPackages), `理货后标签-${updated.labelNo ?? updated.taskNo}.html`, 'text/html;charset=utf-8');
       setWarehouseNotice(`已下载理货标签 ${updated.labelNo ?? updated.taskNo}`);

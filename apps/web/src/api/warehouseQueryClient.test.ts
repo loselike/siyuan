@@ -1,4 +1,9 @@
-import type { WarehouseInStockResponse, WarehousePackageSummary, WarehouseTodayResponse } from '@siyuan/shared';
+import type {
+  WarehouseInStockResponse,
+  WarehousePackageSummary,
+  WarehouseTallyTaskSummary,
+  WarehouseTodayResponse
+} from '@siyuan/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { WarehouseQueryClient, type WarehouseQueryRequest } from './warehouseQueryClient';
 
@@ -31,6 +36,42 @@ describe('WarehouseQueryClient', () => {
     await expect(client.warehouseManualReceiptCustomers()).resolves.toBe(response);
 
     expect(request).toHaveBeenCalledWith('/warehouse/manual-receipt/customers');
+  });
+
+  it('keeps package-group, consolidation-item and tally-output paths unchanged', async () => {
+    const response: WarehousePackageSummary[] = [];
+    const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;
+    const client = new WarehouseQueryClient(request);
+
+    await client.warehousePackageGroups();
+    await expect(client.warehouseConsolidationItems('merge-1')).resolves.toBe(response);
+    await expect(client.warehouseTallyTaskOutputPackages('tally-1')).resolves.toBe(response);
+
+    expect(request).toHaveBeenNthCalledWith(1, '/warehouse/package-groups');
+    expect(request).toHaveBeenNthCalledWith(2, '/warehouse/consolidations/merge-1/items');
+    expect(request).toHaveBeenNthCalledWith(3, '/warehouse/tally-tasks/tally-1/output-packages');
+  });
+
+  it('keeps tally-task query serialization and empty-query paths unchanged', async () => {
+    const response: WarehouseTallyTaskSummary[] = [];
+    const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;
+    const client = new WarehouseQueryClient(request);
+
+    await expect(client.warehouseTallyTasks({
+      status: 'COMPLETED',
+      customerCode: 'C 001',
+      combinedOrderNo: '',
+      completedScope: 'HISTORY',
+      completedFrom: '2026-07-01',
+      completedTo: undefined
+    })).resolves.toBe(response);
+    await client.warehouseTallyTasks();
+
+    expect(request).toHaveBeenNthCalledWith(
+      1,
+      '/warehouse/tally-tasks?status=COMPLETED&customerCode=C+001&completedScope=HISTORY&completedFrom=2026-07-01'
+    );
+    expect(request).toHaveBeenNthCalledWith(2, '/warehouse/tally-tasks');
   });
 
   it('keeps today-receipt query serialization unchanged', async () => {

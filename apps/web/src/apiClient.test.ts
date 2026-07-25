@@ -96,3 +96,27 @@ describe('ApiClient markup query compatibility', () => {
     expect(exportAgentMarkupRules).toHaveBeenCalledWith(query);
   });
 });
+
+describe('ApiClient warehouse tally query compatibility', () => {
+  it('forwards legacy read methods to the existing warehouse query client', async () => {
+    const client = new ApiClient(() => null, vi.fn());
+    const warehousePackageGroups = vi.spyOn(client.warehouseQuery, 'warehousePackageGroups').mockResolvedValue([]);
+    const warehouseConsolidationItems = vi.spyOn(client.warehouseQuery, 'warehouseConsolidationItems').mockResolvedValue([]);
+    const warehouseTallyTasks = vi.spyOn(client.warehouseQuery, 'warehouseTallyTasks').mockResolvedValue([]);
+    const warehouseTallyTaskOutputPackages = vi.spyOn(
+      client.warehouseQuery,
+      'warehouseTallyTaskOutputPackages'
+    ).mockResolvedValue([]);
+    const query = { status: 'COMPLETED' as const, customerCode: 'C001' };
+
+    await client.warehousePackageGroups();
+    await client.warehouseConsolidationItems('merge-1');
+    await client.warehouseTallyTasks(query);
+    await client.warehouseTallyTaskOutputPackages('tally-1');
+
+    expect(warehousePackageGroups).toHaveBeenCalledOnce();
+    expect(warehouseConsolidationItems).toHaveBeenCalledWith('merge-1');
+    expect(warehouseTallyTasks).toHaveBeenCalledWith(query);
+    expect(warehouseTallyTaskOutputPackages).toHaveBeenCalledWith('tally-1');
+  });
+});

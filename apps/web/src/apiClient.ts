@@ -1152,7 +1152,7 @@ export class ApiClient {
   }
 
   async warehousePackageGroups(): Promise<WarehousePackageGroupSummary[]> {
-    return this.request('/warehouse/package-groups');
+    return this.warehouseQuery.warehousePackageGroups();
   }
 
   async createWarehousePackage(input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
@@ -1188,18 +1188,11 @@ export class ApiClient {
   }
 
   async warehouseConsolidationItems(id: string): Promise<WarehousePackageSummary[]> {
-    return this.request(`/warehouse/consolidations/${id}/items`);
+    return this.warehouseQuery.warehouseConsolidationItems(id);
   }
 
   async warehouseTallyTasks(query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {
-    const params = new URLSearchParams();
-    Object.entries(query).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
-        params.set(key, String(value));
-      }
-    });
-    const search = params.toString();
-    return this.request(`/warehouse/tally-tasks${search ? `?${search}` : ''}`);
+    return this.warehouseQuery.warehouseTallyTasks(query);
   }
 
   async warehouseTallyTaskHistoryChain(packageId: string): Promise<WarehouseTallyTaskSummary[]> {
@@ -1223,7 +1216,7 @@ export class ApiClient {
   }
 
   async warehouseTallyTaskOutputPackages(id: string): Promise<WarehousePackageSummary[]> {
-    return this.request(`/warehouse/tally-tasks/${id}/output-packages`);
+    return this.warehouseQuery.warehouseTallyTaskOutputPackages(id);
   }
 
   async printWarehouseTallyTaskLabel(id: string): Promise<WarehouseTallyTaskSummary> {
