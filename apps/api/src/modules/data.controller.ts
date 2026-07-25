@@ -824,16 +824,6 @@ export class DataController {
     });
   }
 
-  @Get('shipments/:id/labels')
-  @RequireAuth()
-  async shipmentLabels(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能查看内部面单');
-    }
-    await this.ensureAnyPermission(request.user, ['warehouse:dispatch-pending:label-view', 'customer-service:transfer:label-view']);
-    return this.repository.getShipmentLabels(request.user, id);
-  }
-
   @Post('shipments/:id/labels/:labelId/void')
   @RequirePermission('warehouse:dispatch-pending:label-void')
   async voidShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string, @Param('labelId') labelId: string) {
@@ -841,15 +831,6 @@ export class DataController {
       throw new ForbiddenException('客户不能作废面单');
     }
     return this.repository.voidShipmentLabel(request.user, id, labelId);
-  }
-
-  @Get('carrier-tasks')
-  @RequirePermission('tracking:carrier-task:view')
-  async carrierTasks(@Req() request: { user: Principal }) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能查看承运商任务');
-    }
-    return this.repository.getCarrierTasks(request.user);
   }
 
   @Post('carrier-tasks/:id/run')
