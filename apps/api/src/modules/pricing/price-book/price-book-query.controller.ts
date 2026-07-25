@@ -1,4 +1,4 @@
-import { BadRequestException, Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';
+import { BadRequestException, Controller, ForbiddenException, Get, Inject, Param, Query, Req } from '@nestjs/common';
 import type { LegacyPricingModule, PriceBookImportTargetModule } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
@@ -46,5 +46,32 @@ export class PriceBookQueryController {
   @RequirePermission('pricing:price-books:health-report-view')
   legacyPricingHealth(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
     return this.repository.getLegacyPricingHealth(request.user, module);
+  }
+
+  @Get('pricing/legacy/quote-meta')
+  @RequirePermission('pricing:lookup:meta-view')
+  async legacyPricingMeta(@Req() request: { user: Principal }) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能访问内部查价');
+    }
+    return this.repository.getLegacyPricingMeta(request.user);
+  }
+
+  @Get('pricing/legacy/dubai-air-sea/display')
+  @RequirePermission(['pricing:lookup:dubai-image-view', 'pricing:dubai-display:active-view'])
+  async legacyDubaiAirSeaDisplay(@Req() request: { user: Principal }) {
+    return this.repository.getDubaiPriceDisplay(request.user);
+  }
+
+  @Get('pricing/legacy/dubai-air-sea/display-versions')
+  @RequirePermission('pricing:dubai-display:versions-view')
+  async legacyDubaiAirSeaDisplayVersions(@Req() request: { user: Principal }) {
+    return this.repository.getDubaiPriceDisplayVersions(request.user);
+  }
+
+  @Get('pricing/south-africa/images')
+  @RequirePermission('pricing:south-africa:image-view')
+  async southAfricaRateImages(@Req() request: { user: Principal }) {
+    return this.repository.getSouthAfricaRateImages(request.user);
   }
 }

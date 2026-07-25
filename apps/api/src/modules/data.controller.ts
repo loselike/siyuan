@@ -1551,15 +1551,6 @@ export class DataController {
     return this.sanitizePriceLookupResponse(response, agentNames);
   }
 
-  @Get('pricing/legacy/quote-meta')
-  @RequirePermission('pricing:lookup:meta-view')
-  async legacyPricingMeta(@Req() request: { user: Principal }) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能访问内部查价');
-    }
-    return this.repository.getLegacyPricingMeta(request.user);
-  }
-
   @Post('pricing/legacy/amazon/quote')
   @RequirePermission('pricing:lookup:amazon')
   async legacyAmazonQuote(@Req() request: { user: Principal }, @Body() body: Omit<LegacyPricingQuoteRequest, 'module'>) {
@@ -1620,18 +1611,6 @@ export class DataController {
     return { ...table, air: table.air.map(sanitize), sea: table.sea.map(sanitize) };
   }
 
-  @Get('pricing/legacy/dubai-air-sea/display')
-  @RequirePermission(['pricing:lookup:dubai-image-view', 'pricing:dubai-display:active-view'])
-  async legacyDubaiAirSeaDisplay(@Req() request: { user: Principal }) {
-    return this.repository.getDubaiPriceDisplay(request.user);
-  }
-
-  @Get('pricing/legacy/dubai-air-sea/display-versions')
-  @RequirePermission('pricing:dubai-display:versions-view')
-  async legacyDubaiAirSeaDisplayVersions(@Req() request: { user: Principal }) {
-    return this.repository.getDubaiPriceDisplayVersions(request.user);
-  }
-
   @Put('pricing/legacy/dubai-air-sea/display-versions/:id/activate')
   @RequirePermission('pricing:dubai-display:activate')
   async activateLegacyDubaiAirSeaDisplayVersion(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: DubaiPriceDisplayActivateInput) {
@@ -1685,12 +1664,6 @@ export class DataController {
   @RequirePermission('pricing:south-africa:rules-delete')
   async deleteSouthAfricaRateRule(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deleteSouthAfricaRateRule(request.user, id);
-  }
-
-  @Get('pricing/south-africa/images')
-  @RequirePermission('pricing:south-africa:image-view')
-  async southAfricaRateImages(@Req() request: { user: Principal }) {
-    return this.repository.getSouthAfricaRateImages(request.user);
   }
 
   @Post('pricing/south-africa/images')

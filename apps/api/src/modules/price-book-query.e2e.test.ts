@@ -76,12 +76,54 @@ describe('Price book query API', () => {
 
   it('keeps market access, authentication and customer denials unchanged', async () => {
     const marketToken = await app.loginAs('market');
+    const operatorToken = await app.loginAs('operator');
     const customerToken = await app.loginAs('customer');
 
     await request(app.getHttpServer())
       .get('/api/pricing/books')
       .set('Authorization', app.auth(marketToken))
       .expect(200);
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/legacy/quote-meta')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          modules: expect.any(Array),
+          agents: [],
+          origins: expect.any(Array),
+          warehouseCodes: expect.any(Array),
+          tiers: expect.any(Array)
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/legacy/dubai-air-sea/display')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          airPages: expect.any(Array),
+          seaPages: expect.any(Array)
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/legacy/dubai-air-sea/display-versions')
+      .set('Authorization', app.auth(marketToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual({ versions: expect.any(Array) });
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/south-africa/images')
+      .set('Authorization', app.auth(marketToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual({ images: expect.any(Array) });
+      });
 
     await request(app.getHttpServer())
       .get('/api/pricing/books')
@@ -95,7 +137,11 @@ describe('Price book query API', () => {
       '/api/pricing/sync-health',
       '/api/pricing/books/import-jobs/codex-phase25-nonexistent',
       '/api/pricing/legacy/sources?module=amazon',
-      '/api/pricing/legacy/health-report?module=amazon'
+      '/api/pricing/legacy/health-report?module=amazon',
+      '/api/pricing/legacy/quote-meta',
+      '/api/pricing/legacy/dubai-air-sea/display',
+      '/api/pricing/legacy/dubai-air-sea/display-versions',
+      '/api/pricing/south-africa/images'
     ]) {
       await request(app.getHttpServer())
         .get(path)
