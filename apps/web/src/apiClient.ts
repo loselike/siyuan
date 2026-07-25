@@ -1105,10 +1105,6 @@ export class ApiClient {
     return this.request(`/warehouse/consolidations/${id}/create-shipment`, { method: 'POST' });
   }
 
-  async warehouseTallyTaskHistoryChain(packageId: string): Promise<WarehouseTallyTaskSummary[]> {
-    return this.warehouseQuery.warehouseTallyTaskHistoryChain(packageId);
-  }
-
   async createWarehouseTallyTask(input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
     return this.request('/warehouse/tally-tasks', { method: 'POST', body: JSON.stringify(input) });
   }

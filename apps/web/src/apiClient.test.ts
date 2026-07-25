@@ -13,15 +13,3 @@ describe('ApiClient gateway errors', () => {
     await expect(client.shipments()).rejects.toThrow('服务暂不可用，请稍后重试');
   });
 });
-
-describe('ApiClient warehouse query compatibility', () => {
-  it('forwards tally-task history-chain reads to WarehouseQueryClient', async () => {
-    const response = [];
-    const client = new ApiClient(() => null, vi.fn());
-    const query = vi.spyOn(client.warehouseQuery, 'warehouseTallyTaskHistoryChain').mockResolvedValue(response);
-
-    await expect(client.warehouseTallyTaskHistoryChain('pkg 1/a')).resolves.toBe(response);
-
-    expect(query).toHaveBeenCalledWith('pkg 1/a');
-  });
-});
