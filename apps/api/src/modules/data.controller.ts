@@ -115,7 +115,6 @@ import type {
   StaffAccountUpdateInput,
   TrackingEventInput,
   WarehouseConsolidationCreateInput,
-  WarehouseInStockQuery,
   WarehouseManualReceiptCreateInput,
   WarehousePackageCreateInput,
   WarehousePackageSplitInput,
@@ -125,7 +124,6 @@ import type {
   WarehouseTallyLabelScanInput,
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskUpdateInput,
-  WarehouseTodayQuery,
   MasterDataSnapshot,
   NavigationReadStateInput
 } from '@siyuan/shared';
@@ -1952,36 +1950,6 @@ export class DataController {
   @RequirePermission('pricing:lookup:view')
   async quotePricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleQuoteRequest) {
     return this.repository.quotePricingRule(request.user, body);
-  }
-
-  @Get('warehouse/packages')
-  @RequirePermission(['warehouse:today-receipt:view', 'warehouse:in-stock:view'])
-  async warehousePackages(@Req() request: { user: Principal }) {
-    return this.repository.getWarehousePackages(request.user);
-  }
-
-  @Get('warehouse/today-receipts')
-  @RequirePermission('warehouse:today-receipt:view')
-  async warehouseTodayReceipts(@Req() request: { user: Principal }, @Query() query: WarehouseTodayQuery) {
-    return this.repository.getWarehouseTodayReceipts(request.user, query);
-  }
-
-  @Get('warehouse/in-stock')
-  @RequirePermission('warehouse:in-stock:view')
-  async warehouseInStock(@Req() request: { user: Principal }, @Query() query: WarehouseInStockQuery) {
-    return this.repository.getWarehouseInStock(request.user, query);
-  }
-
-  @Get('warehouse/package-groups')
-  @RequirePermission('warehouse:in-stock:view')
-  async warehousePackageGroups(@Req() request: { user: Principal }) {
-    return this.repository.getWarehousePackageGroups(request.user);
-  }
-
-  @Get('warehouse/manual-receipt/customers')
-  @RequirePermission('warehouse:today-receipt:manual-create')
-  async warehouseManualReceiptCustomers(@Req() request: { user: Principal }) {
-    return this.repository.getWarehouseManualReceiptCustomers(request.user);
   }
 
   @Post('warehouse/packages')
