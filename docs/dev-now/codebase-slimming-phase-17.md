@@ -1,6 +1,6 @@
 # 代码瘦身治理第十七阶段
 
-- 状态：`completed`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜17`
 - 续接自：`docs/dev-now/codebase-slimming-phase-16.md`
 - 上下文状态：`green`
@@ -55,3 +55,4 @@
 - 剩余风险：旧 `ApiClient.southAfricaRateRules` 仍处于兼容窗口；仓库外未纳管消费者无法由本仓和 47 源码扫描覆盖。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-17`。
 - 准确下一步：兼容窗口结束后再次复扫并删除旧转发和对应兼容测试；继续扫描可扩展现有客户端的纯 GET。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-18.md`

@@ -90,7 +90,6 @@ import type {
   SouthAfricaLookupRequest,
   SouthAfricaLookupResponse,
   SouthAfricaRateRuleInput,
-  SouthAfricaRateRuleListResponse,
   SouthAfricaRateRuleSummary,
   PriceLookupRequest,
   PriceLookupResponse,
@@ -1012,10 +1011,6 @@ export class ApiClient {
 
   async rebuildLegacyPricing(module?: LegacyPricingModule): Promise<{ module: LegacyPricingModule | 'all'; rowCount: number; rebuiltAt: string }> {
     return this.request('/pricing/legacy/rebuild', { method: 'POST', body: JSON.stringify({ module }) });
-  }
-
-  async southAfricaRateRules(): Promise<SouthAfricaRateRuleListResponse> {
-    return this.priceBookQuery.southAfricaRateRules();
   }
 
   async createSouthAfricaRateRule(input: SouthAfricaRateRuleInput): Promise<SouthAfricaRateRuleSummary> {

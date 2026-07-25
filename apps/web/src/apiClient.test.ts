@@ -13,14 +13,3 @@ describe('ApiClient gateway errors', () => {
     await expect(client.shipments()).rejects.toThrow('服务暂不可用，请稍后重试');
   });
 });
-
-describe('ApiClient South Africa pricing query compatibility', () => {
-  it('forwards the rate-rule read to the price-book query client', async () => {
-    const client = new ApiClient(() => null, vi.fn());
-    const southAfricaRateRules = vi.spyOn(client.priceBookQuery, 'southAfricaRateRules').mockResolvedValue({ rules: [] } as never);
-
-    await client.southAfricaRateRules();
-
-    expect(southAfricaRateRules).toHaveBeenCalledOnce();
-  });
-});
