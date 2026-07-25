@@ -94,6 +94,7 @@ describe('ApiClient warehouse query compatibility', () => {
   it('forwards legacy read methods to the warehouse query client', async () => {
     const client = new ApiClient(() => null, vi.fn());
     const packages = vi.spyOn(client.warehouseQuery, 'warehousePackages').mockResolvedValue([]);
+    const manualReceiptCustomers = vi.spyOn(client.warehouseQuery, 'warehouseManualReceiptCustomers').mockResolvedValue([]);
     const response = {
       totals: {
         receiptTickets: 0,
@@ -112,10 +113,12 @@ describe('ApiClient warehouse query compatibility', () => {
     const inStockQuery = { status: 'TALLIED_ARCHIVED' as const, operationKeyword: 'alice' };
 
     await client.warehousePackages();
+    await client.warehouseManualReceiptCustomers();
     await client.warehouseTodayReceipts(todayQuery);
     await client.warehouseInStock(inStockQuery);
 
     expect(packages).toHaveBeenCalledOnce();
+    expect(manualReceiptCustomers).toHaveBeenCalledOnce();
     expect(todayReceipts).toHaveBeenCalledWith(todayQuery);
     expect(inStock).toHaveBeenCalledWith(inStockQuery);
   });

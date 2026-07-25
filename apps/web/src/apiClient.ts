@@ -1235,7 +1235,7 @@ export class ApiClient {
   }
 
   async warehouseManualReceiptCustomers(): Promise<WarehouseManualReceiptCustomerOption[]> {
-    return this.request('/warehouse/manual-receipt/customers');
+    return this.warehouseQuery.warehouseManualReceiptCustomers();
   }
 
   async createWarehousePackage(input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {

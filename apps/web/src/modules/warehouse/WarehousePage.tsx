@@ -730,7 +730,7 @@ export function WarehousePage({
     if (!manualReceiptDrawerOpen) return;
     let cancelled = false;
     setManualReceiptCustomersLoading(true);
-    void apiClient.warehouseManualReceiptCustomers()
+    void apiClient.warehouseQuery.warehouseManualReceiptCustomers()
       .then((customers) => {
         if (!cancelled) setManualReceiptCustomers(customers);
       })

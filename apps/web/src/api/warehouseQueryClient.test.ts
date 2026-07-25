@@ -23,6 +23,16 @@ describe('WarehouseQueryClient', () => {
     expect(request).toHaveBeenCalledWith('/warehouse/packages');
   });
 
+  it('keeps the manual-receipt customer lookup unchanged', async () => {
+    const response = [{ code: 'C001', name: '测试客户' }];
+    const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;
+    const client = new WarehouseQueryClient(request);
+
+    await expect(client.warehouseManualReceiptCustomers()).resolves.toBe(response);
+
+    expect(request).toHaveBeenCalledWith('/warehouse/manual-receipt/customers');
+  });
+
   it('keeps today-receipt query serialization unchanged', async () => {
     const response: WarehouseTodayResponse = { totals: emptyTotals, rows: [] };
     const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;

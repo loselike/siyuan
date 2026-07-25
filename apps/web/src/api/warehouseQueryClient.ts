@@ -1,6 +1,7 @@
 import type {
   WarehouseInStockQuery,
   WarehouseInStockResponse,
+  WarehouseManualReceiptCustomerOption,
   WarehousePackageSummary,
   WarehouseTodayQuery,
   WarehouseTodayResponse
@@ -13,6 +14,10 @@ export class WarehouseQueryClient {
 
   warehousePackages(): Promise<WarehousePackageSummary[]> {
     return this.request('/warehouse/packages');
+  }
+
+  warehouseManualReceiptCustomers(): Promise<WarehouseManualReceiptCustomerOption[]> {
+    return this.request('/warehouse/manual-receipt/customers');
   }
 
   warehouseTodayReceipts(query: WarehouseTodayQuery = {}): Promise<WarehouseTodayResponse> {

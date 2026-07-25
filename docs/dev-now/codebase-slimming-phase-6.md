@@ -1,6 +1,6 @@
 # 代码瘦身治理第六阶段
 
-- 状态：`complete`
+- 状态：`handed_off`
 - 会话标题：`Sunny｜代码瘦身治理｜06`
 - 续接自：`docs/dev-now/codebase-slimming-phase-5.md`
 - 上下文状态：`green`
@@ -54,3 +54,4 @@
 - 剩余风险：兼容方法仍保留在巨型 `ApiClient`；总源码行数因领域边界和兼容层暂时增加，本轮没有性能收益，也未改变业务表现。
 - 发布状态：`已发布 47`；仅 Web，无迁移。备份位于 `/opt/siyuan/backups/codex-20260725-codebase-slimming-phase-6`。
 - 准确下一步：扫描仓库模块剩余只读查询，选择一个不涉及财务、账号、状态流转或审计实现的窄切片；继续保留兼容转发，兼容窗口结束后再集中删除旧入口。
+- 已交接至：`docs/dev-now/codebase-slimming-phase-7.md`
