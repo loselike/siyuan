@@ -1723,12 +1723,6 @@ export class DataController {
     });
   }
 
-  @Get('pricing/legacy/sources')
-  @RequirePermission('pricing:price-books:legacy-source-view')
-  async legacyPricingSources(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
-    return this.repository.getLegacyPricingSources(request.user, module);
-  }
-
   @Post('pricing/legacy/sources/import')
   @RequirePermission('pricing:price-books:legacy-source-import')
   async importLegacyPricingSource(@Req() request: { user: Principal }, @Body() body: LegacyPricingImportInput) {
@@ -1745,12 +1739,6 @@ export class DataController {
   @RequirePermission('pricing:price-books:legacy-rebuild')
   async rebuildLegacyPricing(@Req() request: { user: Principal }, @Body() body: { module?: LegacyPricingModule }) {
     return this.repository.rebuildLegacyPricing(request.user, body.module);
-  }
-
-  @Get('pricing/legacy/health-report')
-  @RequirePermission('pricing:price-books:health-report-view')
-  async legacyPricingHealth(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
-    return this.repository.getLegacyPricingHealth(request.user, module);
   }
 
   @Get('pricing/markup-rules')

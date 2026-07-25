@@ -35,4 +35,16 @@ export class PriceBookQueryController {
   priceBookImportJob(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.getPriceBookImportJob(request.user, id);
   }
+
+  @Get('pricing/legacy/sources')
+  @RequirePermission('pricing:price-books:legacy-source-view')
+  legacyPricingSources(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
+    return this.repository.getLegacyPricingSources(request.user, module);
+  }
+
+  @Get('pricing/legacy/health-report')
+  @RequirePermission('pricing:price-books:health-report-view')
+  legacyPricingHealth(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
+    return this.repository.getLegacyPricingHealth(request.user, module);
+  }
 }

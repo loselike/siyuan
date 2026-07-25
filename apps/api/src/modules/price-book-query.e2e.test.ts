@@ -5,7 +5,7 @@ import { setupE2eApp } from './test-support/e2e-harness.js';
 describe('Price book query API', () => {
   const app = setupE2eApp();
 
-  it('keeps price-book list, sync-health and import-job contracts unchanged', async () => {
+  it('keeps price-book and legacy health contracts unchanged', async () => {
     const adminToken = await app.loginAs('admin');
     const authorization = app.auth(adminToken);
 
@@ -50,6 +50,28 @@ describe('Price book query API', () => {
       .expect((response) => {
         expect(response.body.message).toBe('价格表导入任务不存在');
       });
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/legacy/sources')
+      .query({ module: 'amazon' })
+      .set('Authorization', authorization)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual({ sources: expect.any(Array) });
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/pricing/legacy/health-report')
+      .query({ module: 'amazon' })
+      .set('Authorization', authorization)
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual({
+          module: 'amazon',
+          rowCount: expect.any(Number),
+          issues: expect.any(Array)
+        });
+      });
   });
 
   it('keeps market access, authentication and customer denials unchanged', async () => {
@@ -71,7 +93,9 @@ describe('Price book query API', () => {
     for (const path of [
       '/api/pricing/books',
       '/api/pricing/sync-health',
-      '/api/pricing/books/import-jobs/codex-phase25-nonexistent'
+      '/api/pricing/books/import-jobs/codex-phase25-nonexistent',
+      '/api/pricing/legacy/sources?module=amazon',
+      '/api/pricing/legacy/health-report?module=amazon'
     ]) {
       await request(app.getHttpServer())
         .get(path)
