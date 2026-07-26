@@ -197,6 +197,73 @@ export function markupSpecificity(rule: AgentMarkupSummary, channel: string, rea
   return score;
 }
 
+export function enrichPriceBookRowMarkup(row: PriceBookRowSummary, markupRules: AgentMarkupSummary[], ownerAgentName: string): PriceBookRowSummary {
+  return { ...row, ...resolvePriceBookRowMarkup(row, markupRules, ownerAgentName) };
+}
+
+export function resolvePriceBookRowMarkup(row: PriceBookRowSummary, markupRules: AgentMarkupSummary[], ownerAgentName: string): Pick<PriceBookRowSummary, 'lineMarkupPerKg' | 'markupSource'> {
+  const rule = findBestPriceBookRouteMarkupRule(markupRules, row)
+    ?? findBestMarkupRule(markupRules, row, ownerAgentName)
+    ?? (row.agentName !== ownerAgentName ? findBestMarkupRule(markupRules, row, row.agentName) : undefined)
+  const lineMarkupPerKg = rule?.markupValue ?? rule?.markupPerKg ?? 0.5;
+  if (!rule || rule.id.startsWith('price-agent:')) {
+    return { lineMarkupPerKg, markupSource: 'VIRTUAL_DEFAULT' };
+  }
+  if (rule.channelName || rule.realChannelName || rule.destinationCountry) {
+    return { lineMarkupPerKg, markupSource: 'LINE_CUSTOM' };
+  }
+  return { lineMarkupPerKg, markupSource: 'AGENT_DEFAULT' };
+}
+
+export function findBestPriceBookRouteMarkupRule(markupRules: AgentMarkupSummary[], row: PriceBookRowSummary): AgentMarkupSummary | undefined {
+  const destination = row.destinationCountry.trim();
+  const channel = row.channelName.trim();
+  const realChannel = row.realChannelName?.trim() || channel;
+  return [...markupRules]
+    .filter((rule) => rule.enabled && !rule.deletedAt && rule.priceBookId === row.priceBookId && Boolean(rule.channelName || rule.realChannelName || rule.destinationCountry))
+    .filter((rule) => {
+      const channelMatches = !rule.channelName || rule.channelName === channel;
+      const realChannelMatches = !rule.realChannelName || rule.realChannelName === realChannel;
+      const countryMatches = !rule.destinationCountry || rule.destinationCountry === destination;
+      return channelMatches && realChannelMatches && countryMatches;
+    })
+    .sort((left, right) =>
+      (left.priority ?? 100) - (right.priority ?? 100)
+      || markupSpecificity(right, channel, realChannel, destination) - markupSpecificity(left, channel, realChannel, destination)
+      || safeTime(right.updatedAt) - safeTime(left.updatedAt)
+    )[0];
+}
+
+export function findBestMarkupRule(markupRules: AgentMarkupSummary[], price: PriceBookRowSummary, ownerAgentName = price.agentName, chargeable?: { unit: 'KG' | 'CBM'; value: number }): AgentMarkupSummary | undefined {
+  const destination = price.destinationCountry.trim();
+  const channel = price.channelName.trim();
+  const realChannel = price.realChannelName?.trim() || price.channelName.trim();
+  const candidates = [...markupRules]
+    .filter((rule) => rule.enabled && !rule.deletedAt && rule.agentName === ownerAgentName && (!rule.priceBookId || rule.priceBookId === price.priceBookId))
+    .filter((rule) => {
+      const channelMatches = !rule.channelName || rule.channelName === channel;
+      const realChannelMatches = !rule.realChannelName || rule.realChannelName === realChannel;
+      const countryMatches = !rule.destinationCountry || rule.destinationCountry === destination;
+      return channelMatches && realChannelMatches && countryMatches;
+    });
+  const matchedTiers = chargeable
+    ? candidates.filter((rule) => rule.markupUnit === chargeable.unit && rule.minChargeableValue !== undefined && chargeable.value >= rule.minChargeableValue && (rule.maxChargeableValue === undefined || chargeable.value < rule.maxChargeableValue))
+    : [];
+  const eligible = matchedTiers.length ? matchedTiers : candidates.filter((rule) => !rule.markupUnit);
+  return eligible
+    .sort((left, right) =>
+      (Boolean(right.priceBookId) ? 1 : 0) - (Boolean(left.priceBookId) ? 1 : 0)
+      || (left.priority ?? 100) - (right.priority ?? 100)
+      || markupSpecificity(right, channel, realChannel, destination) - markupSpecificity(left, channel, realChannel, destination)
+      || safeTime(right.updatedAt) - safeTime(left.updatedAt)
+    )[0];
+}
+
+export function safeTime(value?: string) {
+  const time = Date.parse(value ?? '');
+  return Number.isFinite(time) ? time : 0;
+}
+
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }

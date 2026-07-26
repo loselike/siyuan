@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMarkupSummary, PriceBookRowSummary } from '@siyuan/shared';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, filterAgentMarkupRulesByModule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, findBestPriceBookRouteMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
 
 function priceRow(id: string, overrides: Partial<PriceBookRowSummary> = {}): PriceBookRowSummary {
   return {
@@ -84,6 +84,24 @@ describe('agent markup query helpers', () => {
     expect(index.get(markupRuleIndexKey('代理甲', 'book-a'))).toEqual([active]);
     expect([...index.values()].flat()).toHaveLength(1);
     expect(markupSpecificity(markupRule({ channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国' }), '渠道甲', '线路甲', '美国')).toBe(7);
+  });
+
+  it('keeps price-book route priority, tier selection and markup source classification', () => {
+    const row = priceRow('route', { realChannelName: '线路甲' });
+    const generic = markupRule({ id: 'generic', markupValue: 0.6, priority: 1 });
+    const scoped = markupRule({ id: 'scoped', priceBookId: 'book-a', markupValue: 0.8, priority: 10 });
+    const tier = markupRule({ id: 'tier', priceBookId: 'book-a', markupUnit: 'KG', minChargeableValue: 10, maxChargeableValue: 20, markupValue: 1.2 });
+    const route = markupRule({ id: 'route-rule', priceBookId: 'book-a', channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国', markupValue: 1.5 });
+    const rules = [generic, scoped, tier, route];
+
+    expect(findBestMarkupRule(rules, row)?.id).toBe('scoped');
+    expect(findBestMarkupRule(rules, row, '代理甲', { unit: 'KG', value: 15 })?.id).toBe('tier');
+    expect(findBestPriceBookRouteMarkupRule(rules, row)?.id).toBe('route-rule');
+    expect(resolvePriceBookRowMarkup(row, rules, '代理甲')).toEqual({ lineMarkupPerKg: 1.5, markupSource: 'LINE_CUSTOM' });
+    expect(enrichPriceBookRowMarkup(row, [scoped], '代理甲')).toMatchObject({ id: 'route', lineMarkupPerKg: 0.8, markupSource: 'AGENT_DEFAULT' });
+    expect(resolvePriceBookRowMarkup(row, [markupRule({ id: 'price-agent:代理甲', markupValue: 0.5 })], '代理甲')).toEqual({ lineMarkupPerKg: 0.5, markupSource: 'VIRTUAL_DEFAULT' });
+    expect(resolvePriceBookRowMarkup(row, [], '代理甲')).toEqual({ lineMarkupPerKg: 0.5, markupSource: 'VIRTUAL_DEFAULT' });
+    expect(safeTime('invalid')).toBe(0);
   });
 
   it('keeps legacy module recognition and explicit, scoped-book and unclassified rule isolation', () => {

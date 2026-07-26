@@ -285,7 +285,7 @@ import {
 import { getPasswordStrengthError, hashPassword } from './password.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, filterAgentMarkupRulesByModule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { createLargeCargoProfile, isEuropeTransportMode, largeCargoRedirectMessage, type LargeCargoProfile } from './pricing/legacy-cargo-profile.shared.js';
 import { inferBackendPriceCarrierName, matchedTransitDays, publicPricingRouteCode } from './pricing/price-recommendation-display.shared.js';
@@ -16515,43 +16515,6 @@ function buildAgentMarkupDisplay(primary: AgentMarkupSummary, rules: AgentMarkup
   };
 }
 
-function enrichPriceBookRowMarkup(row: PriceBookRowSummary, markupRules: AgentMarkupSummary[], ownerAgentName: string): PriceBookRowSummary {
-  return { ...row, ...resolvePriceBookRowMarkup(row, markupRules, ownerAgentName) };
-}
-
-function resolvePriceBookRowMarkup(row: PriceBookRowSummary, markupRules: AgentMarkupSummary[], ownerAgentName: string): Pick<PriceBookRowSummary, 'lineMarkupPerKg' | 'markupSource'> {
-  const rule = findBestPriceBookRouteMarkupRule(markupRules, row)
-    ?? findBestMarkupRule(markupRules, row, ownerAgentName)
-    ?? (row.agentName !== ownerAgentName ? findBestMarkupRule(markupRules, row, row.agentName) : undefined)
-  const lineMarkupPerKg = rule?.markupValue ?? rule?.markupPerKg ?? 0.5;
-  if (!rule || rule.id.startsWith('price-agent:')) {
-    return { lineMarkupPerKg, markupSource: 'VIRTUAL_DEFAULT' };
-  }
-  if (rule.channelName || rule.realChannelName || rule.destinationCountry) {
-    return { lineMarkupPerKg, markupSource: 'LINE_CUSTOM' };
-  }
-  return { lineMarkupPerKg, markupSource: 'AGENT_DEFAULT' };
-}
-
-function findBestPriceBookRouteMarkupRule(markupRules: AgentMarkupSummary[], row: PriceBookRowSummary): AgentMarkupSummary | undefined {
-  const destination = row.destinationCountry.trim();
-  const channel = row.channelName.trim();
-  const realChannel = row.realChannelName?.trim() || channel;
-  return [...markupRules]
-    .filter((rule) => rule.enabled && !rule.deletedAt && rule.priceBookId === row.priceBookId && Boolean(rule.channelName || rule.realChannelName || rule.destinationCountry))
-    .filter((rule) => {
-      const channelMatches = !rule.channelName || rule.channelName === channel;
-      const realChannelMatches = !rule.realChannelName || rule.realChannelName === realChannel;
-      const countryMatches = !rule.destinationCountry || rule.destinationCountry === destination;
-      return channelMatches && realChannelMatches && countryMatches;
-    })
-    .sort((left, right) =>
-      (left.priority ?? 100) - (right.priority ?? 100)
-      || markupSpecificity(right, channel, realChannel, destination) - markupSpecificity(left, channel, realChannel, destination)
-      || safeTime(right.updatedAt) - safeTime(left.updatedAt)
-    )[0];
-}
-
 function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[], logs: Array<{ action: string; createdAt?: Date | string }>): AgentMarkupPreviewResponse {
   const rows = matchingPriceRowsForRule(rule, priceRows);
   return {
@@ -16582,11 +16545,6 @@ function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookR
 
 function textMatch(value: string, keyword?: string) {
   return !keyword?.trim() || value.toLowerCase().includes(keyword.trim().toLowerCase());
-}
-
-function safeTime(value?: string) {
-  const time = Date.parse(value ?? '');
-  return Number.isFinite(time) ? time : 0;
 }
 
 function logPricingLookupTiming(stage: string, startedAt: number, details: Record<string, unknown> = {}) {
@@ -17742,31 +17700,6 @@ function createBackendPriceLookup(
     totalSales: bestRecommendation.totalSales,
     totalPrice: bestRecommendation.totalSales
   };
-}
-
-function findBestMarkupRule(markupRules: AgentMarkupSummary[], price: PriceBookRowSummary, ownerAgentName = price.agentName, chargeable?: { unit: 'KG' | 'CBM'; value: number }): AgentMarkupSummary | undefined {
-  const destination = price.destinationCountry.trim();
-  const channel = price.channelName.trim();
-  const realChannel = (price.realChannelName?.trim() || price.channelName.trim());
-  const candidates = [...markupRules]
-    .filter((rule) => rule.enabled && !rule.deletedAt && rule.agentName === ownerAgentName && (!rule.priceBookId || rule.priceBookId === price.priceBookId))
-    .filter((rule) => {
-      const channelMatches = !rule.channelName || rule.channelName === channel;
-      const realChannelMatches = !rule.realChannelName || rule.realChannelName === realChannel;
-      const countryMatches = !rule.destinationCountry || rule.destinationCountry === destination;
-      return channelMatches && realChannelMatches && countryMatches;
-    });
-  const matchedTiers = chargeable
-    ? candidates.filter((rule) => rule.markupUnit === chargeable.unit && rule.minChargeableValue !== undefined && chargeable.value >= rule.minChargeableValue && (rule.maxChargeableValue === undefined || chargeable.value < rule.maxChargeableValue))
-    : [];
-  const eligible = matchedTiers.length ? matchedTiers : candidates.filter((rule) => !rule.markupUnit);
-  return eligible
-    .sort((left, right) =>
-      (Boolean(right.priceBookId) ? 1 : 0) - (Boolean(left.priceBookId) ? 1 : 0)
-      || (left.priority ?? 100) - (right.priority ?? 100)
-      || markupSpecificity(right, channel, realChannel, destination) - markupSpecificity(left, channel, realChannel, destination)
-      || safeTime(right.updatedAt) - safeTime(left.updatedAt)
-    )[0];
 }
 
 function normalizeMarkupRoutePreviewInput(input: MarkupRoutePreviewInput): MarkupRoutePreviewInput & { realChannelName: string } {
