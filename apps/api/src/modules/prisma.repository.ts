@@ -18,18 +18,13 @@ import {
   summarizeStatusCounts,
   matchUsPostalRule,
   matchesEuropeanPostalRule,
-  isUsPostalRuleSyntax,
-  hasScopedUsPostalRuleOverlap,
   normalizeUsPostalCode,
   canadaAddressTypeMatchesWarehouseCode,
   sanitizePricingChannelRequirement,
   sanitizePricingTransitLabel,
-  isCanadaAddressScopeWarehouseCode,
   normalizeCanadaAddressType,
   normalizeCanadaAmazonWarehousePrefix,
-  isInvalidWarehouseCodeRule,
   matchWarehouseCodeRule,
-  parseWarehouseCodeRules,
   warehouseCodePrefixCandidates,
   validateShipmentImportRows,
   type AccountLedgerSummary,
@@ -292,6 +287,7 @@ import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEurope
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
 import { agentMarkupScopeKey, applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, markupScopeRank, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
+import { getUsPostalRuleHealthIssues, getWarehouseCodeRuleHealthIssues } from './pricing/pricing-rule-health.shared.js';
 import { renderDubaiWorkbookSheets } from './dubai-price-sheet-renderer.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
 import { buildLineShipmentPackageSummaries } from './line-shipment-packages.js';
@@ -17496,27 +17492,6 @@ function selectUsPostalPriceRows(rows: LegacyPricingRowInternal[], postalCode?: 
   // specificity only explains the matched range; it must never discard a
   // different matching price line.
   return matches.map((item) => ({ ...item.row, postalRule: item.match.matchedLabel }));
-}
-
-function getUsPostalRuleHealthIssues(rows: Array<Pick<PriceBookRowSummary, 'postalRule' | 'channelName' | 'businessRouteName' | 'realChannelName' | 'minWeightKg' | 'maxWeightKg'>>) {
-  const issues: string[] = [];
-  const postalRules = rows.map((row) => row.postalRule);
-  const normalized = postalRules.map((rule) => String(rule ?? '').trim()).filter(Boolean);
-  if (postalRules.some((rule) => !String(rule ?? '').trim())) issues.push('美国价格行未配置邮编范围');
-  if (normalized.some((rule) => !isUsPostalRuleSyntax(rule))) issues.push('美国价格行邮编规则格式无法解析');
-  if (hasScopedUsPostalRuleOverlap(rows)) issues.push('同一渠道、价格组和重量段存在邮编区间重叠');
-  return issues;
-}
-
-function getWarehouseCodeRuleHealthIssues(warehouseCodes: Array<string | undefined | null>) {
-  const invalidSegments = warehouseCodes.flatMap((code) =>
-    isCanadaAddressScopeWarehouseCode(code)
-      ? []
-      : isInvalidWarehouseCodeRule(code)
-      ? [String(code).replace(/^__INVALID_WAREHOUSE_RULE__:/, '')]
-      : parseWarehouseCodeRules(code).invalidSegments
-  );
-  return Array.from(new Set(invalidSegments.map((segment) => `仓库编码规则无效：${segment}，需修正或重新导入`)));
 }
 
 function legacyRowToPriceBookRow(row: LegacyPricingRowInternal, costPerKg: number, chargeableWeightKg: number): PriceBookRowSummary {
