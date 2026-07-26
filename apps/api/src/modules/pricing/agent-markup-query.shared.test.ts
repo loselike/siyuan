@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMarkupSummary, PriceBookRowSummary } from '@siyuan/shared';
-import { agentMarkupScopeKey, applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, markupScopeRank, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
 
 function priceRow(id: string, overrides: Partial<PriceBookRowSummary> = {}): PriceBookRowSummary {
   return {
@@ -66,6 +66,24 @@ describe('agent markup query helpers', () => {
     expect(markupScopeRank(markupRule({ channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国' }))).toBe(3);
     expect(formatMarkupNumber(0.005)).toBe('0.01');
     expect(formatMarkupPerKg(0.5)).toBe('+¥0.50/kg');
+  });
+
+  it('keeps markup totals, units, active-rule indexing and route specificity', () => {
+    expect(applyAgentMarkup(10, 3, markupRule({ markupType: 'WEIGHT', markupValue: 0.5 }))).toEqual({ totalSales: 31.5, salesRatePerKg: 10.5 });
+    expect(applyAgentMarkup(10, 3, markupRule({ markupType: 'PERCENT', markupValue: 10 }))).toEqual({ totalSales: 33, salesRatePerKg: 11 });
+    expect(applyAgentMarkup(10, 3, markupRule({ markupType: 'PER_SHIPMENT', markupValue: 5 }))).toEqual({ totalSales: 35, salesRatePerKg: 11.67 });
+    expect(markupUnitForRow(priceRow('kg'))).toBe('KG');
+    expect(markupUnitForRow(priceRow('cbm', { cbmPrice: 120 }))).toBe('CBM');
+
+    const active = markupRule({ id: 'active', priceBookId: 'book-a' });
+    const index = buildMarkupRuleIndex([
+      active,
+      markupRule({ id: 'disabled', enabled: false }),
+      markupRule({ id: 'deleted', deletedAt: '2026-07-26T00:00:00.000Z' })
+    ]);
+    expect(index.get(markupRuleIndexKey('代理甲', 'book-a'))).toEqual([active]);
+    expect([...index.values()].flat()).toHaveLength(1);
+    expect(markupSpecificity(markupRule({ channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国' }), '渠道甲', '线路甲', '美国')).toBe(7);
   });
 
   it('keeps source cleanup, scoped duplicate merging and stable source sorting', () => {

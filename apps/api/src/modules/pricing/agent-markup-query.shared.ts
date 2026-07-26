@@ -1,4 +1,4 @@
-import type { AgentMarkupListQuery, AgentMarkupSummary, LegacyPricingModule, PriceBookRowSummary, PriceBookRowsQuery } from '@siyuan/shared';
+import type { AgentMarkupListQuery, AgentMarkupSummary, AgentMarkupUnit, LegacyPricingModule, PriceBookRowSummary, PriceBookRowsQuery } from '@siyuan/shared';
 
 export interface ActivePriceBookAgentSource {
   agentName: string;
@@ -64,7 +64,7 @@ export function applyPriceBookRowMarkupControls(rows: PriceBookRowSummary[], que
   const source = String(query.markupSource ?? 'ALL').trim();
   const sort = String(query.markupSort ?? 'NONE').trim();
   let next = rows.filter((row) => {
-    const rowMarkup = roundMarkupMoney(Number(row.lineMarkupPerKg ?? 0.5));
+    const rowMarkup = roundMoney(Number(row.lineMarkupPerKg ?? 0.5));
     if (source !== 'ALL' && row.markupSource !== source) {
       return false;
     }
@@ -78,12 +78,12 @@ export function applyPriceBookRowMarkupControls(rows: PriceBookRowSummary[], que
       return row.markupSource === 'LINE_CUSTOM';
     }
     const expected = Number(amount);
-    return Number.isFinite(expected) && rowMarkup === roundMarkupMoney(expected);
+    return Number.isFinite(expected) && rowMarkup === roundMoney(expected);
   });
   if (sort === 'ASC' || sort === 'DESC') {
     const factor = sort === 'ASC' ? 1 : -1;
     next = [...next].sort((left, right) =>
-      factor * (roundMarkupMoney(Number(left.lineMarkupPerKg ?? 0.5)) - roundMarkupMoney(Number(right.lineMarkupPerKg ?? 0.5))) ||
+      factor * (roundMoney(Number(left.lineMarkupPerKg ?? 0.5)) - roundMoney(Number(right.lineMarkupPerKg ?? 0.5))) ||
       left.channelName.localeCompare(right.channelName, 'zh-CN') ||
       left.destinationCountry.localeCompare(right.destinationCountry, 'zh-CN') ||
       left.minWeightKg - right.minWeightKg
@@ -109,7 +109,57 @@ export function countAgentMarkupHits(rule: AgentMarkupSummary, priceRows: PriceB
   return matchingPriceRowsForRule(rule, priceRows).length;
 }
 
-function roundMarkupMoney(value: number): number {
+export function applyAgentMarkup(costPerKg: number, chargeableWeightKg: number, rule: AgentMarkupSummary) {
+  const type = rule.markupType ?? 'WEIGHT';
+  const value = Number(rule.markupValue ?? rule.markupPerKg ?? 0);
+  const totalCost = roundMoney(costPerKg * chargeableWeightKg);
+  if (type === 'PERCENT') {
+    const totalSales = roundMoney(totalCost * (1 + value / 100));
+    return { totalSales, salesRatePerKg: roundMoney(totalSales / chargeableWeightKg) };
+  }
+  if (type === 'PER_SHIPMENT' || type === 'FIXED') {
+    const totalSales = roundMoney(totalCost + value);
+    return { totalSales, salesRatePerKg: roundMoney(totalSales / chargeableWeightKg) };
+  }
+  const salesRatePerKg = roundMoney(costPerKg + value);
+  return { totalSales: roundMoney(salesRatePerKg * chargeableWeightKg), salesRatePerKg };
+}
+
+export function markupUnitForRow(row: PriceBookRowSummary): AgentMarkupUnit {
+  return Number(row.cbmPrice ?? 0) > 0 ? 'CBM' : 'KG';
+}
+
+export function buildMarkupRuleIndex(markupRules: AgentMarkupSummary[]): Map<string, AgentMarkupSummary[]> {
+  const index = new Map<string, AgentMarkupSummary[]>();
+  for (const rule of markupRules) {
+    if (!rule.enabled || rule.deletedAt) continue;
+    const key = markupRuleIndexKey(rule.agentName, rule.priceBookId);
+    const rows = index.get(key) ?? [];
+    rows.push(rule);
+    index.set(key, rows);
+  }
+  return index;
+}
+
+export function markupRuleIndexKey(agentName: string, priceBookId?: string) {
+  return `${priceBookId ?? ''}\u0001${agentName}`;
+}
+
+export function markupSpecificity(rule: AgentMarkupSummary, channel: string, realChannel: string, destination: string): number {
+  let score = 0;
+  if (rule.channelName && rule.channelName === channel) {
+    score += 2;
+  }
+  if (rule.realChannelName && rule.realChannelName === realChannel) {
+    score += 4;
+  }
+  if (rule.destinationCountry && rule.destinationCountry === destination) {
+    score += 1;
+  }
+  return score;
+}
+
+function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 

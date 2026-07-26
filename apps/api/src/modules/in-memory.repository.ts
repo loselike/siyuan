@@ -285,7 +285,7 @@ import {
 } from '@siyuan/shared';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { agentMarkupScopeKey, applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, markupScopeRank, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { createLargeCargoProfile, isEuropeTransportMode, largeCargoRedirectMessage, type LargeCargoProfile } from './pricing/legacy-cargo-profile.shared.js';
 import { inferBackendPriceCarrierName, matchedTransitDays, publicPricingRouteCode } from './pricing/price-recommendation-display.shared.js';
@@ -13450,22 +13450,6 @@ function safeTime(value?: string) {
   return Number.isFinite(time) ? time : 0;
 }
 
-function applyAgentMarkup(costPerKg: number, chargeableWeightKg: number, rule: AgentMarkupSummary) {
-  const type = rule.markupType ?? 'WEIGHT';
-  const value = Number(rule.markupValue ?? rule.markupPerKg ?? 0);
-  const totalCost = roundMoney(costPerKg * chargeableWeightKg);
-  if (type === 'PERCENT') {
-    const totalSales = roundMoney(totalCost * (1 + value / 100));
-    return { totalSales, salesRatePerKg: roundMoney(totalSales / chargeableWeightKg) };
-  }
-  if (type === 'PER_SHIPMENT' || type === 'FIXED') {
-    const totalSales = roundMoney(totalCost + value);
-    return { totalSales, salesRatePerKg: roundMoney(totalSales / chargeableWeightKg) };
-  }
-  const salesRatePerKg = roundMoney(costPerKg + value);
-  return { totalSales: roundMoney(salesRatePerKg * chargeableWeightKg), salesRatePerKg };
-}
-
 function findBestMarkupRule(markupRules: AgentMarkupSummary[], price: PriceBookRowSummary, ownerAgentName = price.agentName, chargeable?: { unit: 'KG' | 'CBM'; value: number }): AgentMarkupSummary | undefined {
   const destination = price.destinationCountry.trim();
   const channel = price.channelName.trim();
@@ -13502,10 +13486,6 @@ function normalizeMarkupRoutePreviewInput(input: MarkupRoutePreviewInput): Marku
   if (!['KG', 'CBM'].includes(input.markupUnit)) throw new BadRequestException('计费单位必须为 KG 或 CBM');
   if (!Number.isFinite(chargeableValue) || chargeableValue < 0) throw new BadRequestException('计费重量必须为非负数');
   return { priceBookId, agentName, channelName, realChannelName, destinationCountry, markupUnit: input.markupUnit, chargeableValue };
-}
-
-function markupUnitForRow(row: PriceBookRowSummary): AgentMarkupUnit {
-  return Number(row.cbmPrice ?? 0) > 0 ? 'CBM' : 'KG';
 }
 
 function markupRouteRowMatches(row: PriceBookRowSummary, route: MarkupRoutePreviewInput & { realChannelName: string }) {
@@ -13622,22 +13602,6 @@ function validateAgentChannelCustomRemarkScope(
   const exists = priceRows.some((row) => (agentNameByPriceBookId.get(row.priceBookId) ?? row.agentName).trim() === input.agentName.trim()
     && row.channelName.trim() === input.channelName.trim());
   if (!exists) throw new BadRequestException('渠道必须来自当前模块该代理已导入的真实价格表');
-}
-
-function buildMarkupRuleIndex(markupRules: AgentMarkupSummary[]): Map<string, AgentMarkupSummary[]> {
-  const index = new Map<string, AgentMarkupSummary[]>();
-  for (const rule of markupRules) {
-    if (!rule.enabled || rule.deletedAt) continue;
-    const key = markupRuleIndexKey(rule.agentName, rule.priceBookId);
-    const rows = index.get(key) ?? [];
-    rows.push(rule);
-    index.set(key, rows);
-  }
-  return index;
-}
-
-function markupRuleIndexKey(agentName: string, priceBookId?: string) {
-  return `${priceBookId ?? ''}\u0001${agentName}`;
 }
 
 const SOUTH_AFRICA_DEFAULT_REMARK = '无牌无侵权；约翰内斯堡自提、低消0.5CBM  报关件需要单询';
@@ -13772,20 +13736,6 @@ function buildPriceBookAgentSourcesFromRows(priceRows: PriceBookRowSummary[], fi
     grouped.set(key, current);
   }
   return [...grouped.values()];
-}
-
-function markupSpecificity(rule: AgentMarkupSummary, channel: string, realChannel: string, destination: string): number {
-  let score = 0;
-  if (rule.channelName && rule.channelName === channel) {
-    score += 2;
-  }
-  if (rule.realChannelName && rule.realChannelName === realChannel) {
-    score += 4;
-  }
-  if (rule.destinationCountry && rule.destinationCountry === destination) {
-    score += 1;
-  }
-  return score;
 }
 
 function normalizeMemoryStaffProfile(input: MemoryStaffProfileInput) {
