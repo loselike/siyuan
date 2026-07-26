@@ -18,8 +18,10 @@ import {
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
 import { countryOptions, filterLocationOption } from '../finance/entry/countryStateOptions';
+import { getBeijingDayStartTimestamp } from '../shared/format';
 import { AppActionGroup, AppPageHeader, ManagedTable, MetricCard, RoutingStatusTag, StatusTag, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import type { PermissionKey } from '../../apiClient';
+import { getRoutingPeriodSnapshot } from './routingPeriod';
 
 const { Text } = Typography;
 
@@ -258,22 +260,13 @@ export function RoutingPage({
   const pendingShipments = useMemo(() => shipments.filter((shipment) => shipment.status === 'WAITING_SORT'), [shipments]);
   const routedShipments = useMemo(() => shipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH'), [shipments]);
   const returnableShipments = useMemo(() => shipments.filter((shipment) => ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status)), [shipments]);
-  const weekStart = useMemo(() => {
-    const date = new Date();
-    const day = date.getDay() || 7;
-    date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() - day + 1);
-    return date.getTime();
-  }, []);
-  const dayStart = useMemo(() => {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    return date.getTime();
-  }, []);
-  const weeklyRoutedShipments = useMemo(
-    () => shipments.filter((shipment) => shipment.routedAt && new Date(shipment.routedAt).getTime() >= weekStart),
-    [shipments, weekStart]
+  const businessClock = useMemo(() => Date.now(), []);
+  const dayStart = useMemo(() => getBeijingDayStartTimestamp(businessClock), [businessClock]);
+  const weeklySnapshot = useMemo(
+    () => getRoutingPeriodSnapshot(shipments, 'week', businessClock),
+    [businessClock, shipments]
   );
+  const weeklyRoutedShipments = weeklySnapshot.routedShipments;
   const todayRoutedShipments = useMemo(
     () => shipments.filter((shipment) => shipment.routedAt && new Date(shipment.routedAt).getTime() >= dayStart),
     [shipments, dayStart]
@@ -282,14 +275,8 @@ export function RoutingPage({
     () => shipments.filter((shipment) => shipment.outboundAt && new Date(shipment.outboundAt).getTime() >= dayStart),
     [shipments, dayStart]
   );
-  const weeklyOutboundShipments = useMemo(
-    () => shipments.filter((shipment) => shipment.outboundAt && new Date(shipment.outboundAt).getTime() >= weekStart),
-    [shipments, weekStart]
-  );
-  const reroutedThisWeek = useMemo(
-    () => shipments.filter((shipment) => shipment.routeReturnedAt && new Date(shipment.routeReturnedAt).getTime() >= weekStart),
-    [shipments, weekStart]
-  );
+  const weeklyOutboundShipments = weeklySnapshot.outboundShipments;
+  const reroutedThisWeek = weeklySnapshot.reroutedShipments;
   const weeklyAgentStats = useMemo(
     () => summarizeTop(weeklyRoutedShipments.map((shipment) => shipment.agentName || '未分配')),
     [weeklyRoutedShipments]
@@ -298,14 +285,8 @@ export function RoutingPage({
     () => summarizeTop(weeklyRoutedShipments.map(inferRoutingMode), 3),
     [weeklyRoutedShipments]
   );
-  const weeklySensitiveCount = useMemo(
-    () => weeklyRoutedShipments.filter((shipment) => shipment.sensitive === true).length,
-    [weeklyRoutedShipments]
-  );
-  const weeklyDeclaredCount = useMemo(
-    () => weeklyRoutedShipments.filter((shipment) => shipment.declarationRequired === true).length,
-    [weeklyRoutedShipments]
-  );
+  const weeklySensitiveCount = weeklySnapshot.sensitiveCount;
+  const weeklyDeclaredCount = weeklySnapshot.declaredCount;
   const marketStatusGroups = useMemo<MarketStatusGroup[]>(() => [
     {
       title: '待处理',
