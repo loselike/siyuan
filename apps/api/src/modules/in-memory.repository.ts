@@ -12800,10 +12800,6 @@ function redactPriceBookRows(rows: PriceBookRowSummary[], visibility: PricingFie
   });
 }
 
-function redactPriceBookRowsResponse(response: PriceBookRowsResponse, visibility: PricingFieldVisibility): PriceBookRowsResponse {
-  return { ...response, rows: redactPriceBookRows(response.rows, visibility) };
-}
-
 function canViewPricingInternalRoute(role: string): boolean {
   return role === 'ADMIN' || role === 'UG_MARKET';
 }
@@ -13020,18 +13016,6 @@ function createInMemoryEuropeExpressUnitQuote(
   };
 }
 
-function inMemoryLegacyChannelMatches(row: PriceBookRowSummary, channel?: string) {
-  const query = channel?.trim().toLowerCase();
-  if (!query) return true;
-  const haystack = `${row.channelName} ${row.realChannelName ?? ''} ${row.businessRouteName ?? ''} ${row.sourceSheetName ?? ''} ${row.specialRemark ?? ''}`.toLowerCase();
-  if (haystack.includes(query)) return true;
-  if (query.includes('快递')) return /快递|空派|派送|dhl|ups|fedex|express/.test(haystack);
-  if (query.includes('海运')) return /海运|海派|海卡|卡派|卡车|truck/.test(haystack);
-  if (query.includes('铁路')) return /铁路|铁派|rail/.test(haystack);
-  if (query.includes('空运')) return /空运|空派|air/.test(haystack);
-  return false;
-}
-
 function inMemoryEuropeTransportMatches(row: PriceBookRowSummary, channel?: string) {
   const mode = inferEuropeTransportMode(row);
   if (mode === 'UNCLASSIFIED') return false;
@@ -13225,21 +13209,6 @@ function uniqueAmazonWeightBandsFromPriceRows(rows: Array<Pick<PriceBookRowSumma
     .map((row) => row.priceTierLabel?.trim() || inferAmazonWeightBandFromMin(row.minWeightKg))
     .filter((label): label is string => Boolean(label))))
     .sort((left, right) => (amazonWeightBandMinimum(left) ?? 0) - (amazonWeightBandMinimum(right) ?? 0));
-}
-
-function inferAmazonWeightBandFromPriceRows(rows: Array<Pick<PriceBookRowSummary, 'priceTierLabel' | 'minWeightKg' | 'maxWeightKg' | 'cbmPrice'>>, chargeableWeightKg: number) {
-  const weight = Number(chargeableWeightKg);
-  if (!Number.isFinite(weight) || weight <= 0) return undefined;
-  const matching = rows
-    .filter((row) => !normalizeAmazonCbmTier(row.priceTierLabel) && Number(row.cbmPrice ?? 0) <= 0)
-    .filter((row) => weight >= Number(row.minWeightKg ?? 0) && weight <= Number(row.maxWeightKg ?? Number.MAX_SAFE_INTEGER));
-  const candidates = matching.length ? matching : rows
-    .filter((row) => !normalizeAmazonCbmTier(row.priceTierLabel) && Number(row.cbmPrice ?? 0) <= 0)
-    .filter((row) => weight >= Number(row.minWeightKg ?? 0));
-  return candidates
-    .map((row) => ({ label: row.priceTierLabel?.trim() || inferAmazonWeightBandFromMin(row.minWeightKg), minimum: Number(row.minWeightKg ?? 0) }))
-    .filter((item): item is { label: string; minimum: number } => Boolean(item.label))
-    .sort((left, right) => right.minimum - left.minimum)[0]?.label;
 }
 
 function cbmTierMatches(tierLabel: string | undefined, volumeCbm: number) {
@@ -14123,46 +14092,10 @@ function validateAgentChannelCustomRemarkScope(
   if (!exists) throw new BadRequestException('渠道必须来自当前模块该代理已导入的真实价格表');
 }
 
-function agentChannelCustomRemarkMap(remarks: AgentChannelCustomRemarkSummary[], legacyModule: LegacyPricingModule) {
-  return new Map(remarks
-    .filter((remark) => remark.enabled && remark.legacyModule === legacyModule)
-    .map((remark) => [`${remark.agentName}\u0001${remark.channelName}`, remark.content]));
-}
-
 function combinePricingDisplayRemarks(...remarks: Array<string | null | undefined>) {
   return Array.from(new Set(remarks
     .map((remark) => remark?.trim())
     .filter((remark): remark is string => Boolean(remark)))).join('\n') || undefined;
-}
-
-function attachCustomRemarksToPriceLookup(
-  response: PriceLookupResponse,
-  priceRows: PriceBookRowSummary[],
-  priceBooks: Array<Pick<PriceBookSummary, 'id' | 'agentShortName' | 'remark' | 'targetModule'>>,
-  remarks: AgentChannelCustomRemarkSummary[]
-): PriceLookupResponse {
-  const rowById = new Map(priceRows.map((row) => [row.id, row]));
-  const bookById = new Map(priceBooks.map((book) => [book.id, book]));
-  const decorate = (recommendation: PriceLookupRecommendation) => {
-    const row = rowById.get(recommendation.price.id);
-    if (!row) return recommendation;
-    const book = bookById.get(row.priceBookId);
-    const legacyModule = book?.targetModule ?? inferInMemoryLegacyModule(row);
-    if (legacyModule === 'dubaiAirSea') return recommendation;
-    const agentName = book?.agentShortName?.trim() || row.agentName;
-    const content = remarks.find((remark) => remark.enabled && remark.legacyModule === legacyModule && remark.agentName === agentName && remark.channelName === row.channelName)?.content;
-    const safeContent = sanitizePricingChannelRequirement(content, [agentName, row.agentName]);
-    const customRemark = combinePricingDisplayRemarks(recommendation.customRemark, recommendation.remark, safeContent);
-    return customRemark ? { ...recommendation, customRemark } : recommendation;
-  };
-  const recommendations = response.recommendations.map(decorate);
-  const byId = new Map(recommendations.map((item) => [item.price.id, item]));
-  return {
-    ...response,
-    recommendations,
-    cheapestRecommendations: response.cheapestRecommendations.map((item) => byId.get(item.price.id) ?? decorate(item)),
-    fastestRecommendations: response.fastestRecommendations.map((item) => byId.get(item.price.id) ?? decorate(item))
-  };
 }
 
 function buildMarkupRuleIndex(markupRules: AgentMarkupSummary[]): Map<string, AgentMarkupSummary[]> {
