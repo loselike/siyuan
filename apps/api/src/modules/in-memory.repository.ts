@@ -291,7 +291,7 @@ import {
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
-import { normalizeAmazonOriginWarehouseName, uniqueAmazonOriginWarehouseNames } from './pricing/amazon-origin.shared.js';
+import { amazonWeightBandMinimum, cbmTierMatches, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, priceRowAmazonWeightBandMatches, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
 import { buildLineShipmentPackageSummaries } from './line-shipment-packages.js';
 import { getPasswordStrengthError, hashPassword } from './password.js';
@@ -13176,62 +13176,12 @@ function getWarehouseMatchRank(row: PriceBookRowSummary, profile: ReturnType<typ
   return profile.keywords.some((keyword) => searchableText.includes(keyword.toUpperCase())) ? 3 : undefined;
 }
 
-function normalizeAmazonCbmTier(value?: string | number | null): '按方包税' | '按方不包税' | '按方未标注' | undefined {
-  const text = String(value ?? '').trim().replace(/\s+/g, '');
-  if (!/按方|CBM|方/i.test(text)) return undefined;
-  if (/不包税|不含税|未包税/.test(text)) return '按方不包税';
-  if (/包税|含税/.test(text)) return '按方包税';
-  return '按方未标注';
-}
-
-function amazonWeightBandMinimum(value?: string | number | null): number | undefined {
-  const text = String(value ?? '').trim().toUpperCase().replace(/\s+/g, '');
-  const match = text.match(/(\d+(?:\.\d+)?)/);
-  if (!match) return undefined;
-  const weight = Number(match[1]);
-  return Number.isFinite(weight) ? weight : undefined;
-}
-
-function normalizeAmazonWeightBand(value?: string | number | null): string | undefined {
-  const weight = amazonWeightBandMinimum(value);
-  if (weight === undefined) return undefined;
-  return `${weight}KG+`;
-}
-
-function inferAmazonWeightBandFromMin(minWeightKg?: number | null): string | undefined {
-  const min = Number(minWeightKg ?? 0);
-  if (!Number.isFinite(min)) return undefined;
-  return normalizeAmazonWeightBand(min);
-}
-
 function uniqueAmazonWeightBandsFromPriceRows(rows: Array<Pick<PriceBookRowSummary, 'priceTierLabel' | 'minWeightKg' | 'cbmPrice'>>) {
   return Array.from(new Set(rows
     .filter((row) => !normalizeAmazonCbmTier(row.priceTierLabel) && Number(row.cbmPrice ?? 0) <= 0)
     .map((row) => row.priceTierLabel?.trim() || inferAmazonWeightBandFromMin(row.minWeightKg))
     .filter((label): label is string => Boolean(label))))
     .sort((left, right) => (amazonWeightBandMinimum(left) ?? 0) - (amazonWeightBandMinimum(right) ?? 0));
-}
-
-function cbmTierMatches(tierLabel: string | undefined, volumeCbm: number) {
-  if (!Number.isFinite(volumeCbm) || volumeCbm <= 0) return false;
-  const text = String(tierLabel ?? '').toUpperCase().replace(/\s+/g, '');
-  const range = text.match(/(\d+(?:\.\d+)?)\s*[-~－—]\s*(\d+(?:\.\d+)?)\s*CBM?/);
-  if (range) {
-    return volumeCbm >= Number(range[1]) && volumeCbm <= Number(range[2]);
-  }
-  const above = text.match(/(\d+(?:\.\d+)?)\s*CBM?\+/) ?? text.match(/(\d+(?:\.\d+)?)\s*CBM?以上/);
-  if (above) {
-    return volumeCbm > Number(above[1]);
-  }
-  return true;
-}
-
-function priceRowAmazonWeightBandMatches(row: PriceBookRowSummary, weightBand?: string) {
-  const cbmTier = normalizeAmazonCbmTier(weightBand);
-  const rowCbmTier = normalizeAmazonCbmTier(row.priceTierLabel);
-  if (cbmTier) return Number(row.cbmPrice ?? 0) > 0 && (rowCbmTier ? rowCbmTier === cbmTier : true);
-  if (Number(row.cbmPrice ?? 0) > 0) return false;
-  return true;
 }
 
 function selectPriceRowsForLookup(
@@ -13291,27 +13241,6 @@ function selectPriceRowsForLookup(
   }
 
   return [];
-}
-
-function withOpenEndedHighestPriceTiers(rows: PriceBookRowSummary[]) {
-  const highestMinimumByRoute = new Map<string, number>();
-  for (const row of rows) {
-    if (Number(row.cbmPrice ?? 0) > 0 || !isOpenEndedKgTier(row.priceTierLabel)) continue;
-    const key = [row.priceBookId, row.agentName, row.sourceSheetName, row.channelName, row.businessRouteName, row.realChannelName, row.warehouseCode, row.destinationCountry].join('\u0001');
-    highestMinimumByRoute.set(key, Math.max(highestMinimumByRoute.get(key) ?? Number.NEGATIVE_INFINITY, row.minWeightKg));
-  }
-  return rows.map((row) => {
-    if (Number(row.cbmPrice ?? 0) > 0 || !isOpenEndedKgTier(row.priceTierLabel)) return row;
-    const key = [row.priceBookId, row.agentName, row.sourceSheetName, row.channelName, row.businessRouteName, row.realChannelName, row.warehouseCode, row.destinationCountry].join('\u0001');
-    return highestMinimumByRoute.get(key) === row.minWeightKg && row.maxWeightKg < 99999
-      ? { ...row, maxWeightKg: 99999 }
-      : row;
-  });
-}
-
-function isOpenEndedKgTier(label?: string) {
-  const text = String(label ?? '').trim();
-  return !normalizeAmazonCbmTier(text) && /(?:kg|kgs|公斤)?\s*(?:\+|以上)$/i.test(text);
 }
 
 function normalizeAgentMarkupInput(input: AgentMarkupCreateInput | AgentMarkupUpdateInput | AgentMarkupSummary): AgentMarkupSummary {

@@ -14,7 +14,7 @@ import {
   type PriceLookupRequest,
   type QuoteSourceType
 } from '@siyuan/shared';
-import { normalizeAmazonOriginWarehouseName } from './pricing/amazon-origin.shared.js';
+import { normalizeAmazonOriginWarehouseName } from './pricing/amazon-pricing.shared.js';
 
 export type ExcelCellValue = string | number | null;
 export type SimpleWorksheet = {
