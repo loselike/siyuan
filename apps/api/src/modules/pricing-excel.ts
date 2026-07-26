@@ -14,6 +14,7 @@ import {
   type PriceLookupRequest,
   type QuoteSourceType
 } from '@siyuan/shared';
+import { normalizeAmazonOriginWarehouseName } from './pricing/amazon-origin.shared.js';
 
 export type ExcelCellValue = string | number | null;
 export type SimpleWorksheet = {
@@ -2499,21 +2500,6 @@ function parseHorizontalTierPriceWorkbook(
   });
 }
 
-const amazonOriginWarehouseNames = [
-  '义乌仓',
-  '华东',
-  '华南',
-  '厦门/泉州/福州',
-  '天津/南昌/石家庄',
-  '武汉/长沙/成都',
-  '汕头',
-  '济南/潍坊',
-  '深圳/广州仓',
-  '西安/沧州/保定',
-  '重庆',
-  '青岛/郑州/温州/台州/连云港/南京/合肥'
-];
-
 type ImportedAmazonPriceTier =
   | { kind: 'kg'; label: string; minWeightKg: number; maxWeightKg: number; openEnded?: boolean }
   | { kind: 'cbm'; label: '按方包税' | '按方不包税' | '按方未标注'; minWeightKg: number; maxWeightKg: number };
@@ -2537,31 +2523,6 @@ function buildImportedTierColumns(headers: ExcelCellValue[], secondaryHeaders: E
       }
     };
   });
-}
-
-function normalizeAmazonOriginWarehouseName(value: string | number | null | undefined): string | undefined {
-  const text = cellToText(value)
-    .replace(/[／｜|、，,；;]/g, '/')
-    .replace(/\s+/g, '')
-    .replace(/^(?:出货仓|起运仓|发货仓|发货地|起运地|来源地|仓库区域|揽收区域|报价组)[:：]?/, '')
-    .trim();
-  if (!text) return undefined;
-  const compact = text.replace(/[()（）]/g, '');
-  if (/^(?:仓库编码|仓库代码|亚马逊代码|FBA仓库代码|仓库|编码)$/i.test(compact)) {
-    return undefined;
-  }
-  const matched = amazonOriginWarehouseNames.find((name) => compact.includes(name.replace(/[()（）]/g, '')));
-  if (matched) return matched;
-  if (/深圳/.test(compact) && /广州/.test(compact)) {
-    return '深圳/广州仓';
-  }
-  if (/欧洲|西班牙|英国|铁路|空派|快递|海运|专线|渠道|DHL|UPS|FEDEX|美西|美东|包税|双清|卡派|海卡/i.test(compact)) {
-    return undefined;
-  }
-  if (/(仓|华东|华南|义乌|深圳|广州|汕头|厦门|泉州|福州|天津|南昌|石家庄|武汉|长沙|成都|济南|潍坊|西安|沧州|保定|重庆|青岛|郑州|温州|台州|连云港|南京|合肥)/.test(compact)) {
-    return compact.slice(0, 30);
-  }
-  return undefined;
 }
 
 function inferImportedAmazonAgentName(value?: string) {
