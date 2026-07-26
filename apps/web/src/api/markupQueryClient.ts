@@ -1,8 +1,7 @@
 import type {
   AgentMarkupExportResponse,
   AgentMarkupListQuery,
-  AgentMarkupListResponse,
-  AgentMarkupPreviewResponse
+  AgentMarkupListResponse
 } from '@siyuan/shared';
 
 export type MarkupQueryRequest = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -23,10 +22,6 @@ export class MarkupQueryClient {
 
   agentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
     return this.request(`/pricing/markup-rules${queryString(query)}`);
-  }
-
-  previewAgentMarkupRule(id: string): Promise<AgentMarkupPreviewResponse> {
-    return this.request(`/pricing/markup-rules/${id}/preview`);
   }
 
   exportAgentMarkupRules(query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {

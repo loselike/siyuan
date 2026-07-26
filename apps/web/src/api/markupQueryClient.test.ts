@@ -1,7 +1,6 @@
 import type {
   AgentMarkupExportResponse,
-  AgentMarkupListResponse,
-  AgentMarkupPreviewResponse
+  AgentMarkupListResponse
 } from '@siyuan/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { MarkupQueryClient, type MarkupQueryRequest } from './markupQueryClient';
@@ -59,16 +58,6 @@ describe('MarkupQueryClient', () => {
     expect(request).toHaveBeenCalledWith(
       '/pricing/markup-rules/export?priceBookId=book-1&destinationCountry=%E5%8D%97%E9%9D%9E&page=0'
     );
-  });
-
-  it('keeps markup preview path and response passthrough unchanged', async () => {
-    const response = { rule: { id: 'markup-1' } } as unknown as AgentMarkupPreviewResponse;
-    const request = vi.fn().mockResolvedValue(response) as MarkupQueryRequest;
-    const client = new MarkupQueryClient(request);
-
-    await expect(client.previewAgentMarkupRule('markup-1')).resolves.toBe(response);
-
-    expect(request).toHaveBeenCalledWith('/pricing/markup-rules/markup-1/preview');
   });
 
   it('passes markup query errors through without changing their message', async () => {

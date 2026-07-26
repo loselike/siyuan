@@ -895,10 +895,6 @@ export class ApiClient {
     return this.request('/pricing/quote', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async pricingRules(): Promise<PricingRuleSummary[]> {
-    return this.request('/pricing/rules');
-  }
-
   async createPricingRule(input: PricingRuleCreateInput): Promise<PricingRuleSummary> {
     return this.request('/pricing/rules', { method: 'POST', body: JSON.stringify(input) });
   }
