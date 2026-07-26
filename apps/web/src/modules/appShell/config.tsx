@@ -191,7 +191,7 @@ export const shipmentColumnLabels: Record<ShipmentColumnKey, string> = {
   createdAt: '创建时间',
   customerName: '客户名称',
   salesperson: '业务员归属',
-  systemOrderNo: '运单号',
+  systemOrderNo: '出货单号',
   transferNo: '转单号',
   destinationCountry: '目的地',
   channel: '渠道',
