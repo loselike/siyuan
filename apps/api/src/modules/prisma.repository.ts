@@ -17538,12 +17538,6 @@ function legacyRowToRecommendation(
   };
 }
 
-function combinePricingDisplayRemarks(...remarks: Array<string | null | undefined>) {
-  return Array.from(new Set(remarks
-    .map((remark) => remark?.trim())
-    .filter((remark): remark is string => Boolean(remark)))).join('\n') || undefined;
-}
-
 const amazonOriginWarehouseNames = [
   '义乌仓',
   '华东',

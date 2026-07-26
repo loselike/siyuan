@@ -14092,12 +14092,6 @@ function validateAgentChannelCustomRemarkScope(
   if (!exists) throw new BadRequestException('渠道必须来自当前模块该代理已导入的真实价格表');
 }
 
-function combinePricingDisplayRemarks(...remarks: Array<string | null | undefined>) {
-  return Array.from(new Set(remarks
-    .map((remark) => remark?.trim())
-    .filter((remark): remark is string => Boolean(remark)))).join('\n') || undefined;
-}
-
 function buildMarkupRuleIndex(markupRules: AgentMarkupSummary[]): Map<string, AgentMarkupSummary[]> {
   const index = new Map<string, AgentMarkupSummary[]>();
   for (const rule of markupRules) {
