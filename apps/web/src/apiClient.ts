@@ -176,7 +176,6 @@ import type {
   ShipmentDispatchInput,
   WarehouseHandoverPrintInput,
   WarehouseHandoverPrintResponse,
-  WarehouseHandoverSummary,
   ShipmentRestoreInput,
   ShipmentReviewDeleteInput,
   ShipmentReviewDetailSummary,
@@ -714,10 +713,6 @@ export class ApiClient {
 
   async printWarehouseHandover(input: WarehouseHandoverPrintInput): Promise<WarehouseHandoverPrintResponse> {
     return this.request('/warehouse/handover/print', { method: 'POST', body: JSON.stringify(input) });
-  }
-
-  async warehouseHandover(shipmentId: string): Promise<WarehouseHandoverSummary> {
-    return this.request(`/warehouse/handover/${shipmentId}`);
   }
 
   async approveShipmentBusinessData(id: string, body: { remark?: string } = {}): Promise<Shipment> {
