@@ -921,6 +921,8 @@ export interface PriceBookRemarkUpdateInput {
 
 export interface AgentMarkupSummary {
   id: string;
+  /** 特殊展示规则的业务用途；迪拜图片加价不参与普通线路报价引擎。 */
+  rulePurpose?: 'STANDARD_QUOTE' | 'DUBAI_SEA_IMAGE';
   legacyModule?: LegacyPricingModule | 'unclassified';
   priceBookId?: string;
   agentName: string;

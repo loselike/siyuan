@@ -1,10 +1,12 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import type { AgentMarkupSummary } from '@siyuan/shared';
 import {
   buildLegacyQuoteCopyText,
   buildQuoteCopyText,
   formatMarkupValue,
   getCustomRemarkText,
+  renderMarkupSource,
   renderRequirementCell
 } from './pricingPageDisplay';
 
@@ -50,6 +52,22 @@ describe('pricing page display helpers', () => {
       '渠道要求：单询'
     ].join('\n'));
     expect(formatMarkupValue({ markupType: 'PERCENT', markupPerKg: 1.5 })).toBe('+1.5%');
+    expect(formatMarkupValue({ markupType: 'WEIGHT', markupPerKg: 12, markupUnit: 'KG' })).toBe('+¥12.00/KG');
+    expect(formatMarkupValue({ markupType: 'WEIGHT', markupPerKg: 880, markupUnit: 'CBM' })).toBe('+¥880.00/CBM');
+  });
+
+  it('keeps Dubai image sources free of a misleading price-row count', () => {
+    const view = render(renderMarkupSource({
+      id: 'markup-dubai-image',
+      agentName: '迪拜代理',
+      markupPerKg: 0,
+      enabled: true,
+      rulePurpose: 'DUBAI_SEA_IMAGE',
+      sourcePriceBooks: [{ priceBookId: 'display-1', fileName: '迪拜海运报价图.png', lineCount: 1 }]
+    } satisfies AgentMarkupSummary));
+
+    expect(within(view.container).getByText('迪拜海运报价图.png')).toBeInTheDocument();
+    expect(within(view.container).queryByText(/1 条/)).not.toBeInTheDocument();
   });
 
   it('keeps requirement trimming, preview and click behavior unchanged', () => {

@@ -20,13 +20,13 @@ export function formatKgCurrencyRate(amount: number) {
   return `¥${formatKgRate(amount)}`;
 }
 
-export function formatMarkupValue(rule: Pick<AgentMarkupSummary, 'markupType' | 'markupValue' | 'markupPerKg'>) {
+export function formatMarkupValue(rule: Pick<AgentMarkupSummary, 'markupType' | 'markupValue' | 'markupPerKg' | 'markupUnit'>) {
   const type = rule.markupType ?? 'WEIGHT';
   const value = rule.markupValue ?? rule.markupPerKg;
   if (type === 'PERCENT') return `+${formatKgRate(value)}%`;
   if (type === 'PER_SHIPMENT') return `+${formatCurrency(value)}/票`;
   if (type === 'FIXED') return `+${formatCurrency(value)} 固定`;
-  return `+${formatCurrency(value)}/kg`;
+  return `+${formatCurrency(value)}/${rule.markupUnit ?? 'KG'}`;
 }
 
 export function renderMarkupSource(rule: AgentMarkupSummary) {
@@ -38,7 +38,7 @@ export function renderMarkupSource(rule: AgentMarkupSummary) {
     <Space direction="vertical" size={2}>
       {sources.slice(0, 2).map((source) => (
         <Text key={`${source.priceBookId}:${source.fileName}`} className="pricing-source-line">
-          {source.fileName} · {source.lineCount} 条
+          {source.fileName}{rule.rulePurpose === 'DUBAI_SEA_IMAGE' ? '' : ` · ${source.lineCount} 条`}
         </Text>
       ))}
       {sources.length > 2 ? <Text type="secondary">另 {sources.length - 2} 张价格表</Text> : null}
