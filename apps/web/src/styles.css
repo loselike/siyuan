@@ -3179,23 +3179,8 @@ body.is-resizing-table-column {
   pointer-events: none;
 }
 
-.warehouse-label-preview-grid {
-  display: flex;
-  width: 100%;
-  min-width: 600px;
-  max-height: 420px;
-  flex-wrap: wrap;
-  gap: 12px;
-  overflow: auto;
-  padding: 2px;
-}
-
 .warehouse-label-queue-table .ant-table-cell {
   vertical-align: middle;
-}
-
-.warehouse-label-actions {
-  min-width: 132px;
 }
 
 .warehouse-agent-handover-preview {
@@ -3364,10 +3349,6 @@ body.is-resizing-table-column {
   font-size: 13px;
 }
 
-.warehouse-label-print-button {
-  margin-top: 12px;
-}
-
 .warehouse-internal-label {
   display: flex;
   width: 188px;
@@ -3443,14 +3424,6 @@ body.is-resizing-table-column {
 }
 
 @media print {
-  .warehouse-label-preview-grid {
-    display: grid;
-    min-width: 0;
-    max-height: none;
-    grid-template-columns: repeat(2, 188px);
-    overflow: visible;
-  }
-
   .warehouse-internal-label {
     break-inside: avoid;
     page-break-inside: avoid;
@@ -3538,15 +3511,6 @@ body.is-resizing-table-column {
 
 .warehouse-consolidation-card .ant-flex:last-child {
   border-bottom: 0;
-}
-
-.warehouse-handover-trace {
-  display: inline-block;
-  max-width: 100%;
-  color: var(--text);
-  line-height: 1.55;
-  white-space: normal;
-  word-break: break-word;
 }
 
 .pricing-lookup-card .ant-card-body {
