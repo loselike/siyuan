@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMarkupSummary, PriceBookRowSummary } from '@siyuan/shared';
-import { applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, hasPriceBookRowMarkupControls, markupScopeRank, matchingPriceRowsForRule, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, markupScopeRank, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
 
 function priceRow(id: string, overrides: Partial<PriceBookRowSummary> = {}): PriceBookRowSummary {
   return {
@@ -66,5 +66,25 @@ describe('agent markup query helpers', () => {
     expect(markupScopeRank(markupRule({ channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国' }))).toBe(3);
     expect(formatMarkupNumber(0.005)).toBe('0.01');
     expect(formatMarkupPerKg(0.5)).toBe('+¥0.50/kg');
+  });
+
+  it('keeps source cleanup, scoped duplicate merging and stable source sorting', () => {
+    const sources = normalizeAgentSources([
+      ' 代理甲 ',
+      { agentName: ' 代理甲 ', priceBookId: ' book-b ', fileName: '乙表.xlsx', lineCount: 2, legacyModule: 'amazon' },
+      { agentName: '代理甲', priceBookId: 'book-b', fileName: '乙表.xlsx', lineCount: 3, legacyModule: 'amazon' },
+      { agentName: '代理甲', priceBookId: 'book-b', fileName: '甲表.xlsx', lineCount: 1, legacyModule: 'amazon' },
+      { agentName: '代理甲', priceBookId: 'book-c', fileName: '丙表.xlsx', lineCount: 4, legacyModule: 'invalid' as never },
+      { agentName: '   ', priceBookId: 'ignored', fileName: '忽略.xlsx', lineCount: 9 }
+    ]);
+    const grouped = groupAgentSourcesByScope(sources);
+    const merged = grouped.get(agentMarkupScopeKey({ agentName: '代理甲', priceBookId: 'book-b', legacyModule: 'amazon' }));
+
+    expect(sources[0]).toEqual({ agentName: '代理甲', priceBookId: '', fileName: '', lineCount: 0, legacyModule: undefined });
+    expect(sources.find((source) => source.priceBookId === 'book-c')?.legacyModule).toBeUndefined();
+    expect(merged).toEqual([
+      { agentName: '代理甲', priceBookId: 'book-b', fileName: '甲表.xlsx', lineCount: 1, legacyModule: 'amazon' },
+      { agentName: '代理甲', priceBookId: 'book-b', fileName: '乙表.xlsx', lineCount: 5, legacyModule: 'amazon' }
+    ]);
   });
 });

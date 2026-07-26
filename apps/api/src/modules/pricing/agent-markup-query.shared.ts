@@ -1,4 +1,44 @@
-import type { AgentMarkupListQuery, AgentMarkupSummary, PriceBookRowSummary, PriceBookRowsQuery } from '@siyuan/shared';
+import type { AgentMarkupListQuery, AgentMarkupSummary, LegacyPricingModule, PriceBookRowSummary, PriceBookRowsQuery } from '@siyuan/shared';
+
+export interface ActivePriceBookAgentSource {
+  agentName: string;
+  priceBookId: string;
+  fileName: string;
+  lineCount: number;
+  legacyModule?: LegacyPricingModule;
+}
+
+export function normalizeAgentSources(agentSources: Array<string | ActivePriceBookAgentSource>): ActivePriceBookAgentSource[] {
+  return agentSources
+    .map((source) => typeof source === 'string'
+      ? { agentName: source, priceBookId: '', fileName: '', lineCount: 0 }
+      : source)
+    .filter((source) => source.agentName?.trim())
+    .map((source) => ({ ...source, agentName: source.agentName.trim(), priceBookId: source.priceBookId?.trim() ?? '', fileName: source.fileName?.trim() ?? '', legacyModule: normalizeAgentSourceLegacyModule(source.legacyModule) }));
+}
+
+export function groupAgentSourcesByScope(sources: ActivePriceBookAgentSource[]) {
+  const grouped = new Map<string, ActivePriceBookAgentSource[]>();
+  for (const source of sources) {
+    const key = agentMarkupScopeKey(source);
+    const list = grouped.get(key) ?? [];
+    const existing = list.find((item) => item.priceBookId === source.priceBookId && item.fileName === source.fileName);
+    if (existing) {
+      existing.lineCount += source.lineCount;
+    } else {
+      list.push({ ...source });
+    }
+    grouped.set(key, list);
+  }
+  for (const list of grouped.values()) {
+    list.sort((left, right) => left.fileName.localeCompare(right.fileName, 'zh-CN') || left.priceBookId.localeCompare(right.priceBookId));
+  }
+  return grouped;
+}
+
+export function agentMarkupScopeKey(scope: Pick<AgentMarkupSummary, 'agentName' | 'priceBookId' | 'legacyModule'> | ActivePriceBookAgentSource | { agentName: string; priceBookId?: string; legacyModule?: LegacyPricingModule }) {
+  return `${scope.legacyModule ?? ''}\u0001${scope.priceBookId ?? ''}\u0001${scope.agentName}`;
+}
 
 export function shouldIncludeAgentMarkupHits(query: AgentMarkupListQuery) {
   return query.includeHits !== false && String(query.includeHits ?? 'true') !== 'false';
@@ -71,4 +111,10 @@ export function countAgentMarkupHits(rule: AgentMarkupSummary, priceRows: PriceB
 
 function roundMarkupMoney(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function normalizeAgentSourceLegacyModule(value: unknown): LegacyPricingModule | undefined {
+  return value === 'amazon' || value === 'inquiry' || value === 'europeExpress' || value === 'southAfrica' || value === 'usaAirSea' || value === 'canadaAirSea' || value === 'dubaiAirSea'
+    ? value
+    : undefined;
 }

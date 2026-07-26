@@ -290,7 +290,7 @@ import {
 import { getPasswordStrengthError, hashPassword } from './password.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, hasPriceBookRowMarkupControls, markupScopeRank, matchingPriceRowsForRule, shouldIncludeAgentMarkupHits } from './pricing/agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, markupScopeRank, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { renderDubaiWorkbookSheets } from './dubai-price-sheet-renderer.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
@@ -16261,14 +16261,6 @@ function formatChargeableRange(minimum?: number, maximum?: number, unit?: string
   return maximum === undefined ? `${minimum ?? 0}${suffix}+` : `${minimum ?? 0}${suffix}-${maximum}${suffix}`;
 }
 
-interface ActivePriceBookAgentSource {
-  agentName: string;
-  priceBookId: string;
-  fileName: string;
-  lineCount: number;
-  legacyModule?: LegacyPricingModule;
-}
-
 function findAgentMarkupRulesByScope(rules: AgentMarkupSummary[], rule: AgentMarkupSummary) {
   return rules.filter((item) =>
     !item.deletedAt &&
@@ -16334,38 +16326,6 @@ function buildSyncedAgentMarkupRules(rules: AgentMarkupSummary[], agentSources: 
       retainedOnly: activeLineCount === 0 && isAgentLevelMarkupRuleScope(rule)
     };
   });
-}
-
-function normalizeAgentSources(agentSources: Array<string | ActivePriceBookAgentSource>): ActivePriceBookAgentSource[] {
-  return agentSources
-    .map((source) => typeof source === 'string'
-      ? { agentName: source, priceBookId: '', fileName: '', lineCount: 0 }
-      : source)
-    .filter((source) => source.agentName?.trim())
-    .map((source) => ({ ...source, agentName: source.agentName.trim(), priceBookId: source.priceBookId?.trim() ?? '', fileName: source.fileName?.trim() ?? '', legacyModule: normalizeAgentMarkupLegacyModule(source.legacyModule) }));
-}
-
-function groupAgentSourcesByScope(sources: ActivePriceBookAgentSource[]) {
-  const grouped = new Map<string, ActivePriceBookAgentSource[]>();
-  for (const source of sources) {
-    const key = agentMarkupScopeKey(source);
-    const list = grouped.get(key) ?? [];
-    const existing = list.find((item) => item.priceBookId === source.priceBookId && item.fileName === source.fileName);
-    if (existing) {
-      existing.lineCount += source.lineCount;
-    } else {
-      list.push({ ...source });
-    }
-    grouped.set(key, list);
-  }
-  for (const list of grouped.values()) {
-    list.sort((left, right) => left.fileName.localeCompare(right.fileName, 'zh-CN') || left.priceBookId.localeCompare(right.priceBookId));
-  }
-  return grouped;
-}
-
-function agentMarkupScopeKey(scope: Pick<AgentMarkupSummary, 'agentName' | 'priceBookId' | 'legacyModule'> | ActivePriceBookAgentSource | { agentName: string; priceBookId?: string; legacyModule?: LegacyPricingModule }) {
-  return `${scope.legacyModule ?? ''}\u0001${scope.priceBookId ?? ''}\u0001${scope.agentName}`;
 }
 
 function derivePriceBookAgentName(fileName?: string) {

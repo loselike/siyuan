@@ -290,7 +290,7 @@ import {
 } from '@siyuan/shared';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, markupScopeRank, matchingPriceRowsForRule, shouldIncludeAgentMarkupHits } from './pricing/agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, markupScopeRank, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
 import { buildLineShipmentPackageSummaries } from './line-shipment-packages.js';
@@ -13200,14 +13200,6 @@ function findAgentMarkupRulesByScope(rules: AgentMarkupSummary[], rule: AgentMar
   );
 }
 
-interface ActivePriceBookAgentSource {
-  agentName: string;
-  priceBookId: string;
-  fileName: string;
-  lineCount: number;
-  legacyModule?: LegacyPricingModule;
-}
-
 function buildSyncedAgentMarkupRules(rules: AgentMarkupSummary[], agentSources: Array<string | ActivePriceBookAgentSource>) {
   const next = [...rules];
   const sources = normalizeAgentSources(agentSources);
@@ -13259,34 +13251,6 @@ function buildSyncedAgentMarkupRules(rules: AgentMarkupSummary[], agentSources: 
   });
 }
 
-function normalizeAgentSources(agentSources: Array<string | ActivePriceBookAgentSource>): ActivePriceBookAgentSource[] {
-  return agentSources
-    .map((source) => typeof source === 'string'
-      ? { agentName: source, priceBookId: '', fileName: '', lineCount: 0 }
-      : source)
-    .filter((source) => source.agentName?.trim())
-    .map((source) => ({ ...source, agentName: source.agentName.trim(), priceBookId: source.priceBookId?.trim() ?? '', fileName: source.fileName?.trim() ?? '', legacyModule: normalizeAgentMarkupLegacyModule(source.legacyModule) }));
-}
-
-function groupAgentSourcesByScope(sources: ActivePriceBookAgentSource[]) {
-  const grouped = new Map<string, ActivePriceBookAgentSource[]>();
-  for (const source of sources) {
-    const key = agentMarkupScopeKey(source);
-    const list = grouped.get(key) ?? [];
-    const existing = list.find((item) => item.priceBookId === source.priceBookId && item.fileName === source.fileName);
-    if (existing) {
-      existing.lineCount += source.lineCount;
-    } else {
-      list.push({ ...source });
-    }
-    grouped.set(key, list);
-  }
-  for (const list of grouped.values()) {
-    list.sort((left, right) => left.fileName.localeCompare(right.fileName, 'zh-CN') || left.priceBookId.localeCompare(right.priceBookId));
-  }
-  return grouped;
-}
-
 function isAgentLevelMarkupRuleForHealth(rule: AgentMarkupSummary) {
   return !rule.deletedAt && isAgentLevelMarkupRuleScope(rule);
 }
@@ -13307,10 +13271,6 @@ function createDefaultAgentMarkupRule(agentName: string, priceBookId?: string, l
     priority: 100,
     enabled: true
   };
-}
-
-function agentMarkupScopeKey(scope: Pick<AgentMarkupSummary, 'agentName' | 'priceBookId' | 'legacyModule'> | ActivePriceBookAgentSource | { agentName: string; priceBookId?: string; legacyModule?: LegacyPricingModule }) {
-  return `${scope.legacyModule ?? ''}\u0001${scope.priceBookId ?? ''}\u0001${scope.agentName}`;
 }
 
 function derivePriceBookAgentName(fileName?: string) {
