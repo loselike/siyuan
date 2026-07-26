@@ -2,7 +2,6 @@ import type {
   WarehouseInStockQuery,
   WarehouseInStockResponse,
   WarehouseManualReceiptCustomerOption,
-  WarehousePackageGroupSummary,
   WarehousePackageSummary,
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskSummary,
@@ -19,16 +18,8 @@ export class WarehouseQueryClient {
     return this.request('/warehouse/packages');
   }
 
-  warehousePackageGroups(): Promise<WarehousePackageGroupSummary[]> {
-    return this.request('/warehouse/package-groups');
-  }
-
   warehouseManualReceiptCustomers(): Promise<WarehouseManualReceiptCustomerOption[]> {
     return this.request('/warehouse/manual-receipt/customers');
-  }
-
-  warehouseConsolidationItems(id: string): Promise<WarehousePackageSummary[]> {
-    return this.request(`/warehouse/consolidations/${id}/items`);
   }
 
   warehouseTodayReceipts(query: WarehouseTodayQuery = {}): Promise<WarehouseTodayResponse> {
