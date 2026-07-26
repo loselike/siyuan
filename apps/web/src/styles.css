@@ -1828,13 +1828,6 @@ body.is-resizing-table-column {
   overflow: hidden;
 }
 
-.managed-column-settings-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px 12px;
-  width: 100%;
-}
-
 .managed-column-settings-list {
   display: grid;
   gap: 8px;
