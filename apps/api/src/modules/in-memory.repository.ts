@@ -290,6 +290,7 @@ import {
 } from '@siyuan/shared';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
+import { applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, markupScopeRank, matchingPriceRowsForRule, shouldIncludeAgentMarkupHits } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
 import { buildLineShipmentPackageSummaries } from './line-shipment-packages.js';
@@ -13435,10 +13436,6 @@ function buildAgentMarkupListResponse(rules: AgentMarkupSummary[], priceRows: Pr
   };
 }
 
-function shouldIncludeAgentMarkupHits(query: AgentMarkupListQuery) {
-  return query.includeHits !== false && String(query.includeHits ?? 'true') !== 'false';
-}
-
 function groupAgentMarkupRows(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[]) {
   const groups = new Map<string, AgentMarkupSummary[]>();
   for (const rule of rules) {
@@ -13544,51 +13541,6 @@ function findBestPriceBookRouteMarkupRule(markupRules: AgentMarkupSummary[], row
     )[0];
 }
 
-function formatMarkupNumber(value: number) {
-  return (Math.round(value * 100) / 100).toFixed(2);
-}
-
-function formatMarkupPerKg(value: number) {
-  return `+¥${formatMarkupNumber(value)}/kg`;
-}
-
-function applyPriceBookRowMarkupControls(rows: PriceBookRowSummary[], query: PriceBookRowsQuery) {
-  const amount = String(query.markupAmount ?? 'ALL').trim();
-  const source = String(query.markupSource ?? 'ALL').trim();
-  const sort = String(query.markupSort ?? 'NONE').trim();
-  let next = rows.filter((row) => {
-    const rowMarkup = roundMoney(Number(row.lineMarkupPerKg ?? 0.5));
-    if (source !== 'ALL' && row.markupSource !== source) {
-      return false;
-    }
-    if (!amount || amount === 'ALL') {
-      return true;
-    }
-    if (amount === 'DEFAULT') {
-      return row.markupSource === 'AGENT_DEFAULT' || row.markupSource === 'VIRTUAL_DEFAULT';
-    }
-    if (amount === 'OTHER_CUSTOM') {
-      return row.markupSource === 'LINE_CUSTOM';
-    }
-    const expected = Number(amount);
-    return Number.isFinite(expected) && rowMarkup === roundMoney(expected);
-  });
-  if (sort === 'ASC' || sort === 'DESC') {
-    const factor = sort === 'ASC' ? 1 : -1;
-    next = [...next].sort((left, right) =>
-      factor * (roundMoney(Number(left.lineMarkupPerKg ?? 0.5)) - roundMoney(Number(right.lineMarkupPerKg ?? 0.5))) ||
-      left.channelName.localeCompare(right.channelName, 'zh-CN') ||
-      left.destinationCountry.localeCompare(right.destinationCountry, 'zh-CN') ||
-      left.minWeightKg - right.minWeightKg
-    );
-  }
-  return next;
-}
-
-function markupScopeRank(rule: AgentMarkupSummary) {
-  return [rule.channelName, rule.realChannelName, rule.destinationCountry].filter(Boolean).length;
-}
-
 function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[], logs: Array<{ action: string; createdAt?: string; actor?: { username?: string } }>): AgentMarkupPreviewResponse {
   const rows = matchingPriceRowsForRule(rule, priceRows);
   const channels = new Set(rows.map((row) => row.channelName));
@@ -13610,19 +13562,6 @@ function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookR
     })),
     recentChanges: logs.slice(0, 5).map((log) => ({ action: log.action, actor: log.actor?.username, createdAt: log.createdAt ?? new Date().toISOString() }))
   };
-}
-
-function matchingPriceRowsForRule(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[]) {
-  return priceRows.filter((row) =>
-    (rule.priceBookId ? row.priceBookId === rule.priceBookId : row.agentName === rule.agentName) &&
-    (!rule.channelName || row.channelName === rule.channelName) &&
-    (!rule.realChannelName || (row.realChannelName ?? row.channelName) === rule.realChannelName) &&
-    (!rule.destinationCountry || row.destinationCountry === rule.destinationCountry)
-  );
-}
-
-function countAgentMarkupHits(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[]) {
-  return matchingPriceRowsForRule(rule, priceRows).length;
 }
 
 function textMatch(value: string, keyword?: string) {
