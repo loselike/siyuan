@@ -285,7 +285,7 @@ import {
 } from '@siyuan/shared';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, filterAgentMarkupRulesByModule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { createLargeCargoProfile, isEuropeTransportMode, largeCargoRedirectMessage, type LargeCargoProfile } from './pricing/legacy-cargo-profile.shared.js';
 import { inferBackendPriceCarrierName, matchedTransitDays, publicPricingRouteCode } from './pricing/price-recommendation-display.shared.js';
@@ -13251,34 +13251,6 @@ function normalizeAgentMarkupBatchScopes(input: { agentNames?: string[]; scopes?
   return [...unique.values()];
 }
 
-function normalizeAgentMarkupLegacyModule(value: unknown): LegacyPricingModule | undefined {
-  return isLegacyPricingModule(value)
-    ? value
-    : undefined;
-}
-
-function normalizeAgentMarkupModuleQuery(value: unknown): LegacyPricingModule | 'unclassified' | undefined {
-  if (value === 'unclassified') return 'unclassified';
-  return normalizeAgentMarkupLegacyModule(value);
-}
-
-function filterAgentMarkupRulesByModule(rules: AgentMarkupSummary[], module: LegacyPricingModule | 'unclassified' | undefined, priceRows: PriceBookRowSummary[]) {
-  if (!module) {
-    return rules;
-  }
-  const priceBookIds = new Set(priceRows.map((row) => row.priceBookId).filter(Boolean));
-  return rules.filter((rule) => {
-    const explicitModule = normalizeAgentMarkupLegacyModule(rule.legacyModule);
-    if (module === 'unclassified') {
-      return !explicitModule && !rule.priceBookId;
-    }
-    if (explicitModule) {
-      return explicitModule === module;
-    }
-    return Boolean(rule.priceBookId && priceBookIds.has(rule.priceBookId));
-  });
-}
-
 function buildAgentMarkupListResponse(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[], query: AgentMarkupListQuery): AgentMarkupListResponse {
   const includeHits = shouldIncludeAgentMarkupHits(query);
   const activeRows = rules.filter((rule) => !rule.deletedAt);
@@ -13858,16 +13830,6 @@ function inferInMemoryLegacyModule(row: PriceBookRowSummary): LegacyPricingModul
   if (!/超大件|大件/.test(source) && /空海运|铁路|快递|空运|空派|express|rail|air|fedex|dhl|ups/.test(source)) return 'europeExpress';
   if (/超大件|海运|海卡|卡派|卡车|truck|oversize|大件/.test(source)) return 'inquiry';
   return 'europeExpress';
-}
-
-function isLegacyPricingModule(value: unknown): value is LegacyPricingModule {
-  return value === 'amazon'
-    || value === 'inquiry'
-    || value === 'europeExpress'
-    || value === 'southAfrica'
-    || value === 'usaAirSea'
-    || value === 'canadaAirSea'
-    || value === 'dubaiAirSea';
 }
 
 function isAirSeaPricingModule(module: LegacyPricingModule) {

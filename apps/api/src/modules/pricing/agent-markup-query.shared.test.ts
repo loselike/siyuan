@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMarkupSummary, PriceBookRowSummary } from '@siyuan/shared';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, filterAgentMarkupRulesByModule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
 
 function priceRow(id: string, overrides: Partial<PriceBookRowSummary> = {}): PriceBookRowSummary {
   return {
@@ -84,6 +84,25 @@ describe('agent markup query helpers', () => {
     expect(index.get(markupRuleIndexKey('代理甲', 'book-a'))).toEqual([active]);
     expect([...index.values()].flat()).toHaveLength(1);
     expect(markupSpecificity(markupRule({ channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国' }), '渠道甲', '线路甲', '美国')).toBe(7);
+  });
+
+  it('keeps legacy module recognition and explicit, scoped-book and unclassified rule isolation', () => {
+    expect(['amazon', 'inquiry', 'europeExpress', 'southAfrica', 'usaAirSea', 'canadaAirSea', 'dubaiAirSea'].every(isLegacyPricingModule)).toBe(true);
+    expect(isLegacyPricingModule('unclassified')).toBe(false);
+    expect(normalizeAgentMarkupLegacyModule('amazon')).toBe('amazon');
+    expect(normalizeAgentMarkupLegacyModule('invalid')).toBeUndefined();
+    expect(normalizeAgentMarkupModuleQuery('unclassified')).toBe('unclassified');
+
+    const explicitAmazon = markupRule({ id: 'amazon', legacyModule: 'amazon', priceBookId: undefined });
+    const explicitInquiry = markupRule({ id: 'inquiry', legacyModule: 'inquiry', priceBookId: undefined });
+    const scopedBook = markupRule({ id: 'book', legacyModule: undefined, priceBookId: 'book-a' });
+    const unclassified = markupRule({ id: 'unclassified', legacyModule: undefined, priceBookId: undefined });
+    const rules = [explicitAmazon, explicitInquiry, scopedBook, unclassified];
+
+    expect(filterAgentMarkupRulesByModule(rules, 'amazon', [priceRow('amazon-row')]).map((rule) => rule.id)).toEqual(['amazon', 'book']);
+    expect(filterAgentMarkupRulesByModule(rules, 'inquiry', [priceRow('other-row', { priceBookId: 'book-b' })]).map((rule) => rule.id)).toEqual(['inquiry']);
+    expect(filterAgentMarkupRulesByModule(rules, 'unclassified', []).map((rule) => rule.id)).toEqual(['unclassified']);
+    expect(filterAgentMarkupRulesByModule(rules, undefined, [])).toBe(rules);
   });
 
   it('keeps source cleanup, scoped duplicate merging and stable source sorting', () => {

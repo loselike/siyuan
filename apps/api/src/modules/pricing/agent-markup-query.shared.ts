@@ -14,7 +14,7 @@ export function normalizeAgentSources(agentSources: Array<string | ActivePriceBo
       ? { agentName: source, priceBookId: '', fileName: '', lineCount: 0 }
       : source)
     .filter((source) => source.agentName?.trim())
-    .map((source) => ({ ...source, agentName: source.agentName.trim(), priceBookId: source.priceBookId?.trim() ?? '', fileName: source.fileName?.trim() ?? '', legacyModule: normalizeAgentSourceLegacyModule(source.legacyModule) }));
+    .map((source) => ({ ...source, agentName: source.agentName.trim(), priceBookId: source.priceBookId?.trim() ?? '', fileName: source.fileName?.trim() ?? '', legacyModule: normalizeAgentMarkupLegacyModule(source.legacyModule) }));
 }
 
 export function groupAgentSourcesByScope(sources: ActivePriceBookAgentSource[]) {
@@ -38,6 +38,44 @@ export function groupAgentSourcesByScope(sources: ActivePriceBookAgentSource[]) 
 
 export function agentMarkupScopeKey(scope: Pick<AgentMarkupSummary, 'agentName' | 'priceBookId' | 'legacyModule'> | ActivePriceBookAgentSource | { agentName: string; priceBookId?: string; legacyModule?: LegacyPricingModule }) {
   return `${scope.legacyModule ?? ''}\u0001${scope.priceBookId ?? ''}\u0001${scope.agentName}`;
+}
+
+export function isLegacyPricingModule(value: unknown): value is LegacyPricingModule {
+  return value === 'amazon'
+    || value === 'inquiry'
+    || value === 'europeExpress'
+    || value === 'southAfrica'
+    || value === 'usaAirSea'
+    || value === 'canadaAirSea'
+    || value === 'dubaiAirSea';
+}
+
+export function normalizeAgentMarkupLegacyModule(value: unknown): LegacyPricingModule | undefined {
+  return isLegacyPricingModule(value)
+    ? value
+    : undefined;
+}
+
+export function normalizeAgentMarkupModuleQuery(value: unknown): LegacyPricingModule | 'unclassified' | undefined {
+  if (value === 'unclassified') return 'unclassified';
+  return normalizeAgentMarkupLegacyModule(value);
+}
+
+export function filterAgentMarkupRulesByModule(rules: AgentMarkupSummary[], module: LegacyPricingModule | 'unclassified' | undefined, priceRows: PriceBookRowSummary[]) {
+  if (!module) {
+    return rules;
+  }
+  const priceBookIds = new Set(priceRows.map((row) => row.priceBookId).filter(Boolean));
+  return rules.filter((rule) => {
+    const explicitModule = normalizeAgentMarkupLegacyModule(rule.legacyModule);
+    if (module === 'unclassified') {
+      return !explicitModule && !rule.priceBookId;
+    }
+    if (explicitModule) {
+      return explicitModule === module;
+    }
+    return Boolean(rule.priceBookId && priceBookIds.has(rule.priceBookId));
+  });
 }
 
 export function shouldIncludeAgentMarkupHits(query: AgentMarkupListQuery) {
@@ -161,10 +199,4 @@ export function markupSpecificity(rule: AgentMarkupSummary, channel: string, rea
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-function normalizeAgentSourceLegacyModule(value: unknown): LegacyPricingModule | undefined {
-  return value === 'amazon' || value === 'inquiry' || value === 'europeExpress' || value === 'southAfrica' || value === 'usaAirSea' || value === 'canadaAirSea' || value === 'dubaiAirSea'
-    ? value
-    : undefined;
 }

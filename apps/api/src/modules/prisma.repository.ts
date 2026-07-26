@@ -285,7 +285,7 @@ import {
 import { getPasswordStrengthError, hashPassword } from './password.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, filterAgentMarkupRulesByModule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { createLargeCargoProfile, isEuropeTransportMode, largeCargoRedirectMessage, type LargeCargoProfile } from './pricing/legacy-cargo-profile.shared.js';
 import { inferBackendPriceCarrierName, matchedTransitDays, publicPricingRouteCode } from './pricing/price-recommendation-display.shared.js';
@@ -16354,17 +16354,6 @@ function normalizeStringList(value?: string[]) {
   return Array.from(new Set((Array.isArray(value) ? value : []).map((item) => String(item ?? '').trim()).filter(Boolean)));
 }
 
-function normalizeAgentMarkupLegacyModule(value: unknown): LegacyPricingModule | undefined {
-  return isLegacyPricingModule(value)
-    ? value
-    : undefined;
-}
-
-function normalizeAgentMarkupModuleQuery(value: unknown): LegacyPricingModule | 'unclassified' | undefined {
-  if (value === 'unclassified') return 'unclassified';
-  return normalizeAgentMarkupLegacyModule(value);
-}
-
 interface AgentMarkupBatchScopeInput {
   agentName?: string;
   priceBookId?: string;
@@ -16409,23 +16398,6 @@ function filterAgentMarkupSourcesByModule(sources: ActivePriceBookAgentSource[],
     return sources.filter((source) => !source.legacyModule);
   }
   return sources.filter((source) => source.legacyModule === module);
-}
-
-function filterAgentMarkupRulesByModule(rules: AgentMarkupSummary[], module: LegacyPricingModule | 'unclassified' | undefined, priceRows: PriceBookRowSummary[]) {
-  if (!module) {
-    return rules;
-  }
-  const priceBookIds = new Set(priceRows.map((row) => row.priceBookId).filter(Boolean));
-  return rules.filter((rule) => {
-    const explicitModule = normalizeAgentMarkupLegacyModule(rule.legacyModule);
-    if (module === 'unclassified') {
-      return !explicitModule && !rule.priceBookId;
-    }
-    if (explicitModule) {
-      return explicitModule === module;
-    }
-    return Boolean(rule.priceBookId && priceBookIds.has(rule.priceBookId));
-  });
 }
 
 function filterAgentMarkupRulesByModuleSources(rules: AgentMarkupSummary[], module: LegacyPricingModule | 'unclassified' | undefined, sources: ActivePriceBookAgentSource[]) {
@@ -17098,16 +17070,6 @@ function normalizePriceBookImportTargetModule(value: unknown): PriceBookImportTa
     return value;
   }
   throw new BadRequestException('请选择本次导入适用的查价模块');
-}
-
-function isLegacyPricingModule(value: unknown): value is LegacyPricingModule {
-  return value === 'amazon'
-    || value === 'inquiry'
-    || value === 'europeExpress'
-    || value === 'southAfrica'
-    || value === 'usaAirSea'
-    || value === 'canadaAirSea'
-    || value === 'dubaiAirSea';
 }
 
 function defaultLegacyModuleDestination(module: LegacyPricingModule): string | undefined {
