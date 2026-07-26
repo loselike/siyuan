@@ -56,6 +56,11 @@ export function printWarehouseTallyLabelHtml(html: string, targetWindow?: Window
   printWindow.document.write(html);
   printWindow.document.close();
   printWindow.focus();
+  printWindow.onafterprint = () => {
+    if (!printWindow.closed) {
+      printWindow.close();
+    }
+  };
   printWindow.setTimeout(() => printWindow.print(), 100);
   return true;
 }
