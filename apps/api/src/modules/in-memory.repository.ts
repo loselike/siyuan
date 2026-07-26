@@ -287,6 +287,7 @@ import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEurope
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
 import { agentMarkupScopeKey, applyPriceBookRowMarkupControls, countAgentMarkupHits, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, markupScopeRank, matchingPriceRowsForRule, normalizeAgentSources, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
+import { createLargeCargoProfile, isEuropeTransportMode, largeCargoRedirectMessage, type LargeCargoProfile } from './pricing/legacy-cargo-profile.shared.js';
 import { inferBackendPriceCarrierName, matchedTransitDays, publicPricingRouteCode } from './pricing/price-recommendation-display.shared.js';
 import { getUsPostalRuleHealthIssues, getWarehouseCodeRuleHealthIssues } from './pricing/pricing-rule-health.shared.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
@@ -12804,43 +12805,6 @@ function canViewPricingInternalRoute(role: string): boolean {
   return role === 'ADMIN' || role === 'UG_MARKET';
 }
 
-type LegacyCargoProfileInput = Pick<LegacyPricingQuoteRequest, 'productName' | 'packageInfo' | 'lengthCm' | 'widthCm' | 'heightCm' | 'packageCount' | 'volumeCbm' | 'unitActualWeightKg' | 'actualWeightKg' | 'chargeableWeightKg'>;
-
-type LargeCargoProfile = {
-  isLargeCargo: boolean;
-  reasons: string[];
-};
-
-function numericInput(value: unknown): number {
-  const numeric = Number(value ?? 0);
-  return Number.isFinite(numeric) ? numeric : 0;
-}
-
-function createLargeCargoProfile(input: LegacyCargoProfileInput): LargeCargoProfile {
-  const reasons: string[] = [];
-  const lengthCm = numericInput(input.lengthCm);
-  const widthCm = numericInput(input.widthCm);
-  const heightCm = numericInput(input.heightCm);
-  if (lengthCm > 180) reasons.push(`长度 ${roundMoney(lengthCm)}cm 超过 180cm`);
-  if (widthCm > 80) reasons.push(`宽度 ${roundMoney(widthCm)}cm 超过 80cm`);
-  if (heightCm > 80) reasons.push(`高度 ${roundMoney(heightCm)}cm 超过 80cm`);
-  if (lengthCm > 0 && widthCm > 0 && heightCm > 0) {
-    const singleVolumeCbm = (lengthCm * widthCm * heightCm) / 1_000_000;
-    if (singleVolumeCbm > 0.15) {
-      reasons.push(`单件体积 ${singleVolumeCbm.toFixed(3)}CBM 超过 0.15CBM`);
-    }
-  }
-  const cargoText = `${input.productName ?? ''} ${input.packageInfo ?? ''}`;
-  if (/大件|超大件|家具|桌|椅|沙发|床|木箱|木架|托盘|卡板|打托/i.test(cargoText)) {
-    reasons.push('品名/包装包含大件关键词');
-  }
-  return { isLargeCargo: reasons.length > 0, reasons };
-}
-
-function largeCargoRedirectMessage(profile: LargeCargoProfile): string {
-  return `${profile.reasons.join('、') || '当前货物属于大件/超大件'}，应走欧洲超大件综合查询`;
-}
-
 function priceRowCargoCapabilityText(row: PriceBookRowSummary): string {
   const extra = row as PriceBookRowSummary & { remark?: string; raw?: unknown };
   return [
@@ -13014,10 +12978,6 @@ function inMemoryInquiryCargoMatches(row: PriceBookRowSummary, input: Pick<Legac
       ? 'GENERAL'
       : undefined;
   return !requested || cargoType === requested;
-}
-
-function isEuropeTransportMode(value: unknown): value is 'AIR' | 'SEA' | 'RAIL' | 'SEA_RAIL' {
-  return value === 'AIR' || value === 'SEA' || value === 'RAIL' || value === 'SEA_RAIL';
 }
 
 function selectInMemoryUsPostalPriceRows(rows: PriceBookRowSummary[], postalCode?: string) {
