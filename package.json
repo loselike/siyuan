@@ -32,6 +32,7 @@
     "governance:check": "node scripts/check-development-governance.mjs",
     "lint": "npm run lint -w @siyuan/api && npm run lint -w @siyuan/web",
     "typecheck": "npm run build -w @siyuan/shared && npm run typecheck -w @siyuan/shared && npm run typecheck -w @siyuan/api && npm run typecheck -w @siyuan/web",
+    "audit:47-drift": "bash scripts/audit-47-source-drift.sh",
     "sync:47": "bash scripts/sync-47.sh",
     "deploy:47": "bash scripts/deploy-47.sh"
   },

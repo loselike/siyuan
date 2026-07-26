@@ -18,9 +18,10 @@ const e2eUsers = {
 
 type E2eUser = keyof typeof e2eUsers;
 
-// Stage 3 test harness: existing broad e2e tests still boot AppModule with the
-// current in-memory adapter. New domain tests should prefer module fixtures or a
-// Prisma-backed test database instead of expanding InMemoryRepository.
+// Existing broad E2E tests still boot AppModule with the current in-memory
+// adapter. New read-only domain tests should use prisma-read-e2e-harness.ts;
+// write workflows should use a dedicated Prisma test database instead of
+// expanding InMemoryRepository.
 export function setupE2eApp() {
   let app: INestApplication | undefined;
 

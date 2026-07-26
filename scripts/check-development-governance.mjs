@@ -21,8 +21,9 @@ const requiredMigrationFiles = [
 
 const failures = [];
 const architectureSizeBaselinePath = 'scripts/architecture-size-baseline.json';
+const sourceDriftAuditPath = 'scripts/audit-47-source-drift.sh';
 
-for (const path of [...requiredAgentFiles, ...requiredMigrationFiles, architectureSizeBaselinePath]) {
+for (const path of [...requiredAgentFiles, ...requiredMigrationFiles, architectureSizeBaselinePath, sourceDriftAuditPath]) {
   if (!existsSync(path)) failures.push(`required file is missing: ${path}`);
 }
 
@@ -84,6 +85,8 @@ for (const forbiddenText of [
 
 const deployScript = readFileSync('scripts/deploy-47.sh', 'utf8');
 const syncScript = readFileSync('scripts/sync-47.sh', 'utf8');
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+const sourceDriftAudit = existsSync(sourceDriftAuditPath) ? readFileSync(sourceDriftAuditPath, 'utf8') : '';
 const forceFullBlock = deployScript.match(/if \[\[ "\$FORCE_FULL" == true \]\]; then([\s\S]*?)\nfi/)?.[1] ?? '';
 if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
   failures.push('--full must not force Prisma migration execution');
@@ -96,6 +99,14 @@ if (!deployScript.includes('DIRTY_RUNTIME_COUNT=$DIRTY_RUNTIME_COUNT') || !deplo
 }
 if (!syncScript.includes("--exclude='.release-backups/'")) {
   failures.push('sync:47 must preserve remote .release-backups');
+}
+if (packageJson.scripts?.['audit:47-drift'] !== 'bash scripts/audit-47-source-drift.sh') {
+  failures.push('package.json must expose the read-only audit:47-drift command');
+}
+for (const forbiddenCommand of ['rsync ', 'scp ', 'docker compose', 'prisma migrate']) {
+  if (sourceDriftAudit.includes(forbiddenCommand)) {
+    failures.push(`audit:47-drift must remain read-only: found ${forbiddenCommand.trim()}`);
+  }
 }
 
 for (const path of requiredAgentFiles) {
