@@ -1,5 +1,5 @@
 import type { Key, ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AutoComplete, Button, Card, Checkbox, Col, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { FileText, PackageCheck, PackagePlus, Plus, Trash2 } from 'lucide-react';
@@ -127,6 +127,9 @@ export function WarehousePage({
   const pendingRoutingShipments = shipments.filter((shipment) => shipment.status === 'WAITING_SORT');
   const [activeReceiveSection, setActiveReceiveSection] = useState('today');
   const [warehousePackages, setWarehousePackages] = useState<WarehouseInboundPackage[]>([]);
+  const warehousePackagesFallbackRef = useRef<Promise<WarehouseInboundPackage[]> | null>(null);
+  const shipmentsRef = useRef(shipments);
+  shipmentsRef.current = shipments;
   const [todayReceiptRows, setTodayReceiptRows] = useState<WarehouseInboundPackage[]>([]);
   const [todayTotals, setTodayTotals] = useState<WarehouseTodayTotals>({
     receiptTickets: 0,
@@ -220,6 +223,32 @@ export function WarehousePage({
   const [editingPackage, setEditingPackage] = useState<WarehouseInboundPackage | null>(null);
   const [packageEditDraft, setPackageEditDraft] = useState<WarehousePackageEditDraft | null>(null);
   const [savingPackageEdit, setSavingPackageEdit] = useState(false);
+  const mergeWarehousePackages = useCallback((rows: WarehouseInboundPackage[]) => {
+    setWarehousePackages((current) => {
+      const rowById = new Map(current.map((row) => [row.id, row]));
+      rows.forEach((row) => rowById.set(row.id, row));
+      return withWarehouseCustomerProgress([...rowById.values()]);
+    });
+  }, []);
+  const loadWarehousePackagesFallback = useCallback(() => {
+    if (!warehousePackagesFallbackRef.current) {
+      warehousePackagesFallbackRef.current = apiClient.warehouseQuery.warehousePackages()
+        .then((rows) => withWarehouseCustomerProgress(rows.map(mapWarehouseApiPackageToInbound)))
+        .catch(() => withWarehouseCustomerProgress([
+          ...createWarehouseApiPackages(),
+          ...createInitialWarehousePackages(shipmentsRef.current)
+        ]));
+    }
+    return warehousePackagesFallbackRef.current;
+  }, [apiClient]);
+  useEffect(() => {
+    warehousePackagesFallbackRef.current = null;
+  }, [loadWarehousePackagesFallback]);
+  useEffect(() => {
+    if (!canTodayReceiptView && !canInStockView && !canTallyCompletedView) {
+      setWarehousePackages([]);
+    }
+  }, [canInStockView, canTallyCompletedView, canTodayReceiptView]);
   useEffect(() => {
     if (!manualReceiptDrawerOpen) return;
     let cancelled = false;
@@ -239,25 +268,6 @@ export function WarehousePage({
     };
   }, [apiClient, manualReceiptDrawerOpen]);
   useEffect(() => {
-    if (!canTodayReceiptView && !canInStockView) {
-      setWarehousePackages([]);
-      return;
-    }
-    let alive = true;
-    apiClient.warehouseQuery.warehousePackages()
-      .then((rows) => {
-        if (!alive) return;
-        setWarehousePackages(withWarehouseCustomerProgress(rows.map(mapWarehouseApiPackageToInbound)));
-      })
-      .catch(() => {
-        if (!alive) return;
-        setWarehousePackages(withWarehouseCustomerProgress([...createWarehouseApiPackages(), ...createInitialWarehousePackages(shipments)]));
-      });
-    return () => {
-      alive = false;
-    };
-  }, [apiClient, canInStockView, canTodayReceiptView, shipments]);
-  useEffect(() => {
     if (!canTodayReceiptView) {
       setTodayReceiptRows([]);
       return;
@@ -266,14 +276,18 @@ export function WarehousePage({
     apiClient.warehouseQuery.warehouseTodayReceipts(todayFilters)
       .then((response) => {
         if (!alive) return;
-        setTodayReceiptRows(response.rows.map(mapWarehouseApiPackageToInbound));
+        const rows = response.rows.map(mapWarehouseApiPackageToInbound);
+        setTodayReceiptRows(rows);
+        mergeWarehousePackages(rows);
         setTodayTotals(response.totals);
         setSelectedTodayPackageIds([]);
         setTodayReceiptPage(1);
       })
-      .catch(() => {
+      .catch(async () => {
+        const warehousePackageFallback = await loadWarehousePackagesFallback();
         if (!alive) return;
-        const fallbackRows = filterTodayRows(warehousePackages, todayFilters, role);
+        const fallbackRows = filterTodayRows(warehousePackageFallback, todayFilters, role);
+        mergeWarehousePackages(fallbackRows);
         setTodayReceiptRows(fallbackRows);
         setTodayTotals(calculateTodayTotals(fallbackRows, workQueue.length));
         setSelectedTodayPackageIds([]);
@@ -282,7 +296,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canTodayReceiptView, role, todayFilters, warehousePackages, workQueue.length]);
+  }, [apiClient, canTodayReceiptView, loadWarehousePackagesFallback, mergeWarehousePackages, role, todayFilters, workQueue.length]);
   useEffect(() => {
     if (!canInStockView) {
       setInStockRows([]);
@@ -292,14 +306,18 @@ export function WarehousePage({
     apiClient.warehouseQuery.warehouseInStock(inStockFilters)
       .then((response) => {
         if (!alive) return;
-        setInStockRows(response.rows.map(mapWarehouseApiPackageToInbound));
+        const rows = response.rows.map(mapWarehouseApiPackageToInbound);
+        setInStockRows(rows);
+        mergeWarehousePackages(rows);
         setInStockTotals(response.totals);
         setSelectedInStockPackageIds([]);
         setInStockPage(1);
       })
-      .catch(() => {
+      .catch(async () => {
+        const warehousePackageFallback = await loadWarehousePackagesFallback();
         if (!alive) return;
-        const fallbackRows = filterInStockRows(warehousePackages, inStockFilters, role);
+        const fallbackRows = filterInStockRows(warehousePackageFallback, inStockFilters, role);
+        mergeWarehousePackages(fallbackRows);
         setInStockRows(fallbackRows);
         setInStockTotals(calculateTodayTotals(fallbackRows, workQueue.length));
         setSelectedInStockPackageIds([]);
@@ -308,7 +326,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canInStockView, inStockFilters, role, warehousePackages, workQueue.length]);
+  }, [apiClient, canInStockView, inStockFilters, loadWarehousePackagesFallback, mergeWarehousePackages, role, workQueue.length]);
   useEffect(() => {
     if (!canTallyCompletedView) {
       setCompletedTallyArchiveRows([]);
@@ -318,16 +336,21 @@ export function WarehousePage({
     apiClient.warehouseQuery.warehouseInStock({ status: 'TALLIED_ARCHIVED' })
       .then((response) => {
         if (!alive) return;
-        setCompletedTallyArchiveRows(response.rows.map(mapWarehouseApiPackageToInbound).filter(isRecentWarehouseTallyArchive));
+        const rows = response.rows.map(mapWarehouseApiPackageToInbound).filter(isRecentWarehouseTallyArchive);
+        setCompletedTallyArchiveRows(rows);
+        mergeWarehousePackages(rows);
       })
-      .catch(() => {
+      .catch(async () => {
+        const warehousePackageFallback = await loadWarehousePackagesFallback();
         if (!alive) return;
-        setCompletedTallyArchiveRows(warehousePackages.filter((pkg) => pkg.status === 'TALLIED_ARCHIVED' && isRecentWarehouseTallyArchive(pkg)));
+        const rows = warehousePackageFallback.filter((pkg) => pkg.status === 'TALLIED_ARCHIVED' && isRecentWarehouseTallyArchive(pkg));
+        mergeWarehousePackages(rows);
+        setCompletedTallyArchiveRows(rows);
       });
     return () => {
       alive = false;
     };
-  }, [apiClient, canTallyCompletedView, warehousePackages]);
+  }, [apiClient, canTallyCompletedView, loadWarehousePackagesFallback, mergeWarehousePackages]);
   useEffect(() => {
     if (!canTallyPendingView && !canTallyCompletedView) {
       setTallyTasks([]);
