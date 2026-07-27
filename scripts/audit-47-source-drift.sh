@@ -6,6 +6,7 @@ REMOTE_HOST="${SIYUAN_47_REMOTE:-47}"
 REMOTE_DIR="${SIYUAN_47_DIR:-/opt/siyuan}"
 PRINT_DETAILS=true
 FAIL_ON_DRIFT=false
+FAIL_ON_STALE_ARTIFACTS=false
 
 for arg in "$@"; do
   case "$arg" in
@@ -15,11 +16,15 @@ for arg in "$@"; do
     --fail-on-drift)
       FAIL_ON_DRIFT=true
       ;;
+    --fail-on-stale-artifacts)
+      FAIL_ON_STALE_ARTIFACTS=true
+      ;;
     --help|-h)
       cat <<'USAGE'
-Usage: npm run audit:47-drift -- [--summary] [--fail-on-drift]
+Usage: npm run audit:47-drift -- [--summary] [--fail-on-drift] [--fail-on-stale-artifacts]
 
 Compares production source files in the current worktree with the source tree on 47.
+Reports backup and temporary source artifacts separately from the content drift manifest.
 The audit is read-only and does not sync, build, restart, migrate, or modify either side.
 USAGE
       exit 0
@@ -36,6 +41,7 @@ trap 'rm -r -- "$audit_dir"' EXIT
 
 local_manifest="$audit_dir/local.tsv"
 remote_manifest="$audit_dir/remote.tsv"
+remote_stale_artifacts="$audit_dir/remote-stale-artifacts.tsv"
 
 list_runtime_files() {
   {
@@ -103,10 +109,39 @@ cd "$remote_dir"
 done
 REMOTE_SCRIPT
 
-node - "$local_manifest" "$remote_manifest" "$PRINT_DETAILS" "$FAIL_ON_DRIFT" <<'NODE_SCRIPT'
+ssh -o ConnectTimeout=20 "$REMOTE_HOST" bash -s -- "$REMOTE_DIR" > "$remote_stale_artifacts" <<'REMOTE_ARTIFACT_SCRIPT'
+set -euo pipefail
+
+remote_dir="$1"
+cd "$remote_dir"
+
+find apps packages deploy \
+  \( -type d \( -name node_modules -o -name dist -o -name coverage -o -name .vite \) -prune \) -o \
+  \( -type f \
+    \( -name '*.orig' -o -name '*.bak' -o -name '*.backup' -o -name '*.old' \
+      -o -name '*.save' -o -name '*.before' -o -name '*.rej' -o -name '*.tmp' \
+      -o -name '*~' -o -name '*.swp' -o -name '._*' -o -name '.DS_Store' \) \
+    -printf '%p\t%s\n' \) \
+  | LC_ALL=C sort
+REMOTE_ARTIFACT_SCRIPT
+
+node - \
+  "$local_manifest" \
+  "$remote_manifest" \
+  "$remote_stale_artifacts" \
+  "$PRINT_DETAILS" \
+  "$FAIL_ON_DRIFT" \
+  "$FAIL_ON_STALE_ARTIFACTS" <<'NODE_SCRIPT'
 import { readFileSync } from 'node:fs';
 
-const [localPath, remotePath, printDetailsArg, failOnDriftArg] = process.argv.slice(2);
+const [
+  localPath,
+  remotePath,
+  remoteStaleArtifactsPath,
+  printDetailsArg,
+  failOnDriftArg,
+  failOnStaleArtifactsArg
+] = process.argv.slice(2);
 
 function readManifest(path) {
   const entries = new Map();
@@ -121,8 +156,27 @@ function readManifest(path) {
   return entries;
 }
 
+function readStaleArtifacts(path) {
+  const artifacts = [];
+  const content = readFileSync(path, 'utf8').trim();
+  if (!content) return artifacts;
+
+  for (const line of content.split('\n')) {
+    const separator = line.lastIndexOf('\t');
+    if (separator < 1) throw new Error(`Invalid stale artifact line: ${line}`);
+    const size = Number(line.slice(separator + 1));
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error(`Invalid stale artifact size: ${line}`);
+    }
+    artifacts.push({ path: line.slice(0, separator), size });
+  }
+  return artifacts;
+}
+
 const local = readManifest(localPath);
 const remote = readManifest(remotePath);
+const remoteStaleArtifacts = readStaleArtifacts(remoteStaleArtifactsPath);
+const remoteStaleArtifactBytes = remoteStaleArtifacts.reduce((total, artifact) => total + artifact.size, 0);
 const same = [];
 const changed = [];
 const localOnly = [];
@@ -142,6 +196,8 @@ console.log(`SAME=${same.length}`);
 console.log(`CHANGED=${changed.length}`);
 console.log(`LOCAL_ONLY=${localOnly.length}`);
 console.log(`REMOTE_ONLY=${remoteOnly.length}`);
+console.log(`REMOTE_STALE_ARTIFACTS=${remoteStaleArtifacts.length}`);
+console.log(`REMOTE_STALE_ARTIFACT_BYTES=${remoteStaleArtifactBytes}`);
 
 if (printDetailsArg === 'true') {
   for (const [label, paths] of [
@@ -152,9 +208,18 @@ if (printDetailsArg === 'true') {
     console.log(`\n[${label}]`);
     for (const filePath of paths) console.log(filePath);
   }
+
+  console.log('\n[REMOTE_STALE_ARTIFACT_PATHS]');
+  for (const artifact of remoteStaleArtifacts) {
+    console.log(`${artifact.size}\t${artifact.path}`);
+  }
 }
 
 if (failOnDriftArg === 'true' && changed.length + localOnly.length + remoteOnly.length > 0) {
   process.exit(3);
+}
+
+if (failOnStaleArtifactsArg === 'true' && remoteStaleArtifacts.length > 0) {
+  process.exit(4);
 }
 NODE_SCRIPT

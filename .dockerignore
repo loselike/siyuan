@@ -9,6 +9,7 @@ packages/*/dist
 *.log
 *.tsbuildinfo
 **/*.orig
+**/._*
 .DS_Store
 scraped_docs
 worktrees

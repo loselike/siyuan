@@ -9,6 +9,8 @@ coverage
 *.log
 *.tsbuildinfo
 .DS_Store
+._*
+*.orig
 worktrees
 .worktrees
 scraped_docs

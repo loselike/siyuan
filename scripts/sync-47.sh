@@ -43,6 +43,8 @@ rsync -azc --delete --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} \
   --exclude='*.log' \
   --exclude='*.tsbuildinfo' \
   --exclude='.DS_Store' \
+  --exclude='._*' \
+  --exclude='*.orig' \
   --include='.env.example' \
   --exclude='.env' \
   --exclude='.env.*' \

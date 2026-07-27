@@ -100,12 +100,22 @@ if (!deployScript.includes('DIRTY_RUNTIME_COUNT=$DIRTY_RUNTIME_COUNT') || !deplo
 if (!syncScript.includes("--exclude='.release-backups/'")) {
   failures.push('sync:47 must preserve remote .release-backups');
 }
+for (const staleArtifactExclude of ["--exclude='._*'", "--exclude='*.orig'"]) {
+  if (!syncScript.includes(staleArtifactExclude)) {
+    failures.push(`sync:47 must exclude stale source artifacts: ${staleArtifactExclude}`);
+  }
+}
 if (packageJson.scripts?.['audit:47-drift'] !== 'bash scripts/audit-47-source-drift.sh') {
   failures.push('package.json must expose the read-only audit:47-drift command');
 }
 for (const forbiddenCommand of ['rsync ', 'scp ', 'docker compose', 'prisma migrate']) {
   if (sourceDriftAudit.includes(forbiddenCommand)) {
     failures.push(`audit:47-drift must remain read-only: found ${forbiddenCommand.trim()}`);
+  }
+}
+for (const requiredText of ['REMOTE_STALE_ARTIFACTS=', '--fail-on-stale-artifacts']) {
+  if (!sourceDriftAudit.includes(requiredText)) {
+    failures.push(`audit:47-drift is missing stale artifact control: ${requiredText}`);
   }
 }
 
