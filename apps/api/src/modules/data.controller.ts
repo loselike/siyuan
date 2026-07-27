@@ -416,15 +416,11 @@ export class DataController {
   }
 
   private async findDuplicateMojiaPackage(input: WarehousePackageCreateInput) {
-    const combinedOrderNo = input.combinedOrderNo;
-    const scanTimeSecond = input.scanTime ? Math.floor(new Date(input.scanTime).getTime() / 1000) : undefined;
-    const packages = await this.warehouseInventoryQueries.getWarehousePackages(mojiaPrincipal);
-    return packages.find((pkg) =>
-      pkg.combinedOrderNo === combinedOrderNo
-      && pkg.scanSource === '墨家设备'
-      && (!scanTimeSecond || (pkg.scanTime && Math.floor(new Date(pkg.scanTime).getTime() / 1000) === scanTimeSecond))
-      && (!input.remark || pkg.remark === input.remark)
-    );
+    return this.warehouseInventoryQueries.findDuplicateMojiaPackage(mojiaPrincipal, {
+      combinedOrderNo: input.combinedOrderNo as string,
+      scanTime: input.scanTime,
+      remark: input.remark
+    });
   }
 
   @Post('navigation/read-state')

@@ -112,6 +112,61 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
     });
   });
 
+  it('finds a Mojia duplicate with one indexed row query instead of loading inventory', async () => {
+    const packageFindFirst = vi.fn().mockResolvedValue({ combinedOrderNo: 'ORDER-1-SF001' });
+    const packageFindMany = vi.fn();
+    const tallyFindMany = vi.fn();
+    const repository = createRepository({
+      warehousePackage: { findFirst: packageFindFirst, findMany: packageFindMany },
+      warehouseTallyTask: { findMany: tallyFindMany }
+    });
+
+    await expect(repository.findDuplicateMojiaPackage(admin, {
+      combinedOrderNo: 'ORDER-1-SF001',
+      scanTime: '2026-07-25T01:00:00.987Z',
+      remark: '设备号：MJ20210327'
+    })).resolves.toEqual({ combinedOrderNo: 'ORDER-1-SF001' });
+
+    expect(packageFindFirst).toHaveBeenCalledWith({
+      where: {
+        combinedOrderNo: 'ORDER-1-SF001',
+        scanSource: '墨家设备',
+        scanTime: {
+          gte: new Date('2026-07-25T01:00:00.000Z'),
+          lt: new Date('2026-07-25T01:00:01.000Z')
+        },
+        remark: '设备号：MJ20210327'
+      },
+      select: { combinedOrderNo: true },
+      orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
+    });
+    expect(packageFindMany).not.toHaveBeenCalled();
+    expect(tallyFindMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps invalid-time and empty-remark duplicate matching semantics unchanged', async () => {
+    const packageFindFirst = vi.fn().mockResolvedValue(null);
+    const repository = createRepository({
+      warehousePackage: { findFirst: packageFindFirst },
+      warehouseTallyTask: { findMany: vi.fn() }
+    });
+
+    await expect(repository.findDuplicateMojiaPackage(admin, {
+      combinedOrderNo: 'ORDER-1-SF001',
+      scanTime: 'bad-time',
+      remark: ''
+    })).resolves.toBeUndefined();
+
+    expect(packageFindFirst).toHaveBeenCalledWith({
+      where: {
+        combinedOrderNo: 'ORDER-1-SF001',
+        scanSource: '墨家设备'
+      },
+      select: { combinedOrderNo: true },
+      orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
+    });
+  });
+
   it('keeps the warehouse-role rejection text unchanged', async () => {
     const packageFindMany = vi.fn();
     const customerFindMany = vi.fn();
@@ -123,6 +178,8 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
 
     await expect(repository.getWarehousePackages(operator)).rejects.toThrow('当前角色不能操作仓库管理');
     await expect(repository.getWarehouseManualReceiptCustomers(operator)).rejects.toThrow('当前角色不能操作仓库管理');
+    await expect(repository.findDuplicateMojiaPackage(operator, { combinedOrderNo: 'ORDER-1-SF001' }))
+      .rejects.toThrow('当前角色不能操作仓库管理');
     expect(packageFindMany).not.toHaveBeenCalled();
     expect(customerFindMany).not.toHaveBeenCalled();
   });

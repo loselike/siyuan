@@ -9,10 +9,20 @@ import {
 
 export const WAREHOUSE_INVENTORY_QUERY_REPOSITORY = 'WAREHOUSE_INVENTORY_QUERY_REPOSITORY';
 
+export interface MojiaWarehouseDuplicateQuery {
+  combinedOrderNo: string;
+  scanTime?: string;
+  remark?: string;
+}
+
 export interface WarehouseInventoryQueryRepository {
   getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]>;
   getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]>;
   getWarehouseManualReceiptCustomers(principal: Principal): Promise<Array<{ code: string; name: string }>>;
+  findDuplicateMojiaPackage(
+    principal: Principal,
+    query: MojiaWarehouseDuplicateQuery
+  ): Promise<{ combinedOrderNo: string } | undefined>;
 }
 
 @Injectable()
@@ -39,6 +49,27 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
       orderBy: { code: 'asc' }
     });
     return customers.map((customer) => ({ code: customer.code, name: customer.name }));
+  }
+
+  async findDuplicateMojiaPackage(
+    principal: Principal,
+    query: MojiaWarehouseDuplicateQuery
+  ): Promise<{ combinedOrderNo: string } | undefined> {
+    this.ensureWarehouseAccess(principal);
+    const scanTimeSecond = query.scanTime ? Math.floor(new Date(query.scanTime).getTime() / 1000) : undefined;
+    const row = await (this.prisma as any).warehousePackage.findFirst({
+      where: {
+        combinedOrderNo: query.combinedOrderNo,
+        scanSource: '墨家设备',
+        ...(scanTimeSecond
+          ? { scanTime: { gte: new Date(scanTimeSecond * 1000), lt: new Date((scanTimeSecond + 1) * 1000) } }
+          : {}),
+        ...(query.remark ? { remark: query.remark } : {})
+      },
+      select: { combinedOrderNo: true },
+      orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
+    });
+    return row ? { combinedOrderNo: query.combinedOrderNo } : undefined;
   }
 
   private ensureWarehouseAccess(principal: Principal) {
