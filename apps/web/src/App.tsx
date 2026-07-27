@@ -45,7 +45,6 @@ import {
   getModuleCoverageSummary,
   productModules,
   shipmentStatusLabels,
-  summarizeStatusCounts,
   validateShipmentImportRows,
   type AccountLedgerSummary,
   type BusinessType,
@@ -94,9 +93,7 @@ import {
   resolveStaffSectionKey,
   sanitizeShipmentColumnOrder,
   sanitizeHiddenShipmentColumns,
-  shipmentColumnLabels,
   shipmentHiddenColumnsStorageKey,
-  shipmentColumnOrderOptions,
   shipmentColumnOrders,
   shipmentColumnOrderStorageKey,
   shipmentCustomColumnOrderStorageKey,
@@ -176,29 +173,27 @@ export function App() {
   const [sidebarSubNav, setSidebarSubNav] = useState<SidebarSubNavState | null>(null);
   const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['appShell']['navigationUnreadBadges']>>['items']>([]);
   const businessType: BusinessType = 'DEDICATED_LINE';
-  const [selectedStatus, setSelectedStatus] = useState<ShipmentStatus | 'ALL'>('ALL');
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState('shipmentPool');
   const [activeFulfillmentSection, setActiveFulfillmentSection] = useState('stageBoard');
   const [selectedFulfillmentStage, setSelectedFulfillmentStage] = useState<OrdersLifecycleStageKey>('all');
-  const [shipmentColumnOrderMode, setShipmentColumnOrderMode] = useState<ShipmentColumnOrderMode>(() => {
+  const [shipmentColumnOrderMode] = useState<ShipmentColumnOrderMode>(() => {
     const saved = localStorage.getItem(shipmentColumnOrderStorageKey);
     return isShipmentColumnOrderMode(saved) ? saved : 'default';
   });
-  const [customShipmentColumnOrder, setCustomShipmentColumnOrder] = useState<ShipmentColumnKey[]>(() => {
+  const [customShipmentColumnOrder] = useState<ShipmentColumnKey[]>(() => {
     try {
       return sanitizeShipmentColumnOrder(JSON.parse(localStorage.getItem(shipmentCustomColumnOrderStorageKey) ?? 'null'));
     } catch {
       return defaultShipmentColumnOrder;
     }
   });
-  const [hiddenShipmentColumns, setHiddenShipmentColumns] = useState<ShipmentColumnKey[]>(() => {
+  const [hiddenShipmentColumns] = useState<ShipmentColumnKey[]>(() => {
     try {
       return sanitizeHiddenShipmentColumns(JSON.parse(localStorage.getItem(shipmentHiddenColumnsStorageKey) ?? 'null'));
     } catch {
       return defaultHiddenShipmentColumns;
     }
   });
-  const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
   const [keyword, setKeyword] = useState('');
   const [localShipments, setLocalShipments] = useState<Shipment[]>([]);
   const [shipmentOperationLogs, setShipmentOperationLogs] = useState<Record<string, ShipmentOperationLog[]>>({});
@@ -735,29 +730,6 @@ export function App() {
     }
   }
 
-  const visibleShipments = useMemo(() => {
-    const normalized = keyword.trim().toLowerCase();
-    return localShipments.filter((shipment) => {
-      const matchesStatus = selectedStatus === 'ALL' || shipment.status === selectedStatus;
-      const matchesKeyword =
-        normalized.length === 0 ||
-        [
-          shipment.customerName,
-          shipment.customerOrderNo,
-          shipment.systemOrderNo,
-          shipment.transferNo,
-          shipment.destinationCountry,
-          shipment.carrier,
-          shipment.channelName,
-          shipment.agentName
-        ]
-          .filter(Boolean)
-          .some((value) => value?.toLowerCase().includes(normalized));
-
-      return matchesStatus && matchesKeyword;
-    });
-  }, [keyword, localShipments, selectedStatus]);
-
   const businessShipments = useMemo(
     () => localShipments,
     [localShipments]
@@ -803,7 +775,6 @@ export function App() {
     },
     [findShipmentBySystemOrderNo]
   );
-  const statusCounts = summarizeStatusCounts(businessShipments);
   const aiQueue = useMemo(
     () =>
       businessShipments
@@ -1063,50 +1034,8 @@ export function App() {
   const activeShipmentColumnOrder =
     shipmentColumnOrderMode === 'custom' ? customShipmentColumnOrder : shipmentColumnOrders[shipmentColumnOrderMode];
   const visibleShipmentColumnOrder = activeShipmentColumnOrder.filter((key) => !hiddenShipmentColumns.includes(key));
-  const moveShipmentColumn = (key: ShipmentColumnKey, direction: 'up' | 'down') => {
-    setCustomShipmentColumnOrder((current) => {
-      const next = [...current];
-      const index = next.indexOf(key);
-      const targetIndex = direction === 'up' ? index - 1 : index + 1;
-      if (index < 0 || targetIndex < 0 || targetIndex >= next.length) {
-        return current;
-      }
-      [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-      return next;
-    });
-    setShipmentColumnOrderMode('custom');
-  };
-  const resetShipmentColumnOrder = () => {
-    setCustomShipmentColumnOrder(defaultShipmentColumnOrder);
-    setShipmentColumnOrderMode('default');
-    setHiddenShipmentColumns(defaultHiddenShipmentColumns);
-  };
-  const toggleShipmentColumn = (key: ShipmentColumnKey, visible: boolean) => {
-    setHiddenShipmentColumns((current) => {
-      if (visible) {
-        return current.filter((item) => item !== key);
-      }
-      const visibleCount = defaultShipmentColumnOrder.length - current.length;
-      if (visibleCount <= 1 && !current.includes(key)) {
-        return current;
-      }
-      return current.includes(key) ? current : [...current, key];
-    });
-  };
   const visibleShipmentColumnKeys: ShipmentColumnKey[] = visibleShipmentColumnOrder.length ? visibleShipmentColumnOrder : ['systemOrderNo'];
   const columns: ColumnsType<Shipment> = visibleShipmentColumnKeys.map((key) => shipmentColumnMap[key]);
-  const workspaceColumns: ColumnsType<Shipment> = columns.map((column) => {
-    if (column.key !== 'systemOrderNo') {
-      return column;
-    }
-
-    return {
-      ...column,
-      render: (value: string, record: Shipment) => (
-        renderShipmentOrderNoLink(value, { shipment: record, subtitle: '点击查看详情' })
-      )
-    };
-  });
   const fulfillmentTrackingColumn: ColumnsType<Shipment>[number] = {
     ...shipmentColumnMap.latestTracking,
     key: 'trackingStatus',
@@ -2169,7 +2098,6 @@ export function App() {
               <Button
                 type="primary"
                 onClick={() => {
-                  setSelectedStatus('ALL');
                   setActiveMenuKey('workspace');
                 }}
               >
@@ -2391,63 +2319,6 @@ export function App() {
             onCancel={() => setDetailViewingShipment(null)}
           >
             {detailViewingShipment ? renderShipmentDetailContent(detailViewingShipment) : null}
-          </Modal>
-          <Modal
-            title="运单列设置"
-            open={columnSettingsOpen}
-            width={620}
-            onCancel={() => setColumnSettingsOpen(false)}
-            footer={[
-              <Button key="show-all" onClick={() => setHiddenShipmentColumns([])}>
-                全选
-              </Button>,
-              <Button key="reset" onClick={resetShipmentColumnOrder}>
-                恢复默认
-              </Button>,
-              <Button key="close" type="primary" onClick={() => setColumnSettingsOpen(false)}>
-                完成
-              </Button>
-            ]}
-          >
-            <Space direction="vertical" size={12} className="column-settings-panel">
-              <Alert
-                type="info"
-                showIcon
-                message="不同岗位可以按自己的查看习惯选择显示字段并调整顺序。保存后会应用到运营工作台、我的订单和渠道排货的运单表格。"
-              />
-              <div className="column-settings-list">
-                {customShipmentColumnOrder.map((key, index) => (
-                  <div className="column-settings-row" key={key}>
-                    <Space>
-                      <Tag color="blue">{index + 1}</Tag>
-                      <Checkbox
-                        checked={!hiddenShipmentColumns.includes(key)}
-                        onChange={(event) => toggleShipmentColumn(key, event.target.checked)}
-                      >
-                        <Text strong>{shipmentColumnLabels[key]}</Text>
-                      </Checkbox>
-                    </Space>
-                    <Space>
-                      <Button size="small" disabled={index === 0} onClick={() => {
-                        setCustomShipmentColumnOrder((current) => [key, ...current.filter((item) => item !== key)]);
-                      }}>
-                        移到首行
-                      </Button>
-                      <Button size="small" disabled={index === 0} onClick={() => moveShipmentColumn(key, 'up')}>
-                        上移
-                      </Button>
-                      <Button
-                        size="small"
-                        disabled={index === customShipmentColumnOrder.length - 1}
-                        onClick={() => moveShipmentColumn(key, 'down')}
-                      >
-                        下移
-                      </Button>
-                    </Space>
-                  </div>
-                ))}
-              </div>
-            </Space>
           </Modal>
           <ModuleSubNavContext.Provider value={sidebarSubNavContextValue}>
           <Content id="main-content" className="content" role="main" tabIndex={-1}>
@@ -2694,22 +2565,11 @@ export function App() {
             ) : (
               <OperationsPage
                 businessWorkspaceConfig={businessWorkspaceConfig}
-                businessShipments={businessShipments}
                 aiQueue={aiQueue}
                 importValidation={importValidation}
                 businessType={businessType}
                 onAiAssist={handleAiAssist}
                 aiLoading={aiLoading}
-                selectedStatus={selectedStatus}
-                onSelectStatus={setSelectedStatus}
-                statusOrder={statusOrder}
-                statusCounts={statusCounts}
-                shipmentColumnOrderMode={shipmentColumnOrderMode}
-                onShipmentColumnOrderModeChange={setShipmentColumnOrderMode}
-                shipmentColumnOrderOptions={shipmentColumnOrderOptions}
-                onOpenColumnSettings={() => setColumnSettingsOpen(true)}
-                workspaceColumns={workspaceColumns}
-                visibleShipments={visibleShipments}
                 activeWorkspaceSection={activeWorkspaceSection}
                 onActiveWorkspaceSectionChange={setActiveWorkspaceSection}
                 automationPlan={automationPlan}

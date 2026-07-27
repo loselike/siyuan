@@ -2,16 +2,14 @@ import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, Boxes, ClipboardList, FileInput, PackagePlus, RotateCcw, Search, Send, ShieldAlert, Sparkles, Truck, Wallet, Warehouse } from 'lucide-react';
 import { Alert, Badge, Button, Card, Col, Dropdown, Flex, Input, Modal, Progress, Row, Select, Space, Tag, Typography, message } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { businessTypeLabels, shipmentStatusLabels, type BusinessType, type LineShipmentPoolQuery, type LineShipmentPoolResponse, type LineShipmentPoolRow, type LineShipmentStatusGroup, type Shipment, type ShipmentStatus, type ShipmentInternalFlowLogResponse } from '@siyuan/shared';
 import type { ApiClient, PermissionKey, RoleKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
-import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, riskLabel, tenRowTablePagination, type ManagedTableColumn } from '../shared/ui';
+import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, riskLabel, type ManagedTableColumn } from '../shared/ui';
 import { formatBeijingDateTime } from '../shared/format';
 
 const { Title } = Typography;
 
-type ShipmentColumnOrderMode = 'default' | 'customerFirst' | 'agentFirst' | 'custom';
 type LinePoolColumnKey = 'createdAt' | 'customerSales' | 'orderNo' | 'route' | 'status' | 'latestTracking' | 'volumeFee' | 'payment' | 'remark' | 'action';
 
 interface BusinessWorkspaceConfig {
@@ -156,7 +154,6 @@ export function OperationsPage({
   businessType,
   onAiAssist,
   aiLoading,
-  onOpenColumnSettings,
   activeWorkspaceSection,
   onActiveWorkspaceSectionChange,
   automationPlan,
@@ -169,22 +166,11 @@ export function OperationsPage({
   onProcessShipment
 }: {
   businessWorkspaceConfig: BusinessWorkspaceConfig;
-  businessShipments: Shipment[];
   aiQueue: Array<{ shipment: Shipment; insight: RiskInsight }>;
   importValidation: ImportValidationSummary;
   businessType: BusinessType;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
-  selectedStatus: ShipmentStatus | 'ALL';
-  onSelectStatus: (status: ShipmentStatus | 'ALL') => void;
-  statusOrder: ShipmentStatus[];
-  statusCounts: Partial<Record<ShipmentStatus, number>>;
-  shipmentColumnOrderMode: ShipmentColumnOrderMode;
-  onShipmentColumnOrderModeChange: (mode: ShipmentColumnOrderMode) => void;
-  shipmentColumnOrderOptions: Array<{ value: ShipmentColumnOrderMode; label: string }>;
-  onOpenColumnSettings: () => void;
-  workspaceColumns: ColumnsType<Shipment>;
-  visibleShipments: Shipment[];
   activeWorkspaceSection: string;
   onActiveWorkspaceSectionChange: (section: string) => void;
   automationPlan: AutomationPlanItem[];

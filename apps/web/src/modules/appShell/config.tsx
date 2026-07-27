@@ -138,12 +138,6 @@ export const defaultShipmentColumnOrder: ShipmentColumnKey[] = [
   'remark'
 ];
 export const defaultHiddenShipmentColumns: ShipmentColumnKey[] = [];
-export const shipmentColumnOrderOptions: Array<{ value: ShipmentColumnOrderMode; label: string }> = [
-  { value: 'default', label: '默认顺序' },
-  { value: 'customerFirst', label: '客户优先' },
-  { value: 'agentFirst', label: '代理优先' },
-  { value: 'custom', label: '自定义顺序' }
-];
 export const shipmentColumnOrders: Record<ShipmentColumnOrderMode, ShipmentColumnKey[]> = {
   default: defaultShipmentColumnOrder,
   customerFirst: [
