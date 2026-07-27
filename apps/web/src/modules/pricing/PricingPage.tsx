@@ -1,7 +1,7 @@
 import type { ChangeEvent, Key } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AutoComplete, Button, Card, Col, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Progress, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
-import { AlertTriangle, ArrowLeft, ArrowRight, Banknote, CheckCircle2, Copy, Download, Eye, FileInput, MoreHorizontal, PackageCheck, Power, RefreshCw, Search, Settings, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, Eye, FileInput, MoreHorizontal, PackageCheck, Power, RefreshCw, Search, Settings, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { normalizeUsPostalCode, type AgentMarkupListQuery, type AgentMarkupMetrics, type AgentMarkupSummary, type AgentMarkupType, type AgentSummary, type DubaiPriceDisplayPageSummary, type DubaiPriceDisplayResponse, type DubaiPriceDisplayVersionSummary, type LegacyPricingMetaResponse, type LegacyPricingModule, type LegacyPricingQuoteResponse, type LegacyPricingRecommendation, type MasterDataSnapshot, type PriceBookImportJobSummary, type PriceBookImportTargetModule, type PriceBookSummary, type PriceLookupRecommendation, type PriceLookupResponse, type PricingRuleRefreshProgressResponse, type PricingSyncHealthResponse, type PricingSyncHealthRow, type SouthAfricaLookupResponse, type SouthAfricaRateRuleInput, type SouthAfricaRateRuleSummary, type StaffRoleKey } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
@@ -30,7 +30,6 @@ import {
   calculateDimensionVolumeCbm,
   describeLargeCargo,
   filterPriceBookImportAgentOption,
-  formatLegacyModuleCounts,
   getAgentMarkupGroupId,
   getLegacyModuleLabel,
   getMarkupRowLookupChannel,
@@ -38,7 +37,6 @@ import {
   getPricingSyncStatusMeta,
   inferAmazonTierFromChargeableWeight,
   inferSouthAfricaMaterialCategory,
-  isAgentLevelMarkupRule,
   isAirSeaPricingModule,
   isAmazonOriginOption,
   isPostalCodeRequired,
@@ -47,7 +45,6 @@ import {
   legacyPricingModules,
   lookupPermissionByModule,
   normalizeAmazonTier,
-  parseAmazonTierMinimum,
   parseSouthAfricaRuleKeywords,
   priceBookImportModules,
   priceBookMatchesLegacyModule,
@@ -183,13 +180,9 @@ export function PricingPage({
   const [volumeCbmManual, setVolumeCbmManual] = useState(false);
   const [amazonTierManual, setAmazonTierManual] = useState(false);
   const [southAfricaCategoryManual, setSouthAfricaCategoryManual] = useState(false);
-  const [todayLookupCount, setTodayLookupCount] = useState(0);
   useEffect(() => {
     onNoticeRef.current = onNotice;
   }, [onNotice]);
-  const agentMarkupRules = useMemo(() => {
-    return markupRules.filter(isAgentLevelMarkupRule);
-  }, [markupRules]);
   const enabledAgentOptions = useMemo(() => buildPriceBookImportAgentOptions(masterDataAgents), [masterDataAgents]);
   const markupAgentOptions = useMemo(() => {
     const agents = new Set<string>();
@@ -331,7 +324,6 @@ export function PricingPage({
   const amazonCodeValue = Form.useWatch('amazonCode', lookupForm);
   const canadaAddressTypeValue = Form.useWatch('canadaAddressType', lookupForm);
   const productNameValue = Form.useWatch('productName', lookupForm);
-  const channelValue = Form.useWatch('channel', lookupForm);
   const tierValue = Form.useWatch('tier', lookupForm);
   const measuredChargeableWeight = calculatePriceChargeableWeight({
     volumeCbm,
@@ -1195,7 +1187,6 @@ export function PricingPage({
             return;
           }
           setSouthAfricaResult(southAfrica);
-          setTodayLookupCount((current) => current + 1);
           onNotice(southAfrica.result
             ? southAfrica.result.consult
               ? `${southAfrica.result.category} 需单独咨询，已生成待复核记录`
@@ -1218,7 +1209,6 @@ export function PricingPage({
           return;
         }
         setLegacyResult(legacy);
-        setTodayLookupCount((current) => current + 1);
         const resultWeightBand = legacy.module === 'amazon'
           ? legacy.selected?.weightSegmentLabel ?? legacy.query.weightBand ?? selectedAmazonTier
           : undefined;

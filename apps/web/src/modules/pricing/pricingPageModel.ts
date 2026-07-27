@@ -261,15 +261,6 @@ export function pricingLookupErrorMessage(error: unknown) {
   return '查价失败，请稍后重试';
 }
 
-export function formatLegacyModuleCounts(counts?: PriceBookSummary['legacyModuleCounts']) {
-  if (!counts) return '未解析';
-  const modules = legacyPricingModules.filter((item) => (counts[item.key] ?? 0) > 0);
-  const text = (modules.length ? modules : legacyPricingModules)
-    .map((item) => `${item.label} / ${counts[item.key] ?? 0} 条`)
-    .join(' / ');
-  return text || '未解析';
-}
-
 export function priceBookMatchesLegacyModule(book: PriceBookSummary, module: LegacyPricingModule) {
   return Number(book.legacyModuleCounts?.[module] ?? 0) > 0;
 }
@@ -345,10 +336,6 @@ export function calculateDimensionVolumeCbm(values: Pick<Partial<PriceLookupForm
 
 export function isPostalCodeRequired(country?: string) {
   return /美国|加拿大|英国|德国|法国|US|USA|CA|UK|DE|FR/i.test(country?.trim() ?? '');
-}
-
-export function isAgentLevelMarkupRule(rule: AgentMarkupSummary) {
-  return !rule.channelName && !rule.realChannelName && !rule.destinationCountry;
 }
 
 export function getAgentMarkupGroupId(rule: Pick<AgentMarkupSummary, 'agentName' | 'priceBookId'>) {
