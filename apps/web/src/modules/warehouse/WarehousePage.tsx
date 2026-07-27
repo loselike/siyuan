@@ -3,13 +3,13 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, AutoComplete, Button, Card, Checkbox, Col, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { FileText, PackageCheck, PackagePlus, Plus, Trash2 } from 'lucide-react';
-import { type BusinessCostAuditSummary, type Shipment, type ShipmentStatus, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayResponse, type WarehouseTodayTotals } from '@siyuan/shared';
+import { type BusinessCostAuditSummary, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
 import { formatBeijingDateTime } from '../shared/format';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
 import { PlaceholderPanel } from '../shared/PlaceholderPanel';
-import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedTable, MetricCard, StatusTag, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedTable, MetricCard, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import {
   calculateWarehousePackageMetrics,
   calculateWarehouseVolumetricWeight,
@@ -47,8 +47,7 @@ import {
   type WarehouseInboundPackage,
   type WarehouseLabelQueueRow,
   type WarehousePackageDraft,
-  type WarehousePackageEditDraft,
-  type WarehouseQueueColumnKey
+  type WarehousePackageEditDraft
 } from './warehousePageModel';
 
 export { canEditUnenteredWarehousePackage } from './warehousePageModel';
@@ -189,7 +188,6 @@ export function WarehousePage({
   const [tallyPackagePage, setTallyPackagePage] = useState(1);
   const [consolidations, setConsolidations] = useState<WarehouseConsolidationRecord[]>([]);
   const [selectedConsolidationId, setSelectedConsolidationId] = useState<string | null>(null);
-  const [dispatchedConsolidationIds, setDispatchedConsolidationIds] = useState<string[]>([]);
   const [dispatchingWarehouseShipmentIds, setDispatchingWarehouseShipmentIds] = useState<string[]>([]);
   const [warehouseNotice, setWarehouseNotice] = useState<string | null>(null);
   const emptyConsolidationPackageFilters = {
@@ -500,9 +498,7 @@ export function WarehousePage({
     }),
     { packages: 0, actualWeightKg: 0, volumetricWeightKg: 0, chargeableWeightKg: 0 }
   );
-  const warehouseOutboundQueue = consolidations.filter(
-    (record) => record.mode === 'MERGE_AND_SHIP' && !dispatchedConsolidationIds.includes(record.id)
-  );
+  const warehouseOutboundQueue = consolidations.filter((record) => record.mode === 'MERGE_AND_SHIP');
   const warehouseShipmentQueue = shipments.filter(
     (shipment) => shipment.status === 'WAITING_DISPATCH' && !dispatchingWarehouseShipmentIds.includes(shipment.id)
   );
@@ -592,7 +588,7 @@ export function WarehousePage({
     const agentName = '待确认代理';
     return {
       id: row.id,
-      agentGroupName: getWarehouseConsolidationHandoverGroup(row.consolidation),
+      agentGroupName: formatWarehouseHandoverGroup(undefined),
       handoverNo: createWarehouseHandoverNo(row.consolidation.outboundOrderNo),
       inboundOrderNos: formatWarehouseHandoverInboundNos(packages),
       outboundOrderNo: row.consolidation.outboundOrderNo,
@@ -644,10 +640,6 @@ export function WarehousePage({
   function formatWarehouseHandoverGroup(agentName?: string) {
     const agent = agentName?.trim() || '待确认代理';
     return agent;
-  }
-
-  function getWarehouseConsolidationHandoverGroup(record: WarehouseConsolidationRecord) {
-    return formatWarehouseHandoverGroup(undefined);
   }
 
   function groupWarehouseHandoverRowsByAgent(rows: WarehouseHandoverRow[]) {
@@ -1702,7 +1694,6 @@ export function WarehousePage({
           setWarehouseNotice('合并理货至少选择两个任务内原始包裹');
           return;
         }
-        const selected = sourcePackages.filter((pkg) => selectedIds.includes(pkg.id));
         results = [
           {
             sourcePackageIds: selectedIds,
