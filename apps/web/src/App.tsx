@@ -69,15 +69,10 @@ import {
   type FinanceCatalogItemSummary,
   type FulfillmentAction,
   type MasterDataSnapshot,
-  type BusinessCostAuditCreateInput,
   type BusinessCostAuditSummary,
-  type BusinessCostAuditUpdateInput,
-  type PayableAuditCreateInput,
   type PayableAuditSummary,
-  type PayableAuditUpdateInput,
   type PayableFeeSummary,
   type BusinessCostFeeSummary,
-  type ReceivableAuditCreateInput,
   type ReceivableAuditSummary,
   type ReceivableFeeSummary,
   type Shipment,
@@ -640,13 +635,6 @@ export function App() {
     } finally {
       setShipmentFinanceLoading(false);
     }
-  }
-
-  async function refreshFinanceDetailIfOpen() {
-    if (!detailViewingShipment || !canViewShipmentFinanceDetail) {
-      return;
-    }
-    await reloadShipmentFinanceDetail(detailViewingShipment.id);
   }
 
   function mergeSessionUser(user: Principal) {
@@ -1355,22 +1343,6 @@ export function App() {
     setOutboundOrderOpen(true);
   }
 
-  async function handleDeleteShipment(record: Shipment) {
-    await apiClient.deleteShipment(record.id);
-    setLocalShipments((current) => current.filter((shipment) => shipment.id !== record.id));
-    if (editingShipment?.id === record.id) {
-      setEditingShipment(null);
-      setEditingShipmentSource('operation');
-    }
-    if (collectingShipment?.id === record.id) {
-      setCollectingShipment(null);
-    }
-    if (logViewingShipment?.id === record.id) {
-      setLogViewingShipment(null);
-    }
-    setNotice(`已人工删除运单 ${record.systemOrderNo}`);
-  }
-
   async function handleCreateOutboundOrder() {
     const values = await outboundOrderForm.validateFields();
     const systemOrderNo = values.systemOrderNo?.trim() || `SYOUT${Date.now()}`;
@@ -2012,167 +1984,8 @@ export function App() {
     setReceivables((await apiClient.receivableAudits({ pageSize: 100 })).rows);
   }
 
-  async function refreshBusinessCostAudits() {
-    setBusinessCostAudits((await apiClient.businessCostAudits({ pageSize: 100 })).rows);
-  }
-
   async function refreshPayableAudits() {
     setPayableAudits((await apiClient.payableAudits({ pageSize: 100 })).rows);
-  }
-
-  async function handleAuditReceivable(id: string) {
-    await apiClient.auditReceivable(id);
-    await refreshReceivableAudits();
-    setNotice('应收已审核');
-  }
-
-  async function handleReverseAuditReceivable(id: string) {
-    await apiClient.reverseAuditReceivable(id);
-    await refreshReceivableAudits();
-    setNotice('应收已反审核');
-  }
-
-  async function handleDeleteReceivableAudit(id: string) {
-    await apiClient.deleteReceivableAudit(id);
-    await refreshReceivableAudits();
-    setNotice('应收已删除');
-  }
-
-  async function handleBatchAuditReceivables(ids: string[]) {
-    if (ids.length === 0) return;
-    const result = await apiClient.batchAuditReceivables({ ids });
-    await refreshReceivableAudits();
-    setNotice(`批量审核完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`);
-  }
-
-  async function handleBatchReverseAuditReceivables(ids: string[]) {
-    if (ids.length === 0) return;
-    const result = await apiClient.batchReverseAuditReceivables({ ids });
-    await refreshReceivableAudits();
-    setNotice(`批量反审核完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`);
-  }
-
-  async function handleCreateReceivableAudit(input: ReceivableAuditCreateInput) {
-    await apiClient.createReceivableAudit(input);
-    await refreshReceivableAudits();
-    setNotice('应收已新增');
-  }
-
-  async function handleExportReceivableAudits(ids: string[]) {
-    const response = await apiClient.exportReceivableAudits({ ids: ids.length ? ids : undefined });
-    setNotice(`应收导出已生成：${response.rows.length} 条`);
-  }
-
-  async function handleCreateBusinessCostAudit(input: BusinessCostAuditCreateInput) {
-    await apiClient.createBusinessCostAudit(input);
-    await refreshBusinessCostAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('业务成本已新增');
-  }
-
-  async function handleUpdateBusinessCostAudit(id: string, input: BusinessCostAuditUpdateInput) {
-    await apiClient.updateBusinessCostAudit(id, input);
-    await refreshBusinessCostAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('业务成本已修改');
-  }
-
-  async function handleAuditBusinessCost(id: string) {
-    await apiClient.auditBusinessCost(id);
-    await refreshBusinessCostAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('业务成本已审核');
-  }
-
-  async function handleReverseAuditBusinessCost(id: string) {
-    await apiClient.reverseAuditBusinessCost(id);
-    await refreshBusinessCostAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('业务成本已反审核');
-  }
-
-  async function handleDeleteBusinessCostAudit(id: string) {
-    await apiClient.deleteBusinessCostAudit(id);
-    await refreshBusinessCostAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('业务成本已删除');
-  }
-
-  async function handleBatchAuditBusinessCosts(ids: string[]) {
-    if (ids.length === 0) return;
-    const result = await apiClient.batchAuditBusinessCosts({ ids });
-    await refreshBusinessCostAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice(`批量审核完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`);
-  }
-
-  async function handleBatchReverseAuditBusinessCosts(ids: string[]) {
-    if (ids.length === 0) return;
-    const result = await apiClient.batchReverseAuditBusinessCosts({ ids });
-    await refreshBusinessCostAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice(`批量反审核完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`);
-  }
-
-  async function handleExportBusinessCostAudits(ids: string[]) {
-    const response = await apiClient.exportBusinessCostAudits({ ids: ids.length ? ids : undefined });
-    setNotice(`业务成本导出已生成：${response.rows.length} 条`);
-  }
-
-  async function handleCreatePayableAudit(input: PayableAuditCreateInput) {
-    await apiClient.createPayableAudit(input);
-    await refreshPayableAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('应付已新增');
-  }
-
-  async function handleUpdatePayableAudit(id: string, input: PayableAuditUpdateInput) {
-    await apiClient.updatePayableAudit(id, input);
-    await refreshPayableAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('应付已修改');
-  }
-
-  async function handleAuditPayable(id: string) {
-    await apiClient.auditPayable(id);
-    await refreshPayableAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('应付已审核');
-  }
-
-  async function handleReverseAuditPayable(id: string) {
-    await apiClient.reverseAuditPayable(id);
-    await refreshPayableAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('应付已反审核');
-  }
-
-  async function handleDeletePayableAudit(id: string) {
-    await apiClient.deletePayableAudit(id);
-    await refreshPayableAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice('应付已删除');
-  }
-
-  async function handleBatchAuditPayables(ids: string[]) {
-    if (ids.length === 0) return;
-    const result = await apiClient.batchAuditPayables({ ids });
-    await refreshPayableAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice(`批量审核完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`);
-  }
-
-  async function handleBatchReverseAuditPayables(ids: string[]) {
-    if (ids.length === 0) return;
-    const result = await apiClient.batchReverseAuditPayables({ ids });
-    await refreshPayableAudits();
-    await refreshFinanceDetailIfOpen();
-    setNotice(`批量反审核完成：成功 ${result.successCount} 条，失败 ${result.failureCount} 条`);
-  }
-
-  async function handleExportPayableAudits(ids: string[]) {
-    const response = await apiClient.exportPayableAudits({ ids: ids.length ? ids : undefined });
-    setNotice(`应付导出已生成：${response.rows.length} 条`);
   }
 
   async function handleAiAssist(input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) {
@@ -2843,44 +2656,14 @@ export function App() {
                 payableAudits={payableAudits}
                 statements={customerStatements}
                 accounts={customerAccounts}
-                ledger={accountLedger}
                 notice={notice}
                 onCreateStatement={handleCreateCustomerStatement}
                 onCreatePayment={handleCreatePayment}
-                onAuditReceivable={handleAuditReceivable}
-                onReverseAuditReceivable={handleReverseAuditReceivable}
-                onDeleteReceivable={handleDeleteReceivableAudit}
-                onBatchAuditReceivables={handleBatchAuditReceivables}
-                onBatchReverseAuditReceivables={handleBatchReverseAuditReceivables}
-                onCreateReceivable={handleCreateReceivableAudit}
                 onReceivableRowsChange={setReceivables}
-                onExportReceivables={handleExportReceivableAudits}
-                onAuditBusinessCost={handleAuditBusinessCost}
-                onReverseAuditBusinessCost={handleReverseAuditBusinessCost}
-                onDeleteBusinessCost={handleDeleteBusinessCostAudit}
-                onBatchAuditBusinessCosts={handleBatchAuditBusinessCosts}
-                onBatchReverseAuditBusinessCosts={handleBatchReverseAuditBusinessCosts}
-                onCreateBusinessCost={handleCreateBusinessCostAudit}
-                onUpdateBusinessCost={handleUpdateBusinessCostAudit}
                 onBusinessCostRowsChange={setBusinessCostAudits}
-                onExportBusinessCosts={handleExportBusinessCostAudits}
-                onAuditPayable={handleAuditPayable}
-                onReverseAuditPayable={handleReverseAuditPayable}
-                onDeletePayable={handleDeletePayableAudit}
-                onBatchAuditPayables={handleBatchAuditPayables}
-                onBatchReverseAuditPayables={handleBatchReverseAuditPayables}
-                onCreatePayable={handleCreatePayableAudit}
-                onUpdatePayable={handleUpdatePayableAudit}
                 onPayableRowsChange={setPayableAudits}
-                onExportPayables={handleExportPayableAudits}
                 shipments={localShipments}
-                shipmentFinanceDetails={shipmentFinanceDetails}
-                shipmentOperationLogs={shipmentOperationLogs}
-                onApproveShipment={(record) => handleFulfillmentAction(record, 'confirm-declare')}
-                onRejectShipment={(record) => handleFulfillmentAction(record, 'reject-declare')}
-                onEditShipment={(record) => openEditShipmentOperationalModal(record)}
                 onViewShipmentLog={(record) => openShipmentLogModal(record, 'operation')}
-                onDeleteShipment={handleDeleteShipment}
                 renderShipmentFinancePanel={renderShipmentFinancePanel}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
                 apiClient={apiClient}
@@ -2979,44 +2762,14 @@ export function App() {
                 payableAudits={payableAudits}
                 statements={customerStatements}
                 accounts={customerAccounts}
-                ledger={accountLedger}
                 notice={notice}
                 onCreateStatement={handleCreateCustomerStatement}
                 onCreatePayment={handleCreatePayment}
-                onAuditReceivable={handleAuditReceivable}
-                onReverseAuditReceivable={handleReverseAuditReceivable}
-                onDeleteReceivable={handleDeleteReceivableAudit}
-                onBatchAuditReceivables={handleBatchAuditReceivables}
-	                onBatchReverseAuditReceivables={handleBatchReverseAuditReceivables}
-	                onCreateReceivable={handleCreateReceivableAudit}
 	                onReceivableRowsChange={setReceivables}
-	                onExportReceivables={handleExportReceivableAudits}
-                onAuditBusinessCost={handleAuditBusinessCost}
-                onReverseAuditBusinessCost={handleReverseAuditBusinessCost}
-                onDeleteBusinessCost={handleDeleteBusinessCostAudit}
-                onBatchAuditBusinessCosts={handleBatchAuditBusinessCosts}
-                onBatchReverseAuditBusinessCosts={handleBatchReverseAuditBusinessCosts}
-                onCreateBusinessCost={handleCreateBusinessCostAudit}
-                onUpdateBusinessCost={handleUpdateBusinessCostAudit}
                 onBusinessCostRowsChange={setBusinessCostAudits}
-                onExportBusinessCosts={handleExportBusinessCostAudits}
-                onAuditPayable={handleAuditPayable}
-                onReverseAuditPayable={handleReverseAuditPayable}
-                onDeletePayable={handleDeletePayableAudit}
-                onBatchAuditPayables={handleBatchAuditPayables}
-                onBatchReverseAuditPayables={handleBatchReverseAuditPayables}
-                onCreatePayable={handleCreatePayableAudit}
-                onUpdatePayable={handleUpdatePayableAudit}
                 onPayableRowsChange={setPayableAudits}
-                onExportPayables={handleExportPayableAudits}
                 shipments={localShipments}
-                shipmentFinanceDetails={shipmentFinanceDetails}
-                shipmentOperationLogs={shipmentOperationLogs}
-                onApproveShipment={(record) => handleFulfillmentAction(record, 'confirm-declare')}
-                onRejectShipment={(record) => handleFulfillmentAction(record, 'reject-declare')}
-                onEditShipment={(record) => openEditShipmentOperationalModal(record)}
                 onViewShipmentLog={(record) => openShipmentLogModal(record, 'operation')}
-                onDeleteShipment={handleDeleteShipment}
                 renderShipmentFinancePanel={renderShipmentFinancePanel}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
                 apiClient={apiClient}

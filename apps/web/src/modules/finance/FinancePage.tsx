@@ -12,11 +12,9 @@ import {
   Input,
   App as AntdApp,
   Modal,
-  Popconfirm,
   Row,
   Select,
   Space,
-  Statistic,
   Tag,
   Tabs,
   Typography
@@ -25,10 +23,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { Banknote, CalendarDays, CircleDollarSign, ClipboardList, FilePenLine, FileText, Landmark, ListChecks, RefreshCw } from 'lucide-react';
 import {
   shipmentStatusLabels,
-  type AccountLedgerSummary,
-  type BusinessCostAuditCreateInput,
   type BusinessCostAuditSummary,
-  type BusinessCostAuditUpdateInput,
   type CustomerAccountSummary,
   type CustomerContactSummary,
   type CustomerSummary,
@@ -36,23 +31,17 @@ import {
   type FinanceDashboardItem,
   type FinanceDashboardResponse,
   type OrderEntryDetailSummary,
-  type PayableAuditCreateInput,
   type PendingPaymentListQuery,
   type PayableAuditSummary,
-  type PayableAuditUpdateInput,
-  type ReceivableAuditCreateInput,
   type ReceivableAuditSummary,
-  type ReceivableFeeSummary,
   type Shipment,
   type ShipmentFinanceDetailSummary,
-  type ShipmentFinanceItemUpdateInput,
   type ShipmentReviewBasicUpdateInput,
   type ShipmentReviewDetailSummary,
   type ShipmentReviewEventSummary,
   type ShipmentLogisticsTrackingEventSummary,
   type ShipmentReviewPackageSummary,
-  type ShipmentStatus,
-  type WarehousePackageSummary
+  type ShipmentStatus
 } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
 import { confirmDangerousAction } from '../shared/dangerousAction';
@@ -75,13 +64,6 @@ import { getStaffSectionHref } from '../appShell/config';
 const { Text } = Typography;
 const salesScopedRoleKeys = ['OPERATOR', 'UG_MARKET', 'UG_BUSINESS', 'UG_SZ_WUHAN', 'UG_ZZ_SIHUA', 'UG_WH_JIUYULIAN', 'UG_BUSINESS_MANAGER', 'UG_BUSINESS_SUPERVISOR'];
 
-interface ShipmentOperationLog {
-  id: string;
-  operatedAt: string;
-  operator: string;
-  action: string;
-}
-
 export function FinancePage({
   role,
   username,
@@ -91,7 +73,6 @@ export function FinancePage({
   payableAudits,
   statements,
   accounts,
-  ledger,
   notice,
   onCreateStatement,
   onCreatePayment,
@@ -99,13 +80,7 @@ export function FinancePage({
   onBusinessCostRowsChange,
   onPayableRowsChange,
   shipments,
-  shipmentFinanceDetails,
-  shipmentOperationLogs,
-  onApproveShipment,
-  onRejectShipment,
-  onEditShipment,
   onViewShipmentLog,
-  onDeleteShipment,
   renderShipmentFinancePanel,
   renderShipmentOrderNoLink,
   apiClient,
@@ -127,44 +102,14 @@ export function FinancePage({
   payableAudits: PayableAuditSummary[];
   statements: CustomerStatementSummary[];
   accounts: CustomerAccountSummary[];
-  ledger: AccountLedgerSummary[];
   notice: string | null;
   onCreateStatement: () => Promise<void>;
   onCreatePayment: () => Promise<void>;
-  onAuditReceivable: (id: string) => Promise<void>;
-  onReverseAuditReceivable: (id: string) => Promise<void>;
-  onDeleteReceivable: (id: string) => Promise<void>;
-  onBatchAuditReceivables: (ids: string[]) => Promise<void>;
-  onBatchReverseAuditReceivables: (ids: string[]) => Promise<void>;
-	  onCreateReceivable: (input: ReceivableAuditCreateInput) => Promise<void>;
 	  onReceivableRowsChange: (rows: ReceivableAuditSummary[]) => void;
-	  onExportReceivables: (ids: string[]) => Promise<void>;
-  onAuditBusinessCost: (id: string) => Promise<void>;
-  onReverseAuditBusinessCost: (id: string) => Promise<void>;
-  onDeleteBusinessCost: (id: string) => Promise<void>;
-  onBatchAuditBusinessCosts: (ids: string[]) => Promise<void>;
-  onBatchReverseAuditBusinessCosts: (ids: string[]) => Promise<void>;
-  onCreateBusinessCost: (input: BusinessCostAuditCreateInput) => Promise<void>;
-  onUpdateBusinessCost: (id: string, input: BusinessCostAuditUpdateInput) => Promise<void>;
   onBusinessCostRowsChange: (rows: BusinessCostAuditSummary[]) => void;
-  onExportBusinessCosts: (ids: string[]) => Promise<void>;
-  onAuditPayable: (id: string) => Promise<void>;
-  onReverseAuditPayable: (id: string) => Promise<void>;
-  onDeletePayable: (id: string) => Promise<void>;
-  onBatchAuditPayables: (ids: string[]) => Promise<void>;
-  onBatchReverseAuditPayables: (ids: string[]) => Promise<void>;
-  onCreatePayable: (input: PayableAuditCreateInput) => Promise<void>;
-  onUpdatePayable: (id: string, input: PayableAuditUpdateInput) => Promise<void>;
   onPayableRowsChange: (rows: PayableAuditSummary[]) => void;
-  onExportPayables: (ids: string[]) => Promise<void>;
   shipments: Shipment[];
-  shipmentFinanceDetails: Record<string, ShipmentFinanceDetailSummary>;
-  shipmentOperationLogs: Record<string, ShipmentOperationLog[]>;
-  onApproveShipment: (record: Shipment) => Promise<void>;
-  onRejectShipment: (record: Shipment) => Promise<void>;
-  onEditShipment: (record: Shipment) => void;
   onViewShipmentLog: (record: Shipment) => void;
-  onDeleteShipment: (record: Shipment) => Promise<void>;
   renderShipmentFinancePanel: (shipment: Shipment, detail?: ShipmentFinanceDetailSummary) => ReactNode;
   renderShipmentOrderNoLink: (systemOrderNo?: string, options?: { shipment?: Shipment; subtitle?: string; copyText?: string }) => ReactNode;
   apiClient: ApiClient;
@@ -468,7 +413,7 @@ export function FinancePage({
   const copyPendingReviewSummary = async () => {
     if (!selectedPendingReviewShipment) return;
     try {
-      await navigator.clipboard?.writeText(pendingReviewSummaryText);
+      await window.navigator.clipboard?.writeText(pendingReviewSummaryText);
       messageApi.success('摘要已复制');
     } catch {
       messageApi.warning('当前浏览器不支持自动复制');
@@ -1324,7 +1269,7 @@ export function FinancePage({
     const href = getStaffSectionHref('business', sectionKey);
     if (window.location.pathname === href) return;
     window.history.pushState(null, '', href);
-    window.dispatchEvent(new PopStateEvent('popstate'));
+    window.dispatchEvent(new window.PopStateEvent('popstate'));
   }, []);
 
   useEffect(() => {
