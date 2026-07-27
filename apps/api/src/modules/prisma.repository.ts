@@ -1,7 +1,7 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, OnModuleInit, Optional } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import type { Permission as PrismaPermission, Role as PrismaRole, Shipment as PrismaShipment } from '@prisma/client';
+import { Prisma, type Permission as PrismaPermission, type Role as PrismaRole, type Shipment as PrismaShipment } from '@prisma/client';
 import {
   canTransitionShipment,
   calculateCompanyChannelChargeWeight,
@@ -838,7 +838,7 @@ export class PrismaRepository implements OnModuleInit {
     return { ok: true };
   }
 
-  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean } = {}): Promise<Shipment[]> {
+  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; where?: Prisma.ShipmentWhereInput } = {}): Promise<Shipment[]> {
     const canViewMarketAgent = await this.hasAnyPermission(principal.role, [
       'market:pending-routing:agent-channel-view',
       'market:routed:agent-channel-view'
@@ -850,14 +850,15 @@ export class PrismaRepository implements OnModuleInit {
       'market:weekly-routing:cost-view'
     ]);
     const operatorCustomerScope = this.operatorCustomerScope(principal);
+    const baseWhere: Prisma.ShipmentWhereInput = {
+      deletedAt: null,
+      ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
+      ...(operatorCustomerScope
+        ? { OR: [{ entryBy: { in: operatorCustomerScope } }, { customer: { salesperson: { in: operatorCustomerScope } } }] }
+        : {})
+    };
     const rows = await this.prisma.shipment.findMany({
-      where: {
-        deletedAt: null,
-        ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-        ...(operatorCustomerScope
-          ? { OR: [{ entryBy: { in: operatorCustomerScope } }, { customer: { salesperson: { in: operatorCustomerScope } } }] }
-          : {})
-      },
+      where: options.where ? { AND: [baseWhere, options.where] } : baseWhere,
       include: shipmentIncludes,
       orderBy: { createdAt: 'desc' }
     });
@@ -1011,9 +1012,22 @@ export class PrismaRepository implements OnModuleInit {
   async customerServiceTransferShipments(principal: Principal): Promise<Shipment[]> {
     if (!await this.hasPermission(principal.role, 'customer-service:transfer:view')) throw new ForbiddenException('无权查看转单号');
     const canViewAll = await this.hasPermission(principal.role, 'customer-service:transfer:view-all');
-    const rows = (await this.getShipments(principal))
-      .filter((shipment) => shipment.status === 'OUTBOUNDED' && !shipment.transferNo)
-      .filter((shipment) => canViewAll || shipment.salesperson === principal.username);
+    const rows = await this.getShipments(principal, {
+      where: {
+        status: 'OUTBOUNDED',
+        OR: [{ transferNo: null }, { transferNo: '' }],
+        ...(canViewAll
+          ? {}
+          : {
+              AND: {
+                OR: [
+                  { customer: { salesperson: principal.username } },
+                  { customer: { salesperson: null }, entryBy: principal.username }
+                ]
+              }
+            })
+      }
+    });
     const approvalRows = await this.prisma.auditLog.findMany({ where: { action: { in: ['customer_service.business_data.approved', 'customer_service.agent_data.approved'] }, target: { in: rows.map((row) => row.id) } }, select: { action: true, target: true } });
     const approved = new Map<string, Set<string>>();
     approvalRows.forEach((row) => approved.set(row.target, new Set([...(approved.get(row.target) ?? []), row.action])));
