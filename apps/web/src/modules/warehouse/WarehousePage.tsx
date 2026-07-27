@@ -51,8 +51,7 @@ import {
   type WarehouseOutboundLabel,
   type WarehousePackageDraft,
   type WarehousePackageEditDraft,
-  type WarehouseQueueColumnKey,
-  type WarehouseRemainingPackageRow
+  type WarehouseQueueColumnKey
 } from './warehousePageModel';
 
 export { canEditUnenteredWarehousePackage } from './warehousePageModel';
@@ -200,21 +199,12 @@ export function WarehousePage({
   const [dispatchingWarehouseShipmentIds, setDispatchingWarehouseShipmentIds] = useState<string[]>([]);
   const [shippingMarkConfirmations, setShippingMarkConfirmations] = useState<Record<string, boolean>>({});
   const [warehouseNotice, setWarehouseNotice] = useState<string | null>(null);
-  const emptyPackageDetailFilters = {
-    customerOrderNo: '',
-    domesticTrackingNo: '',
-    customerCode: '',
-    remark: '',
-    arrivalStatus: 'ALL'
-  };
   const emptyConsolidationPackageFilters = {
     customerCode: '',
     systemOrderNo: '',
     domesticTrackingNo: '',
     tallyStatus: 'ALL'
   };
-  const [packageDetailFilterDraft, setPackageDetailFilterDraft] = useState(emptyPackageDetailFilters);
-  const [packageDetailFilters, setPackageDetailFilters] = useState(emptyPackageDetailFilters);
   const [consolidationPackageFilterDraft, setConsolidationPackageFilterDraft] = useState(emptyConsolidationPackageFilters);
   const [consolidationPackageFilters, setConsolidationPackageFilters] = useState(emptyConsolidationPackageFilters);
   const [splittingPackage, setSplittingPackage] = useState<WarehouseInboundPackage | null>(null);
@@ -378,14 +368,6 @@ export function WarehousePage({
     value: customer.code,
     label: `${customer.code} - ${customer.name}`
   }));
-  const getWarehouseArrivedCount = (pkg: WarehouseInboundPackage) =>
-    warehousePackages.filter((item) => item.customerOrderNo === pkg.customerOrderNo).length;
-  const resolveWarehouseArrivalStatus = (pkg: WarehouseInboundPackage) => {
-    const businessExceptions = (pkg.exceptions ?? []).filter((item) => !item.startsWith('部分到仓'));
-    if (businessExceptions.length) return 'EXCEPTION';
-    if (!pkg.expectedTotalPackageCount) return 'UNKNOWN';
-    return getWarehouseArrivedCount(pkg) >= pkg.expectedTotalPackageCount ? 'COMPLETE' : 'PARTIAL';
-  };
   const includesFilter = (value: string | undefined, keyword: string) =>
     !keyword.trim() || (value ?? '').toLowerCase().includes(keyword.trim().toLowerCase());
   const isOperatorView = role === 'OPERATOR';
@@ -479,33 +461,6 @@ export function WarehousePage({
     );
   }
   const todaySiteOptions = Array.from(new Set(warehousePackages.map((pkg) => pkg.site).filter((site): site is string => Boolean(site)))).sort();
-  const normalizedPackageCustomerOrderQuery = packageDetailFilters.customerOrderNo.trim();
-  const searchedWarehousePackages = normalizedPackageCustomerOrderQuery
-    ? warehousePackages.filter((pkg) => pkg.customerOrderNo === normalizedPackageCustomerOrderQuery)
-    : [];
-  const filteredWarehousePackages = warehousePackages.filter((pkg) =>
-    includesFilter(pkg.customerOrderNo, packageDetailFilters.customerOrderNo)
-    && includesFilter(pkg.domesticTrackingNo, packageDetailFilters.domesticTrackingNo)
-    && includesFilter(pkg.customerCode, packageDetailFilters.customerCode)
-    && includesFilter(pkg.remark, packageDetailFilters.remark)
-    && (packageDetailFilters.arrivalStatus === 'ALL' || resolveWarehouseArrivalStatus(pkg) === packageDetailFilters.arrivalStatus)
-  );
-  const expectedPackageCount = searchedWarehousePackages.reduce(
-    (max, pkg) => Math.max(max, pkg.expectedTotalPackageCount ?? 0),
-    0
-  );
-  const handledPackageCount = searchedWarehousePackages.length;
-  const remainingPackageCount = Math.max(expectedPackageCount - handledPackageCount, 0);
-  const remainingPackageRows: WarehouseRemainingPackageRow[] = Array.from({ length: remainingPackageCount }, (_, index) => {
-    const sequence = handledPackageCount + index + 1;
-    return {
-      id: `${normalizedPackageCustomerOrderQuery}-remaining-${sequence}`,
-      customerOrderNo: normalizedPackageCustomerOrderQuery,
-      packageSequence: `剩余第 ${sequence} 件`,
-      status: '待回传',
-      note: `预计共 ${expectedPackageCount} 件，已处理 ${handledPackageCount} 件`
-    };
-  });
   const selectedConsolidation = consolidations.find((record) => record.id === selectedConsolidationId);
   const selectedConsolidationPackages = selectedConsolidation
     ? warehousePackages.filter((pkg) => selectedConsolidation.packageIds.includes(pkg.id))
@@ -1676,12 +1631,6 @@ export function WarehousePage({
           <Tag color="green">正常</Tag>
       )
     }
-  ];
-  const warehouseRemainingPackageColumns: ColumnsType<WarehouseRemainingPackageRow> = [
-    { title: '客户单号', dataIndex: 'customerOrderNo', width: 140 },
-    { title: '剩余件序号', dataIndex: 'packageSequence', width: 160 },
-    { title: '状态', dataIndex: 'status', width: 130, render: (value: string) => <Tag color="warning">{value}</Tag> },
-    { title: '说明', dataIndex: 'note' }
   ];
   function patchPackageDraft(patch: Partial<WarehousePackageDraft>) {
     setPackageDraft((current) => ({ ...current, ...patch }));

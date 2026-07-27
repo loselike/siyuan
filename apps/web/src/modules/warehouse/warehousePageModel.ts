@@ -124,14 +124,6 @@ export function canEditUnenteredWarehousePackage(record: Pick<WarehouseInboundPa
   return !record.shipmentId;
 }
 
-export interface WarehouseRemainingPackageRow {
-  id: string;
-  customerOrderNo: string;
-  packageSequence: string;
-  status: string;
-  note: string;
-}
-
 export interface WarehousePackageDraft {
   customerCode: string;
   combinedOrderNo: string;
