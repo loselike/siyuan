@@ -3,14 +3,12 @@ import { useEffect, useMemo, useState } from 'react';
 import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography } from 'antd';
 import type { FormInstance } from 'antd/es/form';
 import type { ColumnsType } from 'antd/es/table';
-import { Activity, Boxes, ClipboardCheck, FileInput, RotateCcw, Sparkles } from 'lucide-react';
+import { Activity, Boxes, ClipboardCheck, RotateCcw, Sparkles } from 'lucide-react';
 import {
   createFulfillmentAdvice,
-  shipmentStatusLabels,
   type BusinessCostAuditSummary,
   type PayableAuditSummary,
   type ShipmentFinanceDetailSummary,
-  type FulfillmentStageSummary,
   type MasterDataSnapshot,
   type Shipment,
   type ShipmentStatus
@@ -19,13 +17,11 @@ import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWo
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
 import { countryOptions, filterLocationOption } from '../finance/entry/countryStateOptions';
 import { getBeijingDayStartTimestamp } from '../shared/format';
-import { AppActionGroup, AppPageHeader, ManagedTable, MetricCard, RoutingStatusTag, StatusTag, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppPageHeader, ManagedTable, MetricCard, RoutingStatusTag, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import type { PermissionKey } from '../../apiClient';
 import { getRoutingPeriodSnapshot } from './routingPeriod';
 
 const { Text } = Typography;
-
-export type RoutingStageKey = 'all' | 'sorting' | 'dispatching';
 
 export interface RoutingAssignmentFormValues {
   destinationCountry?: string;
@@ -50,12 +46,6 @@ export interface RoutingPageConfig {
   aiEnhancements: string[];
   siliconFlowScenarios: string[];
 }
-
-const routingFulfillmentStages: Array<{ key: RoutingStageKey; label: string; statuses: ShipmentStatus[] }> = [
-  { key: 'all', label: '全部', statuses: [] },
-  { key: 'sorting', label: '待排货', statuses: ['WAITING_SORT'] },
-  { key: 'dispatching', label: '待出库', statuses: ['WAITING_DISPATCH'] }
-];
 
 type MarketStatRow = { name: string; count: number };
 type MarketStatusTone = 'amber' | 'blue' | 'green' | 'red' | 'indigo' | 'gray';
@@ -88,14 +78,6 @@ type PendingRoutingCostRow = {
   transferNo?: string;
 };
 
-function getFulfillmentStageCount(summary: FulfillmentStageSummary, stageKey: RoutingStageKey) {
-  if (stageKey === 'all') {
-    return Object.values(summary).reduce((total, count) => total + count, 0);
-  }
-
-  return summary[stageKey];
-}
-
 function inferRoutingMode(shipment: Shipment) {
   const channel = `${shipment.routeAgentChannelName || ''} ${shipment.channelName || ''}`;
   if (/空运|空派|航班/.test(channel)) return '空运';
@@ -125,12 +107,7 @@ function summarizeTop(rows: string[], limit = 5): MarketStatRow[] {
 export function RoutingPage({
   config,
   notice,
-  stageSummary,
   shipments,
-  baseColumns,
-  auditStatusColumn,
-  selectedStage,
-  onSelectStage,
   assignmentShipment,
   assignmentForm,
   masterData,
@@ -153,12 +130,7 @@ export function RoutingPage({
 }: {
   config: RoutingPageConfig;
   notice?: string | null;
-  stageSummary: FulfillmentStageSummary;
   shipments: Shipment[];
-  baseColumns: ColumnsType<Shipment>;
-  auditStatusColumn: ColumnsType<Shipment>[number];
-  selectedStage: RoutingStageKey;
-  onSelectStage: (stage: RoutingStageKey) => void;
   assignmentShipment: Shipment | null;
   assignmentForm: FormInstance<RoutingAssignmentFormValues>;
   masterData: MasterDataSnapshot;

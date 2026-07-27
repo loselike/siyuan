@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
 import type { ThemeConfig } from 'antd/es/config-provider/context';
-import { Activity, Boxes, CircleDollarSign, Gauge, Headphones, Landmark, PackagePlus, Route, Settings, Truck, Users } from 'lucide-react';
+import { Boxes, CircleDollarSign, Gauge, Headphones, Landmark, PackagePlus, Route, Settings, Truck, Users } from 'lucide-react';
 import {
-  summarizeFulfillmentStages,
   type BusinessType,
   type MasterDataSnapshot,
   type Shipment,
@@ -370,7 +369,6 @@ export function resolveStaffSectionKey(menuKey: MenuKey, sectionSegment: string 
   return sectionKeys.find((key) => toRouteSegment(key) === sectionSegment);
 }
 
-export type FulfillmentStageKey = 'all' | 'reviewing' | 'declared' | 'receiving' | 'sorting' | 'dispatching' | 'online' | 'signing' | 'exception';
 export const businessWorkspaceConfigs: Record<
   BusinessType,
   {
@@ -435,22 +433,8 @@ export const businessWorkspaceConfigs: Record<
   }
 };
 
-export const routingFulfillmentStages: Array<{ key: FulfillmentStageKey; label: string; statuses: ShipmentStatus[] }> = [
-  { key: 'all', label: '全部', statuses: [] },
-  { key: 'sorting', label: '待排货', statuses: ['WAITING_SORT'] },
-  { key: 'dispatching', label: '待出库', statuses: ['WAITING_DISPATCH'] }
-];
-
 export function getRouteCategory(channelName: string) {
   return channelName.trim().split(/[\s/-]+/)[0] || channelName;
-}
-
-export function getFulfillmentStageCount(summary: ReturnType<typeof summarizeFulfillmentStages>, stageKey: FulfillmentStageKey) {
-  if (stageKey === 'all') {
-    return Object.values(summary).reduce((total, count) => total + count, 0);
-  }
-
-  return summary[stageKey];
 }
 
 export function getShipmentLifecycleStageCount(shipments: Shipment[], stageKey: OrdersLifecycleStageKey) {

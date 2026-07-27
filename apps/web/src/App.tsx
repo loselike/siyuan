@@ -45,7 +45,6 @@ import {
   getModuleCoverageSummary,
   productModules,
   shipmentStatusLabels,
-  summarizeFulfillmentStages,
   summarizeStatusCounts,
   validateShipmentImportRows,
   type AccountLedgerSummary,
@@ -93,7 +92,6 @@ import {
   passwordStrengthRule,
   parseStaffAppRoute,
   resolveStaffSectionKey,
-  routingFulfillmentStages,
   sanitizeShipmentColumnOrder,
   sanitizeHiddenShipmentColumns,
   shipmentColumnLabels,
@@ -119,7 +117,7 @@ import {
   type OrdersLifecycleStageKey,
   type OutboundOrderFormValues
 } from './modules/orders/OrdersPage';
-import { RoutingPage, type RoutingAssignmentFormValues, type RoutingStageKey } from './modules/routing/RoutingPage';
+import { RoutingPage, type RoutingAssignmentFormValues } from './modules/routing/RoutingPage';
 import {
   getModuleSubNavSignature,
   ModuleSubNavContext,
@@ -182,7 +180,6 @@ export function App() {
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState('shipmentPool');
   const [activeFulfillmentSection, setActiveFulfillmentSection] = useState('stageBoard');
   const [selectedFulfillmentStage, setSelectedFulfillmentStage] = useState<OrdersLifecycleStageKey>('all');
-  const [selectedRoutingStage, setSelectedRoutingStage] = useState<RoutingStageKey>('all');
   const [shipmentColumnOrderMode, setShipmentColumnOrderMode] = useState<ShipmentColumnOrderMode>(() => {
     const saved = localStorage.getItem(shipmentColumnOrderStorageKey);
     return isShipmentColumnOrderMode(saved) ? saved : 'default';
@@ -831,7 +828,6 @@ export function App() {
   const spotlightModules = productModules.filter((module) =>
     ['我的订单', '问题件中心', '客户门户', 'AI 助手', '开放 API', '系统设置'].includes(module.name)
   );
-  const fulfillmentStageSummary = summarizeFulfillmentStages(localShipments, 'ALL');
   const fulfillmentAuditMetricCards = [
     {
       title: '全部运单',
@@ -858,12 +854,6 @@ export function App() {
       icon: <CircleDollarSign />
     }
   ];
-  const routingFulfillmentShipments = useMemo(() => {
-    const activeStage = routingFulfillmentStages.find((stage) => stage.key === selectedRoutingStage);
-    return businessShipments.filter(
-      (shipment) => selectedRoutingStage === 'all' || activeStage?.statuses.includes(shipment.status)
-    );
-  }, [businessShipments, selectedRoutingStage]);
   const allShipmentLogs = logViewingShipment
     ? [
         {
@@ -2658,12 +2648,7 @@ export function App() {
               <RoutingPage
                 config={{ ...modulePageConfigs.routing!, title: '市场管理', description: '市场看板、待排货和本周排货数据。' }}
                 notice={notice}
-                stageSummary={fulfillmentStageSummary}
-                shipments={routingFulfillmentShipments}
-                baseColumns={columns}
-                auditStatusColumn={auditStatusColumn}
-                selectedStage={selectedRoutingStage}
-                onSelectStage={setSelectedRoutingStage}
+                shipments={businessShipments}
                 assignmentShipment={routingAssignmentShipment}
                 assignmentForm={routingAssignmentForm}
                 masterData={masterData}
