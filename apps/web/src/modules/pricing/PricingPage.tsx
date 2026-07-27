@@ -2,7 +2,7 @@ import type { ChangeEvent, Key } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AutoComplete, Button, Card, Col, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Progress, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { AlertTriangle, ArrowLeft, ArrowRight, Banknote, CheckCircle2, Copy, Download, Eye, FileInput, MoreHorizontal, PackageCheck, Power, RefreshCw, Search, Settings, SlidersHorizontal, Trash2 } from 'lucide-react';
-import { normalizeUsPostalCode, type AgentMarkupCreateInput, type AgentMarkupListQuery, type AgentMarkupMetrics, type AgentMarkupSummary, type AgentMarkupType, type AgentMarkupUnit, type AgentSummary, type DubaiPriceDisplayPageSummary, type DubaiPriceDisplayResponse, type DubaiPriceDisplayVersionSummary, type LegacyPricingMetaResponse, type LegacyPricingModule, type LegacyPricingQuoteResponse, type LegacyPricingRecommendation, type MasterDataSnapshot, type PriceBookImportJobSummary, type PriceBookImportTargetModule, type PriceBookRowMarkupSource, type PriceBookRowSummary, type PriceBookSummary, type PriceLookupRecommendation, type PriceLookupResponse, type PricingRuleRefreshProgressResponse, type PricingSyncHealthResponse, type PricingSyncHealthRow, type SouthAfricaLookupResponse, type SouthAfricaRateRuleInput, type SouthAfricaRateRuleSummary, type StaffRoleKey } from '@siyuan/shared';
+import { normalizeUsPostalCode, type AgentMarkupListQuery, type AgentMarkupMetrics, type AgentMarkupSummary, type AgentMarkupType, type AgentSummary, type DubaiPriceDisplayPageSummary, type DubaiPriceDisplayResponse, type DubaiPriceDisplayVersionSummary, type LegacyPricingMetaResponse, type LegacyPricingModule, type LegacyPricingQuoteResponse, type LegacyPricingRecommendation, type MasterDataSnapshot, type PriceBookImportJobSummary, type PriceBookImportTargetModule, type PriceBookSummary, type PriceLookupRecommendation, type PriceLookupResponse, type PricingRuleRefreshProgressResponse, type PricingSyncHealthResponse, type PricingSyncHealthRow, type SouthAfricaLookupResponse, type SouthAfricaRateRuleInput, type SouthAfricaRateRuleSummary, type StaffRoleKey } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
 import { formatCurrency } from '../shared/format';
@@ -16,7 +16,6 @@ import {
   formatKgCurrencyRate,
   formatMarkupValue,
   getCustomRemarkText,
-  getMarkupSourceLabel,
   renderCustomRemarkCell,
   renderMarkupDisplay,
   renderMarkupSource,
@@ -83,19 +82,6 @@ interface AgentMarkupFormValues {
   enabled: 'true' | 'false';
 }
 
-interface ChannelTierMarkupFormValues {
-  agentName: string;
-  channelKey: string;
-  tiers: Array<{ minChargeableValue: number; maxChargeableValue?: number; markupValue: number }>;
-}
-
-interface ChannelTierOption {
-  key: string;
-  channelName: string;
-  realChannelName?: string;
-  markupUnit: AgentMarkupUnit;
-}
-
 interface PriceBookRemarkFormValues {
   customRemark?: string;
 }
@@ -135,7 +121,6 @@ export function PricingPage({
   const isMarkupRouteEditor = new URLSearchParams(window.location.search).get('view') === 'route-editor';
   const [lookupForm] = Form.useForm<LegacyLookupFormValues>();
   const [markupForm] = Form.useForm<AgentMarkupFormValues>();
-  const [channelTierMarkupForm] = Form.useForm<ChannelTierMarkupFormValues>();
   const [priceBookRemarkForm] = Form.useForm<PriceBookRemarkFormValues>();
   const [southAfricaRateRuleForm] = Form.useForm<SouthAfricaRateRuleFormValues>();
   const southAfricaPricingMode = Form.useWatch('pricingMode', southAfricaRateRuleForm);
@@ -143,12 +128,6 @@ export function PricingPage({
   const [priceBooks, setPriceBooks] = useState<PriceBookRecord[]>([]);
   const [markupRules, setMarkupRules] = useState<AgentMarkupRule[]>([]);
   const [markupDetailRules, setMarkupDetailRules] = useState<AgentMarkupRule[]>([]);
-  const [channelTierRules, setChannelTierRules] = useState<AgentMarkupRule[]>([]);
-  const [channelTierOptions, setChannelTierOptions] = useState<ChannelTierOption[]>([]);
-  const [channelTierModalOpen, setChannelTierModalOpen] = useState(false);
-  const [channelTierSaving, setChannelTierSaving] = useState(false);
-  const [channelTierLoading, setChannelTierLoading] = useState(false);
-  const [editingChannelTierRule, setEditingChannelTierRule] = useState<AgentMarkupRule | null>(null);
   const [markupMetrics, setMarkupMetrics] = useState<AgentMarkupMetrics>({ totalRules: 0, enabledRules: 0, disabledRules: 0, unmatchedQuotes: 0 });
   const [markupFilters, setMarkupFilters] = useState<AgentMarkupListQuery>({ status: 'ALL', page: 1, pageSize: 20 });
   const [markupModule, setMarkupModule] = useState<LegacyPricingModule>('amazon');
@@ -163,17 +142,6 @@ export function PricingPage({
   const [markupModalOpen, setMarkupModalOpen] = useState(false);
   const [markupSaving, setMarkupSaving] = useState(false);
   const [markupBatchLoading, setMarkupBatchLoading] = useState(false);
-  const [restoreMarkupChannelAfterSave, setRestoreMarkupChannelAfterSave] = useState(false);
-  const [markupChannelDetailOpen, setMarkupChannelDetailOpen] = useState(false);
-  const [markupChannelRule, setMarkupChannelRule] = useState<MarkupDisplayRule | null>(null);
-  const [markupSheetFilter, setMarkupSheetFilter] = useState('ALL');
-  const [markupAmountFilter, setMarkupAmountFilter] = useState('ALL');
-  const [markupSourceFilter, setMarkupSourceFilter] = useState<PriceBookRowMarkupSource | 'ALL'>('ALL');
-  const [markupSort, setMarkupSort] = useState<'NONE' | 'ASC' | 'DESC'>('NONE');
-  const [batchMarkupPerKg, setBatchMarkupPerKg] = useState(0.5);
-  const [batchMarkupSaving, setBatchMarkupSaving] = useState(false);
-  const [batchMarkupScope, setBatchMarkupScope] = useState<'PAGE' | 'ALL_FILTERED' | 'SELECTED'>('PAGE');
-  const [selectedMarkupChannelRowIds, setSelectedMarkupChannelRowIds] = useState<string[]>([]);
   const [priceBookRemarkModalOpen, setPriceBookRemarkModalOpen] = useState(false);
   const [pricingSyncHealthOpen, setPricingSyncHealthOpen] = useState(false);
   const [pricingSyncHealthLoading, setPricingSyncHealthLoading] = useState(false);
@@ -296,36 +264,7 @@ export function PricingPage({
     () => priceBookRuleRefreshProgress?.modules.find((item) => item.module === priceBookManagementModule),
     [priceBookManagementModule, priceBookRuleRefreshProgress]
   );
-  const activeMarkupChannelRule = markupChannelRule ?? selectedMarkupRule;
-  const [selectedMarkupChannelRows, setSelectedMarkupChannelRows] = useState<ImportedPriceRow[]>([]);
-  const [markupChannelRowsLoading, setMarkupChannelRowsLoading] = useState(false);
-  const [markupChannelRowsError, setMarkupChannelRowsError] = useState('');
-  const [markupChannelLoadingRuleId, setMarkupChannelLoadingRuleId] = useState<string | null>(null);
-  const markupChannelRequestRef = useRef(0);
-  const [markupChannelRowsPagination, setMarkupChannelRowsPagination] = useState({ page: 1, pageSize: 100, totalItems: 0 });
   const getMarkupRowSheetName = (row: ImportedPriceRow) => row.sourceSheetName?.trim() || row.channelName?.trim() || '未标记工作表';
-  const selectedMarkupSheetOptions = Array.from(
-    new Set(selectedMarkupChannelRows.map(getMarkupRowSheetName))
-  ).sort((a, b) => a.localeCompare(b, 'zh-CN'));
-  const markupAmountOptions = [
-    { value: 'ALL', label: '全部加价' },
-    ...[
-      ...((activeMarkupChannelRule?.markupBuckets ?? []).map((bucket) => bucket.markupPerKg)),
-      ...selectedMarkupChannelRows.map((row) => getLineMarkupAmount(row)).filter((value): value is number => typeof value === 'number')
-    ]
-      .sort((left, right) => left - right)
-      .map((value) => ({
-        value: String(value),
-        label: formatMarkupValue({ markupPerKg: value })
-      })),
-    { value: 'DEFAULT', label: '默认加价' },
-    { value: 'OTHER_CUSTOM', label: '其他自定义加价' }
-  ].filter((option, index, options) => options.findIndex((item) => item.value === option.value) === index);
-  const filteredMarkupChannelRows = selectedMarkupChannelRows.filter((row) => {
-    return markupSheetFilter === 'ALL' || getMarkupRowSheetName(row) === markupSheetFilter;
-  });
-  const selectedFilteredMarkupChannelRows = filteredMarkupChannelRows.filter((row) => selectedMarkupChannelRowIds.includes(row.id));
-  const markupChannelRowsBusy = markupChannelRowsLoading || batchMarkupSaving;
   const permissionSet = useMemo(() => new Set(permissions), [permissions]);
   const can = useCallback((permission: PermissionKey) => role === 'ADMIN' || permissionSet.has(permission), [permissionSet, role]);
   const availableLookupModules = useMemo(
@@ -540,7 +479,7 @@ export function PricingPage({
       const channel = new BroadcastChannel('siyuan-pricing-markup');
       channel.onmessage = () => {
         setMarkupNeedsRefresh(true);
-        void Promise.all([reloadMarkupRules(markupFilters), reloadChannelTierRules()]);
+        void reloadMarkupRules(markupFilters);
       };
       return () => channel.close();
     } catch {
@@ -592,10 +531,9 @@ export function PricingPage({
     Promise.all([
       canViewPriceBooks ? apiClient.priceBookQuery.priceBooks({ includeRows: false }) : Promise.resolve({ books: [] as PriceBookSummary[] }),
       canViewMarkupDetails ? apiClient.markupQuery.agentMarkupRules({ page: 1, pageSize: 200, status: 'ALL', includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
-      canViewTierMarkup ? apiClient.markupQuery.agentMarkupRules({ page: 1, pageSize: 500, status: 'ALL', detail: true, includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
       apiClient.masterData().catch(() => ({ agents: [] } as Partial<MasterDataSnapshot>))
     ])
-      .then(([response, rules, detailRules, masterData]) => {
+      .then(([response, rules, masterData]) => {
         if (!alive) {
           return;
         }
@@ -604,7 +542,6 @@ export function PricingPage({
         setPriceRows([...seedImportedPriceRows]);
         setMarkupRules(markupRows);
         setMarkupDetailRules([]);
-        setChannelTierRules(readAgentMarkupRows(detailRules).filter((rule) => rule.markupUnit && rule.minChargeableValue !== undefined));
         setMarkupMetrics(readAgentMarkupMetrics(rules));
         setMasterDataAgents(Array.isArray(masterData?.agents) ? masterData.agents : []);
       })
@@ -684,25 +621,6 @@ export function PricingPage({
     await loadPricingSyncHealth(1);
   }
 
-  async function loadMarkupDetailRules(agentName?: string, priceBookId?: string) {
-    const response = await apiClient.markupQuery.agentMarkupRules({
-      ...(priceBookId ? { priceBookId } : {}),
-      ...(agentName ? { agentName } : {}),
-      page: 1,
-      pageSize: 500,
-      status: 'ALL',
-      legacyModule: markupModule,
-      detail: true,
-      includeHits: false
-    });
-    const rows = readAgentMarkupRows(response);
-    setMarkupDetailRules((current) => {
-      const next = agentName ? current.filter((rule) => rule.agentName !== agentName || (priceBookId && rule.priceBookId !== priceBookId)) : [];
-      return [...rows, ...next];
-    });
-    return rows;
-  }
-
   function reloadMarkupRules(nextFilters: AgentMarkupListQuery = markupFilters) {
     return apiClient.markupQuery.agentMarkupRules({ ...nextFilters, legacyModule: markupModule, page: 1, pageSize: 200, includeHits: false }).then((response) => {
       const rows = readAgentMarkupRows(response);
@@ -710,26 +628,8 @@ export function PricingPage({
       setMarkupMetrics(readAgentMarkupMetrics(response));
       setMarkupFilters({ ...nextFilters, legacyModule: markupModule, page: 1, pageSize: 20 });
       setSelectedMarkupRuleIds((current) => current.filter((id) => rows.some((rule) => rule.id === id)));
-      setMarkupChannelRule((current) => {
-        if (!current) return current;
-        return rows.find((rule) => rule.id === current.id || getAgentMarkupGroupId(rule) === getAgentMarkupGroupId(current)) ?? current;
-      });
       return response;
     });
-  }
-
-  async function reloadChannelTierRules() {
-    const response = await apiClient.markupQuery.agentMarkupRules({
-      legacyModule: markupModule,
-      page: 1,
-      pageSize: 500,
-      status: 'ALL',
-      detail: true,
-      includeHits: false
-    });
-    const rows = readAgentMarkupRows(response).filter((rule) => rule.markupUnit && rule.minChargeableValue !== undefined);
-    setChannelTierRules(rows);
-    return rows;
   }
 
   async function reloadSouthAfricaRateRules() {
@@ -821,140 +721,16 @@ export function PricingPage({
     }
   }
 
-  async function loadChannelTierOptions(agentName: string) {
-    const normalizedAgentName = agentName.trim();
-    if (!normalizedAgentName) {
-      setChannelTierOptions([]);
-      return;
-    }
-    setChannelTierLoading(true);
-    try {
-      const books = markupModulePriceBooks.filter((book) => book.agentShortName === normalizedAgentName);
-      const firstPages = await Promise.all(books.map((book) => apiClient.priceBookQuery.priceBookRows(book.id, { page: 1, pageSize: 500 })));
-      const remainingPages = await Promise.all(firstPages.flatMap((firstPage, bookIndex) => {
-        const totalPages = Math.ceil(firstPage.pagination.totalItems / firstPage.pagination.pageSize);
-        return Array.from({ length: Math.max(0, totalPages - 1) }, (_, index) => apiClient.priceBookQuery.priceBookRows(books[bookIndex].id, { page: index + 2, pageSize: firstPage.pagination.pageSize }));
-      }));
-      const rows = [...firstPages, ...remainingPages].flatMap((page) => page.rows).filter((row) => row.agentName === normalizedAgentName || books.some((book) => book.id === row.priceBookId && book.agentShortName === normalizedAgentName));
-      const options = new Map<string, ChannelTierOption>();
-      rows.forEach((row: PriceBookRowSummary) => {
-        const channelName = row.channelName.trim();
-        if (!channelName) return;
-        const unit: AgentMarkupUnit = Number(row.cbmPrice ?? 0) > 0 ? 'CBM' : 'KG';
-        const realChannelName = row.realChannelName?.trim() || undefined;
-        const key = `${channelName}\u0001${realChannelName ?? ''}\u0001${unit}`;
-        options.set(key, { key, channelName, realChannelName, markupUnit: unit });
-      });
-      setChannelTierOptions([...options.values()].sort((left, right) => left.channelName.localeCompare(right.channelName, 'zh-CN') || left.markupUnit.localeCompare(right.markupUnit)));
-    } catch (error) {
-      setChannelTierOptions([]);
-      onNotice(error instanceof Error ? error.message : '真实渠道加载失败');
-    } finally {
-      setChannelTierLoading(false);
-    }
-  }
-
-  function findChannelTierMarkupRule(row: ImportedPriceRow) {
-    const agentName = activeMarkupChannelRule?.agentName ?? row.agentName;
-    const realChannelName = row.realChannelName ?? row.channelName;
-    const markupUnit: AgentMarkupUnit = Number(row.cbmPrice ?? 0) > 0 ? 'CBM' : 'KG';
-    return channelTierRules.find((rule) => (
-      rule.agentName === agentName
-      && rule.channelName === row.channelName
-      && (rule.realChannelName ?? rule.channelName) === realChannelName
-      && rule.markupUnit === markupUnit
-    ));
-  }
-
-  function openCreateChannelTierMarkupForLine(row: ImportedPriceRow) {
-    const agentName = activeMarkupChannelRule?.agentName ?? row.agentName;
-    const realChannelName = row.realChannelName ?? row.channelName;
-    const markupUnit: AgentMarkupUnit = Number(row.cbmPrice ?? 0) > 0 ? 'CBM' : 'KG';
-    setEditingChannelTierRule(null);
-    channelTierMarkupForm.setFieldsValue({
-      agentName,
-      channelKey: `${row.channelName}\u0001${realChannelName}\u0001${markupUnit}`,
-      tiers: [{ minChargeableValue: 0, maxChargeableValue: undefined, markupValue: 0 }]
-    });
-    void loadChannelTierOptions(agentName);
-    setChannelTierModalOpen(true);
-  }
-
-  function openEditChannelTierMarkup(rule: AgentMarkupRule) {
-    const sameChannelRules = channelTierRules
-      .filter((item) => (
-        item.agentName === rule.agentName
-        && item.channelName === rule.channelName
-        && (item.realChannelName ?? item.channelName) === (rule.realChannelName ?? rule.channelName)
-        && item.markupUnit === rule.markupUnit
-      ))
-      .sort((left, right) => Number(left.minChargeableValue ?? 0) - Number(right.minChargeableValue ?? 0));
-    const tiers = sameChannelRules.map((item) => ({
-      minChargeableValue: Number(item.minChargeableValue ?? 0),
-      maxChargeableValue: item.maxChargeableValue,
-      markupValue: Number(item.markupValue ?? item.markupPerKg ?? 0)
-    }));
-    setEditingChannelTierRule(rule);
-    channelTierMarkupForm.setFieldsValue({
-      agentName: rule.agentName,
-      channelKey: `${rule.channelName}\u0001${rule.realChannelName ?? ''}\u0001${rule.markupUnit}`,
-      tiers: tiers.length ? tiers : [{ minChargeableValue: 0, maxChargeableValue: undefined, markupValue: 0 }]
-    });
-    void loadChannelTierOptions(rule.agentName);
-    setChannelTierModalOpen(true);
-  }
-
-  async function saveChannelTierMarkup() {
-    setChannelTierSaving(true);
-    try {
-      const values = await channelTierMarkupForm.validateFields();
-      const [channelName, realChannelName, markupUnit] = values.channelKey.split('\u0001') as [string, string, AgentMarkupUnit];
-      if (!channelName || (markupUnit !== 'KG' && markupUnit !== 'CBM')) {
-        throw new Error('请选择真实渠道和计费单位');
-      }
-      const tiers = values.tiers ?? [];
-      if (!tiers.length) throw new Error('请至少填写一个重量段');
-      const payload = tiers.map((tier): AgentMarkupCreateInput => ({
-        legacyModule: markupModule,
-        agentName: values.agentName.trim(),
-        channelName,
-        ...(realChannelName ? { realChannelName } : {}),
-        markupType: 'WEIGHT',
-        markupValue: Number(tier.markupValue),
-        markupPerKg: Number(tier.markupValue),
-        markupUnit,
-        minChargeableValue: Number(tier.minChargeableValue),
-        ...(tier.maxChargeableValue === undefined || tier.maxChargeableValue === null ? {} : { maxChargeableValue: Number(tier.maxChargeableValue) }),
-        priority: 10,
-        enabled: true
-      }));
-      const response = await apiClient.batchUpsertAgentMarkupRules(payload);
-      if (response.errorRows.length) {
-        throw new Error(response.errorRows[0]?.reason ?? '渠道阶梯加价保存失败');
-      }
-      setChannelTierModalOpen(false);
-      channelTierMarkupForm.resetFields();
-      onNotice(`已保存 ${response.successCount} 条${markupUnit === 'KG' ? '重量' : '方数'}阶梯加价`);
-      await Promise.all([reloadChannelTierRules(), reloadMarkupRules(markupFilters)]);
-    } catch (error) {
-      const isValidationError = typeof error === 'object' && error !== null && 'errorFields' in error;
-      if (!isValidationError) onNotice(error instanceof Error ? error.message : '渠道阶梯加价保存失败');
-    } finally {
-      setChannelTierSaving(false);
-    }
-  }
-
   const handlePricingSectionChange = useCallback((key: string) => {
     setActivePricingSection(key);
     if (key === 'markup' && markupNeedsRefresh) {
       setMarkupNeedsRefresh(false);
-      void Promise.all([reloadMarkupRules(markupFilters), reloadChannelTierRules()]);
+      void reloadMarkupRules(markupFilters);
     }
   }, [markupFilters, markupNeedsRefresh, markupModule]);
 
   function openCreateMarkupRule() {
     setEditingMarkupRule(null);
-    setRestoreMarkupChannelAfterSave(false);
     markupForm.setFieldsValue({ priceBookId: undefined, agentName: '', channelName: '', realChannelName: '', destinationCountry: '', markupType: 'WEIGHT', markupValue: 0.5, markupPerKg: 0.5, priority: 100, enabled: 'true' });
     setMarkupModalOpen(true);
   }
@@ -968,72 +744,6 @@ export function PricingPage({
       .catch((error) => onNotice(error instanceof Error ? error.message : '加价规则加载失败'));
   }
 
-  function nextMarkupChannelRequestId() {
-    markupChannelRequestRef.current += 1;
-    return markupChannelRequestRef.current;
-  }
-
-  function retryMarkupChannelRows() {
-    if (!activeMarkupChannelRule) {
-      return;
-    }
-    void loadMarkupChannelRows(
-      activeMarkupChannelRule,
-      markupChannelRowsPagination.page,
-      markupChannelRowsPagination.pageSize,
-      markupSheetFilter,
-      markupAmountFilter,
-      markupSourceFilter,
-      markupSort
-    ).catch((error) => onNotice(error instanceof Error ? error.message : '线路明细加载失败'));
-  }
-
-  async function loadMarkupChannelRows(
-    rule: MarkupDisplayRule,
-    page = 1,
-    pageSize = markupChannelRowsPagination.pageSize,
-    sourceSheetName = markupSheetFilter,
-    markupAmount = markupAmountFilter,
-    markupSource = markupSourceFilter,
-    markupSortOrder = markupSort,
-    requestId = nextMarkupChannelRequestId()
-  ) {
-    setMarkupChannelRowsLoading(true);
-    setMarkupChannelLoadingRuleId(rule.id);
-    setMarkupChannelRowsError('');
-    const boundedPageSize = Math.min(200, Math.max(1, pageSize));
-    try {
-      const response = await apiClient.priceBookQuery.priceBookRows(
-        rule.priceBookId,
-        {
-          page,
-          pageSize: boundedPageSize,
-          ...(rule.priceBookId ? {} : { agentName: rule.agentName, channelName: rule.channelName }),
-          ...(sourceSheetName && sourceSheetName !== 'ALL' ? { sourceSheetName } : {}),
-          ...(markupAmount && markupAmount !== 'ALL' ? { markupAmount } : {}),
-          ...(markupSource && markupSource !== 'ALL' ? { markupSource } : {}),
-          ...(markupSortOrder && markupSortOrder !== 'NONE' ? { markupSort: markupSortOrder } : {})
-        }
-      );
-      if (requestId !== markupChannelRequestRef.current) {
-        return;
-      }
-      setSelectedMarkupChannelRows(response.rows);
-      setSelectedMarkupChannelRowIds((current) => current.filter((id) => response.rows.some((row) => row.id === id)));
-      setMarkupChannelRowsPagination(response.pagination);
-    } catch (error) {
-      if (requestId === markupChannelRequestRef.current) {
-        setMarkupChannelRowsError(error instanceof Error ? error.message : '线路明细加载失败');
-      }
-      throw error;
-    } finally {
-      if (requestId === markupChannelRequestRef.current) {
-        setMarkupChannelRowsLoading(false);
-        setMarkupChannelLoadingRuleId(null);
-      }
-    }
-  }
-
   function openMarkupChannelDetail(rule: MarkupDisplayRule | null = selectedMarkupRule) {
     if (!rule) {
       return;
@@ -1044,22 +754,6 @@ export function PricingPage({
     }
     const params = new URLSearchParams({ view: 'route-editor', priceBookId: rule.priceBookId, agentName: rule.agentName });
     window.open(`/app/pricing/markup?${params.toString()}`, '_blank', 'noopener');
-  }
-
-  function closeMarkupChannelDetail() {
-    nextMarkupChannelRequestId();
-    setMarkupChannelDetailOpen(false);
-    setMarkupChannelRowsLoading(false);
-    setMarkupChannelLoadingRuleId(null);
-    setMarkupChannelRowsError('');
-    setMarkupChannelRule(null);
-    setSelectedMarkupChannelRows([]);
-    setSelectedMarkupChannelRowIds([]);
-    setBatchMarkupScope('PAGE');
-    setMarkupSheetFilter('ALL');
-    setMarkupAmountFilter('ALL');
-    setMarkupSourceFilter('ALL');
-    setMarkupSort('NONE');
   }
 
   async function resolveConcreteMarkupRule(rule: MarkupDisplayRule) {
@@ -1095,122 +789,14 @@ export function PricingPage({
     setMarkupModalOpen(true);
   }
 
-  function findLineMarkupRule(row: ImportedPriceRow) {
-    const realChannelName = row.realChannelName ?? row.channelName;
-    return markupDetailRules.find(
-      (rule) =>
-        rule.enabled &&
-        rule.agentName === (activeMarkupChannelRule?.agentName ?? row.agentName) &&
-        (rule.priceBookId ?? '') === (activeMarkupChannelRule?.priceBookId ?? '') &&
-        rule.channelName === row.channelName &&
-        rule.realChannelName === realChannelName &&
-        rule.destinationCountry === row.destinationCountry
-    );
-  }
-
-  function getLineMarkupAmount(row: ImportedPriceRow) {
-    if (typeof row.lineMarkupPerKg === 'number') {
-      return row.lineMarkupPerKg;
-    }
-    const rule = findLineMarkupRule(row);
-    if (rule) {
-      return rule.markupValue ?? rule.markupPerKg;
-    }
-    return activeMarkupChannelRule?.markupValue ?? activeMarkupChannelRule?.markupPerKg ?? 0.5;
-  }
-
-  function getLineMarkupDisplay(row: ImportedPriceRow) {
-    return formatMarkupValue({ markupPerKg: getLineMarkupAmount(row) });
-  }
-
-  function getLineMarkupSource(row: ImportedPriceRow) {
-    if (row.markupSource) {
-      return getMarkupSourceLabel(row.markupSource);
-    }
-    return findLineMarkupRule(row) ? '线路自定义' : '代理默认';
-  }
-
-  async function loadAllMarkupChannelRowsForBatch(rule: MarkupDisplayRule) {
-    const pageSize = 200;
-    const first = await apiClient.priceBookQuery.priceBookRows(
-      rule.priceBookId,
-      {
-        page: 1,
-        pageSize,
-        ...(rule.priceBookId ? {} : { agentName: rule.agentName, channelName: rule.channelName }),
-        ...(markupSheetFilter && markupSheetFilter !== 'ALL' ? { sourceSheetName: markupSheetFilter } : {}),
-        ...(markupAmountFilter && markupAmountFilter !== 'ALL' ? { markupAmount: markupAmountFilter } : {}),
-        ...(markupSourceFilter && markupSourceFilter !== 'ALL' ? { markupSource: markupSourceFilter } : {}),
-        ...(markupSort && markupSort !== 'NONE' ? { markupSort } : {})
-      }
-    );
-    const totalPages = Math.max(1, Math.ceil(first.pagination.totalItems / pageSize));
-    if (totalPages === 1) {
-      return first.rows;
-    }
-    const rest = await Promise.all(
-      Array.from({ length: totalPages - 1 }, (_, index) => index + 2).map((page) =>
-        apiClient.priceBookQuery.priceBookRows(
-          rule.priceBookId,
-          {
-            page,
-            pageSize,
-            ...(rule.priceBookId ? {} : { agentName: rule.agentName, channelName: rule.channelName }),
-            ...(markupSheetFilter && markupSheetFilter !== 'ALL' ? { sourceSheetName: markupSheetFilter } : {}),
-            ...(markupAmountFilter && markupAmountFilter !== 'ALL' ? { markupAmount: markupAmountFilter } : {}),
-            ...(markupSourceFilter && markupSourceFilter !== 'ALL' ? { markupSource: markupSourceFilter } : {}),
-            ...(markupSort && markupSort !== 'NONE' ? { markupSort } : {})
-          }
-        )
-      )
-    );
-    return [...first.rows, ...rest.flatMap((response) => response.rows)];
-  }
-
-  async function getBatchMarkupTargetRows(rule: MarkupDisplayRule) {
-    if (batchMarkupScope === 'SELECTED') {
-      return selectedFilteredMarkupChannelRows;
-    }
-    if (batchMarkupScope === 'ALL_FILTERED') {
-      return loadAllMarkupChannelRowsForBatch(rule);
-    }
-    return filteredMarkupChannelRows;
-  }
-
-  function openCreateLineMarkupRule(row: ImportedPriceRow) {
-    setMarkupChannelDetailOpen(false);
-    setEditingMarkupRule(null);
-    setRestoreMarkupChannelAfterSave(true);
-    const baseMarkup = activeMarkupChannelRule?.markupValue ?? activeMarkupChannelRule?.markupPerKg ?? 0.5;
-    markupForm.setFieldsValue({
-      priceBookId: activeMarkupChannelRule?.priceBookId,
-      agentName: activeMarkupChannelRule?.agentName ?? row.agentName,
-      channelName: row.channelName,
-      realChannelName: row.realChannelName ?? row.channelName,
-      destinationCountry: row.destinationCountry,
-      markupType: 'WEIGHT',
-      markupValue: baseMarkup,
-      markupPerKg: baseMarkup,
-      priority: 100,
-      enabled: 'true'
-    });
-    setMarkupModalOpen(true);
-  }
-
-  function openEditLineMarkupRule(rule: AgentMarkupRule) {
-    setMarkupChannelDetailOpen(false);
-    setRestoreMarkupChannelAfterSave(true);
-    openEditSpecificMarkupRule(rule);
-  }
-
   async function handleSubmitMarkupRule() {
     setMarkupSaving(true);
     try {
       const values = await markupForm.validateFields();
       const payload = {
         legacyModule: markupModule,
-        ...(values.priceBookId?.trim() || editingMarkupRule?.priceBookId || (restoreMarkupChannelAfterSave && activeMarkupChannelRule?.priceBookId)
-          ? { priceBookId: values.priceBookId?.trim() || editingMarkupRule?.priceBookId || activeMarkupChannelRule?.priceBookId }
+        ...(values.priceBookId?.trim() || editingMarkupRule?.priceBookId
+          ? { priceBookId: values.priceBookId?.trim() || editingMarkupRule?.priceBookId }
           : {}),
         agentName: values.agentName.trim(),
         channelName: values.channelName?.trim() || undefined,
@@ -1235,20 +821,9 @@ export function PricingPage({
       setMarkupRules((current) => [rule, ...current.filter((item) => item.id !== rule.id && item.id !== getAgentMarkupGroupId(rule))]);
       setSelectedMarkupRuleIds([getAgentMarkupGroupId(rule)]);
       setMarkupModalOpen(false);
-      const shouldRestoreMarkupChannel = restoreMarkupChannelAfterSave && activeMarkupChannelRule;
-      if (shouldRestoreMarkupChannel) {
-        setMarkupChannelDetailOpen(true);
-      }
-      setRestoreMarkupChannelAfterSave(false);
       markupForm.resetFields();
       onNotice(`${rule.agentName} 加价规则已${shouldCreateFromAgentRow ? '保存' : editingMarkupRule ? '更新' : '新增'}：${formatMarkupValue(rule)}`);
-      const refreshTasks: Array<Promise<unknown>> = [reloadMarkupRules(markupFilters)];
-      if (shouldRestoreMarkupChannel && activeMarkupChannelRule) {
-        const requestId = nextMarkupChannelRequestId();
-        refreshTasks.push(loadMarkupDetailRules(activeMarkupChannelRule.agentName, activeMarkupChannelRule.priceBookId));
-        refreshTasks.push(loadMarkupChannelRows(activeMarkupChannelRule, markupChannelRowsPagination.page, markupChannelRowsPagination.pageSize, markupSheetFilter, markupAmountFilter, markupSourceFilter, markupSort, requestId));
-      }
-      void Promise.all(refreshTasks).catch((error) => {
+      void reloadMarkupRules(markupFilters).catch((error) => {
         onNotice(error instanceof Error ? `加价规则已保存，列表刷新失败：${error.message}` : '加价规则已保存，列表刷新失败');
       });
     } catch (error) {
@@ -1258,71 +833,6 @@ export function PricingPage({
       }
     } finally {
       setMarkupSaving(false);
-    }
-  }
-
-  async function handleBatchApplySheetMarkup() {
-    if (!activeMarkupChannelRule) {
-      onNotice('请先打开代理线路详情');
-      return;
-    }
-    if (!Number.isFinite(batchMarkupPerKg) || batchMarkupPerKg < 0) {
-      onNotice('请输入有效的设置加价');
-      return;
-    }
-
-    setBatchMarkupSaving(true);
-    try {
-      const targetRows = await getBatchMarkupTargetRows(activeMarkupChannelRule);
-      if (targetRows.length === 0) {
-        onNotice(batchMarkupScope === 'SELECTED' ? '请先勾选需要设置加价的线路' : '当前筛选没有可设置加价的线路');
-        return;
-      }
-      const payloadByScope = new Map<string, AgentMarkupCreateInput>();
-      targetRows.forEach((row) => {
-        const payload: AgentMarkupCreateInput = {
-          legacyModule: markupModule,
-          ...(activeMarkupChannelRule?.priceBookId ? { priceBookId: activeMarkupChannelRule.priceBookId } : {}),
-          agentName: activeMarkupChannelRule?.agentName ?? row.agentName,
-          channelName: row.channelName,
-          realChannelName: row.realChannelName ?? row.channelName,
-          destinationCountry: row.destinationCountry,
-          markupType: 'WEIGHT',
-          markupValue: batchMarkupPerKg,
-          markupPerKg: batchMarkupPerKg,
-          priority: 100,
-          enabled: true
-        };
-        payloadByScope.set([payload.priceBookId ?? '', payload.agentName, payload.channelName ?? '', payload.realChannelName ?? '', payload.destinationCountry ?? '', payload.priority ?? 100].join('\u0001'), payload);
-      });
-      const response = await apiClient.batchUpsertAgentMarkupRules([...payloadByScope.values()]);
-      const updatedRules: AgentMarkupRule[] = response.rows;
-      setMarkupDetailRules((current) => [
-        ...updatedRules,
-        ...current.filter((item) => !updatedRules.some((rule) => rule.id === item.id))
-      ]);
-      const filterLabel = markupSheetFilter === 'ALL' ? '全部工作表' : markupSheetFilter;
-      if (response.successCount > 0) {
-        const failedText = response.errorRows.length ? `，${response.errorRows.length} 条失败：${response.errorRows[0]?.reason}，可重试` : '';
-        const scopeText = batchMarkupScope === 'ALL_FILTERED'
-          ? `全部筛选结果 ${targetRows.length} 条`
-          : batchMarkupScope === 'SELECTED'
-            ? `已选 ${targetRows.length} 条`
-            : `当前页 ${targetRows.length} 条`;
-        onNotice(`已设置${scopeText}${filterLabel === '全部工作表' ? '' : `（${filterLabel}）`}线路为 +${formatCurrency(batchMarkupPerKg)}/kg（同步 ${response.successCount} 条规则${failedText}）`);
-      } else {
-        onNotice(response.errorRows[0]?.reason ? `批量设置加价失败：${response.errorRows[0].reason}，请调整后重试` : '批量设置加价失败，请重试');
-      }
-      const requestId = nextMarkupChannelRequestId();
-      await Promise.all([
-        loadMarkupDetailRules(activeMarkupChannelRule.agentName, activeMarkupChannelRule.priceBookId),
-        loadMarkupChannelRows(activeMarkupChannelRule, markupChannelRowsPagination.page, markupChannelRowsPagination.pageSize, markupSheetFilter, markupAmountFilter, markupSourceFilter, markupSort, requestId),
-        reloadMarkupRules(markupFilters)
-      ]);
-    } catch (error) {
-      onNotice(error instanceof Error ? error.message : '批量设置加价失败');
-    } finally {
-      setBatchMarkupSaving(false);
     }
   }
 
@@ -2607,8 +2117,7 @@ export function PricingPage({
                     {can('pricing:markup:line-detail-view') && canViewPriceBookRows ? <Button
                       htmlType="button"
                       size="small"
-                      loading={Boolean(selectedMarkupRule && markupChannelLoadingRuleId === selectedMarkupRule.id)}
-                      disabled={selectedVisibleMarkupRuleIds.length !== 1 || Boolean(selectedMarkupRule && markupChannelLoadingRuleId === selectedMarkupRule.id)}
+                      disabled={selectedVisibleMarkupRuleIds.length !== 1}
                       title={selectedVisibleMarkupRuleIds.length !== 1 ? '请先选择一条代理加价规则' : '查看该代理当前有效价格表线路'}
                       onClick={() => openMarkupChannelDetail()}
                     >
@@ -2650,7 +2159,6 @@ export function PricingPage({
                         setMarkupFilters({ status: 'ALL', page: 1, pageSize: 20, legacyModule: item.key });
                         setSelectedMarkupRuleIds([]);
                         setMarkupDetailRules([]);
-                        setMarkupChannelRule(null);
                       }}
                     >
                       {item.label}
@@ -2696,8 +2204,6 @@ export function PricingPage({
                           htmlType="button"
                           size="small"
                           icon={<Eye size={13} />}
-                          loading={markupChannelLoadingRuleId === rule.id}
-                          disabled={markupChannelLoadingRuleId === rule.id}
                           onClick={(event) => {
                             event.stopPropagation();
                             openMarkupChannelDetail(rule);
@@ -3136,179 +2642,6 @@ export function PricingPage({
       </Modal>
 
       <Modal
-        title={activeMarkupChannelRule ? `${activeMarkupChannelRule.agentName} 渠道线路详情` : '渠道线路详情'}
-        open={markupChannelDetailOpen}
-        destroyOnHidden
-        width={920}
-        footer={<Button htmlType="button" type="primary" onClick={closeMarkupChannelDetail}>关闭</Button>}
-        onCancel={closeMarkupChannelDetail}
-      >
-        <Space direction="vertical" size={12} className="full-width">
-          <Alert
-            className="notice-bar"
-            type="info"
-            showIcon
-            message="代理统一加价作为默认规则；请在每条真实渠道上维护 KG 或 CBM 阶梯加价，查价会按实际计费量命中对应阶梯。"
-          />
-          {markupChannelRowsError ? (
-            <Alert
-              type="error"
-              showIcon
-              message="线路明细加载失败"
-              description={markupChannelRowsError}
-              action={<Button htmlType="button" size="small" danger onClick={retryMarkupChannelRows}>重试</Button>}
-            />
-          ) : null}
-          <div className="pricing-line-toolbar">
-            <Space wrap size={12}>
-              <label className="compact-field">
-                <span>工作表（Sheet）</span>
-                <select
-                  aria-label="按工作表筛选线路"
-                  className="native-select"
-                  value={markupSheetFilter}
-                onChange={(event) => {
-                  const nextSheet = event.target.value;
-                  setMarkupSheetFilter(nextSheet);
-                  if (activeMarkupChannelRule) {
-                      void loadMarkupChannelRows(activeMarkupChannelRule, 1, markupChannelRowsPagination.pageSize, nextSheet, markupAmountFilter, markupSourceFilter, markupSort)
-                        .catch((error) => onNotice(error instanceof Error ? error.message : '线路明细加载失败'));
-                  }
-                }}
-                >
-                  <option value="ALL">全部工作表</option>
-                  {selectedMarkupSheetOptions.map((sheetName) => (
-                    <option key={sheetName} value={sheetName}>{sheetName}</option>
-                  ))}
-                </select>
-              </label>
-              <Text type="secondary">从下方每条真实渠道进入阶梯加价维护；同一渠道的多个重量段统一在一个规则中保存。</Text>
-            </Space>
-          </div>
-          <ManagedTable
-            rowKey="id"
-            size="small"
-            loading={markupChannelRowsLoading}
-            pagination={{
-              current: markupChannelRowsPagination.page,
-              pageSize: markupChannelRowsPagination.pageSize,
-              total: markupChannelRowsPagination.totalItems,
-              showSizeChanger: true,
-              pageSizeOptions: ['50', '100', '200'],
-              onChange: (page, pageSize) => {
-                if (activeMarkupChannelRule) {
-                  void loadMarkupChannelRows(activeMarkupChannelRule, page, pageSize, markupSheetFilter, markupAmountFilter, markupSourceFilter, markupSort)
-                    .catch((error) => onNotice(error instanceof Error ? error.message : '线路明细加载失败'));
-                }
-              }
-            }}
-            dataSource={filteredMarkupChannelRows}
-            scroll={{ x: 1000 }}
-            columns={[
-              { title: '原始代理/承运商', dataIndex: 'agentName', width: 150 },
-              { title: '工作表（Sheet）', width: 180, render: (_, row) => getMarkupRowSheetName(row) },
-              { title: '查价渠道/线路', width: 220, render: (_, row) => getMarkupRowLookupChannel(row) },
-              { title: '查价目的地', width: 110, render: (_, row) => getMarkupRowLookupDestination(row) },
-              { title: '重量段', render: (_, row) => `${row.minWeightKg}-${row.maxWeightKg}kg`, width: 130 },
-              { title: '时效', dataIndex: 'transitLabel', width: 100, render: (value?: string) => value || '待确认' },
-              { title: '渠道要求', width: 120, render: (_, row) => renderRequirementCell(row, () => setSelectedLineRequirement(row)) },
-              {
-                title: '操作',
-                width: 130,
-                fixed: 'right',
-                render: (_, row) => {
-                  const tierRule = findChannelTierMarkupRule(row);
-                  return (
-                    canViewTierMarkup ? <Button
-                      htmlType="button"
-                      size="small"
-                      onClick={() => (tierRule ? openEditChannelTierMarkup(tierRule) : openCreateChannelTierMarkupForLine(row))}
-                    >
-                      {tierRule ? '修改阶梯加价' : '设置阶梯加价'}
-                    </Button> : '-'
-                  );
-                }
-              }
-            ]}
-          />
-        </Space>
-      </Modal>
-
-      <Modal
-        title={`${editingChannelTierRule ? '修改' : '新增'}渠道阶梯加价 · ${getLegacyModuleLabel(markupModule)}`}
-        open={channelTierModalOpen}
-        destroyOnHidden
-        width={760}
-        okText="保存阶梯"
-        cancelText="取消"
-        confirmLoading={channelTierSaving}
-        onOk={() => void saveChannelTierMarkup()}
-        onCancel={() => {
-          if (!channelTierSaving) setChannelTierModalOpen(false);
-        }}
-      >
-        <Form form={channelTierMarkupForm} name="channelTierMarkupRuleForm" layout="vertical">
-          <Row gutter={12}>
-            <Col xs={24} md={12}>
-              <Form.Item label="代理简称" name="agentName" rules={[{ required: true, whitespace: true, message: '请选择代理简称' }]}>
-                <Select
-                  showSearch
-                  placeholder="选择代理简称"
-                  optionFilterProp="label"
-                  options={markupAgentOptions}
-                  onChange={(value) => {
-                    channelTierMarkupForm.setFieldValue('channelKey', undefined);
-                    void loadChannelTierOptions(value);
-                  }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item label="真实渠道 / 计费单位" name="channelKey" rules={[{ required: true, message: '请选择当前模块已导入的真实渠道' }]}>
-                <Select
-                  showSearch
-                  loading={channelTierLoading}
-                  placeholder="先选择代理简称"
-                  optionFilterProp="label"
-                  options={channelTierOptions.map((item) => ({ value: item.key, label: `${item.realChannelName || item.channelName} · 按${item.markupUnit}` }))}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.List name="tiers">
-            {(fields, { add, remove }) => (
-              <Space direction="vertical" size={8} className="full-width">
-                <Text strong>重量段 / 方数段</Text>
-                {fields.map((field, index) => (
-                  <Row gutter={8} key={field.key} align="middle">
-                    <Col xs={24} md={7}>
-                      <Form.Item label={index === 0 ? '下限（含）' : undefined} name={[field.name, 'minChargeableValue']} rules={[{ required: true, message: '请输入下限' }]}>
-                        <InputNumber min={0} precision={3} style={{ width: '100%' }} placeholder="例如 12" />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} md={7}>
-                      <Form.Item label={index === 0 ? '上限（不含，留空为以上）' : undefined} name={[field.name, 'maxChargeableValue']}>
-                        <InputNumber min={0} precision={3} style={{ width: '100%' }} placeholder="例如 51" />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={20} md={7}>
-                      <Form.Item label={index === 0 ? '单位加价' : undefined} name={[field.name, 'markupValue']} rules={[{ required: true, message: '请输入加价金额' }]}>
-                        <InputNumber min={0} precision={2} style={{ width: '100%' }} placeholder="例如 0.80" />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={4} md={3} className="form-list-action-cell">
-                      {fields.length > 1 ? <Button htmlType="button" danger size="small" onClick={() => remove(field.name)}>删除</Button> : null}
-                    </Col>
-                  </Row>
-                ))}
-                <Button htmlType="button" onClick={() => add({ minChargeableValue: 0, maxChargeableValue: undefined, markupValue: 0 })}>新增重量段</Button>
-              </Space>
-            )}
-          </Form.List>
-        </Form>
-      </Modal>
-
-      <Modal
         title={`${editingMarkupRule ? '修改代理加价' : '新增代理加价'} · ${getLegacyModuleLabel(markupModule)}`}
         open={markupModalOpen}
         destroyOnHidden
@@ -3318,7 +2651,6 @@ export function PricingPage({
         onOk={() => void handleSubmitMarkupRule()}
         onCancel={() => {
           if (!markupSaving) {
-            setRestoreMarkupChannelAfterSave(false);
             setMarkupModalOpen(false);
           }
         }}
