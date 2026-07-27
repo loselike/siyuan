@@ -8,6 +8,7 @@ packages/*/dist
 !.env.example
 *.log
 *.tsbuildinfo
+**/*.orig
 .DS_Store
 scraped_docs
 worktrees
