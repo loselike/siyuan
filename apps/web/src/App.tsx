@@ -1,4 +1,4 @@
-import type { ChangeEvent, Key, MouseEvent, ReactNode } from 'react';
+import type { ChangeEvent, MouseEvent, ReactNode } from 'react';
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -13,46 +13,35 @@ import {
   Input,
   InputNumber,
   Layout,
-  message,
   Modal,
   Popconfirm,
-  Progress,
   Row,
   Select,
   Space,
-  Statistic,
   Tabs,
   Tag,
   Typography
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  Banknote,
   Bot,
   ChevronDown,
   ChevronRight,
   CircleDollarSign,
   ClipboardCheck,
-  FileInput,
-  FileText,
   LogOut,
-  PackageCheck,
   UserCircle,
   Search,
-  Send,
   ShieldCheck,
   Sparkles,
-  TicketCheck,
-  Truck
+  TicketCheck
 } from 'lucide-react';
 import {
-  businessTypeLabels,
   calculateTransitTimeLabel,
   createAutomationPlan,
   createBulkTrackingImportResult,
   createFulfillmentAdvice,
   createShipmentInsights,
-  getAvailableFulfillmentActions,
   getModuleCoverageSummary,
   productModules,
   shipmentStatusLabels,
@@ -66,7 +55,6 @@ import {
   type CarrierTaskSummary,
   type CustomerAccountSummary,
   type CustomerStatementSummary,
-  type FinanceCatalogItemSummary,
   type FulfillmentAction,
   type MasterDataSnapshot,
   type BusinessCostAuditSummary,
@@ -74,24 +62,16 @@ import {
   type PayableFeeSummary,
   type BusinessCostFeeSummary,
   type ReceivableAuditSummary,
-  type ReceivableFeeSummary,
   type Shipment,
-  type ShipmentCreateInput,
   type ShipmentFinanceDetailSummary,
-  type ShipmentPaymentUpdateInput,
   type ShipmentPaymentMethod,
   type ShipmentReviewDetailSummary,
   type ShipmentReviewEventSummary,
   type ShipmentLogisticsTrackingEventSummary,
   type StaffGender,
-  type StaffRoleKey,
-  type StaffMenuKey,
-  type ShipmentStatus,
-  type WarehouseConsolidationSummary,
-  type WarehousePackageStatus,
-  type WarehousePackageSummary
+  type ShipmentStatus
 } from '@siyuan/shared';
-import { ApiClient, type AiAssistResponse, type PermissionKey, type Principal, type ProfileUpdateInput, type RoleKey, type Session } from './apiClient';
+import { ApiClient, type AiAssistResponse, type Principal, type ProfileUpdateInput, type Session } from './apiClient';
 import { LoginPage } from './modules/auth/LoginPage';
 import { AppPageBoundary, type PageRenderErrorReport } from './modules/appShell/AppPageBoundary';
 import {
@@ -130,30 +110,20 @@ import {
 } from './modules/appShell/config';
 import { formatPaymentSummary, fulfillmentActionLabels, getRoleDisplayName, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
 import { CustomerPortal } from './modules/customer/CustomerPortal';
-import {
-  createFinanceCatalogFilters,
-  createSettlementMethodOptions,
-  getSettlementMethodRows,
-  normalizeFinanceCatalogCurrency
-} from './modules/finance/catalog';
 import { OrderFeePanel } from './modules/finance/orderFee/OrderFeePanel';
 import { OperationsPage } from './modules/operations/OperationsPage';
 import {
   OrdersPage,
   lifecycleStatusColor,
-  orderLifecycleStages,
   type EditShipmentOperationalFormValues,
   type OrdersLifecycleStageKey,
-  type OutboundOrderFormValues,
-  type ShipmentPaymentFormValues
+  type OutboundOrderFormValues
 } from './modules/orders/OrdersPage';
 import { RoutingPage, type RoutingAssignmentFormValues, type RoutingStageKey } from './modules/routing/RoutingPage';
 import {
   getModuleSubNavSignature,
   ModuleSubNavContext,
-  ModuleSubWorkspace,
   type ModuleSubNavContextValue,
-  type ModuleSubNavItem,
   type SidebarSubNavState
 } from './modules/shared/ModuleSubWorkspace';
 import { MasterDataPage } from './modules/masterData/MasterDataPage';
@@ -165,14 +135,14 @@ import { TrackingPage } from './modules/tracking/TrackingPage';
 import { loadExcel } from './modules/shared/excel';
 import { formatTrackingImportDate, parseBulkTrackingWorkbook, readFileAsArrayBuffer } from './modules/tracking/bulkImport';
 import { formatBeijingDateTime, formatCurrency, formatUsd } from './modules/shared/format';
-import { ManagedTable, MetricCard, StatusTag, createNoticeMessage, renderFilterActions, renderFilterField, renderNoticeBar, riskLabel, riskWeight, tenRowTablePagination } from './modules/shared/ui';
+import { ManagedTable, StatusTag, createNoticeMessage, riskWeight, tenRowTablePagination } from './modules/shared/ui';
 
 const CustomerServicePage = lazy(() => import('./modules/customerService/CustomerServicePage').then((module) => ({ default: module.CustomerServicePage })));
 const FinancePage = lazy(() => import('./modules/finance/FinancePage').then((module) => ({ default: module.FinancePage })));
 const WarehousePage = lazy(() => import('./modules/warehouse/WarehousePage').then((module) => ({ default: module.WarehousePage })));
 
 const { Header, Sider, Content } = Layout;
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 interface AiResult {
   title: string;
@@ -188,10 +158,6 @@ interface ShipmentOperationLog {
 
 type ShipmentLogViewMode = 'operation' | 'routing';
 type ShipmentEditSource = 'operation' | 'operationsPool' | 'routing';
-type PendingRoutingDeleteFormValues = {
-  reason?: string;
-};
-
 function formatNavigationUnreadCount(count: number) {
   return count > 999 ? '999+' : String(count);
 }
@@ -200,9 +166,7 @@ export function App() {
   const [outboundOrderForm] = Form.useForm<OutboundOrderFormValues>();
   const selectedReceivingChannel = Form.useWatch('carrier', outboundOrderForm);
   const [editShipmentForm] = Form.useForm<EditShipmentOperationalFormValues>();
-  const [shipmentPaymentForm] = Form.useForm<ShipmentPaymentFormValues>();
   const [routingAssignmentForm] = Form.useForm<RoutingAssignmentFormValues>();
-  const [pendingRoutingDeleteForm] = Form.useForm<PendingRoutingDeleteFormValues>();
   const [session, setSession] = useState<Session | null>(() => {
     const raw = localStorage.getItem('siyuan-session');
     return raw ? (JSON.parse(raw) as Session) : null;
@@ -259,17 +223,11 @@ export function App() {
   const [editingShipmentSource, setEditingShipmentSource] = useState<ShipmentEditSource>('operation');
   const [routingAssignmentShipment, setRoutingAssignmentShipment] = useState<Shipment | null>(null);
   const [pendingRoutingApprovalShipment, setPendingRoutingApprovalShipment] = useState<Shipment | null>(null);
-  const [pendingRoutingDeleteShipment, setPendingRoutingDeleteShipment] = useState<Shipment | null>(null);
-  const [collectingShipment, setCollectingShipment] = useState<Shipment | null>(null);
   const [detailViewingShipment, setDetailViewingShipment] = useState<Shipment | null>(null);
   const [shipmentFinanceDetails, setShipmentFinanceDetails] = useState<Record<string, ShipmentFinanceDetailSummary>>({});
   const [shipmentFinanceLoading, setShipmentFinanceLoading] = useState(false);
   const [shipmentReviewDetails, setShipmentReviewDetails] = useState<Record<string, ShipmentReviewDetailSummary>>({});
   const [shipmentReviewDetailLoading, setShipmentReviewDetailLoading] = useState(false);
-  const [pendingShipmentPayment, setPendingShipmentPayment] = useState<{
-    shipment: Shipment;
-    input: ShipmentPaymentUpdateInput;
-  } | null>(null);
   const [logViewingShipment, setLogViewingShipment] = useState<Shipment | null>(null);
   const [logViewingMode, setLogViewingMode] = useState<ShipmentLogViewMode>('operation');
   const [bulkTrackingFileName, setBulkTrackingFileName] = useState<string | null>(null);
@@ -289,7 +247,6 @@ export function App() {
   const [forcePasswordChangeOpen, setForcePasswordChangeOpen] = useState(() => Boolean(session?.user.mustChangePassword));
   const [forcePasswordChangeLoading, setForcePasswordChangeLoading] = useState(false);
   const [forcePasswordChangeError, setForcePasswordChangeError] = useState<string | null>(null);
-  const [settlementCatalogItems, setSettlementCatalogItems] = useState<FinanceCatalogItemSummary[]>([]);
   const businessWorkspaceConfig = businessWorkspaceConfigs.DEDICATED_LINE;
   const apiClient = useMemo(
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
@@ -298,8 +255,6 @@ export function App() {
   const reportPageRenderError = useCallback((report: PageRenderErrorReport) => {
     void apiClient.appShell.reportPageRenderError(report).catch(() => undefined);
   }, [apiClient]);
-  const settlementMethodRows = useMemo(() => getSettlementMethodRows(settlementCatalogItems), [settlementCatalogItems]);
-  const settlementMethodOptions = useMemo(() => createSettlementMethodOptions(settlementMethodRows), [settlementMethodRows]);
   function openOrderEntryFromWarehouse(packageIds: string[]) {
     const ids = Array.from(new Set(packageIds.map((id) => id.trim()).filter(Boolean)));
     if (!ids.length) return;
@@ -376,12 +331,12 @@ export function App() {
     setActiveMenuKey(menuKey);
     setExpandedMenuKey(menuKey);
   }, [setNotice]);
-  const handlePrimaryMenuClick = useCallback((event: MouseEvent<HTMLAnchorElement>, key: MenuKey) => {
+  const handlePrimaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, key: MenuKey) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     navigateToAppRoute(key);
   }, [navigateToAppRoute]);
-  const handleSecondaryMenuClick = useCallback((event: MouseEvent<HTMLAnchorElement>, menuKey: MenuKey, sectionKey: string, onChange: (key: string) => void) => {
+  const handleSecondaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, menuKey: MenuKey, sectionKey: string, onChange: (key: string) => void) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     navigateToAppRoute(menuKey, sectionKey);
@@ -392,7 +347,6 @@ export function App() {
     setActiveWorkspaceSection('shipmentPool');
   };
   const canViewShipmentFinanceDetail = session?.user.role === 'ADMIN' || session?.user.role === 'FINANCE' || session?.user.role === 'OPERATOR';
-  const canViewInternalShipmentFinance = session?.user.role === 'ADMIN' || session?.user.role === 'FINANCE';
 
   useEffect(() => {
     localStorage.setItem(shipmentColumnOrderStorageKey, shipmentColumnOrderMode);
@@ -546,31 +500,6 @@ export function App() {
     window.history.replaceState(null, '', href);
     setRequestedAppRoute({ menuKey: currentMenuKey, sectionKey: sidebarSubNav.activeKey });
   }, [currentMenuKey, requestedAppRoute, session, sidebarSubNav]);
-
-  useEffect(() => {
-    if (!session || session.user.role === 'CUSTOMER') {
-      setSettlementCatalogItems([]);
-      return;
-    }
-
-    let cancelled = false;
-    apiClient
-      .financeCatalog({ category: 'SETTLEMENT_METHOD', enabledOnly: true })
-      .then((response) => {
-        if (!cancelled) {
-          setSettlementCatalogItems(Array.isArray(response.items) ? response.items : []);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSettlementCatalogItems([]);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [apiClient, session]);
 
   useEffect(() => {
     setExpandedMenuKey(currentMenuKey);
@@ -929,24 +858,12 @@ export function App() {
       icon: <CircleDollarSign />
     }
   ];
-  const fulfillmentShipments = useMemo(() => {
-    const activeStage = orderLifecycleStages.find((stage) => stage.key === selectedFulfillmentStage);
-    return activeStage ? businessShipments.filter(activeStage.predicate) : businessShipments;
-  }, [businessShipments, selectedFulfillmentStage]);
   const routingFulfillmentShipments = useMemo(() => {
     const activeStage = routingFulfillmentStages.find((stage) => stage.key === selectedRoutingStage);
     return businessShipments.filter(
       (shipment) => selectedRoutingStage === 'all' || activeStage?.statuses.includes(shipment.status)
     );
   }, [businessShipments, selectedRoutingStage]);
-  const fulfillmentAdviceQueue = useMemo(
-    () =>
-      businessShipments
-        .map((shipment) => ({ shipment, advice: createFulfillmentAdvice(shipment) }))
-        .filter((item) => item.advice.priority !== 'normal')
-        .slice(0, 5),
-    [businessShipments]
-  );
   const allShipmentLogs = logViewingShipment
     ? [
         {
@@ -1732,35 +1649,6 @@ export function App() {
     setNotice('已删除成本费用');
   }
 
-  function openPendingRoutingDeleteModal(record: Shipment) {
-    setPendingRoutingDeleteShipment(record);
-    pendingRoutingDeleteForm.setFieldsValue({ reason: undefined });
-  }
-
-  async function handleDeletePendingRouting() {
-    if (!pendingRoutingDeleteShipment) {
-      return;
-    }
-    try {
-      const values = await pendingRoutingDeleteForm.validateFields();
-      const reason = values.reason?.trim() ?? '';
-      await apiClient.deletePendingRoutingShipment(pendingRoutingDeleteShipment.id, { reason });
-      setLocalShipments((current) => current.filter((shipment) => shipment.id !== pendingRoutingDeleteShipment.id));
-      appendShipmentOperationLog(pendingRoutingDeleteShipment.id, `渠道排货：删除待排货（${reason}）`);
-      if (logViewingShipment?.id === pendingRoutingDeleteShipment.id) {
-        setLogViewingShipment(null);
-      }
-      setNotice(`${pendingRoutingDeleteShipment.systemOrderNo} 已从待排货删除`);
-      setPendingRoutingDeleteShipment(null);
-      pendingRoutingDeleteForm.resetFields();
-    } catch (error) {
-      if (typeof error === 'object' && error !== null && 'errorFields' in error) {
-        return;
-      }
-      Modal.error({ title: '删除失败', content: error instanceof Error ? error.message : '待排货删除失败' });
-    }
-  }
-
   async function handleRerouteShipment(record: Shipment, reason: string) {
     const updated = await apiClient.rerouteShipment(record.id, { reason });
     setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
@@ -1837,56 +1725,6 @@ export function App() {
     setEditingShipmentSource('operation');
     editShipmentForm.resetFields();
     setNotice(`已人工修改 ${updated.systemOrderNo} 的轨迹、转单号和状态`);
-  }
-
-  function openShipmentPaymentModal(record: Shipment) {
-    setCollectingShipment(record);
-    shipmentPaymentForm.setFieldsValue({
-      paymentAmountUsd: record.paymentAmountUsd,
-      paymentAmountCny: record.paymentAmountCny,
-      paymentMethod: record.paymentMethod ?? '对公'
-    });
-  }
-
-  async function handleSubmitShipmentPayment() {
-    if (!collectingShipment) {
-      return;
-    }
-
-    const values = await shipmentPaymentForm.validateFields();
-    const hasUsd = values.paymentAmountUsd !== undefined && values.paymentAmountUsd !== null;
-    const hasCny = values.paymentAmountCny !== undefined && values.paymentAmountCny !== null;
-
-    if (!hasUsd && !hasCny) {
-      shipmentPaymentForm.setFields([
-        { name: 'paymentAmountUsd', errors: ['USD 或 RMB 至少填写一个'] },
-        { name: 'paymentAmountCny', errors: ['USD 或 RMB 至少填写一个'] }
-      ]);
-      return;
-    }
-
-    const paymentInput: ShipmentPaymentUpdateInput = {
-      paymentAmountUsd: hasUsd ? Number(values.paymentAmountUsd) : undefined,
-      paymentAmountCny: hasCny ? Number(values.paymentAmountCny) : undefined,
-      paymentMethod: values.paymentMethod
-    };
-
-    setPendingShipmentPayment({ shipment: collectingShipment, input: paymentInput });
-  }
-
-  async function confirmShipmentPayment() {
-    if (!pendingShipmentPayment) {
-      return;
-    }
-
-    const { shipment, input } = pendingShipmentPayment;
-    const updated = await apiClient.registerShipmentPayment(shipment.id, input);
-    setLocalShipments((current) => current.map((item) => (item.id === shipment.id ? updated : item)));
-    appendShipmentOperationLog(shipment.id, `登记收款：${formatPaymentSummary(updated.paymentAmountUsd, updated.paymentAmountCny)} / ${updated.paymentMethod ?? '未登记'}`);
-    setCollectingShipment(null);
-    setPendingShipmentPayment(null);
-    shipmentPaymentForm.resetFields();
-    setNotice(`已登记收款 ${updated.systemOrderNo}：${formatPaymentSummary(updated.paymentAmountUsd, updated.paymentAmountCny)} / ${updated.paymentMethod ?? '未登记'}`);
   }
 
   async function handleBulkTrackingFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -2676,7 +2514,6 @@ export function App() {
                   <OrdersPage
                     notice={null}
                     shipments={businessShipments}
-                    visibleShipments={fulfillmentShipments}
                     columns={fulfillmentColumns}
                     metricCards={fulfillmentAuditMetricCards}
                     selectedStage={selectedFulfillmentStage}
@@ -2702,19 +2539,11 @@ export function App() {
                       setRoutingAssignmentShipment(null);
                       routingAssignmentForm.resetFields();
                     }}
-                    collectingShipment={collectingShipment}
-                    shipmentPaymentForm={shipmentPaymentForm}
-                    onSubmitShipmentPayment={handleSubmitShipmentPayment}
-                    onCancelShipmentPayment={() => setCollectingShipment(null)}
-                    pendingShipmentPayment={pendingShipmentPayment}
-                    onConfirmShipmentPayment={confirmShipmentPayment}
-                    onCancelPendingShipmentPayment={() => setPendingShipmentPayment(null)}
                     onUploadShipmentBusinessInvoice={handleUploadShipmentBusinessInvoice}
                     logViewingShipment={logViewingShipment}
                     logViewingMode={logViewingMode}
                     shipmentLogs={allShipmentLogs}
                     onCloseShipmentLog={() => setLogViewingShipment(null)}
-                    formatPaymentSummary={formatPaymentSummary}
                     onAiAssist={handleAiAssist}
                     aiLoading={aiLoading}
                     permissions={session.permissions}
@@ -3039,35 +2868,6 @@ export function App() {
                   ? `${pendingRoutingApprovalShipment.systemOrderNo} 审核通过后将进入已排货，并同步进入仓库待出库。`
                   : '确认后将进入仓库待出库。'}
               />
-            </Modal>
-            <Modal
-              title="删除待排货"
-              open={Boolean(pendingRoutingDeleteShipment)}
-              destroyOnHidden
-              okText="确认删除"
-              cancelText="取消"
-              okButtonProps={{ danger: true }}
-              onOk={() => void handleDeletePendingRouting()}
-              onCancel={() => {
-                setPendingRoutingDeleteShipment(null);
-                pendingRoutingDeleteForm.resetFields();
-              }}
-            >
-              <Alert
-                className="notice-bar"
-                type="warning"
-                showIcon
-                message={
-                  pendingRoutingDeleteShipment
-                    ? `${pendingRoutingDeleteShipment.systemOrderNo} 将从待排货移除，不进入仓库待出库。`
-                    : '待排货删除需要填写原因。'
-                }
-              />
-              <Form form={pendingRoutingDeleteForm} layout="vertical">
-                <Form.Item name="reason" label="删除原因" rules={[{ required: true, whitespace: true, message: '请填写删除原因' }]}>
-                  <Input.TextArea rows={4} placeholder="例如客户取消出货、资料重复创建等" />
-                </Form.Item>
-              </Form>
             </Modal>
             <Modal
               title={<span id="shipment-operation-log-title-global">{logViewingMode === 'routing' ? '排货日志' : '操作日志'}</span>}

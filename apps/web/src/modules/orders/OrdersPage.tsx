@@ -14,7 +14,6 @@ import {
   Row,
   Select,
   Space,
-  Statistic,
   Tag,
   Typography,
   Upload
@@ -27,9 +26,6 @@ import {
   shipmentStatusLabels,
   type MasterDataSnapshot,
   type Shipment,
-  type ShipmentOperationalUpdateInput,
-  type ShipmentPaymentMethod,
-  type ShipmentPaymentUpdateInput,
   type ShipmentStatus
 } from '@siyuan/shared';
 import { formatBeijingDateTime } from '../shared/format';
@@ -91,12 +87,6 @@ export interface EditShipmentOperationalFormValues {
   etdAt?: string;
 }
 
-export interface ShipmentPaymentFormValues {
-  paymentAmountUsd?: number;
-  paymentAmountCny?: number;
-  paymentMethod: ShipmentPaymentMethod;
-}
-
 export interface ShipmentOperationLog {
   id: string;
   operatedAt: string;
@@ -108,14 +98,9 @@ type ShipmentLogViewMode = 'operation' | 'routing';
 
 const receivingChannelOptions = ['海运DDP', '空运DDP', '快递', '整柜到门', '整柜到港', '拼箱到港', '空运到机场', '代购', '自定义'];
 
-const shipmentPaymentMethods: ShipmentPaymentMethod[] = ['对公', '对私', '阿里店铺', '外汇'];
-
-
-
 export function OrdersPage({
   notice,
   shipments,
-  visibleShipments,
   columns,
   metricCards,
   selectedStage,
@@ -138,19 +123,11 @@ export function OrdersPage({
   masterData,
   onConfirmRoutingAssignment,
   onCancelRoutingAssignment,
-  collectingShipment,
-  shipmentPaymentForm,
-  onSubmitShipmentPayment,
-  onCancelShipmentPayment,
-  pendingShipmentPayment,
-  onConfirmShipmentPayment,
-  onCancelPendingShipmentPayment,
   onUploadShipmentBusinessInvoice,
   logViewingShipment,
   logViewingMode,
   shipmentLogs,
   onCloseShipmentLog,
-  formatPaymentSummary,
   onAiAssist,
   aiLoading,
   permissions,
@@ -158,7 +135,6 @@ export function OrdersPage({
 }: {
   notice?: string | null;
   shipments: Shipment[];
-  visibleShipments: Shipment[];
   columns: ColumnsType<Shipment>;
   metricCards: Array<{ title: string; value: string | number; extra: ReactNode; icon: ReactNode }>;
   selectedStage: OrdersLifecycleStageKey;
@@ -181,19 +157,11 @@ export function OrdersPage({
   masterData: MasterDataSnapshot;
   onConfirmRoutingAssignment: () => Promise<boolean>;
   onCancelRoutingAssignment: () => void;
-  collectingShipment: Shipment | null;
-  shipmentPaymentForm: FormInstance<ShipmentPaymentFormValues>;
-  onSubmitShipmentPayment: () => Promise<void>;
-  onCancelShipmentPayment: () => void;
-  pendingShipmentPayment: { shipment: Shipment; input: ShipmentPaymentUpdateInput } | null;
-  onConfirmShipmentPayment: () => Promise<void>;
-  onCancelPendingShipmentPayment: () => void;
   onUploadShipmentBusinessInvoice: (shipment: Shipment, file: File) => Promise<void>;
   logViewingShipment: Shipment | null;
   logViewingMode: ShipmentLogViewMode;
   shipmentLogs: ShipmentOperationLog[];
   onCloseShipmentLog: () => void;
-  formatPaymentSummary: (usd?: number, cny?: number) => string;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
   permissions: import('../../apiClient').PermissionKey[];
@@ -710,69 +678,6 @@ export function OrdersPage({
             </Col>
           </Row>
         </Form>
-      </Modal>
-
-      <Modal
-        title="登记收款金额"
-        open={Boolean(collectingShipment)}
-        destroyOnHidden
-        okText="确认收款"
-        cancelText="取消"
-        width={560}
-        onOk={() => void onSubmitShipmentPayment().catch(() => undefined)}
-        onCancel={onCancelShipmentPayment}
-      >
-        <Alert
-          className="notice-bar"
-          type="info"
-          showIcon
-          message="未登记前金额和付款方式显示为未知；确认收款后会保留操作记录。"
-        />
-        <Form form={shipmentPaymentForm} layout="vertical">
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item name="paymentAmountUsd" label="收款金额 USD">
-                <InputNumber min={0} precision={2} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="paymentAmountCny" label="收款金额 RMB">
-                <InputNumber min={0} precision={2} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-          </Row>
-          <Form.Item name="paymentMethod" label="收款方式" rules={[{ required: true, message: '请选择收款方式' }]}>
-            <select aria-label="收款方式" className="native-select">
-              {shipmentPaymentMethods.map((method) => (
-                <option key={method} value={method}>
-                  {method}
-                </option>
-              ))}
-            </select>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title="确认登记收款？"
-        open={Boolean(pendingShipmentPayment)}
-        destroyOnHidden
-        okText="确认收款"
-        cancelText="取消"
-        onOk={() => void onConfirmShipmentPayment()}
-        onCancel={onCancelPendingShipmentPayment}
-      >
-        {pendingShipmentPayment ? (
-          <Alert
-            className="notice-bar"
-            type="warning"
-            showIcon
-            message={`${pendingShipmentPayment.shipment.systemOrderNo} 将登记 ${formatPaymentSummary(
-              pendingShipmentPayment.input.paymentAmountUsd,
-              pendingShipmentPayment.input.paymentAmountCny
-            )} / ${pendingShipmentPayment.input.paymentMethod}`}
-          />
-        ) : null}
       </Modal>
 
       <Modal
