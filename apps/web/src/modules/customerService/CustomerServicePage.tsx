@@ -59,6 +59,47 @@ type CustomerServiceDashboardGroup = {
   items: CustomerServiceDashboardTask[];
 };
 
+type CustomerServiceAuditIndex = Map<string, AuditLogSummary>;
+
+function auditIndexKey(target: string, discriminator: string) {
+  return `${target}\u0000${discriminator}`;
+}
+
+function rememberLatest(map: Map<string, AuditLogSummary>, key: string, row: AuditLogSummary) {
+  const current = map.get(key);
+  if (!current || Date.parse(row.createdAt) > Date.parse(current.createdAt)) map.set(key, row);
+}
+
+export function buildCustomerServiceAuditIndex(
+  logs: AuditLogSummary[],
+  dataConfirmationCycleStartedAtByShipment: ReadonlyMap<string, string | undefined> = new Map()
+): CustomerServiceAuditIndex {
+  const index: CustomerServiceAuditIndex = new Map();
+  logs.forEach((row) => {
+    rememberLatest(index, auditIndexKey(row.target, `action:${row.action}`), row);
+    const reviewMatch = /^customer_service\.(business|agent)_data\.(approved|reversed)$/.exec(row.action);
+    const dataCycleStartedAt = dataConfirmationCycleStartedAtByShipment.get(row.target);
+    if (reviewMatch && auditBelongsToDataConfirmationCycle(row, dataCycleStartedAt)) {
+      rememberLatest(index, auditIndexKey(row.target, `review:${reviewMatch[1]}`), row);
+    }
+    const updateMatch = /^customer_service\.(business|agent)_data\.updated$/.exec(row.action);
+    if (updateMatch && auditBelongsToDataConfirmationCycle(row, dataCycleStartedAt)) {
+      rememberLatest(index, auditIndexKey(row.target, `data:${updateMatch[1]}`), row);
+    }
+    const after = getAuditAfter(row);
+    if (row.action === 'customer_service.status.update' && typeof after.statusTo === 'string') {
+      rememberLatest(index, auditIndexKey(row.target, `status:${after.statusTo}`), row);
+    }
+    if (row.action === 'shipment.operational.update' && 'trackingWebsite' in after) {
+      rememberLatest(index, auditIndexKey(row.target, 'tracking'), row);
+    }
+    if (['customer_service.issue.attach', 'customer_service.issue.update', 'customer_service.issue.close'].includes(row.action)) {
+      rememberLatest(index, auditIndexKey(row.target, 'problem'), row);
+    }
+  });
+  return index;
+}
+
 function getDashboardTaskNumericValue(value: number | string) {
   if (typeof value === 'number') return value;
   const parsed = Number.parseFloat(value);
@@ -337,6 +378,14 @@ export function CustomerServicePage({
     agentName: ''
   });
   const [customerServiceAuditLogs, setCustomerServiceAuditLogs] = useState<AuditLogSummary[]>([]);
+  const dataConfirmationCycleStartedAtByShipment = useMemo(
+    () => new Map(shipments.map((shipment) => [shipment.id, shipment.outboundAt])),
+    [shipments]
+  );
+  const customerServiceAuditIndex = useMemo(
+    () => buildCustomerServiceAuditIndex(customerServiceAuditLogs, dataConfirmationCycleStartedAtByShipment),
+    [customerServiceAuditLogs, dataConfirmationCycleStartedAtByShipment]
+  );
   const [submittingDeparture, setSubmittingDeparture] = useState(false);
   const [submittingProblem, setSubmittingProblem] = useState(false);
   const [submittingDataConfirm, setSubmittingDataConfirm] = useState(false);
@@ -402,11 +451,11 @@ export function CustomerServicePage({
     if (!statuses.length) return [];
     return shipments.filter((shipment) => {
       if (!statuses.includes(shipment.status)) return false;
-      if (activeSection === 'dataConfirm') return !(isBusinessDataApproved(shipment.id, customerServiceAuditLogs) && isAgentDataApproved(shipment.id, customerServiceAuditLogs));
-      if (activeSection === 'transferNo') return isBusinessDataApproved(shipment.id, customerServiceAuditLogs) && isAgentDataApproved(shipment.id, customerServiceAuditLogs);
+      if (activeSection === 'dataConfirm') return !(isBusinessDataApproved(shipment.id, customerServiceAuditIndex) && isAgentDataApproved(shipment.id, customerServiceAuditIndex));
+      if (activeSection === 'transferNo') return isBusinessDataApproved(shipment.id, customerServiceAuditIndex) && isAgentDataApproved(shipment.id, customerServiceAuditIndex);
       return true;
     });
-  }, [activeSection, customerServiceAuditLogs, shipments]);
+  }, [activeSection, customerServiceAuditIndex, shipments]);
   const shipmentById = useMemo(() => new Map(shipments.map((shipment) => [shipment.id, shipment])), [shipments]);
   const waitingDepartureDateHint = useMemo(() => {
     const waitingRows = shipments.filter((shipment) => shipment.status === 'WAITING_DEPARTURE');
@@ -440,11 +489,11 @@ export function CustomerServicePage({
     volumeCbm: { title: '业务体积 CBM', dataIndex: 'volumeCbm', width: 115, render: (value: number | undefined) => value ?? '-' },
     chargeWeight: { title: '计费重', dataIndex: 'receivableWeightKg', width: 90 },
     agentWeightKg: { title: '代理计费重', dataIndex: 'agentWeightKg', width: 110 },
-    businessReviewStatus: { title: '业务审核状态', key: 'businessReviewStatus', width: 110, render: (_, row) => isBusinessDataApproved(row.id, customerServiceAuditLogs) ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> },
-    agentPackageCount: { title: '代理件数', key: 'agentPackageCount', width: 100, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditLogs, 'agent')?.packageCount ?? row.packageCount ?? '-' },
-    agentActualWeight: { title: '代理总量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditLogs, 'agent')?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
-    agentVolumeCbm: { title: '代理体积 CBM', key: 'agentVolumeCbm', width: 115, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditLogs, 'agent')?.volumeCbm ?? row.volumeCbm ?? '-' },
-    agentReviewStatus: { title: '代理审核状态', key: 'agentReviewStatus', width: 110, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditLogs) ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> },
+    businessReviewStatus: { title: '业务审核状态', key: 'businessReviewStatus', width: 110, render: (_, row) => isBusinessDataApproved(row.id, customerServiceAuditIndex) ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> },
+    agentPackageCount: { title: '代理件数', key: 'agentPackageCount', width: 100, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.packageCount ?? row.packageCount ?? '-' },
+    agentActualWeight: { title: '代理总量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
+    agentVolumeCbm: { title: '代理体积 CBM', key: 'agentVolumeCbm', width: 115, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.volumeCbm ?? row.volumeCbm ?? '-' },
+    agentReviewStatus: { title: '代理审核状态', key: 'agentReviewStatus', width: 110, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditIndex) ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> },
     declarationRequired: { title: '报关', dataIndex: 'declarationRequired', width: 80, render: (value?: boolean) => value ? '是' : '否' },
     sensitive: { title: '敏感', dataIndex: 'sensitive', width: 80, render: (value?: boolean) => value ? '是' : '否' },
     agentName: { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '-' },
@@ -519,10 +568,10 @@ export function CustomerServicePage({
               <Button size="small" onClick={() => setDataConfirmDetailShipment(row)}>
                 详情
               </Button>
-              {!isBusinessDataApproved(row.id, customerServiceAuditLogs) ? <>{can('customer-service:data-confirm:business-approve') ? <Button size="small" onClick={() => void approveData(row, 'business')}>业务审核</Button> : null}{can('customer-service:data-confirm:business-update') ? <Button size="small" onClick={() => openDataEdit(row, 'business')}>业务修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'business')}>业务反审核</Button> : null}
-              {!isAgentDataApproved(row.id, customerServiceAuditLogs) ? <>{can('customer-service:data-confirm:agent-approve') ? <Button size="small" onClick={() => void approveData(row, 'agent')}>代理审核</Button> : null}{can('customer-service:data-confirm:agent-update') ? <Button size="small" onClick={() => openDataEdit(row, 'agent')}>代理修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'agent')}>代理反审核</Button> : null}
-              {!isBusinessDataApproved(row.id, customerServiceAuditLogs) && !isAgentDataApproved(row.id, customerServiceAuditLogs) && can('customer-service:data-confirm:approve-all') ? <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>全部审核</Button> : null}
-              {isBusinessDataApproved(row.id, customerServiceAuditLogs) && isAgentDataApproved(row.id, customerServiceAuditLogs) && can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'all')}>全部反审核</Button> : null}
+              {!isBusinessDataApproved(row.id, customerServiceAuditIndex) ? <>{can('customer-service:data-confirm:business-approve') ? <Button size="small" onClick={() => void approveData(row, 'business')}>业务审核</Button> : null}{can('customer-service:data-confirm:business-update') ? <Button size="small" onClick={() => openDataEdit(row, 'business')}>业务修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'business')}>业务反审核</Button> : null}
+              {!isAgentDataApproved(row.id, customerServiceAuditIndex) ? <>{can('customer-service:data-confirm:agent-approve') ? <Button size="small" onClick={() => void approveData(row, 'agent')}>代理审核</Button> : null}{can('customer-service:data-confirm:agent-update') ? <Button size="small" onClick={() => openDataEdit(row, 'agent')}>代理修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'agent')}>代理反审核</Button> : null}
+              {!isBusinessDataApproved(row.id, customerServiceAuditIndex) && !isAgentDataApproved(row.id, customerServiceAuditIndex) && can('customer-service:data-confirm:approve-all') ? <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>全部审核</Button> : null}
+              {isBusinessDataApproved(row.id, customerServiceAuditIndex) && isAgentDataApproved(row.id, customerServiceAuditIndex) && can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'all')}>全部反审核</Button> : null}
             </Space>
           )
         }
@@ -545,17 +594,17 @@ export function CustomerServicePage({
     channelName: { title: '代理渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
     systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 150, render: (value?: string) => value || '-' },
-    agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditLogs) ? '已确认' : '-' },
+    agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditIndex) ? '已确认' : '-' },
     etdAt: { title: 'ETD/ATD', dataIndex: 'etdAt', width: 150, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     etaAt: { title: 'ETA/ATA', dataIndex: 'etaAt', width: 150, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     trackingWebsite: {
       title: '查件网址',
       key: 'trackingWebsite',
       width: 220,
-      render: (_, row) => renderTrackingWebsite(row, customerServiceAuditLogs)
+      render: (_, row) => renderTrackingWebsite(row, customerServiceAuditIndex)
     },
-    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getDepartedStatusLog(row.id, customerServiceAuditLogs)?.actorUsername ?? '-' },
-    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getDepartedStatusLog(row.id, customerServiceAuditLogs)?.createdAt) },
+    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getStatusLog(row.id, customerServiceAuditIndex, 'DEPARTED')?.actorUsername ?? '-' },
+    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getStatusLog(row.id, customerServiceAuditIndex, 'DEPARTED')?.createdAt) },
     action: {
       title: '操作',
       key: 'action',
@@ -581,7 +630,7 @@ export function CustomerServicePage({
     .map((key) => departedColumnMap[key]);
   const arrivedPortColumnMap: Record<DepartedColumnKey, ColumnsType<Shipment>[number]> = {
     ...departedColumnMap,
-    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getArrivedPortStatusLog(row.id, customerServiceAuditLogs)?.actorUsername ?? '-' },
+    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getStatusLog(row.id, customerServiceAuditIndex, 'ARRIVED_PORT')?.actorUsername ?? '-' },
     handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: () => '-' },
     action: {
       title: '操作',
@@ -608,8 +657,8 @@ export function CustomerServicePage({
     .map((key) => arrivedPortColumnMap[key]);
   const deliveringColumnMap: Record<DepartedColumnKey, ColumnsType<Shipment>[number]> = {
     ...departedColumnMap,
-    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getArrivedPortStatusLog(row.id, customerServiceAuditLogs)?.actorUsername ?? '-' },
-    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getDeliveringStatusLog(row.id, customerServiceAuditLogs)?.createdAt) },
+    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getStatusLog(row.id, customerServiceAuditIndex, 'ARRIVED_PORT')?.actorUsername ?? '-' },
+    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getStatusLog(row.id, customerServiceAuditIndex, 'DELIVERING')?.createdAt) },
     action: {
       title: '操作',
       key: 'action',
@@ -633,25 +682,6 @@ export function CustomerServicePage({
   const deliveringColumns = deliveringColumnOrder
     .filter((key) => !hiddenDeliveringColumns.includes(key))
     .map((key) => deliveringColumnMap[key]);
-  const actionColumns: ColumnsType<Shipment> = [
-    {
-      title: '操作',
-      key: 'action',
-      fixed: 'right',
-      width: 220,
-      render: (_, row) => (
-        <Space size={6}>
-          {can('customer-service:waiting-departure:update-info') ? <Button size="small" onClick={() => openDepartureModal(row)}>
-            修改
-          </Button> : null}
-          {can('customer-service:waiting-departure:label-upload') || can('customer-service:transfer:label-upload') ? <Button size="small" onClick={() => openLabelModal(row)}>
-            {hasShipmentLabel(row, labelRows) ? '查看面单' : '上传面单'}
-          </Button> : null}
-          {hasShipmentLabel(row, labelRows) ? <Tag color="green">已上传面单</Tag> : null}
-        </Space>
-      )
-    }
-  ];
   const signedProblemActionColumns: ColumnsType<Shipment> = [
     {
       title: '操作',
@@ -674,7 +704,7 @@ export function CustomerServicePage({
   const rawProblemRows = useMemo(() => {
     return problemTickets.map((ticket) => {
       const shipment = shipmentById.get(ticket.shipmentId);
-      const category = getProblemCategory(ticket, shipment, customerServiceAuditLogs);
+      const category = getProblemCategory(ticket, shipment, customerServiceAuditIndex);
       return {
         ticket,
         shipment,
@@ -683,7 +713,7 @@ export function CustomerServicePage({
         dwellDays: problemDwellDays(ticket.createdAt)
       };
     });
-  }, [customerServiceAuditLogs, problemTickets, shipmentById]);
+  }, [customerServiceAuditIndex, problemTickets, shipmentById]);
   const problemRows = useMemo(() => {
     const minDwellDays = Number(problemFilters.minDwellDays);
     return rawProblemRows.filter((row) => {
@@ -701,23 +731,28 @@ export function CustomerServicePage({
   const afterSaleRows = useMemo(() => rawProblemRows.filter((row) => row.category === 'assistance'), [rawProblemRows]);
   const problemCategoryCounts = useMemo(() => {
     const counts: Record<Exclude<ProblemCategory, 'all'>, number> = { preDeparture: 0, arrivedPort: 0, delivering: 0, assistance: 0, history: 0 };
-    problemTickets.forEach((ticket) => {
-      const category = getProblemCategory(ticket, shipmentById.get(ticket.shipmentId), customerServiceAuditLogs);
-      counts[category] += 1;
+    rawProblemRows.forEach((row) => {
+      counts[row.category] += 1;
     });
     return counts;
-  }, [customerServiceAuditLogs, problemTickets, shipmentById]);
+  }, [rawProblemRows]);
   const dashboardMetrics = useMemo(() => {
-    const currentStatusCount = (status: ShipmentStatus) => shipments.filter((shipment) => shipment.status === status).length;
-    const weeklyStatusCount = (status: ShipmentStatus) => customerServiceAuditLogs.filter((row) => {
+    const currentStatusCounts = new Map<ShipmentStatus, number>();
+    shipments.forEach((shipment) => currentStatusCounts.set(shipment.status, (currentStatusCounts.get(shipment.status) ?? 0) + 1));
+    const weeklyStatusCounts = new Map<string, number>();
+    customerServiceAuditLogs.forEach((row) => {
       const after = getAuditAfter(row);
-      return row.action === 'customer_service.status.update' && after.statusTo === status && isCurrentWeek(row.createdAt);
-    }).length;
+      if (row.action === 'customer_service.status.update' && typeof after.statusTo === 'string' && isCurrentWeek(row.createdAt)) {
+        weeklyStatusCounts.set(after.statusTo, (weeklyStatusCounts.get(after.statusTo) ?? 0) + 1);
+      }
+    });
+    const currentStatusCount = (status: ShipmentStatus) => currentStatusCounts.get(status) ?? 0;
+    const weeklyStatusCount = (status: ShipmentStatus) => weeklyStatusCounts.get(status) ?? 0;
     const todayEntryCount = shipments.filter((shipment) => isToday(shipment.entryAt ?? shipment.createdAt)).length;
-    const dataConfirmCount = shipments.filter((shipment) => shipment.status === 'OUTBOUNDED' && !isBusinessDataApproved(shipment.id, customerServiceAuditLogs)).length;
+    const dataConfirmCount = shipments.filter((shipment) => shipment.status === 'OUTBOUNDED' && !isBusinessDataApproved(shipment.id, customerServiceAuditIndex)).length;
     const missingTransferCount = shipments.filter((shipment) =>
       ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status)
-      && isBusinessDataApproved(shipment.id, customerServiceAuditLogs)
+      && isBusinessDataApproved(shipment.id, customerServiceAuditIndex)
       && !shipment.transferNo
     ).length;
     const pendingRoutingCount = pendingRoutingShipments.length;
@@ -781,7 +816,7 @@ export function CustomerServicePage({
     ];
     const maxValue = Math.max(1, ...groups.flatMap((group) => group.items.map((item) => getDashboardTaskNumericValue(item.value))));
     return { groups, maxValue };
-  }, [customerServiceAuditLogs, pendingRoutingShipments.length, problemTickets, rawProblemRows, shipments]);
+  }, [customerServiceAuditIndex, customerServiceAuditLogs, pendingRoutingShipments.length, problemTickets, rawProblemRows, shipments]);
   const problemColumnMap: Record<ProblemColumnKey, ColumnsType<ProblemRow>[number]> = {
     entryAt: { title: '运单创建时间', key: 'entryAt', width: 170, render: (_, row) => row.shipment ? formatBeijingDateTime(row.shipment.entryAt ?? row.shipment.createdAt) : '-' },
     outboundAt: { title: '出库时间', key: 'outboundAt', width: 170, render: (_, row) => row.shipment?.outboundAt ? formatBeijingDateTime(row.shipment.outboundAt) : '-' },
@@ -802,12 +837,12 @@ export function CustomerServicePage({
     reason: { title: '问题件内容', key: 'reason', width: 220, render: (_, row) => row.ticket.reason },
     declarationRequired: { title: '报关', key: 'declarationRequired', width: 80, render: (_, row) => row.shipment ? row.shipment.declarationRequired ? '是' : '否' : '-' },
     sensitive: { title: '敏感', key: 'sensitive', width: 80, render: (_, row) => row.shipment ? row.shipment.sensitive ? '是' : '否' : '-' },
-    agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => row.shipment && isAgentDataApproved(row.shipment.id, customerServiceAuditLogs) ? '已确认' : '-' },
+    agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => row.shipment && isAgentDataApproved(row.shipment.id, customerServiceAuditIndex) ? '已确认' : '-' },
     etdAt: { title: 'ETD/ATD', key: 'etdAt', width: 150, render: (_, row) => row.shipment?.etdAt ? formatBeijingDateTime(row.shipment.etdAt) : '-' },
     etaAt: { title: 'ETA/ATA', key: 'etaAt', width: 150, render: (_, row) => row.shipment?.etaAt ? formatBeijingDateTime(row.shipment.etaAt) : '-' },
-    trackingWebsite: { title: '查件网址', key: 'trackingWebsite', width: 220, render: (_, row) => row.shipment ? renderTrackingWebsite(row.shipment, customerServiceAuditLogs) : '-' },
-    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getProblemHandleLog(row.ticket.id, customerServiceAuditLogs)?.actorUsername ?? '-' },
-    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getProblemHandleLog(row.ticket.id, customerServiceAuditLogs)?.createdAt) },
+    trackingWebsite: { title: '查件网址', key: 'trackingWebsite', width: 220, render: (_, row) => row.shipment ? renderTrackingWebsite(row.shipment, customerServiceAuditIndex) : '-' },
+    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getProblemHandleLog(row.ticket.id, customerServiceAuditIndex)?.actorUsername ?? '-' },
+    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getProblemHandleLog(row.ticket.id, customerServiceAuditIndex)?.createdAt) },
     action: {
       title: '操作',
       key: 'action',
@@ -870,7 +905,6 @@ export function CustomerServicePage({
       apiClient.auditQuery.auditLogs({ action: 'customer_service.business_data.updated' }),
       apiClient.auditQuery.auditLogs({ action: 'customer_service.agent_data.updated' }),
       apiClient.auditQuery.auditLogs({ action: 'shipment.operational.update' }),
-      apiClient.auditQuery.auditLogs({ action: 'customer_service.signature.confirm' }),
       apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.attach' }),
       apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.update' }),
       apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.close' })
@@ -941,7 +975,7 @@ export function CustomerServicePage({
 
   function openDepartureModal(shipment: Shipment) {
     setDepartureShipment(shipment);
-    const tracking = getShipmentTrackingMeta(shipment.id, customerServiceAuditLogs);
+    const tracking = getShipmentTrackingMeta(shipment.id, customerServiceAuditIndex);
     departureForm.setFieldsValue({
       newTransferNo: shipment.transferNo ?? '',
       subOrderNo: shipment.subOrderNo ?? '',
@@ -957,7 +991,7 @@ export function CustomerServicePage({
 
   function openDepartedEditModal(shipment: Shipment) {
     setDepartureShipment(shipment);
-    const tracking = getShipmentTrackingMeta(shipment.id, customerServiceAuditLogs);
+    const tracking = getShipmentTrackingMeta(shipment.id, customerServiceAuditIndex);
     departureForm.setFieldsValue({
       newTransferNo: shipment.transferNo ?? '',
       subOrderNo: shipment.subOrderNo ?? '',
@@ -2105,45 +2139,22 @@ function getAuditAfter(row: AuditLogSummary): Record<string, unknown> {
   return row.after && typeof row.after === 'object' ? row.after as Record<string, unknown> : {};
 }
 
-function getDepartedStatusLog(shipmentId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => {
-      const after = getAuditAfter(row);
-      return row.action === 'customer_service.status.update' && row.target === shipmentId && after.statusTo === 'DEPARTED';
-    })
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function auditBelongsToDataConfirmationCycle(row: AuditLogSummary, outboundAt?: string) {
+  const cycleStartedAt = outboundAt ? Date.parse(outboundAt) : Number.NaN;
+  if (!Number.isFinite(cycleStartedAt)) return true;
+  const auditedCycleStartedAt = getAuditAfter(row).dataConfirmationCycleStartedAt;
+  if (typeof auditedCycleStartedAt === 'string') return Date.parse(auditedCycleStartedAt) === cycleStartedAt;
+  return Date.parse(row.createdAt) >= cycleStartedAt;
 }
 
-function getArrivedPortStatusLog(shipmentId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => {
-      const after = getAuditAfter(row);
-      return row.action === 'customer_service.status.update' && row.target === shipmentId && after.statusTo === 'ARRIVED_PORT';
-    })
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function getStatusLog(shipmentId: string, index: CustomerServiceAuditIndex, status: ShipmentStatus) {
+  return index.get(auditIndexKey(shipmentId, `status:${status}`));
 }
 
-function getDeliveringStatusLog(shipmentId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => {
-      const after = getAuditAfter(row);
-      return row.action === 'customer_service.status.update' && row.target === shipmentId && after.statusTo === 'DELIVERING';
-    })
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
-}
-
-function getSignatureConfirmLog(shipmentId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => row.action === 'customer_service.signature.confirm' && row.target === shipmentId)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
-}
-
-function getProblemCategory(ticket: ProblemTicketSummary, shipment: Shipment | undefined, logs: AuditLogSummary[]): Exclude<ProblemCategory, 'all'> {
+function getProblemCategory(ticket: ProblemTicketSummary, shipment: Shipment | undefined, index: CustomerServiceAuditIndex): Exclude<ProblemCategory, 'all'> {
   if (ticket.status === 'CLOSED') return 'history';
   if (ticket.status === 'ASSISTANCE_REQUIRED') return 'assistance';
-  const attach = logs
-    .filter((row) => row.action === 'customer_service.issue.attach' && row.target === ticket.id)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+  const attach = index.get(auditIndexKey(ticket.id, 'action:customer_service.issue.attach'));
   const after = attach ? getAuditAfter(attach) : {};
   const status = typeof after.originalStatusPool === 'string'
     ? after.originalStatusPool
@@ -2201,24 +2212,20 @@ function keywordMatch(value: unknown, keyword: string) {
   return String(value ?? '').toLowerCase().includes(normalized);
 }
 
-function getProblemHandleLog(ticketId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => ['customer_service.issue.attach', 'customer_service.issue.update', 'customer_service.issue.close'].includes(row.action) && row.target === ticketId)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function getProblemHandleLog(ticketId: string, index: CustomerServiceAuditIndex) {
+  return index.get(auditIndexKey(ticketId, 'problem'));
 }
 
-function isAgentDataApproved(shipmentId: string, logs: AuditLogSummary[]) {
-  return isCurrentDataApproved(shipmentId, logs, 'agent');
+function isAgentDataApproved(shipmentId: string, index: CustomerServiceAuditIndex) {
+  return isCurrentDataApproved(shipmentId, index, 'agent');
 }
 
-function isBusinessDataApproved(shipmentId: string, logs: AuditLogSummary[]) {
-  return isCurrentDataApproved(shipmentId, logs, 'business');
+function isBusinessDataApproved(shipmentId: string, index: CustomerServiceAuditIndex) {
+  return isCurrentDataApproved(shipmentId, index, 'business');
 }
 
-function isCurrentDataApproved(shipmentId: string, logs: AuditLogSummary[], kind: 'business' | 'agent') {
-  const latest = logs
-    .filter((row) => row.target === shipmentId && [`customer_service.${kind}_data.approved`, `customer_service.${kind}_data.reversed`].includes(row.action))
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function isCurrentDataApproved(shipmentId: string, index: CustomerServiceAuditIndex, kind: 'business' | 'agent') {
+  const latest = index.get(auditIndexKey(shipmentId, `review:${kind}`));
   return latest?.action === `customer_service.${kind}_data.approved`;
 }
 
@@ -2228,18 +2235,14 @@ function departureDateMissingMessage(shipment: Shipment) {
   return '确认离港前请先填写 ETA/ATA';
 }
 
-function getLatestDataSnapshot(shipmentId: string, logs: AuditLogSummary[], kind: 'business' | 'agent') {
-  const row = logs
-    .filter((item) => item.target === shipmentId && item.action === `customer_service.${kind}_data.updated`)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function getLatestDataSnapshot(shipmentId: string, index: CustomerServiceAuditIndex, kind: 'business' | 'agent') {
+  const row = index.get(auditIndexKey(shipmentId, `data:${kind}`));
   const snapshot = row ? getAuditAfter(row).snapshot : undefined;
   return snapshot && typeof snapshot === 'object' ? snapshot as { packageCount?: number; weightKg?: number; volumeCbm?: number; chargeWeightKg?: number } : undefined;
 }
 
-function getShipmentTrackingMeta(shipmentId: string, logs: AuditLogSummary[]) {
-  const row = logs
-    .filter((item) => item.action === 'shipment.operational.update' && item.target === shipmentId && 'trackingWebsite' in getAuditAfter(item))
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function getShipmentTrackingMeta(shipmentId: string, index: CustomerServiceAuditIndex) {
+  const row = index.get(auditIndexKey(shipmentId, 'tracking'));
   const after = row ? getAuditAfter(row) : {};
   return {
     url: typeof after.trackingWebsite === 'string' ? after.trackingWebsite : undefined,
@@ -2247,8 +2250,8 @@ function getShipmentTrackingMeta(shipmentId: string, logs: AuditLogSummary[]) {
   };
 }
 
-function renderTrackingWebsite(shipment: Shipment, logs: AuditLogSummary[]) {
-  const tracking = getShipmentTrackingMeta(shipment.id, logs);
+function renderTrackingWebsite(shipment: Shipment, index: CustomerServiceAuditIndex) {
+  const tracking = getShipmentTrackingMeta(shipment.id, index);
   const url = tracking.url ?? trackingWebsiteForShipment(shipment);
   if (!url) return '-';
   return tracking.visibleToSales ? url : `屏蔽：${url}`;
