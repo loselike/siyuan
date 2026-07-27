@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ClipboardEvent } from 'react';
+import { useEffect, useState, type ClipboardEvent } from 'react';
 import { AlertTriangle, Bot, Building2, CheckCircle, Download, Edit, FileText, Plus, Power, Route, Settings, Sparkles, Trash2, Upload as UploadIcon, UserRound, Users } from 'lucide-react';
-import { Alert, Button, Card, Checkbox, Col, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Tag, Typography, Upload } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Tag, Typography, Upload } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { businessTypeLabels, summarizeMasterDataSnapshot, type AgentBankAccountSummary, type AgentChannelSummary, type AgentIntegrationType, type AgentSummary, type AuditLogSummary, type BusinessType, type ChannelCategorySummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type MasterDataSnapshot, type Shipment, type StaffAccountSummary } from '@siyuan/shared';
-import { ApiClient, type PermissionKey, type Principal, type RoleKey } from '../../apiClient';
+import { businessTypeLabels, summarizeMasterDataSnapshot, type AgentBankAccountSummary, type AgentChannelSummary, type AgentIntegrationType, type AgentSummary, type BusinessType, type ChannelCategorySummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type MasterDataSnapshot, type StaffAccountSummary } from '@siyuan/shared';
+import { ApiClient, type PermissionKey, type Principal } from '../../apiClient';
 import { FinanceCatalogPage } from '../finance/FinanceCatalogPage';
 import { useFinanceCatalog } from '../finance/useFinanceCatalog';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
@@ -220,8 +220,7 @@ export function MasterDataPage({
   onMasterDataChange,
   onNotice,
   onAiAssist,
-  aiLoading,
-  shipments = []
+  aiLoading
 }: {
   apiClient: ApiClient;
   masterData: MasterDataSnapshot;
@@ -232,7 +231,6 @@ export function MasterDataPage({
   onNotice: (message: string) => void;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
-  shipments?: Shipment[];
 }) {
   const summary = summarizeMasterDataSnapshot(masterData);
   const currentSalesperson = currentUser.username;
@@ -267,7 +265,6 @@ export function MasterDataPage({
   const [appliedCustomerFilters, setAppliedCustomerFilters] = useState(customerFilters);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<string[]>([]);
-  const [customerAuditLogs, setCustomerAuditLogs] = useState<AuditLogSummary[]>([]);
   const [customerListSettingOpen, setCustomerListSettingOpen] = useState(false);
   const [customerDisableConfirmOpen, setCustomerDisableConfirmOpen] = useState(false);
   const [showCustomerStatus, setShowCustomerStatus] = useState(true);
@@ -423,18 +420,6 @@ export function MasterDataPage({
     customer.id,
     masterData.contacts.filter((contact) => contact.customerId === customer.id && contact.enabled)
   ]));
-  const latestShipmentByCustomerId = useMemo(() => {
-    const latest = new Map<string, Shipment>();
-    shipments.forEach((shipment) => {
-      const key = customerRows.find((customer) => shipment.customerCode === customer.code || shipment.customerName?.startsWith(`${customer.code}-`))?.id;
-      if (!key) return;
-      const previous = latest.get(key);
-      const nextTime = Date.parse(shipment.createdAt ?? shipment.entryAt ?? '');
-      const previousTime = previous ? Date.parse(previous.createdAt ?? previous.entryAt ?? '') : 0;
-      if (!previous || nextTime >= previousTime) latest.set(key, shipment);
-    });
-    return latest;
-  }, [customerRows, shipments]);
   useEffect(() => {
     if (activeMasterSection !== 'customers') return;
     if (!filteredCustomerRows.length) {
@@ -450,23 +435,6 @@ export function MasterDataPage({
       setSelectedCustomerId(filteredCustomerRows[0].id);
     }
   }, [activeMasterSection, filteredCustomerRows, selectedCustomerId]);
-  useEffect(() => {
-    if (activeMasterSection !== 'customers' || !selectedCustomerId) {
-      setCustomerAuditLogs([]);
-      return;
-    }
-    let cancelled = false;
-    apiClient.auditQuery.auditLogs({ target: selectedCustomerId, pageSize: 3 })
-      .then((response) => {
-        if (!cancelled) setCustomerAuditLogs(response.rows);
-      })
-      .catch(() => {
-        if (!cancelled) setCustomerAuditLogs([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeMasterSection, apiClient, selectedCustomerId]);
   const customerColumns: ColumnsType<(typeof customerRows)[number]> = [
     { title: '业务员归属', dataIndex: 'salesperson', width: 120 },
     { title: '客户编号', dataIndex: 'code', width: 120, render: (value: string) => <Text strong>{value}</Text> },

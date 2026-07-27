@@ -2570,7 +2570,6 @@ export function App() {
                 onNotice={setNotice}
                 onAiAssist={handleAiAssist}
                 aiLoading={aiLoading}
-                shipments={localShipments}
               />
             ) : currentMenuKey === 'pricing' ? (
               <PricingPage
