@@ -1,4 +1,4 @@
-import type { Key, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -10,7 +10,6 @@ import {
   Flex,
   Form,
   Input,
-  InputNumber,
   App as AntdApp,
   Modal,
   Popconfirm,
@@ -57,12 +56,6 @@ import {
 } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
 import { confirmDangerousAction } from '../shared/dangerousAction';
-import {
-  applySettlementMethodCurrency,
-  financeCatalogCurrencyOptions,
-  getSettlementMethodCurrency,
-  normalizeFinanceCatalogCurrency
-} from './catalog';
 import { FinanceEntryPage } from './entry/FinanceEntryPage';
 import { FinanceCatalogPage } from './FinanceCatalogPage';
 import { useFinanceCatalog } from './useFinanceCatalog';
@@ -89,26 +82,6 @@ interface ShipmentOperationLog {
   action: string;
 }
 
-type FinanceReviewFilters = {
-  systemOrderNo: string;
-  customer: string;
-  transferNo: string;
-  salesperson: string;
-  agent: string;
-  feeName: string;
-  createdBy: string;
-  reviewedBy: string;
-  paymentNo: string;
-  status: string;
-  createdFrom: string;
-  createdTo: string;
-  reviewedFrom: string;
-  reviewedTo: string;
-  remark: string;
-};
-
-
-
 export function FinancePage({
   role,
   username,
@@ -122,32 +95,9 @@ export function FinancePage({
   notice,
   onCreateStatement,
   onCreatePayment,
-  onAuditReceivable,
-  onReverseAuditReceivable,
-  onDeleteReceivable,
-  onBatchAuditReceivables,
-  onBatchReverseAuditReceivables,
-  onCreateReceivable,
   onReceivableRowsChange,
-  onExportReceivables,
-  onAuditBusinessCost,
-  onReverseAuditBusinessCost,
-  onDeleteBusinessCost,
-  onBatchAuditBusinessCosts,
-  onBatchReverseAuditBusinessCosts,
-  onCreateBusinessCost,
-  onUpdateBusinessCost,
   onBusinessCostRowsChange,
-  onExportBusinessCosts,
-  onAuditPayable,
-  onReverseAuditPayable,
-  onDeletePayable,
-  onBatchAuditPayables,
-  onBatchReverseAuditPayables,
-  onCreatePayable,
-  onUpdatePayable,
   onPayableRowsChange,
-  onExportPayables,
   shipments,
   shipmentFinanceDetails,
   shipmentOperationLogs,
@@ -232,14 +182,6 @@ export function FinancePage({
   const primaryAccount = accounts.find((account) => account.customerId === 'c-9409') ?? accounts[0];
   const [activeFinanceSection, setActiveFinanceSection] = useState(defaultSection);
   const [pendingPaymentInitialQuery, setPendingPaymentInitialQuery] = useState<PendingPaymentListQuery | undefined>();
-  const [selectedReceivableIds, setSelectedReceivableIds] = useState<string[]>([]);
-  const [selectedBusinessCostIds, setSelectedBusinessCostIds] = useState<string[]>([]);
-  const [selectedPayableIds, setSelectedPayableIds] = useState<string[]>([]);
-  const [receivableCreateOpen, setReceivableCreateOpen] = useState(false);
-  const [businessCostEditor, setBusinessCostEditor] = useState<BusinessCostAuditSummary | null>(null);
-  const [businessCostCreateOpen, setBusinessCostCreateOpen] = useState(false);
-  const [payableEditor, setPayableEditor] = useState<PayableAuditSummary | null>(null);
-  const [payableCreateOpen, setPayableCreateOpen] = useState(false);
   const financeCatalog = useFinanceCatalog(apiClient);
   const financeCatalogItems = financeCatalog.items;
   const emptyFinanceReviewFilters = {
@@ -259,7 +201,6 @@ export function FinancePage({
   const [financeReviewFilterDraft, setFinanceReviewFilterDraft] = useState(emptyFinanceReviewFilters);
   const [financeReviewFilters, setFinanceReviewFilters] = useState(emptyFinanceReviewFilters);
   const [financeReviewSelectedShipmentId, setFinanceReviewSelectedShipmentId] = useState<string | null>(null);
-  const [financeReviewSelectedRowKeys, setFinanceReviewSelectedRowKeys] = useState<Key[]>([]);
   const [pendingReviewView, setPendingReviewView] = useState<'ACTIVE' | 'DELETED'>('ACTIVE');
   const [pendingReviewRows, setPendingReviewRows] = useState<Shipment[]>([]);
   const [deletedReviewRows, setDeletedReviewRows] = useState<Shipment[]>([]);
@@ -296,65 +237,9 @@ export function FinancePage({
   const canUseFinanceWorkspace = hasUiPermission('finance:dashboard:view') || hasUiPermission('finance:receivable:read') || hasUiPermission('finance:business-cost:read') || hasUiPermission('finance:payable:read') || hasUiPermission('finance:pending-payment:read') || hasUiPermission('finance:paid-payment:read') || hasUiPermission('finance:water-receipt:read') || hasUiPermission('finance:water-match:read') || hasUiPermission('finance:agent-bill:read');
   const canRestoreReviewShipment = hasUiPermission('business:review:restore');
   const canPurgeReviewShipment = hasUiPermission('business:review:purge');
-  const emptyReceivableFilters: FinanceReviewFilters = {
-    systemOrderNo: '',
-    customer: '',
-    transferNo: '',
-    salesperson: '',
-    agent: '',
-    feeName: '',
-    createdBy: '',
-    reviewedBy: '',
-    paymentNo: '',
-    status: 'ALL',
-    createdFrom: '',
-    createdTo: '',
-    reviewedFrom: '',
-    reviewedTo: '',
-    remark: ''
-  };
-  const [receivableFilterDraft, setReceivableFilterDraft] = useState(emptyReceivableFilters);
-  const [receivableFilters, setReceivableFilters] = useState(emptyReceivableFilters);
-  const [receivableForm] = Form.useForm<ReceivableAuditCreateInput>();
-  const [businessCostFilterDraft, setBusinessCostFilterDraft] = useState(emptyReceivableFilters);
-  const [businessCostFilters, setBusinessCostFilters] = useState(emptyReceivableFilters);
-  const [businessCostForm] = Form.useForm<BusinessCostAuditCreateInput & BusinessCostAuditUpdateInput>();
-  const [payableFilterDraft, setPayableFilterDraft] = useState(emptyReceivableFilters);
-  const [payableFilters, setPayableFilters] = useState(emptyReceivableFilters);
-  const [payableForm] = Form.useForm<PayableAuditCreateInput & PayableAuditUpdateInput>();
   const [financeDashboard, setFinanceDashboard] = useState<FinanceDashboardResponse | null>(null);
   const [financeDashboardLoading, setFinanceDashboardLoading] = useState(false);
   const [financeDashboardError, setFinanceDashboardError] = useState<string | null>(null);
-  const updateReceivableFilterDraft = (key: keyof typeof emptyReceivableFilters, value: string) => {
-    setReceivableFilterDraft((current) => ({ ...current, [key]: value }));
-  };
-  const applyReceivableFilters = () => {
-    setReceivableFilters(receivableFilterDraft);
-  };
-  const resetReceivableFilters = () => {
-    setReceivableFilterDraft(emptyReceivableFilters);
-    setReceivableFilters(emptyReceivableFilters);
-  };
-  const updateBusinessCostFilterDraft = (key: keyof typeof emptyReceivableFilters, value: string) => {
-    setBusinessCostFilterDraft((current) => ({ ...current, [key]: value }));
-  };
-  const applyBusinessCostFilters = () => {
-    setBusinessCostFilters(businessCostFilterDraft);
-  };
-  const resetBusinessCostFilters = () => {
-    setBusinessCostFilterDraft(emptyReceivableFilters);
-    setBusinessCostFilters(emptyReceivableFilters);
-  };
-  const updatePayableFilterDraft = (key: keyof typeof emptyReceivableFilters, value: string) => {
-    setPayableFilterDraft((current) => ({ ...current, [key]: value }));
-  };
-  const applyPayableFilters = () => {
-    setPayableFilters(payableFilterDraft);
-  };
-  const resetPayableFilters = () => {
-    setPayableFilterDraft(emptyReceivableFilters);
-    setPayableFilters(emptyReceivableFilters);
-  };
   const loadPendingReviewRows = useCallback(async () => {
     setPendingReviewLoading(true);
     try {
@@ -456,7 +341,6 @@ export function FinancePage({
     ? [...pendingReviewShipments, ...deletedReviewShipments].find((shipment) => shipment.id === financeReviewSelectedShipmentId)
       ?? (pendingReviewDetail?.shipment.id === financeReviewSelectedShipmentId ? pendingReviewDetail.shipment : null)
     : null;
-  const isSalesScopedRole = salesScopedRoleKeys.includes(role);
   const canFinalReviewShipment = hasUiPermission('business:review:approve') || hasUiPermission('business:review:reject') || hasUiPermission('business:review:delete');
   const canBusinessReviewShipment = pendingReviewView === 'ACTIVE' && hasUiPermission('business:review:approve');
   const loadPendingReviewDetail = useCallback(async (shipmentId: string) => {
@@ -1468,169 +1352,6 @@ export function FinancePage({
   const openAgentBills = () => {
     setActiveFinanceSection('agent-bill-ai');
   };
-  const filteredReceivables = useMemo(() => {
-    const inDateRange = (value: string | undefined, from: string, to: string) => {
-      if (!value) return !from && !to;
-      const timestamp = new Date(value).getTime();
-      if (from && timestamp < new Date(`${from}T00:00:00`).getTime()) return false;
-      if (to && timestamp > new Date(`${to}T23:59:59`).getTime()) return false;
-      return true;
-    };
-    const includes = (value: string | undefined, keyword: string) => !keyword || (value ?? '').toLowerCase().includes(keyword.toLowerCase());
-    return receivables.filter((fee) => {
-      const customerMatches = !receivableFilters.customer
-        || [fee.customerName, fee.customerCode, fee.customerOrderNo].some((value) => includes(value, receivableFilters.customer));
-      return includes(fee.systemOrderNo, receivableFilters.systemOrderNo)
-        && customerMatches
-        && includes(fee.transferNo, receivableFilters.transferNo)
-        && includes(fee.salesperson, receivableFilters.salesperson)
-        && includes(fee.name, receivableFilters.feeName)
-        && includes(fee.createdBy, receivableFilters.createdBy)
-        && includes(fee.reviewedBy, receivableFilters.reviewedBy)
-        && includes(fee.paymentNo, receivableFilters.paymentNo)
-        && includes(fee.remark, receivableFilters.remark)
-        && (receivableFilters.status === 'ALL' || fee.reconciliationStatus === receivableFilters.status)
-        && inDateRange(fee.createdAt, receivableFilters.createdFrom, receivableFilters.createdTo)
-        && inDateRange(fee.reviewedAt, receivableFilters.reviewedFrom, receivableFilters.reviewedTo);
-    });
-  }, [receivables, receivableFilters]);
-  const filteredBusinessCosts = useMemo(() => {
-    const inDateRange = (value: string | undefined, from: string, to: string) => {
-      if (!value) return !from && !to;
-      const timestamp = new Date(value).getTime();
-      if (from && timestamp < new Date(`${from}T00:00:00`).getTime()) return false;
-      if (to && timestamp > new Date(`${to}T23:59:59`).getTime()) return false;
-      return true;
-    };
-    const includes = (value: string | undefined, keyword: string) => !keyword || (value ?? '').toLowerCase().includes(keyword.toLowerCase());
-    return businessCostAudits.filter((fee) => {
-      const customerMatches = !businessCostFilters.customer
-        || [fee.customerName, fee.customerCode, fee.customerOrderNo].some((value) => includes(value, businessCostFilters.customer));
-      return includes(fee.systemOrderNo, businessCostFilters.systemOrderNo)
-        && customerMatches
-        && includes(fee.transferNo, businessCostFilters.transferNo)
-        && includes(fee.salesperson, businessCostFilters.salesperson)
-        && includes(fee.name, businessCostFilters.feeName)
-        && includes(fee.createdBy, businessCostFilters.createdBy)
-        && includes(fee.reviewedBy, businessCostFilters.reviewedBy)
-        && includes(fee.paymentNo, businessCostFilters.paymentNo)
-        && includes(fee.remark, businessCostFilters.remark)
-        && (businessCostFilters.status === 'ALL' || fee.reconciliationStatus === businessCostFilters.status)
-        && inDateRange(fee.createdAt, businessCostFilters.createdFrom, businessCostFilters.createdTo)
-        && inDateRange(fee.reviewedAt, businessCostFilters.reviewedFrom, businessCostFilters.reviewedTo);
-    });
-  }, [businessCostAudits, businessCostFilters]);
-  const businessCostSummary = useMemo(() => {
-    const activeRows = filteredBusinessCosts.filter((fee) => !fee.voided);
-    return {
-      pending: activeRows.filter((fee) => fee.reconciliationStatus !== 'CONFIRMED').length,
-      confirmed: activeRows.filter((fee) => fee.reconciliationStatus === 'CONFIRMED').length,
-      profit: activeRows.reduce((sum, fee) => sum + (fee.businessProfit ?? 0), 0),
-      count: activeRows.length
-    };
-  }, [filteredBusinessCosts]);
-  const filteredPayables = useMemo(() => {
-    const inDateRange = (value: string | undefined, from: string, to: string) => {
-      if (!value) return !from && !to;
-      const timestamp = new Date(value).getTime();
-      if (from && timestamp < new Date(`${from}T00:00:00`).getTime()) return false;
-      if (to && timestamp > new Date(`${to}T23:59:59`).getTime()) return false;
-      return true;
-    };
-    const includes = (value: string | undefined, keyword: string) => !keyword || (value ?? '').toLowerCase().includes(keyword.toLowerCase());
-    return payableAudits.filter((fee) => {
-      const customerMatches = !payableFilters.customer
-        || [fee.customerName, fee.customerCode, fee.customerOrderNo].some((value) => includes(value, payableFilters.customer));
-      return includes(fee.systemOrderNo, payableFilters.systemOrderNo)
-        && customerMatches
-        && includes(fee.transferNo, payableFilters.transferNo)
-        && includes(fee.salesperson, payableFilters.salesperson)
-        && includes(fee.agentName, payableFilters.agent)
-        && includes(fee.name, payableFilters.feeName)
-        && includes(fee.createdBy, payableFilters.createdBy)
-        && includes(fee.reviewedBy, payableFilters.reviewedBy)
-        && includes(fee.paymentNo, payableFilters.paymentNo)
-        && includes(fee.remark, payableFilters.remark)
-        && (payableFilters.status === 'ALL' || fee.reconciliationStatus === payableFilters.status)
-        && inDateRange(fee.createdAt, payableFilters.createdFrom, payableFilters.createdTo)
-        && inDateRange(fee.reviewedAt, payableFilters.reviewedFrom, payableFilters.reviewedTo);
-    });
-  }, [payableAudits, payableFilters]);
-  const payableSummary = useMemo(() => {
-    const activeRows = filteredPayables.filter((fee) => !fee.voided);
-    return {
-      pending: activeRows.filter((fee) => fee.reconciliationStatus !== 'CONFIRMED').length,
-      confirmed: activeRows.filter((fee) => fee.reconciliationStatus === 'CONFIRMED').length,
-      total: activeRows.reduce((sum, fee) => sum + fee.amount, 0),
-      count: activeRows.length
-    };
-  }, [filteredPayables]);
-  function openBusinessCostEditor(row?: BusinessCostAuditSummary) {
-    setBusinessCostEditor(row ?? null);
-    const settlementMethod = row?.settlementMethod;
-    businessCostForm.setFieldsValue(row ? {
-      systemOrderNo: row.systemOrderNo,
-      customerOrderNo: row.customerOrderNo,
-      transferNo: row.transferNo,
-      customerCode: row.customerCode,
-      name: row.name,
-      amount: row.amount,
-      currency: normalizeFinanceCatalogCurrency(row.currency) ?? getSettlementMethodCurrency(financeCatalog.settlementRows, settlementMethod) ?? 'RMB',
-      settlementMethod,
-      paymentNo: row.paymentNo,
-      agentName: row.agentName,
-      chargeWeightKg: row.chargeWeightKg,
-      unitPrice: row.unitPrice,
-      remark: row.remark
-    } : { name: '业务员成本', currency: 'RMB' });
-    setBusinessCostCreateOpen(true);
-  }
-  function openPayableEditor(row?: PayableAuditSummary) {
-    setPayableEditor(row ?? null);
-    const settlementMethod = row?.settlementMethod;
-    payableForm.setFieldsValue(row ? {
-      systemOrderNo: row.systemOrderNo,
-      customerOrderNo: row.customerOrderNo,
-      transferNo: row.transferNo,
-      customerCode: row.customerCode,
-      name: row.name,
-      amount: row.amount,
-      currency: normalizeFinanceCatalogCurrency(row.currency) ?? getSettlementMethodCurrency(financeCatalog.settlementRows, settlementMethod) ?? 'RMB',
-      settlementMethod,
-      paymentNo: row.paymentNo,
-      remark: row.remark
-    } : { name: '代理运费', currency: 'RMB' });
-    setPayableCreateOpen(true);
-  }
-  async function submitReceivableCreate() {
-    const values = await receivableForm.validateFields();
-    await onCreateReceivable(values);
-    receivableForm.resetFields();
-    setReceivableCreateOpen(false);
-  }
-  async function submitBusinessCost() {
-    const values = await businessCostForm.validateFields();
-    if (businessCostEditor) {
-      await onUpdateBusinessCost(businessCostEditor.id, values);
-    } else {
-      await onCreateBusinessCost(values);
-    }
-    businessCostForm.resetFields();
-    setBusinessCostEditor(null);
-    setBusinessCostCreateOpen(false);
-  }
-  async function submitPayable() {
-    const values = await payableForm.validateFields();
-    if (payableEditor) {
-      await onUpdatePayable(payableEditor.id, values);
-    } else {
-      await onCreatePayable(values);
-    }
-    payableForm.resetFields();
-    setPayableEditor(null);
-    setPayableCreateOpen(false);
-  }
-
   const dashboardValue = (item: FinanceDashboardItem) => {
     if (typeof item.amount === 'number') return formatCurrency(item.amount);
     if (item.value) return item.value;
@@ -1950,7 +1671,7 @@ export function FinancePage({
 
       {menuMode === 'finance' ? <Row gutter={[12, 12]} className="finance-metric-row">
         <Col xs={24} md={8}>
-          <MetricCard icon={<Banknote />} title="待审应收" value={formatCurrency(total)} extra={`${filteredReceivables.length} 条应收`} />
+          <MetricCard icon={<Banknote />} title="待审应收" value={formatCurrency(total)} extra={`${receivables.length} 条应收`} />
         </Col>
         <Col xs={24} md={8}>
           <MetricCard icon={<FileText />} title="对账草稿" value={statements.length} extra="客户账单待确认" />
@@ -2084,191 +1805,6 @@ export function FinancePage({
 	        </Col>
       </Row>
       </ModuleSubWorkspace>
-      <Modal
-        title="新增应收"
-        className="finance-modal"
-        width={760}
-        open={receivableCreateOpen}
-        onCancel={() => setReceivableCreateOpen(false)}
-        onOk={submitReceivableCreate}
-        okText="保存应收"
-        cancelText="取消"
-      >
-        <Form form={receivableForm} layout="vertical" initialValues={{ name: '运费', currency: 'RMB' }}>
-          <Form.Item name="systemOrderNo" label="出货单号">
-            <Input placeholder="按出货单号匹配订单" />
-          </Form.Item>
-          <Form.Item name="customerOrderNo" label="客户单号">
-            <Input placeholder="可选，按客户单号匹配" />
-          </Form.Item>
-          <Form.Item name="transferNo" label="转单号">
-            <Input placeholder="可选，按转单号匹配" />
-          </Form.Item>
-          <Form.Item name="customerCode" label="客户编号">
-            <Input placeholder="可选，按客户编号匹配" />
-          </Form.Item>
-          <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请填写费用名称' }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="amount" label="金额" rules={[{ required: true, message: '请填写金额' }]}>
-            <InputNumber className="full-width" min={0} precision={2} />
-          </Form.Item>
-          <Form.Item name="currency" label="币种">
-            <Select options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} />
-          </Form.Item>
-          <Form.Item name="settlementMethod" label="结算方式">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="选择结算方式，自动带出币种"
-              options={financeCatalog.settlementOptions}
-              onChange={(value) => applySettlementMethodCurrency(receivableForm, financeCatalog.settlementRows, value)}
-            />
-          </Form.Item>
-          <Form.Item name="paymentNo" label="付款编号">
-            <Input />
-          </Form.Item>
-          <Form.Item name="remark" label="备注">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-        </Form>
-      </Modal>
-      <Modal
-        title={businessCostEditor ? '修改业务成本' : '新增业务成本'}
-        className="finance-modal"
-        width={780}
-        open={businessCostCreateOpen}
-        onCancel={() => {
-          setBusinessCostCreateOpen(false);
-          setBusinessCostEditor(null);
-          businessCostForm.resetFields();
-        }}
-        onOk={submitBusinessCost}
-        okText="保存成本"
-        cancelText="取消"
-      >
-        <Form
-          form={businessCostForm}
-          layout="vertical"
-          initialValues={{ name: '业务员成本', currency: 'RMB' }}
-          onValuesChange={(changed, values) => {
-            if ('settlementMethod' in changed) {
-              applySettlementMethodCurrency(businessCostForm, financeCatalog.settlementRows, values.settlementMethod);
-            }
-            if ('chargeWeightKg' in changed || 'unitPrice' in changed) {
-              const weight = Number(values.chargeWeightKg);
-              const price = Number(values.unitPrice);
-              if (Number.isFinite(weight) && Number.isFinite(price)) {
-                businessCostForm.setFieldValue('amount', Number((weight * price).toFixed(2)));
-              }
-            }
-          }}
-        >
-          <Form.Item name="systemOrderNo" label="出货单号">
-            <Input placeholder="按出货单号匹配订单" disabled={Boolean(businessCostEditor)} />
-          </Form.Item>
-          <Form.Item name="customerOrderNo" label="客户单号">
-            <Input placeholder="可选，按客户单号匹配" disabled={Boolean(businessCostEditor)} />
-          </Form.Item>
-          <Form.Item name="transferNo" label="转单号">
-            <Input placeholder="可选，按转单号匹配" disabled={Boolean(businessCostEditor)} />
-          </Form.Item>
-          <Form.Item name="customerCode" label="客户编号">
-            <Input placeholder="可选，按客户编号匹配" disabled={Boolean(businessCostEditor)} />
-          </Form.Item>
-          <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请填写费用名称' }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="chargeWeightKg" label="计费重">
-            <InputNumber className="full-width" min={0} precision={3} />
-          </Form.Item>
-          <Form.Item name="unitPrice" label="单价">
-            <InputNumber className="full-width" min={0} precision={2} />
-          </Form.Item>
-          <Form.Item name="amount" label="总金额" rules={[{ required: true, message: '请填写总金额' }]}>
-            <InputNumber className="full-width" min={0} precision={2} />
-          </Form.Item>
-          <Form.Item name="currency" label="币种">
-            <Select options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} />
-          </Form.Item>
-          <Form.Item name="settlementMethod" label="结算方式">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="选择结算方式，自动带出币种"
-              options={financeCatalog.settlementOptions}
-            />
-          </Form.Item>
-          <Form.Item name="paymentNo" label="付款编号">
-            <Input />
-          </Form.Item>
-          <Form.Item name="agentName" label="代理">
-            <Input placeholder="财务可按实际成本来源调整" />
-          </Form.Item>
-          <Form.Item name="remark" label="备注">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-        </Form>
-      </Modal>
-      <Modal
-        title={payableEditor ? '修改应付' : '新增应付'}
-        className="finance-modal"
-        width={780}
-        open={payableCreateOpen}
-        onCancel={() => {
-          setPayableCreateOpen(false);
-          setPayableEditor(null);
-          payableForm.resetFields();
-        }}
-        onOk={submitPayable}
-        okText="保存应付"
-        cancelText="取消"
-      >
-        <Form form={payableForm} layout="vertical" initialValues={{ name: '代理运费', currency: 'RMB' }}>
-          <Form.Item name="systemOrderNo" label="出货单号">
-            <Input placeholder="按出货单号匹配订单" disabled={Boolean(payableEditor)} />
-          </Form.Item>
-          <Form.Item name="customerOrderNo" label="客户单号">
-            <Input placeholder="可选，按客户单号匹配" disabled={Boolean(payableEditor)} />
-          </Form.Item>
-          <Form.Item name="transferNo" label="转单号">
-            <Input placeholder="可选，按转单号匹配" disabled={Boolean(payableEditor)} />
-          </Form.Item>
-          <Form.Item name="customerCode" label="客户编号">
-            <Input placeholder="可选，按客户编号匹配" disabled={Boolean(payableEditor)} />
-          </Form.Item>
-          <Form.Item name="agentName" label="代理" rules={[{ required: true, message: '请填写代理' }]}>
-            <Input placeholder="默认取订单代理，可按实际账单修改" />
-          </Form.Item>
-          <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请填写费用名称' }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="amount" label="金额" rules={[{ required: true, message: '请填写金额' }]}>
-            <InputNumber className="full-width" min={0} precision={2} />
-          </Form.Item>
-          <Form.Item name="currency" label="币种">
-            <Select options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} />
-          </Form.Item>
-          <Form.Item name="settlementMethod" label="结算方式">
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              placeholder="选择结算方式，自动带出币种"
-              options={financeCatalog.settlementOptions}
-              onChange={(value) => applySettlementMethodCurrency(payableForm, financeCatalog.settlementRows, value)}
-            />
-          </Form.Item>
-          <Form.Item name="paymentNo" label="付款编号">
-            <Input placeholder="后续绑定付款记录时可自动回写，也可手工填写" />
-          </Form.Item>
-          <Form.Item name="remark" label="备注">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </AppPage>
   );
 }
