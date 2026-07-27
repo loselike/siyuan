@@ -179,16 +179,6 @@ export interface TallyTaskCompleteDraft {
   remark: string;
 }
 
-export interface WarehouseOutboundLabel {
-  id: string;
-  consolidationId: string;
-  labelNo: string;
-  outboundOrderNo: string;
-  destinationCountry: string;
-  totalPackages: number;
-  pieceIndex: number;
-}
-
 export function createWarehouseDateTimeInputValue(date = new Date()) {
   const beijingTime = new Date(date.getTime() + 8 * 60 * 60 * 1000);
   return beijingTime.toISOString().slice(0, 16);

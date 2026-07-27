@@ -81,16 +81,6 @@ export function formatWarehousePackageNo(pkg: { customerOrderNo: string; domesti
   return pkg.domesticTrackingNo ? `${pkg.customerOrderNo}-${pkg.domesticTrackingNo}` : pkg.customerOrderNo;
 }
 
-export function createWarehouseInternalLabelNo(source: string) {
-  const hash = Array.from(source).reduce((total, char, index) => total + char.charCodeAt(0) * (index + 17), 0);
-  return `A${(hash % 1_000_000).toString().padStart(6, '0')}`;
-}
-
-export function createWarehouseBarcodeBars(labelNo: string) {
-  const seed = Array.from(labelNo).reduce((total, char, index) => total + char.charCodeAt(0) * (index + 3), 0);
-  return Array.from({ length: 30 }, (_, index) => 2 + ((seed + index * 7 + labelNo.charCodeAt(index % labelNo.length)) % 5));
-}
-
 export function escapeHtml(value: string) {
   return value
     .replaceAll('&', '&amp;')

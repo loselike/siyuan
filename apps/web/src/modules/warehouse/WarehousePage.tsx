@@ -13,8 +13,6 @@ import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedTable, Me
 import {
   calculateWarehousePackageMetrics,
   calculateWarehouseVolumetricWeight,
-  createWarehouseBarcodeBars,
-  createWarehouseInternalLabelNo,
   escapeHtml,
   formatWarehousePackageNo,
   parseWarehousePackageCode
@@ -48,7 +46,6 @@ import {
   type WarehouseHandoverRow,
   type WarehouseInboundPackage,
   type WarehouseLabelQueueRow,
-  type WarehouseOutboundLabel,
   type WarehousePackageDraft,
   type WarehousePackageEditDraft,
   type WarehouseQueueColumnKey
@@ -150,7 +147,6 @@ export function WarehousePage({
   const [batchHandoverOpen, setBatchHandoverOpen] = useState(false);
   const [batchShippingMarkConfirmed, setBatchShippingMarkConfirmed] = useState(false);
   const [batchDispatching, setBatchDispatching] = useState(false);
-  const [warehouseDispatchedArchiveRows, setWarehouseDispatchedArchiveRows] = useState<WarehouseHandoverRow[]>([]);
   const [exceptionModalOpen, setExceptionModalOpen] = useState(false);
   const [manualReceiptDrawerOpen, setManualReceiptDrawerOpen] = useState(false);
   const [manualReceiptCustomers, setManualReceiptCustomers] = useState<WarehouseManualReceiptCustomerOption[]>([]);
@@ -193,11 +189,8 @@ export function WarehousePage({
   const [tallyPackagePage, setTallyPackagePage] = useState(1);
   const [consolidations, setConsolidations] = useState<WarehouseConsolidationRecord[]>([]);
   const [selectedConsolidationId, setSelectedConsolidationId] = useState<string | null>(null);
-  const [warehouseOutboundLabelsByConsolidationId, setWarehouseOutboundLabelsByConsolidationId] = useState<Record<string, WarehouseOutboundLabel[]>>({});
-  const [warehouseShipmentLabelsByShipmentId, setWarehouseShipmentLabelsByShipmentId] = useState<Record<string, WarehouseOutboundLabel[]>>({});
   const [dispatchedConsolidationIds, setDispatchedConsolidationIds] = useState<string[]>([]);
   const [dispatchingWarehouseShipmentIds, setDispatchingWarehouseShipmentIds] = useState<string[]>([]);
-  const [shippingMarkConfirmations, setShippingMarkConfirmations] = useState<Record<string, boolean>>({});
   const [warehouseNotice, setWarehouseNotice] = useState<string | null>(null);
   const emptyConsolidationPackageFilters = {
     customerCode: '',
@@ -551,12 +544,10 @@ export function WarehousePage({
     { label: '待理货', value: inStockTotals.pendingTallyTickets, helper: '分批到仓待合并' },
     { label: '收货异常', value: inStockTotals.exceptionTickets, helper: '件重尺或资料待复核' }
   ];
-  const warehouseOutboundedRows: WarehouseHandoverRow[] = [
-    ...shipments
-      .filter((shipment) => Boolean(shipment.outboundAt || shipment.dispatchedAt))
-      .map(createWarehouseOutboundedRowFromShipment),
-    ...warehouseDispatchedArchiveRows
-  ].sort((a, b) => new Date(b.outboundAt ?? 0).getTime() - new Date(a.outboundAt ?? 0).getTime());
+  const warehouseOutboundedRows: WarehouseHandoverRow[] = shipments
+    .filter((shipment) => Boolean(shipment.outboundAt || shipment.dispatchedAt))
+    .map(createWarehouseOutboundedRowFromShipment)
+    .sort((a, b) => new Date(b.outboundAt ?? 0).getTime() - new Date(a.outboundAt ?? 0).getTime());
   const packageEditMetrics = packageEditDraft ? calculateWarehousePackageMetrics({
     weightKg: packageEditDraft.weightKg,
     lengthCm: packageEditDraft.lengthCm,
@@ -704,66 +695,9 @@ export function WarehousePage({
     return mode === 'MERGE_AND_SHIP' ? '理货并出货' : '仅理货';
   }
 
-  function createWarehouseOutboundLabels(record: WarehouseConsolidationRecord) {
-    const destinationCountry = getConsolidationDestination(record);
-    const labelNo = createWarehouseInternalLabelNo(record.outboundOrderNo);
-    return Array.from({ length: record.totalPackages }, (_, index): WarehouseOutboundLabel => ({
-      id: `${record.id}-label-${index + 1}`,
-      consolidationId: record.id,
-      labelNo,
-      outboundOrderNo: record.outboundOrderNo,
-      destinationCountry,
-      totalPackages: record.totalPackages,
-      pieceIndex: index + 1
-    }));
-  }
-
-  function printWarehouseOutboundLabels(record: WarehouseConsolidationRecord) {
-    const labels = createWarehouseOutboundLabels(record);
-    setWarehouseOutboundLabelsByConsolidationId((current) => ({
-      ...current,
-      [record.id]: labels
-    }));
-    setWarehouseNotice(`已生成 ${record.outboundOrderNo} 面单 ${record.totalPackages} 张`);
-  }
-
-  function createWarehouseShipmentLabels(record: Shipment) {
-    const totalPackages = Math.max(record.packageCount, 1);
-    const labelNo = createWarehouseInternalLabelNo(record.systemOrderNo);
-    return Array.from({ length: totalPackages }, (_, index): WarehouseOutboundLabel => ({
-      id: `${record.id}-warehouse-label-${index + 1}`,
-      consolidationId: record.id,
-      labelNo,
-      outboundOrderNo: record.systemOrderNo,
-      destinationCountry: record.destinationCountry,
-      totalPackages,
-      pieceIndex: index + 1
-    }));
-  }
-
-  function printWarehouseShipmentLabels(record: Shipment) {
-    const totalPackages = Math.max(record.packageCount, 1);
-    const labels = createWarehouseShipmentLabels(record);
-    setWarehouseShipmentLabelsByShipmentId((current) => ({
-      ...current,
-      [record.id]: labels
-    }));
-    setWarehouseNotice(`已生成仓库出货面单 ${record.systemOrderNo} ${totalPackages} 张`);
-  }
-
-  function dispatchWarehouseOutbound(record: WarehouseConsolidationRecord) {
-    setDispatchedConsolidationIds((current) => Array.from(new Set([...current, record.id])));
-    setWarehouseNotice(`已出货 ${record.outboundOrderNo}`);
-  }
-
   async function dispatchWarehouseShipment(record: Shipment, options: { shippingMarkConfirmed?: boolean; handoverNo?: string; batchDispatchSource?: string } = {}) {
     await onDispatch(record, options);
     setDispatchingWarehouseShipmentIds((current) => Array.from(new Set([...current, record.id])));
-    setShippingMarkConfirmations((current) => {
-      const next = { ...current };
-      delete next[record.id];
-      return next;
-    });
     setWarehouseNotice(`已出货 ${record.systemOrderNo}`);
   }
 
@@ -892,16 +826,6 @@ export function WarehousePage({
     { key: 'sensitive', title: '敏感', width: 74, render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueSensitive(record) }
   ];
 
-  function getWarehouseQueueStageTime(row: WarehouseLabelQueueRow) {
-    return row.kind === 'shipment' && row.shipment.routedAt ? formatBeijingDateTime(row.shipment.routedAt) : '-';
-  }
-
-  function getWarehouseQueueLabels(row: WarehouseLabelQueueRow) {
-    return row.kind === 'shipment'
-      ? warehouseShipmentLabelsByShipmentId[row.shipment.id] ?? []
-      : warehouseOutboundLabelsByConsolidationId[row.consolidation.id] ?? [];
-  }
-
   function createWarehouseHandoverHtml(rows: WarehouseHandoverRow[]) {
     const createdAt = formatBeijingDateTime(new Date().toISOString());
     const groups = groupWarehouseHandoverRowsByAgent(rows);
@@ -994,20 +918,6 @@ export function WarehousePage({
     if (!selectedWarehouseQueueTicketCount) {
       setWarehouseNotice('请先勾选待出库订单');
       return;
-    }
-    const missingShipmentLabelRows = selectedWarehouseQueueRows.filter((row): row is Extract<WarehouseLabelQueueRow, { kind: 'shipment' }> => row.kind === 'shipment' && !getWarehouseQueueLabels(row).length);
-    const missingConsolidationLabelRows = selectedWarehouseQueueRows.filter((row): row is Extract<WarehouseLabelQueueRow, { kind: 'consolidation' }> => row.kind === 'consolidation' && !getWarehouseQueueLabels(row).length);
-    if (missingShipmentLabelRows.length) {
-      setWarehouseShipmentLabelsByShipmentId((current) => ({
-        ...current,
-        ...Object.fromEntries(missingShipmentLabelRows.map((row) => [row.shipment.id, createWarehouseShipmentLabels(row.shipment)]))
-      }));
-    }
-    if (missingConsolidationLabelRows.length) {
-      setWarehouseOutboundLabelsByConsolidationId((current) => ({
-        ...current,
-        ...Object.fromEntries(missingConsolidationLabelRows.map((row) => [row.consolidation.id, createWarehouseOutboundLabels(row.consolidation)]))
-      }));
     }
     setBatchShippingMarkConfirmed(false);
     setBatchHandoverOpen(true);
@@ -3271,48 +3181,5 @@ export function WarehousePage({
         </Space>
       </Modal>
     </AppPage>
-  );
-}
-
-function WarehouseInboundLabelCard({
-  customerCode,
-  domesticTrackingNo,
-  packageIndex,
-  totalPackageCount,
-  scanTime
-}: {
-  customerCode: string;
-  domesticTrackingNo: string;
-  packageIndex: number;
-  totalPackageCount: number;
-  scanTime: string;
-}) {
-  return (
-    <div className="warehouse-inbound-label" aria-label={`入库标签 ${customerCode} ${domesticTrackingNo} ${packageIndex}/${totalPackageCount}`}>
-      <div className="warehouse-inbound-barcode" aria-label={`入库条形码 ${customerCode}-${domesticTrackingNo}-${packageIndex}/${totalPackageCount}`}>
-        {Array.from({ length: 38 }, (_, index) => <span key={index} style={{ width: index % 4 === 0 ? 3 : 1 }} />)}
-      </div>
-      <Text className="warehouse-inbound-mark">{customerCode}</Text>
-      <Text className="warehouse-inbound-tracking">{domesticTrackingNo}</Text>
-      <Text className="warehouse-inbound-piece">{packageIndex}/{totalPackageCount}</Text>
-      <Text className="warehouse-inbound-time">{scanTime}</Text>
-    </div>
-  );
-}
-
-function WarehouseInternalLabelCard({ label }: { label: WarehouseOutboundLabel }) {
-  return (
-    <div className="warehouse-internal-label" aria-label={`内部交货面单 ${label.labelNo} ${label.destinationCountry} ${label.pieceIndex}/${label.totalPackages} ${label.outboundOrderNo}`}>
-      <Text className="warehouse-label-title" type="secondary">内部交货面单</Text>
-      <div className="warehouse-label-barcode" aria-label={`条形码 ${label.labelNo}`}>
-        {createWarehouseBarcodeBars(label.labelNo).map((width, index) => (
-          <span key={`${label.labelNo}-${index}`} style={{ width }} />
-        ))}
-      </div>
-      <Text className="warehouse-label-no">{label.labelNo}</Text>
-      <Text className="warehouse-label-piece">{label.pieceIndex}/{label.totalPackages}</Text>
-      <Text className="warehouse-label-country">{label.destinationCountry}</Text>
-      <Text className="warehouse-label-order" type="secondary">{label.outboundOrderNo}</Text>
-    </div>
   );
 }
