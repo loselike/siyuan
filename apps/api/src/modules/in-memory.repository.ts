@@ -4138,6 +4138,11 @@ export class InMemoryRepository {
     return response;
   }
 
+  async getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
+    const response = await this.getWarehouseInStock(principal, {});
+    return { totals: response.totals };
+  }
+
   async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {
     return summarizeWarehousePackageGroups(await this.getWarehousePackages(principal));
   }

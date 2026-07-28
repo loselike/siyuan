@@ -5,7 +5,7 @@ import { setupE2eApp } from './test-support/e2e-harness.js';
 describe('Warehouse inventory query API', () => {
   const app = setupE2eApp();
 
-  it('keeps the five warehouse inventory read paths and response shapes unchanged', async () => {
+  it('keeps the existing warehouse inventory response shapes and returns matching dashboard totals', async () => {
     const adminToken = await app.loginAs('admin');
     const authorization = app.auth(adminToken);
 
@@ -32,6 +32,13 @@ describe('Warehouse inventory query API', () => {
       totals: expect.any(Object),
       rows: expect.any(Array)
     }));
+
+    const inStockSummary = await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock-summary')
+      .set('Authorization', authorization)
+      .expect(200);
+    expect(inStockSummary.body).toEqual({ totals: inStock.body.totals });
+    expect(inStockSummary.body).not.toHaveProperty('rows');
 
     const groups = await request(app.getHttpServer())
       .get('/api/warehouse/package-groups')
@@ -63,6 +70,13 @@ describe('Warehouse inventory query API', () => {
       .expect(403);
     await request(app.getHttpServer())
       .get('/api/warehouse/manual-receipt/customers')
+      .set('Authorization', app.auth(customerToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock-summary')
+      .expect(401);
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock-summary')
       .set('Authorization', app.auth(customerToken))
       .expect(403);
   });

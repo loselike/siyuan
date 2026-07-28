@@ -5556,6 +5556,62 @@ export class PrismaRepository implements OnModuleInit {
     return response;
   }
 
+  async getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
+    if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
+      throw new ForbiddenException('当前角色不能查看在仓数据');
+    }
+    const salesScope = this.operatorCustomerScope(principal);
+    const where: any = {
+      status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] },
+      ...(salesScope ? { salesperson: { in: salesScope } } : {})
+    };
+    const rows = await (this.prisma as any).warehousePackage.findMany({
+      where,
+      select: {
+        combinedOrderNo: true,
+        customerOrderNo: true,
+        domesticTrackingNo: true,
+        packageCount: true,
+        weightKg: true,
+        cbm: true,
+        status: true,
+        manualException: true,
+        exceptions: true
+      }
+    });
+    const grouped = new Map<string, any[]>();
+    rows.forEach((row: any) => {
+      const key = row.combinedOrderNo || `${row.customerOrderNo}-${row.domesticTrackingNo}`;
+      grouped.set(key, [...(grouped.get(key) ?? []), row]);
+    });
+    const waitingDispatchTickets = await this.prisma.shipment.count({
+      where: {
+        status: 'WAITING_DISPATCH',
+        ...(salesScope ? { customer: { salesperson: { in: salesScope } } } : {})
+      }
+    });
+    const response = {
+      totals: {
+        receiptTickets: grouped.size,
+        totalPackages: rows.reduce((sum: number, row: any) => sum + Number(row.packageCount ?? 0), 0),
+        totalWeightKg: roundMoney(rows.reduce((sum: number, row: any) => sum + Number(row.weightKg ?? 0) * Number(row.packageCount ?? 0), 0)),
+        totalCbm: roundMoney(rows.reduce((sum: number, row: any) => sum + Number(row.cbm ?? 0), 0)),
+        waitingDispatchTickets,
+        pendingTallyTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.status === 'RECEIVED')).length,
+        exceptionTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.manualException || (Array.isArray(item.exceptions) && item.exceptions.length))).length
+      }
+    };
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'warehouse.in_stock.view',
+        target: 'warehouse:in-stock',
+        after: toAuditJson({ query: {}, rowCount: rows.length })
+      }
+    });
+    return response;
+  }
+
   async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string) {
     this.ensureWarehouseAccess(principal);
     const normalizedCode = customerCode?.trim() ?? '';

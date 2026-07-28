@@ -124,6 +124,16 @@ describe('WarehouseQueryClient', () => {
     expect(request).toHaveBeenNthCalledWith(3, '/warehouse/today-receipts');
   });
 
+  it('loads dashboard totals from the dedicated summary path', async () => {
+    const response: Pick<WarehouseInStockResponse, 'totals'> = { totals: emptyTotals };
+    const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;
+    const client = new WarehouseQueryClient(request);
+
+    await expect(client.warehouseInStockSummary()).resolves.toBe(response);
+
+    expect(request).toHaveBeenCalledWith('/warehouse/in-stock-summary');
+  });
+
   it('passes warehouse query errors through without changing their message', async () => {
     const request = vi.fn().mockRejectedValue(new Error('没有访问权限')) as WarehouseQueryRequest;
     const client = new WarehouseQueryClient(request);

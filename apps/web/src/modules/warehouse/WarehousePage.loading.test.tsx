@@ -41,8 +41,9 @@ describe('WarehousePage scoped loading', () => {
     const warehousePackages = vi.fn().mockResolvedValue([row]);
     const warehouseTodayReceipts = vi.fn().mockResolvedValue({ rows: [row], totals });
     const warehouseInStock = vi.fn().mockResolvedValue({ rows: [row], totals });
+    const warehouseInStockSummary = vi.fn().mockResolvedValue({ totals });
     const apiClient = {
-      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock }
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockSummary }
     } as unknown as ApiClient;
 
     render(
@@ -50,6 +51,7 @@ describe('WarehousePage scoped loading', () => {
         apiClient={apiClient}
         role="WAREHOUSE"
         permissions={['warehouse:today-receipt:view', 'warehouse:in-stock:view']}
+        initialSection="dashboard"
         shipments={[]}
         notice={null}
         onDispatch={vi.fn()}
@@ -60,8 +62,9 @@ describe('WarehousePage scoped loading', () => {
 
     await waitFor(() => {
       expect(warehouseTodayReceipts).toHaveBeenCalledTimes(1);
-      expect(warehouseInStock).toHaveBeenCalledTimes(1);
+      expect(warehouseInStockSummary).toHaveBeenCalledTimes(1);
     });
+    expect(warehouseInStock).not.toHaveBeenCalled();
     expect(warehousePackages).not.toHaveBeenCalled();
   });
 
@@ -69,8 +72,9 @@ describe('WarehousePage scoped loading', () => {
     const warehousePackages = vi.fn().mockResolvedValue([row]);
     const warehouseTodayReceipts = vi.fn().mockRejectedValue(new Error('today unavailable'));
     const warehouseInStock = vi.fn().mockRejectedValue(new Error('in-stock unavailable'));
+    const warehouseInStockSummary = vi.fn().mockRejectedValue(new Error('summary unavailable'));
     const apiClient = {
-      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock }
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockSummary }
     } as unknown as ApiClient;
 
     render(
@@ -78,6 +82,7 @@ describe('WarehousePage scoped loading', () => {
         apiClient={apiClient}
         role="WAREHOUSE"
         permissions={['warehouse:today-receipt:view', 'warehouse:in-stock:view']}
+        initialSection="dashboard"
         shipments={[]}
         notice={null}
         onDispatch={vi.fn()}
@@ -88,6 +93,35 @@ describe('WarehousePage scoped loading', () => {
 
     await waitFor(() => {
       expect(warehousePackages).toHaveBeenCalledTimes(1);
+      expect(warehouseInStockSummary).toHaveBeenCalledTimes(1);
     });
+    expect(warehousePackages).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the full in-stock response for the in-stock workspace', async () => {
+    const warehousePackages = vi.fn().mockResolvedValue([row]);
+    const warehouseTodayReceipts = vi.fn().mockResolvedValue({ rows: [row], totals });
+    const warehouseInStock = vi.fn().mockResolvedValue({ rows: [row], totals });
+    const warehouseInStockSummary = vi.fn().mockResolvedValue({ totals });
+    const apiClient = {
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockSummary }
+    } as unknown as ApiClient;
+
+    render(
+      <WarehousePage
+        apiClient={apiClient}
+        role="WAREHOUSE"
+        permissions={['warehouse:today-receipt:view', 'warehouse:in-stock:view']}
+        initialSection="packages"
+        shipments={[]}
+        notice={null}
+        onDispatch={vi.fn()}
+        findShipmentBySystemOrderNo={() => undefined}
+        renderShipmentOrderNoLink={(systemOrderNo) => systemOrderNo ?? '-'}
+      />
+    );
+
+    await waitFor(() => expect(warehouseInStock).toHaveBeenCalledTimes(1));
+    expect(warehouseInStockSummary).not.toHaveBeenCalled();
   });
 });

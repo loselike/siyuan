@@ -35,6 +35,12 @@ export class WarehouseInventoryQueryController {
     return this.auditedRepository.getWarehouseInStock(request.user, query);
   }
 
+  @Get('warehouse/in-stock-summary')
+  @RequirePermission('warehouse:in-stock:view')
+  warehouseInStockSummary(@Req() request: { user: Principal }) {
+    return this.auditedRepository.getWarehouseInStockSummary(request.user);
+  }
+
   @Get('warehouse/package-groups')
   @RequirePermission('warehouse:in-stock:view')
   warehousePackageGroups(@Req() request: { user: Principal }) {

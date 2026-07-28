@@ -74,6 +74,7 @@ export function WarehousePage({
   shipments,
   businessCostAudits = [],
   notice,
+  initialSection,
   onDispatch,
   canCreateOrderEntry = false,
   onCreateOrderEntryFromWarehouse,
@@ -87,6 +88,7 @@ export function WarehousePage({
   shipments: Shipment[];
   businessCostAudits?: BusinessCostAuditSummary[];
   notice: string | null;
+  initialSection?: string;
   onDispatch: (record: Shipment, options?: { shippingMarkConfirmed?: boolean; handoverNo?: string; batchDispatchSource?: string }) => Promise<void>;
   canCreateOrderEntry?: boolean;
   onCreateOrderEntryFromWarehouse?: (packageIds: string[]) => void;
@@ -125,7 +127,9 @@ export function WarehousePage({
   const canOutboundedView = hasWarehousePermission('warehouse:outbounded:view');
   const workQueue = shipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH');
   const pendingRoutingShipments = shipments.filter((shipment) => shipment.status === 'WAITING_SORT');
-  const [activeReceiveSection, setActiveReceiveSection] = useState('today');
+  const [activeReceiveSection, setActiveReceiveSection] = useState(initialSection ?? 'today');
+  const needsInStockSummary = activeReceiveSection === 'dashboard';
+  const needsInStockRows = activeReceiveSection === 'packages' || activeReceiveSection === 'consolidation';
   const [warehousePackages, setWarehousePackages] = useState<WarehouseInboundPackage[]>([]);
   const warehousePackagesFallbackRef = useRef<Promise<WarehouseInboundPackage[]> | null>(null);
   const shipmentsRef = useRef(shipments);
@@ -302,6 +306,7 @@ export function WarehousePage({
       setInStockRows([]);
       return;
     }
+    if (!needsInStockRows) return;
     let alive = true;
     apiClient.warehouseQuery.warehouseInStock(inStockFilters)
       .then((response) => {
@@ -326,7 +331,24 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canInStockView, inStockFilters, loadWarehousePackagesFallback, mergeWarehousePackages, role, workQueue.length]);
+  }, [apiClient, canInStockView, inStockFilters, loadWarehousePackagesFallback, mergeWarehousePackages, needsInStockRows, role, workQueue.length]);
+  useEffect(() => {
+    if (!canInStockView || !needsInStockSummary) return;
+    let alive = true;
+    apiClient.warehouseQuery.warehouseInStockSummary()
+      .then((response) => {
+        if (alive) setInStockTotals(response.totals);
+      })
+      .catch(async () => {
+        const warehousePackageFallback = await loadWarehousePackagesFallback();
+        if (!alive) return;
+        const fallbackRows = filterInStockRows(warehousePackageFallback, {}, role);
+        setInStockTotals(calculateTodayTotals(fallbackRows, workQueue.length));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiClient, canInStockView, loadWarehousePackagesFallback, needsInStockSummary, role, workQueue.length]);
   useEffect(() => {
     if (!canTallyCompletedView) {
       setCompletedTallyArchiveRows([]);

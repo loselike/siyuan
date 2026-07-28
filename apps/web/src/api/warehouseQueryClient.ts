@@ -44,6 +44,10 @@ export class WarehouseQueryClient {
     return this.request(`/warehouse/in-stock${search ? `?${search}` : ''}`);
   }
 
+  warehouseInStockSummary(): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
+    return this.request('/warehouse/in-stock-summary');
+  }
+
   warehouseTallyTasks(query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {
     const params = new globalThis.URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
