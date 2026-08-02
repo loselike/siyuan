@@ -36,7 +36,11 @@ if (selfTest) {
   const finance = select(['apps/api/src/modules/finance/catalog/finance-catalog.service.ts']);
   const prisma = select(['apps/api/prisma/schema.prisma']);
   const genericWeb = select(['apps/web/src/modules/orders/OrdersPage.tsx']);
-  if (finance.rules.join(',') !== 'finance-catalog') throw new Error('finance catalog mapping failed');
+  const financeWeb = select(['apps/web/src/modules/finance/FinanceCatalogPage.tsx']);
+  const unrelatedFinanceWeb = select(['apps/web/src/modules/finance/waterReceipt/WaterReceiptPage.tsx']);
+  if (finance.rules.join(',') !== 'finance-catalog-api') throw new Error('finance catalog API mapping failed');
+  if (financeWeb.rules.join(',') !== 'finance-catalog-web') throw new Error('finance catalog Web mapping failed');
+  if (unrelatedFinanceWeb.rules.join(',') !== 'web') throw new Error('unrelated Finance Web mapping must use generic Web rule');
   if (!prisma.risks.includes('MODEL_ESCALATION_REQUIRED')) throw new Error('Prisma escalation mapping failed');
   if (genericWeb.rules.join(',') !== 'web') throw new Error('generic Web mapping failed');
   console.log('VALIDATION_SELECTOR_SELF_TEST_OK');

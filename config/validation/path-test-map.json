@@ -9,11 +9,23 @@
       "safety": ["npm run typecheck", "npm run governance:check"]
     },
     {
-      "id": "finance-catalog",
-      "patterns": ["apps/api/src/modules/finance/catalog/**", "apps/web/src/modules/finance/**", "packages/shared/src/finance-catalog.ts"],
+      "id": "finance-catalog-api",
+      "patterns": ["apps/api/src/modules/finance/catalog/**", "packages/shared/src/finance-catalog.ts"],
       "risk": "normal",
       "effect": ["npm run test:api:safe -- --run src/modules/app.finance.e2e.test.ts -t \"keeps finance catalog endpoints stable after moving them out of DataController\""],
       "safety": ["npm run typecheck", "npm run governance:check"]
+    },
+    {
+      "id": "finance-catalog-web",
+      "patterns": [
+        "apps/web/src/modules/finance/FinanceCatalogPage.tsx",
+        "apps/web/src/modules/finance/catalog.ts",
+        "apps/web/src/modules/finance/financeCatalogClient.ts",
+        "apps/web/src/modules/finance/useFinanceCatalog.tsx"
+      ],
+      "risk": "normal",
+      "effect": ["npm run test:web:safe -- --run src/modules/finance/finance.test.tsx -t \"finance catalog 财务资料支持结算方式货物类型品名横向切换和删除\""],
+      "safety": ["npm run typecheck -w @siyuan/web", "npm run governance:check"]
     },
     {
       "id": "problem-ticket",
