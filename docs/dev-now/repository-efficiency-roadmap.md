@@ -4,7 +4,7 @@
 - 会话标题：`Sunny｜仓库效率治理｜01`
 - 续接自：无
 - 上下文状态：`green`
-- 已观察压缩：`1`
+- 已观察压缩：`2`
 - 输入来源：`无（当前会话明确请求）`
 - 会话 slug：`repository-efficiency-roadmap`
 - 分支：`codex/repository-efficiency-roadmap`
@@ -33,6 +33,7 @@
 - `docs/dev-now/` 已从 219 个文件收敛到 3 个模板加本会话 1 个活跃文件；151 个终态/旧交接文件完整移入归档，64 个本地完成但未发布项移入 backlog，没有丢弃内容。
 - 已新增 `context:check` 与 dry-run 优先的 `context:archive`；日常主线程已改为 Terra Medium，子任务默认 Luna Medium，Sol 仅按风险门升级，且规则明确不会自动切换当前主线程模型。
 - 已移植并重建当前 47 源码对应的架构基线：401 条路由契约、3 组既有重复路由作为显式债务冻结，不改变当前运行路由。
+- Finance Catalog 已固化为参考垂直切片：Controller→Service→Repository/Audit ports→Prisma/Memory adapters，Shared 领域 subpath 与 Web 窄 client 已落地；根 Shared 导出和 legacy memory 审计桥保持兼容。
 
 ## 验证
 
@@ -41,6 +42,7 @@
 - API 过期夹具定向 3/3 通过；Web 类型夹具定向 8/8 通过；`git diff --check` 通过。
 - `context:check` 通过：活跃状态 1、归档 151、backlog 64；`context:archive` dry-run 候选 0。
 - `governance:check` 通过：开发规则、上下文、401 条路由/架构 no-new-debt、墨家设备拒绝路径 3/3 全部通过。
+- Finance Catalog 双 adapter 契约 4/4、现有 API 读写权限/创建删除/审计场景 1/1 通过；API/Web typecheck 通过。
 
 ## 交接
 
@@ -49,10 +51,10 @@
 - 用户验收目标：新任务能从唯一代码基线快速定位；上下文不重复加载历史；首个旧链路完成等价垂直切片；业务行为、权限、数据、金额、状态和审计不变。
 - 效果证据：生产源码已从 237/321 漂移恢复为可独立构建的 321/321 精确快照。
 - 安全证据：远端锁 clear/free；只读拉取未写 47；本轮修正仅测试文件；完整生产构建通过。
-- 未验证项：Finance Catalog 参考切片契约、问题件领域所有权与双 Repository 等价性、最终标准发布后的 47 新指纹。
+- 未验证项：问题件领域所有权与双 Repository 等价性、最终标准发布后的 47 新指纹。
 - 发布状态：`未发布`。
 - 稳定附件：无。
-- 准确下一步：提交上下文/架构/发布治理；核对 Finance Catalog 参考切片是否覆盖 Controller→Service→Port→Prisma/Memory 契约，再以问题件为首个旧链路等价迁移样本。
+- 准确下一步：沿当前代码确认问题件 owner、权限、状态和审计事实，冻结契约后迁移首个问题件用例，不改变 Shipment 主状态语义。
 - 建议新标题：`Sunny｜仓库效率治理｜02`
 - 建议新状态文件：`docs/dev-now/repository-efficiency-roadmap-02.md`
 - 接手要求：状态改为 `handed_off` 后，新的唯一写会话才能继续。

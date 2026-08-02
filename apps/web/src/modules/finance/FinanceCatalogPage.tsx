@@ -7,7 +7,7 @@ import type {
   FinanceCatalogCategory,
   FinanceCatalogItemInput,
   FinanceCatalogItemSummary
-} from '@siyuan/shared';
+} from '@siyuan/shared/finance-catalog';
 import {
   financeCatalogCategories,
   financeCatalogCategoryLabels,

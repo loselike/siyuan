@@ -679,7 +679,10 @@ describe('Siyuan API finance', () => {
     await request(app.getHttpServer())
       .get('/api/finance/catalog?category=FEE_NAME&enabledOnly=true')
       .set('Authorization', app.auth(operatorToken))
-      .expect(403);
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.items).toEqual(expect.arrayContaining([expect.objectContaining({ category: 'FEE_NAME', name: '运费' })]));
+      });
 
     await request(app.getHttpServer())
       .post('/api/finance/catalog')

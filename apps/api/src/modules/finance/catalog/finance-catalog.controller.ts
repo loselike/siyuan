@@ -4,7 +4,7 @@ import type {
   FinanceCatalogItemInput,
   FinanceCatalogListQuery,
   FinanceCatalogReorderInput
-} from '@siyuan/shared';
+} from '@siyuan/shared/finance-catalog';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 import { FinanceCatalogService } from './finance-catalog.service.js';

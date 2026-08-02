@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Form, Modal } from 'antd';
-import type { FinanceCatalogCategory, FinanceCatalogItemInput, FinanceCatalogItemSummary } from '@siyuan/shared';
-import { ApiClient } from '../../apiClient';
+import type { FinanceCatalogCategory, FinanceCatalogItemInput, FinanceCatalogItemSummary } from '@siyuan/shared/finance-catalog';
 import {
   createFinanceCatalogFilters,
   createSettlementMethodOptions,
   getSettlementMethodRows,
   normalizeFinanceCatalogCurrency
 } from './catalog';
+import type { FinanceCatalogClient } from './financeCatalogClient';
 
-export function useFinanceCatalog(apiClient: ApiClient, enabled = true) {
+export function useFinanceCatalog(apiClient: FinanceCatalogClient, enabled = true) {
   const [items, setItems] = useState<FinanceCatalogItemSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState(createFinanceCatalogFilters);

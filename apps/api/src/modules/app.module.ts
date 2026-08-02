@@ -9,10 +9,13 @@ import { DataController } from './data.controller.js';
 import { DatabaseSeedService } from './database-seed.service.js';
 import { FinanceCatalogController } from './finance/catalog/finance-catalog.controller.js';
 import {
-  FINANCE_CATALOG_REPOSITORY,
-  InMemoryFinanceCatalogRepository,
-  PrismaFinanceCatalogRepository
-} from './finance/catalog/finance-catalog.repository.js';
+  FINANCE_CATALOG_AUDIT_WRITER,
+  LegacyFinanceCatalogAuditWriter,
+  PrismaFinanceCatalogAuditWriter
+} from './finance/catalog/finance-catalog.audit.js';
+import { InMemoryFinanceCatalogRepository } from './finance/catalog/finance-catalog.in-memory-repository.js';
+import { PrismaFinanceCatalogRepository } from './finance/catalog/finance-catalog.prisma-repository.js';
+import { FINANCE_CATALOG_REPOSITORY } from './finance/catalog/finance-catalog.repository.js';
 import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
 import { PayerBankAccountController } from './finance/payer-bank/payer-bank-account.controller.js';
 import {
@@ -78,6 +81,10 @@ const financeCatalogRepositoryProvider = usePrismaRepository
   ? { provide: FINANCE_CATALOG_REPOSITORY, useClass: PrismaFinanceCatalogRepository }
   : { provide: FINANCE_CATALOG_REPOSITORY, useClass: InMemoryFinanceCatalogRepository };
 
+const financeCatalogAuditWriterProvider = usePrismaRepository
+  ? { provide: FINANCE_CATALOG_AUDIT_WRITER, useClass: PrismaFinanceCatalogAuditWriter }
+  : { provide: FINANCE_CATALOG_AUDIT_WRITER, useClass: LegacyFinanceCatalogAuditWriter };
+
 const payerBankAccountRepositoryProvider = usePrismaRepository
   ? { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: PrismaPayerBankAccountRepository }
   : { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: InMemoryPayerBankAccountRepository };
@@ -127,6 +134,7 @@ const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
     LineageWatcher,
     ...repositoryProviders,
     financeCatalogRepositoryProvider,
+    financeCatalogAuditWriterProvider,
     payerBankAccountRepositoryProvider,
     FinanceCatalogService,
     PayerBankAccountService,

@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./finance-catalog": {
+      "types": "./dist/finance-catalog.d.ts",
+      "import": "./dist/finance-catalog.js"
     }
   },
   "scripts": {

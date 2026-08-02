@@ -5,8 +5,12 @@ import type {
   FinanceCatalogListQuery,
   FinanceCatalogListResponse,
   FinanceCatalogReorderInput
-} from '@siyuan/shared';
+} from '@siyuan/shared/finance-catalog';
 import type { Principal } from '../../rbac.js';
+import {
+  FINANCE_CATALOG_AUDIT_WRITER,
+  type FinanceCatalogAuditWriter
+} from './finance-catalog.audit.js';
 import {
   FINANCE_CATALOG_REPOSITORY,
   mapFinanceCatalogRows,
@@ -15,6 +19,7 @@ import {
 } from './finance-catalog.repository.js';
 import {
   financeCatalogCategories,
+  FinanceCatalogInputError,
   mapFinanceCatalogItem,
   normalizeFinanceCatalogInput,
   toAuditJson
@@ -22,7 +27,10 @@ import {
 
 @Injectable()
 export class FinanceCatalogService {
-  constructor(@Inject(FINANCE_CATALOG_REPOSITORY) private readonly repository: FinanceCatalogRepository) {}
+  constructor(
+    @Inject(FINANCE_CATALOG_REPOSITORY) private readonly repository: FinanceCatalogRepository,
+    @Inject(FINANCE_CATALOG_AUDIT_WRITER) private readonly auditWriter: FinanceCatalogAuditWriter
+  ) {}
 
   async list(queryOrCategory?: FinanceCatalogListQuery | FinanceCatalogCategory): Promise<FinanceCatalogListResponse> {
     const query: FinanceCatalogListQuery = typeof queryOrCategory === 'string' ? { category: queryOrCategory } : queryOrCategory ?? {};
@@ -36,7 +44,7 @@ export class FinanceCatalogService {
   }
 
   async create(principal: Principal, input: FinanceCatalogItemInput) {
-    const data = normalizeFinanceCatalogInput(input, { requireCategory: true, requireName: true });
+    const data = this.normalizeInput(input, { requireCategory: true, requireName: true });
     const category = data.category as FinanceCatalogCategory;
     const name = data.name as string;
     await this.ensureUniqueName(category, name);
@@ -48,7 +56,7 @@ export class FinanceCatalogService {
     }
     const row = await this.repository.create(data as FinanceCatalogCreateData);
     const summary = mapFinanceCatalogItem(row);
-    await this.repository.writeAudit({
+    await this.auditWriter.write({
       actorId: principal.id,
       principal,
       action: 'finance.catalog.create',
@@ -63,7 +71,7 @@ export class FinanceCatalogService {
     if (!current) {
       throw new NotFoundException('财务资料不存在');
     }
-    const data = normalizeFinanceCatalogInput(input, { requireCategory: false, requireName: false });
+    const data = this.normalizeInput(input, { requireCategory: false, requireName: false });
     delete data.category;
     const nextName = (data.name as string | undefined) ?? current.name;
     const nextEnabled = (data.enabled as boolean | undefined) ?? current.enabled;
@@ -76,7 +84,7 @@ export class FinanceCatalogService {
     const row = await this.repository.update(id, data);
     const summary = mapFinanceCatalogItem(row);
     const enabledChanged = input.enabled !== undefined && input.enabled !== current.enabled;
-    await this.repository.writeAudit({
+    await this.auditWriter.write({
       actorId: principal.id,
       principal,
       action: enabledChanged ? (summary.enabled ? 'finance.catalog.enable' : 'finance.catalog.disable') : 'finance.catalog.update',
@@ -94,7 +102,7 @@ export class FinanceCatalogService {
     }
     const row = await this.repository.update(id, { enabled: false });
     const summary = mapFinanceCatalogItem(row);
-    await this.repository.writeAudit({
+    await this.auditWriter.write({
       actorId: principal.id,
       principal,
       action: 'finance.catalog.disable',
@@ -112,7 +120,7 @@ export class FinanceCatalogService {
     }
     const deleted = await this.repository.delete(id);
     const summary = mapFinanceCatalogItem(deleted);
-    await this.repository.writeAudit({
+    await this.auditWriter.write({
       actorId: principal.id,
       principal,
       action: 'finance.catalog.delete',
@@ -137,7 +145,7 @@ export class FinanceCatalogService {
       throw new BadRequestException('排序列表包含不属于该分类的资料');
     }
     const result = await this.repository.reorder(input.category, input.orderedIds);
-    await this.repository.writeAudit({
+    await this.auditWriter.write({
       actorId: principal.id,
       principal,
       action: 'finance.catalog.reorder',
@@ -152,6 +160,20 @@ export class FinanceCatalogService {
     const existing = await this.repository.findEnabledByName(category, name, excludeId);
     if (existing) {
       throw new BadRequestException('同一分类下已存在启用中的同名资料');
+    }
+  }
+
+  private normalizeInput(
+    input: Partial<FinanceCatalogItemInput>,
+    options: { requireCategory: boolean; requireName: boolean }
+  ) {
+    try {
+      return normalizeFinanceCatalogInput(input, options);
+    } catch (error) {
+      if (error instanceof FinanceCatalogInputError) {
+        throw new BadRequestException(error.message);
+      }
+      throw error;
     }
   }
 }

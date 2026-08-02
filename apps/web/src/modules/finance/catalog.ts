@@ -2,7 +2,7 @@ import {
   defaultFinanceCatalogItems,
   type FinanceCatalogCategory,
   type FinanceCatalogItemSummary
-} from '@siyuan/shared';
+} from '@siyuan/shared/finance-catalog';
 
 export const financeCatalogCategories: FinanceCatalogCategory[] = ['FEE_NAME', 'SETTLEMENT_METHOD', 'CARGO_TYPE', 'PRODUCT_NAME'];
 

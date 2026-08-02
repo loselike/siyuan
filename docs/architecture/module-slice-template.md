@@ -50,19 +50,19 @@ Shared 只承载跨进程契约与真正跨端纯规则，不承载 Nest、Prism
 - `finance-catalog.service.ts`：application。
 - `FinanceCatalogRepository`：port。
 - `PrismaFinanceCatalogRepository` / `InMemoryFinanceCatalogRepository`：adapters。
+- `FinanceCatalogAuditWriter`：审计 port 及 Prisma/legacy adapters。
 - `finance-catalog.types.ts`：输入规范化与映射。
+- `@siyuan/shared/finance-catalog`：跨端纯契约 subpath。
+- `FinanceCatalogClient`：Web 侧窄接口。
 
 [`config/architecture/module-boundaries.json`](../../config/architecture/module-boundaries.json) 已把关键依赖方向变成机器门：Controller 必须依赖 Service 且不得直接依赖 Prisma/Repository；Service 必须依赖 port 且不得引用 Prisma/Controller；adapter 不得反向引用 Service/Controller。
 
-它只是“当前最接近模板的参考”，不是最终完成态。已知差距：
+该切片已作为新迁移的结构参考，业务路径和对外根导出保持兼容。当前只保留两项显式兼容边界：
 
-- port 与两个 adapter 仍在同一文件。
-- InMemory adapter 为写审计仍依赖总 `PrismaRepository`。
-- `finance-catalog.types.ts` 仍用 Nest `BadRequestException`，已作为显式历史债务记录。
-- `DataController` 为其他用例直接依赖 `FinanceCatalogService`，说明跨域查询 port 尚未定义。
-- Web 财务资料页面同时被 Finance 与 Master Data 组合，owner 仍需领域确认。
+- legacy memory 模式的审计 adapter 仍桥接总 `PrismaRepository`，但 catalog repository port 与两个 adapter 已不再依赖它；不得把该依赖扩回业务 port。
+- 根 `@siyuan/shared` 继续 re-export 财务资料类型以兼容既有消费者；新增或迁移后的 Finance Catalog 代码必须使用领域 subpath。
 
-因此下一步不是复制目录，而是先保留这条短链路的优点，再在首个旧链路迁移中证明 port、双 adapter contract、前端领域 client 和 Shared subpath 能共同工作。
+双 adapter 已由同一 repository contract suite 验证，架构门禁固定 Controller→Service→Port、纯类型、窄 Web client 和 Shared subpath 的依赖方向。
 
 ## 5. 首个旧链路建议
 

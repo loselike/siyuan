@@ -3,7 +3,7 @@
   "modules": [
     {
       "name": "finance-catalog-reference-slice",
-      "status": "reference-not-final-target",
+      "status": "reference",
       "files": [
         {
           "path": "apps/api/src/modules/finance/catalog/finance-catalog.controller.ts",
@@ -23,7 +23,8 @@
         {
           "path": "apps/api/src/modules/finance/catalog/finance-catalog.service.ts",
           "requiredImports": [
-            "./finance-catalog.repository.js"
+            "./finance-catalog.repository.js",
+            "./finance-catalog.audit.js"
           ],
           "forbiddenImports": [
             "../../prisma.service.js",
@@ -36,8 +37,46 @@
         },
         {
           "path": "apps/api/src/modules/finance/catalog/finance-catalog.repository.ts",
+          "forbiddenImports": [
+            "@nestjs/common",
+            "../../prisma.service.js",
+            "../../prisma.repository.js",
+            "./finance-catalog.controller.js",
+            "./finance-catalog.service.js"
+          ],
+          "forbiddenText": [
+            "this.prisma"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/finance/catalog/finance-catalog.prisma-repository.ts",
           "requiredImports": [
-            "../../prisma.service.js"
+            "../../prisma.service.js",
+            "./finance-catalog.repository.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.repository.js",
+            "./finance-catalog.controller.js",
+            "./finance-catalog.service.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/finance/catalog/finance-catalog.in-memory-repository.ts",
+          "requiredImports": [
+            "./finance-catalog.repository.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.service.js",
+            "../../prisma.repository.js",
+            "./finance-catalog.controller.js",
+            "./finance-catalog.service.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/finance/catalog/finance-catalog.audit.ts",
+          "requiredImports": [
+            "../../prisma.service.js",
+            "../../prisma.repository.js"
           ],
           "forbiddenImports": [
             "./finance-catalog.controller.js",
@@ -46,10 +85,8 @@
         },
         {
           "path": "apps/api/src/modules/finance/catalog/finance-catalog.types.ts",
-          "knownDebtImports": [
-            "@nestjs/common"
-          ],
           "forbiddenImports": [
+            "@nestjs/common",
             "../../prisma.service.js",
             "../../prisma.repository.js",
             "./finance-catalog.controller.js",
@@ -57,6 +94,23 @@
           ],
           "forbiddenText": [
             "this.prisma"
+          ]
+        },
+        {
+          "path": "apps/web/src/modules/finance/useFinanceCatalog.tsx",
+          "requiredImports": [
+            "./financeCatalogClient"
+          ],
+          "forbiddenImports": [
+            "../../apiClient"
+          ]
+        },
+        {
+          "path": "packages/shared/src/finance-catalog.ts",
+          "forbiddenImports": [
+            "@nestjs/common",
+            "@prisma/client",
+            "react"
           ]
         }
       ]

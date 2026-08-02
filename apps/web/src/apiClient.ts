@@ -44,11 +44,6 @@ import type {
   ExchangeRateCreateInput,
   ExchangeRateSummary,
   ExchangeRateUpdateInput,
-  FinanceCatalogItemInput,
-  FinanceCatalogItemSummary,
-  FinanceCatalogListQuery,
-  FinanceCatalogListResponse,
-  FinanceCatalogReorderInput,
   FinanceDashboardResponse,
   FuelRateCreateInput,
   FuelRateSummary,
@@ -272,6 +267,13 @@ import type {
   WarehouseTallyTaskSummary,
   WarehouseTallyTaskUpdateInput
 } from '@siyuan/shared';
+import type {
+  FinanceCatalogItemInput,
+  FinanceCatalogItemSummary,
+  FinanceCatalogListQuery,
+  FinanceCatalogListResponse,
+  FinanceCatalogReorderInput
+} from '@siyuan/shared/finance-catalog';
 import type {
   AnnouncementAudienceOptions,
   AnnouncementCreateInput,

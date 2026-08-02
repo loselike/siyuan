@@ -1,10 +1,13 @@
-import { BadRequestException } from '@nestjs/common';
 import {
   defaultFinanceCatalogItems,
   type FinanceCatalogCategory,
   type FinanceCatalogItemInput,
   type FinanceCatalogItemSummary
-} from '@siyuan/shared';
+} from '@siyuan/shared/finance-catalog';
+
+export class FinanceCatalogInputError extends Error {
+  override readonly name = 'FinanceCatalogInputError';
+}
 
 export type FinanceCatalogRow = {
   id: string;
@@ -33,21 +36,21 @@ export function normalizeFinanceCatalogInput(input: Partial<FinanceCatalogItemIn
   const data: Record<string, unknown> = {};
   if (input.category !== undefined) {
     if (!financeCatalogCategories.includes(input.category)) {
-      throw new BadRequestException('财务资料库分类不正确');
+      throw new FinanceCatalogInputError('财务资料库分类不正确');
     }
     data.category = input.category;
   } else if (options.requireCategory) {
-    throw new BadRequestException('财务资料库分类不能为空');
+    throw new FinanceCatalogInputError('财务资料库分类不能为空');
   }
 
   if (input.name !== undefined) {
     const name = input.name.trim();
     if (!name) {
-      throw new BadRequestException('名称不能为空');
+      throw new FinanceCatalogInputError('名称不能为空');
     }
     data.name = name;
   } else if (options.requireName) {
-    throw new BadRequestException('名称不能为空');
+    throw new FinanceCatalogInputError('名称不能为空');
   }
 
   if (input.sortOrder !== undefined) {
@@ -56,7 +59,7 @@ export function normalizeFinanceCatalogInput(input: Partial<FinanceCatalogItemIn
   if (input.currency !== undefined) {
     const currency = normalizeFinanceCurrency(input.currency);
     if (currency && !financeCatalogCurrencies.includes(currency)) {
-      throw new BadRequestException('币种只支持 RMB、USD、HKD');
+      throw new FinanceCatalogInputError('币种只支持 RMB、USD、HKD');
     }
     data.currency = currency;
   }
