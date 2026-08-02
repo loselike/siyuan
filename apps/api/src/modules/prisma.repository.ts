@@ -13476,6 +13476,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const miscFeeIdsToMatch = Array.from(new Set(input.miscFeeIdsToMatch ?? []));
     if (input.submitForReview) {
       const due = await this.getTallyMiscFeeDueInternal(principal, normalized.customer.code);
+      const mandatoryUnconfirmed = due.rows.filter((row) => row.dueLevel === 'MANDATORY' && row.confirmationStatus !== 'CONFIRMED');
+      if (mandatoryUnconfirmed.length) {
+        throw new BadRequestException(`该客户有 ${mandatoryUnconfirmed.length} 笔满 60 天理货杂费尚未完成仓库确认，请先由仓库确认`);
+      }
       const missingMandatoryIds = due.rows
         .filter((row) => row.dueLevel === 'MANDATORY' && !miscFeeIdsToMatch.includes(row.id))
         .map((row) => row.id);
@@ -13750,6 +13754,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const miscFeeIdsToMatch = Array.from(new Set(input.miscFeeIdsToMatch ?? []));
     if (input.submitForReview) {
       const due = await this.getTallyMiscFeeDueInternal(principal, normalized.customer.code);
+      const mandatoryUnconfirmed = due.rows.filter((row) => row.dueLevel === 'MANDATORY' && row.confirmationStatus !== 'CONFIRMED');
+      if (mandatoryUnconfirmed.length) {
+        throw new BadRequestException(`该客户有 ${mandatoryUnconfirmed.length} 笔满 60 天理货杂费尚未完成仓库确认，请先由仓库确认`);
+      }
       const missingMandatoryIds = due.rows
         .filter((row) => row.dueLevel === 'MANDATORY' && !miscFeeIdsToMatch.includes(row.id))
         .map((row) => row.id);
@@ -15204,6 +15212,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     const miscFeeIdsToMatch = Array.from(new Set(body.miscFeeIdsToMatch ?? []));
     const tallyDue = await this.getTallyMiscFeeDueInternal(principal, shipment.customer.code);
+    const mandatoryUnconfirmed = tallyDue.rows.filter((row) => row.dueLevel === 'MANDATORY' && row.confirmationStatus !== 'CONFIRMED');
+    if (mandatoryUnconfirmed.length) {
+      throw new BadRequestException(`该客户存在满 60 天但尚未仓库确认的理货杂费，请先确认：${mandatoryUnconfirmed.map((row) => row.feeName).join('、')}`);
+    }
     const missingMandatory = tallyDue.rows
       .filter((row) => row.dueLevel === 'MANDATORY' && !miscFeeIdsToMatch.includes(row.id))
       .map((row) => row.feeName);
@@ -21457,8 +21469,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (canManagePayable && !['PURCHASE', 'TALLY_MISC'].includes(input.sourceType) && input.payableAmount === undefined) {
       throw new BadRequestException('请先填写代理应付成本');
     }
-    if (input.sourceType === 'TALLY_MISC' && input.businessAmount === undefined) {
-      throw new BadRequestException('理货杂费业务成本金额不能为空');
+    if (input.sourceType === 'TALLY_MISC'
+      && (!Number.isFinite(Number(input.businessAmount)) || Number(input.businessAmount) <= 0
+        || !Number.isFinite(Number(input.payableAmount)) || Number(input.payableAmount) <= 0)) {
+      throw new BadRequestException('理货杂费业务成本和应付成本必须大于 0');
     }
     if (!canManagePayable && input.businessAmount === undefined) {
       throw new BadRequestException('业务成本金额不能为空');
@@ -21563,6 +21577,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const nextPayableAmount = !canManagePayable || input.payableAmount === undefined ? Number(current.payableAmount) : Number(input.payableAmount);
     const canManageOwner = this.isMiscFeeFullPayableRole(principal);
     if ((nextBusinessAmount !== undefined && (!Number.isFinite(nextBusinessAmount) || nextBusinessAmount < 0)) || !Number.isFinite(nextPayableAmount) || nextPayableAmount < 0) throw new BadRequestException('金额必须为非负数');
+    if (current.sourceType === 'TALLY_MISC'
+      && (nextBusinessAmount === undefined || nextBusinessAmount <= 0 || nextPayableAmount <= 0)) {
+      throw new BadRequestException('理货杂费业务成本和应付成本必须大于 0');
+    }
     const agent = !canManagePayable || input.agentId === undefined
       ? undefined
       : input.agentId
@@ -21650,6 +21668,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async matchMiscFee(principal: Principal, id: string, input: MiscFeeMatchInput): Promise<MiscFeeDetail> {
     const current = await this.findVisibleMiscFee(principal, id);
+    if (current.sourceType === 'TALLY_MISC') {
+      throw new BadRequestException('理货杂费只能在业务录单或仓库出库时勾选匹配');
+    }
     await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'match');
     if (isPickupFeeSourceType(current.sourceType)) {
       throw new BadRequestException('提货费必须由负责业务员通过“匹配业务成本”归属运单，不能使用通用匹配');
@@ -21664,11 +21685,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       || current.hangRequests?.length
     )) {
       throw new BadRequestException('跨越费用进入确认、审核、挂账或付款流程后不能改配运单');
-    }
-    if (current.sourceType === 'TALLY_MISC'
-      && (principal.role === 'WAREHOUSE' || principal.role.startsWith('UG_WAREHOUSE'))
-      && Date.now() - current.createdAt.getTime() < 30 * 24 * 60 * 60 * 1000) {
-      throw new BadRequestException('登记未满 30 天的理货杂费只能由业务员在录单时匹配');
     }
     const shipment = await (this.prisma as any).shipment.findFirst({ where: { id: input.shipmentId, customerId: current.customerId, deletedAt: null } });
     if (!shipment) throw new BadRequestException('只能匹配同一客户的有效订单');
@@ -21813,6 +21829,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const current = await this.findVisibleMiscFee(principal, id);
     await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'confirm');
     if (current.sourceType === 'KUAYUE') throw new BadRequestException('跨越账单无需业务确认，由财务审核统一锁定业务成本和应付成本');
+    if (current.sourceType === 'TALLY_MISC') {
+      this.ensureTallyMiscFeeRegistrant(principal);
+      if (current.matchStatus !== 'UNMATCHED' || current.shipmentId) throw new BadRequestException('理货杂费必须先由仓库确认，再进入订单匹配');
+      if (!Number.isFinite(Number(current.businessAmount)) || Number(current.businessAmount) <= 0
+        || !Number.isFinite(Number(current.payableAmount)) || Number(current.payableAmount) <= 0) {
+        throw new BadRequestException('理货杂费业务成本和应付成本必须大于 0');
+      }
+    }
     if (isPickupFeeSourceType(current.sourceType)) throw new BadRequestException('提货费的业务确认必须通过“匹配业务成本”一次完成');
     if (current.voidedAt) throw new BadRequestException('已作废费用不能确认');
     if (current.confirmationStatus === 'CONFIRMED') return this.getMiscFee(principal, id);
@@ -21846,6 +21870,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (current.voidedAt) throw new BadRequestException('已作废费用不能审核');
     if (!Number.isFinite(Number(current.payableAmount)) || Number(current.payableAmount) < 0) throw new BadRequestException('应付成本必须为非负数');
     if (current.auditStatus === 'APPROVED') return this.getMiscFee(principal, id);
+    if (current.sourceType === 'TALLY_MISC') {
+      if (current.confirmationStatus !== 'CONFIRMED') throw new BadRequestException('理货杂费尚未完成仓库确认，不能财务审核');
+      if (current.matchStatus !== 'MATCHED' || !current.shipmentId) throw new BadRequestException('理货杂费尚未匹配运单，不能财务审核');
+      if (!Number.isFinite(Number(current.businessAmount)) || Number(current.businessAmount) <= 0
+        || !Number.isFinite(Number(current.payableAmount)) || Number(current.payableAmount) <= 0) {
+        throw new BadRequestException('理货杂费业务成本和应付成本必须大于 0');
+      }
+    }
     if (isPickupFeeSourceType(current.sourceType) && !canAuditPickupFee({
       ...current,
       businessAmount: current.businessAmount === null ? null : Number(current.businessAmount),
@@ -22120,6 +22152,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     if (current.voidedAt) throw new BadRequestException('已作废费用不能挂账');
     if (!Number.isFinite(Number(current.payableAmount)) || Number(current.payableAmount) < 0) throw new BadRequestException('应付成本必须为非负数');
+    if (current.sourceType === 'TALLY_MISC'
+      && (current.confirmationStatus !== 'CONFIRMED' || current.matchStatus !== 'MATCHED' || !current.shipmentId || current.auditStatus !== 'APPROVED')) {
+      throw new BadRequestException('理货杂费必须完成仓库确认、订单匹配和财务审核后才能挂账');
+    }
     if (current.sourceType === 'KUAYUE') {
       const request = await this.withMiscFeeFinancialLock(async (tx: any) => {
         const existing = await tx.miscFeeHangRequest.findFirst({
@@ -22175,7 +22211,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       });
       return this.toMiscFeeHangSummary(principal, request);
     }
-    const payableFirstSource = miscFeePayableFirstSourceTypes.has(current.sourceType);
+    const payableFirstSource = miscFeePayableFirstSourceTypes.has(current.sourceType) && current.sourceType !== 'TALLY_MISC';
     if (!payableFirstSource && current.auditStatus !== 'APPROVED') {
       throw new BadRequestException('该费用需先完成应付审核再挂账');
     }
@@ -22382,6 +22418,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return this.getTallyMiscFeeDueInternal(principal, customerCode);
   }
 
+  private tallyMiscFeeAgeDays(occurredAt: Date, now = new Date()) {
+    const toDayNumber = (value: Date) => {
+      const [year, month, day] = getBeijingDateKey(value).split('-').map(Number);
+      return Math.floor(Date.UTC(year, month - 1, day) / (24 * 60 * 60 * 1000));
+    };
+    return Math.max(0, toDayNumber(now) - toDayNumber(occurredAt));
+  }
+
   private async getTallyMiscFeeDueInternal(principal: Principal, customerCode: string): Promise<MiscFeeTallyDueSummary> {
     const code = customerCode?.trim();
     if (!code) throw new BadRequestException('客户编号不能为空');
@@ -22391,11 +22435,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const scopedWhere = await this.miscFeeScopeWhere(principal, { sourceType: 'TALLY_MISC', customerCode: code });
     const rows = await (this.prisma as any).miscFeeRecord.findMany({
       where: { ...scopedWhere, customerId: customer.id, matchStatus: 'UNMATCHED', voidedAt: null, archivedAt: null },
-      orderBy: { createdAt: 'asc' }
+      orderBy: { occurredAt: 'asc' }
     });
-    const now = Date.now();
     const mapped = rows.map((row: any) => {
-      const ageDays = Math.max(0, Math.floor((now - row.createdAt.getTime()) / (24 * 60 * 60 * 1000)));
+      const ageDays = this.tallyMiscFeeAgeDays(row.occurredAt);
       return {
         id: row.id,
         feeName: row.feeName,
@@ -22403,6 +22446,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         businessCurrency: row.businessCurrency,
         occurredAt: row.occurredAt.toISOString(),
         registeredAt: row.createdAt.toISOString(),
+        confirmationStatus: row.confirmationStatus,
         ageDays,
         dueLevel: ageDays >= 60 ? 'MANDATORY' as const : ageDays >= 30 ? 'WAREHOUSE_DUE' as const : 'OPTIONAL' as const
       };
@@ -23925,12 +23969,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const fee = current.miscFeeRecord;
     if (fee.voidedAt) throw new BadRequestException('已作废费用不能同意挂账');
     if (!Number.isFinite(Number(fee.payableAmount)) || Number(fee.payableAmount) < 0) throw new BadRequestException('应付成本必须为非负数');
+    if (fee.sourceType === 'TALLY_MISC'
+      && (fee.confirmationStatus !== 'CONFIRMED' || fee.matchStatus !== 'MATCHED' || !fee.shipmentId || fee.auditStatus !== 'APPROVED')) {
+      throw new BadRequestException('理货杂费必须完成仓库确认、订单匹配和财务审核后才能同意挂账');
+    }
     if (fee.sourceType === 'KUAYUE' && (!Number.isFinite(Number(fee.businessAmount)) || Number(fee.businessAmount) < 0)) {
       throw new BadRequestException('跨越业务成本必须为非负数');
     }
     const canApproveBeforePayableAudit = fee.sourceType === 'PURCHASE'
       || fee.sourceType === 'KUAYUE'
-      || miscFeePayableFirstSourceTypes.has(fee.sourceType);
+      || (miscFeePayableFirstSourceTypes.has(fee.sourceType) && fee.sourceType !== 'TALLY_MISC');
     if (fee.auditStatus !== 'APPROVED' && !canApproveBeforePayableAudit) throw new BadRequestException('应付尚未审核，不能同意挂账');
     this.normalizePaymentCurrency(fee.payableCurrency);
     const payableSnapshot = fee.auditStatus === 'APPROVED'
@@ -24187,6 +24235,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     source: 'ORDER_ENTRY' | 'WAREHOUSE_DISPATCH'
   ) {
     if (!miscFeeIds.length) return;
+    await this.ensureMiscFeePermission(principal, 'tally', 'match');
     await this.lockMiscFeeProfitSettlementSources(tx);
     const rows = await tx.miscFeeRecord.findMany({
       where: {
@@ -24199,21 +24248,28 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
     });
     if (rows.length !== miscFeeIds.length) throw new BadRequestException('部分理货杂费已处理或不属于该客户，请刷新后重试');
+    const unconfirmedRows = rows.filter((row: any) => row.confirmationStatus !== 'CONFIRMED');
+    if (unconfirmedRows.length) throw new BadRequestException('部分理货杂费尚未完成仓库确认，请先到理货杂费页面确认');
     if (rows.length) await this.ensureWarehouseMiscFeeShipmentSite(principal, rows[0].customerCodeSnapshot);
     if (source === 'WAREHOUSE_DISPATCH') {
-      const warehouseEarlyRows = rows.filter((row: any) => Date.now() - row.createdAt.getTime() < 30 * 24 * 60 * 60 * 1000);
-      if (warehouseEarlyRows.length) throw new BadRequestException('登记未满 30 天的理货杂费只能由业务员在录单时匹配');
+      const warehouseEarlyRows = rows.filter((row: any) => this.tallyMiscFeeAgeDays(row.occurredAt) < 30);
+      if (warehouseEarlyRows.length) throw new BadRequestException('发生未满 30 天的理货杂费只能由业务员在录单时匹配');
     }
     for (const row of rows) {
       if (row.businessAmount === null) {
         throw new BadRequestException(`理货杂费“${row.feeName}”尚未登记业务成本，请先由仓库补充`);
       }
-      const confirmedAt = row.confirmedAt ?? new Date();
+      if (!Number.isFinite(Number(row.businessAmount)) || Number(row.businessAmount) <= 0
+        || !Number.isFinite(Number(row.payableAmount)) || Number(row.payableAmount) <= 0) {
+        throw new BadRequestException(`理货杂费“${row.feeName}”的业务成本和应付成本必须大于 0，请先由仓库修正`);
+      }
+      const confirmedAt = row.confirmedAt;
+      if (!confirmedAt) throw new BadRequestException(`理货杂费“${row.feeName}”缺少仓库确认时间，请先重新确认`);
       const businessSnapshot = row.businessExchangeRate !== null && row.businessRmbAmount !== null
         ? { rate: Number(row.businessExchangeRate), rmbAmount: Number(row.businessRmbAmount) }
         : await this.miscFeeRmbSnapshot(Number(row.businessAmount), row.businessCurrency, confirmedAt, tx);
       const changed = await tx.miscFeeRecord.updateMany({
-        where: { id: row.id, version: row.version, matchStatus: 'UNMATCHED', shipmentId: null },
+        where: { id: row.id, version: row.version, matchStatus: 'UNMATCHED', confirmationStatus: 'CONFIRMED', shipmentId: null },
         data: {
           shipmentId: shipment.id,
           systemOrderNoSnapshot: shipment.systemOrderNo,
@@ -24231,9 +24287,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             volumeCbm: shipment.volumeCbm
           }),
           matchStatus: 'MATCHED',
-          confirmationStatus: 'CONFIRMED',
-          confirmedBy: row.confirmedBy ?? principal.username,
-          confirmedAt,
           businessExchangeRate: businessSnapshot.rate,
           businessRmbAmount: businessSnapshot.rmbAmount,
           profitEligibleAt: row.auditStatus === 'APPROVED' ? confirmedAt : null,

@@ -3608,6 +3608,7 @@ export interface MiscFeeTallyDueItem {
   businessCurrency: string;
   occurredAt: string;
   registeredAt: string;
+  confirmationStatus: MiscFeeConfirmationStatus;
   ageDays: number;
   dueLevel: 'OPTIONAL' | 'WAREHOUSE_DUE' | 'MANDATORY';
 }
