@@ -323,10 +323,16 @@ function isPayableFirstMiscFee(row: MiscFeeSummary) {
 
 function canSubmitMiscFeeHangRequest(row: MiscFeeSummary) {
   if (row.sourceType === 'KUAYUE') return canSubmitKuayueHangRequest(row);
+  if (row.sourceType === 'TALLY_MISC') {
+    return row.auditStatus === 'APPROVED' && row.confirmationStatus === 'CONFIRMED' && row.matchStatus === 'MATCHED';
+  }
   return row.auditStatus === 'APPROVED' || isPayableFirstMiscFee(row);
 }
 
 function canAuditMiscFeeRow(row: MiscFeeSummary) {
+  if (row.sourceType === 'TALLY_MISC') {
+    return row.auditStatus === 'PENDING' && row.confirmationStatus === 'CONFIRMED' && row.matchStatus === 'MATCHED';
+  }
   if (row.sourceType === 'WAREHOUSE_PICKUP' || row.sourceType === 'MARKET_PICKUP') {
     return canAuditPickupFee(row);
   }
@@ -823,7 +829,7 @@ function FeeWorkbench({
       occurredAt: formatBeijingDate(new Date().toISOString()),
       businessAmount: undefined,
       businessCurrency: section === 'kuayue' ? 'RMB' : 'RMB',
-      payableAmount: section === 'tally' ? 0 : undefined,
+      payableAmount: undefined,
       payableCurrency: 'RMB',
       agentName: sourceType === 'WAREHOUSE_PICKUP' ? '思远仓库（内部报销）' : sourceType === 'TALLY_MISC' ? '思远仓库' : undefined
     });
@@ -964,7 +970,7 @@ function FeeWorkbench({
         reason: section === 'tally' ? '理货杂费页面删除' : section === 'purchase' ? '代购申请页面删除' : '页面作废'
       });
       message.success({
-        confirm: '业务确认完成',
+        confirm: section === 'tally' ? '仓库确认完成' : '业务确认完成',
         audit: '应付审核完成',
         void: section === 'tally' ? '理货杂费已删除并保留审计记录' : section === 'purchase' ? '代购申请已删除并保留审计记录' : '费用已作废'
       }[action]);
@@ -1052,6 +1058,9 @@ function FeeWorkbench({
           <Button size="small" icon={<Eye size={13} />} onClick={() => void openDetail(row)}>查看</Button>
           {section === 'tally' && canManageTallyRegistration && hasPermission('update') && row.matchStatus === 'UNMATCHED' && row.confirmationStatus === 'PENDING' && row.auditStatus === 'PENDING' && !row.voidedAt ? (
             <Button size="small" onClick={() => openEdit(row)}>修改</Button>
+          ) : null}
+          {section === 'tally' && canManageTallyRegistration && hasPermission('confirm') && row.matchStatus === 'UNMATCHED' && row.confirmationStatus === 'PENDING' && row.auditStatus === 'PENDING' && !row.voidedAt ? (
+            <Button size="small" type="primary" onClick={() => void performAction(row, 'confirm')}>仓库确认</Button>
           ) : null}
           {section === 'pickup' && canViewPayable && hasPermission('update') && canEditPickupFeeRegistration(row) ? (
             <Button size="small" onClick={() => openEdit(row)}>修改登记</Button>
@@ -1283,8 +1292,10 @@ function FeeWorkbench({
                 : statusTag(section === 'pickup' ? '待业务归属' : '未匹配', 'warning')}
               {section === 'tally'
                 ? row.confirmationStatus === 'CONFIRMED'
-                  ? statusTag('业务成本已写入', 'success')
-                  : statusTag('待订单勾选', 'processing')
+                  ? row.matchStatus === 'MATCHED'
+                    ? statusTag('已写入业务成本', 'success')
+                    : statusTag('待订单匹配', 'processing')
+                  : statusTag('待仓库确认', 'warning')
                 : businessAssignmentTag(row)}
               {canViewPayable ? auditTag(row.auditStatus) : null}
               {canViewPayable ? hangTag(row.hangStatus) : null}
@@ -1771,9 +1782,9 @@ function FeeWorkbench({
     toolbarLeading: <Text type="secondary">已选 {selectedKeys.length} 条</Text>,
     toolbarActions: (
       <Space wrap>
-        {!['kuayue', 'pickup', 'tally', 'purchase'].includes(section) && hasPermission('confirm') && !canAssignBusinessCost ? (
+        {!['kuayue', 'pickup', 'purchase'].includes(section) && hasPermission('confirm') && !canAssignBusinessCost ? (
           <Button size="small" disabled={!selectedRows.some((row) => row.confirmationStatus === 'PENDING' && row.businessAmount !== undefined)} onClick={() => void performBatch('confirm')}>
-            批量确认
+            {section === 'tally' ? '批量仓库确认' : '批量确认'}
           </Button>
         ) : null}
         {section !== 'purchase' && hasPermission('audit') ? (
@@ -1954,9 +1965,9 @@ function FeeWorkbench({
         <Col xs={24} sm={12} lg={6}>
           <MetricCard
             icon={<CheckCircle2 size={18} />}
-            title={section === 'tally' ? '待订单匹配' : '待业务归属'}
+            title={section === 'tally' ? '待仓库确认' : '待业务归属'}
             value={response.totals.pendingConfirmation}
-            extra={section === 'tally' ? '录单或出库勾选后写入业务成本' : '业务员匹配订单后写入业务成本'}
+            extra={section === 'tally' ? '确认后由录单或出库勾选匹配' : '业务员匹配订单后写入业务成本'}
           />
         </Col>
         {canViewPayable ? (
@@ -2197,8 +2208,8 @@ function FeeWorkbench({
               <AppFormSection title="业务成本">
                 <Row gutter={12}>
                   <Col span={12}>
-                    <Form.Item name="businessAmount" label="业务成本金额" rules={[{ required: true, message: '请填写业务成本' }]}>
-                      <InputNumber min={0} precision={2} className="misc-fee-full-width" />
+                    <Form.Item name="businessAmount" label="业务成本金额" rules={[{ required: true, message: '请填写业务成本' }, ...(section === 'tally' ? [{ type: 'number' as const, min: 0.01, message: '业务成本必须大于 0' }] : [])]}>
+                      <InputNumber min={section === 'tally' ? 0.01 : 0} precision={2} className="misc-fee-full-width" />
                     </Form.Item>
                   </Col>
                   <Col span={12}>
@@ -2234,8 +2245,8 @@ function FeeWorkbench({
               <AppFormSection title="应付成本">
                 <Row gutter={12}>
                   <Col span={12}>
-                    <Form.Item name="payableAmount" label="应付成本金额" rules={[{ required: true, message: '请填写应付成本' }]}>
-                      <InputNumber min={0} precision={2} className="misc-fee-full-width" />
+                    <Form.Item name="payableAmount" label="应付成本金额" rules={[{ required: true, message: '请填写应付成本' }, ...(section === 'tally' ? [{ type: 'number' as const, min: 0.01, message: '应付成本必须大于 0' }] : [])]}>
+                      <InputNumber min={section === 'tally' ? 0.01 : 0} precision={2} className="misc-fee-full-width" />
                     </Form.Item>
                   </Col>
                   <Col span={12}>

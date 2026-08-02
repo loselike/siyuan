@@ -260,7 +260,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       .then((response) => {
         if (!mounted) return;
         setTallyMiscFeeDue(response);
-        setSelectedTallyMiscFeeIds(response.rows.filter((row) => row.dueLevel === 'MANDATORY').map((row) => row.id));
+        setSelectedTallyMiscFeeIds(response.rows.filter((row) => row.dueLevel === 'MANDATORY' && row.confirmationStatus === 'CONFIRMED').map((row) => row.id));
       })
       .catch(() => {
         if (!mounted) return;
@@ -1358,11 +1358,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                   <Space direction="vertical" size={4} style={{ width: '100%' }}>
                     {tallyMiscFeeDue.rows.map((fee) => {
                       const mandatory = fee.dueLevel === 'MANDATORY';
+                      const warehouseConfirmed = fee.confirmationStatus === 'CONFIRMED';
                       return (
                         <Checkbox
                           key={fee.id}
                           checked={selectedTallyMiscFeeIds.includes(fee.id)}
-                          disabled={mandatory}
+                          disabled={mandatory || !warehouseConfirmed}
                           onChange={(event) => setSelectedTallyMiscFeeIds((current) => event.target.checked
                             ? Array.from(new Set([...current, fee.id]))
                             : current.filter((id) => id !== fee.id))}
@@ -1370,6 +1371,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                           <Space size={6} wrap>
                             <Text strong>{fee.feeName}</Text>
                             <Text>{fee.businessAmount === undefined ? '待仓库补充金额' : `${fee.businessAmount.toFixed(2)} ${fee.businessCurrency}`}</Text>
+                            {!warehouseConfirmed ? <Tag color="gold">待仓库确认</Tag> : null}
                             <Tag color={mandatory ? 'red' : fee.dueLevel === 'WAREHOUSE_DUE' ? 'orange' : 'blue'}>
                               {mandatory ? `${fee.ageDays} 天·必须处理` : fee.dueLevel === 'WAREHOUSE_DUE' ? `${fee.ageDays} 天·仓库可处理` : `${fee.ageDays} 天`}
                             </Tag>
@@ -1377,7 +1379,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                         </Checkbox>
                       );
                     })}
-                    <Text type="secondary">勾选后，提交审核时会把这些理货杂费匹配到本运单；满 60 天记录不可取消。</Text>
+                    <Text type="secondary">仓库确认后可勾选；提交审核时自动匹配本运单并写入业务成本。满 60 天记录必须处理。</Text>
                   </Space>
                 )}
                 style={{ marginBottom: 12 }}

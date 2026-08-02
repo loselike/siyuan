@@ -1033,7 +1033,7 @@ export function WarehousePage({
     const due = await apiClient.miscFeeTallyDue(record.customerCode);
     const rows = due.rows.filter((row) => row.dueLevel !== 'OPTIONAL');
     if (!rows.length) return [];
-    const selected = new Set(rows.map((row) => row.id));
+    const selected = new Set(rows.filter((row) => row.confirmationStatus === 'CONFIRMED').map((row) => row.id));
     return new Promise((resolve) => {
       modal.confirm({
         title: due.mandatoryCount ? '存在满 60 天理货杂费，出库前必须处理' : '发现待匹配理货杂费',
@@ -1044,22 +1044,24 @@ export function WarehousePage({
           <Space direction="vertical" size={6} style={{ width: '100%', marginTop: 12 }}>
             {rows.map((fee: MiscFeeTallyDueItem) => {
               const mandatory = fee.dueLevel === 'MANDATORY';
+              const warehouseConfirmed = fee.confirmationStatus === 'CONFIRMED';
               return (
                 <Checkbox
                   key={fee.id}
-                  defaultChecked
-                  disabled={mandatory}
+                  defaultChecked={warehouseConfirmed}
+                  disabled={mandatory || !warehouseConfirmed}
                   onChange={(event) => event.target.checked ? selected.add(fee.id) : selected.delete(fee.id)}
                 >
                   <Space size={6} wrap>
                     <Text strong>{fee.feeName}</Text>
                     <Text>{fee.businessAmount === undefined ? '待仓库补充金额' : `${fee.businessAmount.toFixed(2)} ${fee.businessCurrency}`}</Text>
+                    {!warehouseConfirmed ? <Tag color="gold">待仓库确认</Tag> : null}
                     <Tag color={mandatory ? 'red' : 'orange'}>{fee.ageDays} 天{mandatory ? '·必须处理' : ''}</Tag>
                   </Space>
                 </Checkbox>
               );
             })}
-            <Text type="secondary">满 30 天记录可由仓库匹配到本运单；满 60 天记录不可取消。</Text>
+            <Text type="secondary">仓库确认且满 30 天的记录可匹配到本运单；满 60 天记录必须处理。</Text>
           </Space>
         ),
         onOk: () => resolve(Array.from(selected)),
