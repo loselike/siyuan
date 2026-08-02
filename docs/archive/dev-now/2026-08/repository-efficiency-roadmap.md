@@ -1,10 +1,10 @@
 # 仓库效率与可理解性治理
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 会话标题：`Sunny｜仓库效率治理｜01`
 - 续接自：无
 - 上下文状态：`green`
-- 已观察压缩：`2`
+- 已观察压缩：`3`
 - 输入来源：`无（当前会话明确请求）`
 - 会话 slug：`repository-efficiency-roadmap`
 - 分支：`codex/repository-efficiency-roadmap`
@@ -36,6 +36,8 @@
 - Finance Catalog 已固化为参考垂直切片：Controller→Service→Repository/Audit ports→Prisma/Memory adapters，Shared 领域 subpath 与 Web 窄 client 已落地；根 Shared 导出和 legacy memory 审计桥保持兼容。
 - 问题件领域 owner 已从当前代码固化为 Customer Service；Shipment 保留主状态所有权。首个旧链路 `GET /problem-tickets` 已迁移到 Query Service/Port/Prisma 与 legacy adapters，写入、审计、通知和状态流转未移动。
 - 已新增 `validation:select`：按变更路径选择每个切片的一条效果测试和一条安全门，Prisma 自动标记模型升级；Finance Catalog fixture/reset/handler 已从 6,499 行 `appTestHarness` 拆为独立 79 行领域 fixture。
+- 发布前合并了 47 同期上线的理货杂费确认流程；没有覆盖并发业务改动。标准发布脚本补齐 worktree `.git` 指针排除，并统一本地/远端 test-support 指纹规则。
+- 已通过干净发布协调 worktree 发布 Web+API；没有 Prisma 变化、没有迁移、没有生产业务写入。
 
 ## 验证
 
@@ -47,18 +49,20 @@
 - Finance Catalog 双 adapter 契约 4/4、现有 API 读写权限/创建删除/审计场景 1/1 通过；API/Web typecheck 通过。
 - 问题件双 query adapter 契约 4/4、真实 API 客户范围/岗位权限 2/2、Web client facade 1/1 通过。旧 `problemTickets.test.tsx` 仍指向已不存在的“问题件”按钮，作为历史测试拆分项保留，未据此修改运行界面。
 - validation selector self-test 通过；Finance Catalog harness 真实 UI 场景 1/1 通过；Shared/API/Web 全量 typecheck 与治理门禁通过。
+- 最终候选 Shared/API/Web 生产构建通过；Finance Catalog 与问题件双 adapter 契约 8/8、真实 API 允许/拒绝场景 2/2、Web facade/UI 场景 2/2 通过。
+- 47 发布后 Finance Catalog 允许/拒绝为 200/403，问题件允许/拒绝/未登录为 200/403/401；容器健康，333/333 源码同哈希，release/recovery 锁均 clear。
 
 ## 交接
 
-- 阻塞：无。
+- 阻塞：无；本任务已闭环。
 - 剩余风险：47 现有 3 组重复 HTTP 路由已被门禁记录但尚未消除；不能在无等价接口证据时直接删除。当前治理提交改变 package scripts，最终标准发布前需重新取得 47 baseline receipt 并由发布流程更新远端源码基线。
 - 用户验收目标：新任务能从唯一代码基线快速定位；上下文不重复加载历史；首个旧链路完成等价垂直切片；业务行为、权限、数据、金额、状态和审计不变。
 - 效果证据：生产源码已从 237/321 漂移恢复为可独立构建的 321/321 精确快照。
 - 安全证据：远端锁 clear/free；只读拉取未写 47；本轮修正仅测试文件；完整生产构建通过。
-- 未验证项：最终生产构建、标准发布后的 47 新指纹和线上只读权限/响应证据。
-- 发布状态：`未发布`。
+- 未验证项：无代码或服务端未验证项；纯视觉页面仍按项目规则由用户在 47 人工查看。
+- 发布状态：`已发布`，release ID `web-ca9626267b90_api-403a0f775a57`；Web/API/migration 指纹与 47 完全一致。
 - 稳定附件：无。
-- 准确下一步：提交最小验证治理，执行最终生产构建与候选审查，再从干净提交按 baseline receipt 精确发布 47 并做只读线上验证。
+- 准确下一步：后续新任务直接使用当前唯一基线和领域地图；需要继续拆分时一次只选择一个有固定验收样本的旧链路。
 - 建议新标题：`Sunny｜仓库效率治理｜02`
 - 建议新状态文件：`docs/dev-now/repository-efficiency-roadmap-02.md`
 - 接手要求：状态改为 `handed_off` 后，新的唯一写会话才能继续。
