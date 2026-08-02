@@ -18,6 +18,9 @@ function DynamicCallbackHarness({ children }: { children: ReactNode }) {
   }, []);
   const context = useMemo<ModuleSubNavContextValue>(() => ({
     parentKey: 'workspace',
+    routeKey: 'workspace:',
+    resolveSectionKey: () => undefined,
+    navigateToSection: () => undefined,
     register,
     clear: () => setRegisteredState(null)
   }), [register]);

@@ -13,6 +13,9 @@ function ReportsPageHarness({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       parentKey: 'reports',
+      routeKey: 'reports:',
+      resolveSectionKey: () => undefined,
+      navigateToSection: () => undefined,
       register: (state: Omit<SidebarSubNavState, 'parentKey' | 'signature'>) => {
         setSubNav({
           parentKey: 'reports',

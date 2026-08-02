@@ -10,9 +10,11 @@ const emptyListResponse: AgentMarkupListResponse = {
     totalRules: 0,
     enabledRules: 0,
     disabledRules: 0,
-    unmatchedQuotes: 0
+    unmatchedQuotes: 0,
+    systemDefaultScopes: 0
   },
   rows: [],
+  filterOptions: { agentNames: [], channelNames: [], realChannelNames: [], destinationCountries: [] },
   pagination: { page: 1, pageSize: 20, totalItems: 0 }
 };
 

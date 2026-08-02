@@ -3,10 +3,10 @@ import {
   calculateCartonSpecTotals,
   createWarehouseApiPackages,
   currentPageIds,
-  parseBeijingDateTimeInputToIso,
   withWarehouseCustomerProgress,
   type WarehouseInboundPackage
 } from './warehousePageModel';
+import { parseBeijingDateTimeInputToIso } from '../shared/format';
 
 describe('warehouse page model', () => {
   it('keeps paging, Beijing time conversion and carton totals unchanged', () => {
