@@ -191,6 +191,9 @@ if (!fingerprintScript.includes('scope_hash web') || !fingerprintScript.includes
 if (!fingerprintScript.includes('*/test-support/*') || !fingerprintScript.includes('*/testSupport/*')) {
   failures.push('release fingerprints must exclude both test-support naming variants');
 }
+if (!deployScript.includes('*/test-support/*') || !deployScript.includes('*/testSupport/*')) {
+  failures.push('standard deploy fingerprints must exclude the same test-support naming variants as the portable helper');
+}
 if (!whitelistDeployScript.includes('PENDING_MIGRATION_SET_MISMATCH') || !whitelistDeployScript.includes('APPROVED_MIGRATIONS_CSV')) {
   failures.push('whitelist migration release must reject an unapproved remote pending-migration set');
 }
