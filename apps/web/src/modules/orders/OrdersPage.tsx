@@ -29,8 +29,9 @@ import {
   type ShipmentStatus
 } from '@siyuan/shared';
 import { formatBeijingDateTime } from '../shared/format';
+import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
-import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
 import type { RoutingAssignmentFormValues } from '../routing/RoutingPage';
 
 const { Text } = Typography;
@@ -52,6 +53,36 @@ export function lifecycleStatusColor(status: ShipmentStatus) {
   if (['PROBLEM', 'STUCK', 'REVIEW_REJECTED'].includes(status)) return 'error';
   if (['DRAFT', 'REVIEW_PENDING', 'WAITING_RECEIVE', 'WAITING_SORT', 'WAITING_DISPATCH'].includes(status)) return 'warning';
   return 'processing';
+}
+
+export function orderManagementStatusLabel(status: ShipmentStatus) {
+  return status === 'WAITING_DISPATCH' ? '已排货' : shipmentStatusLabels[status];
+}
+
+const orderManagementAgentRestrictedRoles = new Set([
+  'OPERATOR',
+  'UG_BUSINESS',
+  'UG_SZ_WUHAN',
+  'UG_ZZ_SIHUA',
+  'UG_WH_JIUYULIAN',
+  'UG_BUSINESS_MANAGER',
+  'UG_BUSINESS_SUPERVISOR'
+]);
+
+export function canViewOrderManagementAgentDetails(role: import('../../apiClient').RoleKey) {
+  return !orderManagementAgentRestrictedRoles.has(role);
+}
+
+export function resolveOrderManagementAgentShortName(
+  shipment: Pick<Shipment, 'agentId' | 'agentName'>,
+  agents: MasterDataSnapshot['agents']
+) {
+  const agentName = shipment.agentName?.trim();
+  const agent = agents.find((item) =>
+    (shipment.agentId && item.id === shipment.agentId)
+    || (agentName && (item.shortName === agentName || item.name === agentName))
+  );
+  return agent?.shortName?.trim() || agent?.code?.trim() || '-';
 }
 
 export interface OutboundOrderFormValues {
@@ -95,13 +126,126 @@ export interface ShipmentOperationLog {
 }
 
 type ShipmentLogViewMode = 'operation' | 'routing';
+type OrderManagementDensity = 'compact' | 'dense';
+
+const precisionLedgerColumnWidths: Record<string, number> = {
+  createdAt: 88,
+  customerName: 88,
+  salesperson: 76,
+  systemOrderNo: 98,
+  transferNo: 92,
+  destinationCountry: 60,
+  channel: 76,
+  agent: 100,
+  packageCount: 50,
+  weight: 110,
+  trackingStatus: 80,
+  transitTime: 56,
+  paymentAmount: 70,
+  paymentCurrency: 62,
+  paymentMethod: 68,
+  remark: 62,
+  lifecycleStatus: 72,
+  auditStatus: 68,
+  actions: 78
+};
+
+type OrderMatrixField = {
+  key: string;
+  label: string;
+  className?: string;
+};
+
+function findManagedOrderColumn(columns: ManagedTableColumns<Shipment>, key: string) {
+  return columns.find((column) => String(column.key) === key);
+}
+
+function getOrderColumnDataValue(record: Shipment, dataIndex: unknown) {
+  if (typeof dataIndex === 'string' || typeof dataIndex === 'number') {
+    return (record as unknown as Record<string | number, unknown>)[dataIndex];
+  }
+  if (Array.isArray(dataIndex)) {
+    return dataIndex.reduce<unknown>((value, segment) => {
+      if (!value || typeof value !== 'object') return undefined;
+      return (value as Record<string | number, unknown>)[segment];
+    }, record);
+  }
+  return undefined;
+}
+
+function renderOrderColumnValue(
+  columns: ManagedTableColumns<Shipment>,
+  key: string,
+  record: Shipment,
+  index: number
+) {
+  const column = findManagedOrderColumn(columns, key);
+  if (!column) return <Text type="secondary">-</Text>;
+
+  const shouldUseCellRenderer = ['systemOrderNo', 'destinationCountry', 'channel', 'agent', 'actions'].includes(key);
+  if (!shouldUseCellRenderer && column.recordDetail && column.recordDetail.value) {
+    return column.recordDetail.value(record, index);
+  }
+
+  const dataIndex = 'dataIndex' in column ? column.dataIndex : undefined;
+  if ('render' in column && typeof column.render === 'function') {
+    return column.render(getOrderColumnDataValue(record, dataIndex), record, index) as ReactNode;
+  }
+
+  const value = getOrderColumnDataValue(record, dataIndex);
+  return value === undefined || value === null || value === '' ? <Text type="secondary">-</Text> : String(value);
+}
+
+function renderOrderMatrixCell(
+  columns: ManagedTableColumns<Shipment>,
+  fields: OrderMatrixField[],
+  record: Shipment,
+  index: number,
+  valueOverrides: Partial<Record<string, ReactNode>> = {}
+) {
+  return (
+    <div className="order-matrix-cell">
+      {fields.map((field) => (
+        <div className={`order-matrix-field ${field.className ?? ''}`} key={field.key}>
+          <span className="order-matrix-label">{field.label}</span>
+          <div className="order-matrix-value">
+            {field.key in valueOverrides ? valueOverrides[field.key] : renderOrderColumnValue(columns, field.key, record, index)}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function renderOrderMatrixDateTime(value: string) {
+  const [date, time] = value.split(' ');
+  return (
+    <span className="order-matrix-datetime" title={value}>
+      <span className="order-matrix-date">{date}</span>
+      {time ? <span className="order-matrix-time">{time}</span> : null}
+    </span>
+  );
+}
 
 const receivingChannelOptions = ['海运DDP', '空运DDP', '快递', '整柜到门', '整柜到港', '拼箱到港', '空运到机场', '代购', '自定义'];
+
+type OrderManagementFilters = {
+  createdFrom?: string;
+  createdTo?: string;
+  customerKeyword: string;
+};
+
+function createEmptyOrderManagementFilters(): OrderManagementFilters {
+  return { customerKeyword: '' };
+}
+
+
 
 export function OrdersPage({
   notice,
   shipments,
   columns,
+  matrixSourceColumns,
   metricCards,
   selectedStage,
   onSelectStage,
@@ -128,6 +272,7 @@ export function OrdersPage({
   logViewingMode,
   shipmentLogs,
   onCloseShipmentLog,
+  formatPaymentSummary,
   onAiAssist,
   aiLoading,
   permissions,
@@ -135,7 +280,8 @@ export function OrdersPage({
 }: {
   notice?: string | null;
   shipments: Shipment[];
-  columns: ColumnsType<Shipment>;
+  columns: ManagedTableColumns<Shipment>;
+  matrixSourceColumns: ManagedTableColumns<Shipment>;
   metricCards: Array<{ title: string; value: string | number; extra: ReactNode; icon: ReactNode }>;
   selectedStage: OrdersLifecycleStageKey;
   onSelectStage: (stage: OrdersLifecycleStageKey) => void;
@@ -162,28 +308,189 @@ export function OrdersPage({
   logViewingMode: ShipmentLogViewMode;
   shipmentLogs: ShipmentOperationLog[];
   onCloseShipmentLog: () => void;
+  formatPaymentSummary: (usd?: number, cny?: number) => string;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
   permissions: import('../../apiClient').PermissionKey[];
   role: import('../../apiClient').RoleKey;
 }) {
   const hasBusinessPermission = (permission: import('../../apiClient').PermissionKey) => role === 'ADMIN' || permissions.includes(permission);
-  const [createdFrom, setCreatedFrom] = useState<string>();
-  const [createdTo, setCreatedTo] = useState<string>();
-  const [customerKeyword, setCustomerKeyword] = useState('');
+  const showAgentDetails = canViewOrderManagementAgentDetails(role);
+  const [tableDensity, setTableDensity] = useState<OrderManagementDensity>('compact');
+  const [filterDraft, setFilterDraft] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
+  const [appliedFilters, setAppliedFilters] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
   const filteredShipments = useMemo(() => {
-    const keyword = customerKeyword.trim().toLowerCase();
+    const keyword = appliedFilters.customerKeyword.toLowerCase();
     return shipments.filter((shipment) => {
       const createdAt = shipment.createdAt.slice(0, 10);
-      if (createdFrom && createdAt < createdFrom) return false;
-      if (createdTo && createdAt > createdTo) return false;
+      if (appliedFilters.createdFrom && createdAt < appliedFilters.createdFrom) return false;
+      if (appliedFilters.createdTo && createdAt > appliedFilters.createdTo) return false;
       return !keyword || [shipment.customerCode, shipment.customerName].some((value) => value?.toLowerCase().includes(keyword));
     });
-  }, [createdFrom, createdTo, customerKeyword, shipments]);
+  }, [appliedFilters, shipments]);
+  const applyFilters = () => {
+    setAppliedFilters({
+      ...filterDraft,
+      customerKeyword: filterDraft.customerKeyword.trim()
+    });
+  };
+  const resetFilters = () => {
+    setFilterDraft(createEmptyOrderManagementFilters());
+    setAppliedFilters(createEmptyOrderManagementFilters());
+    onSelectStage('all');
+  };
   const filteredStageShipments = useMemo(() => {
     const stage = orderLifecycleStages.find((item) => item.key === selectedStage);
     return stage ? filteredShipments.filter(stage.predicate) : filteredShipments;
   }, [filteredShipments, selectedStage]);
+  const precisionLedgerColumns = useMemo<ManagedTableColumns<Shipment>>(
+    () => columns.map((column) => {
+      const key = String(column.key);
+      const width = precisionLedgerColumnWidths[key];
+      return width ? { ...column, width } : column;
+    }),
+    [columns]
+  );
+  const matrixColumns = useMemo<ManagedTableColumns<Shipment>>(
+    () => [
+      {
+        key: 'matrixBasic',
+        title: '基础信息',
+        width: 160,
+        className: 'order-matrix-group-basic',
+        render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
+          { key: 'createdAt', label: '创建时间', className: 'order-matrix-field-datetime' },
+          { key: 'customerName', label: '客户名称' },
+          { key: 'salesperson', label: '业务员归属' }
+        ], record, index, {
+          createdAt: renderOrderMatrixDateTime(formatBeijingDateTime(record.createdAt))
+        })
+      },
+      {
+        key: 'matrixOrder',
+        title: '运单信息',
+        width: 145,
+        className: 'order-matrix-group-order',
+        render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
+          { key: 'systemOrderNo', label: '出货单号' },
+          { key: 'transferNo', label: '转单号' }
+        ], record, index)
+      },
+      {
+        key: 'matrixRoute',
+        title: '路线与代理',
+        width: showAgentDetails ? 210 : 180,
+        className: `order-matrix-group-route${showAgentDetails ? '' : ' order-matrix-group-route-restricted'}`,
+        render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
+          { key: 'destinationCountry', label: '目的地' },
+          { key: 'channel', label: '公司渠道' },
+          ...(showAgentDetails ? [
+            { key: 'agentShortName', label: agentFieldLabels.shortName },
+            { key: 'agentChannel', label: agentFieldLabels.channel }
+          ] : [])
+        ], record, index, showAgentDetails ? {
+          agentShortName: <Text type={resolveOrderManagementAgentShortName(record, masterData.agents) === '-' ? 'secondary' : undefined}>
+            {resolveOrderManagementAgentShortName(record, masterData.agents)}
+          </Text>,
+          agentChannel: <Text type={record.routeAgentChannelName ? undefined : 'secondary'}>
+            {record.routeAgentChannelName || '-'}
+          </Text>
+        } : undefined)
+      },
+      {
+        key: 'matrixCargoPayment',
+        title: '货物与收款',
+        width: 230,
+        className: 'order-matrix-group-cargo',
+        render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
+          { key: 'packageCount', label: '件数' },
+          { key: 'weight', label: '应收/代理计费重' },
+          { key: 'paymentAmount', label: '收款金额' },
+          { key: 'paymentCurrency', label: '收款币种' },
+          { key: 'paymentMethod', label: '收款方式' }
+        ], record, index, {
+          paymentAmount: <Text type={record.paymentAmountUsd === undefined && record.paymentAmountCny === undefined ? 'secondary' : undefined}>
+            {record.paymentAmountUsd === undefined && record.paymentAmountCny === undefined
+              ? '未知'
+              : formatPaymentSummary(record.paymentAmountUsd, record.paymentAmountCny)}
+          </Text>
+        })
+      },
+      {
+        key: 'matrixFulfillment',
+        title: '履约状态',
+        width: 195,
+        className: 'order-matrix-group-fulfillment',
+        render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
+          { key: 'trackingStatus', label: '轨迹状态', className: 'order-matrix-field-wrap order-matrix-field-status-copy' },
+          { key: 'transitTime', label: '时效', className: 'order-matrix-field-status-copy' },
+          { key: 'lifecycleStatus', label: '当前节点' },
+          { key: 'auditStatus', label: '审核状态' }
+        ], record, index, {
+          trackingStatus: <span className="order-matrix-status-text" title={record.latestTracking || '-'}>{record.latestTracking || '-'}</span>,
+          transitTime: <span className="order-matrix-status-text">{renderOrderColumnValue(matrixSourceColumns, 'transitTime', record, index)}</span>
+        })
+      },
+      {
+        key: 'matrixRemark',
+        title: '备注',
+        width: 70,
+        render: (_, record) => (
+          <Text className="order-matrix-remark" title={record.remark || '无备注'} type={record.remark ? undefined : 'secondary'}>
+            {record.remark || '无备注'}
+          </Text>
+        )
+      },
+      {
+        key: 'matrixActions',
+        title: '操作',
+        width: 90,
+        className: 'order-matrix-actions',
+        render: (_, record, index) => renderOrderColumnValue(matrixSourceColumns, 'actions', record, index)
+      }
+    ],
+    [formatPaymentSummary, masterData.agents, matrixSourceColumns, showAgentDetails]
+  );
+  const tableDensityToolbar = (
+    <Select<OrderManagementDensity>
+      aria-label="表格密度"
+      size="small"
+      value={tableDensity}
+      options={[
+        { label: '紧凑', value: 'compact' },
+        { label: '高密度', value: 'dense' }
+      ]}
+      onChange={setTableDensity}
+    />
+  );
+  const tableFilterToolbar = (
+    <Space wrap className="fulfillment-board-filters">
+      <Input
+        type="date"
+        aria-label="开始日期"
+        value={filterDraft.createdFrom}
+        onChange={(event) => setFilterDraft((current) => ({ ...current, createdFrom: event.target.value || undefined }))}
+        onPressEnter={applyFilters}
+      />
+      <Input
+        type="date"
+        aria-label="结束日期"
+        value={filterDraft.createdTo}
+        onChange={(event) => setFilterDraft((current) => ({ ...current, createdTo: event.target.value || undefined }))}
+        onPressEnter={applyFilters}
+      />
+      <Input
+        allowClear
+        aria-label="客户编号或客户名称"
+        placeholder="客户编号 / 客户名称"
+        value={filterDraft.customerKeyword}
+        onChange={(event) => setFilterDraft((current) => ({ ...current, customerKeyword: event.target.value }))}
+        onPressEnter={applyFilters}
+      />
+      <Button type="primary" onClick={applyFilters}>查询</Button>
+      <Button onClick={resetFilters}>重置</Button>
+    </Space>
+  );
   const orderSubItems = useMemo<ModuleSubNavItem[]>(
     () => [
       { key: 'stageBoard', label: '订单预览', description: '状态池与单票操作' },
@@ -215,7 +522,7 @@ export function OrdersPage({
     () => [
       { title: '出货单号', dataIndex: 'systemOrderNo', width: 180 },
       { title: '客户编号', dataIndex: 'customerCode', width: 120, render: (value?: string) => value || '-' },
-      { title: '代理', dataIndex: 'agentName', width: 160, render: (value?: string) => value || '-' },
+      { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value || '-' },
       {
         title: '模板',
         key: 'template',
@@ -343,21 +650,51 @@ export function OrdersPage({
                 })}
               </div>
             </div>
-            <Space wrap className="fulfillment-board-filters">
-              <Input type="date" aria-label="开始日期" value={createdFrom} onChange={(event) => setCreatedFrom(event.target.value || undefined)} />
-              <Input type="date" aria-label="结束日期" value={createdTo} onChange={(event) => setCreatedTo(event.target.value || undefined)} />
-              <Input allowClear aria-label="客户编号或客户名称" placeholder="客户编号 / 客户名称" value={customerKeyword} onChange={(event) => setCustomerKeyword(event.target.value)} />
-              <Button onClick={() => { setCreatedFrom(undefined); setCreatedTo(undefined); setCustomerKeyword(''); onSelectStage('all'); }}>重置</Button>
-            </Space>
-
-            <ManagedTable
-              className="fulfillment-table"
+            <ManagedDualViewTable
+              viewStorageKey="sunny.business.order-management.table-view"
+              defaultView="ledger"
+              viewAriaLabel="运单表格视图"
+              views={{
+                matrix: {
+                  columns: matrixColumns,
+                  tableProps: {
+                    className: 'fulfillment-table fulfillment-matrix-table',
+                    tableLayout: 'fixed',
+                    minimumScrollX: 0,
+                    resizableColumns: true,
+                    columnSettings: {
+                      storageKey: 'sunny.business.order-management.matrix-columns',
+                      title: '矩阵列设置',
+                      lockedKeys: ['matrixActions']
+                    },
+                    rowClassName: (record) => `fulfillment-matrix-row fulfillment-matrix-row-${lifecycleStatusColor(record.status)}`,
+                    recordDetail: hasBusinessPermission('business:shipment:detail') ? {
+                      title: '运单详情',
+                      ariaLabel: (record) => `查看运单 ${record.systemOrderNo} 详情`,
+                      columns: matrixSourceColumns
+                    } : false
+                  }
+                },
+                ledger: {
+                  columns: precisionLedgerColumns,
+                  shellClassName: 'fulfillment-board-card-columns',
+                  tableProps: {
+                    className: 'fulfillment-table',
+                    minimumScrollX: 1200,
+                    recordDetail: hasBusinessPermission('business:shipment:detail') ? {
+                      title: '运单详情',
+                      ariaLabel: (record) => `查看运单 ${record.systemOrderNo} 详情`
+                    } : false
+                  }
+                }
+              }}
               rowKey="id"
-              columns={columns}
               dataSource={filteredStageShipments}
               size="small"
+              density={tableDensity}
               pagination={tenRowTablePagination}
-              minimumScrollX={1200}
+              toolbarLeading={tableFilterToolbar}
+              toolbarActions={tableDensityToolbar}
             />
           </Card>
         ) : null}
@@ -373,6 +710,7 @@ export function OrdersPage({
             }
           >
             <ManagedTable
+              recordDetail={{ title: '发票任务详情' }}
               className="fulfillment-table"
               rowKey="id"
               columns={invoiceColumns}
@@ -608,7 +946,7 @@ export function OrdersPage({
             <select aria-label="状态" className="native-select">
               {editableStatuses.map((status) => (
                 <option key={status} value={status}>
-                  {shipmentStatusLabels[status]}
+                  {orderManagementStatusLabel(status)}
                 </option>
               ))}
             </select>
@@ -681,6 +1019,7 @@ export function OrdersPage({
       </Modal>
 
       <Modal
+        className="shipment-operation-log-modal"
         title={<span id="shipment-operation-log-title">{logViewingMode === 'routing' ? '排货日志' : '操作日志'}</span>}
         aria-labelledby="shipment-operation-log-title"
         open={Boolean(logViewingShipment)}
@@ -702,13 +1041,20 @@ export function OrdersPage({
           }
         />
         <ManagedTable
+          className="shipment-operation-log-table"
+          recordDetail={false}
           rowKey="id"
           size="small"
-          pagination={tenRowTablePagination}
+          pagination={shipmentLogs.length > 10 ? tenRowTablePagination : false}
           dataSource={shipmentLogs}
+          sticky={false}
+          minimumScrollX={0}
+          resizableColumns={false}
+          columnSettings={false}
+          tableLayout="fixed"
           columns={[
-            { title: '操作时间', dataIndex: 'operatedAt', width: 210, render: (value: string) => formatBeijingDateTime(value) },
-            { title: '操作人员', dataIndex: 'operator', width: 130 },
+            { title: '操作时间', dataIndex: 'operatedAt', width: 180, render: (value: string) => formatBeijingDateTime(value) },
+            { title: '操作人员', dataIndex: 'operator', width: 96 },
             { title: '操作动作', dataIndex: 'action' }
           ]}
         />

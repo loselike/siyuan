@@ -5,6 +5,9 @@ import type {
   ReceivableAuditExportRequest,
   ReceivableAuditListQuery,
   ReceivableAuditUpdateInput,
+  ReceivableMatchRequestBatchInput,
+  ReceivableMatchRequestUpdateInput,
+  ReceivableMatchReviewInput,
   ReceivableReceiptMatchInput,
   WaterReceiptCreateInput,
   WaterReceiptExportRequest,
@@ -12,8 +15,7 @@ import type {
   WaterReceiptMarkArrivedInput,
   WaterReceiptMatchOrdersInput,
   WaterReceiptUnmatchInput,
-  WaterReceiptUpdateInput,
-  WaterReceiptVoucherInput
+  WaterReceiptUpdateInput
 } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { FinanceCatalogService } from '../catalog/finance-catalog.service.js';
@@ -55,6 +57,34 @@ export class FinanceReceivableService {
     return this.repository.auditReceivableAudit(principal, id);
   }
 
+  approveReceivableMatchRequest(principal: Principal, id: string) {
+    return this.repository.approveReceivableMatchRequest(principal, id);
+  }
+
+  updateReceivableMatchRequest(principal: Principal, id: string, input: ReceivableMatchRequestUpdateInput) {
+    return this.repository.updateReceivableMatchRequest(principal, id, input);
+  }
+
+  deleteReceivableMatchRequest(principal: Principal, id: string) {
+    return this.repository.deleteReceivableMatchRequest(principal, id);
+  }
+
+  reverseReceivableMatchRequest(principal: Principal, id: string, input: ReceivableMatchReviewInput) {
+    return this.repository.reverseReceivableMatchRequest(principal, id, input);
+  }
+
+  batchApproveReceivableMatchRequests(principal: Principal, input: ReceivableMatchRequestBatchInput) {
+    return this.repository.batchApproveReceivableMatchRequests(principal, input);
+  }
+
+  batchReverseReceivableMatchRequests(principal: Principal, input: ReceivableMatchRequestBatchInput) {
+    return this.repository.batchReverseReceivableMatchRequests(principal, input);
+  }
+
+  batchDeleteReceivableMatchRequests(principal: Principal, input: ReceivableMatchRequestBatchInput) {
+    return this.repository.batchDeleteReceivableMatchRequests(principal, input);
+  }
+
   reverseAuditReceivableAudit(principal: Principal, id: string) {
     return this.repository.reverseAuditReceivableAudit(principal, id);
   }
@@ -79,12 +109,20 @@ export class FinanceReceivableService {
     return this.repository.matchReceivableReceipt(principal, id, input);
   }
 
+  receivableWaterReceiptCandidates(principal: Principal, id: string) {
+    return this.repository.getReceivableWaterReceiptCandidates(principal, id);
+  }
+
   exportReceivableAudits(principal: Principal, input: ReceivableAuditExportRequest) {
     return this.repository.exportReceivableAudits(principal, input);
   }
 
   waterReceipts(principal: Principal, query: WaterReceiptListQuery) {
     return this.repository.getWaterReceipts(principal, query);
+  }
+
+  waterReceiptSiteOptions() {
+    return this.repository.getEnabledSitesForReference();
   }
 
   async createWaterReceipt(principal: Principal, input: WaterReceiptCreateInput) {
@@ -119,10 +157,6 @@ export class FinanceReceivableService {
 
   voidWaterReceipt(principal: Principal, id: string, input: { reason?: string }) {
     return this.repository.voidWaterReceipt(principal, id, input);
-  }
-
-  uploadWaterReceiptVoucher(principal: Principal, id: string, input: WaterReceiptVoucherInput) {
-    return this.repository.uploadWaterReceiptVoucher(principal, id, input);
   }
 
   deleteWaterReceiptVoucher(principal: Principal, id: string) {

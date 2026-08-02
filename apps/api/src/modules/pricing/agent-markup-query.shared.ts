@@ -5,6 +5,10 @@ export interface ActivePriceBookAgentSource {
   priceBookId: string;
   fileName: string;
   lineCount: number;
+  routeCount?: number;
+  quoteRowCount?: number;
+  kgQuoteRowCount?: number;
+  cbmQuoteRowCount?: number;
   legacyModule?: LegacyPricingModule;
 }
 
@@ -25,6 +29,10 @@ export function groupAgentSourcesByScope(sources: ActivePriceBookAgentSource[]) 
     const existing = list.find((item) => item.priceBookId === source.priceBookId && item.fileName === source.fileName);
     if (existing) {
       existing.lineCount += source.lineCount;
+      existing.routeCount = Number(existing.routeCount ?? 0) + Number(source.routeCount ?? 0);
+      existing.quoteRowCount = Number(existing.quoteRowCount ?? 0) + Number(source.quoteRowCount ?? source.lineCount);
+      existing.kgQuoteRowCount = Number(existing.kgQuoteRowCount ?? 0) + Number(source.kgQuoteRowCount ?? source.lineCount);
+      existing.cbmQuoteRowCount = Number(existing.cbmQuoteRowCount ?? 0) + Number(source.cbmQuoteRowCount ?? 0);
     } else {
       list.push({ ...source });
     }

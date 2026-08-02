@@ -14,10 +14,12 @@ import type {
   PendingPaymentListQuery
 } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
-import { financeCatalogCurrencyOptions } from '../catalog';
+import { createFinanceFeeNameOptions, financeCatalogCurrencyOptions } from '../catalog';
 import { downloadCsv } from '../exportCsv';
 import { formatBeijingDateTime } from '../../shared/format';
-import { ManagedTable } from '../../shared/ui';
+import { agentFieldLabels } from '../../shared/agentFieldLabels';
+import { ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
+import { ChargeWeightChangeTag } from '../ChargeWeightChangeTag';
 
 const { Text } = Typography;
 
@@ -123,7 +125,12 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
   const canExport = hasPermission(permissions, 'finance:payable:export');
   const canViewSensitive = hasPermission(permissions, 'finance:payable:view-sensitive') || response.rows.some((row) => row.canViewSensitivePayable);
   const canViewProfit = hasPermission(permissions, 'finance:payable:view-profit') || response.rows.some((row) => row.canViewProfit);
-  const feeNameOptions = useMemo(() => financeCatalogItems.filter((item) => item.category === 'FEE_NAME' && item.enabled).map((item) => ({ label: item.name, value: item.name })), [financeCatalogItems]);
+  const feeNameOptions = useMemo(() => createFinanceFeeNameOptions(financeCatalogItems), [financeCatalogItems]);
+  const selectedRows = useMemo(
+    () => response.rows.filter((row) => selectedIds.includes(row.id)),
+    [response.rows, selectedIds]
+  );
+  const hasSelectedMiscFeeHang = selectedRows.some((row) => row.auditSource === 'MISC_FEE_HANG');
 
   const loadRows = async (nextQuery = query) => {
     setLoading(true);
@@ -168,7 +175,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
     currency: 'ALL',
     sortBy: 'date',
     sortOrder: 'desc',
-    systemOrderNo: row?.systemOrderNo,
+    systemOrderNo: row?.auditSource === 'MISC_FEE_HANG' ? undefined : row?.systemOrderNo,
     customerCode: row?.customerCode,
     agent: row?.agentName
   });
@@ -196,7 +203,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
   const matchShipment = async () => {
     const values = form.getFieldsValue();
     if (!values.shipmentId && !values.systemOrderNo && !values.customerOrderNo && !values.transferNo && !values.customerCode) {
-      message.warning('请先填写运单号、客户编号或转单号');
+      message.warning('请先填写出货单号、客户编号或转单号');
       return;
     }
     setMatchingShipment(true);
@@ -251,6 +258,10 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
 
   const runBatch = async (action: 'audit' | 'reverse' | 'void') => {
     if (!selectedIds.length) return;
+    if (action !== 'audit' && hasSelectedMiscFeeHang) {
+      message.warning('跨越挂账在市场应付审核中只支持审核，不支持反审核或删除');
+      return;
+    }
     const result = action === 'audit'
       ? await apiClient.batchAuditPayables({ ids: selectedIds })
       : action === 'reverse'
@@ -269,15 +280,15 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
   };
 
   const baseColumns: Record<ColumnKey, ColumnsType<PayableAuditSummary>[number]> = {
-    agentName: { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value ?? '-' },
+    agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 180, render: (value?: string) => value ?? '-' },
     name: { title: '费用名称', dataIndex: 'name', width: 130, sorter: true },
     customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 110, sorter: true },
-    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (value: string | undefined, row) => row.auditSource === 'MISC_FEE_HANG' && !row.shipmentId ? '未匹配订单' : renderShipmentOrderNoLink(value) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 170, render: (value?: string) => value ?? '-' },
     agentChannel: { title: '代理渠道', dataIndex: 'agentChannel', width: 130, render: (value?: string) => value ?? '-' },
     reconciliationStatus: { title: '对账状态', dataIndex: 'reconciliationStatus', width: 105, fixed: 'right', render: statusTag },
     currency: { title: '币种', dataIndex: 'currency', width: 80, render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag> },
-    chargeWeightKg: { title: '计费重', dataIndex: 'chargeWeightKg', width: 110, align: 'right', render: (value?: number) => typeof value === 'number' ? value.toFixed(3) : '-' },
+    chargeWeightKg: { title: '计费重', dataIndex: 'chargeWeightKg', width: 110, align: 'right', render: (value: number | undefined, row) => <ChargeWeightChangeTag value={value} change={row.chargeWeightChange} /> },
     unitPrice: { title: '单价', dataIndex: 'unitPrice', width: 100, align: 'right', render: (value: number | undefined) => typeof value === 'number' ? formatMoney(value) : '-' },
     amount: { title: '总金额', dataIndex: 'amount', width: 120, align: 'right', sorter: true, render: (value: number, row) => row.canViewSensitivePayable ? formatMoney(value) : <Text type="secondary">按权限隐藏</Text> },
     orderRmbTotal: { title: '合计', dataIndex: 'orderRmbTotal', width: 130, align: 'right', sorter: true, render: (value?: number, row?: PayableAuditSummary) => row?.canViewSensitivePayable ? formatMoney(value ?? 0) : <Text type="secondary">按权限隐藏</Text> },
@@ -294,7 +305,17 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
       key: 'action',
       width: 250,
       fixed: 'right',
-      render: (_, row) => (
+      render: (_, row) => row.auditSource === 'MISC_FEE_HANG' ? (
+        <Space size={4}>
+          {row.reconciliationStatus === 'CONFIRMED' ? (
+            <Tag color="success">已生成待付款</Tag>
+          ) : (
+            <Popconfirm title="确认审核该跨越挂账并生成待付款？" onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
+              <Button size="small" type="primary" disabled={!canAudit}>审核</Button>
+            </Popconfirm>
+          )}
+        </Space>
+      ) : (
         <Space size={4}>
           <Button size="small" disabled={!canManage || row.reconciliationStatus === 'CONFIRMED' || row.voided} onClick={() => openEditor(row)}>修改</Button>
           {row.reconciliationStatus === 'CONFIRMED' ? (
@@ -322,6 +343,44 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
     .filter((key) => !unavailableColumns.has(key))
     .map((key) => baseColumns[key]);
 
+  const matrixColumns: ManagedTableColumns<PayableAuditSummary> = [
+    {
+      key: 'matrixInformation',
+      title: '信息',
+      width: 960,
+      className: 'managed-matrix-group-primary',
+      render: (_value, row) => (
+        <ManagedMatrixCell
+          columns={4}
+          labelWidth={66}
+          fields={[
+            { key: 'systemOrderNo', label: '出货单号', value: row.auditSource === 'MISC_FEE_HANG' && !row.shipmentId ? '未匹配订单' : renderShipmentOrderNoLink(row.systemOrderNo), title: row.systemOrderNo },
+            { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
+            { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
+            { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
+            { key: 'name', label: '费用名称', value: row.name || '-' },
+            row.canViewSensitivePayable ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
+            { key: 'agentChannel', label: agentFieldLabels.channel, value: row.agentChannel || '-', title: row.agentChannel },
+            { key: 'currency', label: '币种', value: <Tag>{row.currency ?? 'RMB'}</Tag> },
+            { key: 'chargeWeightKg', label: '计费重', value: <ChargeWeightChangeTag value={row.chargeWeightKg} change={row.chargeWeightChange} /> },
+            { key: 'unitPrice', label: '单价', value: typeof row.unitPrice === 'number' ? formatMoney(row.unitPrice) : '-' },
+            { key: 'amount', label: '总金额', value: row.canViewSensitivePayable ? formatMoney(row.amount) : <Text type="secondary">按权限隐藏</Text> },
+            { key: 'orderRmbTotal', label: '合计', value: row.canViewSensitivePayable ? formatMoney(row.orderRmbTotal ?? 0) : <Text type="secondary">按权限隐藏</Text> },
+            row.canViewProfit ? { key: 'receivableProfit', label: '应收利润', value: typeof row.receivableProfit === 'number' ? formatMoney(row.receivableProfit) : '-' } : null,
+            row.canViewProfit ? { key: 'operationProfit', label: '运营利润', value: typeof row.operationProfit === 'number' ? formatMoney(row.operationProfit) : '-' } : null,
+            { key: 'status', label: '状态', value: statusTag(row.reconciliationStatus) },
+            { key: 'createdAt', label: '制单日期', value: <ManagedMatrixDateTime value={row.createdAt ? formatBeijingDateTime(row.createdAt) : undefined} /> },
+            { key: 'createdBy', label: '制单人', value: row.createdBy || '系统' },
+            { key: 'reviewedAt', label: '审单日期', value: <ManagedMatrixDateTime value={row.reviewedAt ? formatBeijingDateTime(row.reviewedAt) : undefined} /> },
+            { key: 'reviewedBy', label: '审单人', value: row.reviewedBy || '-' },
+            row.remark ? { key: 'remark', label: '备注', value: row.remark, title: row.remark, wrap: true } : null
+          ]}
+        />
+      )
+    },
+    { ...baseColumns.action, key: 'action', width: 150, fixed: 'right' }
+  ];
+
   return (
     <Card
       title="市场应付审核"
@@ -329,15 +388,15 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
       extra={
         <Space wrap>
           <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消"><Button disabled={!selectedIds.length || !canBatchAudit}>批量审核</Button></Popconfirm>
-          <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消"><Button disabled={!selectedIds.length || !canBatchReverse}>批量反审核</Button></Popconfirm>
-          <Popconfirm title={`确认批量删除已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('void')} okText="批量删除" cancelText="取消"><Button disabled={!selectedIds.length || !canBatchVoid} danger>批量删除</Button></Popconfirm>
+          <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消"><Button disabled={!selectedIds.length || !canBatchReverse || hasSelectedMiscFeeHang}>批量反审核</Button></Popconfirm>
+          <Popconfirm title={`确认批量删除已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('void')} okText="批量删除" cancelText="取消"><Button disabled={!selectedIds.length || !canBatchVoid || hasSelectedMiscFeeHang} danger>批量删除</Button></Popconfirm>
           <Button disabled={!canExport} onClick={async () => {
             const exported = await apiClient.exportPayableAudits({ ids: selectedIds.length ? selectedIds : undefined, query });
             downloadCsv('payable-audits.csv', [
-              { key: 'agentName', label: '代理' },
+              { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
               { key: 'name', label: '费用名称' },
               { key: 'customerCode', label: '客户编号' },
-              { key: 'systemOrderNo', label: '运单号' },
+              { key: 'systemOrderNo', label: '出货单号' },
               { key: 'transferNo', label: '转单号' },
               { key: 'agentChannel', label: '代理渠道' },
               { key: 'reconciliationStatus', label: '对账状态' },
@@ -362,7 +421,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
         <Row gutter={[10, 10]} className="finance-filter-bar finance-audit-filter-grid">
           <Col xs={24} md={8} xl={4}><Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="出货单号 / 订单号" /></Form.Item></Col>
           <Col xs={24} md={8} xl={4}><Form.Item name="customer" label="客户"><Input placeholder="客户编号 / 名称" /></Form.Item></Col>
-          <Col xs={24} md={8} xl={4}><Form.Item name="agent" label="代理"><Input /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={`${agentFieldLabels.detailedCompanyName}筛选`}><Input /></Form.Item></Col>
           <Col xs={24} md={8} xl={4}><Form.Item name="status" label="对账状态"><Select options={[{ value: 'ALL', label: '全部' }, { value: 'PENDING', label: '待审核' }, { value: 'CONFIRMED', label: '已审核' }, { value: 'VOIDED', label: '已删除' }]} /></Form.Item></Col>
           <Col xs={24} md={16} xl={8} className="finance-audit-filter-actions">
             <Space wrap>
@@ -395,20 +454,48 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
         <Tag color="success">已审核 {response.totals.confirmedCount}</Tag>
         <Tag color="default">已删除 {response.totals.voidedCount}</Tag>
       </Flex>
-      <ManagedTable
+      <ManagedDualViewTable<PayableAuditSummary>
+        viewStorageKey="sunny.finance.payableAudit.view-v1"
+        viewAriaLabel="市场应付审核表格视图"
+        defaultView="matrix"
+        views={{
+          matrix: {
+            label: '矩阵视图',
+            columns: matrixColumns,
+            tableProps: {
+              className: 'finance-audit-table finance-payable-audit-matrix-table',
+              minimumScrollX: 0,
+              tableLayout: 'fixed',
+              showHeader: false,
+              recordDetail: { title: '应付审核详情', columns },
+              columnSettings: {
+                storageKey: 'siyuan.finance.payableAudit.matrix-columns.v2',
+                title: '市场应付审核矩阵列设置',
+                lockedKeys: ['action']
+              }
+            }
+          },
+          ledger: {
+            label: '精密台账模式',
+            columns,
+            tableProps: {
+              className: 'finance-audit-table finance-payable-audit-ledger-table',
+              minimumScrollX: 2800,
+              recordDetail: { title: '应付审核详情' },
+              columnSettings: {
+                storageKey: columnStorageKey,
+                title: '市场应付审核列设置',
+                defaultColumnOrder
+              }
+            }
+          }
+        }}
         rowKey="id"
-        className="finance-audit-table"
         size="small"
         loading={loading}
         dataSource={response.rows}
-        columns={columns}
-        rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) }}
-        scroll={{ x: 2800 }}
-        columnSettings={{
-          storageKey: columnStorageKey,
-          title: '市场应付审核列设置',
-          defaultColumnOrder
-        }}
+        rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: Boolean(row.voided || (row.auditSource === 'MISC_FEE_HANG' && row.reconciliationStatus === 'CONFIRMED')) }) }}
+        columnSettingsPlacement="toolbar"
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
         onChange={(pagination: TablePaginationConfig, _filters, sorter) => {
           const sort = Array.isArray(sorter) ? sorter[0] : sorter;
@@ -438,7 +525,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
                   <Space direction="vertical" size={2}>
                     <Text strong>{matchedShipment.customerName}</Text>
                     <Text type="secondary">出货单号：{matchedShipment.systemOrderNo} / 转单号：{matchedShipment.transferNo ?? '-'}</Text>
-                    <Text type="secondary">业务员：{matchedShipment.salesperson ?? '-'} / 代理：{matchedShipment.agentName ?? '-'} / 代理渠道：{matchedShipment.agentChannel ?? '-'}</Text>
+                    <Text type="secondary">业务员：{matchedShipment.salesperson ?? '-'} / {agentFieldLabels.detailedCompanyName}：{matchedShipment.agentName ?? '-'} / {agentFieldLabels.channel}：{matchedShipment.agentChannel ?? '-'}</Text>
                   </Space>
                 </Card>
               ) : null}

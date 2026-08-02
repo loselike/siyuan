@@ -1,15 +1,19 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Space, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Space, Spin, Tag, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentStatus } from '@siyuan/shared';
+import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceDataConfirmRow, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentStatus } from '@siyuan/shared';
 import type { ApiClient } from '../../apiClient';
-import { formatBeijingDateTime } from '../shared/format';
+import { agentFieldLabels } from '../shared/agentFieldLabels';
+import { formatBeijingDateTime, formatBeijingDateTimeInputValue, isBeijingCurrentWeek, isBeijingToday, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
-import { AppPageHeader, ManagedTable, StatusTag, tenRowTablePagination } from '../shared/ui';
+import { AppDateTimePicker, AppPageHeader, ManagedTable, StatusTag, tenRowTablePagination } from '../shared/ui';
+import { TrackingWebsiteLink } from './TrackingWebsiteLink';
+import { ProblemTicketCreateModal } from './ProblemTicketCreateModal';
 
 const { Text } = Typography;
 const allowedLabelFileTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/pdf'];
+const dataConfirmRowsCache = new WeakMap<ApiClient, CustomerServiceDataConfirmRow[]>();
 
 const statusSections: Record<string, ShipmentStatus[]> = {
   dataConfirm: ['OUTBOUNDED'],
@@ -28,22 +32,10 @@ type DepartureFormValues = {
   etaAt?: string;
   trackingWebsite?: string;
   trackingWebsiteVisibleToSales?: boolean;
-  websiteSyncToSales?: boolean;
   pushToSales?: boolean;
   statusRemark?: string;
 };
 
-type ProblemFormValues = {
-  tags?: string[];
-  reason?: string;
-  customerVisible?: boolean;
-  pushToSales?: boolean;
-};
-
-const waitingProblemTagOptions = ['数据不对', '起运港查验'];
-const departedProblemTagOptions = ['目的港运港查验', '集装箱被甩在XX码头'];
-const arrivedPortProblemTagOptions = ['联系不上收货人', '收货人地址错误'];
-const afterSaleProblemTagOptions = ['货物丢失', '货物破损'];
 type CustomerServiceTaskTone = 'amber' | 'blue' | 'green' | 'red' | 'gray';
 type CustomerServiceDashboardTask = {
   key: string;
@@ -145,6 +137,7 @@ type WaitingColumnKey =
   | 'agentName'
   | 'carrier'
   | 'channelName'
+  | 'routeAgentChannelName'
   | 'systemOrderNo'
   | 'transferNo'
   | 'etdAt'
@@ -165,6 +158,7 @@ type DepartedColumnKey =
   | 'agentName'
   | 'carrier'
   | 'channelName'
+  | 'routeAgentChannelName'
   | 'systemOrderNo'
   | 'transferNo'
   | 'agentData'
@@ -192,6 +186,7 @@ type ProblemColumnKey =
   | 'agentName'
   | 'carrier'
   | 'channelName'
+  | 'routeAgentChannelName'
   | 'reason'
   | 'declarationRequired'
   | 'sensitive'
@@ -225,6 +220,7 @@ const defaultWaitingColumnOrder: WaitingColumnKey[] = [
   'agentName',
   'carrier',
   'channelName',
+  'routeAgentChannelName',
   'systemOrderNo',
   'transferNo',
   'etdAt',
@@ -246,6 +242,7 @@ const defaultDepartedColumnOrder: DepartedColumnKey[] = [
   'agentName',
   'carrier',
   'channelName',
+  'routeAgentChannelName',
   'systemOrderNo',
   'transferNo',
   'agentData',
@@ -273,6 +270,7 @@ const defaultProblemColumnOrder: ProblemColumnKey[] = [
   'agentName',
   'carrier',
   'channelName',
+  'routeAgentChannelName',
   'reason',
   'declarationRequired',
   'sensitive',
@@ -302,6 +300,11 @@ type DataConfirmFormValues = {
   pushToSales?: boolean;
 };
 
+type DataConfirmApproveTarget = {
+  shipment: Shipment;
+  kind: 'business' | 'agent';
+};
+
 type LifecycleStatusAction = {
   shipment: Shipment;
   targetStatus: ShipmentStatus;
@@ -324,7 +327,8 @@ export function CustomerServicePage({
   onProblemTicketUpdated,
   onNotice,
   initialSection = 'service-dashboard',
-  permissions = []
+  permissions = [],
+  role
 }: {
   shipments: Shipment[];
   problemTickets: ProblemTicketSummary[];
@@ -337,11 +341,11 @@ export function CustomerServicePage({
   onNotice?: (notice: string) => void;
   initialSection?: string;
   permissions?: string[];
+  role?: string;
 }) {
   const [activeSection, setActiveSection] = useState(initialSection);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [departureForm] = Form.useForm<DepartureFormValues>();
-  const [problemForm] = Form.useForm<ProblemFormValues>();
   const [dataConfirmForm] = Form.useForm<DataConfirmFormValues>();
   const [dataEditForm] = Form.useForm<DataConfirmFormValues>();
   const [dataReverseForm] = Form.useForm<{ reason?: string }>();
@@ -349,6 +353,7 @@ export function CustomerServicePage({
   const [problemShipment, setProblemShipment] = useState<Shipment | null>(null);
   const [dataConfirmShipment, setDataConfirmShipment] = useState<Shipment | null>(null);
   const [dataConfirmDetailShipment, setDataConfirmDetailShipment] = useState<Shipment | null>(null);
+  const [dataConfirmApproveTarget, setDataConfirmApproveTarget] = useState<DataConfirmApproveTarget | null>(null);
   const [dataEditTarget, setDataEditTarget] = useState<{ shipment: Shipment; kind: 'business' | 'agent' } | null>(null);
   const [dataReverseTarget, setDataReverseTarget] = useState<{ shipment: Shipment; kind: 'business' | 'agent' | 'all' } | null>(null);
   const [labelShipment, setLabelShipment] = useState<Shipment | null>(null);
@@ -378,17 +383,24 @@ export function CustomerServicePage({
     agentName: ''
   });
   const [customerServiceAuditLogs, setCustomerServiceAuditLogs] = useState<AuditLogSummary[]>([]);
+  const [dataConfirmRows, setDataConfirmRows] = useState<CustomerServiceDataConfirmRow[]>(() => apiClient ? dataConfirmRowsCache.get(apiClient) ?? [] : []);
+  const [dataConfirmHasLoaded, setDataConfirmHasLoaded] = useState(() => Boolean(apiClient && dataConfirmRowsCache.has(apiClient)));
+  const [dataConfirmLoading, setDataConfirmLoading] = useState(false);
+  const [dataConfirmLoadError, setDataConfirmLoadError] = useState<string | null>(null);
+  const dataConfirmRequestIdRef = useRef(0);
   const dataConfirmationCycleStartedAtByShipment = useMemo(
-    () => new Map(shipments.map((shipment) => [shipment.id, shipment.outboundAt])),
-    [shipments]
+    () => new Map([...shipments, ...dataConfirmRows.map((row) => row.shipment)].map((shipment) => [shipment.id, shipment.outboundAt])),
+    [dataConfirmRows, shipments]
   );
   const customerServiceAuditIndex = useMemo(
     () => buildCustomerServiceAuditIndex(customerServiceAuditLogs, dataConfirmationCycleStartedAtByShipment),
     [customerServiceAuditLogs, dataConfirmationCycleStartedAtByShipment]
   );
   const [submittingDeparture, setSubmittingDeparture] = useState(false);
-  const [submittingProblem, setSubmittingProblem] = useState(false);
   const [submittingDataConfirm, setSubmittingDataConfirm] = useState(false);
+  const [submittingSingleDataConfirm, setSubmittingSingleDataConfirm] = useState(false);
+  const [submittingDataEdit, setSubmittingDataEdit] = useState(false);
+  const [dataEditError, setDataEditError] = useState<string | null>(null);
   const [uploadingLabel, setUploadingLabel] = useState(false);
   const [pendingLabelFile, setPendingLabelFile] = useState<File | null>(null);
   const [labelPreviewUrl, setLabelPreviewUrl] = useState<string | null>(null);
@@ -412,6 +424,8 @@ export function CustomerServicePage({
   const canViewTransferAgent = permissions.includes('customer-service:transfer:view-agent');
   const canViewTransferAgentData = permissions.includes('customer-service:transfer:view-agent-data');
   const canViewTransferSensitive = permissions.includes('customer-service:transfer:view-sensitive');
+  const canViewDataConfirmBusiness = permissions.includes('customer-service:data-confirm:business-view');
+  const canViewDataConfirmAgent = permissions.includes('customer-service:data-confirm:agent-view');
   const can = (permission: string) => permissions.includes(permission);
   const canProblemView = can('customer-service:problem:view');
   const canColumnSetting: Record<string, boolean> = {
@@ -423,9 +437,9 @@ export function CustomerServicePage({
   };
   const items: ModuleSubNavItem[] = [
     ...(can('customer-service:dashboard:view') ? [{ key: 'service-dashboard', label: '客服看板' }] : []),
+    ...(can('customer-service:pending-routing:view') ? [{ key: 'pending-routing', label: '待排货' }] : []),
     ...(can('customer-service:data-confirm:view') ? [{ key: 'dataConfirm', label: '数据确认' }] : []),
     ...(canTransferView ? [{ key: 'transferNo', label: '转单号' }] : []),
-    ...(can('customer-service:pending-routing:view') ? [{ key: 'pending-routing', label: '待排货' }] : []),
     ...(can('customer-service:waiting-departure:view') ? [{ key: 'waitingDeparture', label: '待离港' }] : []),
     ...(can('customer-service:departed:view') ? [{ key: 'departed', label: '已离港' }] : []),
     ...(can('customer-service:arrived-port:view') ? [{ key: 'arrivedPort', label: '已到港' }] : []),
@@ -446,16 +460,21 @@ export function CustomerServicePage({
     }
   }, [activeSection]);
   useEffect(() => () => clearPendingLabelFile(), []);
+  const dataConfirmReviewByShipmentId = useMemo(
+    () => new Map(dataConfirmRows.map((row) => [row.shipment.id, row])),
+    [dataConfirmRows]
+  );
   const rows = useMemo(() => {
+    if (activeSection === 'dataConfirm') return dataConfirmRows.map((row) => row.shipment);
     const statuses = statusSections[activeSection] ?? [];
     if (!statuses.length) return [];
     return shipments.filter((shipment) => {
       if (!statuses.includes(shipment.status)) return false;
-      if (activeSection === 'dataConfirm') return !(isBusinessDataApproved(shipment.id, customerServiceAuditIndex) && isAgentDataApproved(shipment.id, customerServiceAuditIndex));
-      if (activeSection === 'transferNo') return isBusinessDataApproved(shipment.id, customerServiceAuditIndex) && isAgentDataApproved(shipment.id, customerServiceAuditIndex);
+      if (activeSection === 'transferNo') return isBusinessDataApproved(shipment.id, customerServiceAuditIndex)
+        && isAgentDataApproved(shipment.id, customerServiceAuditIndex);
       return true;
     });
-  }, [activeSection, customerServiceAuditIndex, shipments]);
+  }, [activeSection, customerServiceAuditIndex, dataConfirmRows, shipments]);
   const shipmentById = useMemo(() => new Map(shipments.map((shipment) => [shipment.id, shipment])), [shipments]);
   const waitingDepartureDateHint = useMemo(() => {
     const waitingRows = shipments.filter((shipment) => shipment.status === 'WAITING_DEPARTURE');
@@ -485,20 +504,21 @@ export function CustomerServicePage({
     destinationCountry: { title: '目的地', dataIndex: 'destinationCountry', width: 100 },
     productName: { title: '品名', dataIndex: 'productName', width: 130, render: (value?: string) => value || '-' },
     packageCount: { title: '件数', dataIndex: 'packageCount', width: 80 },
-    actualWeight: { title: '业务总量 KG', dataIndex: 'actualWeightKg', width: 110, render: (value: number | undefined, row) => value ?? row.receivableWeightKg ?? '-' },
+    actualWeight: { title: '业务重量 KG', dataIndex: 'actualWeightKg', width: 110, render: (value: number | undefined, row) => value ?? row.receivableWeightKg ?? '-' },
     volumeCbm: { title: '业务体积 CBM', dataIndex: 'volumeCbm', width: 115, render: (value: number | undefined) => value ?? '-' },
     chargeWeight: { title: '计费重', dataIndex: 'receivableWeightKg', width: 90 },
     agentWeightKg: { title: '代理计费重', dataIndex: 'agentWeightKg', width: 110 },
     businessReviewStatus: { title: '业务审核状态', key: 'businessReviewStatus', width: 110, render: (_, row) => isBusinessDataApproved(row.id, customerServiceAuditIndex) ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> },
     agentPackageCount: { title: '代理件数', key: 'agentPackageCount', width: 100, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.packageCount ?? row.packageCount ?? '-' },
-    agentActualWeight: { title: '代理总量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
+    agentActualWeight: { title: '代理重量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
     agentVolumeCbm: { title: '代理体积 CBM', key: 'agentVolumeCbm', width: 115, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.volumeCbm ?? row.volumeCbm ?? '-' },
     agentReviewStatus: { title: '代理审核状态', key: 'agentReviewStatus', width: 110, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditIndex) ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> },
     declarationRequired: { title: '报关', dataIndex: 'declarationRequired', width: 80, render: (value?: boolean) => value ? '是' : '否' },
     sensitive: { title: '敏感', dataIndex: 'sensitive', width: 80, render: (value?: boolean) => value ? '是' : '否' },
-    agentName: { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '-' },
-    carrier: { title: '公司渠道', dataIndex: 'carrier', width: 130 },
-    channelName: { title: '代理渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
+    agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value || '-' },
+    carrier: { title: '承运商', dataIndex: 'carrier', width: 120, render: (value?: string) => value || '-' },
+    channelName: { title: '公司渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
+    routeAgentChannelName: { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '-' },
     systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 150, render: (value?: string) => value || '-' },
     etdAt: { title: 'ETD/ATD', dataIndex: 'etdAt', width: 150, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
@@ -509,12 +529,12 @@ export function CustomerServicePage({
       fixed: 'right',
       width: 320,
       render: (_, row) => (
-        <Space size={6}>
+        <Space size={6} className="customer-service-waiting-departure-actions">
           <Button size="small" onClick={() => openDepartureModal(row)}>
             修改
           </Button>
           <Button size="small" type="primary" onClick={() => confirmDeparted(row)}>
-            确认离港/增加批注
+            确认离港
           </Button>
           <Button size="small" onClick={() => openProblemModal(row)}>
             问题件
@@ -552,31 +572,52 @@ export function CustomerServicePage({
     'agentName',
     'carrier',
     'channelName',
+    'routeAgentChannelName',
     'systemOrderNo',
     'transferNo',
     'action'
   ];
-  const dataConfirmColumns: ColumnsType<Shipment> = dataConfirmColumnOrder.map((key) => (
+  const businessDataConfirmColumnKeys = new Set<WaitingColumnKey>(['packageCount', 'actualWeight', 'volumeCbm', 'chargeWeight', 'businessReviewStatus', 'declarationRequired', 'sensitive']);
+  const agentDataConfirmColumnKeys = new Set<WaitingColumnKey>(['agentPackageCount', 'agentActualWeight', 'agentVolumeCbm', 'agentWeightKg', 'agentReviewStatus', 'agentName', 'carrier', 'channelName', 'routeAgentChannelName']);
+  const dataConfirmColumns: ColumnsType<Shipment> = dataConfirmColumnOrder
+    .filter((key) => (canViewDataConfirmBusiness || !businessDataConfirmColumnKeys.has(key))
+      && (canViewDataConfirmAgent || !agentDataConfirmColumnKeys.has(key)))
+    .map((key) => (
     key === 'action'
       ? {
           title: '操作',
           key: 'action',
           fixed: 'right',
           width: 430,
-          render: (_, row) => (
-            <Space size={4} wrap>
-              <Button size="small" onClick={() => setDataConfirmDetailShipment(row)}>
-                详情
-              </Button>
-              {!isBusinessDataApproved(row.id, customerServiceAuditIndex) ? <>{can('customer-service:data-confirm:business-approve') ? <Button size="small" onClick={() => void approveData(row, 'business')}>业务审核</Button> : null}{can('customer-service:data-confirm:business-update') ? <Button size="small" onClick={() => openDataEdit(row, 'business')}>业务修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'business')}>业务反审核</Button> : null}
-              {!isAgentDataApproved(row.id, customerServiceAuditIndex) ? <>{can('customer-service:data-confirm:agent-approve') ? <Button size="small" onClick={() => void approveData(row, 'agent')}>代理审核</Button> : null}{can('customer-service:data-confirm:agent-update') ? <Button size="small" onClick={() => openDataEdit(row, 'agent')}>代理修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'agent')}>代理反审核</Button> : null}
-              {!isBusinessDataApproved(row.id, customerServiceAuditIndex) && !isAgentDataApproved(row.id, customerServiceAuditIndex) && can('customer-service:data-confirm:approve-all') ? <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>全部审核</Button> : null}
-              {isBusinessDataApproved(row.id, customerServiceAuditIndex) && isAgentDataApproved(row.id, customerServiceAuditIndex) && can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'all')}>全部反审核</Button> : null}
-            </Space>
-          )
+          render: (_, row) => {
+            const review = dataConfirmReviewByShipmentId.get(row.id);
+            const businessApproved = review?.businessDataApproved === true;
+            const agentApproved = review?.agentDataApproved === true;
+            return (
+              <Space size={4} wrap>
+                <Button size="small" onClick={() => setDataConfirmDetailShipment(row)}>
+                  详情
+                </Button>
+                {!businessApproved ? <>{can('customer-service:data-confirm:business-approve') ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'business' })}>业务审核</Button> : null}{can('customer-service:data-confirm:business-update') ? <Button size="small" onClick={() => openDataEdit(row, 'business')}>业务修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'business')}>业务反审核</Button> : null}
+                {!agentApproved ? <>{can('customer-service:data-confirm:agent-approve') ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'agent' })}>代理审核</Button> : null}{can('customer-service:data-confirm:agent-update') ? <Button size="small" onClick={() => openDataEdit(row, 'agent')}>代理修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'agent')}>代理反审核</Button> : null}
+                {!businessApproved && !agentApproved && can('customer-service:data-confirm:approve-all') ? <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>全部审核</Button> : null}
+                {businessApproved && agentApproved && can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'all')}>全部反审核</Button> : null}
+              </Space>
+            );
+          }
         }
+      : key === 'businessReviewStatus'
+        ? { title: '业务审核状态', key, width: 110, render: (_, row) => dataConfirmReviewByShipmentId.get(row.id)?.businessDataApproved ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> }
+        : key === 'agentPackageCount'
+          ? { title: '代理件数', key, width: 100, render: (_, row) => dataConfirmReviewByShipmentId.get(row.id)?.agentDataSnapshot?.packageCount ?? row.packageCount ?? '-' }
+          : key === 'agentActualWeight'
+            ? { title: '代理重量 KG', key, width: 110, render: (_, row) => dataConfirmReviewByShipmentId.get(row.id)?.agentDataSnapshot?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' }
+            : key === 'agentVolumeCbm'
+              ? { title: '代理体积 CBM', key, width: 115, render: (_, row) => dataConfirmReviewByShipmentId.get(row.id)?.agentDataSnapshot?.volumeCbm ?? row.volumeCbm ?? '-' }
+              : key === 'agentReviewStatus'
+                ? { title: '代理审核状态', key, width: 110, render: (_, row) => dataConfirmReviewByShipmentId.get(row.id)?.agentDataApproved ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> }
       : waitingColumnMap[key]
-  ));
+    ));
   const departedColumnMap: Record<DepartedColumnKey, ColumnsType<Shipment>[number]> = {
     entryAt: { title: '运单创建时间', dataIndex: 'entryAt', width: 170, render: (_: string | undefined, row) => formatBeijingDateTime(row.entryAt ?? row.createdAt) },
     outboundAt: { title: '出库时间', dataIndex: 'outboundAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
@@ -589,9 +630,10 @@ export function CustomerServicePage({
     chargeWeight: { title: '计费重', dataIndex: 'receivableWeightKg', width: 90 },
     declarationRequired: { title: '报关', dataIndex: 'declarationRequired', width: 80, render: (value?: boolean) => value ? '是' : '否' },
     sensitive: { title: '敏感', dataIndex: 'sensitive', width: 80, render: (value?: boolean) => value ? '是' : '否' },
-    agentName: { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '-' },
-    carrier: { title: '公司渠道', dataIndex: 'carrier', width: 130 },
-    channelName: { title: '代理渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
+    agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value || '-' },
+    carrier: { title: '承运商', dataIndex: 'carrier', width: 120, render: (value?: string) => value || '-' },
+    channelName: { title: '公司渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
+    routeAgentChannelName: { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '-' },
     systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 150, render: (value?: string) => value || '-' },
     agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditIndex) ? '已确认' : '-' },
@@ -616,7 +658,7 @@ export function CustomerServicePage({
             修改
           </Button> : null}
           {can('customer-service:departed:confirm-arrived-port') ? <Button size="small" type="primary" onClick={() => markArrivedPort(row)}>
-            确认到港/增加批注
+            确认到港
           </Button> : null}
           {can('customer-service:departed:problem-create') ? <Button size="small" onClick={() => openProblemModal(row)}>
             问题件
@@ -749,10 +791,13 @@ export function CustomerServicePage({
     const currentStatusCount = (status: ShipmentStatus) => currentStatusCounts.get(status) ?? 0;
     const weeklyStatusCount = (status: ShipmentStatus) => weeklyStatusCounts.get(status) ?? 0;
     const todayEntryCount = shipments.filter((shipment) => isToday(shipment.entryAt ?? shipment.createdAt)).length;
-    const dataConfirmCount = shipments.filter((shipment) => shipment.status === 'OUTBOUNDED' && !isBusinessDataApproved(shipment.id, customerServiceAuditIndex)).length;
+    const dataConfirmCount = shipments.filter((shipment) => shipment.status === 'OUTBOUNDED'
+      && (!isBusinessDataApproved(shipment.id, customerServiceAuditIndex)
+        || !isAgentDataApproved(shipment.id, customerServiceAuditIndex))).length;
     const missingTransferCount = shipments.filter((shipment) =>
       ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status)
       && isBusinessDataApproved(shipment.id, customerServiceAuditIndex)
+      && isAgentDataApproved(shipment.id, customerServiceAuditIndex)
       && !shipment.transferNo
     ).length;
     const pendingRoutingCount = pendingRoutingShipments.length;
@@ -831,9 +876,10 @@ export function CustomerServicePage({
     packageCount: { title: '件数', key: 'packageCount', width: 80, render: (_, row) => row.shipment?.packageCount ?? '-' },
     actualWeight: { title: '实重', key: 'actualWeight', width: 90, render: (_, row) => row.shipment?.receivableWeightKg ?? '-' },
     chargeWeight: { title: '计费重', key: 'chargeWeight', width: 90, render: (_, row) => row.shipment?.receivableWeightKg ?? '-' },
-    agentName: { title: '代理', key: 'agentName', width: 130, render: (_, row) => row.shipment?.agentName || '-' },
-    carrier: { title: '公司渠道', key: 'carrier', width: 130, render: (_, row) => row.shipment?.carrier || '-' },
-    channelName: { title: '代理渠道', key: 'channelName', width: 150, render: (_, row) => row.shipment?.channelName || '-' },
+    agentName: { title: agentFieldLabels.detailedCompanyName, key: 'agentName', width: 190, render: (_, row) => row.shipment?.agentName || '-' },
+    carrier: { title: '承运商', key: 'carrier', width: 120, render: (_, row) => row.shipment?.carrier || '-' },
+    channelName: { title: '公司渠道', key: 'channelName', width: 150, render: (_, row) => row.shipment?.channelName || '-' },
+    routeAgentChannelName: { title: agentFieldLabels.channel, key: 'routeAgentChannelName', width: 150, render: (_, row) => row.shipment?.routeAgentChannelName || '-' },
     reason: { title: '问题件内容', key: 'reason', width: 220, render: (_, row) => row.ticket.reason },
     declarationRequired: { title: '报关', key: 'declarationRequired', width: 80, render: (_, row) => row.shipment ? row.shipment.declarationRequired ? '是' : '否' : '-' },
     sensitive: { title: '敏感', key: 'sensitive', width: 80, render: (_, row) => row.shipment ? row.shipment.sensitive ? '是' : '否' : '-' },
@@ -912,8 +958,41 @@ export function CustomerServicePage({
     setCustomerServiceAuditLogs(responses.flatMap((response) => response.rows));
   }
 
+  async function refreshCustomerServiceDataConfirmRows() {
+    if (!apiClient) return;
+    const requestId = ++dataConfirmRequestIdRef.current;
+    const hasCachedRows = dataConfirmRowsCache.has(apiClient);
+    const cachedRows = dataConfirmRowsCache.get(apiClient);
+    if (hasCachedRows && cachedRows) {
+      setDataConfirmRows(cachedRows);
+      setDataConfirmHasLoaded(true);
+    }
+    setDataConfirmLoading(true);
+    setDataConfirmLoadError(null);
+    try {
+      const nextRows = await apiClient.customerServiceDataConfirmShipments();
+      if (requestId === dataConfirmRequestIdRef.current) {
+        dataConfirmRowsCache.set(apiClient, nextRows);
+        setDataConfirmRows(nextRows);
+        setDataConfirmHasLoaded(true);
+      }
+    } catch (error) {
+      if (requestId === dataConfirmRequestIdRef.current) {
+        if (!hasCachedRows) {
+          setDataConfirmRows([]);
+          setDataConfirmHasLoaded(false);
+        }
+        setDataConfirmLoadError(error instanceof Error ? error.message : '数据确认列表加载失败');
+      }
+    } finally {
+      if (requestId === dataConfirmRequestIdRef.current) {
+        setDataConfirmLoading(false);
+      }
+    }
+  }
+
   useEffect(() => {
-    if (!apiClient || !['service-dashboard', 'dataConfirm', 'transferNo', 'departed', 'arrivedPort', 'delivering', 'problems', 'afterSale'].includes(activeSection)) return;
+    if (!apiClient || !['service-dashboard', 'transferNo', 'departed', 'arrivedPort', 'delivering', 'problems', 'afterSale'].includes(activeSection)) return;
     let cancelled = false;
     refreshCustomerServiceAuditLogs()
       .catch(() => {
@@ -922,6 +1001,20 @@ export function CustomerServicePage({
     return () => {
       cancelled = true;
     };
+  }, [activeSection, apiClient]);
+  useEffect(() => {
+    if (!apiClient) {
+      setDataConfirmRows([]);
+      setDataConfirmHasLoaded(false);
+      return;
+    }
+    const hasCachedRows = dataConfirmRowsCache.has(apiClient);
+    setDataConfirmRows(dataConfirmRowsCache.get(apiClient) ?? []);
+    setDataConfirmHasLoaded(hasCachedRows);
+  }, [apiClient]);
+  useEffect(() => {
+    if (activeSection !== 'dataConfirm' || !apiClient) return;
+    void refreshCustomerServiceDataConfirmRows();
   }, [activeSection, apiClient]);
   useEffect(() => {
     if (activeSection !== 'transferNo' || !apiClient || !canTransferView) return;
@@ -961,8 +1054,8 @@ export function CustomerServicePage({
     const result: ColumnsType<Shipment> = [
       { title: '运单创建时间', dataIndex: 'createdAt', width: 165, sorter: (a, b) => a.createdAt.localeCompare(b.createdAt), render: formatBeijingDateTime },
       ...(canViewTransferOutboundAt ? [{ title: '出库时间', dataIndex: 'outboundAt', width: 165, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' }] : []),
-      { title: '业务员', dataIndex: 'salesperson', width: 95 }, { title: '运单号', dataIndex: 'systemOrderNo', width: 170 },
-      ...(canViewTransferAgent ? [{ title: '代理', dataIndex: 'agentName', width: 130 }, { title: '代理渠道', dataIndex: 'routeAgentChannelName', width: 140, render: (value?: string) => value || '-' }] : []),
+      { title: '业务员', dataIndex: 'salesperson', width: 95 }, { title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
+      ...(canViewTransferAgent ? [{ title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190 }, { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 140, render: (value?: string) => value || '-' }] : []),
       { title: '客户编号', dataIndex: 'customerCode', width: 100 }, { title: '目的地', dataIndex: 'destinationCountry', width: 95 }, { title: '业务渠道', dataIndex: 'channelName', width: 130 },
       { title: '业务件数', dataIndex: 'packageCount', width: 90 }, { title: '业务总量', dataIndex: 'receivableWeightKg', width: 95 }, { title: '业务体积', dataIndex: 'volumeCbm', width: 95 }, { title: '业务计费重', dataIndex: 'receivableWeightKg', width: 100 },
       ...(canViewTransferAgentData ? [{ title: '代理计费重', dataIndex: 'agentWeightKg', width: 105 }] : []),
@@ -983,7 +1076,6 @@ export function CustomerServicePage({
       etaAt: toDatetimeLocalValue(shipment.etaAt),
       trackingWebsite: tracking.url ?? agentTrackingWebsiteForShipment(shipment, agents) ?? trackingWebsiteForShipment(shipment),
       trackingWebsiteVisibleToSales: tracking.visibleToSales ?? false,
-      websiteSyncToSales: false,
       pushToSales: false,
       statusRemark: ''
     });
@@ -999,7 +1091,6 @@ export function CustomerServicePage({
       etaAt: toDatetimeLocalValue(shipment.etaAt),
       trackingWebsite: tracking.url ?? agentTrackingWebsiteForShipment(shipment, agents) ?? trackingWebsiteForShipment(shipment),
       trackingWebsiteVisibleToSales: tracking.visibleToSales ?? false,
-      websiteSyncToSales: false,
       pushToSales: false,
       statusRemark: ''
     });
@@ -1007,12 +1098,6 @@ export function CustomerServicePage({
 
   function openProblemModal(shipment: Shipment) {
     setProblemShipment(shipment);
-    problemForm.setFieldsValue({
-      tags: [],
-      reason: '',
-      customerVisible: true,
-      pushToSales: false
-    });
   }
 
   function openDataConfirmModal(shipment: Shipment) {
@@ -1021,6 +1106,7 @@ export function CustomerServicePage({
   }
 
   function openDataEdit(shipment: Shipment, kind: 'business' | 'agent') {
+    setDataEditError(null);
     setDataEditTarget({ shipment, kind });
     dataEditForm.setFieldsValue({
       packageCount: shipment.packageCount,
@@ -1066,15 +1152,15 @@ export function CustomerServicePage({
         transferNo: newTransferNo || departureShipment.transferNo,
         subOrderNo: subOrderNo || departureShipment.subOrderNo,
         latestTracking: departureShipment.latestTracking,
-        etdAt: values.etdAt,
-        etaAt: values.etaAt,
+        etdAt: values.etdAt ? parseBeijingDateTimeInputToIso(values.etdAt) : undefined,
+        etaAt: values.etaAt ? parseBeijingDateTimeInputToIso(values.etaAt) : undefined,
         trackingWebsite: values.trackingWebsite,
         trackingWebsiteVisibleToSales: values.trackingWebsiteVisibleToSales ?? false,
         ...(statusRemark ? { statusRemark } : {})
       });
       onShipmentUpdated?.(updated);
       await refreshCustomerServiceAuditLogs();
-      onNotice?.(`${updated.systemOrderNo} 已修改信息${values.pushToSales || values.websiteSyncToSales ? '，业务推送待企业微信接入' : ''}`);
+      onNotice?.(`${updated.systemOrderNo} 已修改信息${values.pushToSales ? '，业务推送待企业微信接入' : ''}`);
       setDepartureShipment(null);
       departureForm.resetFields();
     } catch (error) {
@@ -1108,7 +1194,7 @@ export function CustomerServicePage({
       targetStatus: 'DEPARTED',
       latestTracking: '已离港',
       targetSection: 'departed',
-      title: '确认离港/增加批注',
+      title: '确认离港',
       okText: '确认离港',
       successText: '已确认离港',
       errorText: '确认离港失败'
@@ -1121,7 +1207,7 @@ export function CustomerServicePage({
       targetStatus: 'ARRIVED_PORT',
       latestTracking: '已到港',
       targetSection: 'arrivedPort',
-      title: '确认到港/增加批注',
+      title: '确认到港',
       okText: '确认到港',
       successText: '已确认到港',
       errorText: '确认到港失败'
@@ -1171,23 +1257,24 @@ export function CustomerServicePage({
     if (!lifecycleStatusAction || !apiClient) return;
     setSubmittingLifecycleStatus(true);
     try {
+      const keepCurrentSection = lifecycleStatusAction.targetStatus === 'DEPARTED';
       const statusRemark = lifecycleStatusRemark.trim();
-      if (lifecycleStatusAction.targetStatus === 'DEPARTED' && !statusRemark) {
-        const errorMessage = '确认离港请填写离港批注';
-        setDepartureConfirmError(errorMessage);
-        message.error(errorMessage);
-        return;
-      }
       const updated = await apiClient.updateShipmentOperational(lifecycleStatusAction.shipment.id, {
         status: lifecycleStatusAction.targetStatus,
         latestTracking: lifecycleStatusAction.latestTracking,
         ...(statusRemark ? { statusRemark } : {})
       });
       onShipmentUpdated?.(updated);
-      await refreshCustomerServiceAuditLogs();
+      if (keepCurrentSection) {
+        void refreshCustomerServiceAuditLogs().catch(() => undefined);
+      } else {
+        await refreshCustomerServiceAuditLogs();
+      }
       onNotice?.(`${updated.systemOrderNo} ${lifecycleStatusAction.successText}`);
       setDepartureConfirmError(null);
-      setActiveSection(lifecycleStatusAction.targetSection);
+      if (!keepCurrentSection) {
+        setActiveSection(lifecycleStatusAction.targetSection);
+      }
       setLifecycleStatusAction(null);
       setLifecycleStatusRemark('');
     } catch (error) {
@@ -1201,37 +1288,17 @@ export function CustomerServicePage({
     }
   }
 
-  async function submitProblem() {
+  async function submitProblem(input: ProblemTicketCreateInput) {
     if (!problemShipment || !apiClient) {
-      return;
+      throw new Error('请选择需要创建问题件的运单');
     }
-    const values = await problemForm.validateFields();
-    const reason = [...new Set([...(values.tags ?? []), values.reason?.trim()].filter(Boolean))].join('；');
-    if (!reason) {
-      problemForm.setFields([{ name: 'reason', errors: ['请选择标签或填写问题原因'] }]);
-      return;
-    }
-    setSubmittingProblem(true);
-    try {
-      const ticket = await apiClient.createProblemTicket(problemShipment.id, {
-        reason,
-        customerVisible: values.customerVisible ?? true,
-        tags: values.tags,
-        pushToSales: values.pushToSales
-      });
-      onProblemTicketCreated?.(ticket);
-      onShipmentUpdated?.({ ...problemShipment, hasProblemTicket: true });
-      setProblemCategory(problemCategoryForStatus(problemShipment.status));
-      setActiveSection('problems');
-      await refreshCustomerServiceAuditLogs();
-      onNotice?.(`${problemShipment.systemOrderNo} 已创建问题件${values.pushToSales ? '，业务推送待企业微信接入' : ''}`);
-      setProblemShipment(null);
-      problemForm.resetFields();
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '创建问题件失败');
-    } finally {
-      setSubmittingProblem(false);
-    }
+    const ticket = await apiClient.createProblemTicket(problemShipment.id, input);
+    onProblemTicketCreated?.(ticket);
+    onShipmentUpdated?.({ ...problemShipment, hasProblemTicket: true });
+    setProblemCategory(problemCategoryForStatus(problemShipment.status));
+    setActiveSection('problems');
+    await refreshCustomerServiceAuditLogs();
+    onNotice?.(`${problemShipment.systemOrderNo} 已创建问题件${input.pushToSales ? '，业务推送待企业微信接入' : ''}`);
   }
 
   async function submitDataConfirm() {
@@ -1241,9 +1308,9 @@ export function CustomerServicePage({
     const values = await dataConfirmForm.validateFields();
     setSubmittingDataConfirm(true);
     try {
-      const updated = await apiClient.approveShipmentAllData(dataConfirmShipment.id, { remark: values.remark });
+      const updated = await apiClient.approveShipmentAllData(dataConfirmShipment.id, { remark: values.remark, expectedOutboundAt: dataConfirmShipment.outboundAt! });
       onShipmentUpdated?.(updated);
-      await refreshCustomerServiceAuditLogs();
+      await refreshCustomerServiceDataConfirmRows();
       onNotice?.(`${updated.systemOrderNo} 业务与代理数据均已审核，已进入转单号`);
       setDataConfirmShipment(null);
       dataConfirmForm.resetFields();
@@ -1256,33 +1323,52 @@ export function CustomerServicePage({
   }
 
   async function approveData(shipment: Shipment, kind: 'business' | 'agent') {
-    if (!apiClient) return;
+    if (!apiClient) return false;
     try {
       const updated = kind === 'business'
-        ? await apiClient.approveShipmentBusinessData(shipment.id)
-        : await apiClient.approveShipmentAgentData(shipment.id);
+        ? await apiClient.approveShipmentBusinessData(shipment.id, { expectedOutboundAt: shipment.outboundAt! })
+        : await apiClient.approveShipmentAgentData(shipment.id, { expectedOutboundAt: shipment.outboundAt! });
       onShipmentUpdated?.(updated);
-      await refreshCustomerServiceAuditLogs();
+      await refreshCustomerServiceDataConfirmRows();
       onNotice?.(`${updated.systemOrderNo}${kind === 'business' ? '业务' : '代理'}数据已审核`);
+      return true;
     } catch (error) {
       message.error(error instanceof Error ? error.message : '数据审核失败');
+      return false;
+    }
+  }
+
+  async function submitSingleDataConfirm() {
+    if (!dataConfirmApproveTarget) return;
+    setSubmittingSingleDataConfirm(true);
+    try {
+      const approved = await approveData(dataConfirmApproveTarget.shipment, dataConfirmApproveTarget.kind);
+      if (approved) setDataConfirmApproveTarget(null);
+    } finally {
+      setSubmittingSingleDataConfirm(false);
     }
   }
 
   async function submitDataEdit() {
     if (!dataEditTarget || !apiClient) return;
     const values = await dataEditForm.validateFields();
+    setDataEditError(null);
+    setSubmittingDataEdit(true);
     try {
-      const input = { packageCount: Number(values.packageCount), weightKg: Number(values.weightKg), volumeCbm: Number(values.volumeCbm), chargeWeightKg: Number(values.chargeWeightKg), remark: values.remark?.trim(), ...(dataEditTarget.kind === 'business' ? { pushToSales: values.pushToSales === true } : {}) };
+      const input = { packageCount: Number(values.packageCount), weightKg: Number(values.weightKg), volumeCbm: Number(values.volumeCbm), chargeWeightKg: Number(values.chargeWeightKg), expectedOutboundAt: dataEditTarget.shipment.outboundAt!, remark: values.remark?.trim(), ...(dataEditTarget.kind === 'business' ? { pushToSales: values.pushToSales === true } : {}) };
       const updated = dataEditTarget.kind === 'business'
         ? await apiClient.updateShipmentBusinessData(dataEditTarget.shipment.id, input)
         : await apiClient.updateShipmentAgentData(dataEditTarget.shipment.id, input);
       onShipmentUpdated?.(updated);
-      await refreshCustomerServiceAuditLogs();
+      await refreshCustomerServiceDataConfirmRows();
       onNotice?.(`${updated.systemOrderNo}${dataEditTarget.kind === 'business' ? '业务' : '代理'}数据已修改`);
       setDataEditTarget(null);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : '数据修改失败');
+      const errorMessage = error instanceof Error ? error.message : '数据修改失败';
+      setDataEditError(errorMessage);
+      message.error(errorMessage);
+    } finally {
+      setSubmittingDataEdit(false);
     }
   }
 
@@ -1291,12 +1377,12 @@ export function CustomerServicePage({
     const { reason } = await dataReverseForm.validateFields();
     try {
       const updated = dataReverseTarget.kind === 'business'
-        ? await apiClient.reverseShipmentBusinessData(dataReverseTarget.shipment.id, { reason: reason! })
+        ? await apiClient.reverseShipmentBusinessData(dataReverseTarget.shipment.id, { reason: reason!, expectedOutboundAt: dataReverseTarget.shipment.outboundAt! })
         : dataReverseTarget.kind === 'agent'
-          ? await apiClient.reverseShipmentAgentData(dataReverseTarget.shipment.id, { reason: reason! })
-          : await apiClient.reverseShipmentAllData(dataReverseTarget.shipment.id, { reason: reason! });
+          ? await apiClient.reverseShipmentAgentData(dataReverseTarget.shipment.id, { reason: reason!, expectedOutboundAt: dataReverseTarget.shipment.outboundAt! })
+          : await apiClient.reverseShipmentAllData(dataReverseTarget.shipment.id, { reason: reason!, expectedOutboundAt: dataReverseTarget.shipment.outboundAt! });
       onShipmentUpdated?.(updated);
-      await refreshCustomerServiceAuditLogs();
+      await refreshCustomerServiceDataConfirmRows();
       onNotice?.(`${updated.systemOrderNo} 数据反审核完成`);
       setDataReverseTarget(null);
       setActiveSection('dataConfirm');
@@ -1578,23 +1664,24 @@ export function CustomerServicePage({
                 <Input allowClear placeholder="业务员" value={problemFilters.salesperson} onChange={(event) => setProblemFilters((current) => ({ ...current, salesperson: event.target.value }))} />
                 <Input allowClear type="number" min={0} placeholder="停留时间最少天数" value={problemFilters.minDwellDays} onChange={(event) => setProblemFilters((current) => ({ ...current, minDwellDays: event.target.value }))} />
                 <Input allowClear placeholder="客户编号" value={problemFilters.customerCode} onChange={(event) => setProblemFilters((current) => ({ ...current, customerCode: event.target.value }))} />
-                <Input allowClear placeholder="运单号" value={problemFilters.systemOrderNo} onChange={(event) => setProblemFilters((current) => ({ ...current, systemOrderNo: event.target.value }))} />
+                <Input allowClear placeholder="出货单号" value={problemFilters.systemOrderNo} onChange={(event) => setProblemFilters((current) => ({ ...current, systemOrderNo: event.target.value }))} />
                 <Input allowClear placeholder="目的地" value={problemFilters.destinationCountry} onChange={(event) => setProblemFilters((current) => ({ ...current, destinationCountry: event.target.value }))} />
-                <Input allowClear placeholder="代理" value={problemFilters.agentName} onChange={(event) => setProblemFilters((current) => ({ ...current, agentName: event.target.value }))} />
+                <Input allowClear placeholder={agentFieldLabels.detailedCompanyName} value={problemFilters.agentName} onChange={(event) => setProblemFilters((current) => ({ ...current, agentName: event.target.value }))} />
                 <Button onClick={() => setProblemFilters({ salesperson: '', minDwellDays: '', customerCode: '', systemOrderNo: '', destinationCountry: '', agentName: '' })}>重置</Button>
               </Space>
-              <ManagedTable rowKey={(row) => row.ticket.id} size="small" columns={problemColumns} dataSource={problemRows} pagination={tenRowTablePagination} minimumScrollX={3300} columnSettings={canColumnSetting.problems ? { storageKey: 'sunny.customer-service.problem.columns', title: '问题件列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined} />
+              <ManagedTable recordDetail={{ title: '问题件详情' }} rowKey={(row) => row.ticket.id} size="small" columns={problemColumns} dataSource={problemRows} pagination={tenRowTablePagination} minimumScrollX={3300} columnSettings={canColumnSetting.problems ? { storageKey: 'sunny.customer-service.problem.columns', title: '问题件列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined} />
             </Space>
           </Card>
         ) : null}
         {activeSection === 'afterSale' ? (
           <Card title="需协助问题件">
-            <ManagedTable rowKey={(row) => row.ticket.id} size="small" columns={afterSaleColumns} dataSource={afterSaleRows} pagination={tenRowTablePagination} minimumScrollX={3300} columnSettings={canColumnSetting.afterSale ? { storageKey: 'sunny.customer-service.problem.columns', title: '问题件列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined} />
+            <ManagedTable recordDetail={{ title: '需协助问题件详情' }} rowKey={(row) => row.ticket.id} size="small" columns={afterSaleColumns} dataSource={afterSaleRows} pagination={tenRowTablePagination} minimumScrollX={3300} columnSettings={canColumnSetting.afterSale ? { storageKey: 'sunny.customer-service.after-sale.columns', title: '需协助问题件列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined} />
           </Card>
         ) : null}
         {activeSection === 'pending-routing' ? (
           <Card title="待排货">
             <ManagedTable
+              recordDetail={{ title: '客服待排货详情' }}
               rowKey="id"
               size="small"
               columns={pendingRoutingColumns}
@@ -1608,6 +1695,11 @@ export function CustomerServicePage({
         {activeSection in statusSections ? (
           <Card
             title={activeLabel}
+            extra={activeSection === 'dataConfirm' && dataConfirmHasLoaded && dataConfirmLoadError
+              ? <Text type="warning">刷新失败，当前显示上次数据</Text>
+              : activeSection === 'dataConfirm' && dataConfirmHasLoaded && dataConfirmLoading
+                ? <Space size={6}><Spin size="small" /><Text type="secondary">正在刷新</Text></Space>
+                : undefined}
           >
             <Space direction="vertical" size={12} className="full-width">
               {activeSection === 'waitingDeparture' && departureConfirmError ? (
@@ -1616,12 +1708,30 @@ export function CustomerServicePage({
               {activeSection === 'waitingDeparture' && waitingDepartureDateHint ? (
                 <Alert type={waitingDepartureDateHint.startsWith('日期已完整') ? 'success' : 'warning'} showIcon message={waitingDepartureDateHint} />
               ) : null}
+              {activeSection === 'dataConfirm' && dataConfirmLoadError && !dataConfirmHasLoaded ? (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="数据确认列表加载失败"
+                  description={dataConfirmLoadError}
+                  action={<Button size="small" onClick={() => void refreshCustomerServiceDataConfirmRows()}>重试</Button>}
+                />
+              ) : null}
               {activeSection === 'transferNo' && canTransferWrite ? <Button type="primary" disabled={!selectedTransferIds.length || (selectedTransferIds.length > 1 && !canTransferBatchWrite)} onClick={() => openTransferFill(transferRows.filter((row) => selectedTransferIds.includes(row.id)))}>填写转单号</Button> : null}
               <ManagedTable
+                recordDetail={{ title: `${activeLabel}详情` }}
                 rowKey="id"
                 size="small"
                 columns={tableColumnsForSection()}
                 dataSource={activeSection === 'transferNo' ? transferRows : rows}
+                loading={false}
+                locale={activeSection === 'dataConfirm' ? {
+                  emptyText: dataConfirmLoading && !dataConfirmHasLoaded
+                    ? <Space size={8}><Spin size="small" /><Text type="secondary">正在加载数据</Text></Space>
+                    : dataConfirmLoadError && !dataConfirmHasLoaded
+                      ? '数据加载失败，请重试'
+                      : '暂无待确认数据'
+                } : undefined}
                 rowSelection={activeSection === 'transferNo' && canTransferWrite ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
                 pagination={tenRowTablePagination}
                 minimumScrollX={activeSection === 'waitingDeparture' ? 2460 : ['departed', 'arrivedPort', 'delivering'].includes(activeSection) ? 2850 : activeSection === 'dataConfirm' ? 2100 : activeSection === 'transferNo' ? 1350 : activeSection === 'signed' ? 1200 : 1080}
@@ -1635,10 +1745,41 @@ export function CustomerServicePage({
           </Card>
         ) : null}
       </ModuleSubWorkspace>
-      <Modal title={transferFillRows.length > 1 ? '批量填写转单号' : '填写转单号'} open={transferFillRows.length > 0} onCancel={() => setTransferFillRows([])} onOk={() => void submitTransferFill()} confirmLoading={transferSubmitting} width={760} destroyOnHidden>
+      <Modal className="customer-service-transfer-modal" title={transferFillRows.length > 1 ? '批量填写转单号' : '填写转单号'} open={transferFillRows.length > 0} onCancel={() => setTransferFillRows([])} onOk={() => void submitTransferFill()} confirmLoading={transferSubmitting} width={640} destroyOnHidden>
         <Form form={transferForm} layout="vertical">
           <Form.List name="rows">
-            {() => <ManagedTable rowKey="id" size="small" pagination={false} dataSource={transferFillRows} columns={[{ title: '客户编号', dataIndex: 'customerCode' }, { title: '运单号', dataIndex: 'systemOrderNo' }, { title: '转单号', key: 'transferNo', render: (_, __, index) => <Form.Item name={[index, 'transferNo']} rules={[{ required: true, whitespace: true, message: '请填写转单号' }]} noStyle><Input aria-label={`转单号 ${index + 1}`} /></Form.Item> }, ...(can('customer-service:transfer:sub-order-write') ? [{ title: '分单号', key: 'subOrderNo', render: (_: unknown, __: Shipment, index: number) => <Form.Item name={[index, 'subOrderNo']} noStyle><Input aria-label={`分单号 ${index + 1}`} /></Form.Item> }] : []), ...(can('customer-service:transfer:push-sales') ? [{ title: '同步推送业务', key: 'pushToSales', render: (_: unknown, __: Shipment, index: number) => <Form.Item name={[index, 'pushToSales']} valuePropName="checked" noStyle><Checkbox /></Form.Item> }] : [])]} />}
+            {() => (
+              <div className="customer-service-transfer-form-list">
+                {transferFillRows.map((shipment, index) => (
+                  <section className="customer-service-transfer-form-item" key={shipment.id}>
+                    {transferFillRows.length > 1 ? <Text strong className="customer-service-transfer-form-sequence">第 {index + 1} 票</Text> : null}
+                    <div className="customer-service-transfer-order-info">
+                      <div>
+                        <Text type="secondary">客户编号</Text>
+                        <Text strong>{shipment.customerCode || '-'}</Text>
+                      </div>
+                      <div>
+                        <Text type="secondary">出货单号</Text>
+                        <Text strong copyable>{shipment.systemOrderNo || '-'}</Text>
+                      </div>
+                    </div>
+                    <Form.Item name={[index, 'transferNo']} label="转单号" rules={[{ required: true, whitespace: true, message: '请填写转单号' }]}>
+                      <Input autoFocus={index === 0} aria-label={transferFillRows.length > 1 ? `转单号 ${index + 1}` : '转单号'} placeholder="请填写转单号" />
+                    </Form.Item>
+                    {can('customer-service:transfer:sub-order-write') ? (
+                      <Form.Item name={[index, 'subOrderNo']} label="分单号">
+                        <Input aria-label={transferFillRows.length > 1 ? `分单号 ${index + 1}` : '分单号'} placeholder="选填" />
+                      </Form.Item>
+                    ) : null}
+                    {can('customer-service:transfer:push-sales') ? (
+                      <Form.Item name={[index, 'pushToSales']} valuePropName="checked" className="customer-service-transfer-push-option">
+                        <Checkbox>同步推送业务</Checkbox>
+                      </Form.Item>
+                    ) : null}
+                  </section>
+                ))}
+              </div>
+            )}
           </Form.List>
         </Form>
       </Modal>
@@ -1680,6 +1821,7 @@ export function CustomerServicePage({
         </Space>
       </Modal>
       <Modal
+        className="customer-service-operational-edit-modal"
         title="修改信息"
         open={Boolean(departureShipment)}
         onCancel={() => setDepartureShipment(null)}
@@ -1687,56 +1829,72 @@ export function CustomerServicePage({
         confirmLoading={submittingDeparture}
         okText="确定"
         cancelText="取消"
+        width={1120}
+        styles={{ body: { maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' } }}
         destroyOnHidden
       >
-        <Form form={departureForm} layout="vertical">
-          <Space direction="vertical" size={16} className="full-width">
-            <Space direction="vertical" size={2}>
-              <Text strong>基础信息</Text>
-              <Text type="secondary">客户编号：{departureShipment?.customerCode || '-'}</Text>
-              <Text type="secondary">出货单号：{departureShipment?.systemOrderNo || '-'}</Text>
-              <Text type="secondary">当前转单号：{departureShipment?.transferNo || '-'}</Text>
-            </Space>
-            <Space direction="vertical" size={8} className="full-width">
-              <Text strong>转单信息</Text>
-              <Form.Item name="newTransferNo" label="新转单号">
-                <Input placeholder="留空则保留当前转单号" />
-              </Form.Item>
-              <Form.Item name="subOrderNo" label="分单号">
-                <Input />
-              </Form.Item>
-            </Space>
-            <Space direction="vertical" size={8} className="full-width">
-              <Text strong>轨迹信息</Text>
-              <Form.Item name="etdAt" label="ETD/ATD">
-                <Input type="datetime-local" />
-              </Form.Item>
-              <Form.Item name="etaAt" label="ETA/ATA">
-                <Input type="datetime-local" />
-              </Form.Item>
-              <Form.Item name="trackingWebsite" label="查询网站">
-                <Input placeholder="默认按转单号生成，可手动填写" />
-              </Form.Item>
-            </Space>
-            <Space direction="vertical" size={8} className="full-width">
-              <Text strong>同步选项</Text>
-              <Form.Item name="trackingWebsiteVisibleToSales" valuePropName="checked">
-                <Checkbox>查询网站对业务显示</Checkbox>
-              </Form.Item>
-              <Form.Item name="websiteSyncToSales" valuePropName="checked">
-                <Checkbox>网站是否同步业务</Checkbox>
-              </Form.Item>
-              <Form.Item name="pushToSales" valuePropName="checked">
-                <Checkbox>是否推送业务</Checkbox>
-              </Form.Item>
-            </Space>
-            <Space direction="vertical" size={8} className="full-width">
-              <Text strong>批注</Text>
+        <Form form={departureForm} layout="vertical" className="customer-service-operational-edit-form">
+          <Text strong className="customer-service-operational-edit-summary-title">基础信息</Text>
+          <div className="customer-service-operational-edit-summary" aria-label="基础信息">
+            <div>
+              <Text type="secondary">客户编号</Text>
+              <Text strong>{departureShipment?.customerCode || '-'}</Text>
+            </div>
+            <div>
+              <Text type="secondary">出货单号</Text>
+              <Text strong>{departureShipment?.systemOrderNo || '-'}</Text>
+            </div>
+            <div>
+              <Text type="secondary">当前转单号</Text>
+              <Text strong>{departureShipment?.transferNo || '-'}</Text>
+            </div>
+          </div>
+          <div className="customer-service-operational-edit-primary-grid">
+            <section className="customer-service-operational-edit-section">
+              <Text strong className="customer-service-operational-edit-section-title">转单信息</Text>
+              <div className="customer-service-operational-edit-two-column">
+                <Form.Item name="newTransferNo" label="新转单号">
+                  <Input size="small" placeholder="留空则保留当前转单号" />
+                </Form.Item>
+                <Form.Item name="subOrderNo" label="分单号">
+                  <Input size="small" placeholder="选填" />
+                </Form.Item>
+              </div>
+            </section>
+            <section className="customer-service-operational-edit-section">
+              <Text strong className="customer-service-operational-edit-section-title">轨迹信息</Text>
+              <div className="customer-service-operational-edit-two-column">
+                <Form.Item name="etdAt" label="ETD/ATD">
+                  <AppDateTimePicker size="small" />
+                </Form.Item>
+                <Form.Item name="etaAt" label="ETA/ATA">
+                  <AppDateTimePicker size="small" />
+                </Form.Item>
+                <Form.Item name="trackingWebsite" label="查询网站" className="customer-service-operational-edit-wide-field">
+                  <Input size="small" placeholder="默认按转单号生成，可手动填写" />
+                </Form.Item>
+              </div>
+            </section>
+          </div>
+          <div className="customer-service-operational-edit-secondary-grid">
+            <section className="customer-service-operational-edit-section">
+              <Text strong className="customer-service-operational-edit-section-title">同步选项</Text>
+              <div className="customer-service-operational-edit-checks">
+                <Form.Item name="trackingWebsiteVisibleToSales" valuePropName="checked">
+                  <Checkbox>查询网站对业务显示</Checkbox>
+                </Form.Item>
+                <Form.Item name="pushToSales" valuePropName="checked">
+                  <Checkbox>网站是否推送业务</Checkbox>
+                </Form.Item>
+              </div>
+            </section>
+            <section className="customer-service-operational-edit-section">
+              <Text strong className="customer-service-operational-edit-section-title">批注</Text>
               <Form.Item name="statusRemark" label="本次修改说明">
-                <Input.TextArea maxLength={300} rows={3} showCount placeholder="可留空；填写后写入本次修改审计" />
+                <Input.TextArea maxLength={300} rows={2} showCount placeholder="可留空；填写后写入本次修改审计" />
               </Form.Item>
-            </Space>
-          </Space>
+            </section>
+          </div>
         </Form>
       </Modal>
       <Modal
@@ -1760,9 +1918,9 @@ export function CustomerServicePage({
             <Text type="secondary">当前状态：{lifecycleStatusAction ? shipmentStatusLabels[lifecycleStatusAction.shipment.status] : '-'}</Text>
           </Space>
           <Form layout="vertical">
-            <Form.Item label="批注">
+            <Form.Item label={lifecycleStatusAction?.targetStatus === 'ARRIVED_PORT' ? '到港批注（选填）' : '批注'}>
               <Input.TextArea
-                aria-label="批注"
+                aria-label={lifecycleStatusAction?.targetStatus === 'ARRIVED_PORT' ? '到港批注（选填）' : '批注'}
                 value={lifecycleStatusRemark}
                 maxLength={300}
                 rows={4}
@@ -1783,7 +1941,7 @@ export function CustomerServicePage({
         destroyOnHidden
       >
         <div className="customer-service-detail-grid">
-          {buildDataConfirmDetailItems(dataConfirmDetailShipment).map((item) => (
+          {buildDataConfirmDetailItems(dataConfirmDetailShipment, canViewDataConfirmBusiness, canViewDataConfirmAgent).map((item) => (
             <div className="customer-service-detail-item" key={item.label}>
               <Text type="secondary">{item.label}</Text>
               <Text strong>{item.value}</Text>
@@ -1792,6 +1950,29 @@ export function CustomerServicePage({
         </div>
       </Modal>
       <Modal
+        title={dataConfirmApproveTarget?.kind === 'agent' ? '确认代理审核' : '确认业务审核'}
+        open={Boolean(dataConfirmApproveTarget)}
+        onCancel={() => {
+          if (!submittingSingleDataConfirm) setDataConfirmApproveTarget(null);
+        }}
+        onOk={() => void submitSingleDataConfirm()}
+        confirmLoading={submittingSingleDataConfirm}
+        okText={dataConfirmApproveTarget?.kind === 'agent' ? '确认代理审核' : '确认业务审核'}
+        cancelText="取消"
+        closable={!submittingSingleDataConfirm}
+        maskClosable={!submittingSingleDataConfirm}
+        width={460}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={8} className="full-width">
+          <Text>出货单号：<Text strong>{dataConfirmApproveTarget?.shipment.systemOrderNo || '-'}</Text></Text>
+          <Text type="secondary">
+            确认后将把{dataConfirmApproveTarget?.kind === 'agent' ? '代理' : '业务'}数据标记为已审核，并保留本次审核记录。
+          </Text>
+        </Space>
+      </Modal>
+      <Modal
+        className="customer-service-all-audit-modal"
         title="全部审核"
         open={Boolean(dataConfirmShipment)}
         onCancel={() => setDataConfirmShipment(null)}
@@ -1799,47 +1980,62 @@ export function CustomerServicePage({
         confirmLoading={submittingDataConfirm}
         okText="全部审核"
         cancelText="取消"
+        width={880}
         destroyOnHidden
       >
-        <Form form={dataConfirmForm} layout="vertical">
-          <Space direction="vertical" size={2} className="full-width">
+        <Form form={dataConfirmForm} layout="vertical" className="customer-service-all-audit-form">
+          <div className="customer-service-all-audit-summary">
             <Text strong>{dataConfirmShipment?.systemOrderNo}</Text>
             <Text type="secondary">客户：{dataConfirmShipment?.customerCode || '-'}</Text>
-          </Space>
-          <Form.Item label="目的国家">
-            <Input readOnly value={dataConfirmShipment?.destinationCountry || '-'} />
-          </Form.Item>
-          <Form.Item label="出货件数">
-            <Input readOnly value={dataConfirmShipment?.packageCount ?? '-'} />
-          </Form.Item>
-          <Form.Item label="计费重量">
-            <Input readOnly value={dataConfirmShipment?.receivableWeightKg ?? '-'} />
-          </Form.Item>
-          <Form.Item label="是否报关">
-            <Input readOnly value={dataConfirmShipment?.declarationRequired ? '是' : '否'} />
-          </Form.Item>
-          <Form.Item label="是否敏感">
-            <Input readOnly value={dataConfirmShipment?.sensitive ? '是' : '否'} />
-          </Form.Item>
-          <Form.Item name="remark" label="备注">
-            <Input.TextArea rows={3} />
+          </div>
+          <div className="customer-service-all-audit-grid">
+            <Form.Item label="目的国家">
+              <Input readOnly value={dataConfirmShipment?.destinationCountry || '-'} />
+            </Form.Item>
+            <Form.Item label="出货件数">
+              <Input readOnly value={dataConfirmShipment?.packageCount ?? '-'} />
+            </Form.Item>
+            <Form.Item label="计费重量">
+              <Input readOnly value={dataConfirmShipment?.receivableWeightKg ?? '-'} />
+            </Form.Item>
+            <Form.Item label="是否报关">
+              <Input readOnly value={dataConfirmShipment?.declarationRequired ? '是' : '否'} />
+            </Form.Item>
+            <Form.Item label="是否敏感">
+              <Input readOnly value={dataConfirmShipment?.sensitive ? '是' : '否'} />
+            </Form.Item>
+          </div>
+          <Form.Item name="remark" label="备注" className="customer-service-all-audit-remark">
+            <Input.TextArea rows={2} />
           </Form.Item>
         </Form>
       </Modal>
       <Modal
-        title={`${dataEditTarget?.kind === 'business' ? '业务' : '代理'}数据修改`}
+        title={`${dataEditTarget?.kind === 'business' ? '业务' : '代理'}数据修改 · ${dataEditTarget?.shipment.systemOrderNo || '-'}`}
         open={Boolean(dataEditTarget)}
-        onCancel={() => setDataEditTarget(null)}
+        onCancel={() => {
+          setDataEditError(null);
+          setDataEditTarget(null);
+        }}
         onOk={() => void submitDataEdit()}
         okText="保存修改"
+        confirmLoading={submittingDataEdit}
         destroyOnHidden
       >
         <Form form={dataEditForm} layout="vertical">
-          <Text type="secondary">客户编号：{dataEditTarget?.shipment.customerCode || '-'} / 运单号：{dataEditTarget?.shipment.systemOrderNo || '-'}</Text>
+          <Text type="secondary">客户编号：{dataEditTarget?.shipment.customerCode || '-'} / 出货单号：{dataEditTarget?.shipment.systemOrderNo || '-'}</Text>
+          {dataEditError ? <Alert type="error" showIcon message={dataEditError} style={{ marginTop: 16 }} /> : null}
           <Form.Item name="packageCount" label="件数" rules={[{ required: true, message: '请填写件数' }]}><InputNumber min={1} precision={0} style={{ width: '100%' }} /></Form.Item>
-          <Form.Item name="weightKg" label="总量 KG" rules={[{ required: true, message: '请填写总量' }]}><InputNumber min={0.001} precision={3} style={{ width: '100%' }} /></Form.Item>
+          <Form.Item name="weightKg" label="实际重量 KG" rules={[{ required: true, message: '请填写实际重量' }]}><InputNumber min={0.001} precision={3} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="volumeCbm" label="体积 CBM" rules={[{ required: true, message: '请填写体积' }]}><InputNumber min={0.001} precision={3} style={{ width: '100%' }} /></Form.Item>
-          <Form.Item name="chargeWeightKg" label="计费重 KG" rules={[{ required: true, message: '请填写计费重' }]}><InputNumber min={0.001} precision={3} style={{ width: '100%' }} /></Form.Item>
+          <Form.Item
+            name="chargeWeightKg"
+            label={`${dataEditTarget?.kind === 'business' ? '业务' : '代理'}计费重 KG`}
+            extra="公式费用按计费重 × 单价同步更新"
+            rules={[{ required: true, message: '请填写计费重' }]}
+          >
+            <InputNumber min={0.001} precision={3} style={{ width: '100%' }} />
+          </Form.Item>
           <Form.Item name="remark" label="修改备注"><Input.TextArea rows={3} /></Form.Item>
           {dataEditTarget?.kind === 'business' ? <Form.Item name="pushToSales" valuePropName="checked"><Checkbox>推送业务</Checkbox></Form.Item> : null}
         </Form>
@@ -1968,35 +2164,15 @@ export function CustomerServicePage({
           </Card>
         ) : null}
       </Modal>
-      <Modal
-        title="创建问题件"
-        open={Boolean(problemShipment)}
+      {apiClient ? <ProblemTicketCreateModal
+        shipment={problemShipment}
+        apiClient={apiClient}
+        role={role ?? ''}
+        defaultCustomerVisible
+        showPushToSales
         onCancel={() => setProblemShipment(null)}
-        onOk={() => void submitProblem()}
-        confirmLoading={submittingProblem}
-        okText="确定"
-        cancelText="取消"
-        destroyOnHidden
-      >
-        <Form form={problemForm} layout="vertical">
-          <Space direction="vertical" size={2} className="full-width">
-            <Text strong>{problemShipment?.systemOrderNo}</Text>
-            <Text type="secondary">客户：{problemShipment?.customerCode || '-'} / 转单号：{problemShipment?.transferNo || '-'}</Text>
-          </Space>
-          <Form.Item name="tags" label="常用标签">
-            <Checkbox.Group options={problemShipment?.status === 'SIGNED' || problemShipment?.status === 'DELIVERING' ? afterSaleProblemTagOptions : problemShipment?.status === 'ARRIVED_PORT' ? arrivedPortProblemTagOptions : problemShipment?.status === 'DEPARTED' ? departedProblemTagOptions : waitingProblemTagOptions} />
-          </Form.Item>
-          <Form.Item name="reason" label="问题原因">
-            <Input.TextArea rows={5} placeholder="选择标签后可补充说明，也可以纯手写" />
-          </Form.Item>
-          <Form.Item name="customerVisible" valuePropName="checked">
-            <Checkbox>客户可见</Checkbox>
-          </Form.Item>
-          <Form.Item name="pushToSales" valuePropName="checked">
-            <Checkbox>是否推送业务</Checkbox>
-          </Form.Item>
-        </Form>
-      </Modal>
+        onSubmit={submitProblem}
+      /> : null}
       <Modal
         title="待离港列设置"
         open={columnSettingsOpen}
@@ -2097,13 +2273,14 @@ export function CustomerServicePage({
 }
 
 function toDatetimeLocalValue(value?: string) {
-  if (!value) return undefined;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return undefined;
-  return date.toISOString().slice(0, 16);
+  return value ? formatBeijingDateTimeInputValue(value) || undefined : undefined;
 }
 
-function buildDataConfirmDetailItems(shipment: Shipment | null): Array<{ label: string; value: string }> {
+function buildDataConfirmDetailItems(
+  shipment: Shipment | null,
+  canViewBusiness: boolean,
+  canViewAgent: boolean
+): Array<{ label: string; value: string }> {
   if (!shipment) return [];
   const value = (input: unknown) => input === undefined || input === null || input === '' ? '-' : String(input);
   return [
@@ -2114,15 +2291,20 @@ function buildDataConfirmDetailItems(shipment: Shipment | null): Array<{ label: 
     { label: '客户名称', value: value(shipment.customerName) },
     { label: '目的地', value: value(shipment.destinationCountry) },
     { label: '品名', value: value(shipment.productName) },
-    { label: '件数', value: value(shipment.packageCount) },
-    { label: '实重', value: value(shipment.receivableWeightKg) },
-    { label: '计费重', value: value(shipment.receivableWeightKg) },
-    { label: '代理计费重', value: value(shipment.agentWeightKg) },
-    { label: '报关', value: shipment.declarationRequired ? '是' : '否' },
-    { label: '敏感', value: shipment.sensitive ? '是' : '否' },
-    { label: '代理', value: value(shipment.agentName) },
-    { label: '公司渠道', value: value(shipment.carrier) },
-    { label: '代理渠道', value: value(shipment.channelName) },
+    ...(canViewBusiness ? [
+      { label: '件数', value: value(shipment.packageCount) },
+      { label: '实重', value: value(shipment.receivableWeightKg) },
+      { label: '计费重', value: value(shipment.receivableWeightKg) },
+      { label: '报关', value: shipment.declarationRequired ? '是' : '否' },
+      { label: '敏感', value: shipment.sensitive ? '是' : '否' }
+    ] : []),
+    ...(canViewAgent ? [
+      { label: '代理计费重', value: value(shipment.agentWeightKg) },
+      { label: agentFieldLabels.detailedCompanyName, value: value(shipment.agentName) },
+      { label: '承运商', value: value(shipment.carrier) },
+      { label: '公司渠道', value: value(shipment.channelName) },
+      { label: agentFieldLabels.channel, value: value(shipment.routeAgentChannelName) }
+    ] : []),
     { label: '出货单号', value: value(shipment.systemOrderNo) },
     { label: '转单号', value: value(shipment.transferNo) },
     { label: '状态', value: value(shipment.status) },
@@ -2137,14 +2319,6 @@ function formatMaybeDateTime(value?: string) {
 
 function getAuditAfter(row: AuditLogSummary): Record<string, unknown> {
   return row.after && typeof row.after === 'object' ? row.after as Record<string, unknown> : {};
-}
-
-function auditBelongsToDataConfirmationCycle(row: AuditLogSummary, outboundAt?: string) {
-  const cycleStartedAt = outboundAt ? Date.parse(outboundAt) : Number.NaN;
-  if (!Number.isFinite(cycleStartedAt)) return true;
-  const auditedCycleStartedAt = getAuditAfter(row).dataConfirmationCycleStartedAt;
-  if (typeof auditedCycleStartedAt === 'string') return Date.parse(auditedCycleStartedAt) === cycleStartedAt;
-  return Date.parse(row.createdAt) >= cycleStartedAt;
 }
 
 function getStatusLog(shipmentId: string, index: CustomerServiceAuditIndex, status: ShipmentStatus) {
@@ -2186,24 +2360,11 @@ function getAfterSaleStatus(row: ProblemRow) {
 }
 
 function isCurrentWeek(value?: string) {
-  const time = value ? Date.parse(value) : NaN;
-  if (!Number.isFinite(time)) return false;
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
-  const end = new Date(start);
-  end.setDate(start.getDate() + 7);
-  return time >= start.getTime() && time < end.getTime();
+  return isBeijingCurrentWeek(value);
 }
 
 function isToday(value?: string) {
-  const time = value ? Date.parse(value) : NaN;
-  if (!Number.isFinite(time)) return false;
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setDate(start.getDate() + 1);
-  return time >= start.getTime() && time < end.getTime();
+  return isBeijingToday(value);
 }
 
 function keywordMatch(value: unknown, keyword: string) {
@@ -2241,6 +2402,14 @@ function getLatestDataSnapshot(shipmentId: string, index: CustomerServiceAuditIn
   return snapshot && typeof snapshot === 'object' ? snapshot as { packageCount?: number; weightKg?: number; volumeCbm?: number; chargeWeightKg?: number } : undefined;
 }
 
+function auditBelongsToDataConfirmationCycle(row: AuditLogSummary, outboundAt?: string) {
+  const cycleStartedAt = outboundAt ? Date.parse(outboundAt) : Number.NaN;
+  if (!Number.isFinite(cycleStartedAt)) return true;
+  const auditedCycleStartedAt = getAuditAfter(row).dataConfirmationCycleStartedAt;
+  if (typeof auditedCycleStartedAt === 'string') return Date.parse(auditedCycleStartedAt) === cycleStartedAt;
+  return Date.parse(row.createdAt) >= cycleStartedAt;
+}
+
 function getShipmentTrackingMeta(shipmentId: string, index: CustomerServiceAuditIndex) {
   const row = index.get(auditIndexKey(shipmentId, 'tracking'));
   const after = row ? getAuditAfter(row) : {};
@@ -2254,7 +2423,7 @@ function renderTrackingWebsite(shipment: Shipment, index: CustomerServiceAuditIn
   const tracking = getShipmentTrackingMeta(shipment.id, index);
   const url = tracking.url ?? trackingWebsiteForShipment(shipment);
   if (!url) return '-';
-  return tracking.visibleToSales ? url : `屏蔽：${url}`;
+  return <TrackingWebsiteLink url={url} prefix={tracking.visibleToSales ? undefined : '屏蔽：'} />;
 }
 
 function latestCreatedLabel(labels: ShipmentLabelSummary[]) {

@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
-import { Activity, AlertTriangle, Building2, ClipboardCheck, Edit, FileInput, FileText, LockKeyhole, PlusCircle, Power, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users } from 'lucide-react';
-import { Alert, Button, Card, Checkbox, Col, DatePicker, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
+import { Activity, AlertTriangle, Building2, ChevronDown, ClipboardCheck, Edit, Ellipsis, FileInput, FileText, LockKeyhole, PlusCircle, Power, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users } from 'lucide-react';
+import { Alert, Button, Card, Checkbox, Col, DatePicker, Dropdown, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
 import type { DatePickerProps } from 'antd/es/date-picker';
 import zhCNDatePickerLocale from 'antd/es/date-picker/locale/zh_CN';
 import type { AuditLogDashboardSummary, AuditLogListResponse, AuditLogQuery, AuditLogSummary, DepartmentSummary, SiteSummary, StaffAccountCreateInput, StaffAccountQuery, StaffAccountRoleKey, StaffAccountSummary, StaffGender } from '@siyuan/shared';
@@ -10,20 +10,32 @@ import { ApiClient, type PermissionKey, type RoleGroupInput, type RoleKey, type 
 import { getPasswordStrengthErrorForUi } from '../appShell/config';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { addRowsWorksheet, createWorkbook, downloadWorkbook, loadExcel, readWorkbook, worksheetToRows } from '../shared/excel';
-import { formatBeijingDateTime } from '../shared/format';
+import { formatBeijingDate, formatBeijingDateTime, formatBeijingDateTimeInputValue, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, createNoticeMessage, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import {
+  canBulkGrantPermissionControl,
+  getPermissionControlState,
+  getPermissionControls,
+  getUnrepresentedPermissionCount,
+  isUiPreferencePermission,
+  inferPermissionRisk,
+  permissionControlCategoryOrder,
+  requiresPermissionGrantConfirmation,
+  updatePermissionControl,
+  type PermissionControl
+} from './rolePermissionPresentation';
 
 const { Text } = Typography;
 const auditDateTimeFormat = 'YYYY-MM-DD HH:mm';
 const auditDatePickerLocale = { ...zhCNDatePickerLocale, lang: { ...zhCNDatePickerLocale.lang, ok: '确认' } } as DatePickerProps['locale'];
 
 function getAuditDateTimeValue(value?: string) {
-  const parsed = value ? dayjs(value) : null;
+  const parsed = value ? dayjs(formatBeijingDateTimeInputValue(value)) : null;
   return parsed?.isValid() ? parsed : null;
 }
 
 function getAuditDateTimeFilterValue(value: string | string[]) {
-  return typeof value === 'string' && value ? value.replace(' ', 'T') : undefined;
+  return typeof value === 'string' && value ? parseBeijingDateTimeInputToIso(value.replace(' ', 'T')) : undefined;
 }
 
 interface SiteFormValues {
@@ -132,21 +144,11 @@ function getAuditIpText(row?: AuditLogSummary | null) {
   return row?.ipAddress?.trim() || '-';
 }
 
-function toLocalDateTimeInput(date: Date) {
-  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000);
-  return offsetDate.toISOString().slice(0, 16);
-}
-
 function buildAuditShortcut(days: number): Pick<AuditLogQuery, 'startedAt' | 'endedAt'> {
   const end = new Date();
-  const start = new Date(end);
-  if (days === 1) {
-    start.setHours(0, 0, 0, 0);
-  } else {
-    start.setDate(start.getDate() - (days - 1));
-    start.setHours(0, 0, 0, 0);
-  }
-  return { startedAt: toLocalDateTimeInput(start), endedAt: toLocalDateTimeInput(end) };
+  const [year, month, day] = formatBeijingDate(end).split('-').map(Number);
+  const start = new Date(Date.UTC(year, month - 1, day - (days - 1), -8, 0, 0, 0));
+  return { startedAt: start.toISOString(), endedAt: end.toISOString() };
 }
 
 function AuditSparkline({ values }: { values: number[] }) {
@@ -183,13 +185,15 @@ export function SettingsPage({
   onAiAssist,
   aiLoading,
   permissions,
-  onNavigateToSection
+  onNavigateToSection,
+  initialSection
 }: {
   apiClient: ApiClient;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
   permissions: PermissionKey[];
   onNavigateToSection: (sectionKey: string) => void;
+  initialSection?: string;
 }) {
   const [settingsNotice, setSettingsNoticeState] = useState<string | null>(null);
   const setSettingsNotice = useCallback((message: string | null) => {
@@ -197,7 +201,7 @@ export function SettingsPage({
   }, []);
   const [roleMatrix, setRoleMatrix] = useState<RolePermissionMatrix | null>(null);
   const [draftPermissions, setDraftPermissions] = useState<Record<string, PermissionKey[]>>({});
-  const [activeSettingsSection, setActiveSettingsSection] = useState('accounts');
+  const [activeSettingsSection, setActiveSettingsSection] = useState(initialSection ?? 'accounts');
   const [auditLogs, setAuditLogs] = useState<AuditLogSummary[]>([]);
   const [auditWarnings, setAuditWarnings] = useState<AuditLogListResponse['suspiciousDeleteWarnings']>([]);
   const [auditDashboard, setAuditDashboard] = useState<AuditLogDashboardSummary | null>(null);
@@ -233,12 +237,17 @@ export function SettingsPage({
   const [roleGroupAppliedFilters, setRoleGroupAppliedFilters] = useState({ keyword: '', site: undefined as string | undefined, status: 'ALL' as 'ALL' | 'ENABLED' | 'DISABLED' });
   const [roleGroupAuditLogs, setRoleGroupAuditLogs] = useState<AuditLogSummary[]>([]);
   const [roleGroupOpen, setRoleGroupOpen] = useState(false);
+  const [roleGroupDetailOpen, setRoleGroupDetailOpen] = useState(false);
   const [editingRoleGroup, setEditingRoleGroup] = useState<RolePermissionRow | null>(null);
-  const [roleGroupDisableConfirmOpen, setRoleGroupDisableConfirmOpen] = useState(false);
   const [roleGroupForm] = Form.useForm<RoleGroupFormValues>();
   const [selectedPermissionRoleKey, setSelectedPermissionRoleKey] = useState<RoleKey | null>(null);
   const [selectedPermissionWorkspace, setSelectedPermissionWorkspace] = useState<'operations' | 'pricing' | 'business' | 'warehouse' | 'market' | 'customerService' | 'tracking' | 'finance' | 'master' | 'system'>('operations');
   const [selectedWorkspacePermissionGroup, setSelectedWorkspacePermissionGroup] = useState<string | null>(null);
+  const [pendingPermissionGrant, setPendingPermissionGrant] = useState<{
+    roleKey: RoleKey;
+    control: PermissionControl;
+    isPartialGrant: boolean;
+  } | null>(null);
   const hasSystemPermission = (...keys: PermissionKey[]) => keys.some((key) => permissions.includes(key));
   const settingsSubItems: ModuleSubNavItem[] = [
     hasSystemPermission('system:user-groups:read') && { key: 'userGroups', label: '用户组', description: '组织与角色组' },
@@ -250,6 +259,14 @@ export function SettingsPage({
     hasSystemPermission('system:ai-security:read') && { key: 'aiSecurity', label: 'AI 接口安全', description: '密钥与调用入口' },
     hasSystemPermission('system:base-config:read') && { key: 'baseConfig', label: '系统基础配置', description: '模板与状态字典' }
   ].filter(Boolean) as ModuleSubNavItem[];
+  useEffect(() => {
+    if (initialSection) setActiveSettingsSection(initialSection);
+  }, [initialSection]);
+  useEffect(() => {
+    if (settingsSubItems.length && !settingsSubItems.some((item) => item.key === activeSettingsSection)) {
+      setActiveSettingsSection(settingsSubItems[0].key);
+    }
+  }, [activeSettingsSection, settingsSubItems]);
   const builtinStaffRoleOptions: Array<{ label: string; value: StaffAccountRoleKey }> = [
     { label: '系统管理员', value: 'ADMIN' },
     { label: '客服', value: 'CUSTOMER_SERVICE' },
@@ -416,6 +433,38 @@ export function SettingsPage({
     await loadStaffAccounts();
   }
 
+  function confirmStaffAccountRowAction(account: StaffAccountSummary, action: 'reset' | 'toggle' | 'delete') {
+    if (action === 'reset') {
+      Modal.confirm({
+        title: '确认重置密码？',
+        content: `账号 ${account.username} 的密码会重置为 ${account.username}@123，并要求下次登录修改密码。`,
+        okText: '确认重置',
+        cancelText: '取消',
+        onOk: () => resetStaffAccountPasswords([account.id])
+      });
+      return;
+    }
+    if (action === 'toggle') {
+      Modal.confirm({
+        title: `确认${account.enabled ? '停用' : '启用'}该员工账号？`,
+        content: account.enabled ? '停用后账号不可登录，但会保留历史记录。' : '启用后账号可重新登录。',
+        okText: `确认${account.enabled ? '停用' : '启用'}`,
+        cancelText: '取消',
+        okButtonProps: account.enabled ? { danger: true } : undefined,
+        onOk: () => updateStaffAccountsEnabled([account.id], !account.enabled)
+      });
+      return;
+    }
+    Modal.confirm({
+      title: '删除员工账号',
+      content: '删除后不可恢复，请确认该账号无未完成业务。',
+      okText: '确认删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => deleteStaffAccount(account.id)
+    });
+  }
+
   useEffect(() => {
     let mounted = true;
     void apiClient.rolePermissions().then((matrix) => {
@@ -527,7 +576,7 @@ export function SettingsPage({
     const matchesStatus = roleGroupAppliedFilters.status === 'ALL' || (roleGroupAppliedFilters.status === 'ENABLED' ? role.enabled !== false : role.enabled === false);
     return matchesKeyword && matchesSite && matchesStatus;
   }), [roleGroupAppliedFilters, userGroupRows]);
-  const selectedRoleGroup = filteredUserGroupRows.find((role) => role.key === selectedRoleGroupKey) ?? filteredUserGroupRows[0] ?? null;
+  const selectedRoleGroup = filteredUserGroupRows.find((role) => role.key === selectedRoleGroupKey) ?? null;
   const roleGroupStaff = staffAccounts.filter((account) => account.role === selectedRoleGroup?.key);
   const roleGroupMetrics = {
     enabled: userGroupRows.filter((role) => role.enabled !== false).length,
@@ -540,12 +589,12 @@ export function SettingsPage({
       .map((role) => ({ label: role.label, value: role.key as StaffAccountRoleKey }))
     : builtinStaffRoleOptions;
   const templateRoleOptions = builtinStaffRoleOptions.filter((role) => role.value !== 'ADMIN');
-  const permissionGroups = Object.entries(
+  const permissionGroups = useMemo(() => Object.entries(
     (roleMatrix?.availablePermissions ?? []).reduce<Record<string, RolePermissionMatrix['availablePermissions']>>((acc, permission) => {
       acc[permission.group] = [...(acc[permission.group] ?? []), permission];
       return acc;
     }, {})
-  );
+  ), [roleMatrix?.availablePermissions]);
   const duplicatePermissionCodes = useMemo(() => {
     const seen = new Set<string>();
     return (roleMatrix?.availablePermissions ?? [])
@@ -587,6 +636,28 @@ export function SettingsPage({
   const selectedWorkspacePermissions = workspacePermissionGroups.find(([group]) => group === selectedWorkspacePermissionGroup)
     ?? workspacePermissionGroups[0]
     ?? null;
+  const selectedPermissionControls = selectedWorkspacePermissions
+    ? getPermissionControls(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1])
+    : [];
+  const selectedRoleGrantedPermissions = selectedPermissionRole
+    ? draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions
+    : [];
+  const unrepresentedPermissionCount = selectedWorkspacePermissions
+    ? getUnrepresentedPermissionCount(selectedWorkspacePermissions[1], selectedPermissionControls)
+    : 0;
+  const grantedSelectedControlCount = selectedPermissionControls.filter((control) => (
+    getPermissionControlState(control, selectedRoleGrantedPermissions).checked
+  )).length;
+  const canBulkGrantSelectedControls = selectedPermissionRole
+    ? selectedPermissionControls.some((control) => canBulkGrantPermissionControl(control, selectedPermissionRole.key))
+    : false;
+  const availablePermissionByCode = new Map((roleMatrix?.availablePermissions ?? []).map((permission) => [permission.code, permission]));
+  const highRiskGrantedPermissionCount = selectedRoleGrantedPermissions.filter((code) => {
+    const permission = availablePermissionByCode.get(code);
+    if (!permission) return false;
+    const risk = inferPermissionRisk(permission);
+    return risk === 'high' || risk === 'critical';
+  }).length;
   const filteredSites = sites.filter((site) => {
     const keyword = siteAppliedFilters.name.trim().toLowerCase();
     const matchesName = !keyword || site.name.toLowerCase().includes(keyword);
@@ -609,7 +680,7 @@ export function SettingsPage({
 
   useEffect(() => {
     if (activeSettingsSection !== 'userGroups') return;
-    setSelectedRoleGroupKey((current) => (current && filteredUserGroupRows.some((role) => role.key === current) ? current : filteredUserGroupRows[0]?.key ?? null));
+    setSelectedRoleGroupKey((current) => (current && filteredUserGroupRows.some((role) => role.key === current) ? current : null));
   }, [activeSettingsSection, filteredUserGroupRows]);
 
   useEffect(() => {
@@ -706,15 +777,33 @@ export function SettingsPage({
     setSettingsNotice(`${updated.label}权限已保存，RBAC 即时生效`);
   }
 
-  function toggleRolePermission(roleKey: RoleKey, permission: PermissionKey, checked: boolean) {
+  function toggleRolePermissionControl(roleKey: RoleKey, control: PermissionControl, checked: boolean) {
+    setDraftPermissions((current) => ({
+      ...current,
+      [roleKey]: updatePermissionControl(current[roleKey] ?? selectedPermissionRole?.permissions ?? [], control, checked)
+    }));
+  }
+
+  function confirmAndToggleRolePermissionControl(
+    roleKey: RoleKey,
+    control: PermissionControl,
+    checked: boolean,
+    isPartialGrant: boolean
+  ) {
+    if (!requiresPermissionGrantConfirmation(control, checked)) {
+      toggleRolePermissionControl(roleKey, control, checked);
+      return;
+    }
+    setPendingPermissionGrant({ roleKey, control, isPartialGrant });
+  }
+
+  function toggleSelectedPermissionControls(roleKey: RoleKey, checked: boolean) {
     setDraftPermissions((current) => {
-      const currentPermissions = new Set(current[roleKey] ?? []);
-      if (checked) {
-        currentPermissions.add(permission);
-      } else {
-        currentPermissions.delete(permission);
-      }
-      return { ...current, [roleKey]: [...currentPermissions] };
+      let next = current[roleKey] ?? selectedPermissionRole?.permissions ?? [];
+      selectedPermissionControls.forEach((control) => {
+        if (!checked || canBulkGrantPermissionControl(control, roleKey)) next = updatePermissionControl(next, control, checked);
+      });
+      return { ...current, [roleKey]: next };
     });
   }
 
@@ -738,7 +827,7 @@ export function SettingsPage({
       headers,
       ...rows.map((row) => headers.map((header) => row[header as keyof typeof row]))
     ]);
-    await downloadWorkbook(workbook, `高危操作审计-${new Date().toISOString().slice(0, 10)}.xlsx`);
+    await downloadWorkbook(workbook, `高危操作审计-${formatBeijingDate(new Date())}.xlsx`);
   }
 
   function summarizeAuditChange(row: AuditLogSummary) {
@@ -805,6 +894,22 @@ export function SettingsPage({
     setRoleGroupOpen(true);
   }
 
+  function openRoleGroupDetail(role: RolePermissionRow) {
+    setSelectedRoleGroupKey(role.key);
+    setRoleGroupDetailOpen(true);
+  }
+
+  function confirmRoleGroupDisable(role: RolePermissionRow) {
+    Modal.confirm({
+      title: '确认停用该用户组？',
+      content: '停用后不再作为新建员工可选角色，已绑定员工不会被删除。',
+      okText: '确认停用',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => disableRoleGroup(role)
+    });
+  }
+
   function getRolePermissionSummary(role: RolePermissionRow) {
     const labels = (roleMatrix?.availablePermissions ?? []).filter((permission) => role.permissions.includes(permission.code)).map((permission) => permission.label);
     return labels.slice(0, 2).join(' / ') || role.restriction || '-';
@@ -860,32 +965,43 @@ export function SettingsPage({
           </Col>
         </Row>
       ) : activeSettingsSection === 'userGroups' ? (
-        <Row gutter={[16, 16]} className="user-group-metrics">
-          <Col xs={24} md={8}>
-            <MetricCard icon={<Users />} title="启用用户组" value={roleGroupMetrics.enabled} extra="当前已启用的用户组数量" />
-          </Col>
-          <Col xs={24} md={8}>
-            <MetricCard icon={<Power />} title="停用用户组" value={roleGroupMetrics.disabled} extra="当前已停用的用户组数量" />
-          </Col>
-          <Col xs={24} md={8}>
-            <MetricCard icon={<ShieldCheck />} title="绑定员工数" value={staffAccountsLoading ? '-' : roleGroupMetrics.boundStaff} extra="绑定到用户组的员工总数" />
-          </Col>
-        </Row>
+        <section className="user-group-overview" aria-label="用户组概览">
+          <Text strong className="user-group-overview-title">用户组概览</Text>
+          <div className="user-group-overview-items">
+            {[
+              { key: 'enabled', icon: <Users />, label: '启用用户组', value: roleGroupMetrics.enabled, tone: 'default' },
+              { key: 'disabled', icon: <Power />, label: '停用用户组', value: roleGroupMetrics.disabled, tone: 'default' },
+              { key: 'bound', icon: <ShieldCheck />, label: '绑定员工', value: roleGroupMetrics.boundStaff, tone: 'default' }
+            ].map((metric) => (
+              <div className={`user-group-overview-item is-${metric.tone}`} key={metric.key}>
+                <span className="user-group-overview-icon">{metric.icon}</span>
+                <span className="user-group-overview-label">{metric.label}</span>
+                <strong className="user-group-overview-value">{staffAccountsLoading && metric.key === 'bound' ? '-' : metric.value}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
       ) : activeSettingsSection === 'accounts' ? (
-        <Row gutter={[12, 12]} className="staff-account-metrics">
-          <Col xs={24} md={12} xl={6}>
-            <MetricCard icon={<Users />} title="在职账号" value={staffAccountsLoading ? '-' : staffAccountMetrics.active} extra={`占比 ${staffAccounts.length ? Math.round((staffAccountMetrics.active / staffAccounts.length) * 100) : 0}%`} />
-          </Col>
-          <Col xs={24} md={12} xl={6}>
-            <MetricCard icon={<Power />} title="停用账号" value={staffAccountsLoading ? '-' : staffAccountMetrics.disabled} extra={`占比 ${staffAccounts.length ? Math.round((staffAccountMetrics.disabled / staffAccounts.length) * 100) : 0}%`} />
-          </Col>
-          <Col xs={24} md={12} xl={6}>
-            <MetricCard icon={<LockKeyhole />} title="需改密" value={staffAccountsLoading ? '-' : staffAccountMetrics.mustChangePassword} extra={`占比 ${staffAccounts.length ? Math.round((staffAccountMetrics.mustChangePassword / staffAccounts.length) * 100) : 0}%`} />
-          </Col>
-          <Col xs={24} md={12} xl={6}>
-            <MetricCard icon={<FileText />} title="资料未完善" value={staffAccountsLoading ? '-' : staffAccountMetrics.incomplete} extra={`占比 ${staffAccounts.length ? Math.round((staffAccountMetrics.incomplete / staffAccounts.length) * 100) : 0}%`} />
-          </Col>
-        </Row>
+        <section className="staff-account-overview" aria-label="账号概览">
+          <Text strong className="staff-account-overview-title">账号概览</Text>
+          <div className="staff-account-overview-items">
+            {[
+              { key: 'active', icon: <Users />, label: '在职账号', value: staffAccountMetrics.active, tone: 'default' },
+              { key: 'disabled', icon: <Power />, label: '停用账号', value: staffAccountMetrics.disabled, tone: 'default' },
+              { key: 'password', icon: <LockKeyhole />, label: '需改密', value: staffAccountMetrics.mustChangePassword, tone: 'default' },
+              { key: 'incomplete', icon: <FileText />, label: '资料未完善', value: staffAccountMetrics.incomplete, tone: 'warning' }
+            ].map((metric) => (
+              <div className={`staff-account-overview-item is-${metric.tone}`} key={metric.key}>
+                <span className="staff-account-overview-icon">{metric.icon}</span>
+                <span className="staff-account-overview-label">{metric.label}</span>
+                <strong className="staff-account-overview-value">{staffAccountsLoading ? '-' : metric.value}</strong>
+                <span className="staff-account-overview-ratio">
+                  占比 {staffAccounts.length ? Math.round((metric.value / staffAccounts.length) * 100) : 0}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
       ) : activeSettingsSection === 'sites' ? (
         <Row gutter={[12, 12]} className="site-metrics">
           <Col xs={24} md={8}>
@@ -931,33 +1047,34 @@ export function SettingsPage({
                   <Button type="primary" icon={<PlusCircle size={15} />} onClick={() => openRoleGroupEditor(null)}>
                     增加
                   </Button>
-                  <Button icon={<Edit size={15} />} disabled={!selectedRoleGroup} onClick={() => selectedRoleGroup ? openRoleGroupEditor(selectedRoleGroup) : undefined}>
-                    修改
-                  </Button>
-                  <Popconfirm
-                    title="确认停用该用户组？"
-                    description="停用后不再作为新建员工可选角色，已绑定员工不会被删除。"
-                    okText="确认停用"
-                    cancelText="取消"
-                    disabled={!selectedRoleGroup}
-                    open={roleGroupDisableConfirmOpen}
-                    onOpenChange={(open) => setRoleGroupDisableConfirmOpen(Boolean(selectedRoleGroup && open))}
-                    onConfirm={async () => {
-                      if (selectedRoleGroup) await disableRoleGroup(selectedRoleGroup);
-                      setRoleGroupDisableConfirmOpen(false);
+                  <Dropdown
+                    trigger={['click']}
+                    menu={{
+                      items: [
+                        { key: 'detail', label: '查看当前组详情', disabled: !selectedRoleGroup },
+                        { key: 'edit', label: '编辑当前用户组', disabled: !selectedRoleGroup },
+                        { key: 'disable', label: '停用当前用户组', danger: true, disabled: !selectedRoleGroup || selectedRoleGroup.enabled === false }
+                      ],
+                      onClick: ({ key }) => {
+                        if (!selectedRoleGroup) return;
+                        if (key === 'detail') openRoleGroupDetail(selectedRoleGroup);
+                        if (key === 'edit') openRoleGroupEditor(selectedRoleGroup);
+                        if (key === 'disable') confirmRoleGroupDisable(selectedRoleGroup);
+                      }
                     }}
-                    onCancel={() => setRoleGroupDisableConfirmOpen(false)}
                   >
-                    <Button danger icon={<Power size={15} />} disabled={!selectedRoleGroup}>停用</Button>
-                  </Popconfirm>
+                    <Button icon={<Ellipsis size={16} />}>更多</Button>
+                  </Dropdown>
                 </Space>
               }
             >
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 <div className="user-group-filter-strip">
                   <Input
+                    aria-label="用户组关键字"
                     className="user-group-search"
                     placeholder="用户组名称 / 说明"
+                    suffix={<Search size={16} />}
                     value={roleGroupFilters.keyword}
                     onChange={(event) => setRoleGroupFilters((current) => ({ ...current, keyword: event.target.value }))}
                   />
@@ -984,8 +1101,9 @@ export function SettingsPage({
                       </Button>
                     ))}
                   </Space.Compact>
-                  <Button type="primary" onClick={() => setRoleGroupAppliedFilters({ ...roleGroupFilters })}>查询</Button>
+                  <Button type="primary" icon={<Search size={16} />} onClick={() => setRoleGroupAppliedFilters({ ...roleGroupFilters })}>查询</Button>
                   <Button
+                    icon={<RefreshCw size={16} />}
                     onClick={() => {
                       const empty = { keyword: '', site: undefined, status: 'ALL' as const };
                       setRoleGroupFilters(empty);
@@ -996,130 +1114,90 @@ export function SettingsPage({
                   </Button>
                 </div>
                 <ManagedTable
+                  recordDetail={false}
                   className="user-group-table"
                   rowKey="key"
                   size="small"
+                  density="compact"
                   loading={!roleMatrix || staffAccountsLoading}
                   pagination={tenRowTablePagination}
                   dataSource={filteredUserGroupRows}
+                  showSelectionSummary={false}
+                  toolbarLeading={(
+                    <span className="user-group-result-summary">
+                      共 {filteredUserGroupRows.length} 个用户组 <span>· 已选 {selectedRoleGroup ? 1 : 0} 条</span>
+                    </span>
+                  )}
+                  toolbarActions={selectedRoleGroup ? (
+                    <Space size={6} wrap className="user-group-batch-actions">
+                      <Button size="small" icon={<Edit size={14} />} onClick={() => openRoleGroupEditor(selectedRoleGroup)}>修改</Button>
+                      {selectedRoleGroup.enabled !== false ? (
+                        <Button size="small" icon={<Power size={14} />} danger onClick={() => confirmRoleGroupDisable(selectedRoleGroup)}>停用</Button>
+                      ) : null}
+                    </Space>
+                  ) : null}
                   rowSelection={{
                     type: 'radio',
+                    columnTitle: '选择',
                     selectedRowKeys: selectedRoleGroup?.key ? [selectedRoleGroup.key] : [],
-                    onChange: (keys) => setSelectedRoleGroupKey(String(keys[0] ?? ''))
+                    onChange: (keys) => setSelectedRoleGroupKey(keys[0] ? String(keys[0]) : null)
                   }}
-                  onRow={(record) => ({ onClick: () => setSelectedRoleGroupKey(record.key) })}
+                  onRow={(record) => ({
+                    onClick: () => setSelectedRoleGroupKey(record.key),
+                    onDoubleClick: () => openRoleGroupDetail(record)
+                  })}
                   rowClassName={(record) => (record.key === selectedRoleGroup?.key ? 'user-group-row-selected' : '')}
                   columns={[
                     { title: '排序', dataIndex: 'sortOrder', width: 74, render: (value?: number) => value ?? 0 },
-                    { title: '用户组名称', dataIndex: 'label', width: 140, render: (value: string) => <Text strong>{value}</Text> },
-                    { title: '用户组说明', dataIndex: 'description', width: 190, render: (value?: string) => value || '-' },
-                    { title: '站点', dataIndex: 'site', width: 120, render: (value?: string) => value || '-' },
+                    { title: '用户组名称', dataIndex: 'label', width: 180, render: (value: string) => <Text strong>{value}</Text> },
+                    { title: '用户组说明', dataIndex: 'description', width: 260, render: (value?: string) => value || '-' },
+                    { title: '站点', dataIndex: 'site', width: 150, render: (value?: string) => value || '-' },
                     { title: '绑定员工', width: 100, render: (_: unknown, role: RolePermissionRow) => `${staffAccounts.filter((account) => account.role === role.key).length} 人` },
-                    { title: '权限摘要', width: 190, render: (_: unknown, role: RolePermissionRow) => getRolePermissionSummary(role) },
                     { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled?: boolean) => <Tag color={enabled === false ? 'default' : 'green'}>{enabled === false ? '停用' : '启用'}</Tag> },
                     {
                       title: '操作',
-                      width: 170,
+                      width: 190,
                       fixed: 'right',
                       render: (_: unknown, role: RolePermissionRow) => (
-                        <Space size={4}>
-                          <Button type="link" size="small" onClick={(event) => {
+                        <Space size={6} className="user-group-row-actions">
+                          <Button size="small" onClick={(event) => {
                             event.stopPropagation();
                             openRolePermissions(role.key);
                           }}>查看权限</Button>
-                          <Button type="link" size="small" onClick={(event) => {
-                            event.stopPropagation();
-                            openRoleGroupEditor(role);
-                          }}>编辑</Button>
-                          <Button type="link" size="small" danger onClick={(event) => {
-                            event.stopPropagation();
-                            setSelectedRoleGroupKey(role.key);
-                            setRoleGroupDisableConfirmOpen(true);
-                          }}>停用</Button>
+                          <Dropdown
+                            trigger={['click']}
+                            menu={{
+                              items: [
+                                { key: 'detail', label: '查看详情' },
+                                { key: 'edit', label: '编辑' },
+                                { key: 'disable', label: '停用', danger: true, disabled: role.enabled === false }
+                              ],
+                              onClick: ({ key, domEvent }) => {
+                                domEvent.stopPropagation();
+                                setSelectedRoleGroupKey(role.key);
+                                if (key === 'detail') openRoleGroupDetail(role);
+                                if (key === 'edit') openRoleGroupEditor(role);
+                                if (key === 'disable') confirmRoleGroupDisable(role);
+                              }
+                            }}
+                          >
+                            <Button
+                              size="small"
+                              icon={<Ellipsis size={15} />}
+                              aria-label={`${role.label} 更多操作`}
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              更多
+                            </Button>
+                          </Dropdown>
                         </Space>
                       )
                     }
                   ]}
-                  scroll={{ x: 1180 }}
+                  minimumScrollX={980}
+                  scroll={{ y: 'calc(100vh - 470px)' }}
                 />
               </Space>
-            </Card>
-            <Card className="user-group-detail-panel" title="用户组详情">
-              {selectedRoleGroup ? (
-                <Space direction="vertical" size={14} style={{ width: '100%' }}>
-                  <Space align="center" size={12}>
-                    <span className="user-group-detail-icon"><Users size={28} /></span>
-                    <Space direction="vertical" size={2}>
-                      <Space>
-                        <Text strong>{selectedRoleGroup.label}</Text>
-                        <Tag color={selectedRoleGroup.enabled === false ? 'default' : 'green'}>{selectedRoleGroup.enabled === false ? '停用' : '启用'}</Tag>
-                      </Space>
-                      <Text type="secondary">{selectedRoleGroup.description || selectedRoleGroup.restriction || '按岗位维护菜单与数据权限。'}</Text>
-                    </Space>
-                  </Space>
-                  <div className="user-group-detail-section">
-                    <Text strong>基础信息</Text>
-                    <div className="user-group-detail-fields">
-                      <Text type="secondary">站点范围</Text><Text>{selectedRoleGroup.site || '全部站点'}</Text>
-                      <Text type="secondary">角色类型</Text><Text>{selectedRoleGroup.key === 'ADMIN' ? '平台管理' : '业务用户组'}</Text>
-                      <Text type="secondary">绑定员工</Text><Text>{roleGroupStaff.length} 人</Text>
-                      <Text type="secondary">创建时间</Text><Text>-</Text>
-                      <Text type="secondary">更新时间</Text><Text>-</Text>
-                    </div>
-                  </div>
-                  <div className="user-group-detail-section">
-                    <Flex justify="space-between" align="center">
-                      <Text strong>绑定员工 ({roleGroupStaff.length})</Text>
-                      <Button type="link" size="small" onClick={() => {
-                        setStaffFilters({ status: 'ALL', role: selectedRoleGroup.key as StaffAccountRoleKey });
-                        setStaffAppliedFilters({ status: 'ALL', role: selectedRoleGroup.key as StaffAccountRoleKey });
-                        setActiveSettingsSection('accounts');
-                      }}>查看全部</Button>
-                    </Flex>
-                    <Space wrap>
-                      {roleGroupStaff.slice(0, 3).map((account) => (
-                        <span className="user-group-staff-chip" key={account.id}>
-                          <span>{(account.name || account.nickname || account.username).slice(0, 1).toUpperCase()}</span>
-                          {account.name || account.nickname || account.username}
-                        </span>
-                      ))}
-                      {!roleGroupStaff.length ? <Text type="secondary">暂无绑定员工</Text> : null}
-                    </Space>
-                  </div>
-                  <div className="user-group-detail-section">
-                    <Flex justify="space-between" align="center">
-                      <Text strong>菜单权限</Text>
-                      <Button type="link" size="small" onClick={() => {
-                        openRolePermissions(selectedRoleGroup.key);
-                      }}>查看全部</Button>
-                    </Flex>
-                    <Text type="secondary">共 {selectedRoleGroup.permissions.length} 个菜单，已授权 {selectedRoleGroup.permissions.length} 个</Text>
-                    <div className="user-group-permission-summary">{getRolePermissionSummary(selectedRoleGroup)}</div>
-                  </div>
-                  <div className="user-group-detail-section">
-                    <Flex justify="space-between" align="center">
-                      <Text strong>数据范围</Text>
-                      <Button type="link" size="small" onClick={() => {
-                        openRolePermissions(selectedRoleGroup.key);
-                      }}>查看全部</Button>
-                    </Flex>
-                    <Text>{selectedRoleGroup.scope || selectedRoleGroup.restriction || '按用户组权限执行'}</Text>
-                  </div>
-                  <div className="user-group-detail-section">
-                    <Text strong>最近变更</Text>
-                    <div className="user-group-timeline">
-                      {roleGroupAuditLogs.length ? roleGroupAuditLogs.slice(0, 2).map((log) => (
-                        <div key={log.id}>
-                          <Text>{formatBeijingDateTime(log.createdAt)}</Text>
-                          <Text type="secondary">{log.actorUsername} 调整：{log.actionLabel}</Text>
-                        </div>
-                      )) : <Text type="secondary">暂无变更记录</Text>}
-                    </div>
-                  </div>
-                </Space>
-              ) : (
-                <Text type="secondary">暂无用户组</Text>
-              )}
             </Card>
           </div>
           ) : null}
@@ -1207,6 +1285,7 @@ export function SettingsPage({
                 </Button>
               </div>
               <ManagedTable<SiteSummary>
+                recordDetail={{ title: '站点详情' }}
                 rowKey="id"
                 size="small"
                 className="settings-site-table"
@@ -1292,9 +1371,6 @@ export function SettingsPage({
                 >
                   新增
                 </Button>
-                <Button icon={<FileText size={16} />} onClick={() => void downloadStaffImportTemplate()}>
-                  模板下载
-                </Button>
                 <Button icon={<FileInput size={16} />} onClick={() => staffImportInputRef.current?.click()}>
                   批量导入
                 </Button>
@@ -1309,49 +1385,17 @@ export function SettingsPage({
                     if (file) void importStaffAccounts(file);
                   }}
                 />
-                <Button
-                  icon={<Edit size={16} />}
-                  disabled={!selectedStaffAccount}
-                  onClick={() => selectedStaffAccount ? openStaffAccountEditor(selectedStaffAccount) : undefined}
+                <Dropdown
+                  trigger={['click']}
+                  menu={{
+                    items: [{ key: 'template', icon: <FileText size={15} />, label: '模板下载' }],
+                    onClick: ({ key }) => {
+                      if (key === 'template') void downloadStaffImportTemplate();
+                    }
+                  }}
                 >
-                  修改
-                </Button>
-                <Popconfirm
-                  title="确认停用选中员工账号？"
-                  description="停用后账号不可登录，但会保留历史记录。"
-                  okText="确认停用"
-                  cancelText="取消"
-                  disabled={!selectedStaffAccountIds.length}
-                  onConfirm={() => updateStaffAccountsEnabled(selectedStaffAccountIds, false)}
-                >
-                  <Button icon={<Power size={16} />} danger disabled={!selectedStaffAccountIds.length}>
-                    停用
-                  </Button>
-                </Popconfirm>
-                <Popconfirm
-                  title="确认删除该员工账号？"
-                  description="删除后不可恢复，请确认该账号无未完成业务。"
-                  okText="确认删除"
-                  cancelText="取消"
-                  disabled={!selectedStaffAccount}
-                  onConfirm={() => selectedStaffAccount ? deleteStaffAccount(selectedStaffAccount.id) : undefined}
-                >
-                  <Button icon={<Trash2 size={16} />} danger disabled={!selectedStaffAccount}>
-                    删除
-                  </Button>
-                </Popconfirm>
-                <Popconfirm
-                  title="确认批量重置密码？"
-                  description="选中员工的密码会重置为“用户名@123”，且下次登录必须修改密码。"
-                  okText="确认重置"
-                  cancelText="取消"
-                  disabled={!selectedStaffAccountIds.length}
-                  onConfirm={() => resetStaffAccountPasswords(selectedStaffAccountIds)}
-                >
-                  <Button icon={<LockKeyhole size={16} />} disabled={!selectedStaffAccountIds.length}>
-                    员工账号重置密码
-                  </Button>
-                </Popconfirm>
+                  <Button icon={<Ellipsis size={16} />}>更多</Button>
+                </Dropdown>
               </Space>
             }
           >
@@ -1424,14 +1468,60 @@ export function SettingsPage({
                 </Space>
               </div>
             <ManagedTable<StaffAccountSummary>
+              recordDetail={{ title: '员工账号详情' }}
               rowKey="id"
               size="small"
+              density="compact"
               className="settings-account-table"
-              minimumScrollX={1280}
-              scroll={{ y: 'calc(100vh - 520px)' }}
+              minimumScrollX={1080}
+              scroll={{ y: 'calc(100vh - 470px)' }}
               pagination={tenRowTablePagination}
               dataSource={staffAccounts}
               loading={staffAccountsLoading}
+              showSelectionSummary={false}
+              toolbarLeading={(
+                <span className="staff-account-result-summary">
+                  共 {staffAccounts.length} 个账号 <span>· 已选 {selectedStaffAccountIds.length} 条</span>
+                </span>
+              )}
+              toolbarActions={selectedStaffAccountIds.length ? (
+                <Space size={6} wrap className="staff-account-batch-actions">
+                  {selectedStaffAccount ? (
+                    <Button size="small" icon={<Edit size={14} />} onClick={() => openStaffAccountEditor(selectedStaffAccount)}>
+                      修改
+                    </Button>
+                  ) : null}
+                  <Popconfirm
+                    title="确认停用选中员工账号？"
+                    description="停用后账号不可登录，但会保留历史记录。"
+                    okText="确认停用"
+                    cancelText="取消"
+                    onConfirm={() => updateStaffAccountsEnabled(selectedStaffAccountIds, false)}
+                  >
+                    <Button size="small" icon={<Power size={14} />} danger>停用</Button>
+                  </Popconfirm>
+                  <Popconfirm
+                    title="确认批量重置密码？"
+                    description="选中员工的密码会重置为“用户名@123”，且下次登录必须修改密码。"
+                    okText="确认重置"
+                    cancelText="取消"
+                    onConfirm={() => resetStaffAccountPasswords(selectedStaffAccountIds)}
+                  >
+                    <Button size="small" icon={<LockKeyhole size={14} />}>重置密码</Button>
+                  </Popconfirm>
+                  {selectedStaffAccount ? (
+                    <Popconfirm
+                      title="确认删除该员工账号？"
+                      description="删除后不可恢复，请确认该账号无未完成业务。"
+                      okText="确认删除"
+                      cancelText="取消"
+                      onConfirm={() => deleteStaffAccount(selectedStaffAccount.id)}
+                    >
+                      <Button size="small" icon={<Trash2 size={14} />} danger>删除</Button>
+                    </Popconfirm>
+                  ) : null}
+                </Space>
+              ) : null}
               onRow={(record) => ({ onClick: () => record ? setSelectedStaffAccountIds([record.id]) : undefined })}
               rowSelection={{
                 columnTitle: '选择',
@@ -1439,10 +1529,10 @@ export function SettingsPage({
                 onChange: (keys) => setSelectedStaffAccountIds(keys.map(String))
               }}
               columns={[
-                { title: '账号', dataIndex: 'username', width: 140, render: (value: string) => <Text code>{value}</Text> },
+                { title: '账号', dataIndex: 'username', width: 120, render: (value: string) => <Text code>{value}</Text> },
                 {
                   title: '姓名 / 部门',
-                  width: 180,
+                  width: 170,
                   render: (_, record?: StaffAccountSummary) => record ? (
                     <Space direction="vertical" size={0}>
                       <Text strong>{record.name || '-'}</Text>
@@ -1450,61 +1540,50 @@ export function SettingsPage({
                     </Space>
                   ) : null
                 },
-                { title: '站点', dataIndex: 'site', width: 130, render: (value?: string) => value || '-' },
+                { title: '站点', dataIndex: 'site', width: 120, render: (value?: string) => value || '-' },
                 {
                   title: '用户组',
                   dataIndex: 'roleLabel',
-                  width: 130,
+                  width: 120,
                   render: (value: string, record?: StaffAccountSummary) => <Tag color={record?.role === 'ADMIN' ? 'red' : record?.role === 'FINANCE' ? 'gold' : 'blue'}>{value}</Tag>
                 },
-                { title: '状态', dataIndex: 'enabled', width: 100, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '在职' : '停用'}</Tag> },
+                { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '在职' : '停用'}</Tag> },
                 {
                   title: '改密要求',
                   dataIndex: 'mustChangePassword',
-                  width: 120,
+                  width: 105,
                   render: (value?: boolean) => <Tag color={value ? 'orange' : 'green'}>{value ? '需改密' : '正常'}</Tag>
                 },
-                { title: '最近登录', dataIndex: 'lastLoginAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+                { title: '最近登录', dataIndex: 'lastLoginAt', width: 155, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
                 {
                   title: '操作',
-                  width: 300,
+                  width: 148,
                   fixed: 'right',
                   render: (_, record?: StaffAccountSummary) => record ? (
-                    <Space size={6} wrap={false}>
-                      <Popconfirm
-                        title="确认重置密码？"
-                        description={`账号 ${record.username} 的密码会重置为 ${record.username}@123，并要求下次登录修改密码。`}
-                        okText="确认重置"
-                        cancelText="取消"
-                        onConfirm={() => resetStaffAccountPasswords([record.id])}
-                      >
-                        <Button size="small">重置密码</Button>
-                      </Popconfirm>
+                    <Space size={6} wrap={false} className="staff-account-row-actions">
                       <Button size="small" onClick={(event) => { event.stopPropagation(); openStaffAccountEditor(record); }}>
                         编辑
                       </Button>
-                      <Popconfirm
-                        title={`确认${record.enabled ? '停用' : '启用'}该员工账号？`}
-                        description={record.enabled ? '停用后账号不可登录，但会保留历史记录。' : '启用后账号可重新登录。'}
-                        okText={`确认${record.enabled ? '停用' : '启用'}`}
-                        cancelText="取消"
-                        onConfirm={() => updateStaffAccountsEnabled([record.id], !record.enabled)}
+                      <Dropdown
+                        trigger={['click']}
+                        menu={{
+                          items: [
+                            { key: 'reset', label: '重置密码' },
+                            { key: 'toggle', label: record.enabled ? '停用' : '启用', danger: record.enabled },
+                            { type: 'divider' },
+                            { key: 'delete', label: '删除', danger: true }
+                          ],
+                          onClick: ({ key }) => confirmStaffAccountRowAction(record, key as 'reset' | 'toggle' | 'delete')
+                        }}
                       >
-                        <Button size="small" danger={record.enabled}>
-                          {record.enabled ? '停用' : '启用'}
+                        <Button
+                          size="small"
+                          aria-label={`${record.username} 更多操作`}
+                          onClick={(event) => event.stopPropagation()}
+                        >
+                          更多 <ChevronDown size={13} />
                         </Button>
-                      </Popconfirm>
-                      <Popconfirm
-                        title="删除员工账号"
-                        description="删除后不可恢复，请确认该账号无未完成业务。"
-                        okText="确认删除"
-                        cancelText="取消"
-                        onConfirm={() => deleteStaffAccount(record.id)}
-                      >
-                        <Button size="small" danger>
-                          删除
-                        </Button>
-                      </Popconfirm>
+                      </Dropdown>
                     </Space>
                   ) : null
                 }
@@ -1515,7 +1594,7 @@ export function SettingsPage({
           ) : null}
 
           {activeSettingsSection === 'rolePermissions' ? (
-          <Card className="module-grid role-permission-card" title="角色权限分配" extra={<Text type="secondary">基于功能点配置，未勾选即无权限</Text>}>
+          <Card className="module-grid role-permission-card" title="角色权限分配" extra={<Text type="secondary">列设置随页面查看权限开放，保存仅影响个人账号</Text>}>
             {roleMatrix && selectedPermissionRole ? (
               <div className="role-permission-editor role-permission-console">
                 <aside className="role-permission-roles" aria-label="角色列表">
@@ -1525,7 +1604,14 @@ export function SettingsPage({
                   </div>
                   {rolePermissionRows.map((role) => {
                     const selected = role.key === selectedPermissionRole.key;
-                    const permissionCount = (draftPermissions[role.key] ?? role.permissions).length;
+                    const preferencePermissionCodes = new Set(
+                      (roleMatrix?.availablePermissions ?? [])
+                        .filter(isUiPreferencePermission)
+                        .map((permission) => permission.code)
+                    );
+                    const permissionCount = (draftPermissions[role.key] ?? role.permissions)
+                      .filter((permission) => !preferencePermissionCodes.has(permission))
+                      .length;
                     return (
                       <button
                         type="button"
@@ -1564,7 +1650,8 @@ export function SettingsPage({
                   <Text type="secondary" className="role-permission-tree-root">{permissionWorkspace.label}</Text>
                   {workspacePermissionGroups.map(([group, permissions]) => {
                     const selected = selectedWorkspacePermissions?.[0] === group;
-                    const granted = permissions.filter((permission) => (draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).includes(permission.code)).length;
+                    const controls = getPermissionControls(group, permissions);
+                    const granted = controls.filter((control) => getPermissionControlState(control, selectedRoleGrantedPermissions).checked).length;
                     return (
                       <button
                         key={group}
@@ -1573,7 +1660,7 @@ export function SettingsPage({
                         onClick={() => setSelectedWorkspacePermissionGroup(group)}
                       >
                         <span>{group.replace(permissionWorkspace.prefix, '')}</span>
-                        <Tag>{granted}/{permissions.length}</Tag>
+                        <Tag>{granted}/{controls.length}</Tag>
                       </button>
                     );
                   })}
@@ -1587,15 +1674,15 @@ export function SettingsPage({
                     <Space className="role-permission-detail-actions">
                       <Button
                         size="small"
-                        disabled={selectedPermissionRole.key === 'ADMIN' || !selectedWorkspacePermissions}
-                        onClick={() => selectedWorkspacePermissions?.[1].forEach((permission) => toggleRolePermission(selectedPermissionRole.key, permission.code, true))}
+                        disabled={selectedPermissionRole.key === 'ADMIN' || !selectedWorkspacePermissions || !canBulkGrantSelectedControls}
+                        onClick={() => toggleSelectedPermissionControls(selectedPermissionRole.key, true)}
                       >
-                        全选当前目录
+                        全选基础查看
                       </Button>
                       <Button
                         size="small"
                         disabled={selectedPermissionRole.key === 'ADMIN' || !selectedWorkspacePermissions}
-                        onClick={() => selectedWorkspacePermissions?.[1].forEach((permission) => toggleRolePermission(selectedPermissionRole.key, permission.code, false))}
+                        onClick={() => toggleSelectedPermissionControls(selectedPermissionRole.key, false)}
                       >
                         清空当前目录
                       </Button>
@@ -1604,39 +1691,114 @@ export function SettingsPage({
                       </Button>
                     </Space>
                   </Flex>
-                  <div className="role-permission-option-grid" data-testid="role-permission-option-grid">
-                    {(selectedWorkspacePermissions?.[1] ?? []).map((permission) => (
-                      <div className="role-permission-option" key={permission.code}>
-                        <Text strong>{permission.label}</Text>
-                        <Checkbox
-                          aria-label={`允许${permission.label}`}
-                          disabled={selectedPermissionRole.key === 'ADMIN'}
-                          checked={(draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).includes(permission.code)}
-                          onChange={(event) => toggleRolePermission(selectedPermissionRole.key, permission.code, event.target.checked)}
-                        >
-                          允许
-                        </Checkbox>
-                      </div>
-                    ))}
+                  {selectedPermissionRole.key === 'ADMIN' ? (
+                    <Text type="secondary" className="role-permission-preserved-note">管理员组固定拥有全部权限，无需单独勾选；请选择其他用户组进行权限配置。</Text>
+                  ) : null}
+                  {unrepresentedPermissionCount > 0 ? (
+                    <Text type="secondary" className="role-permission-preserved-note">
+                      当前目录另有 {unrepresentedPermissionCount} 个界面偏好或待接入权限，已保留原配置，不随业务权限切换。
+                    </Text>
+                  ) : null}
+                  <div className="role-permission-sections" data-testid="role-permission-option-grid">
+                    {permissionControlCategoryOrder.map((category) => {
+                      const controls = selectedPermissionControls.filter((control) => control.category === category);
+                      if (!controls.length) return null;
+                      return (
+                        <section className="role-permission-section" key={category} aria-label={category}>
+                          <div className="role-permission-section-heading">
+                            <Text strong>{category}</Text>
+                            <Text type="secondary">{controls.length} 项</Text>
+                          </div>
+                          <div className="role-permission-option-grid">
+                            {controls.map((control) => {
+                              const disabled = selectedPermissionRole.key === 'ADMIN';
+                              const state = disabled
+                                ? { checked: true, indeterminate: false, grantedCount: control.codes.length }
+                                : getPermissionControlState(control, selectedRoleGrantedPermissions);
+                              const riskLabel = control.risk === 'critical'
+                                ? { label: '极高风险', color: 'red' }
+                                : control.risk === 'high'
+                                  ? { label: '高风险', color: 'orange' }
+                                  : control.risk === 'sensitive'
+                                    ? { label: '敏感字段', color: 'gold' }
+                                    : null;
+                              return (
+                                <label className={`role-permission-option role-permission-risk-${control.risk}${disabled ? ' is-disabled' : ''}`} key={control.id}>
+                                  <div className="role-permission-option-copy">
+                                    <Space size={6} wrap>
+                                      <Text strong>{control.label}</Text>
+                                      {riskLabel ? <Tag color={riskLabel.color}>{riskLabel.label}</Tag> : null}
+                                      {state.indeterminate ? <Tag>部分授权</Tag> : null}
+                                      {control.restrictedToMarketFinance ? <Tag color="red">默认不开放，按需授权</Tag> : null}
+                                    </Space>
+                                    <Text type="secondary">{control.description}</Text>
+                                  </div>
+                                  <Checkbox
+                                    aria-label={`授权${control.label}`}
+                                    title={disabled ? '管理员组固定拥有全部权限，无需单独勾选' : undefined}
+                                    disabled={disabled}
+                                    checked={state.checked}
+                                    indeterminate={state.indeterminate}
+                                    onChange={(event) => confirmAndToggleRolePermissionControl(
+                                      selectedPermissionRole.key,
+                                      control,
+                                      event.target.checked,
+                                      state.indeterminate
+                                    )}
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </section>
+                      );
+                    })}
                   </div>
                 </section>
                 <aside className="role-permission-summary" aria-label="当前角色权限概览">
                   <Text strong>当前角色权限概览</Text>
                   <div className="role-permission-summary-metrics">
-                    <Statistic title="已授权" value={(draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).length} />
-                    <Statistic title="未授权" value={roleMatrix.availablePermissions.length - (draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).length} />
-                    <Statistic title="高风险权限" value={(draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions).filter((permission) => /:process$|:status-update$|:import$|:upload$|:assist$|:confirm$/.test(permission)).length} />
+                    <Statistic title="底层已授权" value={selectedRoleGrantedPermissions.length} />
+                    <Statistic title="当前目录" value={grantedSelectedControlCount} suffix={`/ ${selectedPermissionControls.length}`} />
+                    <Statistic title="高风险授权" value={highRiskGrantedPermissionCount} />
                   </div>
-                  <Text type="secondary">保存后由后端立即执行权限裁剪，并记录权限变更审计。</Text>
+                  <Text type="secondary">业务权限会映射到现有底层权限码；保存后由后端立即执行，并记录权限变更审计。</Text>
                 </aside>
               </div>
             ) : (
-              <ManagedTable rowKey="key" size="small" pagination={false} dataSource={[]} columns={[]} loading />
+              <ManagedTable rowKey="key" size="small" pagination={false} dataSource={[]} columns={[]} loading recordDetail={false} />
             )}
           </Card>
           ) : null}
         </Col>
         ) : null}
+
+        <Modal
+          open={Boolean(pendingPermissionGrant)}
+          title={pendingPermissionGrant
+            ? pendingPermissionGrant.isPartialGrant
+              ? `确认补齐“${pendingPermissionGrant.control.label}”？`
+              : pendingPermissionGrant.control.risk === 'sensitive'
+                ? `确认开放敏感字段“${pendingPermissionGrant.control.label}”？`
+                : `确认授予“${pendingPermissionGrant.control.label}”？`
+            : '确认授权'}
+          okText="确认授权"
+          cancelText="取消"
+          okButtonProps={pendingPermissionGrant?.control.risk === 'critical' ? { danger: true } : undefined}
+          onCancel={() => setPendingPermissionGrant(null)}
+          onOk={() => {
+            if (!pendingPermissionGrant) return;
+            toggleRolePermissionControl(pendingPermissionGrant.roleKey, pendingPermissionGrant.control, true);
+            setPendingPermissionGrant(null);
+          }}
+          destroyOnHidden
+        >
+          <Text>
+            {pendingPermissionGrant?.control.risk === 'sensitive'
+              ? `${pendingPermissionGrant.control.description} 该权限默认不开放，请确认当前岗位确有业务需要。保存后立即生效并记录权限变更审计。`
+              : `${pendingPermissionGrant?.control.description ?? ''} 保存后该岗位将立即获得对应的高风险操作权限，并记录权限变更审计。`}
+          </Text>
+        </Modal>
 
         {['security', 'aiSecurity', 'audit', 'baseConfig'].includes(activeSettingsSection) ? (
         <Col xs={24}>
@@ -1687,15 +1849,6 @@ export function SettingsPage({
             }
           >
             <Space direction="vertical" size={12} className="quality-panel">
-              {auditDashboard?.recentFailedImportant.length ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message={`最近有 ${auditDashboard.recentFailedImportant.length} 条失败的重要操作`}
-                  description="请优先查看失败队列，确认权限、财务、导入导出或审核类动作是否需要补救。"
-                />
-              ) : null}
-
               {auditWarnings.length ? (
                 <Alert
                   type="warning"
@@ -1852,6 +2005,7 @@ export function SettingsPage({
 
               <div className="audit-workbench-layout">
                 <ManagedTable
+                  recordDetail={false}
                   className="audit-log-table"
                   rowKey="id"
                   size="small"
@@ -1861,7 +2015,6 @@ export function SettingsPage({
                     current: auditPagination.page,
                     pageSize: auditPagination.pageSize,
                     total: auditPagination.totalItems,
-                    showSizeChanger: false,
                     showTotal: (total) => `共 ${total} 条`
                   }}
                   onChange={(pagination) => setAuditPagination((current) => ({
@@ -2013,6 +2166,100 @@ export function SettingsPage({
             </select>
           </Form.Item>
         </Form>
+      </Modal>
+      <Modal
+        title="用户组详情"
+        open={roleGroupDetailOpen && Boolean(selectedRoleGroup)}
+        width={760}
+        className="user-group-detail-modal"
+        destroyOnHidden
+        onCancel={() => setRoleGroupDetailOpen(false)}
+        footer={selectedRoleGroup ? (
+          <Space>
+            <Button onClick={() => setRoleGroupDetailOpen(false)}>关闭</Button>
+            <Button type="primary" icon={<Edit size={15} />} onClick={() => {
+              setRoleGroupDetailOpen(false);
+              openRoleGroupEditor(selectedRoleGroup);
+            }}>编辑用户组</Button>
+          </Space>
+        ) : null}
+      >
+        {selectedRoleGroup ? (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Space align="center" size={12}>
+              <span className="user-group-detail-icon"><Users size={28} /></span>
+              <Space direction="vertical" size={2}>
+                <Space>
+                  <Text strong>{selectedRoleGroup.label}</Text>
+                  <Tag color={selectedRoleGroup.enabled === false ? 'default' : 'green'}>{selectedRoleGroup.enabled === false ? '停用' : '启用'}</Tag>
+                </Space>
+                <Text type="secondary">{selectedRoleGroup.description || selectedRoleGroup.restriction || '按岗位维护菜单与数据权限。'}</Text>
+              </Space>
+            </Space>
+            <div className="user-group-detail-section">
+              <Text strong>基础信息</Text>
+              <div className="user-group-detail-fields">
+                <Text type="secondary">站点范围</Text><Text>{selectedRoleGroup.site || '全部站点'}</Text>
+                <Text type="secondary">角色类型</Text><Text>{selectedRoleGroup.key === 'ADMIN' ? '平台管理' : '业务用户组'}</Text>
+                <Text type="secondary">绑定员工</Text><Text>{roleGroupStaff.length} 人</Text>
+                <Text type="secondary">创建时间</Text><Text>-</Text>
+                <Text type="secondary">更新时间</Text><Text>-</Text>
+              </div>
+            </div>
+            <div className="user-group-detail-section">
+              <Flex justify="space-between" align="center">
+                <Text strong>绑定员工 ({roleGroupStaff.length})</Text>
+                <Button type="link" size="small" onClick={() => {
+                  setRoleGroupDetailOpen(false);
+                  setStaffFilters({ status: 'ALL', role: selectedRoleGroup.key as StaffAccountRoleKey });
+                  setStaffAppliedFilters({ status: 'ALL', role: selectedRoleGroup.key as StaffAccountRoleKey });
+                  setActiveSettingsSection('accounts');
+                }}>查看全部</Button>
+              </Flex>
+              <Space wrap>
+                {roleGroupStaff.slice(0, 3).map((account) => (
+                  <span className="user-group-staff-chip" key={account.id}>
+                    <span>{(account.name || account.nickname || account.username).slice(0, 1).toUpperCase()}</span>
+                    {account.name || account.nickname || account.username}
+                  </span>
+                ))}
+                {!roleGroupStaff.length ? <Text type="secondary">暂无绑定员工</Text> : null}
+              </Space>
+            </div>
+            <div className="user-group-detail-section">
+              <Flex justify="space-between" align="center">
+                <Text strong>菜单权限</Text>
+                <Button type="link" size="small" onClick={() => {
+                  setRoleGroupDetailOpen(false);
+                  openRolePermissions(selectedRoleGroup.key);
+                }}>查看全部</Button>
+              </Flex>
+              <Text type="secondary">共 {selectedRoleGroup.permissions.length} 个菜单，已授权 {selectedRoleGroup.permissions.length} 个</Text>
+              <div className="user-group-permission-summary">{getRolePermissionSummary(selectedRoleGroup)}</div>
+            </div>
+            <div className="user-group-detail-section">
+              <Flex justify="space-between" align="center">
+                <Text strong>数据范围</Text>
+                <Button type="link" size="small" onClick={() => {
+                  setRoleGroupDetailOpen(false);
+                  openRolePermissions(selectedRoleGroup.key);
+                }}>查看全部</Button>
+              </Flex>
+              <Text>{selectedRoleGroup.scope || selectedRoleGroup.restriction || '按用户组权限执行'}</Text>
+            </div>
+            <div className="user-group-detail-section">
+              <Text strong>最近变更</Text>
+              <div className="user-group-timeline">
+                {roleGroupAuditLogs.length ? roleGroupAuditLogs.slice(0, 2).map((log) => (
+                  <div key={log.id}>
+                    <Text>{formatBeijingDateTime(log.createdAt)}</Text>
+                    <Text type="secondary">{log.actorUsername} 调整：{log.actionLabel}</Text>
+                  </div>
+                )) : <Text type="secondary">暂无变更记录</Text>}
+              </div>
+            </div>
+          </Space>
+        ) : null}
       </Modal>
       <Modal
         title={editingRoleGroup ? '编辑用户组' : '新建用户组'}

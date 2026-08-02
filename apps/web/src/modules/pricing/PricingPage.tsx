@@ -1,15 +1,17 @@
 import type { ChangeEvent, Key } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AutoComplete, Button, Card, Col, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Progress, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
-import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, Copy, Download, Eye, FileInput, MoreHorizontal, PackageCheck, Power, RefreshCw, Search, Settings, SlidersHorizontal, Trash2 } from 'lucide-react';
-import { normalizeUsPostalCode, type AgentMarkupListQuery, type AgentMarkupMetrics, type AgentMarkupSummary, type AgentMarkupType, type AgentSummary, type DubaiPriceDisplayPageSummary, type DubaiPriceDisplayResponse, type DubaiPriceDisplayVersionSummary, type LegacyPricingMetaResponse, type LegacyPricingModule, type LegacyPricingQuoteResponse, type LegacyPricingRecommendation, type MasterDataSnapshot, type PriceBookImportJobSummary, type PriceBookImportTargetModule, type PriceBookSummary, type PriceLookupRecommendation, type PriceLookupResponse, type PricingRuleRefreshProgressResponse, type PricingSyncHealthResponse, type PricingSyncHealthRow, type SouthAfricaLookupResponse, type SouthAfricaRateRuleInput, type SouthAfricaRateRuleSummary, type StaffRoleKey } from '@siyuan/shared';
+import { Alert, AutoComplete, Button, Card, Col, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Progress, Row, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { AlertTriangle, CheckCircle2, Copy, Download, Eye, FileInput, MoreHorizontal, PackageCheck, Power, RefreshCw, Search, Settings, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { normalizeCanadaAmazonWarehouseCode, normalizeUsPostalCode, type AgentMarkupListQuery, type AgentMarkupListResponse, type AgentMarkupMetrics, type AgentMarkupSummary, type AgentMarkupType, type AgentMarkupUnit, type AgentSummary, type DubaiPriceDisplayPageSummary, type DubaiPriceDisplayResponse, type DubaiPriceDisplayVersionSummary, type LegacyPricingMetaResponse, type LegacyPricingModule, type LegacyPricingQuoteResponse, type LegacyPricingRecommendation, type MasterDataSnapshot, type PriceBookImportJobSummary, type PriceBookImportTargetModule, type PriceBookSummary, type PriceLookupRecommendation, type PriceLookupResponse, type PricingRuleRefreshProgressResponse, type PricingSyncHealthResponse, type PricingSyncHealthRow, type SouthAfricaLookupResponse, type SouthAfricaRateRuleInput, type SouthAfricaRateRuleSummary, type StaffRoleKey } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
-import { formatCurrency } from '../shared/format';
+import { formatBeijingDate, formatBeijingDateTime, formatCurrency } from '../shared/format';
 import { countryOptions, filterLocationOption } from '../finance/entry/countryStateOptions';
-import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, paginationWhenNeeded, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import { calculatePriceChargeableWeight, seedImportedPriceRows, type ImportedPriceRow } from './excel';
-import { MarkupRouteEditor } from './MarkupRouteEditor';
+import { MarkupRouteEditor, type MarkupRouteEditorContext } from './MarkupRouteEditor';
+import { getLegacyRecommendationScopeColumnTitle, getLegacyRecommendationScopeLabel } from './canadaPricingScope';
+import { getMarkupRuleLabel } from './markupRuleLabel';
 import {
   buildLegacyQuoteCopyText,
   buildQuoteCopyText,
@@ -54,6 +56,7 @@ import {
   withPricingLookupTimeout,
   type LegacyLookupFormValues
 } from './pricingPageModel';
+import './pricingMarkupWorkbench.css';
 
 export {
   buildPriceBookImportAgentOptions,
@@ -88,8 +91,13 @@ interface SouthAfricaRateRuleFormValues {
   name: string;
   keywords: string;
   pricingMode: 'fixed' | 'consult';
-  ratePerCbm?: number;
+  costPerCbm?: number;
+  markupPerCbm?: number;
   remark?: string;
+}
+
+interface DubaiSeaMarkupFormValues {
+  seaMarkupPerCbm: number;
 }
 
 type AgentMarkupRule = AgentMarkupSummary;
@@ -99,17 +107,151 @@ type MarkupDisplayRule = AgentMarkupRule & {
   isPriceBookGroup?: boolean;
 };
 type PriceBookRecord = PriceBookSummary;
+type PriceBookManagementModule = PriceBookImportTargetModule | 'unclassified';
 type PriceRecommendation = PriceLookupRecommendation;
 type PriceLookupResult = PriceLookupResponse;
+type DubaiLookupPageGroup = {
+  key: string;
+  label: string;
+  pages: DubaiPriceDisplayPageSummary[];
+};
+
+type DubaiHighResolutionPreview = {
+  title: string;
+  pages: Array<{ id: string; pageNo: number; imageUrl: string }>;
+};
+
+const emptyMarkupFilterOptions: AgentMarkupListResponse['filterOptions'] = { agentNames: [], channelNames: [], realChannelNames: [], destinationCountries: [] };
+
+export function buildDubaiLookupPageGroups(mode: 'AIR' | 'SEA', pages: DubaiPriceDisplayPageSummary[]) {
+  const modePages = pages
+    .filter((page) => page.mode === mode)
+    .sort((left, right) => left.pageNo - right.pageNo);
+  const groups: DubaiLookupPageGroup[] = modePages.map((page, index) => ({
+    key: page.id,
+    label: modePages.length === 1 ? '完整价格表' : `第 ${index + 1} 部分`,
+    pages: [page]
+  }));
+  return { groups };
+}
+
+export function buildSouthAfricaQuoteTableRows(rules: SouthAfricaRateRuleSummary[]) {
+  return rules
+    .filter((rule) => rule.enabled)
+    .map((rule) => ({
+      id: rule.id,
+      category: rule.category,
+      name: rule.name,
+      keywords: rule.keywords,
+      consult: rule.consult,
+      ratePerCbm: rule.ratePerCbm,
+      remark: rule.remark
+    }));
+}
+
+export function getSouthAfricaQuotePriceTone(rule: Pick<SouthAfricaRateRuleSummary, 'consult' | 'ratePerCbm'>) {
+  if (rule.consult) return 'consult';
+  return rule.ratePerCbm === undefined ? 'pending' : 'ready';
+}
+
+export type LegacyRecommendationSort = 'price' | 'transit';
+
+function getLegacyTransitSortKey(transitLabel?: string) {
+  const values = transitLabel?.match(/\d+(?:\.\d+)?/g)?.map(Number).filter(Number.isFinite) ?? [];
+  return [values[0] ?? Number.POSITIVE_INFINITY, values[1] ?? values[0] ?? Number.POSITIVE_INFINITY] as const;
+}
+
+export function sortLegacyRecommendations(recommendations: LegacyPricingRecommendation[], mode: LegacyRecommendationSort) {
+  return [...recommendations].sort((left, right) => {
+    if (mode === 'transit') {
+      const [leftMin, leftMax] = getLegacyTransitSortKey(left.transitLabel);
+      const [rightMin, rightMax] = getLegacyTransitSortKey(right.transitLabel);
+      const transitDifference = leftMin - rightMin || leftMax - rightMax;
+      if (transitDifference) return transitDifference;
+    }
+    return left.salesTotal - right.salesTotal
+      || left.salesUnitPrice - right.salesUnitPrice
+      || left.channelName.localeCompare(right.channelName, 'zh-CN');
+  });
+}
+
+function isGeneratedDefaultMarkupRule(rule: AgentMarkupRule) {
+  return rule.id.startsWith('price-agent:');
+}
+
+function isSystemDefaultMarkupRule(rule: AgentMarkupRule) {
+  return isGeneratedDefaultMarkupRule(rule) && rule.defaultRuleSource !== 'AGENT_DEFAULT';
+}
+
+function getMarkupRuleLevel(rule: AgentMarkupRule) {
+  if (rule.rulePurpose === 'DUBAI_SEA_IMAGE') return { key: 'imageMarkup', label: '图片加价', color: 'blue' as const };
+  if (isGeneratedDefaultMarkupRule(rule)) return rule.defaultRuleSource === 'AGENT_DEFAULT'
+    ? { key: 'default', label: '代理默认', color: 'default' as const }
+    : { key: 'systemDefault', label: '系统默认', color: 'green' as const };
+  const hasRoute = Boolean(rule.channelName || rule.realChannelName);
+  const hasTier = Boolean(rule.markupUnit && rule.minChargeableValue !== undefined);
+  if (hasRoute && hasTier) return { key: 'routeTier', label: '线路阶梯', color: 'blue' as const };
+  if (hasRoute) return { key: 'route', label: '线路规则', color: 'purple' as const };
+  if (rule.destinationCountry) return { key: 'country', label: '目的国规则', color: 'orange' as const };
+  if (!hasTier) return { key: 'default', label: '代理默认', color: 'default' as const };
+  return { key: 'other', label: '通用阶梯', color: 'cyan' as const };
+}
+
+function getMarkupRuleScopeDisplay(rule: AgentMarkupRule) {
+  if (rule.rulePurpose === 'DUBAI_SEA_IMAGE') {
+    return { primary: '海运主运费', details: '空运及海运附加费用保持不变' };
+  }
+  if (isSystemDefaultMarkupRule(rule)) {
+    return { primary: '未命中更具体规则时兜底', details: '适用于全部国家、全部线路' };
+  }
+  if (isGeneratedDefaultMarkupRule(rule)) {
+    return { primary: '继承代理统一默认', details: '适用于当前价格表的全部国家、全部线路' };
+  }
+  const primary = rule.realChannelName || rule.channelName || rule.destinationCountry || '全部国家 · 全部线路';
+  const details = [
+    rule.destinationCountry && primary !== rule.destinationCountry ? rule.destinationCountry : undefined,
+    rule.channelName && primary !== rule.channelName ? rule.channelName : undefined
+  ].filter(Boolean).join(' · ');
+  return { primary, details };
+}
+
+function getMarkupRuleRangeDisplay(rule: AgentMarkupRule) {
+  if (!rule.markupUnit || rule.minChargeableValue === undefined) return '全部计费量';
+  return rule.maxChargeableValue === undefined
+    ? `${rule.minChargeableValue}${rule.markupUnit}+`
+    : `${rule.minChargeableValue}–${rule.maxChargeableValue}${rule.markupUnit}`;
+}
+
+export function getMarkupValueFieldMeta(type?: AgentMarkupType) {
+  const metadata: Record<AgentMarkupType, { label: string; unit: string }> = {
+    WEIGHT: { label: '业务员加价 / kg', unit: '元/kg' },
+    PER_SHIPMENT: { label: '单票加价', unit: '元/票' },
+    FIXED: { label: '固定加价', unit: '元' },
+    PERCENT: { label: '加价比例', unit: '%' }
+  };
+  return metadata[type ?? 'WEIGHT'];
+}
+
+function getPriceBookImportJobStatus(job: Pick<PriceBookImportJobSummary, 'status'>) {
+  const status = String(job.status ?? '').toUpperCase();
+  if (status === 'SUCCESS') return { label: '成功', color: 'green' };
+  if (status === 'FAILED') return { label: '失败', color: 'red' };
+  if (status === 'PARTIAL_FAILED') return { label: '部分失败', color: 'orange' };
+  if (status === 'PARSING') return { label: '解析中', color: 'blue' };
+  if (status === 'IMPORTING') return { label: '导入中', color: 'blue' };
+  return { label: '等待处理', color: 'default' };
+}
 
 export function PricingPage({
   apiClient,
+  initialSection,
   role,
   permissions,
   notice,
   onNotice
 }: {
   apiClient: ApiClient;
+  initialSection?: string;
   role: StaffRoleKey;
   permissions: PermissionKey[];
   notice: string | null;
@@ -120,25 +262,45 @@ export function PricingPage({
   const [markupForm] = Form.useForm<AgentMarkupFormValues>();
   const [priceBookRemarkForm] = Form.useForm<PriceBookRemarkFormValues>();
   const [southAfricaRateRuleForm] = Form.useForm<SouthAfricaRateRuleFormValues>();
+  const [dubaiSeaMarkupForm] = Form.useForm<DubaiSeaMarkupFormValues>();
+  const markupTypeValue = Form.useWatch('markupType', markupForm);
+  const markupAgentNameValue = Form.useWatch('agentName', markupForm);
+  const markupChannelNameValue = Form.useWatch('channelName', markupForm);
+  const markupRealChannelNameValue = Form.useWatch('realChannelName', markupForm);
+  const markupDestinationCountryValue = Form.useWatch('destinationCountry', markupForm);
   const southAfricaPricingMode = Form.useWatch('pricingMode', southAfricaRateRuleForm);
+  const southAfricaCostPerCbm = Form.useWatch('costPerCbm', southAfricaRateRuleForm);
+  const southAfricaMarkupPerCbm = Form.useWatch('markupPerCbm', southAfricaRateRuleForm);
   const [priceRows, setPriceRows] = useState<ImportedPriceRow[]>(() => [...seedImportedPriceRows]);
   const [priceBooks, setPriceBooks] = useState<PriceBookRecord[]>([]);
   const [markupRules, setMarkupRules] = useState<AgentMarkupRule[]>([]);
   const [markupDetailRules, setMarkupDetailRules] = useState<AgentMarkupRule[]>([]);
-  const [markupMetrics, setMarkupMetrics] = useState<AgentMarkupMetrics>({ totalRules: 0, enabledRules: 0, disabledRules: 0, unmatchedQuotes: 0 });
+  const [expandedMarkupGroup, setExpandedMarkupGroup] = useState<MarkupDisplayRule | null>(null);
+  const [expandedMarkupRules, setExpandedMarkupRules] = useState<AgentMarkupRule[]>([]);
+  const [expandedMarkupRulesLoading, setExpandedMarkupRulesLoading] = useState(false);
+  const [expandedMarkupRulesError, setExpandedMarkupRulesError] = useState('');
+  const [expandedMarkupRulesPagination, setExpandedMarkupRulesPagination] = useState({ page: 1, pageSize: 10, totalItems: 0 });
+  const [expandedMarkupRulesSort, setExpandedMarkupRulesSort] = useState<{ sortBy: AgentMarkupListQuery['sortBy']; sortOrder: NonNullable<AgentMarkupListQuery['sortOrder']> }>({ sortBy: undefined, sortOrder: 'asc' });
+  const [markupMetrics, setMarkupMetrics] = useState<AgentMarkupMetrics>({ totalRules: 0, enabledRules: 0, disabledRules: 0, unmatchedQuotes: 0, systemDefaultScopes: 0 });
+  const [markupFilterOptions, setMarkupFilterOptions] = useState<AgentMarkupListResponse['filterOptions']>(emptyMarkupFilterOptions);
   const [markupFilters, setMarkupFilters] = useState<AgentMarkupListQuery>({ status: 'ALL', page: 1, pageSize: 20 });
   const [markupModule, setMarkupModule] = useState<LegacyPricingModule>('amazon');
   const [selectedMarkupRuleIds, setSelectedMarkupRuleIds] = useState<string[]>([]);
   const [markupPage, setMarkupPage] = useState(1);
   const [selectedPriceBookIds, setSelectedPriceBookIds] = useState<string[]>([]);
-  const [priceBookManagementModule, setPriceBookManagementModule] = useState<PriceBookImportTargetModule>('amazon');
+  const [priceBookManagementModule, setPriceBookManagementModule] = useState<PriceBookManagementModule>('amazon');
   const [managedPriceBooks, setManagedPriceBooks] = useState<PriceBookRecord[]>([]);
   const [priceBookManagementLoading, setPriceBookManagementLoading] = useState(false);
+  const [priceBookManagementSlowLoading, setPriceBookManagementSlowLoading] = useState(false);
+  const [priceBookManagementLoadError, setPriceBookManagementLoadError] = useState<string | null>(null);
+  const [priceBookManagementReloadVersion, setPriceBookManagementReloadVersion] = useState(0);
   const [priceBookManagementFilters, setPriceBookManagementFilters] = useState({ agentName: 'ALL', keyword: '' });
   const [editingMarkupRule, setEditingMarkupRule] = useState<AgentMarkupRule | null>(null);
   const [markupModalOpen, setMarkupModalOpen] = useState(false);
   const [markupSaving, setMarkupSaving] = useState(false);
   const [markupBatchLoading, setMarkupBatchLoading] = useState(false);
+  const [markupRouteEditorOpen, setMarkupRouteEditorOpen] = useState(false);
+  const [markupRouteEditorContext, setMarkupRouteEditorContext] = useState<MarkupRouteEditorContext | null>(null);
   const [priceBookRemarkModalOpen, setPriceBookRemarkModalOpen] = useState(false);
   const [pricingSyncHealthOpen, setPricingSyncHealthOpen] = useState(false);
   const [pricingSyncHealthLoading, setPricingSyncHealthLoading] = useState(false);
@@ -150,24 +312,34 @@ export function PricingPage({
   const [markupNeedsRefresh, setMarkupNeedsRefresh] = useState(false);
   const [priceBookImporting, setPriceBookImporting] = useState(false);
   const [priceBookImportJob, setPriceBookImportJob] = useState<PriceBookImportJobSummary | null>(null);
+  const [priceBookImportHistoryOpen, setPriceBookImportHistoryOpen] = useState(false);
+  const [priceBookImportHistoryLoading, setPriceBookImportHistoryLoading] = useState(false);
+  const [priceBookImportHistory, setPriceBookImportHistory] = useState<PriceBookImportJobSummary[]>([]);
+  const [priceBookImportHistoryPagination, setPriceBookImportHistoryPagination] = useState({ page: 1, pageSize: 10, totalItems: 0 });
   const [priceBookImportAgentId, setPriceBookImportAgentId] = useState<string | undefined>();
   const [masterDataAgents, setMasterDataAgents] = useState<AgentSummary[]>([]);
   const priceBookFileInputRef = useRef<HTMLInputElement | null>(null);
   const onNoticeRef = useRef(onNotice);
   const lookupRequestSeqRef = useRef(0);
-  const southAfricaAutoLookupKeyRef = useRef('');
   const [lookupResult, setLookupResult] = useState<PriceLookupResult | null>(null);
   const [lookupLoading, setLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [legacyModule, setLegacyModule] = useState<LegacyPricingModule>('amazon');
   const [legacyMeta, setLegacyMeta] = useState<LegacyPricingMetaResponse | null>(null);
   const [legacyResult, setLegacyResult] = useState<LegacyPricingQuoteResponse | null>(null);
+  const [legacyRecommendationSort, setLegacyRecommendationSort] = useState<LegacyRecommendationSort>('price');
   const [dubaiPriceDisplay, setDubaiPriceDisplay] = useState<DubaiPriceDisplayResponse | null>(null);
   const [dubaiPriceDisplayLoading, setDubaiPriceDisplayLoading] = useState(false);
   const [dubaiPriceDisplayError, setDubaiPriceDisplayError] = useState<string | null>(null);
+  const [dubaiImageObjectUrls, setDubaiImageObjectUrls] = useState<Record<string, string>>({});
   const [dubaiDisplayVersions, setDubaiDisplayVersions] = useState<DubaiPriceDisplayVersionSummary[]>([]);
-  const [selectedDubaiPricePage, setSelectedDubaiPricePage] = useState<DubaiPriceDisplayPageSummary | null>(null);
-  const [dubaiDisplayPageIndexes, setDubaiDisplayPageIndexes] = useState<Record<'AIR' | 'SEA', number>>({ AIR: 0, SEA: 0 });
+  const [editingDubaiMarkupVersion, setEditingDubaiMarkupVersion] = useState<Pick<DubaiPriceDisplayVersionSummary, 'id' | 'seaMarkupPerCbm'> | null>(null);
+  const [dubaiMarkupSaving, setDubaiMarkupSaving] = useState(false);
+  const [dubaiHighResolutionPreview, setDubaiHighResolutionPreview] = useState<DubaiHighResolutionPreview | null>(null);
+  const [selectedDubaiDisplayVersion, setSelectedDubaiDisplayVersion] = useState<DubaiPriceDisplayVersionSummary | null>(null);
+  const [dubaiVersionImageObjectUrls, setDubaiVersionImageObjectUrls] = useState<Record<string, string>>({});
+  const [dubaiVersionPreviewLoading, setDubaiVersionPreviewLoading] = useState(false);
+  const [dubaiVersionPreviewError, setDubaiVersionPreviewError] = useState<string | null>(null);
   const [southAfricaResult, setSouthAfricaResult] = useState<SouthAfricaLookupResponse | null>(null);
   const [southAfricaRules, setSouthAfricaRules] = useState<SouthAfricaRateRuleSummary[]>([]);
   const [southAfricaRuleModalOpen, setSouthAfricaRuleModalOpen] = useState(false);
@@ -239,8 +411,13 @@ export function PricingPage({
         ) : <Text type="secondary">未填写</Text>;
       }
     },
-    { title: '查价模块', width: 280, render: () => <Text>{priceBookImportModules.find((item) => item.key === priceBookManagementModule)?.label}</Text> },
-    { title: '导入行数', dataIndex: 'rowCount', width: 120 },
+    { title: '查价模块', width: 180, render: () => <Text>{priceBookManagementModule === 'unclassified' ? '未归类数据' : priceBookImportModules.find((item) => item.key === priceBookManagementModule)?.label}</Text> },
+    { title: '导入行数', dataIndex: 'importRowCount', width: 105, render: (value: number | undefined, record: PriceBookRecord) => value ?? record.rowCount },
+    { title: '有效线路', dataIndex: 'activeRouteCount', width: 100, render: (value?: number) => value ?? 0 },
+    { title: '有效报价', dataIndex: 'activeQuoteRowCount', width: 100, render: (value?: number) => value ?? 0 },
+    { title: 'KG', dataIndex: 'activeKgQuoteRowCount', width: 85, render: (value?: number) => value ?? 0 },
+    { title: 'CBM', dataIndex: 'activeCbmQuoteRowCount', width: 85, render: (value?: number) => value ?? 0 },
+    { title: '异常行', dataIndex: 'failedRowCount', width: 90, render: (value?: number) => value ? <Tag color="red">{value}</Tag> : 0 },
     {
       title: '规则同步',
       width: 150,
@@ -248,10 +425,10 @@ export function PricingPage({
         const status = record.refreshStatus ?? 'CURRENT';
         const display = status === 'CURRENT' ? '已同步' : status === 'PENDING' ? '等待同步' : status === 'RUNNING' ? '同步中' : status === 'UNAVAILABLE' ? '原文件不可用' : '同步失败';
         const color = status === 'CURRENT' ? 'green' : status === 'UNAVAILABLE' || status === 'FAILED' ? 'red' : 'blue';
-        return <Tag color={color} title={record.lastRuleRefreshAt ? `最近规则同步：${new Date(record.lastRuleRefreshAt).toLocaleString('zh-CN')}` : undefined}>{display}</Tag>;
+        return <Tag color={color} title={record.lastRuleRefreshAt ? `最近规则同步：${formatBeijingDateTime(record.lastRuleRefreshAt)}` : undefined}>{display}</Tag>;
       }
     },
-    { title: '导入时间', dataIndex: 'importedAt', width: 220, render: (value: string) => new Date(value).toLocaleString('zh-CN') }
+    { title: '导入时间', dataIndex: 'importedAt', width: 220, render: (value: string) => formatBeijingDateTime(value) }
   ], [priceBookManagementModule]);
   const activePriceBookRuleRefresh = useMemo(
     () => priceBookRuleRefreshProgress?.modules.find((item) => item.module === priceBookManagementModule),
@@ -286,6 +463,9 @@ export function PricingPage({
   const canCopyQuote = can('pricing:lookup:copy-quote');
   const canViewDubaiImages = can('pricing:lookup:dubai-image-view') || can('pricing:dubai-display:active-view');
   const canReadSouthAfricaRules = can('pricing:south-africa:rules-read');
+  const canViewSouthAfricaQuoteTable = can('pricing:lookup:south-africa-table-view') && canReadSouthAfricaRules;
+  const canViewSouthAfricaCostMarkup = can('pricing:south-africa:cost-markup-view');
+  const southAfricaQuoteTableRows = useMemo(() => buildSouthAfricaQuoteTableRows(southAfricaRules), [southAfricaRules]);
   const amazonTierLabels = useMemo(() => buildAmazonTierLabels(), []);
   const pricingSubItems = useMemo(
     () => [
@@ -299,7 +479,10 @@ export function PricingPage({
     ],
     [availableLookupModules.length, canViewMarkupWorkspace, canViewPriceBooks]
   );
-  const [activePricingSection, setActivePricingSection] = useState('lookup');
+  const [activePricingSection, setActivePricingSection] = useState(initialSection ?? 'lookup');
+  useEffect(() => {
+    if (initialSection) setActivePricingSection(initialSection);
+  }, [initialSection]);
   useEffect(() => {
     if (!pricingSubItems.some((item) => item.key === activePricingSection)) {
       setActivePricingSection(pricingSubItems[0]?.key ?? 'lookup');
@@ -410,30 +593,11 @@ export function PricingPage({
     if (legacyModule === 'usaAirSea') return Boolean(normalizeUsPostalCode(postalCodeValue)) && hasMeasureInput;
     if (legacyModule === 'canadaAirSea') {
       return hasMeasureInput
-        && (canadaAddressTypeValue !== 'AMAZON' || /^[A-Za-z]{3}$/.test(amazonCodeValue?.trim() ?? ''));
+        && (canadaAddressTypeValue !== 'AMAZON' || Boolean(normalizeCanadaAmazonWarehouseCode(amazonCodeValue)));
     }
     if (isAirSeaPricingModule(legacyModule)) return hasMeasureInput;
     return false;
   })();
-  useEffect(() => {
-    if (legacyModule !== 'southAfrica' || activePricingSection !== 'lookup' || !canRunLookup) {
-      return;
-    }
-    const lookupKey = [
-      productNameValue?.trim() ?? '',
-      Number(volumeCbm ?? 0).toFixed(3),
-      tierValue?.trim() ?? ''
-    ].join('|');
-    if (southAfricaAutoLookupKeyRef.current === lookupKey) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      southAfricaAutoLookupKeyRef.current = lookupKey;
-      void runLookup();
-    }, 450);
-    return () => window.clearTimeout(timer);
-  }, [activePricingSection, canRunLookup, legacyModule, productNameValue, tierValue, volumeCbm]);
-
   const sortedRecommendations = useMemo(() => {
     return [...(lookupResult?.recommendations ?? [])].sort((left, right) => left.totalSales - right.totalSales);
   }, [lookupResult]);
@@ -442,10 +606,15 @@ export function PricingPage({
   const legacyHasRecommendations = Boolean(legacyResult?.recommendations.length);
   const highlightedLegacyQuote = legacyResult?.selected ?? legacyResult?.cheapestRecommendations[0] ?? legacyResult?.recommendations[0] ?? null;
   const legacyUnitPreview = legacyResult?.module === 'europeExpress' && Number(legacyResult.query.chargeableWeightKg ?? 0) <= 0;
+  const sortedLegacyRecommendations = useMemo(
+    () => sortLegacyRecommendations(legacyResult?.recommendations ?? [], legacyRecommendationSort),
+    [legacyRecommendationSort, legacyResult?.recommendations]
+  );
+  const visibleLegacyRecommendations = sortedLegacyRecommendations.slice(0, 3);
 
   useEffect(() => {
     let alive = true;
-    if (can('pricing:lookup:meta-view')) {
+    if (activePricingSection === 'lookup' && can('pricing:lookup:meta-view')) {
       apiClient.priceBookQuery.legacyPricingMeta()
         .then((meta) => {
           if (!alive) return;
@@ -453,7 +622,10 @@ export function PricingPage({
         })
         .catch(() => undefined);
     }
-    if (canReadSouthAfricaRules) {
+    if (canReadSouthAfricaRules && (
+      activePricingSection === 'lookup'
+      || (activePricingSection === 'priceBooks' && priceBookManagementModule === 'southAfrica')
+    )) {
       apiClient.priceBookQuery.southAfricaRateRules()
         .then((southAfrica) => {
           if (!alive) return;
@@ -464,7 +636,7 @@ export function PricingPage({
     return () => {
       alive = false;
     };
-  }, [apiClient, can, canReadSouthAfricaRules]);
+  }, [activePricingSection, apiClient, can, canReadSouthAfricaRules, priceBookManagementModule]);
 
   useEffect(() => {
     try {
@@ -484,7 +656,6 @@ export function PricingPage({
     let alive = true;
     setDubaiPriceDisplayLoading(true);
     setDubaiPriceDisplayError(null);
-    setDubaiDisplayPageIndexes({ AIR: 0, SEA: 0 });
     apiClient.priceBookQuery.dubaiPriceDisplay()
       .then((response) => {
         if (alive) setDubaiPriceDisplay(response);
@@ -503,6 +674,65 @@ export function PricingPage({
   }, [activePricingSection, apiClient, canViewDubaiImages, legacyModule]);
 
   useEffect(() => {
+    const scopedPages = [
+      ...buildDubaiLookupPageGroups('AIR', dubaiPriceDisplay?.airPages ?? []).groups.flatMap((group) => group.pages),
+      ...buildDubaiLookupPageGroups('SEA', dubaiPriceDisplay?.seaPages ?? []).groups.flatMap((group) => group.pages)
+    ];
+    const pages = [...new Map(scopedPages.map((page) => [page.id, page])).values()];
+    let cancelled = false;
+    const createdUrls: string[] = [];
+    setDubaiImageObjectUrls({});
+    if (!pages.length) return () => undefined;
+    void Promise.all(pages.map(async (page) => {
+      const blob = await apiClient.dubaiPriceDisplayPageImage(page.url);
+      const objectUrl = URL.createObjectURL(blob);
+      createdUrls.push(objectUrl);
+      return [page.id, objectUrl] as const;
+    })).then((entries) => {
+      if (!cancelled) setDubaiImageObjectUrls(Object.fromEntries(entries));
+    }).catch((error: unknown) => {
+      if (!cancelled) setDubaiPriceDisplayError(error instanceof Error ? error.message : '迪拜价格图片加载失败');
+    });
+    return () => {
+      cancelled = true;
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [apiClient, dubaiPriceDisplay]);
+
+  useEffect(() => {
+    if (!selectedDubaiDisplayVersion) {
+      setDubaiVersionImageObjectUrls({});
+      setDubaiVersionPreviewLoading(false);
+      setDubaiVersionPreviewError(null);
+      return () => undefined;
+    }
+    let cancelled = false;
+    const createdUrls: string[] = [];
+    const pages = selectedDubaiDisplayVersion.pages
+      .filter((page): page is typeof page & { mode: 'AIR' | 'SEA' } => page.mode === 'AIR' || page.mode === 'SEA')
+      .sort((left, right) => left.mode.localeCompare(right.mode) || left.sheetName.localeCompare(right.sheetName) || left.pageNo - right.pageNo);
+    setDubaiVersionImageObjectUrls({});
+    setDubaiVersionPreviewLoading(true);
+    setDubaiVersionPreviewError(null);
+    void Promise.all(pages.map(async (page) => {
+      const blob = await apiClient.dubaiPriceDisplayVersionPageImage(selectedDubaiDisplayVersion.id, page.id);
+      const objectUrl = URL.createObjectURL(blob);
+      createdUrls.push(objectUrl);
+      return [page.id, objectUrl] as const;
+    })).then((entries) => {
+      if (!cancelled) setDubaiVersionImageObjectUrls(Object.fromEntries(entries));
+    }).catch((error: unknown) => {
+      if (!cancelled) setDubaiVersionPreviewError(error instanceof Error ? error.message : '迪拜完整价格图片加载失败');
+    }).finally(() => {
+      if (!cancelled) setDubaiVersionPreviewLoading(false);
+    });
+    return () => {
+      cancelled = true;
+      createdUrls.forEach((url) => URL.revokeObjectURL(url));
+    };
+  }, [apiClient, selectedDubaiDisplayVersion]);
+
+  useEffect(() => {
     if (!can('pricing:dubai-display:versions-view') || activePricingSection !== 'priceBooks' || priceBookManagementModule !== 'dubaiAirSea') return;
     let alive = true;
     apiClient.priceBookQuery.dubaiPriceDisplayVersions()
@@ -513,16 +743,17 @@ export function PricingPage({
 
   useEffect(() => {
     let alive = true;
-    if (!canViewMarkupWorkspace) {
+    if (!canViewMarkupWorkspace || (activePricingSection !== 'markup' && activePricingSection !== 'priceBooks')) {
       setPriceBooks([]);
       setPriceRows([]);
       return () => {
         alive = false;
       };
     }
+    const isMarkupSection = activePricingSection === 'markup';
     Promise.all([
-      canViewPriceBooks ? apiClient.priceBookQuery.priceBooks({ includeRows: false }) : Promise.resolve({ books: [] as PriceBookSummary[] }),
-      canViewMarkupDetails ? apiClient.markupQuery.agentMarkupRules({ page: 1, pageSize: 200, status: 'ALL', includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
+      isMarkupSection && canViewPriceBooks ? apiClient.priceBookQuery.priceBooks({ includeRows: false }) : Promise.resolve({ books: [] as PriceBookSummary[] }),
+      isMarkupSection && canViewMarkupDetails ? apiClient.markupQuery.agentMarkupRules({ page: 1, pageSize: 200, status: 'ALL', includeHits: false, legacyModule: markupModule }) : Promise.resolve([] as AgentMarkupSummary[]),
       apiClient.masterData().catch(() => ({ agents: [] } as Partial<MasterDataSnapshot>))
     ])
       .then(([response, rules, masterData]) => {
@@ -535,6 +766,7 @@ export function PricingPage({
         setMarkupRules(markupRows);
         setMarkupDetailRules([]);
         setMarkupMetrics(readAgentMarkupMetrics(rules));
+        setMarkupFilterOptions(Array.isArray(rules) ? emptyMarkupFilterOptions : rules.filterOptions);
         setMasterDataAgents(Array.isArray(masterData?.agents) ? masterData.agents : []);
       })
       .catch((error) => {
@@ -545,31 +777,51 @@ export function PricingPage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canViewMarkupDetails, canViewMarkupWorkspace, canViewPriceBooks, canViewTierMarkup, markupModule]);
+  }, [activePricingSection, apiClient, canViewMarkupDetails, canViewMarkupWorkspace, canViewPriceBooks, canViewTierMarkup, markupModule]);
 
   useEffect(() => {
     if (!canViewPriceBooks || activePricingSection !== 'priceBooks') return;
     let alive = true;
-    const timeout = globalThis.setTimeout(() => {
-      if (alive) onNoticeRef.current('当前模块价格表加载超时，请稍后重试');
+    let timedOut = false;
+    const controller = new AbortController();
+    const slowTimeout = globalThis.setTimeout(() => {
+      if (alive && !timedOut) setPriceBookManagementSlowLoading(true);
     }, 8000);
+    const failureTimeout = globalThis.setTimeout(() => {
+      if (!alive) return;
+      timedOut = true;
+      controller.abort();
+      setPriceBookManagementSlowLoading(false);
+      setPriceBookManagementLoadError('当前模块价格表加载失败，请重试');
+      setPriceBookManagementLoading(false);
+    }, 20000);
     setPriceBookManagementLoading(true);
+    setPriceBookManagementSlowLoading(false);
+    setPriceBookManagementLoadError(null);
     setSelectedPriceBookIds([]);
-    apiClient.priceBookQuery.priceBooks({ includeRows: false, targetModule: priceBookManagementModule })
+    apiClient.priceBooks({ includeRows: false, targetModule: priceBookManagementModule, signal: controller.signal })
       .then((response) => {
-        if (alive) setManagedPriceBooks(response.books);
+        if (alive && !timedOut) setManagedPriceBooks(response.books);
       })
       .catch((error) => {
-        if (alive) onNoticeRef.current(error instanceof Error ? error.message : '当前模块价格表加载失败');
+        if (!alive || timedOut) return;
+        setPriceBookManagementLoadError(error instanceof Error ? error.message : '当前模块价格表加载失败');
       })
       .finally(() => {
-        if (alive) setPriceBookManagementLoading(false);
+        globalThis.clearTimeout(slowTimeout);
+        globalThis.clearTimeout(failureTimeout);
+        if (alive && !timedOut) {
+          setPriceBookManagementSlowLoading(false);
+          setPriceBookManagementLoading(false);
+        }
       });
     return () => {
       alive = false;
-      globalThis.clearTimeout(timeout);
+      controller.abort();
+      globalThis.clearTimeout(slowTimeout);
+      globalThis.clearTimeout(failureTimeout);
     };
-  }, [activePricingSection, apiClient, canViewPriceBooks, priceBookManagementModule]);
+  }, [activePricingSection, apiClient, canViewPriceBooks, priceBookManagementModule, priceBookManagementReloadVersion]);
 
   useEffect(() => {
     if (!can('pricing:price-books:sync-health-view') || activePricingSection !== 'priceBooks') return;
@@ -613,11 +865,69 @@ export function PricingPage({
     await loadPricingSyncHealth(1);
   }
 
+  async function loadExpandedMarkupRules(
+    group: MarkupDisplayRule,
+    page = 1,
+    sortBy = expandedMarkupRulesSort.sortBy,
+    sortOrder = expandedMarkupRulesSort.sortOrder,
+    pageSize = expandedMarkupRulesPagination.pageSize
+  ) {
+    setExpandedMarkupRulesLoading(true);
+    setExpandedMarkupRulesError('');
+    try {
+      const response = await apiClient.markupQuery.agentMarkupRules({
+        ...(group.priceBookId ? { priceBookId: group.priceBookId } : {}),
+        agentName: group.agentName,
+        legacyModule: markupModule,
+        status: 'ENABLED',
+        detail: true,
+        includeHits: true,
+        page,
+        pageSize,
+        sortBy,
+        sortOrder
+      });
+      setExpandedMarkupRules(readAgentMarkupRows(response));
+      setExpandedMarkupRulesPagination(response.pagination);
+      setExpandedMarkupRulesSort({ sortBy, sortOrder });
+    } catch (error) {
+      setExpandedMarkupRules([]);
+      setExpandedMarkupRulesError(error instanceof Error ? error.message : '规则清单加载失败');
+    } finally {
+      setExpandedMarkupRulesLoading(false);
+    }
+  }
+
+  function openMarkupRuleDetails(group: MarkupDisplayRule) {
+    setExpandedMarkupGroup(group);
+    setExpandedMarkupRulesSort({ sortBy: undefined, sortOrder: 'asc' });
+    void loadExpandedMarkupRules(group, 1, undefined, 'asc');
+  }
+
+  function closeMarkupRuleDetails() {
+    setExpandedMarkupGroup(null);
+    setExpandedMarkupRules([]);
+    setExpandedMarkupRulesError('');
+    setExpandedMarkupRulesPagination({ page: 1, pageSize: 10, totalItems: 0 });
+  }
+
+  function refreshExpandedMarkupRuleList() {
+    return expandedMarkupGroup
+      ? loadExpandedMarkupRules(
+          expandedMarkupGroup,
+          expandedMarkupRulesPagination.page,
+          expandedMarkupRulesSort.sortBy,
+          expandedMarkupRulesSort.sortOrder
+        )
+      : Promise.resolve();
+  }
+
   function reloadMarkupRules(nextFilters: AgentMarkupListQuery = markupFilters) {
     return apiClient.markupQuery.agentMarkupRules({ ...nextFilters, legacyModule: markupModule, page: 1, pageSize: 200, includeHits: false }).then((response) => {
       const rows = readAgentMarkupRows(response);
       setMarkupRules(rows);
       setMarkupMetrics(readAgentMarkupMetrics(response));
+      setMarkupFilterOptions(Array.isArray(response) ? emptyMarkupFilterOptions : response.filterOptions);
       setMarkupFilters({ ...nextFilters, legacyModule: markupModule, page: 1, pageSize: 20 });
       setSelectedMarkupRuleIds((current) => current.filter((id) => rows.some((rule) => rule.id === id)));
       return response;
@@ -638,7 +948,8 @@ export function PricingPage({
       name: '',
       keywords: '',
       pricingMode: 'fixed',
-      ratePerCbm: undefined,
+      costPerCbm: undefined,
+      markupPerCbm: undefined,
       remark: ''
     });
     setSouthAfricaRuleModalOpen(true);
@@ -651,7 +962,8 @@ export function PricingPage({
       name: rule.name,
       keywords: rule.keywords.join('、'),
       pricingMode: rule.consult ? 'consult' : 'fixed',
-      ratePerCbm: rule.ratePerCbm,
+      costPerCbm: rule.costPerCbm,
+      markupPerCbm: rule.markupPerCbm,
       remark: rule.remark ?? ''
     });
     setSouthAfricaRuleModalOpen(true);
@@ -667,7 +979,10 @@ export function PricingPage({
         name: values.name.trim(),
         keywords: parseSouthAfricaRuleKeywords(values.keywords),
         consult,
-        ...(consult ? {} : { ratePerCbm: Number(values.ratePerCbm) }),
+        ...(consult ? {} : { ratePerCbm: editingSouthAfricaRule?.ratePerCbm }),
+        ...(!consult && values.costPerCbm !== undefined && values.markupPerCbm !== undefined
+          ? { costPerCbm: Number(values.costPerCbm), markupPerCbm: Number(values.markupPerCbm) }
+          : {}),
         ...(values.remark?.trim() ? { remark: values.remark.trim() } : {})
       };
       if (editingSouthAfricaRule) {
@@ -676,7 +991,6 @@ export function PricingPage({
         await apiClient.createSouthAfricaRateRule(payload);
       }
       await reloadSouthAfricaRateRules();
-      southAfricaAutoLookupKeyRef.current = '';
       setSouthAfricaResult(null);
       setSouthAfricaRuleModalOpen(false);
       southAfricaRateRuleForm.resetFields();
@@ -693,7 +1007,6 @@ export function PricingPage({
     try {
       await apiClient.updateSouthAfricaRateRuleEnabled(rule.id, enabled);
       await reloadSouthAfricaRateRules();
-      southAfricaAutoLookupKeyRef.current = '';
       setSouthAfricaResult(null);
       onNotice(`南非物料规则已${enabled ? '启用' : '停用'}`);
     } catch (error) {
@@ -705,12 +1018,144 @@ export function PricingPage({
     try {
       await apiClient.deleteSouthAfricaRateRule(rule.id);
       await reloadSouthAfricaRateRules();
-      southAfricaAutoLookupKeyRef.current = '';
       setSouthAfricaResult(null);
       onNotice('南非物料规则已删除');
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '南非物料规则删除失败');
     }
+  }
+
+  function renderSouthAfricaRuleManagement() {
+    return (
+      <div className="pricing-south-africa-management">
+        <ManagedTable<SouthAfricaRateRuleSummary>
+          className="pricing-south-africa-management-table"
+          recordDetail={{ title: '南非物料价格规则详情' }}
+          rowKey="id"
+          size="small"
+          pagination={tenRowTablePagination}
+          dataSource={southAfricaRules}
+          scroll={{ x: 1520 }}
+          columns={[
+            { title: '一级分类', dataIndex: 'category', width: 120, fixed: 'left' as const, render: (value) => <Tag className="pricing-south-africa-category-tag">{value}</Tag> },
+            { title: '物料类别', dataIndex: 'name', width: 170, fixed: 'left' as const },
+            { title: '匹配关键词', dataIndex: 'keywords', width: 280, render: (keywords: string[]) => <Space className="pricing-south-africa-keywords" wrap size={[2, 2]}>{keywords.slice(0, 8).map((keyword) => <Tag className="pricing-south-africa-keyword-tag" key={keyword}>{keyword}</Tag>)}</Space> },
+            ...(canViewSouthAfricaCostMarkup ? [
+              {
+                title: '成本价/CBM',
+                dataIndex: 'costPerCbm',
+                width: 130,
+                render: (value: number | undefined, rule: SouthAfricaRateRuleSummary) => rule.consult
+                  ? <Text type="secondary">不适用</Text>
+                  : value === undefined ? <Tag color="orange">待补录</Tag> : <Text strong>{formatCurrency(value)}/CBM</Text>
+              },
+              {
+                title: '加价/CBM',
+                dataIndex: 'markupPerCbm',
+                width: 120,
+                render: (value: number | undefined, rule: SouthAfricaRateRuleSummary) => rule.consult
+                  ? <Text type="secondary">不适用</Text>
+                  : value === undefined ? <Tag color="orange">待补录</Tag> : <Text strong className="pricing-south-africa-markup-value">+{formatCurrency(value)}/CBM</Text>
+              }
+            ] : []),
+            {
+              title: '最终查价/CBM',
+              dataIndex: 'ratePerCbm',
+              width: 155,
+              onCell: (rule) => ({
+                className: `pricing-south-africa-price-cell pricing-south-africa-price-${getSouthAfricaQuotePriceTone(rule)}`
+              }),
+              render: (value: number | undefined, rule) => rule.consult
+                ? <Tag color="orange">需单询</Tag>
+                : <Space direction="vertical" size={0}><Text strong className="pricing-south-africa-price-value">{formatCurrency(value ?? 0)}/CBM</Text>{rule.costPerCbm === undefined || rule.markupPerCbm === undefined ? <Text type="secondary">保留原报价</Text> : <Text type="success">自动计算</Text>}</Space>
+            },
+            { title: '备注', dataIndex: 'remark', width: 280, render: (value?: string) => <Text className="pricing-south-africa-quote-remark">{value || '-'}</Text> },
+            { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> },
+            ...(can('pricing:south-africa:rules-update') || can('pricing:south-africa:rules-enable') || can('pricing:south-africa:rules-delete') ? [{
+              title: '操作',
+              key: 'action',
+              width: 210,
+              fixed: 'right' as const,
+              render: (_: unknown, rule: SouthAfricaRateRuleSummary) => (
+                <Space size={4}>
+                  {can('pricing:south-africa:rules-update') ? <Button htmlType="button" size="small" onClick={() => openEditSouthAfricaRateRule(rule)}>修改</Button> : null}
+                  {can('pricing:south-africa:rules-enable') ? (
+                    rule.enabled ? <Popconfirm title="确认停用该南非物料规则？" description="停用后该规则不会参与自动查价。" okText="确认停用" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void setSouthAfricaRateRuleEnabled(rule, false)}>
+                      <Button htmlType="button" size="small">停用</Button>
+                    </Popconfirm> : <Button htmlType="button" size="small" onClick={() => void setSouthAfricaRateRuleEnabled(rule, true)}>启用</Button>
+                  ) : null}
+                  {can('pricing:south-africa:rules-delete') ? <Popconfirm title="确认删除该南非物料规则？" description="删除后无法恢复，且后续查价将不再匹配该规则。" okText="确认删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void deleteSouthAfricaRateRule(rule)}>
+                    <Button htmlType="button" size="small" danger>删除</Button>
+                  </Popconfirm> : null}
+                </Space>
+              )
+            }] : [])
+          ]}
+        />
+      </div>
+    );
+  }
+
+  function renderSouthAfricaQuoteTable() {
+    return (
+      <Card
+        className="module-grid pricing-legacy-result-card pricing-south-africa-quote-table-card"
+        title="南非专线报价表"
+        extra={<Text type="secondary">共 {southAfricaQuoteTableRows.length} 条启用报价</Text>}
+      >
+        <ManagedTable
+          className="pricing-south-africa-quote-table"
+          recordDetail={false}
+          rowKey="id"
+          size="small"
+          pagination={tenRowTablePagination}
+          dataSource={southAfricaQuoteTableRows}
+          scroll={{ x: 1020 }}
+          columns={[
+            {
+              title: '一级分类',
+              dataIndex: 'category',
+              width: 150,
+              sorter: (left, right) => left.category.localeCompare(right.category, 'zh-CN'),
+              render: (value) => <Tag className="pricing-south-africa-category-tag">{value}</Tag>
+            },
+            {
+              title: '物料类别',
+              dataIndex: 'name',
+              width: 180,
+              sorter: (left, right) => left.name.localeCompare(right.name, 'zh-CN')
+            },
+            {
+              title: '匹配关键词',
+              dataIndex: 'keywords',
+              width: 300,
+              sorter: (left, right) => left.keywords.join('\u0001').localeCompare(right.keywords.join('\u0001'), 'zh-CN'),
+              render: (keywords: string[]) => <Space className="pricing-south-africa-keywords" wrap size={[2, 2]}>{keywords.map((keyword) => <Tag className="pricing-south-africa-keyword-tag" key={keyword}>{keyword}</Tag>)}</Space>
+            },
+            {
+              title: '报价/CBM',
+              dataIndex: 'ratePerCbm',
+              width: 160,
+              sorter: (left, right) => (left.ratePerCbm ?? Number.POSITIVE_INFINITY) - (right.ratePerCbm ?? Number.POSITIVE_INFINITY),
+              onCell: (rule) => ({
+                className: `pricing-south-africa-price-cell pricing-south-africa-price-${getSouthAfricaQuotePriceTone(rule)}`
+              }),
+              render: (value: number | undefined, rule) => rule.consult
+                ? <Tag color="orange">需单询</Tag>
+                : value === undefined
+                  ? <Tag color="orange">待确认</Tag>
+                  : <Text strong className="pricing-south-africa-price-value">{formatCurrency(value)}/CBM</Text>
+            },
+            {
+              title: '备注',
+              dataIndex: 'remark',
+              width: 360,
+              render: (value?: string) => <Text className="pricing-south-africa-quote-remark">{value || '-'}</Text>
+            }
+          ]}
+        />
+      </Card>
+    );
   }
 
   const handlePricingSectionChange = useCallback((key: string) => {
@@ -731,6 +1176,10 @@ export function PricingPage({
     if (!selectedMarkupRule) {
       return;
     }
+    if (selectedMarkupRule.rulePurpose === 'DUBAI_SEA_IMAGE') {
+      openDubaiSeaMarkupRuleEditor(selectedMarkupRule);
+      return;
+    }
     void resolveConcreteMarkupRule(selectedMarkupRule)
       .then(openEditSpecificMarkupRule)
       .catch((error) => onNotice(error instanceof Error ? error.message : '加价规则加载失败'));
@@ -744,8 +1193,67 @@ export function PricingPage({
       onNotice('当前规则未关联有效价格表，无法打开线路阶梯工作台');
       return;
     }
-    const params = new URLSearchParams({ view: 'route-editor', priceBookId: rule.priceBookId, agentName: rule.agentName });
-    window.open(`/app/pricing/markup?${params.toString()}`, '_blank', 'noopener');
+    setMarkupRouteEditorContext({ priceBookId: rule.priceBookId, agentName: rule.agentName });
+    setMarkupRouteEditorOpen(true);
+  }
+
+  function renderExpandedMarkupRuleTable(group: MarkupDisplayRule) {
+    const breakdown = group.ruleBreakdown;
+    const breakdownItems = [
+      ['默认', breakdown?.defaultRules ?? 0, 'default'],
+      ['目的国', breakdown?.countryRules ?? 0, 'orange'],
+      ['线路规则', breakdown?.routeRules ?? 0, 'purple'],
+      ['线路阶梯', breakdown?.routeTierRules ?? 0, 'blue'],
+      ['其他', breakdown?.otherRules ?? 0, 'cyan']
+    ].filter(([, count]) => Number(count) > 0) as Array<[string, number, string]>;
+    return <div className="pricing-markup-rule-breakdown">
+      <div className="pricing-markup-rule-breakdown-head">
+        <div>
+          <Text strong>{group.agentName} · 生效规则清单</Text>
+          <Text type="secondary">系统默认与已配置规则共同展示；规则数量和覆盖线路、成本行分开统计</Text>
+        </div>
+        <Space size={6} wrap>
+          <Tag>共 {group.ruleCount ?? 1} 项</Tag>
+          {breakdownItems.map(([label, count, color]) => <Tag key={label} color={color === 'default' ? undefined : color}>{label} {count}</Tag>)}
+        </Space>
+        <Text type="secondary" className="pricing-markup-rule-priority-note">线路阶梯和具体范围规则优先；未命中时使用代理默认或系统默认</Text>
+      </div>
+      {expandedMarkupRulesError ? <Alert type="error" showIcon message="规则清单加载失败" description={expandedMarkupRulesError} action={<Button size="small" onClick={() => void loadExpandedMarkupRules(group, expandedMarkupRulesPagination.page)}>重试</Button>} /> : null}
+      <ManagedTable
+        rowKey="id"
+        size="small"
+        loading={expandedMarkupRulesLoading}
+        dataSource={expandedMarkupRules}
+        recordDetail={false}
+        columnSettings={false}
+        pagination={{
+          current: expandedMarkupRulesPagination.page,
+          pageSize: 10,
+          total: expandedMarkupRulesPagination.totalItems,
+          showSizeChanger: false,
+          showTotal: (total) => `共 ${total} 项 · 每页 10 项`,
+          onChange: (page) => void loadExpandedMarkupRules(group, page, expandedMarkupRulesSort.sortBy, expandedMarkupRulesSort.sortOrder, 10)
+        }}
+        onChange={(_, __, sorter, extra) => {
+          if (extra.action !== 'sort' || Array.isArray(sorter) || !sorter.field || !sorter.order) return;
+          const field = String(sorter.field) as NonNullable<AgentMarkupListQuery['sortBy']>;
+          void loadExpandedMarkupRules(group, 1, field, sorter.order === 'descend' ? 'desc' : 'asc');
+        }}
+        scroll={{ x: 1040 }}
+        rowClassName={(rule) => isSystemDefaultMarkupRule(rule) ? 'pricing-markup-rule-system-default' : ''}
+        columns={[
+          { key: 'priority', title: '优先级', dataIndex: 'priority', width: 82, sorter: true, sortOrder: expandedMarkupRulesSort.sortBy === 'priority' ? (expandedMarkupRulesSort.sortOrder === 'asc' ? 'ascend' : 'descend') : null, render: (value: number | undefined, rule) => isGeneratedDefaultMarkupRule(rule) ? <Text type="secondary">兜底</Text> : value ?? 100 },
+          { key: 'ruleLevel', title: '规则层级', width: 112, render: (_, rule) => { const level = getMarkupRuleLevel(rule); return <Tag color={level.color}>{level.label}</Tag>; } },
+          { key: 'scope', title: '作用范围', width: 280, render: (_, rule) => { const value = getMarkupRuleScopeDisplay(rule); return <div className="pricing-markup-rule-scope"><Text strong>{value.primary}</Text>{value.details ? <Text type="secondary" ellipsis={{ tooltip: value.details }}>{value.details}</Text> : null}</div>; } },
+          { key: 'markupUnit', title: '计费', dataIndex: 'markupUnit', width: 76, render: (value?: AgentMarkupUnit) => value ?? '通用' },
+          { key: 'range', title: '计费量区间', width: 145, render: (_, rule) => getMarkupRuleRangeDisplay(rule) },
+          { key: 'markupValue', title: '加价', dataIndex: 'markupValue', width: 125, sorter: true, sortOrder: expandedMarkupRulesSort.sortBy === 'markupValue' ? (expandedMarkupRulesSort.sortOrder === 'asc' ? 'ascend' : 'descend') : null, render: (_, rule) => <Text className="pricing-markup-rule-value">+{formatCurrency(Number(rule.markupValue ?? rule.markupPerKg ?? 0))}{rule.markupType === 'WEIGHT' || !rule.markupType ? `/${rule.markupUnit ?? 'KG'}` : ''}</Text> },
+          { key: 'hits', title: '覆盖线路 / 成本行', width: 155, render: (_, rule) => isSystemDefaultMarkupRule(rule) ? <Text type="secondary">动态兜底</Text> : <span><Text strong className="pricing-markup-hit-count">{rule.routeHitCount ?? 0} 条</Text> / {rule.hitCount ?? 0} 行</span> },
+          { key: 'enabled', title: '状态', dataIndex: 'enabled', width: 82, sorter: true, sortOrder: expandedMarkupRulesSort.sortBy === 'enabled' ? (expandedMarkupRulesSort.sortOrder === 'asc' ? 'ascend' : 'descend') : null, render: (enabled: boolean, rule) => <Tag color={enabled ? 'green' : 'default'}>{isGeneratedDefaultMarkupRule(rule) ? '生效' : enabled ? '启用' : '停用'}</Tag> },
+          { key: 'action', title: '操作', width: 96, fixed: 'right', render: (_, rule) => can('pricing:markup:update') ? <Button type="link" size="small" onClick={() => { if (isGeneratedDefaultMarkupRule(rule)) void resolveConcreteMarkupRule(group).then(openEditSpecificMarkupRule).catch((error) => onNotice(error instanceof Error ? error.message : '加价规则加载失败')); else openEditSpecificMarkupRule(rule); }}>{isSystemDefaultMarkupRule(rule) ? '设置默认' : isGeneratedDefaultMarkupRule(rule) ? '调整默认' : '编辑'}</Button> : <Text type="secondary">只读</Text> }
+        ]}
+      />
+    </div>;
   }
 
   async function resolveConcreteMarkupRule(rule: MarkupDisplayRule) {
@@ -815,7 +1323,11 @@ export function PricingPage({
       setMarkupModalOpen(false);
       markupForm.resetFields();
       onNotice(`${rule.agentName} 加价规则已${shouldCreateFromAgentRow ? '保存' : editingMarkupRule ? '更新' : '新增'}：${formatMarkupValue(rule)}`);
-      void reloadMarkupRules(markupFilters).catch((error) => {
+      const refreshTasks: Array<Promise<unknown>> = [reloadMarkupRules(markupFilters)];
+      if (expandedMarkupGroup?.agentName === rule.agentName && expandedMarkupGroup.priceBookId === rule.priceBookId) {
+        refreshTasks.push(refreshExpandedMarkupRuleList());
+      }
+      void Promise.all(refreshTasks).catch((error) => {
         onNotice(error instanceof Error ? `加价规则已保存，列表刷新失败：${error.message}` : '加价规则已保存，列表刷新失败');
       });
     } catch (error) {
@@ -835,6 +1347,7 @@ export function PricingPage({
     setMarkupBatchLoading(true);
     void batchUpdateMarkupRules([selectedMarkupRule], false).then((response) => {
       void reloadMarkupRules(markupFilters);
+      void refreshExpandedMarkupRuleList();
       onNotice(`${selectedMarkupRule.agentName} 加价规则已停用（${response.successCount} 条）`);
     }).catch((error) => {
       onNotice(error instanceof Error ? error.message : '加价规则停用失败');
@@ -850,6 +1363,7 @@ export function PricingPage({
     setMarkupBatchLoading(true);
     void batchDeleteMarkupRules(selectedMarkupRules).then((response) => {
       void reloadMarkupRules(markupFilters);
+      void refreshExpandedMarkupRuleList();
       setSelectedMarkupRuleIds([]);
       onNotice(`已删除 ${response.successCount} 条加价规则`);
     }).catch((error) => {
@@ -864,6 +1378,10 @@ export function PricingPage({
    * 避免权限叠加时把固定操作列挤压到文字被截断。
    */
   function openMarkupRowAction(action: 'edit' | 'toggle' | 'delete', rule: MarkupDisplayRule) {
+    if (rule.rulePurpose === 'DUBAI_SEA_IMAGE') {
+      if (action === 'edit') openDubaiSeaMarkupRuleEditor(rule);
+      return;
+    }
     if (action === 'edit') {
       void resolveConcreteMarkupRule(rule)
         .then(openEditSpecificMarkupRule)
@@ -889,6 +1407,7 @@ export function PricingPage({
         return request
           .then((response) => {
             void reloadMarkupRules(markupFilters);
+            void refreshExpandedMarkupRuleList();
             if (isToggle) {
               onNotice(`${rule.agentName} 加价规则已${nextEnabled ? '启用' : '停用'}`);
             } else {
@@ -997,12 +1516,74 @@ export function PricingPage({
     }
   }
 
+  function openDubaiSeaMarkupEditor(version: DubaiPriceDisplayVersionSummary) {
+    dubaiSeaMarkupForm.setFieldsValue({ seaMarkupPerCbm: version.seaMarkupPerCbm });
+    setEditingDubaiMarkupVersion(version);
+  }
+
+  function openDubaiSeaMarkupRuleEditor(rule: AgentMarkupRule) {
+    if (!rule.applicationVersionId) {
+      onNotice('当前迪拜海运图片版本不可用，请刷新后重试');
+      return;
+    }
+    const seaMarkupPerCbm = Number(rule.markupValue ?? rule.markupPerKg);
+    dubaiSeaMarkupForm.setFieldsValue({ seaMarkupPerCbm });
+    setEditingDubaiMarkupVersion({ id: rule.applicationVersionId, seaMarkupPerCbm });
+  }
+
+  function openDubaiImagePreview(
+    title: string,
+    pages: Array<{ id: string; pageNo: number }>,
+    imageUrls: Record<string, string>
+  ) {
+    const previewPages = pages.flatMap((page) => {
+      const imageUrl = imageUrls[page.id];
+      return imageUrl ? [{ ...page, imageUrl }] : [];
+    });
+    if (previewPages.length !== pages.length) {
+      onNotice('高清原图仍在加载，请稍后再试');
+      return;
+    }
+    setDubaiHighResolutionPreview({ title, pages: previewPages });
+  }
+
+  function openDubaiDisplayVersionPreview(version: DubaiPriceDisplayVersionSummary) {
+    if (version.status !== 'READY' || !version.pages.some((page) => page.mode === 'AIR' || page.mode === 'SEA')) {
+      onNotice('当前版本尚未生成可查看的价格图片');
+      return;
+    }
+    setSelectedDubaiDisplayVersion(version);
+  }
+
+  async function saveDubaiSeaMarkup() {
+    if (!editingDubaiMarkupVersion) return;
+    const values = await dubaiSeaMarkupForm.validateFields();
+    setDubaiMarkupSaving(true);
+    try {
+      const response = await apiClient.updateDubaiSeaMarkup(editingDubaiMarkupVersion.id, values);
+      setDubaiDisplayVersions(response.versions);
+      if (markupModule === 'dubaiAirSea') await reloadMarkupRules(markupFilters);
+      setEditingDubaiMarkupVersion(null);
+      dubaiSeaMarkupForm.resetFields();
+      onNotice('迪拜海运业务图片已按新的内部价格规则生成');
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '迪拜海运业务图片生成失败');
+    } finally {
+      setDubaiMarkupSaving(false);
+    }
+  }
+
   async function handlePriceFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) {
       return;
     }
     const selectedModule = priceBookManagementModule;
+    if (selectedModule === 'unclassified') {
+      onNotice('未归类数据仅支持查看，请先选择具体价格表模块再导入');
+      event.target.value = '';
+      return;
+    }
     const selectedAgent = enabledAgentOptions.find((option) => option.value === priceBookImportAgentId);
     if (selectedModule !== 'dubaiAirSea' && !selectedAgent) {
       onNotice('请先选择代理简称');
@@ -1057,6 +1638,41 @@ export function PricingPage({
     throw new Error('价格表导入仍在处理中，请稍后刷新查看任务结果');
   }
 
+  async function loadPriceBookImportHistory(page = 1) {
+    setPriceBookImportHistoryLoading(true);
+    try {
+      const response = await apiClient.priceBookImportJobs({ targetModule: priceBookManagementModule, page, pageSize: 10 });
+      setPriceBookImportHistory(response.jobs);
+      setPriceBookImportHistoryPagination(response.pagination);
+      setPriceBookImportHistoryOpen(true);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '导入记录加载失败');
+    } finally {
+      setPriceBookImportHistoryLoading(false);
+    }
+  }
+
+  async function retryPriceBookImport(job: PriceBookImportJobSummary) {
+    setPriceBookImportHistoryLoading(true);
+    try {
+      const started = await apiClient.retryPriceBookImportJob(job.id);
+      setPriceBookImportJob(started.job);
+      onNotice(`已重新提交 ${job.fileName}`);
+      const completed = isTerminalImportJob(started.job) ? started.job : await waitForPriceBookImportJob(started.job.id);
+      setPriceBookImportJob(completed);
+      await loadPriceBookImportHistory(priceBookImportHistoryPagination.page);
+      const response = await apiClient.priceBooks({ includeRows: false, targetModule: priceBookManagementModule });
+      setManagedPriceBooks(response.books);
+      if (completed.status === 'SUCCESS') onNotice(`重试成功：${job.fileName}`);
+      else onNotice(completed.message ?? `重试失败：${job.fileName}`);
+    } catch (error) {
+      onNotice(error instanceof Error ? error.message : '导入任务重试失败');
+    } finally {
+      setPriceBookImportHistoryLoading(false);
+    }
+  }
+
+
   async function deleteSelectedPriceBooks() {
     const selectedBooks = managedPriceBooks.filter((book) => selectedPriceBookIds.includes(book.id));
     if (!selectedBooks.length) {
@@ -1064,8 +1680,8 @@ export function PricingPage({
     }
 
     try {
-      await Promise.all(selectedBooks.map((book) => apiClient.deletePriceBook(book.id)));
-      const deletedIds = new Set(selectedBooks.map((book) => book.id));
+      const response = await apiClient.batchDeletePriceBooks({ ids: selectedBooks.map((book) => book.id) });
+      const deletedIds = new Set(response.results.filter((item) => item.success).map((item) => item.id));
       setPriceBooks((current) => current.filter((book) => !deletedIds.has(book.id)));
       setManagedPriceBooks((current) => current.filter((book) => !deletedIds.has(book.id)));
       setPriceRows((current) => current.filter((row) => !row.priceBookId || !deletedIds.has(row.priceBookId)));
@@ -1079,9 +1695,10 @@ export function PricingPage({
         // 价格表已经删除；加价规则刷新失败不能让旧报价结果留在页面上。
         setMarkupNeedsRefresh(true);
       }
-      onNotice(selectedBooks.length === 1
-        ? `已删除价格表 ${selectedBooks[0].fileName}，其报价已失效，请重新查询`
-        : `已删除 ${selectedBooks.length} 张价格表，相关报价已失效，请重新查询`);
+      setSelectedPriceBookIds(response.results.filter((item) => !item.success).map((item) => item.id));
+      onNotice(response.failedCount
+        ? `已删除 ${response.successCount} 张，${response.failedCount} 张失败：${response.results.filter((item) => !item.success).map((item) => item.error).join('；')}`
+        : `已删除 ${response.successCount} 张价格表，相关报价已失效，请重新查询`);
     } catch (error) {
       onNotice(error instanceof Error ? error.message : '价格表删除失败');
     }
@@ -1127,9 +1744,9 @@ export function PricingPage({
         onNotice('请先填写亚马逊仓库代码');
         return;
       }
-      if (legacyModule === 'canadaAirSea' && canadaAddressType === 'AMAZON' && !/^[A-Z]{3}$/.test(amazonCode ?? '')) {
-        lookupForm.setFields([{ name: 'amazonCode', errors: ['请输入三位大写字母，例如 YVR'] }]);
-        onNotice('亚马逊仓请填写三位仓库代码，例如 YVR');
+      if (legacyModule === 'canadaAirSea' && canadaAddressType === 'AMAZON' && !normalizeCanadaAmazonWarehouseCode(amazonCode)) {
+        lookupForm.setFields([{ name: 'amazonCode', errors: ['至少输入三位，前三位须为字母，例如 YYC 或 YYC1'] }]);
+        onNotice('亚马逊仓请填写至少三位仓库代码，例如 YYC 或 YYC1');
         return;
       }
       if ((legacyModule === 'inquiry' || legacyModule === 'europeExpress') && !destinationCountry) {
@@ -1163,8 +1780,7 @@ export function PricingPage({
         return;
       }
       const largeCargoReason = describeLargeCargo(values);
-      // 驰汉卡车海运双清明确归属本模块；是否可接大件由后端按实际
-      // 价格表线路判断，其他仅有快递线路的代理仍会收到原有转模块提示。
+      // 方数只用于换算快递派计费重；卡派/按方线路不由填写 CBM 自动开启。
       if ((legacyModule === 'inquiry' || legacyModule === 'amazon') && largeCargoReason) {
         onNotice('已按大件/超大件规则匹配渠道');
       }
@@ -1260,11 +1876,12 @@ export function PricingPage({
     setLookupError(null);
     setLookupLoading(false);
     setSelectedLegacyRecommendation(null);
-    setSelectedDubaiPricePage(null);
+    setDubaiHighResolutionPreview(null);
   }
 
   function resetLookupResult() {
     invalidatePricingResult();
+    setLegacyRecommendationSort('price');
     if (legacyModule === 'europeExpress') {
       lookupForm.setFieldValue('channel', '');
     }
@@ -1301,6 +1918,7 @@ export function PricingPage({
   function changeLegacyModule(nextModule: LegacyPricingModule) {
     invalidatePricingResult();
     setLegacyModule(nextModule);
+    setLegacyRecommendationSort('price');
     setChargeableWeightManual(false);
     setVolumeCbmManual(false);
     setAmazonTierManual(false);
@@ -1336,9 +1954,7 @@ export function PricingPage({
 
     if (legacyModule === 'amazon') {
       return (
-        <>
-          <section className="pricing-form-block">
-            <Text strong className="pricing-form-block-title">亚马逊查询条件</Text>
+          <section className="pricing-form-block pricing-form-block-amazon">
             <div className="pricing-form-grid pricing-form-grid-amazon">
               <Form.Item name="amazonCode" label="亚马逊仓库代码" rules={[{ required: true, message: '请输入仓库代码' }]}>
                 <Input tabIndex={lookupTabIndex('amazonCode')} placeholder="FTW5" />
@@ -1361,19 +1977,32 @@ export function PricingPage({
               <Form.Item name="volumeCbm" label="方数 CBM">
                 <InputNumber tabIndex={lookupTabIndex('volumeCbm')} aria-label="方数" className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="如 1" />
               </Form.Item>
+              <div className="pricing-amazon-inline-action">
+                <Button
+                  aria-label="查价查询"
+                  type="primary"
+                  size="large"
+                  icon={<Search size={16} />}
+                  htmlType="button"
+                  loading={lookupLoading}
+                  disabled={!canRunLookup || lookupLoading}
+                  onClick={() => void runLookup()}
+                >
+                  查询比价
+                </Button>
+              </div>
               <Form.Item name="chargeableWeightKg" hidden>
                 <InputNumber />
               </Form.Item>
             </div>
           </section>
-        </>
       );
     }
 
     if (legacyModule === 'inquiry') {
       return (
         <>
-          <section className="pricing-form-block">
+          <section className="pricing-form-block pricing-form-block-inquiry">
             <Text strong className="pricing-form-block-title">询盘信息</Text>
             <div className="pricing-form-grid pricing-form-grid-inquiry">
               <Form.Item name="productName" label="品名">
@@ -1401,7 +2030,7 @@ export function PricingPage({
                 <Input tabIndex={lookupTabIndex('postalCode')} placeholder="60750" />
               </Form.Item>
               <Form.Item name="address" label="地址" className="pricing-field-span-2">
-                <Input.TextArea tabIndex={lookupTabIndex('address')} rows={3} placeholder="France 549 rue du maubon Choisy au bac" />
+                <Input.TextArea tabIndex={lookupTabIndex('address')} rows={2} placeholder="France 549 rue du maubon Choisy au bac" />
               </Form.Item>
               <Form.Item name="packageInfo" label="包装（可选）">
                 <Input tabIndex={lookupTabIndex('packageInfo')} aria-label="包装" placeholder="如 1个木箱、2托、纸箱货" />
@@ -1424,10 +2053,31 @@ export function PricingPage({
               <Form.Item name="volumeCbm" label="方数 CBM" rules={[{ required: true, message: '请输入方数' }]}>
                 <InputNumber tabIndex={lookupTabIndex('volumeCbm')} aria-label="方数" className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="5" />
               </Form.Item>
+              <div className="pricing-inquiry-weight-summary" title="没有尺寸时直接填写方数，系统按 CBM x 167 自动计算计费重">
+                <Text type="secondary">自动计费重</Text>
+                <Text strong>{calculatedChargeableWeight > 0 ? calculatedChargeableWeight : 0} KG</Text>
+              </div>
+              <div className="pricing-inquiry-query-action">
+                <Button
+                  aria-label="查价查询"
+                  type="primary"
+                  size="large"
+                  icon={<Search size={16} />}
+                  htmlType="button"
+                  loading={lookupLoading}
+                  disabled={!canRunLookup || lookupLoading}
+                  onClick={() => void runLookup()}
+                >
+                  查询综合报价
+                </Button>
+              </div>
             </div>
           </section>
-          <section className="pricing-form-block">
-            <Text strong className="pricing-form-block-title">尺寸（有就填）</Text>
+          <section className="pricing-form-block pricing-form-block-inquiry-size">
+            <div className="pricing-form-block-heading">
+              <Text strong className="pricing-form-block-title">尺寸（有就填）</Text>
+              <Text type="secondary">没有尺寸时直接填方数，系统按 CBM x 167 自动计算。</Text>
+            </div>
             <div className="pricing-form-grid pricing-form-grid-size">
               <Form.Item name="lengthCm" label="长 cm"><InputNumber tabIndex={lookupTabIndex('lengthCm')} min={0} precision={2} placeholder="可不填" /></Form.Item>
               <Form.Item name="widthCm" label="宽 cm"><InputNumber tabIndex={lookupTabIndex('widthCm')} min={0} precision={2} placeholder="可不填" /></Form.Item>
@@ -1477,7 +2127,7 @@ export function PricingPage({
                 <InputNumber tabIndex={lookupTabIndex('chargeableWeightKg')} className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="如 80、120、1000；不填则按最低单价排序" />
               </Form.Item>
               <Form.Item name="volumeCbm" label="方数 CBM">
-                <InputNumber tabIndex={lookupTabIndex('volumeCbm')} className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="卡车头程按方报价时填写" />
+                <InputNumber tabIndex={lookupTabIndex('volumeCbm')} className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="用于换算快递派计费重（1CBM=167KG）" />
               </Form.Item>
             </div>
           </section>
@@ -1510,9 +2160,9 @@ export function PricingPage({
       const moduleLabel = getLegacyModuleLabel(legacyModule);
       return (
         <>
-          <section className="pricing-form-block">
+          <section className="pricing-form-block pricing-form-block-air-sea-primary">
             <Text strong className="pricing-form-block-title">{moduleLabel}条件</Text>
-            <div className="pricing-form-grid pricing-form-grid-express">
+            <div className="pricing-form-grid pricing-form-grid-express pricing-form-grid-air-sea-primary">
               {legacyModule === 'usaAirSea' ? (
                 <>
                   <Form.Item name="destinationCountry" hidden><Input /></Form.Item>
@@ -1547,16 +2197,16 @@ export function PricingPage({
                   {canadaAddressTypeValue === 'AMAZON' ? (
                     <Form.Item
                       name="amazonCode"
-                      label="亚马逊仓库前三位"
+                      label="亚马逊仓库代码"
                       rules={[
-                        { required: true, message: '请输入亚马逊仓库前三位' },
-                        { pattern: /^[A-Za-z]{3}$/, message: '请输入三位大写字母，例如 YVR' }
+                        { required: true, message: '请输入亚马逊仓库代码' },
+                        { pattern: /^[A-Za-z]{3}[A-Za-z0-9]*$/, message: '至少输入三位，前三位须为字母，例如 YYC 或 YYC1' }
                       ]}
                     >
                       <Input
                         tabIndex={lookupTabIndex('amazonCode')}
-                        maxLength={3}
-                        placeholder="例如 YVR"
+                        maxLength={16}
+                        placeholder="例如 YYC 或 YYC1"
                         onChange={(event) => lookupForm.setFieldValue('amazonCode', event.target.value.toUpperCase())}
                       />
                     </Form.Item>
@@ -1576,10 +2226,27 @@ export function PricingPage({
               <Form.Item name="volumeCbm" label="方数 CBM">
                 <InputNumber tabIndex={lookupTabIndex('volumeCbm')} aria-label="方数 CBM" className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="如 1.000" />
               </Form.Item>
+              <div className="pricing-air-sea-query-action">
+                <Button
+                  aria-label="查询价格"
+                  type="primary"
+                  size="large"
+                  icon={<Search size={16} />}
+                  htmlType="button"
+                  loading={lookupLoading}
+                  disabled={!canRunLookup || lookupLoading}
+                  onClick={() => void runLookup()}
+                >
+                  查询价格
+                </Button>
+              </div>
             </div>
           </section>
-          <section className="pricing-form-block">
-            <Text strong className="pricing-form-block-title">尺寸信息</Text>
+          <section className="pricing-form-block pricing-form-block-air-sea-size">
+            <div className="pricing-form-block-heading">
+              <Text strong className="pricing-form-block-title">尺寸信息</Text>
+              <Text type="secondary">有尺寸时填写，用于核对计费重量。</Text>
+            </div>
             <div className="pricing-form-grid pricing-form-grid-size">
               <Form.Item name="lengthCm" label="长 cm"><InputNumber tabIndex={lookupTabIndex('lengthCm')} min={0} precision={2} placeholder="可不填" /></Form.Item>
               <Form.Item name="widthCm" label="宽 cm"><InputNumber tabIndex={lookupTabIndex('widthCm')} min={0} precision={2} placeholder="可不填" /></Form.Item>
@@ -1588,7 +2255,7 @@ export function PricingPage({
               <Form.Item name="unitActualWeightKg" label="单件实重 KG"><InputNumber tabIndex={lookupTabIndex('unitActualWeightKg')} min={0} precision={3} placeholder="可不填" /></Form.Item>
             </div>
           </section>
-          <section className="pricing-form-block pricing-form-block-muted">
+          <section className="pricing-form-block pricing-form-block-muted pricing-form-block-air-sea-extra">
             <Text strong className="pricing-form-block-title">辅助信息</Text>
             <div className="pricing-form-grid pricing-form-grid-express-extra">
               <Form.Item name="productName" label="品名（可选）">
@@ -1628,7 +2295,7 @@ export function PricingPage({
   return (
     <AppPage>
       <AppPageHeader
-        title="报价查价中心"
+        title="报价查询中心"
         description={legacyModule === 'dubaiAirSea' ? '直接浏览迪拜空运、海运有效业务价格' : '已根据目的地、计费重和价格规则匹配可用渠道'}
         actions={activePricingSection === 'lookup' && legacyModule !== 'dubaiAirSea' ? (
           <AppActionGroup>
@@ -1674,47 +2341,45 @@ export function PricingPage({
               {dubaiPriceDisplayError ? <Alert type="error" showIcon message={dubaiPriceDisplayError} /> : null}
               {(['AIR', 'SEA'] as const).map((mode) => {
                 const pages = mode === 'AIR' ? dubaiPriceDisplay?.airPages ?? [] : dubaiPriceDisplay?.seaPages ?? [];
-                const currentIndex = Math.min(dubaiDisplayPageIndexes[mode], Math.max(0, pages.length - 1));
-                const currentPage = pages[currentIndex];
+                const { groups } = buildDubaiLookupPageGroups(mode, pages);
+                const modeLabel = mode === 'AIR' ? '空运' : '海运';
                 return (
                   <Card
                     key={mode}
                     className="module-grid pricing-legacy-result-card"
-                    title={`迪拜${mode === 'AIR' ? '空运' : '海运'}价格表`}
+                    title={`迪拜${modeLabel}价格表`}
                     loading={dubaiPriceDisplayLoading}
-                    extra={pages.length > 1 ? (
-                      <Space size={6} className="pricing-dubai-page-switcher">
-                        <Tooltip title="上一页">
-                          <Button
-                            htmlType="button"
-                            size="small"
-                            aria-label="上一页"
-                            icon={<ArrowLeft size={15} />}
-                            disabled={currentIndex === 0}
-                            onClick={() => setDubaiDisplayPageIndexes((current) => ({ ...current, [mode]: Math.max(0, current[mode] - 1) }))}
-                          />
-                        </Tooltip>
-                        <Text type="secondary">第 {currentIndex + 1} / {pages.length} 页</Text>
-                        <Tooltip title="下一页">
-                          <Button
-                            htmlType="button"
-                            size="small"
-                            aria-label="下一页"
-                            icon={<ArrowRight size={15} />}
-                            disabled={currentIndex >= pages.length - 1}
-                            onClick={() => setDubaiDisplayPageIndexes((current) => ({ ...current, [mode]: Math.min(pages.length - 1, current[mode] + 1) }))}
-                          />
-                        </Tooltip>
-                      </Space>
-                    ) : undefined}
+                    extra={<Text type="secondary">双击图片高清查看</Text>}
                   >
-                    {currentPage ? (
-                      <div className="pricing-dubai-image-pages">
-                        <button type="button" className="pricing-dubai-image-page" onClick={() => setSelectedDubaiPricePage(currentPage)}>
-                          <img src={currentPage.url} alt={`迪拜${mode === 'AIR' ? '空运' : '海运'}价格表第 ${currentPage.pageNo} 页`} />
-                        </button>
+                    {pages.length ? (
+                      <div className={`pricing-dubai-overview-grid${groups.length > 1 ? ' is-split' : ''}`}>
+                        {groups.map((group) => {
+                          const loaded = group.pages.every((page) => Boolean(dubaiImageObjectUrls[page.id]));
+                          return (
+                            <button
+                              key={group.key}
+                              type="button"
+                              className="pricing-dubai-overview-group"
+                              aria-label={`迪拜${modeLabel}价格表${group.label}，双击高清查看`}
+                              title="双击高清查看"
+                              onDoubleClick={() => openDubaiImagePreview(`迪拜${modeLabel}价格表 · ${group.label}`, group.pages, dubaiImageObjectUrls)}
+                            >
+                              {loaded ? (
+                                <span className={`pricing-dubai-overview-stack${group.pages.length > 1 ? ' is-merged' : ''}`}>
+                                  {group.pages.map((page) => (
+                                    <img
+                                      key={page.id}
+                                      src={dubaiImageObjectUrls[page.id]}
+                                      alt={`迪拜${modeLabel}价格表第 ${page.pageNo} 页`}
+                                    />
+                                  ))}
+                                </span>
+                              ) : <span className="pricing-dubai-overview-loading"><Spin size="small" /></span>}
+                            </button>
+                          );
+                        })}
                       </div>
-                    ) : <div className="pricing-empty-result pricing-empty-result-compact"><Text type="secondary">暂无已发布的迪拜{mode === 'AIR' ? '空运' : '海运'}价格表</Text></div>}
+                    ) : <div className="pricing-empty-result pricing-empty-result-compact"><Text type="secondary">暂无已发布的迪拜{modeLabel}价格表</Text></div>}
                   </Card>
                 );
               })}
@@ -1722,11 +2387,6 @@ export function PricingPage({
           ) : (
           <Card
             className="module-grid pricing-lookup-card pricing-calculator-card"
-            title={can('pricing:lookup:view') ? (
-              <Space size={10} wrap>
-                <span>查价</span>
-              </Space>
-            ) : undefined}
           >
             <Form
               form={lookupForm}
@@ -1740,6 +2400,9 @@ export function PricingPage({
               onValuesChange={(changedValues) => {
                 const dimensionKeys = ['volumeCbm', 'actualWeightKg', 'lengthCm', 'widthCm', 'heightCm', 'packageCount', 'unitActualWeightKg'];
                 const cbmDimensionKeys = ['lengthCm', 'widthCm', 'heightCm', 'packageCount'];
+                const tierChanged = Object.prototype.hasOwnProperty.call(changedValues, 'tier');
+                const southAfricaLookupInputChanged = legacyModule === 'southAfrica'
+                  && ['productName', 'tier', 'volumeCbm'].some((key) => Object.prototype.hasOwnProperty.call(changedValues, key));
                 if (Object.prototype.hasOwnProperty.call(changedValues, 'volumeCbm')) {
                   setVolumeCbmManual(true);
                 }
@@ -1753,21 +2416,24 @@ export function PricingPage({
                   setChargeableWeightManual(false);
                   setAmazonTierManual(false);
                 }
-                if (Object.prototype.hasOwnProperty.call(changedValues, 'tier')) {
+                if (tierChanged) {
                   if (legacyModule === 'southAfrica') {
                     setSouthAfricaCategoryManual(Boolean(String(changedValues.tier ?? '').trim()));
                   } else {
                     setAmazonTierManual(true);
                   }
+                  if (legacyModule !== 'southAfrica') {
+                    setChargeableWeightManual(false);
+                  }
+                }
+                if (tierChanged || southAfricaLookupInputChanged) {
                   lookupRequestSeqRef.current += 1;
                   setLegacyResult(null);
                   setSouthAfricaResult(null);
                   setLookupResult(null);
                   setLookupError(null);
+                  setLookupLoading(false);
                   setSelectedLegacyRecommendation(null);
-                  if (legacyModule !== 'southAfrica') {
-                    setChargeableWeightManual(false);
-                  }
                   onNotice(null);
                 }
               }}
@@ -1775,14 +2441,7 @@ export function PricingPage({
               <div className={`pricing-calculator-grid pricing-calculator-grid-${legacyModule}${isAirSeaPricingModule(legacyModule) ? ' pricing-calculator-grid-air-sea' : ''}`}>
                 <div className="pricing-calculator-left">
                   {renderLegacyLookupFields()}
-                  {legacyModule === 'inquiry' ? (
-                    <div className="pricing-auto-weight-inline">
-                      <Text strong>自动计费重</Text>
-                      <Title level={3}>{calculatedChargeableWeight > 0 ? calculatedChargeableWeight : 0} KG</Title>
-                      <Text type="secondary">没有尺寸时直接填方数，系统按 CBM x 167 自动算计费重。</Text>
-                    </div>
-                  ) : null}
-                  <div className="pricing-legacy-action-row">
+                  {legacyModule !== 'amazon' && legacyModule !== 'inquiry' && !isAirSeaPricingModule(legacyModule) ? <div className="pricing-legacy-action-row">
                     <Button
                       aria-label="查价查询"
                       type="primary"
@@ -1793,10 +2452,10 @@ export function PricingPage({
                       disabled={!canRunLookup || lookupLoading}
                       onClick={() => void runLookup()}
                     >
-                      {legacyModule === 'amazon' ? '查询比价' : legacyModule === 'inquiry' ? '查询综合报价' : '查询价格'}
+                      查询价格
                     </Button>
                     <Button htmlType="button" size="large" onClick={resetLookupResult}>清空</Button>
-                  </div>
+                  </div> : null}
                 </div>
               </div>
             </Form>
@@ -1874,50 +2533,26 @@ export function PricingPage({
               )}
             </Card>
           ) : null}
-          {legacyModule === 'southAfrica' && canReadSouthAfricaRules ? (
-            <Card
-              className="module-grid pricing-legacy-result-card pricing-south-africa-rate-table-card"
-              title="南非专线报价表"
-              extra={can('pricing:south-africa:rules-create') ? <Button htmlType="button" type="primary" onClick={openCreateSouthAfricaRateRule}>新增物料规则</Button> : undefined}
-            >
-              <ManagedTable<SouthAfricaRateRuleSummary>
-                rowKey="id"
-                size="small"
-                pagination={tenRowTablePagination}
-                dataSource={southAfricaRules}
-                rowClassName={(record) => record.id === southAfricaResult?.result?.id ? 'pricing-south-africa-hit-row' : ''}
-                columns={[
-                  { title: '一级分类', dataIndex: 'category', width: 120, render: (value) => <Text strong>{value}</Text> },
-                  { title: '物料类别', dataIndex: 'name', width: 150 },
-                  { title: '匹配关键词', dataIndex: 'keywords', width: 260, render: (keywords: string[]) => <Space className="pricing-south-africa-keywords" wrap size={[2, 2]}>{keywords.slice(0, 8).map((keyword) => <Tag className="pricing-south-africa-keyword-tag" key={keyword}>{keyword}</Tag>)}</Space> },
-                  { title: '运费/CBM', dataIndex: 'ratePerCbm', width: 120, render: (value: number | undefined, record) => record.consult ? <Tag color="orange">需单询</Tag> : `${formatCurrency(value ?? 0)}/CBM` },
-                  { title: '备注', dataIndex: 'remark', width: 260, render: (value?: string) => value || '-' },
-                  { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> },
-                  ...(can('pricing:south-africa:rules-update') || can('pricing:south-africa:rules-enable') || can('pricing:south-africa:rules-delete') ? [{
-                    title: '操作',
-                    key: 'action',
-                    width: 210,
-                    fixed: 'right' as const,
-                    render: (_: unknown, rule: SouthAfricaRateRuleSummary) => (
-                      <Space size={4}>
-                        {can('pricing:south-africa:rules-update') ? <Button htmlType="button" size="small" onClick={() => openEditSouthAfricaRateRule(rule)}>修改</Button> : null}
-                        {can('pricing:south-africa:rules-enable') ? (
-                          rule.enabled ? <Popconfirm title="确认停用该南非物料规则？" description="停用后该规则不会参与自动查价。" okText="确认停用" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void setSouthAfricaRateRuleEnabled(rule, false)}>
-                            <Button htmlType="button" size="small">停用</Button>
-                          </Popconfirm> : <Button htmlType="button" size="small" onClick={() => void setSouthAfricaRateRuleEnabled(rule, true)}>启用</Button>
-                        ) : null}
-                        {can('pricing:south-africa:rules-delete') ? <Popconfirm title="确认删除该南非物料规则？" description="删除后无法恢复，且后续查价将不再匹配该规则。" okText="确认删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void deleteSouthAfricaRateRule(rule)}>
-                          <Button htmlType="button" size="small" danger>删除</Button>
-                        </Popconfirm> : null}
-                      </Space>
-                    )
-                  }] : [])
-                ]}
-              />
-            </Card>
-          ) : null}
+          {legacyModule === 'southAfrica' && canViewSouthAfricaQuoteTable ? renderSouthAfricaQuoteTable() : null}
           {legacyModule !== 'southAfrica' && legacyModule !== 'dubaiAirSea' && (lookupLoading || lookupError || legacyResult) ? (
-            <Card className="module-grid pricing-legacy-result-card" title={`${legacyPricingModules.find((item) => item.key === (legacyResult?.module ?? legacyModule))?.label ?? '渠道报价'} · 业务报价`}>
+            <Card
+              className="module-grid pricing-legacy-result-card"
+              title={legacyResult && legacyHasRecommendations ? `推荐方案（${legacyResult.recommendations.length} 条线路）` : '推荐方案'}
+              extra={legacyResult && legacyHasRecommendations ? (
+                <div className="pricing-legacy-sort">
+                  <Text type="secondary">排序方式</Text>
+                  <Select
+                    aria-label="报价排序方式"
+                    value={legacyRecommendationSort}
+                    onChange={setLegacyRecommendationSort}
+                    options={[
+                      { value: 'price', label: '价格最低' },
+                      { value: 'transit', label: '时效最快' }
+                    ]}
+                  />
+                </div>
+              ) : undefined}
+            >
               {legacyResult && legacyHasRecommendations ? (
                 <>
                   {legacyUnitPreview ? (
@@ -1925,45 +2560,62 @@ export function PricingPage({
                       className="notice-bar"
                       type="info"
                       showIcon
-                      message="未填写计费重，当前结果按最低单价排序，仅用于快速比价；填写计费重量后可计算真实总价。"
+                      message="未填写计费重，当前报价仅用于快速比价；填写计费重量后可计算真实总价。"
                     />
                   ) : null}
-                  <Row gutter={[12, 12]}>
-                    {(legacyResult.cheapestRecommendations.length ? legacyResult.cheapestRecommendations : legacyResult.recommendations.slice(0, 3)).map((item, index) => (
+                  <Row gutter={[12, 12]} className="pricing-legacy-recommendation-grid">
+                    {visibleLegacyRecommendations.map((item, index) => (
                       <Col xs={24} md={8} key={item.id}>
-                        <button type="button" className="pricing-legacy-quote-card" onClick={() => setSelectedLegacyRecommendation(item)}>
-                          <span className="pricing-legacy-rank">{index + 1}</span>
-                          <Text strong>{item.channelName}</Text>
-                          <Title level={4}>{formatCurrency(item.salesTotal)}</Title>
-                          {item.transportMode ? <Tag color="blue">{item.transportMode === 'SEA_RAIL' ? '铁海联运' : item.transportMode === 'AIR' ? '空运' : item.transportMode === 'SEA' ? '海运' : '铁路'}</Tag> : null}
-                          {item.cargoType === 'BATTERY' ? <Tag color="purple">电池/带电</Tag> : null}
-                          {canViewCost ? <span>成本 {item.costTotal === undefined ? '-' : formatCurrency(item.costTotal)}</span> : null}
-                          <span>{item.weightSegmentLabel} / {formatKgCurrencyRate(item.salesUnitPrice)}{item.quoteMode === 'cbm' ? '/CBM' : '/kg'}</span>
-                          {canViewPostalRule && item.postalRule ? <span>匹配邮编/价格区 {item.postalRule}</span> : null}
-                          <span>时效 {item.transitLabel ?? '时效待确认'}</span>
-                          {item.productSurchargeRemark || item.specialRemark || item.remark ? <Tag color="orange">渠道要求</Tag> : null}
-                          {item.customRemark ? <Tag color="cyan">自定义备注</Tag> : null}
+                        <button type="button" className={`pricing-legacy-quote-card${index === 0 ? ' is-leading' : ''}`} onClick={() => setSelectedLegacyRecommendation(item)}>
+                          {index === 0 ? <span className="pricing-legacy-leading-ribbon">{legacyRecommendationSort === 'price' ? '最低价' : '时效最快'}</span> : null}
+                          <span className="pricing-legacy-card-head">
+                            <Text strong className="pricing-legacy-channel-name">{item.channelName}</Text>
+                            <Text className="pricing-legacy-transit">{item.transitLabel ?? '时效待确认'}</Text>
+                          </span>
+                          <Title level={3} className="pricing-legacy-card-price">{formatCurrency(item.salesTotal)}</Title>
+                          <span className="pricing-legacy-card-facts">
+                            {canViewCost ? <span>成本 {item.costTotal === undefined ? '-' : formatCurrency(item.costTotal)}</span> : null}
+                            <span>{item.weightSegmentLabel} / {formatKgCurrencyRate(item.salesUnitPrice)}{item.quoteMode === 'cbm' ? '/CBM' : '/kg'}</span>
+                            {canViewPostalRule && item.postalRule ? <span>匹配邮编/价格区 {item.postalRule}</span> : null}
+                          </span>
+                          <span className="pricing-legacy-card-footer">
+                            <span className="pricing-legacy-card-tags">
+                              {item.transportMode ? <Tag color="blue">{item.transportMode === 'SEA_RAIL' ? '铁海联运' : item.transportMode === 'AIR' ? '空运' : item.transportMode === 'SEA' ? '海运' : '铁路'}</Tag> : null}
+                              {item.cargoType === 'BATTERY' ? <Tag color="purple">电池/带电</Tag> : null}
+                              {item.productSurchargeRemark || item.specialRemark || item.remark ? <Tag color="orange">渠道要求</Tag> : null}
+                              {item.customRemark ? <Tag color="cyan">自定义备注</Tag> : null}
+                            </span>
+                            <span className="pricing-legacy-card-detail">查看详情</span>
+                          </span>
                         </button>
                       </Col>
                     ))}
                   </Row>
+                  <div className="pricing-legacy-all-title">
+                    <Text strong>全部报价线路</Text>
+                  </div>
                   <ManagedTable
+                    recordDetail={{ title: '报价结果详情' }}
                     rowKey="id"
                     size="small"
                     pagination={tenRowTablePagination}
-                    dataSource={legacyResult.recommendations}
+                    dataSource={sortedLegacyRecommendations}
                     scroll={{ x: canViewGrossProfit || canViewPostalRule ? 1710 : 1510 }}
                     onRow={(record) => ({ onClick: () => setSelectedLegacyRecommendation(record) })}
                     columns={[
                       { title: '渠道', dataIndex: 'channelName', width: 240, render: (value) => <Text strong>{value}</Text> },
                       ...(legacyModule === 'inquiry' ? [{ title: '运输方式', dataIndex: 'transportMode', width: 110, render: (value?: LegacyPricingRecommendation['transportMode']) => value ? <Tag color="blue">{value === 'SEA_RAIL' ? '铁海联运' : value === 'AIR' ? '空运' : value === 'SEA' ? '海运' : '铁路'}</Tag> : '-' }] : []),
-                      { title: '仓库/国家', width: 140, render: (_value, record) => record.warehouseCode || record.destinationCountry || '-' },
+                      {
+                        title: getLegacyRecommendationScopeColumnTitle(legacyResult?.module ?? legacyModule),
+                        width: 160,
+                        render: (_value, record) => getLegacyRecommendationScopeLabel(record.module, record)
+                      },
                       ...(canViewPostalRule ? [{ title: '匹配邮编/价格区', dataIndex: 'postalRule', width: 150, render: (value?: string) => value || '-' }] : []),
                       { title: '重量段', dataIndex: 'weightSegmentLabel', width: 140 },
                       { title: '时效', dataIndex: 'transitLabel', width: 120, render: (value?: string) => value || '时效待确认' },
                       ...(canViewCost ? [{ title: '成本单价', width: 120, render: (_value: unknown, record: LegacyPricingRecommendation) => record.calculation ? `${formatKgCurrencyRate(record.calculation.cost.unitPrice)}/${record.calculation.chargeable.unit}` : '-' }] : []),
                       ...(canViewCost ? [{ title: '成本来源重量段', width: 150, render: (_value: unknown, record: LegacyPricingRecommendation) => record.calculation?.cost.weightSegmentLabel ?? '-' }] : []),
-                      ...(canViewMarkupBreakdown ? [{ title: '命中加价规则', width: 170, render: (_value: unknown, record: LegacyPricingRecommendation) => record.calculation?.markup.source === 'LINE_TIER' ? record.calculation.markup.rangeLabel : '统一加价回退' }] : []),
+                      ...(canViewMarkupBreakdown ? [{ title: '命中加价规则', width: 190, render: (_value: unknown, record: LegacyPricingRecommendation) => getMarkupRuleLabel(record.calculation?.markup) }] : []),
                       ...(canViewMarkupBreakdown ? [{ title: '实际加价值', width: 120, render: (_value: unknown, record: LegacyPricingRecommendation) => record.calculation ? formatCurrency(record.calculation.markup.totalMarkup) : '-' }] : []),
                       { title: '单价', dataIndex: 'salesUnitPrice', width: 110, render: (value, record) => `${formatKgCurrencyRate(value)}${record.quoteMode === 'cbm' ? '/CBM' : '/kg'}` },
                       { title: '总价', dataIndex: 'salesTotal', width: 120, render: (value) => <Text strong>{formatCurrency(value)}</Text> },
@@ -2004,14 +2656,25 @@ export function PricingPage({
         ) : null}
 
         <Modal
-          title={selectedDubaiPricePage ? `迪拜价格表 - ${selectedDubaiPricePage.sheetName} 第 ${selectedDubaiPricePage.pageNo} 页` : '迪拜价格表'}
-          open={Boolean(selectedDubaiPricePage)}
+          title={dubaiHighResolutionPreview?.title ?? '迪拜价格表高清原图'}
+          open={Boolean(dubaiHighResolutionPreview)}
           destroyOnHidden
-          width="90vw"
-          footer={<Button htmlType="button" type="primary" onClick={() => setSelectedDubaiPricePage(null)}>关闭</Button>}
-          onCancel={() => setSelectedDubaiPricePage(null)}
+          width="96vw"
+          className="pricing-dubai-high-resolution-modal"
+          footer={<Button htmlType="button" type="primary" onClick={() => setDubaiHighResolutionPreview(null)}>关闭</Button>}
+          onCancel={() => setDubaiHighResolutionPreview(null)}
         >
-          {selectedDubaiPricePage ? <img className="pricing-dubai-image-preview" src={selectedDubaiPricePage.url} alt="迪拜价格表大图预览" /> : null}
+          <div className="pricing-dubai-high-resolution-hint">原始分辨率展示，可横向或纵向滚动查看价格明细。</div>
+          <div className={`pricing-dubai-image-preview-stack${(dubaiHighResolutionPreview?.pages.length ?? 0) > 1 ? ' is-merged' : ''}`}>
+            {dubaiHighResolutionPreview?.pages.map((page) => (
+              <img
+                key={page.id}
+                className="pricing-dubai-image-preview"
+                src={page.imageUrl}
+                alt={`迪拜价格表高清原图第 ${page.pageNo} 页`}
+              />
+            ))}
+          </div>
         </Modal>
 
         <Modal
@@ -2034,7 +2697,7 @@ export function PricingPage({
               {canViewCost || canViewGrossProfit || canViewMarkupBreakdown ? (
                 <div className="pricing-result-grid pricing-admin-only">
                   {canViewCost ? <><div className="pricing-result-item"><Text type="secondary">成本单价</Text><Text strong>{selectedLegacyRecommendation.costUnitPrice === undefined ? '-' : `${formatKgCurrencyRate(selectedLegacyRecommendation.costUnitPrice)}${selectedLegacyRecommendation.quoteMode === 'cbm' ? '/CBM' : '/kg'}`}</Text></div><div className="pricing-result-item"><Text type="secondary">成本来源重量段</Text><Text strong>{selectedLegacyRecommendation.calculation?.cost.weightSegmentLabel ?? '-'}</Text></div><div className="pricing-result-item"><Text type="secondary">成本合计</Text><Text strong>{selectedLegacyRecommendation.costTotal === undefined ? '-' : formatCurrency(selectedLegacyRecommendation.costTotal)}</Text></div></> : null}
-                  {canViewMarkupBreakdown ? <><div className="pricing-result-item"><Text type="secondary">命中加价规则</Text><Text strong>{selectedLegacyRecommendation.calculation?.markup.source === 'LINE_TIER' ? selectedLegacyRecommendation.calculation.markup.rangeLabel : '统一加价回退'}</Text></div><div className="pricing-result-item"><Text type="secondary">实际加价值</Text><Text strong>{selectedLegacyRecommendation.calculation ? formatCurrency(selectedLegacyRecommendation.calculation.markup.totalMarkup) : '-'}</Text></div></> : null}
+                  {canViewMarkupBreakdown ? <><div className="pricing-result-item"><Text type="secondary">命中加价规则</Text><Text strong>{getMarkupRuleLabel(selectedLegacyRecommendation.calculation?.markup)}</Text></div><div className="pricing-result-item"><Text type="secondary">实际加价值</Text><Text strong>{selectedLegacyRecommendation.calculation ? formatCurrency(selectedLegacyRecommendation.calculation.markup.totalMarkup) : '-'}</Text></div></> : null}
                   {canViewGrossProfit ? <div className="pricing-result-item"><Text type="secondary">毛利</Text><Text strong>{selectedLegacyRecommendation.grossProfit === undefined ? '-' : formatCurrency(selectedLegacyRecommendation.grossProfit)}</Text></div> : null}
                 </div>
               ) : null}
@@ -2048,6 +2711,50 @@ export function PricingPage({
             </Space>
           ) : null}
         </Modal>
+
+        <Modal
+          title="价格表导入记录"
+          open={priceBookImportHistoryOpen}
+          width={1180}
+          destroyOnHidden
+          footer={<Button htmlType="button" type="primary" onClick={() => setPriceBookImportHistoryOpen(false)}>关闭</Button>}
+          onCancel={() => setPriceBookImportHistoryOpen(false)}
+        >
+          <ManagedTable<PriceBookImportJobSummary>
+            recordDetail={{ title: '导入任务详情' }}
+            rowKey="id"
+            size="small"
+            loading={priceBookImportHistoryLoading}
+            dataSource={priceBookImportHistory}
+            pagination={{
+              current: priceBookImportHistoryPagination.page,
+              pageSize: priceBookImportHistoryPagination.pageSize,
+              total: priceBookImportHistoryPagination.totalItems,
+              showSizeChanger: false,
+              onChange: (page) => void loadPriceBookImportHistory(page)
+            }}
+            scroll={{ x: 1080 }}
+            columns={[
+              { title: '文件名', dataIndex: 'fileName', width: 220, fixed: 'left' },
+              { title: '代理简称', dataIndex: 'agentShortName', width: 120, render: (value?: string) => value || '未绑定' },
+              { title: '状态', dataIndex: 'status', width: 100, render: (_value: string, record) => { const meta = getPriceBookImportJobStatus(record); return <Tag color={meta.color}>{meta.label}</Tag>; } },
+              { title: '进度', width: 130, render: (_value: unknown, record) => `${record.processedRows}/${record.totalRows || '?'}` },
+              { title: '异常行', dataIndex: 'failedRows', width: 90, render: (value: number) => value ? <Tag color="red">{value}</Tag> : '0' },
+              { title: '结果 / 失败原因', width: 300, render: (_value: unknown, record) => <Text type={record.status === 'FAILED' ? 'danger' : undefined}>{record.errorSummary?.length ? record.errorSummary.map((item) => `第${item.index}行：${item.reason}`).join('；') : record.message || '-'}</Text> },
+              { title: '创建时间', dataIndex: 'createdAt', width: 170, render: (value: string) => formatBeijingDateTime(value) },
+              { title: '完成时间', dataIndex: 'completedAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+              {
+                title: '操作',
+                width: 90,
+                fixed: 'right',
+                render: (_value: unknown, record) => ['FAILED', 'PARTIAL_FAILED'].includes(record.status) && can('pricing:price-books:upload')
+                  ? <Button htmlType="button" type="link" size="small" onClick={() => void retryPriceBookImport(record)}>重试</Button>
+                  : <Text type="secondary">—</Text>
+              }
+            ]}
+          />
+        </Modal>
+
 
         <Modal
           title={customRemarkDetail?.title ?? '自定义备注'}
@@ -2086,8 +2793,8 @@ export function PricingPage({
                 <MetricCard title="加价规则" value={markupMetrics.totalRules} icon={<SlidersHorizontal size={22} />} />
                 <MetricCard title="启用规则" value={markupMetrics.enabledRules} icon={<CheckCircle2 size={22} />} />
                 <MetricCard title="停用规则" value={markupMetrics.disabledRules} icon={<Power size={22} />} />
-                <MetricCard title="未命中报价" value={markupMetrics.unmatchedQuotes} icon={<AlertTriangle size={22} />} />
-                <MetricCard title="最近修改" value={markupMetrics.latestUpdatedAt ? new Date(markupMetrics.latestUpdatedAt).toLocaleDateString('zh-CN') : '-'} extra={markupMetrics.latestUpdatedAt ? new Date(markupMetrics.latestUpdatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '暂无修改记录'} icon={<Settings size={22} />} />
+                <MetricCard title="使用系统默认" value={markupMetrics.systemDefaultScopes} icon={<AlertTriangle size={22} />} />
+                <MetricCard title="最近修改" value={markupMetrics.latestUpdatedAt ? formatBeijingDate(markupMetrics.latestUpdatedAt) : '-'} extra={markupMetrics.latestUpdatedAt ? formatBeijingDateTime(markupMetrics.latestUpdatedAt).slice(11, 16) : '暂无修改记录'} icon={<Settings size={22} />} />
               </div>
               {canViewMarkupDetails ? <Card
                 className="module-grid pricing-markup-card"
@@ -2100,11 +2807,11 @@ export function PricingPage({
                 extra={
                   <Space wrap>
                     <Button htmlType="button" size="small" type="primary" icon={<Search size={14} />} onClick={() => setActivePricingSection('lookup')}>查询报价</Button>
-                    {can('pricing:markup:import') ? <Button htmlType="button" size="small" icon={<FileInput size={14} />} onClick={() => onNotice('请使用规则模板上传入口导入')}>导入规则</Button> : null}
-                    {can('pricing:markup:export') ? <Button htmlType="button" size="small" icon={<Download size={14} />} onClick={exportMarkupRules}>导出规则</Button> : null}
-                    {can('pricing:markup:default-create') ? <Button htmlType="button" size="small" onClick={openCreateMarkupRule}>新增默认加价</Button> : null}
-                    {can('pricing:markup:update') ? <Button htmlType="button" size="small" disabled={selectedVisibleMarkupRuleIds.length !== 1 || selectedMarkupRuleIsPriceBookGroup || markupBatchLoading} onClick={openEditMarkupRule}>修改</Button> : null}
-                    {can('pricing:markup:line-detail-view') && canViewPriceBookRows ? <Button
+                    {markupModule !== 'dubaiAirSea' && can('pricing:markup:import') ? <Button htmlType="button" size="small" icon={<FileInput size={14} />} onClick={() => onNotice('请使用规则模板上传入口导入')}>导入规则</Button> : null}
+                    {markupModule !== 'dubaiAirSea' && can('pricing:markup:export') ? <Button htmlType="button" size="small" icon={<Download size={14} />} onClick={exportMarkupRules}>导出规则</Button> : null}
+                    {markupModule !== 'dubaiAirSea' && can('pricing:markup:default-create') ? <Button htmlType="button" size="small" onClick={openCreateMarkupRule}>新增默认加价</Button> : null}
+                    {(markupModule === 'dubaiAirSea' ? can('pricing:dubai-display:markup-update') : can('pricing:markup:update')) ? <Button htmlType="button" size="small" disabled={selectedVisibleMarkupRuleIds.length !== 1 || selectedMarkupRuleIsPriceBookGroup || markupBatchLoading} onClick={openEditMarkupRule}>修改</Button> : null}
+                    {markupModule !== 'dubaiAirSea' && can('pricing:markup:line-detail-view') && canViewPriceBookRows ? <Button
                       htmlType="button"
                       size="small"
                       disabled={selectedVisibleMarkupRuleIds.length !== 1}
@@ -2113,7 +2820,7 @@ export function PricingPage({
                     >
                       查看线路
                     </Button> : null}
-                    {can('pricing:markup:enable') ? <Popconfirm
+                    {markupModule !== 'dubaiAirSea' && can('pricing:markup:enable') ? <Popconfirm
                       title="确认停用该加价规则？"
                       description="停用后业务员报价不会再使用该规则，历史记录仍保留。"
                       okText="确认停用"
@@ -2124,7 +2831,7 @@ export function PricingPage({
                     >
                       <Button htmlType="button" size="small" icon={<Power size={14} />} loading={markupBatchLoading} disabled={selectedVisibleMarkupRuleIds.length !== 1 || selectedMarkupRuleIsPriceBookGroup || selectedMarkupRule?.enabled === false}>停用</Button>
                     </Popconfirm> : null}
-                    {can('pricing:markup:delete') ? <Popconfirm
+                    {markupModule !== 'dubaiAirSea' && can('pricing:markup:delete') ? <Popconfirm
                       title={`确认删除 ${selectedVisibleMarkupRuleIds.length} 条加价规则？`}
                       description="删除后不可恢复；历史报价保留当时的金额快照。"
                       okText="确认删除"
@@ -2149,22 +2856,26 @@ export function PricingPage({
                         setMarkupFilters({ status: 'ALL', page: 1, pageSize: 20, legacyModule: item.key });
                         setSelectedMarkupRuleIds([]);
                         setMarkupDetailRules([]);
+                        setExpandedMarkupGroup(null);
+                        setExpandedMarkupRules([]);
+                        setExpandedMarkupRulesError('');
                       }}
                     >
                       {item.label}
                     </Button>
                   ))}
                 </div>
-                <div className="pricing-markup-filters">
+                {markupModule !== 'dubaiAirSea' ? <div className="pricing-markup-filters">
                   <Select allowClear placeholder="全部代理简称" value={markupFilters.agentName} onChange={(value) => setMarkupFilters((current) => ({ ...current, agentName: value }))} options={markupAgentOptions} />
-                  <Select allowClear placeholder="全部渠道" value={markupFilters.channelName} onChange={(value) => setMarkupFilters((current) => ({ ...current, channelName: value }))} options={Array.from(new Set(markupModulePriceRows.map((row) => row.channelName))).map((value) => ({ value, label: value }))} />
-                  <Select allowClear placeholder="全部线路" value={markupFilters.realChannelName} onChange={(value) => setMarkupFilters((current) => ({ ...current, realChannelName: value }))} options={Array.from(new Set(markupModulePriceRows.map((row) => row.realChannelName ?? row.channelName))).map((value) => ({ value, label: value }))} />
-                  <Select allowClear placeholder="全部国家" value={markupFilters.destinationCountry} onChange={(value) => setMarkupFilters((current) => ({ ...current, destinationCountry: value }))} options={Array.from(new Set(markupModulePriceRows.map((row) => row.destinationCountry))).map((value) => ({ value, label: value }))} />
+                  <Select allowClear showSearch placeholder="全部渠道" value={markupFilters.channelName} onChange={(value) => setMarkupFilters((current) => ({ ...current, channelName: value }))} options={markupFilterOptions.channelNames.map((value) => ({ value, label: value }))} />
+                  <Select allowClear showSearch placeholder="全部线路" value={markupFilters.realChannelName} onChange={(value) => setMarkupFilters((current) => ({ ...current, realChannelName: value }))} options={markupFilterOptions.realChannelNames.map((value) => ({ value, label: value }))} />
+                  <Select allowClear showSearch placeholder="全部国家" value={markupFilters.destinationCountry} onChange={(value) => setMarkupFilters((current) => ({ ...current, destinationCountry: value }))} options={markupFilterOptions.destinationCountries.map((value) => ({ value, label: value }))} />
                   <Select value={markupFilters.status ?? 'ALL'} onChange={(value) => setMarkupFilters((current) => ({ ...current, status: value }))} options={[{ value: 'ALL', label: '全部' }, { value: 'ENABLED', label: '启用' }, { value: 'DISABLED', label: '停用' }]} />
                   <Button htmlType="button" type="primary" onClick={applyMarkupFilters}>查询</Button>
                   <Button htmlType="button" onClick={resetMarkupFilters}>重置</Button>
-                </div>
+                </div> : null}
               <ManagedTable
+                recordDetail={{ title: '代理加价规则详情' }}
                 rowKey="id"
                 size="small"
                 pagination={{ ...tenRowTablePagination, current: markupPage, onChange: (page) => setMarkupPage(page) }}
@@ -2175,14 +2886,30 @@ export function PricingPage({
                   onChange: (keys) => setSelectedMarkupRuleIds(keys.map(String))
                 }}
                 onRow={(record) => ({ onClick: () => setSelectedMarkupRuleIds([record.id]) })}
-                columns={[
+                columns={markupModule === 'dubaiAirSea' ? [
+                  { title: '代理简称', dataIndex: 'agentName', width: 160, fixed: 'left' },
+                  { title: '来源价格表', width: 300, render: (_, rule) => renderMarkupSource(rule) },
+                  { title: '适用范围', width: 180, render: () => <Text strong>海运主运费</Text> },
+                  { title: '加价逻辑', width: 220, render: (_, rule) => renderMarkupDisplay(rule) },
+                  { title: '后续导入', width: 200, render: () => <Tag color="blue">自动沿用当前规则</Tag> },
+                  { title: '最近修改', dataIndex: 'updatedAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+                  { title: '状态', dataIndex: 'enabled', width: 90, render: () => <Tag color="green">启用</Tag> },
+                  {
+                    title: '操作',
+                    width: 120,
+                    fixed: 'right',
+                    render: (_, rule) => can('pricing:dubai-display:markup-update') ? (
+                      <Button htmlType="button" size="small" onClick={(event) => { event.stopPropagation(); openDubaiSeaMarkupRuleEditor(rule); }}>调整加价</Button>
+                    ) : <Text type="secondary">只读</Text>
+                  }
+                ] : [
                   { title: '代理简称', dataIndex: 'agentName', width: 180, fixed: 'left' },
                   { title: '来源价格表', width: 260, render: (_, rule) => renderMarkupSource(rule) },
-                  { title: '有效线路', width: 100, render: (_, rule) => rule.activeLineCount ? `${rule.activeLineCount} 条` : <Text type="secondary">0 条</Text> },
-                  { title: '规则数量', dataIndex: 'ruleCount', width: 110, render: (value?: number) => `${value ?? 1} 条` },
+                  { title: '线路 / 报价', width: 210, render: (_, rule) => <Space direction="vertical" size={0}><Text strong>{rule.activeRouteCount ?? '—'} 条线路 / {rule.activeQuoteRowCount ?? rule.activeLineCount ?? 0} 条报价</Text><Text type="secondary">KG {rule.activeKgQuoteRowCount ?? rule.activeLineCount ?? 0} 条 · CBM {rule.activeCbmQuoteRowCount ?? 0} 条</Text></Space> },
+                  { title: '规则构成', dataIndex: 'ruleCount', width: 130, render: (value: number | undefined, rule) => <Button className="pricing-markup-rule-entry" type="link" size="small" icon={<Eye size={13} />} onClick={(event) => { event.stopPropagation(); openMarkupRuleDetails(rule); }}>查看 {value ?? 1} 项</Button> },
                   { title: '加价状态', width: 160, render: (_, rule) => renderMarkupDisplay(rule) },
                   { title: '最高优先级', dataIndex: 'priority', width: 110 },
-                  { title: '最近修改', dataIndex: 'updatedAt', width: 160, render: (value?: string) => value ? new Date(value).toLocaleString('zh-CN') : '-' },
+                  { title: '最近修改', dataIndex: 'updatedAt', width: 160, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
                   { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> },
                   {
                     title: '操作',
@@ -2242,8 +2969,13 @@ export function PricingPage({
             className="module-grid"
             title="价格表管理"
             extra={
-              <Space>
-                {can('pricing:price-books:upload') ? <Select
+              priceBookManagementModule === 'southAfrica' ? (
+                <Space>
+                  <Tag color="blue">南非专线查询</Tag>
+                  {canViewSouthAfricaCostMarkup && can('pricing:south-africa:rules-create') ? <Button htmlType="button" type="primary" size="small" onClick={openCreateSouthAfricaRateRule}>新增物料规则</Button> : null}
+                </Space>
+              ) : <Space>
+                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:upload') ? <Select
                   aria-label="选择代理简称"
                   showSearch
                   placeholder="选择代理简称"
@@ -2255,7 +2987,8 @@ export function PricingPage({
                   options={enabledAgentOptions}
                   onChange={(value) => setPriceBookImportAgentId(value)}
                 /> : null}
-                <Tag color="blue">{priceBookImportModules.find((item) => item.key === priceBookManagementModule)?.label}</Tag>
+                <Tag color={priceBookManagementModule === 'unclassified' ? 'orange' : 'blue'}>{priceBookManagementModule === 'unclassified' ? '未归类数据' : priceBookImportModules.find((item) => item.key === priceBookManagementModule)?.label}</Tag>
+                {can('pricing:price-books:import-job-view') ? <Button htmlType="button" size="small" icon={<RefreshCw size={14} />} loading={priceBookImportHistoryLoading} onClick={() => void loadPriceBookImportHistory(1)}>导入记录</Button> : null}
                 {can('pricing:price-books:sync-health-view') ? <Button
                   htmlType="button"
                   size="small"
@@ -2265,7 +2998,7 @@ export function PricingPage({
                 >
                   同步体检
                 </Button> : null}
-                {can('pricing:price-books:upload') ? <Button
+                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:upload') ? <Button
                   htmlType="button"
                   size="small"
                   icon={<FileInput size={14} />}
@@ -2276,7 +3009,7 @@ export function PricingPage({
                 >
                   增加价格表
                 </Button> : null}
-                {can('pricing:price-books:upload') ? <input
+                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:upload') ? <input
                   ref={priceBookFileInputRef}
                   className="visually-hidden-file-input"
                   aria-label="增加价格表"
@@ -2294,10 +3027,10 @@ export function PricingPage({
                 >
                   下载价格表
                 </Button> : null}
-                {can('pricing:price-books:remark-update') ? <Button htmlType="button" size="small" disabled={selectedPriceBookIds.length !== 1} onClick={openEditPriceBookRemark}>
+                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:remark-update') ? <Button htmlType="button" size="small" disabled={selectedPriceBookIds.length !== 1} onClick={openEditPriceBookRemark}>
                   编辑自定义备注
                 </Button> : null}
-                {can('pricing:price-books:delete') ? <Popconfirm
+                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:delete') ? <Popconfirm
                   title={selectedPriceBookIds.length > 1 ? `确认删除 ${selectedPriceBookIds.length} 张价格表？` : '确认删除该价格表？'}
                   description="删除后该价格表导入的报价行会从当前报价库移除。"
                   okText="删除价格表"
@@ -2327,7 +3060,18 @@ export function PricingPage({
                   {item.label}
                 </Button>
               ))}
+              <Button
+                htmlType="button"
+                type={priceBookManagementModule === 'unclassified' ? 'primary' : 'default'}
+                onClick={() => {
+                  setPriceBookManagementModule('unclassified');
+                  setPriceBookManagementFilters({ agentName: 'ALL', keyword: '' });
+                }}
+              >
+                未归类数据
+              </Button>
             </div>
+            {priceBookManagementModule === 'southAfrica' ? renderSouthAfricaRuleManagement() : <>
             <div className="pricing-price-book-filter-bar">
               <Select
                 aria-label="当前模块代理简称筛选"
@@ -2344,6 +3088,9 @@ export function PricingPage({
               />
               <Text type="secondary">当前模块已选 {selectedPriceBookIds.length} 张</Text>
             </div>
+            {priceBookManagementModule === 'unclassified' ? <Alert type="warning" showIcon message="未归类数据处理区" description="这里只读展示历史未绑定查价模块的数据，可下载原文件核对；确认归属后请在对应模块重新导入，系统不会自动迁移或删除。" /> : null}
+            {priceBookManagementSlowLoading && priceBookManagementLoading ? <Alert type="info" showIcon message="当前模块价格表加载较慢，正在继续加载" /> : null}
+            {priceBookManagementLoadError ? <Alert type="error" showIcon message={priceBookManagementLoadError} action={<Button size="small" onClick={() => setPriceBookManagementReloadVersion((version) => version + 1)}>重新加载</Button>} /> : null}
             {activePriceBookRuleRefresh ? (
               <div className="pricing-rule-refresh-progress" role="status" aria-label="当前模块规则同步进度">
                 <div className="pricing-rule-refresh-progress__summary">
@@ -2356,7 +3103,7 @@ export function PricingPage({
                     {activePriceBookRuleRefresh.failedBooks ? <Text type="danger">失败 {activePriceBookRuleRefresh.failedBooks} 张</Text> : null}
                     {activePriceBookRuleRefresh.unavailableBooks ? <Text type="danger">原文件不可用 {activePriceBookRuleRefresh.unavailableBooks} 张</Text> : null}
                   </Space>
-                  {activePriceBookRuleRefresh.updatedAt ? <Text type="secondary">最近完成：{new Date(activePriceBookRuleRefresh.updatedAt).toLocaleString('zh-CN')}</Text> : null}
+                  {activePriceBookRuleRefresh.updatedAt ? <Text type="secondary">最近完成：{formatBeijingDateTime(activePriceBookRuleRefresh.updatedAt)}</Text> : null}
                 </div>
                 <Progress
                   percent={activePriceBookRuleRefresh.progressPercent}
@@ -2375,31 +3122,53 @@ export function PricingPage({
               />
             ) : null}
             <ManagedTable
+              recordDetail={{ title: '价格表详情' }}
               rowKey="id"
               size="small"
               pagination={tenRowTablePagination}
               loading={priceBookManagementLoading}
               dataSource={filteredManagedPriceBooks}
               rowSelection={priceBookManagementRowSelection}
+              scroll={{ x: 1640 }}
               columns={priceBookManagementColumns}
             />
             {priceBookManagementModule === 'dubaiAirSea' && can('pricing:dubai-display:versions-view') ? (
               <div className="pricing-dubai-display-admin">
                 <div className="pricing-section-title-row">
                   <div>
-                    <Text strong>迪拜原表图片展示版本</Text>
-                    <div><Text type="secondary">导入后自动按空运、海运工作表转图；对应图片全部成功后自动替换当前展示，失败时保留上一有效版本。</Text></div>
+                    <Text strong>迪拜业务价格图片版本</Text>
+                    <div><Text type="secondary">空运按原表生成；海运只调整主运费单价后生成业务图片。双击任意已完成版本可查看全部原始图片，包括查价页未展示的页面。</Text></div>
                   </div>
                 </div>
                 <ManagedTable<DubaiPriceDisplayVersionSummary>
+                  recordDetail={{ title: '迪拜价格展示版本详情' }}
                   rowKey="id"
                   size="small"
                   pagination={tenRowTablePagination}
                   dataSource={dubaiDisplayVersions}
+                  onRow={(record) => ({
+                    title: record.status === 'READY' ? '双击查看全部原始图片' : '当前版本尚未完成转换',
+                    onDoubleClick: (event) => {
+                      const target = event.target;
+                      if (target instanceof HTMLElement && target.closest('button, a, input, select, textarea, [role="button"]')) return;
+                      event.preventDefault();
+                      openDubaiDisplayVersionPreview(record);
+                    }
+                  })}
                   columns={[
                     { title: '原文件', dataIndex: 'originalName', width: 260 },
                     { title: '转换状态', dataIndex: 'status', width: 120, render: (value: string) => <Tag color={value === 'READY' ? 'green' : value === 'FAILED' ? 'red' : 'blue'}>{value === 'READY' ? '已完成' : value === 'FAILED' ? '失败' : '转换中'}</Tag> },
                     { title: '页面', width: 160, render: (_value, record) => `空运 ${record.pages.filter((page) => page.mode === 'AIR').length} 页 / 海运 ${record.pages.filter((page) => page.mode === 'SEA').length} 页` },
+                    ...(can('pricing:dubai-display:markup-view') ? [{
+                      title: '海运价格规则',
+                      width: 190,
+                      render: (_value: unknown, record: DubaiPriceDisplayVersionSummary) => record.pages.some((page) => page.mode === 'SEA') ? (
+                        <Space size={4} wrap>
+                          <Text strong>{record.seaMarkupPerCbm === undefined ? '-' : `+${formatCurrency(record.seaMarkupPerCbm)}/CBM`}</Text>
+                          <Tag color={record.seaMarkupApplied ? 'green' : 'red'}>{record.seaMarkupApplied ? '已应用' : '未应用'}</Tag>
+                        </Space>
+                      ) : <Text type="secondary">不适用</Text>
+                    }] : []),
                     { title: '提示', dataIndex: 'message', render: (value?: string) => value || '-' },
                     {
                       title: '当前展示',
@@ -2413,15 +3182,21 @@ export function PricingPage({
                       )
                     },
                     {
-                      title: '操作', width: 140, fixed: 'right',
-                      render: (_value, record) => record.status === 'FAILED' && can('pricing:dubai-display:retry') ? (
-                        <Button htmlType="button" size="small" onClick={() => {
+                      title: '操作', width: 220, fixed: 'right',
+                      render: (_value, record) => (
+                        <Space size={4} wrap>
+                          {record.status === 'READY' && record.isActiveSea && can('pricing:dubai-display:markup-update') ? (
+                            <Button htmlType="button" size="small" onClick={() => openDubaiSeaMarkupEditor(record)}>调整海运价格</Button>
+                          ) : null}
+                          {record.status === 'FAILED' && can('pricing:dubai-display:retry') ? (
+                            <Button htmlType="button" size="small" onClick={() => {
                           void apiClient.retryDubaiPriceDisplayVersion(record.id)
                             .then((response) => { setDubaiDisplayVersions(response.versions); onNotice('迪拜价格表图片已重新生成'); })
                             .catch((error) => onNotice(error instanceof Error ? error.message : '重新生成图片失败'));
-                        }}>重新生成图片</Button>
-                      ) : record.status === 'READY' && !record.isActiveAir && !record.isActiveSea && can('pricing:dubai-display:activate') ? (
-                        <Popconfirm
+                            }}>重新生成图片</Button>
+                          ) : null}
+                          {record.status === 'READY' && !record.isActiveAir && !record.isActiveSea && can('pricing:dubai-display:activate') ? (
+                            <Popconfirm
                           title="设为当前展示版本"
                           description="将用此版本替换它包含的空运或海运图片展示。"
                           okText="确认切换"
@@ -2429,18 +3204,63 @@ export function PricingPage({
                           onConfirm={() => apiClient.activateDubaiPriceDisplayVersion(record.id, { salesSafe: true })
                             .then((response) => { setDubaiDisplayVersions(response.versions); onNotice('已切换为当前展示版本'); })
                             .catch((error) => { onNotice(error instanceof Error ? error.message : '切换当前展示版本失败'); })}
-                        >
-                          <Button htmlType="button" size="small">设为当前展示</Button>
-                        </Popconfirm>
-                      ) : <Text type="secondary">自动切换</Text>
+                            >
+                              <Button htmlType="button" size="small">设为当前展示</Button>
+                            </Popconfirm>
+                          ) : null}
+                          {record.status === 'READY' && (record.isActiveAir || record.isActiveSea) && !(record.isActiveSea && can('pricing:dubai-display:markup-update')) ? <Text type="secondary">当前版本</Text> : null}
+                        </Space>
+                      )
                     }
                   ]}
                 />
               </div>
             ) : null}
+            </>}
           </Card>
       ) : null}
       </ModuleSubWorkspace>
+
+      <Modal
+        title={selectedDubaiDisplayVersion ? `完整原始图片 · ${selectedDubaiDisplayVersion.originalName}` : '完整原始图片'}
+        open={Boolean(selectedDubaiDisplayVersion)}
+        destroyOnHidden
+        width="96vw"
+        className="pricing-dubai-management-preview-modal"
+        footer={<Button htmlType="button" type="primary" onClick={() => setSelectedDubaiDisplayVersion(null)}>关闭</Button>}
+        onCancel={() => setSelectedDubaiDisplayVersion(null)}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="这里保留并展示当前版本的全部转换图片"
+          description="包含查价页未展示的空运第1、2页和海运第1、2页等页面；图片按原始分辨率展示，可在窗口内滚动查看。"
+        />
+        {dubaiVersionPreviewError ? <Alert className="pricing-dubai-management-preview-error" type="error" showIcon message={dubaiVersionPreviewError} /> : null}
+        {dubaiVersionPreviewLoading ? (
+          <div className="pricing-empty-result pricing-empty-result-compact"><Spin size="small" /></div>
+        ) : selectedDubaiDisplayVersion ? (
+          <div className="pricing-dubai-management-preview-scroll">
+            {(['AIR', 'SEA'] as const).map((mode) => {
+              const pages = selectedDubaiDisplayVersion.pages
+                .filter((page) => page.mode === mode)
+                .sort((left, right) => left.sheetName.localeCompare(right.sheetName) || left.pageNo - right.pageNo);
+              if (!pages.length) return null;
+              return (
+                <section key={mode} className="pricing-dubai-management-preview-section">
+                  <div className="pricing-dubai-management-preview-heading">{mode === 'AIR' ? '空运全部页面' : '海运全部页面'} · 共 {pages.length} 页</div>
+                  {pages.map((page) => dubaiVersionImageObjectUrls[page.id] ? (
+                    <figure key={page.id} className="pricing-dubai-management-preview-page">
+                      <figcaption>{page.sheetName} · 原第 {page.pageNo} 页</figcaption>
+                      <img src={dubaiVersionImageObjectUrls[page.id]} alt={`${mode === 'AIR' ? '空运' : '海运'}原始图片第 ${page.pageNo} 页`} />
+                    </figure>
+                  ) : null)}
+                </section>
+              );
+            })}
+          </div>
+        ) : null}
+      </Modal>
 
       <Modal
         title="编辑自定义备注"
@@ -2459,7 +3279,41 @@ export function PricingPage({
       </Modal>
 
       <Modal
-        title={`${editingSouthAfricaRule ? '修改' : '新增'}南非物料规则`}
+        title="调整迪拜海运业务价格"
+        open={Boolean(editingDubaiMarkupVersion)}
+        destroyOnHidden
+        width={480}
+        okText="生成新图片"
+        cancelText="取消"
+        confirmLoading={dubaiMarkupSaving}
+        onOk={() => void saveDubaiSeaMarkup()}
+        onCancel={() => {
+          if (!dubaiMarkupSaving) {
+            setEditingDubaiMarkupVersion(null);
+            dubaiSeaMarkupForm.resetFields();
+          }
+        }}
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="系统从原始价格表重新生成海运图片"
+          description="只调整海运主运费单价；空运价格和报关、派送、大件操作等附加费用保持不变。生成成功后自动替换当前海运图片。"
+        />
+        <Form form={dubaiSeaMarkupForm} name="dubaiSeaMarkupForm" layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item
+            name="seaMarkupPerCbm"
+            label="海运主运费调整"
+            rules={[{ required: true, message: '请输入海运主运费调整金额' }]}
+          >
+            <InputNumber min={0.01} max={1000} precision={2} addonAfter="RMB/CBM" style={{ width: '100%' }} />
+          </Form.Item>
+          <Text type="secondary">该配置及原始价格仅限价格管理人员查看。</Text>
+        </Form>
+      </Modal>
+
+      <Modal
+        title={`${editingSouthAfricaRule ? '修改' : '新增'}南非物料价格规则`}
         open={southAfricaRuleModalOpen}
         destroyOnHidden
         okText="保存规则"
@@ -2470,14 +3324,7 @@ export function PricingPage({
           if (!southAfricaRuleSaving) setSouthAfricaRuleModalOpen(false);
         }}
       >
-        <Alert
-          className="notice-bar"
-          type="info"
-          showIcon
-          message="品名匹配依赖关键词"
-          description="填写客户实际会输入的品名，如“衣服、T恤、外套”；分类和物料类别也会自动参与匹配。"
-        />
-        <Form form={southAfricaRateRuleForm} name="southAfricaRateRuleForm" layout="vertical" className="spacing-top">
+        <Form form={southAfricaRateRuleForm} name="southAfricaRateRuleForm" layout="vertical">
           <Row gutter={12}>
             <Col xs={24} md={12}>
               <Form.Item name="category" label="一级分类" rules={[{ required: true, whitespace: true, message: '请输入一级分类' }, { max: 60, message: '一级分类不能超过 60 个字符' }]}>
@@ -2494,27 +3341,62 @@ export function PricingPage({
             <Input.TextArea rows={3} maxLength={500} showCount placeholder="多个关键词用逗号、顿号、空格或换行分隔，例如：衣服、T恤、外套" />
           </Form.Item>
           <Row gutter={12}>
-            <Col xs={24} md={12}>
+            <Col xs={24} md={canViewSouthAfricaCostMarkup ? 8 : 24}>
               <Form.Item name="pricingMode" label="报价方式" rules={[{ required: true, message: '请选择报价方式' }]}>
                 <Select options={[{ value: 'fixed', label: '固定运费/CBM' }, { value: 'consult', label: '需单独咨询' }]} />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
+            {canViewSouthAfricaCostMarkup ? <Col xs={24} md={8}>
               <Form.Item
-                name="ratePerCbm"
-                label="运费/CBM"
+                name="costPerCbm"
+                label="成本价/CBM"
+                dependencies={['markupPerCbm', 'pricingMode']}
                 rules={[{
                   validator: async (_rule, value) => {
                     if (southAfricaPricingMode === 'consult') return;
+                    const markup = southAfricaRateRuleForm.getFieldValue('markupPerCbm');
+                    if (value === undefined && markup === undefined && editingSouthAfricaRule?.ratePerCbm !== undefined) return;
+                    if (value === undefined || markup === undefined) throw new Error('成本价和加价必须同时填写');
                     if (Number(value) > 0) return;
-                    throw new Error('固定报价必须填写大于 0 的运费/CBM');
+                    throw new Error('成本价必须大于 0');
                   }
                 }]}
               >
-                <InputNumber min={0} precision={2} disabled={southAfricaPricingMode === 'consult'} className="full-width" placeholder={southAfricaPricingMode === 'consult' ? '单询规则无需填写' : '例如 2600'} />
+                <InputNumber min={0} precision={2} disabled={southAfricaPricingMode === 'consult'} className="full-width" placeholder={southAfricaPricingMode === 'consult' ? '无需填写' : '例如 3000'} />
               </Form.Item>
-            </Col>
+            </Col> : null}
+            {canViewSouthAfricaCostMarkup ? <Col xs={24} md={8}>
+              <Form.Item
+                name="markupPerCbm"
+                label="加价/CBM"
+                dependencies={['costPerCbm', 'pricingMode']}
+                rules={[{
+                  validator: async (_rule, value) => {
+                    if (southAfricaPricingMode === 'consult') return;
+                    const cost = southAfricaRateRuleForm.getFieldValue('costPerCbm');
+                    if (value === undefined && cost === undefined && editingSouthAfricaRule?.ratePerCbm !== undefined) return;
+                    if (value === undefined || cost === undefined) throw new Error('成本价和加价必须同时填写');
+                    if (Number(value) >= 0) return;
+                    throw new Error('加价不能小于 0');
+                  }
+                }]}
+              >
+                <InputNumber min={0} precision={2} disabled={southAfricaPricingMode === 'consult'} className="full-width" placeholder={southAfricaPricingMode === 'consult' ? '无需填写' : '例如 500'} />
+              </Form.Item>
+            </Col> : null}
           </Row>
+          {canViewSouthAfricaCostMarkup && southAfricaPricingMode === 'fixed' ? (
+            <div className="pricing-south-africa-price-equation" role="status">
+              <Text type="secondary">最终查价</Text>
+              <Text strong>
+                {southAfricaCostPerCbm !== undefined && southAfricaMarkupPerCbm !== undefined
+                  ? `${formatCurrency(Number(southAfricaCostPerCbm) + Number(southAfricaMarkupPerCbm))}/CBM`
+                  : editingSouthAfricaRule?.ratePerCbm !== undefined
+                    ? `${formatCurrency(editingSouthAfricaRule.ratePerCbm)}/CBM（保留原报价）`
+                    : '补齐成本价和加价后自动计算'}
+              </Text>
+            </div>
+          ) : null}
           <Form.Item name="remark" label="备注" rules={[{ max: 500, message: '备注不能超过 500 个字符' }]}>
             <Input.TextArea rows={3} maxLength={500} showCount placeholder="例如低消、禁运、提货或报关说明" />
           </Form.Item>
@@ -2559,20 +3441,24 @@ export function PricingPage({
             </div>
           </div>
           <ManagedTable
+            recordDetail={{ title: '价格同步健康详情' }}
             rowKey="id"
             size="small"
             loading={pricingSyncHealthLoading}
-            pagination={{
+            pagination={paginationWhenNeeded(pricingSyncHealthPagination.totalItems, {
               current: pricingSyncHealthPagination.page,
               pageSize: pricingSyncHealthPagination.pageSize,
               total: pricingSyncHealthPagination.totalItems,
               showSizeChanger: true,
-              pageSizeOptions: ['20', '50', '100'],
+              pageSizeOptions: ['10', '30', '50', '100'],
               onChange: (page, pageSize) => {
                 void loadPricingSyncHealth(page, pageSize);
               }
-            }}
+            })}
             dataSource={pricingSyncHealthRows}
+            sticky={false}
+            resizableColumns={false}
+            columnSettings={false}
             scroll={{ x: 1160 }}
             columns={[
               { title: '价格表 xls', dataIndex: 'fileName', width: 240, fixed: 'left' },
@@ -2616,13 +3502,18 @@ export function PricingPage({
             <Text type="secondary">这些规则保留在加价规则里，但当前没有有效 xls 报价行，不参与报价和加价。</Text>
           </div>
           <ManagedTable
+            recordDetail={{ title: '失效加价规则详情' }}
             rowKey="id"
             size="small"
-            pagination={tenRowTablePagination}
+            pagination={paginationWhenNeeded(pricingSyncOrphanRules.length)}
             dataSource={pricingSyncOrphanRules}
-            scroll={{ x: 780 }}
+            sticky={false}
+            minimumScrollX={0}
+            resizableColumns={false}
+            columnSettings={false}
+            tableLayout="fixed"
             columns={[
-              { title: '代理简称', dataIndex: 'agentName', width: 180, fixed: 'left' },
+              { title: '代理简称', dataIndex: 'agentName', width: 180 },
               { title: '加价规则', width: 140, render: (_, rule) => <Text strong>{formatMarkupValue(rule)}</Text> },
               { title: '状态', dataIndex: 'enabled', width: 100, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> },
               { title: '说明', render: () => <Text type="secondary">价格表已删除，或当前有效 xls 中没有该代理报价行</Text> }
@@ -2632,10 +3523,52 @@ export function PricingPage({
       </Modal>
 
       <Modal
-        title={`${editingMarkupRule ? '修改代理加价' : '新增代理加价'} · ${getLegacyModuleLabel(markupModule)}`}
+        title={expandedMarkupGroup ? `规则明细 · ${expandedMarkupGroup.agentName}` : '规则明细'}
+        open={Boolean(expandedMarkupGroup)}
+        destroyOnHidden
+        width="calc(100vw - 64px)"
+        className="pricing-markup-rule-modal"
+        styles={{ body: { maxHeight: 'calc(100vh - 180px)', overflowY: 'auto', padding: 12 } }}
+        footer={<Button htmlType="button" type="primary" onClick={closeMarkupRuleDetails}>关闭</Button>}
+        onCancel={closeMarkupRuleDetails}
+      >
+        {expandedMarkupGroup ? renderExpandedMarkupRuleTable(expandedMarkupGroup) : null}
+      </Modal>
+
+      <Modal
+        title="线路阶梯加价"
+        open={markupRouteEditorOpen}
+        destroyOnHidden
+        closable={false}
+        maskClosable={false}
+        footer={null}
+        width="calc(100vw - 48px)"
+        styles={{ body: { maxHeight: 'calc(100vh - 160px)', overflowY: 'auto', padding: 20 } }}
+        onCancel={() => {
+          setMarkupRouteEditorOpen(false);
+          setMarkupRouteEditorContext(null);
+        }}
+      >
+        {markupRouteEditorContext ? <MarkupRouteEditor
+          apiClient={apiClient}
+          permissions={permissions}
+          onNotice={onNotice}
+          context={markupRouteEditorContext}
+          embedded
+          onClose={() => {
+            setMarkupRouteEditorOpen(false);
+            setMarkupRouteEditorContext(null);
+          }}
+        /> : null}
+      </Modal>
+
+      <Modal
+        title={editingMarkupRule ? '修改代理加价' : '新增代理加价'}
         open={markupModalOpen}
         destroyOnHidden
-        okText="保存"
+        width={960}
+        className="pricing-markup-edit-modal"
+        okText={editingMarkupRule ? '保存修改' : '新增规则'}
         cancelText="取消"
         confirmLoading={markupSaving}
         onOk={() => void handleSubmitMarkupRule()}
@@ -2645,60 +3578,122 @@ export function PricingPage({
           }
         }}
       >
-        <Form form={markupForm} name="markupRuleForm" layout="vertical">
-          <Form.Item label="查价大类">
-            <Input value={getLegacyModuleLabel(markupModule)} readOnly />
-          </Form.Item>
-          <Form.Item name="priceBookId" label="来源价格表（可选）">
-            <Select
-              allowClear
-              showSearch
-              placeholder="当前大类全部价格表"
-              optionFilterProp="label"
-              options={markupModulePriceBooks.map((book) => ({ value: book.id, label: book.fileName }))}
-            />
-          </Form.Item>
-          <Form.Item name="agentName" label="代理简称" rules={[{ required: true, whitespace: true, message: '请选择代理简称' }]}>
-            <Select
-              showSearch
-              placeholder="选择基础资料代理简称"
-              optionFilterProp="label"
-              options={markupAgentOptions}
-            />
-          </Form.Item>
-          <Form.Item name="channelName" label="渠道（可选）">
-            <Input placeholder="例如 海运洛杉矶专线；为空表示该代理全部渠道" />
-          </Form.Item>
-          <Form.Item name="realChannelName" label="线路自定义（可选）">
-            <Input placeholder="例如 DHK03；填写后优先于渠道统一加价" />
-          </Form.Item>
-          <Form.Item name="destinationCountry" label="国家（可选）">
-            <Input placeholder="例如 美国；为空表示全部国家" />
-          </Form.Item>
-          <Form.Item name="markupType" label="加价方式" rules={[{ required: true, message: '请选择加价方式' }]}>
-            <Select
-              options={[
-                { value: 'WEIGHT', label: '按重量' },
-                { value: 'PER_SHIPMENT', label: '按票' },
-                { value: 'FIXED', label: '固定金额' },
-                { value: 'PERCENT', label: '按比例' }
-              ]}
-            />
-          </Form.Item>
-          <Form.Item name="markupValue" label="业务员加价 / kg" rules={[{ required: true, message: '请输入加价值' }]}>
-            <InputNumber min={0} precision={2} style={{ width: '100%' }} />
-          </Form.Item>
+        <Form form={markupForm} name="markupRuleForm" layout="vertical" className="pricing-markup-edit-form">
+          <div className="pricing-markup-edit-summary">
+            <Tag color="blue">{getLegacyModuleLabel(markupModule)}</Tag>
+            <div>
+              <Text strong>{markupAgentNameValue?.trim() || '待选择代理'}</Text>
+              <Text type="secondary">
+                作用范围：{markupDestinationCountryValue?.trim() || '全部国家'} · {markupRealChannelNameValue?.trim() || markupChannelNameValue?.trim() || '全部线路'}
+              </Text>
+            </div>
+          </div>
+
+          <section className="pricing-markup-edit-section" aria-labelledby="pricing-markup-basic-title">
+            <div className="pricing-markup-edit-section-head">
+              <Text strong id="pricing-markup-basic-title">基础信息</Text>
+              <Text type="secondary">确认报价来源与代理归属</Text>
+            </div>
+            <Row gutter={12}>
+              <Col xs={24} md={12}>
+                <Form.Item label="查价大类">
+                  <Input value={getLegacyModuleLabel(markupModule)} readOnly />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="priceBookId" label="来源价格表（可选）">
+                  <Select
+                    allowClear
+                    showSearch
+                    placeholder="当前大类全部价格表"
+                    optionFilterProp="label"
+                    options={markupModulePriceBooks.map((book) => ({ value: book.id, label: book.fileName }))}
+                  />
+                </Form.Item>
+              </Col>
+              <Col span={24}>
+                <Form.Item name="agentName" label="代理简称" rules={[{ required: true, whitespace: true, message: '请选择代理简称' }]}>
+                  <Select
+                    showSearch
+                    placeholder="选择基础资料代理简称"
+                    optionFilterProp="label"
+                    options={markupAgentOptions}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          </section>
+
+          <section className="pricing-markup-edit-section" aria-labelledby="pricing-markup-scope-title">
+            <div className="pricing-markup-edit-section-head">
+              <Text strong id="pricing-markup-scope-title">适用范围</Text>
+              <Text type="secondary">留空表示该代理的全部范围</Text>
+            </div>
+            <Row gutter={12}>
+              <Col xs={24} md={12}>
+                <Form.Item name="channelName" label="渠道（可选）">
+                  <Input placeholder="例如 海运洛杉矶专线" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="realChannelName" label="线路自定义（可选）">
+                  <Input placeholder="例如 DHK03；优先于渠道统一加价" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item name="destinationCountry" label="国家（可选）">
+                  <Input placeholder="例如 美国；为空表示全部国家" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <div className="pricing-markup-edit-scope-note">
+                  <Text type="secondary">当前生效范围</Text>
+                  <Text strong>{markupDestinationCountryValue?.trim() || '全部国家'} · {markupRealChannelNameValue?.trim() || markupChannelNameValue?.trim() || '全部线路'}</Text>
+                </div>
+              </Col>
+            </Row>
+          </section>
+
+          <section className="pricing-markup-edit-section" aria-labelledby="pricing-markup-value-title">
+            <div className="pricing-markup-edit-section-head">
+              <Text strong id="pricing-markup-value-title">加价设置</Text>
+              <Text type="secondary">设置计算方式、加价值与规则优先级</Text>
+            </div>
+            <Row gutter={12}>
+              <Col xs={24} sm={12} lg={6}>
+                <Form.Item name="markupType" label="加价方式" rules={[{ required: true, message: '请选择加价方式' }]}>
+                  <Select
+                    options={[
+                      { value: 'WEIGHT', label: '按重量' },
+                      { value: 'PER_SHIPMENT', label: '按票' },
+                      { value: 'FIXED', label: '固定金额' },
+                      { value: 'PERCENT', label: '按比例' }
+                    ]}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12} lg={6}>
+                <Form.Item name="markupValue" label={getMarkupValueFieldMeta(markupTypeValue).label} rules={[{ required: true, message: '请输入加价值' }]}>
+                  <InputNumber min={0} precision={2} addonAfter={getMarkupValueFieldMeta(markupTypeValue).unit} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12} lg={6}>
+                <Form.Item name="priority" label="优先级" rules={[{ required: true, message: '请输入优先级' }]}>
+                  <InputNumber min={1} precision={0} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={12} lg={6}>
+                <Form.Item name="enabled" label="状态" rules={[{ required: true, message: '请选择状态' }]}>
+                  <select className="native-select" aria-label="加价规则状态">
+                    <option value="true">启用</option>
+                    <option value="false">停用</option>
+                  </select>
+                </Form.Item>
+              </Col>
+            </Row>
+          </section>
           <Form.Item name="markupPerKg" hidden>
             <InputNumber min={0} precision={2} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="priority" label="优先级" rules={[{ required: true, message: '请输入优先级' }]}>
-            <InputNumber min={1} precision={0} style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="enabled" label="状态" rules={[{ required: true, message: '请选择状态' }]}>
-            <select className="native-select" aria-label="加价规则状态">
-              <option value="true">启用</option>
-              <option value="false">停用</option>
-            </select>
           </Form.Item>
         </Form>
       </Modal>

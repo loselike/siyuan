@@ -55,6 +55,7 @@ export class AuthController {
       id: account.id,
       username: account.username,
       role: account.role,
+      site: account.site,
       customerId: account.customerId,
       name: account.name,
       phone: account.phone,

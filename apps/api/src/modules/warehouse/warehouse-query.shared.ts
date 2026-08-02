@@ -5,6 +5,7 @@ import type {
   WarehousePackageSummary,
   WarehouseTallyTaskSummary
 } from '@siyuan/shared';
+import { resolveWarehouseTallyLifecycleStatus } from '@siyuan/shared';
 import type { PrismaService } from '../prisma.service.js';
 
 function roundMoney(value: number): number {
@@ -19,6 +20,9 @@ export function mapWarehousePackage(row: any): WarehousePackageSummary {
   const sides = [lengthCm, widthCm, heightCm].sort((left, right) => right - left);
   const girthCm = roundMoney((sides[0] ?? 0) + 2 * ((sides[1] ?? 0) + (sides[2] ?? 0)));
   const totalVolumetricWeightKg5000 = roundMoney((lengthCm * widthCm * heightCm * packageCount) / 5000);
+  const tallyTaskId = row.tallyTaskId ?? undefined;
+  const tallyTaskNo = row.tallyTaskNo ?? undefined;
+  const tallyCompleted = Boolean(tallyTaskId || tallyTaskNo);
   return {
     id: row.id,
     customerCode: row.customerCode,
@@ -35,9 +39,9 @@ export function mapWarehousePackage(row: any): WarehousePackageSummary {
     archivedByPackageNo: row.archivedByPackageNo ?? undefined,
     archivedReason: row.archivedReason ?? undefined,
     archivedAt: row.archivedAt?.toISOString?.() ?? undefined,
-    tallyTaskId: undefined,
-    tallyTaskNo: undefined,
-    tallyCompleted: false,
+    tallyTaskId,
+    tallyTaskNo,
+    tallyCompleted,
     outboundOrderNo: row.systemOrderNo ?? undefined,
     systemOrderNo: row.systemOrderNo ?? undefined,
     shipmentId: row.shipmentId ?? undefined,
@@ -69,7 +73,7 @@ export function mapWarehousePackage(row: any): WarehousePackageSummary {
     measurementMatchedBy: row.measurementMatchedBy ?? undefined,
     inboundAt: row.scanTime?.toISOString(),
     receiptSourceId: row.sourcePackageId ?? row.id,
-    tallyStatus: '待理货',
+    tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId, tallyTaskNo, tallyCompleted }),
     splitStatus: row.sourcePackageId ? '拆票子票' : '原始票',
     consolidationStatus: row.status === 'CONSOLIDATED' ? '已合票' : '未合票',
     outboundStatus: row.status === 'SHIPPED' ? '已出库' : '未出库',
@@ -94,7 +98,8 @@ export async function mapWarehousePackagesWithConfirmedTally(
           { id: { in: rows.map((row) => row.tallyTaskId).filter(Boolean) } }
         ]
       },
-      select: { id: true, taskNo: true, status: true, packageIds: true, appliedPackageId: true }
+      select: { id: true, taskNo: true, status: true, packageIds: true, appliedPackageId: true, createdAt: true },
+      orderBy: { createdAt: 'asc' }
     })
     : [];
   const completedTaskByPackageId = new Map<string, { id: string; taskNo: string }>();
@@ -115,12 +120,24 @@ export async function mapWarehousePackagesWithConfirmedTally(
     const pendingTask = pendingTaskByPackageId.get(row.id)
       ?? (directTask?.status === 'PENDING' ? { id: directTask.id, taskNo: directTask.taskNo } : undefined);
     if (pendingTask) {
-      return { ...summary, tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false, tallyStatus: '理货中' };
+      return {
+        ...summary,
+        tallyTaskId: pendingTask.id,
+        tallyTaskNo: pendingTask.taskNo,
+        tallyCompleted: false,
+        tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false })
+      };
     }
     const task = completedTaskByPackageId.get(row.id)
       ?? (row.tallyTaskId && row.tallyTaskNo ? { id: row.tallyTaskId, taskNo: row.tallyTaskNo } : undefined);
     return task
-      ? { ...summary, tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true, tallyStatus: '已理货' }
+      ? {
+        ...summary,
+        tallyTaskId: task.id,
+        tallyTaskNo: task.taskNo,
+        tallyCompleted: true,
+        tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true })
+      }
       : { ...summary, tallyTaskId: undefined, tallyTaskNo: undefined, tallyCompleted: false, tallyStatus: '待理货' };
   });
 }
@@ -161,6 +178,9 @@ export function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
     id: row.id,
     taskNo: row.taskNo,
     status: row.status,
+    rootTallyTaskId: row.rootTallyTaskId ?? row.id,
+    previousTallyTaskId: row.previousTallyTaskId ?? undefined,
+    tallySequence: row.tallySequence ?? 1,
     packageIds: [...(row.packageIds ?? [])],
     sourcePackageId: row.sourcePackageId,
     sourceCombinedOrderNo: row.sourceCombinedOrderNo,

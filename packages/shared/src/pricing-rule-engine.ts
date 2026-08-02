@@ -67,9 +67,13 @@ export function normalizeCanadaAddressType(value?: string | null): CanadaAddress
   return String(value ?? '').trim().toUpperCase() === 'AMAZON' ? 'AMAZON' : 'PRIVATE';
 }
 
-export function normalizeCanadaAmazonWarehousePrefix(value?: string | null): string | undefined {
+export function normalizeCanadaAmazonWarehouseCode(value?: string | null): string | undefined {
   const normalized = String(value ?? '').trim().replace(/\s+/g, '').toUpperCase();
-  return /^[A-Z]{3}$/.test(normalized) ? normalized : undefined;
+  return /^[A-Z]{3}[A-Z0-9]*$/.test(normalized) ? normalized : undefined;
+}
+
+export function normalizeCanadaAmazonWarehousePrefix(value?: string | null): string | undefined {
+  return normalizeCanadaAmazonWarehouseCode(value)?.slice(0, 3);
 }
 
 export function isCanadaAddressScopeWarehouseCode(value?: string | null): boolean {
@@ -99,7 +103,7 @@ export function matchWarehouseCodeRule(ruleValue: string | undefined | null, inp
   return parsed.prefixRules.some((prefix) => input.startsWith(prefix) && /^\d/.test(input.slice(prefix.length))) ? 1 : undefined;
 }
 
-/** Private rows are exclusive; Amazon rows match the entered three-letter FBA prefix. */
+/** Private rows are exclusive; Amazon rows match exact codes unless the source explicitly defines a bare prefix. */
 export function canadaAddressTypeMatchesWarehouseCode(
   rowWarehouseCode: string | undefined | null,
   addressType?: CanadaAddressType | string | null,
@@ -109,16 +113,15 @@ export function canadaAddressTypeMatchesWarehouseCode(
   if (normalizeCanadaAddressType(addressType) === 'PRIVATE') {
     return !rowCode || rowCode === CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE;
   }
-  const warehousePrefix = normalizeCanadaAmazonWarehousePrefix(amazonCode);
-  if (!warehousePrefix || !rowCode || isCanadaAddressScopeWarehouseCode(rowCode)) return false;
-  // Canada lookup accepts the first three warehouse letters. Supplier rows
-  // can hold a mixed cell such as `YVR+YXX2`; matching only the whole cell
-  // would incorrectly hide the YVR rate. Parse every rule in that cell and
-  // let a prefix select its corresponding exact/range entries.
+  const warehouseCode = normalizeCanadaAmazonWarehouseCode(amazonCode);
+  if (!warehouseCode || !rowCode || isCanadaAddressScopeWarehouseCode(rowCode)) return false;
+  // A mixed source cell such as `YVR+YXX2` means exactly what it says: YVR is
+  // an explicit prefix rule, while YXX2 is an exact warehouse. Never collapse
+  // the entered code to three letters, otherwise YXX1 would incorrectly use
+  // the YXX2 price.
   const parsed = parseWarehouseCodeRules(rowCode);
-  return parsed.prefixRules.includes(warehousePrefix)
-    || parsed.exactCodes.some((code) => code.startsWith(warehousePrefix))
-    || matchWarehouseCodeRule(rowCode, warehousePrefix) !== undefined;
+  return parsed.prefixRules.includes(warehouseCode)
+    || matchWarehouseCodeRule(rowCode, warehouseCode) !== undefined;
 }
 
 export function warehouseCodePrefixCandidates(value?: string | null): string[] {

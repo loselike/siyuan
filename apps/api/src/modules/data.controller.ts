@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Headers, Inject, Logger, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UnauthorizedException, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -13,7 +13,10 @@ import type {
   AgentChannelUpdateInput,
   AgentMarkupCreateInput,
   AgentMarkupListQuery,
+  MarkupRouteListQuery,
+  MarkupRoutePreviewBatchInput,
   MarkupRoutePreviewInput,
+  MarkupRouteTierBatchReplaceInput,
   MarkupRouteTierReplaceInput,
   AgentMarkupUpdateInput,
   AgentUpdateInput,
@@ -25,6 +28,7 @@ import type {
   BusinessCostAuditUpdateInput,
   CarrierCreateInput,
   ChannelCreateInput,
+  ChannelDeleteResponse,
   ChannelCategoryCreateInput,
   ChannelCategoryUpdateInput,
   ChannelUpdateInput,
@@ -53,6 +57,9 @@ import type {
   PaymentWaterReceiptInput,
   ShipmentDispatchInput,
   WarehouseHandoverPrintInput,
+  WarehouseRentDetailQuery,
+  WarehouseRentRuleEnabledInput,
+  WarehouseRentRuleInput,
   VoucherImageUploadContext,
   PayableAuditBatchInput,
   PayableAuditListQuery,
@@ -68,10 +75,13 @@ import type {
   PaymentVoucherInput,
   PaymentVoucherListQuery,
   PriceBookImportInput,
+  PriceBookBatchDeleteInput,
+  PriceBookImportJobListQuery,
   PriceBookImportTargetModule,
   PriceBookRowsQuery,
   PriceBookRemarkUpdateInput,
   DubaiPriceDisplayActivateInput,
+  DubaiSeaMarkupUpdateInput,
   LegacyPricingImportInput,
   LegacyPricingModule,
   LegacyPricingQuoteResponse,
@@ -80,12 +90,15 @@ import type {
   SouthAfricaLookupRequest,
   SouthAfricaLookupResponse,
   SouthAfricaRateRuleInput,
+  SouthAfricaRateRuleSummary,
   PriceLookupRequest,
   PriceLookupRecommendation,
   PriceLookupResponse,
   PricingQuoteRequest,
   PricingRuleCreateInput,
   PricingRuleQuoteRequest,
+  CommonTagCreateInput,
+  CommonTagUpdateInput,
   ProblemTicketCreateInput,
   ReceivableAdjustmentInput,
   SurchargeCreateInput,
@@ -96,6 +109,9 @@ import type {
   ShipmentFinanceItemUpdateInput,
   ShipmentImportRequest,
   ShipmentOperationalUpdateInput,
+  CustomerServiceDataReviewInput,
+  CustomerServiceDataReverseInput,
+  CustomerServiceDataUpdateInput,
   CustomerServiceTransferBatchInput,
   ShipmentPaymentUpdateInput,
   ShipmentRerouteInput,
@@ -119,6 +135,7 @@ import type {
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCreateInput,
   WarehouseTallyLabelScanInput,
+  WarehouseTallyRepeatStatisticsQuery,
   WarehouseTallyTaskUpdateInput,
   MasterDataSnapshot,
   NavigationReadStateInput
@@ -135,6 +152,10 @@ import {
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const MOJIA_REQUEST_SAMPLE_RETENTION_MS = 72 * 60 * 60 * 1000;
+const MOJIA_REQUEST_SAMPLE_MAX_BYTES = 16 * 1024;
+const MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES = 100;
+const MOJIA_REQUEST_SAMPLE_WRITE_CONCURRENCY = 2;
 
 @Controller()
 export class DataController {
@@ -152,6 +173,12 @@ export class DataController {
     'image/gif': '.gif'
   };
   private readonly logger = new Logger(DataController.name);
+  private readonly mojiaRequestSampleWriteQueue: Array<{
+    run: () => void;
+    drop: () => void;
+    priority: boolean;
+  }> = [];
+  private mojiaRequestSampleActiveWrites = 0;
   private readonly labelFileMimeExtensions: Record<string, string> = {
     ...this.imageMimeExtensions,
     'application/pdf': '.pdf'
@@ -226,6 +253,12 @@ export class DataController {
       recommendations,
       ...(response.result ? { result: recommendations.find((item) => item.id === response.result?.id) ?? sanitize(response.result) } : {})
     };
+  }
+
+  private async sanitizeSouthAfricaRateRuleForPrincipal(principal: Principal, rule: SouthAfricaRateRuleSummary): Promise<SouthAfricaRateRuleSummary> {
+    if (await this.hasAnyPermission(principal.role, ['pricing:south-africa:cost-markup-view'])) return rule;
+    const { costPerCbm: _costPerCbm, markupPerCbm: _markupPerCbm, ...businessRule } = rule;
+    return businessRule;
   }
 
   private async hasAnyPermission(role: RoleKey, permissions: PermissionKey[]) {
@@ -375,33 +408,139 @@ export class DataController {
   ) {
     this.ensureMojiaDeviceToken(headers, queryToken);
     const startedAt = Date.now();
+    const measurement = body && typeof body === 'object' ? body : {};
+    const sampleId = this.createMojiaRequestSample(measurement);
     try {
-      const barcode = String(body.barcode ?? body.orderNo ?? '').trim();
+      const barcode = String(measurement.barcode ?? measurement.orderNo ?? '').trim();
       if (barcode) {
         const matched = await this.repository.applyWarehouseTallyMeasurementByBarcode(mojiaPrincipal, {
           barcode,
-          weightKg: positiveNumber(body.weightKg ?? body.weight, 'weight'),
-          lengthCm: positiveNumber(body.lengthCm ?? body.length, 'length'),
-          widthCm: positiveNumber(body.widthCm ?? body.width, 'width'),
-          heightCm: positiveNumber(body.heightCm ?? body.height, 'height'),
-          measuredAt: normalizeMojiaMeasuredAt(body.measuredAt),
-          deviceNo: String(body.deviceNo ?? body.machineNo ?? '').trim() || undefined
+          weightKg: positiveNumber(measurement.weightKg ?? measurement.weight, 'weight'),
+          lengthCm: positiveNumber(measurement.lengthCm ?? measurement.length, 'length'),
+          widthCm: positiveNumber(measurement.widthCm ?? measurement.width, 'width'),
+          heightCm: positiveNumber(measurement.heightCm ?? measurement.height, 'height'),
+          measuredAt: normalizeMojiaMeasuredAt(measurement.measuredAt),
+          deviceNo: String(measurement.deviceNo ?? measurement.machineNo ?? '').trim() || undefined
         });
         if (matched) {
+          this.completeMojiaRequestSample(sampleId, 'SUCCESS', matched.package.id);
           return { result: 'true', message: `${matched.package.labelNo} ${matched.alreadyApplied ? '已接收' : '复测覆盖成功'}` };
         }
       }
-      const input = this.toWarehousePackageInput(body);
+      const input = this.toWarehousePackageInput(measurement);
       const duplicate = await this.findDuplicateMojiaPackage(input);
       if (duplicate) {
+        this.completeMojiaRequestSample(sampleId, 'SUCCESS');
         return { result: 'true', message: `${duplicate.combinedOrderNo} 已接收` };
       }
       const created = await this.repository.createWarehousePackage(mojiaPrincipal, input);
+      this.completeMojiaRequestSample(sampleId, 'SUCCESS', created.id);
       return { result: 'true', message: `${created.combinedOrderNo} 录入成功` };
     } catch (error) {
       const message = error instanceof Error ? error.message : '录入失败';
+      this.completeMojiaRequestSample(sampleId, 'FAILED', undefined, message);
       await this.recordMojiaPushFailure(message, startedAt);
       return { result: 'false', message };
+    }
+  }
+
+  private createMojiaRequestSample(body: MojiaMeasurementInput): Promise<string | undefined> {
+    try {
+      const receivedAt = new Date();
+      const parsedPayload = sanitizeMojiaRequestSamplePayload(body as Record<string, unknown>);
+      const serialized = JSON.stringify(parsedPayload);
+      const originalBytes = Buffer.byteLength(serialized, 'utf8');
+      const payload = originalBytes <= MOJIA_REQUEST_SAMPLE_MAX_BYTES
+        ? parsedPayload
+        : {
+            _sampling: {
+              omitted: true,
+              reason: 'PAYLOAD_TOO_LARGE',
+              originalBytes,
+              fieldCount: Object.keys(parsedPayload).length,
+              fieldNames: Object.keys(parsedPayload).slice(0, 20).map((field) => field.slice(0, 80))
+            }
+          };
+      return this.enqueueMojiaRequestSampleWrite(() => this.repository.createMojiaRequestSample({
+        deviceNo: String(body.deviceNo ?? body.machineNo ?? '').trim() || undefined,
+        payload,
+        payloadHash: createHash('sha256').update(serialized).digest('hex'),
+        receivedAt,
+        expiresAt: new Date(receivedAt.getTime() + MOJIA_REQUEST_SAMPLE_RETENTION_MS)
+      }));
+    } catch {
+      this.logger.warn('墨家请求采样写入失败，业务接收继续执行');
+      return Promise.resolve(undefined);
+    }
+  }
+
+  private completeMojiaRequestSample(
+    sampleId: Promise<string | undefined>,
+    result: 'SUCCESS' | 'FAILED',
+    warehousePackageId?: string,
+    errorMessage?: string
+  ) {
+    void sampleId.then((resolvedSampleId) => {
+      if (!resolvedSampleId) return;
+      void this.enqueueMojiaRequestSampleWrite(async () => {
+        await this.repository.completeMojiaRequestSample(resolvedSampleId, {
+          result,
+          warehousePackageId,
+          errorMessage: errorMessage?.slice(0, 1000),
+          completedAt: new Date()
+        });
+      }, true);
+    });
+  }
+
+  private enqueueMojiaRequestSampleWrite<T>(task: () => Promise<T>, priority = false): Promise<T | undefined> {
+    if (!priority && this.mojiaRequestSampleWriteQueue.length >= MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES) {
+      this.logger.warn('墨家请求采样队列已满，本次采样已丢弃');
+      return Promise.resolve(undefined);
+    }
+    return new Promise((resolve) => {
+      const queued = {
+        priority,
+        drop: () => resolve(undefined),
+        run: () => {
+          this.mojiaRequestSampleActiveWrites += 1;
+          void task()
+            .then(resolve)
+            .catch(() => {
+              this.logger.warn('墨家请求采样后台写入失败，业务接收结果不受影响');
+              resolve(undefined);
+            })
+            .finally(() => {
+              this.mojiaRequestSampleActiveWrites -= 1;
+              this.drainMojiaRequestSampleWriteQueue();
+            });
+        }
+      };
+      if (priority) {
+        if (this.mojiaRequestSampleWriteQueue.length >= MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES) {
+          let normalIndex = -1;
+          for (let index = this.mojiaRequestSampleWriteQueue.length - 1; index >= 0; index -= 1) {
+            if (!this.mojiaRequestSampleWriteQueue[index]?.priority) {
+              normalIndex = index;
+              break;
+            }
+          }
+          if (normalIndex >= 0) this.mojiaRequestSampleWriteQueue.splice(normalIndex, 1)[0]?.drop();
+        }
+        this.mojiaRequestSampleWriteQueue.unshift(queued);
+      } else {
+        this.mojiaRequestSampleWriteQueue.push(queued);
+      }
+      this.drainMojiaRequestSampleWriteQueue();
+    });
+  }
+
+  private drainMojiaRequestSampleWriteQueue() {
+    while (
+      this.mojiaRequestSampleActiveWrites < MOJIA_REQUEST_SAMPLE_WRITE_CONCURRENCY
+      && this.mojiaRequestSampleWriteQueue.length > 0
+    ) {
+      this.mojiaRequestSampleWriteQueue.shift()?.run();
     }
   }
 
@@ -643,49 +782,49 @@ export class DataController {
 
   @Post('shipments/:id/business-data/approve')
   @RequirePermission('customer-service:data-confirm:business-approve')
-  async approveShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { remark?: string }) {
+  async approveShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
     return this.repository.approveShipmentBusinessData(request.user, id, body);
   }
 
   @Post('shipments/:id/agent-data/approve')
   @RequirePermission('customer-service:data-confirm:agent-approve')
-  async approveShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { remark?: string }) {
+  async approveShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
     return this.repository.approveShipmentAgentData(request.user, id, body);
   }
 
   @Patch('shipments/:id/business-data')
   @RequirePermission('customer-service:data-confirm:business-update')
-  async updateShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { packageCount: number; weightKg: number; volumeCbm: number; chargeWeightKg: number; remark?: string; pushToSales?: boolean }) {
+  async updateShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
     return this.repository.updateShipmentBusinessData(request.user, id, body);
   }
 
   @Patch('shipments/:id/agent-data')
   @RequirePermission('customer-service:data-confirm:agent-update')
-  async updateShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { packageCount: number; weightKg: number; volumeCbm: number; chargeWeightKg: number; remark?: string }) {
+  async updateShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
     return this.repository.updateShipmentAgentData(request.user, id, body);
   }
 
   @Post('shipments/:id/business-data/reverse')
   @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
+  async reverseShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
     return this.repository.reverseShipmentBusinessData(request.user, id, body);
   }
 
   @Post('shipments/:id/agent-data/reverse')
   @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
+  async reverseShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
     return this.repository.reverseShipmentAgentData(request.user, id, body);
   }
 
   @Post('shipments/:id/data-confirmation/approve-all')
   @RequirePermission('customer-service:data-confirm:approve-all')
-  async approveShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { remark?: string }) {
+  async approveShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
     return this.repository.approveShipmentAllData(request.user, id, body);
   }
 
   @Post('shipments/:id/data-confirmation/reverse-all')
   @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
+  async reverseShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
     return this.repository.reverseShipmentAllData(request.user, id, body);
   }
 
@@ -719,6 +858,12 @@ export class DataController {
   async updateOperationShipmentOperational(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentOperationalUpdateInput) {
     if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能人工修改运单');
     return this.repository.updateShipmentOperational(request.user, id, body);
+  }
+
+  @Get('customer-service/data-confirm-shipments')
+  @RequirePermission('customer-service:data-confirm:view')
+  async customerServiceDataConfirmShipments(@Req() request: { user: Principal }) {
+    return this.repository.customerServiceDataConfirmShipments(request.user);
   }
 
   @Post('customer-service/transfer-shipments/fill')
@@ -824,6 +969,27 @@ export class DataController {
       sizeBytes: file.size,
       url: `/api/uploads/${basename(uploadDir)}/${fileName}`
     });
+  }
+
+  @Get('shipments/:id/invoice-template/download')
+  @RequirePermission('business:order-entry:invoice-upload')
+  async downloadShipmentInvoiceTemplate(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能下载代理发票模板');
+    }
+    const file = await this.repository.downloadShipmentInvoiceTemplate(request.user, id);
+    const mimeType = file.extension === '.xls'
+      ? 'application/vnd.ms-excel'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const downloadName = `发票模板${file.extension}`;
+    response.setHeader('Content-Type', mimeType);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader('Content-Disposition', `attachment; filename="invoice-template${file.extension}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
+    return new StreamableFile(file.buffer);
   }
 
   @Post('shipments/:id/labels/:labelId/void')
@@ -936,17 +1102,52 @@ export class DataController {
     return this.repository.addTrackingEvent(request.user, id, body);
   }
 
+  @Get('customer-service/problem-tags')
+  @RequireAuth()
+  async problemTicketCommonTags(@Req() request: { user: Principal }) {
+    await this.ensureAnyPermission(request.user, ['customer-service:problem:view', 'customer-service:problem:create', 'customer-service:pending-routing:problem-create', 'customer-service:waiting-departure:problem-create', 'customer-service:departed:problem-create', 'customer-service:arrived-port:problem-create', 'customer-service:delivering:problem-create', 'customer-service:delivering:after-sale-create', 'customer-service:signed:after-sale-create', 'operations:line-shipment:problem-create', 'business:shipment:problem-create']);
+    return this.repository.getProblemTicketCommonTags(request.user);
+  }
+
+  @Post('customer-service/problem-tags')
+  @RequireAuth()
+  async createProblemTicketCommonTag(@Req() request: { user: Principal }, @Body() body: CommonTagCreateInput) {
+    if (request.user.role !== 'ADMIN') throw new ForbiddenException('仅管理员可以维护常用标签');
+    return this.repository.createProblemTicketCommonTag(request.user, body);
+  }
+
+  @Put('customer-service/problem-tags/:id')
+  @RequireAuth()
+  async updateProblemTicketCommonTag(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CommonTagUpdateInput) {
+    if (request.user.role !== 'ADMIN') throw new ForbiddenException('仅管理员可以维护常用标签');
+    return this.repository.updateProblemTicketCommonTag(request.user, id, body);
+  }
+
+  @Delete('customer-service/problem-tags/:id')
+  @RequireAuth()
+  async deleteProblemTicketCommonTag(@Req() request: { user: Principal }, @Param('id') id: string) {
+    if (request.user.role !== 'ADMIN') throw new ForbiddenException('仅管理员可以维护常用标签');
+    return this.repository.deleteProblemTicketCommonTag(request.user, id);
+  }
+
   @Post('shipments/:id/problem-tickets')
   @RequireAuth()
   async createProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    await this.ensureAnyPermission(request.user, ['customer-service:problem:create', 'customer-service:pending-routing:problem-create', 'customer-service:waiting-departure:problem-create', 'customer-service:departed:problem-create', 'customer-service:arrived-port:problem-create', 'customer-service:delivering:problem-create']);
+    await this.ensureAnyPermission(request.user, ['customer-service:problem:create', 'customer-service:pending-routing:problem-create', 'customer-service:waiting-departure:problem-create', 'customer-service:departed:problem-create', 'customer-service:arrived-port:problem-create', 'customer-service:delivering:problem-create', 'customer-service:delivering:after-sale-create', 'customer-service:signed:after-sale-create']);
+    await this.repository.assertCustomerServiceProblemCreationAllowed(request.user, id);
     return this.repository.createProblemTicket(request.user, id, body);
+  }
+
+  @Post('business/shipments/:id/problem-tickets')
+  @RequirePermission('business:shipment:problem-create')
+  async createBusinessProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
+    return this.repository.createProblemTicket(request.user, id, { ...body, customerVisible: true, pushToSales: undefined });
   }
 
   @Post('operations/line-shipments/:id/problem-tickets')
   @RequirePermission('operations:line-shipment:problem-create')
   async createOperationProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    return this.repository.createProblemTicket(request.user, id, body);
+    return this.repository.createProblemTicket(request.user, id, { ...body, customerVisible: false, pushToSales: undefined });
   }
 
   @Post('problem-tickets/:id/replies')
@@ -1162,6 +1363,16 @@ export class DataController {
   @RequirePermission('master-data:channels:enable')
   async updateMasterDataChannelEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateChannelEnabled(request.user, id, body);
+  }
+
+  @Post('master-data/channels/batch-delete')
+  @RequirePermission('master-data:channels:batch-delete')
+  async batchDeleteMasterDataChannels(@Req() request: { user: Principal }, @Body() body: { ids?: string[] }): Promise<ChannelDeleteResponse> {
+    const ids = Array.from(new Set((body.ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
+    if (!ids.length) {
+      throw new BadRequestException('请选择公司渠道');
+    }
+    return this.repository.deleteChannels(request.user, ids);
   }
 
   @Delete('master-data/channels/:id')
@@ -1388,6 +1599,15 @@ export class DataController {
     return this.repository.quote(body);
   }
 
+  @Get('pricing/books')
+  @RequirePermission('pricing:price-books:list-view')
+  async priceBooks(@Req() request: { user: Principal }, @Query('includeRows') includeRows?: string, @Query('targetModule') targetModule?: PriceBookImportTargetModule | 'unclassified') {
+    if (includeRows === 'true') {
+      throw new BadRequestException('价格表列表不支持返回完整明细，请使用分页线路接口');
+    }
+    return this.repository.getPriceBooks(request.user, false, targetModule);
+  }
+
   @Get('pricing/books/rule-refresh-progress')
   @RequirePermission('pricing:price-books:sync-health-view')
   async priceBookRuleRefreshProgress(@Req() request: { user: Principal }) {
@@ -1404,6 +1624,12 @@ export class DataController {
   @RequirePermission('pricing:price-books:rows-view')
   async priceBookRowsByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: PriceBookRowsQuery) {
     return this.repository.getPriceBookRows(request.user, id, query);
+  }
+
+  @Get('pricing/books/:id/markup-routes')
+  @RequirePermission('pricing:markup-tier:read')
+  async markupRoutesByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: MarkupRouteListQuery) {
+    return this.repository.getMarkupRoutes(request.user, id, query);
   }
 
   @Get('pricing/books/:id/download')
@@ -1488,7 +1714,7 @@ export class DataController {
   }
 
   @Get('pricing/legacy/dubai-air-sea/table')
-  @RequirePermission('pricing:lookup:dubai-air-sea')
+  @RequirePermission('pricing:dubai-display:markup-view')
   async legacyDubaiAirSeaTable(@Req() request: { user: Principal }) {
     const [table, agentNames] = await Promise.all([this.repository.getDubaiPriceTable(request.user), this.repository.getPricingAgentNames()]);
     const sanitize = (row: typeof table.air[number]) => ({
@@ -1497,6 +1723,31 @@ export class DataController {
       channelRequirement: sanitizePricingChannelRequirement(row.channelRequirement, agentNames)
     });
     return { ...table, air: table.air.map(sanitize), sea: table.sea.map(sanitize) };
+  }
+
+  @Get('pricing/legacy/dubai-air-sea/display-pages/:id/image')
+  @RequirePermission(['pricing:lookup:dubai-image-view', 'pricing:dubai-display:active-view'])
+  async legacyDubaiAirSeaDisplayPageImage(@Req() request: { user: Principal }, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {
+    const file = await this.repository.getDubaiPriceDisplayPageImage(request.user, id);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('Content-Disposition', `inline; filename="dubai-price-${id}.png"`);
+    return new StreamableFile(file.buffer);
+  }
+
+  @Get('pricing/legacy/dubai-air-sea/display-versions/:versionId/pages/:pageId/image')
+  @RequirePermission('pricing:dubai-display:versions-view')
+  async legacyDubaiAirSeaDisplayVersionPageImage(
+    @Req() request: { user: Principal },
+    @Param('versionId') versionId: string,
+    @Param('pageId') pageId: string,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const file = await this.repository.getDubaiPriceDisplayVersionPageImage(request.user, versionId, pageId);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Cache-Control', 'private, no-store');
+    response.setHeader('Content-Disposition', `inline; filename="dubai-price-${pageId}.png"`);
+    return new StreamableFile(file.buffer);
   }
 
   @Put('pricing/legacy/dubai-air-sea/display-versions/:id/activate')
@@ -1509,6 +1760,12 @@ export class DataController {
   @RequirePermission('pricing:dubai-display:retry')
   async retryLegacyDubaiAirSeaDisplayVersion(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.retryDubaiPriceDisplayVersion(request.user, id);
+  }
+
+  @Post('pricing/legacy/dubai-air-sea/display-versions/:id/sea-markup')
+  @RequirePermission('pricing:dubai-display:markup-update')
+  async updateLegacyDubaiSeaMarkup(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: DubaiSeaMarkupUpdateInput) {
+    return this.repository.updateDubaiSeaMarkup(request.user, id, body);
   }
 
   @Post('pricing/south-africa/lookup')
@@ -1524,34 +1781,40 @@ export class DataController {
   @RequirePermission('pricing:south-africa:rules-read')
   async southAfricaRateRules(@Req() request: { user: Principal }) {
     const response = await this.repository.getSouthAfricaRateRules(request.user);
+    const canViewCostMarkup = await this.hasAnyPermission(request.user.role, ['pricing:south-africa:cost-markup-view']);
     return {
       ...response,
-      rules: response.rules.map((rule) => ({ ...rule, remark: sanitizePricingChannelRequirement(rule.remark) }))
+      rules: response.rules.map((rule) => {
+        const sanitized = { ...rule, remark: sanitizePricingChannelRequirement(rule.remark) };
+        if (canViewCostMarkup) return sanitized;
+        const { costPerCbm: _costPerCbm, markupPerCbm: _markupPerCbm, ...businessRule } = sanitized;
+        return businessRule;
+      })
     };
   }
 
   @Post('pricing/south-africa/rules')
   @RequirePermission('pricing:south-africa:rules-create')
   async createSouthAfricaRateRule(@Req() request: { user: Principal }, @Body() body: SouthAfricaRateRuleInput) {
-    return this.repository.createSouthAfricaRateRule(request.user, body);
+    return this.sanitizeSouthAfricaRateRuleForPrincipal(request.user, await this.repository.createSouthAfricaRateRule(request.user, body));
   }
 
   @Put('pricing/south-africa/rules/:id')
   @RequirePermission('pricing:south-africa:rules-update')
   async updateSouthAfricaRateRule(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: SouthAfricaRateRuleInput) {
-    return this.repository.updateSouthAfricaRateRule(request.user, id, body);
+    return this.sanitizeSouthAfricaRateRuleForPrincipal(request.user, await this.repository.updateSouthAfricaRateRule(request.user, id, body));
   }
 
   @Patch('pricing/south-africa/rules/:id/enabled')
   @RequirePermission('pricing:south-africa:rules-enable')
   async updateSouthAfricaRateRuleEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { enabled?: boolean }) {
-    return this.repository.updateSouthAfricaRateRuleEnabled(request.user, id, body);
+    return this.sanitizeSouthAfricaRateRuleForPrincipal(request.user, await this.repository.updateSouthAfricaRateRuleEnabled(request.user, id, body));
   }
 
   @Delete('pricing/south-africa/rules/:id')
   @RequirePermission('pricing:south-africa:rules-delete')
   async deleteSouthAfricaRateRule(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteSouthAfricaRateRule(request.user, id);
+    return this.sanitizeSouthAfricaRateRuleForPrincipal(request.user, await this.repository.deleteSouthAfricaRateRule(request.user, id));
   }
 
   @Post('pricing/south-africa/images')
@@ -1650,10 +1913,22 @@ export class DataController {
     return this.repository.previewMarkupRoute(request.user, body);
   }
 
+  @Post('pricing/markup-rules/route-preview/batch')
+  @RequirePermission('pricing:markup-tier:read')
+  async previewMarkupRoutesBatch(@Req() request: { user: Principal }, @Body() body: MarkupRoutePreviewBatchInput) {
+    return this.repository.previewMarkupRoutesBatch(request.user, body);
+  }
+
   @Post('pricing/markup-rules/route-tiers')
   @RequirePermission('pricing:markup-tier:update')
   async replaceMarkupRouteTiers(@Req() request: { user: Principal }, @Body() body: MarkupRouteTierReplaceInput) {
     return this.repository.replaceMarkupRouteTiers(request.user, body);
+  }
+
+  @Post('pricing/markup-rules/route-tiers/batch')
+  @RequirePermission('pricing:markup-tier:update')
+  async replaceMarkupRouteTiersBatch(@Req() request: { user: Principal }, @Body() body: MarkupRouteTierBatchReplaceInput) {
+    return this.repository.replaceMarkupRouteTiersBatch(request.user, body);
   }
 
   @Post('pricing/markup-rules/migrate-pricebook-scopes')
@@ -1704,16 +1979,11 @@ export class DataController {
     }
     const normalizedFile = { ...file, originalname: normalizeUploadedFileName(file.originalname) };
     this.assertExcelFile(normalizedFile);
-    const uploadRoot = process.env.UPLOAD_DIR
-      ? process.env.UPLOAD_DIR
-      : process.env.NODE_ENV === 'production'
-        ? '/app/uploads'
-        : join(process.cwd(), 'uploads');
-    const uploadDir = join(uploadRoot, 'pricing-imports');
-    await mkdir(uploadDir, { recursive: true });
+    const uploadDir = resolveUploadDirectory('pricing-imports');
+    await mkdir(uploadDir.dir, { recursive: true });
     const extension = extname(normalizedFile.originalname).toLowerCase();
     const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
-    const filePath = join(uploadDir, fileName);
+    const filePath = join(uploadDir.dir, fileName);
     await writeFile(filePath, file.buffer);
     return this.repository.createPriceBookImportJob(request.user, {
       fileName: normalizedFile.originalname,
@@ -1723,6 +1993,24 @@ export class DataController {
       buffer: file.buffer,
       filePath
     });
+  }
+
+  @Get('pricing/books/import-jobs/:id')
+  @RequirePermission('pricing:price-books:import-job-view')
+  async priceBookImportJob(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.getPriceBookImportJob(request.user, id);
+  }
+
+  @Get('pricing/books/import-jobs')
+  @RequirePermission('pricing:price-books:import-job-view')
+  async priceBookImportJobs(@Req() request: { user: Principal }, @Query() query: PriceBookImportJobListQuery) {
+    return this.repository.getPriceBookImportJobs(request.user, query);
+  }
+
+  @Post('pricing/books/import-jobs/:id/retry')
+  @RequirePermission('pricing:price-books:upload')
+  async retryPriceBookImportJob(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.retryPriceBookImportJob(request.user, id);
   }
 
   @Put('pricing/books/:id/remark')
@@ -1735,6 +2023,12 @@ export class DataController {
   @RequirePermission('pricing:price-books:delete')
   async deletePriceBook(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deletePriceBook(request.user, id);
+  }
+
+  @Post('pricing/books/batch-delete')
+  @RequirePermission('pricing:price-books:delete')
+  async batchDeletePriceBooks(@Req() request: { user: Principal }, @Body() body: PriceBookBatchDeleteInput) {
+    return this.repository.batchDeletePriceBooks(request.user, body.ids);
   }
 
   @Get('pricing/rules')
@@ -1761,6 +2055,50 @@ export class DataController {
     return this.repository.quotePricingRule(request.user, body);
   }
 
+  @Get('warehouse/rent-details')
+  @RequirePermission('warehouse:rent-detail:view')
+  async warehouseRentDetails(@Req() request: { user: Principal }, @Query() query: WarehouseRentDetailQuery) {
+    return this.repository.getWarehouseRentDetails(request.user, query);
+  }
+
+  @Get('warehouse/rent-details/export')
+  @RequirePermission('warehouse:rent-detail:export')
+  async exportWarehouseRentDetails(@Req() request: { user: Principal }, @Query() query: WarehouseRentDetailQuery) {
+    return this.repository.exportWarehouseRentDetails(request.user, query);
+  }
+
+  @Get('warehouse/rent-rules')
+  @RequirePermission('warehouse:rent-rule:view')
+  async warehouseRentRules(@Req() request: { user: Principal }) {
+    return this.repository.getWarehouseRentRules(request.user);
+  }
+
+  @Post('warehouse/rent-rules')
+  @RequirePermission('warehouse:rent-rule:manage')
+  async createWarehouseRentRule(@Req() request: { user: Principal }, @Body() body: WarehouseRentRuleInput) {
+    return this.repository.createWarehouseRentRule(request.user, body);
+  }
+
+  @Put('warehouse/rent-rules/:id')
+  @RequirePermission('warehouse:rent-rule:manage')
+  async updateWarehouseRentRule(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: WarehouseRentRuleInput
+  ) {
+    return this.repository.updateWarehouseRentRule(request.user, id, body);
+  }
+
+  @Put('warehouse/rent-rules/:id/enabled')
+  @RequirePermission('warehouse:rent-rule:manage')
+  async updateWarehouseRentRuleEnabled(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: WarehouseRentRuleEnabledInput
+  ) {
+    return this.repository.updateWarehouseRentRuleEnabled(request.user, id, body);
+  }
+
   @Post('warehouse/packages')
   @RequirePermission('warehouse:today-receipt:manual-create')
   async createWarehousePackage(@Req() request: { user: Principal }, @Body() body: WarehousePackageCreateInput) {
@@ -1782,19 +2120,19 @@ export class DataController {
   }
 
   @Patch('warehouse/packages/:id')
-  @RequirePermission(['warehouse:today-receipt:update', 'warehouse:in-stock:update'])
+  @RequirePermission('warehouse:in-stock:update')
   async updateWarehousePackage(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehousePackageUpdateInput) {
     return this.repository.updateWarehousePackage(request.user, id, body);
   }
 
   @Put('warehouse/packages/:id/remark')
-  @RequirePermission('warehouse:today-receipt:remark-update')
+  @RequirePermission('warehouse:in-stock:update')
   async updateWarehousePackageRemark(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { remark?: string }) {
     return this.repository.updateWarehousePackageRemark(request.user, id, body);
   }
 
   @Patch('warehouse/packages/:id/exception')
-  @RequirePermission('warehouse:today-receipt:exception-manage')
+  @RequirePermission('warehouse:in-stock:update')
   async updateWarehousePackageException(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { manualException?: string }) {
     return this.repository.updateWarehousePackageException(request.user, id, body);
   }
@@ -1810,6 +2148,21 @@ export class DataController {
   @RequirePermission('warehouse:tally-pending:merge-and-ship')
   async createWarehouseConsolidationShipment(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.createShipmentFromWarehouseConsolidation(request.user, id);
+  }
+
+  @Get('warehouse/tally-repeat-statistics')
+  @RequirePermission('warehouse:tally-completed:view')
+  async warehouseTallyRepeatStatistics(
+    @Req() request: { user: Principal },
+    @Query() query: WarehouseTallyRepeatStatisticsQuery
+  ) {
+    return this.repository.getWarehouseTallyRepeatStatistics(request.user, query);
+  }
+
+  @Get('warehouse/tally-task-history-chain')
+  @RequirePermission('warehouse:in-stock:tally-record-view')
+  async warehouseTallyTaskHistoryChain(@Req() request: { user: Principal }, @Query('packageId') packageId: string) {
+    return this.repository.getWarehouseTallyTaskHistoryChain(request.user, packageId);
   }
 
   @Post('warehouse/tally-tasks')
@@ -2082,12 +2435,30 @@ export class DataController {
     if (context === 'PAYMENT_APPLICATION_BILL' && !body.paymentApplicationId) throw new BadRequestException('缺少付款申请');
     if (context === 'PAID_PAYMENT_RECEIPT' && !body.paymentApplicationId) throw new BadRequestException('缺少付款申请');
     if (context === 'WATER_RECEIPT' && !body.waterReceiptId) throw new BadRequestException('缺少水单');
+    if (context === 'WATER_RECEIPT' && body.waterReceiptId) {
+      await this.repository.assertWaterReceiptVoucherUploadAccess(request.user, body.waterReceiptId);
+    }
+    if (context === 'PENDING_PAYMENT_BILL' && body.pendingPaymentId) {
+      await this.repository.assertPendingPaymentVoucherUploadAccess(
+        request.user,
+        body.pendingPaymentId,
+        'finance:pending-payment:bill-voucher-upload'
+      );
+    }
+    if (context === 'PAYMENT_APPLICATION_BILL' && body.paymentApplicationId) {
+      await this.repository.assertPaymentApplicationVoucherUploadAccess(
+        request.user,
+        body.paymentApplicationId,
+        'finance:pending-payment:payment-voucher-upload'
+      );
+    }
 
     const uploadDir = resolveUploadDirectory('vouchers');
     await mkdir(uploadDir.dir, { recursive: true });
     const extension = this.imageMimeExtensions[normalizedFile.mimetype];
     const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
-    await writeFile(join(uploadDir.dir, fileName), normalizedFile.buffer);
+    const filePath = join(uploadDir.dir, fileName);
+    await writeFile(filePath, normalizedFile.buffer);
 
     const url = `${uploadDir.publicPath}/${fileName}`;
     const input: PaymentVoucherInput = {
@@ -2100,12 +2471,30 @@ export class DataController {
     if (context === 'PENDING_PAYMENT_BILL') {
       const pendingPaymentId = body.pendingPaymentId;
       if (!pendingPaymentId) throw new BadRequestException('缺少待付款记录');
-      return this.repository.addPaymentVoucher(request.user, { ...input, pendingPaymentId, voucherType: 'BILL' });
+      try {
+        return await this.repository.addPaymentVoucher(
+          request.user,
+          { ...input, pendingPaymentId, voucherType: 'BILL' },
+          'finance:pending-payment:bill-voucher-upload'
+        );
+      } catch (error) {
+        await unlink(filePath).catch(() => undefined);
+        throw error;
+      }
     }
     if (context === 'PAYMENT_APPLICATION_BILL') {
       const paymentApplicationId = body.paymentApplicationId;
       if (!paymentApplicationId) throw new BadRequestException('缺少付款申请');
-      return this.repository.addPaymentVoucher(request.user, { ...input, paymentApplicationId, voucherType: 'BILL' });
+      try {
+        return await this.repository.addPaymentVoucher(
+          request.user,
+          { ...input, paymentApplicationId, voucherType: 'BILL' },
+          'finance:pending-payment:payment-voucher-upload'
+        );
+      } catch (error) {
+        await unlink(filePath).catch(() => undefined);
+        throw error;
+      }
     }
     if (context === 'PAID_PAYMENT_RECEIPT') {
       const paymentApplicationId = body.paymentApplicationId;
@@ -2115,7 +2504,12 @@ export class DataController {
     if (context === 'WATER_RECEIPT') {
       const waterReceiptId = body.waterReceiptId;
       if (!waterReceiptId) throw new BadRequestException('缺少水单');
-      return this.repository.uploadWaterReceiptVoucher(request.user, waterReceiptId, input);
+      try {
+        return await this.repository.uploadWaterReceiptVoucher(request.user, waterReceiptId, input);
+      } catch (error) {
+        await unlink(filePath).catch(() => undefined);
+        throw error;
+      }
     }
     throw new BadRequestException('不支持的凭证类型');
   }
@@ -2260,6 +2654,45 @@ function normalizeUploadedFileName(fileName: string) {
   }
   const normalized = candidates.find((candidate) => /[\u4e00-\u9fff]/.test(candidate) && !candidate.includes('�')) ?? raw;
   return normalized.replace(/[\\/:\0]/g, '_').trim() || '未命名文件';
+}
+
+function sanitizeMojiaRequestSamplePayload(value: Record<string, unknown>): Record<string, unknown> {
+  return sanitizeMojiaRequestSampleValue(value, 0) as Record<string, unknown>;
+}
+
+function sanitizeMojiaRequestSampleValue(value: unknown, depth: number): unknown {
+  if (!value || typeof value !== 'object') return value;
+  if (depth >= 8) return '[OMITTED_MAX_DEPTH]';
+  if (Array.isArray(value)) return value.map((item) => sanitizeMojiaRequestSampleValue(item, depth + 1));
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+    key,
+    isMojiaRequestSampleSensitiveKey(key)
+      ? '[REDACTED]'
+      : sanitizeMojiaRequestSampleValue(child, depth + 1)
+  ]));
+}
+
+function isMojiaRequestSampleSensitiveKey(key: string): boolean {
+  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+  return /密码|令牌|密钥|签名|口令|凭证/.test(key)
+    || normalized === 'auth'
+    || normalized === 'jwt'
+    || normalized === 'bearer'
+    || normalized.includes('authorization')
+    || normalized.endsWith('token')
+    || normalized.endsWith('password')
+    || normalized.endsWith('passwd')
+    || normalized.endsWith('pwd')
+    || normalized.endsWith('secret')
+    || normalized.endsWith('credential')
+    || normalized.endsWith('cookie')
+    || normalized.endsWith('apikey')
+    || normalized.endsWith('accesskey')
+    || normalized.endsWith('privatekey')
+    || normalized.endsWith('sessionid')
+    || normalized.endsWith('sessionkey')
+    || normalized.endsWith('signature')
+    || normalized === 'sign';
 }
 
 type MojiaMeasurementInput = {

@@ -36,7 +36,7 @@ import type {
   WarehousePackageSummary,
   WarehouseTallyTaskSummary
 } from '@siyuan/shared';
-import { summarizeLineShipmentPool } from '@siyuan/shared';
+import { resolveWarehouseTallyLifecycleStatus, summarizeLineShipmentPool } from '@siyuan/shared';
 import { App } from '../../App';
 
 type TestPayablePaymentApplication = {
@@ -431,23 +431,35 @@ const warehousePackages: WarehousePackageSummary[] = [
 const initialWarehousePackages = warehousePackages.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }));
 const warehouseTallyTasks: WarehouseTallyTaskSummary[] = [];
 
-function withConfirmedWarehouseTally(packages: WarehousePackageSummary[]) {
+function withConfirmedWarehouseTally(packages: WarehousePackageSummary[]): WarehousePackageSummary[] {
   const completedTaskByPackageId = new Map<string, WarehouseTallyTaskSummary>();
   const pendingTaskByPackageId = new Map<string, WarehouseTallyTaskSummary>();
-  warehouseTallyTasks
+  [...warehouseTallyTasks].reverse()
     .filter((task) => task.status === 'COMPLETED')
     .forEach((task) => [...task.packageIds, task.appliedPackageId].filter(Boolean).forEach((packageId) => completedTaskByPackageId.set(packageId!, task)));
-  warehouseTallyTasks
+  [...warehouseTallyTasks].reverse()
     .filter((task) => task.status === 'PENDING')
     .forEach((task) => task.packageIds.forEach((packageId) => pendingTaskByPackageId.set(packageId, task)));
   return packages.map((pkg) => {
     const pendingTask = pendingTaskByPackageId.get(pkg.id);
     if (pendingTask) {
-      return { ...pkg, tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false, tallyStatus: '理货中' };
+      return {
+        ...pkg,
+        tallyTaskId: pendingTask.id,
+        tallyTaskNo: pendingTask.taskNo,
+        tallyCompleted: false,
+        tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false })
+      };
     }
     const task = completedTaskByPackageId.get(pkg.id);
     return task
-      ? { ...pkg, tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true, tallyStatus: '已理货' }
+      ? {
+        ...pkg,
+        tallyTaskId: task.id,
+        tallyTaskNo: task.taskNo,
+        tallyCompleted: true,
+        tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true })
+      }
       : { ...pkg, tallyTaskId: undefined, tallyTaskNo: undefined, tallyCompleted: false, tallyStatus: '待理货' };
   });
 }
@@ -1410,8 +1422,7 @@ function buildReceivableAuditResponse(rows: ReceivableAuditSummary[], url = 'htt
     return !needle || (value ?? '').toLowerCase().includes(needle.toLowerCase());
   };
   const filteredRows = rows.filter((row) => {
-    const status = params.get('status') ?? 'ALL';
-    if (status === 'ALL' && row.voided) return false;
+    const status = params.get('reconciliationStatus') ?? params.get('status') ?? 'ALL';
     if (status !== 'ALL' && row.reconciliationStatus !== status) return false;
     const customerNeedle = params.get('customer');
     const customerMatches = !customerNeedle || [row.customerCode, row.customerName, row.customerOrderNo].some((value) => (value ?? '').toLowerCase().includes(customerNeedle.toLowerCase()));
@@ -1437,14 +1448,26 @@ function buildReceivableAuditResponse(rows: ReceivableAuditSummary[], url = 'htt
 	      receiptBalance: receipt?.balance ?? ledger?.balance
 	    };
   });
+  const orderTotalKey = (row: ReceivableAuditSummary) => {
+    const customerCode = row.customerCode?.trim();
+    const systemOrderNo = row.systemOrderNo?.trim();
+    return customerCode && systemOrderNo ? `${customerCode}\u0000${systemOrderNo}` : `single:${row.id}`;
+  };
   const orderTotals = decorated.reduce((map, row) => {
     if (row.voided) return map;
-    map.set(row.systemOrderNo, Number(((map.get(row.systemOrderNo) ?? 0) + (row.rmbAmount ?? 0)).toFixed(2)));
+    const key = orderTotalKey(row);
+    map.set(key, Number(((map.get(key) ?? 0) + (row.rmbAmount ?? 0)).toFixed(2)));
     return map;
   }, new Map<string, number>());
   const visible = decorated
-    .filter((row) => !row.voided)
-    .map((row) => ({ ...row, orderRmbTotal: orderTotals.get(row.systemOrderNo) ?? 0 }));
+    .sort((left, right) => {
+      const customer = left.customerCode.localeCompare(right.customerCode, 'zh-Hans-CN');
+      if (customer) return customer;
+      const order = left.systemOrderNo.localeCompare(right.systemOrderNo, 'zh-Hans-CN');
+      if (order) return order;
+      return new Date(right.createdAt ?? 0).getTime() - new Date(left.createdAt ?? 0).getTime();
+    })
+    .map((row) => ({ ...row, orderRmbTotal: row.voided ? undefined : orderTotals.get(orderTotalKey(row)) }));
   return {
     rows: visible,
     totals: {
@@ -3721,6 +3744,13 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
         [right.channelName, right.realChannelName, right.destinationCountry].filter(Boolean).length ||
         (left.priority ?? 100) - (right.priority ?? 100)
       )[0];
+      const sourcePriceBooks = importedPriceBooks
+        .map((book) => ({
+          priceBookId: book.id,
+          fileName: book.fileName,
+          lineCount: importedPriceRows.filter((row) => row.agentName === name && row.priceBookId === book.id).length
+        }))
+        .filter((source) => source.lineCount > 0);
       const hitIds = new Set(
         [...importedPriceRows, ...backendSeedPriceRows]
           .filter((row) => row.agentName === name)
@@ -3729,10 +3759,13 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       return {
         ...primary,
         id: `agent:${name}`,
+        priceBookId: primary.priceBookId ?? sourcePriceBooks[0]?.priceBookId,
         agentName: name,
         channelName: undefined,
         realChannelName: undefined,
         destinationCountry: undefined,
+        sourcePriceBooks,
+        activeLineCount: hitIds.size,
         enabled: rules.some((rule) => rule.enabled),
         ruleCount: rules.length,
         hitCount: hitIds.size
@@ -4456,7 +4489,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       pkg.archivedAt = scanTime;
       pkg.tallyTaskId = task.id;
       pkg.tallyTaskNo = task.taskNo;
-      pkg.tallyStatus = '理货归档';
+      pkg.tallyStatus = resolveWarehouseTallyLifecycleStatus({ tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true });
     });
     warehousePackages.unshift(appliedPackage);
 
@@ -5013,6 +5046,29 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(receivableFees);
   }
 
+  const receivableWaterReceiptCandidates = url.match(/\/api\/finance\/receivable-audits\/([^/]+)\/water-receipt-candidates$/);
+  if (receivableWaterReceiptCandidates) {
+    const receivable = receivableFees.find((row) => row.id === receivableWaterReceiptCandidates[1]);
+    if (!receivable) return jsonResponse({ message: '应收不存在' }, 404);
+    return jsonResponse({
+      receivableId: receivable.id,
+      customerCode: receivable.customerCode,
+      rows: waterReceipts
+        .filter((row) => row.customerId === receivable.customerId)
+        .map((row) => ({
+          id: row.id,
+          receiptNo: row.receiptNo,
+          paymentNo: row.paymentNo,
+          receiptDate: row.receiptDate,
+          currency: row.currency,
+          amount: row.amount,
+          matchedAmount: row.matchedAmount,
+          balance: row.balance,
+          status: row.status
+        }))
+    });
+  }
+
   if (url.endsWith('/api/finance/dashboard')) {
     const pendingReceivables = receivableFees.filter((row) => row.reconciliationStatus === 'PENDING');
     const pendingBusinessCosts = businessCostFees.filter((row) => row.reconciliationStatus === 'PENDING');
@@ -5110,8 +5166,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
       }
       const matches = body.matches ?? [];
       const amount = Number(matches.reduce((sum: number, item: { amount: number }) => sum + Number(item.amount), 0).toFixed(2));
-      matches.forEach((match: { receivableFinanceItemId: string; amount: number }) => {
-        const fee = receivableFees.find((item) => item.id === match.receivableFinanceItemId);
+      matches.forEach((match: { receivableId?: string; receivableFinanceItemId?: string; receivableSourceType?: 'SYSTEM' | 'MANUAL'; amount: number }) => {
+        const receivableId = match.receivableId ?? match.receivableFinanceItemId;
+        const fee = receivableFees.find((item) => item.id === receivableId);
         if (fee) {
           if ((fee.currency ?? 'RMB') !== (receipt.currency ?? 'RMB')) return;
           const received = Number(((fee.receivedAmount ?? 0) + Number(match.amount)).toFixed(2));
@@ -5119,7 +5176,18 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
           fee.receiptStatus = received >= fee.amount ? 'RECEIVED' : 'PARTIAL';
           fee.receivedAt = fee.receiptStatus === 'RECEIVED' ? '2026-06-18T10:00:00.000Z' : fee.receivedAt;
           fee.paymentNo = receipt.receiptNo;
-          receipt.matches.push({ id: `wrm-${receipt.matches.length + 1}`, waterReceiptId: receipt.id, receivableFinanceItemId: fee.id, shipmentId: fee.shipmentId, systemOrderNo: fee.systemOrderNo, customerCode: fee.customerCode, feeName: fee.name, amount: Number(match.amount), createdAt: '2026-06-18T10:00:00.000Z' });
+          receipt.matches.push({
+            id: `wrm-${receipt.matches.length + 1}`,
+            waterReceiptId: receipt.id,
+            ...(match.receivableSourceType === 'SYSTEM' ? { receivableFeeId: fee.id } : { receivableFinanceItemId: fee.id }),
+            receivableSourceType: match.receivableSourceType ?? 'MANUAL',
+            shipmentId: fee.shipmentId,
+            systemOrderNo: fee.systemOrderNo,
+            customerCode: fee.customerCode,
+            feeName: fee.name,
+            amount: Number(match.amount),
+            createdAt: '2026-06-18T10:00:00.000Z'
+          });
         }
       });
       receipt.matchedAmount = Number((receipt.matchedAmount + amount).toFixed(2));
@@ -5581,7 +5649,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const currency = search.get('currency');
     if (currency && currency !== 'ALL') rows = rows.filter((row) => row.currency === currency);
     const systemOrderNo = search.get('systemOrderNo');
-    if (systemOrderNo) rows = rows.filter((row) => row.systemOrderNo.includes(systemOrderNo));
+    if (systemOrderNo) rows = rows.filter((row) => row.systemOrderNo?.includes(systemOrderNo));
     const amountByCurrency = rows.reduce((list, row) => {
       const bucket = list.find((item) => item.currency === row.currency);
       if (bucket) bucket.amount += row.amount;

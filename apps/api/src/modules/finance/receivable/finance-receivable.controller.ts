@@ -5,6 +5,9 @@ import type {
   ReceivableAuditExportRequest,
   ReceivableAuditListQuery,
   ReceivableAuditUpdateInput,
+  ReceivableMatchRequestBatchInput,
+  ReceivableMatchRequestUpdateInput,
+  ReceivableMatchReviewInput,
   ReceivableReceiptMatchInput,
   WaterReceiptCreateInput,
   WaterReceiptExportRequest,
@@ -12,8 +15,7 @@ import type {
   WaterReceiptMarkArrivedInput,
   WaterReceiptMatchOrdersInput,
   WaterReceiptUnmatchInput,
-  WaterReceiptUpdateInput,
-  WaterReceiptVoucherInput
+  WaterReceiptUpdateInput
 } from '@siyuan/shared';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
@@ -53,6 +55,65 @@ export class FinanceReceivableController {
     return this.service.auditReceivableAudit(request.user, id);
   }
 
+  @Post('finance/receivable-match-requests/:id/approve')
+  @RequirePermission('finance:water-match:audit')
+  async approveReceivableMatchRequest(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.service.approveReceivableMatchRequest(request.user, id);
+  }
+
+  @Put('finance/receivable-match-requests/:id')
+  @RequirePermission('finance:water-match:adjust')
+  async updateReceivableMatchRequest(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: ReceivableMatchRequestUpdateInput
+  ) {
+    return this.service.updateReceivableMatchRequest(request.user, id, body);
+  }
+
+  @Delete('finance/receivable-match-requests/:id')
+  @RequirePermission('finance:water-match:cancel')
+  async deleteReceivableMatchRequest(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.service.deleteReceivableMatchRequest(request.user, id);
+  }
+
+  @Post('finance/receivable-match-requests/:id/reverse-audit')
+  @RequirePermission('finance:water-match:reverse')
+  async reverseReceivableMatchRequest(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: ReceivableMatchReviewInput
+  ) {
+    return this.service.reverseReceivableMatchRequest(request.user, id, body);
+  }
+
+  @Post('finance/receivable-match-requests/batch-approve')
+  @RequirePermission('finance:water-match:audit')
+  async batchApproveReceivableMatchRequests(
+    @Req() request: { user: Principal },
+    @Body() body: ReceivableMatchRequestBatchInput
+  ) {
+    return this.service.batchApproveReceivableMatchRequests(request.user, body);
+  }
+
+  @Post('finance/receivable-match-requests/batch-reverse-audit')
+  @RequirePermission('finance:water-match:reverse')
+  async batchReverseReceivableMatchRequests(
+    @Req() request: { user: Principal },
+    @Body() body: ReceivableMatchRequestBatchInput
+  ) {
+    return this.service.batchReverseReceivableMatchRequests(request.user, body);
+  }
+
+  @Post('finance/receivable-match-requests/batch-delete')
+  @RequirePermission('finance:water-match:cancel')
+  async batchDeleteReceivableMatchRequests(
+    @Req() request: { user: Principal },
+    @Body() body: ReceivableMatchRequestBatchInput
+  ) {
+    return this.service.batchDeleteReceivableMatchRequests(request.user, body);
+  }
+
   @Post('finance/receivable-audits/:id/reverse-audit')
   @RequirePermission('finance:receivable:reverse')
   async reverseAuditReceivableAudit(@Req() request: { user: Principal }, @Param('id') id: string) {
@@ -89,6 +150,12 @@ export class FinanceReceivableController {
     return this.service.matchReceivableReceipt(request.user, id, body);
   }
 
+  @Get('finance/receivable-audits/:id/water-receipt-candidates')
+  @RequirePermission('finance:receivable:match-water')
+  async receivableWaterReceiptCandidates(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.service.receivableWaterReceiptCandidates(request.user, id);
+  }
+
   @Post('finance/receivable-audits/export')
   @RequirePermission('finance:receivable:export')
   async exportReceivableAudits(@Req() request: { user: Principal }, @Body() body: ReceivableAuditExportRequest) {
@@ -99,6 +166,12 @@ export class FinanceReceivableController {
   @RequirePermission(['finance:water-receipt:read', 'finance:water-match:read'])
   async waterReceipts(@Req() request: { user: Principal }, @Query() query: WaterReceiptListQuery) {
     return this.service.waterReceipts(request.user, query);
+  }
+
+  @Get('finance/water-receipts/site-options')
+  @RequirePermission(['finance:water-receipt:create', 'finance:water-receipt:update'])
+  async waterReceiptSiteOptions() {
+    return this.service.waterReceiptSiteOptions();
   }
 
   @Post('finance/water-receipts')
@@ -147,12 +220,6 @@ export class FinanceReceivableController {
   @RequirePermission('finance:water-receipt:void')
   async voidWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
     return this.service.voidWaterReceipt(request.user, id, body);
-  }
-
-  @Post('finance/water-receipts/:id/voucher')
-  @RequirePermission('finance:water-receipt:voucher-upload')
-  async uploadWaterReceiptVoucher(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptVoucherInput) {
-    return this.service.uploadWaterReceiptVoucher(request.user, id, body);
   }
 
   @Delete('finance/water-receipts/:id/voucher')

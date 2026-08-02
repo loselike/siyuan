@@ -7,8 +7,14 @@ import type {
   AgentMarkupCreateInput,
   AgentMarkupSummary,
   AgentMarkupUpdateInput,
+  MarkupRouteListQuery,
+  MarkupRouteListResponse,
+  MarkupRoutePreviewBatchInput,
+  MarkupRoutePreviewBatchResponse,
   MarkupRoutePreviewInput,
   MarkupRoutePreviewResponse,
+  MarkupRouteTierBatchReplaceInput,
+  MarkupRouteTierBatchReplaceResponse,
   MarkupRouteTierReplaceInput,
   AgentSummary,
   AgentUpdateInput,
@@ -20,6 +26,7 @@ import type {
   CarrierTaskRunResponse,
   AccountLedgerSummary,
   ChannelCreateInput,
+  ChannelDeleteResponse,
   ChannelCategoryCreateInput,
   ChannelCategorySummary,
   ChannelCategoryUpdateInput,
@@ -47,6 +54,29 @@ import type {
   FuelRateSummary,
   LabelCreateResponse,
   MasterDataSnapshot,
+  KuayueImportCommitInput,
+  KuayueImportCommitResult,
+  KuayueImportLineClaimInput,
+  KuayueImportLineListResponse,
+  KuayueImportLineQuery,
+  KuayueImportPreview,
+  MiscFeeActionInput,
+  MiscFeeBusinessAssignmentInput,
+  MiscFeeHangBatchApproveInput,
+  MiscFeeHangBatchApproveResult,
+  MiscFeeDetail,
+  MiscFeeDeliveryShipmentOption,
+  MiscFeeHangListResponse,
+  MiscFeeHangQuery,
+  MiscFeeHangRequestInput,
+  MiscFeeHangRequestSummary,
+  MiscFeeTallyDueSummary,
+  MiscFeeInput,
+  MiscFeeListResponse,
+  MiscFeeMatchInput,
+  MiscFeeQuery,
+  MiscFeeUpdateInput,
+  MiscFeeVoidInput,
   OrderEntryCreateInput,
   OrderEntryDetailSummary,
   OrderEntryDraftUpdateInput,
@@ -67,6 +97,10 @@ import type {
   PaidPaymentUpdateInput,
   PaymentConfirmPaidInput,
   PaymentWaterReceiptInput,
+  PayerBankAccountInput,
+  PayerBankAccountListQuery,
+  PayerBankAccountListResponse,
+  PayerBankAccountSummary,
   PayableAuditBatchInput,
   PayableAuditCreateInput,
   PayableAuditExportRequest,
@@ -76,9 +110,15 @@ import type {
   PayableAuditSummary,
   PayableAuditUpdateInput,
   PriceBookImportInput,
+  PriceBookBatchDeleteInput,
+  PriceBookBatchDeleteResponse,
+  PriceBookImportJobListQuery,
+  PriceBookImportJobListResponse,
+  PriceBookImportTargetModule,
   PriceBookImportJobResponse,
   PriceBookImportResult,
   PriceBookRemarkUpdateInput,
+  PriceBooksResponse,
   PriceBookSummary,
   LegacyPricingImportInput,
   LegacyPricingModule,
@@ -86,6 +126,7 @@ import type {
   LegacyPricingQuoteResponse,
   LegacyPricingSourcesResponse,
   DubaiPriceDisplayActivateInput,
+  DubaiSeaMarkupUpdateInput,
   DubaiPriceDisplayVersionListResponse,
   SouthAfricaLookupRequest,
   SouthAfricaLookupResponse,
@@ -101,6 +142,9 @@ import type {
   PricingRuleQuoteRequest,
   PricingRuleQuoteResponse,
   PricingRuleSummary,
+  CommonTagCreateInput,
+  CommonTagSummary,
+  CommonTagUpdateInput,
   ProblemTicketCreateInput,
   ProblemTicketSummary,
   QuoteResponse,
@@ -111,7 +155,11 @@ import type {
   ReceivableAuditExportResponse,
   ReceivableAuditListQuery,
   ReceivableAuditListResponse,
+  ReceivableMatchRequestBatchInput,
+  ReceivableMatchRequestUpdateInput,
+  ReceivableMatchReviewInput,
   ReceivableReceiptMatchInput,
+  ReceivableWaterReceiptCandidatesResponse,
   ReceivableAuditSummary,
   ReceivableAuditUpdateInput,
   ReceivableAdjustmentInput,
@@ -125,7 +173,6 @@ import type {
   WaterReceiptMatchOrdersInput,
   WaterReceiptUnmatchInput,
   WaterReceiptUpdateInput,
-  WaterReceiptVoucherInput,
   WaterReceiptVoucherSummary,
   BusinessCostAuditBatchInput,
   BusinessCostAuditBatchResult,
@@ -150,10 +197,22 @@ import type {
   PaymentVoucherDifferenceInput,
   PaymentVoucherListQuery,
   PaymentVoucherSummary,
+  MarketProfitLedgerQuery,
+  MarketProfitLedgerResponse,
+  WarehouseProfitLedgerQuery,
+  WarehouseProfitLedgerResponse,
+  FinanceProfitLedgerQuery,
+  FinanceProfitLedgerResponse,
+  ProfitSettlementDetail,
+  ProfitSettlementInput,
+  ProfitSettlementListResponse,
+  ProfitSettlementQuery,
+  ProfitSettlementReleaseResult,
   VoucherImageUploadInput,
   VoucherImageUploadResponse,
   SurchargeCreateInput,
   SurchargeSummary,
+  SiteSummary,
   StaffGender,
   StaffAccountCreateInput,
   StaffAccountPasswordResetInput,
@@ -182,6 +241,10 @@ import type {
   ShipmentReviewRejectInput,
   ShipmentLabelSummary,
   ShipmentOperationalUpdateInput,
+  CustomerServiceDataConfirmRow,
+  CustomerServiceDataReviewInput,
+  CustomerServiceDataReverseInput,
+  CustomerServiceDataUpdateInput,
   CustomerServiceTransferBatchInput,
   CustomerServiceTransferBatchResponse,
   ShipmentPaymentUpdateInput,
@@ -195,13 +258,30 @@ import type {
   WarehousePackageSplitResponse,
   WarehousePackageSummary,
   WarehousePackageUpdateInput,
+  WarehouseRentDetailQuery,
+  WarehouseRentDetailResponse,
+  WarehouseRentRuleEnabledInput,
+  WarehouseRentRuleInput,
+  WarehouseRentRuleSummary,
   WarehouseTallyLabelScanInput,
   WarehouseTallyLabelScanResponse,
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCreateInput,
+  WarehouseTallyRepeatStatisticsQuery,
+  WarehouseTallyRepeatStatisticsResponse,
   WarehouseTallyTaskSummary,
-  WarehouseTallyTaskUpdateInput,
+  WarehouseTallyTaskUpdateInput
 } from '@siyuan/shared';
+import type {
+  AnnouncementAudienceOptions,
+  AnnouncementCreateInput,
+  AnnouncementSummary,
+  NotificationActionTaskListResponse,
+  NotificationListResponse,
+  NotificationOperationsResponse,
+  NotificationPreferenceSummary,
+  NotificationUnreadSummary
+} from './modules/notifications/notificationTypes';
 import { AppShellClient } from './api/appShellClient';
 import { AuditQueryClient } from './api/auditQueryClient';
 import { CarrierTaskQueryClient } from './api/carrierTaskQueryClient';
@@ -217,6 +297,7 @@ export type PermissionKey =
   | `tracking:${string}`
   | `finance:${string}`
   | `master-data:${string}`
+  | `misc-fee:${string}`
   | 'operations:line-shipment:view'
   | 'operations:line-shipment:detail'
   | 'operations:line-shipment:process'
@@ -300,8 +381,6 @@ export type PermissionKey =
   | 'market:dashboard:agent-stats-view'
   | 'market:dashboard:channel-mode-stats-view'
   | 'market:dashboard:sensitive-summary-view'
-  | 'market:dashboard:team-view'
-  | 'market:dashboard:all-view'
   | 'market:pending-routing:view'
   | 'market:pending-routing:detail'
   | 'market:pending-routing:assign'
@@ -387,6 +466,10 @@ export type PermissionKey =
   | 'warehouse:outbounded:handover-view'
   | 'warehouse:outbounded:detail-view'
   | 'warehouse:outbounded:export'
+  | 'warehouse:rent-detail:view'
+  | 'warehouse:rent-detail:export'
+  | 'warehouse:rent-rule:view'
+  | 'warehouse:rent-rule:manage'
   | `pricing:${string}`
   | 'finance:business-cost:read'
   | 'finance:business-cost:manage'
@@ -429,6 +512,24 @@ export type PermissionKey =
   | 'finance:water-receipt:export'
   | 'finance:water-receipt:voucher'
   | 'finance:water-receipt:view-all'
+  | 'finance:water-receipt:detail'
+  | 'finance:water-receipt:create'
+  | 'finance:water-receipt:update'
+  | 'finance:water-receipt:reverse-archive'
+  | 'finance:water-receipt:voucher-view'
+  | 'finance:water-receipt:voucher-upload'
+  | 'finance:water-receipt:voucher-delete'
+  | 'finance:water-receipt:view-sensitive'
+  | 'finance:water-match:read'
+  | 'finance:water-match:receivable-view'
+  | 'finance:water-match:create'
+  | 'finance:water-match:audit'
+  | 'finance:water-match:reverse'
+  | 'finance:water-match:cancel'
+  | 'finance:water-match:adjust'
+  | 'finance:water-match:history-view'
+  | 'finance:water-match:difference-view'
+  | 'finance:water-match:export'
   | 'finance:customer-account:read'
   | 'master-data:customers:read'
   | 'master-data:customers:write'
@@ -453,6 +554,7 @@ export interface Principal {
   id: string;
   username: string;
   role: RoleKey;
+  site?: string;
   customerId?: string;
   name?: string;
   phone?: string;
@@ -641,7 +743,7 @@ export class ApiClient {
     return this.request(`/shipments/${id}/review/reverse`, { method: 'POST', ...(input ? { body: JSON.stringify(input) } : {}) });
   }
 
-  async deleteShipmentReview(id: string, input: ShipmentReviewDeleteInput): Promise<ShipmentReviewDetailSummary> {
+  async deleteShipmentReview(id: string, input: ShipmentReviewDeleteInput): Promise<{ id: string; deleted: true }> {
     return this.request(`/shipments/${id}/review`, { method: 'DELETE', body: JSON.stringify(input) });
   }
 
@@ -715,35 +817,35 @@ export class ApiClient {
     return this.request('/warehouse/handover/print', { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async approveShipmentBusinessData(id: string, body: { remark?: string } = {}): Promise<Shipment> {
+  async approveShipmentBusinessData(id: string, body: CustomerServiceDataReviewInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/business-data/approve`, { method: 'POST', body: JSON.stringify(body) });
   }
 
-  async approveShipmentAgentData(id: string, body: { remark?: string } = {}): Promise<Shipment> {
+  async approveShipmentAgentData(id: string, body: CustomerServiceDataReviewInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/agent-data/approve`, { method: 'POST', body: JSON.stringify(body) });
   }
 
-  async updateShipmentBusinessData(id: string, body: { packageCount: number; weightKg: number; volumeCbm: number; chargeWeightKg: number; remark?: string; pushToSales?: boolean }): Promise<Shipment> {
+  async updateShipmentBusinessData(id: string, body: CustomerServiceDataUpdateInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/business-data`, { method: 'PATCH', body: JSON.stringify(body) });
   }
 
-  async updateShipmentAgentData(id: string, body: { packageCount: number; weightKg: number; volumeCbm: number; chargeWeightKg: number; remark?: string }): Promise<Shipment> {
+  async updateShipmentAgentData(id: string, body: CustomerServiceDataUpdateInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/agent-data`, { method: 'PATCH', body: JSON.stringify(body) });
   }
 
-  async reverseShipmentBusinessData(id: string, body: { reason: string }): Promise<Shipment> {
+  async reverseShipmentBusinessData(id: string, body: CustomerServiceDataReverseInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/business-data/reverse`, { method: 'POST', body: JSON.stringify(body) });
   }
 
-  async reverseShipmentAgentData(id: string, body: { reason: string }): Promise<Shipment> {
+  async reverseShipmentAgentData(id: string, body: CustomerServiceDataReverseInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/agent-data/reverse`, { method: 'POST', body: JSON.stringify(body) });
   }
 
-  async approveShipmentAllData(id: string, body: { remark?: string } = {}): Promise<Shipment> {
+  async approveShipmentAllData(id: string, body: CustomerServiceDataReviewInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/data-confirmation/approve-all`, { method: 'POST', body: JSON.stringify(body) });
   }
 
-  async reverseShipmentAllData(id: string, body: { reason: string }): Promise<Shipment> {
+  async reverseShipmentAllData(id: string, body: CustomerServiceDataReverseInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/data-confirmation/reverse-all`, { method: 'POST', body: JSON.stringify(body) });
   }
 
@@ -761,6 +863,10 @@ export class ApiClient {
 
   async customerServiceTransferShipments(): Promise<Shipment[]> {
     return this.request('/customer-service/transfer-shipments');
+  }
+
+  async customerServiceDataConfirmShipments(): Promise<CustomerServiceDataConfirmRow[]> {
+    return this.request('/customer-service/data-confirm-shipments');
   }
 
   async fillCustomerServiceTransferShipments(input: CustomerServiceTransferBatchInput): Promise<CustomerServiceTransferBatchResponse> {
@@ -839,6 +945,39 @@ export class ApiClient {
     return response.json() as Promise<{ shipment: Shipment; fileName: string; url: string }>;
   }
 
+  async downloadShipmentInvoiceTemplate(id: string): Promise<{ fileName: string; blob: Blob }> {
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE}/shipments/${encodeURIComponent(id)}/invoice-template/download`, { headers });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '';
+      if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
+        throw new Error('发票模板下载失败，请检查网络后重试');
+      }
+      throw error;
+    }
+    if (response.status === 401) {
+      this.onUnauthorized();
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    if (!response.ok) {
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    let fileName = '发票模板.xlsx';
+    try {
+      fileName = encodedName ? decodeURIComponent(encodedName) : plainName || fileName;
+    } catch {
+      fileName = plainName || fileName;
+    }
+    return { fileName, blob: await response.blob() };
+  }
+
   async addTrackingEvent(id: string, input: TrackingEventInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/tracking-events`, { method: 'POST', body: JSON.stringify(input) });
   }
@@ -859,8 +998,28 @@ export class ApiClient {
     return this.request('/problem-tickets');
   }
 
+  async problemTicketCommonTags(): Promise<CommonTagSummary[]> {
+    return this.request('/customer-service/problem-tags');
+  }
+
+  async createProblemTicketCommonTag(input: CommonTagCreateInput): Promise<CommonTagSummary> {
+    return this.request('/customer-service/problem-tags', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateProblemTicketCommonTag(id: string, input: CommonTagUpdateInput): Promise<CommonTagSummary> {
+    return this.request(`/customer-service/problem-tags/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deleteProblemTicketCommonTag(id: string): Promise<CommonTagSummary> {
+    return this.request(`/customer-service/problem-tags/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   async createProblemTicket(id: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
     return this.request(`/shipments/${id}/problem-tickets`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createBusinessProblemTicket(id: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
+    return this.request(`/business/shipments/${id}/problem-tickets`, { method: 'POST', body: JSON.stringify(input) });
   }
 
   async createOperationProblemTicket(id: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
@@ -907,6 +1066,13 @@ export class ApiClient {
     return this.request('/pricing/rules/quote', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async priceBooks(options: { includeRows?: boolean; targetModule?: PriceBookImportTargetModule | 'unclassified'; signal?: AbortSignal } = {}): Promise<PriceBooksResponse> {
+    const params = new globalThis.URLSearchParams();
+    if (options.includeRows === false) params.set('includeRows', 'false');
+    if (options.targetModule) params.set('targetModule', options.targetModule);
+    return this.request(`/pricing/books${params.toString() ? `?${params.toString()}` : ''}`, { signal: options.signal });
+  }
+
   async importPriceBook(input: PriceBookImportInput, options: { returnRows?: boolean } = {}): Promise<PriceBookImportResult> {
     const params = new globalThis.URLSearchParams();
     if (options.returnRows === false) {
@@ -922,6 +1088,34 @@ export class ApiClient {
     if (input.agentId) form.append('agentId', input.agentId);
     if (input.agentShortName) form.append('agentShortName', input.agentShortName);
     return this.request('/pricing/books/import-jobs', { method: 'POST', body: form });
+  }
+
+  async priceBookImportJob(id: string): Promise<PriceBookImportJobResponse> {
+    return this.request(`/pricing/books/import-jobs/${id}`);
+  }
+
+  async priceBookImportJobs(query: PriceBookImportJobListQuery = {}): Promise<PriceBookImportJobListResponse> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) params.set(key, String(value));
+    });
+    return this.request(`/pricing/books/import-jobs${params.toString() ? `?${params.toString()}` : ''}`);
+  }
+
+  async retryPriceBookImportJob(id: string): Promise<PriceBookImportJobResponse> {
+    return this.request(`/pricing/books/import-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+  }
+
+  async markupRoutes(priceBookId: string, query: MarkupRouteListQuery = {}): Promise<MarkupRouteListResponse> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.filter((item) => String(item).trim()).forEach((item) => params.append(key, String(item)));
+      } else if (value !== undefined && value !== null && String(value).trim()) {
+        params.set(key, String(value));
+      }
+    });
+    return this.request(`/pricing/books/${priceBookId}/markup-routes${params.toString() ? `?${params.toString()}` : ''}`);
   }
 
   async downloadPriceBook(id: string): Promise<{ fileName: string; blob: Blob }> {
@@ -966,6 +1160,10 @@ export class ApiClient {
     return this.request(`/pricing/books/${id}`, { method: 'DELETE' });
   }
 
+  async batchDeletePriceBooks(input: PriceBookBatchDeleteInput): Promise<PriceBookBatchDeleteResponse> {
+    return this.request('/pricing/books/batch-delete', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async lookupPrice(input: PriceLookupRequest): Promise<PriceLookupResponse> {
     return this.request('/pricing/lookup', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -984,12 +1182,44 @@ export class ApiClient {
     return this.request(paths[input.module], { method: 'POST', body: JSON.stringify(body) });
   }
 
+  async dubaiPriceDisplayPageImage(path: string): Promise<Blob> {
+    if (!path.startsWith('/pricing/legacy/dubai-air-sea/display-pages/')) throw new Error('迪拜价格图片地址无效');
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(`${API_BASE}${path}`, { headers });
+    if (response.status === 401) {
+      this.onUnauthorized();
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    if (!response.ok) throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    return response.blob();
+  }
+
+  async dubaiPriceDisplayVersionPageImage(versionId: string, pageId: string): Promise<Blob> {
+    const path = `/pricing/legacy/dubai-air-sea/display-versions/${encodeURIComponent(versionId)}/pages/${encodeURIComponent(pageId)}/image`;
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(`${API_BASE}${path}`, { headers });
+    if (response.status === 401) {
+      this.onUnauthorized();
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    if (!response.ok) throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    return response.blob();
+  }
+
   async activateDubaiPriceDisplayVersion(id: string, input: DubaiPriceDisplayActivateInput): Promise<DubaiPriceDisplayVersionListResponse> {
     return this.request(`/pricing/legacy/dubai-air-sea/display-versions/${id}/activate`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
   async retryDubaiPriceDisplayVersion(id: string): Promise<DubaiPriceDisplayVersionListResponse> {
     return this.request(`/pricing/legacy/dubai-air-sea/display-versions/${id}/retry`, { method: 'POST' });
+  }
+
+  async updateDubaiSeaMarkup(id: string, input: DubaiSeaMarkupUpdateInput): Promise<DubaiPriceDisplayVersionListResponse> {
+    return this.request(`/pricing/legacy/dubai-air-sea/display-versions/${id}/sea-markup`, { method: 'POST', body: JSON.stringify(input) });
   }
 
   async importLegacyPricingSource(input: LegacyPricingImportInput): Promise<{ source: LegacyPricingSourcesResponse['sources'][number]; rowCount: number }> {
@@ -1028,8 +1258,16 @@ export class ApiClient {
     return this.request('/pricing/markup-rules/route-preview', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async previewMarkupRoutesBatch(input: MarkupRoutePreviewBatchInput): Promise<MarkupRoutePreviewBatchResponse> {
+    return this.request('/pricing/markup-rules/route-preview/batch', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async replaceMarkupRouteTiers(input: MarkupRouteTierReplaceInput): Promise<MarkupRoutePreviewResponse> {
     return this.request('/pricing/markup-rules/route-tiers', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async replaceMarkupRouteTiersBatch(input: MarkupRouteTierBatchReplaceInput): Promise<MarkupRouteTierBatchReplaceResponse> {
+    return this.request('/pricing/markup-rules/route-tiers/batch', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async migrateLegacyMarkupRouteScopes(): Promise<{ migratedCount: number; archivedCount: number; skippedCount: number }> {
@@ -1064,6 +1302,47 @@ export class ApiClient {
     return this.request(`/pricing/markup-rules/${id}`, { method: 'DELETE' });
   }
 
+  async warehouseRentDetails(query: WarehouseRentDetailQuery = {}): Promise<WarehouseRentDetailResponse> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const search = params.toString();
+    return this.request(`/warehouse/rent-details${search ? `?${search}` : ''}`);
+  }
+
+  async exportWarehouseRentDetails(query: WarehouseRentDetailQuery = {}): Promise<WarehouseRentDetailResponse> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const search = params.toString();
+    return this.request(`/warehouse/rent-details/export${search ? `?${search}` : ''}`);
+  }
+
+  async warehouseRentRules(): Promise<WarehouseRentRuleSummary[]> {
+    return this.request('/warehouse/rent-rules');
+  }
+
+  async createWarehouseRentRule(input: WarehouseRentRuleInput): Promise<WarehouseRentRuleSummary> {
+    return this.request('/warehouse/rent-rules', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateWarehouseRentRule(id: string, input: WarehouseRentRuleInput): Promise<WarehouseRentRuleSummary> {
+    return this.request(`/warehouse/rent-rules/${id}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async updateWarehouseRentRuleEnabled(
+    id: string,
+    input: WarehouseRentRuleEnabledInput
+  ): Promise<WarehouseRentRuleSummary> {
+    return this.request(`/warehouse/rent-rules/${id}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
   async createWarehousePackage(input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
     return this.request('/warehouse/packages', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1094,6 +1373,19 @@ export class ApiClient {
 
   async createWarehouseConsolidationShipment(id: string): Promise<WarehouseConsolidationSummary> {
     return this.request(`/warehouse/consolidations/${id}/create-shipment`, { method: 'POST' });
+  }
+
+  async warehouseTallyRepeatStatistics(
+    query: WarehouseTallyRepeatStatisticsQuery = {}
+  ): Promise<WarehouseTallyRepeatStatisticsResponse> {
+    const params = new URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    const search = params.toString();
+    return this.request(`/warehouse/tally-repeat-statistics${search ? `?${search}` : ''}`);
   }
 
   async createWarehouseTallyTask(input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
@@ -1185,6 +1477,31 @@ export class ApiClient {
 
   async reorderFinanceCatalogItems(input: FinanceCatalogReorderInput): Promise<FinanceCatalogListResponse> {
     return this.request('/finance/catalog/reorder', { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async payerBankAccounts(query: PayerBankAccountListQuery = {}): Promise<PayerBankAccountListResponse> {
+    return this.request(`/master-data/payer-bank-accounts${this.queryString(query)}`);
+  }
+
+  async createPayerBankAccount(input: PayerBankAccountInput): Promise<PayerBankAccountSummary> {
+    return this.request('/master-data/payer-bank-accounts', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
+  }
+
+  async updatePayerBankAccount(
+    id: string,
+    input: Partial<PayerBankAccountInput>
+  ): Promise<PayerBankAccountSummary> {
+    return this.request(`/master-data/payer-bank-accounts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(input)
+    });
+  }
+
+  async deletePayerBankAccount(id: string): Promise<{ id: string; deleted: boolean }> {
+    return this.request(`/master-data/payer-bank-accounts/${id}`, { method: 'DELETE' });
   }
 
   async receivableAudits(query: ReceivableAuditListQuery = {}): Promise<ReceivableAuditListResponse> {
@@ -1319,6 +1636,188 @@ export class ApiClient {
     return this.request(`/finance/pending-payments${this.queryString(query)}`);
   }
 
+  async miscFees(query: MiscFeeQuery = {}): Promise<MiscFeeListResponse> {
+    return this.request(`/misc-fees${this.queryString(query)}`);
+  }
+
+  async miscFeeDeliveryShipmentOptions(customerCode: string): Promise<MiscFeeDeliveryShipmentOption[]> {
+    return this.request(`/misc-fees/delivery/shipment-options${this.queryString({ customerCode })}`);
+  }
+
+  async previewKuayueImport(file: File): Promise<KuayueImportPreview> {
+    const body = new FormData();
+    body.append('file', file);
+    return this.request('/misc-fees/kuayue/import-preview', { method: 'POST', body });
+  }
+
+  async commitKuayueImport(input: KuayueImportCommitInput): Promise<KuayueImportCommitResult> {
+    return this.request('/misc-fees/kuayue/import-commit', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async kuayueImportLines(query: KuayueImportLineQuery = {}): Promise<KuayueImportLineListResponse> {
+    return this.request(`/misc-fees/kuayue/import-lines${this.queryString(query)}`);
+  }
+
+  async claimKuayueImportLine(lineId: string, input: KuayueImportLineClaimInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/kuayue/import-lines/${lineId}/claim`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
+  }
+
+  async miscFee(id: string): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}`);
+  }
+
+  async downloadMiscFeeAttachment(attachmentId: string): Promise<{ fileName: string; blob: Blob }> {
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(`${API_BASE}/misc-fee-attachments/${encodeURIComponent(attachmentId)}/file`, { headers });
+    if (response.status === 401) {
+      this.onUnauthorized();
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    if (!response.ok) {
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    const disposition = response.headers.get('content-disposition') ?? '';
+    const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+    const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
+    let fileName = '杂费附件';
+    try {
+      fileName = encodedName ? decodeURIComponent(encodedName) : plainName || fileName;
+    } catch {
+      fileName = plainName || fileName;
+    }
+    return { fileName, blob: await response.blob() };
+  }
+
+  async createMiscFee(input: MiscFeeInput): Promise<MiscFeeDetail> {
+    return this.request('/misc-fees', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateMiscFee(id: string, input: MiscFeeUpdateInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}`, { method: 'PATCH', body: JSON.stringify(input) });
+  }
+
+  async matchMiscFee(id: string, input: MiscFeeMatchInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}/match`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async assignMiscFeeBusinessCost(id: string, input: MiscFeeBusinessAssignmentInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}/business-assignment`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async confirmMiscFee(id: string, input: MiscFeeActionInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}/confirm`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async auditMiscFee(id: string, input: MiscFeeActionInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}/audit`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async directPayAndArchiveKuayueMiscFee(id: string, input: MiscFeeActionInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}/direct-paid-archive`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async reverseAuditMiscFee(id: string, input: MiscFeeActionInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}/reverse-audit`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async voidMiscFee(id: string, input: MiscFeeVoidInput): Promise<MiscFeeDetail> {
+    return this.request(`/misc-fees/${id}/void`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createMiscFeeHangRequest(id: string, input: MiscFeeHangRequestInput): Promise<MiscFeeHangRequestSummary> {
+    return this.request(`/misc-fees/${id}/hang-requests`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createMiscFeeHangRequestWithFile(
+    id: string,
+    input: { version: number; remark?: string; idempotencyKey?: string; purchase?: boolean; file?: File }
+  ): Promise<MiscFeeHangRequestSummary> {
+    const body = new FormData();
+    body.append('version', String(input.version));
+    if (input.remark) body.append('remark', input.remark);
+    if (input.idempotencyKey) body.append('idempotencyKey', input.idempotencyKey);
+    if (input.purchase) body.append('purchase', 'true');
+    if (input.file) body.append('file', input.file);
+    return this.request(`/misc-fees/${id}/hang-requests-with-file`, { method: 'POST', body });
+  }
+
+  async applyMiscFeePurchasePayment(id: string, input: MiscFeeHangRequestInput): Promise<MiscFeeHangRequestSummary> {
+    return this.request(`/misc-fees/${id}/purchase-payment-request`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async miscFeeHangRequests(query: MiscFeeHangQuery = {}): Promise<MiscFeeHangListResponse> {
+    return this.request(`/misc-fee-hang-requests${this.queryString(query)}`);
+  }
+
+  async miscFeeTallyDue(customerCode: string): Promise<MiscFeeTallyDueSummary> {
+    return this.request(`/misc-fees/tally/due${this.queryString({ customerCode })}`);
+  }
+
+  async approveMiscFeeHangRequest(id: string, input: MiscFeeActionInput): Promise<MiscFeeHangRequestSummary> {
+    return this.request(`/misc-fee-hang-requests/${id}/approve`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async batchApproveMiscFeeHangRequests(input: MiscFeeHangBatchApproveInput): Promise<MiscFeeHangBatchApproveResult> {
+    return this.request('/misc-fee-hang-requests/batch-approve', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async rejectMiscFeeHangRequest(id: string, input: MiscFeeActionInput): Promise<MiscFeeHangRequestSummary> {
+    return this.request(`/misc-fee-hang-requests/${id}/reject`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async withdrawMiscFeeHangRequest(id: string, input: MiscFeeActionInput): Promise<MiscFeeHangRequestSummary> {
+    return this.request(`/misc-fee-hang-requests/${id}/withdraw`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async miscFeeMarketProfitLedger(query: MarketProfitLedgerQuery): Promise<MarketProfitLedgerResponse> {
+    return this.request(`/misc-fees/market-profit/ledger${this.queryString(query)}`);
+  }
+
+  async miscFeeWarehouseProfitLedger(query: WarehouseProfitLedgerQuery): Promise<WarehouseProfitLedgerResponse> {
+    return this.request(`/misc-fees/warehouse-profit/ledger${this.queryString(query)}`);
+  }
+
+  async miscFeeFinanceProfitLedger(query: FinanceProfitLedgerQuery): Promise<FinanceProfitLedgerResponse> {
+    return this.request(`/misc-fees/finance-profit/ledger${this.queryString(query)}`);
+  }
+
+  async exportMiscFeeFinanceProfitLedger(query: FinanceProfitLedgerQuery): Promise<FinanceProfitLedgerResponse> {
+    return this.request('/misc-fees/finance-profit/export', { method: 'POST', body: JSON.stringify(query) });
+  }
+
+  async miscFeeProfitSettlements(query: ProfitSettlementQuery): Promise<ProfitSettlementListResponse> {
+    return this.request(`/misc-fee-profit-settlements${this.queryString(query)}`);
+  }
+
+  async miscFeeProfitSettlement(id: string): Promise<ProfitSettlementDetail> {
+    return this.request(`/misc-fee-profit-settlements/${id}`);
+  }
+
+  async createMiscFeeProfitSettlement(input: ProfitSettlementInput): Promise<ProfitSettlementDetail> {
+    return this.request('/misc-fee-profit-settlements', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async transitionMiscFeeProfitSettlement(
+    id: string,
+    action: 'submit' | 'audit' | 'reverse-audit' | 'archive',
+    input: MiscFeeActionInput
+  ): Promise<ProfitSettlementDetail> {
+    return this.request(`/misc-fee-profit-settlements/${id}/${action}`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async recomputeMiscFeeProfitSettlement(id: string, input: MiscFeeActionInput): Promise<ProfitSettlementDetail> {
+    return this.request(`/misc-fee-profit-settlements/${id}/recompute`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async releaseMiscFeeProfitSettlement(id: string, input: MiscFeeActionInput): Promise<ProfitSettlementReleaseResult> {
+    return this.request(`/misc-fee-profit-settlements/${id}/release`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async createPaymentApplications(input: PaymentApplicationCreateInput): Promise<PaymentApplicationSummary[]> {
     return this.request('/finance/payment-applications', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1441,6 +1940,10 @@ export class ApiClient {
     return this.request(`/finance/water-receipts${this.queryString(query)}`);
   }
 
+  async waterReceiptSiteOptions(): Promise<SiteSummary[]> {
+    return this.request('/finance/water-receipts/site-options');
+  }
+
   async createWaterReceipt(input: WaterReceiptCreateInput): Promise<WaterReceiptListResponse['rows'][number]> {
     return this.request('/finance/water-receipts', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1457,8 +1960,40 @@ export class ApiClient {
     return this.request(`/finance/water-receipts/${id}/matchable-receivables`);
   }
 
+  async receivableWaterReceiptCandidates(id: string): Promise<ReceivableWaterReceiptCandidatesResponse> {
+    return this.request(`/finance/receivable-audits/${id}/water-receipt-candidates`);
+  }
+
   async matchWaterReceiptOrders(id: string, input: WaterReceiptMatchOrdersInput): Promise<WaterReceiptListResponse['rows'][number]> {
     return this.request(`/finance/water-receipts/${id}/match-orders`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async approveReceivableMatchRequest(id: string): Promise<ReceivableAuditSummary> {
+    return this.request(`/finance/receivable-match-requests/${id}/approve`, { method: 'POST' });
+  }
+
+  async updateReceivableMatchRequest(id: string, input: ReceivableMatchRequestUpdateInput): Promise<ReceivableAuditSummary> {
+    return this.request(`/finance/receivable-match-requests/${id}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deleteReceivableMatchRequest(id: string): Promise<ReceivableAuditSummary> {
+    return this.request(`/finance/receivable-match-requests/${id}`, { method: 'DELETE' });
+  }
+
+  async reverseReceivableMatchRequest(id: string, input: ReceivableMatchReviewInput = {}): Promise<ReceivableAuditSummary> {
+    return this.request(`/finance/receivable-match-requests/${id}/reverse-audit`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async batchApproveReceivableMatchRequests(input: ReceivableMatchRequestBatchInput): Promise<ReceivableAuditBatchResult> {
+    return this.request('/finance/receivable-match-requests/batch-approve', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async batchReverseReceivableMatchRequests(input: ReceivableMatchRequestBatchInput): Promise<ReceivableAuditBatchResult> {
+    return this.request('/finance/receivable-match-requests/batch-reverse-audit', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async batchDeleteReceivableMatchRequests(input: ReceivableMatchRequestBatchInput): Promise<ReceivableAuditBatchResult> {
+    return this.request('/finance/receivable-match-requests/batch-delete', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async unmatchWaterReceipt(id: string, input: WaterReceiptUnmatchInput): Promise<WaterReceiptListResponse['rows'][number]> {
@@ -1471,10 +2006,6 @@ export class ApiClient {
 
   async voidWaterReceipt(id: string, input: { reason?: string } = {}): Promise<WaterReceiptListResponse['rows'][number]> {
     return this.request(`/finance/water-receipts/${id}/void`, { method: 'POST', body: JSON.stringify(input) });
-  }
-
-  async uploadWaterReceiptVoucher(id: string, input: WaterReceiptVoucherInput): Promise<WaterReceiptVoucherSummary> {
-    return this.request(`/finance/water-receipts/${id}/voucher`, { method: 'POST', body: JSON.stringify(input) });
   }
 
   async deleteWaterReceiptVoucher(id: string): Promise<{ deleted: true }> {
@@ -1585,6 +2116,10 @@ export class ApiClient {
     return this.request(`/master-data/channels/${id}`, { method: 'DELETE' });
   }
 
+  async deleteChannels(input: { ids: string[] }): Promise<ChannelDeleteResponse> {
+    return this.request('/master-data/channels/batch-delete', { method: 'POST', body: JSON.stringify(input) });
+  }
+
   async createChannelCategory(input: ChannelCategoryCreateInput): Promise<ChannelCategorySummary> {
     return this.request('/master-data/channel-categories', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1675,6 +2210,79 @@ export class ApiClient {
 
   async updateRolePermissions(role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
     return this.request(`/system/roles/${role}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions }) });
+  }
+
+  async notificationSummary(): Promise<NotificationUnreadSummary> {
+    return this.request('/notifications/summary');
+  }
+
+  async notifications(query: { status?: 'ALL' | 'UNREAD' | 'ARCHIVED'; category?: string; keyword?: string; page?: number; pageSize?: number } = {}): Promise<NotificationListResponse> {
+    const params = new URLSearchParams();
+    if (query.status && query.status !== 'ALL') params.set('status', query.status);
+    if (query.category && query.category !== 'ALL') params.set('category', query.category);
+    if (query.keyword?.trim()) params.set('keyword', query.keyword.trim());
+    if (query.page) params.set('page', String(query.page));
+    if (query.pageSize) params.set('pageSize', String(query.pageSize));
+    const suffix = params.toString();
+    return this.request(`/notifications${suffix ? `?${suffix}` : ''}`);
+  }
+
+  async notificationActionTasks(): Promise<NotificationActionTaskListResponse> {
+    return this.request('/notifications/action-tasks');
+  }
+
+  async markNotificationRead(id: string): Promise<{ ok: true }> {
+    return this.request(`/notifications/${id}/read`, { method: 'PATCH' });
+  }
+
+  async markAllNotificationsRead(): Promise<{ ok: true; updatedCount: number }> {
+    return this.request('/notifications/read-all', { method: 'POST' });
+  }
+
+  async archiveNotification(id: string): Promise<{ ok: true }> {
+    return this.request(`/notifications/${id}/archive`, { method: 'PATCH' });
+  }
+
+  async restoreNotification(id: string): Promise<{ ok: true }> {
+    return this.request(`/notifications/${id}/restore`, { method: 'PATCH' });
+  }
+
+  async acknowledgeNotification(id: string): Promise<{ ok: true }> {
+    return this.request(`/notifications/${id}/acknowledge`, { method: 'POST' });
+  }
+
+  async notificationPreferences(): Promise<NotificationPreferenceSummary[]> {
+    return this.request('/notifications/preferences');
+  }
+
+  async updateNotificationPreferences(items: Array<{ category: string; enabled: boolean }>): Promise<NotificationPreferenceSummary[]> {
+    return this.request('/notifications/preferences', { method: 'PATCH', body: JSON.stringify({ items }) });
+  }
+
+  async notificationOperations(status?: string): Promise<NotificationOperationsResponse> {
+    const params = new URLSearchParams();
+    if (status && status !== 'ALL') params.set('status', status);
+    return this.request(`/system/notification-operations${params.size ? `?${params.toString()}` : ''}`);
+  }
+
+  async retryNotificationOperation(id: string): Promise<{ ok: true }> {
+    return this.request(`/system/notification-operations/${id}/retry`, { method: 'POST' });
+  }
+
+  async announcementAudienceOptions(): Promise<AnnouncementAudienceOptions> {
+    return this.request('/system/announcements/audience-options');
+  }
+
+  async announcements(): Promise<AnnouncementSummary[]> {
+    return this.request('/system/announcements');
+  }
+
+  async publishAnnouncement(input: AnnouncementCreateInput): Promise<AnnouncementSummary> {
+    return this.request('/system/announcements', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async withdrawAnnouncement(id: string): Promise<AnnouncementSummary> {
+    return this.request(`/system/announcements/${id}/withdraw`, { method: 'POST' });
   }
 
   async aiAssist(input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }): Promise<AiAssistResponse> {

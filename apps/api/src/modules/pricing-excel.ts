@@ -15,6 +15,7 @@ import {
   type QuoteSourceType
 } from '@siyuan/shared';
 import { normalizeAmazonOriginWarehouseName } from './pricing/amazon-pricing.shared.js';
+import { visiblePriceWorkbookSheetNames } from './pricing-workbook-visibility.js';
 
 export type ExcelCellValue = string | number | null;
 export type SimpleWorksheet = {
@@ -58,15 +59,16 @@ export const PRICING_PARSER_RULE_VERSIONS: Record<PriceBookImportTargetModule, n
   amazon: 8,
   // v7 applies the same shared requirement and transit contract to inquiry.
   inquiry: 7,
-  // v9 applies the shared requirement and transit contract to Europe Express.
-  europeExpress: 9,
+  // v10 adds the EPS customs/product/zone matrix used by its legacy .xls
+  // Europe air-price workbook without changing other supplier profiles.
+  europeExpress: 10,
   southAfrica: 1,
-  // v7 replays US air/sea workbooks with the shared requirement and transit
-  // contract, including small route tables.
-  usaAirSea: 7,
-  // v4 adds an explicit private/FBA address scope and normalises FBA matching
-  // to the three-letter prefix used by the supplier's Canada sheets.
-  canadaAirSea: 4,
+  // v8 also recognises structurally valid Topuda US sea courier sheets from
+  // the selected USA Air/Sea module, without requiring "美国" in the sheet name.
+  usaAirSea: 8,
+  // v5 preserves complete Canada FBA warehouse codes; a bare three-letter
+  // source cell remains an explicit prefix rule.
+  canadaAirSea: 5,
   dubaiAirSea: 1
 };
 
@@ -159,7 +161,7 @@ export function inspectEuropeOversizeWorkbookSheets(
     const sheetName = String(row.sourceSheetName ?? '').trim();
     if (sheetName) countsBySheet.set(sheetName, (countsBySheet.get(sheetName) ?? 0) + 1);
   });
-  const sheets = workbook.SheetNames
+  const sheets = visiblePriceWorkbookSheetNames(workbook)
     .map((sheetName, index) => {
       const expectedName = zhenyunOversizeSheetLabels.find((label) => sheetName.includes(label));
       if (!expectedName) return undefined;
@@ -294,7 +296,7 @@ export async function parsePriceWorkbookBuffer(
 
 export function inspectDubaiWorkbookSheets(buffer: Buffer): Array<{ sheetName: string; mode: 'AIR' | 'SEA' | 'UNASSIGNED' }> {
   const workbook = xlsx.read(buffer, { type: 'buffer', cellDates: true });
-  return workbook.SheetNames.map((sheetName) => {
+  return visiblePriceWorkbookSheetNames(workbook).map((sheetName) => {
     const normalized = sheetName.replace(/\s+/g, '').toLowerCase();
     return {
       sheetName,
@@ -306,7 +308,7 @@ export function inspectDubaiWorkbookSheets(buffer: Buffer): Array<{ sheetName: s
 function readWorkbook(arrayBuffer: ArrayBuffer, excel: ExcelModule): SimpleWorkbook {
   const workbook = excel.xlsx.read(new Uint8Array(arrayBuffer), { type: 'array', cellDates: true });
   return {
-    worksheets: workbook.SheetNames.map((sheetName) => {
+    worksheets: visiblePriceWorkbookSheetNames(workbook).map((sheetName) => {
       const worksheet = workbook.Sheets[sheetName];
       restoreNumericCachedFormulaErrors(worksheet);
       return {
@@ -517,6 +519,11 @@ export async function parsePriceWorkbook(
       }
       return attachWorkbookLookupNotes(rows, lookupNotes);
     }
+  }
+
+  const epsEuropeExpressRows = parseEpsEuropeExpressPriceWorkbook(workbook, sourceName, targetModule, agentShortName);
+  if (epsEuropeExpressRows.length) {
+    return attachWorkbookLookupNotes(epsEuropeExpressRows, lookupNotes);
   }
 
   const canadaAirSeaRows = !targetModule || targetModule === 'canadaAirSea'
@@ -953,6 +960,134 @@ function parseZhenyunEuropeExpressPriceWorkbook(
 }
 
 /**
+ * EPS Europe air workbooks keep the destination in a later `国家/重量` column
+ * and repeat merged customs/product/channel values only on the first zone row.
+ * Resolve columns by their labels instead of treating the first column as the
+ * destination, which is reserved for `清关方式` in this supplier layout.
+ */
+function parseEpsEuropeExpressPriceWorkbook(
+  workbook: SimpleWorkbook,
+  sourceName?: string,
+  targetModule?: PriceBookImportTargetModule,
+  agentShortName?: string
+): ImportedPriceRow[] {
+  if (targetModule !== 'europeExpress' || !/eps/i.test(`${agentShortName ?? ''} ${sourceName ?? ''}`)) {
+    return [];
+  }
+
+  return workbook.worksheets.flatMap((sheet) => {
+    const rows = worksheetToRows(sheet);
+    const logicalSheetName = rows
+      .flatMap((row) => row.map(cellToText))
+      .find((value) => /欧盟.*空派.*包税/.test(value))
+      ?? sheet.name;
+    const productSurchargeRemark = extractEpsEuropeProductSurchargeRemark(rows);
+    const commonSpecialRemark = rows
+      .map(rowToRemarkLine)
+      .find((line) => /^特别提醒[:：]/.test(line.trim()));
+
+    return rows.flatMap((headers, headerIndex) => {
+      const customsIndex = findHeaderIndex(headers, ['清关方式']);
+      const productIndex = findHeaderIndex(headers, ['产品']);
+      const channelCodeIndex = findHeaderIndex(headers, ['渠道代码', '通道代码']);
+      const regionIndex = findHeaderIndex(headers, ['分区']);
+      const destinationIndex = findHeaderIndex(headers, ['国家/重量', '国家/重量区间', '目的地', '国家']);
+      if ([customsIndex, productIndex, channelCodeIndex, regionIndex, destinationIndex].some((index) => index < 0)) {
+        return [];
+      }
+
+      // EPS uses the full-width plus sign in 21KG＋/45KG＋ headers.
+      const normalizedHeaders = headers.map((value) => typeof value === 'string' ? value.replace(/＋/g, '+') : value);
+      const tierColumns = buildImportedTierColumns(normalizedHeaders).filter((item) => item.tier.kind === 'kg');
+      if (tierColumns.length < 2) return [];
+      const remarkIndex = findHeaderIndex(headers, ['备注', '渠道要求', '说明']);
+
+      let customsMethod = '';
+      let productName = '';
+      let channelCode = '';
+      let routeRemark = '';
+      const importedRows: ImportedPriceRow[] = [];
+      for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+        const row = rows[rowIndex];
+        if (findHeaderIndex(row, ['清关方式']) >= 0 && findHeaderIndex(row, ['国家/重量', '国家/重量区间']) >= 0) {
+          break;
+        }
+
+        const rowCustomsMethod = cellToText(row[customsIndex]);
+        const rowProductName = cellToText(row[productIndex]);
+        const rowChannelCode = cellToText(row[channelCodeIndex]);
+        const rowRemark = remarkIndex >= 0 ? cellToText(row[remarkIndex]) : '';
+        if (rowCustomsMethod) customsMethod = rowCustomsMethod;
+        if (rowProductName) productName = rowProductName;
+        if (rowChannelCode) channelCode = rowChannelCode;
+        if (rowRemark) routeRemark = rowRemark;
+
+        const destinationValue = cellToText(row[destinationIndex]);
+        const region = cellToText(row[regionIndex]);
+        const hasPrice = tierColumns.some(({ columnIndex }) => cellToNumber(row[columnIndex]) > 0);
+        if (!destinationValue || !hasPrice || !customsMethod || !productName || !channelCode) continue;
+
+        const destinations = splitImportedDestinations(destinationValue, logicalSheetName, 'europeExpress');
+        const businessRouteName = `${customsMethod}${productName}`;
+        const channelName = `${logicalSheetName} - ${productName}（${channelCode}）`;
+        const specialRemark = mergeRemarkBlocks(routeRemark, commonSpecialRemark);
+        const transitLabel = extractEpsEuropeTransitLabel(routeRemark);
+        const cargoType: EuropeOversizeCargoType = /内电|电池/.test(productName) ? 'BATTERY' : 'GENERAL';
+
+        tierColumns.forEach(({ columnIndex, tier }) => {
+          const costPerKg = cellToNumber(row[columnIndex]);
+          if (costPerKg <= 0) return;
+          destinations.forEach((destinationCountry, destinationIndexInRow) => {
+            importedRows.push({
+              id: `import-price-${Date.now()}-${sheet.name}-${headerIndex}-${rowIndex}-${columnIndex}-${destinationIndexInRow}`,
+              agentName: agentShortName?.trim() || 'EPS',
+              sourceSheetName: logicalSheetName,
+              carrierName: inferPriceCarrierName({ channelName }),
+              channelName,
+              realChannelName: channelCode,
+              businessRouteName,
+              transportMode: 'AIR',
+              cargoType,
+              destinationCountry,
+              minWeightKg: tier.minWeightKg,
+              maxWeightKg: tier.maxWeightKg,
+              costPerKg,
+              priceTierLabel: tier.label,
+              currency: 'RMB',
+              transitDays: parseTransitDays(transitLabel),
+              transitLabel,
+              productCategory: productName,
+              region: region || undefined,
+              channelCode,
+              ...(productSurchargeRemark ? { productSurchargeRemark } : {}),
+              ...(specialRemark ? { specialRemark } : {})
+            });
+          });
+        });
+      }
+      return importedRows;
+    });
+  });
+}
+
+function extractEpsEuropeProductSurchargeRemark(rows: ExcelCellValue[][]) {
+  const startIndex = rows.findIndex((row) => /加价产品目录/.test(rowToRemarkLine(row)));
+  if (startIndex < 0) return undefined;
+  const nextSectionOffset = rows.slice(startIndex + 1)
+    .findIndex((row) => /^注意事项/.test(cellToText(row[0])));
+  const endIndex = nextSectionOffset < 0 ? rows.length : startIndex + 1 + nextSectionOffset;
+  return mergeRemarkBlocks(...rows.slice(startIndex, endIndex).map(rowToRemarkLine));
+}
+
+function extractEpsEuropeTransitLabel(value: string) {
+  const match = value
+    .replace(/[－—–]/g, '-')
+    .replace(/[～]/g, '~')
+    .match(/\d+(?:\.\d+)?(?:[-~至到]\d+(?:\.\d+)?)?(?:个)?(?:自然|工作)?(?:天|日)/i);
+  return match ? `时效${match[0].replace(/\s+/g, '')}` : undefined;
+}
+
+/**
  * 坤宇加拿大报价表以“分区/重量”或“分区”作为首列，价格档位位于同一
  * 行；它没有通用价格表所要求的代理、渠道、最小/最大重量字段。该布局
  * 同时覆盖空派、海派和 FBA 按方表，故按目标模块独立解析，避免流入亚马逊。
@@ -1033,28 +1168,22 @@ function parseKunyunCanadaAirSeaPriceWorkbook(
 
 /**
  * Canada supplier sheets distinguish private deliveries with a literal
- * “非亚马逊地址” row. FBA rows are selected from the first three letters of a
- * warehouse zone (YVR / YYC / YYZ ...), not the full Amazon warehouse code.
+ * “非亚马逊地址” row. Complete FBA codes remain exact rules; only a bare
+ * three-letter source value (YVR / YYC / YYZ ...) acts as a prefix rule.
  */
 function canadaAddressScopeRulesForImport(value: string): string[] {
   const normalized = value.replace(/\s+/g, '').toUpperCase();
   if (/非亚马逊|私人(?:地址|住宅)?|非FBA/.test(normalized)) {
     return [CANADA_PRIVATE_ADDRESS_WAREHOUSE_CODE];
   }
-  if (/FBA|AMAZON|亚马逊/.test(normalized)) {
-    const prefixes = Array.from(new Set(normalized
-      .split(/[+／/|｜,，、;；\n\r]+/)
-      .map((segment) => segment.match(/[A-Z]{3}/)?.[0])
-      .filter((prefix): prefix is string => prefix !== undefined && !['FBA', 'AMZ', 'AMA'].includes(prefix))));
-    return prefixes.length ? prefixes : [CANADA_AMAZON_UNMAPPED_WAREHOUSE_CODE];
-  }
-  // A zone list such as "YVR+YXX2" has no explicit FBA suffix but is still
-  // an Amazon warehouse table. Preserve only its three-letter zone prefixes.
-  const prefixes = Array.from(new Set(normalized
-    .split(/[+／/|｜,，、;；\n\r]+/)
-    .map((segment) => segment.match(/^[A-Z]{3}/)?.[0])
-    .filter((prefix): prefix is string => prefix !== undefined && !['FBA', 'AMZ', 'AMA'].includes(prefix))));
-  return prefixes.length ? prefixes : [CANADA_ADDRESS_SCOPE_UNSPECIFIED_WAREHOUSE_CODE];
+  const hasAmazonMarker = /FBA|AMAZON|亚马逊/.test(normalized);
+  const warehouseRules = Array.from(new Set(warehouseCodeRulesForImport(
+    normalized.replace(/FBA|AMAZON|亚马逊/g, '')
+  ).filter((rule) => !isInvalidWarehouseCodeRule(rule))));
+  if (warehouseRules.length) return warehouseRules;
+  return [hasAmazonMarker
+    ? CANADA_AMAZON_UNMAPPED_WAREHOUSE_CODE
+    : CANADA_ADDRESS_SCOPE_UNSPECIFIED_WAREHOUSE_CODE];
 }
 
 /** Keep product surcharges separate from operational/channel requirements. */
@@ -1601,7 +1730,11 @@ function parseTopudaUsSeaParallelPostalWorkbooks(
   agentShortName?: string
 ): ImportedPriceRow[] {
   return workbook.worksheets.flatMap((sheet) => {
-    if (!/美国.*(?:海派|快递)|中超大件海派/i.test(sheet.name)) return [];
+    // This parser is reached only from Topuda's `usaAirSea` profile. Supplier
+    // sheet labels are not a reliable country signal (for example, the source
+    // calls a US courier sheet simply "海运快递派送"). Keep the structural
+    // guards below—TPD route titles, a postal column, and at least two KG
+    // tiers—so unrelated sheets still cannot enter the US postal price pool.
     const rows = worksheetToRows(sheet);
     const sheetColumnCount = rows.reduce((maximum, row) => Math.max(maximum, row.length), 0);
     return rows.flatMap((titleRow, titleIndex) => {

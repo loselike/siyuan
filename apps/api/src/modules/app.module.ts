@@ -14,11 +14,27 @@ import {
   PrismaFinanceCatalogRepository
 } from './finance/catalog/finance-catalog.repository.js';
 import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
+import { PayerBankAccountController } from './finance/payer-bank/payer-bank-account.controller.js';
+import {
+  InMemoryPayerBankAccountRepository,
+  PAYER_BANK_ACCOUNT_REPOSITORY,
+  PrismaPayerBankAccountRepository
+} from './finance/payer-bank/payer-bank-account.repository.js';
+import { PayerBankAccountService } from './finance/payer-bank/payer-bank-account.service.js';
 import { FinanceReceivableController } from './finance/receivable/finance-receivable.controller.js';
 import { FinanceReceivableService } from './finance/receivable/finance-receivable.service.js';
+import { MiscFeeController } from './finance/misc-fee/misc-fee.controller.js';
+import { MiscFeeService } from './finance/misc-fee/misc-fee.service.js';
 import { InMemoryRepository } from './in-memory.repository.js';
 import { LineageWatcher } from './lineage-watcher.js';
 import { MasterDataChannelQueryController } from './master-data/channel/master-data-channel-query.controller.js';
+import { AnnouncementController, NotificationController, NotificationOperationsController } from './notifications/notification.controller.js';
+import {
+  InMemoryNotificationService,
+  NotificationAuditWorker,
+  NotificationService,
+  PrismaNotificationService
+} from './notifications/notification.service.js';
 import { OperationsLineShipmentQueryController } from './operations/line-shipment/operations-line-shipment-query.controller.js';
 import { PriceBookQueryController } from './pricing/price-book/price-book-query.controller.js';
 import { PrismaRepository } from './prisma.repository.js';
@@ -62,6 +78,14 @@ const financeCatalogRepositoryProvider = usePrismaRepository
   ? { provide: FINANCE_CATALOG_REPOSITORY, useClass: PrismaFinanceCatalogRepository }
   : { provide: FINANCE_CATALOG_REPOSITORY, useClass: InMemoryFinanceCatalogRepository };
 
+const payerBankAccountRepositoryProvider = usePrismaRepository
+  ? { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: PrismaPayerBankAccountRepository }
+  : { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: InMemoryPayerBankAccountRepository };
+
+const notificationServiceProvider = usePrismaRepository
+  ? { provide: NotificationService, useClass: PrismaNotificationService }
+  : { provide: NotificationService, useClass: InMemoryNotificationService };
+
 const systemDirectoryRepositoryProvider = usePrismaRepository
   ? { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: PrismaSystemDirectoryRepository }
   : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
@@ -75,14 +99,41 @@ const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
   : { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: LegacyWarehouseInventoryQueryRepository };
 
 @Module({
-  controllers: [AuthController, DataController, AiController, CustomerServiceQueryController, FinanceCatalogController, FinanceReceivableController, MasterDataChannelQueryController, OperationsLineShipmentQueryController, OrderEntryQueryController, PriceBookQueryController, ShipmentFulfillmentQueryController, ShipmentOverviewQueryController, SystemDirectoryController, WarehouseDispatchQueryController, WarehouseInventoryQueryController, WarehouseTallyQueryController],
+  controllers: [
+    AuthController,
+    DataController,
+    AiController,
+    CustomerServiceQueryController,
+    FinanceCatalogController,
+    PayerBankAccountController,
+    FinanceReceivableController,
+    NotificationController,
+    AnnouncementController,
+    NotificationOperationsController,
+    MiscFeeController,
+    MasterDataChannelQueryController,
+    OperationsLineShipmentQueryController,
+    OrderEntryQueryController,
+    PriceBookQueryController,
+    ShipmentFulfillmentQueryController,
+    ShipmentOverviewQueryController,
+    SystemDirectoryController,
+    WarehouseDispatchQueryController,
+    WarehouseInventoryQueryController,
+    WarehouseTallyQueryController
+  ],
   providers: [
     AiService,
     LineageWatcher,
     ...repositoryProviders,
     financeCatalogRepositoryProvider,
+    payerBankAccountRepositoryProvider,
     FinanceCatalogService,
+    PayerBankAccountService,
     FinanceReceivableService,
+    notificationServiceProvider,
+    ...(usePrismaRepository ? [NotificationAuditWorker] : []),
+    MiscFeeService,
     systemDirectoryRepositoryProvider,
     SystemDirectoryService,
     warehouseInventoryQueryRepositoryProvider,

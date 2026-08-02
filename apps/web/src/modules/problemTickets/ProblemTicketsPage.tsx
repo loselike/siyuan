@@ -5,6 +5,7 @@ import { Alert, Button, Card, Col, Flex, Row, Space, Statistic, Tag, Typography 
 import type { ProblemTicketSummary } from '@siyuan/shared';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPageHeader, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { formatBeijingDateTime } from '../shared/format';
 
 const { Text } = Typography;
 
@@ -61,7 +62,7 @@ function LowFrequencyModulePage({
   const records = tickets.map((ticket) => ({
     primary: ticket.systemOrderNo,
     secondary: `${ticket.customerName} / ${ticket.reason}`,
-    metric: new Date(ticket.createdAt).toLocaleString('zh-CN', { hour12: false }),
+    metric: formatBeijingDateTime(ticket.createdAt),
     status: ticket.status === 'CLOSED' ? '已关闭' : '待处理'
   }));
   const queue = openTickets.map((ticket) => ({
@@ -119,6 +120,7 @@ function LowFrequencyModulePage({
             {activeSection === 'records' ? (
               <Card className="module-grid" title="业务数据">
                 <ManagedTable
+                  recordDetail={{ title: '问题件业务详情' }}
                   rowKey="primary"
                   size="small"
                   pagination={tenRowTablePagination}
@@ -159,6 +161,7 @@ function LowFrequencyModulePage({
             {activeSection === 'queue' ? (
               <Card className="module-grid" title="模块待办">
                 <ManagedTable
+                  recordDetail={{ title: '问题件待办详情' }}
                   rowKey="item"
                   size="small"
                   pagination={tenRowTablePagination}

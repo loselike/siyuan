@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { ThemeConfig } from 'antd/es/config-provider/context';
-import { Boxes, CircleDollarSign, Gauge, Headphones, Landmark, PackagePlus, Route, Settings, Truck, Users } from 'lucide-react';
+import { Activity, Boxes, CircleDollarSign, Gauge, Headphones, Landmark, PackagePlus, ReceiptText, Route, Settings, Truck, Users } from 'lucide-react';
 import {
   type BusinessType,
   type MasterDataSnapshot,
@@ -274,6 +274,7 @@ export const menuItems: Array<{ key: StaffMenuKey; icon: ReactNode; label: strin
   { key: 'customerService', icon: <Headphones size={16} />, label: '客服管理' },
   { key: 'logisticsTracking', icon: <Truck size={16} />, label: '物流轨迹管理' },
   { key: 'finance', icon: <Landmark size={16} />, label: '财务管理' },
+  { key: 'miscFees', icon: <ReceiptText size={16} />, label: '杂费' },
   { key: 'master', icon: <Users size={16} />, label: '基础资料库' },
   { key: 'settings', icon: <Settings size={16} />, label: '系统管理' }
 ];
@@ -304,6 +305,7 @@ const staffMenuRouteSegments: Record<MenuKey, string> = {
   problems: 'customer-service',
   pricing: 'pricing',
   finance: 'finance',
+  miscFees: 'misc-fees',
   reports: 'workspace',
   master: 'master',
   settings: 'settings'
@@ -318,6 +320,7 @@ const routeSegmentAliases: Record<string, MenuKey> = {
   'customer-service': 'customerService',
   tracking: 'logisticsTracking',
   finance: 'finance',
+  'misc-fees': 'miscFees',
   master: 'master',
   settings: 'settings'
 };

@@ -3,10 +3,12 @@ import type {
   WarehouseManualReceiptCartonSpecInput,
   WarehousePackageStatus,
   WarehousePackageSummary,
+  WarehouseRentDetailSummary,
   WarehouseTallyTaskSummary
 } from '@siyuan/shared';
 import { warehouseScanTestRows } from '../../warehouseScanTestData';
-import { formatBeijingDateTime } from '../shared/format';
+import { formatBeijingDateTimeInputValue } from '../shared/format';
+import { agentFieldLabels } from '../shared/agentFieldLabels';
 import {
   calculateWarehousePackageMetrics,
   calculateWarehouseVolumetricWeight,
@@ -23,17 +25,18 @@ export const defaultTodayReceiptColumnKeys: string[] = [
   'packageCount',
   'weightKg',
   'dimensions',
+  'girth',
   'cbm',
   'vol5000',
   'vol6000',
   'scanTime',
-  'remark',
+  'deviceNo',
   'exceptions',
+  'remark',
   'actions'
 ];
 
 export const defaultInStockColumnKeys: string[] = [
-  'select',
   'site',
   'customerCode',
   'combinedOrderNo',
@@ -52,6 +55,8 @@ export const defaultInStockColumnKeys: string[] = [
   'measurementStatus',
   'remark',
   'exceptions',
+  'warehouseRent',
+  'warehouseDays',
   'actions'
 ];
 
@@ -67,6 +72,7 @@ export interface WarehouseInboundPackage {
   shipmentId?: string;
   systemOrderNo: string;
   customerCode: string;
+  customerMaintained?: boolean;
   customerName?: string;
   site?: string;
   salesperson?: string;
@@ -111,6 +117,8 @@ export interface WarehouseInboundPackage {
   inboundAt?: string;
   receiptSourceId?: string;
   tallyStatus?: string;
+  warehouseDays?: number;
+  warehouseRentAmountRmb?: number;
   splitStatus?: string;
   consolidationStatus?: string;
   outboundStatus?: string;
@@ -122,6 +130,10 @@ export interface WarehouseInboundPackage {
 
 export function canEditUnenteredWarehousePackage(record: Pick<WarehouseInboundPackage, 'shipmentId'>) {
   return !record.shipmentId;
+}
+
+export function isWarehouseCustomerUnmaintained(record: Pick<WarehouseInboundPackage, 'customerMaintained'>) {
+  return record.customerMaintained !== true;
 }
 
 export interface WarehousePackageDraft {
@@ -179,28 +191,6 @@ export interface TallyTaskCompleteDraft {
   remark: string;
 }
 
-export function createWarehouseDateTimeInputValue(date = new Date()) {
-  const beijingTime = new Date(date.getTime() + 8 * 60 * 60 * 1000);
-  return beijingTime.toISOString().slice(0, 16);
-}
-
-export function parseBeijingDateTimeInputToIso(value: string) {
-  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
-  if (!match) {
-    const fallback = new Date(value);
-    return Number.isNaN(fallback.getTime()) ? new Date().toISOString() : fallback.toISOString();
-  }
-  const [, year, month, day, hour, minute, second = '00'] = match;
-  return new Date(Date.UTC(
-    Number(year),
-    Number(month) - 1,
-    Number(day),
-    Number(hour) - 8,
-    Number(minute),
-    Number(second)
-  )).toISOString();
-}
-
 export function createEmptyCartonSpec(): WarehouseManualReceiptCartonSpecInput {
   return { weightKg: 0, lengthCm: 0, widthCm: 0, heightCm: 0, packageCount: 1 };
 }
@@ -220,14 +210,9 @@ export function calculateCartonSpecTotals(cartonSpecs: WarehouseManualReceiptCar
 
 export function formatWarehouseDateTimeInputValue(value?: string) {
   if (!value) {
-    return createWarehouseDateTimeInputValue();
+    return formatBeijingDateTimeInputValue();
   }
-  const readableMatch = value.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/);
-  if (readableMatch) {
-    return `${readableMatch[1]}T${readableMatch[2]}:${readableMatch[3]}`;
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? createWarehouseDateTimeInputValue() : createWarehouseDateTimeInputValue(parsed);
+  return formatBeijingDateTimeInputValue(value) || formatBeijingDateTimeInputValue();
 }
 
 function resolveWarehouseTallyRecentCutoff() {
@@ -325,11 +310,11 @@ export const warehouseQueueColumnLabels: Record<WarehouseQueueColumnKey, string>
   createdAt: '运单创建时间',
   salesperson: '业务员',
   outboundNo: '出货单号',
-  agent: '代理',
-  agentChannel: '代理渠道',
+  agent: agentFieldLabels.detailedCompanyName,
+  agentChannel: agentFieldLabels.channel,
   customerCode: '客户编号',
   destination: '目的地',
-  channel: '渠道',
+  channel: '公司渠道',
   packageCount: '业务数据：件数',
   totalWeight: '业务数据：总量',
   volume: '业务数据：体积',
@@ -450,6 +435,7 @@ export function mapWarehouseApiPackageToInbound(pkg: WarehousePackageSummary): W
     shipmentId: pkg.shipmentId,
     systemOrderNo: pkg.systemOrderNo ?? `API仓库-${pkg.customerOrderNo}`,
     customerCode: pkg.customerCode,
+    customerMaintained: pkg.customerMaintained,
     customerName: pkg.customerName,
     site: pkg.site,
     salesperson: pkg.salesperson,
@@ -462,7 +448,7 @@ export function mapWarehouseApiPackageToInbound(pkg: WarehousePackageSummary): W
     archivedByPackageId: pkg.archivedByPackageId,
     archivedByPackageNo: pkg.archivedByPackageNo,
     archivedReason: pkg.archivedReason,
-    archivedAt: pkg.archivedAt ? formatBeijingDateTime(pkg.archivedAt) : undefined,
+    archivedAt: pkg.archivedAt,
     tallyTaskId: pkg.tallyTaskId,
     tallyTaskNo: pkg.tallyTaskNo,
     tallyCompleted: pkg.tallyCompleted === true,
@@ -471,7 +457,7 @@ export function mapWarehouseApiPackageToInbound(pkg: WarehousePackageSummary): W
     destinationCountry: pkg.destinationCountry ?? '',
     expectedTotalPackageCount: pkg.expectedTotalPackageCount,
     packageIndex: pkg.packageIndex,
-    scanTime: pkg.scanTime ? formatBeijingDateTime(pkg.scanTime) : undefined,
+    scanTime: pkg.scanTime,
     packageCount: pkg.packageCount,
     weightKg: pkg.weightKg,
     lengthCm: pkg.lengthCm,
@@ -491,7 +477,7 @@ export function mapWarehouseApiPackageToInbound(pkg: WarehousePackageSummary): W
     measurementStatus: pkg.measurementStatus,
     measurementMatchedAt: pkg.measurementMatchedAt,
     measurementMatchedBy: pkg.measurementMatchedBy,
-    inboundAt: pkg.inboundAt ? formatBeijingDateTime(pkg.inboundAt) : undefined,
+    inboundAt: pkg.inboundAt,
     receiptSourceId: pkg.receiptSourceId,
     tallyStatus: pkg.tallyStatus,
     splitStatus: pkg.splitStatus,
@@ -500,8 +486,33 @@ export function mapWarehouseApiPackageToInbound(pkg: WarehousePackageSummary): W
     status: pkg.status,
     exceptions: pkg.exceptions,
     createdBy: pkg.createdBy,
-    createdAt: pkg.createdAt ? formatBeijingDateTime(pkg.createdAt) : undefined
+    createdAt: pkg.createdAt
   };
+}
+
+export function warehouseRentDetailKey(
+  record: Pick<WarehouseInboundPackage, 'site' | 'customerCode' | 'domesticTrackingNo'>
+) {
+  return [record.site ?? '', record.customerCode, record.domesticTrackingNo].join('|');
+}
+
+export function attachWarehouseRentDetails(
+  rows: WarehouseInboundPackage[],
+  details: WarehouseRentDetailSummary[] | undefined
+) {
+  if (!details) return rows;
+
+  const detailsByKey = new Map(details.map((detail) => [warehouseRentDetailKey(detail), detail]));
+  return rows.map((row) => {
+    const detail = detailsByKey.get(warehouseRentDetailKey(row));
+    return detail
+      ? {
+          ...row,
+          warehouseDays: detail.warehouseDays,
+          warehouseRentAmountRmb: detail.rentAmountRmb
+        }
+      : row;
+  });
 }
 
 export function withWarehouseCustomerProgress(packages: WarehouseInboundPackage[]): WarehouseInboundPackage[] {

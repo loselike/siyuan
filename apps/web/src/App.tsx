@@ -1,5 +1,5 @@
 import type { ChangeEvent, MouseEvent, ReactNode } from 'react';
-import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -13,6 +13,7 @@ import {
   Input,
   InputNumber,
   Layout,
+  message,
   Modal,
   Popconfirm,
   Row,
@@ -29,6 +30,7 @@ import {
   ChevronRight,
   CircleDollarSign,
   ClipboardCheck,
+  FileDown,
   LogOut,
   UserCircle,
   Search,
@@ -40,7 +42,6 @@ import {
   calculateTransitTimeLabel,
   createAutomationPlan,
   createBulkTrackingImportResult,
-  createFulfillmentAdvice,
   createShipmentInsights,
   getModuleCoverageSummary,
   productModules,
@@ -53,12 +54,14 @@ import {
   type CarrierTaskSummary,
   type CustomerAccountSummary,
   type CustomerStatementSummary,
+  type FinanceCatalogItemSummary,
   type FulfillmentAction,
   type MasterDataSnapshot,
   type BusinessCostAuditSummary,
   type PayableAuditSummary,
   type PayableFeeSummary,
   type BusinessCostFeeSummary,
+  type ProblemTicketCreateInput,
   type ReceivableAuditSummary,
   type Shipment,
   type ShipmentFinanceDetailSummary,
@@ -70,6 +73,7 @@ import {
   type ShipmentStatus
 } from '@siyuan/shared';
 import { ApiClient, type AiAssistResponse, type Principal, type ProfileUpdateInput, type Session } from './apiClient';
+import { agentFieldLabels } from './modules/shared/agentFieldLabels';
 import { LoginPage } from './modules/auth/LoginPage';
 import { AppPageBoundary, type PageRenderErrorReport } from './modules/appShell/AppPageBoundary';
 import {
@@ -103,18 +107,26 @@ import {
   type ShipmentColumnKey,
   type ShipmentColumnOrderMode
 } from './modules/appShell/config';
+import { resolveModuleInitialSection } from './modules/appShell/moduleInitialSection';
+import { resolveExpandedMenuAfterPrimaryClick } from './modules/appShell/sidebarMenuState';
 import { formatPaymentSummary, fulfillmentActionLabels, getRoleDisplayName, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
 import { CustomerPortal } from './modules/customer/CustomerPortal';
+import { resolveCustomerServiceInitialSection } from './modules/customerService/customerServiceNavigation';
+import { ProblemTicketCreateModal } from './modules/customerService/ProblemTicketCreateModal';
 import { OrderFeePanel } from './modules/finance/orderFee/OrderFeePanel';
+import { NotificationCenter } from './modules/notifications/NotificationCenter';
 import { OperationsPage } from './modules/operations/OperationsPage';
 import {
+  canViewOrderManagementAgentDetails,
   OrdersPage,
   lifecycleStatusColor,
+  orderManagementStatusLabel,
   type EditShipmentOperationalFormValues,
   type OrdersLifecycleStageKey,
   type OutboundOrderFormValues
 } from './modules/orders/OrdersPage';
 import { RoutingPage, type RoutingAssignmentFormValues } from './modules/routing/RoutingPage';
+import { shouldLoadRoutingFeeNameCatalog } from './modules/routing/routingFeeCatalog';
 import {
   getModuleSubNavSignature,
   ModuleSubNavContext,
@@ -130,14 +142,25 @@ import { TrackingPage } from './modules/tracking/TrackingPage';
 import { loadExcel } from './modules/shared/excel';
 import { formatTrackingImportDate, parseBulkTrackingWorkbook, readFileAsArrayBuffer } from './modules/tracking/bulkImport';
 import { formatBeijingDateTime, formatCurrency, formatUsd } from './modules/shared/format';
-import { ManagedTable, StatusTag, createNoticeMessage, riskWeight, tenRowTablePagination } from './modules/shared/ui';
+import { getCustomerDisplayName } from './modules/shared/customerDisplay';
+import { getPendingRoutingApprovalReadiness } from './modules/shared/pendingRoutingColumns';
+import { ManagedTable, StatusTag, createNoticeMessage, paginationWhenNeeded, riskWeight, type ManagedTableColumns } from './modules/shared/ui';
 
-const CustomerServicePage = lazy(() => import('./modules/customerService/CustomerServicePage').then((module) => ({ default: module.CustomerServicePage })));
-const FinancePage = lazy(() => import('./modules/finance/FinancePage').then((module) => ({ default: module.FinancePage })));
-const WarehousePage = lazy(() => import('./modules/warehouse/WarehousePage').then((module) => ({ default: module.WarehousePage })));
+const loadCustomerServicePage = () => import('./modules/customerService/CustomerServicePage').then((module) => ({ default: module.CustomerServicePage }));
+const loadFinancePage = () => import('./modules/finance/FinancePage').then((module) => ({ default: module.FinancePage }));
+const loadWarehousePage = () => import('./modules/warehouse/WarehousePage').then((module) => ({ default: module.WarehousePage }));
+const loadMiscFeesPage = () => import('./modules/miscFees/MiscFeesPage').then((module) => ({ default: module.MiscFeesPage }));
+const CustomerServicePage = lazy(loadCustomerServicePage);
+const FinancePage = lazy(loadFinancePage);
+const WarehousePage = lazy(loadWarehousePage);
+const MiscFeesPage = lazy(loadMiscFeesPage);
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
+
+function normalizeRoutingAgentChannelName(value: string | undefined) {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
 
 interface AiResult {
   title: string;
@@ -167,13 +190,21 @@ export function App() {
     return raw ? (JSON.parse(raw) as Session) : null;
   });
   const [requestedAppRoute, setRequestedAppRoute] = useState(() => parseStaffAppRoute(window.location.pathname));
-  const pendingNavigationRouteRef = useRef<ReturnType<typeof parseStaffAppRoute>>(null);
-  const [activeMenuKey, setActiveMenuKey] = useState<MenuKey>('workspace');
+  const [pendingNotificationTarget, setPendingNotificationTarget] = useState<{ type: string; id: string } | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    const type = params.get('notificationEntityType');
+    const id = params.get('notificationEntityId');
+    return type && id ? { type, id } : null;
+  });
   const [expandedMenuKey, setExpandedMenuKey] = useState<MenuKey | null>('workspace');
   const [sidebarSubNav, setSidebarSubNav] = useState<SidebarSubNavState | null>(null);
   const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['appShell']['navigationUnreadBadges']>>['items']>([]);
   const businessType: BusinessType = 'DEDICATED_LINE';
-  const [activeWorkspaceSection, setActiveWorkspaceSection] = useState('shipmentPool');
+  const [activeWorkspaceSection, setActiveWorkspaceSection] = useState(() => resolveModuleInitialSection(
+    'workspace',
+    requestedAppRoute?.menuKey === 'workspace' ? requestedAppRoute.sectionKey : undefined,
+    'shipmentPool'
+  ));
   const [activeFulfillmentSection, setActiveFulfillmentSection] = useState('stageBoard');
   const [selectedFulfillmentStage, setSelectedFulfillmentStage] = useState<OrdersLifecycleStageKey>('all');
   const [shipmentColumnOrderMode] = useState<ShipmentColumnOrderMode>(() => {
@@ -216,6 +247,10 @@ export function App() {
   const [routingAssignmentShipment, setRoutingAssignmentShipment] = useState<Shipment | null>(null);
   const [pendingRoutingApprovalShipment, setPendingRoutingApprovalShipment] = useState<Shipment | null>(null);
   const [detailViewingShipment, setDetailViewingShipment] = useState<Shipment | null>(null);
+  const [shipmentFinancePrewarmed, setShipmentFinancePrewarmed] = useState(false);
+  const [shipmentReviewRequestedId, setShipmentReviewRequestedId] = useState<string>();
+  const [shipmentFeeCatalogItems, setShipmentFeeCatalogItems] = useState<FinanceCatalogItemSummary[] | null>(null);
+  const [fulfillmentProblemShipment, setFulfillmentProblemShipment] = useState<Shipment | null>(null);
   const [shipmentFinanceDetails, setShipmentFinanceDetails] = useState<Record<string, ShipmentFinanceDetailSummary>>({});
   const [shipmentFinanceLoading, setShipmentFinanceLoading] = useState(false);
   const [shipmentReviewDetails, setShipmentReviewDetails] = useState<Record<string, ShipmentReviewDetailSummary>>({});
@@ -239,6 +274,7 @@ export function App() {
   const [forcePasswordChangeOpen, setForcePasswordChangeOpen] = useState(() => Boolean(session?.user.mustChangePassword));
   const [forcePasswordChangeLoading, setForcePasswordChangeLoading] = useState(false);
   const [forcePasswordChangeError, setForcePasswordChangeError] = useState<string | null>(null);
+  const [feeNameCatalogItems, setFeeNameCatalogItems] = useState<FinanceCatalogItemSummary[]>([]);
   const businessWorkspaceConfig = businessWorkspaceConfigs.DEDICATED_LINE;
   const apiClient = useMemo(
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
@@ -261,18 +297,86 @@ export function App() {
     () => menuItems.filter((item) => visibleMenuKeys.includes(item.key)),
     [visibleMenuKeys]
   );
+  useEffect(() => {
+    if (!session) return;
+    const preload = () => {
+      const preloadTasks: Promise<unknown>[] = [];
+      if (visibleMenuKeys.includes('customerService')) preloadTasks.push(loadCustomerServicePage());
+      if (visibleMenuKeys.includes('business') || visibleMenuKeys.includes('finance')) preloadTasks.push(loadFinancePage());
+      if (visibleMenuKeys.includes('receive')) preloadTasks.push(loadWarehousePage());
+      if (visibleMenuKeys.includes('miscFees')) preloadTasks.push(loadMiscFeesPage());
+      void Promise.allSettled(preloadTasks);
+    };
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(preload, { timeout: 1_500 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+    const timeoutId = globalThis.setTimeout(preload, 300);
+    return () => globalThis.clearTimeout(timeoutId);
+  }, [session, visibleMenuKeys]);
   const navigationUnreadByKey = useMemo(
     () => new Map(navigationUnreadBadges.map((item) => [`${item.moduleKey}:${item.sectionKey ?? ''}`, item.unreadCount])),
     [navigationUnreadBadges]
   );
   const currentMenuKey = useMemo<MenuKey>(
     () =>
-      session && session.user.role !== 'CUSTOMER' && visibleMenuKeys.includes(activeMenuKey)
-        ? activeMenuKey
+      session && session.user.role !== 'CUSTOMER' && requestedAppRoute?.menuKey && visibleMenuKeys.includes(requestedAppRoute.menuKey)
+        ? requestedAppRoute.menuKey
         : visibleMenuKeys[0] ?? 'workspace',
-    [activeMenuKey, session, visibleMenuKeys]
+    [requestedAppRoute, session, visibleMenuKeys]
   );
-  const activeSectionKey = sidebarSubNav?.parentKey === currentMenuKey ? sidebarSubNav.activeKey : undefined;
+  const requestedSectionKey = requestedAppRoute?.menuKey === currentMenuKey ? requestedAppRoute.sectionKey : undefined;
+  const resolvedRouteSectionKey = sidebarSubNav?.parentKey === currentMenuKey
+    ? resolveStaffSectionKey(currentMenuKey, requestedSectionKey, sidebarSubNav.items.map((item) => item.key))
+    : undefined;
+  const activeSectionKey = resolvedRouteSectionKey
+    ?? (sidebarSubNav?.parentKey === currentMenuKey ? sidebarSubNav.activeKey : undefined);
+  const orderManagementOwnsShipmentOverlays = currentMenuKey === 'orders'
+    || (currentMenuKey === 'business' && activeSectionKey === 'order-management');
+  const navigateToAppRoute = useCallback((menuKey: MenuKey, sectionKey?: string, mode: 'push' | 'replace' = 'push') => {
+    const href = getStaffSectionHref(menuKey, sectionKey);
+    const route = parseStaffAppRoute(href) ?? { menuKey, sectionKey };
+    if (window.location.pathname !== href) {
+      window.history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', href);
+    }
+    setRequestedAppRoute(route);
+    setNotice(null);
+    if (menuKey === 'customerService' && !sectionKey) {
+      setCustomerServiceInitialSection('service-dashboard');
+    }
+    setExpandedMenuKey(menuKey);
+  }, [setNotice]);
+  const handleNotificationNavigate = useCallback((targetPath: string) => {
+    const targetUrl = new URL(targetPath, window.location.origin);
+    if (targetUrl.origin !== window.location.origin) {
+      message.warning('通知跳转地址无效');
+      return;
+    }
+    const targetRoute = parseStaffAppRoute(targetUrl.pathname);
+    if (!targetRoute || !visibleMenuKeys.includes(targetRoute.menuKey)) {
+      message.warning('当前账号没有该业务页面的访问权限');
+      return;
+    }
+    navigateToAppRoute(targetRoute.menuKey, targetRoute.sectionKey);
+    if (targetUrl.search) {
+      window.history.replaceState(null, '', `${targetUrl.pathname}${targetUrl.search}`);
+    }
+    const targetType = targetUrl.searchParams.get('notificationEntityType');
+    const targetId = targetUrl.searchParams.get('notificationEntityId');
+    setPendingNotificationTarget(targetType && targetId ? { type: targetType, id: targetId } : null);
+  }, [navigateToAppRoute, visibleMenuKeys]);
+  const consumePendingNotificationTarget = useCallback((target: { type: string; id: string }) => {
+    setPendingNotificationTarget((current) => current?.type === target.type && current.id === target.id ? null : current);
+    const currentUrl = new URL(window.location.href);
+    if (
+      currentUrl.searchParams.get('notificationEntityType') === target.type
+      && currentUrl.searchParams.get('notificationEntityId') === target.id
+    ) {
+      currentUrl.searchParams.delete('notificationEntityType');
+      currentUrl.searchParams.delete('notificationEntityId');
+      window.history.replaceState(null, '', `${currentUrl.pathname}${currentUrl.search}`);
+    }
+  }, []);
   const registerSidebarSubNav = useCallback(
     (state: Omit<SidebarSubNavState, 'parentKey' | 'signature'>) => {
       const signature = getModuleSubNavSignature(state.items);
@@ -303,40 +407,35 @@ export function App() {
   const sidebarSubNavContextValue = useMemo<ModuleSubNavContextValue>(
     () => ({
       parentKey: currentMenuKey,
+      routeKey: `${currentMenuKey}:${requestedSectionKey ?? ''}`,
+      requestedSectionKey,
+      resolveSectionKey: (sectionKeys) => resolveStaffSectionKey(currentMenuKey, requestedSectionKey, sectionKeys),
+      navigateToSection: (sectionKey, mode) => navigateToAppRoute(currentMenuKey, sectionKey, mode),
       register: registerSidebarSubNav,
       clear: clearSidebarSubNav
     }),
-    [clearSidebarSubNav, currentMenuKey, registerSidebarSubNav]
+    [clearSidebarSubNav, currentMenuKey, navigateToAppRoute, registerSidebarSubNav, requestedSectionKey]
   );
-  const navigateToAppRoute = useCallback((menuKey: MenuKey, sectionKey?: string) => {
-    const href = getStaffSectionHref(menuKey, sectionKey);
-    const route = parseStaffAppRoute(href) ?? { menuKey, sectionKey };
-    pendingNavigationRouteRef.current = route;
-    if (window.location.pathname !== href) {
-      window.history.pushState(null, '', href);
-    }
-    setRequestedAppRoute(route);
-    setNotice(null);
-    if (menuKey === 'customerService' && !sectionKey) {
-      setCustomerServiceInitialSection('service-dashboard');
-    }
-    setActiveMenuKey(menuKey);
-    setExpandedMenuKey(menuKey);
-  }, [setNotice]);
   const handlePrimaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, key: MenuKey) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
+    const clickResult = resolveExpandedMenuAfterPrimaryClick({
+      clickedKey: key,
+      currentKey: currentMenuKey,
+      expandedKey: expandedMenuKey,
+      hasSubNav: sidebarSubNav?.parentKey === key && sidebarSubNav.items.length > 0
+    });
+    setExpandedMenuKey(clickResult.expandedKey);
+    if (!clickResult.shouldNavigate) return;
     navigateToAppRoute(key);
-  }, [navigateToAppRoute]);
-  const handleSecondaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, menuKey: MenuKey, sectionKey: string, onChange: (key: string) => void) => {
+  }, [currentMenuKey, expandedMenuKey, navigateToAppRoute, sidebarSubNav]);
+  const handleSecondaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, menuKey: MenuKey, sectionKey: string) => {
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     navigateToAppRoute(menuKey, sectionKey);
-    onChange(sectionKey);
   }, [navigateToAppRoute]);
   const handleBrandClick = () => {
     navigateToAppRoute('workspace', 'shipmentPool');
-    setActiveWorkspaceSection('shipmentPool');
   };
   const canViewShipmentFinanceDetail = session?.user.role === 'ADMIN' || session?.user.role === 'FINANCE' || session?.user.role === 'OPERATOR';
 
@@ -374,8 +473,8 @@ export function App() {
   }, [apiClient, session]);
 
   useEffect(() => {
-    if (!session || session.user.role === 'CUSTOMER' || !sidebarSubNav || sidebarSubNav.parentKey !== currentMenuKey) return;
-    const sectionKey = sidebarSubNav.activeKey;
+    if (!session || session.user.role === 'CUSTOMER' || !activeSectionKey) return;
+    const sectionKey = activeSectionKey;
     void apiClient.appShell.markNavigationRead({ moduleKey: currentMenuKey, sectionKey }).then(() => {
       setNavigationUnreadBadges((current) => current.map((item) => {
         if (item.moduleKey === currentMenuKey && item.sectionKey === sectionKey) return { ...item, unreadCount: 0, displayCount: '0' };
@@ -388,7 +487,7 @@ export function App() {
         return item;
       }));
     }).catch(() => undefined);
-  }, [apiClient, currentMenuKey, session, sidebarSubNav]);
+  }, [activeSectionKey, apiClient, currentMenuKey, session]);
 
   useEffect(() => {
     if (!session || session.user.role === 'CUSTOMER') {
@@ -398,9 +497,6 @@ export function App() {
     const nextMenuKey = requestedMenuKey && visibleMenuKeys.includes(requestedMenuKey)
       ? requestedMenuKey
       : visibleMenuKeys[0] ?? 'workspace';
-    if (activeMenuKey !== nextMenuKey) {
-      setActiveMenuKey(nextMenuKey);
-    }
     if (requestedMenuKey && !visibleMenuKeys.includes(requestedMenuKey)) {
       const fallbackHref = getStaffModuleHref(nextMenuKey);
       if (window.location.pathname !== fallbackHref) {
@@ -409,96 +505,77 @@ export function App() {
       setRequestedAppRoute({ menuKey: nextMenuKey });
       setNotice('当前账号无权限访问该模块，已跳转至可访问模块。');
     }
-  }, [activeMenuKey, requestedAppRoute, session, setNotice, visibleMenuKeys]);
+  }, [requestedAppRoute, session, setNotice, visibleMenuKeys]);
 
   useEffect(() => {
     const handlePopState = () => {
       const route = parseStaffAppRoute(window.location.pathname);
-      pendingNavigationRouteRef.current = route;
       setRequestedAppRoute(route);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Browser location is the navigation source of truth. This also repairs a
-  // stale in-memory menu after a failed render before a module has mounted its
-  // secondary navigation, which previously allowed URL and rendered module to
-  // describe different pages.
   useEffect(() => {
-    if (!session || session.user.role === 'CUSTOMER') return;
-    const route = parseStaffAppRoute(window.location.pathname);
-    if (!route || route.menuKey === currentMenuKey) return;
-    pendingNavigationRouteRef.current = route;
-    setRequestedAppRoute(route);
-    setActiveMenuKey(route.menuKey);
-  }, [currentMenuKey, session]);
+    if (!session || session.user.role === 'CUSTOMER' || !shouldLoadRoutingFeeNameCatalog(currentMenuKey)) {
+      setFeeNameCatalogItems([]);
+      return;
+    }
 
-  useEffect(() => {
-    const targetRoute = pendingNavigationRouteRef.current ?? requestedAppRoute;
-    if (!session || session.user.role === 'CUSTOMER' || !targetRoute?.sectionKey) return;
-    if (targetRoute.menuKey !== currentMenuKey || sidebarSubNav?.parentKey !== currentMenuKey) return;
-    const sectionKey = resolveStaffSectionKey(
-      currentMenuKey,
-      targetRoute.sectionKey,
-      sidebarSubNav.items.map((item) => item.key)
-    );
-    if (sectionKey && sectionKey !== sidebarSubNav.activeKey) {
-      sidebarSubNav.onChange(sectionKey);
-      return;
-    }
-    if (sectionKey === sidebarSubNav.activeKey) {
-      pendingNavigationRouteRef.current = null;
-      return;
-    }
-    if (!sectionKey) {
-      pendingNavigationRouteRef.current = null;
-      const href = getStaffSectionHref(currentMenuKey, sidebarSubNav.activeKey);
-      if (window.location.pathname !== href) {
-        window.history.replaceState(null, '', href);
-      }
-      setRequestedAppRoute({ menuKey: currentMenuKey, sectionKey: sidebarSubNav.activeKey });
-    }
-  }, [currentMenuKey, requestedAppRoute, session, sidebarSubNav]);
+    let cancelled = false;
+    apiClient
+      .financeCatalog({ category: 'FEE_NAME', enabledOnly: true })
+      .then((response) => {
+        if (!cancelled) {
+          setFeeNameCatalogItems(Array.isArray(response.items) ? response.items : []);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setFeeNameCatalogItems([]);
+        }
+      });
 
-  useEffect(() => {
-    if (!session || session.user.role === 'CUSTOMER' || sidebarSubNav?.parentKey !== currentMenuKey) return;
-    const pendingRoute = pendingNavigationRouteRef.current;
-    if (pendingRoute?.menuKey === currentMenuKey && !pendingRoute.sectionKey) {
-      pendingNavigationRouteRef.current = null;
-    }
-    const pendingSectionKey = pendingRoute?.menuKey === currentMenuKey
-      ? resolveStaffSectionKey(currentMenuKey, pendingRoute.sectionKey, sidebarSubNav.items.map((item) => item.key))
-      : undefined;
-    if (pendingSectionKey && pendingSectionKey !== sidebarSubNav.activeKey) {
-      return;
-    }
-    if (pendingSectionKey === sidebarSubNav.activeKey) {
-      pendingNavigationRouteRef.current = null;
-    }
-    const href = getStaffSectionHref(currentMenuKey, sidebarSubNav.activeKey);
-    const requestedSectionKey = requestedAppRoute?.menuKey === currentMenuKey ? requestedAppRoute.sectionKey : undefined;
-    const resolvedRequestedSection = resolveStaffSectionKey(
-      currentMenuKey,
-      requestedSectionKey,
-      sidebarSubNav.items.map((item) => item.key)
-    );
-    if (resolvedRequestedSection && resolvedRequestedSection !== sidebarSubNav.activeKey) {
-      return;
-    }
-    if (resolvedRequestedSection === sidebarSubNav.activeKey && window.location.pathname === href) {
-      return;
-    }
-    window.history.replaceState(null, '', href);
-    setRequestedAppRoute({ menuKey: currentMenuKey, sectionKey: sidebarSubNav.activeKey });
-  }, [currentMenuKey, requestedAppRoute, session, sidebarSubNav]);
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, currentMenuKey, session]);
 
   useEffect(() => {
     setExpandedMenuKey(currentMenuKey);
   }, [currentMenuKey]);
 
   useEffect(() => {
-    if (!detailViewingShipment || !canViewShipmentFinanceDetail || shipmentFinanceDetails[detailViewingShipment.id]) {
+    if (!detailViewingShipment || !canViewShipmentFinanceDetail) {
+      return;
+    }
+
+    let cancelled = false;
+    const prewarm = () => {
+      if (!cancelled) setShipmentFinancePrewarmed(true);
+    };
+    if ('requestIdleCallback' in window) {
+      const idleId = window.requestIdleCallback(prewarm, { timeout: 1_200 });
+      return () => {
+        cancelled = true;
+        window.cancelIdleCallback(idleId);
+      };
+    }
+    const timeoutId = globalThis.setTimeout(prewarm, 180);
+    return () => {
+      cancelled = true;
+      globalThis.clearTimeout(timeoutId);
+    };
+  }, [canViewShipmentFinanceDetail, detailViewingShipment]);
+
+  useEffect(() => {
+    if (
+      !detailViewingShipment
+      || !canViewShipmentFinanceDetail
+      || !shipmentFinancePrewarmed
+      || shipmentReviewRequestedId === detailViewingShipment.id
+      || shipmentFinanceDetails[detailViewingShipment.id]
+    ) {
       return;
     }
 
@@ -525,10 +602,35 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [apiClient, canViewShipmentFinanceDetail, detailViewingShipment, shipmentFinanceDetails]);
+  }, [
+    apiClient,
+    canViewShipmentFinanceDetail,
+    detailViewingShipment,
+    shipmentFinanceDetails,
+    shipmentFinancePrewarmed,
+    shipmentReviewRequestedId
+  ]);
 
   useEffect(() => {
-    if (!detailViewingShipment || shipmentReviewDetails[detailViewingShipment.id]) {
+    if (!detailViewingShipment || !canViewShipmentFinanceDetail || !shipmentFinancePrewarmed || shipmentFeeCatalogItems !== null) {
+      return;
+    }
+    let cancelled = false;
+    apiClient
+      .financeCatalog({ enabledOnly: true })
+      .then((response) => {
+        if (!cancelled) setShipmentFeeCatalogItems(Array.isArray(response.items) ? response.items : []);
+      })
+      .catch(() => {
+        if (!cancelled) setShipmentFeeCatalogItems([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, canViewShipmentFinanceDetail, detailViewingShipment, shipmentFeeCatalogItems, shipmentFinancePrewarmed]);
+
+  useEffect(() => {
+    if (!detailViewingShipment || shipmentReviewRequestedId !== detailViewingShipment.id || shipmentReviewDetails[detailViewingShipment.id]) {
       return;
     }
     let cancelled = false;
@@ -536,7 +638,14 @@ export function App() {
     apiClient
       .shipmentReviewDetail(detailViewingShipment.id)
       .then((detail) => {
-        if (!cancelled) setShipmentReviewDetails((current) => ({ ...current, [detail.shipment.id]: detail }));
+        if (!cancelled) {
+          setShipmentReviewDetails((current) => ({ ...current, [detail.shipment.id]: detail }));
+          if (canViewShipmentFinanceDetail) {
+            setShipmentFinanceDetails((current) => current[detail.shipment.id]
+              ? current
+              : { ...current, [detail.shipment.id]: detail.finance });
+          }
+        }
       })
       .catch(() => undefined)
       .finally(() => {
@@ -545,7 +654,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [apiClient, detailViewingShipment, shipmentReviewDetails]);
+  }, [apiClient, canViewShipmentFinanceDetail, detailViewingShipment, shipmentReviewDetails, shipmentReviewRequestedId]);
 
   async function reloadShipmentFinanceDetail(shipmentId: string) {
     setShipmentFinanceLoading(true);
@@ -652,12 +761,6 @@ export function App() {
     const nextSession = await apiClient.login(username, password, captchaId, captchaCode);
     localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
     setSession(nextSession);
-    const visibleKeys = getVisibleStaffMenuKeysByPermissions(nextSession.permissions ?? [], nextSession.user.role);
-    setActiveMenuKey(
-      requestedAppRoute?.menuKey && visibleKeys.includes(requestedAppRoute.menuKey)
-        ? requestedAppRoute.menuKey
-        : visibleKeys[0] ?? 'workspace'
-    );
     setPersonalCenterOpen(false);
     const requiresPasswordChange = Boolean(nextSession.user.mustChangePassword);
     setForcePasswordChangeOpen(requiresPasswordChange);
@@ -739,6 +842,23 @@ export function App() {
       systemOrderNo ? localShipments.find((shipment) => shipment.systemOrderNo === systemOrderNo) : undefined,
     [localShipments]
   );
+  const openShipmentDetail = useCallback((shipment: Shipment) => {
+    setShipmentFinancePrewarmed(false);
+    setShipmentReviewRequestedId(undefined);
+    setDetailViewingShipment(shipment);
+  }, []);
+  useEffect(() => {
+    if (pendingNotificationTarget?.type !== 'SHIPMENT') return;
+    const shipment = localShipments.find((item) => item.id === pendingNotificationTarget.id);
+    if (!shipment) return;
+    openShipmentDetail(shipment);
+    consumePendingNotificationTarget(pendingNotificationTarget);
+  }, [consumePendingNotificationTarget, localShipments, openShipmentDetail, pendingNotificationTarget]);
+  const closeShipmentDetail = useCallback(() => {
+    setDetailViewingShipment(null);
+    setShipmentFinancePrewarmed(false);
+    setShipmentReviewRequestedId(undefined);
+  }, []);
   const renderShipmentOrderNoLink = useCallback(
     (
       systemOrderNo?: string,
@@ -760,7 +880,7 @@ export function App() {
                 className="order-number-link"
                 type="link"
                 size="small"
-                onClick={() => setDetailViewingShipment(shipment)}
+                onClick={() => openShipmentDetail(shipment)}
               >
                 {systemOrderNo}
               </Button>
@@ -773,7 +893,7 @@ export function App() {
         </div>
       );
     },
-    [findShipmentBySystemOrderNo]
+    [findShipmentBySystemOrderNo, openShipmentDetail]
   );
   const aiQueue = useMemo(
     () =>
@@ -876,13 +996,14 @@ export function App() {
     });
   }
 
-  const shipmentColumnMap: Record<ShipmentColumnKey, ColumnsType<Shipment>[number]> = {
+  const shipmentColumnMap: Record<ShipmentColumnKey, ManagedTableColumns<Shipment>[number]> = {
     createdAt: {
       key: 'createdAt',
       title: '创建时间',
       dataIndex: 'createdAt',
       width: 145,
       render: (value: string) => formatBeijingDateTime(value),
+      recordDetail: { value: (record) => formatBeijingDateTime(record.createdAt) },
       sorter: (a, b) => a.createdAt.localeCompare(b.createdAt)
     },
     customerName: {
@@ -890,33 +1011,32 @@ export function App() {
       title: '客户名称',
       dataIndex: 'customerName',
       width: 170,
-      render: (value: string, record) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{value}</Text>
-          <Text type="secondary">{record.customerOrderNo}</Text>
-        </Space>
-      )
+      render: (_: string, record) => <Text strong>{getCustomerDisplayName(record)}</Text>,
+      recordDetail: { value: (record) => getCustomerDisplayName(record), span: 2 }
     },
     salesperson: {
       key: 'salesperson',
       title: '业务员归属',
       dataIndex: 'salesperson',
       width: 120,
-      render: (value?: string) => <Text type={value ? undefined : 'secondary'}>{value || '未分配'}</Text>
+      render: (value?: string) => <Text type={value ? undefined : 'secondary'}>{value || '未分配'}</Text>,
+      recordDetail: { value: (record) => record.salesperson || '未分配' }
     },
     systemOrderNo: {
       key: 'systemOrderNo',
-      title: '运单号',
+      title: '出货单号',
       dataIndex: 'systemOrderNo',
       width: 150,
-      render: (value: string, record) => renderShipmentOrderNoLink(value, { shipment: record, subtitle: '点击查看详情' })
+      render: (value: string, record) => renderShipmentOrderNoLink(value, { shipment: record, subtitle: '点击查看详情' }),
+      recordDetail: { value: (record) => record.systemOrderNo || '-' }
     },
     transferNo: {
       key: 'transferNo',
       title: '转单号',
       dataIndex: 'transferNo',
       width: 155,
-      render: (value?: string) => <Text type={value ? undefined : 'secondary'}>{value ?? '待获取快递号'}</Text>
+      render: (value?: string) => <Text type={value ? undefined : 'secondary'}>{value ?? '待获取快递号'}</Text>,
+      recordDetail: { value: (record) => record.transferNo || '待获取快递号' }
     },
     destinationCountry: {
       key: 'destinationCountry',
@@ -928,7 +1048,15 @@ export function App() {
           <span>{value}</span>
           {record.isRemoteArea ? <Tag color="gold">偏远</Tag> : null}
         </Space>
-      )
+      ),
+      recordDetail: {
+        value: (record) => (
+          <Space>
+            <span>{record.destinationCountry || '-'}</span>
+            {record.isRemoteArea ? <Tag color="gold">偏远</Tag> : null}
+          </Space>
+        )
+      }
     },
     channel: {
       key: 'channel',
@@ -939,26 +1067,30 @@ export function App() {
           return <Text>{getRouteCategory(record.channelName)}</Text>;
         }
         return <Text>{record.channelName || record.carrier}</Text>;
-      }
+      },
+      recordDetail: { value: (record) => session?.user.role === 'OPERATOR' ? getRouteCategory(record.channelName) : (record.channelName || record.carrier || '-') }
     },
     agent: {
       key: 'agent',
-      title: '代理',
-      width: 120,
-      render: (_, record) => <Text type={session?.user.role === 'OPERATOR' ? 'secondary' : undefined}>{session?.user.role === 'OPERATOR' ? '按权限隐藏' : record.agentName}</Text>
+      title: agentFieldLabels.detailedCompanyName,
+      width: 190,
+      render: (_, record) => <Text type={session?.user.role === 'OPERATOR' ? 'secondary' : undefined}>{session?.user.role === 'OPERATOR' ? '按权限隐藏' : record.agentName}</Text>,
+      recordDetail: { value: (record) => session?.user.role === 'OPERATOR' ? '按权限隐藏' : (record.agentName || '-') }
     },
     packageCount: {
       key: 'packageCount',
       title: '件数',
       dataIndex: 'packageCount',
       width: 70,
-      align: 'right'
+      align: 'right',
+      recordDetail: { value: (record) => record.packageCount }
     },
     weight: {
       key: 'weight',
       title: '应收/代理计费重',
       width: 140,
-      render: (_, record) => `${record.receivableWeightKg.toFixed(3)} / ${record.agentWeightKg.toFixed(3)}`
+      render: (_, record) => `${record.receivableWeightKg.toFixed(3)} / ${record.agentWeightKg.toFixed(3)}`,
+      recordDetail: { value: (record) => `${record.receivableWeightKg.toFixed(3)} / ${record.agentWeightKg.toFixed(3)} kg` }
     },
     latestTracking: {
       key: 'latestTracking',
@@ -972,20 +1104,32 @@ export function App() {
             {record.trackingStaleDays ? `${record.trackingStaleDays} 天未更新` : '今日更新'}
           </Text>
         </Space>
-      )
+      ),
+      recordDetail: {
+        value: (record) => (
+          <Space direction="vertical" size={0}>
+            <Text>{record.latestTracking || '-'}</Text>
+            <Text type={record.trackingStaleDays >= 5 ? 'danger' : 'secondary'}>
+              {record.trackingStaleDays ? `${record.trackingStaleDays} 天未更新` : '今日更新'}
+            </Text>
+          </Space>
+        )
+      }
     },
     status: {
       key: 'status',
       title: '状态',
       dataIndex: 'status',
       width: 110,
-      render: (status: ShipmentStatus) => <StatusTag status={status} />
+      render: (status: ShipmentStatus) => <StatusTag status={status} />,
+      recordDetail: { value: (record) => <StatusTag status={record.status} /> }
     },
     transitTime: {
       key: 'transitTime',
       title: '时效',
       width: 110,
-      render: (_, record) => <Text>{calculateTransitTimeLabel(record, demoOperationalNow)}</Text>
+      render: (_, record) => <Text>{calculateTransitTimeLabel(record, demoOperationalNow)}</Text>,
+      recordDetail: { value: (record) => calculateTransitTimeLabel(record, demoOperationalNow) }
     },
     paymentAmount: {
       key: 'paymentAmount',
@@ -1002,7 +1146,15 @@ export function App() {
             </>
           )}
         </Space>
-      )
+      ),
+      recordDetail: {
+        value: (record) => (
+          <Space direction="vertical" size={0}>
+            <Text>{record.paymentAmountUsd === undefined ? 'USD 未知' : formatUsd(record.paymentAmountUsd)}</Text>
+            <Text type="secondary">{record.paymentAmountCny === undefined ? 'RMB 未知' : formatCurrency(record.paymentAmountCny)}</Text>
+          </Space>
+        )
+      }
     },
     paymentCurrency: {
       key: 'paymentCurrency',
@@ -1014,6 +1166,12 @@ export function App() {
           record.paymentAmountCny === undefined ? null : 'RMB'
         ].filter(Boolean);
         return <Tag color={currencies.length ? 'green' : 'default'}>{currencies.length ? currencies.join(' + ') : '未知'}</Tag>;
+      },
+      recordDetail: {
+        value: (record) => {
+          const currencies = [record.paymentAmountUsd === undefined ? null : 'USD', record.paymentAmountCny === undefined ? null : 'RMB'].filter(Boolean);
+          return <Tag color={currencies.length ? 'green' : 'default'}>{currencies.length ? currencies.join(' + ') : '未知'}</Tag>;
+        }
       }
     },
     paymentMethod: {
@@ -1021,27 +1179,34 @@ export function App() {
       title: '收款方式',
       dataIndex: 'paymentMethod',
       width: 110,
-      render: (value?: ShipmentPaymentMethod) => <Tag color={value ? 'blue' : 'default'}>{value ?? '未知'}</Tag>
+      render: (value?: ShipmentPaymentMethod) => <Tag color={value ? 'blue' : 'default'}>{value ?? '未知'}</Tag>,
+      recordDetail: { value: (record) => <Tag color={record.paymentMethod ? 'blue' : 'default'}>{record.paymentMethod ?? '未知'}</Tag> }
     },
     remark: {
       key: 'remark',
       title: '备注',
       dataIndex: 'remark',
       width: 180,
-      render: (value?: string) => <Text type={value ? undefined : 'secondary'}>{value || '无备注'}</Text>
+      render: (value?: string) => <Text type={value ? undefined : 'secondary'}>{value || '无备注'}</Text>,
+      recordDetail: { value: (record) => record.remark || '无备注', span: 3 }
     }
   };
   const activeShipmentColumnOrder =
     shipmentColumnOrderMode === 'custom' ? customShipmentColumnOrder : shipmentColumnOrders[shipmentColumnOrderMode];
   const visibleShipmentColumnOrder = activeShipmentColumnOrder.filter((key) => !hiddenShipmentColumns.includes(key));
   const visibleShipmentColumnKeys: ShipmentColumnKey[] = visibleShipmentColumnOrder.length ? visibleShipmentColumnOrder : ['systemOrderNo'];
-  const columns: ColumnsType<Shipment> = visibleShipmentColumnKeys.map((key) => shipmentColumnMap[key]);
-  const fulfillmentTrackingColumn: ColumnsType<Shipment>[number] = {
+  const columns: ManagedTableColumns<Shipment> = visibleShipmentColumnKeys.map((key) => shipmentColumnMap[key]);
+  const fulfillmentTrackingColumn: ManagedTableColumns<Shipment>[number] = {
     ...shipmentColumnMap.latestTracking,
     key: 'trackingStatus',
     title: '轨迹状态'
   };
-  const fulfillmentBaseColumns = columns.filter((column) => column.key !== 'latestTracking' && column.key !== 'status');
+  const showFulfillmentAgentDetails = session ? canViewOrderManagementAgentDetails(session.user.role) : false;
+  const fulfillmentBaseColumns = columns.filter(
+    (column) => column.key !== 'latestTracking'
+      && column.key !== 'status'
+      && (showFulfillmentAgentDetails || column.key !== 'agent')
+  );
   const fulfillmentTrackingInsertIndex = fulfillmentBaseColumns.findIndex((column) => column.key === 'channel');
   const fulfillmentDisplayColumns =
     fulfillmentTrackingInsertIndex >= 0
@@ -1051,7 +1216,8 @@ export function App() {
           ...fulfillmentBaseColumns.slice(fulfillmentTrackingInsertIndex + 1)
         ]
       : [fulfillmentTrackingColumn, ...fulfillmentBaseColumns];
-  const auditStatusColumn: ColumnsType<Shipment>[number] = {
+  const auditStatusColumn: ManagedTableColumns<Shipment>[number] = {
+    key: 'auditStatus',
     title: '审核状态',
     width: 110,
     render: (_, record) => {
@@ -1062,42 +1228,41 @@ export function App() {
         return <Tag color="red">未通过</Tag>;
       }
       return <Tag color="green">已通过</Tag>;
+    },
+    recordDetail: {
+      value: (record) => {
+        if (record.status === 'DRAFT' || record.status === 'REVIEW_PENDING') return <Tag color="warning">待审核</Tag>;
+        if (record.status === 'REVIEW_REJECTED') return <Tag color="red">未通过</Tag>;
+        return <Tag color="green">已通过</Tag>;
+      }
     }
   };
-  const lifecycleStatusColumn: ColumnsType<Shipment>[number] = {
+  const lifecycleStatusColumn: ManagedTableColumns<Shipment>[number] = {
     key: 'lifecycleStatus',
     title: '当前节点',
     width: 126,
     render: (_, record) => (
-      <Space direction="vertical" size={2}>
+      <Tag color={record.hasProblemTicket && !['PROBLEM', 'STUCK'].includes(record.status) ? 'error' : lifecycleStatusColor(record.status)}>
+        {record.hasProblemTicket && !['PROBLEM', 'STUCK'].includes(record.status) ? '有问题件' : orderManagementStatusLabel(record.status)}
+      </Tag>
+    ),
+    recordDetail: {
+      value: (record) => (
         <Tag color={record.hasProblemTicket && !['PROBLEM', 'STUCK'].includes(record.status) ? 'error' : lifecycleStatusColor(record.status)}>
-          {record.hasProblemTicket && !['PROBLEM', 'STUCK'].includes(record.status) ? '有问题件' : shipmentStatusLabels[record.status]}
+          {record.hasProblemTicket && !['PROBLEM', 'STUCK'].includes(record.status) ? '有问题件' : orderManagementStatusLabel(record.status)}
         </Tag>
-        <Text type="secondary">{record.hasProblemTicket ? '需持续跟进' : '按流转自动更新'}</Text>
-      </Space>
-    )
+      )
+    }
   };
 
-  const fulfillmentColumns: ColumnsType<Shipment> = [
+  const fulfillmentColumns: ManagedTableColumns<Shipment> = [
     ...fulfillmentDisplayColumns,
     lifecycleStatusColumn,
     auditStatusColumn,
     {
-      title: 'AI 下一步',
-      width: 170,
-      render: (_, record) => {
-        const advice = createFulfillmentAdvice(record);
-        return (
-          <Space direction="vertical" size={0}>
-            <Text strong>{advice.nextAction}</Text>
-            <Text type={advice.priority === 'urgent' ? 'danger' : 'secondary'}>{advice.riskReasons[0]}</Text>
-          </Space>
-        );
-      }
-    },
-    {
+      key: 'actions',
       title: '操作',
-      width: 160,
+      width: 220,
       fixed: 'right',
       render: (_, record) => (
         <Space wrap>
@@ -1156,12 +1321,28 @@ export function App() {
                 <Button size="small" onClick={() => openShipmentLogModal(record, 'operation')}>
                   操作日志
                 </Button>
+                {record.status === 'WAITING_DISPATCH'
+                  && record.invoiceTemplateAvailable
+                  && (session?.user.role === 'ADMIN' || session?.permissions.includes('business:order-entry:invoice-upload')) ? (
+                    <Button size="small" icon={<FileDown size={14} />} onClick={() => void handleDownloadShipmentInvoiceTemplate(record)}>
+                      下载发票模板
+                    </Button>
+                  ) : null}
               </>
             );
           })()}
         </Space>
       )
     }
+  ];
+  const fulfillmentMatrixSourceColumns: ManagedTableColumns<Shipment> = [
+    ...defaultShipmentColumnOrder
+      .filter((key) => key !== 'latestTracking' && key !== 'status' && (showFulfillmentAgentDetails || key !== 'agent'))
+      .map((key) => shipmentColumnMap[key]),
+    fulfillmentTrackingColumn,
+    lifecycleStatusColumn,
+    auditStatusColumn,
+    fulfillmentColumns[fulfillmentColumns.length - 1]
   ];
 
   function openOutboundOrderModal() {
@@ -1221,6 +1402,10 @@ export function App() {
   }
 
   async function handleFulfillmentAction(record: Shipment, action: FulfillmentAction) {
+    if (action === 'create-problem') {
+      setFulfillmentProblemShipment(record);
+      return;
+    }
     const actionResult = resolveFulfillmentAction(record, action);
 
     if (!actionResult.ok) {
@@ -1247,13 +1432,21 @@ export function App() {
             })
             : action === 'add-tracking'
               ? await apiClient.addTrackingEvent(record.id, { status: '手工轨迹更新', happenedAt: new Date().toISOString() })
-              : action === 'create-problem'
-                ? (await apiClient.createProblemTicket(record.id, { reason: '人工创建问题件', customerVisible: true }), { ...record, hasProblemTicket: true, status: 'PROBLEM' as ShipmentStatus })
-                : { ...record, ...actionResult.patch };
+              : { ...record, ...actionResult.patch };
 
     setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
     appendShipmentOperationLog(record.id, actionResult.message);
     setNotice(actionResult.message);
+  }
+
+  async function submitFulfillmentProblem(input: ProblemTicketCreateInput) {
+    if (!fulfillmentProblemShipment) throw new Error('请选择需要创建问题件的运单');
+    await apiClient.createBusinessProblemTicket(fulfillmentProblemShipment.id, input);
+    setLocalShipments((current) => current.map((shipment) => shipment.id === fulfillmentProblemShipment.id
+      ? { ...shipment, hasProblemTicket: true, status: 'PROBLEM' }
+      : shipment));
+    appendShipmentOperationLog(fulfillmentProblemShipment.id, '已创建问题件');
+    setNotice(`${fulfillmentProblemShipment.systemOrderNo} 已创建问题件`);
   }
 
   async function handleReverseShipmentReview(record: Shipment) {
@@ -1267,11 +1460,12 @@ export function App() {
     }
   }
 
-  async function handleWarehouseDispatchShipment(record: Shipment, options: { shippingMarkConfirmed?: boolean; handoverNo?: string; batchDispatchSource?: string } = {}) {
+  async function handleWarehouseDispatchShipment(record: Shipment, options: { shippingMarkConfirmed?: boolean; handoverNo?: string; batchDispatchSource?: string; miscFeeIdsToMatch?: string[] } = {}) {
     const updated = await apiClient.dispatchShipment(record.id, {
       shippingMarkConfirmed: options.shippingMarkConfirmed,
       handoverNo: options.handoverNo,
-      batchDispatchSource: options.batchDispatchSource
+      batchDispatchSource: options.batchDispatchSource,
+      miscFeeIdsToMatch: options.miscFeeIdsToMatch
     });
     setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? updated : shipment)));
     appendShipmentOperationLog(record.id, '仓库管理：确认出库');
@@ -1290,52 +1484,38 @@ export function App() {
     setNotice(`已上传 ${record.systemOrderNo} 业务发票`);
   }
 
+  async function handleDownloadShipmentInvoiceTemplate(record: Shipment) {
+    try {
+      const file = await apiClient.downloadShipmentInvoiceTemplate(record.id);
+      const url = URL.createObjectURL(file.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = file.fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      Modal.error({ title: '下载失败', content: error instanceof Error ? error.message : '发票模板下载失败' });
+    }
+  }
+
   function openRoutingAssignmentModal(record: Shipment) {
     const matchedChannel = masterData.channels.find((channel) => channel.name === record.channelName);
 
     routingAssignmentForm.setFieldsValue({
-      agentId: undefined,
-      manualAgentName: undefined,
+      agentId: record.agentId,
       channelId: matchedChannel?.id ?? masterData.channels.find((channel) => channel.enabled)?.id,
       manualChannelName: undefined,
-      agentChannelName: undefined,
+      agentChannelName: record.routeAgentChannelName,
       destinationCountry: record.destinationCountry,
-      chargeWeightKg: record.routeChargeWeightKg,
-      unitPrice: record.routeUnitPrice,
-      otherFee: record.routeOtherFee ?? 0,
-      currency: record.routeCurrency ?? 'RMB',
-      shippingMarkRequired: false,
+      shippingMarkRequired: record.shippingMarkRequired === true,
       saveAgentChannelToMasterData: false
     });
     setRoutingAssignmentShipment(record);
     void apiClient.shipmentFinanceDetail(record.id)
       .then((detail) => setShipmentFinanceDetails((current) => ({ ...current, [record.id]: detail })))
       .catch(() => undefined);
-  }
-
-  async function resolveRoutingAgent(values: RoutingAssignmentFormValues) {
-    const manualAgentName = values.manualAgentName?.trim();
-    const selectedAgent = values.agentId ? masterData.agents.find((agent) => agent.id === values.agentId) : undefined;
-    const matchedManualAgent = manualAgentName
-      ? masterData.agents.find((agent) => [agent.name, agent.shortName, agent.code].filter(Boolean).includes(manualAgentName))
-      : undefined;
-
-    if (matchedManualAgent ?? selectedAgent) {
-      return matchedManualAgent ?? selectedAgent;
-    }
-
-    if (!manualAgentName) {
-      return undefined;
-    }
-
-    const createdAgent = await apiClient.createAgent({
-      name: manualAgentName,
-      shortName: manualAgentName,
-      code: manualAgentName.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12) || undefined,
-      integrationType: 'MANUAL'
-    });
-    setMasterData((current) => ({ ...current, agents: [...current.agents, createdAgent] }));
-    return createdAgent;
   }
 
   async function resolveRoutingChannel(values: RoutingAssignmentFormValues) {
@@ -1360,7 +1540,7 @@ export function App() {
     return createdChannel;
   }
 
-  async function handleConfirmRoutingAssignment(approve = true) {
+  async function handleConfirmRoutingAssignment() {
     if (!routingAssignmentShipment) {
       return false;
     }
@@ -1373,7 +1553,7 @@ export function App() {
       const values = await routingAssignmentForm.validateFields();
       const destinationCountry = values.destinationCountry?.trim();
       if (!destinationCountry) {
-        setNotice('请先填写国家，再保存或排货');
+        setNotice('请先填写国家，再保存排货资料');
         return false;
       }
       if (destinationCountry !== routingAssignmentShipment.destinationCountry) {
@@ -1381,7 +1561,7 @@ export function App() {
         setLocalShipments((current) => current.map((shipment) => (shipment.id === updatedCountry.id ? updatedCountry : shipment)));
         appendShipmentOperationLog(routingAssignmentShipment.id, `渠道排货：修改国家为 ${destinationCountry}`);
       }
-      const agent = await resolveRoutingAgent(values);
+      const agent = values.agentId ? masterData.agents.find((item) => item.id === values.agentId && item.enabled) : undefined;
       const channel = await resolveRoutingChannel(values);
 
       if (!agent) {
@@ -1393,52 +1573,44 @@ export function App() {
         return false;
       }
       const agentChannelName = values.agentChannelName?.trim();
-      if (values.saveAgentChannelToMasterData && agentChannelName && !masterData.agentChannels.some((item) => item.agentId === agent.id && item.channelName === agentChannelName)) {
-        const createdAgentChannel = await apiClient.createAgentChannel({ agentId: agent.id, channelName: agentChannelName });
-        setMasterData((current) => ({ ...current, agentChannels: [...current.agentChannels, createdAgentChannel] }));
-      }
+      const matchingAgentChannels = masterData.agentChannels.filter((item) => (
+        item.agentId === agent.id
+        && normalizeRoutingAgentChannelName(item.channelName) === normalizeRoutingAgentChannelName(agentChannelName)
+      ));
+      const matchedAgentChannel = matchingAgentChannels.find((item) => item.enabled) ?? matchingAgentChannels[0];
 
-      const otherFee = Number(values.otherFee || 0);
-      const routeCostTotal = Number(values.chargeWeightKg || 0) * Number(values.unitPrice || 0) + otherFee;
       const updated = await apiClient.routeShipment(routingAssignmentShipment.id, {
         channelId: channel.id,
         agentId: agent.id,
-        agentChannelName: values.agentChannelName,
-        chargeWeightKg: values.chargeWeightKg,
-        unitPrice: values.unitPrice,
-        otherFee,
-        otherFeeRemark: values.otherFeeRemark?.trim() || undefined,
-        currency: values.currency ?? 'RMB',
+        agentChannelId: matchedAgentChannel?.id,
+        agentChannelName,
+        saveAgentChannelToMasterData: values.saveAgentChannelToMasterData === true && !matchedAgentChannel,
         shippingMarkRequired: values.shippingMarkRequired === true,
-        approve
+        approve: false
       });
       const patched: Shipment = {
         ...updated,
         channelName: channel.name,
         carrier: channel.carrierName,
-        agentName: agent.name
+        agentName: agent.name,
+        routeAgentChannelName: agentChannelName
       };
       setLocalShipments((current) => current.map((shipment) => (shipment.id === routingAssignmentShipment.id ? patched : shipment)));
       if (session?.user.role === 'ADMIN' || session?.user.role === 'FINANCE') {
         await refreshPayableAudits();
       }
       void apiClient.masterData().then(setMasterData).catch(() => undefined);
-      appendShipmentOperationLog(routingAssignmentShipment.id, `渠道排货：代理 ${agent.name}，渠道 ${channel.name}，成本 ${routeCostTotal.toFixed(2)} ${values.currency ?? 'RMB'}`);
-      if (approve) {
-        setRoutingAssignmentShipment(null);
-        routingAssignmentForm.resetFields();
-        setNotice('市场排货审核通过，已进入待出库');
-      } else {
-        setRoutingAssignmentShipment(patched);
-        setNotice('排货信息已保存，尚未审核进入待出库');
-      }
+      appendShipmentOperationLog(routingAssignmentShipment.id, `渠道排货：代理 ${agent.name}，代理渠道 ${agentChannelName}`);
+      setRoutingAssignmentShipment(null);
+      routingAssignmentForm.resetFields();
+      setNotice('排货信息已保存，请返回列表点击审核进入已排货');
       return true;
     } catch (error) {
       if (error && typeof error === 'object' && 'errorFields' in error) {
         return false;
       }
       if (error instanceof Error && error.message) {
-        Modal.error({ title: '排货失败', content: error.message });
+        Modal.error({ title: '保存失败', content: error.message });
       }
       return false;
     }
@@ -1450,26 +1622,19 @@ export function App() {
       return;
     }
 
-    if (!record.destinationCountry?.trim()) {
+    const approvalReadiness = getPendingRoutingApprovalReadiness(record);
+    if (!approvalReadiness.ready) {
       openRoutingAssignmentModal(record);
-      setNotice('请先点击排货或修改补齐国家，再审核进入已排货/待出库');
+      setNotice(`请先保存排货资料并补齐：${approvalReadiness.missingFields.join('、')}`);
       return;
     }
 
-    const channel = record.channelId
-      ? masterData.channels.find((item) => item.id === record.channelId)
-      : masterData.channels.find((item) => item.name === record.channelName);
-    const agent = record.agentId
-      ? masterData.agents.find((item) => item.id === record.agentId)
-      : masterData.agents.find((item) => item.name === record.agentName || item.shortName === record.agentName || item.code === record.agentName);
-    const agentChannelName = record.routeAgentChannelName?.trim() || record.channelName?.trim();
-    const chargeWeightKg = record.routeChargeWeightKg ?? record.agentWeightKg ?? record.receivableWeightKg;
-    const unitPrice = record.routeUnitPrice;
-    const otherFee = record.routeOtherFee ?? 0;
-
-    if (!channel || !agent || !agentChannelName || !chargeWeightKg || !unitPrice) {
+    const channel = masterData.channels.find((item) => item.id === record.channelId && item.enabled);
+    const agent = masterData.agents.find((item) => item.id === record.agentId && item.enabled);
+    const agentChannelName = record.routeAgentChannelName?.trim();
+    if (!channel || !agent || !agentChannelName) {
       openRoutingAssignmentModal(record);
-      setNotice('请先点击修改补齐代理、代理渠道、计费重和单价，再审核进入已排货/待出库');
+      setNotice('已保存的代理或渠道资料已失效，请重新选择并保存后再审核');
       return;
     }
 
@@ -1483,18 +1648,14 @@ export function App() {
         channelId: channel.id,
         agentId: agent.id,
         agentChannelName,
-        chargeWeightKg,
-        unitPrice,
-        otherFee,
-        otherFeeRemark: record.routeOtherFee && record.routeOtherFee > 0 ? '市场审核保留费用' : undefined,
-        currency: record.routeCurrency ?? 'RMB',
         shippingMarkRequired: record.shippingMarkRequired === true
       });
       const patched: Shipment = {
         ...updated,
         channelName: channel.name,
         carrier: channel.carrierName,
-        agentName: agent.name
+        agentName: agent.name,
+        routeAgentChannelName: agentChannelName
       };
       setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? patched : shipment)));
       appendShipmentOperationLog(record.id, `排货审核通过：进入已排货/待出库`);
@@ -1515,7 +1676,7 @@ export function App() {
     shipment: Shipment,
     type: 'BUSINESS_COST' | 'PAYABLE',
     feeId: string | undefined,
-    input: { name: string; currency: string; chargeWeightKg?: number; unitPrice?: number; amount?: number }
+    input: { name: string; currency: string; chargeWeightKg?: number; unitPrice?: number; amount: number }
   ) {
     const payload = {
       type,
@@ -1523,7 +1684,7 @@ export function App() {
       currency: input.currency,
       chargeWeightKg: input.chargeWeightKg,
       unitPrice: input.unitPrice,
-      amount: input.amount ?? 0
+      amount: input.amount
     };
     const savedItem = feeId
       ? await apiClient.updateShipmentFinanceItem(shipment.id, feeId, payload)
@@ -1791,6 +1952,32 @@ export function App() {
     </div>
   );
 
+  const renderShipmentMatrixField = (
+    label: string,
+    value: ReactNode,
+    options: {
+      copyText?: string;
+      muted?: boolean;
+      emphasis?: boolean;
+      span?: 2 | 3 | 4 | 5 | 'full';
+    } = {}
+  ) => {
+    const className = [
+      'shipment-detail-matrix-cell',
+      options.span ? `shipment-detail-matrix-cell-span-${options.span}` : '',
+      options.emphasis ? 'shipment-detail-matrix-cell-emphasis' : ''
+    ].filter(Boolean).join(' ');
+
+    return (
+      <div className={className}>
+        <span className="shipment-detail-matrix-label">{label}</span>
+        <div className={`shipment-detail-matrix-value${options.muted ? ' shipment-detail-muted-value' : ''}`}>
+          {options.copyText ? <Text copyable={{ text: options.copyText }}>{value}</Text> : value}
+        </div>
+      </div>
+    );
+  };
+
   const renderShipmentFinancePanel = (shipment: Shipment, detail?: ShipmentFinanceDetailSummary) => {
     if (!canViewShipmentFinanceDetail) {
       return null;
@@ -1800,6 +1987,8 @@ export function App() {
         apiClient={apiClient}
         role={session.user.role}
         permissions={session.permissions}
+        agents={masterData.agents}
+        catalogItems={shipmentFeeCatalogItems ?? []}
         shipment={shipment}
         detail={detail}
         loading={shipmentFinanceLoading}
@@ -1838,68 +2027,76 @@ export function App() {
       { title: '来源', dataIndex: 'source', width: 110 }
     ];
 
-    const cargoDataText = [
-      `件数 ${shipment.packageCount}`,
-      `实重 ${(shipment.weightKg ?? shipment.receivableWeightKg).toFixed(3)} kg`,
-      `体积 ${shipment.volumeCbm === undefined ? '-' : `${shipment.volumeCbm.toFixed(3)} m³`}`,
-      `计费重 ${(shipment.chargeableWeightKg ?? shipment.agentWeightKg ?? shipment.receivableWeightKg).toFixed(3)} kg`,
-      `来源 ${shipment.cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '自动匹配'}`
-    ].join(' / ');
-
     const basicInfo = (
-      <div className="shipment-detail-business-layout">
-        <section className="shipment-detail-section">
-          <div className="shipment-detail-section-title">录入与货物</div>
-          <div className="shipment-detail-grid">
-            {renderShipmentDetailField('运单录入日期', shipment.entryAt ? formatBeijingDateTime(shipment.entryAt) : formatBeijingDateTime(shipment.createdAt))}
-            {renderShipmentDetailField('客户编号', getDetailText(shipment.customerCode, '-'))}
-            {renderShipmentDetailField('客户名称', shipment.customerName)}
-            {renderShipmentDetailField('出货单号', shipment.outboundOrderNo || shipment.systemOrderNo, { copyText: shipment.outboundOrderNo || shipment.systemOrderNo })}
-            {renderShipmentDetailField('公司渠道', getDetailText(shipment.channelName || shipment.carrier, '-'))}
-            {renderShipmentDetailField('转单号', transferNo, shipment.transferNo ? { copyText: shipment.transferNo } : { muted: true })}
-            {renderShipmentDetailField('入仓号', getDetailText(shipment.inboundNo, '-'), { muted: !shipment.inboundNo })}
-            {renderShipmentDetailField('品名', getDetailText(shipment.productName, '-'))}
-            {renderShipmentDetailField('货物数据', cargoDataText, { wide: true })}
-            {renderShipmentDetailField('收货人名称', getDetailText(shipment.receiverName, '-'))}
-            {renderShipmentDetailField('FBA仓库代码', getDetailText(shipment.fbaWarehouseCode, '-'))}
-            {renderShipmentDetailField('国家', getDetailText(shipment.receiverCountry, '-'))}
-            {renderShipmentDetailField('收货人公司名称', getDetailText(shipment.receiverCompany, '-'))}
-            {renderShipmentDetailField('收货人地址', getDetailText(shipment.receiverAddress, '-'), { wide: true })}
-            {renderShipmentDetailField('州/省', getDetailText(shipment.receiverState, '-'))}
-            {renderShipmentDetailField('收货人电话', getDetailText(shipment.receiverPhone, '-'))}
-            {renderShipmentDetailField('邮编', getDetailText(shipment.receiverPostalCode, '-'))}
+      <div className="shipment-detail-basic-matrix">
+        <section className="shipment-detail-matrix-section shipment-detail-matrix-section-entry" aria-labelledby="shipment-detail-entry-title">
+          <div className="shipment-detail-matrix-section-title" id="shipment-detail-entry-title">录入与货物</div>
+          <div className="shipment-detail-matrix-grid shipment-detail-matrix-grid-4">
+            {renderShipmentMatrixField('运单录入日期', shipment.entryAt ? formatBeijingDateTime(shipment.entryAt) : formatBeijingDateTime(shipment.createdAt))}
+            {renderShipmentMatrixField('客户编号', getDetailText(shipment.customerCode, '-'))}
+            {renderShipmentMatrixField('客户名称', shipment.customerName)}
+            {renderShipmentMatrixField('出货单号', shipment.outboundOrderNo || shipment.systemOrderNo, { copyText: shipment.outboundOrderNo || shipment.systemOrderNo })}
+            {renderShipmentMatrixField('公司渠道', getDetailText(shipment.channelName || shipment.carrier, '-'))}
+            {renderShipmentMatrixField('转单号', transferNo, shipment.transferNo ? { copyText: shipment.transferNo } : { muted: true })}
+            {renderShipmentMatrixField('入仓号', getDetailText(shipment.inboundNo, '-'), { muted: !shipment.inboundNo })}
+            {renderShipmentMatrixField('品名', getDetailText(shipment.productName, '-'))}
+            <div className="shipment-detail-cargo-strip">
+              <span className="shipment-detail-matrix-label">货物数据</span>
+              <span><small>件数</small>{shipment.packageCount}</span>
+              <span><small>实重</small>{(shipment.weightKg ?? shipment.receivableWeightKg).toFixed(3)} kg</span>
+              <span><small>体积</small>{shipment.volumeCbm === undefined ? '-' : `${shipment.volumeCbm.toFixed(3)} m³`}</span>
+              <span><small>计费重</small>{(shipment.chargeableWeightKg ?? shipment.agentWeightKg ?? shipment.receivableWeightKg).toFixed(3)} kg</span>
+              <span><small>来源</small><Tag color="cyan">{shipment.cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '自动匹配'}</Tag></span>
+            </div>
           </div>
         </section>
 
-        <section className="shipment-detail-section">
-          <div className="shipment-detail-section-title">出库与审核</div>
-          <div className="shipment-detail-grid">
-            {renderShipmentDetailField('出库日期', shipment.outboundAt ? formatBeijingDateTime(shipment.outboundAt) : '-')}
-            {renderShipmentDetailField('目的地', shipment.destinationCountry)}
-            {renderShipmentDetailField('报关', shipment.declarationRequired ? '是' : '否')}
-            {renderShipmentDetailField('货物类型', getDetailText(shipment.cargoType, '-'))}
-            {renderShipmentDetailField('是否敏感', shipment.sensitive ? '是' : '否')}
-            {canViewShipmentSensitiveFields ? renderShipmentDetailField('代理渠道', agentName, { muted: !shipment.agentName }) : null}
-            {renderShipmentDetailField('分单号', getDetailText(shipment.subOrderNo, '-'))}
-            {renderShipmentDetailField('FBA 入仓单号', getDetailText(shipment.fbaInboundNo, '-'))}
-            {renderShipmentDetailField('结算方式', getDetailText(shipment.settlementMethod, '-'))}
-            {canViewShipmentFinanceDetail ? renderShipmentDetailField('应收总额', financeDetail ? formatCurrency(financeDetail.receivableTotal) : '待加载') : null}
-            {renderShipmentDetailField('备注', remark, { wide: true, muted: remark === '无备注' })}
-            {renderShipmentDetailField('应收审核日期', shipment.reviewedAt ? formatBeijingDateTime(shipment.reviewedAt) : '-')}
-            {canViewShipmentSensitiveFields ? renderShipmentDetailField('业务成本审核日期', shipment.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-') : null}
-            {canViewShipmentSensitiveFields ? renderShipmentDetailField('应付审核日期', '-') : null}
+        <section className="shipment-detail-matrix-section shipment-detail-matrix-section-outbound" aria-labelledby="shipment-detail-outbound-title">
+          <div className="shipment-detail-matrix-section-title" id="shipment-detail-outbound-title">出库与审核</div>
+          <div className="shipment-detail-matrix-grid shipment-detail-matrix-grid-5">
+            {renderShipmentMatrixField('出库日期', shipment.outboundAt ? formatBeijingDateTime(shipment.outboundAt) : '-', { muted: !shipment.outboundAt })}
+            {renderShipmentMatrixField('目的地', shipment.destinationCountry)}
+            {renderShipmentMatrixField('报关', shipment.declarationRequired ? '是' : '否')}
+            {renderShipmentMatrixField('货物类型', getDetailText(shipment.cargoType, '-'))}
+            {renderShipmentMatrixField('是否敏感', shipment.sensitive ? '是' : '否')}
+            {canViewShipmentSensitiveFields ? renderShipmentMatrixField(agentFieldLabels.detailedCompanyName, agentName, { muted: !shipment.agentName }) : null}
+            {renderShipmentMatrixField('分单号', getDetailText(shipment.subOrderNo, '-'))}
+            {renderShipmentMatrixField('FBA 入仓单号', getDetailText(shipment.fbaInboundNo, '-'))}
+            {renderShipmentMatrixField('结算方式', getDetailText(shipment.settlementMethod, '-'))}
+            {canViewShipmentFinanceDetail ? renderShipmentMatrixField('应收总额', financeDetail ? formatCurrency(financeDetail.receivableTotal) : '待加载', { emphasis: true }) : null}
+            {renderShipmentMatrixField('备注', remark, {
+              span: canViewShipmentSensitiveFields ? (canViewShipmentFinanceDetail ? 2 : 3) : undefined,
+              muted: remark === '无备注'
+            })}
+            {renderShipmentMatrixField('应收审核日期', shipment.reviewedAt ? formatBeijingDateTime(shipment.reviewedAt) : '-', { muted: !shipment.reviewedAt })}
+            {canViewShipmentSensitiveFields ? renderShipmentMatrixField('业务成本审核日期', shipment.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-', { muted: !shipment.businessReviewedAt }) : null}
+            {canViewShipmentSensitiveFields ? renderShipmentMatrixField('应付审核日期', '-', { muted: true }) : null}
           </div>
         </section>
 
-        <section className="shipment-detail-section shipment-detail-section-wide">
-          <div className="shipment-detail-section-title">履约与轨迹</div>
-          <div className="shipment-detail-grid">
-            {renderShipmentDetailField('出货单号', shipment.outboundOrderNo || shipment.systemOrderNo, { copyText: shipment.outboundOrderNo || shipment.systemOrderNo })}
-            {renderShipmentDetailField('状态', <StatusTag status={shipment.status} />)}
-            {renderShipmentDetailField('时效', calculateTransitTimeLabel(shipment, demoOperationalNow))}
-            {renderShipmentDetailField('ETD', shipment.etdAt ? formatBeijingDateTime(shipment.etdAt) : '未填写', { muted: !shipment.etdAt })}
-            {renderShipmentDetailField('ETA', shipment.etaAt ? formatBeijingDateTime(shipment.etaAt) : '未填写', { muted: !shipment.etaAt })}
-            {renderShipmentDetailField('最新物流轨迹', latestTracking, { wide: true })}
+        <section className="shipment-detail-matrix-section shipment-detail-matrix-section-receiver" aria-labelledby="shipment-detail-receiver-title">
+          <div className="shipment-detail-matrix-section-title" id="shipment-detail-receiver-title">收货信息</div>
+          <div className="shipment-detail-matrix-grid shipment-detail-matrix-grid-4">
+            {renderShipmentMatrixField('收货人名称', getDetailText(shipment.receiverName, '-'), { muted: !shipment.receiverName })}
+            {renderShipmentMatrixField('收货人公司名称', getDetailText(shipment.receiverCompany, '-'), { muted: !shipment.receiverCompany })}
+            {renderShipmentMatrixField('FBA仓库代码', getDetailText(shipment.fbaWarehouseCode, '-'), { muted: !shipment.fbaWarehouseCode })}
+            {renderShipmentMatrixField('国家', getDetailText(shipment.receiverCountry, '-'), { muted: !shipment.receiverCountry })}
+            {renderShipmentMatrixField('收货人地址', getDetailText(shipment.receiverAddress, '-'), { muted: !shipment.receiverAddress })}
+            {renderShipmentMatrixField('州/省', getDetailText(shipment.receiverState, '-'), { muted: !shipment.receiverState })}
+            {renderShipmentMatrixField('收货人电话', getDetailText(shipment.receiverPhone, '-'), { muted: !shipment.receiverPhone })}
+            {renderShipmentMatrixField('邮编', getDetailText(shipment.receiverPostalCode, '-'), { muted: !shipment.receiverPostalCode })}
+          </div>
+        </section>
+
+        <section className="shipment-detail-matrix-section shipment-detail-matrix-section-fulfillment" aria-labelledby="shipment-detail-fulfillment-title">
+          <div className="shipment-detail-matrix-section-title" id="shipment-detail-fulfillment-title">履约与轨迹</div>
+          <div className="shipment-detail-matrix-grid shipment-detail-matrix-grid-5">
+            {renderShipmentMatrixField('出货单号', shipment.outboundOrderNo || shipment.systemOrderNo, { copyText: shipment.outboundOrderNo || shipment.systemOrderNo })}
+            {renderShipmentMatrixField('状态', <StatusTag status={shipment.status} />)}
+            {renderShipmentMatrixField('时效', calculateTransitTimeLabel(shipment, demoOperationalNow))}
+            {renderShipmentMatrixField('ETD', shipment.etdAt ? formatBeijingDateTime(shipment.etdAt) : '未填写', { muted: !shipment.etdAt })}
+            {renderShipmentMatrixField('ETA', shipment.etaAt ? formatBeijingDateTime(shipment.etaAt) : '未填写', { muted: !shipment.etaAt })}
+            {renderShipmentMatrixField('最新物流轨迹', latestTracking, { span: 'full', muted: latestTracking === '暂无轨迹' })}
           </div>
         </section>
       </div>
@@ -1918,12 +2115,19 @@ export function App() {
 
     const financeDetailContent = (
       <>
-        <section className="shipment-detail-section">
-          <div className="shipment-detail-section-title">费用与收款</div>
-          <div className="shipment-detail-grid">
-            {renderShipmentDetailField('收款金额', paymentAmount)}
-            {renderShipmentDetailField('收款币种', paymentCurrency)}
-            {renderShipmentDetailField('收款方式', paymentMethod, { muted: paymentMethod === '未知' })}
+        <section className="shipment-finance-payment-band" aria-label="收款信息">
+          <div className="shipment-finance-payment-band-title">收款信息</div>
+          <div className="shipment-finance-payment-item">
+            <span>收款金额</span>
+            <strong>{paymentAmount}</strong>
+          </div>
+          <div className="shipment-finance-payment-item">
+            <span>收款币种</span>
+            <strong>{paymentCurrency}</strong>
+          </div>
+          <div className="shipment-finance-payment-item">
+            <span>收款方式</span>
+            <strong className={paymentMethod === '未知' ? 'shipment-detail-muted-value' : ''}>{paymentMethod}</strong>
           </div>
         </section>
 
@@ -1933,33 +2137,52 @@ export function App() {
 
     return (
       <div className="shipment-detail-layout">
-        <section className="shipment-detail-hero">
-          <div className="shipment-detail-hero-main">
-            <span className="shipment-detail-eyebrow">出货单号</span>
-            <Text className="shipment-detail-order-no" copyable={{ text: shipment.outboundOrderNo || shipment.systemOrderNo }}>
-              {shipment.outboundOrderNo || shipment.systemOrderNo}
-            </Text>
-            <Text className="shipment-detail-customer">{shipment.customerName}</Text>
+        <section className="shipment-detail-summary" aria-label="运单摘要">
+          <div className="shipment-detail-summary-item">
+            <span>出货单号</span>
+            <Text copyable={{ text: shipment.outboundOrderNo || shipment.systemOrderNo }}>{shipment.outboundOrderNo || shipment.systemOrderNo}</Text>
           </div>
-          <div className="shipment-detail-hero-meta">
-            <StatusTag status={shipment.status} />
-            <span>客户单号：{shipment.customerOrderNo}</span>
-            <span>转单号：{transferNo}</span>
+          <div className="shipment-detail-summary-item">
+            <span>客户名称</span>
+            <strong>{shipment.customerName}</strong>
           </div>
+          <div className="shipment-detail-summary-item">
+            <span>客户单号</span>
+            <strong>{shipment.customerOrderNo}</strong>
+          </div>
+          <div className="shipment-detail-summary-item">
+            <span>转单号</span>
+            {shipment.transferNo ? <Text copyable={{ text: shipment.transferNo }}>{shipment.transferNo}</Text> : <strong className="shipment-detail-muted-value">{transferNo}</strong>}
+          </div>
+          <StatusTag status={shipment.status} />
         </section>
 
         <Tabs
+          key={shipment.id}
           className="shipment-detail-tabs"
+          onChange={(key) => {
+            if (key === 'finance') {
+              setShipmentFinancePrewarmed(true);
+            }
+            if (key === 'internal-tracking' || key === 'logistics-tracking') {
+              setShipmentReviewRequestedId(shipment.id);
+            }
+          }}
           items={[
             { key: 'basic', label: '基本信息', children: <div className="shipment-detail-tab-panel">{basicInfo}</div> },
             { key: 'package', label: '单件明细', children: <div className="shipment-detail-tab-panel">{packageDetail}</div> },
-            ...(canViewShipmentFinanceDetail ? [{ key: 'finance', label: '费用明细', children: <div className="shipment-detail-tab-panel">{financeDetailContent}</div> }] : []),
+            ...(canViewShipmentFinanceDetail ? [{
+              key: 'finance',
+              label: '费用明细',
+              forceRender: shipmentFinancePrewarmed,
+              children: <div className="shipment-detail-tab-panel shipment-detail-finance-tab-panel">{financeDetailContent}</div>
+            }] : []),
             {
               key: 'internal-tracking',
               label: '内部轨迹',
               children: reviewDetail ? (
                 reviewDetail.internalTrackingEvents.length
-                  ? <ManagedTable rowKey="id" size="small" columns={internalTrackingColumns} dataSource={reviewDetail.internalTrackingEvents} pagination={false} scroll={{ x: 920 }} sticky={false} resizableColumns={false} columnSettings={false} />
+                  ? <ManagedTable rowKey="id" size="small" columns={internalTrackingColumns} dataSource={reviewDetail.internalTrackingEvents} pagination={false} scroll={{ x: 920 }} sticky={false} resizableColumns={false} columnSettings={false} recordDetail={false} />
                   : <Text type="secondary">暂无公司内部生命周期记录</Text>
               ) : (shipmentReviewDetailLoading ? <Text type="secondary">正在加载内部轨迹…</Text> : <Text type="secondary">暂无公司内部生命周期记录</Text>)
             },
@@ -1968,7 +2191,7 @@ export function App() {
               label: '物流轨迹',
               children: reviewDetail ? (
                 reviewDetail.logisticsTrackingEvents.length
-                  ? <ManagedTable rowKey="id" size="small" columns={logisticsTrackingColumns} dataSource={reviewDetail.logisticsTrackingEvents} pagination={false} scroll={{ x: 1120 }} sticky={false} resizableColumns={false} columnSettings={false} />
+                  ? <ManagedTable rowKey="id" size="small" columns={logisticsTrackingColumns} dataSource={reviewDetail.logisticsTrackingEvents} pagination={false} scroll={{ x: 1120 }} sticky={false} resizableColumns={false} columnSettings={false} recordDetail={false} />
                   : <Text type="secondary">暂无外部物流轨迹</Text>
               ) : (shipmentReviewDetailLoading ? <Text type="secondary">正在加载物流轨迹…</Text> : <Text type="secondary">暂无外部物流轨迹</Text>)
             }
@@ -1985,8 +2208,10 @@ export function App() {
   if (session.user.role === 'CUSTOMER') {
     return (
       <CustomerPortal
+        apiClient={apiClient}
         theme={appTheme}
         user={session.user}
+        permissions={session.permissions}
         shipments={localShipments}
         problemTickets={problemTickets}
         receivables={receivables}
@@ -2060,10 +2285,10 @@ export function App() {
                               href={getStaffSectionHref(item.key, subItem.key)}
                               key={subItem.key}
                               role="button"
-                              className={`side-sub-nav-item${subItem.key === subNav.activeKey ? ' is-active' : ''}`}
-                              aria-current={subItem.key === subNav.activeKey ? 'page' : undefined}
+                              className={`side-sub-nav-item${subItem.key === activeSectionKey ? ' is-active' : ''}`}
+                              aria-current={subItem.key === activeSectionKey ? 'page' : undefined}
                               onClick={(event) => {
-                                handleSecondaryMenuClick(event, item.key, subItem.key, subNav.onChange);
+                                handleSecondaryMenuClick(event, item.key, subItem.key);
                                 setExpandedMenuKey(item.key);
                               }}
                             >
@@ -2098,7 +2323,7 @@ export function App() {
               <Button
                 type="primary"
                 onClick={() => {
-                  setActiveMenuKey('workspace');
+                  navigateToAppRoute('workspace', 'shipmentPool');
                 }}
               >
                 专线 {localShipments.length}
@@ -2114,6 +2339,7 @@ export function App() {
               allowClear
             />
             <Space>
+              <NotificationCenter apiClient={apiClient} permissions={session.permissions} onNavigate={(targetPath) => handleNotificationNavigate(targetPath)} />
               <Button icon={<UserCircle size={16} />} onClick={() => void openPersonalCenter()}>
                 个人中心
               </Button>
@@ -2306,17 +2532,12 @@ export function App() {
             </Space>
           </Modal>
           <Modal
-            title={
-              <Space direction="vertical" size={2} className="shipment-detail-title">
-                <Text strong>{detailViewingShipment ? `运单详情 · ${detailViewingShipment.systemOrderNo}` : '运单详情'}</Text>
-                <Text type="secondary">基础订单信息</Text>
-              </Space>
-            }
+            title={<Text strong className="shipment-detail-title">{detailViewingShipment ? `运单详情 · ${detailViewingShipment.systemOrderNo}` : '运单详情'}</Text>}
             open={Boolean(detailViewingShipment)}
-            width={860}
+            width={1440}
             className="shipment-detail-modal-shell"
-            footer={<Button aria-label="关闭" onClick={() => setDetailViewingShipment(null)}>关闭</Button>}
-            onCancel={() => setDetailViewingShipment(null)}
+            footer={<Button aria-label="关闭" onClick={closeShipmentDetail}>关闭</Button>}
+            onCancel={closeShipmentDetail}
           >
             {detailViewingShipment ? renderShipmentDetailContent(detailViewingShipment) : null}
           </Modal>
@@ -2347,12 +2568,18 @@ export function App() {
             {currentMenuKey === 'business' || currentMenuKey === 'orders' ? (
               <FinancePage
                 menuMode="business"
+                initialSection={resolveModuleInitialSection(
+                  'business',
+                  requestedAppRoute?.menuKey === 'business' ? requestedAppRoute.sectionKey : undefined,
+                  'business-dashboard'
+                )}
                 role={session.user.role}
                 username={session.user.username}
                 permissions={session.permissions}
                 receivables={receivables}
                 businessCostAudits={businessCostAudits}
                 payableAudits={payableAudits}
+                agents={masterData.agents}
                 statements={customerStatements}
                 accounts={customerAccounts}
                 notice={notice}
@@ -2376,6 +2603,7 @@ export function App() {
                     notice={null}
                     shipments={businessShipments}
                     columns={fulfillmentColumns}
+                    matrixSourceColumns={fulfillmentMatrixSourceColumns}
                     metricCards={fulfillmentAuditMetricCards}
                     selectedStage={selectedFulfillmentStage}
                     onSelectStage={setSelectedFulfillmentStage}
@@ -2405,6 +2633,7 @@ export function App() {
                     logViewingMode={logViewingMode}
                     shipmentLogs={allShipmentLogs}
                     onCloseShipmentLog={() => setLogViewingShipment(null)}
+                    formatPaymentSummary={formatPaymentSummary}
                     onAiAssist={handleAiAssist}
                     aiLoading={aiLoading}
                     permissions={session.permissions}
@@ -2419,10 +2648,20 @@ export function App() {
                 aiLoading={aiLoading}
                 permissions={session.permissions}
                 onNavigateToSection={(sectionKey) => navigateToAppRoute('settings', sectionKey)}
+                initialSection={resolveModuleInitialSection(
+                  'settings',
+                  requestedAppRoute?.menuKey === 'settings' ? requestedAppRoute.sectionKey : undefined,
+                  'accounts'
+                )}
               />
             ) : currentMenuKey === 'master' ? (
               <MasterDataPage
                 apiClient={apiClient}
+                initialSection={resolveModuleInitialSection(
+                  'master',
+                  requestedAppRoute?.menuKey === 'master' ? requestedAppRoute.sectionKey : undefined,
+                  'financeCatalog'
+                )}
                 masterData={masterData}
                 permissions={session.permissions}
                 currentUser={session.user}
@@ -2435,6 +2674,11 @@ export function App() {
             ) : currentMenuKey === 'pricing' ? (
               <PricingPage
                 apiClient={apiClient}
+                initialSection={resolveModuleInitialSection(
+                  'pricing',
+                  requestedAppRoute?.menuKey === 'pricing' ? requestedAppRoute.sectionKey : undefined,
+                  'lookup'
+                )}
                 role={session.user.role}
                 permissions={session.permissions}
                 notice={notice}
@@ -2443,12 +2687,18 @@ export function App() {
             ) : currentMenuKey === 'finance' ? (
               <FinancePage
                 menuMode="finance"
+                initialSection={resolveModuleInitialSection(
+                  'finance',
+                  requestedAppRoute?.menuKey === 'finance' ? requestedAppRoute.sectionKey : undefined,
+                  'finance-dashboard'
+                )}
                 role={session.user.role}
                 username={session.user.username}
                 permissions={session.permissions}
                 receivables={receivables}
                 businessCostAudits={businessCostAudits}
                 payableAudits={payableAudits}
+                agents={masterData.agents}
                 statements={customerStatements}
                 accounts={customerAccounts}
                 notice={notice}
@@ -2462,13 +2712,34 @@ export function App() {
                 renderShipmentFinancePanel={renderShipmentFinancePanel}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
                 apiClient={apiClient}
+                notificationTarget={pendingNotificationTarget?.type === 'WATER_RECEIPT' ? pendingNotificationTarget : undefined}
+                onNotificationTargetHandled={consumePendingNotificationTarget}
                 customers={masterData.customers}
                 customerContacts={masterData.contacts}
                 onCustomerContactsChange={(contacts) => setMasterData((current) => ({ ...current, contacts }))}
               />
+            ) : currentMenuKey === 'miscFees' ? (
+              <MiscFeesPage
+                apiClient={apiClient}
+                initialSection={resolveModuleInitialSection(
+                  'miscFees',
+                  requestedAppRoute?.menuKey === 'miscFees' ? requestedAppRoute.sectionKey : undefined,
+                  'pickup'
+                )}
+                role={session.user.role}
+                permissions={session.permissions}
+                agents={masterData.agents}
+              />
             ) : currentMenuKey === 'receive' ? (
               <WarehousePage
                 apiClient={apiClient}
+                initialSection={resolveModuleInitialSection(
+                  'receive',
+                  requestedAppRoute?.menuKey === 'receive' ? requestedAppRoute.sectionKey : undefined,
+                  'today'
+                )}
+                notificationTarget={pendingNotificationTarget && ['WAREHOUSE_PACKAGE', 'WAREHOUSE_TALLY'].includes(pendingNotificationTarget.type) ? pendingNotificationTarget : undefined}
+                onNotificationTargetHandled={consumePendingNotificationTarget}
                 role={session.user.role}
                 permissions={session.permissions}
                 shipments={businessShipments}
@@ -2492,11 +2763,14 @@ export function App() {
                 agents={masterData.agents}
                 apiClient={apiClient}
                 permissions={session.permissions}
+                role={session.user.role}
                 onShipmentUpdated={upsertLocalShipment}
                 onProblemTicketCreated={(ticket) => setProblemTickets((current) => [ticket, ...current])}
                 onProblemTicketUpdated={(ticket) => setProblemTickets((current) => current.map((item) => item.id === ticket.id ? ticket : item))}
                 onNotice={setNotice}
-                initialSection={customerServiceInitialSection}
+                initialSection={requestedAppRoute?.menuKey === 'customerService'
+                  ? resolveCustomerServiceInitialSection(requestedAppRoute.sectionKey)
+                  : customerServiceInitialSection}
               />
             ) : currentMenuKey === 'logisticsTracking' || currentMenuKey === 'tracking' ? (
               <TrackingPage
@@ -2513,16 +2787,17 @@ export function App() {
                 onConfirmBulkTrackingImport={handleConfirmBulkTrackingImport}
                 onRunTask={handleRunCarrierTask}
                 onRetryTask={handleRetryCarrierTask}
-                onViewShipment={setDetailViewingShipment}
+                onViewShipment={openShipmentDetail}
               />
             ) : currentMenuKey === 'market' || currentMenuKey === 'routing' ? (
               <RoutingPage
-                config={{ ...modulePageConfigs.routing!, title: '市场管理', description: '市场看板、待排货和本周排货数据。' }}
+                config={{ ...modulePageConfigs.routing!, title: '市场管理', description: '市场看板、待排货和周期排货数据。' }}
                 notice={notice}
                 shipments={businessShipments}
                 assignmentShipment={routingAssignmentShipment}
                 assignmentForm={routingAssignmentForm}
                 masterData={masterData}
+                feeNameCatalogItems={feeNameCatalogItems}
                 businessCostAudits={businessCostAudits}
                 payableAudits={payableAudits}
                 assignmentFinanceDetail={routingAssignmentShipment ? shipmentFinanceDetails[routingAssignmentShipment.id] : undefined}
@@ -2578,14 +2853,14 @@ export function App() {
                 apiClient={apiClient}
                 permissions={session.permissions}
                 role={session.user.role}
-                onViewShipment={setDetailViewingShipment}
+                onViewShipment={openShipmentDetail}
                 onProcessShipment={(shipment) => openEditShipmentOperationalModal(shipment, 'operationsPool')}
               />
             )}
             </AppPageBoundary>
             <Modal
               title="人工修改轨迹与状态"
-              open={Boolean(editingShipment) && currentMenuKey !== 'orders'}
+              open={Boolean(editingShipment) && !orderManagementOwnsShipmentOverlays}
               destroyOnHidden
               okText="确认修改"
               cancelText="取消"
@@ -2716,7 +2991,8 @@ export function App() {
             <Modal
               title={<span id="shipment-operation-log-title-global">{logViewingMode === 'routing' ? '排货日志' : '操作日志'}</span>}
               aria-labelledby="shipment-operation-log-title-global"
-              open={Boolean(logViewingShipment) && currentMenuKey !== 'orders'}
+              className="shipment-operation-log-modal"
+              open={Boolean(logViewingShipment) && !orderManagementOwnsShipmentOverlays}
               destroyOnHidden
               width={760}
               footer={<Button onClick={() => setLogViewingShipment(null)}>关闭</Button>}
@@ -2735,21 +3011,33 @@ export function App() {
                 }
               />
               <ManagedTable
+                className="shipment-operation-log-table"
                 rowKey="id"
                 size="small"
-                pagination={tenRowTablePagination}
+                pagination={paginationWhenNeeded(shipmentLogs.length)}
                 dataSource={shipmentLogs}
                 sticky={false}
                 minimumScrollX={0}
                 resizableColumns={false}
                 columnSettings={false}
+                recordDetail={false}
+                tableLayout="fixed"
                 columns={[
-                  { title: '操作时间', dataIndex: 'operatedAt', width: 210, render: (value: string) => formatBeijingDateTime(value) },
-                  { title: '操作人员', dataIndex: 'operator', width: 130 },
+                  { title: '操作时间', dataIndex: 'operatedAt', width: 180, render: (value: string) => formatBeijingDateTime(value) },
+                  { title: '操作人员', dataIndex: 'operator', width: 96 },
                   { title: '操作动作', dataIndex: 'action' }
                 ]}
               />
             </Modal>
+            <ProblemTicketCreateModal
+              shipment={fulfillmentProblemShipment}
+              apiClient={apiClient}
+              role={session.user.role}
+              defaultCustomerVisible
+              showCustomerVisible={false}
+              onCancel={() => setFulfillmentProblemShipment(null)}
+              onSubmit={submitFulfillmentProblem}
+            />
           </Content>
           </ModuleSubNavContext.Provider>
         </Layout>

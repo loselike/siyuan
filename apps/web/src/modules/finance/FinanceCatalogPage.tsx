@@ -240,6 +240,7 @@ export function FinanceCatalogPage({
               <Button onClick={() => void onRefresh()}>刷新</Button>
             </div>
             <ManagedTable
+              recordDetail={{ title: '财务资料详情' }}
               rowKey="id"
               size="small"
               loading={loading}

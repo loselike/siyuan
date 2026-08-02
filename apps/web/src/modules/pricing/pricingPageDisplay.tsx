@@ -38,7 +38,7 @@ export function renderMarkupSource(rule: AgentMarkupSummary) {
     <Space direction="vertical" size={2}>
       {sources.slice(0, 2).map((source) => (
         <Text key={`${source.priceBookId}:${source.fileName}`} className="pricing-source-line">
-          {source.fileName}{rule.rulePurpose === 'DUBAI_SEA_IMAGE' ? '' : ` · ${source.lineCount} 条`}
+          {source.fileName}{rule.rulePurpose === 'DUBAI_SEA_IMAGE' ? '' : ` · ${source.quoteRowCount ?? source.lineCount} 条报价`}
         </Text>
       ))}
       {sources.length > 2 ? <Text type="secondary">另 {sources.length - 2} 张价格表</Text> : null}

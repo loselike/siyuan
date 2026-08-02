@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Key, type MouseEvent as ReactMouseEvent, type ReactNode, type ThHTMLAttributes } from 'react';
+import { cloneElement, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type HTMLAttributes, type Key, type MouseEvent as ReactMouseEvent, type ReactNode, type ThHTMLAttributes } from 'react';
 import dayjs, { type Dayjs } from 'dayjs';
-import { Button, Card, Checkbox, DatePicker, Empty, Flex, Input, message as antdMessage, Modal, Space, Statistic, Table, Tag, Tooltip, Typography } from 'antd';
+import 'dayjs/locale/zh-cn';
+import { Alert, Button, Card, Checkbox, DatePicker, Empty, Flex, Input, message as antdMessage, Modal, Segmented, Skeleton, Space, Statistic, Table, Tag, Tooltip, Typography } from 'antd';
 import type { ButtonProps } from 'antd';
 import type { DatePickerProps, RangePickerProps } from 'antd/es/date-picker';
 import zhCNDatePickerLocale from 'antd/es/date-picker/locale/zh_CN';
@@ -12,6 +13,8 @@ import { shipmentStatusLabels, type ShipmentStatus } from '@siyuan/shared';
 const { Text, Title } = Typography;
 const { RangePicker } = DatePicker;
 export const APP_DATE_FORMAT = 'YYYY-MM-DD';
+export const APP_DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm';
+export const APP_DATE_TIME_VALUE_FORMAT = 'YYYY-MM-DDTHH:mm';
 
 export type NoticeBarType = 'success' | 'info' | 'warning' | 'error';
 
@@ -32,14 +35,44 @@ export function createNoticeMessage(message: string | null) {
   return `${message}${noticeEventSeparator}${Date.now()}-${noticeEventSequence}`;
 }
 
+export const STANDARD_LIST_PAGE_SIZE_OPTIONS = [10, 30, 50] as const;
+
 export const tenRowTablePagination: TablePaginationConfig = {
-  pageSize: 10,
-  showSizeChanger: false,
+  defaultPageSize: 10,
+  showSizeChanger: true,
+  pageSizeOptions: [...STANDARD_LIST_PAGE_SIZE_OPTIONS],
   showTotal: (total) => `共 ${total} 条`
 };
 
-export function getManagedTableScrollX(columns: ColumnsType<unknown>, minimum = 960) {
+export function resolveListPaginationChange(
+  previous: { current: number; pageSize: number },
+  current: number,
+  pageSize: number
+) {
+  return {
+    current: previous.pageSize === pageSize ? current : 1,
+    pageSize
+  };
+}
+
+export function paginationWhenNeeded(
+  total: number,
+  pagination: TablePaginationConfig = tenRowTablePagination
+): TablePaginationConfig | false {
+  const pageSize = Number(
+    pagination.pageSize
+      ?? pagination.defaultPageSize
+      ?? tenRowTablePagination.defaultPageSize
+      ?? 10
+  );
+  return total > pageSize ? pagination : false;
+}
+
+export function getManagedTableScrollX(columns: ColumnsType<unknown>, minimum = 960): number {
   const width = columns.reduce((sum, column) => {
+    if ('children' in column && Array.isArray(column.children) && column.children.length) {
+      return sum + getManagedTableScrollX(column.children as ColumnsType<unknown>, 0) - 24;
+    }
     const rawWidth = column.width;
     if (typeof rawWidth === 'number') {
       return sum + rawWidth;
@@ -65,7 +98,13 @@ export function isAppDateRangeInvalid(start?: string | null, end?: string | null
 }
 
 function toAppDateValue(value?: string | null): Dayjs | null {
-  return isAppDateValue(value) ? dayjs(value) : null;
+  return isAppDateValue(value) ? dayjs(value).locale('zh-cn') : null;
+}
+
+function toAppDateTimeValue(value?: string | null): Dayjs | null {
+  if (!value) return null;
+  const parsed = dayjs(value).locale('zh-cn');
+  return parsed.isValid() ? parsed : null;
 }
 
 function joinClassNames(...classNames: Array<string | undefined>) {
@@ -189,6 +228,110 @@ export function AppDatePicker({
           onChange?.(nextValue || undefined);
         }
         onBlur?.(event, info);
+      }}
+    />
+  );
+}
+
+type AppDateTimePickerProps = Omit<DatePickerProps, 'value' | 'onChange' | 'format' | 'picker'> & {
+  value?: string;
+  onChange?: (value?: string) => void;
+};
+
+export function AppDateTimePicker({
+  value,
+  onChange,
+  placeholder = '年 / 月 / 日  时:分',
+  className,
+  allowClear = true,
+  locale,
+  renderExtraFooter,
+  showTime = { format: 'HH:mm' },
+  showToday = true,
+  needConfirm = true,
+  open,
+  onOpenChange,
+  onOk,
+  ...props
+}: AppDateTimePickerProps) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const [draftValue, setDraftValue] = useState<string | undefined>(value);
+  const mergedOpen = open ?? internalOpen;
+
+  useEffect(() => {
+    if (!mergedOpen) {
+      setDraftValue(value);
+    }
+  }, [mergedOpen, value]);
+
+  const closePicker = () => {
+    if (open === undefined) {
+      setInternalOpen(false);
+    }
+    onOpenChange?.(false);
+  };
+  const commitValue = (nextValue?: string) => {
+    onChange?.(nextValue);
+    closePicker();
+  };
+
+  return (
+    <DatePicker
+      {...props}
+      allowClear={allowClear}
+      className={joinClassNames('app-date-picker', 'app-date-time-picker', className)}
+      format={APP_DATE_TIME_FORMAT}
+      inputReadOnly={false}
+      locale={withConfirmLocale(locale)}
+      needConfirm={needConfirm}
+      placeholder={placeholder}
+      renderExtraFooter={(mode) => (
+        <div className="app-date-picker-confirm-footer">
+          <Button
+            type="link"
+            size="small"
+            onMouseDown={preventFooterMouseDown}
+            onClick={() => {
+              setDraftValue(undefined);
+              commitValue(undefined);
+            }}
+          >
+            清除
+          </Button>
+          {renderExtraFooter?.(mode)}
+        </div>
+      )}
+      showTime={showTime}
+      showToday={showToday}
+      suffixIcon={<CalendarDays size={16} />}
+      key={value ?? '__empty_date_time__'}
+      open={mergedOpen}
+      value={toAppDateTimeValue(needConfirm && mergedOpen ? draftValue : value)}
+      onOpenChange={(nextOpen) => {
+        if (open === undefined) {
+          setInternalOpen(nextOpen);
+        }
+        if (nextOpen) {
+          setDraftValue(value);
+        }
+        onOpenChange?.(nextOpen);
+      }}
+      onChange={(_, dateString) => {
+        const nextValue = Array.isArray(dateString)
+          ? dateString[0]
+          : dateString
+            ? toAppDateTimeValue(dateString)?.format(APP_DATE_TIME_VALUE_FORMAT)
+            : undefined;
+        if (needConfirm) {
+          setDraftValue(nextValue);
+        } else {
+          onChange?.(nextValue);
+        }
+      }}
+      onOk={(date) => {
+        const nextValue = date?.format(APP_DATE_TIME_VALUE_FORMAT) ?? draftValue;
+        commitValue(nextValue);
+        onOk?.(date);
       }}
     />
   );
@@ -462,7 +605,7 @@ export function ConfirmActionButton({
   );
 }
 
-type ManagedTableColumnSettings = {
+export type ManagedTableColumnSettings = {
   storageKey: string;
   title?: string;
   labels?: Record<string, string>;
@@ -472,24 +615,184 @@ type ManagedTableColumnSettings = {
   lockedKeys?: string[];
 };
 
+export type RecordDetailField = {
+  key: string;
+  label: string;
+  value: ReactNode;
+  span?: 1 | 2 | 3;
+  format?: (value: ReactNode) => ReactNode;
+  copyable?: boolean;
+};
+
+function renderRecordDetailValue(field: Pick<RecordDetailField, 'value' | 'format'>) {
+  return field.format ? field.format(field.value) : (field.value ?? '-');
+}
+
+export function RecordDetailModal({
+  open,
+  title,
+  fields = [],
+  footer,
+  onClose
+}: {
+  open: boolean;
+  title: ReactNode;
+  fields?: RecordDetailField[];
+  footer?: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      className="record-detail-modal"
+      open={open}
+      width={1120}
+      destroyOnHidden
+      onCancel={onClose}
+      footer={footer === undefined ? <Button aria-label="关闭" onClick={onClose}>关闭</Button> : footer}
+      title={title}
+    >
+      <div className="record-detail-content">
+        <div className="record-detail-flat-fields">
+          {fields.map((field) => (
+            <div className={`record-detail-flat-field record-detail-field-span-${field.span ?? 1}`} key={field.key}>
+              <span className="record-detail-label">{field.label}</span>
+              <div className="record-detail-value">{renderRecordDetailValue(field)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+export type ManagedTableColumnRecordDetail<RecordType extends object> = false | {
+  label?: string;
+  value?: (record: RecordType, index?: number) => ReactNode;
+  span?: 1 | 2 | 3;
+};
+
+export type ManagedTableRecordDetailOptions<RecordType extends object> = {
+  title?: ReactNode | ((record: RecordType) => ReactNode);
+  canOpen?: (record: RecordType) => boolean;
+  ariaLabel?: (record: RecordType) => string;
+  excludeColumnKeys?: string[];
+  columns?: ManagedTableColumns<RecordType>;
+  footer?: (record: RecordType, close: () => void, index?: number) => ReactNode;
+};
+
 /**
  * A business-table column has one identity for display, column settings and sorting.
  * `sortValue` is used for calculated/display-only columns that have no direct dataIndex.
  */
-export type ManagedTableColumn<RecordType> = (ColumnType<RecordType> | ColumnGroupType<RecordType>) & {
+export type ManagedTableColumn<RecordType extends object> = (ColumnType<RecordType> | ColumnGroupType<RecordType>) & {
   sortValue?: (record: RecordType) => unknown;
   sortable?: boolean;
+  resizable?: boolean;
   settingsLabel?: string;
+  recordDetail?: ManagedTableColumnRecordDetail<RecordType>;
 };
 
-export type ManagedTableColumns<RecordType> = ManagedTableColumn<RecordType>[];
+export type ManagedTableColumns<RecordType extends object> = ManagedTableColumn<RecordType>[];
 
-type ManagedTableProps<RecordType extends object> = Omit<TableProps<RecordType>, 'columns'> & {
+export type ManagedTableDensity = 'auto' | 'standard' | 'compact' | 'dense';
+
+export type ManagedTableProps<RecordType extends object> = Omit<TableProps<RecordType>, 'columns'> & {
   columns: ManagedTableColumns<RecordType>;
   minimumScrollX?: number;
   columnSettings?: ManagedTableColumnSettings | false;
-  columnSettingsPlacement?: 'column' | 'toolbar';
+  columnSettingsPlacement?: 'toolbar';
+  density?: ManagedTableDensity;
+  toolbarLeading?: ReactNode;
+  toolbarActions?: ReactNode;
+  showSelectionSummary?: boolean;
   resizableColumns?: boolean;
+  recordDetail?: false | true | ManagedTableRecordDetailOptions<RecordType>;
+  /** Opens the existing read-only detail without requiring a table-row gesture. */
+  recordDetailTarget?: { key: string; record: RecordType } | null;
+};
+
+export type ManagedTableViewMode = 'matrix' | 'ledger';
+
+export type ManagedTableViewDefinition<RecordType extends object> = {
+  label?: ReactNode;
+  columns: ManagedTableColumns<RecordType>;
+  tableProps?: Partial<Omit<ManagedTableProps<RecordType>, 'columns' | 'dataSource' | 'pagination' | 'rowSelection' | 'toolbarLeading' | 'toolbarActions'>>;
+  shellClassName?: string;
+};
+
+export type ManagedMatrixField = {
+  key: string;
+  label: ReactNode;
+  value: ReactNode;
+  title?: string;
+  wrap?: boolean;
+  emphasis?: boolean;
+};
+
+export type ManagedMatrixCellProps = {
+  fields: Array<ManagedMatrixField | null | false | undefined>;
+  labelWidth?: number | string;
+  gap?: number | string;
+  columns?: number;
+  className?: string;
+};
+
+/**
+ * Shared field/value layout for business matrix tables. Business pages still
+ * decide the groups and fields explicitly; this component only standardizes
+ * label tracks, wrapping and vertical rhythm.
+ */
+export function ManagedMatrixCell({ fields, labelWidth = 64, gap = 6, columns = 1, className }: ManagedMatrixCellProps) {
+  const visibleFields = fields.filter(Boolean) as ManagedMatrixField[];
+  const style = {
+    '--managed-matrix-label-width': typeof labelWidth === 'number' ? `${labelWidth}px` : labelWidth,
+    '--managed-matrix-row-gap': typeof gap === 'number' ? `${gap}px` : gap,
+    '--managed-matrix-column-count': Math.max(1, Math.floor(columns))
+  } as CSSProperties;
+
+  return (
+    <div className={joinClassNames('managed-matrix-cell', columns > 1 ? 'managed-matrix-cell-grid' : undefined, className)} style={style}>
+      {visibleFields.map((field) => (
+        <div
+          key={field.key}
+          className={joinClassNames('managed-matrix-field', field.wrap ? 'managed-matrix-field-wrap' : undefined)}
+        >
+          <span className="managed-matrix-label">{field.label}</span>
+          <span
+            className={joinClassNames('managed-matrix-value', field.emphasis ? 'managed-matrix-value-emphasis' : undefined)}
+            title={field.title}
+          >
+            {field.value ?? '-'}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function ManagedMatrixDateTime({ value }: { value?: string | null }) {
+  const normalized = value?.trim();
+  if (!normalized) return <span>-</span>;
+  const [date, ...timeParts] = normalized.split(/\s+/);
+  const time = timeParts.join(' ');
+  return (
+    <span className="managed-matrix-datetime" title={normalized}>
+      <strong>{date}</strong>
+      {time ? <span>{time}</span> : null}
+    </span>
+  );
+}
+
+export type ManagedDualViewTableProps<RecordType extends object> = Omit<
+  ManagedTableProps<RecordType>,
+  'columns' | 'minimumScrollX' | 'columnSettings' | 'className' | 'tableLayout' | 'resizableColumns' | 'recordDetail'
+> & {
+  views: Record<ManagedTableViewMode, ManagedTableViewDefinition<RecordType>>;
+  viewStorageKey: string;
+  defaultView?: ManagedTableViewMode;
+  viewAriaLabel?: string;
+  shellClassName?: string;
+  onViewChange?: (view: ManagedTableViewMode) => void;
 };
 
 /**
@@ -511,6 +814,7 @@ function getManagedTablePaginationSignature(pagination: TableProps<object>['pagi
     showLessItems: pagination.showLessItems,
     showQuickJumper: typeof pagination.showQuickJumper === 'object' ? Boolean(pagination.showQuickJumper) : pagination.showQuickJumper,
     showSizeChanger: typeof pagination.showSizeChanger === 'object' ? Boolean(pagination.showSizeChanger) : pagination.showSizeChanger,
+    pageSizeOptions: pagination.pageSizeOptions?.join(','),
     responsive: pagination.responsive,
     simple: typeof pagination.simple === 'object' ? Boolean(pagination.simple) : pagination.simple,
     size: pagination.size,
@@ -534,22 +838,39 @@ export function ManagedTable<RecordType extends object>({
   columns,
   minimumScrollX = 960,
   columnSettings,
-  columnSettingsPlacement = 'column',
+  columnSettingsPlacement = 'toolbar',
+  density = 'auto',
+  toolbarLeading,
+  toolbarActions,
+  showSelectionSummary = true,
   resizableColumns = true,
+  recordDetail,
+  recordDetailTarget,
   pagination,
   rowSelection,
   scroll,
   className,
   sticky,
   onChange,
+  onRow,
   ...props
 }: ManagedTableProps<RecordType>) {
+  const resolvedColumns = useMemo(
+    () => resolveManagedTableColumnKeys(columns),
+    [columns]
+  );
+  const recordDetailOptions = recordDetail && recordDetail !== true ? recordDetail : undefined;
+  const internalRecordDetailEnabled = recordDetail !== undefined && recordDetail !== false;
+  const resolvedRecordDetailColumns = useMemo(
+    () => resolveManagedTableColumnKeys(recordDetailOptions?.columns ?? columns),
+    [columns, recordDetailOptions?.columns]
+  );
   const columnKeys = useMemo(
     () =>
       Array.from(
-        new Set(collectManagedTableColumnKeys(columns as ManagedColumnLike[]))
+        new Set(collectManagedTableColumnKeys(resolvedColumns as ManagedColumnLike[]))
       ),
-    [columns]
+    [resolvedColumns]
   );
   const effectiveColumnSettings = useMemo<ManagedTableColumnSettings | undefined>(() => {
     if (columnSettings === false || !columnKeys.length) {
@@ -559,17 +880,34 @@ export function ManagedTable<RecordType extends object>({
       return columnSettings;
     }
     return {
-      storageKey: getManagedTableColumnStorageKey(columns as ManagedColumnLike[], className),
+      storageKey: getManagedTableColumnStorageKey(resolvedColumns as ManagedColumnLike[], className),
       title: '列设置',
       lockedKeys: inferManagedTableLockedColumnKeys(columnKeys)
     };
-  }, [className, columnKeys, columnSettings, columns]);
-  const widthStorageKey = useMemo(() => getManagedTableWidthStorageKey(columns as ManagedColumnLike[], effectiveColumnSettings, className), [className, effectiveColumnSettings, columns]);
+  }, [className, columnKeys, columnSettings, resolvedColumns]);
+  const widthStorageKey = useMemo(() => getManagedTableWidthStorageKey(resolvedColumns as ManagedColumnLike[], effectiveColumnSettings, className), [className, effectiveColumnSettings, resolvedColumns]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => readManagedTableColumnSettings(effectiveColumnSettings, columnKeys).hiddenKeys);
   const [columnOrder, setColumnOrder] = useState<string[]>(() => readManagedTableColumnSettings(effectiveColumnSettings, columnKeys).columnOrder);
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>(() => readManagedTableColumnWidths(widthStorageKey));
+  const [activeRecordDetail, setActiveRecordDetail] = useState<{ record: RecordType; index?: number } | null>(null);
+  const lastRecordDetailTargetKeyRef = useRef<string | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    if (!recordDetailTarget) {
+      lastRecordDetailTargetKeyRef.current = null;
+      return;
+    }
+    if (!internalRecordDetailEnabled || lastRecordDetailTargetKeyRef.current === recordDetailTarget.key) {
+      return;
+    }
+    if (recordDetailOptions?.canOpen && !recordDetailOptions.canOpen(recordDetailTarget.record)) {
+      return;
+    }
+    lastRecordDetailTargetKeyRef.current = recordDetailTarget.key;
+    setActiveRecordDetail({ record: recordDetailTarget.record });
+  }, [internalRecordDetailEnabled, recordDetailOptions, recordDetailTarget]);
 
   useEffect(() => {
     if (effectiveColumnSettings) {
@@ -577,7 +915,8 @@ export function ManagedTable<RecordType extends object>({
       const lockedKeys = getManagedTableLockedKeys(effectiveColumnSettings, columnKeys);
       writeManagedTableColumnSettings(effectiveColumnSettings.storageKey, {
         hiddenKeys: hiddenKeys.filter((key) => columnKeys.includes(key) && !lockedKeys.includes(key)),
-        columnOrder: normalizedOrder
+        columnOrder: normalizedOrder,
+        schemaKeys: columnKeys
       });
     }
   }, [columnKeys, columnOrder, effectiveColumnSettings, hiddenKeys]);
@@ -639,10 +978,10 @@ export function ManagedTable<RecordType extends object>({
   }, []);
 
   const visibleColumns = useMemo(() => {
-    const sourceColumns = effectiveColumnSettings ? orderManagedTableColumns(columns, columnOrder) : columns;
+    const sourceColumns = effectiveColumnSettings ? orderManagedTableColumns(resolvedColumns, columnOrder) : resolvedColumns;
     const nextColumns = filterManagedTableVisibleColumns(sourceColumns, hiddenKeys);
-    return nextColumns.length ? nextColumns : columns.slice(0, 1);
-  }, [columnOrder, effectiveColumnSettings, columns, hiddenKeys]);
+    return nextColumns.length ? nextColumns : resolvedColumns.slice(0, 1);
+  }, [columnOrder, effectiveColumnSettings, hiddenKeys, resolvedColumns]);
   const dataSource = useMemo(() => (Array.isArray(props.dataSource) ? props.dataSource : []), [props.dataSource]);
   const managedColumns = useMemo(() => {
     const sortedColumns = applyManagedTableDefaultSorters(visibleColumns, dataSource);
@@ -660,22 +999,33 @@ export function ManagedTable<RecordType extends object>({
       />
     </Tooltip>
   ) : null, [effectiveColumnSettings]);
-  const managedColumnsWithSettings = useMemo(() => {
-    if (!tableSettingsButton || columnSettingsPlacement !== 'column') {
-      return managedColumns;
-    }
-    const settingsColumn: ColumnsType<RecordType>[number] = {
-      key: '__managed_table_column_settings',
-      title: <span className="managed-table-settings-header">{tableSettingsButton}</span>,
-      width: 48,
-      fixed: 'right',
-      align: 'center',
-      className: 'managed-table-settings-column',
-      onHeaderCell: () => ({ className: 'managed-table-settings-column' }),
-      render: () => null
-    };
-    return [...managedColumns, settingsColumn];
-  }, [columnSettingsPlacement, managedColumns, tableSettingsButton]);
+  const detailDisabledColumnKeys = useMemo(
+    () => new Set([
+      ...(recordDetailOptions?.excludeColumnKeys ?? []),
+      ...columnKeys.filter((key) => isManagedTableSelectionColumnKey(key) || isManagedTableActionColumnKey(key)),
+      '__managed_table_column_settings'
+    ]),
+    [columnKeys, recordDetailOptions?.excludeColumnKeys]
+  );
+  const managedColumnsForTable = useMemo(() => {
+    const detailAwareColumns = internalRecordDetailEnabled
+      ? applyManagedTableRecordDetailCells(managedColumns, detailDisabledColumnKeys)
+      : managedColumns;
+    return applyManagedTableActionColumnClass(detailAwareColumns);
+  }, [detailDisabledColumnKeys, internalRecordDetailEnabled, managedColumns]);
+  const visibleBusinessColumnCount = useMemo(
+    () => collectManagedTableColumnKeys(managedColumnsForTable as ManagedColumnLike[])
+      .filter((key) => !isManagedTableSelectionColumnKey(key) && !isManagedTableActionColumnKey(key))
+      .length,
+    [managedColumnsForTable]
+  );
+  const resolvedDensity = density === 'auto'
+    ? visibleBusinessColumnCount >= 15
+      ? 'dense'
+      : visibleBusinessColumnCount >= 10
+        ? 'compact'
+        : 'standard'
+    : density;
   const paginationRef = useRef(pagination);
   paginationRef.current = pagination;
   const handlePaginationChange = useCallback((page: number, pageSize: number) => {
@@ -724,7 +1074,7 @@ export function ManagedTable<RecordType extends object>({
     current: normalizedPagination.current ?? activePagination.current,
     pageSize: normalizedPagination.pageSize ?? activePagination.pageSize
   }), [activePagination.current, activePagination.pageSize, normalizedPagination]);
-  const tableScrollX = scroll?.x ?? (minimumScrollX > 0 ? getManagedTableScrollX(managedColumnsWithSettings as ColumnsType<unknown>, minimumScrollX) : undefined);
+  const tableScrollX = scroll?.x ?? (minimumScrollX > 0 ? getManagedTableScrollX(managedColumnsForTable as ColumnsType<unknown>, minimumScrollX) : undefined);
   const scrollSignature = getManagedTableScrollSignature(scroll as TableProps<object>['scroll']);
   const managedScroll = useMemo(() => ({ ...scroll, x: tableScrollX }), [scrollSignature, tableScrollX]);
   const managedComponents = useMemo(
@@ -752,7 +1102,7 @@ export function ManagedTable<RecordType extends object>({
         : undefined,
     [rowSelection]
   );
-  const selectionSummary = rowSelection ? (
+  const selectionSummary = rowSelection && showSelectionSummary ? (
     <span className="managed-table-selection-summary" aria-live="polite">
       已选 {selectedRowKeys.length} 条
     </span>
@@ -778,25 +1128,95 @@ export function ManagedTable<RecordType extends object>({
       onChange?.(nextPagination, filters, sorter, extra);
     }
   }, [activePagination.current, activePagination.pageSize, onChange, rowSelection, selectedRowKeys.length]);
+  const managedOnRow = useCallback<NonNullable<TableProps<RecordType>['onRow']>>((record, index) => {
+    const originalRowProps = onRow?.(record, index) ?? {};
+    const internalDetailEnabled = Boolean(internalRecordDetailEnabled && (recordDetailOptions?.canOpen?.(record) ?? true));
+    if (!internalDetailEnabled) {
+      return originalRowProps;
+    }
+    const openRecordDetail = (event: { target: EventTarget | null; currentTarget: EventTarget | null; defaultPrevented: boolean }) => {
+      if (event.defaultPrevented || shouldIgnoreManagedTableRecordDetailEvent(event.target)) {
+        return;
+      }
+      const columnKey = getManagedTableRecordDetailColumnKey(event.target);
+      if (columnKey && detailDisabledColumnKeys.has(columnKey)) {
+        return;
+      }
+      setActiveRecordDetail({ record, index });
+    };
+    return {
+      ...originalRowProps,
+      className: joinClassNames(originalRowProps.className, 'managed-table-record-detail-row'),
+      tabIndex: originalRowProps.tabIndex ?? 0,
+      'aria-label': recordDetailOptions?.ariaLabel?.(record),
+      onDoubleClick: (event) => {
+        originalRowProps.onDoubleClick?.(event);
+        openRecordDetail(event);
+      },
+      onKeyDown: (event) => {
+        originalRowProps.onKeyDown?.(event);
+        if (event.key === 'Enter' && event.target === event.currentTarget) {
+          openRecordDetail(event);
+        }
+      }
+    };
+  }, [detailDisabledColumnKeys, internalRecordDetailEnabled, onRow, recordDetailOptions]);
+
+  const orderedRecordDetailColumns = useMemo(
+    () => effectiveColumnSettings
+      ? orderManagedTableColumns(resolvedRecordDetailColumns, columnOrder)
+      : resolvedRecordDetailColumns,
+    [columnOrder, effectiveColumnSettings, resolvedRecordDetailColumns]
+  );
+  const activeRecordDetailFields = useMemo(
+    () => activeRecordDetail
+      ? buildManagedTableRecordDetailFields(
+          orderedRecordDetailColumns,
+          activeRecordDetail.record,
+          activeRecordDetail.index,
+          detailDisabledColumnKeys
+        )
+      : [],
+    [activeRecordDetail, detailDisabledColumnKeys, orderedRecordDetailColumns]
+  );
+  const activeRecordDetailTitle = activeRecordDetail
+    ? resolveManagedTableRecordDetailTitle(recordDetailOptions?.title, effectiveColumnSettings?.title, activeRecordDetail.record)
+    : '记录详情';
+  const closeRecordDetail = useCallback(() => setActiveRecordDetail(null), []);
+  const activeRecordDetailFooter = activeRecordDetail && recordDetailOptions?.footer
+    ? recordDetailOptions.footer(activeRecordDetail.record, closeRecordDetail, activeRecordDetail.index)
+    : undefined;
 
   return (
     <div className="managed-table-shell">
-      {selectionSummary || toolbarSettingsButton ? (
+      {toolbarLeading || selectionSummary || toolbarActions || toolbarSettingsButton ? (
         <div className="managed-table-toolbar">
-          <div>{selectionSummary}</div>
-          <div>{toolbarSettingsButton}</div>
+          <div className="managed-table-toolbar-leading">
+            {toolbarLeading}
+            {selectionSummary}
+          </div>
+          <div className="managed-table-toolbar-actions">
+            {toolbarActions}
+            {toolbarSettingsButton}
+          </div>
         </div>
       ) : null}
       <Table<RecordType>
         {...props}
-        className={['managed-table', resizableColumns ? 'managed-table-resizable' : null, className].filter(Boolean).join(' ')}
-        columns={managedColumnsWithSettings}
+        className={[
+          'managed-table',
+          `managed-table-density-${resolvedDensity}`,
+          resizableColumns ? 'managed-table-resizable' : null,
+          className
+        ].filter(Boolean).join(' ')}
+        columns={managedColumnsForTable}
         components={managedComponents}
         pagination={effectivePagination}
         rowSelection={managedRowSelection}
         scroll={managedScroll}
         sticky={sticky ?? true}
         onChange={handleTableChange}
+        onRow={managedOnRow}
       />
       {effectiveColumnSettings ? (
         <Modal
@@ -847,7 +1267,7 @@ export function ManagedTable<RecordType extends object>({
                       });
                     }}
                   >
-                    {effectiveColumnSettings.labels?.[key] ?? getTableColumnLabel(columns as ManagedColumnLike[], key)}
+                    {effectiveColumnSettings.labels?.[key] ?? getTableColumnLabel(resolvedColumns as ManagedColumnLike[], key)}
                   </Checkbox>
                   <Space size={6}>
                     <Button size="small" disabled={locked || index === 0} onClick={() => setColumnOrder((current) => moveManagedTableColumnToFirst(current, columnKeys, key))}>
@@ -866,6 +1286,104 @@ export function ManagedTable<RecordType extends object>({
           </div>
         </Modal>
       ) : null}
+      <RecordDetailModal
+        open={Boolean(activeRecordDetail)}
+        title={activeRecordDetailTitle}
+        fields={activeRecordDetailFields}
+        footer={activeRecordDetailFooter}
+        onClose={closeRecordDetail}
+      />
+    </div>
+  );
+}
+
+export function ManagedDualViewTable<RecordType extends object>({
+  views,
+  viewStorageKey,
+  defaultView = 'ledger',
+  viewAriaLabel = '表格视图',
+  shellClassName,
+  onViewChange,
+  pagination,
+  toolbarActions,
+  ...props
+}: ManagedDualViewTableProps<RecordType>) {
+  const [activeView, setActiveView] = useState<ManagedTableViewMode>(
+    () => readManagedTableViewPreference(viewStorageKey, defaultView)
+  );
+  const [uncontrolledPagination, setUncontrolledPagination] = useState(() => ({
+    current: pagination === false ? 1 : pagination?.current ?? pagination?.defaultCurrent ?? 1,
+    pageSize: pagination === false
+      ? tenRowTablePagination.pageSize ?? 10
+      : pagination?.pageSize ?? pagination?.defaultPageSize ?? tenRowTablePagination.pageSize ?? 10
+  }));
+
+  useEffect(() => {
+    setActiveView(readManagedTableViewPreference(viewStorageKey, defaultView));
+  }, [defaultView, viewStorageKey]);
+
+  useEffect(() => {
+    writeManagedTableViewPreference(viewStorageKey, activeView);
+    onViewChange?.(activeView);
+  }, [activeView, onViewChange, viewStorageKey]);
+
+  useEffect(() => {
+    if (pagination === false) return;
+    setUncontrolledPagination((current) => {
+      const next = {
+        current: pagination?.current ?? current.current,
+        pageSize: pagination?.pageSize ?? current.pageSize
+      };
+      return next.current === current.current && next.pageSize === current.pageSize ? current : next;
+    });
+  }, [pagination, pagination === false ? undefined : pagination?.current, pagination === false ? undefined : pagination?.pageSize]);
+
+  const managedPagination = pagination === false ? false : {
+    ...pagination,
+    current: pagination?.current ?? uncontrolledPagination.current,
+    pageSize: pagination?.pageSize ?? uncontrolledPagination.pageSize,
+    onChange: (page: number, pageSize: number) => {
+      if (pagination?.current === undefined || pagination?.pageSize === undefined) {
+        setUncontrolledPagination({ current: page, pageSize });
+      }
+      pagination?.onChange?.(page, pageSize);
+    },
+    onShowSizeChange: (current: number, pageSize: number) => {
+      if (pagination?.current === undefined || pagination?.pageSize === undefined) {
+        setUncontrolledPagination({ current, pageSize });
+      }
+      pagination?.onShowSizeChange?.(current, pageSize);
+    }
+  };
+  const activeDefinition = views[activeView];
+  const activeTableProps = activeDefinition.tableProps ?? {};
+  const modeToolbar = (
+    <>
+      <Segmented
+        aria-label={viewAriaLabel}
+        size="small"
+        value={activeView}
+        options={[
+          { label: views.matrix.label ?? '矩阵视图', value: 'matrix' },
+          { label: views.ledger.label ?? '精密台账模式', value: 'ledger' }
+        ]}
+        onChange={(value) => setActiveView(value as ManagedTableViewMode)}
+      />
+      {toolbarActions}
+    </>
+  );
+
+  return (
+    <div className={joinClassNames('managed-dual-view-table', `managed-dual-view-table-${activeView}`, shellClassName, activeDefinition.shellClassName)}>
+      <ManagedTable<RecordType>
+        key={`${viewStorageKey}:${activeView}`}
+        {...props}
+        {...activeTableProps}
+        className={joinClassNames(`managed-table-view-${activeView}`, activeTableProps.className)}
+        columns={activeDefinition.columns}
+        pagination={managedPagination}
+        toolbarActions={modeToolbar}
+      />
     </div>
   );
 }
@@ -893,6 +1411,201 @@ function ResizableHeaderCell({ children, className, resizeColumnKey, resizeColum
   );
 }
 
+function applyManagedTableRecordDetailCells<RecordType extends object>(
+  columns: ColumnsType<RecordType>,
+  disabledColumnKeys: Set<string>
+): ColumnsType<RecordType> {
+  return columns.map((column, index) => {
+    if ('children' in column && Array.isArray(column.children)) {
+      return {
+        ...column,
+        children: applyManagedTableRecordDetailCells(column.children as ColumnsType<RecordType>, disabledColumnKeys)
+      };
+    }
+    const key = getTableColumnKey(column as ManagedColumnLike) ?? `column-${index}`;
+    const disabled = disabledColumnKeys.has(key)
+      || (typeof column.title === 'string' && /^(操作|动作|选择)$/.test(column.title.trim()));
+    return {
+      ...column,
+      onCell: (record: RecordType, rowIndex?: number) => {
+        const originalCell = typeof column.onCell === 'function' ? column.onCell(record, rowIndex) : {};
+        return {
+          ...originalCell,
+          'data-managed-column-key': key,
+          'data-record-detail-enabled': disabled ? 'false' : 'true'
+        } as HTMLAttributes<HTMLElement>;
+      }
+    };
+  });
+}
+
+const managedTableRecordDetailInteractiveSelector = [
+  'button',
+  'a',
+  'input',
+  'textarea',
+  'select',
+  '[role="button"]',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[data-record-detail-ignore]',
+  '.ant-table-selection-column',
+  '.managed-table-settings-column'
+].join(',');
+
+function getManagedTableRecordDetailTarget(target: EventTarget | null) {
+  return target instanceof Element ? target : null;
+}
+
+function shouldIgnoreManagedTableRecordDetailEvent(target: EventTarget | null) {
+  return Boolean(getManagedTableRecordDetailTarget(target)?.closest(managedTableRecordDetailInteractiveSelector));
+}
+
+function getManagedTableRecordDetailColumnKey(target: EventTarget | null) {
+  return getManagedTableRecordDetailTarget(target)?.closest<HTMLElement>('[data-managed-column-key]')?.dataset.managedColumnKey ?? null;
+}
+
+function getManagedTableRecordDetailDataIndexValue<RecordType extends object>(
+  record: RecordType,
+  dataIndex: string | number | readonly (string | number)[] | undefined
+) {
+  if (dataIndex === undefined) {
+    return undefined;
+  }
+  const path = Array.isArray(dataIndex) ? dataIndex : [dataIndex];
+  return path.reduce<unknown>((value, segment) => {
+    if (value === null || value === undefined || typeof value !== 'object') {
+      return undefined;
+    }
+    return (value as Record<string | number, unknown>)[segment];
+  }, record);
+}
+
+function inferManagedTableRecordDetailSpan(label: string, value: ReactNode): 1 | 2 | 3 {
+  if (/(备注|要求|地址|异常原因|失败原因|处理说明|补充说明)/.test(label)) {
+    return 3;
+  }
+  if (typeof value !== 'string') {
+    return 1;
+  }
+  const weightedLength = Array.from(value).reduce((total, character) => total + (/[^\u0000-\u00ff]/.test(character) ? 2 : 1), 0);
+  if (value.includes('\n') || weightedLength > 64) {
+    return 3;
+  }
+  return weightedLength > 32 ? 2 : 1;
+}
+
+function makeManagedTableRecordDetailValueReadOnly(value: ReactNode): ReactNode {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => <span key={index}>{makeManagedTableRecordDetailValueReadOnly(item)}</span>);
+  }
+  if (!isValidElement<{ children?: ReactNode; [key: string]: unknown }>(value)) {
+    return value;
+  }
+  const props = value.props;
+  const intrinsicType = typeof value.type === 'string' ? value.type : undefined;
+  const isInteractive = Boolean(
+    intrinsicType && ['button', 'a', 'input', 'textarea', 'select'].includes(intrinsicType)
+      || props.href
+      || props.role === 'button'
+      || props.onClick
+      || props.onDoubleClick
+      || props.onChange
+  );
+  if (isInteractive) {
+    return props.children ? makeManagedTableRecordDetailValueReadOnly(props.children) : String(props.value ?? '-');
+  }
+  const readOnlyProps = Object.fromEntries(
+    Object.entries(props).filter(([key]) => !/^on[A-Z]/.test(key) && !['href', 'target', 'tabIndex'].includes(key))
+  );
+  if ('copyable' in readOnlyProps) {
+    readOnlyProps.copyable = false;
+  }
+  return cloneElement(value, readOnlyProps, makeManagedTableRecordDetailValueReadOnly(props.children));
+}
+
+function buildManagedTableRecordDetailFields<RecordType extends object>(
+  columns: ManagedTableColumns<RecordType>,
+  record: RecordType,
+  rowIndex: number | undefined,
+  disabledColumnKeys: Set<string>
+): RecordDetailField[] {
+  return columns.flatMap((column) => {
+    if ('children' in column && Array.isArray(column.children) && column.children.length) {
+      return buildManagedTableRecordDetailFields(
+        column.children as ManagedTableColumns<RecordType>,
+        record,
+        rowIndex,
+        disabledColumnKeys
+      );
+    }
+    const key = getTableColumnKey(column as ManagedColumnLike);
+    if (!key
+      || disabledColumnKeys.has(key)
+      || isManagedTableSelectionColumnKey(key)
+      || isManagedTableActionColumnKey(key)
+      || column.recordDetail === false) {
+      return [];
+    }
+    const detail = column.recordDetail || undefined;
+    const label = detail?.label
+      ?? (typeof column.settingsLabel === 'string' && column.settingsLabel.trim() ? column.settingsLabel.trim() : undefined)
+      ?? (typeof column.title === 'string' && column.title.trim() ? column.title.trim() : undefined);
+    if (!label) {
+      return [];
+    }
+    const dataIndex = (column as ColumnType<RecordType>).dataIndex as string | number | readonly (string | number)[] | undefined;
+    const dataValue = getManagedTableRecordDetailDataIndexValue(record, dataIndex)
+      ?? (dataIndex === undefined && !key.startsWith(managedTableGeneratedColumnKeyPrefix)
+        ? getManagedTableRecordDetailDataIndexValue(record, key)
+        : undefined);
+    const columnRender = (column as ColumnType<RecordType>).render;
+    const renderedValue = typeof columnRender === 'function'
+      ? columnRender(dataValue, record, rowIndex ?? 0)
+      : dataValue;
+    const rawValue = detail?.value ? detail.value(record, rowIndex) : renderedValue;
+    if (rawValue && typeof rawValue === 'object' && !isValidElement(rawValue) && 'children' in rawValue) {
+      const renderedCell = rawValue as { children?: ReactNode };
+      return [{
+        key,
+        label,
+        value: makeManagedTableRecordDetailValueReadOnly(renderedCell.children ?? '-'),
+        span: detail?.span ?? 1
+      }];
+    }
+    if (rawValue !== null && typeof rawValue === 'object' && !Array.isArray(rawValue) && !('$$typeof' in rawValue)) {
+      return [];
+    }
+    const value = rawValue === null || rawValue === undefined || rawValue === ''
+      ? '-'
+      : typeof rawValue === 'boolean'
+        ? (rawValue ? '是' : '否')
+        : Array.isArray(rawValue)
+          ? rawValue.join('、') || '-'
+          : makeManagedTableRecordDetailValueReadOnly(rawValue as ReactNode);
+    return [{
+      key,
+      label,
+      value,
+      span: detail?.span ?? inferManagedTableRecordDetailSpan(label, value)
+    }];
+  });
+}
+
+function resolveManagedTableRecordDetailTitle<RecordType extends object>(
+  configuredTitle: ReactNode | ((record: RecordType) => ReactNode) | undefined,
+  columnSettingsTitle: string | undefined,
+  record: RecordType
+) {
+  if (typeof configuredTitle === 'function') {
+    return configuredTitle(record);
+  }
+  if (configuredTitle) {
+    return configuredTitle;
+  }
+  const baseTitle = columnSettingsTitle?.trim().replace(/列设置$/, '').trim();
+  return baseTitle ? `${baseTitle}详情` : '记录详情';
+}
+
 function applyManagedColumnWidths<RecordType extends object>(
   columns: ColumnsType<RecordType>,
   widths: Record<string, number>,
@@ -901,12 +1614,14 @@ function applyManagedColumnWidths<RecordType extends object>(
   return columns.map((column, index) => {
     const key = getTableColumnKey(column as ManagedColumnLike) ?? `column-${index}`;
     const existingWidth = getColumnNumericWidth(column as ManagedColumnLike);
-    const width = widths[key] ?? existingWidth;
+    const columnResizable = (column as ManagedColumnLike).resizable !== false;
+    const width = columnResizable ? widths[key] ?? existingWidth : existingWidth;
     const nextColumn = {
       ...column,
       width,
       onHeaderCell: (headerColumn: unknown) => {
         const originalHeaderCell = typeof column.onHeaderCell === 'function' ? column.onHeaderCell(headerColumn as never) : {};
+        if (!columnResizable) return originalHeaderCell;
         return {
           ...originalHeaderCell,
           resizeColumnKey: key,
@@ -1016,8 +1731,44 @@ type ManagedColumnLike = {
   title?: ReactNode;
   sortValue?: (record: object) => unknown;
   sortable?: boolean;
+  resizable?: boolean;
   settingsLabel?: string;
 };
+
+const managedTableGeneratedColumnKeyPrefix = '__managed_generated__:';
+
+function resolveManagedTableColumnKeys<RecordType extends object>(columns: ManagedTableColumns<RecordType>): ManagedTableColumns<RecordType> {
+  const usedKeys = new Set<string>();
+  const reserveKey = (candidate: string) => {
+    if (!usedKeys.has(candidate)) {
+      usedKeys.add(candidate);
+      return candidate;
+    }
+    let suffix = 2;
+    while (usedKeys.has(`${candidate}:${suffix}`)) suffix += 1;
+    const uniqueKey = `${candidate}:${suffix}`;
+    usedKeys.add(uniqueKey);
+    return uniqueKey;
+  };
+  const visit = (source: ManagedTableColumns<RecordType>, path: number[]): ManagedTableColumns<RecordType> => source.map((column, index) => {
+    const nextPath = [...path, index];
+    if ('children' in column && Array.isArray(column.children) && column.children.length) {
+      return {
+        ...column,
+        children: visit(column.children as ManagedTableColumns<RecordType>, nextPath)
+      };
+    }
+    const explicitKey = getTableColumnKey(column as ManagedColumnLike);
+    const label = typeof column.settingsLabel === 'string' && column.settingsLabel.trim()
+      ? column.settingsLabel.trim()
+      : typeof column.title === 'string' && column.title.trim()
+        ? column.title.trim()
+        : `column-${nextPath.join('-')}`;
+    const key = reserveKey(explicitKey ?? `${managedTableGeneratedColumnKeyPrefix}${label}`);
+    return key === explicitKey ? column : { ...column, key };
+  });
+  return visit(columns, []);
+}
 
 function getTableColumnKey(column: ManagedColumnLike): string | null {
   const explicitKey = normalizeTableColumnKey(column.key);
@@ -1069,7 +1820,7 @@ function findManagedTableColumn(columns: ManagedColumnLike[], key: string): Mana
 
 function normalizeManagedTableColumnOrder(order: string[] | undefined, columnKeys: string[]) {
   const selectionKeys = columnKeys.filter(isManagedTableSelectionColumnKey);
-  const actionKeys = columnKeys.filter(isManagedTableActionColumnKey);
+  const actionKeys = columnKeys.filter(isManagedTableTrailingActionColumnKey);
   const normalized = (order ?? []).filter((key, index, array) => columnKeys.includes(key) && !selectionKeys.includes(key) && !actionKeys.includes(key) && array.indexOf(key) === index);
   return [
     ...selectionKeys,
@@ -1117,6 +1868,31 @@ function filterManagedTableVisibleColumns<RecordType extends object>(columns: Co
     const key = getTableColumnKey(column as ManagedColumnLike);
     return key && hiddenKeys.includes(key) ? [] : [column];
   }) as ColumnsType<RecordType>;
+}
+
+function applyManagedTableActionColumnClass<RecordType extends object>(columns: ColumnsType<RecordType>): ColumnsType<RecordType> {
+  return columns.map((column) => {
+    if ('children' in column && Array.isArray(column.children)) {
+      return {
+        ...column,
+        children: applyManagedTableActionColumnClass(column.children as ColumnsType<RecordType>)
+      };
+    }
+    const key = getTableColumnKey(column as ManagedColumnLike);
+    if (!key || !isManagedTableActionColumnKey(key)) {
+      return column;
+    }
+    const isWideActionColumn = typeof column.width === 'number' && column.width >= 300;
+    return {
+      ...column,
+      width: isWideActionColumn ? 240 : column.width,
+      className: joinClassNames(
+        column.className,
+        'managed-table-action-column',
+        isWideActionColumn ? 'managed-table-action-column-wrapped' : undefined
+      )
+    };
+  });
 }
 
 function moveManagedTableColumn(currentOrder: string[], columnKeys: string[], key: string, offset: -1 | 1) {
@@ -1173,6 +1949,13 @@ function readManagedTableColumnSettings(columnSettings: ManagedTableColumnSettin
         : Array.isArray(selected.order)
           ? selected.order
           : undefined;
+      const storedSchemaKeys = Array.isArray(selected.schemaKeys)
+        ? selected.schemaKeys.filter((key): key is string => typeof key === 'string')
+        : undefined;
+      const schemaChanged = storedSchemaKeys
+        ? !areManagedTableStringArraysEqual(storedSchemaKeys, columnKeys)
+        : Boolean(storedColumnOrder && columnKeys.some((key) => !lockedKeys.includes(key) && !storedColumnOrder.includes(key)));
+      if (schemaChanged) return fallback;
       const hiddenKeys = storedHiddenKeys
         ? storedHiddenKeys.filter((key): key is string => typeof key === 'string' && columnKeys.includes(key) && !lockedKeys.includes(key))
         : fallback.hiddenKeys.filter((key) => !lockedKeys.includes(key));
@@ -1190,16 +1973,69 @@ function readManagedTableColumnSettings(columnSettings: ManagedTableColumnSettin
 type ManagedTableStoredSettings = {
   hiddenKeys?: unknown;
   columnOrder?: unknown;
+  schemaKeys?: unknown;
   /** Compatible with finance's pre-ManagedTable column settings shape. */
   hidden?: unknown;
   order?: unknown;
   accounts?: Record<string, {
     hiddenKeys?: unknown;
     columnOrder?: unknown;
+    schemaKeys?: unknown;
     hidden?: unknown;
     order?: unknown;
   }>;
 };
+
+type ManagedTableViewPreference = {
+  view?: unknown;
+  accounts?: Record<string, { view?: unknown }>;
+};
+
+function isManagedTableViewMode(value: unknown): value is ManagedTableViewMode {
+  return value === 'matrix' || value === 'ledger';
+}
+
+function readManagedTableViewPreference(storageKey: string, fallback: ManagedTableViewMode) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null') as unknown;
+    if (isManagedTableViewMode(saved)) {
+      return saved;
+    }
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+      return fallback;
+    }
+    const stored = saved as ManagedTableViewPreference;
+    const account = getManagedTableSettingsAccountKey();
+    const accountView = account ? stored.accounts?.[account]?.view : undefined;
+    if (isManagedTableViewMode(accountView)) {
+      return accountView;
+    }
+    if (account && stored.accounts) {
+      return fallback;
+    }
+    return isManagedTableViewMode(stored.view) ? stored.view : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeManagedTableViewPreference(storageKey: string, view: ManagedTableViewMode) {
+  let current: ManagedTableViewPreference = {};
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null') as unknown;
+    if (saved && typeof saved === 'object' && !Array.isArray(saved)) {
+      current = saved as ManagedTableViewPreference;
+    }
+  } catch {
+    current = {};
+  }
+  const account = getManagedTableSettingsAccountKey();
+  localStorage.setItem(storageKey, JSON.stringify({
+    ...current,
+    view,
+    ...(account ? { accounts: { ...current.accounts, [account]: { view } } } : {})
+  }));
+}
 
 function getManagedTableSettingsAccountKey() {
   try {
@@ -1220,7 +2056,7 @@ function readManagedTableStorageObject(storageKey: string): ManagedTableStoredSe
   }
 }
 
-function writeManagedTableColumnSettings(storageKey: string, settings: { hiddenKeys: string[]; columnOrder: string[] }) {
+function writeManagedTableColumnSettings(storageKey: string, settings: { hiddenKeys: string[]; columnOrder: string[]; schemaKeys: string[] }) {
   const current = readManagedTableStorageObject(storageKey);
   const account = getManagedTableSettingsAccountKey();
   localStorage.setItem(storageKey, JSON.stringify({
@@ -1248,7 +2084,17 @@ function isManagedTableSelectionColumnKey(key: string) {
 }
 
 function isManagedTableActionColumnKey(key: string) {
-  return /^(action|actions|operation|operations|operate|controls)$/i.test(key);
+  const semanticKey = key.startsWith(managedTableGeneratedColumnKeyPrefix)
+    ? key.slice(managedTableGeneratedColumnKeyPrefix.length)
+    : key;
+  return isManagedTableTrailingActionColumnKey(key) || /(?:[-_:]actions?|[a-z0-9]Actions?)$/.test(semanticKey) || /^(操作|动作)$/i.test(semanticKey);
+}
+
+function isManagedTableTrailingActionColumnKey(key: string) {
+  const semanticKey = key.startsWith(managedTableGeneratedColumnKeyPrefix)
+    ? key.slice(managedTableGeneratedColumnKeyPrefix.length)
+    : key;
+  return /^(action|actions|operation|operations|operate|controls|操作|动作)$/i.test(semanticKey);
 }
 
 function getManagedTableWidthStorageKey(columns: ManagedColumnLike[], columnSettings: ManagedTableColumnSettings | undefined, className: string | undefined) {
@@ -1415,8 +2261,8 @@ export function renderFilterActions(onSearch: () => void, onReset: () => void) {
   );
 }
 
-export function AppPage({ children }: { children: ReactNode }) {
-  return <div className="app-page">{children}</div>;
+export function AppPage({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={['app-page', className].filter(Boolean).join(' ')}>{children}</div>;
 }
 
 export function AppPageHeader(props: { title: string; description?: ReactNode; actions?: ReactNode }) {

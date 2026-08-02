@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react';
 import { App as AntdApp, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { PaymentVoucherInput, PaymentVoucherListQuery, PaymentVoucherSummary } from '@siyuan/shared';
+import type { AgentSummary, PaymentVoucherInput, PaymentVoucherListQuery, PaymentVoucherSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { formatBeijingDateTime } from '../../shared/format';
-import { AppDatePicker, ManagedTable } from '../../shared/ui';
+import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, tenRowTablePagination, type ManagedTableColumns } from '../../shared/ui';
+import { agentFieldLabels } from '../../shared/agentFieldLabels';
+import { getDetailedCompanyAgentOptions } from '../../shared/agentIdentity';
 
 type AgentBillPageProps = {
   apiClient: ApiClient;
   permissions: PermissionKey[];
+  agents: AgentSummary[];
+  historicalMode?: boolean;
 };
 
 function hasPermission(permissions: PermissionKey[], permission: PermissionKey) {
@@ -23,16 +27,18 @@ const statusLabels: Record<string, string> = {
   ARCHIVED: '已归档'
 };
 
-export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
+export function AgentBillPage({ apiClient, permissions, agents, historicalMode = false }: AgentBillPageProps) {
   const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PaymentVoucherListQuery>();
   const [form] = Form.useForm<PaymentVoucherInput>();
   const [rows, setRows] = useState<PaymentVoucherSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const canImport = hasPermission(permissions, 'finance:agent-bill:import');
+  const canImport = !historicalMode && hasPermission(permissions, 'finance:agent-bill:import');
   const canResolveDifference = hasPermission(permissions, 'finance:agent-bill:difference-resolve');
   const canArchive = hasPermission(permissions, 'finance:agent-bill:archive') || hasPermission(permissions, 'finance:agent-bill:reverse-archive');
+  const agentOptions = getDetailedCompanyAgentOptions(agents);
+  const agentNameOptions = agentOptions.map((option) => ({ ...option, value: agents.find((agent) => agent.id === option.value)?.name ?? option.label }));
 
   const loadRows = async (query: PaymentVoucherListQuery = queryForm.getFieldsValue()) => {
     setLoading(true);
@@ -98,7 +104,7 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
 
   const columns: ColumnsType<PaymentVoucherSummary> = [
     { title: '账单号', dataIndex: 'billNo', width: 150, fixed: 'left' },
-    { title: '代理', dataIndex: 'agentName', width: 140 },
+    { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190 },
     { title: '账单日期', dataIndex: 'billDate', width: 130, render: (value?: string) => value ? value.slice(0, 10) : '-' },
     { title: '币种', dataIndex: 'currency', width: 90 },
     { title: '账单金额', dataIndex: 'billAmount', width: 120, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
@@ -143,23 +149,80 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
     ) }
   ];
 
+  const matrixColumns: ManagedTableColumns<PaymentVoucherSummary> = [
+    {
+      key: 'matrixInformation',
+      title: '信息',
+      width: 960,
+      className: 'managed-matrix-group-primary',
+      render: (_value, row) => (
+        <ManagedMatrixCell
+          columns={4}
+          labelWidth={66}
+          fields={[
+            { key: 'billNo', label: '账单号', value: row.billNo || '-', title: row.billNo },
+            { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true },
+            { key: 'billDate', label: '账单日期', value: row.billDate ? row.billDate.slice(0, 10) : '-' },
+            { key: 'currency', label: '币种', value: <Tag>{row.currency || 'RMB'}</Tag> },
+            { key: 'billAmount', label: '账单金额', value: typeof row.billAmount === 'number' ? row.billAmount.toFixed(2) : '-' },
+            { key: 'systemOrderNo', label: '出货单号', value: row.systemOrderNo || '-', title: row.systemOrderNo },
+            { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
+            { key: 'agentChannel', label: agentFieldLabels.channel, value: row.agentChannel || '-', title: row.agentChannel },
+            { key: 'chargeWeightKg', label: '计费重', value: typeof row.chargeWeightKg === 'number' ? row.chargeWeightKg.toFixed(2) : '-' },
+            { key: 'unitPrice', label: '单价', value: typeof row.unitPrice === 'number' ? row.unitPrice.toFixed(2) : '-' },
+            { key: 'payableAmount', label: '应付金额', value: typeof row.payableAmount === 'number' ? row.payableAmount.toFixed(2) : '-' },
+            row.payableFinanceItemId ? { key: 'payableFinanceItemId', label: '应付费用ID', value: row.payableFinanceItemId, title: row.payableFinanceItemId } : null,
+            row.paymentApplicationNo ? { key: 'paymentApplicationNo', label: '付款申请号', value: row.paymentApplicationNo, title: row.paymentApplicationNo } : null,
+            row.paidPaymentId ? { key: 'paidPaymentId', label: '已支付记录', value: row.paidPaymentId, title: row.paidPaymentId } : null,
+            row.differenceType ? { key: 'differenceType', label: '差异类型', value: row.differenceType } : null,
+            typeof row.differenceAmount === 'number' ? { key: 'differenceAmount', label: '差异金额', value: row.differenceAmount.toFixed(2) } : null,
+            row.differenceReason ? { key: 'differenceReason', label: '差异原因', value: row.differenceReason, title: row.differenceReason, wrap: true } : null,
+            row.differenceHandledBy ? { key: 'differenceHandledBy', label: '处理人', value: row.differenceHandledBy } : null,
+            row.differenceHandledAt ? { key: 'differenceHandledAt', label: '处理时间', value: <ManagedMatrixDateTime value={formatBeijingDateTime(row.differenceHandledAt)} /> } : null,
+            row.extraFeeType ? { key: 'extraFeeType', label: '杂费类型', value: row.extraFeeType } : null,
+            typeof row.extraFeeAmount === 'number' ? { key: 'extraFeeAmount', label: '杂费金额', value: row.extraFeeAmount.toFixed(2) } : null,
+            row.extraFeeCurrency ? { key: 'extraFeeCurrency', label: '杂费币种', value: row.extraFeeCurrency } : null,
+            row.extraFeeAgentName ? { key: 'extraFeeAgentName', label: '杂费代理', value: row.extraFeeAgentName, title: row.extraFeeAgentName, wrap: true } : null,
+            row.extraFeeCustomerCode ? { key: 'extraFeeCustomerCode', label: '归属客户', value: row.extraFeeCustomerCode } : null,
+            row.extraFeeSystemOrderNo ? { key: 'extraFeeSystemOrderNo', label: '归属订单', value: row.extraFeeSystemOrderNo, title: row.extraFeeSystemOrderNo } : null,
+            row.extraFeeOccurredAt ? { key: 'extraFeeOccurredAt', label: '发生日期', value: row.extraFeeOccurredAt.slice(0, 10) } : null,
+            row.extraFeeFinanceItemId ? { key: 'extraFeeFinanceItemId', label: '关联费用ID', value: row.extraFeeFinanceItemId, title: row.extraFeeFinanceItemId } : null,
+            row.extraFeeRemark ? { key: 'extraFeeRemark', label: '杂费备注', value: row.extraFeeRemark, title: row.extraFeeRemark, wrap: true } : null,
+            row.kuayueBillNo ? { key: 'kuayueBillNo', label: '跨越账单号', value: row.kuayueBillNo, title: row.kuayueBillNo } : null,
+            row.kuayueCustomerCode ? { key: 'kuayueCustomerCode', label: '跨越客户', value: row.kuayueCustomerCode } : null,
+            row.kuayueSystemOrderNo ? { key: 'kuayueSystemOrderNo', label: '跨越订单', value: row.kuayueSystemOrderNo, title: row.kuayueSystemOrderNo } : null,
+            typeof row.kuayueAmount === 'number' ? { key: 'kuayueAmount', label: '跨越金额', value: row.kuayueAmount.toFixed(2) } : null,
+            row.kuayueCurrency ? { key: 'kuayueCurrency', label: '跨越币种', value: row.kuayueCurrency } : null,
+            row.kuayueBillDate ? { key: 'kuayueBillDate', label: '跨越日期', value: row.kuayueBillDate.slice(0, 10) } : null,
+            row.kuayueStatus ? { key: 'kuayueStatus', label: '跨越状态', value: row.kuayueStatus } : null,
+            { key: 'status', label: '状态', value: <Tag color={row.status === 'DIFFERENCE_PENDING' ? 'orange' : 'blue'}>{statusLabels[row.status || 'IMPORTED'] ?? row.status}</Tag> },
+            { key: 'fileName', label: '明细文件', value: row.fileName || '-', title: row.fileName },
+            { key: 'uploadedBy', label: '导入人', value: row.uploadedBy || '-' },
+            { key: 'createdAt', label: '导入时间', value: <ManagedMatrixDateTime value={row.createdAt ? formatBeijingDateTime(row.createdAt) : undefined} /> }
+          ]}
+        />
+      )
+    },
+    { ...columns[columns.length - 1], key: 'actions', width: 150, fixed: 'right' }
+  ];
+
   return (
     <Space direction="vertical" size={12} className="finance-workspace">
-      <Card title="代理账单人工导入" className="finance-filter-card">
+      <Card title={historicalMode ? '历史代理账单查询' : '代理账单人工导入'} className="finance-filter-card">
         <Form name="agentBillQuery" form={queryForm} layout="inline" onFinish={loadRows} initialValues={{ currency: 'ALL', status: 'ALL' }}>
           <Form.Item name="billNo" label="账单号筛选"><Input allowClear /></Form.Item>
-          <Form.Item name="agentName" label="代理筛选"><Input allowClear /></Form.Item>
+          <Form.Item name="agentName" label={`${agentFieldLabels.detailedCompanyName}筛选`}><Select showSearch allowClear optionFilterProp="searchText" options={agentNameOptions} style={{ width: 220 }} /></Form.Item>
           <Form.Item name="currency" label="币种"><Select style={{ width: 96 }} options={['ALL', 'RMB', 'USD'].map((value) => ({ label: value === 'ALL' ? '全部' : value, value }))} /></Form.Item>
           <Form.Item name="status" label="状态"><Select style={{ width: 130 }} options={[{ label: '全部', value: 'ALL' }, { label: '已导入', value: 'IMPORTED' }, { label: '已匹配', value: 'MATCHED' }, { label: '差异待处理', value: 'DIFFERENCE_PENDING' }, { label: '差异已处理', value: 'DIFFERENCE_HANDLED' }, { label: '已归档', value: 'ARCHIVED' }]} /></Form.Item>
           <Form.Item><Button type="primary" htmlType="submit" loading={loading}>查询</Button></Form.Item>
         </Form>
       </Card>
 
-      <Card title="登记代理账单" className="finance-work-card">
+      {!historicalMode ? <Card title="登记代理账单" className="finance-work-card">
         <Form name="agentBillImport" form={form} layout="vertical" disabled={!canImport} initialValues={{ currency: 'RMB' }} onFinish={submit}>
           <Row gutter={[12, 0]}>
             <Col xs={24} md={6}><Form.Item name="billNo" label="账单号" rules={[{ required: true, whitespace: true, message: '请输入账单号' }]}><Input /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="agentName" label="代理" rules={[{ required: true, whitespace: true, message: '请输入代理' }]}><Input /></Form.Item></Col>
+            <Col xs={24} md={6}><Form.Item name="agentId" label={agentFieldLabels.detailedCompanyName} rules={[{ required: true, message: '请选择代理详细公司名' }]}><Select showSearch optionFilterProp="searchText" options={agentOptions} /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="billDate" label="账单日期" rules={[{ required: true, message: '请选择账单日期' }]}><AppDatePicker /></Form.Item></Col>
             <Col xs={24} md={3}><Form.Item name="currency" label="币种"><Select options={['RMB', 'USD'].map((value) => ({ label: value, value }))} /></Form.Item></Col>
             <Col xs={24} md={3}><Form.Item name="billAmount" label="账单金额" rules={[{ required: true, message: '请输入金额' }]}><InputNumber min={0} precision={2} style={{ width: '100%' }} /></Form.Item></Col>
@@ -187,10 +250,52 @@ export function AgentBillPage({ apiClient, permissions }: AgentBillPageProps) {
             <Col xs={24} md={6}><Form.Item label=" "><Button type="primary" htmlType="submit" loading={saving} disabled={!canImport}>保存代理账单</Button></Form.Item></Col>
           </Row>
         </Form>
-      </Card>
+      </Card> : null}
 
       <Card title="代理账单列表" className="finance-table-card">
-        <ManagedTable rowKey="id" size="small" loading={loading} columns={columns} dataSource={rows} pagination={{ pageSize: 10 }} scroll={{ x: 4990 }} className="finance-work-table" />
+        <ManagedDualViewTable<PaymentVoucherSummary>
+          viewStorageKey="sunny.finance.agentBill.view-v1"
+          viewAriaLabel="代理账单表格视图"
+          defaultView="matrix"
+          views={{
+            matrix: {
+              label: '矩阵视图',
+              columns: matrixColumns,
+              tableProps: {
+                className: 'finance-work-table finance-agent-bill-matrix-table',
+                minimumScrollX: 0,
+                tableLayout: 'fixed',
+                showHeader: false,
+                recordDetail: { title: '代理账单详情', columns },
+                columnSettings: {
+                  storageKey: 'sunny.finance.agentBill.matrix-columns-v2',
+                  title: '代理账单矩阵列设置',
+                  lockedKeys: ['actions']
+                }
+              }
+            },
+            ledger: {
+              label: '精密台账模式',
+              columns,
+              tableProps: {
+                className: 'finance-work-table finance-agent-bill-ledger-table',
+                minimumScrollX: 4990,
+                recordDetail: { title: '代理账单详情' },
+                columnSettings: {
+                  storageKey: 'sunny.finance.agentBill.columns-v1',
+                  title: '代理账单列设置',
+                  lockedKeys: ['billNo', 'actions']
+                }
+              }
+            }
+          }}
+          rowKey="id"
+          size="small"
+          loading={loading}
+          dataSource={rows}
+          pagination={tenRowTablePagination}
+          columnSettingsPlacement="toolbar"
+        />
       </Card>
     </Space>
   );

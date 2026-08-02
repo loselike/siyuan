@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popover, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
+import { Button, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   defaultFinanceCatalogItems,
+  type AgentSummary,
   type BusinessCostFeeSummary,
   type FinanceCatalogItemSummary,
   type PayableFeeSummary,
@@ -19,19 +20,14 @@ import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { confirmDangerousAction } from '../../shared/dangerousAction';
 import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
 import { tenRowTablePagination } from '../../shared/ui';
-import { Settings } from 'lucide-react';
-import { createSettlementMethodOptions, financeCatalogCurrencyOptions, getSettlementMethodRows } from '../catalog';
+import { applySettlementMethodCurrency, createFinanceFeeNameOptions, createSettlementMethodOptions, financeCatalogCurrencyOptions, getSettlementMethodRows } from '../catalog';
+import { agentFieldLabels } from '../../shared/agentFieldLabels';
+import { getDetailedCompanyAgentOptions, resolveAgentIdByIdentity } from '../../shared/agentIdentity';
 
 const { Text } = Typography;
 
 type OrderFeeRow = ReceivableFeeSummary | PayableFeeSummary | BusinessCostFeeSummary;
 type OrderFeeTableType = ShipmentFinanceItemType;
-type OrderFeeDraftRow = ShipmentFinanceItemCreateInput & {
-  id: string;
-  isDraft: true;
-  type: OrderFeeTableType;
-};
-type OrderFeeDisplayRow = OrderFeeRow | OrderFeeDraftRow;
 
 interface OrderFeeEditorState {
   type: OrderFeeTableType;
@@ -47,16 +43,13 @@ interface OrderFeePanelProps {
   apiClient: ApiClient;
   role: RoleKey;
   permissions?: PermissionKey[];
+  agents: AgentSummary[];
+  catalogItems?: FinanceCatalogItemSummary[];
   shipment: Shipment;
   detail?: ShipmentFinanceDetailSummary;
   loading?: boolean;
   onReload: (shipmentId: string) => Promise<unknown>;
   renderShipmentOrderNoLink: (systemOrderNo?: string, options?: { shipment?: Shipment; subtitle?: string; copyText?: string }) => ReactNode;
-}
-
-interface ColumnPreference {
-  visible: string[];
-  order: string[];
 }
 
 const feeTypeTitles: Record<OrderFeeTableType, string> = {
@@ -65,72 +58,112 @@ const feeTypeTitles: Record<OrderFeeTableType, string> = {
   PAYABLE: '应付费用'
 };
 
-const feeTypeDescriptions: Record<OrderFeeTableType, string> = {
-  RECEIVABLE: '维护客户应收、付款编号、结算方式和对账状态。',
-  BUSINESS_COST: '维护销售/业务成本口径，业务员可见且可维护。',
-  PAYABLE: '维护代理应付费用，仅管理员和财务可见。'
+type FeeAuditStatus = 'PENDING' | 'CONFIRMED';
+type ReceiptMatchStatus = 'UNMATCHED' | 'PENDING' | 'PARTIAL' | 'MATCHED';
+
+const feeAuditStatusLabel: Record<FeeAuditStatus, string> = {
+  PENDING: '待审核',
+  CONFIRMED: '已审核'
 };
 
-const financeStatusLabel: Record<string, string> = {
-  PENDING: '待对账',
-  CONFIRMED: '已审核',
-  LOCKED: '已锁定',
-  VOIDED: '已作废'
-};
-
-const financeStatusColor: Record<string, string> = {
+const feeAuditStatusColor: Record<FeeAuditStatus, string> = {
   PENDING: 'gold',
-  CONFIRMED: 'green',
-  LOCKED: 'blue',
-  VOIDED: 'default'
+  CONFIRMED: 'green'
+};
+
+const receiptStatusLabel: Record<string, string> = {
+  UNPAID: '未收款',
+  PARTIAL: '部分收款',
+  RECEIVED: '已收款'
 };
 
 const quickFeeNames = ['运费', '报关费', '纸箱', '胶带'];
 
-const defaultColumnOrder: Record<OrderFeeTableType, string[]> = {
-  RECEIVABLE: ['index', 'name', 'customerCode', 'systemOrderNo', 'transferNo', 'status', 'currency', 'paymentNo', 'amount', 'rmbAmount', 'settlementMethod', 'createdAt', 'createdBy', 'reviewedAt', 'reviewedBy', 'remark', 'actions', 'receivedAmount', 'receiptStatus'],
-  BUSINESS_COST: ['index', 'agentName', 'name', 'customerCode', 'systemOrderNo', 'transferNo', 'status', 'currency', 'chargeWeightKg', 'unitPrice', 'amount', 'rmbAmount', 'createdAt', 'createdBy', 'reviewedAt', 'reviewedBy', 'remark', 'actions', 'amountOverridden', 'businessProfit'],
-  PAYABLE: ['index', 'agentName', 'name', 'customerCode', 'systemOrderNo', 'transferNo', 'status', 'currency', 'chargeWeightKg', 'unitPrice', 'amount', 'rmbAmount', 'createdAt', 'createdBy', 'reviewedAt', 'reviewedBy', 'remark', 'actions', 'amountOverridden']
-};
-
-const defaultHiddenColumns: Record<OrderFeeTableType, string[]> = {
-  RECEIVABLE: ['receivedAmount', 'receiptStatus'],
-  BUSINESS_COST: ['amountOverridden', 'businessProfit'],
-  PAYABLE: ['amountOverridden']
-};
-
 function formatFinanceAmount(amount: number, currency?: string) {
   return `${currency ?? 'RMB'} ${amount.toFixed(2)}`;
+}
+
+function resolveRmbAmount(row: Pick<OrderFeeRow, 'amount' | 'currency' | 'rmbAmount'>) {
+  if (row.rmbAmount !== undefined) return row.rmbAmount;
+  return ['RMB', 'CNY'].includes((row.currency ?? 'RMB').toUpperCase()) ? row.amount : undefined;
+}
+
+function formatRmbAmount(row: Pick<OrderFeeRow, 'amount' | 'currency' | 'rmbAmount'>) {
+  const amount = resolveRmbAmount(row);
+  return amount === undefined ? '缺少有效汇率' : formatCurrency(amount);
 }
 
 function formatOptionalDate(value?: string) {
   return value ? formatBeijingDateTime(value) : '-';
 }
 
-function getStatus(row: OrderFeeRow) {
-  return row.reconciliationStatus ?? (row.settled ? 'CONFIRMED' : 'PENDING');
+function hasPendingReceiptMatch(row: ReceivableFeeSummary) {
+  return row.pendingMatchRequests?.some((request) => request.status === 'PENDING')
+    || row.pendingMatchRequest?.status === 'PENDING';
+}
+
+function hasPostedReceiptMatch(row: ReceivableFeeSummary) {
+  return row.receiptStatus === 'PARTIAL'
+    || row.receiptStatus === 'RECEIVED'
+    || Number(row.receivedAmount ?? 0) > 0;
+}
+
+function getReceiptMatchStatus(row: ReceivableFeeSummary): ReceiptMatchStatus {
+  if (hasPendingReceiptMatch(row)) return 'PENDING';
+  const receivedAmount = Number(row.receivedAmount ?? 0);
+  if (row.receiptStatus === 'RECEIVED' || (row.amount > 0 && receivedAmount >= row.amount)) return 'MATCHED';
+  if (row.receiptStatus === 'PARTIAL' || receivedAmount > 0) return 'PARTIAL';
+  return 'UNMATCHED';
+}
+
+function renderReceiptMatchStatus(row: ReceivableFeeSummary) {
+  const status = getReceiptMatchStatus(row);
+  if (status === 'PENDING') return <Tag color="gold">待匹配审核</Tag>;
+  if (status === 'PARTIAL') return <Tag color="blue">部分匹配</Tag>;
+  if (status === 'MATCHED') return <Tag color="success">已匹配</Tag>;
+  return <Tag>未匹配</Tag>;
+}
+
+const receiptMatchStatusOrder: Record<ReceiptMatchStatus, number> = {
+  UNMATCHED: 0,
+  PENDING: 1,
+  PARTIAL: 2,
+  MATCHED: 3
+};
+
+function getFeeAuditStatus(row: OrderFeeRow): FeeAuditStatus {
+  const hasPostedMatch = ('receivedAmount' in row || 'receiptStatus' in row)
+    && hasPostedReceiptMatch(row as ReceivableFeeSummary);
+  if (
+    row.settled
+    || row.locked
+    || row.voided
+    || hasPostedMatch
+    || row.reconciliationStatus === 'CONFIRMED'
+    || row.reconciliationStatus === 'LOCKED'
+    || row.reconciliationStatus === 'VOIDED'
+  ) {
+    return 'CONFIRMED';
+  }
+  return 'PENDING';
 }
 
 function parseCustomerCode(customerName?: string) {
   return customerName?.split('-')[0] || '-';
 }
 
+function isActiveFeeRow(row: OrderFeeRow) {
+  return !row.voided && row.reconciliationStatus !== 'VOIDED';
+}
+
 function isManualEditable(row: OrderFeeRow) {
-  return row.sourceType === 'MANUAL' && !row.locked && getStatus(row) !== 'CONFIRMED' && getStatus(row) !== 'LOCKED';
+  const hasPendingMatch = ('pendingMatchRequests' in row || 'pendingMatchRequest' in row)
+    && hasPendingReceiptMatch(row as ReceivableFeeSummary);
+  return row.sourceType === 'MANUAL' && getFeeAuditStatus(row) === 'PENDING' && !hasPendingMatch;
 }
 
 function hasUiPermission(role: RoleKey, permissions: PermissionKey[] | undefined, permission: PermissionKey) {
   return role === 'ADMIN' || Boolean(permissions?.includes(permission));
-}
-
-function canManageType(role: RoleKey, type: OrderFeeTableType, permissions?: PermissionKey[]) {
-  if (type === 'PAYABLE') {
-    return hasUiPermission(role, permissions, 'finance:order-fee:payable:manage') || hasUiPermission(role, permissions, 'finance:payable:manage');
-  }
-  if (type === 'BUSINESS_COST') {
-    return hasUiPermission(role, permissions, 'finance:business-cost:manage');
-  }
-  return hasUiPermission(role, permissions, 'finance:receivable:update');
 }
 
 function calculateAmountOverride(row: { amount?: number; chargeWeightKg?: number; unitPrice?: number }) {
@@ -142,30 +175,21 @@ function hasChargePricing(row: OrderFeeRow): row is PayableFeeSummary | Business
   return 'chargeWeightKg' in row || 'unitPrice' in row;
 }
 
-function isDraftRow(row: OrderFeeDisplayRow): row is OrderFeeDraftRow {
-  return 'isDraft' in row && row.isDraft;
-}
-
-function resolveDefaultColumnOrder(type: OrderFeeTableType, keys: string[]) {
-  const ordered = defaultColumnOrder[type].filter((key) => keys.includes(key));
-  return [...ordered, ...keys.filter((key) => !ordered.includes(key))];
-}
-
-function resolveDefaultVisibleColumns(type: OrderFeeTableType, keys: string[]) {
-  const hidden = new Set(defaultHiddenColumns[type]);
-  return resolveDefaultColumnOrder(type, keys).filter((key) => !hidden.has(key));
-}
-
 export function OrderFeePanel({
   apiClient,
   role,
   permissions,
+  agents,
+  catalogItems = [],
   shipment,
   detail,
   loading,
   onReload,
   renderShipmentOrderNoLink
 }: OrderFeePanelProps) {
+  const [modal, modalContextHolder] = Modal.useModal();
+  const [activeType, setActiveType] = useState<OrderFeeTableType>('RECEIVABLE');
+  const [inspectedRowId, setInspectedRowId] = useState<string>();
   const [editor, setEditor] = useState<OrderFeeEditorState | null>(null);
   const [editorForm] = Form.useForm<ShipmentFinanceItemCreateInput & ShipmentFinanceItemUpdateInput>();
   const [selectedRowKeys, setSelectedRowKeys] = useState<Record<OrderFeeTableType, string[]>>({
@@ -173,17 +197,6 @@ export function OrderFeePanel({
     BUSINESS_COST: [],
     PAYABLE: []
   });
-  const [draftRows, setDraftRows] = useState<Record<OrderFeeTableType, OrderFeeDraftRow | null>>({
-    RECEIVABLE: null,
-    BUSINESS_COST: null,
-    PAYABLE: null
-  });
-  const [columnPreferences, setColumnPreferences] = useState<Record<OrderFeeTableType, ColumnPreference>>({
-    RECEIVABLE: { visible: [], order: [] },
-    BUSINESS_COST: { visible: [], order: [] },
-    PAYABLE: { visible: [], order: [] }
-  });
-  const [catalogItems, setCatalogItems] = useState<FinanceCatalogItemSummary[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [receiptMatch, setReceiptMatch] = useState<ReceiptMatchState | null>(null);
   const [receiptRows, setReceiptRows] = useState<WaterReceiptSummary[]>([]);
@@ -198,52 +211,67 @@ export function OrderFeePanel({
   const canViewBusinessCostAgent = roleCanViewPayables && (hasUiPermission(role, permissions, 'finance:business-cost:view-agent')
     || hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
     || hasUiPermission(role, permissions, 'finance:payable:view-sensitive'));
-  const receivableRows = detail?.receivables ?? [];
-  const businessCostRows = detail?.businessCosts ?? [];
-  const payableRows = visiblePayables ? detail?.payables ?? [] : [];
+  const receivableRows = (detail?.receivables ?? []).filter(isActiveFeeRow);
+  const businessCostRows = (detail?.businessCosts ?? []).filter(isActiveFeeRow);
+  const payableRows = visiblePayables ? (detail?.payables ?? []).filter(isActiveFeeRow) : [];
+  const rowsByType = useMemo<Record<OrderFeeTableType, OrderFeeRow[]>>(() => ({
+    RECEIVABLE: receivableRows,
+    BUSINESS_COST: businessCostRows,
+    PAYABLE: payableRows
+  }), [businessCostRows, payableRows, receivableRows]);
+  const visibleTypes = useMemo<OrderFeeTableType[]>(
+    () => visiblePayables ? ['RECEIVABLE', 'BUSINESS_COST', 'PAYABLE'] : ['RECEIVABLE', 'BUSINESS_COST'],
+    [visiblePayables]
+  );
+  const currentRows = rowsByType[activeType];
+  const inspectedRow = currentRows.find((row) => row.id === inspectedRowId) ?? currentRows[0];
+  const selectedKeys = selectedRowKeys[activeType];
+  const selectedRows = currentRows.filter((row) => selectedKeys.includes(row.id));
+  const canCreateFee = hasUiPermission(role, permissions, 'business:order-fee:create');
+  const canUpdateFee = hasUiPermission(role, permissions, 'business:order-fee:update');
+  const canMatchReceipt = hasUiPermission(role, permissions, 'finance:water-match:create');
+  const canDeleteReceivable = hasUiPermission(role, permissions, 'finance:receivable:void');
+  const canDeleteFee = hasUiPermission(role, permissions, 'business:order-fee:delete')
+    || (activeType === 'RECEIVABLE' && canDeleteReceivable);
   const settlementRows = useMemo(() => getSettlementMethodRows(catalogItems), [catalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
+  const agentOptions = useMemo(() => getDetailedCompanyAgentOptions(agents), [agents]);
   const feeNameOptions = useMemo(() => {
     const rows = catalogItems.length
-      ? catalogItems.filter((item) => item.category === 'FEE_NAME' && item.enabled)
-      : defaultFinanceCatalogItems.filter((item) => item.category === 'FEE_NAME');
-    return rows
-      .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-Hans-CN'))
-      .map((item) => ({ label: item.name, value: item.name }));
+      ? catalogItems
+      : defaultFinanceCatalogItems;
+    return createFinanceFeeNameOptions(rows);
   }, [catalogItems]);
 
   useEffect(() => {
-    apiClient.financeCatalog({ enabledOnly: true })
-      .then((response) => setCatalogItems(Array.isArray(response.items) ? response.items : []))
-      .catch(() => setCatalogItems([]));
-  }, [apiClient]);
+    if (!visibleTypes.includes(activeType)) {
+      setActiveType(visibleTypes[0]);
+    }
+  }, [activeType, visibleTypes]);
 
   useEffect(() => {
-    const next: Record<OrderFeeTableType, ColumnPreference> = { RECEIVABLE: { visible: [], order: [] }, BUSINESS_COST: { visible: [], order: [] }, PAYABLE: { visible: [], order: [] } };
-    (['RECEIVABLE', 'BUSINESS_COST', 'PAYABLE'] as OrderFeeTableType[]).forEach((type) => {
-      const raw = window.localStorage.getItem(`siyuan.orderFee.columns.${type}`);
-      if (!raw) return;
-      try {
-        next[type] = JSON.parse(raw) as ColumnPreference;
-      } catch {
-        next[type] = { visible: [], order: [] };
-      }
-    });
-    setColumnPreferences(next);
-  }, []);
-
-  const persistColumnPreference = useCallback((type: OrderFeeTableType, preference: ColumnPreference) => {
-    setColumnPreferences((current) => ({ ...current, [type]: preference }));
-    window.localStorage.setItem(`siyuan.orderFee.columns.${type}`, JSON.stringify(preference));
-  }, []);
+    if (!currentRows.length) {
+      setInspectedRowId(undefined);
+      return;
+    }
+    if (!currentRows.some((row) => row.id === inspectedRowId)) {
+      setInspectedRowId(currentRows[0].id);
+    }
+  }, [currentRows, inspectedRowId]);
 
   const reload = useCallback(async () => {
     await onReload(shipment.id);
   }, [onReload, shipment.id]);
 
+  const changeType = useCallback((type: OrderFeeTableType) => {
+    setActiveType(type);
+    setEditor(null);
+    editorForm.resetFields();
+  }, [editorForm]);
+
   const openReceiptMatch = useCallback(async (row: ReceivableFeeSummary) => {
-    if (getStatus(row) !== 'CONFIRMED') {
-      message.warning('应收审核通过后才能匹配水单');
+    if (hasPendingReceiptMatch(row)) {
+      message.warning('该应收已有待财务审核的水单匹配申请');
       return;
     }
     const customerCode = parseCustomerCode(shipment.customerName);
@@ -264,97 +292,6 @@ export function OrderFeePanel({
     }
   }, [apiClient, shipment.customerName]);
 
-  const focusDraftRow = useCallback((type: OrderFeeTableType) => {
-    window.setTimeout(() => {
-      const target = document.querySelector<HTMLElement>(`[data-order-fee-draft="${type}"] input, [data-order-fee-draft="${type}"] .ant-select-selector`);
-      target?.focus();
-    }, 0);
-  }, []);
-
-  const createDefaultDraft = useCallback((type: OrderFeeTableType): OrderFeeDraftRow => ({
-    id: `draft-${type}`,
-    isDraft: true,
-    type,
-    name: type === 'RECEIVABLE' ? '运费' : '',
-    amount: 0,
-    currency: 'RMB',
-    reconciliationStatus: 'PENDING',
-    agentName: type === 'PAYABLE' ? shipment.agentName : undefined
-  }), [shipment.agentName]);
-
-  const openDraft = useCallback((type: OrderFeeTableType) => {
-    if (draftRows[type]) {
-      message.info('请先保存或取消当前新增行');
-      focusDraftRow(type);
-      return;
-    }
-    setDraftRows((current) => ({ ...current, [type]: createDefaultDraft(type) }));
-    focusDraftRow(type);
-  }, [createDefaultDraft, draftRows, focusDraftRow]);
-
-  const updateDraft = useCallback((type: OrderFeeTableType, patch: Partial<OrderFeeDraftRow>) => {
-    setDraftRows((current) => ({
-      ...current,
-      [type]: current[type] ? { ...current[type], ...patch } : current[type]
-    }));
-  }, []);
-
-  const cancelDraft = useCallback((type: OrderFeeTableType) => {
-    setDraftRows((current) => ({ ...current, [type]: null }));
-  }, []);
-
-  const saveDraft = useCallback(async (type: OrderFeeTableType) => {
-    const draft = draftRows[type];
-    if (!draft) return;
-    const name = draft.name?.trim();
-    if (!name) {
-      message.warning('请选择或输入费用名称');
-      focusDraftRow(type);
-      return;
-    }
-    if (!draft.currency) {
-      message.warning('请选择币种');
-      focusDraftRow(type);
-      return;
-    }
-    const shouldCalculateAmount = (type === 'BUSINESS_COST' || type === 'PAYABLE')
-      && draft.chargeWeightKg !== undefined
-      && draft.unitPrice !== undefined;
-    const amount = shouldCalculateAmount
-      ? Number((Number(draft.chargeWeightKg) * Number(draft.unitPrice)).toFixed(2))
-      : Number(draft.amount ?? 0);
-    if (Number.isNaN(amount)) {
-      message.warning('请输入金额');
-      focusDraftRow(type);
-      return;
-    }
-    const input: ShipmentFinanceItemCreateInput = {
-      type,
-      name,
-      amount,
-      currency: draft.currency ?? 'RMB',
-      settlementMethod: draft.settlementMethod,
-      paymentNo: type === 'RECEIVABLE' ? draft.paymentNo : undefined,
-      reconciliationStatus: draft.reconciliationStatus ?? 'PENDING',
-      agentName: type === 'PAYABLE' ? draft.agentName : undefined,
-      chargeWeightKg: type === 'BUSINESS_COST' || type === 'PAYABLE' ? draft.chargeWeightKg : undefined,
-      unitPrice: type === 'BUSINESS_COST' || type === 'PAYABLE' ? draft.unitPrice : undefined,
-      amountOverridden: type === 'BUSINESS_COST' || type === 'PAYABLE'
-        ? calculateAmountOverride({ amount, chargeWeightKg: draft.chargeWeightKg, unitPrice: draft.unitPrice })
-        : false,
-      remark: draft.remark
-    };
-    setSubmitting(true);
-    try {
-      await apiClient.createShipmentFinanceItem(shipment.id, input);
-      setDraftRows((current) => ({ ...current, [type]: null }));
-      await reload();
-      message.success('费用已新增');
-    } finally {
-      setSubmitting(false);
-    }
-  }, [apiClient, draftRows, focusDraftRow, reload, shipment.id]);
-
   const submitReceiptMatch = useCallback(async (receipt: WaterReceiptSummary) => {
     if (!receiptMatch) return;
     const unpaid = Math.max(0, receiptMatch.row.amount - Number(receiptMatch.row.receivedAmount ?? 0));
@@ -366,17 +303,23 @@ export function OrderFeePanel({
     setSubmitting(true);
     try {
       await apiClient.matchWaterReceiptOrders(receipt.id, {
-        matches: [{ receivableFinanceItemId: receiptMatch.row.id, amount }]
+        matches: [{
+          receivableId: receiptMatch.row.id,
+          receivableSourceType: receiptMatch.row.sourceType ?? 'MANUAL',
+          amount
+        }]
       });
       setReceiptMatch(null);
       await reload();
-      message.success('水单匹配完成');
+      message.success('匹配申请已提交，等待财务审核');
     } finally {
       setSubmitting(false);
     }
   }, [apiClient, receiptMatch, reload]);
 
   const openEditor = useCallback((type: OrderFeeTableType, row?: OrderFeeRow) => {
+    setActiveType(type);
+    setInspectedRowId(row?.id);
     setEditor({ type, row });
     editorForm.setFieldsValue({
       type,
@@ -384,14 +327,20 @@ export function OrderFeePanel({
       amount: row?.amount ?? 0,
       currency: row?.currency ?? 'RMB',
       settlementMethod: row?.settlementMethod,
-      paymentNo: 'paymentNo' in (row ?? {}) ? row?.paymentNo : undefined,
-      reconciliationStatus: row?.reconciliationStatus ?? 'PENDING',
-      agentName: type === 'PAYABLE' && row && 'agentName' in row ? row.agentName : shipment.agentName,
+      paymentNo: row && 'paymentNo' in row ? row.paymentNo : undefined,
+      agentId: type !== 'RECEIVABLE' && row && 'agentId' in row
+        ? row.agentId ?? resolveAgentIdByIdentity(agents, 'agentName' in row ? row.agentName : undefined)
+        : shipment.agentId ?? resolveAgentIdByIdentity(agents, shipment.agentName),
       chargeWeightKg: row && hasChargePricing(row) ? row.chargeWeightKg : undefined,
       unitPrice: row && hasChargePricing(row) ? row.unitPrice : undefined,
       remark: row?.remark
     });
-  }, [editorForm, shipment.agentName]);
+  }, [agents, editorForm, shipment.agentId, shipment.agentName]);
+
+  const closeEditor = useCallback(() => {
+    setEditor(null);
+    editorForm.resetFields();
+  }, [editorForm]);
 
   const submitEditor = useCallback(async () => {
     if (!editor) return;
@@ -408,8 +357,8 @@ export function OrderFeePanel({
       currency: values.currency ?? 'RMB',
       settlementMethod: values.settlementMethod,
       paymentNo: editor.type === 'RECEIVABLE' ? values.paymentNo : undefined,
-      reconciliationStatus: values.reconciliationStatus ?? 'PENDING',
-      agentName: editor.type === 'PAYABLE' ? values.agentName : undefined,
+      reconciliationStatus: editor.row?.reconciliationStatus ?? 'PENDING',
+      agentId: editor.type === 'RECEIVABLE' ? undefined : values.agentId,
       chargeWeightKg: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE' ? values.chargeWeightKg : undefined,
       unitPrice: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE' ? values.unitPrice : undefined,
       amountOverridden: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE'
@@ -424,14 +373,15 @@ export function OrderFeePanel({
       } else {
         await apiClient.createShipmentFinanceItem(shipment.id, { ...input, type: editor.type } as ShipmentFinanceItemCreateInput);
       }
-      setEditor(null);
-      editorForm.resetFields();
+      const editedId = editor.row?.id;
+      closeEditor();
       await reload();
+      if (editedId) setInspectedRowId(editedId);
       message.success(editor.row ? '费用已修改' : '费用已新增');
     } finally {
       setSubmitting(false);
     }
-  }, [apiClient, editor, editorForm, reload, shipment.id]);
+  }, [apiClient, closeEditor, editor, editorForm, reload, shipment.id]);
 
   const runRows = useCallback(async (type: OrderFeeTableType, action: 'delete' | 'lock' | 'unlock' | 'recalc', rows: OrderFeeRow[]) => {
     const targets = rows.filter((row) => row.sourceType === 'MANUAL');
@@ -443,7 +393,11 @@ export function OrderFeePanel({
     try {
       for (const row of targets) {
         if (action === 'delete') {
-          await apiClient.deleteShipmentFinanceItem(shipment.id, row.id);
+          if (type === 'RECEIVABLE' && canDeleteReceivable) {
+            await apiClient.deleteReceivableAudit(row.id);
+          } else {
+            await apiClient.deleteShipmentFinanceItem(shipment.id, row.id);
+          }
         } else if (action === 'lock') {
           await apiClient.lockShipmentFinanceItem(shipment.id, row.id);
         } else if (action === 'unlock') {
@@ -456,30 +410,35 @@ export function OrderFeePanel({
         }
       }
       setSelectedRowKeys((current) => ({ ...current, [type]: [] }));
+      setEditor(null);
       await reload();
       message.success(action === 'recalc' ? '已重算选中费用' : '费用操作已完成');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '费用操作失败，请稍后重试');
     } finally {
       setSubmitting(false);
     }
-  }, [apiClient, reload, shipment.id]);
+  }, [apiClient, canDeleteReceivable, reload, shipment.id]);
 
-  const confirmRunRows = (type: OrderFeeTableType, action: 'delete' | 'lock' | 'unlock' | 'recalc', rows: OrderFeeRow[]) => {
-    const count = rows.length;
+  const confirmRunRows = useCallback((type: OrderFeeTableType, action: 'delete' | 'lock' | 'unlock' | 'recalc', rows: OrderFeeRow[]) => {
     const actionText = action === 'delete' ? '删除' : action === 'lock' ? '锁定' : action === 'unlock' ? '解锁' : '重算';
     const contentMap = {
-      delete: '删除后不可恢复；已被付款申请、付款记录、凭证或水单匹配引用的费用不能删除。',
+      delete: type === 'RECEIVABLE' && canDeleteReceivable
+        ? '删除后不可恢复；如已匹配水单，将同步撤销匹配并回算水单、应收及客户账户余额；存在待审核匹配申请时不能删除。'
+        : '删除后不可恢复；已被付款申请、付款记录、凭证或水单匹配引用的费用不能删除。',
       lock: '锁定后该费用不可直接编辑，需要解锁后才能修改。',
       unlock: '解锁后该费用会恢复可编辑，请确认下游审核或付款状态允许回退。',
       recalc: '重算会按当前计费重和单价覆盖金额，请确认费用口径正确。'
     } as const;
     confirmDangerousAction({
-      title: `确认${actionText}${count > 1 ? `选中的 ${count} 条费用` : '该费用'}？`,
+      title: `确认${actionText}${rows.length > 1 ? `选中的 ${rows.length} 条费用` : '该费用'}？`,
       content: contentMap[action],
       okText: actionText,
       danger: action === 'delete',
+      confirm: modal.confirm,
       onOk: () => runRows(type, action, rows)
     });
-  };
+  }, [canDeleteReceivable, modal, runRows]);
 
   const quickAdd = useCallback(async (type: OrderFeeTableType, name: string) => {
     setSubmitting(true);
@@ -490,402 +449,355 @@ export function OrderFeePanel({
         amount: 0,
         currency: 'RMB',
         reconciliationStatus: 'PENDING',
-        agentName: type === 'PAYABLE' ? shipment.agentName : undefined
+        agentId: type === 'RECEIVABLE' ? undefined : shipment.agentId ?? resolveAgentIdByIdentity(agents, shipment.agentName)
       });
       await reload();
       message.success(`已快速添加${name}`);
     } finally {
       setSubmitting(false);
     }
-  }, [apiClient, reload, shipment.agentName, shipment.id]);
+  }, [agents, apiClient, reload, shipment.agentId, shipment.agentName, shipment.id]);
 
-  const renderStatus = (row: OrderFeeDisplayRow) => {
-    if (isDraftRow(row)) {
+  const inspectRow = useCallback((rowId: string) => {
+    setEditor(null);
+    editorForm.resetFields();
+    setInspectedRowId(rowId);
+  }, [editorForm]);
+
+  const renderStatus = (row: OrderFeeRow) => {
+    const status = getFeeAuditStatus(row);
+    return <Tag color={feeAuditStatusColor[status]}>{feeAuditStatusLabel[status]}</Tag>;
+  };
+
+  const compactColumns = useMemo<ColumnsType<OrderFeeRow>>(() => {
+    const isReceivable = activeType === 'RECEIVABLE';
+    const columns: ColumnsType<OrderFeeRow> = [{
+      title: '费用名称',
+      dataIndex: 'name',
+      key: 'name',
+      width: isReceivable ? '16%' : '20%',
+      ellipsis: true,
+      sorter: (left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN')
+    },
+    {
+      title: '费用审核状态',
+      key: 'status',
+      width: isReceivable ? '14%' : '15%',
+      render: (_, row) => renderStatus(row),
+      sorter: (left, right) => getFeeAuditStatus(left).localeCompare(getFeeAuditStatus(right))
+    },
+    {
+      title: '币种',
+      key: 'currency',
+      width: isReceivable ? '9%' : '10%',
+      render: (_, row) => <Tag>{row.currency ?? 'RMB'}</Tag>
+    },
+    {
+      title: '人民币合计',
+      key: 'rmbAmount',
+      width: isReceivable ? '16%' : '18%',
+      align: 'right',
+      render: (_, row) => formatRmbAmount(row),
+      sorter: (left, right) => (resolveRmbAmount(left) ?? 0) - (resolveRmbAmount(right) ?? 0)
+    },
+    {
+      title: '结算方式',
+      key: 'settlementMethod',
+      width: isReceivable ? '16%' : '17%',
+      ellipsis: true,
+      render: (_, row) => row.settlementMethod || '-'
+    },
+    {
+      title: '操作',
+      key: 'inspect',
+      width: isReceivable ? '15%' : '16%',
+      align: 'center',
+      render: (_, row) => (
+        <Space size={0} className="order-fee-row-actions">
+          <Button type="link" size="small" onClick={(event) => {
+            event.stopPropagation();
+            inspectRow(row.id);
+          }}>查看</Button>
+          {row.sourceType === 'MANUAL' && canUpdateFee ? (
+            <Button type="link" size="small" disabled={!isManualEditable(row)} onClick={(event) => {
+              event.stopPropagation();
+              openEditor(activeType, row);
+            }}>修改</Button>
+          ) : null}
+        </Space>
+      )
+    }];
+    if (isReceivable) {
+      columns.splice(3, 0, {
+        title: '匹配状态',
+        key: 'receiptMatchStatus',
+        width: '10%',
+        render: (_, row) => renderReceiptMatchStatus(row as ReceivableFeeSummary),
+        sorter: (left, right) => receiptMatchStatusOrder[getReceiptMatchStatus(left as ReceivableFeeSummary)] - receiptMatchStatusOrder[getReceiptMatchStatus(right as ReceivableFeeSummary)]
+      });
+    }
+    return columns;
+  }, [activeType, canUpdateFee, inspectRow, openEditor]);
+
+  const detailItem = (label: string, value: ReactNode, wide = false) => (
+    <div className={`order-fee-inspector-item${wide ? ' order-fee-inspector-item-wide' : ''}`}>
+      <span>{label}</span>
+      <div>{value}</div>
+    </div>
+  );
+
+  const renderInspector = () => {
+    if (editor) {
       return (
-        <Select
-          size="small"
-          value={row.reconciliationStatus ?? 'PENDING'}
-          options={Object.entries(financeStatusLabel).filter(([value]) => value !== 'VOIDED').map(([value, label]) => ({ label, value }))}
-          onChange={(value) => updateDraft(row.type, { reconciliationStatus: value as OrderFeeDraftRow['reconciliationStatus'] })}
-          style={{ minWidth: 96 }}
-        />
+        <div className="order-fee-inspector-editor" data-testid="order-fee-side-editor">
+          <div className="order-fee-inspector-heading">
+            <div>
+              <strong>{editor.row ? '修改' : '新增'}{feeTypeTitles[editor.type]}</strong>
+              <Text type="secondary">在右侧完成编辑，保存后左侧列表自动更新。</Text>
+            </div>
+          </div>
+          <Form form={editorForm} layout="vertical" className="order-fee-side-form">
+            <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请选择费用名称' }]}>
+              <Select showSearch options={feeNameOptions} placeholder="选择费用名称" />
+            </Form.Item>
+            <Form.Item name="currency" label="币种" rules={[{ required: true, message: '请选择币种' }]}>
+              <Select options={financeCatalogCurrencyOptions.map((item) => ({ label: item, value: item }))} />
+            </Form.Item>
+            <Form.Item name="settlementMethod" label="结算方式">
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                options={settlementOptions}
+                placeholder="选择结算方式，自动带出币种"
+                onChange={(value) => applySettlementMethodCurrency(editorForm, settlementRows, value)}
+              />
+            </Form.Item>
+            {editor.type !== 'RECEIVABLE' ? (
+              <Form.Item name="agentId" label={agentFieldLabels.detailedCompanyName} className="order-fee-side-form-wide">
+                <Select showSearch allowClear optionFilterProp="searchText" options={agentOptions} placeholder="选择代理详细公司名" />
+              </Form.Item>
+            ) : (
+              <Form.Item name="paymentNo" label="付款编号" className="order-fee-side-form-wide">
+                <Input placeholder="匹配水单后自动回写，也可手动记录" />
+              </Form.Item>
+            )}
+            {editor.type !== 'RECEIVABLE' ? (
+              <>
+                <Form.Item name="chargeWeightKg" label="计费重">
+                  <InputNumber min={0} precision={3} addonAfter="kg" />
+                </Form.Item>
+                <Form.Item name="unitPrice" label={editor.type === 'PAYABLE' ? '代理成本单价' : '单价'}>
+                  <InputNumber min={0} precision={2} />
+                </Form.Item>
+              </>
+            ) : null}
+            <Form.Item name="amount" label="总金额" rules={[{ required: true, message: '请输入金额' }]}>
+              <InputNumber min={0} precision={2} />
+            </Form.Item>
+            <Form.Item name="remark" label="备注" className="order-fee-side-form-wide">
+              <Input.TextArea rows={3} />
+            </Form.Item>
+          </Form>
+          <div className="order-fee-inspector-actions">
+            <Button onClick={closeEditor} disabled={submitting}>取消</Button>
+            <Button type="primary" onClick={submitEditor} loading={submitting}>保存费用</Button>
+          </div>
+        </div>
       );
     }
-    const status = getStatus(row);
-    return <Tag color={financeStatusColor[status] ?? 'gold'}>{financeStatusLabel[status] ?? status}</Tag>;
-  };
 
-  const renderColumnSettings = (type: OrderFeeTableType, allColumns: ColumnsType<OrderFeeDisplayRow>) => {
-    const keys = allColumns.map((column) => String(column.key)).filter((key) => key !== 'select');
-    const preference = columnPreferences[type];
-    const visible = preference.visible.length ? preference.visible : resolveDefaultVisibleColumns(type, keys);
-    const order = preference.order.length ? preference.order.filter((key) => keys.includes(key)) : resolveDefaultColumnOrder(type, keys);
-    const move = (key: string, delta: number) => {
-      const nextOrder = [...order];
-      const index = nextOrder.indexOf(key);
-      const targetIndex = index + delta;
-      if (index < 0 || targetIndex < 0 || targetIndex >= nextOrder.length) return;
-      [nextOrder[index], nextOrder[targetIndex]] = [nextOrder[targetIndex], nextOrder[index]];
-      persistColumnPreference(type, { visible, order: nextOrder });
-    };
-    const moveToFirst = (key: string) => {
-      if (order[0] === key) return;
-      persistColumnPreference(type, { visible, order: [key, ...order.filter((item) => item !== key)] });
-    };
-    return (
-      <Popover
-        trigger="click"
-        placement="bottomRight"
-        content={(
-          <div className="order-fee-column-settings">
-            {order.map((key) => {
-              const column = allColumns.find((item) => String(item.key) === key);
-              return (
-                <div className="order-fee-column-setting-row" key={key}>
-                  <Checkbox
-                    checked={visible.includes(key)}
-                    onChange={(event) => {
-                      const nextVisible = event.target.checked ? [...visible, key] : visible.filter((item) => item !== key);
-                      persistColumnPreference(type, { visible: nextVisible, order });
-                    }}
-                  >
-                    {String(column?.title ?? key)}
-                  </Checkbox>
-                  <Space size={4}>
-                    <Button size="small" disabled={order[0] === key} onClick={() => moveToFirst(key)}>移到首行</Button>
-                    <Button size="small" onClick={() => move(key, -1)}>上移</Button>
-                    <Button size="small" onClick={() => move(key, 1)}>下移</Button>
-                  </Space>
-                </div>
-              );
-            })}
-            <Button size="small" onClick={() => persistColumnPreference(type, { visible: resolveDefaultVisibleColumns(type, keys), order: resolveDefaultColumnOrder(type, keys) })}>重置列</Button>
-          </div>
-        )}
-      >
-        <Tooltip title="列设置">
-          <Button className="managed-table-settings-button" size="small" aria-label="列设置" icon={<Settings size={16} />} />
-        </Tooltip>
-      </Popover>
-    );
-  };
-
-  const createColumns = (type: OrderFeeTableType): ColumnsType<OrderFeeDisplayRow> => {
-    const renderReceiptNo = (row: OrderFeeDisplayRow) => {
-      if (isDraftRow(row)) {
-        if (type !== 'RECEIVABLE') return row.paymentNo || '-';
-        return <Input size="small" value={row.paymentNo} placeholder="付款编号" onChange={(event) => updateDraft(type, { paymentNo: event.target.value })} />;
-      }
-      if (type !== 'RECEIVABLE') return 'paymentNo' in row ? row.paymentNo || '-' : '-';
-      const receivable = row as ReceivableFeeSummary;
-      const canMatch = getStatus(receivable) === 'CONFIRMED' && receivable.receiptStatus !== 'RECEIVED';
-      const label = receivable.matchedReceiptNo || receivable.paymentNo || '匹配水单';
+    if (!inspectedRow) {
       return (
-        <Button type="link" size="small" disabled={!canMatch} onClick={() => openReceiptMatch(receivable)}>
-          {label}
-        </Button>
-      );
-    };
-    const base: ColumnsType<OrderFeeDisplayRow> = [
-      { title: '序号', key: 'index', width: 70, fixed: 'left', render: (_value, row, index) => isDraftRow(row) ? <Tag color="blue">新增</Tag> : index + 1 },
-      {
-        title: '费用名称',
-        dataIndex: 'name',
-        key: 'name',
-        width: 150,
-        fixed: 'left',
-        sorter: (a, b) => isDraftRow(a) || isDraftRow(b) ? 0 : a.name.localeCompare(b.name, 'zh-Hans-CN'),
-        render: (_value, row) => isDraftRow(row)
-          ? <Select size="small" showSearch options={feeNameOptions} placeholder="选择费用名称" value={row.name || undefined} onChange={(value) => updateDraft(type, { name: value })} style={{ minWidth: 128 }} />
-          : row.name
-      },
-      { title: '客户编号', key: 'customerCode', width: 120, render: () => parseCustomerCode(shipment.customerName) },
-      { title: '出货单号', key: 'systemOrderNo', width: 200, render: () => renderShipmentOrderNoLink(shipment.systemOrderNo, { shipment }) },
-      { title: '转单号', key: 'transferNo', width: 170, render: () => shipment.transferNo || '-' },
-      { title: '对账状态', key: 'status', width: 110, render: (_, row) => renderStatus(row), sorter: (a, b) => isDraftRow(a) || isDraftRow(b) ? 0 : getStatus(a).localeCompare(getStatus(b)) },
-      {
-        title: '币种',
-        key: 'currency',
-        width: 100,
-        render: (_, row) => isDraftRow(row)
-          ? <Select size="small" value={row.currency ?? 'RMB'} options={financeCatalogCurrencyOptions.map((item) => ({ label: item, value: item }))} onChange={(value) => updateDraft(type, { currency: value })} style={{ minWidth: 82 }} />
-          : <Tag>{row.currency ?? 'RMB'}</Tag>
-      },
-      {
-        title: '金额',
-        key: 'amount',
-        width: 130,
-        align: 'right',
-        render: (_, row) => isDraftRow(row)
-          ? <InputNumber size="small" min={0} precision={2} value={row.amount} onChange={(value) => updateDraft(type, { amount: value ?? undefined })} style={{ width: 104 }} />
-          : formatFinanceAmount(row.amount, row.currency),
-        sorter: (a, b) => isDraftRow(a) || isDraftRow(b) ? 0 : a.amount - b.amount
-      },
-      { title: '合计', key: 'rmbAmount', width: 130, align: 'right', render: (_, row) => isDraftRow(row) ? formatCurrency(Number(row.amount ?? 0)) : formatCurrency(row.rmbAmount ?? row.amount) },
-      {
-        title: '结算方式',
-        key: 'settlementMethod',
-        width: 150,
-        render: (_, row) => isDraftRow(row)
-          ? <Select size="small" allowClear options={settlementOptions} placeholder="结算方式" value={row.settlementMethod} onChange={(value) => updateDraft(type, { settlementMethod: value })} style={{ minWidth: 128 }} />
-          : row.settlementMethod || '-'
-      },
-      { title: type === 'RECEIVABLE' ? '匹配水单编号' : '付款编号', key: 'paymentNo', width: 170, render: (_, row) => renderReceiptNo(row) },
-      { title: '已收金额', key: 'receivedAmount', width: 120, align: 'right', render: (_, row) => !isDraftRow(row) && 'receivedAmount' in row ? formatFinanceAmount(Number(row.receivedAmount ?? 0), row.currency) : '-' },
-      { title: '收款状态', key: 'receiptStatus', width: 110, render: (_, row) => !isDraftRow(row) && 'receiptStatus' in row ? <Tag color={row.receiptStatus === 'RECEIVED' ? 'green' : row.receiptStatus === 'PARTIAL' ? 'gold' : 'default'}>{row.receiptStatus === 'RECEIVED' ? '已收款' : row.receiptStatus === 'PARTIAL' ? '部分收款' : '未收款'}</Tag> : '-' },
-      {
-        title: '计费重',
-        key: 'chargeWeightKg',
-        width: 120,
-        render: (_, row) => isDraftRow(row)
-          ? <InputNumber size="small" min={0} precision={3} value={row.chargeWeightKg} onChange={(value) => updateDraft(type, { chargeWeightKg: value ?? undefined })} style={{ width: 106 }} />
-          : 'chargeWeightKg' in row && row.chargeWeightKg !== undefined ? `${row.chargeWeightKg} kg` : '-'
-      },
-      {
-        title: '单价',
-        key: 'unitPrice',
-        width: 120,
-        render: (_, row) => isDraftRow(row)
-          ? <InputNumber size="small" min={0} precision={2} value={row.unitPrice} onChange={(value) => updateDraft(type, { unitPrice: value ?? undefined })} style={{ width: 104 }} />
-          : 'unitPrice' in row && row.unitPrice !== undefined ? `${formatFinanceAmount(row.unitPrice, row.currency)}/kg` : '-'
-      },
-      { title: '人工覆盖', key: 'amountOverridden', width: 110, render: (_, row) => row.amountOverridden ? <Tag color="orange">人工覆盖</Tag> : '-' },
-      { title: '代理', key: 'agentName', width: 150, render: (_, row) => isDraftRow(row) ? <Input size="small" value={row.agentName} placeholder="代理名称" onChange={(event) => updateDraft(type, { agentName: event.target.value })} /> : 'agentName' in row ? row.agentName || shipment.agentName || '-' : '-' },
-      { title: '业务利润', key: 'businessProfit', width: 130, align: 'right', render: (_, row) => !isDraftRow(row) && 'businessProfit' in row && row.businessProfit !== undefined ? formatCurrency(row.businessProfit) : '-' },
-      { title: '制单日期', key: 'createdAt', width: 160, render: (_, row) => isDraftRow(row) ? '待保存' : formatOptionalDate(row.createdAt) },
-      { title: '制单人', key: 'createdBy', width: 110, render: (_, row) => isDraftRow(row) ? '-' : row.createdBy || '-' },
-      { title: '审单日期', key: 'reviewedAt', width: 160, render: (_, row) => isDraftRow(row) ? '-' : formatOptionalDate(row.reviewedAt) },
-      { title: '审单人', key: 'reviewedBy', width: 110, render: (_, row) => isDraftRow(row) ? '-' : row.reviewedBy || '-' },
-      { title: '备注', key: 'remark', width: 180, ellipsis: true, render: (_, row) => isDraftRow(row) ? <Input size="small" value={row.remark} placeholder="备注" onChange={(event) => updateDraft(type, { remark: event.target.value })} /> : <Text title={row.remark}>{row.remark || '-'}</Text> },
-      {
-        title: '操作',
-        key: 'actions',
-        width: 240,
-        fixed: 'right',
-        render: (_, row) => isDraftRow(row) ? (
-          <Space size={6}>
-            <Button size="small" type="primary" loading={submitting} onClick={() => saveDraft(type)}>保存</Button>
-            <Button size="small" disabled={submitting} onClick={() => cancelDraft(type)}>取消</Button>
-          </Space>
-        ) : row.sourceType === 'MANUAL' && canManageType(role, type, permissions) ? (
-          <Space size={6}>
-            <Button size="small" onClick={() => openEditor(type, row)} disabled={!isManualEditable(row)}>修改</Button>
-            <Button size="small" onClick={() => confirmRunRows(type, row.locked ? 'unlock' : 'lock', [row])}>{row.locked ? '解锁' : '锁定'}</Button>
-            {type === 'RECEIVABLE' ? <Button size="small" disabled={getStatus(row) !== 'CONFIRMED' || (row as ReceivableFeeSummary).receiptStatus === 'RECEIVED'} onClick={() => openReceiptMatch(row as ReceivableFeeSummary)}>匹配水单</Button> : null}
-            <Button size="small" danger disabled={!isManualEditable(row)} onClick={() => confirmRunRows(type, 'delete', [row])}>删除</Button>
-          </Space>
-        ) : <Text type="secondary">系统生成</Text>
-      }
-    ];
-    if (type === 'RECEIVABLE') return base.filter((column) => !['chargeWeightKg', 'unitPrice', 'amountOverridden', 'agentName', 'businessProfit'].includes(String(column.key)));
-    if (type === 'BUSINESS_COST') return base.filter((column) => !['paymentNo', 'receivedAmount', 'receiptStatus'].includes(String(column.key)) && !(String(column.key) === 'agentName' && !canViewBusinessCostAgent));
-    return base.filter((column) => !['paymentNo', 'receivedAmount', 'receiptStatus', 'businessProfit'].includes(String(column.key)));
-  };
-
-  const draftRequiredColumns: Record<OrderFeeTableType, string[]> = {
-    RECEIVABLE: ['name', 'currency', 'settlementMethod', 'status', 'paymentNo', 'amount', 'remark', 'actions'],
-    BUSINESS_COST: ['name', 'currency', 'status', 'chargeWeightKg', 'unitPrice', 'amount', 'remark', 'actions'],
-    PAYABLE: ['agentName', 'name', 'currency', 'status', 'chargeWeightKg', 'unitPrice', 'amount', 'remark', 'actions']
-  };
-
-  const renderTable = (type: OrderFeeTableType, rows: OrderFeeRow[]) => {
-    const canManage = canManageType(role, type, permissions);
-    const allColumns = createColumns(type);
-    const keys = allColumns.map((column) => String(column.key));
-    const preference = columnPreferences[type];
-    const draft = draftRows[type];
-    const baseVisible = preference.visible.length ? preference.visible : resolveDefaultVisibleColumns(type, keys);
-    const visible = draft
-      ? Array.from(new Set([...baseVisible, ...draftRequiredColumns[type].filter((key) => keys.includes(key))]))
-      : baseVisible;
-    const baseOrder = preference.order.length ? preference.order.filter((key) => keys.includes(key)) : resolveDefaultColumnOrder(type, keys);
-    const order = draft
-      ? [...baseOrder, ...draftRequiredColumns[type].filter((key) => keys.includes(key) && !baseOrder.includes(key))]
-      : baseOrder;
-    const orderedColumns = order
-      .map((key) => allColumns.find((column) => String(column.key) === key))
-      .filter(Boolean) as ColumnsType<OrderFeeDisplayRow>;
-    const visibleColumns = orderedColumns.filter((column) => visible.includes(String(column.key)));
-    const selected = selectedRowKeys[type];
-    const selectedRows = rows.filter((row) => selected.includes(row.id));
-    const total = rows.reduce((sum, row) => sum + (row.rmbAmount ?? row.amount), 0);
-    const chargeWeightTotal = rows.reduce((sum, row) => sum + ('chargeWeightKg' in row && row.chargeWeightKg ? row.chargeWeightKg : 0), 0);
-    const dataSource: OrderFeeDisplayRow[] = draft ? [draft, ...rows] : rows;
-
-    return (
-      <div className="shipment-finance-table-card order-fee-table-card" key={type}>
-        <div className="shipment-finance-table-heading">
-          <div>
-            <div className="shipment-finance-table-title">{feeTypeTitles[type]}</div>
-            <Text type="secondary">{feeTypeDescriptions[type]}</Text>
-          </div>
-          <Space wrap>
-            {renderColumnSettings(type, allColumns)}
-            {canManage ? <Button size="small" type="primary" onClick={() => openDraft(type)}>添加</Button> : null}
-          </Space>
+        <div className="order-fee-inspector-empty">
+          <strong>暂无{feeTypeTitles[activeType]}</strong>
+          <Text type="secondary">可点击“新增费用”在右侧直接录入。</Text>
         </div>
-        <Table
-          className="finance-work-table finance-embedded-table"
-          rowKey="id"
-          columns={visibleColumns}
-          dataSource={dataSource}
-          size="small"
-          scroll={{ x: Math.max(1500, visibleColumns.reduce((sum, column) => sum + Number(column.width ?? 120), 0)) }}
-          loading={loading}
-          pagination={{ ...tenRowTablePagination, hideOnSinglePage: true }}
-          rowSelection={{
-            selectedRowKeys: selected,
-            onChange: (next) => setSelectedRowKeys((current) => ({ ...current, [type]: next.map(String) })),
-            columnWidth: 56,
-            fixed: true,
-            getCheckboxProps: (row) => ({ disabled: !canManage || isDraftRow(row) || row.sourceType !== 'MANUAL' })
-          }}
-          onRow={(row) => isDraftRow(row) ? { 'data-order-fee-draft': type, className: 'order-fee-draft-row' } : {}}
-          expandable={{
-            rowExpandable: (row) => !isDraftRow(row),
-            expandedRowRender: (row) => (
-              <div className="order-fee-expanded-row">
-                {!isDraftRow(row) ? (
-                  <>
-                    <span>制单：{row.createdBy || '-'} / {formatOptionalDate(row.createdAt)}</span>
-                    <span>审单：{row.reviewedBy || '-'} / {formatOptionalDate(row.reviewedAt)}</span>
-                    <span>备注：{row.remark || '-'}</span>
-                  </>
-                ) : null}
-              </div>
-            )
-          }}
-          summary={() => (
-            <Table.Summary fixed>
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0} colSpan={3}>合计</Table.Summary.Cell>
-                <Table.Summary.Cell index={3} colSpan={Math.max(1, visibleColumns.length - 3)}>
-                  {formatCurrency(total)}，计费重 {chargeWeightTotal.toFixed(3)} kg，共 {rows.length} 行
-                </Table.Summary.Cell>
-              </Table.Summary.Row>
-            </Table.Summary>
-          )}
-          locale={{ emptyText: `暂无${feeTypeTitles[type]}` }}
-        />
-        {canManage ? (
-          <div className="order-fee-toolbar">
-            <Space wrap>
-              <Text type="secondary">已选 {selected.length} 条</Text>
-              <Button size="small" disabled={!selected.length} onClick={() => confirmRunRows(type, 'delete', selectedRows)}>删除</Button>
-              <Button size="small" disabled={!selected.length} onClick={() => confirmRunRows(type, 'recalc', selectedRows)}>重算</Button>
-              <Button size="small" disabled={!selected.length} onClick={() => confirmRunRows(type, 'lock', selectedRows)}>锁定</Button>
-              <Button size="small" disabled={!selected.length} onClick={() => confirmRunRows(type, 'unlock', selectedRows)}>解锁</Button>
-              <Dropdown
-                menu={{ items: quickFeeNames.map((name) => ({ key: name, label: name })), onClick: ({ key }) => quickAdd(type, String(key)) }}
-                trigger={['click']}
-              >
-                <Button size="small">快速添加</Button>
-              </Dropdown>
-            </Space>
+      );
+    }
+
+    const isReceivable = activeType === 'RECEIVABLE';
+    const canDeleteInspected = inspectedRow.sourceType === 'MANUAL' && canDeleteFee;
+    const canMatchInspected = isReceivable && canMatchReceipt;
+    const agentName = 'agentName' in inspectedRow ? inspectedRow.agentName || shipment.agentName || '-' : shipment.agentName || '-';
+    const receiptStatus = isReceivable && 'receiptStatus' in inspectedRow ? inspectedRow.receiptStatus : undefined;
+    const receivable = isReceivable ? inspectedRow as ReceivableFeeSummary : undefined;
+    const pendingMatchRequest = receivable?.pendingMatchRequests?.find((request) => request.status === 'PENDING')
+      ?? receivable?.pendingMatchRequest;
+    const receiptMatchDisabledReason = receivable && hasPendingReceiptMatch(receivable)
+      ? '该应收已有待财务审核的水单匹配申请'
+      : receiptStatus === 'RECEIVED'
+        ? '该应收费用已完成收款，无需再次匹配水单'
+        : undefined;
+    return (
+      <div className="order-fee-inspector-detail">
+        <div className="order-fee-inspector-heading">
+          <div>
+            <strong>费用详情</strong>
+            <Text type="secondary">{feeTypeTitles[activeType]} · {inspectedRow.name}</Text>
           </div>
-        ) : null}
+          {renderStatus(inspectedRow)}
+        </div>
+        <section className="order-fee-inspector-group">
+          <h4>基础信息</h4>
+          <div className="order-fee-inspector-grid">
+            {detailItem('费用名称', inspectedRow.name)}
+            {detailItem('客户编号', parseCustomerCode(shipment.customerName))}
+            {detailItem('出货单号', renderShipmentOrderNoLink(shipment.systemOrderNo, { shipment }))}
+            {detailItem('转单号', shipment.transferNo || '-')}
+            {activeType !== 'RECEIVABLE' && (activeType !== 'BUSINESS_COST' || canViewBusinessCostAgent)
+              ? detailItem(agentFieldLabels.detailedCompanyName, agentName, true)
+              : null}
+          </div>
+        </section>
+        <section className="order-fee-inspector-group">
+          <h4>计算与收付</h4>
+          <div className="order-fee-inspector-grid">
+            {detailItem('币种', inspectedRow.currency || 'RMB')}
+            {detailItem('金额', formatFinanceAmount(inspectedRow.amount, inspectedRow.currency))}
+            {detailItem('人民币合计', formatRmbAmount(inspectedRow))}
+            {detailItem('结算方式', inspectedRow.settlementMethod || '-')}
+            {detailItem('付款编号', inspectedRow.paymentNo || '-')}
+            {isReceivable && 'matchedReceiptNo' in inspectedRow ? detailItem('匹配水单编号', inspectedRow.matchedReceiptNo || '-') : null}
+            {isReceivable && 'receivedAmount' in inspectedRow ? detailItem('已收金额', formatFinanceAmount(Number(inspectedRow.receivedAmount ?? 0), inspectedRow.currency)) : null}
+            {isReceivable ? detailItem('收款状态', receiptStatus ? receiptStatusLabel[receiptStatus] ?? receiptStatus : '未收款') : null}
+            {isReceivable && 'receivedAt' in inspectedRow ? detailItem('收款时间', formatOptionalDate(inspectedRow.receivedAt)) : null}
+            {isReceivable && 'receiptMatchSource' in inspectedRow ? detailItem('匹配来源', inspectedRow.receiptMatchSource === 'AUTO' ? '自动匹配' : inspectedRow.receiptMatchSource === 'MANUAL' ? '手动匹配' : '-') : null}
+            {isReceivable && 'receiptMatchHint' in inspectedRow && inspectedRow.receiptMatchHint ? detailItem('匹配提示', inspectedRow.receiptMatchHint, true) : null}
+            {pendingMatchRequest ? detailItem('匹配申请', <Space size={6}><Tag color="gold">待财务审核</Tag><span>{pendingMatchRequest.receiptNo} · {formatFinanceAmount(pendingMatchRequest.amount, pendingMatchRequest.currency)}</span></Space>, true) : null}
+            {hasChargePricing(inspectedRow) ? detailItem('计费重', inspectedRow.chargeWeightKg === undefined ? '-' : `${inspectedRow.chargeWeightKg} kg`) : null}
+            {hasChargePricing(inspectedRow) ? detailItem('单价', inspectedRow.unitPrice === undefined ? '-' : `${formatFinanceAmount(inspectedRow.unitPrice, inspectedRow.currency)}/kg`) : null}
+            {hasChargePricing(inspectedRow) ? detailItem('金额来源', inspectedRow.amountOverridden ? <Tag color="orange">人工覆盖</Tag> : '公式计算') : null}
+            {'businessProfit' in inspectedRow ? detailItem('业务利润', inspectedRow.businessProfit === undefined ? '-' : formatCurrency(inspectedRow.businessProfit)) : null}
+          </div>
+        </section>
+        <section className="order-fee-inspector-group">
+          <h4>审计信息</h4>
+          <div className="order-fee-inspector-grid">
+            {detailItem('制单日期', formatOptionalDate(inspectedRow.createdAt))}
+            {detailItem('制单人', inspectedRow.createdBy || '-')}
+            {detailItem('审单日期', formatOptionalDate(inspectedRow.reviewedAt))}
+            {detailItem('审单人', inspectedRow.reviewedBy || '-')}
+            {detailItem('费用来源', inspectedRow.sourceType === 'MANUAL' ? '手工录入' : '系统生成')}
+            {detailItem('备注', inspectedRow.remark || '-', true)}
+          </div>
+        </section>
+        <div className="order-fee-inspector-actions">
+          {canMatchInspected ? (
+            <Tooltip title={receiptMatchDisabledReason}>
+              <span aria-label={receiptMatchDisabledReason}>
+                <Button disabled={Boolean(receiptMatchDisabledReason)} onClick={() => openReceiptMatch(inspectedRow as ReceivableFeeSummary)}>匹配水单</Button>
+              </span>
+            </Tooltip>
+          ) : null}
+          {canDeleteInspected ? (
+            <Button danger disabled={!isManualEditable(inspectedRow)} onClick={() => confirmRunRows(activeType, 'delete', [inspectedRow])}>删除</Button>
+          ) : null}
+          {!canMatchInspected && !canDeleteInspected ? <Text type="secondary">当前账号仅支持查看</Text> : null}
+        </div>
       </div>
     );
   };
 
   const metric = (label: string, value: ReactNode, tone: 'neutral' | 'success' | 'warning' = 'neutral') => (
-    <div className={`shipment-finance-metric shipment-finance-metric-${tone}`}>
+    <div key={label} className={`shipment-finance-metric shipment-finance-metric-${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
   );
 
   const profitSections = roleCanViewPayables ? detail?.profitSections ?? [] : [];
+  const receivableRmbTotal = receivableRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
+  const businessCostRmbTotal = businessCostRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
+  const payableRmbTotal = payableRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
+  const hasUnsupportedRmbAmount = currentRows.some((row) => resolveRmbAmount(row) === undefined);
+  const total = currentRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
+  const chargeWeightTotal = currentRows.reduce((sum, row) => sum + (hasChargePricing(row) ? Number(row.chargeWeightKg ?? 0) : 0), 0);
 
   return (
     <section className="shipment-detail-section shipment-detail-finance-section">
+      {modalContextHolder}
       <div className="shipment-detail-section-title">费用与利润</div>
       {loading && !detail ? <Text type="secondary">正在加载财务明细...</Text> : null}
       <div className="shipment-finance-metrics">
-        {metric('应收费用', receivableRows.length ? formatCurrency(detail?.receivableTotal ?? 0) : '待生成', receivableRows.length ? 'success' : 'warning')}
-        {metric('业务成本', detail?.businessCostTotal === undefined ? '待生成' : formatCurrency(detail.businessCostTotal))}
-        {visiblePayables ? metric('应付费用', payableRows.length ? formatCurrency(detail?.payableTotal ?? 0) : '待生成', payableRows.length ? 'warning' : 'neutral') : null}
+        {metric('应收费用', receivableRows.length ? formatCurrency(receivableRmbTotal) : '待生成', receivableRows.length ? 'success' : 'warning')}
+        {metric('业务成本', businessCostRows.length ? formatCurrency(businessCostRmbTotal) : '待生成')}
+        {visiblePayables ? metric('应付费用', payableRows.length ? formatCurrency(payableRmbTotal) : '待生成', payableRows.length ? 'warning' : 'neutral') : null}
         {visiblePayables ? metric('利润汇总', detail?.grossProfit === undefined ? '待生成' : formatCurrency(detail.grossProfit), detail?.grossProfit === undefined ? 'neutral' : detail.grossProfit >= 0 ? 'success' : 'warning') : null}
       </div>
       {profitSections.length ? (
-        <Collapse
-          className="order-fee-profit-collapse"
-          size="small"
-          defaultActiveKey={['profit']}
-          items={[{
-            key: 'profit',
-            label: '利润明细',
-            children: (
-              <div className="order-fee-profit-grid">
-                {profitSections.map((item) => (
-                  <div key={item.key}>{metric(item.title, formatCurrency(item.amount), item.amount >= 0 ? 'success' : 'warning')}</div>
-                ))}
-              </div>
-            )
-          }]}
-        />
+        <div className="order-fee-profit-band">
+          <div className="order-fee-profit-band-title">利润明细</div>
+          {profitSections.map((item) => metric(item.title, formatCurrency(item.amount), item.amount >= 0 ? 'success' : 'warning'))}
+        </div>
       ) : null}
-      <div className="shipment-finance-table-stack">
-        {renderTable('RECEIVABLE', receivableRows)}
-        {renderTable('BUSINESS_COST', businessCostRows)}
-        {visiblePayables ? renderTable('PAYABLE', payableRows) : null}
+      <div className="order-fee-workbench">
+        <div className="order-fee-workbench-head">
+          <div className="order-fee-type-tabs" role="tablist" aria-label="费用分类">
+            {visibleTypes.map((type) => (
+              <Button
+                key={type}
+                type={activeType === type ? 'primary' : 'text'}
+                role="tab"
+                aria-selected={activeType === type}
+                onClick={() => changeType(type)}
+              >
+                {feeTypeTitles[type]} <span>{rowsByType[type].length}</span>
+              </Button>
+            ))}
+          </div>
+          {canCreateFee ? <Button type="primary" onClick={() => openEditor(activeType)}>新增费用</Button> : null}
+        </div>
+        <div className="order-fee-master-detail">
+          <div className="order-fee-master-pane">
+            <Table<OrderFeeRow>
+              className="finance-work-table finance-embedded-table order-fee-compact-table"
+              rowKey="id"
+              columns={compactColumns}
+              dataSource={currentRows}
+              size="small"
+              tableLayout="fixed"
+              loading={loading}
+              pagination={{ ...tenRowTablePagination, hideOnSinglePage: true }}
+              rowSelection={canDeleteFee ? {
+                selectedRowKeys: selectedKeys,
+                onChange: (next) => setSelectedRowKeys((current) => ({ ...current, [activeType]: next.map(String) })),
+                columnWidth: 42,
+                getCheckboxProps: (row) => ({ disabled: !isManualEditable(row) })
+              } : undefined}
+              onRow={(row) => ({ onClick: () => inspectRow(row.id) })}
+              rowClassName={(row) => row.id === inspectedRow?.id ? 'order-fee-row-active' : ''}
+              locale={{ emptyText: `暂无${feeTypeTitles[activeType]}` }}
+            />
+            <div className="order-fee-master-summary">
+              <span>共 {currentRows.length} 条</span>
+              <span>人民币合计 {hasUnsupportedRmbAmount ? '缺少有效汇率' : formatCurrency(total)}</span>
+              {activeType !== 'RECEIVABLE' ? <span>计费重 {chargeWeightTotal.toFixed(3)} kg</span> : null}
+            </div>
+            {canCreateFee || canDeleteFee ? (
+              <div className="order-fee-toolbar">
+                <Space wrap>
+                  {canDeleteFee ? <Text type="secondary">已选 {selectedKeys.length} 条</Text> : null}
+                  {canDeleteFee ? <Button size="small" disabled={!selectedKeys.length} onClick={() => confirmRunRows(activeType, 'delete', selectedRows)}>删除</Button> : null}
+                  {canCreateFee ? (
+                    <Dropdown
+                      menu={{ items: quickFeeNames.map((name) => ({ key: name, label: name })), onClick: ({ key }) => quickAdd(activeType, String(key)) }}
+                      trigger={['click']}
+                    >
+                      <Button size="small">快速添加</Button>
+                    </Dropdown>
+                  ) : null}
+                </Space>
+              </div>
+            ) : null}
+          </div>
+          <aside className="order-fee-inspector-pane" aria-label="费用详情与编辑">
+            {renderInspector()}
+          </aside>
+        </div>
       </div>
       <Modal
-        title={`${editor?.row ? '修改' : '新增'}${editor ? feeTypeTitles[editor.type] : '费用'}`}
-        className="finance-modal"
-        open={Boolean(editor)}
-        onCancel={() => setEditor(null)}
-        onOk={submitEditor}
-        confirmLoading={submitting}
-        width={760}
-        forceRender
-        destroyOnHidden
-      >
-        <Form form={editorForm} layout="vertical">
-          <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请选择或输入费用名称' }]}>
-            <Select showSearch options={feeNameOptions} placeholder="选择费用名称" />
-          </Form.Item>
-          <Space size={12} className="order-fee-editor-row">
-            <Form.Item name="currency" label="币种" rules={[{ required: true, message: '请选择币种' }]}>
-              <Select options={financeCatalogCurrencyOptions.map((item) => ({ label: item, value: item }))} />
-            </Form.Item>
-            <Form.Item name="settlementMethod" label="结算方式">
-              <Select allowClear options={settlementOptions} placeholder="选择结算方式" />
-            </Form.Item>
-            <Form.Item name="reconciliationStatus" label="对账状态">
-              <Select options={Object.entries(financeStatusLabel).filter(([value]) => value !== 'VOIDED').map(([value, label]) => ({ label, value }))} />
-            </Form.Item>
-          </Space>
-          {editor?.type === 'PAYABLE' ? (
-            <Form.Item name="agentName" label="代理">
-              <Input placeholder="代理名称" />
-            </Form.Item>
-          ) : null}
-          {editor?.type === 'RECEIVABLE' ? (
-            <Form.Item name="paymentNo" label="付款编号">
-              <Input placeholder="匹配水单后自动回写，也可手动记录付款编号" />
-            </Form.Item>
-          ) : null}
-          {editor?.type === 'BUSINESS_COST' || editor?.type === 'PAYABLE' ? (
-            <Space size={12} className="order-fee-editor-row">
-              <Form.Item name="chargeWeightKg" label="计费重">
-                <InputNumber min={0} precision={3} addonAfter="kg" />
-              </Form.Item>
-              <Form.Item name="unitPrice" label={editor.type === 'PAYABLE' ? '代理成本单价' : '单价'}>
-                <InputNumber min={0} precision={2} />
-              </Form.Item>
-            </Space>
-          ) : null}
-          <Form.Item name="amount" label="总金额" rules={[{ required: true, message: '请输入金额' }]}>
-            <InputNumber min={0} precision={2} className="order-fee-editor-amount" />
-          </Form.Item>
-          <Form.Item name="remark" label="备注">
-            <Input.TextArea rows={3} />
-          </Form.Item>
-        </Form>
-      </Modal>
-      <Modal
-        title="匹配已到账水单"
+        title="提交水单匹配申请"
         className="finance-modal"
         open={Boolean(receiptMatch)}
         onCancel={() => setReceiptMatch(null)}
@@ -894,7 +806,7 @@ export function OrderFeePanel({
         destroyOnHidden
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Text type="secondary">仅显示同客户、已到账、未归档/未作废且仍有余额的水单。</Text>
+          <Text type="secondary">提交后进入财务“水单匹配”，财务审核通过后才更新水单、应收和客户账户余额。</Text>
           <InputNumber
             min={0}
             precision={2}
@@ -917,7 +829,7 @@ export function OrderFeePanel({
               { title: '已匹配', dataIndex: 'matchedAmount', width: 110, align: 'right', render: (value: number) => value.toFixed(2) },
               { title: '余额', dataIndex: 'balance', width: 110, align: 'right', render: (value: number) => value.toFixed(2) },
               { title: '付款编号', dataIndex: 'paymentNo', width: 140, render: (value?: string) => value || '-' },
-              { title: '操作', key: 'actions', width: 90, fixed: 'right', render: (_, row) => <Button size="small" type="primary" onClick={() => submitReceiptMatch(row)}>匹配</Button> }
+              { title: '操作', key: 'actions', width: 100, fixed: 'right', render: (_, row) => <Button size="small" type="primary" onClick={() => submitReceiptMatch(row)}>提交申请</Button> }
             ]}
             locale={{ emptyText: '暂无可匹配水单' }}
           />

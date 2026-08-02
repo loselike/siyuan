@@ -348,6 +348,7 @@ export function ReportsPage(props: {
                   rowKey="key"
                   dataSource={operationsRows}
                   pagination={false}
+                  recordDetail={false}
                   columns={[
                     { title: '业务类型', dataIndex: 'businessType', key: 'businessType', width: 140, fixed: 'left' },
                     { title: '运单数', dataIndex: 'shipmentCount', key: 'shipmentCount', width: 120 },
@@ -374,6 +375,7 @@ export function ReportsPage(props: {
                   rowKey="key"
                   dataSource={warehouseRows}
                   pagination={false}
+                  recordDetail={false}
                   columns={[
                     { title: '仓库节点', dataIndex: 'stage', key: 'stage', width: 140, fixed: 'left' },
                     { title: '运单数', dataIndex: 'shipmentCount', key: 'shipmentCount', width: 120 },
@@ -392,6 +394,7 @@ export function ReportsPage(props: {
                   rowKey="key"
                   dataSource={financeRows}
                   pagination={false}
+                  recordDetail={false}
                   columns={[
                     { title: '报表类型', dataIndex: 'reportName', key: 'reportName', width: 140, fixed: 'left' },
                     { title: '记录数', dataIndex: 'recordCount', key: 'recordCount', width: 120 },

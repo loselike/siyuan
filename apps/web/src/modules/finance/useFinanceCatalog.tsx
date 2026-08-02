@@ -9,7 +9,7 @@ import {
   normalizeFinanceCatalogCurrency
 } from './catalog';
 
-export function useFinanceCatalog(apiClient: ApiClient) {
+export function useFinanceCatalog(apiClient: ApiClient, enabled = true) {
   const [items, setItems] = useState<FinanceCatalogItemSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [filters, setFilters] = useState(createFinanceCatalogFilters);
@@ -36,8 +36,9 @@ export function useFinanceCatalog(apiClient: ApiClient) {
   }, [apiClient, showError]);
 
   useEffect(() => {
+    if (!enabled) return;
     void refresh();
-  }, [refresh]);
+  }, [enabled, refresh]);
 
   const getCategoryRows = useCallback(
     (category: FinanceCatalogCategory) => items

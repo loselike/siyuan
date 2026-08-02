@@ -22,6 +22,21 @@ export const financeCatalogCategoryHints: Record<FinanceCatalogCategory, string>
 
 export const financeCatalogCurrencyOptions = ['RMB', 'USD', 'HKD'];
 
+type FinanceFeeNameSource = Pick<FinanceCatalogItemSummary, 'category' | 'enabled' | 'sortOrder' | 'name'>;
+
+export function createFinanceFeeNameOptions(items: FinanceFeeNameSource[]) {
+  const names = new Set<string>();
+  return [...items]
+    .filter((item) => item.category === 'FEE_NAME' && item.enabled)
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-Hans-CN'))
+    .flatMap((item) => {
+      const name = item.name.trim();
+      if (!name || names.has(name)) return [];
+      names.add(name);
+      return [{ label: name, value: name }];
+    });
+}
+
 export const createFinanceCatalogFilters = (): Record<FinanceCatalogCategory, { keyword: string; enabledOnly: boolean }> => ({
   FEE_NAME: { keyword: '', enabledOnly: false },
   SETTLEMENT_METHOD: { keyword: '', enabledOnly: false },

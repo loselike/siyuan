@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Flex, Form, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import { RefreshCw } from 'lucide-react';
 import type {
@@ -15,9 +15,11 @@ import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { downloadCsv } from '../exportCsv';
 import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput';
 import { formatBeijingDateTime } from '../../shared/format';
-import { AppDatePicker, isAppDateRangeInvalid, ManagedTable } from '../../shared/ui';
+import { agentFieldLabels } from '../../shared/agentFieldLabels';
+import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
 
 const { Text } = Typography;
+const bankAccountOrdinals = ['一', '二', '三'];
 
 type PendingPaymentFormValues = PendingPaymentListQuery;
 
@@ -37,6 +39,16 @@ type PendingPaymentPageProps = {
   initialQuery?: PendingPaymentListQuery;
 };
 
+type PaymentApplicationGroup = {
+  key: string;
+  agentName: string;
+  agentShortName: string;
+  currency: 'RMB' | 'USD';
+  bank?: PayeeBankAccountSummary;
+  rows: PendingPaymentSummary[];
+  amount: number;
+};
+
 const defaultPendingPaymentQuery: PendingPaymentListQuery = {
   page: 1,
   pageSize: 10,
@@ -53,6 +65,29 @@ function hasPermission(permissions: PermissionKey[], permission: PermissionKey) 
 function formatMoney(amount?: number) {
   if (typeof amount !== 'number' || Number.isNaN(amount)) return '-';
   return amount.toFixed(2);
+}
+
+function groupPaymentApplications(rows: PendingPaymentSummary[]) {
+  const groups = new Map<string, PaymentApplicationGroup>();
+  rows.forEach((row) => {
+    const bankIdentity = row.bankAccount
+      ? `${row.bankAccount.id}|${row.bankAccount.accountName}|${row.bankAccount.bankName}|${row.bankAccount.bankAccountNo}`
+      : '待选择银行';
+    const key = `${row.agentName ?? '未指定代理'}|${bankIdentity}|${row.currency}`;
+    const current = groups.get(key) ?? {
+      key,
+      agentName: row.agentName ?? '未指定代理',
+      agentShortName: row.agentShortName ?? '-',
+      currency: row.currency,
+      bank: row.bankAccount,
+      rows: [],
+      amount: 0
+    };
+    current.rows.push(row);
+    current.amount = Number((current.amount + row.amount).toFixed(2));
+    groups.set(key, current);
+  });
+  return Array.from(groups.values());
 }
 
 function renderPaymentStatus(status: PendingPaymentSummary['status']) {
@@ -77,13 +112,19 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [applicationOpen, setApplicationOpen] = useState(false);
+  const [applicationSubmitting, setApplicationSubmitting] = useState(false);
+  const applicationSubmittingRef = useRef(false);
   const [voucherTarget, setVoucherTarget] = useState<PendingPaymentSummary | null>(null);
   const [previewTarget, setPreviewTarget] = useState<PendingPaymentSummary | null>(null);
   const [bankOptions, setBankOptions] = useState<PayeeBankAccountSummary[]>([]);
-  const canMaintainPayment = hasPermission(permissions, 'finance:payable:payment');
-  const canMaintainBank = hasPermission(permissions, 'finance:payable:bank');
-  const canUploadAttachment = hasPermission(permissions, 'finance:payable:attachment');
-  const canExport = hasPermission(permissions, 'finance:payable:export');
+  const [bankOptionsLoading, setBankOptionsLoading] = useState(false);
+  const [manualBankMode, setManualBankMode] = useState(false);
+  const canCreatePaymentApplication = hasPermission(permissions, 'finance:pending-payment:create');
+  const canCancelPaymentApplication = hasPermission(permissions, 'finance:pending-payment:cancel');
+  const canSelectBank = hasPermission(permissions, 'finance:pending-payment:bank-select');
+  const canMaintainBank = hasPermission(permissions, 'finance:pending-payment:bank-manage');
+  const canUploadAttachment = hasPermission(permissions, 'finance:pending-payment:bill-voucher-upload');
+  const canExport = hasPermission(permissions, 'finance:pending-payment:export');
 
   const loadRows = async (nextQuery = query) => {
     setLoading(true);
@@ -115,17 +156,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     [response.rows, selectedIds]
   );
 
-  const groupedApplications = useMemo(() => {
-    const groups = new Map<string, { key: string; agentName: string; currency: 'RMB' | 'USD'; bank?: PayeeBankAccountSummary; rows: PendingPaymentSummary[]; amount: number }>();
-    selectedRows.forEach((row) => {
-      const key = `${row.agentName ?? '未指定代理'}|${row.bankAccount?.bankAccountNo ?? '待选择银行'}|${row.currency}`;
-      const current = groups.get(key) ?? { key, agentName: row.agentName ?? '未指定代理', currency: row.currency, bank: row.bankAccount, rows: [], amount: 0 };
-      current.rows.push(row);
-      current.amount = Number((current.amount + row.amount).toFixed(2));
-      groups.set(key, current);
-    });
-    return Array.from(groups.values());
-  }, [selectedRows]);
+  const groupedApplications = useMemo(() => groupPaymentApplications(selectedRows), [selectedRows]);
   const hasMultipleApplicationGroups = groupedApplications.length > 1;
   const selectedAmountByCurrency = useMemo(() => {
     const amountMap = new Map<string, number>();
@@ -157,21 +188,26 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     await loadRows(next);
   };
 
-  const openApplication = async () => {
-    if (!selectedRows.length) {
+  const openApplication = async (rows = selectedRows) => {
+    if (!rows.length) {
       message.warning('请先勾选待付款记录');
       return;
     }
-    if (hasMultipleApplicationGroups) {
+    const groups = groupPaymentApplications(rows);
+    if (groups.length > 1) {
       message.warning('当前选择跨收款方、银行账号或币种，请按同一付款组分开生成付款申请');
       return;
     }
-    const first = selectedRows[0];
+    const rowIds = rows.map((row) => row.id);
+    const first = rows[0];
+    setSelectedIds(rowIds);
+    setBankOptions([]);
+    setManualBankMode(false);
     applicationForm.setFieldsValue({
-      pendingPaymentIds: selectedIds,
+      pendingPaymentIds: rowIds,
       agentName: first.agentName,
       currency: first.currency,
-      bankAccountId: first.bankAccount?.id,
+      bankAccountId: canSelectBank ? first.bankAccount?.id : undefined,
       accountName: first.bankAccount?.accountName,
       bankName: first.bankAccount?.bankName,
       bankAccountNo: first.bankAccount?.bankAccountNo,
@@ -179,50 +215,127 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       saveBank: true
     });
     setApplicationOpen(true);
+    setBankOptionsLoading(true);
     try {
-      const banks = first.agentName ? await apiClient.payeeBankAccounts({ agentName: first.agentName, currency: first.currency }) : [];
+      const banks = canSelectBank && first.agentName ? await apiClient.payeeBankAccounts({ agentName: first.agentName, currency: first.currency }) : [];
       setBankOptions(banks);
+      const selectedBank = banks.find((bank) => bank.id === first.bankAccount?.id) ?? first.bankAccount;
+      if (selectedBank) {
+        applicationForm.setFieldsValue({
+          bankAccountId: selectedBank.id,
+          accountName: selectedBank.accountName,
+          bankName: selectedBank.bankName,
+          bankAccountNo: selectedBank.bankAccountNo,
+          currency: selectedBank.currency
+        });
+      } else if (!banks.length && canMaintainBank) {
+        setManualBankMode(true);
+        applicationForm.setFieldsValue({
+          bankAccountId: undefined,
+          accountName: undefined,
+          bankName: undefined,
+          bankAccountNo: undefined
+        });
+      }
     } catch (error) {
       setBankOptions([]);
+      if (canMaintainBank) setManualBankMode(true);
       message.error(error instanceof Error ? error.message : '收款银行加载失败');
+    } finally {
+      setBankOptionsLoading(false);
     }
   };
 
-  const submitApplication = async () => {
-    const values = await applicationForm.validateFields();
-    if (hasMultipleApplicationGroups) {
-      message.warning('当前选择跨收款方、银行账号或币种，请分开提交');
+  const selectBankAccount = (bankAccountId?: string) => {
+    const bank = bankOptions.find((item) => item.id === bankAccountId);
+    if (!bank) {
+      setManualBankMode(canMaintainBank);
+      applicationForm.setFieldsValue({
+        bankAccountId: undefined,
+        accountName: undefined,
+        bankName: undefined,
+        bankAccountNo: undefined
+      });
       return;
     }
-    const useManual = !values.bankAccountId && values.accountName && values.bankName && values.bankAccountNo;
-    if (!values.bankAccountId && !useManual) {
-      message.warning('请补齐收款银行信息');
-      return;
-    }
-    if (!values.voucherImage?.fileName && selectedRows.some((row) => !row.vouchers.length)) {
-      message.warning('请上传供应商账单截图');
-      return;
-    }
-    await apiClient.createPaymentApplications({
-      pendingPaymentIds: selectedIds,
-      bankAccountId: values.bankAccountId,
-      remark: values.remark,
-      manualBankAccount: useManual ? {
-        agentName: values.agentName ?? selectedRows[0]?.agentName ?? '未指定代理',
-        accountName: values.accountName,
-        bankName: values.bankName,
-        bankAccountNo: values.bankAccountNo,
-        currency: values.currency ?? selectedRows[0]?.currency ?? 'RMB',
-        remark: values.remark
-      } : undefined,
-      saveManualBankAccount: useManual ? values.saveBank !== false : undefined,
-      voucher: values.voucherImage?.fileName ? values.voucherImage : undefined
+    setManualBankMode(false);
+    applicationForm.setFieldsValue({
+      bankAccountId: bank.id,
+      accountName: bank.accountName,
+      bankName: bank.bankName,
+      bankAccountNo: bank.bankAccountNo,
+      currency: bank.currency
     });
-    message.success('付款申请已提交');
+  };
+
+  const startManualBankEntry = () => {
+    if (!canMaintainBank) return;
+    setManualBankMode(true);
+    applicationForm.setFieldsValue({
+      bankAccountId: undefined,
+      accountName: undefined,
+      bankName: undefined,
+      bankAccountNo: undefined,
+      saveBank: true
+    });
+  };
+
+  const closeApplication = () => {
+    if (applicationSubmittingRef.current) return;
     setApplicationOpen(false);
+    setBankOptions([]);
+    setManualBankMode(false);
     applicationForm.resetFields();
-    setSelectedIds([]);
-    await loadRows();
+  };
+
+  const submitApplication = async () => {
+    if (applicationSubmittingRef.current) return;
+    applicationSubmittingRef.current = true;
+    setApplicationSubmitting(true);
+    try {
+      const values = await applicationForm.validateFields();
+      if (hasMultipleApplicationGroups) {
+        message.warning('当前选择跨收款方、银行账号或币种，请分开提交');
+        return;
+      }
+      const useManual = canMaintainBank && !values.bankAccountId && values.accountName && values.bankName && values.bankAccountNo;
+      const useExistingBank = !values.bankAccountId
+        && !useManual
+        && selectedRows.every((row) => Boolean(row.bankAccount?.id));
+      if (!values.bankAccountId && !useManual && !useExistingBank) {
+        message.warning('请补齐收款银行信息');
+        return;
+      }
+      if (!values.voucherImage?.fileName && selectedRows.some((row) => !row.vouchers.length)) {
+        message.warning('请上传供应商账单截图');
+        return;
+      }
+      await apiClient.createPaymentApplications({
+        pendingPaymentIds: selectedIds,
+        bankAccountId: values.bankAccountId,
+        remark: values.remark,
+        manualBankAccount: useManual ? {
+          agentName: values.agentName ?? selectedRows[0]?.agentName ?? '未指定代理',
+          accountName: values.accountName,
+          bankName: values.bankName,
+          bankAccountNo: values.bankAccountNo,
+          currency: values.currency ?? selectedRows[0]?.currency ?? 'RMB',
+          remark: values.remark
+        } : undefined,
+        saveManualBankAccount: useManual ? values.saveBank !== false : undefined,
+        voucher: values.voucherImage?.fileName ? values.voucherImage : undefined
+      });
+      message.success('付款申请已提交');
+      setApplicationOpen(false);
+      applicationForm.resetFields();
+      setSelectedIds([]);
+      await loadRows();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '付款申请提交失败');
+    } finally {
+      applicationSubmittingRef.current = false;
+      setApplicationSubmitting(false);
+    }
   };
 
   const submitVoucher = async () => {
@@ -243,28 +356,103 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       message.warning('该记录缺少付款申请关联，无法撤回');
       return;
     }
-    await apiClient.cancelPaymentApplication(row.paymentApplicationId, { reason: '财务撤回付款申请' });
-    message.success('付款申请已撤回');
-    await loadRows();
+    try {
+      await apiClient.cancelPaymentApplication(row.paymentApplicationId, { reason: '财务撤回付款申请' });
+      message.success('付款申请已撤回');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '付款申请撤回失败');
+    } finally {
+      await loadRows();
+    }
   };
 
   const exportRows = async () => {
     const exported = await apiClient.exportPaymentApplications({ ids: selectedIds.length ? selectedIds : undefined, query });
     downloadCsv('pending-payments.csv', [
       { key: 'date', label: '日期' },
-      { key: 'agentName', label: '代理' },
+      { key: 'agentShortName', label: agentFieldLabels.shortName },
       { key: 'salesperson', label: '业务员' },
       { key: 'customerCode', label: '客户编号' },
-      { key: 'systemOrderNo', label: '运单号' },
+      { key: 'systemOrderNo', label: '出货单号' },
       { key: 'feeName', label: '应付费用' },
       { key: 'currency', label: '币种' },
       { key: 'amount', label: '合计金额' },
       { key: 'remark', label: '备注' },
       { key: 'status', label: '状态' },
       { key: 'paymentApplicationNo', label: '付款申请编号' }
-    ], exported.rows as unknown as Array<Record<string, unknown>>);
+    ], exported.rows.map((row) => ({ ...row, date: row.date ? formatBeijingDateTime(row.date) : '-' })) as unknown as Array<Record<string, unknown>>);
     message.success(`付款申请导出已生成：${exported.rows.length} 条`);
   };
+
+  const columns: ManagedTableColumns<PendingPaymentSummary> = [
+    { title: '日期', dataIndex: 'date', width: 170, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+    { title: agentFieldLabels.shortName, dataIndex: 'agentShortName', width: 130, render: (value?: string) => value ?? '-' },
+    { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value ?? '-' },
+    { title: '客户编号', dataIndex: 'customerCode', width: 110 },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    { title: '应付费用', dataIndex: 'feeName', width: 140 },
+    { title: '币种', dataIndex: 'currency', width: 90 },
+    { title: '合计金额', dataIndex: 'amount', width: 130, align: 'right', sorter: true, render: (value: number) => <Text strong className="finance-payment-amount">{formatMoney(value)}</Text> },
+    { title: '备注', dataIndex: 'remark', width: 160, ellipsis: true, render: (value?: string) => value ?? '-' },
+    {
+      title: '对账单凭证',
+      dataIndex: 'vouchers',
+      width: 150,
+      render: (value: PendingPaymentSummary['vouchers'], row) => value.length
+        ? <Button className="finance-payment-voucher-button" size="small" onDoubleClick={() => setPreviewTarget(row)} onClick={() => setPreviewTarget(row)}>{value.length} 张凭证</Button>
+        : <Button size="small" disabled={!canUploadAttachment} onClick={() => setVoucherTarget(row)}>记录凭证</Button>
+    },
+    { title: '收款方银行信息', dataIndex: 'bankAccount', width: 260, render: (value?: PayeeBankAccountSummary) => value ? `${value.accountName} / ${value.bankName} / ${value.bankAccountNo}` : '待选择' },
+    { title: '状态', dataIndex: 'status', width: 120, render: renderPaymentStatus },
+    {
+      title: '操作',
+      key: 'action',
+      fixed: 'right',
+      width: 140,
+      render: (_, row) => {
+        if (row.status === 'APPLIED' && row.paymentApplicationId && canCancelPaymentApplication) {
+          return (
+            <Popconfirm title="确认撤回该付款申请？" onConfirm={() => void cancelApplication(row)}>
+              <Button size="small">撤回</Button>
+            </Popconfirm>
+          );
+        }
+        if ((row.status === 'PENDING' || row.status === 'READY') && canCreatePaymentApplication) {
+          return <Button size="small" type="link" onClick={() => void openApplication([row])}>发起付款</Button>;
+        }
+        return '-';
+      }
+    }
+  ];
+
+  const matrixColumns: ManagedTableColumns<PendingPaymentSummary> = [
+    {
+      key: 'matrixInformation',
+      title: '信息',
+      width: 960,
+      className: 'managed-matrix-group-primary',
+      render: (_value, row) => (
+        <ManagedMatrixCell
+          columns={4}
+          labelWidth={66}
+          fields={[
+            { key: 'date', label: '日期', value: <ManagedMatrixDateTime value={row.date ? formatBeijingDateTime(row.date) : undefined} /> },
+            { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
+            { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
+            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(row.systemOrderNo), title: row.systemOrderNo },
+            { key: 'agentShortName', label: agentFieldLabels.shortName, value: row.agentShortName || '-' },
+            { key: 'feeName', label: '应付费用', value: row.feeName || '-', title: row.feeName, wrap: true },
+            row.remark ? { key: 'remark', label: '备注', value: row.remark, title: row.remark, wrap: true } : null,
+            { key: 'amount', label: '合计金额', value: <Text strong className="finance-payment-amount">{row.currency} {formatMoney(row.amount)}</Text> },
+            { key: 'vouchers', label: '对账凭证', value: row.vouchers.length ? <Button className="finance-payment-voucher-button" size="small" onClick={() => setPreviewTarget(row)}>{row.vouchers.length} 张凭证</Button> : <Button size="small" disabled={!canUploadAttachment} onClick={() => setVoucherTarget(row)}>记录凭证</Button> },
+            { key: 'bankAccount', label: '收款银行', value: row.bankAccount ? `${row.bankAccount.accountName} / ${row.bankAccount.bankName} / ${row.bankAccount.bankAccountNo}` : '待选择', title: row.bankAccount?.bankAccountNo, wrap: true },
+            { key: 'status', label: '状态', value: renderPaymentStatus(row.status) }
+          ]}
+        />
+      )
+    },
+    { ...columns[columns.length - 1], key: 'action', width: 110, fixed: 'right' }
+  ];
 
   return (
     <Card
@@ -279,7 +467,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     >
       <Form form={queryForm} layout="vertical" className="finance-pending-filter-card">
         <div className="finance-pending-filter-bar" role="group" aria-label="待付款筛选条件">
-          <Form.Item name="agent" label="代理"><Input allowClear /></Form.Item>
+          <Form.Item name="agent" label={agentFieldLabels.shortName}><Input allowClear /></Form.Item>
           <Form.Item name="salesperson" label="业务员"><Input allowClear /></Form.Item>
           <Form.Item name="customerCode" label="客户编号"><Input allowClear /></Form.Item>
           <Form.Item name="systemOrderNo" label="出货单号"><Input allowClear /></Form.Item>
@@ -303,25 +491,53 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
 
       <div className="finance-payment-command-bar">
         <Space wrap className="finance-payment-command-primary">
-          <Button type="primary" disabled={!canMaintainPayment} onClick={openApplication}>生成付款申请</Button>
-          <Text type="secondary">已选 {selectedIds.length} 条，按收款方、银行账号、币种自动合并</Text>
+          {canCreatePaymentApplication ? (
+            <Button type="primary" disabled={!selectedRows.length} onClick={() => void openApplication()}>
+              批量发起付款
+            </Button>
+          ) : null}
+          <Text type="secondary">已选 {selectedRows.length} 条</Text>
           {hasMultipleApplicationGroups ? <Text type="warning">当前包含多个付款组，请分组提交</Text> : null}
         </Space>
         <Space wrap className="finance-payment-command-summary">
           {selectedAmountByCurrency.map((item) => <Tag color="blue" key={`selected-${item.currency}`}>已选 {item.currency}：{formatMoney(item.amount)}</Tag>)}
-          {response.totals.amountByCurrency.map((item) => <Tag key={`total-${item.currency}`}>{item.currency} 合计：{formatMoney(item.amount)}</Tag>)}
         </Space>
       </div>
 
-      <ManagedTable
-        className="finance-work-table"
+      <ManagedDualViewTable<PendingPaymentSummary>
+        viewStorageKey="sunny.finance.pendingPayment.view-v1"
+        viewAriaLabel="待付款表格视图"
+        defaultView="matrix"
+        views={{
+          matrix: {
+            label: '矩阵视图',
+            columns: matrixColumns,
+            tableProps: {
+              className: 'finance-work-table finance-pending-payment-matrix-table',
+              minimumScrollX: 0,
+              tableLayout: 'fixed',
+              showHeader: false,
+              recordDetail: { title: '待付款详情', columns },
+              columnSettings: { storageKey: 'sunny.finance.pendingPayment.matrix-columns-v2', title: '待付款矩阵列设置', lockedKeys: ['action'] }
+            }
+          },
+          ledger: {
+            label: '精密台账模式',
+            columns,
+            tableProps: {
+              className: 'finance-work-table finance-pending-payment-ledger-table',
+              minimumScrollX: 1500,
+              recordDetail: { title: '待付款详情' },
+              columnSettings: { storageKey: 'sunny.finance.pendingPayment.columns-v1', title: '待付款列设置', lockedKeys: ['systemOrderNo', 'action'] }
+            }
+          }
+        }}
         rowKey="id"
         size="small"
         loading={loading}
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
         rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.status === 'APPLIED' || row.status === 'INVALIDATED' || row.status === 'PAID' }) }}
         rowClassName={(row) => selectedIds.includes(row.id) ? 'finance-payment-row-selected' : ''}
-        scroll={{ x: 1500 }}
         dataSource={response.rows}
         onChange={(pagination, _, sorter) => {
           const sort = Array.isArray(sorter) ? sorter[0] : sorter;
@@ -335,45 +551,48 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
           setQuery(next);
           void loadRows(next);
         }}
-        columns={[
-          { title: '日期', dataIndex: 'date', width: 170, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
-          { title: '代理', dataIndex: 'agentName', width: 140, render: (value?: string) => value ?? '-' },
-          { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value ?? '-' },
-          { title: '客户编号', dataIndex: 'customerCode', width: 110 },
-          { title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (value?: string) => renderShipmentOrderNoLink(value) },
-          { title: '应付费用', dataIndex: 'feeName', width: 140 },
-          { title: '币种', dataIndex: 'currency', width: 90 },
-          { title: '合计金额', dataIndex: 'amount', width: 130, align: 'right', sorter: true, render: (value: number) => <Text strong className="finance-payment-amount">{formatMoney(value)}</Text> },
-          { title: '备注', dataIndex: 'remark', width: 160, ellipsis: true, render: (value?: string) => value ?? '-' },
-          {
-            title: '对账单凭证',
-            dataIndex: 'vouchers',
-            width: 150,
-            render: (value: PendingPaymentSummary['vouchers'], row) => value.length
-              ? <Button className="finance-payment-voucher-button" size="small" onDoubleClick={() => setPreviewTarget(row)} onClick={() => setPreviewTarget(row)}>{value.length} 张凭证</Button>
-              : <Button size="small" disabled={!canUploadAttachment} onClick={() => setVoucherTarget(row)}>记录凭证</Button>
-          },
-          { title: '收款方银行信息', dataIndex: 'bankAccount', width: 260, render: (value?: PayeeBankAccountSummary) => value ? `${value.accountName} / ${value.bankName} / ${value.bankAccountNo}` : '待选择' },
-          { title: '状态', dataIndex: 'status', width: 120, render: renderPaymentStatus },
-          {
-            title: '操作',
-            key: 'action',
-            fixed: 'right',
-            width: 120,
-            render: (_, row) => row.status === 'APPLIED' && row.paymentApplicationId && canMaintainPayment ? (
-              <Popconfirm title="确认撤回该付款申请？" onConfirm={() => void cancelApplication(row)}>
-                <Button size="small">撤回</Button>
-              </Popconfirm>
-            ) : '-'
-          }
-        ]}
+        columnSettingsPlacement="toolbar"
       />
 
-      <Modal title="生成付款申请" className="finance-modal finance-payment-application-modal" open={applicationOpen} onCancel={() => { setApplicationOpen(false); applicationForm.resetFields(); }} onOk={submitApplication} okText="提交付款申请" cancelText="取消" width={920}>
+      <Modal
+        title={(
+          <div className="finance-payment-application-title">
+            <span>生成付款申请</span>
+            <Text type="secondary">确认付款对象、收款账户和账单凭证后提交</Text>
+          </div>
+        )}
+        className="finance-modal finance-payment-application-modal"
+        open={applicationOpen}
+        onCancel={closeApplication}
+        onOk={submitApplication}
+        confirmLoading={applicationSubmitting}
+        cancelButtonProps={{ disabled: applicationSubmitting }}
+        closable={!applicationSubmitting}
+        maskClosable={!applicationSubmitting}
+        okText="提交付款申请"
+        cancelText="取消"
+        width={980}
+        footer={(
+          <Flex className="finance-payment-application-footer" align="center" justify="space-between" gap={12}>
+            <Text>
+              已选 <Text strong>{selectedRows.length}</Text> 项
+              {selectedAmountByCurrency.map((item) => (
+                <Text key={`modal-total-${item.currency}`}>
+                  {' '}· {item.currency} <Text strong className="finance-payment-application-footer-amount">{formatMoney(item.amount)}</Text>
+                </Text>
+              ))}
+            </Text>
+            <Space>
+              <Button disabled={applicationSubmitting} onClick={closeApplication}>取消</Button>
+              <Button type="primary" loading={applicationSubmitting} onClick={() => void submitApplication()}>提交付款申请</Button>
+            </Space>
+          </Flex>
+        )}
+      >
         <Space direction="vertical" className="full-width" size={12}>
           {hasMultipleApplicationGroups ? <Alert type="warning" showIcon message="当前包含多个付款组，请关闭后按同一收款方、银行账号和币种分开提交。" /> : null}
           <section className="finance-payment-modal-section">
-            <div className="finance-payment-section-title">已选付款组摘要</div>
+            <div className="finance-payment-section-title">付款摘要</div>
             <Table
               className="finance-work-table finance-embedded-table finance-payment-group-table"
               rowKey="key"
@@ -381,48 +600,79 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
               pagination={false}
               dataSource={groupedApplications}
               columns={[
-                { title: '代理', dataIndex: 'agentName' },
+                { title: agentFieldLabels.shortName, dataIndex: 'agentShortName' },
                 { title: '币种', dataIndex: 'currency', width: 90 },
                 { title: '明细数', dataIndex: 'rows', width: 90, render: (value: PendingPaymentSummary[]) => value.length },
-                { title: '合计金额', dataIndex: 'amount', width: 140, align: 'right', render: (value: number) => <Text strong>{formatMoney(value)}</Text> },
-                { title: '银行账号', dataIndex: 'bank', render: (value?: PayeeBankAccountSummary) => value ? `${value.bankName} / ${value.bankAccountNo}` : <Text type="warning">待选择</Text> }
+                { title: '合计金额', dataIndex: 'amount', width: 160, align: 'right', render: (value: number) => <Text strong className="finance-payment-application-summary-amount">{formatMoney(value)}</Text> }
               ]}
             />
           </section>
           <Form form={applicationForm} layout="vertical">
             <section className="finance-payment-modal-section">
-              <div className="finance-payment-section-title">收款银行</div>
-              <Row gutter={12}>
-                <Col xs={24} md={12}><Form.Item name="bankAccountId" label="选择收款银行"><Select allowClear showSearch optionFilterProp="label" disabled={!canMaintainBank} options={bankOptions.map((item) => ({ value: item.id, label: `${item.currency} / ${item.bankName} / ${item.accountName} / ${item.bankAccountNo}` }))} /></Form.Item></Col>
-                <Col xs={24} md={12}><Form.Item name="currency" label="银行币种"><Select disabled={!canMaintainBank} options={[{ label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
-              </Row>
-            </section>
-            <section className="finance-payment-modal-section">
-              <div className="finance-payment-section-title">手动银行信息</div>
-              <Row gutter={12}>
-                <Col xs={24} md={8}><Form.Item name="accountName" label="手动收款方名称"><Input disabled={!canMaintainBank} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="bankName" label="手动开户行"><Input disabled={!canMaintainBank} /></Form.Item></Col>
-                <Col xs={24} md={8}><Form.Item name="bankAccountNo" label="手动银行账号"><Input disabled={!canMaintainBank} /></Form.Item></Col>
-                <Col xs={24}>
-                  <Form.Item name="saveBank" valuePropName="checked">
-                    <Checkbox disabled={!canMaintainBank}>保存为代理银行，下次复用</Checkbox>
+              <div className="finance-payment-section-heading">
+                <div>
+                  <div className="finance-payment-section-title">收款银行信息</div>
+                  <Text type="secondary">从代理资料中选择已保存的收款银行，也可新增填写</Text>
+                </div>
+                <Tag color="blue">代理资料</Tag>
+              </div>
+              <Row gutter={12} align="bottom">
+                <Col xs={24} md={20}>
+                  <Form.Item name="bankAccountId" label="选择收款银行">
+                    <Select
+                      allowClear
+                      showSearch
+                      loading={bankOptionsLoading}
+                      placeholder={bankOptionsLoading ? '正在加载收款银行' : '请选择代理资料中的收款银行'}
+                      disabled={!canSelectBank}
+                      filterOption={(input, option) => String(option?.label ?? '').toLowerCase().includes(input.trim().toLowerCase())}
+                      onChange={(value) => selectBankAccount(value)}
+                      options={bankOptions.map((item, index) => ({
+                        value: item.id,
+                        label: `收款银行账户${bankAccountOrdinals[index] ?? index + 1} · ${item.bankName} · ${item.accountName} · ${item.bankAccountNo}`
+                      }))}
+                    />
                   </Form.Item>
+                </Col>
+                <Col xs={24} md={4}>
+                  <Button className="full-width" disabled={!canMaintainBank} onClick={startManualBankEntry}>新增填写</Button>
+                </Col>
+              </Row>
+              <div className="finance-payment-bank-divider"><span>银行资料</span></div>
+              <Row gutter={12}>
+                <Col xs={24} md={8}><Form.Item name="accountName" label="账户名称"><Input aria-label="账户名称" readOnly={!manualBankMode} /></Form.Item></Col>
+                <Col xs={24} md={8}><Form.Item name="bankName" label="开户行"><Input aria-label="开户行" readOnly={!manualBankMode} /></Form.Item></Col>
+                <Col xs={24} md={8}><Form.Item name="bankAccountNo" label="银行账号"><Input aria-label="银行账号" readOnly={!manualBankMode} /></Form.Item></Col>
+                <Col xs={24}>
+                  <Form.Item name="currency" hidden><Input /></Form.Item>
+                  {manualBankMode ? (
+                    <Form.Item name="saveBank" valuePropName="checked" className="finance-payment-bank-save">
+                      <Checkbox disabled={!canMaintainBank}>保存到代理资料的收款银行账户，下次可直接选择</Checkbox>
+                    </Form.Item>
+                  ) : null}
+                  {manualBankMode ? <Text type="secondary" className="finance-payment-bank-save-location">保存位置：基础资料库 &gt; 代理资料；已有三个账户时不会覆盖原账户</Text> : null}
                 </Col>
               </Row>
             </section>
-            <section className="finance-payment-modal-section">
-              <div className="finance-payment-section-title">供应商账单截图</div>
-              <Form.Item name="voucherImage" label="供应商账单截图">
-                <VoucherImageInput
-                  disabled={!canUploadAttachment}
-                  uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: selectedRows[0]?.id }) as Promise<VoucherImageValue>}
-                />
-              </Form.Item>
-            </section>
-            <section className="finance-payment-modal-section">
-              <div className="finance-payment-section-title">备注</div>
-              <Form.Item name="remark" label="备注"><Input.TextArea rows={3} /></Form.Item>
-            </section>
+            <Row gutter={12} className="finance-payment-support-row">
+              <Col xs={24} md={12}>
+                <section className="finance-payment-modal-section finance-payment-support-section">
+                  <div className="finance-payment-section-title">供应商账单截图</div>
+                  <Form.Item name="voucherImage">
+                    <VoucherImageInput
+                      disabled={!canUploadAttachment}
+                      uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: selectedRows[0]?.id }) as Promise<VoucherImageValue>}
+                    />
+                  </Form.Item>
+                </section>
+              </Col>
+              <Col xs={24} md={12}>
+                <section className="finance-payment-modal-section finance-payment-support-section">
+                  <div className="finance-payment-section-title">备注</div>
+                  <Form.Item name="remark"><Input.TextArea rows={3} placeholder="填写付款说明（选填）" /></Form.Item>
+                </section>
+              </Col>
+            </Row>
           </Form>
         </Space>
       </Modal>

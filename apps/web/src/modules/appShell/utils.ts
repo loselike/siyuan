@@ -61,6 +61,7 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
     ['customerService', isCustomerServiceRole && canAny('customer-service:dashboard:view', 'customer-service:data-confirm:view', 'customer-service:transfer:view', 'customer-service:pending-routing:view', 'customer-service:waiting-departure:view', 'customer-service:departed:view', 'customer-service:arrived-port:view', 'customer-service:delivering:view', 'customer-service:signed:view', 'customer-service:problem:view')],
     ['logisticsTracking', canAny('tracking:carrier-task:view', 'tracking:external:view')],
     ['finance', (isFinanceRole && canAny('finance:dashboard:view', 'finance:receivable:read', 'finance:business-cost:read', 'finance:payable:read', 'finance:pending-payment:read', 'finance:paid-payment:read', 'finance:water-receipt:read', 'finance:water-match:read', 'finance:agent-bill:read'))],
+    ['miscFees', permissions.some((permission) => permission.startsWith('misc-fee:') && permission.endsWith(':read'))],
     ['master', canAny('master-data:customers:read', 'master-data:finance:read', 'master-data:agents:read', 'master-data:agent-channels:read', 'master-data:channels:read', 'master-data:channel-categories:read', 'master-data:remote-areas:read', 'master-data:exchange-rates:read', 'master-data:assistant:read')],
     ['settings', canAny('system:user-groups:read', 'system:accounts:read', 'system:sites:read', 'system:audit:read', 'system:role-permissions:read', 'system:security:read', 'system:ai-security:read', 'system:base-config:read')]
   ];

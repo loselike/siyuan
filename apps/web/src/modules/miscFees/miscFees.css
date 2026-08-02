@@ -1,0 +1,379 @@
+.misc-fee-page {
+  --misc-fee-business: #2458d3;
+  --misc-fee-payable: #b76e00;
+}
+
+.misc-fee-metrics .metric-card {
+  height: 100%;
+}
+
+.misc-fee-filter-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  min-width: max-content;
+}
+
+.misc-fee-filter-form .module-filter-field {
+  min-width: 156px;
+}
+
+.misc-fee-ledger-card .ant-card-body {
+  padding: 0;
+}
+
+.misc-fee-cost-track {
+  display: grid;
+  gap: 4px;
+  min-height: 82px;
+  padding: 8px 10px;
+  border-left: 3px solid;
+  border-radius: 5px;
+  background: #f7f9fc;
+}
+
+.misc-fee-cost-track strong {
+  color: #142033;
+  font-size: 14px;
+  line-height: 1.25;
+}
+
+.misc-fee-cost-track > span:not(.ant-tag) {
+  overflow: hidden;
+  color: #5f6f86;
+  font-size: 12px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.misc-fee-business-track {
+  border-left-color: var(--misc-fee-business);
+  background: #f4f7ff;
+}
+
+.misc-fee-payable-track {
+  border-left-color: var(--misc-fee-payable);
+  background: #fff9ef;
+}
+
+.misc-fee-editor-drawer .ant-drawer-body {
+  padding: 14px 16px 20px;
+  background: #f5f8fc;
+}
+
+.misc-fee-editor-drawer .app-form-section {
+  box-shadow: none;
+}
+
+.misc-fee-form-tracks {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.misc-fee-form-tracks.is-single-track {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.misc-fee-full-width {
+  width: 100%;
+}
+
+.misc-fee-form-alert {
+  margin-bottom: 12px;
+}
+
+.misc-fee-last-form-item {
+  margin-bottom: 0;
+}
+
+.misc-fee-kuayue-claim-card {
+  margin-top: 0;
+}
+
+.misc-fee-kuayue-workspace-tabs {
+  margin-top: -2px;
+}
+
+.misc-fee-kuayue-workspace-tabs .ant-tabs-nav {
+  margin: 0 0 12px;
+}
+
+.misc-fee-kuayue-workspace-tabs .ant-tabs-tab {
+  min-width: 148px;
+  justify-content: center;
+  padding: 10px 14px;
+  font-weight: 600;
+}
+
+.misc-fee-kuayue-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 10px;
+  overflow: hidden;
+  border: 1px solid #dfe7f3;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.misc-fee-kuayue-summary-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-width: 0;
+  padding: 9px 14px;
+  border-right: 1px solid #e8edf5;
+}
+
+.misc-fee-kuayue-summary-item:last-child {
+  border-right: 0;
+}
+
+.misc-fee-kuayue-summary-item span,
+.misc-fee-kuayue-summary-item small {
+  color: #65758b;
+  font-size: 12px;
+}
+
+.misc-fee-kuayue-summary-item strong {
+  color: #142033;
+  font-size: 16px;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+.misc-fee-kuayue-summary-item small {
+  grid-column: 1 / -1;
+}
+
+.misc-fee-kuayue-unassigned-table .ant-table-cell,
+.misc-fee-assigned-ledger-card .ant-table-cell {
+  vertical-align: top;
+}
+
+.content .misc-fee-flat-matrix-table .ant-table-thead > tr > th {
+  height: 36px;
+  padding-block: 4px;
+}
+
+.content .misc-fee-flat-matrix-table .ant-table-tbody > tr > td {
+  padding: 7px 6px;
+}
+
+.misc-fee-flat-matrix-table .managed-matrix-field {
+  gap: 4px;
+}
+
+.misc-fee-flat-matrix-table .managed-table-resize-handle::after {
+  top: 18%;
+  height: 64%;
+  background: #c9d5e6;
+}
+
+.misc-fee-flat-matrix-table .managed-table-resizable-cell:hover .managed-table-resize-handle::after,
+.misc-fee-flat-matrix-table .managed-table-resize-handle:hover::after {
+  width: 2px;
+  background: #2563eb;
+}
+
+.misc-fee-flat-matrix-table .managed-matrix-label,
+.misc-fee-flat-matrix-table .managed-matrix-value {
+  overflow-wrap: normal;
+  white-space: nowrap;
+}
+
+.misc-fee-flat-matrix-table .managed-matrix-field-wrap .managed-matrix-value {
+  display: block;
+  white-space: nowrap;
+  -webkit-line-clamp: unset;
+}
+
+.misc-fee-flat-matrix-table .managed-matrix-value > .ant-space {
+  flex-wrap: nowrap;
+}
+
+.content .misc-fee-kuayue-assigned-matrix-table .managed-table-action-column {
+  width: 140px !important;
+  min-width: 140px !important;
+  max-width: 140px !important;
+  padding-inline: 6px !important;
+}
+
+.misc-fee-kuayue-assigned-matrix-table .managed-table-action-column .ant-space {
+  width: max-content;
+  max-width: 100%;
+  grid-template-columns: repeat(2, max-content);
+  gap: 4px !important;
+}
+
+.misc-fee-kuayue-claim-form {
+  margin-top: 12px;
+}
+
+.misc-fee-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.misc-fee-profit-amount {
+  color: #1f6f3e;
+  font-size: 14px;
+}
+
+.misc-fee-profit-view-tabs {
+  margin-top: -4px;
+}
+
+.misc-fee-profit-view-tabs .ant-tabs-nav {
+  margin-bottom: 10px;
+}
+
+.misc-fee-warehouse-profit-metrics {
+  margin-bottom: 10px;
+}
+
+.misc-fee-warehouse-profit-page .misc-fee-filter-form .module-filter-field:nth-child(2) {
+  min-width: 250px;
+}
+
+.misc-fee-warehouse-profit-ledger .ant-table-footer {
+  padding: 10px 14px;
+  border-top: 1px solid #d9e2ef;
+  background: #f6f9fd;
+}
+
+.misc-fee-finance-profit-bridge {
+  margin-bottom: 10px;
+  border: 1px solid #cfd9e8;
+  border-left: 4px solid #2458d3;
+  border-radius: 8px;
+  background: #f7f9fd;
+  box-shadow: none;
+}
+
+.misc-fee-finance-profit-bridge .ant-card-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 14px;
+}
+
+.misc-fee-finance-profit-formula {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  white-space: nowrap;
+}
+
+.misc-fee-finance-profit-formula > span {
+  display: grid;
+  gap: 1px;
+}
+
+.misc-fee-finance-profit-formula > span > strong {
+  color: #17243a;
+  font-size: 16px;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+.misc-fee-finance-profit-formula > b {
+  color: #7b899c;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.misc-fee-finance-profit-formula .is-result {
+  padding-left: 12px;
+  border-left: 1px solid #cbd6e5;
+}
+
+.misc-fee-finance-profit-formula .is-result > strong {
+  color: #1f6f3e;
+  font-size: 18px;
+}
+
+.misc-fee-finance-profit-reference {
+  justify-content: flex-end;
+  font-size: 12px;
+}
+
+.misc-fee-finance-profit-page .misc-fee-filter-form .module-filter-field:nth-child(2) {
+  min-width: 250px;
+}
+
+.misc-fee-market-profit-page .misc-fee-filter-form .module-filter-field:nth-child(2) {
+  min-width: 260px;
+}
+
+.misc-fee-market-profit-page .misc-fee-filter-form .module-filter-field:nth-child(3) {
+  min-width: 240px;
+}
+
+.misc-fee-market-profit-ledger .ant-table-footer {
+  padding: 10px 14px;
+  border-top: 1px solid #d9e2ef;
+  background: #f6f9fd;
+}
+
+.misc-fee-market-profit-total {
+  min-height: 24px;
+  font-size: 12px;
+}
+
+.misc-fee-market-profit-total > .ant-typography:first-child {
+  min-width: 44px;
+  color: #142033;
+}
+
+@media (max-width: 900px) {
+  .misc-fee-form-tracks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .misc-fee-kuayue-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .misc-fee-kuayue-summary-item:nth-child(2) {
+    border-right: 0;
+  }
+
+  .misc-fee-kuayue-summary-item:nth-child(-n + 2) {
+    border-bottom: 1px solid #e8edf5;
+  }
+
+  .misc-fee-market-profit-page .misc-fee-filter-form .module-filter-field,
+  .misc-fee-warehouse-profit-page .misc-fee-filter-form .module-filter-field {
+    min-width: 220px;
+  }
+
+  .misc-fee-finance-profit-bridge .ant-card-body,
+  .misc-fee-finance-profit-formula {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .misc-fee-finance-profit-formula > b {
+    display: none;
+  }
+
+  .misc-fee-finance-profit-formula .is-result {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .misc-fee-finance-profit-reference {
+    justify-content: flex-start;
+  }
+
+  .misc-fee-finance-profit-page .misc-fee-filter-form .module-filter-field {
+    min-width: 220px;
+  }
+}

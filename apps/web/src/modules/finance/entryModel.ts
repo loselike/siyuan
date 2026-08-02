@@ -10,7 +10,6 @@ export interface FinanceEntryFormValues {
   systemOrderNo?: string;
   entryAt?: string;
   outboundAt?: string;
-  transferNo?: string;
   subOrderNo?: string;
   inboundNo?: string;
   businessType?: BusinessType;
@@ -19,7 +18,7 @@ export interface FinanceEntryFormValues {
   receivingChannel?: string;
   settlementMethod?: string;
   currency?: string;
-  agentName?: string;
+  agentId?: string;
   channelName?: string;
   cargoType?: string;
   packageCount?: number;
@@ -60,6 +59,7 @@ export interface FinanceEntryFeeDraft {
   receiptMatchAmount?: number;
   receiptMatchSource?: 'AUTO' | 'MANUAL';
   receiptMatchHint?: string;
+  agentId?: string;
   agentName?: string;
   chargeWeightKg?: number;
   unitPrice?: number;
@@ -101,6 +101,7 @@ export function createFinanceEntryFeeDraft(
     receiptMatchAmount: patch.receiptMatchAmount,
     receiptMatchSource: patch.receiptMatchSource,
     receiptMatchHint: patch.receiptMatchHint,
+    agentId: patch.agentId,
     agentName: patch.agentName,
     chargeWeightKg: patch.chargeWeightKg,
     unitPrice: patch.unitPrice,

@@ -286,7 +286,8 @@ export function readAgentMarkupMetrics(response: AgentMarkupListResponse | Agent
     totalRules: response.length,
     enabledRules: response.filter((rule) => rule.enabled).length,
     disabledRules: response.filter((rule) => !rule.enabled).length,
-    unmatchedQuotes: 0
+    unmatchedQuotes: 0,
+    systemDefaultScopes: 0
   };
 }
 

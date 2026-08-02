@@ -4,20 +4,23 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/apply-antd-typography-stability-patch.mjs",
     "dev": "vite --host 0.0.0.0",
+    "prebuild": "node scripts/apply-antd-typography-stability-patch.mjs",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "pretest": "node scripts/apply-antd-typography-stability-patch.mjs",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
     "@e965/xlsx": "^0.20.3",
     "@siyuan/shared": "file:../../packages/shared",
-    "antd": "^5.26.1",
+    "antd": "5.29.3",
     "jsbarcode": "^3.12.3",
     "lucide-react": "^0.515.0",
-    "react": "^19.1.0",
-    "react-dom": "^19.1.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7",
     "read-excel-file": "^9.2.0",
     "write-excel-file": "^4.1.1"
   },

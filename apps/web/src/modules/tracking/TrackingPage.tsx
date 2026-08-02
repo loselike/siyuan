@@ -5,7 +5,7 @@ import { Alert, Button, Card, Col, Row, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { shipmentStatusLabels, type BulkTrackingImportResult, type BulkTrackingImportRow, type CarrierTaskSummary, type Shipment } from '@siyuan/shared';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
-import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
 import { formatBeijingDateTime } from '../shared/format';
 import { formatTrackingImportDate } from './bulkImport';
 
@@ -161,6 +161,139 @@ export function TrackingPage({
   const latestColumns = allLatestColumns.filter((column) => column.key !== 'latestTracking' || can('tracking:external:latest-view'))
     .filter((column) => column.key !== 'trackingStaleDays' || can('tracking:external:stale-days-view'))
     .filter((column) => column.key !== 'action' || can('tracking:external:detail'));
+  const taskActionColumn = taskColumns.find((column) => column.key === 'action');
+  const taskMatrixColumns: ManagedTableColumns<CarrierTaskSummary> = [
+    {
+      key: 'matrixShipment',
+      title: '运单信息',
+      width: 250,
+      className: 'managed-matrix-group-primary',
+      render: (_: unknown, task: CarrierTaskSummary) => (
+        <ManagedMatrixCell
+          labelWidth={54}
+          fields={[
+            { key: 'systemOrderNo', label: '出货单号', value: renderTrackingShipmentNo(task.systemOrderNo, task.shipmentId) },
+            { key: 'customerName', label: '客户', value: task.customerName || '-', title: task.customerName, wrap: true }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixCarrier',
+      title: '转运信息',
+      width: 200,
+      render: (_: unknown, task: CarrierTaskSummary) => (
+        <ManagedMatrixCell
+          labelWidth={48}
+          fields={[
+            { key: 'carrier', label: '承运商', value: task.carrier || '-' },
+            { key: 'transferNo', label: '转单号', value: task.transferNo || '-', title: task.transferNo }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixExecution',
+      title: '执行状态',
+      width: 150,
+      render: (_: unknown, task: CarrierTaskSummary) => (
+        <ManagedMatrixCell
+          labelWidth={54}
+          fields={[
+            {
+              key: 'status',
+              label: '状态',
+              value: (
+                <Tag color={task.status === 'SUCCESS' ? 'green' : task.status === 'FAILED' ? 'red' : 'gold'}>
+                  {task.status === 'SUCCESS' ? '成功' : task.status === 'FAILED' ? '失败' : '待执行'}
+                </Tag>
+              )
+            },
+            { key: 'attempts', label: '尝试次数', value: task.attempts }
+          ]}
+        />
+      )
+    },
+    ...(can('tracking:carrier-task:error-view') ? [{
+      key: 'matrixException',
+      title: '异常信息',
+      width: 230,
+      render: (_: unknown, task: CarrierTaskSummary) => (
+        <ManagedMatrixCell
+          labelWidth={54}
+          fields={[
+            { key: 'lastError', label: '错误信息', value: task.lastError || '暂无异常', title: task.lastError, wrap: true }
+          ]}
+        />
+      )
+    }] : []),
+    ...(taskActionColumn ? [{ ...taskActionColumn, title: '操作', width: 140, fixed: 'right' as const }] : [])
+  ];
+  const latestActionColumn = latestColumns.find((column) => column.key === 'action');
+  const latestMatrixColumns: ManagedTableColumns<Shipment> = [
+    {
+      key: 'matrixUpdated',
+      title: '更新信息',
+      width: 155,
+      className: 'managed-matrix-group-primary',
+      render: (_: unknown, shipment: Shipment) => (
+        <ManagedMatrixCell
+          labelWidth={54}
+          fields={[
+            { key: 'latestTrackingUpdatedAt', label: '更新时间', value: <ManagedMatrixDateTime value={formatLatestTrackingTime(shipment)} /> },
+            can('tracking:external:stale-days-view') ? {
+              key: 'trackingStaleDays',
+              label: '未更新',
+              value: <Tag color={shipment.trackingStaleDays >= 5 ? 'orange' : 'green'}>{shipment.trackingStaleDays ? `${shipment.trackingStaleDays} 天` : '今日更新'}</Tag>
+            } : null
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixShipment',
+      title: '运单信息',
+      width: 240,
+      render: (_: unknown, shipment: Shipment) => (
+        <ManagedMatrixCell
+          labelWidth={54}
+          fields={[
+            { key: 'systemOrderNo', label: '出货单号', value: renderTrackingShipmentNo(shipment.systemOrderNo, shipment.id) },
+            { key: 'customerName', label: '客户', value: shipment.customerName || '-', title: shipment.customerName, wrap: true },
+            { key: 'transferNo', label: '转单号', value: shipment.transferNo || '-', title: shipment.transferNo }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixTracking',
+      title: '轨迹信息',
+      width: 300,
+      render: (_: unknown, shipment: Shipment) => (
+        <ManagedMatrixCell
+          labelWidth={66}
+          fields={[
+            can('tracking:external:latest-view') ? { key: 'latestTracking', label: '最新轨迹', value: shipment.latestTracking || '-', title: shipment.latestTracking, wrap: true } : null,
+            { key: 'location', label: '地点', value: extractTrackingLocation(shipment.latestTracking) || '-' }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixStatus',
+      title: '履约状态',
+      width: 140,
+      render: (_: unknown, shipment: Shipment) => (
+        <ManagedMatrixCell
+          labelWidth={48}
+          fields={[
+            { key: 'status', label: '状态', value: <Tag>{shipmentStatusLabels[shipment.status] ?? shipment.status}</Tag> }
+          ]}
+        />
+      )
+    },
+    ...(latestActionColumn ? [{ ...latestActionColumn, title: '操作', width: 110, fixed: 'right' as const }] : [])
+  ];
   const previewColumns: ColumnsType<NonNullable<BulkTrackingImportResult['shipmentPreviews']>[number]> = [
     { key: 'systemOrderNo', title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
     { key: 'matchedOrderNo', title: '匹配单号', dataIndex: 'matchedOrderNo', width: 160 },
@@ -211,27 +344,55 @@ export function TrackingPage({
       <ModuleSubWorkspace items={trackingSubItems} activeKey={activeTrackingSection} onChange={setActiveTrackingSection}>
       {activeTrackingSection === 'tasks' ? (
       <Card title="承运商任务">
-        <ManagedTable
+        <ManagedDualViewTable
+          viewStorageKey="sunny.tracking.tasks.view-v1"
+          viewAriaLabel="承运商任务表格视图"
+          defaultView="matrix"
+          shellClassName="tracking-tasks-dual-table"
+          views={{
+            matrix: {
+              label: '矩阵视图',
+              columns: taskMatrixColumns,
+              tableProps: {
+                className: 'tracking-tasks-matrix-table',
+                minimumScrollX: 0,
+                tableLayout: 'fixed',
+                recordDetail: { title: '轨迹任务详情', columns: taskColumns },
+                columnSettings: can('tracking:carrier-task:column-setting') ? {
+                  storageKey: 'sunny.tracking.tasks.matrix-columns-v1',
+                  title: '轨迹任务矩阵列设置',
+                  lockedKeys: ['action']
+                } : false
+              }
+            },
+            ledger: {
+              label: '精密台账模式',
+              columns: taskColumns,
+              tableProps: {
+                className: 'tracking-tasks-ledger-table',
+                minimumScrollX: 1180,
+                recordDetail: { title: '轨迹任务详情' },
+                columnSettings: can('tracking:carrier-task:column-setting') ? {
+                  storageKey: 'siyuan-tracking-task-hidden-columns',
+                  title: '轨迹任务列设置',
+                  labels: {
+                    systemOrderNo: '出货单号',
+                    customerName: '客户',
+                    carrier: '承运商',
+                    transferNo: '转单号',
+                    status: '状态',
+                    attempts: '尝试次数',
+                    lastError: '错误信息',
+                    action: '操作'
+                  }
+                } : false
+              }
+            }
+          }}
           rowKey="id"
           size="small"
           pagination={tenRowTablePagination}
-          columns={taskColumns}
           dataSource={tasks}
-          minimumScrollX={1180}
-          columnSettings={can('tracking:carrier-task:column-setting') ? {
-            storageKey: 'siyuan-tracking-task-hidden-columns',
-            title: '轨迹任务列设置',
-            labels: {
-              systemOrderNo: '出货单号',
-              customerName: '客户',
-              carrier: '承运商',
-              transferNo: '转单号',
-              status: '状态',
-              attempts: '尝试次数',
-              lastError: '错误信息',
-              action: '操作'
-            }
-          } : undefined}
         />
       </Card>
       ) : null}
@@ -258,29 +419,57 @@ export function TrackingPage({
         ) : null}
       >
         <Space direction="vertical" size={12} className="full-width">
-          <ManagedTable
+          <ManagedDualViewTable
+            viewStorageKey="sunny.tracking.latest.view-v1"
+            viewAriaLabel="外部物流轨迹表格视图"
+            defaultView="matrix"
+            shellClassName="tracking-latest-dual-table"
+            views={{
+              matrix: {
+                label: '矩阵视图',
+                columns: latestMatrixColumns,
+                tableProps: {
+                  className: 'tracking-latest-matrix-table',
+                  minimumScrollX: 0,
+                  tableLayout: 'fixed',
+                  recordDetail: { title: '最新轨迹详情', columns: latestColumns },
+                  columnSettings: can('tracking:external:column-setting') ? {
+                    storageKey: 'sunny.tracking.latest.matrix-columns-v1',
+                    title: '外部物流轨迹矩阵列设置',
+                    lockedKeys: ['action']
+                  } : false
+                }
+              },
+              ledger: {
+                label: '精密台账模式',
+                columns: latestColumns,
+                tableProps: {
+                  className: 'tracking-latest-ledger-table',
+                  minimumScrollX: 1380,
+                  recordDetail: { title: '最新轨迹详情' },
+                  columnSettings: can('tracking:external:column-setting') ? {
+                    storageKey: 'siyuan-tracking-latest-hidden-columns',
+                    title: '外部物流轨迹列设置',
+                    labels: {
+                      latestTrackingUpdatedAt: '更新时间',
+                      systemOrderNo: '出货单号',
+                      customerName: '客户',
+                      transferNo: '转单号',
+                      latestTracking: '最新物流轨迹',
+                      location: '地点',
+                      status: '状态',
+                      trackingStaleDays: '未更新天数',
+                      action: '操作'
+                    },
+                    lockedKeys: ['action']
+                  } : false
+                }
+              }
+            }}
             rowKey="id"
             size="small"
-            columns={latestColumns}
             dataSource={shipments}
             pagination={tenRowTablePagination}
-            minimumScrollX={1380}
-            columnSettings={can('tracking:external:column-setting') ? {
-              storageKey: 'siyuan-tracking-latest-hidden-columns',
-              title: '外部物流轨迹列设置',
-              labels: {
-                latestTrackingUpdatedAt: '更新时间',
-                systemOrderNo: '出货单号',
-                customerName: '客户',
-                transferNo: '转单号',
-                latestTracking: '最新物流轨迹',
-                location: '地点',
-                status: '状态',
-                trackingStaleDays: '未更新天数',
-                action: '操作'
-              },
-              lockedKeys: ['action']
-            } : undefined}
           />
           {canPreview && (bulkTrackingFileName || bulkTrackingError || bulkTrackingResult) ? (
             <Card size="small" className="tracking-import-preview-card" title="导入轨迹预览">
@@ -306,6 +495,7 @@ export function TrackingPage({
                       pagination={tenRowTablePagination}
                       minimumScrollX={870}
                       columnSettings={false}
+                      recordDetail={false}
                     />
                     <ManagedTable
                       rowKey={(row) => `${row.shipmentId}-${row.rowNumber ?? row.trackingDate}-${row.latestTracking}`}
@@ -315,6 +505,7 @@ export function TrackingPage({
                       pagination={tenRowTablePagination}
                       minimumScrollX={780}
                       columnSettings={false}
+                      recordDetail={false}
                     />
                     {can('tracking:external:import-error-view') && bulkTrackingResult.errorRows?.length ? (
                       <ManagedTable
@@ -325,6 +516,7 @@ export function TrackingPage({
                         pagination={tenRowTablePagination}
                         minimumScrollX={500}
                         columnSettings={false}
+                        recordDetail={false}
                       />
                     ) : null}
                     <Button

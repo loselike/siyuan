@@ -12,10 +12,12 @@ import type {
   FinanceCatalogItemSummary
 } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
-import { financeCatalogCurrencyOptions } from '../catalog';
+import { createFinanceFeeNameOptions, financeCatalogCurrencyOptions } from '../catalog';
 import { downloadCsv } from '../exportCsv';
 import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
-import { ManagedTable } from '../../shared/ui';
+import { agentFieldLabels } from '../../shared/agentFieldLabels';
+import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
+import { ChargeWeightChangeTag } from '../ChargeWeightChangeTag';
 
 const { Text } = Typography;
 
@@ -79,7 +81,8 @@ const defaultColumnOrder: ColumnKey[] = [
   'action'
 ];
 
-const columnStorageKey = 'siyuan.finance.businessCostAudit.columns';
+// 切换到紧凑布局后，旧版保存的超宽列设置不应继续覆盖新的默认工作视图。
+const columnStorageKey = 'siyuan.finance.businessCostAudit.columns.v2';
 
 function formatMoney(amount?: number, currency = 'RMB') {
   if (typeof amount !== 'number' || Number.isNaN(amount)) return '-';
@@ -130,9 +133,7 @@ export function BusinessCostAuditPage({
   const canViewAgent = hasPermission(permissions, 'finance:business-cost:view-agent') || response.rows.some((row) => row.canViewAgent);
   const canViewProfit = hasPermission(permissions, 'finance:business-cost:view-profit') || response.rows.some((row) => row.canViewProfit);
   const feeNameOptions = useMemo(
-    () => financeCatalogItems
-      .filter((item) => item.category === 'FEE_NAME' && item.enabled)
-      .map((item) => ({ label: item.name, value: item.name })),
+    () => createFinanceFeeNameOptions(financeCatalogItems),
     [financeCatalogItems]
   );
 
@@ -238,37 +239,50 @@ export function BusinessCostAuditPage({
   };
 
   const baseColumns: Record<ColumnKey, ColumnsType<BusinessCostAuditSummary>[number]> = {
-    agentName: { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value ?? '-' },
-    name: { title: '费用名称', dataIndex: 'name', width: 130, sorter: true },
-    customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 110, sorter: true },
-    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
-    transferNo: { title: '转单号', dataIndex: 'transferNo', width: 180, render: (value?: string) => <Text className="table-compact-text">{value ?? '-'}</Text> },
-    reconciliationStatus: { title: '对账状态', dataIndex: 'reconciliationStatus', width: 105, fixed: 'right', render: statusTag },
-    currency: { title: '币种', dataIndex: 'currency', width: 80, render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag> },
-    chargeWeightKg: { title: '计费重', dataIndex: 'chargeWeightKg', width: 110, align: 'right', render: (value?: number) => typeof value === 'number' ? `${value.toFixed(3)} kg` : '-' },
-    unitPrice: { title: '单价', dataIndex: 'unitPrice', width: 100, align: 'right', render: (value: number | undefined, row) => typeof value === 'number' ? formatMoney(value, row.currency) : '-' },
-    amount: { title: '总金额', dataIndex: 'amount', width: 120, align: 'right', sorter: true, render: (value: number, row) => formatMoney(value, row.currency) },
-    orderRmbTotal: { title: '合计(RMB)', dataIndex: 'orderRmbTotal', width: 130, align: 'right', sorter: true, render: (value?: number) => formatCurrency(value ?? 0) },
+    agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 170, ellipsis: true, render: (value?: string) => value ?? '-' },
+    name: { title: '费用名称', dataIndex: 'name', width: 80, ellipsis: true, sorter: true },
+    customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 80, ellipsis: true, sorter: true },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 130, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    transferNo: { title: '转单号', dataIndex: 'transferNo', width: 115, render: (value?: string) => <Text className="table-compact-text">{value ?? '-'}</Text> },
+    reconciliationStatus: {
+      title: '对账状态',
+      dataIndex: 'reconciliationStatus',
+      width: 82,
+      fixed: 'right',
+      className: 'finance-business-cost-audit-status-column',
+      render: statusTag
+    },
+    currency: {
+      title: '币种',
+      dataIndex: 'currency',
+      width: 64,
+      className: 'finance-business-cost-audit-currency-column',
+      render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag>
+    },
+    chargeWeightKg: { title: '计费重', dataIndex: 'chargeWeightKg', width: 105, align: 'right', render: (value: number | undefined, row) => <ChargeWeightChangeTag value={value} change={row.chargeWeightChange} showUnit /> },
+    unitPrice: { title: '单价', dataIndex: 'unitPrice', width: 85, align: 'right', render: (value: number | undefined, row) => typeof value === 'number' ? formatMoney(value, row.currency) : '-' },
+    amount: { title: '总金额', dataIndex: 'amount', width: 95, align: 'right', sorter: true, render: (value: number, row) => formatMoney(value, row.currency) },
+    orderRmbTotal: { title: '合计(RMB)', dataIndex: 'orderRmbTotal', width: 100, align: 'right', sorter: true, render: (value?: number) => formatCurrency(value ?? 0) },
     businessProfit: {
       title: '业务利润',
       dataIndex: 'businessProfit',
-      width: 120,
+      width: 95,
       align: 'right',
       sorter: true,
       render: (value: number | undefined, row) => row.canViewProfit && typeof value === 'number'
         ? <Text type={value < 0 ? 'danger' : value > 0 ? 'success' : 'secondary'}>{formatCurrency(value)}</Text>
         : <Text type="secondary">按权限隐藏</Text>
     },
-    salesperson: { title: '业务员', dataIndex: 'salesperson', width: 100, render: (value?: string) => value ?? '-' },
-    createdAt: { title: '制单日期', dataIndex: 'createdAt', width: 155, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
-    createdBy: { title: '制单人', dataIndex: 'createdBy', width: 100, render: (value?: string) => value ?? '系统' },
-    reviewedAt: { title: '审单日期', dataIndex: 'reviewedAt', width: 155, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
-    reviewedBy: { title: '审单人', dataIndex: 'reviewedBy', width: 100, render: (value?: string) => value ?? '-' },
-    remark: { title: '备注', dataIndex: 'remark', width: 180, ellipsis: true, render: (value?: string) => value ?? '-' },
+    salesperson: { title: '业务员', dataIndex: 'salesperson', width: 80, ellipsis: true, render: (value?: string) => value ?? '-' },
+    createdAt: { title: '制单日期', dataIndex: 'createdAt', width: 132, ellipsis: true, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+    createdBy: { title: '制单人', dataIndex: 'createdBy', width: 82, ellipsis: true, render: (value?: string) => value ?? '系统' },
+    reviewedAt: { title: '审单日期', dataIndex: 'reviewedAt', width: 132, ellipsis: true, sorter: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+    reviewedBy: { title: '审单人', dataIndex: 'reviewedBy', width: 82, ellipsis: true, render: (value?: string) => value ?? '-' },
+    remark: { title: '备注', dataIndex: 'remark', width: 110, ellipsis: true, render: (value?: string) => value ?? '-' },
     action: {
       title: '操作',
       key: 'action',
-      width: 250,
+      width: 160,
       fixed: 'right',
       render: (_, row) => (
         <Space size={4}>
@@ -298,6 +312,48 @@ export function BusinessCostAuditPage({
     .filter((key) => !unavailableColumns.has(key))
     .map((key) => baseColumns[key]);
 
+  const matrixColumns: ManagedTableColumns<BusinessCostAuditSummary> = [
+    {
+      key: 'matrixInformation',
+      title: '信息',
+      width: 960,
+      className: 'managed-matrix-group-primary',
+      render: (_value, row) => (
+        <ManagedMatrixCell
+          columns={4}
+          labelWidth={66}
+          fields={[
+            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(row.systemOrderNo), title: row.systemOrderNo },
+            { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
+            { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
+            { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
+            { key: 'name', label: '费用名称', value: row.name || '-' },
+            row.canViewAgent ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
+            { key: 'currency', label: '币种', value: <Tag>{row.currency ?? 'RMB'}</Tag> },
+            { key: 'chargeWeightKg', label: '计费重', value: <ChargeWeightChangeTag value={row.chargeWeightKg} change={row.chargeWeightChange} showUnit /> },
+            { key: 'unitPrice', label: '单价', value: formatMoney(row.unitPrice, row.currency) },
+            { key: 'amount', label: '总金额', value: formatMoney(row.amount, row.currency) },
+            { key: 'orderRmbTotal', label: '合计(RMB)', value: formatCurrency(row.orderRmbTotal ?? 0) },
+            row.canViewProfit ? {
+              key: 'businessProfit',
+              label: '业务利润',
+              value: typeof row.businessProfit === 'number'
+                ? <Text type={row.businessProfit < 0 ? 'danger' : row.businessProfit > 0 ? 'success' : 'secondary'}>{formatCurrency(row.businessProfit)}</Text>
+                : '-'
+            } : null,
+            { key: 'status', label: '状态', value: statusTag(row.reconciliationStatus) },
+            { key: 'createdAt', label: '制单日期', value: <ManagedMatrixDateTime value={row.createdAt ? formatBeijingDateTime(row.createdAt) : undefined} /> },
+            { key: 'createdBy', label: '制单人', value: row.createdBy || '系统' },
+            { key: 'reviewedAt', label: '审单日期', value: <ManagedMatrixDateTime value={row.reviewedAt ? formatBeijingDateTime(row.reviewedAt) : undefined} /> },
+            { key: 'reviewedBy', label: '审单人', value: row.reviewedBy || '-' },
+            row.remark ? { key: 'remark', label: '备注', value: row.remark, title: row.remark, wrap: true } : null
+          ]}
+        />
+      )
+    },
+    { ...baseColumns.action, key: 'action', width: 150, fixed: 'right' }
+  ];
+
   return (
     <Card
       title="业务员成本"
@@ -316,10 +372,10 @@ export function BusinessCostAuditPage({
           <Button disabled={!canExport} onClick={async () => {
             const exported = await apiClient.exportBusinessCostAudits({ ids: selectedIds.length ? selectedIds : undefined, query });
             downloadCsv('business-cost-audits.csv', [
-              { key: 'agentName', label: '代理' },
+              { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
               { key: 'name', label: '费用名称' },
               { key: 'customerCode', label: '客户编号' },
-              { key: 'systemOrderNo', label: '运单号' },
+              { key: 'systemOrderNo', label: '出货单号' },
               { key: 'transferNo', label: '转单号' },
               { key: 'reconciliationStatus', label: '对账状态' },
               { key: 'currency', label: '币种' },
@@ -358,11 +414,10 @@ export function BusinessCostAuditPage({
             <Col xs={24} md={8} xl={4}><Form.Item name="createdBy" label="制单人"><Input /></Form.Item></Col>
             <Col xs={24} md={8} xl={4}><Form.Item name="reviewedBy" label="审核人员"><Input /></Form.Item></Col>
             <Col xs={24} md={8} xl={4}><Form.Item name="paymentNo" label="付款编号"><Input /></Form.Item></Col>
-            <Col xs={24} md={8} xl={4}><Form.Item name="createdFrom" label="制单日起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-            <Col xs={24} md={8} xl={4}><Form.Item name="createdTo" label="制单日止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedFrom" label="核单日起"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedTo" label="核单日止"><Input placeholder="YYYY-MM-DD" /></Form.Item></Col>
-            <Col xs={24} md={8} xl={4}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="createdFrom" label="制单日期起"><AppDatePicker /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="createdTo" label="制单日期止"><AppDatePicker /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedFrom" label="审核日期起"><AppDatePicker /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="reviewedTo" label="审核日期止"><AppDatePicker /></Form.Item></Col>
           </Row>
         ) : null}
       </Form>
@@ -376,21 +431,49 @@ export function BusinessCostAuditPage({
         {response.totals.amountByCurrency.map((item) => <Tag key={item.currency}>{item.currency} {item.amount.toFixed(2)}</Tag>)}
       </Flex>
 
-      <ManagedTable
+      <ManagedDualViewTable<BusinessCostAuditSummary>
+        viewStorageKey="sunny.finance.businessCostAudit.view-v1"
+        viewAriaLabel="业务成本审核表格视图"
+        defaultView="matrix"
+        views={{
+          matrix: {
+            label: '矩阵视图',
+            columns: matrixColumns,
+            tableProps: {
+              className: 'finance-audit-table finance-business-cost-audit-table finance-business-cost-audit-matrix-table',
+              minimumScrollX: 0,
+              tableLayout: 'fixed',
+              showHeader: false,
+              recordDetail: { title: '业务成本审核详情', columns },
+              columnSettings: {
+                storageKey: 'siyuan.finance.businessCostAudit.matrix-columns.v2',
+                title: '业务成本审核矩阵列设置',
+                lockedKeys: ['action']
+              }
+            }
+          },
+          ledger: {
+            label: '精密台账模式',
+            columns,
+            tableProps: {
+              className: 'finance-audit-table finance-business-cost-audit-table finance-business-cost-audit-ledger-table',
+              minimumScrollX: 1950,
+              recordDetail: { title: '业务成本审核详情' },
+              columnSettings: {
+                storageKey: columnStorageKey,
+                title: '业务成本审核列设置',
+                defaultColumnOrder
+              }
+            }
+          }
+        }}
         rowKey="id"
-        className="finance-audit-table"
         size="small"
         loading={loading}
         dataSource={response.rows}
-        columns={columns}
         locale={{ emptyText: '暂无已自审通过的业务成本待审项' }}
         rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) }}
-        scroll={{ x: 2500 }}
-        columnSettings={{
-          storageKey: columnStorageKey,
-          title: '业务成本审核列设置',
-          defaultColumnOrder
-        }}
+        columnSettingsPlacement="toolbar"
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
         onChange={(pagination: TablePaginationConfig, _filters, sorter) => {
           const sort = Array.isArray(sorter) ? sorter[0] : sorter;

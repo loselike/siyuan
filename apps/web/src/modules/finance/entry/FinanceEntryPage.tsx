@@ -1,11 +1,12 @@
 import type { Key } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { calculateCompanyChannelChargeWeight, calculateCompanyChannelChargeWeightFromCargo, type AgentSummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type FinanceCatalogItemSummary, type FinanceCatalogCategory, type OrderEntryCreateInput, type OrderEntryDetailSummary, type OrderEntryWarehousePackageQuery, type ShipmentFinanceItemType, type WarehousePackageSummary, type WarehouseTallyTaskSummary, type WaterReceiptSummary } from '@siyuan/shared';
+import { calculateCompanyChannelChargeWeight, calculateCompanyChannelChargeWeightFromCargo, evaluateCompanyChannelWarnings, getCompanyChannelAggregateCargoValidationError, type AgentSummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type FinanceCatalogItemSummary, type FinanceCatalogCategory, type MiscFeeTallyDueSummary, type OrderEntryCreateInput, type OrderEntryDetailSummary, type OrderEntryWarehousePackageQuery, type ShipmentFinanceItemType, type WarehousePackageSummary, type WarehouseTallyTaskSummary, type WaterReceiptSummary } from '@siyuan/shared';
 import type { ApiClient, RoleKey } from '../../../apiClient';
-import { formatBeijingDateTime } from '../../shared/format';
+import { formatBeijingDateTime, formatBeijingDateTimeInputValue, parseBeijingDateTimeInputToIso } from '../../shared/format';
 import {
+  createFinanceFeeNameOptions,
   createSettlementMethodOptions,
   financeCatalogCurrencyOptions,
   getSettlementMethodCurrency,
@@ -21,11 +22,22 @@ import {
 } from './entryModel';
 import { countryOptions as builtInCountryOptions, filterLocationOption, getStateOptions } from './countryStateOptions';
 import { WarehouseTallyHistoryChain } from '../../warehouse/WarehouseTallyHistoryChain';
+import { ManagedTable } from '../../shared/ui';
+import { WarehousePackageNoWithTallyStatus } from '../../shared/WarehousePackageNoWithTallyStatus';
+import { agentFieldLabels } from '../../shared/agentFieldLabels';
+import { getDetailedCompanyAgentOptions, resolveAgentIdByIdentity } from '../../shared/agentIdentity';
 
 const { Text } = Typography;
 
-function toDatetimeLocal(value: Date) {
-  return new Date(value.getTime() - value.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+export function resolveCurrentUsdToRmbRate(exchangeRates: ExchangeRateSummary[], now = new Date()) {
+  const timestamp = now.getTime();
+  return exchangeRates
+    .filter((rate) => rate.enabled
+      && rate.baseCurrency.toUpperCase() === 'USD'
+      && rate.quoteCurrency.toUpperCase() === 'RMB'
+      && Date.parse(rate.activeAt) <= timestamp
+      && (!rate.endAt || Date.parse(rate.endAt) >= timestamp))
+    .sort((left, right) => Date.parse(right.activeAt) - Date.parse(left.activeAt))[0]?.rate;
 }
 
 function getDefaultFeeName(items: FinanceCatalogItemSummary[], preferred: string) {
@@ -45,6 +57,13 @@ function summarizeWarehouseCargo(packages: WarehousePackageSummary[]) {
     },
     { packageCount: 0, weightKg: 0, cbm: 0 }
   );
+}
+
+function calculateSelectedPackageVolumetricWeight(pkg: WarehousePackageSummary, divisor: 5000 | 6000) {
+  if (divisor === 5000 && pkg.volumetricWeightKg5000 !== undefined) return pkg.volumetricWeightKg5000;
+  if (divisor === 6000 && pkg.totalVolumetricWeightKg !== undefined) return pkg.totalVolumetricWeightKg;
+  const volumetricWeight = (Number(pkg.lengthCm) || 0) * (Number(pkg.widthCm) || 0) * (Number(pkg.heightCm) || 0) * Math.max(1, Number(pkg.packageCount) || 1) / divisor;
+  return roundFinanceNumber(volumetricWeight);
 }
 
 interface FinanceEntryPageProps {
@@ -78,9 +97,11 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const [selectedPackages, setSelectedPackages] = useState<WarehousePackageSummary[]>([]);
   const [packagePickerSelected, setPackagePickerSelected] = useState<WarehousePackageSummary[]>([]);
   const [packageModalOpen, setPackageModalOpen] = useState(false);
+  const [selectedPackageDetailsOpen, setSelectedPackageDetailsOpen] = useState(false);
   const [packageTrackingQuery, setPackageTrackingQuery] = useState('');
   const [packageQuery, setPackageQuery] = useState<OrderEntryWarehousePackageQuery | null>(null);
   const [preselectedPackageLoadKey, setPreselectedPackageLoadKey] = useState('');
+  const [preselectedPackageWarning, setPreselectedPackageWarning] = useState<{ requestedCount: number; availableCount: number } | null>(null);
   const [tallyHistoryPackage, setTallyHistoryPackage] = useState<WarehousePackageSummary | null>(null);
   const [tallyHistoryTasks, setTallyHistoryTasks] = useState<WarehouseTallyTaskSummary[]>([]);
   const [tallyHistoryLoading, setTallyHistoryLoading] = useState(false);
@@ -90,6 +111,8 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const [exchangeRates, setExchangeRates] = useState<ExchangeRateSummary[]>([]);
   const [receiptLoading, setReceiptLoading] = useState(false);
   const [draftLoading, setDraftLoading] = useState(false);
+  const [tallyMiscFeeDue, setTallyMiscFeeDue] = useState<MiscFeeTallyDueSummary | null>(null);
+  const [selectedTallyMiscFeeIds, setSelectedTallyMiscFeeIds] = useState<string[]>([]);
   const [receivables, setReceivables] = useState<FinanceEntryFeeDraft[]>([
     createFinanceEntryFeeDraft('RECEIVABLE', { name: getDefaultFeeName(financeCatalogItems, '运费') })
   ]);
@@ -108,12 +131,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const settlementRows = useMemo(() => getSettlementMethodRows(financeCatalogItems), [financeCatalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
   const agentOptions = useMemo(
-    () => agents
-      .filter((agent) => agent.enabled)
-      .map((agent) => ({
-        label: agent.shortName || agent.name || agent.code,
-        value: agent.shortName || agent.name || agent.code
-      })),
+    () => getDetailedCompanyAgentOptions(agents),
     [agents]
   );
   const businessChannelOptions = useMemo(
@@ -123,9 +141,9 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     [channels]
   );
   const createdAtText = useMemo(() => formatBeijingDateTime(new Date().toISOString()), []);
-  const entryAtDefault = useMemo(() => toDatetimeLocal(new Date()), []);
+  const entryAtDefault = useMemo(() => formatBeijingDateTimeInputValue(), []);
   const watchedCustomerOrderNo = Form.useWatch('customerOrderNo', form);
-  const watchedAgentName = Form.useWatch('agentName', form);
+  const watchedAgentId = Form.useWatch('agentId', form);
   const watchedCustomerCode = Form.useWatch('customerCode', form);
   const watchedReceiverCountry = Form.useWatch('receiverCountry', form);
   const watchedReceivingChannel = Form.useWatch('receivingChannel', form);
@@ -177,10 +195,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     [financeCatalogItems]
   );
   const feeNameOptions = useMemo(
-    () => financeCatalogItems
-      .filter((item) => item.category === 'FEE_NAME' && item.enabled)
-      .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-Hans-CN'))
-      .map((item) => ({ label: item.name, value: item.name })),
+    () => createFinanceFeeNameOptions(financeCatalogItems),
     [financeCatalogItems]
   );
   const receivableDefaultFeeName = useMemo(() => getDefaultFeeName(financeCatalogItems, '运费'), [financeCatalogItems]);
@@ -227,6 +242,30 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       })
       .catch(() => {
         if (mounted) setReceiptRows([]);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [apiClient, watchedCustomerCode]);
+
+  useEffect(() => {
+    const customerCode = watchedCustomerCode?.trim();
+    if (!customerCode) {
+      setTallyMiscFeeDue(null);
+      setSelectedTallyMiscFeeIds([]);
+      return;
+    }
+    let mounted = true;
+    apiClient.miscFeeTallyDue(customerCode)
+      .then((response) => {
+        if (!mounted) return;
+        setTallyMiscFeeDue(response);
+        setSelectedTallyMiscFeeIds(response.rows.filter((row) => row.dueLevel === 'MANDATORY').map((row) => row.id));
+      })
+      .catch(() => {
+        if (!mounted) return;
+        setTallyMiscFeeDue(null);
+        setSelectedTallyMiscFeeIds([]);
       });
     return () => {
       mounted = false;
@@ -302,6 +341,27 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       : selectedPackages.reduce((sum, pkg) => sum + pkg.chargeableWeightKg, 0);
     return { ...summary, chargeWeightKg: roundFinanceNumber(chargeWeightKg) };
   }, [selectedCompanyChannel, selectedPackages]);
+  const companyChannelWarnings = useMemo(
+    () => selectedCompanyChannel ? evaluateCompanyChannelWarnings(selectedCompanyChannel, selectedPackages) : [],
+    [selectedCompanyChannel, selectedPackages]
+  );
+  const companyChannelWarningsByPackageIndex = useMemo(() => {
+    const warningsByPackageIndex = new Map<number, typeof companyChannelWarnings>();
+    companyChannelWarnings.forEach((warning) => {
+      const packageWarnings = warningsByPackageIndex.get(warning.packageIndex - 1) ?? [];
+      packageWarnings.push(warning);
+      warningsByPackageIndex.set(warning.packageIndex - 1, packageWarnings);
+    });
+    return warningsByPackageIndex;
+  }, [companyChannelWarnings]);
+  const aggregateCargoRuleError = useMemo(() => {
+    if (!selectedCompanyChannel || cargoDataSource !== 'MANUAL_ADJUSTED') return undefined;
+    return getCompanyChannelAggregateCargoValidationError(selectedCompanyChannel, {
+      packageCount: Number(watchedPackageCount ?? 0),
+      actualWeightKg: Number(watchedActualWeightKg ?? 0),
+      volumeCbm: Number(watchedVolumeCbm ?? 0)
+    });
+  }, [cargoDataSource, selectedCompanyChannel, watchedActualWeightKg, watchedPackageCount, watchedVolumeCbm]);
   const totals = useMemo(() => ({
     packageCount: Number(watchedPackageCount ?? matchedCargoTotals.packageCount) || 0,
     weightKg: Number(watchedActualWeightKg ?? matchedCargoTotals.weightKg) || 0,
@@ -318,6 +378,11 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     const actualWeightKg = Number(values.actualWeightKg ?? 0);
     const volumeCbm = Number(values.volumeCbm ?? 0);
     if (channel) {
+      if (getCompanyChannelAggregateCargoValidationError(channel, {
+        packageCount: Number(values.packageCount ?? 0),
+        actualWeightKg,
+        volumeCbm
+      })) return 0;
       return roundFinanceNumber(calculateCompanyChannelChargeWeightFromCargo(channel, {
         packageCount: Number(values.packageCount ?? 0),
         actualWeightKg,
@@ -367,6 +432,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const matchedSalesperson = username;
   const clearSelectedPackages = useCallback(() => {
     setSelectedPackages([]);
+    setSelectedPackageDetailsOpen(false);
     form.setFieldsValue({ packageCount: undefined, actualWeightKg: undefined, volumeCbm: undefined, chargeableWeightKg: undefined });
     setChargeWeightOverridden(false);
     syncCargoChargeWeightToFees(0);
@@ -461,7 +527,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       createFinanceEntryFeeDraft(type, {
         name: type === 'RECEIVABLE' ? receivableDefaultFeeName : type === 'BUSINESS_COST' ? businessCostDefaultFeeName : undefined,
         currency: type === 'PAYABLE' ? 'RMB' : formCurrency,
-        agentName: type !== 'RECEIVABLE' ? form.getFieldValue('agentName') : undefined,
+        agentId: type !== 'RECEIVABLE' ? form.getFieldValue('agentId') : undefined,
         chargeWeightKg
       })
     ]);
@@ -479,7 +545,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
 
   const reset = () => {
     form.resetFields();
-    form.setFieldsValue({ entryAt: toDatetimeLocal(new Date()) });
+    form.setFieldsValue({ entryAt: formatBeijingDateTimeInputValue() });
     setPackages([]);
     setPackageQuery(null);
     setPackageTrackingQuery('');
@@ -500,22 +566,24 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         amount: row.amount,
         settlementMethod: row.settlementMethod,
         paymentNo: row.paymentNo,
+        agentId: canUseAgentFields && 'agentId' in row
+          ? row.agentId ?? resolveAgentIdByIdentity(agents, 'agentName' in row ? row.agentName : undefined)
+          : undefined,
         agentName: canUseAgentFields && 'agentName' in row ? row.agentName : undefined,
         chargeWeightKg: 'chargeWeightKg' in row ? row.chargeWeightKg : undefined,
         unitPrice: 'unitPrice' in row ? row.unitPrice : undefined,
         remark: row.remark
       });
     form.setFieldsValue({
-      entryAt: shipment.entryAt ? toDatetimeLocal(new Date(shipment.entryAt)) : undefined,
+      entryAt: shipment.entryAt ? formatBeijingDateTimeInputValue(shipment.entryAt) : undefined,
       customerCode: shipment.customerCode,
       customerName: shipment.customerName,
       customerOrderNo: shipment.customerOrderNo,
-      transferNo: shipment.transferNo,
       subOrderNo: shipment.subOrderNo,
       inboundNo: shipment.inboundNo,
       destinationCountry: shipment.destinationCountry,
       receivingChannel: shipment.channelId || shipment.channelName || shipment.carrier || detail.packages[0]?.receivingChannel,
-      agentName: canUseAgentFields ? shipment.agentName : undefined,
+      agentId: canUseAgentFields ? shipment.agentId ?? resolveAgentIdByIdentity(agents, shipment.agentName) : undefined,
       declarationRequired: shipment.declarationRequired,
       sensitive: shipment.sensitive,
       cargoType: shipment.cargoType,
@@ -544,7 +612,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     setReceivables(detail.receivables.length ? detail.receivables.map((row) => toFeeDraft('RECEIVABLE', row)) : [createFinanceEntryFeeDraft('RECEIVABLE', { name: receivableDefaultFeeName })]);
     setBusinessCosts(detail.businessCosts.length ? detail.businessCosts.map((row) => toFeeDraft('BUSINESS_COST', row)) : [createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })]);
     setPayables(detail.payables.length ? detail.payables.map((row) => toFeeDraft('PAYABLE', row)) : [createFinanceEntryFeeDraft('PAYABLE')]);
-  }, [businessCostDefaultFeeName, canUseAgentFields, form, receivableDefaultFeeName]);
+  }, [agents, businessCostDefaultFeeName, canUseAgentFields, form, receivableDefaultFeeName]);
 
   useEffect(() => {
     if (!draftId) return;
@@ -685,12 +753,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     setBusinessCosts((rows) => rows.map((row) => ({
       ...row,
       chargeWeightKg: totalChargeWeight,
-      agentName: row.agentName || form.getFieldValue('agentName')
+      agentId: row.agentId || form.getFieldValue('agentId')
     })));
     setPayables((rows) => rows.map((row) => ({
       ...row,
       chargeWeightKg: totalChargeWeight,
-      agentName: row.agentName || form.getFieldValue('agentName')
+      agentId: row.agentId || form.getFieldValue('agentId')
     })));
   }, [channels, form, selectedCustomer?.name]);
 
@@ -722,6 +790,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
 
   const confirmPackageSelection = useCallback(() => {
     setSelectedPackages(packagePickerSelected);
+    setPreselectedPackageWarning(null);
     if (packagePickerSelected.length) {
       applyPackageSelection(packagePickerSelected);
     } else {
@@ -736,24 +805,30 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   useEffect(() => {
     if (!preselectedPackageIds?.length) return;
     const ids = new Set(preselectedPackageIds);
-    const hasAllPreselectedPackages = preselectedPackageIds.every((id) => packages.some((pkg) => pkg.id === id));
-    if (!hasAllPreselectedPackages && preselectedPackageLoadKey !== preselectedPackageKey) {
+    const loadedPackageKey = (packageQuery?.packageIds ?? []).join('|');
+    if (loadedPackageKey !== preselectedPackageKey && preselectedPackageLoadKey !== preselectedPackageKey) {
+      setPreselectedPackageWarning(null);
       setPreselectedPackageLoadKey(preselectedPackageKey);
       void loadPackages({ packageIds: Array.from(ids) });
-      return;
     }
-  }, [loadPackages, packages, preselectedPackageIds, preselectedPackageKey, preselectedPackageLoadKey]);
+  }, [loadPackages, packageQuery?.packageIds, preselectedPackageIds, preselectedPackageKey, preselectedPackageLoadKey]);
 
   useEffect(() => {
-    if (!preselectedPackageIds?.length || !packages.length) return;
+    if (!preselectedPackageIds?.length || packageLoading) return;
+    const loadedPackageKey = (packageQuery?.packageIds ?? []).join('|');
+    if (loadedPackageKey !== preselectedPackageKey) return;
     const ids = new Set(preselectedPackageIds);
     const rows = packages.filter((pkg) => ids.has(pkg.id));
+    const unavailableCount = Math.max(0, preselectedPackageIds.length - rows.length);
+    setPreselectedPackageWarning(unavailableCount
+      ? { requestedCount: preselectedPackageIds.length, availableCount: rows.length }
+      : null);
     if (!rows.length) return;
     setSelectedPackages(rows);
     applyPackageSelection(rows);
     setPreselectedPackageLoadKey('');
     onPreselectedPackageIdsConsumed?.();
-  }, [applyPackageSelection, onPreselectedPackageIdsConsumed, packages, preselectedPackageIds, preselectedPackageKey]);
+  }, [applyPackageSelection, onPreselectedPackageIdsConsumed, packageLoading, packageQuery?.packageIds, packages, preselectedPackageIds, preselectedPackageKey]);
 
   useEffect(() => {
     if (draftLoading) return;
@@ -801,7 +876,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       currency: normalizeFinanceCatalogCurrency(row.currency) ?? normalizeFinanceCatalogCurrency(form.getFieldValue('currency')) ?? 'RMB',
       settlementMethod: row.settlementMethod || form.getFieldValue('settlementMethod'),
       paymentNo: row.paymentNo,
-      agentName: canUseAgentFields && type !== 'RECEIVABLE' ? (row.agentName || form.getFieldValue('agentName')) : undefined,
+      agentId: canUseAgentFields && type !== 'RECEIVABLE' ? (row.agentId || form.getFieldValue('agentId')) : undefined,
       chargeWeightKg: row.chargeWeightKg,
       unitPrice: row.unitPrice,
       receiptId: type === 'RECEIVABLE' ? row.receiptId : undefined,
@@ -839,8 +914,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         customerOrderNo: values.customerOrderNo || customerCode || firstPackage?.customerOrderNo || '',
         outboundOrderNo: values.customerOrderNo?.trim(),
         systemOrderNo: values.customerOrderNo?.trim(),
-        entryAt: values.entryAt,
-        transferNo: values.transferNo,
+        entryAt: values.entryAt ? parseBeijingDateTimeInputToIso(values.entryAt) : undefined,
         subOrderNo: values.subOrderNo,
         inboundNo: values.inboundNo,
         businessType: 'DEDICATED_LINE',
@@ -848,6 +922,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         destinationCountry: values.destinationCountry ?? firstPackage?.destinationCountry ?? '',
         receivingChannel: selectedBusinessChannel?.name || values.receivingChannel || values.channelName,
         channelId: selectedBusinessChannel?.id,
+        agentId: canUseAgentFields ? values.agentId : undefined,
         declarationRequired: values.declarationRequired ?? false,
         sensitive: Boolean(values.sensitive),
         cargoType: values.cargoType ?? '',
@@ -874,6 +949,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       receivables: buildFeeRows(receivables, 'RECEIVABLE'),
       businessCosts: buildFeeRows(businessCosts, 'BUSINESS_COST'),
       payables: canEditOrderEntryPayables ? buildFeeRows(payables, 'PAYABLE') : [],
+      miscFeeIdsToMatch: submitForReview ? selectedTallyMiscFeeIds : [],
       submitForReview
     };
     setSubmitting(true);
@@ -920,41 +996,19 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
 
   const renderPackageNoWithTally = (record: WarehousePackageSummary) => {
     const packageNo = record.combinedOrderNo || `${record.customerOrderNo}-${record.domesticTrackingNo}`;
-    const tallied = isTalliedPackage(record);
-    if (!tallied) {
-      return <Text strong>{packageNo}</Text>;
-    }
     return (
-      <Space size={4} className="finance-entry-tally-inline">
-        <Button
-          type="link"
-          size="small"
-          className="finance-entry-package-link"
-          onClick={(event) => {
-            event.stopPropagation();
-            void openTallyHistory(record);
-          }}
-        >
-          {packageNo}
-        </Button>
-        <Tag
-          color="processing"
-          className="finance-entry-tally-tag"
-          onClick={(event) => {
-            event.stopPropagation();
-            void openTallyHistory(record);
-          }}
-        >
-          理
-        </Tag>
-      </Space>
+      <WarehousePackageNoWithTallyStatus
+        packageNo={packageNo}
+        record={record}
+        onOpenTallyHistory={isTalliedPackage(record) ? () => void openTallyHistory(record) : undefined}
+      />
     );
   };
 
   const packageColumns: ColumnsType<WarehousePackageSummary> = [
     {
       title: '客户单号-快递单号',
-      width: 230,
+      width: 190,
       render: (_, record) => (
         <div className="finance-entry-package-cell">
           {renderPackageNoWithTally(record)}
@@ -962,12 +1016,59 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         </div>
       )
     },
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150, render: (value?: string) => value || '-' },
-    { title: '件数', dataIndex: 'packageCount', width: 80 },
-    { title: '实重', dataIndex: 'weightKg', width: 100, render: (value: number) => `${value.toFixed(2)} kg` },
-    { title: '6000材积', dataIndex: 'volumetricWeightKg', width: 110, render: (value: number) => `${value.toFixed(2)} kg` },
-    { title: '扫描时间', dataIndex: 'scanTime', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
-    { title: '备注', dataIndex: 'remark', width: 160, render: (value?: string) => value || '-' }
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 125, ellipsis: true, render: (value?: string) => value || '-' },
+    { title: '件数', dataIndex: 'packageCount', width: 60 },
+    { title: '实重', dataIndex: 'weightKg', width: 80, render: (value: number) => `${value.toFixed(2)} kg` },
+    {
+      title: '5000材积',
+      dataIndex: 'volumetricWeightKg5000',
+      width: 92,
+      render: (value: number | undefined, record) => `${(value ?? (record.lengthCm * record.widthCm * record.heightCm * record.packageCount) / 5000).toFixed(2)} kg`
+    },
+    { title: '6000材积', dataIndex: 'volumetricWeightKg', width: 92, render: (value: number) => `${value.toFixed(2)} kg` },
+    { title: '扫描时间', dataIndex: 'scanTime', width: 145, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+    { title: '备注', dataIndex: 'remark', width: 120, ellipsis: true, render: (value?: string) => value || '-' }
+  ];
+
+  const selectedPackageDetailColumns: ColumnsType<WarehousePackageSummary> = [
+    {
+      title: '包裹',
+      width: 180,
+      render: (_, record) => (
+        <div className="finance-entry-package-cell">
+          <Text strong>{record.combinedOrderNo || `${record.customerOrderNo}-${record.domesticTrackingNo}`}</Text>
+          <Text type="secondary">箱序：{record.packageIndex ?? '-'} / {record.expectedTotalPackageCount ?? '-'}</Text>
+        </div>
+      )
+    },
+    { title: '件数', dataIndex: 'packageCount', width: 66, align: 'right' },
+    { title: '规格（长 × 宽 × 高）', width: 172, align: 'right', render: (_, record) => `${record.lengthCm.toFixed(2)} × ${record.widthCm.toFixed(2)} × ${record.heightCm.toFixed(2)} cm` },
+    { title: '实重', dataIndex: 'weightKg', width: 92, align: 'right', render: (value: number) => `${value.toFixed(2)} kg` },
+    { title: '方数', width: 106, align: 'right', render: (_, record) => `${Number(record.totalCbm ?? record.cbm).toFixed(6)} CBM` },
+    { title: '5000材积', width: 104, align: 'right', render: (_, record) => `${calculateSelectedPackageVolumetricWeight(record, 5000).toFixed(2)} kg` },
+    { title: '6000材积', width: 104, align: 'right', render: (_, record) => `${calculateSelectedPackageVolumetricWeight(record, 6000).toFixed(2)} kg` },
+    {
+      title: selectedCompanyChannel ? '渠道计费重' : '仓库计费重',
+      width: 112,
+      align: 'right',
+      render: (_, record) => `${(selectedCompanyChannel
+        ? calculateCompanyChannelChargeWeight(selectedCompanyChannel, [record])
+        : record.chargeableWeightKg).toFixed(2)} kg`
+    },
+    {
+      title: '预警',
+      width: 260,
+      render: (_, __, packageIndex) => {
+        const warnings = companyChannelWarningsByPackageIndex.get(packageIndex) ?? [];
+        if (!selectedCompanyChannel) return <Text type="secondary">请选择公司渠道后判断</Text>;
+        if (!warnings.length) return <Tag color="green">未命中预警</Tag>;
+        return (
+          <Space direction="vertical" size={2} className="finance-entry-package-warning-list">
+            {warnings.map((warning) => <Text key={warning.code} type="danger">{warning.message}</Text>)}
+          </Space>
+        );
+      }
+    }
   ];
 
   const getFeeCurrency = (row: FinanceEntryFeeDraft, type: ShipmentFinanceItemType) => {
@@ -975,18 +1076,27 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     return normalizeFinanceCatalogCurrency(row.currency) ?? normalizeFinanceCatalogCurrency(form.getFieldValue('currency')) ?? 'RMB';
   };
 
+  const currentUsdToRmbRate = resolveCurrentUsdToRmbRate(exchangeRates);
   const currencyToRmb = (currency?: string) => {
     const normalized = normalizeFinanceCatalogCurrency(currency) ?? 'RMB';
     if (normalized === 'RMB') return 1;
-    if (normalized === 'USD') return exchangeRates.find((rate) => rate.enabled && rate.baseCurrency === 'USD' && rate.quoteCurrency === 'RMB')?.rate ?? 0;
-    return 0;
+    if (normalized === 'USD') return currentUsdToRmbRate;
+    return undefined;
   };
 
   const renderReadonlyCell = (value?: string | number | null, placeholder = '-') => <Text>{value === undefined || value === null || value === '' ? placeholder : value}</Text>;
 
-  const getFeeRmbTotal = (rows: FinanceEntryFeeDraft[], type: ShipmentFinanceItemType) => rows.reduce((sum, row) => {
-    return sum + calculateFinanceEntryFeeAmount(row) * currencyToRmb(getFeeCurrency(row, type));
-  }, 0);
+  const getFeeRmbAmount = (row: FinanceEntryFeeDraft, type: ShipmentFinanceItemType) => {
+    const exchangeRate = currencyToRmb(getFeeCurrency(row, type));
+    return exchangeRate === undefined ? undefined : calculateFinanceEntryFeeAmount(row) * exchangeRate;
+  };
+  const getFeeRmbTotal = (rows: FinanceEntryFeeDraft[], type: ShipmentFinanceItemType) => {
+    const amounts = rows.map((row) => getFeeRmbAmount(row, type));
+    return amounts.some((amount) => amount === undefined)
+      ? undefined
+      : amounts.reduce<number>((sum, amount) => sum + Number(amount), 0);
+  };
+  const formatFeeRmbAmount = (amount?: number) => amount === undefined ? '缺少有效汇率' : `RMB ${amount.toFixed(2)}`;
   const receivableCurrencyRows = ['USD', 'RMB'].map((currency) => ({
     currency,
     balance: receiptRows
@@ -1013,14 +1123,14 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const renderFeeTable = (type: ShipmentFinanceItemType, title: string, rows: FinanceEntryFeeDraft[]) => {
     if (type === 'RECEIVABLE') {
       const columns: ColumnsType<FinanceEntryFeeDraft> = [
-        { title: '业务员', width: 100, render: () => renderReadonlyCell(matchedSalesperson) },
-        { title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
-        { title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
-        { title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
-        { title: '转单号', width: 130, render: () => renderReadonlyCell(undefined, '待回填') },
-        { title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
+        { key: 'salesperson', title: '业务员', width: 100, render: () => renderReadonlyCell(matchedSalesperson) },
+        { key: 'feeName', title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
+        { key: 'customerCode', title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
+        { key: 'systemOrderNo', title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
+        { key: 'currency', title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
         {
-          title: '匹配水单编号',
+          key: 'receiptNo',
+          title: '申请匹配水单',
           width: 260,
           render: (_, row) => (
             <Space size={6} wrap>
@@ -1032,8 +1142,9 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
             </Space>
           )
         },
-        { title: '金额', width: 120, render: (_, row) => <InputNumber min={0} max={row.receiptBalance} precision={2} value={row.amount} onChange={(value) => updateFee(type, row.id, { amount: value ?? undefined })} /> },
+        { key: 'amount', title: '金额', width: 120, render: (_, row) => <InputNumber min={0} max={row.receiptBalance} precision={2} value={row.amount} onChange={(value) => updateFee(type, row.id, { amount: value ?? undefined })} /> },
         {
+          key: 'settlementMethod',
           title: '结算方式',
           width: 170,
           render: (_, row) => (
@@ -1045,13 +1156,13 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
             />
           )
         },
-        { title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{`RMB ${(calculateFinanceEntryFeeAmount(row) * currencyToRmb(getFeeCurrency(row, type))).toFixed(2)}`}</Text> },
-        { title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
-        { title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
-        { title: '审单日期', width: 120, render: () => renderReadonlyCell(null) },
-        { title: '审单人', width: 100, render: () => renderReadonlyCell(null) },
-        { title: '备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
-        { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
+        { key: 'totalRmb', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeRmbAmount(getFeeRmbAmount(row, type))}</Text> },
+        { key: 'createdAt', title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
+        { key: 'createdBy', title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
+        { key: 'auditedAt', title: '审单日期', width: 120, render: () => renderReadonlyCell(null) },
+        { key: 'auditedBy', title: '审单人', width: 100, render: () => renderReadonlyCell(null) },
+        { key: 'remark', title: '备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
+        { key: 'action', title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
       ];
       return (
         <Card className="finance-entry-fee-card" title={title} extra={<Button onClick={() => addFee(type)}>新增项目</Button>}>
@@ -1067,13 +1178,15 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
               { title: '金额', dataIndex: 'amount', width: 140, align: 'right', render: (value: number) => value.toFixed(2) }
             ]}
           />
-          <Table<FinanceEntryFeeDraft>
+          <ManagedTable<FinanceEntryFeeDraft>
             className="finance-entry-editable-table finance-work-table finance-embedded-table"
             rowKey="id"
             size="small"
             pagination={false}
             dataSource={rows}
             scroll={{ x: 2050 }}
+            columnSettings={false}
+            recordDetail={false}
             summary={() => (
               <Table.Summary fixed>
                 <Table.Summary.Row>
@@ -1081,51 +1194,63 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                     <Text strong>合计</Text>
                   </Table.Summary.Cell>
                   <Table.Summary.Cell index={columns.length - 1} align="right">
-                    <Text strong>RMB {getFeeRmbTotal(rows, type).toFixed(2)}</Text>
+                    <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
                   </Table.Summary.Cell>
                 </Table.Summary.Row>
               </Table.Summary>
             )}
-            columns={columns}
+            columns={columns.map((column) => ({ ...column, sortable: false }))}
           />
         </Card>
       );
     }
 
     if (type === 'BUSINESS_COST') {
+      const receivableRmbTotal = getFeeRmbTotal(receivables, 'RECEIVABLE');
+      const businessCostRmbTotal = getFeeRmbTotal(businessCosts, 'BUSINESS_COST');
       const profitColumns: ColumnsType<FinanceEntryFeeDraft> = canViewFinanceAuditFields ? [
-        { title: '业务利润', width: 120, align: 'right', render: () => <Text>{(getFeeRmbTotal(receivables, 'RECEIVABLE') - getFeeRmbTotal(businessCosts, 'BUSINESS_COST')).toFixed(2)}</Text> }
+        {
+          key: 'businessProfit',
+          title: '业务利润',
+          width: 120,
+          align: 'right',
+          render: () => <Text>{receivableRmbTotal === undefined || businessCostRmbTotal === undefined
+            ? '缺少有效汇率'
+            : (receivableRmbTotal - businessCostRmbTotal).toFixed(2)}</Text>
+        }
       ] : [];
       const columns: ColumnsType<FinanceEntryFeeDraft> = [
         ...(canUseAgentFields ? [{
-          title: '代理',
+          key: 'agent',
+          title: agentFieldLabels.detailedCompanyName,
           width: 150,
-          render: (_: unknown, row: FinanceEntryFeeDraft) => <Select showSearch allowClear value={row.agentName || watchedAgentName} options={agentOptions} onChange={(value) => updateFee(type, row.id, { agentName: value })} />
+          render: (_: unknown, row: FinanceEntryFeeDraft) => <Select showSearch allowClear optionFilterProp="searchText" value={row.agentId || watchedAgentId} options={agentOptions} onChange={(value) => updateFee(type, row.id, { agentId: value })} />
         }] : []),
-        { title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
-        { title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
-        { title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
-        { title: '转单号', width: 130, render: () => renderReadonlyCell(undefined, '待回填') },
-        { title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
-        { title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
-        { title: '单价', width: 120, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
-        { title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
-        { title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{`RMB ${(calculateFinanceEntryFeeAmount(row) * currencyToRmb(getFeeCurrency(row, type))).toFixed(2)}`}</Text> },
+        { key: 'feeName', title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
+        { key: 'customerCode', title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
+        { key: 'systemOrderNo', title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
+        { key: 'currency', title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
+        { key: 'chargeWeightKg', title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
+        { key: 'unitPrice', title: '单价', width: 120, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
+        { key: 'totalAmount', title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
+        { key: 'totalRmb', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeRmbAmount(getFeeRmbAmount(row, type))}</Text> },
         ...profitColumns,
-        { title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
-        { title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
-        { title: '备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
-        { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
+        { key: 'createdAt', title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
+        { key: 'createdBy', title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
+        { key: 'remark', title: '备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
+        { key: 'action', title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
       ];
       return (
         <Card className="finance-entry-fee-card" title={title} extra={<Button onClick={() => addFee(type)}>新增项目</Button>}>
-          <Table<FinanceEntryFeeDraft>
+          <ManagedTable<FinanceEntryFeeDraft>
             className="finance-entry-editable-table finance-work-table finance-embedded-table"
             rowKey="id"
             size="small"
             pagination={false}
             dataSource={rows}
             scroll={{ x: Math.max(1600, columns.length * 125) }}
+            columnSettings={false}
+            recordDetail={false}
             summary={() => (
               <Table.Summary fixed>
                 <Table.Summary.Row>
@@ -1133,12 +1258,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                     <Text strong>合计</Text>
                   </Table.Summary.Cell>
                   <Table.Summary.Cell index={columns.length - 1} align="right">
-                    <Text strong>RMB {getFeeRmbTotal(rows, type).toFixed(2)}</Text>
+                    <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
                   </Table.Summary.Cell>
                 </Table.Summary.Row>
               </Table.Summary>
             )}
-            columns={columns}
+            columns={columns.map((column) => ({ ...column, sortable: false }))}
           />
         </Card>
       );
@@ -1146,40 +1271,43 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
 
     const columns: ColumnsType<FinanceEntryFeeDraft> = [
       ...(canUseAgentFields ? [{
-        title: '代理',
+        key: 'agent',
+        title: agentFieldLabels.detailedCompanyName,
         width: 150,
-        render: (_: unknown, row: FinanceEntryFeeDraft) => <Select showSearch allowClear value={row.agentName || watchedAgentName} options={agentOptions} onChange={(value) => updateFee(type, row.id, { agentName: value })} />
+        render: (_: unknown, row: FinanceEntryFeeDraft) => <Select showSearch allowClear optionFilterProp="searchText" value={row.agentId || watchedAgentId} options={agentOptions} onChange={(value) => updateFee(type, row.id, { agentId: value })} />
       }] : []),
-      { title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
-      { title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
-      { title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
-      { title: '转单号', width: 130, render: () => renderReadonlyCell(undefined, '待回填') },
-      { title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
-      { title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
-      { title: '出货成本单价', width: 125, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
-      { title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
-      { title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{`RMB ${(calculateFinanceEntryFeeAmount(row) * currencyToRmb(getFeeCurrency(row, type))).toFixed(2)}`}</Text> },
+      { key: 'feeName', title: '费用名称', width: 150, render: (_, row) => renderFeeNameSelect(type, row, title) },
+      { key: 'customerCode', title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
+      { key: 'systemOrderNo', title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
+      { key: 'currency', title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
+      { key: 'chargeWeightKg', title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
+      { key: 'outboundUnitPrice', title: '出货成本单价', width: 125, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
+      { key: 'totalAmount', title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
+      { key: 'totalRmb', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeRmbAmount(getFeeRmbAmount(row, type))}</Text> },
       {
+        key: 'paymentNo',
         title: '付款编号',
         width: 150,
         render: (_, row) => <Input value={row.paymentNo} onChange={(event) => updateFee(type, row.id, { paymentNo: event.target.value })} />
       },
-      { title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
-      { title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
-      { title: '审单日期', width: 120, render: () => renderReadonlyCell(null) },
-      { title: '审单人', width: 100, render: () => renderReadonlyCell(null) },
-      { title: '应付备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
-      { title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
+      { key: 'createdAt', title: '制单日期', width: 170, render: () => renderReadonlyCell(createdAtText) },
+      { key: 'createdBy', title: '制单人', width: 110, render: () => renderReadonlyCell(username) },
+      { key: 'auditedAt', title: '审单日期', width: 120, render: () => renderReadonlyCell(null) },
+      { key: 'auditedBy', title: '审单人', width: 100, render: () => renderReadonlyCell(null) },
+      { key: 'remark', title: '应付备注', width: 180, render: (_, row) => <Input value={row.remark} onChange={(event) => updateFee(type, row.id, { remark: event.target.value })} /> },
+      { key: 'action', title: '操作', width: 80, fixed: 'right', render: (_, row) => <Button danger disabled={rows.length <= 1} onClick={() => removeFee(type, row.id)}>删除</Button> }
     ];
     return (
       <Card className="finance-entry-fee-card" title={title} extra={<Button onClick={() => addFee(type)}>新增项目</Button>}>
-        <Table<FinanceEntryFeeDraft>
+        <ManagedTable<FinanceEntryFeeDraft>
           className="finance-entry-editable-table finance-work-table finance-embedded-table"
           rowKey="id"
           size="small"
           pagination={false}
           dataSource={rows}
           scroll={{ x: Math.max(1800, columns.length * 125) }}
+          columnSettings={false}
+          recordDetail={false}
           summary={() => (
             <Table.Summary fixed>
               <Table.Summary.Row>
@@ -1187,12 +1315,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                   <Text strong>合计</Text>
                 </Table.Summary.Cell>
                 <Table.Summary.Cell index={columns.length - 1} align="right">
-                  <Text strong>RMB {getFeeRmbTotal(rows, type).toFixed(2)}</Text>
+                  <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
                 </Table.Summary.Cell>
               </Table.Summary.Row>
             </Table.Summary>
           )}
-          columns={columns}
+          columns={columns.map((column) => ({ ...column, sortable: false }))}
         />
       </Card>
     );
@@ -1203,6 +1331,58 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       <Row gutter={[12, 12]} className="finance-entry-workbench-row">
         <Col xs={24}>
           <Card className="finance-entry-workbench-card finance-entry-form-card" title={draftId ? '继续编辑录单草稿' : '运单基础信息'} loading={draftLoading}>
+            {preselectedPackageWarning ? (
+              <Alert
+                type={preselectedPackageWarning.availableCount ? 'warning' : 'error'}
+                showIcon
+                message={preselectedPackageWarning.availableCount
+                  ? `原选 ${preselectedPackageWarning.requestedCount} 件，仅 ${preselectedPackageWarning.availableCount} 件可录单`
+                  : `原选 ${preselectedPackageWarning.requestedCount} 件均不可录单`}
+                description={preselectedPackageWarning.availableCount
+                  ? '其余包裹可能已绑定运单、被草稿占用或状态已变化；本页只会保存当前列出的可用包裹。'
+                  : '包裹可能已绑定运单、被草稿占用或状态已变化，请返回仓库重新选择。'}
+                action={!preselectedPackageWarning.availableCount
+                  ? <Button size="small" onClick={() => window.history.back()}>返回仓库</Button>
+                  : undefined}
+                style={{ marginBottom: 12 }}
+              />
+            ) : null}
+            {tallyMiscFeeDue?.rows.length ? (
+              <Alert
+                type={tallyMiscFeeDue.mandatoryCount ? 'error' : tallyMiscFeeDue.warehouseDueCount ? 'warning' : 'info'}
+                showIcon
+                message={tallyMiscFeeDue.mandatoryCount
+                  ? `该客户有 ${tallyMiscFeeDue.mandatoryCount} 笔满 60 天理货杂费，提交前必须处理`
+                  : `该客户有 ${tallyMiscFeeDue.rows.length} 笔未匹配理货杂费`}
+                description={(
+                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                    {tallyMiscFeeDue.rows.map((fee) => {
+                      const mandatory = fee.dueLevel === 'MANDATORY';
+                      return (
+                        <Checkbox
+                          key={fee.id}
+                          checked={selectedTallyMiscFeeIds.includes(fee.id)}
+                          disabled={mandatory}
+                          onChange={(event) => setSelectedTallyMiscFeeIds((current) => event.target.checked
+                            ? Array.from(new Set([...current, fee.id]))
+                            : current.filter((id) => id !== fee.id))}
+                        >
+                          <Space size={6} wrap>
+                            <Text strong>{fee.feeName}</Text>
+                            <Text>{fee.businessAmount === undefined ? '待仓库补充金额' : `${fee.businessAmount.toFixed(2)} ${fee.businessCurrency}`}</Text>
+                            <Tag color={mandatory ? 'red' : fee.dueLevel === 'WAREHOUSE_DUE' ? 'orange' : 'blue'}>
+                              {mandatory ? `${fee.ageDays} 天·必须处理` : fee.dueLevel === 'WAREHOUSE_DUE' ? `${fee.ageDays} 天·仓库可处理` : `${fee.ageDays} 天`}
+                            </Tag>
+                          </Space>
+                        </Checkbox>
+                      );
+                    })}
+                    <Text type="secondary">勾选后，提交审核时会把这些理货杂费匹配到本运单；满 60 天记录不可取消。</Text>
+                  </Space>
+                )}
+                style={{ marginBottom: 12 }}
+              />
+            ) : null}
             <div className="finance-entry-summary-grid">
               <div className="finance-entry-summary-card"><Text type="secondary">已选货物</Text><Text strong>{selectedPackages.length} 条</Text></div>
               <div className="finance-entry-summary-card"><Text type="secondary">总件数</Text><Text strong>{totals.packageCount} 件</Text></div>
@@ -1233,13 +1413,13 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                   <Col xs={24} md={12} xl={6}><Form.Item label="仓库数据"><Button block onClick={() => void openPackageModal()} disabled={!watchedCustomerCode?.trim()}>仓库数据</Button></Form.Item></Col>
                   <Col xs={24} md={12} xl={6}><Form.Item name="customerCode" label="客户编号" rules={[{ required: true, message: '请输入客户编号' }]}><Input /></Form.Item></Col>
                   <Col xs={24} md={12} xl={6}><Form.Item name="customerName" label="客户名称"><Input readOnly placeholder={watchedCustomerCode?.trim() ? '未匹配客户资料' : '填写客户编号后自动带出'} /></Form.Item></Col>
-                  <Col xs={24} md={12} xl={6}><Form.Item name="customerOrderNo" label="出货单号" rules={[{ required: true, message: '请输入出货单号' }]}><Input /></Form.Item></Col>
-                  <Col xs={24} md={12} xl={6}>
+                  <Col xs={24} md={12} xl={8}><Form.Item name="customerOrderNo" label="出货单号" rules={[{ required: true, message: '请输入出货单号' }]}><Input /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={8}>
                     <Form.Item name="receivingChannel" label="公司渠道" rules={[{ required: true, message: '请选择公司渠道' }]}>
                       <Select showSearch allowClear options={businessChannelOptions} onChange={(value) => recalculateCargoChargeWeight(value)} />
                     </Form.Item>
                   </Col>
-                  <Col xs={24} md={12} xl={6}>
+                  <Col xs={24} md={12} xl={8}>
                     <Form.Item name="destinationCountry" label="国家" rules={[{ required: true, message: '请选择或输入国家' }]}>
                       <AutoComplete
                         allowClear
@@ -1250,38 +1430,70 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                       />
                     </Form.Item>
                   </Col>
-                  <Col xs={24} md={12} xl={6}><Form.Item name="transferNo" label="转单号"><Input /></Form.Item></Col>
-                  <Col xs={24} md={12} xl={6}><Form.Item name="inboundNo" label="入仓号"><Input /></Form.Item></Col>
-                  <Col xs={24}><Form.Item name="productName" label="品名" rules={[{ required: true, message: '请输入品名' }]}><AutoComplete options={productNameOptions} onBlur={() => maybeSaveCatalogItem('PRODUCT_NAME', form.getFieldValue('productName'))} /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={6} className="finance-entry-inbound-field"><Form.Item name="inboundNo" label="入仓号"><Input /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={18} className="finance-entry-product-field"><Form.Item name="productName" label="品名" rules={[{ required: true, message: '请输入品名' }]}><AutoComplete options={productNameOptions} onBlur={() => maybeSaveCatalogItem('PRODUCT_NAME', form.getFieldValue('productName'))} /></Form.Item></Col>
                 </Row>
                 <div className="finance-entry-cargo-metrics" aria-label="货物数据">
                   <div className="finance-entry-cargo-toolbar">
                     <Space wrap align="center">
                       <Text strong>货物数据</Text>
-                      <Tag color={cargoDataSource === 'MANUAL_ADJUSTED' ? 'gold' : 'blue'}>{cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '仓库自动汇总'}</Tag>
+                      <Tag
+                        aria-disabled={!selectedPackages.length}
+                        aria-label="双击查看已选包裹详情"
+                        className="finance-entry-cargo-detail-trigger"
+                        color={cargoDataSource === 'MANUAL_ADJUSTED' ? 'gold' : 'blue'}
+                        role="button"
+                        tabIndex={selectedPackages.length ? 0 : -1}
+                        title={selectedPackages.length ? `双击查看已选的 ${selectedPackages.length} 条包裹详情` : '请先从仓库数据选择包裹'}
+                        onDoubleClick={() => {
+                          if (selectedPackages.length) setSelectedPackageDetailsOpen(true);
+                        }}
+                        onKeyDown={(event) => {
+                          if (selectedPackages.length && (event.key === 'Enter' || event.key === ' ')) {
+                            event.preventDefault();
+                            setSelectedPackageDetailsOpen(true);
+                          }
+                        }}
+                      >
+                        {cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '仓库自动汇总'}
+                      </Tag>
                       {chargeWeightOverridden ? <Tag color="orange">计费重已手动覆盖</Tag> : null}
                     </Space>
                     <Button size="small" onClick={() => recalculateCargoChargeWeight()} disabled={!selectedCompanyChannel && !totals.weightKg && !totals.cbm}>按公司渠道重新计算</Button>
                   </div>
                   <div className="finance-entry-cargo-grid">
                     <Form.Item name="packageCount" label="件数"><InputNumber min={0} precision={0} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('packageCount', value)} /></Form.Item>
-                    <Form.Item name="actualWeightKg" label="实重 kg"><div className="finance-entry-cargo-unit-input"><InputNumber min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('actualWeightKg', value)} /><span>kg</span></div></Form.Item>
-                    <Form.Item name="volumeCbm" label="体积 CBM"><div className="finance-entry-cargo-unit-input"><InputNumber min={0} precision={6} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('volumeCbm', value)} /><span>CBM</span></div></Form.Item>
-                    <Form.Item name="chargeableWeightKg" label="计费重 kg"><div className="finance-entry-cargo-unit-input"><InputNumber min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('chargeableWeightKg', value)} /><span>kg</span></div></Form.Item>
+                    <Form.Item label="实重 kg"><div className="finance-entry-cargo-unit-input"><Form.Item name="actualWeightKg" noStyle><InputNumber aria-label="实重 kg" min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('actualWeightKg', value)} /></Form.Item><span>kg</span></div></Form.Item>
+                    <Form.Item label="体积 CBM"><div className="finance-entry-cargo-unit-input"><Form.Item name="volumeCbm" noStyle><InputNumber aria-label="体积 CBM" min={0} precision={6} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('volumeCbm', value)} /></Form.Item><span>CBM</span></div></Form.Item>
+                    <Form.Item label="计费重 kg"><div className="finance-entry-cargo-unit-input"><Form.Item name="chargeableWeightKg" noStyle><InputNumber aria-label="计费重 kg" min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('chargeableWeightKg', value)} /></Form.Item><span>kg</span></div></Form.Item>
                   </div>
                   {selectedCompanyChannel ? <Text type="secondary">已按 {selectedCompanyChannel.name} 计算：除材积 {selectedCompanyChannel.volumeDivisor} / {selectedCompanyChannel.multiPieceWeightRule} / {selectedCompanyChannel.settlementWeightRule}</Text> : <Text type="secondary">请选择公司渠道；仓库货物会按该渠道规则计算计费重。</Text>}
+                  {aggregateCargoRuleError ? <Alert type="warning" showIcon message={aggregateCargoRuleError} /> : null}
+                  {companyChannelWarnings.length ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message={`公司渠道预警（${companyChannelWarnings.length} 项）`}
+                      description={(
+                        <Space direction="vertical" size={0}>
+                          {companyChannelWarnings.map((warning) => (
+                            <Text key={`${warning.code}-${warning.packageIndex}`}>
+                              第 {warning.packageIndex} 条货物{warning.affectedPackageCount > 1 ? `（${warning.affectedPackageCount} 件）` : ''}：{warning.message}
+                            </Text>
+                          ))}
+                        </Space>
+                      )}
+                    />
+                  ) : null}
                 </div>
               </section>
               <div className="finance-entry-two-column-layout">
                 <section className="finance-entry-field-panel finance-entry-receiver-panel">
                   <div className="finance-entry-form-subtitle">收货信息</div>
                   <Row gutter={12}>
-                    <Col xs={24} md={12}><Form.Item name="receiverName" label="收货人名称"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="receiverCompany" label="收货人公司名称"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="receiverPhone" label="收货人电话"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="fbaWarehouseCode" label="FBA仓库代码"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="receiverPostalCode" label="邮编"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}>
+                    <Col xs={24} md={12} xxl={8}><Form.Item name="receiverName" label="收货人名称"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={8}><Form.Item name="receiverPhone" label="收货人电话"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={8}>
                       <Form.Item name="receiverCountry" label="收货国家">
                         <AutoComplete
                           allowClear
@@ -1291,7 +1503,8 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                         />
                       </Form.Item>
                     </Col>
-                    <Col xs={24} md={12}>
+                    <Col xs={24} md={12} xxl={12}><Form.Item name="receiverCompany" label="收货人公司名称"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={6}>
                       <Form.Item name="receiverState" label="州/省">
                         <AutoComplete
                           allowClear
@@ -1301,8 +1514,10 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                         />
                       </Form.Item>
                     </Col>
-                    <Col xs={24}><Form.Item name="receiverAddress" label="收货人地址"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}>
+                    <Col xs={24} md={12} xxl={6}><Form.Item name="receiverPostalCode" label="邮编"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={6}><Form.Item name="fbaWarehouseCode" label="FBA仓库代码"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={18}><Form.Item name="receiverAddress" label="收货人地址"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={10}>
                       <Form.Item name="receiverContactId" label="已有收货地址">
                         <Select
                           allowClear
@@ -1316,7 +1531,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                         />
                       </Form.Item>
                     </Col>
-                    <Col xs={24} md={12}>
+                    <Col xs={24} md={12} xxl={14}>
                       <Form.Item
                         name="saveReceiverToCustomer"
                         valuePropName="checked"
@@ -1335,34 +1550,55 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                   </Row>
                 </section>
                 <section className="finance-entry-field-panel finance-entry-audit-panel">
-                  <div className="finance-entry-form-subtitle">出库与审核</div>
+                  <div className="finance-entry-form-subtitle">出库设置</div>
                   <Row gutter={12}>
-                    <Col xs={24} md={12}><Form.Item label="出库日期"><Input readOnly value="仓库出货后自动生成" /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="fbaInboundNo" label="FBA 入仓单号"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="destinationCountry" label="目的地" rules={[{ required: true, message: '请输入目的地' }]}><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="declarationRequired" label="报关" rules={[{ required: true, message: '请选择报关' }]}><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="cargoType" label="货物类型" rules={[{ required: true, message: '请选择货物类型' }]}><AutoComplete options={cargoTypeOptions} onBlur={() => maybeSaveCatalogItem('CARGO_TYPE', form.getFieldValue('cargoType'))} /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="sensitive" label="是否敏感"><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={8}><Form.Item name="destinationCountry" label="目的地" rules={[{ required: true, message: '请输入目的地' }]}><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={8}><Form.Item name="cargoType" label="货物类型" rules={[{ required: true, message: '请选择货物类型' }]}><AutoComplete options={cargoTypeOptions} onBlur={() => maybeSaveCatalogItem('CARGO_TYPE', form.getFieldValue('cargoType'))} /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={8}><Form.Item name="fbaInboundNo" label="FBA 入仓单号"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={canUseAgentFields ? 6 : 8}><Form.Item name="declarationRequired" label="报关" rules={[{ required: true, message: '请选择报关' }]}><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={canUseAgentFields ? 6 : 8}><Form.Item name="sensitive" label="是否敏感"><Select options={[{ value: false, label: '否' }, { value: true, label: '是' }]} /></Form.Item></Col>
                     {canUseAgentFields ? (
-                      <Col xs={24} md={12}>
-                        <Form.Item name="agentName" label="代理渠道">
-                          <Select showSearch allowClear options={agentOptions} onChange={(value) => {
-                            setPayables((rows) => rows.map((row) => ({ ...row, agentName: row.agentName || value })));
-                            setBusinessCosts((rows) => rows.map((row) => ({ ...row, agentName: row.agentName || value })));
+                      <Col xs={24} md={12} xxl={6}>
+                        <Form.Item name="agentId" label={agentFieldLabels.detailedCompanyName}>
+                          <Select showSearch allowClear optionFilterProp="searchText" options={agentOptions} onChange={(value) => {
+                            setPayables((rows) => rows.map((row) => ({ ...row, agentId: row.agentId || value })));
+                            setBusinessCosts((rows) => rows.map((row) => ({ ...row, agentId: row.agentId || value })));
                           }} />
                         </Form.Item>
                       </Col>
                     ) : null}
-                    <Col xs={24} md={12}><Form.Item name="subOrderNo" label="分单号"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item name="settlementMethod" label="结算方式" rules={[{ required: true, message: '请选择结算方式' }]}><Select showSearch options={settlementOptions} onChange={(value) => form.setFieldsValue({ currency: getSettlementMethodCurrency(settlementRows, value) ?? form.getFieldValue('currency') ?? 'RMB' })} /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item label="应收总额"><Input aria-label="应收总额" readOnly value={`RMB ${getFeeRmbTotal(receivables, 'RECEIVABLE').toFixed(2)}`} /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={canUseAgentFields ? 6 : 8}><Form.Item name="subOrderNo" label="分单号"><Input /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={12}><Form.Item name="settlementMethod" label="结算方式" rules={[{ required: true, message: '请选择结算方式' }]}><Select showSearch options={settlementOptions} onChange={(value) => form.setFieldsValue({ currency: getSettlementMethodCurrency(settlementRows, value) ?? form.getFieldValue('currency') ?? 'RMB' })} /></Form.Item></Col>
+                    <Col xs={24} md={12} xxl={12}><Form.Item label="应收总额"><Input aria-label="应收总额" readOnly value={formatFeeRmbAmount(getFeeRmbTotal(receivables, 'RECEIVABLE'))} /></Form.Item></Col>
                     <Col xs={24}><Form.Item name="remark" label="备注"><Input /></Form.Item></Col>
-                    <Col xs={24} md={12}><Form.Item label="应收审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col>
-                    {canViewFinanceAuditFields ? <Col xs={24} md={12}><Form.Item label="业务成本审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
-                    {canViewFinanceAuditFields ? <Col xs={24} md={12}><Form.Item label="应付审核日期"><Input readOnly value="提交审核后自动生成" /></Form.Item></Col> : null}
                   </Row>
                 </section>
               </div>
+              <section className="finance-entry-system-date-panel" aria-label="系统日期">
+                <div className="finance-entry-system-date-title">系统日期</div>
+                <div className="finance-entry-system-date-grid">
+                  <div className="finance-entry-system-date-item">
+                    <Text type="secondary">出库日期</Text>
+                    <Text>仓库出货后自动生成</Text>
+                  </div>
+                  <div className="finance-entry-system-date-item">
+                    <Text type="secondary">应收审核日期</Text>
+                    <Text>待生成</Text>
+                  </div>
+                  {canViewFinanceAuditFields ? (
+                    <div className="finance-entry-system-date-item">
+                      <Text type="secondary">业务成本审核日期</Text>
+                      <Text>待生成</Text>
+                    </div>
+                  ) : null}
+                  {canViewFinanceAuditFields ? (
+                    <div className="finance-entry-system-date-item">
+                      <Text type="secondary">应付审核日期</Text>
+                      <Text>待生成</Text>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
             </Form>
           </Card>
         </Col>
@@ -1378,6 +1614,38 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         <Button type="primary" onClick={() => submit(true)} loading={submitting} disabled={draftLoading || !canSaveDraft || !canSubmitForReview || (!draftId && !canCreateOrderEntry)}>提交审核</Button>
       </div>
       <Modal
+        title={`已选包裹详情（${selectedPackages.length} 条）`}
+        open={selectedPackageDetailsOpen}
+        onCancel={() => setSelectedPackageDetailsOpen(false)}
+        footer={<Button onClick={() => setSelectedPackageDetailsOpen(false)}>关闭</Button>}
+        width={1240}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={12} className="full-width">
+          {selectedCompanyChannel ? (
+            companyChannelWarnings.length ? (
+              <Alert
+                type="error"
+                showIcon
+                message={`当前公司渠道“${selectedCompanyChannel.name}”命中 ${companyChannelWarnings.length} 项预警`}
+                description="红色行表示该包裹超过当前渠道配置的超重或超围阈值，请复核尺寸、重量或渠道规则。"
+              />
+            ) : <Alert type="success" showIcon message={`当前公司渠道“${selectedCompanyChannel.name}”下，所选包裹均未命中超重或超围预警`} />
+          ) : <Alert type="info" showIcon message="请先选择公司渠道，系统才能按该渠道的超重和超围规则预警" />}
+          <Table<WarehousePackageSummary>
+            className="finance-embedded-table finance-entry-package-detail-table"
+            rowKey="id"
+            size="small"
+            dataSource={selectedPackages}
+            columns={selectedPackageDetailColumns}
+            pagination={false}
+            tableLayout="fixed"
+            scroll={{ x: 1196 }}
+            rowClassName={(_, packageIndex) => (companyChannelWarningsByPackageIndex.has(packageIndex) ? 'finance-entry-package-warning-row' : '')}
+          />
+        </Space>
+      </Modal>
+      <Modal
         title={`仓库数据${watchedCustomerCode?.trim() ? ` · ${watchedCustomerCode.trim()}` : ''}`}
         open={packageModalOpen}
         onCancel={closePackageModal}
@@ -1389,7 +1657,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
             </Button>
           </Space>
         )}
-        width={980}
+        width={1080}
         destroyOnHidden
       >
         <Space direction="vertical" size={12} className="full-width">
@@ -1407,15 +1675,15 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
             <Button onClick={() => packageQuery ? void loadPackages(packageQuery) : void searchPackages()} loading={packageLoading}>刷新</Button>
           </Space>
           <Table<WarehousePackageSummary>
-            className="finance-embedded-table"
+            className="finance-embedded-table finance-modal-fit-table"
             rowKey="id"
             size="small"
             loading={packageLoading}
             dataSource={packages}
             columns={packageColumns}
-            pagination={{ pageSize: 8, showSizeChanger: false }}
-            scroll={{ x: 980 }}
-            rowSelection={{ selectedRowKeys: packagePickerSelectedIds, onChange: handlePackageSelection, columnWidth: 56, fixed: true }}
+            pagination={packages.length > 8 ? { pageSize: 8, showSizeChanger: false } : false}
+            tableLayout="fixed"
+            rowSelection={{ selectedRowKeys: packagePickerSelectedIds, onChange: handlePackageSelection, columnWidth: 48 }}
             locale={{ emptyText: selectedCustomer ? '暂无该客户编号可录单的在仓货物' : '请先维护客户资料' }}
             onRow={(record) => ({
               onDoubleClick: () => {
@@ -1431,9 +1699,9 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                       <p>体积：{record.cbm.toFixed(6)} CBM</p>
                       <p>计费重：{record.chargeableWeightKg.toFixed(2)} kg</p>
                       <p>扫描时间：{record.scanTime ? formatBeijingDateTime(record.scanTime) : '-'}</p>
-                      {isTalliedPackage(record) ? (
+                      {record.tallyStatus && record.tallyStatus !== '待理货' ? (
                         <>
-                          <p>理货标记：已理货</p>
+                          <p>理货标记：{record.tallyStatus}</p>
                           <p>理货任务：{record.tallyTaskNo || record.tallyTaskId || '-'}</p>
                         </>
                       ) : null}
@@ -1475,26 +1743,25 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         destroyOnHidden
       >
         <Table<WaterReceiptSummary>
-          className="finance-embedded-table"
+          className="finance-embedded-table finance-modal-fit-table"
           rowKey="id"
           size="small"
           loading={receiptLoading}
           dataSource={receiptRows}
-          pagination={{ pageSize: 8, showSizeChanger: false }}
-          scroll={{ x: 920 }}
+          pagination={receiptRows.length > 8 ? { pageSize: 8, showSizeChanger: false } : false}
+          tableLayout="fixed"
           columns={[
-            { title: '客户编号', dataIndex: 'customerCode', width: 110 },
-            { title: '水单编号', dataIndex: 'receiptNo', width: 160 },
-            { title: '币种', dataIndex: 'currency', width: 90, render: (value?: string) => value ?? 'RMB' },
-            { title: '金额', dataIndex: 'amount', width: 110, align: 'right', render: (value: number) => value.toFixed(2) },
-            { title: '余额', dataIndex: 'balance', width: 110, align: 'right', render: (value: number) => value.toFixed(2) },
-            { title: '收款方式', dataIndex: 'receiptMethod', width: 120, render: (value?: string) => value || '-' },
-            { title: '付款编号', dataIndex: 'paymentNo', width: 140, render: (value?: string) => value || '-' },
+            { title: '客户编号', dataIndex: 'customerCode', width: 96, ellipsis: true },
+            { title: '水单编号', dataIndex: 'receiptNo', width: 140, ellipsis: true },
+            { title: '币种', dataIndex: 'currency', width: 70, render: (value?: string) => value ?? 'RMB' },
+            { title: '金额', dataIndex: 'amount', width: 92, align: 'right', render: (value: number) => value.toFixed(2) },
+            { title: '余额', dataIndex: 'balance', width: 92, align: 'right', render: (value: number) => value.toFixed(2) },
+            { title: '收款方式', dataIndex: 'receiptMethod', width: 100, ellipsis: true, render: (value?: string) => value || '-' },
+            { title: '付款编号', dataIndex: 'paymentNo', width: 120, ellipsis: true, render: (value?: string) => value || '-' },
             {
               title: '操作',
               key: 'actions',
-              width: 90,
-              fixed: 'right',
+              width: 78,
               render: (_, row) => {
                 const disabled = Boolean(receiptPickerRow && (row.currency ?? 'RMB') !== getFeeCurrency(receiptPickerRow, 'RECEIVABLE'));
                 return <Button size="small" type="primary" disabled={disabled} onClick={() => selectReceiptForRow(row)}>选择</Button>;
@@ -1503,7 +1770,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
           ]}
           locale={{ emptyText: '暂无可匹配的已到账水单' }}
         />
-        <Text type="secondary">保存草稿不会占用水单余额；提交审核成功后才会执行正式匹配。</Text>
+        <Text type="secondary">保存草稿不会占用水单余额；业务员提交后生成待审核匹配申请，财务在应收审核通过后才更新相关余额。</Text>
       </Modal>
     </div>
   );

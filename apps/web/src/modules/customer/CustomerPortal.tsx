@@ -12,7 +12,8 @@ import {
   type Shipment,
   type ShipmentStatus
 } from '@siyuan/shared';
-import type { Principal } from '../../apiClient';
+import type { ApiClient, PermissionKey, Principal } from '../../apiClient';
+import { NotificationCenter } from '../notifications/NotificationCenter';
 import { formatCurrency } from '../shared/format';
 import { AppActionGroup, AppPageHeader, ManagedTable, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 
@@ -35,8 +36,10 @@ function renderCustomerShipmentDetailField(
 }
 
 export function CustomerPortal({
+  apiClient,
   theme,
   user,
+  permissions,
   shipments,
   problemTickets,
   receivables,
@@ -46,8 +49,10 @@ export function CustomerPortal({
   onLogout,
   onCreate
 }: {
+  apiClient: ApiClient;
   theme: ThemeConfig;
   user: Principal;
+  permissions: PermissionKey[];
   shipments: Shipment[];
   problemTickets: Array<{ id: string; reason: string; status: string; customerVisible: boolean }>;
   receivables: ReceivableFeeSummary[];
@@ -103,7 +108,10 @@ export function CustomerPortal({
                 <Text className="brand-subtitle">客户工作台 · {user.username}</Text>
               </div>
             </Space>
-            <Button onClick={onLogout}>退出</Button>
+            <Space>
+              <NotificationCenter apiClient={apiClient} permissions={permissions} compact />
+              <Button onClick={onLogout}>退出</Button>
+            </Space>
           </Flex>
         </Header>
         <Content className="content" role="main">
@@ -146,6 +154,7 @@ export function CustomerPortal({
             <Col xs={24} lg={16}>
               <Card title="我的运单">
                 <ManagedTable
+                  recordDetail={{ title: '客户运单详情' }}
                   size="small"
                   rowKey="id"
                   dataSource={shipments}
@@ -256,7 +265,7 @@ export function CustomerPortal({
           >
             {customerDetailShipment ? (
               <div className="shipment-detail-grid">
-                {renderCustomerShipmentDetailField('运单号', customerDetailShipment.systemOrderNo, { copyText: customerDetailShipment.systemOrderNo })}
+                {renderCustomerShipmentDetailField('出货单号', customerDetailShipment.systemOrderNo, { copyText: customerDetailShipment.systemOrderNo })}
                 {renderCustomerShipmentDetailField('客户单号', customerDetailShipment.customerOrderNo, { copyText: customerDetailShipment.customerOrderNo })}
                 {renderCustomerShipmentDetailField(
                   '转单号',
