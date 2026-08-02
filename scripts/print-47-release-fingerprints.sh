@@ -21,7 +21,10 @@ sha256_stream() {
 }
 
 is_test_file() {
-  case "$1" in *.test.ts|*.test.tsx|*.spec.ts|*.spec.tsx|*/__tests__/*) return 0 ;; *) return 1 ;; esac
+  case "$1" in
+    *.test.ts|*.test.tsx|*.spec.ts|*.spec.tsx|*/__tests__/*|*/test-support/*|*/testSupport/*|*/test/*|*/tests/*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 runtime_files() {
