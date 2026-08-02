@@ -1,0 +1,3 @@
+# Referenced master data uses reference-protected deletion
+
+When operators delete master data that is already referenced by operational or financial history, the record disappears from current master-data lists and future selection but remains internally available to those historical references. Unreferenced master data may be physically deleted; deletion must not cascade into shipments, pricing history, finance records, payments, or other business documents. This deliberately makes the user-visible meaning of delete different from unconditional database-row deletion in order to preserve auditability and business history.

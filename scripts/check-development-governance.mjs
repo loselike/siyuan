@@ -19,38 +19,27 @@ const requiredMigrationFiles = [
   'apps/api/prisma/migrations/20260719143000_normalize_warehouse_package_received_status/migration.sql'
 ];
 
+const requiredGovernanceFiles = [
+  'scripts/check-context-governance.mjs',
+  'scripts/archive-context.mjs',
+  'scripts/check-architecture-governance.mjs',
+  'scripts/architecture-baseline.mjs',
+  'config/architecture/governance-baseline.json',
+  'config/architecture/module-boundaries.json'
+];
+
 const failures = [];
-const architectureSizeBaselinePath = 'scripts/architecture-size-baseline.json';
-const sourceDriftAuditPath = 'scripts/audit-47-source-drift.sh';
 
-for (const path of [...requiredAgentFiles, ...requiredMigrationFiles, architectureSizeBaselinePath, sourceDriftAuditPath]) {
+for (const path of [...requiredAgentFiles, ...requiredMigrationFiles, ...requiredGovernanceFiles]) {
   if (!existsSync(path)) failures.push(`required file is missing: ${path}`);
-}
-
-if (existsSync(architectureSizeBaselinePath)) {
-  try {
-    const baseline = JSON.parse(readFileSync(architectureSizeBaselinePath, 'utf8'));
-    for (const [path, maxLines] of Object.entries(baseline.files ?? {})) {
-      if (!existsSync(path)) {
-        failures.push(`architecture hotspot is missing: ${path}`);
-        continue;
-      }
-      const content = readFileSync(path, 'utf8');
-      const lineCount = content.split(/\r?\n/).length - (content.endsWith('\n') ? 1 : 0);
-      if (!Number.isInteger(maxLines) || maxLines <= 0) {
-        failures.push(`architecture hotspot baseline is invalid: ${path}`);
-      } else if (lineCount > maxLines) {
-        failures.push(`architecture hotspot grew: ${path} (${lineCount} > ${maxLines})`);
-      }
-    }
-  } catch (error) {
-    failures.push(`architecture size baseline is invalid JSON: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 const devRules = readFileSync('docs/dev-thread-rules.md', 'utf8');
 const agentRules = readFileSync('AGENTS.md', 'utf8');
 const releaseRules = readFileSync('docs/47-cloud-docker-release.md', 'utf8');
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+const codexConfig = readFileSync('.codex/config.toml', 'utf8');
+const contextCheckScript = readFileSync('scripts/check-context-governance.mjs', 'utf8');
 for (const forbiddenLine of ['npm test', 'npm run test:web', 'npm run test:api']) {
   if (devRules.split(/\r?\n/).some((line) => line.trim() === forbiddenLine)) {
     failures.push(`unsafe command remains in docs/dev-thread-rules.md: ${forbiddenLine}`);
@@ -65,11 +54,38 @@ for (const [path, content, requiredText] of [
   ['AGENTS.md', agentRules, '定位根因 -> 修改代码 -> 最小相关本地验证 -> 重新精确发布 -> 重新线上验证'],
   ['AGENTS.md', agentRules, '发生 `stream disconnected`、工具中断、上下文恢复'],
   ['AGENTS.md', agentRules, '未取得真实页面截图不是阻断项'],
+  ['AGENTS.md', agentRules, '47 是全局串行资源'],
+  ['AGENTS.md', agentRules, '远端全链路发布锁'],
+  ['AGENTS.md', agentRules, '不调用多个代理重复扫描同一范围'],
+  ['AGENTS.md', agentRules, 'Codex 不会因 `AGENTS.md` 自动切换当前主线程模型'],
+  ['AGENTS.md', agentRules, 'docs/archive/codex-state/'],
+  ['AGENTS.md', agentRules, 'npm run context:check'],
   ['docs/dev-thread-rules.md', devRules, '无浏览器验收与 47 验证流程'],
+  ['docs/dev-thread-rules.md', devRules, '47 发布使用单一全局队列'],
   ['docs/47-cloud-docker-release.md', releaseRules, '发布后验收只使用服务端和代码证据'],
-  ['docs/47-cloud-docker-release.md', releaseRules, '线上验证失败不结束任务']
+  ['docs/47-cloud-docker-release.md', releaseRules, '线上验证失败不结束任务'],
+  ['docs/47-cloud-docker-release.md', releaseRules, 'checksum 条件更新']
 ]) {
   if (!content.includes(requiredText)) failures.push(`${path} is missing acceptance rule: ${requiredText}`);
+}
+
+for (const requiredScript of ['context:check', 'context:archive', 'release:47:baseline', 'deploy:47:whitelist', 'architecture:check']) {
+  if (!packageJson.scripts?.[requiredScript]) failures.push(`package.json is missing governance command: ${requiredScript}`);
+}
+if (!packageJson.scripts?.['governance:check']?.includes('npm run context:check')) {
+  failures.push('governance:check must include context:check');
+}
+for (const requiredConfig of [
+  'model = "gpt-5.6-terra"',
+  'model_reasoning_effort = "medium"',
+  '[models.new_thread]',
+  'max_concurrent_threads_per_session = 2',
+  'default_subagent_model = "gpt-5.6-luna"'
+]) {
+  if (!codexConfig.includes(requiredConfig)) failures.push(`.codex/config.toml is missing routing rule: ${requiredConfig}`);
+}
+for (const requiredContextRule of ['maxStateBytes = 16 * 1024', 'maxActiveFiles = 12', 'terminal and must be archived']) {
+  if (!contextCheckScript.includes(requiredContextRule)) failures.push(`context governance is missing rule: ${requiredContextRule}`);
 }
 
 for (const forbiddenText of [
@@ -85,8 +101,12 @@ for (const forbiddenText of [
 
 const deployScript = readFileSync('scripts/deploy-47.sh', 'utf8');
 const syncScript = readFileSync('scripts/sync-47.sh', 'utf8');
-const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
-const sourceDriftAudit = existsSync(sourceDriftAuditPath) ? readFileSync(sourceDriftAuditPath, 'utf8') : '';
+const releaseLockScript = readFileSync('scripts/lib/47-release-lock.sh', 'utf8');
+const whitelistDeployScript = readFileSync('scripts/deploy-47-whitelist.sh', 'utf8');
+const casSyncScript = readFileSync('scripts/cas-sync-47-file.sh', 'utf8');
+const captureBaselineScript = readFileSync('scripts/capture-47-release-baseline.sh', 'utf8');
+const fingerprintScript = readFileSync('scripts/print-47-release-fingerprints.sh', 'utf8');
+const resolveRecoveryScript = readFileSync('scripts/resolve-47-release-recovery.sh', 'utf8');
 const forceFullBlock = deployScript.match(/if \[\[ "\$FORCE_FULL" == true \]\]; then([\s\S]*?)\nfi/)?.[1] ?? '';
 if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
   failures.push('--full must not force Prisma migration execution');
@@ -97,26 +117,95 @@ if (!deployScript.includes('MIGRATION_REQUIRED=$MIGRATE_CHANGED')) {
 if (!deployScript.includes('DIRTY_RUNTIME_COUNT=$DIRTY_RUNTIME_COUNT') || !deployScript.includes('Refusing deploy:47 apply because the runtime worktree is dirty.')) {
   failures.push('deploy:47 must fail closed on a dirty runtime worktree');
 }
+if (!deployScript.includes('requires a completely clean release-coordinator worktree') || !deployScript.includes('git diff --name-only HEAD')) {
+  failures.push('deploy:47 must reject staged, unstaged and untracked candidate changes');
+}
 if (!syncScript.includes("--exclude='.release-backups/'")) {
   failures.push('sync:47 must preserve remote .release-backups');
 }
-for (const staleArtifactExclude of ["--exclude='._*'", "--exclude='*.orig'"]) {
-  if (!syncScript.includes(staleArtifactExclude)) {
-    failures.push(`sync:47 must exclude stale source artifacts: ${staleArtifactExclude}`);
-  }
+if (!syncScript.includes("--exclude='.siyuan-release-lock/'")) {
+  failures.push('sync:47 must preserve the active remote release lock directory during exact-tree deletion');
 }
-if (packageJson.scripts?.['audit:47-drift'] !== 'bash scripts/audit-47-source-drift.sh') {
-  failures.push('package.json must expose the read-only audit:47-drift command');
+if (!syncScript.includes("--exclude='.siyuan-release-recovery-required'")) {
+  failures.push('sync:47 must preserve the fail-closed release recovery marker');
 }
-for (const forbiddenCommand of ['rsync ', 'scp ', 'docker compose', 'prisma migrate']) {
-  if (sourceDriftAudit.includes(forbiddenCommand)) {
-    failures.push(`audit:47-drift must remain read-only: found ${forbiddenCommand.trim()}`);
-  }
+if (!syncScript.includes('SIYUAN_47_EXPECTED_RELEASE_ID') || !syncScript.includes('RSYNC_DELETE=(--delete)')) {
+  failures.push('standard exact-tree sync must require the captured release baseline before applying deletions');
 }
-for (const requiredText of ['REMOTE_STALE_ARTIFACTS=', '--fail-on-stale-artifacts']) {
-  if (!sourceDriftAudit.includes(requiredText)) {
-    failures.push(`audit:47-drift is missing stale artifact control: ${requiredText}`);
-  }
+if (!syncScript.includes("--exclude='.codex-release-staging/'") || !syncScript.includes("--exclude='tmp/'")) {
+  failures.push('sync:47 must preserve release staging and temporary candidate directories');
+}
+if (!deployScript.includes('siyuan_47_acquire_release_lock') || deployScript.indexOf('siyuan_47_acquire_release_lock') > deployScript.indexOf('REMOTE_STATE=')) {
+  failures.push('deploy:47 must acquire the global release lock before reading remote release state');
+}
+if (!deployScript.includes('REMOTE_RELEASE_BASELINE_MISMATCH') || !deployScript.includes('--expected-release-id')) {
+  failures.push('standard deploy must reject a candidate whose captured 47 release baseline changed');
+}
+if (!deployScript.includes('REMOTE_RELEASE_MANIFEST_MISMATCH') || deployScript.lastIndexOf('.siyuan-release-state') < deployScript.lastIndexOf('curl --retry 10')) {
+  failures.push('standard deploy must verify the remote manifest and write success state only after public health checks');
+}
+if (!deployScript.includes('Standard deploy does not execute an implicit pending migration set.')) {
+  failures.push('standard deploy must route reviewed migrations through the pending-set-aware whitelist flow');
+}
+if (!captureBaselineScript.includes('siyuan_47_acquire_release_lock') || !captureBaselineScript.includes('EXPECTED_RELEASE_ID=')) {
+  failures.push('47 baseline capture must read the release ID under the global lock');
+}
+if (!captureBaselineScript.includes('RELEASE_BASELINE_TREE_MISMATCH') || !captureBaselineScript.includes('BASELINE_RECEIPT=') || !deployScript.includes('git merge-base --is-ancestor')) {
+  failures.push('standard release baseline must bind an exact remote tree to the same worktree branch and ancestor commit');
+}
+if (!syncScript.includes('siyuan_47_verify_release_lock')) {
+  failures.push('sync:47 apply must verify the global release lock');
+}
+if (!releaseLockScript.includes('.siyuan-release-lock') || !releaseLockScript.includes('SIYUAN_47_RELEASE_LOCK_WAIT_SECONDS')) {
+  failures.push('47 release lock helper must provide one remote queue lock with bounded waiting');
+}
+if (!releaseLockScript.includes('heartbeat_at') || !releaseLockScript.includes('siyuan_47_start_release_lock_heartbeat')) {
+  failures.push('47 release lock must expose a heartbeat for audited stale-lock recovery');
+}
+if (!releaseLockScript.includes('RELEASE_RECOVERY_REQUIRED') || !releaseLockScript.includes('exit 81')) {
+  failures.push('47 release queue must block after an unresolved post-mutation failure');
+}
+if (!resolveRecoveryScript.includes('--expected-marker-sha') || !resolveRecoveryScript.includes('--confirm-recovered')) {
+  failures.push('release recovery marker must only clear through an explicit checksum-bound resolution command');
+}
+if (!whitelistDeployScript.includes('siyuan_47_acquire_release_lock') || !whitelistDeployScript.includes('cas-sync-47-file.sh')) {
+  failures.push('whitelist deploy must hold the global release lock while applying CAS candidates');
+}
+if (!whitelistDeployScript.includes('--preflight-only') || !whitelistDeployScript.includes('Duplicate whitelist target is not allowed')) {
+  failures.push('whitelist deploy must preflight every checksum before the first mutation and reject duplicate targets');
+}
+if (!whitelistDeployScript.includes('Whitelist scope mismatch') || !whitelistDeployScript.includes('WHITELIST_RELEASE_ID')) {
+  failures.push('whitelist deploy must derive scope from targets and advance the remote release baseline');
+}
+if (!whitelistDeployScript.includes('WEB_FINGERPRINT=$web_fingerprint') || !whitelistDeployScript.includes('MIGRATE_FINGERPRINT=$migrate_fingerprint')) {
+  failures.push('whitelist success state must use fingerprints recomputed from the actual remote tree');
+}
+if (!fingerprintScript.includes('scope_hash web') || !fingerprintScript.includes('scope_hash migrate')) {
+  failures.push('portable release fingerprint helper must cover web, api and migration manifests');
+}
+if (!fingerprintScript.includes('*/test-support/*') || !fingerprintScript.includes('*/testSupport/*')) {
+  failures.push('release fingerprints must exclude both test-support naming variants');
+}
+if (!whitelistDeployScript.includes('PENDING_MIGRATION_SET_MISMATCH') || !whitelistDeployScript.includes('APPROVED_MIGRATIONS_CSV')) {
+  failures.push('whitelist migration release must reject an unapproved remote pending-migration set');
+}
+if (!whitelistDeployScript.includes('Migration whitelist must include schema.prisma')) {
+  failures.push('migration whitelist must not publish schema-only or migration-only candidates');
+}
+if (!whitelistDeployScript.includes('Reviewed migration target must be exactly') || !whitelistDeployScript.includes('APPROVED_MIGRATION_CHECKSUM_MISMATCH')) {
+  failures.push('approved migrations must bind exact migration.sql targets and candidate checksums');
+}
+if (!whitelistDeployScript.includes('Infrastructure target requires a separately reviewed full/infra release path') || !deployScript.includes('docker-compose.yml requires a separately reviewed full/infra release path')) {
+  failures.push('generic standard/whitelist flows must reject infrastructure-wide Compose changes');
+}
+if (!whitelistDeployScript.includes('CAS_BATCH_ROLLED_BACK') || !whitelistDeployScript.includes('CAS_PHASE')) {
+  failures.push('multi-file whitelist CAS must rollback earlier replacements when the batch mutation phase fails');
+}
+if (!casSyncScript.includes('REMOTE_CHECKSUM_MISMATCH') || !casSyncScript.includes('siyuan_47_verify_release_lock')) {
+  failures.push('whitelist file sync must fail closed on remote checksum changes and verify lock ownership');
+}
+if (!casSyncScript.includes('readlink -f') || !casSyncScript.includes('mv -T')) {
+  failures.push('whitelist CAS must reject symlink/path escapes and replace only a regular-file target');
 }
 
 for (const path of requiredAgentFiles) {

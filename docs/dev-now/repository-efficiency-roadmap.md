@@ -29,24 +29,30 @@
 - 已提交 47 当前生产源码只读快照 `2b87dcd`；运行文件 manifest 为 321/321，同哈希 321、内容差异 0、本地/远端独有均为 0、远端遗留物为 0。
 - 独立 worktree 完成 `npm ci` 和 Prisma Client 生成；确认首次 Shared 大量缺失报错由 worktree 误解析根工作树依赖造成，不是 47 Shared 源码缺失。
 - 47 当前生产源码中有 6 个已过期测试夹具；已仅更新测试输入/类型，不修改运行时代码。API/Web/Shared 生产构建已恢复可重复通过。
+- `.codex-state.md` 已从 382,316 bytes / 231 条历史记录压缩为 1,765 bytes 的当前索引；原文完整保存到 `docs/archive/codex-state/`。
+- `docs/dev-now/` 已从 219 个文件收敛到 3 个模板加本会话 1 个活跃文件；151 个终态/旧交接文件完整移入归档，64 个本地完成但未发布项移入 backlog，没有丢弃内容。
+- 已新增 `context:check` 与 dry-run 优先的 `context:archive`；日常主线程已改为 Terra Medium，子任务默认 Luna Medium，Sol 仅按风险门升级，且规则明确不会自动切换当前主线程模型。
+- 已移植并重建当前 47 源码对应的架构基线：401 条路由契约、3 组既有重复路由作为显式债务冻结，不改变当前运行路由。
 
 ## 验证
 
 - 47 源码漂移审计：`LOCAL_COUNT=321`、`REMOTE_COUNT=321`、`SAME=321`、`CHANGED=0`、`LOCAL_ONLY=0`、`REMOTE_ONLY=0`、遗留物 0。
 - API typecheck 通过；Web typecheck 通过；`npm run build` 的 Shared/API/Web 全部通过。
 - API 过期夹具定向 3/3 通过；Web 类型夹具定向 8/8 通过；`git diff --check` 通过。
+- `context:check` 通过：活跃状态 1、归档 151、backlog 64；`context:archive` dry-run 候选 0。
+- `governance:check` 通过：开发规则、上下文、401 条路由/架构 no-new-debt、墨家设备拒绝路径 3/3 全部通过。
 
 ## 交接
 
 - 阻塞：无。
-- 剩余风险：当前快照仍携带历史状态文档和旧治理入口；下一步必须先压缩上下文并补 clean-candidate/47 基线门禁，再开始业务垂直切片。
+- 剩余风险：47 现有 3 组重复 HTTP 路由已被门禁记录但尚未消除；不能在无等价接口证据时直接删除。当前治理提交改变 package scripts，最终标准发布前需重新取得 47 baseline receipt 并由发布流程更新远端源码基线。
 - 用户验收目标：新任务能从唯一代码基线快速定位；上下文不重复加载历史；首个旧链路完成等价垂直切片；业务行为、权限、数据、金额、状态和审计不变。
 - 效果证据：生产源码已从 237/321 漂移恢复为可独立构建的 321/321 精确快照。
 - 安全证据：远端锁 clear/free；只读拉取未写 47；本轮修正仅测试文件；完整生产构建通过。
-- 未验证项：clean-candidate 发布 receipt、状态历史归档、问题件领域所有权与双 Repository 等价性。
+- 未验证项：Finance Catalog 参考切片契约、问题件领域所有权与双 Repository 等价性、最终标准发布后的 47 新指纹。
 - 发布状态：`未发布`。
 - 稳定附件：无。
-- 准确下一步：提交测试夹具修复，移植最新 clean-candidate/47 baseline 治理脚本和精简后的状态索引，新增 context:check 并完成 governance 验证。
+- 准确下一步：提交上下文/架构/发布治理；核对 Finance Catalog 参考切片是否覆盖 Controller→Service→Port→Prisma/Memory 契约，再以问题件为首个旧链路等价迁移样本。
 - 建议新标题：`Sunny｜仓库效率治理｜02`
 - 建议新状态文件：`docs/dev-now/repository-efficiency-roadmap-02.md`
 - 接手要求：状态改为 `handed_off` 后，新的唯一写会话才能继续。

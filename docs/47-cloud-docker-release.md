@@ -4,6 +4,9 @@
 
 ## 发布原则
 
+- 47 是全局串行发布资源。Web、API、Shared、迁移和纯源码白名单共用同一把远端发布锁，不按服务拆锁；多个会话可以并行开发，但不得并行同步、构建、迁移、重启或写发布状态。
+- 标准发布开始前先用 `npm run release:47:baseline`：它要求发布协调 worktree 干净，并核对当前提交的 Web/API/Prisma manifest 与 47 实际树完全一致，随后生成绑定 worktree、分支和祖先 commit 的 receipt。完成候选合并与验证后执行 `npm run deploy:47 -- --expected-release-id <记录值>`；远端 ID、receipt 或祖先关系任一不一致都会阻断。
+- `npm run deploy:47 -- --lock-status` 只读查看当前锁、heartbeat 和 recovery-required 状态。锁目录异常残留时不得直接删除；先确认没有发布、构建或迁移进程，再由主推进会话处理。
 - 代码可以同步到 `/opt/siyuan`，但依赖安装、构建、Prisma 命令都必须在 Docker 镜像或 Compose 服务里执行。
 - 线上迁移只运行 `prisma migrate deploy`，通过 `db-migrate` 工具容器执行。
 - 线上禁止运行 `prisma db push`、`prisma migrate reset`、`prisma:seed`、`demo:seed`。
@@ -40,31 +43,50 @@
 npm run sync:47
 ```
 
-确认排除项和文件列表无误后执行真实同步：
+确认排除项和文件列表无误后，运行标准发布入口；`sync:47 --apply` 只允许由该入口在锁内调用，不再作为人工发布命令：
 
 ```bash
-npm run sync:47 -- --apply
+npm run release:47:baseline
+npm run deploy:47 -- --expected-release-id <上一步记录的值>
 ```
 
-同步脚本会排除 `node_modules`、构建产物、`.git`、`.release-backups`、`scraped_docs`、`outputs`、`.env` 等大目录、远端发布备份和敏感文件，避免向 47 传输无关内容或因 `rsync --delete` 删除远端备份。
+`sync:47 --apply` 同时校验远端锁 token 和任务开始时的 `EXPECTED_RELEASE_ID`；缺失、锁属于其他发布或 baseline 已变化时直接拒绝。dry-run 不写远端。
+
+同步脚本会排除 `node_modules`、构建产物、`.git`、`.release-backups`、`.codex-release-staging`、`tmp`、`scraped_docs`、`outputs`、`.env` 等目录、远端发布备份和敏感文件。标准发布只允许发布协调 worktree 在 captured baseline 匹配时用 `rsync --delete` 形成精确候选镜像，并在构建前核对远端实际 manifest；功能 worktree 与白名单流程不得使用全树删除。
 
 同步脚本还会排除旧亮崽报价源路径，例如 `data/quotes.json`、`inquiry_data/prices.json`、`europe-express-data/`、`europe-truck-data/` 和 `south-africa/*.json`。发布只同步代码和迁移，不携带旧报价数据副本。
 
 ## 一键智能发布
 
-日常发布优先执行：
+日常发布固定执行：
 
 ```bash
-npm run deploy:47
+npm run release:47:baseline
+# 完成候选合并与验证后
+npm run deploy:47 -- --expected-release-id <任务开始时记录的值>
 ```
 
-脚本根据上一次成功发布记录的 Web、API、Prisma 运行时指纹自动判断范围。测试文件和文档可以同步到 47，但不会触发运行时镜像重建。开发闭环固定为最小本地安全门、差异检查、源码同步、受影响服务构建、必要迁移、重启、API/容器/代码验证和结果汇报；不插入浏览器验收，也不在本地重复 47 必然执行的 production build。任一步失败都会停止并输出最近服务日志。
+脚本根据上一次成功发布记录的 Web、API、Prisma 运行时指纹自动判断范围。测试文件和文档可以同步到 47，但不会触发运行时镜像重建。标准发布发现 Prisma 指纹变化时只报告范围并阻断 apply；迁移必须改走 `deploy:47:whitelist`，由明确列出的 migration 目标形成 approved set，并在执行前确认线上全部 pending migrations 与 approved set 完全一致。开发闭环固定为最小本地安全门、差异检查、源码同步、受影响服务构建、必要迁移、重启、API/容器/代码验证和结果汇报。
 
 线上验证失败不结束任务：必须定位根因、修改代码、只重跑受影响的最小本地安全门、重新精确发布并复验，直到 47 服务端和代码证据通过；若故障影响可用性、数据或权限安全，优先回滚/恢复后再修复。
 
 任务因网络或流式响应中断后继续时，先重新读取当前 `AGENTS.md` 和任务状态，再恢复发布链路。旧会话中的“尚未发布”“等待浏览器截图”不构成阻断；本地安全门已通过的运行时代码必须实际尝试精确发布，并以发布命令或明确错误作为结果证据。
 
 一键 apply 只允许运行时代码工作树干净的已验证候选；只要 Web、API、Shared、Prisma、根运行时依赖或 Docker 配置存在未提交修改，脚本就输出 `DIRTY_RUNTIME_COUNT` 并拒绝 apply。当前这类多任务脏工作树必须继续使用“以 47 当前文件为基线生成白名单补丁”的精确发布流程，不能通过全仓同步或跳过守卫绕开。
+
+多任务脏工作树的白名单发布统一使用 checksum 条件更新，并在同一把锁内完成上传、构建和健康检查：
+
+```bash
+npm run deploy:47:whitelist -- \
+  --scope web \
+  --file /tmp/release-root/apps/web/src/example.tsx \
+         apps/web/src/example.tsx \
+         <生成候选时记录的远端 SHA-256>
+```
+
+可重复传入 `--file <candidate> <target> <expected-sha>` 发布多个文件；新文件使用 `MISSING`，同一目标不得重复声明。scope 由 targets 唯一推导并拒绝降级；Prisma 候选必须同时包含 schema 与 reviewed migration，线上 pending 集合必须与 approved migration 集合一致；`docker-compose.yml` 和无法静态确定影响面的基础设施文件直接阻断。工具先完成全部 checksum 预检，CAS 阶段失败会恢复已替换文件；构建/迁移/重启/health 阶段失败则写 recovery-required 标记并关闭后续发布队列。
+
+禁止在白名单流程外手工 `scp` 运行时文件。若同一目标文件被其他会话修改，必须退出当前发布、基于最新远端或共同基线完成 Git 合并和重新验证，再生成新候选。
 
 只查看范围而不发布：
 
@@ -86,70 +108,11 @@ npm run deploy:47 -- --full
 
 ## 按范围执行发布
 
-在 47 云服务器上按判定范围执行。下面是常用命令模板：
+以下动作全部由 `deploy:47` 或 `deploy:47:whitelist` 在全链路锁内执行，仅说明脚本行为，不是可复制的 SSH/Compose 操作入口。任何会话不得绕过入口直接运行远端 Docker 命令。
 
-### `state/docs-only`
+脚本按范围执行下列受控动作：`state/docs-only` 只做条件同步和状态推进；`web` 或 `api` 只构建、重启对应服务；含 `migrate` 的范围先构建迁移镜像并运行 `prisma migrate deploy`；`web+api` 只处理两个运行服务。所有动作前后都校验同一锁 token，成功状态在容器内与公网健康检查全部通过后才写入。
 
-只执行 `npm run sync:47 -- --apply`，不进入 Docker 构建、迁移和服务重启。
-
-### `web`
-
-```bash
-set -e
-cd /opt/siyuan
-
-docker compose build web
-docker compose up -d --remove-orphans web
-docker compose ps
-```
-
-### `api`
-
-```bash
-set -e
-cd /opt/siyuan
-
-docker compose build api
-docker compose up -d --remove-orphans api
-docker compose ps
-```
-
-### `api+migrate`
-
-```bash
-set -e
-cd /opt/siyuan
-
-docker compose build db-migrate api
-docker compose --profile tools run --rm db-migrate
-docker compose up -d --remove-orphans api
-docker compose ps
-```
-
-### `web+api` 或 `full-no-migrate`
-
-```bash
-set -e
-cd /opt/siyuan
-
-docker compose build api web
-docker compose up -d --no-deps --remove-orphans api web
-docker compose ps
-```
-
-### `web+api+migrate` 或 `full+migrate`
-
-```bash
-set -e
-cd /opt/siyuan
-
-docker compose build db-migrate api web
-docker compose --profile tools run --rm db-migrate
-docker compose up -d --remove-orphans api web
-docker compose ps
-```
-
-说明：
+实现说明：
 
 - `db-migrate` 使用 `Dockerfile.api` 的 `prisma-runner` target，默认命令是 `npm run prisma:migrate:deploy -w @siyuan/api`。
 - `api` / `web` 使用 Compose 内的服务网络互通，`web` 通过 Nginx 将 `/api/` 代理到 `api:3001`。
@@ -183,6 +146,7 @@ curl -I http://127.0.0.1:${APP_PORT:-8899}/
 - 迁移失败：只排查 migration 文件、`DATABASE_URL`、Postgres 连通性；不要改用 `db push` 绕过。
 - 服务未启动：查看 `docker compose logs api web postgres redis`，按容器日志处理。
 - 数据问题：不要执行 reset/seed；需要人工确认备份和修复 SQL 后再处理。
+- `RELEASE_RECOVERY_STATUS=required`：停止所有新发布。主推进会话根据 marker 的 phase、`.release-backups`、迁移记录、容器和公网 health 完成恢复；确认后执行 `npm run release:47:resolve -- --expected-marker-sha <lock-status 输出> --confirm-recovered`。checksum 已变化或仍持锁时命令拒绝清除。
 
 ## 后续优化方向
 
