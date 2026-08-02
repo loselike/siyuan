@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "prisma",
+      "patterns": ["apps/api/prisma/**"],
+      "risk": "MODEL_ESCALATION_REQUIRED",
+      "effect": ["npm run test:api:safe -- --run <migration-or-repository-focused-test>"],
+      "safety": ["npm run typecheck", "npm run governance:check"]
+    },
+    {
+      "id": "finance-catalog",
+      "patterns": ["apps/api/src/modules/finance/catalog/**", "apps/web/src/modules/finance/**", "packages/shared/src/finance-catalog.ts"],
+      "risk": "normal",
+      "effect": ["npm run test:api:safe -- --run src/modules/app.finance.e2e.test.ts -t \"keeps finance catalog endpoints stable after moving them out of DataController\""],
+      "safety": ["npm run typecheck", "npm run governance:check"]
+    },
+    {
+      "id": "problem-ticket",
+      "patterns": ["apps/api/src/modules/customer-service/problem-ticket/**", "apps/api/src/modules/customer-service/query/customer-service-query.controller.ts", "apps/web/src/modules/problemTickets/**", "packages/shared/src/problem-ticket.ts"],
+      "risk": "permission-and-state-boundary",
+      "effect": ["npm run test:api:safe -- --run src/modules/customer-service-query.e2e.test.ts"],
+      "safety": ["npm run typecheck", "npm run governance:check"]
+    },
+    {
+      "id": "web-test-harness",
+      "patterns": ["apps/web/src/modules/testSupport/**"],
+      "risk": "test-only",
+      "effect": ["npm run test:web:safe -- --run <closest-domain-test> -t \"<focused-scenario>\""],
+      "safety": ["npm run typecheck -w @siyuan/web"]
+    },
+    {
+      "id": "shared",
+      "patterns": ["packages/shared/**"],
+      "risk": "cross-workspace-contract",
+      "effect": ["npm run test:shared:safe -- --run <closest-domain-test>"],
+      "safety": ["npm run typecheck"]
+    },
+    {
+      "id": "api",
+      "patterns": ["apps/api/**"],
+      "risk": "normal",
+      "effect": ["npm run test:api:safe -- --run <closest-domain-test>"],
+      "safety": ["npm run typecheck -w @siyuan/api"]
+    },
+    {
+      "id": "web",
+      "patterns": ["apps/web/**"],
+      "risk": "normal",
+      "effect": ["npm run test:web:safe -- --run <closest-domain-test> -t \"<focused-scenario>\""],
+      "safety": ["npm run typecheck -w @siyuan/web"]
+    },
+    {
+      "id": "governance",
+      "patterns": ["AGENTS.md", ".codex/**", "scripts/**", "config/architecture/**", "config/validation/**", "docs/dev-thread-rules.md"],
+      "risk": "governance",
+      "effect": ["npm run governance:check"],
+      "safety": ["git diff --check"]
+    }
+  ]
+}

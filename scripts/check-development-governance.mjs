@@ -25,7 +25,9 @@ const requiredGovernanceFiles = [
   'scripts/check-architecture-governance.mjs',
   'scripts/architecture-baseline.mjs',
   'config/architecture/governance-baseline.json',
-  'config/architecture/module-boundaries.json'
+  'config/architecture/module-boundaries.json',
+  'scripts/select-validation.mjs',
+  'config/validation/path-test-map.json'
 ];
 
 const failures = [];
@@ -69,7 +71,7 @@ for (const [path, content, requiredText] of [
   if (!content.includes(requiredText)) failures.push(`${path} is missing acceptance rule: ${requiredText}`);
 }
 
-for (const requiredScript of ['context:check', 'context:archive', 'release:47:baseline', 'deploy:47:whitelist', 'architecture:check']) {
+for (const requiredScript of ['context:check', 'context:archive', 'validation:select', 'release:47:baseline', 'deploy:47:whitelist', 'architecture:check']) {
   if (!packageJson.scripts?.[requiredScript]) failures.push(`package.json is missing governance command: ${requiredScript}`);
 }
 if (!packageJson.scripts?.['governance:check']?.includes('npm run context:check')) {

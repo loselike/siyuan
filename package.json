@@ -31,6 +31,7 @@
     "test:all:safe": "npm run test:shared:safe && npm run build -w @siyuan/shared && npm run test:api:safe -- --run src/modules && npm run test:web:safe -- --run src/modules",
     "context:check": "node scripts/check-context-governance.mjs",
     "context:archive": "node scripts/archive-context.mjs",
+    "validation:select": "node scripts/select-validation.mjs",
     "governance:check": "node scripts/check-development-governance.mjs && npm run context:check && npm run architecture:check",
     "architecture:check": "node scripts/check-architecture-governance.mjs && npm run architecture:check:security",
     "architecture:check:fast": "node scripts/check-architecture-governance.mjs --skip-lint",

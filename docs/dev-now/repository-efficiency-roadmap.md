@@ -35,6 +35,7 @@
 - 已移植并重建当前 47 源码对应的架构基线：401 条路由契约、3 组既有重复路由作为显式债务冻结，不改变当前运行路由。
 - Finance Catalog 已固化为参考垂直切片：Controller→Service→Repository/Audit ports→Prisma/Memory adapters，Shared 领域 subpath 与 Web 窄 client 已落地；根 Shared 导出和 legacy memory 审计桥保持兼容。
 - 问题件领域 owner 已从当前代码固化为 Customer Service；Shipment 保留主状态所有权。首个旧链路 `GET /problem-tickets` 已迁移到 Query Service/Port/Prisma 与 legacy adapters，写入、审计、通知和状态流转未移动。
+- 已新增 `validation:select`：按变更路径选择每个切片的一条效果测试和一条安全门，Prisma 自动标记模型升级；Finance Catalog fixture/reset/handler 已从 6,499 行 `appTestHarness` 拆为独立 79 行领域 fixture。
 
 ## 验证
 
@@ -45,6 +46,7 @@
 - `governance:check` 通过：开发规则、上下文、401 条路由/架构 no-new-debt、墨家设备拒绝路径 3/3 全部通过。
 - Finance Catalog 双 adapter 契约 4/4、现有 API 读写权限/创建删除/审计场景 1/1 通过；API/Web typecheck 通过。
 - 问题件双 query adapter 契约 4/4、真实 API 客户范围/岗位权限 2/2、Web client facade 1/1 通过。旧 `problemTickets.test.tsx` 仍指向已不存在的“问题件”按钮，作为历史测试拆分项保留，未据此修改运行界面。
+- validation selector self-test 通过；Finance Catalog harness 真实 UI 场景 1/1 通过；Shared/API/Web 全量 typecheck 与治理门禁通过。
 
 ## 交接
 
@@ -53,10 +55,10 @@
 - 用户验收目标：新任务能从唯一代码基线快速定位；上下文不重复加载历史；首个旧链路完成等价垂直切片；业务行为、权限、数据、金额、状态和审计不变。
 - 效果证据：生产源码已从 237/321 漂移恢复为可独立构建的 321/321 精确快照。
 - 安全证据：远端锁 clear/free；只读拉取未写 47；本轮修正仅测试文件；完整生产构建通过。
-- 未验证项：变更路径到最小测试的自动映射、首个巨型测试支持文件拆分、最终标准发布后的 47 新指纹。
+- 未验证项：最终生产构建、标准发布后的 47 新指纹和线上只读权限/响应证据。
 - 发布状态：`未发布`。
 - 稳定附件：无。
-- 准确下一步：增加 changed-path→最小验证选择器，并拆出首个 appTestHarness 领域 fixture；随后执行最终安全门和 47 精确发布。
+- 准确下一步：提交最小验证治理，执行最终生产构建与候选审查，再从干净提交按 baseline receipt 精确发布 47 并做只读线上验证。
 - 建议新标题：`Sunny｜仓库效率治理｜02`
 - 建议新状态文件：`docs/dev-now/repository-efficiency-roadmap-02.md`
 - 接手要求：状态改为 `handed_off` 后，新的唯一写会话才能继续。

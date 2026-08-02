@@ -10,7 +10,6 @@ import type {
   CustomerAccountSummary,
   DepartmentSummary,
   BusinessCostAuditSummary,
-  FinanceCatalogItemSummary,
   MasterDataSnapshot,
   AgentBankAccountSummary,
   PayeeBankAccountSummary,
@@ -38,6 +37,7 @@ import type {
 } from '@siyuan/shared';
 import { resolveWarehouseTallyLifecycleStatus, summarizeLineShipmentPool } from '@siyuan/shared';
 import { App } from '../../App';
+import { handleFinanceCatalogRequest, resetFinanceCatalogFixture } from './fixtures/financeCatalogFixture';
 
 type TestPayablePaymentApplication = {
   id: string;
@@ -405,17 +405,6 @@ const backendSeedPriceRows: PriceBookRowSummary[] = [
   { id: 'price-public-yy-12-100', priceBookId: 'seed-public', agentName: '亿阳国际', carrierName: '海运', sourceSheetName: '华南', channelName: 'YY黄金达海卡', realChannelName: 'YY黄金达海卡', warehouseCode: 'FTW5', destinationCountry: '业务渠道展示国', minWeightKg: 12, maxWeightKg: 100, costPerKg: 11, currency: 'RMB', transitDays: 25, transitLabel: '23-27 天' },
   { id: 'price-public-english-12-100', priceBookId: 'seed-public', agentName: '英文代理', carrierName: '快递', sourceSheetName: '深圳/广州仓', channelName: 'DHL Express', realChannelName: 'DHL Express', warehouseCode: 'FTW5', destinationCountry: '业务渠道展示国', minWeightKg: 12, maxWeightKg: 100, costPerKg: 12, currency: 'RMB', transitDays: 5, transitLabel: '5-7 天' }
 ];
-const financeCatalogItems: FinanceCatalogItemSummary[] = [
-  { id: 'fc-fee-freight-default', category: 'FEE_NAME', name: '运费', currency: 'RMB', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'fc-fee-freight', category: 'FEE_NAME', name: '基础运费', currency: 'RMB', sortOrder: 2, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'fc-fee-fuel', category: 'FEE_NAME', name: '燃油费', currency: 'RMB', sortOrder: 3, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'fc-fee-business-cost', category: 'FEE_NAME', name: '业务员成本', currency: 'RMB', sortOrder: 4, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'fc-fee-disabled', category: 'FEE_NAME', name: '停用费用', currency: 'RMB', sortOrder: 5, enabled: false, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'fc-settlement-monthly', category: 'SETTLEMENT_METHOD', name: '月结', currency: 'RMB', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'fc-cargo-normal', category: 'CARGO_TYPE', name: '普货', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' },
-  { id: 'fc-product-desk', category: 'PRODUCT_NAME', name: '桌子', sortOrder: 1, enabled: true, createdAt: '2026-06-01T00:00:00.000Z', updatedAt: '2026-06-01T00:00:00.000Z' }
-];
-const initialFinanceCatalogItems = financeCatalogItems.map((item) => ({ ...item }));
 const agentMarkupRules: AgentMarkupSummary[] = [
   { id: 'markup-a', agentName: 'a代理', markupPerKg: 0.5, enabled: true },
   { id: 'markup-b', agentName: 'b代理', markupPerKg: 1, enabled: true }
@@ -1393,7 +1382,7 @@ beforeEach(() => {
   importedPriceRows.splice(0, importedPriceRows.length);
   priceBookImportJobs.splice(0, priceBookImportJobs.length);
   priceBookSourceFiles.clear();
-  financeCatalogItems.splice(0, financeCatalogItems.length, ...initialFinanceCatalogItems.map((item) => ({ ...item })));
+  resetFinanceCatalogFixture();
   Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:test-download') });
   Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
@@ -2735,57 +2724,8 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(masterData);
   }
 
-  if (url.includes('/api/finance/catalog/reorder') && init?.method === 'PUT') {
-    const categoryItems = financeCatalogItems.filter((item) => item.category === body.category);
-    const nextItems = body.orderedIds
-      .map((id: string, index: number) => categoryItems.find((item) => item.id === id) ? { ...categoryItems.find((item) => item.id === id)!, sortOrder: index + 1 } : null)
-      .filter(Boolean) as FinanceCatalogItemSummary[];
-    financeCatalogItems.splice(0, financeCatalogItems.length, ...financeCatalogItems.filter((item) => item.category !== body.category), ...nextItems);
-    return jsonResponse({ items: nextItems });
-  }
-
-  if (url.includes('/api/finance/catalog') && init?.method === 'POST') {
-    const item = {
-      id: `fc-${body.category}-${body.name}`,
-      category: body.category,
-      name: body.name,
-      currency: body.currency,
-      remark: body.remark,
-      sortOrder: body.sortOrder ?? financeCatalogItems.filter((row) => row.category === body.category).length + 1,
-      enabled: body.enabled !== false,
-      createdAt: '2026-06-01T00:00:00.000Z',
-      updatedAt: '2026-06-01T00:00:00.000Z'
-    };
-    financeCatalogItems.push(item);
-    return jsonResponse(item);
-  }
-
-  const financeCatalogItemMatch = url.match(/\/api\/finance\/catalog\/([^/?]+)$/);
-  if (financeCatalogItemMatch && init?.method === 'PUT') {
-    const item = financeCatalogItems.find((row) => row.id === financeCatalogItemMatch[1]);
-    if (!item) return jsonResponse({ message: 'Not found' }, 404);
-    Object.assign(item, body, { updatedAt: '2026-06-01T00:00:00.000Z' });
-    return jsonResponse(item);
-  }
-
-  if (financeCatalogItemMatch && init?.method === 'DELETE') {
-    const item = financeCatalogItems.find((row) => row.id === financeCatalogItemMatch[1]);
-    if (!item) return jsonResponse({ message: 'Not found' }, 404);
-    item.enabled = false;
-    return jsonResponse(item);
-  }
-
-  if (url.includes('/api/finance/catalog')) {
-    const parsed = new URL(url, 'http://test.local');
-    const category = parsed.searchParams.get('category');
-    const keyword = parsed.searchParams.get('keyword')?.trim().toLowerCase() ?? '';
-    const enabledOnly = parsed.searchParams.get('enabledOnly') === 'true';
-    const items = financeCatalogItems
-      .filter((item) => !category || item.category === category)
-      .filter((item) => !enabledOnly || item.enabled)
-      .filter((item) => !keyword || [item.name, item.currency, item.remark].some((value) => (value ?? '').toLowerCase().includes(keyword)));
-    return jsonResponse({ items });
-  }
+  const financeCatalogResponse = handleFinanceCatalogRequest(url, init, body);
+  if (financeCatalogResponse) return financeCatalogResponse;
 
   if (url.endsWith('/api/shipments/review-pending')) {
     const role = actorRole();
