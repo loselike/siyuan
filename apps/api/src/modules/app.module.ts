@@ -5,6 +5,10 @@ import { AiService } from './ai.service.js';
 import { AuditInterceptor } from './audit.interceptor.js';
 import { AuthController } from './auth.controller.js';
 import { CustomerServiceQueryController } from './customer-service/query/customer-service-query.controller.js';
+import { LegacyProblemTicketQueryRepository } from './customer-service/problem-ticket/problem-ticket-query.legacy-repository.js';
+import { PrismaProblemTicketQueryRepository } from './customer-service/problem-ticket/problem-ticket-query.prisma-repository.js';
+import { PROBLEM_TICKET_QUERY_REPOSITORY } from './customer-service/problem-ticket/problem-ticket-query.repository.js';
+import { ProblemTicketQueryService } from './customer-service/problem-ticket/problem-ticket-query.service.js';
 import { DataController } from './data.controller.js';
 import { DatabaseSeedService } from './database-seed.service.js';
 import { FinanceCatalogController } from './finance/catalog/finance-catalog.controller.js';
@@ -85,6 +89,10 @@ const financeCatalogAuditWriterProvider = usePrismaRepository
   ? { provide: FINANCE_CATALOG_AUDIT_WRITER, useClass: PrismaFinanceCatalogAuditWriter }
   : { provide: FINANCE_CATALOG_AUDIT_WRITER, useClass: LegacyFinanceCatalogAuditWriter };
 
+const problemTicketQueryRepositoryProvider = usePrismaRepository
+  ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
+  : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
+
 const payerBankAccountRepositoryProvider = usePrismaRepository
   ? { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: PrismaPayerBankAccountRepository }
   : { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: InMemoryPayerBankAccountRepository };
@@ -135,8 +143,10 @@ const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
     ...repositoryProviders,
     financeCatalogRepositoryProvider,
     financeCatalogAuditWriterProvider,
+    problemTicketQueryRepositoryProvider,
     payerBankAccountRepositoryProvider,
     FinanceCatalogService,
+    ProblemTicketQueryService,
     PayerBankAccountService,
     FinanceReceivableService,
     notificationServiceProvider,

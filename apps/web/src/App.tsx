@@ -61,7 +61,6 @@ import {
   type PayableAuditSummary,
   type PayableFeeSummary,
   type BusinessCostFeeSummary,
-  type ProblemTicketCreateInput,
   type ReceivableAuditSummary,
   type Shipment,
   type ShipmentFinanceDetailSummary,
@@ -72,6 +71,7 @@ import {
   type StaffGender,
   type ShipmentStatus
 } from '@siyuan/shared';
+import type { ProblemTicketCreateInput, ProblemTicketSummary } from '@siyuan/shared/problem-ticket';
 import { ApiClient, type AiAssistResponse, type Principal, type ProfileUpdateInput, type Session } from './apiClient';
 import { agentFieldLabels } from './modules/shared/agentFieldLabels';
 import { LoginPage } from './modules/auth/LoginPage';
@@ -136,6 +136,7 @@ import {
 import { MasterDataPage } from './modules/masterData/MasterDataPage';
 import { PricingPage } from './modules/pricing/PricingPage';
 import { ProblemTicketsPage } from './modules/problemTickets/ProblemTicketsPage';
+import { loadProblemTickets } from './modules/problemTickets/problemTicketClient';
 import { ReportsPage } from './modules/reports/ReportsPage';
 import { SettingsPage } from './modules/settings/SettingsPage';
 import { TrackingPage } from './modules/tracking/TrackingPage';
@@ -228,7 +229,7 @@ export function App() {
   const [keyword, setKeyword] = useState('');
   const [localShipments, setLocalShipments] = useState<Shipment[]>([]);
   const [shipmentOperationLogs, setShipmentOperationLogs] = useState<Record<string, ShipmentOperationLog[]>>({});
-  const [problemTickets, setProblemTickets] = useState<Awaited<ReturnType<ApiClient['problemTickets']>>>([]);
+  const [problemTickets, setProblemTickets] = useState<ProblemTicketSummary[]>([]);
   const [receivables, setReceivables] = useState<ReceivableAuditSummary[]>([]);
   const [businessCostAudits, setBusinessCostAudits] = useState<BusinessCostAuditSummary[]>([]);
   const [payableAudits, setPayableAudits] = useState<PayableAuditSummary[]>([]);
@@ -714,7 +715,7 @@ export function App() {
         : canReadWarehouseDispatch
           ? client.warehouseDispatchShipments()
           : Promise.resolve([]),
-      canReadProblems ? client.problemTickets() : Promise.resolve([])
+      canReadProblems ? loadProblemTickets(client) : Promise.resolve([])
     ]);
     setLocalShipments(nextShipments);
     setProblemTickets(nextTickets);

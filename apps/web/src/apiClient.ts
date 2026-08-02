@@ -137,11 +137,6 @@ import type {
   PricingRuleQuoteRequest,
   PricingRuleQuoteResponse,
   PricingRuleSummary,
-  CommonTagCreateInput,
-  CommonTagSummary,
-  CommonTagUpdateInput,
-  ProblemTicketCreateInput,
-  ProblemTicketSummary,
   QuoteResponse,
   ReceivableAuditBatchInput,
   ReceivableAuditBatchResult,
@@ -274,6 +269,13 @@ import type {
   FinanceCatalogListResponse,
   FinanceCatalogReorderInput
 } from '@siyuan/shared/finance-catalog';
+import type {
+  CommonTagCreateInput,
+  CommonTagSummary,
+  CommonTagUpdateInput,
+  ProblemTicketCreateInput,
+  ProblemTicketSummary
+} from '@siyuan/shared/problem-ticket';
 import type {
   AnnouncementAudienceOptions,
   AnnouncementCreateInput,

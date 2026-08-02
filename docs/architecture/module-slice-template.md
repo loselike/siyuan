@@ -64,13 +64,13 @@ Shared 只承载跨进程契约与真正跨端纯规则，不承载 Nest、Prism
 
 双 adapter 已由同一 repository contract suite 验证，架构门禁固定 Controller→Service→Port、纯类型、窄 Web client 和 Shared subpath 的依赖方向。
 
-## 5. 首个旧链路建议
+## 5. 首个旧链路：问题件读取
 
-问题件/常用标签仍是优先候选，但开始前必须确认：
+当前代码事实已确认领域边界：
 
-- Problem Ticket 的领域 owner。
-- 客服、运营、业务、客户账号的读写范围。
-- Shipment 状态由谁拥有，问题件只能提交事实还是可以直接改主状态。
-- 当前真实操作入口是 Customer Service/Operations，不能只验收低频展示页。
+- Customer Service 拥有问题件 OPEN / ASSISTANCE_REQUIRED / CLOSED 生命周期和客户可见边界。
+- Shipment 拥有运单生命周期；问题件只产生关联和派生 `hasProblemTicket` 信号，不直接改变主状态。
+- 客户账号读取仍按 `customerVisible=true + shipment.customerId` 双条件裁剪；内部岗位仍由后端 RBAC 决定。
+- 第一条迁移仅覆盖 `GET /problem-tickets`：Controller→Query Service→Query Port→Prisma/legacy adapters，现有写入、审计、通知和状态逻辑原位不动。
 
-这些决策确认后，按“一个 endpoint + 一个用例 + 两个 adapter + 一个前端入口”形成第一条垂直切片，不批量搬迁整个 Customer Service。
+该切片由双 adapter query contract、真实 E2E 的客户可见/内部可见/仓库拒绝/未登录拒绝，以及 Web client facade 定向测试覆盖。后续写用例必须逐个迁移并先冻结审计、通知、标签快照和 Shipment 派生信号，禁止一次搬迁整个 Customer Service。

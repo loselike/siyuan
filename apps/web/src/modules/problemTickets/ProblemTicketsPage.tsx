@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Bot, ClipboardCheck, FileInput, Sparkles } from 'lucide-react';
 import { Alert, Button, Card, Col, Flex, Row, Space, Statistic, Tag, Typography } from 'antd';
-import type { ProblemTicketSummary } from '@siyuan/shared';
+import type { ProblemTicketSummary } from '@siyuan/shared/problem-ticket';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPageHeader, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import { formatBeijingDateTime } from '../shared/format';

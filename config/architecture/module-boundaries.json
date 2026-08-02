@@ -114,6 +114,92 @@
           ]
         }
       ]
+    },
+    {
+      "name": "problem-ticket-first-slice",
+      "status": "first-read-slice",
+      "files": [
+        {
+          "path": "apps/api/src/modules/customer-service/query/customer-service-query.controller.ts",
+          "requiredImports": [
+            "../problem-ticket/problem-ticket-query.service.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.service.js",
+            "../problem-ticket/problem-ticket-query.repository.js"
+          ],
+          "forbiddenText": [
+            "repository.getProblemTickets"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/customer-service/problem-ticket/problem-ticket-query.service.ts",
+          "requiredImports": [
+            "./problem-ticket-query.repository.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.service.js",
+            "../../prisma.repository.js",
+            "../query/customer-service-query.controller.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/customer-service/problem-ticket/problem-ticket-query.repository.ts",
+          "requiredImports": [
+            "@siyuan/shared/problem-ticket"
+          ],
+          "forbiddenImports": [
+            "@nestjs/common",
+            "../../prisma.service.js",
+            "../../prisma.repository.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/customer-service/problem-ticket/problem-ticket-query.prisma-repository.ts",
+          "requiredImports": [
+            "../../prisma.service.js",
+            "./problem-ticket-query.repository.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.repository.js",
+            "../query/customer-service-query.controller.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/customer-service/problem-ticket/problem-ticket-query.legacy-repository.ts",
+          "requiredImports": [
+            "../../prisma.repository.js",
+            "./problem-ticket-query.repository.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.service.js",
+            "../query/customer-service-query.controller.js"
+          ]
+        },
+        {
+          "path": "apps/web/src/modules/problemTickets/problemTicketClient.ts",
+          "requiredImports": [
+            "@siyuan/shared/problem-ticket"
+          ],
+          "forbiddenImports": [
+            "../../apiClient"
+          ]
+        },
+        {
+          "path": "apps/web/src/App.tsx",
+          "requiredImports": [
+            "./modules/problemTickets/problemTicketClient"
+          ]
+        },
+        {
+          "path": "packages/shared/src/problem-ticket.ts",
+          "forbiddenImports": [
+            "@nestjs/common",
+            "@prisma/client",
+            "react"
+          ]
+        }
+      ]
     }
   ]
 }
