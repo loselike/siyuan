@@ -37,6 +37,7 @@ if [[ "${MODE}" == "--apply" ]]; then
 fi
 
 rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${RSYNC_DELETE[@]}"} \
+  --exclude='.git' \
   --exclude='.git/' \
   --exclude='.siyuan-release-lock/' \
   --exclude='.siyuan-release-recovery-required' \

@@ -125,6 +125,9 @@ if (!deployScript.includes('requires a completely clean release-coordinator work
 if (!syncScript.includes("--exclude='.release-backups/'")) {
   failures.push('sync:47 must preserve remote .release-backups');
 }
+if (!syncScript.includes("--exclude='.git'") || !syncScript.includes("--exclude='.git/'")) {
+  failures.push('sync:47 must exclude both a standard .git directory and a worktree .git pointer file');
+}
 if (!syncScript.includes("--exclude='.siyuan-release-lock/'")) {
   failures.push('sync:47 must preserve the active remote release lock directory during exact-tree deletion');
 }
