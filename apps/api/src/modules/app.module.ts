@@ -76,6 +76,7 @@ import {
   PrismaWarehouseInventoryQueryRepository,
   WAREHOUSE_INVENTORY_QUERY_REPOSITORY
 } from './warehouse/inventory/warehouse-inventory-query.repository.js';
+import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
 import { LegacyWarehouseTallyQueryRepository } from './warehouse/tally/legacy-warehouse-tally-query.repository.js';
 import {
   PrismaWarehouseTallyQueryRepository,
@@ -180,6 +181,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     ProblemTicketQueryService,
     PayerBankAccountService,
     FinanceReceivableService,
+    WarehouseInventoryQueryService,
     notificationServiceProvider,
     ...(usePrismaRepository ? [NotificationAuditWorker] : []),
     MiscFeeService,

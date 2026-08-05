@@ -149,10 +149,7 @@ import { sanitizePricingChannelRequirement } from './pricing-excel.js';
 import { parseWarehouseMachineWorkbook } from './warehouse-machine-import.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
-import {
-  WAREHOUSE_INVENTORY_QUERY_REPOSITORY,
-  type WarehouseInventoryQueryRepository
-} from './warehouse/inventory/warehouse-inventory-query.repository.js';
+import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -166,8 +163,8 @@ export class DataController {
   constructor(
     @Inject(PrismaRepository) private readonly repository: PrismaRepository,
     @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService,
-    @Inject(WAREHOUSE_INVENTORY_QUERY_REPOSITORY)
-    private readonly warehouseInventoryQueries: WarehouseInventoryQueryRepository
+    @Inject(WarehouseInventoryQueryService)
+    private readonly warehouseInventoryQueries: WarehouseInventoryQueryService
   ) {}
 
   private readonly imageMimeExtensions: Record<string, string> = {

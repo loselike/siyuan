@@ -3,16 +3,13 @@ import type { WarehouseInStockQuery, WarehouseTodayQuery } from '@siyuan/shared'
 import { PrismaRepository } from '../../prisma.repository.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
-import {
-  WAREHOUSE_INVENTORY_QUERY_REPOSITORY,
-  type WarehouseInventoryQueryRepository
-} from './warehouse-inventory-query.repository.js';
+import { WarehouseInventoryQueryService } from './warehouse-inventory-query.service.js';
 
 @Controller()
 export class WarehouseInventoryQueryController {
   constructor(
-    @Inject(WAREHOUSE_INVENTORY_QUERY_REPOSITORY)
-    private readonly repository: WarehouseInventoryQueryRepository,
+    @Inject(WarehouseInventoryQueryService)
+    private readonly service: WarehouseInventoryQueryService,
     @Inject(PrismaRepository)
     private readonly auditedRepository: PrismaRepository
   ) {}
@@ -20,7 +17,7 @@ export class WarehouseInventoryQueryController {
   @Get('warehouse/packages')
   @RequirePermission(['warehouse:today-receipt:view', 'warehouse:in-stock:view'])
   warehousePackages(@Req() request: { user: Principal }) {
-    return this.repository.getWarehousePackages(request.user);
+    return this.service.listPackages(request.user);
   }
 
   @Get('warehouse/today-receipts')
@@ -44,12 +41,12 @@ export class WarehouseInventoryQueryController {
   @Get('warehouse/package-groups')
   @RequirePermission('warehouse:in-stock:view')
   warehousePackageGroups(@Req() request: { user: Principal }) {
-    return this.repository.getWarehousePackageGroups(request.user);
+    return this.service.listPackageGroups(request.user);
   }
 
   @Get('warehouse/manual-receipt/customers')
   @RequirePermission('warehouse:today-receipt:manual-create')
   warehouseManualReceiptCustomers(@Req() request: { user: Principal }) {
-    return this.repository.getWarehouseManualReceiptCustomers(request.user);
+    return this.service.listManualReceiptCustomers(request.user);
   }
 }
