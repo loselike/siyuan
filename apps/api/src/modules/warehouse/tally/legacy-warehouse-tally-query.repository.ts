@@ -17,6 +17,10 @@ export class LegacyWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     return this.repository.getWarehouseTallyTasks(principal, query);
   }
 
+  getWarehouseTallyTaskSourcePackages(principal: Principal, id: string) {
+    return this.repository.getWarehouseTallyTaskSourcePackages(principal, id);
+  }
+
   getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string) {
     return this.repository.getWarehouseTallyTaskHistoryChain(principal, packageId);
   }

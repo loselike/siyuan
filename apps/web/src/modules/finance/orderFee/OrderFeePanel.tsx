@@ -23,6 +23,7 @@ import { tenRowTablePagination } from '../../shared/ui';
 import { applySettlementMethodCurrency, createFinanceFeeNameOptions, createSettlementMethodOptions, financeCatalogCurrencyOptions, getSettlementMethodRows } from '../catalog';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions, resolveAgentIdByIdentity } from '../../shared/agentIdentity';
+import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -202,7 +203,8 @@ export function OrderFeePanel({
   const [receiptRows, setReceiptRows] = useState<WaterReceiptSummary[]>([]);
   const [receiptLoading, setReceiptLoading] = useState(false);
 
-  const roleCanViewPayables = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE' || role === 'BOSS' || role === 'OWNER';
+  const roleCanViewPayables = hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
+    || hasUiPermission(role, permissions, 'finance:payable:view-sensitive');
   const visiblePayables = roleCanViewPayables && (detail?.canViewPayables
     ?? (
       hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
@@ -280,11 +282,16 @@ export function OrderFeePanel({
       return;
     }
     const unpaid = Math.max(0, row.amount - Number(row.receivedAmount ?? 0));
+    const receivableCurrency = row.currency ?? 'RMB';
     setReceiptMatch({ row, amount: Number(unpaid.toFixed(2)) });
     setReceiptLoading(true);
     try {
       const response = await apiClient.waterReceipts({ customerCode, status: 'ALL', page: 1, pageSize: 1000 });
-      setReceiptRows(response.rows.filter((item) => ['ARRIVED', 'PARTIAL_MATCHED'].includes(item.status) && Number(item.balance) > 0));
+      setReceiptRows(response.rows.filter((item) => (
+        ['ARRIVED', 'PARTIAL_MATCHED'].includes(item.status)
+        && Number(item.balance) > 0
+        && item.currency === receivableCurrency
+      )));
     } catch (error) {
       Modal.error({ title: '水单加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
@@ -302,12 +309,9 @@ export function OrderFeePanel({
     }
     setSubmitting(true);
     try {
-      await apiClient.matchWaterReceiptOrders(receipt.id, {
-        matches: [{
-          receivableId: receiptMatch.row.id,
-          receivableSourceType: receiptMatch.row.sourceType ?? 'MANUAL',
-          amount
-        }]
+      await apiClient.matchReceivableReceipt(receiptMatch.row.id, {
+        ledgerId: receipt.id,
+        amount
       });
       setReceiptMatch(null);
       await reload();
@@ -463,6 +467,8 @@ export function OrderFeePanel({
     editorForm.resetFields();
     setInspectedRowId(rowId);
   }, [editorForm]);
+
+  const receiptMatchCurrency = (receiptMatch?.row.currency?.trim() || 'RMB').toUpperCase();
 
   const renderStatus = (row: OrderFeeRow) => {
     const status = getFeeAuditStatus(row);
@@ -643,7 +649,7 @@ export function OrderFeePanel({
           <div className="order-fee-inspector-grid">
             {detailItem('费用名称', inspectedRow.name)}
             {detailItem('客户编号', parseCustomerCode(shipment.customerName))}
-            {detailItem('出货单号', renderShipmentOrderNoLink(shipment.systemOrderNo, { shipment }))}
+            {detailItem('出货单号', renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(shipment), { shipment }))}
             {detailItem('转单号', shipment.transferNo || '-')}
             {activeType !== 'RECEIVABLE' && (activeType !== 'BUSINESS_COST' || canViewBusinessCostAgent)
               ? detailItem(agentFieldLabels.detailedCompanyName, agentName, true)
@@ -807,13 +813,18 @@ export function OrderFeePanel({
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Text type="secondary">提交后进入财务“水单匹配”，财务审核通过后才更新水单、应收和客户账户余额。</Text>
-          <InputNumber
-            min={0}
-            precision={2}
-            value={receiptMatch?.amount}
-            addonBefore="本次匹配金额"
-            onChange={(value) => setReceiptMatch((current) => current ? { ...current, amount: Number(value ?? 0) } : current)}
-          />
+          <Space size={8} wrap>
+            <Text strong>本次匹配金额</Text>
+            <InputNumber
+              min={0}
+              precision={2}
+              value={receiptMatch?.amount}
+              aria-label={`本次匹配金额（${receiptMatchCurrency}）`}
+              style={{ width: 180 }}
+              onChange={(value) => setReceiptMatch((current) => current ? { ...current, amount: Number(value ?? 0) } : current)}
+            />
+            <Tag color="blue">{receiptMatchCurrency}</Tag>
+          </Space>
           <Table<WaterReceiptSummary>
             className="finance-embedded-table"
             rowKey="id"
@@ -821,17 +832,17 @@ export function OrderFeePanel({
             loading={receiptLoading || submitting}
             dataSource={receiptRows}
             pagination={{ pageSize: 8, showSizeChanger: false }}
-            scroll={{ x: 820 }}
+            scroll={{ x: 776 }}
             columns={[
-              { title: '水单编号', dataIndex: 'receiptNo', width: 160 },
-              { title: '客户编号', dataIndex: 'customerCode', width: 110 },
-              { title: '金额', dataIndex: 'amount', width: 110, align: 'right', render: (value: number) => value.toFixed(2) },
-              { title: '已匹配', dataIndex: 'matchedAmount', width: 110, align: 'right', render: (value: number) => value.toFixed(2) },
-              { title: '余额', dataIndex: 'balance', width: 110, align: 'right', render: (value: number) => value.toFixed(2) },
-              { title: '付款编号', dataIndex: 'paymentNo', width: 140, render: (value?: string) => value || '-' },
-              { title: '操作', key: 'actions', width: 100, fixed: 'right', render: (_, row) => <Button size="small" type="primary" onClick={() => submitReceiptMatch(row)}>提交申请</Button> }
+              { title: '水单编号', dataIndex: 'receiptNo', width: 145 },
+              { title: '客户编号', dataIndex: 'customerCode', width: 96 },
+              { title: `金额（${receiptMatchCurrency}）`, dataIndex: 'amount', width: 105, align: 'right', render: (value: number) => value.toFixed(2) },
+              { title: `已匹配（${receiptMatchCurrency}）`, dataIndex: 'matchedAmount', width: 120, align: 'right', render: (value: number) => value.toFixed(2) },
+              { title: `余额（${receiptMatchCurrency}）`, dataIndex: 'balance', width: 105, align: 'right', render: (value: number) => value.toFixed(2) },
+              { title: '付款编号', dataIndex: 'paymentNo', width: 115, render: (value?: string) => value || '-' },
+              { title: '操作', key: 'actions', width: 90, fixed: 'right', render: (_, row) => <Button size="small" type="primary" onClick={() => submitReceiptMatch(row)}>提交申请</Button> }
             ]}
-            locale={{ emptyText: '暂无可匹配水单' }}
+            locale={{ emptyText: `暂无 ${receiptMatchCurrency} 可匹配水单` }}
           />
         </Space>
       </Modal>

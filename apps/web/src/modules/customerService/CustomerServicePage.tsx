@@ -7,7 +7,9 @@ import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, isBeijingCurrentWeek, isBeijingToday, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
-import { AppDateTimePicker, AppPageHeader, ManagedTable, StatusTag, tenRowTablePagination } from '../shared/ui';
+import { ShipmentRiskFlag, isShipmentRiskFlagActive } from '../shared/ShipmentRiskFlag';
+import { AppDateTimePicker, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, StatusTag, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { TrackingWebsiteLink } from './TrackingWebsiteLink';
 import { ProblemTicketCreateModal } from './ProblemTicketCreateModal';
 
@@ -317,7 +319,7 @@ type LifecycleStatusAction = {
 };
 
 export function CustomerServicePage({
-  shipments,
+  shipments: workspaceShipments,
   problemTickets,
   businessCostAudits = [],
   agents = [],
@@ -343,6 +345,19 @@ export function CustomerServicePage({
   permissions?: string[];
   role?: string;
 }) {
+  const canReadWorkspaceShipments = permissions.includes('business:shipment:list');
+  const canReadCustomerServiceStatusPool = [
+    'customer-service:pending-routing:view',
+    'customer-service:data-confirm:view',
+    'customer-service:transfer:view',
+    'customer-service:waiting-departure:view',
+    'customer-service:departed:view',
+    'customer-service:arrived-port:view',
+    'customer-service:delivering:view',
+    'customer-service:signed:view'
+  ].some((permission) => permissions.includes(permission));
+  const [customerServiceShipments, setCustomerServiceShipments] = useState<Shipment[]>([]);
+  const shipments = canReadWorkspaceShipments ? workspaceShipments : customerServiceShipments;
   const [activeSection, setActiveSection] = useState(initialSection);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [departureForm] = Form.useForm<DepartureFormValues>();
@@ -449,6 +464,28 @@ export function CustomerServicePage({
     ...(can('customer-service:problem:after-sale-view') || can('customer-service:signed:after-sale-view') ? [{ key: 'afterSale', label: '需协助问题件' }] : [])
   ];
   useEffect(() => {
+    if (canReadWorkspaceShipments || !canReadCustomerServiceStatusPool || !apiClient) return;
+    let cancelled = false;
+    apiClient.customerServiceShipments()
+      .then((rows) => {
+        if (!cancelled) setCustomerServiceShipments(rows);
+      })
+      .catch((error) => {
+        if (!cancelled) message.error(error instanceof Error ? error.message : '客服状态池加载失败');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [apiClient, canReadCustomerServiceStatusPool, canReadWorkspaceShipments]);
+  useEffect(() => {
+    if (canReadWorkspaceShipments || !canReadCustomerServiceStatusPool || !workspaceShipments.length) return;
+    setCustomerServiceShipments((current) => {
+      const next = new Map(current.map((shipment) => [shipment.id, shipment]));
+      workspaceShipments.forEach((shipment) => next.set(shipment.id, shipment));
+      return [...next.values()];
+    });
+  }, [canReadCustomerServiceStatusPool, canReadWorkspaceShipments, workspaceShipments]);
+  useEffect(() => {
     setActiveSection(initialSection);
   }, [initialSection]);
   useEffect(() => {
@@ -488,15 +525,32 @@ export function CustomerServicePage({
   }, [shipments]);
   const pendingRoutingShipments = useMemo(() => shipments.filter((shipment) => shipment.status === 'WAITING_SORT'), [shipments]);
   const currentLabel = labelShipment ? latestCreatedLabel(labelRows[labelShipment.id] ?? []) : undefined;
+  const renderWaitingDepartureActions = (row: Shipment) => (
+    <Space size={6} className="customer-service-waiting-departure-actions">
+      <Button size="small" onClick={() => openDepartureModal(row)}>
+        修改
+      </Button>
+      <Button size="small" type="primary" onClick={() => confirmDeparted(row)}>
+        确认离港
+      </Button>
+      <Button size="small" onClick={() => openProblemModal(row)}>
+        问题件
+      </Button>
+      <Button size="small" onClick={() => openLabelModal(row)}>
+        {hasShipmentLabel(row, labelRows) ? '查看面单' : '上传面单'}
+      </Button>
+      {hasShipmentLabel(row, labelRows) ? <Tag color="green">已上传面单</Tag> : null}
+    </Space>
+  );
   const columns: ColumnsType<Shipment> = [
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
-    { title: '客户单号', dataIndex: 'customerOrderNo', width: 150 },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 170, render: (_: string, row) => resolveShipmentOutboundOrderNo(row) },
+    { title: '出货单号', dataIndex: 'customerOrderNo', width: 150 },
     { title: '客户', dataIndex: 'customerName', width: 160 },
     { title: '转单号', dataIndex: 'transferNo', width: 160, render: (value?: string) => value || '-' },
     { title: '最新物流轨迹', dataIndex: 'latestTracking' },
     { title: '状态', dataIndex: 'status', width: 120, render: (status: ShipmentStatus) => <StatusTag status={status} /> }
   ];
-  const waitingColumnMap: Record<WaitingColumnKey, ColumnsType<Shipment>[number]> = {
+  const waitingColumnMap: Record<WaitingColumnKey, ManagedTableColumns<Shipment>[number]> = {
     entryAt: { title: '运单创建时间', dataIndex: 'entryAt', width: 170, render: (_: string | undefined, row) => formatBeijingDateTime(row.entryAt ?? row.createdAt) },
     outboundAt: { title: '出库时间', dataIndex: 'outboundAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     salesperson: { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value || '-' },
@@ -513,13 +567,13 @@ export function CustomerServicePage({
     agentActualWeight: { title: '代理重量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
     agentVolumeCbm: { title: '代理体积 CBM', key: 'agentVolumeCbm', width: 115, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.volumeCbm ?? row.volumeCbm ?? '-' },
     agentReviewStatus: { title: '代理审核状态', key: 'agentReviewStatus', width: 110, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditIndex) ? <Tag color="green">已审核</Tag> : <Tag>待审核</Tag> },
-    declarationRequired: { title: '报关', dataIndex: 'declarationRequired', width: 80, render: (value?: boolean) => value ? '是' : '否' },
-    sensitive: { title: '敏感', dataIndex: 'sensitive', width: 80, render: (value?: boolean) => value ? '是' : '否' },
+    declarationRequired: { title: '报关', dataIndex: 'declarationRequired', width: 80, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> },
+    sensitive: { title: '敏感', dataIndex: 'sensitive', width: 80, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> },
     agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value || '-' },
     carrier: { title: '承运商', dataIndex: 'carrier', width: 120, render: (value?: string) => value || '-' },
     channelName: { title: '公司渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
     routeAgentChannelName: { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '-' },
-    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 170, render: (_: string, row) => resolveShipmentOutboundOrderNo(row) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 150, render: (value?: string) => value || '-' },
     etdAt: { title: 'ETD/ATD', dataIndex: 'etdAt', width: 150, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     etaAt: { title: 'ETA/ATA', dataIndex: 'etaAt', width: 150, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
@@ -527,29 +581,105 @@ export function CustomerServicePage({
       title: '操作',
       key: 'action',
       fixed: 'right',
-      width: 320,
-      render: (_, row) => (
-        <Space size={6} className="customer-service-waiting-departure-actions">
-          <Button size="small" onClick={() => openDepartureModal(row)}>
-            修改
-          </Button>
-          <Button size="small" type="primary" onClick={() => confirmDeparted(row)}>
-            确认离港
-          </Button>
-          <Button size="small" onClick={() => openProblemModal(row)}>
-            问题件
-          </Button>
-          <Button size="small" onClick={() => openLabelModal(row)}>
-            {hasShipmentLabel(row, labelRows) ? '查看面单' : '上传面单'}
-          </Button>
-          {hasShipmentLabel(row, labelRows) ? <Tag color="green">已上传面单</Tag> : null}
-        </Space>
-      )
+      width: 190,
+      resizable: false,
+      render: (_, row) => renderWaitingDepartureActions(row)
     }
   };
   const waitingDepartureColumns = waitingColumnOrder
     .filter((key) => !hiddenWaitingColumns.includes(key))
     .map((key) => waitingColumnMap[key]);
+  const waitingDepartureMatrixColumns: ManagedTableColumns<Shipment> = [
+    {
+      key: 'matrixBasic',
+      title: '基础信息',
+      width: 190,
+      className: 'managed-matrix-group-primary',
+      render: (_, row) => (
+        <ManagedMatrixCell
+          labelWidth={74}
+          fields={[
+            { key: 'entryAt', label: '运单创建时间', value: <ManagedMatrixDateTime value={formatBeijingDateTime(row.entryAt ?? row.createdAt)} /> },
+            { key: 'outboundAt', label: '出库时间', value: row.outboundAt ? <ManagedMatrixDateTime value={formatBeijingDateTime(row.outboundAt)} /> : '-' },
+            { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
+            { key: 'customerCode', label: '客户编号', value: row.customerCode || '-', emphasis: true }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixCargo',
+      title: '货物信息',
+      width: 170,
+      render: (_, row) => (
+        <ManagedMatrixCell
+          labelWidth={58}
+          fields={[
+            { key: 'destinationCountry', label: '目的地', value: row.destinationCountry || '-' },
+            { key: 'productName', label: '品名', value: row.productName || '-', title: row.productName, wrap: true },
+            { key: 'packageCount', label: '件数', value: row.packageCount ?? '-' },
+            { key: 'declarationRequired', label: '报关', value: <ShipmentRiskFlag value={row.declarationRequired} /> },
+            { key: 'sensitive', label: '敏感', value: <ShipmentRiskFlag value={row.sensitive} /> }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixMeasurement',
+      title: '重量体积',
+      width: 190,
+      render: (_, row) => (
+        <ManagedMatrixCell
+          labelWidth={82}
+          fields={[
+            { key: 'actualWeight', label: '业务重量 KG', value: row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
+            { key: 'volumeCbm', label: '业务体积 CBM', value: row.volumeCbm ?? '-' },
+            { key: 'chargeWeight', label: '计费重', value: row.receivableWeightKg ?? '-' },
+            { key: 'agentWeightKg', label: '代理计费重', value: row.agentWeightKg ?? '-' }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixRoute',
+      title: '路线与代理',
+      width: 230,
+      render: (_, row) => (
+        <ManagedMatrixCell
+          labelWidth={82}
+          fields={[
+            { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true },
+            { key: 'carrier', label: '承运商', value: row.carrier || '-' },
+            { key: 'channelName', label: '公司渠道', value: row.channelName || '-', title: row.channelName, wrap: true },
+            { key: 'routeAgentChannelName', label: agentFieldLabels.channel, value: row.routeAgentChannelName || '-', title: row.routeAgentChannelName, wrap: true }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixShipment',
+      title: '运单节点',
+      width: 220,
+      render: (_, row) => (
+        <ManagedMatrixCell
+          labelWidth={62}
+          fields={[
+            { key: 'systemOrderNo', label: '出货单号', value: resolveShipmentOutboundOrderNo(row), emphasis: true },
+            { key: 'transferNo', label: '转单号', value: row.transferNo || '-' },
+            { key: 'etdAt', label: 'ETD/ATD', value: row.etdAt ? <ManagedMatrixDateTime value={formatBeijingDateTime(row.etdAt)} /> : '-' },
+            { key: 'etaAt', label: 'ETA/ATA', value: row.etaAt ? <ManagedMatrixDateTime value={formatBeijingDateTime(row.etaAt)} /> : '-' }
+          ]}
+        />
+      )
+    },
+    {
+      key: 'matrixActions',
+      title: '操作',
+      fixed: 'right',
+      width: 170,
+      render: (_, row) => renderWaitingDepartureActions(row)
+    }
+  ];
   const dataConfirmColumnOrder: WaitingColumnKey[] = [
     'entryAt',
     'outboundAt',
@@ -628,13 +758,13 @@ export function CustomerServicePage({
     packageCount: { title: '件数', dataIndex: 'packageCount', width: 80 },
     actualWeight: { title: '实重', dataIndex: 'receivableWeightKg', width: 90 },
     chargeWeight: { title: '计费重', dataIndex: 'receivableWeightKg', width: 90 },
-    declarationRequired: { title: '报关', dataIndex: 'declarationRequired', width: 80, render: (value?: boolean) => value ? '是' : '否' },
-    sensitive: { title: '敏感', dataIndex: 'sensitive', width: 80, render: (value?: boolean) => value ? '是' : '否' },
+    declarationRequired: { title: '报关', dataIndex: 'declarationRequired', width: 80, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> },
+    sensitive: { title: '敏感', dataIndex: 'sensitive', width: 80, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> },
     agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value || '-' },
     carrier: { title: '承运商', dataIndex: 'carrier', width: 120, render: (value?: string) => value || '-' },
     channelName: { title: '公司渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
     routeAgentChannelName: { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '-' },
-    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 170, render: (_: string, row) => resolveShipmentOutboundOrderNo(row) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 150, render: (value?: string) => value || '-' },
     agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditIndex) ? '已确认' : '-' },
     etdAt: { title: 'ETD/ATD', dataIndex: 'etdAt', width: 150, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
@@ -765,7 +895,7 @@ export function CustomerServicePage({
       return keywordMatch(shipment?.salesperson, problemFilters.salesperson)
         && (!Number.isFinite(minDwellDays) || !problemFilters.minDwellDays || row.dwellDays >= minDwellDays)
         && keywordMatch(shipment?.customerCode, problemFilters.customerCode)
-        && keywordMatch(row.ticket.systemOrderNo, problemFilters.systemOrderNo)
+        && keywordMatch(resolveShipmentOutboundOrderNo(row.shipment ?? row.ticket), problemFilters.systemOrderNo)
         && keywordMatch(shipment?.destinationCountry, problemFilters.destinationCountry)
         && keywordMatch(shipment?.agentName, problemFilters.agentName);
     });
@@ -870,7 +1000,7 @@ export function CustomerServicePage({
     salesperson: { title: '业务员', key: 'salesperson', width: 110, render: (_, row) => row.shipment?.salesperson || '-' },
     customerCode: { title: '客户编号', key: 'customerCode', width: 110, render: (_, row) => row.shipment?.customerCode || '-' },
     destinationCountry: { title: '目的地', key: 'destinationCountry', width: 100, render: (_, row) => row.shipment?.destinationCountry || '-' },
-    systemOrderNo: { title: '出货单号', key: 'systemOrderNo', width: 170, render: (_, row) => row.ticket.systemOrderNo },
+    systemOrderNo: { title: '出货单号', key: 'systemOrderNo', width: 170, render: (_, row) => resolveShipmentOutboundOrderNo(row.shipment ?? row.ticket) },
     transferNo: { title: '转单号', key: 'transferNo', width: 150, render: (_, row) => row.shipment?.transferNo || '-' },
     productName: { title: '品名', key: 'productName', width: 130, render: (_, row) => row.shipment?.productName || '-' },
     packageCount: { title: '件数', key: 'packageCount', width: 80, render: (_, row) => row.shipment?.packageCount ?? '-' },
@@ -881,8 +1011,8 @@ export function CustomerServicePage({
     channelName: { title: '公司渠道', key: 'channelName', width: 150, render: (_, row) => row.shipment?.channelName || '-' },
     routeAgentChannelName: { title: agentFieldLabels.channel, key: 'routeAgentChannelName', width: 150, render: (_, row) => row.shipment?.routeAgentChannelName || '-' },
     reason: { title: '问题件内容', key: 'reason', width: 220, render: (_, row) => row.ticket.reason },
-    declarationRequired: { title: '报关', key: 'declarationRequired', width: 80, render: (_, row) => row.shipment ? row.shipment.declarationRequired ? '是' : '否' : '-' },
-    sensitive: { title: '敏感', key: 'sensitive', width: 80, render: (_, row) => row.shipment ? row.shipment.sensitive ? '是' : '否' : '-' },
+    declarationRequired: { title: '报关', key: 'declarationRequired', width: 80, render: (_, row) => <ShipmentRiskFlag value={row.shipment ? row.shipment.declarationRequired : '-'} /> },
+    sensitive: { title: '敏感', key: 'sensitive', width: 80, render: (_, row) => <ShipmentRiskFlag value={row.shipment ? row.shipment.sensitive : '-'} /> },
     agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => row.shipment && isAgentDataApproved(row.shipment.id, customerServiceAuditIndex) ? '已确认' : '-' },
     etdAt: { title: 'ETD/ATD', key: 'etdAt', width: 150, render: (_, row) => row.shipment?.etdAt ? formatBeijingDateTime(row.shipment.etdAt) : '-' },
     etaAt: { title: 'ETA/ATA', key: 'etaAt', width: 150, render: (_, row) => row.shipment?.etaAt ? formatBeijingDateTime(row.shipment.etaAt) : '-' },
@@ -1054,13 +1184,13 @@ export function CustomerServicePage({
     const result: ColumnsType<Shipment> = [
       { title: '运单创建时间', dataIndex: 'createdAt', width: 165, sorter: (a, b) => a.createdAt.localeCompare(b.createdAt), render: formatBeijingDateTime },
       ...(canViewTransferOutboundAt ? [{ title: '出库时间', dataIndex: 'outboundAt', width: 165, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' }] : []),
-      { title: '业务员', dataIndex: 'salesperson', width: 95 }, { title: '出货单号', dataIndex: 'systemOrderNo', width: 170 },
+      { title: '业务员', dataIndex: 'salesperson', width: 95 }, { title: '出货单号', dataIndex: 'systemOrderNo', width: 170, render: (_: string, row) => resolveShipmentOutboundOrderNo(row) },
       ...(canViewTransferAgent ? [{ title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190 }, { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 140, render: (value?: string) => value || '-' }] : []),
       { title: '客户编号', dataIndex: 'customerCode', width: 100 }, { title: '目的地', dataIndex: 'destinationCountry', width: 95 }, { title: '业务渠道', dataIndex: 'channelName', width: 130 },
       { title: '业务件数', dataIndex: 'packageCount', width: 90 }, { title: '业务总量', dataIndex: 'receivableWeightKg', width: 95 }, { title: '业务体积', dataIndex: 'volumeCbm', width: 95 }, { title: '业务计费重', dataIndex: 'receivableWeightKg', width: 100 },
       ...(canViewTransferAgentData ? [{ title: '代理计费重', dataIndex: 'agentWeightKg', width: 105 }] : []),
       { title: '品名', dataIndex: 'productName', width: 120 },
-      ...(canViewTransferSensitive ? [{ title: '报关', dataIndex: 'declarationRequired', width: 70, render: (value?: boolean) => value ? '是' : '否' }, { title: '敏感', dataIndex: 'sensitive', width: 70, render: (value?: boolean) => value ? '是' : '否' }] : []),
+      ...(canViewTransferSensitive ? [{ title: '报关', dataIndex: 'declarationRequired', width: 70, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> }, { title: '敏感', dataIndex: 'sensitive', width: 70, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> }] : []),
       { title: '操作', key: 'action', fixed: 'right', width: 115, render: (_, row) => <Button size="small" type="primary" disabled={!canTransferWrite} onClick={() => openTransferFill([row])}>填写转单号</Button> }
     ];
     return result;
@@ -1718,29 +1848,72 @@ export function CustomerServicePage({
                 />
               ) : null}
               {activeSection === 'transferNo' && canTransferWrite ? <Button type="primary" disabled={!selectedTransferIds.length || (selectedTransferIds.length > 1 && !canTransferBatchWrite)} onClick={() => openTransferFill(transferRows.filter((row) => selectedTransferIds.includes(row.id)))}>填写转单号</Button> : null}
-              <ManagedTable
-                recordDetail={{ title: `${activeLabel}详情` }}
-                rowKey="id"
-                size="small"
-                columns={tableColumnsForSection()}
-                dataSource={activeSection === 'transferNo' ? transferRows : rows}
-                loading={false}
-                locale={activeSection === 'dataConfirm' ? {
-                  emptyText: dataConfirmLoading && !dataConfirmHasLoaded
-                    ? <Space size={8}><Spin size="small" /><Text type="secondary">正在加载数据</Text></Space>
-                    : dataConfirmLoadError && !dataConfirmHasLoaded
-                      ? '数据加载失败，请重试'
-                      : '暂无待确认数据'
-                } : undefined}
-                rowSelection={activeSection === 'transferNo' && canTransferWrite ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
-                pagination={tenRowTablePagination}
-                minimumScrollX={activeSection === 'waitingDeparture' ? 2460 : ['departed', 'arrivedPort', 'delivering'].includes(activeSection) ? 2850 : activeSection === 'dataConfirm' ? 2100 : activeSection === 'transferNo' ? 1350 : activeSection === 'signed' ? 1200 : 1080}
-                columnSettings={canColumnSetting[activeSection] ? {
-                  storageKey: `sunny.customer-service.${activeSection}.columns`,
-                  title: `${activeLabel}列设置`,
-                  lockedKeys: ['action']
-                } : undefined}
-              />
+              {activeSection === 'waitingDeparture' ? (
+                <ManagedDualViewTable
+                  viewStorageKey="sunny.customer-service.waiting-departure.table-view"
+                  defaultView="ledger"
+                  viewAriaLabel="待离港表格视图"
+                  views={{
+                    matrix: {
+                      columns: waitingDepartureMatrixColumns,
+                      tableProps: {
+                        className: 'customer-service-waiting-departure-matrix-table',
+                        tableLayout: 'fixed',
+                        minimumScrollX: 1170,
+                        resizableColumns: true,
+                        recordDetail: { title: '待离港详情' },
+                        columnSettings: canColumnSetting.waitingDeparture ? {
+                          storageKey: 'sunny.customer-service.waiting-departure.matrix-columns',
+                          title: '待离港矩阵列设置',
+                          lockedKeys: ['matrixActions']
+                        } : undefined
+                      }
+                    },
+                    ledger: {
+                      columns: waitingDepartureColumns,
+                      tableProps: {
+                        className: 'customer-service-waiting-departure-ledger-table',
+                        minimumScrollX: 2460,
+                        recordDetail: { title: '待离港详情' },
+                        columnSettings: canColumnSetting.waitingDeparture ? {
+                          storageKey: 'sunny.customer-service.waitingDeparture.columns',
+                          title: '待离港列设置',
+                          lockedKeys: ['action']
+                        } : undefined
+                      }
+                    }
+                  }}
+                  rowKey="id"
+                  size="small"
+                  dataSource={rows}
+                  loading={false}
+                  pagination={tenRowTablePagination}
+                />
+              ) : (
+                <ManagedTable
+                  recordDetail={{ title: `${activeLabel}详情` }}
+                  rowKey="id"
+                  size="small"
+                  columns={tableColumnsForSection()}
+                  dataSource={activeSection === 'transferNo' ? transferRows : rows}
+                  loading={false}
+                  locale={activeSection === 'dataConfirm' ? {
+                    emptyText: dataConfirmLoading && !dataConfirmHasLoaded
+                      ? <Space size={8}><Spin size="small" /><Text type="secondary">正在加载数据</Text></Space>
+                      : dataConfirmLoadError && !dataConfirmHasLoaded
+                        ? '数据加载失败，请重试'
+                        : '暂无待确认数据'
+                  } : undefined}
+                  rowSelection={activeSection === 'transferNo' && canTransferWrite ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
+                  pagination={tenRowTablePagination}
+                  minimumScrollX={['departed', 'arrivedPort', 'delivering'].includes(activeSection) ? 2850 : activeSection === 'dataConfirm' ? 2100 : activeSection === 'transferNo' ? 1350 : activeSection === 'signed' ? 1200 : 1080}
+                  columnSettings={canColumnSetting[activeSection] ? {
+                    storageKey: `sunny.customer-service.${activeSection}.columns`,
+                    title: `${activeLabel}列设置`,
+                    lockedKeys: ['action']
+                  } : undefined}
+                />
+              )}
             </Space>
           </Card>
         ) : null}
@@ -1799,7 +1972,7 @@ export function CustomerServicePage({
       >
         <Space direction="vertical" size={16} className="full-width">
           <Space direction="vertical" size={2}>
-            <Text strong>{feeDetailShipment?.systemOrderNo}</Text>
+            <Text strong>{feeDetailShipment ? resolveShipmentOutboundOrderNo(feeDetailShipment) : '-'}</Text>
             <Text type="secondary">客户：{feeDetailShipment?.customerCode || feeDetailShipment?.customerName || '-'}</Text>
           </Space>
           {feeDetailLoading ? (
@@ -1912,7 +2085,7 @@ export function CustomerServicePage({
       >
         <Space direction="vertical" size={12} className="full-width">
           <Space direction="vertical" size={2}>
-            <Text strong>{lifecycleStatusAction?.shipment.systemOrderNo}</Text>
+            <Text strong>{lifecycleStatusAction ? resolveShipmentOutboundOrderNo(lifecycleStatusAction.shipment) : '-'}</Text>
             <Text type="secondary">客户编号：{lifecycleStatusAction?.shipment.customerCode || '-'}</Text>
             <Text type="secondary">转单号：{lifecycleStatusAction?.shipment.transferNo || '-'}</Text>
             <Text type="secondary">当前状态：{lifecycleStatusAction ? shipmentStatusLabels[lifecycleStatusAction.shipment.status] : '-'}</Text>
@@ -1944,7 +2117,7 @@ export function CustomerServicePage({
           {buildDataConfirmDetailItems(dataConfirmDetailShipment, canViewDataConfirmBusiness, canViewDataConfirmAgent).map((item) => (
             <div className="customer-service-detail-item" key={item.label}>
               <Text type="secondary">{item.label}</Text>
-              <Text strong>{item.value}</Text>
+              <Text strong>{item.label === '报关' || item.label === '敏感' ? <ShipmentRiskFlag value={item.value} /> : item.value}</Text>
             </div>
           ))}
         </div>
@@ -1965,7 +2138,7 @@ export function CustomerServicePage({
         destroyOnHidden
       >
         <Space direction="vertical" size={8} className="full-width">
-          <Text>出货单号：<Text strong>{dataConfirmApproveTarget?.shipment.systemOrderNo || '-'}</Text></Text>
+          <Text>出货单号：<Text strong>{dataConfirmApproveTarget ? resolveShipmentOutboundOrderNo(dataConfirmApproveTarget.shipment) : '-'}</Text></Text>
           <Text type="secondary">
             确认后将把{dataConfirmApproveTarget?.kind === 'agent' ? '代理' : '业务'}数据标记为已审核，并保留本次审核记录。
           </Text>
@@ -1985,7 +2158,7 @@ export function CustomerServicePage({
       >
         <Form form={dataConfirmForm} layout="vertical" className="customer-service-all-audit-form">
           <div className="customer-service-all-audit-summary">
-            <Text strong>{dataConfirmShipment?.systemOrderNo}</Text>
+            <Text strong>{dataConfirmShipment ? resolveShipmentOutboundOrderNo(dataConfirmShipment) : '-'}</Text>
             <Text type="secondary">客户：{dataConfirmShipment?.customerCode || '-'}</Text>
           </div>
           <div className="customer-service-all-audit-grid">
@@ -1999,10 +2172,10 @@ export function CustomerServicePage({
               <Input readOnly value={dataConfirmShipment?.receivableWeightKg ?? '-'} />
             </Form.Item>
             <Form.Item label="是否报关">
-              <Input readOnly value={dataConfirmShipment?.declarationRequired ? '是' : '否'} />
+              <Input className={isShipmentRiskFlagActive(dataConfirmShipment?.declarationRequired) ? 'shipment-risk-input-active' : undefined} readOnly value={dataConfirmShipment?.declarationRequired ? '是' : '否'} />
             </Form.Item>
             <Form.Item label="是否敏感">
-              <Input readOnly value={dataConfirmShipment?.sensitive ? '是' : '否'} />
+              <Input className={isShipmentRiskFlagActive(dataConfirmShipment?.sensitive) ? 'shipment-risk-input-active' : undefined} readOnly value={dataConfirmShipment?.sensitive ? '是' : '否'} />
             </Form.Item>
           </div>
           <Form.Item name="remark" label="备注" className="customer-service-all-audit-remark">
@@ -2023,7 +2196,7 @@ export function CustomerServicePage({
         destroyOnHidden
       >
         <Form form={dataEditForm} layout="vertical">
-          <Text type="secondary">客户编号：{dataEditTarget?.shipment.customerCode || '-'} / 出货单号：{dataEditTarget?.shipment.systemOrderNo || '-'}</Text>
+          <Text type="secondary">客户编号：{dataEditTarget?.shipment.customerCode || '-'} / 出货单号：{dataEditTarget ? resolveShipmentOutboundOrderNo(dataEditTarget.shipment) : '-'}</Text>
           {dataEditError ? <Alert type="error" showIcon message={dataEditError} style={{ marginTop: 16 }} /> : null}
           <Form.Item name="packageCount" label="件数" rules={[{ required: true, message: '请填写件数' }]}><InputNumber min={1} precision={0} style={{ width: '100%' }} /></Form.Item>
           <Form.Item name="weightKg" label="实际重量 KG" rules={[{ required: true, message: '请填写实际重量' }]}><InputNumber min={0.001} precision={3} style={{ width: '100%' }} /></Form.Item>
@@ -2050,7 +2223,7 @@ export function CustomerServicePage({
         destroyOnHidden
       >
         <Form form={dataReverseForm} layout="vertical">
-          <Text type="secondary">{dataReverseTarget?.shipment.systemOrderNo} 将回到可修改的数据确认状态。</Text>
+          <Text type="secondary">{dataReverseTarget ? resolveShipmentOutboundOrderNo(dataReverseTarget.shipment) : '-'} 将回到可修改的数据确认状态。</Text>
           <Form.Item name="reason" label="反审核原因" rules={[{ required: true, whitespace: true, message: '请填写反审核原因' }]}><Input.TextArea rows={3} /></Form.Item>
         </Form>
       </Modal>
@@ -2168,6 +2341,7 @@ export function CustomerServicePage({
         shipment={problemShipment}
         apiClient={apiClient}
         role={role ?? ''}
+        permissions={permissions}
         defaultCustomerVisible
         showPushToSales
         onCancel={() => setProblemShipment(null)}
@@ -2305,7 +2479,7 @@ function buildDataConfirmDetailItems(
       { label: '公司渠道', value: value(shipment.channelName) },
       { label: agentFieldLabels.channel, value: value(shipment.routeAgentChannelName) }
     ] : []),
-    { label: '出货单号', value: value(shipment.systemOrderNo) },
+    { label: '出货单号', value: value(resolveShipmentOutboundOrderNo(shipment)) },
     { label: '转单号', value: value(shipment.transferNo) },
     { label: '状态', value: value(shipment.status) },
     { label: '最新物流轨迹', value: value(shipment.latestTracking) },

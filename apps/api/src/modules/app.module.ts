@@ -17,6 +17,7 @@ import {
   LegacyFinanceCatalogAuditWriter,
   PrismaFinanceCatalogAuditWriter
 } from './finance/catalog/finance-catalog.audit.js';
+import { FINANCE_CATALOG_AUTHORIZER } from './finance/catalog/finance-catalog.authorization.js';
 import { InMemoryFinanceCatalogRepository } from './finance/catalog/finance-catalog.in-memory-repository.js';
 import { PrismaFinanceCatalogRepository } from './finance/catalog/finance-catalog.prisma-repository.js';
 import { FINANCE_CATALOG_REPOSITORY } from './finance/catalog/finance-catalog.repository.js';
@@ -44,6 +45,11 @@ import {
 } from './notifications/notification.service.js';
 import { OperationsLineShipmentQueryController } from './operations/line-shipment/operations-line-shipment-query.controller.js';
 import { PriceBookQueryController } from './pricing/price-book/price-book-query.controller.js';
+import {
+  LegacyPriceBookQueryRepository,
+  PRICE_BOOK_QUERY_REPOSITORY,
+  PrismaPriceBookQueryRepository
+} from './pricing/price-book/price-book-query.repository.js';
 import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
@@ -57,6 +63,12 @@ import {
   SYSTEM_DIRECTORY_REPOSITORY
 } from './system/directory/system-directory.repository.js';
 import { SystemDirectoryService } from './system/directory/system-directory.service.js';
+import { TrackingQueryController } from './tracking/query/tracking-query.controller.js';
+import { LegacyTrackingQueryRepository } from './tracking/query/legacy-tracking-query.repository.js';
+import {
+  PrismaTrackingQueryRepository,
+  TRACKING_QUERY_REPOSITORY
+} from './tracking/query/tracking-query.repository.js';
 import { WarehouseDispatchQueryController } from './warehouse/dispatch/warehouse-dispatch-query.controller.js';
 import { WarehouseInventoryQueryController } from './warehouse/inventory/warehouse-inventory-query.controller.js';
 import { LegacyWarehouseInventoryQueryRepository } from './warehouse/inventory/legacy-warehouse-inventory-query.repository.js';
@@ -89,6 +101,15 @@ const financeCatalogAuditWriterProvider = usePrismaRepository
   ? { provide: FINANCE_CATALOG_AUDIT_WRITER, useClass: PrismaFinanceCatalogAuditWriter }
   : { provide: FINANCE_CATALOG_AUDIT_WRITER, useClass: LegacyFinanceCatalogAuditWriter };
 
+const financeCatalogAuthorizerProvider = {
+  provide: FINANCE_CATALOG_AUTHORIZER,
+  useFactory: (repository: PrismaRepository) => ({
+    hasPermission: repository.hasPermission.bind(repository),
+    recordPermissionDenied: repository.recordPermissionDenied.bind(repository)
+  }),
+  inject: [PrismaRepository]
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -113,6 +134,14 @@ const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
   ? { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: PrismaWarehouseInventoryQueryRepository }
   : { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: LegacyWarehouseInventoryQueryRepository };
 
+const trackingQueryRepositoryProvider = usePrismaRepository
+  ? { provide: TRACKING_QUERY_REPOSITORY, useClass: PrismaTrackingQueryRepository }
+  : { provide: TRACKING_QUERY_REPOSITORY, useClass: LegacyTrackingQueryRepository };
+
+const priceBookQueryRepositoryProvider = usePrismaRepository
+  ? { provide: PRICE_BOOK_QUERY_REPOSITORY, useClass: PrismaPriceBookQueryRepository }
+  : { provide: PRICE_BOOK_QUERY_REPOSITORY, useClass: LegacyPriceBookQueryRepository };
+
 @Module({
   controllers: [
     AuthController,
@@ -133,6 +162,7 @@ const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
     ShipmentFulfillmentQueryController,
     ShipmentOverviewQueryController,
     SystemDirectoryController,
+    TrackingQueryController,
     WarehouseDispatchQueryController,
     WarehouseInventoryQueryController,
     WarehouseTallyQueryController
@@ -143,6 +173,7 @@ const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
     ...repositoryProviders,
     financeCatalogRepositoryProvider,
     financeCatalogAuditWriterProvider,
+    financeCatalogAuthorizerProvider,
     problemTicketQueryRepositoryProvider,
     payerBankAccountRepositoryProvider,
     FinanceCatalogService,
@@ -153,6 +184,8 @@ const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
     ...(usePrismaRepository ? [NotificationAuditWorker] : []),
     MiscFeeService,
     systemDirectoryRepositoryProvider,
+    trackingQueryRepositoryProvider,
+    priceBookQueryRepositoryProvider,
     SystemDirectoryService,
     warehouseInventoryQueryRepositoryProvider,
     warehouseTallyQueryRepositoryProvider,

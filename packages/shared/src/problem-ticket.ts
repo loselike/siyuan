@@ -8,6 +8,8 @@ export interface ProblemTicketCreateInput {
 export interface ProblemTicketSummary {
   id: string;
   shipmentId: string;
+  customerOrderNo?: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   customerName: string;
   reason: string;

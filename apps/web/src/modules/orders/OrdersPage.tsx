@@ -30,18 +30,21 @@ import {
 } from '@siyuan/shared';
 import { formatBeijingDateTime } from '../shared/format';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
+import { canViewOrderManagementAgentDetails } from './orderAgentPermissions';
 import type { RoutingAssignmentFormValues } from '../routing/RoutingPage';
 
 const { Text } = Typography;
 
-export type OrdersLifecycleStageKey = 'all' | 'review' | 'warehouse' | 'inTransit' | 'problem' | 'completed';
+export type OrdersLifecycleStageKey = 'all' | 'review' | 'approved' | 'warehouse' | 'inTransit' | 'problem' | 'completed';
 
 export const orderLifecycleStages: Array<{ key: OrdersLifecycleStageKey; label: string; predicate: (shipment: Shipment) => boolean }> = [
   { key: 'all', label: '全部', predicate: () => true },
   { key: 'review', label: '审核处理', predicate: (shipment) => ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status) },
-  { key: 'warehouse', label: '仓内待出', predicate: (shipment) => ['DECLARED', 'WAITING_RECEIVE', 'WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment.status) },
+  { key: 'approved', label: '已审核', predicate: (shipment) => Boolean(shipment.businessReviewedAt) },
+  { key: 'warehouse', label: '已排货', predicate: (shipment) => shipment.status === 'WAITING_DISPATCH' },
   { key: 'inTransit', label: '运输中', predicate: (shipment) => ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'WAITING_ONLINE', 'WAITING_SIGNED', 'WAITING_RETURN'].includes(shipment.status) },
   { key: 'problem', label: '问题件', predicate: (shipment) => ['PROBLEM', 'STUCK'].includes(shipment.status) || shipment.hasProblemTicket },
   { key: 'completed', label: '已完成', predicate: (shipment) => ['SIGNED', 'CANCELLED'].includes(shipment.status) }
@@ -57,20 +60,6 @@ export function lifecycleStatusColor(status: ShipmentStatus) {
 
 export function orderManagementStatusLabel(status: ShipmentStatus) {
   return status === 'WAITING_DISPATCH' ? '已排货' : shipmentStatusLabels[status];
-}
-
-const orderManagementAgentRestrictedRoles = new Set([
-  'OPERATOR',
-  'UG_BUSINESS',
-  'UG_SZ_WUHAN',
-  'UG_ZZ_SIHUA',
-  'UG_WH_JIUYULIAN',
-  'UG_BUSINESS_MANAGER',
-  'UG_BUSINESS_SUPERVISOR'
-]);
-
-export function canViewOrderManagementAgentDetails(role: import('../../apiClient').RoleKey) {
-  return !orderManagementAgentRestrictedRoles.has(role);
 }
 
 export function resolveOrderManagementAgentShortName(
@@ -315,7 +304,7 @@ export function OrdersPage({
   role: import('../../apiClient').RoleKey;
 }) {
   const hasBusinessPermission = (permission: import('../../apiClient').PermissionKey) => role === 'ADMIN' || permissions.includes(permission);
-  const showAgentDetails = canViewOrderManagementAgentDetails(role);
+  const showAgentDetails = canViewOrderManagementAgentDetails(role, permissions);
   const [tableDensity, setTableDensity] = useState<OrderManagementDensity>('compact');
   const [filterDraft, setFilterDraft] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
   const [appliedFilters, setAppliedFilters] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
@@ -337,7 +326,7 @@ export function OrdersPage({
   const resetFilters = () => {
     setFilterDraft(createEmptyOrderManagementFilters());
     setAppliedFilters(createEmptyOrderManagementFilters());
-    onSelectStage('all');
+    onSelectStage('approved');
   };
   const filteredStageShipments = useMemo(() => {
     const stage = orderLifecycleStages.find((item) => item.key === selectedStage);
@@ -351,6 +340,7 @@ export function OrdersPage({
     }),
     [columns]
   );
+  const orderRecordDetailColumns = matrixSourceColumns;
   const matrixColumns = useMemo<ManagedTableColumns<Shipment>>(
     () => [
       {
@@ -399,20 +389,20 @@ export function OrdersPage({
       },
       {
         key: 'matrixCargoPayment',
-        title: '货物与收款',
+        title: '货物与应收',
         width: 230,
         className: 'order-matrix-group-cargo',
         render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
           { key: 'packageCount', label: '件数' },
           { key: 'weight', label: '应收/代理计费重' },
-          { key: 'paymentAmount', label: '收款金额' },
-          { key: 'paymentCurrency', label: '收款币种' },
-          { key: 'paymentMethod', label: '收款方式' }
+          { key: 'paymentAmount', label: '应收金额' },
+          { key: 'paymentCurrency', label: '应收币种' },
+          { key: 'paymentMethod', label: '结算方式' }
         ], record, index, {
-          paymentAmount: <Text type={record.paymentAmountUsd === undefined && record.paymentAmountCny === undefined ? 'secondary' : undefined}>
-            {record.paymentAmountUsd === undefined && record.paymentAmountCny === undefined
-              ? '未知'
-              : formatPaymentSummary(record.paymentAmountUsd, record.paymentAmountCny)}
+          paymentAmount: <Text type={record.receivableSummary?.amounts.length ? undefined : 'secondary'}>
+            {record.receivableSummary?.amounts.length
+              ? record.receivableSummary.amounts.map(({ currency, amount }) => `${currency} ${amount.toFixed(2)}`).join(' / ')
+              : '未知'}
           </Text>
         })
       },
@@ -520,7 +510,7 @@ export function OrdersPage({
 
   const invoiceColumns = useMemo<ColumnsType<Shipment>>(
     () => [
-      { title: '出货单号', dataIndex: 'systemOrderNo', width: 180 },
+      { title: '出货单号', dataIndex: 'systemOrderNo', width: 180, render: (_: string, shipment) => resolveShipmentOutboundOrderNo(shipment) },
       { title: '客户编号', dataIndex: 'customerCode', width: 120, render: (value?: string) => value || '-' },
       { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value || '-' },
       {
@@ -671,7 +661,7 @@ export function OrdersPage({
                     recordDetail: hasBusinessPermission('business:shipment:detail') ? {
                       title: '运单详情',
                       ariaLabel: (record) => `查看运单 ${record.systemOrderNo} 详情`,
-                      columns: matrixSourceColumns
+                      columns: orderRecordDetailColumns
                     } : false
                   }
                 },
@@ -683,7 +673,8 @@ export function OrdersPage({
                     minimumScrollX: 1200,
                     recordDetail: hasBusinessPermission('business:shipment:detail') ? {
                       title: '运单详情',
-                      ariaLabel: (record) => `查看运单 ${record.systemOrderNo} 详情`
+                      ariaLabel: (record) => `查看运单 ${record.systemOrderNo} 详情`,
+                      columns: orderRecordDetailColumns
                     } : false
                   }
                 }
@@ -785,11 +776,6 @@ export function OrdersPage({
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="systemOrderNo" label="出货单号">
-                <Input />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
               <Form.Item name="destinationCountry" label="目的地" rules={[{ required: true, message: '请输入目的地' }]}>
                 <Input />
               </Form.Item>
@@ -873,7 +859,7 @@ export function OrdersPage({
               options={masterData.channels
                 .filter((channel) => channel.enabled)
                 .map((channel) => ({
-                  label: `${channel.name} / ${channel.carrierName}`,
+                  label: [channel.name, channel.carrierName].filter(Boolean).join(' / '),
                   value: channel.id
               }))}
             />
@@ -1003,7 +989,7 @@ export function OrdersPage({
                   options={masterData.channels
                     .filter((channel) => channel.enabled)
                     .map((channel) => ({
-                      label: `${channel.name} / ${channel.carrierName}`,
+                      label: [channel.name, channel.carrierName].filter(Boolean).join(' / '),
                       value: channel.id
                     }))}
                 />

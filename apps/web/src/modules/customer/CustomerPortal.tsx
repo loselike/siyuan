@@ -15,6 +15,7 @@ import {
 import type { ApiClient, PermissionKey, Principal } from '../../apiClient';
 import { NotificationCenter } from '../notifications/NotificationCenter';
 import { formatCurrency } from '../shared/format';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { AppActionGroup, AppPageHeader, ManagedTable, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 
 const { Header, Content } = Layout;
@@ -134,8 +135,8 @@ export function CustomerPortal({
               <Card title="新建预报">
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <label>
-                    <Text strong>客户单号</Text>
-                    <Input aria-label="客户单号" value={customerOrderNo} onChange={(event) => setCustomerOrderNo(event.target.value)} />
+                    <Text strong>出货单号</Text>
+                    <Input aria-label="出货单号" value={customerOrderNo} onChange={(event) => setCustomerOrderNo(event.target.value)} />
                   </label>
                   <label>
                     <Text strong>目的地国家</Text>
@@ -164,21 +165,24 @@ export function CustomerPortal({
                   resizableColumns={false}
                   columnSettings={false}
                   columns={[
-                    { title: '客户单号', dataIndex: 'customerOrderNo' },
+                    { title: '出货单号', dataIndex: 'customerOrderNo' },
                     {
                       title: '出货单号',
                       dataIndex: 'systemOrderNo',
-                      render: (value: string, record) => (
-                        <Space direction="vertical" size={0}>
-                          <Space size={4}>
-                            <Button className="order-number-link" type="link" size="small" onClick={() => setCustomerDetailShipment(record)}>
-                              {value}
-                            </Button>
-                            <Text copyable={{ text: record.transferNo ? `${value}\n${record.transferNo}` : value }} />
+                      render: (_: string, record) => {
+                        const outboundOrderNo = resolveShipmentOutboundOrderNo(record);
+                        return (
+                          <Space direction="vertical" size={0}>
+                            <Space size={4}>
+                              <Button className="order-number-link" type="link" size="small" onClick={() => setCustomerDetailShipment(record)}>
+                                {outboundOrderNo}
+                              </Button>
+                              <Text copyable={{ text: record.transferNo ? `${outboundOrderNo}\n${record.transferNo}` : outboundOrderNo }} />
+                            </Space>
+                            <Text type="secondary">点击查看详情</Text>
                           </Space>
-                          <Text type="secondary">点击查看详情</Text>
-                        </Space>
-                      )
+                        );
+                      }
                     },
                     { title: '转单号', dataIndex: 'transferNo', render: (value?: string) => value ?? '待生成' },
                     { title: '目的地', dataIndex: 'destinationCountry' },
@@ -265,8 +269,7 @@ export function CustomerPortal({
           >
             {customerDetailShipment ? (
               <div className="shipment-detail-grid">
-                {renderCustomerShipmentDetailField('出货单号', customerDetailShipment.systemOrderNo, { copyText: customerDetailShipment.systemOrderNo })}
-                {renderCustomerShipmentDetailField('客户单号', customerDetailShipment.customerOrderNo, { copyText: customerDetailShipment.customerOrderNo })}
+                {renderCustomerShipmentDetailField('出货单号', resolveShipmentOutboundOrderNo(customerDetailShipment), { copyText: resolveShipmentOutboundOrderNo(customerDetailShipment) })}
                 {renderCustomerShipmentDetailField(
                   '转单号',
                   customerDetailShipment.transferNo ?? '待获取快递号',

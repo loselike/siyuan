@@ -26,8 +26,14 @@ export class WarehouseTallyQueryController {
     return this.repository.getWarehouseTallyTasks(request.user, query);
   }
 
+  @Get('warehouse/tally-tasks/:id/source-packages')
+  @RequirePermission('warehouse:tally-pending:detail-view')
+  warehouseTallyTaskSourcePackages(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.getWarehouseTallyTaskSourcePackages(request.user, id);
+  }
+
   @Get('warehouse/tally-task-history-chain')
-  @RequirePermission('warehouse:tally-completed:view')
+  @RequirePermission('warehouse:in-stock:tally-record-view')
   warehouseTallyTaskHistoryChain(@Req() request: { user: Principal }, @Query('packageId') packageId: string) {
     return this.repository.getWarehouseTallyTaskHistoryChain(request.user, packageId);
   }

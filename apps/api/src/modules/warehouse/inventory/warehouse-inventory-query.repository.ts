@@ -30,7 +30,6 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
 
   async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
-    this.ensureWarehouseAccess(principal);
     const rows = await (this.prisma as any).warehousePackage.findMany({
       orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
     });
@@ -42,9 +41,20 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   }
 
   async getWarehouseManualReceiptCustomers(principal: Principal) {
-    this.ensureWarehouseAccess(principal);
+    const salesScope = principal.dataScope === 'SALES_OWN'
+      ? [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))
+      : principal.departmentTeamScope?.filter(Boolean);
+    let siteSalespeople: string[] | undefined;
+    if (principal.role !== 'ADMIN' && !principal.shipmentAllView && !salesScope?.length) {
+      if (!principal.site) throw new ForbiddenException('当前岗位未配置客户或站点数据范围');
+      siteSalespeople = (await this.prisma.user.findMany({ where: { site: principal.site, enabled: true }, select: { username: true } }))
+        .map((user) => user.username);
+    }
     const customers = await this.prisma.customer.findMany({
-      where: { enabled: true },
+      where: {
+        enabled: true,
+        ...(principal.role !== 'ADMIN' && !principal.shipmentAllView ? { salesperson: { in: salesScope?.length ? salesScope : siteSalespeople ?? [] } } : {})
+      },
       select: { code: true, name: true },
       orderBy: { code: 'asc' }
     });
@@ -55,7 +65,6 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     principal: Principal,
     query: MojiaWarehouseDuplicateQuery
   ): Promise<{ combinedOrderNo: string } | undefined> {
-    this.ensureWarehouseAccess(principal);
     const scanTimeSecond = query.scanTime ? Math.floor(new Date(query.scanTime).getTime() / 1000) : undefined;
     const row = await (this.prisma as any).warehousePackage.findFirst({
       where: {
@@ -72,9 +81,4 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     return row ? { combinedOrderNo: query.combinedOrderNo } : undefined;
   }
 
-  private ensureWarehouseAccess(principal: Principal) {
-    if (!['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)) {
-      throw new ForbiddenException('当前角色不能操作仓库管理');
-    }
-  }
 }

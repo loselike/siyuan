@@ -7,6 +7,7 @@ import { formatBeijingDateTime } from '../../shared/format';
 import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, tenRowTablePagination, type ManagedTableColumns } from '../../shared/ui';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions } from '../../shared/agentIdentity';
+import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 type AgentBillPageProps = {
   apiClient: ApiClient;
@@ -108,7 +109,7 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
     { title: '账单日期', dataIndex: 'billDate', width: 130, render: (value?: string) => value ? value.slice(0, 10) : '-' },
     { title: '币种', dataIndex: 'currency', width: 90 },
     { title: '账单金额', dataIndex: 'billAmount', width: 120, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150 },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150, render: (_: string | undefined, row) => resolveShipmentOutboundOrderNo(row) },
     { title: '转单号', dataIndex: 'transferNo', width: 140, render: (value?: string) => value || '-' },
     { title: '代理渠道', dataIndex: 'agentChannel', width: 140, render: (value?: string) => value || '-' },
     { title: '计费重', dataIndex: 'chargeWeightKg', width: 100, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
@@ -165,7 +166,7 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
             { key: 'billDate', label: '账单日期', value: row.billDate ? row.billDate.slice(0, 10) : '-' },
             { key: 'currency', label: '币种', value: <Tag>{row.currency || 'RMB'}</Tag> },
             { key: 'billAmount', label: '账单金额', value: typeof row.billAmount === 'number' ? row.billAmount.toFixed(2) : '-' },
-            { key: 'systemOrderNo', label: '出货单号', value: row.systemOrderNo || '-', title: row.systemOrderNo },
+            { key: 'systemOrderNo', label: '出货单号', value: resolveShipmentOutboundOrderNo(row), title: resolveShipmentOutboundOrderNo(row) },
             { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
             { key: 'agentChannel', label: agentFieldLabels.channel, value: row.agentChannel || '-', title: row.agentChannel },
             { key: 'chargeWeightKg', label: '计费重', value: typeof row.chargeWeightKg === 'number' ? row.chargeWeightKg.toFixed(2) : '-' },

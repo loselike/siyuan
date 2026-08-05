@@ -11,18 +11,20 @@ export class OrderEntryQueryController {
   @Get('shipments/order-entry/packages')
   @RequirePermission('business:order-entry:warehouse-package-select')
   async orderEntryPackages(@Req() request: { user: Principal }, @Query() query: OrderEntryWarehousePackageQuery) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
-      throw new ForbiddenException('当前角色不能使用内部录单');
-    }
+    this.ensureOrderEntryScope(request.user);
     return this.repository.getOrderEntryWarehousePackages(request.user, query);
   }
 
   @Get('shipments/:id/order-entry')
   @RequirePermission('business:order-entry:view')
   async orderEntryDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
-      throw new ForbiddenException('当前角色不能使用内部录单');
-    }
+    this.ensureOrderEntryScope(request.user);
     return this.repository.getOrderEntryDetail(request.user, id);
+  }
+
+  private ensureOrderEntryScope(principal: Principal) {
+    if (principal.role === 'CUSTOMER') throw new ForbiddenException('当前角色不能使用内部录单');
+    if (principal.shipmentAllView || principal.dataScope === 'SALES_OWN' || principal.departmentTeamScope?.length) return;
+    throw new ForbiddenException('当前岗位未配置录单数据范围');
   }
 }

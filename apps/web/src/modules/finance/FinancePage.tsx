@@ -30,6 +30,7 @@ import {
   type CustomerContactSummary,
   type CustomerSummary,
   type CustomerStatementSummary,
+  type MasterDataSnapshot,
   type FinanceDashboardItem,
   type FinanceDashboardResponse,
   type OrderEntryDetailSummary,
@@ -59,14 +60,16 @@ import { WaterReceiptPage } from './waterReceipt/WaterReceiptPage';
 import { AgentBillPage } from './agentBill/AgentBillPage';
 import { formatBeijingDate, formatBeijingDateTime, formatCurrency, getBeijingWeekStartTimestamp, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { getCustomerDisplayName } from '../shared/customerDisplay';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { PlaceholderPanel } from '../shared/PlaceholderPanel';
 import { AppActionGroup, AppPage, AppPageHeader, CompactMetricCard as MetricCard, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, renderNoticeBar, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
 import { getStaffSectionHref } from '../appShell/config';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
+import { filterServerScopedBusinessShipments, resolveBusinessDraftRows, resolveBusinessPendingReviewRows } from './financeBusinessScope';
+import { ShipmentRiskFlag } from '../shared/ShipmentRiskFlag';
 
 const { Text } = Typography;
-const salesScopedRoleKeys = ['OPERATOR', 'UG_MARKET', 'UG_BUSINESS', 'UG_SZ_WUHAN', 'UG_ZZ_SIHUA', 'UG_WH_JIUYULIAN', 'UG_BUSINESS_MANAGER', 'UG_BUSINESS_SUPERVISOR'];
 
 export function FinancePage({
   role,
@@ -93,6 +96,7 @@ export function FinancePage({
   renderOrderAi,
   prefillOrderEntryPackageIds,
   onOrderEntryPrefillConsumed,
+  masterData,
   customers,
   customerContacts,
   onCustomerContactsChange,
@@ -129,6 +133,7 @@ export function FinancePage({
   renderOrderAi?: () => ReactNode;
   prefillOrderEntryPackageIds?: string[];
   onOrderEntryPrefillConsumed?: () => void;
+  masterData: MasterDataSnapshot;
   customers: CustomerSummary[];
   customerContacts: CustomerContactSummary[];
   onCustomerContactsChange?: (contacts: CustomerContactSummary[]) => void;
@@ -203,6 +208,7 @@ export function FinancePage({
   const canUseOrderEntryAgentFields = hasUiPermission('master-data:agents:read');
   const canContinueOrderEntryDraft = canViewOrderEntry && canViewOrderEntryDrafts && canSaveOrderEntryDraft;
   const canUseFinanceWorkspace = hasUiPermission('finance:dashboard:view') || hasUiPermission('finance:receivable:read') || hasUiPermission('finance:business-cost:read') || hasUiPermission('finance:payable:read') || hasUiPermission('finance:pending-payment:read') || hasUiPermission('finance:paid-payment:read') || hasUiPermission('finance:water-receipt:read') || hasUiPermission('finance:water-match:read') || hasUiPermission('finance:agent-bill:read');
+  const isBusinessWaterReceiptUser = permissions.includes('data-scope:sales-own' as PermissionKey);
   const canRestoreReviewShipment = hasUiPermission('business:review:restore');
   const canPurgeReviewShipment = hasUiPermission('business:review:purge');
   const [financeDashboard, setFinanceDashboard] = useState<FinanceDashboardResponse | null>(null);
@@ -280,13 +286,13 @@ export function FinancePage({
         && includes(customerCode, financeReviewFilters.customerCode)
         && includes(shipment.customerName, financeReviewFilters.customerName)
         && includes(shipment.salesperson, financeReviewFilters.salesperson)
-        && includes(shipment.systemOrderNo, financeReviewFilters.systemOrderNo)
+        && (includes(resolveShipmentOutboundOrderNo(shipment), financeReviewFilters.systemOrderNo) || includes(shipment.systemOrderNo, financeReviewFilters.systemOrderNo))
         && includes(shipment.destinationCountry, financeReviewFilters.destinationCountry)
         && includes(shipment.channelName || shipment.carrier, financeReviewFilters.channelName)
         && (financeReviewFilters.customs === 'ALL' || String(Boolean(shipment.declarationRequired)) === financeReviewFilters.customs)
         && (financeReviewFilters.sensitive === 'ALL' || String(Boolean(shipment.sensitive)) === financeReviewFilters.sensitive)
         && (financeReviewFilters.overdue === 'ALL' || String(Date.now() - new Date(shipment.createdAt).getTime() > 3 * 24 * 60 * 60 * 1000) === financeReviewFilters.overdue)
-        && (!keyword || [customerCode, shipment.customerName, shipment.systemOrderNo, shipment.customerOrderNo, shipment.transferNo, shipment.destinationCountry, shipment.channelName].some((value) => includes(value, keyword)));
+        && (!keyword || [customerCode, shipment.customerName, resolveShipmentOutboundOrderNo(shipment), shipment.systemOrderNo, shipment.transferNo, shipment.destinationCountry, shipment.channelName].some((value) => includes(value, keyword)));
     });
   }, [financeReviewFilters]);
   const pendingReviewShipments = useMemo(
@@ -369,6 +375,7 @@ export function FinancePage({
     return `${getPendingReviewCustomerCode(shipment)} / ${getCustomerDisplayName(shipment)}`;
   };
   const getPendingReviewChannel = (shipment?: Shipment | null) => formatPendingReviewValue(shipment?.channelName || shipment?.carrier);
+  const getPendingReviewOutboundOrderNo = (shipment?: Shipment | null) => shipment ? resolveShipmentOutboundOrderNo(shipment) : '-';
   const detailShipment = pendingReviewDetail?.shipment ?? selectedPendingReviewShipment;
   const canDirectEditPendingReview = Boolean(
     pendingReviewView === 'ACTIVE'
@@ -397,11 +404,11 @@ export function FinancePage({
     { label: '体积', value: detailShipment?.volumeCbm ? `${detailShipment.volumeCbm.toFixed(3)} m³` : '-' },
     { label: '计费重', value: formatPendingReviewWeight(getPendingReviewChargeableWeight(detailShipment)) },
     { label: '货物数据来源', value: detailShipment?.cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '自动匹配' },
-    { label: '是否报关', value: detailShipment?.declarationRequired ? '是' : '否' },
-    { label: '是否敏感', value: detailShipment?.sensitive ? '是' : '否' },
+    { label: '是否报关', value: <ShipmentRiskFlag value={detailShipment?.declarationRequired} /> },
+    { label: '是否敏感', value: <ShipmentRiskFlag value={detailShipment?.sensitive} /> },
     { label: '渠道', value: getPendingReviewChannel(detailShipment) },
     { label: '价格', value: pendingReviewDetail ? pendingReviewPriceText : '-' },
-    { label: '出货单号', value: formatPendingReviewValue(detailShipment?.systemOrderNo) }
+    { label: '出货单号', value: getPendingReviewOutboundOrderNo(detailShipment) }
   ];
   const pendingReviewSummaryText = [
     getPendingReviewCustomerCode(detailShipment),
@@ -415,9 +422,10 @@ export function FinancePage({
     detailShipment?.sensitive ? '是' : '否',
     getPendingReviewChannel(detailShipment),
     pendingReviewDetail ? pendingReviewPriceText : '-',
-    formatPendingReviewValue(detailShipment?.systemOrderNo)
+    getPendingReviewOutboundOrderNo(detailShipment)
   ].join('——');
-  const canViewReviewSensitiveFields = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE' || role === 'BOSS' || role === 'OWNER';
+  const canViewReviewAgentIdentity = role === 'ADMIN' || permissions.includes('finance:business-cost:view-agent');
+  const canViewReviewFinanceFields = role === 'ADMIN' || permissions.includes('business:review:finance-detail-view');
   const renderShipmentCargoData = (shipment?: Shipment | null) => [
     `件数 ${formatPendingReviewValue(shipment?.packageCount)}`,
     `实重 ${formatPendingReviewWeight(getPendingReviewWeight(shipment))}`,
@@ -606,7 +614,7 @@ export function FinancePage({
     });
   };
   const renderReviewKeyValues = (items: Array<[string, ReactNode]>) => (
-    <Descriptions size="small" column={2} bordered items={items.map(([label, children]) => ({ key: label, label, children: children || '-' }))} />
+    <Descriptions size="small" column={2} bordered items={items.map(([label, children]) => ({ key: label, label, children: label.includes('报关') || label.includes('敏感') ? <ShipmentRiskFlag value={typeof children === 'string' ? children : undefined} /> : children || '-' }))} />
   );
   const renderReviewFieldPanel = (title: string, items: Array<[string, ReactNode]>) => (
     <section className="finance-detail-field-panel">
@@ -615,7 +623,7 @@ export function FinancePage({
         size="small"
         column={1}
         bordered
-        items={items.map(([label, children]) => ({ key: label, label, children: children || '-' }))}
+        items={items.map(([label, children]) => ({ key: label, label, children: label.includes('报关') || label.includes('敏感') ? <ShipmentRiskFlag value={typeof children === 'string' ? children : undefined} /> : children || '-' }))}
       />
     </section>
   );
@@ -646,8 +654,8 @@ export function FinancePage({
                 />
                 <Row gutter={12}>
                   <Col xs={24} md={12}><Form.Item name="customerCode" label="客户编号" rules={[{ required: true, message: '请选择客户' }]}><Select showSearch optionFilterProp="label" options={customers.filter((customer) => customer.enabled).map((customer) => ({ value: customer.code, label: `${customer.code} - ${customer.name}` }))} /></Form.Item></Col>
-                  <Col xs={24} md={12}><Form.Item name="customerOrderNo" label="客户单号" rules={[{ required: true, message: '请填写客户单号' }]}><Input /></Form.Item></Col>
-                  <Col xs={24} md={12}><Form.Item name="companyChannelName" label="公司渠道" rules={[{ required: true, message: '请填写公司渠道' }]}><Input placeholder="填写已启用的公司渠道名称" /></Form.Item></Col>
+                  <Col xs={24} md={12}><Form.Item name="customerOrderNo" label="出货单号" rules={[{ required: true, message: '请填写出货单号' }]}><Input /></Form.Item></Col>
+                  <Col xs={24} md={12}><Form.Item name="companyChannelName" label="公司渠道" rules={[{ required: true, message: '请选择公司渠道' }]}><Select showSearch optionFilterProp="label" placeholder="输入渠道或承运商名称搜索" options={masterData.channels.filter((channel) => channel.enabled).map((channel) => ({ value: channel.name, label: [channel.name, channel.carrierName].filter(Boolean).join(' / ') }))} /></Form.Item></Col>
                   <Col xs={24} md={12}><Form.Item name="inboundNo" label="入仓号"><Input /></Form.Item></Col>
                   <Col xs={24} md={12}><Form.Item name="productName" label="品名" rules={[{ required: true, message: '请填写品名' }]}><Input /></Form.Item></Col>
                   <Col xs={24} md={12}><Form.Item name="fbaWarehouseCode" label="FBA 仓库代码"><Input /></Form.Item></Col>
@@ -674,9 +682,9 @@ export function FinancePage({
                 bordered
                 items={[
                   { key: 'outboundAt', label: '出库日期', children: shipment?.outboundAt ? formatBeijingDateTime(shipment.outboundAt) : '-' },
-                  ...(canViewReviewSensitiveFields ? [{ key: 'agentName', label: agentFieldLabels.detailedCompanyName, children: shipment?.agentName || '-' }] : []),
+                  ...(canViewReviewAgentIdentity ? [{ key: 'agentName', label: agentFieldLabels.detailedCompanyName, children: shipment?.agentName || '-' }] : []),
                   { key: 'reviewedAt', label: '应收审核日期', children: shipment?.reviewedAt ? formatBeijingDateTime(shipment.reviewedAt) : '-' },
-                  ...(canViewReviewSensitiveFields ? [{ key: 'businessReviewedAt', label: '业务成本审核日期', children: shipment?.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-' }] : [])
+                  ...(canViewReviewFinanceFields ? [{ key: 'businessReviewedAt', label: '业务成本审核日期', children: shipment?.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-' }] : [])
                 ]}
               />
               <Row gutter={12}>
@@ -699,7 +707,7 @@ export function FinancePage({
         ['运单录入日期', shipment?.createdAt ? formatBeijingDateTime(shipment.createdAt) : '-'],
         ['客户编号', getPendingReviewCustomerCode(shipment)],
         ['客户名称', shipment ? getCustomerDisplayName(shipment) : '-'],
-        ['客户单号', shipment?.customerOrderNo],
+        ['出货单号', getPendingReviewOutboundOrderNo(shipment)],
         ['公司渠道', getPendingReviewChannel(shipment)],
         ['转单号', shipment?.transferNo],
         ['入仓号', shipment?.inboundNo],
@@ -717,13 +725,13 @@ export function FinancePage({
         ['目的地', shipment?.destinationCountry],
         ['报关', shipment?.declarationRequired ? '是' : '否'],
         ['货物类型', shipment?.cargoType],
-        ...(canViewReviewSensitiveFields ? [[agentFieldLabels.detailedCompanyName, shipment?.agentName] as [string, ReactNode]] : []),
+        ...(canViewReviewAgentIdentity ? [[agentFieldLabels.detailedCompanyName, shipment?.agentName] as [string, ReactNode]] : []),
         ['分单号', shipment?.subOrderNo],
         ['FBA 入仓单号', shipment?.fbaInboundNo],
         ['结算方式', shipment?.settlementMethod],
         ['备注', shipment?.remark],
         ['应收审核日期', shipment?.reviewedAt ? formatBeijingDateTime(shipment.reviewedAt) : '-'],
-        ...(canViewReviewSensitiveFields ? [
+        ...(canViewReviewFinanceFields ? [
           ['业务成本审核日期', shipment?.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-'] as [string, ReactNode],
           ['应付审核日期', '-'] as [string, ReactNode]
         ] : []),
@@ -780,7 +788,7 @@ export function FinancePage({
       key: 'systemOrderNo',
       dataIndex: 'systemOrderNo',
       width: 180,
-      render: (value: string, record) => (
+      render: (_value: string, record) => (
         <Button
           type="link"
           className="finance-pending-order-button"
@@ -789,7 +797,7 @@ export function FinancePage({
             setFinanceReviewSelectedShipmentId(record.id);
           }}
         >
-          {formatPendingReviewValue(value)}
+          {getPendingReviewOutboundOrderNo(record)}
         </Button>
       )
     },
@@ -807,8 +815,8 @@ export function FinancePage({
     },
     { title: '应收', key: 'receivableRmbTotal', width: 120, align: 'right', render: (_, record) => renderPendingReviewReceivable(record) },
     { title: '产品名称', key: 'productName', dataIndex: 'productName', width: 150, render: (value?: string) => formatPendingReviewValue(value) },
-    { title: '报关', key: 'declarationRequired', dataIndex: 'declarationRequired', width: 90, render: (value?: boolean) => value ? '是' : '否' },
-    { title: '敏感', key: 'sensitive', dataIndex: 'sensitive', width: 90, render: (value?: boolean) => value ? '是' : '否' },
+    { title: '报关', key: 'declarationRequired', dataIndex: 'declarationRequired', width: 90, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> },
+    { title: '敏感', key: 'sensitive', dataIndex: 'sensitive', width: 90, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> },
     {
       title: '状态',
       key: 'status',
@@ -854,7 +862,7 @@ export function FinancePage({
           labelWidth={66}
           fields={[
             { key: 'createdAt', label: '创建时间', value: <ManagedMatrixDateTime value={formatBeijingDateTime(record.createdAt)} /> },
-            { key: 'systemOrderNo', label: '出货单号', value: <Button type="link" className="finance-pending-order-button" onClick={(event) => { event.stopPropagation(); setFinanceReviewSelectedShipmentId(record.id); }}>{formatPendingReviewValue(record.systemOrderNo)}</Button> },
+            { key: 'systemOrderNo', label: '出货单号', value: <Button type="link" className="finance-pending-order-button" onClick={(event) => { event.stopPropagation(); setFinanceReviewSelectedShipmentId(record.id); }}>{getPendingReviewOutboundOrderNo(record)}</Button> },
             { key: 'customerCode', label: '客户编号', value: getPendingReviewCustomerCode(record) },
             { key: 'customerName', label: '客户名称', value: <Text strong>{getCustomerDisplayName(record)}</Text>, title: getCustomerDisplayName(record) },
             { key: 'salesperson', label: '业务员', value: formatPendingReviewValue(record.salesperson) },
@@ -866,8 +874,8 @@ export function FinancePage({
             { key: 'chargeableWeightKg', label: '计费重', value: formatPendingReviewWeight(getPendingReviewChargeableWeight(record)) },
             { key: 'receivableRmbTotal', label: '应收', value: <Text strong>{renderPendingReviewReceivable(record)}</Text> },
             { key: 'productName', label: '产品名称', value: formatPendingReviewValue(record.productName), title: record.productName },
-            { key: 'declarationRequired', label: '报关', value: record.declarationRequired ? '是' : '否' },
-            { key: 'sensitive', label: '敏感', value: record.sensitive ? '是' : '否' },
+            { key: 'declarationRequired', label: '报关', value: <ShipmentRiskFlag value={record.declarationRequired} /> },
+            { key: 'sensitive', label: '敏感', value: <ShipmentRiskFlag value={record.sensitive} /> },
             { key: 'status', label: '状态', value: <Tag color="gold">{shipmentStatusLabels[record.status] ?? formatPendingReviewValue(record.status)}</Tag> },
             { key: 'overdue', label: '超时标记', value: isPendingReviewOverdue(record) ? <Tag color="red">超时</Tag> : <Tag color="green">正常</Tag> }
           ]}
@@ -927,8 +935,7 @@ export function FinancePage({
   const orderEntryDraftColumns: ManagedTableColumns<Shipment> = [
     { title: '创建时间', key: 'createdAt', dataIndex: 'createdAt', width: 165, render: (value: string) => formatBeijingDateTime(value) },
     { title: '客户编号/名称', key: 'customer', width: 210, sortValue: (record) => `${record.customerCode ?? ''}|${record.customerName ?? ''}`, render: (_, record) => getPendingReviewCustomer(record) },
-    { title: '客户单号', key: 'customerOrderNo', dataIndex: 'customerOrderNo', width: 150, render: (value?: string) => formatPendingReviewValue(value) },
-    { title: '出货单号/草稿号', key: 'systemOrderNo', dataIndex: 'systemOrderNo', width: 170, render: (value?: string) => <Text strong>{formatPendingReviewValue(value)}</Text> },
+    { title: '出货单号/草稿号', key: 'systemOrderNo', dataIndex: 'systemOrderNo', width: 170, render: (_: string | undefined, record) => <Text strong>{resolveShipmentOutboundOrderNo(record)}</Text> },
     { title: '公司渠道', key: 'channelName', width: 150, sortValue: (record) => record.channelName ?? record.carrier, render: (_, record) => getPendingReviewChannel(record) },
     {
       title: '货物数据',
@@ -1005,8 +1012,7 @@ export function FinancePage({
           labelWidth={66}
           fields={[
             { key: 'createdAt', label: '创建时间', value: <ManagedMatrixDateTime value={formatBeijingDateTime(record.createdAt)} /> },
-            { key: 'systemOrderNo', label: '出货单号', value: <Text strong>{formatPendingReviewValue(record.systemOrderNo)}</Text>, title: record.systemOrderNo },
-            { key: 'customerOrderNo', label: '客户单号', value: formatPendingReviewValue(record.customerOrderNo), title: record.customerOrderNo },
+            { key: 'systemOrderNo', label: '出货单号', value: <Text strong>{resolveShipmentOutboundOrderNo(record)}</Text>, title: resolveShipmentOutboundOrderNo(record) },
             { key: 'customer', label: '客户', value: getPendingReviewCustomer(record), title: `${record.customerCode ?? ''} ${record.customerName ?? ''}`.trim() },
             { key: 'entryBy', label: '创建人', value: formatPendingReviewValue(record.entryBy || record.salesperson) }
           ]}
@@ -1343,6 +1349,13 @@ export function FinancePage({
             { key: 'remote-areas', label: '偏远' },
             { key: 'exchange-rates', label: '汇率' }
           ]
+      : isBusinessWaterReceiptUser
+        ? [
+            { key: 'water-receipt-arrivals', label: '水单到账查询' },
+            { key: 'water-receipts', label: '水单匹配' }
+          ].filter((item) => item.key === 'water-receipt-arrivals'
+            ? hasUiPermission('finance:water-receipt:read')
+            : hasUiPermission('finance:water-match:read'))
       : !canUseFinanceWorkspace
         ? [
             { key: 'water-receipt-arrivals', label: '水单到账查询' },
@@ -1427,27 +1440,18 @@ export function FinancePage({
     return String(item.count ?? 0);
   };
 
-  const isBusinessScopeShipment = useCallback((shipment: Shipment) => {
-    if (role === 'ADMIN') return true;
-    if (!salesScopedRoleKeys.includes(role)) return false;
-    return shipment.entryBy === username || shipment.salesperson === username;
-  }, [role, username]);
   const businessScopedShipments = useMemo(
-    () => shipments.filter((shipment) => !shipment.deletedAt && isBusinessScopeShipment(shipment)),
-    [isBusinessScopeShipment, shipments]
+    () => filterServerScopedBusinessShipments(shipments),
+    [shipments]
   );
-  const businessDraftRows = useMemo(() => {
-    const rows = orderEntryDraftRows.length
-      ? orderEntryDraftRows
-      : businessScopedShipments.filter((shipment) => ['DRAFT', 'REVIEW_REJECTED'].includes(shipment.status));
-    return rows.filter((shipment) => !shipment.deletedAt && isBusinessScopeShipment(shipment));
-  }, [businessScopedShipments, isBusinessScopeShipment, orderEntryDraftRows]);
-  const businessPendingReviewRows = useMemo(() => {
-    const rows = pendingReviewRows.length
-      ? pendingReviewRows
-      : businessScopedShipments.filter((shipment) => shipment.status === 'REVIEW_PENDING');
-    return rows.filter((shipment) => !shipment.deletedAt && shipment.status === 'REVIEW_PENDING' && isBusinessScopeShipment(shipment));
-  }, [businessScopedShipments, isBusinessScopeShipment, pendingReviewRows]);
+  const businessDraftRows = useMemo(
+    () => resolveBusinessDraftRows(orderEntryDraftRows, businessScopedShipments),
+    [businessScopedShipments, orderEntryDraftRows]
+  );
+  const businessPendingReviewRows = useMemo(
+    () => resolveBusinessPendingReviewRows(pendingReviewRows, businessScopedShipments),
+    [businessScopedShipments, pendingReviewRows]
+  );
   const getBeijingDateKey = (value?: string) => {
     const date = value ? new Date(value) : new Date();
     if (Number.isNaN(date.getTime())) return '';
@@ -1761,6 +1765,7 @@ export function FinancePage({
               key={editingOrderEntryDraftId ?? 'new-order-entry'}
               apiClient={apiClient}
               role={role}
+              permissions={permissions}
               username={username}
               financeCatalogItems={financeCatalogItems}
               customers={customers}
@@ -1865,6 +1870,7 @@ export function FinancePage({
               customers={customers}
               settlementOptions={financeCatalog.settlementOptions}
               renderShipmentOrderNoLink={renderShipmentOrderNoLink}
+              readOnlyMatching={isBusinessWaterReceiptUser}
             />
 	          ) : null}
 	          {activeFinanceSection === 'agent-bill-ai' ? (

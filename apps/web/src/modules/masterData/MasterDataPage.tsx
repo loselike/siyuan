@@ -1,12 +1,13 @@
 import { useEffect, useState, type ClipboardEvent } from 'react';
 import { AlertTriangle, Bot, Building2, CheckCircle, Download, Edit, FileText, Plus, Power, Route, Settings, Sparkles, Trash2, Upload as UploadIcon, UserRound, Users } from 'lucide-react';
-import { Alert, Button, Card, Checkbox, Col, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Tag, Typography, Upload } from 'antd';
+import { Alert, AutoComplete, Button, Card, Checkbox, Col, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Tag, Typography, Upload } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { companyChannelBusinessTypeLabels, summarizeMasterDataSnapshot, type AgentBankAccountSummary, type AgentChannelSummary, type AgentIntegrationType, type AgentSummary, type ChannelCategorySummary, type ChannelSummary, type CompanyChannelBusinessType, type CompanyChannelMinimumChargeUnit, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type MasterDataSnapshot, type StaffAccountSummary } from '@siyuan/shared';
+import { companyChannelBusinessTypeLabels, summarizeMasterDataSnapshot, type AgentBankAccountSummary, type AgentChannelSummary, type AgentIntegrationType, type AgentSummary, type ChannelCategorySummary, type ChannelSummary, type CompanyChannelBusinessType, type CompanyChannelMinimumChargeUnit, type CustomerContactSummary, type CustomerSourceSummary, type CustomerSummary, type ExchangeRateSummary, type MasterDataSnapshot, type StaffAccountSummary } from '@siyuan/shared';
 import { ApiClient, type PermissionKey, type Principal } from '../../apiClient';
 import { FinanceCatalogPage } from '../finance/FinanceCatalogPage';
 import { useFinanceCatalog } from '../finance/useFinanceCatalog';
 import { PayerBankAccountsPage } from './PayerBankAccountsPage';
+import { CustomerSourcesPage } from './CustomerSourcesPage';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedTable, MetricCard, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
@@ -18,6 +19,7 @@ interface MasterCustomerFormValues {
   customerCode: string;
   customerName: string;
   customerSource: string;
+  saveCustomerSourceToCatalog?: boolean;
   salesperson?: string;
   defaultSettlementMethod: string;
   contacts?: MasterCustomerContactFormValues[];
@@ -25,7 +27,6 @@ interface MasterCustomerFormValues {
 
 const customerSalespersonRoles = new Set([
   'OPERATOR',
-  'UG_MARKET',
   'UG_BUSINESS',
   'UG_SZ_WUHAN',
   'UG_ZZ_SIHUA',
@@ -33,6 +34,10 @@ const customerSalespersonRoles = new Set([
   'UG_BUSINESS_MANAGER',
   'UG_BUSINESS_SUPERVISOR'
 ]);
+
+export function isCustomerSalesperson(account: Pick<StaffAccountSummary, 'enabled' | 'role'>) {
+  return account.enabled && customerSalespersonRoles.has(account.role);
+}
 
 interface MasterCustomerContactFormValues {
   receiverName: string;
@@ -51,8 +56,7 @@ interface MasterAgentFormValues {
   agentName: string;
   settlementCycle?: AgentSummary['settlementCycle'];
   warehouses: MasterAgentWarehouseFormValues[];
-  invoiceTemplateName: string;
-  invoiceTemplateUrl: string;
+  invoiceTemplates: MasterAgentInvoiceTemplateFormValues[];
   trackingWebsite: string;
   bankAccountName: string;
   bankAccountNo: string;
@@ -60,6 +64,12 @@ interface MasterAgentFormValues {
   bankAccounts: MasterAgentBankAccountFormValues[];
   agentIntegrationType?: AgentIntegrationType;
   agentEnabled?: 'true' | 'false';
+}
+
+interface MasterAgentInvoiceTemplateFormValues {
+  id?: string;
+  name?: string;
+  url?: string;
 }
 
 interface MasterAgentWarehouseFormValues {
@@ -86,8 +96,7 @@ interface MasterAgentChannelFormValues {
 
 interface MasterCompanyChannelFormValues {
   name: string;
-  carrierId: string;
-  carrierName: string;
+  carrierId?: string;
   businessType: CompanyChannelBusinessType;
   category?: string;
   volumeDivisor: string;
@@ -209,6 +218,7 @@ const currencyName = (code: string) => currencyNames[code.toUpperCase()] ?? code
 const todayDate = () => formatBeijingDate(new Date());
 const MAX_AGENT_WAREHOUSES = 3;
 const MAX_AGENT_BANK_ACCOUNTS = 3;
+const MAX_AGENT_INVOICE_TEMPLATES = 20;
 const agentItemOrdinals = ['一', '二', '三'];
 const emptyAgentWarehouse = (): MasterAgentWarehouseFormValues => ({ address: '', contactName: '', contactPhone: '' });
 const emptyAgentBankAccounts = (): MasterAgentBankAccountFormValues[] => [{ currency: 'RMB', enabled: 'true' }];
@@ -263,6 +273,7 @@ export function MasterDataPage({
   const summary = summarizeMasterDataSnapshot(masterData);
   const currentSalesperson = currentUser.username;
   const [masterCustomerForm] = Form.useForm<MasterCustomerFormValues>();
+  const watchedCustomerSource = Form.useWatch('customerSource', masterCustomerForm) ?? '';
   const [masterCustomerContactForm] = Form.useForm<MasterCustomerContactFormValues>();
   const [masterAgentForm] = Form.useForm<MasterAgentFormValues>();
   const [masterAgentChannelForm] = Form.useForm<MasterAgentChannelFormValues>();
@@ -279,6 +290,8 @@ export function MasterDataPage({
   const [masterChannelCategoryForm] = Form.useForm<MasterChannelCategoryFormValues>();
   const [masterExchangeRateForm] = Form.useForm<MasterExchangeRateFormValues>();
   const [masterCustomerOpen, setMasterCustomerOpen] = useState(false);
+  const [customerSources, setCustomerSources] = useState<CustomerSourceSummary[]>([]);
+  const [customerSourcesLoading, setCustomerSourcesLoading] = useState(false);
   const [salespersonAccounts, setSalespersonAccounts] = useState<StaffAccountSummary[]>([]);
   const [salespersonAccountsLoading, setSalespersonAccountsLoading] = useState(false);
   const [masterAgentOpen, setMasterAgentOpen] = useState(false);
@@ -330,6 +343,7 @@ export function MasterDataPage({
   const hasMasterPermission = (...keys: PermissionKey[]) => currentUser.role === 'ADMIN' || keys.some((key) => permissions.includes(key));
   const canReadCustomers = hasMasterPermission('master-data:customers:read');
   const canWriteCustomers = hasMasterPermission('master-data:customers:create', 'master-data:customers:update');
+  const canDeleteCustomerSources = hasMasterPermission('master-data:customers:delete');
   const canManageCustomerContacts = hasMasterPermission('master-data:customers:contacts-manage');
   const canAssignCustomerSalesperson = hasMasterPermission('master-data:customers:assign-salesperson');
 
@@ -344,7 +358,7 @@ export function MasterDataPage({
     void apiClient.staffAccounts({ status: 'ENABLED' })
       .then((rows) => {
         if (!active) return;
-        setSalespersonAccounts(rows.filter((account) => account.enabled && customerSalespersonRoles.has(account.role)));
+        setSalespersonAccounts(rows.filter(isCustomerSalesperson));
       })
       .catch((error) => {
         if (active) onNotice(error instanceof Error ? `业务员选项加载失败：${error.message}` : '业务员选项加载失败');
@@ -356,6 +370,24 @@ export function MasterDataPage({
       active = false;
     };
   }, [apiClient, canAssignCustomerSalesperson, masterCustomerOpen, onNotice]);
+  useEffect(() => {
+    if (!masterCustomerOpen || !canReadCustomers) return undefined;
+    let active = true;
+    setCustomerSourcesLoading(true);
+    void apiClient.customerSources()
+      .then((response) => {
+        if (active) setCustomerSources(response.items);
+      })
+      .catch((error) => {
+        if (active) onNotice(error instanceof Error ? `客户来源选项加载失败：${error.message}` : '客户来源选项加载失败');
+      })
+      .finally(() => {
+        if (active) setCustomerSourcesLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [apiClient, canReadCustomers, masterCustomerOpen, onNotice]);
   const canReadFinanceCatalog = hasMasterPermission('master-data:finance:read');
   const canWriteFinanceCatalog = hasMasterPermission('master-data:finance:fee-name:create', 'master-data:finance:fee-name:update', 'master-data:finance:settlement:create', 'master-data:finance:settlement:update');
   const canReadPayerBanks = hasMasterPermission('master-data:payer-banks:read');
@@ -379,6 +411,10 @@ export function MasterDataPage({
   const canReadAssistant = hasMasterPermission('master-data:assistant:read');
   const canReadAgentBanks = hasMasterPermission('master-data:agents:bank-view');
   const canWriteAgentBanks = hasMasterPermission('master-data:agents:bank-manage');
+  const normalizedWatchedCustomerSource = watchedCustomerSource.trim().toLocaleLowerCase('zh-CN');
+  const watchedCustomerSourceExists = Boolean(normalizedWatchedCustomerSource)
+    && customerSources.some((source) => source.enabled && source.normalizedName === normalizedWatchedCustomerSource);
+  const showSaveCustomerSourceOption = Boolean(normalizedWatchedCustomerSource) && !watchedCustomerSourceExists;
   const [agentBankAccounts, setAgentBankAccounts] = useState<AgentBankAccountSummary[]>([]);
   const [remoteAreaFiles, setRemoteAreaFiles] = useState<RemoteAreaAttachment[]>(() => {
     if (typeof window === 'undefined') return [];
@@ -390,6 +426,7 @@ export function MasterDataPage({
   });
   const masterSubItems: ModuleSubNavItem[] = [
     ...(canReadCustomers ? [{ key: 'customers', label: '客户资料', description: '业务员归属、客户编号、客户名称' }] : []),
+    ...(canReadCustomers ? [{ key: 'customerSources', label: '客户来源', description: '获客来源选项与使用状态' }] : []),
     ...(canReadFinanceCatalog ? [{ key: 'financeCatalog', label: '财务资料', description: '费用、结算、货物、品名' }] : []),
     ...(canReadPayerBanks ? [{ key: 'payerBanks', label: '付款银行资料', description: '付款银行、户名与账号' }] : []),
     ...(canReadAgents ? [
@@ -635,10 +672,18 @@ export function MasterDataPage({
     })),
     {
       title: '发票模板',
-      dataIndex: 'invoiceTemplateName',
-      width: 180,
-      render: (value: string | undefined, record) =>
-        record.invoiceTemplateUrl ? <a href={record.invoiceTemplateUrl} target="_blank" rel="noreferrer">{value || '查看模板'}</a> : value || '-'
+      key: 'invoiceTemplates',
+      width: 220,
+      render: (_value: unknown, record: AgentSummary) => {
+        const templates = record.invoiceTemplates?.length ? record.invoiceTemplates : [
+          { id: 'legacy-1', name: record.invoiceTemplateName || '模板 1', url: record.invoiceTemplateUrl || '' },
+          { id: 'legacy-2', name: record.invoiceTemplateName2 || '模板 2', url: record.invoiceTemplateUrl2 || '' },
+          { id: 'legacy-3', name: record.invoiceTemplateName3 || '模板 3', url: record.invoiceTemplateUrl3 || '' }
+        ].filter((template) => Boolean(template.url));
+        return templates.length ? <Space direction="vertical" size={2}>{templates.map((template, index) => template.url ? (
+          <a href={template.url} key={template.id} target="_blank" rel="noreferrer">{`模板 ${index + 1}：${template.name || '查看模板'}`}</a>
+        ) : <Text key={template.id}>{`模板 ${index + 1}：${template.name}`}</Text>)}</Space> : '-';
+      }
     },
     {
       title: '状态',
@@ -761,7 +806,7 @@ export function MasterDataPage({
     { title: '业务类型', dataIndex: 'businessType', width: 110, render: (value: CompanyChannelBusinessType) => <Tag>{companyChannelBusinessTypeLabels[value] ?? value}</Tag> },
     { title: '渠道类别', dataIndex: 'category', width: 120, render: (value?: string) => value || '-' },
     { title: '渠道名称', dataIndex: 'name', width: 180, render: (value: string) => <Text strong>{value}</Text> },
-    { title: '承运商', dataIndex: 'carrierName', width: 120 },
+    { title: '承运商', dataIndex: 'carrierName', width: 120, render: (value?: string) => value || '-' },
     { title: '除材积', dataIndex: 'volumeDivisor', width: 90 },
     { title: '多件重量计算方式', dataIndex: 'multiPieceWeightRule', width: 170, render: (value: string) => optionLabel(multiPieceWeightRuleOptions, value) },
     { title: '结算重量计算规则', dataIndex: 'settlementWeightRule', width: 160, render: (value: string) => optionLabel(settlementWeightRuleOptions, value) },
@@ -892,6 +937,7 @@ export function MasterDataPage({
       customerCode: '',
       customerName: '',
       customerSource: '',
+      saveCustomerSourceToCatalog: false,
       salesperson: canAssignCustomerSalesperson ? undefined : currentSalesperson,
       defaultSettlementMethod: undefined,
       contacts: []
@@ -905,6 +951,7 @@ export function MasterDataPage({
       customerCode: customer.code,
       customerName: customer.name,
       customerSource: customer.customerSource ?? '',
+      saveCustomerSourceToCatalog: false,
       salesperson: canAssignCustomerSalesperson ? customer.salesperson : currentSalesperson,
       defaultSettlementMethod: customer.defaultSettlementMethod ?? '',
       contacts: []
@@ -924,6 +971,7 @@ export function MasterDataPage({
         code: customerCode,
         name: customerName,
         customerSource: customerSource || undefined,
+        saveCustomerSourceToCatalog: Boolean(customerSource && values.saveCustomerSourceToCatalog),
         salesperson: salesperson ?? '',
         defaultSettlementMethod,
         enabled: editingMasterCustomer?.enabled ?? true
@@ -1093,8 +1141,7 @@ export function MasterDataPage({
       agentIntegrationType: 'MANUAL',
       agentEnabled: 'true',
       warehouses: [emptyAgentWarehouse()],
-      invoiceTemplateName: '',
-      invoiceTemplateUrl: '',
+      invoiceTemplates: [],
       trackingWebsite: '',
       bankAccountName: '',
       bankAccountNo: '',
@@ -1125,8 +1172,11 @@ export function MasterDataPage({
       agentName: agent.name,
       settlementCycle: agent.settlementCycle,
       warehouses: agentWarehouses(agent),
-      invoiceTemplateName: agent.invoiceTemplateName ?? '',
-      invoiceTemplateUrl: agent.invoiceTemplateUrl ?? '',
+      invoiceTemplates: agent.invoiceTemplates?.length ? agent.invoiceTemplates : [
+        { id: 'legacy-1', name: agent.invoiceTemplateName ?? '模板 1', url: agent.invoiceTemplateUrl ?? '' },
+        { id: 'legacy-2', name: agent.invoiceTemplateName2 ?? '模板 2', url: agent.invoiceTemplateUrl2 ?? '' },
+        { id: 'legacy-3', name: agent.invoiceTemplateName3 ?? '模板 3', url: agent.invoiceTemplateUrl3 ?? '' }
+      ].filter((template) => Boolean(template.url)),
       trackingWebsite: agent.trackingWebsite ?? '',
       bankAccountName: bank?.accountName ?? '',
       bankAccountNo: bank?.bankAccountNo ?? '',
@@ -1138,23 +1188,26 @@ export function MasterDataPage({
     setMasterAgentOpen(true);
   }
 
-  async function handleAgentInvoiceTemplate(file: File) {
+  async function handleAgentInvoiceTemplate(index: number, file: File) {
+    const urlField: ['invoiceTemplates', number, 'url'] = ['invoiceTemplates', index, 'url'];
     const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
     if (!['.xls', '.xlsx'].includes(extension) || extension === '.xlsm') {
-      masterAgentForm.setFields([{ name: 'invoiceTemplateUrl', errors: ['请上传 .xls/.xlsx 发票模板'] }]);
+      masterAgentForm.setFields([{ name: urlField, errors: ['请上传 .xls/.xlsx 发票模板'] }]);
       return;
     }
     const uploaded = await apiClient.uploadAgentInvoiceTemplate(file);
-    masterAgentForm.setFieldsValue({ invoiceTemplateName: uploaded.fileName, invoiceTemplateUrl: uploaded.url });
-    masterAgentForm.setFields([{ name: 'invoiceTemplateUrl', errors: [] }]);
-    onNotice(`已上传代理发票模板 ${uploaded.fileName}`);
+    const templates = [...(masterAgentForm.getFieldValue('invoiceTemplates') ?? [])];
+    templates[index] = { ...templates[index], name: templates[index]?.name?.trim() || uploaded.fileName, url: uploaded.url };
+    masterAgentForm.setFieldValue('invoiceTemplates', templates);
+    masterAgentForm.setFields([{ name: urlField, errors: [] }]);
+    onNotice(`已上传模板：${uploaded.fileName}`);
   }
 
-  function handleAgentInvoicePaste(event: ClipboardEvent<HTMLElement>) {
+  function handleAgentInvoicePaste(index: number, event: ClipboardEvent<HTMLElement>) {
     const file = Array.from(event.clipboardData.files).find((item) => ['.xls', '.xlsx'].includes(item.name.slice(item.name.lastIndexOf('.')).toLowerCase()));
     if (!file) return;
     event.preventDefault();
-    void handleAgentInvoiceTemplate(file);
+    void handleAgentInvoiceTemplate(index, file);
   }
 
   async function handleSubmitMasterAgent() {
@@ -1219,8 +1272,11 @@ export function MasterDataPage({
       warehouseContactName3: warehouses[2]?.contactName || undefined,
       warehouseContactPhone3: warehouses[2]?.contactPhone || undefined,
       warehouseContact: [warehouses[0]?.contactName, warehouses[0]?.contactPhone].filter(Boolean).join(' ') || undefined,
-      invoiceTemplateName: values.invoiceTemplateName?.trim(),
-      invoiceTemplateUrl: values.invoiceTemplateUrl?.trim(),
+      invoiceTemplates: (values.invoiceTemplates ?? []).map((template) => ({
+        id: template.id,
+        name: template.name?.trim(),
+        url: template.url?.trim()
+      })),
       trackingWebsite: values.trackingWebsite?.trim(),
       integrationType: values.agentIntegrationType ?? 'MANUAL',
       enabled: values.agentEnabled !== 'false'
@@ -1367,11 +1423,9 @@ export function MasterDataPage({
   async function handleCreateMasterCompanyChannel() {
     setEditingMasterCompanyChannel(null);
     masterCompanyChannelForm.resetFields();
-    const fallbackCarrier = masterData.carriers[0];
     masterCompanyChannelForm.setFieldsValue({
       name: '',
-      carrierId: fallbackCarrier?.id ?? '',
-      carrierName: fallbackCarrier?.name ?? '未分类',
+      carrierId: undefined,
       businessType: 'EXPRESS',
       category: '',
       volumeDivisor: '5000',
@@ -1398,7 +1452,6 @@ export function MasterDataPage({
     masterCompanyChannelForm.setFieldsValue({
       name: channel.name,
       carrierId: channel.carrierId,
-      carrierName: channel.carrierName,
       businessType: channel.businessType ?? 'EXPRESS',
       category: channel.category ?? '',
       volumeDivisor: String(channel.volumeDivisor ?? 5000),
@@ -1423,15 +1476,14 @@ export function MasterDataPage({
   async function handleSubmitMasterCompanyChannel() {
     const values = await masterCompanyChannelForm.validateFields();
     const category = values.category?.trim() ?? '';
-    const categoryCarrier = category
-      ? masterData.carriers.find((carrier) => carrier.name.trim().toLowerCase() === category.toLowerCase())
+    const selectedCarrier = values.carrierId
+      ? masterData.carriers.find((carrier) => carrier.id === values.carrierId)
       : undefined;
-    const fallbackCarrier = masterData.carriers.find((carrier) => carrier.id === values.carrierId) ?? masterData.carriers[0];
     const remoteAreaRule = values.remoteAreaRule?.trim();
     const input = {
       name: values.name.trim(),
-      carrierId: editingMasterCompanyChannel ? values.carrierId : categoryCarrier?.id ?? fallbackCarrier?.id ?? '',
-      carrierName: editingMasterCompanyChannel ? values.carrierName?.trim() || undefined : categoryCarrier?.name ?? fallbackCarrier?.name ?? '未分类',
+      carrierId: selectedCarrier?.id ?? null,
+      carrierName: selectedCarrier?.name ?? null,
       businessType: values.businessType,
       category,
       volumeDivisor: Number(values.volumeDivisor) || 5000,
@@ -1645,6 +1697,14 @@ export function MasterDataPage({
       <ModuleSubWorkspace items={masterSubItems} activeKey={activeMasterSection} onChange={setActiveMasterSection}>
       <Row gutter={[16, 16]} className="main-grid">
         <Col xs={24}>
+          {activeMasterSection === 'customerSources' ? (
+            <CustomerSourcesPage
+              apiClient={apiClient}
+              canWrite={canWriteCustomers}
+              canDelete={canDeleteCustomerSources}
+              onNotice={onNotice}
+            />
+          ) : null}
           {activeMasterSection === 'financeCatalog' ? (
             <FinanceCatalogPage
               {...financeCatalog.pageProps}
@@ -2467,8 +2527,6 @@ export function MasterDataPage({
         }}
       >
         <Form form={masterCompanyChannelForm} layout="vertical" className="company-channel-rule-form">
-          <Form.Item name="carrierId" hidden><Input /></Form.Item>
-          <Form.Item name="carrierName" hidden><Input /></Form.Item>
           <Title level={5}>基础信息</Title>
           <Row gutter={12}>
             <Col xs={24} md={12}>
@@ -2483,6 +2541,20 @@ export function MasterDataPage({
                     <option key={value} value={value}>{label}</option>
                   ))}
                 </select>
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="carrierId"
+                label="承运商（选填）"
+              >
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="未选择时保持为空"
+                  options={masterData.carriers.filter((carrier) => carrier.enabled || carrier.id === editingMasterCompanyChannel?.carrierId).map((carrier) => ({ label: carrier.name, value: carrier.id }))}
+                />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -2707,8 +2779,21 @@ export function MasterDataPage({
               </Col>
               <Col xs={24} md={12} lg={8}>
                 <Form.Item name="customerSource" label="客户来源">
-                  <Input placeholder="例如 展会、转介绍、线上询盘" />
+                  <AutoComplete
+                    allowClear
+                    options={customerSources
+                      .filter((source) => source.enabled)
+                      .map((source) => ({ value: source.name, label: source.name }))}
+                    filterOption={(inputValue, option) => String(option?.value ?? '').toLocaleLowerCase('zh-CN').includes(inputValue.toLocaleLowerCase('zh-CN'))}
+                    notFoundContent={customerSourcesLoading ? '正在加载来源资料库…' : '资料库中没有，可直接输入'}
+                    placeholder="选择已有来源，或直接输入自定义来源"
+                  />
                 </Form.Item>
+                {showSaveCustomerSourceOption ? (
+                  <Form.Item name="saveCustomerSourceToCatalog" valuePropName="checked" className="customer-source-save-option">
+                    <Checkbox>同时保存到客户来源资料库，供下次选择</Checkbox>
+                  </Form.Item>
+                ) : null}
               </Col>
               {canAssignCustomerSalesperson ? (
                 <Col xs={24} md={12} lg={12}>
@@ -2717,7 +2802,7 @@ export function MasterDataPage({
                       className="customer-editor-salesperson-warning"
                       type="warning"
                       showIcon
-                      message={`当前归属 ${editingMasterCustomer.salesperson} 已停用或不再具备业务员职责，请改派给启用业务员或清空归属。`}
+                      message={`当前归属 ${editingMasterCustomer.salesperson} 已停用或不属于业务组，请改派给启用的业务组人员或清空归属。`}
                     />
                   ) : null}
                   <Form.Item name="salesperson" label="业务员归属">
@@ -2726,14 +2811,14 @@ export function MasterDataPage({
                       showSearch
                       loading={salespersonAccountsLoading}
                       optionFilterProp="label"
-                      placeholder="选择启用业务员；留空表示未指派"
+                      placeholder="选择启用的业务组人员；留空表示未指派"
                       options={[
                         ...salespersonAccounts.map((account) => ({
                           value: account.username,
                           label: `${account.username}${account.name || account.nickname ? ` · ${account.name || account.nickname}` : ''}${account.site ? ` · ${account.site}` : ''} · 启用`
                         })),
                         ...(editingMasterCustomer?.salesperson && !salespersonAccounts.some((account) => account.username === editingMasterCustomer.salesperson)
-                          ? [{ value: editingMasterCustomer.salesperson, label: `${editingMasterCustomer.salesperson} · 已停用/非业务员`, disabled: true }]
+                          ? [{ value: editingMasterCustomer.salesperson, label: `${editingMasterCustomer.salesperson} · 已停用/非业务组`, disabled: true }]
                           : [])
                       ]}
                     />
@@ -3006,33 +3091,35 @@ export function MasterDataPage({
                 <Input placeholder="例如 https://track.example.com?no={transferNo}" />
               </Form.Item>
             </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="invoiceTemplateName" label="发票模板名称">
-                <Input placeholder="例如 代理发票模板.xlsx" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item label="上传点">
-                <Space.Compact className="full-width">
-                  <Form.Item name="invoiceTemplateUrl" noStyle>
-                    <Input
-                      aria-label="上传点"
-                      placeholder="上传或粘贴 Excel 后自动填充"
-                      onPaste={handleAgentInvoicePaste}
-                    />
-                  </Form.Item>
-                  <Upload
-                    accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    showUploadList={false}
-                    beforeUpload={(file) => {
-                      void handleAgentInvoiceTemplate(file as File);
-                      return false;
-                    }}
+            <Col xs={24}>
+              <Form.List name="invoiceTemplates">
+                {(fields, { add, remove }) => (
+                  <Card
+                    size="small"
+                    title="发票模板"
+                    extra={<Space size={4}>
+                      <Text type="secondary">{fields.length ? `${fields.length} 套；运单下载时人工选择` : '按需添加'}</Text>
+                      <Button aria-label="新增发票模板" disabled={fields.length >= MAX_AGENT_INVOICE_TEMPLATES} icon={<Plus size={16} />} onClick={() => add({ name: '', url: '' })} size="small" type="text" />
+                    </Space>}
                   >
-                    <Button>上传模板</Button>
-                  </Upload>
-                </Space.Compact>
-              </Form.Item>
+                    {fields.length ? (
+                      <Space className="full-width" direction="vertical" size={8}>
+                        {fields.map((field, index) => (
+                          <Row gutter={12} key={field.key} align="top">
+                            <Form.Item name={[field.name, 'id']} hidden><Input /></Form.Item>
+                            <Col xs={24} md={8}><Form.Item name={[field.name, 'name']} label={`模板 ${index + 1} 名称`} rules={[{ required: true, whitespace: true, message: '请输入模板名称' }]}><Input placeholder={`例如 模板 ${index + 1}.xlsx`} /></Form.Item></Col>
+                            <Col xs={24} md={15}><Form.Item label={`模板 ${index + 1} 文件`} required><Space.Compact className="full-width">
+                              <Form.Item name={[field.name, 'url']} noStyle rules={[{ required: true, whitespace: true, message: '请上传或填写模板文件' }]}><Input aria-label={`模板 ${index + 1} 文件`} placeholder="上传或粘贴 Excel 后自动填充" onPaste={(event) => handleAgentInvoicePaste(index, event)} /></Form.Item>
+                              <Upload accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" showUploadList={false} beforeUpload={(file) => { void handleAgentInvoiceTemplate(index, file as File); return false; }}><Button>上传模板</Button></Upload>
+                            </Space.Compact></Form.Item></Col>
+                            <Col xs={24} md={1}><Button aria-label={`删除发票模板 ${index + 1}`} danger icon={<Trash2 size={15} />} onClick={() => remove(field.name)} size="small" type="text" /></Col>
+                          </Row>
+                        ))}
+                      </Space>
+                    ) : <Text type="secondary">暂无发票模板，点击右上角“+”添加。</Text>}
+                  </Card>
+                )}
+              </Form.List>
             </Col>
             {canReadAgentBanks ? (
               <>

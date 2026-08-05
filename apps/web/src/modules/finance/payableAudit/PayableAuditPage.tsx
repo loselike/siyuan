@@ -13,6 +13,7 @@ import type {
   PayableAuditUpdateInput,
   PendingPaymentListQuery
 } from '@siyuan/shared';
+import { FINANCIAL_DECIMAL_SCALE, calculateMonetaryTotal, formatFinancialDecimal, formatMonetaryTotal } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { createFinanceFeeNameOptions, financeCatalogCurrencyOptions } from '../catalog';
 import { downloadCsv } from '../exportCsv';
@@ -20,6 +21,7 @@ import { formatBeijingDateTime } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
 import { ChargeWeightChangeTag } from '../ChargeWeightChangeTag';
+import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -89,7 +91,12 @@ function hasPermission(permissions: PermissionKey[], permission: PermissionKey) 
 
 function formatMoney(amount?: number) {
   if (typeof amount !== 'number' || Number.isNaN(amount)) return '-';
-  return amount.toFixed(2);
+  return formatMonetaryTotal(amount);
+}
+
+function formatUnitPrice(amount?: number) {
+  if (typeof amount !== 'number' || Number.isNaN(amount)) return '-';
+  return formatFinancialDecimal(amount);
 }
 
 function statusTag(value?: string) {
@@ -200,6 +207,16 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
     showPendingPaymentPrompt(row);
   };
 
+  const reverseAuditOne = async (row: PayableAuditSummary) => {
+    try {
+      await apiClient.reverseAuditPayable(row.id);
+      message.success('应付费用已反审核');
+      await loadRows();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '反审核失败');
+    }
+  };
+
   const matchShipment = async () => {
     const values = form.getFieldsValue();
     if (!values.shipmentId && !values.systemOrderNo && !values.customerOrderNo && !values.transferNo && !values.customerCode) {
@@ -234,7 +251,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
     const payload = {
       ...values,
       amount: typeof values.chargeWeightKg === 'number' && typeof values.unitPrice === 'number'
-        ? Number((values.chargeWeightKg * values.unitPrice).toFixed(2))
+        ? calculateMonetaryTotal(values.chargeWeightKg, values.unitPrice)
         : values.amount
     };
     if (editingRow) {
@@ -253,7 +270,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
   const syncAmount = (values: PayableAuditCreateInput & PayableAuditUpdateInput) => {
     const weight = Number(values.chargeWeightKg);
     const price = Number(values.unitPrice);
-    if (Number.isFinite(weight) && Number.isFinite(price)) form.setFieldValue('amount', Number((weight * price).toFixed(2)));
+    if (Number.isFinite(weight) && Number.isFinite(price)) form.setFieldValue('amount', calculateMonetaryTotal(weight, price));
   };
 
   const runBatch = async (action: 'audit' | 'reverse' | 'void') => {
@@ -283,13 +300,13 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
     agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 180, render: (value?: string) => value ?? '-' },
     name: { title: '费用名称', dataIndex: 'name', width: 130, sorter: true },
     customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 110, sorter: true },
-    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (value: string | undefined, row) => row.auditSource === 'MISC_FEE_HANG' && !row.shipmentId ? '未匹配订单' : renderShipmentOrderNoLink(value) },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, sorter: true, render: (_: string | undefined, row) => renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 170, render: (value?: string) => value ?? '-' },
     agentChannel: { title: '代理渠道', dataIndex: 'agentChannel', width: 130, render: (value?: string) => value ?? '-' },
     reconciliationStatus: { title: '对账状态', dataIndex: 'reconciliationStatus', width: 105, fixed: 'right', render: statusTag },
     currency: { title: '币种', dataIndex: 'currency', width: 80, render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag> },
     chargeWeightKg: { title: '计费重', dataIndex: 'chargeWeightKg', width: 110, align: 'right', render: (value: number | undefined, row) => <ChargeWeightChangeTag value={value} change={row.chargeWeightChange} /> },
-    unitPrice: { title: '单价', dataIndex: 'unitPrice', width: 100, align: 'right', render: (value: number | undefined) => typeof value === 'number' ? formatMoney(value) : '-' },
+    unitPrice: { title: '单价', dataIndex: 'unitPrice', width: 100, align: 'right', render: (value: number | undefined) => typeof value === 'number' ? formatUnitPrice(value) : '-' },
     amount: { title: '总金额', dataIndex: 'amount', width: 120, align: 'right', sorter: true, render: (value: number, row) => row.canViewSensitivePayable ? formatMoney(value) : <Text type="secondary">按权限隐藏</Text> },
     orderRmbTotal: { title: '合计', dataIndex: 'orderRmbTotal', width: 130, align: 'right', sorter: true, render: (value?: number, row?: PayableAuditSummary) => row?.canViewSensitivePayable ? formatMoney(value ?? 0) : <Text type="secondary">按权限隐藏</Text> },
     receivableProfit: { title: '应收利润', dataIndex: 'receivableProfit', width: 120, align: 'right', sorter: true, render: (value?: number, row?: PayableAuditSummary) => row?.canViewProfit && typeof value === 'number' ? formatMoney(value) : <Text type="secondary">按权限隐藏</Text> },
@@ -319,7 +336,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
         <Space size={4}>
           <Button size="small" disabled={!canManage || row.reconciliationStatus === 'CONFIRMED' || row.voided} onClick={() => openEditor(row)}>修改</Button>
           {row.reconciliationStatus === 'CONFIRMED' ? (
-            <Popconfirm title="确认反审核该应付费用？" onConfirm={async () => { await apiClient.reverseAuditPayable(row.id); await loadRows(); }} okText="反审核" cancelText="取消">
+            <Popconfirm title="确认反审核该应付费用？" onConfirm={() => reverseAuditOne(row)} okText="反审核" cancelText="取消">
               <Button size="small" disabled={!canReverse}>反审核</Button>
             </Popconfirm>
           ) : (
@@ -354,7 +371,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
           columns={4}
           labelWidth={66}
           fields={[
-            { key: 'systemOrderNo', label: '出货单号', value: row.auditSource === 'MISC_FEE_HANG' && !row.shipmentId ? '未匹配订单' : renderShipmentOrderNoLink(row.systemOrderNo), title: row.systemOrderNo },
+            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)), title: resolveShipmentOutboundOrderNo(row) },
             { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
             { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
@@ -363,7 +380,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
             { key: 'agentChannel', label: agentFieldLabels.channel, value: row.agentChannel || '-', title: row.agentChannel },
             { key: 'currency', label: '币种', value: <Tag>{row.currency ?? 'RMB'}</Tag> },
             { key: 'chargeWeightKg', label: '计费重', value: <ChargeWeightChangeTag value={row.chargeWeightKg} change={row.chargeWeightChange} /> },
-            { key: 'unitPrice', label: '单价', value: typeof row.unitPrice === 'number' ? formatMoney(row.unitPrice) : '-' },
+            { key: 'unitPrice', label: '单价', value: typeof row.unitPrice === 'number' ? formatUnitPrice(row.unitPrice) : '-' },
             { key: 'amount', label: '总金额', value: row.canViewSensitivePayable ? formatMoney(row.amount) : <Text type="secondary">按权限隐藏</Text> },
             { key: 'orderRmbTotal', label: '合计', value: row.canViewSensitivePayable ? formatMoney(row.orderRmbTotal ?? 0) : <Text type="secondary">按权限隐藏</Text> },
             row.canViewProfit ? { key: 'receivableProfit', label: '应收利润', value: typeof row.receivableProfit === 'number' ? formatMoney(row.receivableProfit) : '-' } : null,
@@ -396,7 +413,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
               { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
               { key: 'name', label: '费用名称' },
               { key: 'customerCode', label: '客户编号' },
-              { key: 'systemOrderNo', label: '出货单号' },
+              { key: 'outboundOrderNo', label: '出货单号' },
               { key: 'transferNo', label: '转单号' },
               { key: 'agentChannel', label: '代理渠道' },
               { key: 'reconciliationStatus', label: '对账状态' },
@@ -515,8 +532,8 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
           {!editingRow ? (
             <>
               <Form.Item name="shipmentId" hidden><Input /></Form.Item>
-              <Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="按出货单号匹配订单" /></Form.Item>
-              <Form.Item name="customerOrderNo" label="客户单号"><Input placeholder="可选，按客户单号匹配" /></Form.Item>
+              <Form.Item name="systemOrderNo" label="关联订单"><Input placeholder="按出货单号或内部单号匹配" /></Form.Item>
+              <Form.Item name="customerOrderNo" label="出货单号"><Input placeholder="可选，按出货单号匹配" /></Form.Item>
               <Form.Item name="transferNo" label="转单号"><Input placeholder="可选，按转单号匹配" /></Form.Item>
               <Form.Item name="customerCode" label="客户编号"><Input placeholder="可选，按客户编号匹配" /></Form.Item>
               <Button loading={matchingShipment} onClick={() => void matchShipment()}>匹配订单</Button>
@@ -524,7 +541,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
                 <Card size="small" className="finance-audit-summary">
                   <Space direction="vertical" size={2}>
                     <Text strong>{matchedShipment.customerName}</Text>
-                    <Text type="secondary">出货单号：{matchedShipment.systemOrderNo} / 转单号：{matchedShipment.transferNo ?? '-'}</Text>
+                    <Text type="secondary">出货单号：{resolveShipmentOutboundOrderNo(matchedShipment)} / 转单号：{matchedShipment.transferNo ?? '-'}</Text>
                     <Text type="secondary">业务员：{matchedShipment.salesperson ?? '-'} / {agentFieldLabels.detailedCompanyName}：{matchedShipment.agentName ?? '-'} / {agentFieldLabels.channel}：{matchedShipment.agentChannel ?? '-'}</Text>
                   </Space>
                 </Card>
@@ -535,7 +552,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
           )}
           <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请选择或填写费用名称' }]}><AutoComplete options={feeNameOptions} /></Form.Item>
           <Form.Item name="chargeWeightKg" label="计费重" rules={[{ required: true, message: '请填写计费重' }]}><InputNumber className="full-width" min={0} precision={3} /></Form.Item>
-          <Form.Item name="unitPrice" label="单价" rules={[{ required: true, message: '请填写单价' }]}><InputNumber className="full-width" min={0} precision={2} /></Form.Item>
+          <Form.Item name="unitPrice" label="单价" rules={[{ required: true, message: '请填写单价' }]}><InputNumber className="full-width" min={0} precision={FINANCIAL_DECIMAL_SCALE} /></Form.Item>
           <Form.Item name="amount" label="总金额"><InputNumber className="full-width" min={0} precision={2} disabled /></Form.Item>
           <Form.Item name="currency" label="币种"><Select options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} /></Form.Item>
           <Form.Item name="paymentNo" label="付款编号"><Input /></Form.Item>

@@ -41,8 +41,7 @@ import {
   canAuditPickupFee,
   canDirectPayAndArchiveKuayue,
   canEditPickupFeeRegistration,
-  canSubmitKuayueHangRequest,
-  pickupFeeSourceForRole
+  canSubmitKuayueHangRequest
 } from '@siyuan/shared';
 import type {
   AgentSummary,
@@ -280,12 +279,45 @@ function businessAssignmentTag(row: MiscFeeSummary) {
   return row.businessAmount === undefined ? statusTag('待业务归属', 'warning') : statusTag('待业务确认', 'warning');
 }
 
-function isBusinessAssignmentRole(role: RoleKey) {
-  return ['OPERATOR', 'UG_BUSINESS', 'UG_SZ_WUHAN', 'UG_ZZ_SIHUA', 'UG_WH_JIUYULIAN', 'UG_BUSINESS_MANAGER', 'UG_BUSINESS_SUPERVISOR'].includes(role);
+type MiscFeeUiDataScope = 'ALL' | 'WAREHOUSE_SITE' | 'MARKET' | 'SALES_OWN' | 'UNCONFIGURED';
+
+export function resolveMiscFeeUiDataScope(role: RoleKey, permissions: readonly PermissionKey[]): MiscFeeUiDataScope {
+  if (role === 'ADMIN') return 'ALL';
+  const scopes = [
+    permissions.includes('data-scope:misc-fee-all') ? 'ALL' : undefined,
+    permissions.includes('data-scope:misc-fee-warehouse-site') ? 'WAREHOUSE_SITE' : undefined,
+    permissions.includes('data-scope:misc-fee-market') ? 'MARKET' : undefined,
+    permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined
+  ].filter(Boolean) as Exclude<MiscFeeUiDataScope, 'UNCONFIGURED'>[];
+  return scopes.length === 1 ? scopes[0] : 'UNCONFIGURED';
 }
 
-function isPurchaseApplicantRole(role: RoleKey) {
-  return role === 'ADMIN' || isBusinessAssignmentRole(role);
+function pickupFeeSourceForScope(scope: MiscFeeUiDataScope): MiscFeeSourceType | undefined {
+  if (scope === 'WAREHOUSE_SITE') return 'WAREHOUSE_PICKUP';
+  if (scope === 'MARKET') return 'MARKET_PICKUP';
+  return undefined;
+}
+
+function miscFeeSectionAllowedForScope(section: MiscFeeSectionKey, scope: MiscFeeUiDataScope) {
+  if (scope === 'ALL') return true;
+  if (scope === 'WAREHOUSE_SITE') return ['pickup', 'tally', 'hang', 'warehouse-profit'].includes(section);
+  if (scope === 'MARKET') return ['pickup', 'delivery', 'hang', 'market-profit'].includes(section);
+  if (scope === 'SALES_OWN') return ['kuayue', 'purchase', 'delivery', 'hang'].includes(section);
+  return false;
+}
+
+function miscFeeCreateAllowedForScope(section: MiscFeeSectionKey, scope: MiscFeeUiDataScope) {
+  if (scope === 'ALL') return true;
+  if (scope === 'WAREHOUSE_SITE') return ['pickup', 'tally'].includes(section);
+  if (scope === 'MARKET') return ['pickup', 'delivery'].includes(section);
+  if (scope === 'SALES_OWN') return ['purchase', 'delivery'].includes(section);
+  return false;
+}
+
+function profitSettlementAllowedForScope(type: ProfitSettlementType, scope: MiscFeeUiDataScope) {
+  return scope === 'ALL'
+    || (scope === 'MARKET' && type === 'MARKET')
+    || (scope === 'WAREHOUSE_SITE' && type === 'WAREHOUSE');
 }
 
 function purchaseWorkflowTag(row: MiscFeeSummary) {
@@ -311,10 +343,6 @@ function hangProgressTag(status: MiscFeeHangRequestSummary['progressStatus']) {
     PAYMENT_MISSING: ['待付款未生成', 'error']
   } as const)[status];
   return statusTag(value[0], value[1]);
-}
-
-function isWarehouseRole(role: RoleKey) {
-  return role === 'WAREHOUSE' || role.startsWith('UG_WAREHOUSE');
 }
 
 function isPayableFirstMiscFee(row: MiscFeeSummary) {
@@ -392,8 +420,8 @@ function mergeFeeResponses(responses: MiscFeeListResponse[]): MiscFeeListRespons
   }), emptyFeeResponse);
 }
 
-function defaultSourceForSection(section: MiscFeeSectionKey, role?: RoleKey): MiscFeeSourceType | undefined {
-  if (section === 'pickup') return pickupFeeSourceForRole(role ?? '') ?? 'WAREHOUSE_PICKUP';
+function defaultSourceForSection(section: MiscFeeSectionKey, scope: MiscFeeUiDataScope): MiscFeeSourceType | undefined {
+  if (section === 'pickup') return pickupFeeSourceForScope(scope) ?? 'WAREHOUSE_PICKUP';
   return sourceSectionMap[section]?.[0];
 }
 
@@ -410,9 +438,11 @@ export function MiscFeesPage({
   agents: AgentSummary[];
   initialSection?: string;
 }) {
+  const miscFeeDataScope = resolveMiscFeeUiDataScope(role, permissions);
   const visibleItems = useMemo(
-    () => sectionItems.filter((item) => role === 'ADMIN' || permissions.includes(`misc-fee:${permissionSection(item.key)}:read`)),
-    [permissions, role]
+    () => sectionItems.filter((item) => miscFeeSectionAllowedForScope(item.key, miscFeeDataScope)
+      && (role === 'ADMIN' || permissions.includes(`misc-fee:${permissionSection(item.key)}:read`))),
+    [miscFeeDataScope, permissions, role]
   );
   const initialVisibleSection = visibleItems.some((item) => item.key === initialSection)
     ? initialSection as MiscFeeSectionKey
@@ -426,7 +456,9 @@ export function MiscFeesPage({
   }, [initialSection, visibleItems]);
 
   if (!visibleItems.length) {
-    return <Alert type="warning" showIcon message="当前账号没有杂费模块权限" />;
+    return <Alert type="warning" showIcon message={miscFeeDataScope === 'UNCONFIGURED'
+      ? '当前岗位的杂费数据范围未配置或存在冲突，请联系管理员'
+      : '当前账号没有杂费模块权限'} />;
   }
 
   return (
@@ -526,6 +558,7 @@ function FeeWorkbench({
   const [detail, setDetail] = useState<MiscFeeDetail>();
   const [detailLoading, setDetailLoading] = useState(false);
   const permissionPrefix = `misc-fee:${permissionSection(section)}`;
+  const miscFeeDataScope = resolveMiscFeeUiDataScope(role, permissions);
   const hasPermission = useCallback(
     (action: string) => role === 'ADMIN' || permissions.includes(`${permissionPrefix}:${action}` as PermissionKey),
     [permissionPrefix, permissions, role]
@@ -534,15 +567,16 @@ function FeeWorkbench({
   const canDirectPayAndArchive = role === 'ADMIN'
     || permissions.includes('finance:payable:paid-confirm')
     || permissions.includes('finance:paid-payment:confirm');
-  const canAssignBusinessCost = isBusinessAssignmentRole(role) && hasPermission('match') && hasPermission('confirm');
-  const canManageTallyRegistration = section === 'tally' && (role === 'ADMIN' || isWarehouseRole(role));
-  const canManagePurchaseApplication = section === 'purchase' && isPurchaseApplicantRole(role);
+  const canAssignBusinessCost = ['ALL', 'SALES_OWN'].includes(miscFeeDataScope) && hasPermission('match') && hasPermission('confirm');
+  const canManageTallyRegistration = section === 'tally' && ['ALL', 'WAREHOUSE_SITE'].includes(miscFeeDataScope);
+  const canManagePurchaseApplication = section === 'purchase' && ['ALL', 'SALES_OWN'].includes(miscFeeDataScope);
   const canCreateCurrentFee = hasPermission('create')
+    && miscFeeCreateAllowedForScope(section, miscFeeDataScope)
     && (canViewPayable || section === 'purchase')
     && (section !== 'tally' || canManageTallyRegistration)
     && (section !== 'purchase' || canManagePurchaseApplication);
   const sources = sourceSectionMap[section] ?? [];
-  const rolePickupSource = pickupFeeSourceForRole(role);
+  const rolePickupSource = pickupFeeSourceForScope(miscFeeDataScope);
   const availablePickupSourceOptions = rolePickupSource
     ? pickupSourceOptions.filter((option) => option.value === rolePickupSource)
     : pickupSourceOptions;
@@ -820,7 +854,7 @@ function FeeWorkbench({
   };
 
   const openCreate = () => {
-    const sourceType = defaultSourceForSection(section, role);
+    const sourceType = defaultSourceForSection(section, miscFeeDataScope);
     setEditingTarget(undefined);
     form.resetFields();
     form.setFieldsValue({
@@ -903,7 +937,7 @@ function FeeWorkbench({
     setSaving(true);
     try {
       const values = await form.validateFields();
-      const sourceType = values.sourceType ?? defaultSourceForSection(section, role);
+      const sourceType = values.sourceType ?? defaultSourceForSection(section, miscFeeDataScope);
       const occurredAt = values.occurredAt ?? (section === 'delivery' ? formatBeijingDate(new Date().toISOString()) : undefined);
       if (!sourceType || !occurredAt) return;
       const normalizedValues = {
@@ -3708,7 +3742,9 @@ function ProfitWorkbench({
   const [detail, setDetail] = useState<ProfitSettlementDetail>();
   const [detailLoading, setDetailLoading] = useState(false);
   const permissionPrefix = `misc-fee:${section}`;
-  const can = (action: string) => role === 'ADMIN' || permissions.includes(`${permissionPrefix}:${action}` as PermissionKey);
+  const miscFeeDataScope = resolveMiscFeeUiDataScope(role, permissions);
+  const can = (action: string) => profitSettlementAllowedForScope(type, miscFeeDataScope)
+    && (role === 'ADMIN' || permissions.includes(`${permissionPrefix}:${action}` as PermissionKey));
   const currentItem = sectionItems.find((item) => item.key === section)!;
 
   const load = useCallback(async () => {
@@ -3728,11 +3764,11 @@ function ProfitWorkbench({
   }, [load]);
 
   useEffect(() => {
-    if (type !== 'WAREHOUSE' || role === 'WAREHOUSE' || role.startsWith('UG_WAREHOUSE')) return;
+    if (type !== 'WAREHOUSE' || miscFeeDataScope === 'WAREHOUSE_SITE') return;
     void apiClient.waterReceiptSiteOptions()
       .then((items) => setSites(items.filter((item) => item.enabled)))
       .catch((error) => message.error(error instanceof Error ? error.message : '站点加载失败'));
-  }, [apiClient, message, role, type]);
+  }, [apiClient, message, miscFeeDataScope, type]);
 
   const create = async () => {
     try {
@@ -3924,7 +3960,7 @@ function ProfitWorkbench({
         onCancel={() => setCreateOpen(false)}
       >
         <Form form={form} layout="vertical">
-          {type === 'WAREHOUSE' && role !== 'WAREHOUSE' && !role.startsWith('UG_WAREHOUSE') ? (
+          {type === 'WAREHOUSE' && miscFeeDataScope !== 'WAREHOUSE_SITE' ? (
             <Form.Item name="siteScope" label="结算站点" rules={[{ required: true, message: '请选择结算站点' }]}>
               <Select
                 showSearch
@@ -3934,7 +3970,7 @@ function ProfitWorkbench({
               />
             </Form.Item>
           ) : null}
-          {type === 'WAREHOUSE' && (role === 'WAREHOUSE' || role.startsWith('UG_WAREHOUSE')) ? (
+          {type === 'WAREHOUSE' && miscFeeDataScope === 'WAREHOUSE_SITE' ? (
             <Alert type="info" showIcon message="系统将按当前仓库账号归属站点生成结算单。" />
           ) : null}
           <Form.Item name="period" label="结算期间" rules={[{ required: true, message: '请选择结算期间' }]}>

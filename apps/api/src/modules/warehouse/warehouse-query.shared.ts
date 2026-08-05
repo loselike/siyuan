@@ -7,6 +7,7 @@ import type {
 } from '@siyuan/shared';
 import { resolveWarehouseTallyLifecycleStatus } from '@siyuan/shared';
 import type { PrismaService } from '../prisma.service.js';
+import { WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } from '../warehouse-tally-aggregate-correction.js';
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
@@ -236,7 +237,14 @@ export async function loadWarehouseTallyTaskOutputPackages(
   const task = await (prisma as any).warehouseTallyTask.findUnique({ where: { id } });
   if (!task) throw new NotFoundException('理货任务不存在');
   const rows = await (prisma as any).warehousePackage.findMany({
-    where: { tallyTaskId: id, id: { notIn: task.packageIds } },
+    where: {
+      tallyTaskId: id,
+      id: { notIn: task.packageIds },
+      OR: [
+        { archivedReason: null },
+        { archivedReason: { not: WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } }
+      ]
+    },
     orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
   });
   if (rows.length) return rows.map(mapWarehousePackage);

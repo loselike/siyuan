@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Headers, Inject, Logger, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UnauthorizedException, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Headers, Inject, Logger, NotFoundException, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UnauthorizedException, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { resolveUploadDirectory, resolveUploadRoot } from '../configure-app.js';
@@ -36,6 +36,8 @@ import type {
   CustomerContactCreateInput,
   CustomerContactUpdateInput,
   CustomerCreateInput,
+  CustomerSourceInput,
+  CustomerSourceListQuery,
   CustomerUpdateInput,
   CustomerUserCreateInput,
   EnabledUpdateInput,
@@ -76,7 +78,6 @@ import type {
   PaymentVoucherListQuery,
   PriceBookImportInput,
   PriceBookBatchDeleteInput,
-  PriceBookImportJobListQuery,
   PriceBookImportTargetModule,
   PriceBookRowsQuery,
   PriceBookRemarkUpdateInput,
@@ -129,12 +130,14 @@ import type {
   TrackingEventInput,
   WarehouseConsolidationCreateInput,
   WarehouseManualReceiptCreateInput,
+  WarehouseSameSpecReplenishInput,
   WarehousePackageCreateInput,
   WarehousePackageSplitInput,
   WarehousePackageUpdateInput,
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCreateInput,
   WarehouseTallyLabelScanInput,
+  WarehouseTallyHistoricalAggregateCorrectionInput,
   WarehouseTallyRepeatStatisticsQuery,
   WarehouseTallyTaskUpdateInput,
   MasterDataSnapshot,
@@ -143,8 +146,9 @@ import type {
 import { PrismaRepository } from './prisma.repository.js';
 import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
+import { parseWarehouseMachineWorkbook } from './warehouse-machine-import.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
-import { isBusinessAgentRestrictedRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
+import { isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 import {
   WAREHOUSE_INVENTORY_QUERY_REPOSITORY,
   type WarehouseInventoryQueryRepository
@@ -305,7 +309,7 @@ export class DataController {
   }
 
   private scopeMasterDataCustomers(principal: Principal, snapshot: MasterDataSnapshot): MasterDataSnapshot {
-    if (!isSalesScopedRole(principal.role)) return snapshot;
+    if (!hasSalesOwnDataScope(principal)) return snapshot;
     const scope = new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value)));
     const customers = snapshot.customers.filter((customer) => customer.salesperson && scope.has(customer.salesperson));
     const customerIds = new Set(customers.map((customer) => customer.id));
@@ -584,18 +588,14 @@ export class DataController {
   @Get('shipments/order-entry/drafts')
   @RequirePermission('business:order-entry:draft-view')
   async orderEntryDrafts(@Req() request: { user: Principal }) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
-      throw new ForbiddenException('当前角色不能使用内部录单');
-    }
+    ensureInternalOrderEntryScope(request.user);
     return this.repository.getOrderEntryDrafts(request.user);
   }
 
   @Post('shipments/order-entry')
   @RequirePermission('business:order-entry:create')
   async createOrderEntry(@Req() request: { user: Principal }, @Body() body: OrderEntryCreateInput) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
-      throw new ForbiddenException('当前角色不能使用内部录单');
-    }
+    ensureInternalOrderEntryScope(request.user);
     const followupPermission = body.submitForReview ? 'business:order-entry:submit-review' : 'business:order-entry:draft-save';
     if (!await this.repository.hasPermission(request.user.role, followupPermission)) {
       await this.repository.recordPermissionDenied(request.user, { permissions: [followupPermission], method: 'POST', path: '/api/shipments/order-entry' });
@@ -609,9 +609,7 @@ export class DataController {
   @Put('shipments/:id/order-entry-draft')
   @RequirePermission('business:order-entry:draft-save')
   async updateOrderEntryDraft(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: OrderEntryDraftUpdateInput) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
-      throw new ForbiddenException('当前角色不能使用内部录单');
-    }
+    ensureInternalOrderEntryScope(request.user);
     if (body.submitForReview && !await this.repository.hasPermission(request.user.role, 'business:order-entry:submit-review')) {
       await this.repository.recordPermissionDenied(request.user, { permissions: ['business:order-entry:submit-review'], method: 'PUT', path: `/api/shipments/${id}/order-entry-draft` });
       throw new ForbiddenException('没有提交审核权限');
@@ -624,9 +622,7 @@ export class DataController {
   @Delete('shipments/:id/order-entry-draft')
   @RequirePermission('business:order-entry:draft-delete')
   async deleteOrderEntryDraft(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentReviewDeleteInput) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
-      throw new ForbiddenException('当前角色不能使用内部录单');
-    }
+    ensureInternalOrderEntryScope(request.user);
     return this.repository.deleteOrderEntryDraft(request.user, id, body);
   }
 
@@ -636,10 +632,24 @@ export class DataController {
     return this.repository.getShipmentReviewDetail(request.user, id);
   }
 
+  @Get('shipments/:id/package-detail')
+  @RequirePermission([
+    'business:review:detail',
+    'business:shipment:detail',
+    'operations:line-shipment:detail',
+    'warehouse:outbounded:detail-view'
+  ])
+  async shipmentPackageDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
+    if (request.user.role === 'CUSTOMER') {
+      throw new ForbiddenException('客户不能查看内部单件货物明细');
+    }
+    return this.repository.getShipmentPackageDetail(request.user, id);
+  }
+
   @Put('shipments/:id/review-basic')
   @RequirePermission('business:shipment:update-basic')
   async updateShipmentReviewBasic(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentReviewBasicUpdateInput) {
-    if (request.user.role === 'CUSTOMER' || request.user.role === 'WAREHOUSE') {
+    if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('当前角色不能修改待审核运单资料');
     }
     return this.repository.updateShipmentReviewBasic(request.user, id, body);
@@ -697,6 +707,7 @@ export class DataController {
   @Post('shipments')
   @RequirePermission('business:order-entry:create')
   async createShipment(@Req() request: { user: Principal }, @Body() body: ShipmentCreateInput) {
+    if (request.user.role !== 'CUSTOMER') ensureInternalOrderEntryScope(request.user);
     return this.repository.createShipment(request.user, body);
   }
 
@@ -860,6 +871,22 @@ export class DataController {
     return this.repository.updateShipmentOperational(request.user, id, body);
   }
 
+  @Get('customer-service/shipments')
+  @RequireAuth()
+  async customerServiceShipments(@Req() request: { user: Principal }) {
+    await this.ensureAnyPermission(request.user, [
+      'customer-service:pending-routing:view',
+      'customer-service:data-confirm:view',
+      'customer-service:transfer:view',
+      'customer-service:waiting-departure:view',
+      'customer-service:departed:view',
+      'customer-service:arrived-port:view',
+      'customer-service:delivering:view',
+      'customer-service:signed:view'
+    ]);
+    return this.repository.customerServiceShipments(request.user);
+  }
+
   @Get('customer-service/data-confirm-shipments')
   @RequirePermission('customer-service:data-confirm:view')
   async customerServiceDataConfirmShipments(@Req() request: { user: Principal }) {
@@ -976,12 +1003,22 @@ export class DataController {
   async downloadShipmentInvoiceTemplate(
     @Req() request: { user: Principal },
     @Param('id') id: string,
+    @Query('templateId') templateId: string | undefined,
+    @Query('templateSlot') templateSlot: string | undefined,
     @Res({ passthrough: true }) response: Response
   ) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能下载代理发票模板');
     }
-    const file = await this.repository.downloadShipmentInvoiceTemplate(request.user, id);
+    let resolvedTemplateId = templateId?.trim() || undefined;
+    if (!resolvedTemplateId && templateSlot !== undefined) {
+      const slot = Number(templateSlot);
+      if (slot !== 1 && slot !== 2 && slot !== 3) {
+        throw new BadRequestException('发票模板序号必须为 1、2 或 3');
+      }
+      resolvedTemplateId = `legacy-${slot}`;
+    }
+    const file = await this.repository.downloadShipmentInvoiceTemplate(request.user, id, resolvedTemplateId);
     const mimeType = file.extension === '.xls'
       ? 'application/vnd.ms-excel'
       : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
@@ -1110,23 +1147,20 @@ export class DataController {
   }
 
   @Post('customer-service/problem-tags')
-  @RequireAuth()
+  @RequirePermission('customer-service:problem:tag-manage')
   async createProblemTicketCommonTag(@Req() request: { user: Principal }, @Body() body: CommonTagCreateInput) {
-    if (request.user.role !== 'ADMIN') throw new ForbiddenException('仅管理员可以维护常用标签');
     return this.repository.createProblemTicketCommonTag(request.user, body);
   }
 
   @Put('customer-service/problem-tags/:id')
-  @RequireAuth()
+  @RequirePermission('customer-service:problem:tag-manage')
   async updateProblemTicketCommonTag(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CommonTagUpdateInput) {
-    if (request.user.role !== 'ADMIN') throw new ForbiddenException('仅管理员可以维护常用标签');
     return this.repository.updateProblemTicketCommonTag(request.user, id, body);
   }
 
   @Delete('customer-service/problem-tags/:id')
-  @RequireAuth()
+  @RequirePermission('customer-service:problem:tag-manage')
   async deleteProblemTicketCommonTag(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role !== 'ADMIN') throw new ForbiddenException('仅管理员可以维护常用标签');
     return this.repository.deleteProblemTicketCommonTag(request.user, id);
   }
 
@@ -1184,9 +1218,8 @@ export class DataController {
     const snapshot = await this.repository.getMasterData();
     const canReadCustomers = await this.hasAnyPermission(request.user.role, ['master-data:customers:read']);
     const canReadFinanceCatalog = await this.hasAnyPermission(request.user.role, ['master-data:finance:read']);
-    const agentIdentityRestricted = isBusinessAgentRestrictedRole(request.user.role);
-    const canReadAgents = !agentIdentityRestricted && await this.repository.hasPermission(request.user.role, 'master-data:agents:read');
-    const canReadAgentChannels = !agentIdentityRestricted && await this.hasAnyPermission(request.user.role, ['master-data:agent-channels:read']);
+    const canReadAgents = await this.repository.hasPermission(request.user.role, 'master-data:agents:read');
+    const canReadAgentChannels = await this.hasAnyPermission(request.user.role, ['master-data:agent-channels:read']);
     const canReadChannels = await this.repository.hasPermission(request.user.role, 'master-data:channels:read');
     const canReadChannelCategories = await this.hasAnyPermission(request.user.role, ['master-data:channel-categories:read']);
     const canReadExchangeRates = await this.hasAnyPermission(request.user.role, ['master-data:exchange-rates:read']);
@@ -1219,6 +1252,31 @@ export class DataController {
   @RequirePermission('master-data:customers:read')
   async masterDataCustomers(@Req() request: { user: Principal }) {
     return this.scopeMasterDataCustomers(request.user, await this.repository.getMasterData()).customers;
+  }
+
+  @Get('master-data/customer-sources')
+  @RequirePermission('master-data:customers:read')
+  async masterDataCustomerSources(@Query('keyword') keyword?: string, @Query('enabledOnly') enabledOnly?: string) {
+    const query: CustomerSourceListQuery = { keyword, enabledOnly: enabledOnly === 'true' };
+    return this.repository.listCustomerSources(query);
+  }
+
+  @Post('master-data/customer-sources')
+  @RequirePermission('master-data:customers:create')
+  async createMasterDataCustomerSource(@Req() request: { user: Principal }, @Body() body: CustomerSourceInput) {
+    return this.repository.createCustomerSource(request.user, body);
+  }
+
+  @Put('master-data/customer-sources/:id')
+  @RequirePermission('master-data:customers:update')
+  async updateMasterDataCustomerSource(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: Partial<CustomerSourceInput>) {
+    return this.repository.updateCustomerSource(request.user, id, body);
+  }
+
+  @Delete('master-data/customer-sources/:id')
+  @RequirePermission('master-data:customers:delete')
+  async deleteMasterDataCustomerSource(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.deleteCustomerSource(request.user, id);
   }
 
   @Post('master-data/customers')
@@ -1483,6 +1541,12 @@ export class DataController {
     return this.repository.updateRoleGroupEnabled(request.user, role, body);
   }
 
+  @Delete('system/roles/:role')
+  @RequirePermission('system:user-groups:delete')
+  async deleteSystemRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey) {
+    return this.repository.deleteRoleGroup(request.user, role);
+  }
+
   @Get('system/staff-accounts')
   @RequirePermission('system:accounts:read')
   async systemStaffAccounts(@Req() request: { user: Principal }, @Query() query: StaffAccountQuery) {
@@ -1524,6 +1588,8 @@ export class DataController {
   async updateSystemStaffAccount(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: StaffAccountUpdateInput) {
     if (body.role) await this.ensurePermission(request.user, 'system:accounts:update-role');
     if (body.site !== undefined) await this.ensurePermission(request.user, 'system:accounts:update-site');
+    if (body.enabled !== undefined) await this.ensurePermission(request.user, 'system:accounts:enable');
+    if (body.password !== undefined) await this.ensurePermission(request.user, 'system:accounts:reset-password');
     // 部门调整当前复用账号资料维护权限；部门不联动用户组或站点。
     return this.repository.updateStaffAccount(request.user, id, body);
   }
@@ -1558,6 +1624,16 @@ export class DataController {
     @Body() body: { permissions?: PermissionKey[] }
   ) {
     return this.repository.updateRolePermissions(request.user, role, body.permissions ?? []);
+  }
+
+  @Put('system/roles/:role/permissions/copy')
+  @RequirePermission('system:role-permissions:copy-role')
+  async copyRolePermissions(
+    @Req() request: { user: Principal },
+    @Param('role') role: RoleKey,
+    @Body() body: { sourceRoleKey?: RoleKey }
+  ) {
+    return this.repository.copyRolePermissions(request.user, role, body.sourceRoleKey);
   }
 
   @Get('system/audit-logs')
@@ -1597,15 +1673,6 @@ export class DataController {
       throw new ForbiddenException('客户不能访问内部查价');
     }
     return this.repository.quote(body);
-  }
-
-  @Get('pricing/books')
-  @RequirePermission('pricing:price-books:list-view')
-  async priceBooks(@Req() request: { user: Principal }, @Query('includeRows') includeRows?: string, @Query('targetModule') targetModule?: PriceBookImportTargetModule | 'unclassified') {
-    if (includeRows === 'true') {
-      throw new BadRequestException('价格表列表不支持返回完整明细，请使用分页线路接口');
-    }
-    return this.repository.getPriceBooks(request.user, false, targetModule);
   }
 
   @Get('pricing/books/rule-refresh-progress')
@@ -1995,18 +2062,6 @@ export class DataController {
     });
   }
 
-  @Get('pricing/books/import-jobs/:id')
-  @RequirePermission('pricing:price-books:import-job-view')
-  async priceBookImportJob(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.getPriceBookImportJob(request.user, id);
-  }
-
-  @Get('pricing/books/import-jobs')
-  @RequirePermission('pricing:price-books:import-job-view')
-  async priceBookImportJobs(@Req() request: { user: Principal }, @Query() query: PriceBookImportJobListQuery) {
-    return this.repository.getPriceBookImportJobs(request.user, query);
-  }
-
   @Post('pricing/books/import-jobs/:id/retry')
   @RequirePermission('pricing:price-books:upload')
   async retryPriceBookImportJob(@Req() request: { user: Principal }, @Param('id') id: string) {
@@ -2099,6 +2154,26 @@ export class DataController {
     return this.repository.updateWarehouseRentRuleEnabled(request.user, id, body);
   }
 
+  @Post('warehouse/packages/machine-import')
+  @RequirePermission('warehouse:in-stock:machine-import')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  async warehouseMachineImport(
+    @Req() request: { user: Principal },
+    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
+    @Body('commit') commit?: string
+  ) {
+    if (!file?.buffer?.length) throw new BadRequestException('请上传机器过机 Excel 文件');
+    const normalizedFile = { ...file, originalname: normalizeUploadedFileName(file.originalname) };
+    this.assertExcelFile(normalizedFile);
+    const parsed = parseWarehouseMachineWorkbook(normalizedFile.buffer, normalizedFile.originalname);
+    if (String(commit).toLowerCase() === 'true') {
+      return this.repository.importWarehouseMachineImport(request.user, parsed, {
+        fileHash: createHash('sha256').update(normalizedFile.buffer).digest('hex')
+      });
+    }
+    return this.repository.previewWarehouseMachineImport(request.user, parsed);
+  }
+
   @Post('warehouse/packages')
   @RequirePermission('warehouse:today-receipt:manual-create')
   async createWarehousePackage(@Req() request: { user: Principal }, @Body() body: WarehousePackageCreateInput) {
@@ -2111,6 +2186,12 @@ export class DataController {
   async createWarehouseManualReceipt(@Req() request: { user: Principal }, @Body() body: WarehouseManualReceiptCreateInput) {
     await this.repository.assertWarehouseManualReceiptCustomer(request.user, body.customerCode);
     return this.repository.createWarehouseManualReceipt(request.user, body);
+  }
+
+  @Post('warehouse/packages/:id/same-spec-replenish')
+  @RequirePermission('warehouse:in-stock:same-spec-replenish')
+  async replenishWarehouseSameSpec(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseSameSpecReplenishInput) {
+    return this.repository.replenishWarehouseSameSpec(request.user, id, body);
   }
 
   @Post('warehouse/packages/:id/split')
@@ -2159,12 +2240,6 @@ export class DataController {
     return this.repository.getWarehouseTallyRepeatStatistics(request.user, query);
   }
 
-  @Get('warehouse/tally-task-history-chain')
-  @RequirePermission('warehouse:in-stock:tally-record-view')
-  async warehouseTallyTaskHistoryChain(@Req() request: { user: Principal }, @Query('packageId') packageId: string) {
-    return this.repository.getWarehouseTallyTaskHistoryChain(request.user, packageId);
-  }
-
   @Post('warehouse/tally-tasks')
   @RequirePermission('warehouse:tally-pending:task-create')
   async createWarehouseTallyTask(@Req() request: { user: Principal }, @Body() body: WarehouseTallyTaskCreateInput) {
@@ -2181,6 +2256,22 @@ export class DataController {
   @RequirePermission('warehouse:tally-pending:task-process')
   async completeWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseTallyTaskCompleteInput) {
     return this.repository.completeWarehouseTallyTask(request.user, id, body);
+  }
+
+  @Get('warehouse/tally-tasks/:id/historical-aggregate-correction')
+  @RequirePermission('warehouse:tally-history:correct')
+  async warehouseTallyHistoricalAggregateCorrectionPreview(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.getWarehouseTallyHistoricalAggregateCorrectionPreview(request.user, id);
+  }
+
+  @Post('warehouse/tally-tasks/:id/historical-aggregate-correction')
+  @RequirePermission('warehouse:tally-history:correct')
+  async correctWarehouseTallyHistoricalAggregate(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: WarehouseTallyHistoricalAggregateCorrectionInput
+  ) {
+    return this.repository.correctWarehouseTallyHistoricalAggregate(request.user, id, body);
   }
 
   @Post('warehouse/tally-tasks/:id/label')
@@ -2393,6 +2484,12 @@ export class DataController {
     return this.repository.getPaymentVouchers(request.user, query);
   }
 
+  @Delete('finance/pending-payment-bill-vouchers/:id')
+  @RequirePermission('finance:pending-payment:bill-voucher-upload')
+  async deletePendingPaymentBillVoucher(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.deletePendingPaymentBillVoucher(request.user, id);
+  }
+
   @Patch('finance/payment-vouchers/:id/difference')
   @RequirePermission('finance:agent-bill:difference-manage')
   async updatePaymentVoucherDifference(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: PaymentVoucherDifferenceInput) {
@@ -2403,6 +2500,26 @@ export class DataController {
   @RequirePermission('finance:agent-bill:archive')
   async updatePaymentVoucherArchive(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: PaymentVoucherArchiveInput) {
     return this.repository.updatePaymentVoucherArchive(request.user, id, body);
+  }
+
+  @Get('uploads/vouchers/:fileName')
+  @RequireAuth()
+  async downloadVoucherImage(
+    @Req() request: { user: Principal },
+    @Param('fileName') fileName: string,
+    @Res({ passthrough: true }) response: Response
+  ) {
+    const storedFileName = basename(fileName);
+    if (storedFileName !== fileName || !/^[A-Za-z0-9._-]+$/.test(storedFileName)) {
+      throw new BadRequestException('凭证文件名不正确');
+    }
+    const metadata = await this.repository.getVoucherImageFileAccess(request.user, storedFileName);
+    const buffer = await readFile(join(resolveUploadDirectory('vouchers').dir, storedFileName)).catch(() => null);
+    if (!buffer) throw new NotFoundException('凭证图片不存在');
+    response.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
+    response.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(metadata.fileName)}`);
+    response.setHeader('Cache-Control', 'private, no-store');
+    return new StreamableFile(buffer);
   }
 
   @Post('finance/voucher-images')
@@ -2613,7 +2730,7 @@ export class DataController {
   }
 
   @Get('finance/customer-statements')
-  @RequirePermission(['finance:dashboard:view', 'finance:customer-account:read'])
+  @RequirePermission('finance:customer-account:read')
   async customerStatements(@Req() request: { user: Principal }) {
     return this.repository.getCustomerStatements(request.user);
   }
@@ -2625,13 +2742,13 @@ export class DataController {
   }
 
   @Get('finance/customer-accounts')
-  @RequirePermission(['finance:dashboard:view', 'finance:customer-account:read'])
+  @RequirePermission('finance:customer-account:read')
   async customerAccounts(@Req() request: { user: Principal }) {
     return this.repository.getCustomerAccounts(request.user);
   }
 
   @Get('finance/account-ledger')
-  @RequirePermission(['finance:dashboard:view', 'finance:customer-account:read'])
+  @RequirePermission('finance:customer-account:read')
   async accountLedger(@Req() request: { user: Principal }) {
     return this.repository.getAccountLedger(request.user);
   }
@@ -2654,6 +2771,11 @@ function normalizeUploadedFileName(fileName: string) {
   }
   const normalized = candidates.find((candidate) => /[\u4e00-\u9fff]/.test(candidate) && !candidate.includes('�')) ?? raw;
   return normalized.replace(/[\\/:\0]/g, '_').trim() || '未命名文件';
+}
+
+function hasSalesOwnDataScope(principal: Principal): boolean {
+  return principal.dataScope === 'SALES_OWN'
+    || (isSalesScopedRole(principal.role) && principal.role !== 'UG_MARKET');
 }
 
 function sanitizeMojiaRequestSamplePayload(value: Record<string, unknown>): Record<string, unknown> {
@@ -2748,4 +2870,9 @@ function normalizeMojiaMeasuredAt(value: unknown): string | undefined {
   if (Number.isNaN(date.getTime())) return undefined;
   date.setMilliseconds(0);
   return date.toISOString();
+}
+function ensureInternalOrderEntryScope(principal: Principal) {
+  if (principal.role === 'CUSTOMER') throw new ForbiddenException('当前角色不能使用内部录单');
+  if (principal.shipmentAllView || principal.dataScope === 'SALES_OWN' || principal.departmentTeamScope?.length) return;
+  throw new ForbiddenException('当前岗位未配置录单数据范围');
 }

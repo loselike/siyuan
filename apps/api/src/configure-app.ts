@@ -35,6 +35,8 @@ export function configureApp(app: INestApplication) {
     'misc-fee-imports',
     'misc-fee-attachments'
   ]);
+  const authenticatedUploadSegments = new Set(['vouchers']);
+  const publicUploadStatic = serveStatic(uploadRoot, { fallthrough: false });
   app.use('/api/uploads', (request: Request, response: Response, next: NextFunction) => {
     let decodedPath: string;
     try {
@@ -48,9 +50,12 @@ export function configureApp(app: INestApplication) {
       response.sendStatus(404);
       return;
     }
-    next();
+    if (segments.some((segment) => authenticatedUploadSegments.has(segment))) {
+      next();
+      return;
+    }
+    publicUploadStatic(request, response, next);
   });
-  app.use('/api/uploads', serveStatic(uploadRoot, { fallthrough: false }));
   app.use(json({ limit: '25mb' }));
   app.use(urlencoded({ extended: true, limit: '25mb' }));
   app.enableCors();

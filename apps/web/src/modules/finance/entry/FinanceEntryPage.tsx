@@ -2,8 +2,8 @@ import type { Key } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { calculateCompanyChannelChargeWeight, calculateCompanyChannelChargeWeightFromCargo, evaluateCompanyChannelWarnings, getCompanyChannelAggregateCargoValidationError, type AgentSummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type FinanceCatalogItemSummary, type FinanceCatalogCategory, type MiscFeeTallyDueSummary, type OrderEntryCreateInput, type OrderEntryDetailSummary, type OrderEntryWarehousePackageQuery, type ShipmentFinanceItemType, type WarehousePackageSummary, type WarehouseTallyTaskSummary, type WaterReceiptSummary } from '@siyuan/shared';
-import type { ApiClient, RoleKey } from '../../../apiClient';
+import { calculateCompanyChannelChargeWeight, calculateCompanyChannelChargeWeightFromCargo, evaluateCompanyChannelWarnings, formatShipmentProductNames, getCompanyChannelAggregateCargoValidationError, normalizeShipmentProductNames, type AgentSummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type FinanceCatalogItemSummary, type FinanceCatalogCategory, type MiscFeeTallyDueSummary, type OrderEntryCreateInput, type OrderEntryDetailSummary, type OrderEntryWarehousePackageQuery, type ShipmentFinanceItemType, type WarehousePackageSummary, type WarehouseTallyTaskSummary, type WaterReceiptSummary } from '@siyuan/shared';
+import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, parseBeijingDateTimeInputToIso } from '../../shared/format';
 import {
   createFinanceFeeNameOptions,
@@ -26,6 +26,7 @@ import { ManagedTable } from '../../shared/ui';
 import { WarehousePackageNoWithTallyStatus } from '../../shared/WarehousePackageNoWithTallyStatus';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions, resolveAgentIdByIdentity } from '../../shared/agentIdentity';
+import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -42,6 +43,14 @@ export function resolveCurrentUsdToRmbRate(exchangeRates: ExchangeRateSummary[],
 
 function getDefaultFeeName(items: FinanceCatalogItemSummary[], preferred: string) {
   return items.find((item) => item.category === 'FEE_NAME' && item.enabled && item.name === preferred)?.name ?? '';
+}
+
+export function resolveOrderEntryBusinessCostAccess(role: RoleKey, permissions: readonly PermissionKey[]) {
+  const canManage = role === 'ADMIN' || permissions.includes('business:order-entry:business-cost-write');
+  return {
+    canManage,
+    canView: canManage || permissions.includes('business:order-entry:business-cost-view')
+  };
 }
 
 function summarizeWarehouseCargo(packages: WarehousePackageSummary[]) {
@@ -69,6 +78,7 @@ function calculateSelectedPackageVolumetricWeight(pkg: WarehousePackageSummary, 
 interface FinanceEntryPageProps {
   apiClient: ApiClient;
   role: RoleKey;
+  permissions: PermissionKey[];
   username: string;
   financeCatalogItems: FinanceCatalogItemSummary[];
   customers: CustomerSummary[];
@@ -87,7 +97,7 @@ interface FinanceEntryPageProps {
   onPreselectedPackageIdsConsumed?: () => void;
 }
 
-export function FinanceEntryPage({ apiClient, role, username, financeCatalogItems, customers, customerContacts, onCustomerContactsChange, onCatalogChange, onCreated, draftId, initialDraftDetail, canCreateOrderEntry, canSaveDraft, canSubmitForReview, canUseAgentFields, onDraftClosed, preselectedPackageIds, onPreselectedPackageIdsConsumed }: FinanceEntryPageProps) {
+export function FinanceEntryPage({ apiClient, role, permissions, username, financeCatalogItems, customers, customerContacts, onCustomerContactsChange, onCatalogChange, onCreated, draftId, initialDraftDetail, canCreateOrderEntry, canSaveDraft, canSubmitForReview, canUseAgentFields, onDraftClosed, preselectedPackageIds, onPreselectedPackageIdsConsumed }: FinanceEntryPageProps) {
   const { message: messageApi, modal } = AntdApp.useApp();
   const [form] = Form.useForm<FinanceEntryFormValues>();
   const [packages, setPackages] = useState<WarehousePackageSummary[]>([]);
@@ -125,9 +135,18 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
   const [cargoDataSource, setCargoDataSource] = useState<'AUTO_MATCHED' | 'MANUAL_ADJUSTED'>('AUTO_MATCHED');
   const [chargeWeightOverridden, setChargeWeightOverridden] = useState(false);
   const [receiverContactEdited, setReceiverContactEdited] = useState(false);
-  const canEditOrderEntryPayables = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE';
-  const canViewFinanceAuditFields = role === 'ADMIN' || role === 'FINANCE' || role === 'UG_FINANCE' || role === 'BOSS' || role === 'OWNER';
-  const canEditEntryAt = role === 'ADMIN' || role === 'BOSS' || role === 'OWNER';
+  const canEditOrderEntryPayables = role === 'ADMIN' || permissions.includes('finance:order-fee:payable:manage');
+  const businessCostAccess = resolveOrderEntryBusinessCostAccess(role, permissions);
+  const canWriteOrderEntryBusinessCosts = businessCostAccess.canManage;
+  const canViewOrderEntryBusinessCosts = businessCostAccess.canView;
+  const canViewFinanceAuditFields = role === 'ADMIN' || [
+    'business:review:finance-detail-view',
+    'finance:order-fee:payable:view',
+    'finance:payable:view-sensitive',
+    'finance:business-cost:view-agent',
+    'finance:business-cost:view-profit'
+  ].some((permission) => permissions.includes(permission as PermissionKey));
+  const canEditEntryAt = role === 'ADMIN' || permissions.includes('finance:payable:manage');
   const settlementRows = useMemo(() => getSettlementMethodRows(financeCatalogItems), [financeCatalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
   const agentOptions = useMemo(
@@ -591,7 +610,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       actualWeightKg: shipment.actualWeightKg ?? shipment.weightKg,
       volumeCbm: shipment.volumeCbm,
       chargeableWeightKg: shipment.chargeableWeightKg ?? shipment.receivableWeightKg,
-      productName: shipment.productName,
+      productNames: normalizeShipmentProductNames(shipment.productNames, shipment.productName),
       settlementMethod: shipment.settlementMethod,
       fbaInboundNo: shipment.fbaInboundNo,
       receiverName: shipment.receiverName,
@@ -908,6 +927,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       return;
     }
     const selectedBusinessChannel = channels.find((channel) => channel.id === values.receivingChannel || channel.name === values.receivingChannel);
+    const productNames = normalizeShipmentProductNames(values.productNames, values.productName);
     const input: OrderEntryCreateInput = {
       shipment: {
         customerCode,
@@ -926,7 +946,8 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         declarationRequired: values.declarationRequired ?? false,
         sensitive: Boolean(values.sensitive),
         cargoType: values.cargoType ?? '',
-        productName: values.productName ?? '',
+        productName: formatShipmentProductNames(productNames),
+        productNames,
         settlementMethod: values.settlementMethod ?? '',
         fbaInboundNo: values.fbaInboundNo,
         receiverName: values.receiverName,
@@ -947,7 +968,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       },
       warehousePackageIds: selectedPackages.map((pkg) => pkg.id),
       receivables: buildFeeRows(receivables, 'RECEIVABLE'),
-      businessCosts: buildFeeRows(businessCosts, 'BUSINESS_COST'),
+      businessCosts: canWriteOrderEntryBusinessCosts ? buildFeeRows(businessCosts, 'BUSINESS_COST') : [],
       payables: canEditOrderEntryPayables ? buildFeeRows(payables, 'PAYABLE') : [],
       miscFeeIdsToMatch: submitForReview ? selectedTallyMiscFeeIds : [],
       submitForReview
@@ -966,8 +987,8 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         content: savedForCompletion
           ? `待完善原因：${detail.shipment.reviewRejectedReason}`
           : submitForReview
-          ? `已生成出货单号 ${detail.shipment.outboundOrderNo || detail.shipment.systemOrderNo}`
-          : `草稿已保存，可在录单草稿箱继续编辑。草稿号/出货单号：${detail.shipment.outboundOrderNo || detail.shipment.systemOrderNo}`
+          ? `已生成出货单号 ${resolveShipmentOutboundOrderNo(detail.shipment)}`
+          : `草稿已保存，可在录单草稿箱继续编辑。草稿号/出货单号：${resolveShipmentOutboundOrderNo(detail.shipment)}`
       });
       reset();
       await onCreated?.(detail, submitForReview && !savedForCompletion);
@@ -1016,7 +1037,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
         </div>
       )
     },
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 125, ellipsis: true, render: (value?: string) => value || '-' },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 125, ellipsis: true, render: (_: string | undefined, record) => resolveShipmentOutboundOrderNo(record) },
     { title: '件数', dataIndex: 'packageCount', width: 60 },
     { title: '实重', dataIndex: 'weightKg', width: 80, render: (value: number) => `${value.toFixed(2)} kg` },
     {
@@ -1206,6 +1227,27 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
     }
 
     if (type === 'BUSINESS_COST') {
+      if (!canWriteOrderEntryBusinessCosts) {
+        return (
+          <Card className="finance-entry-fee-card" title={title} extra={<Tag>只读</Tag>}>
+            <ManagedTable<FinanceEntryFeeDraft>
+              className="finance-work-table finance-embedded-table"
+              rowKey="id"
+              size="small"
+              pagination={false}
+              dataSource={rows}
+              columnSettings={false}
+              recordDetail={false}
+              columns={[
+                { key: 'feeName', title: '费用名称', dataIndex: 'name' },
+                { key: 'currency', title: '币种', render: (_, row) => getFeeCurrency(row, type) },
+                { key: 'amount', title: '总金额', align: 'right', render: (_, row) => calculateFinanceEntryFeeAmount(row).toFixed(2) },
+                { key: 'remark', title: '备注', dataIndex: 'remark', render: (value) => value || '-' }
+              ]}
+            />
+          </Card>
+        );
+      }
       const receivableRmbTotal = getFeeRmbTotal(receivables, 'RECEIVABLE');
       const businessCostRmbTotal = getFeeRmbTotal(businessCosts, 'BUSINESS_COST');
       const profitColumns: ColumnsType<FinanceEntryFeeDraft> = canViewFinanceAuditFields ? [
@@ -1433,7 +1475,25 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
                     </Form.Item>
                   </Col>
                   <Col xs={24} md={12} xl={6} className="finance-entry-inbound-field"><Form.Item name="inboundNo" label="入仓号"><Input /></Form.Item></Col>
-                  <Col xs={24} md={12} xl={18} className="finance-entry-product-field"><Form.Item name="productName" label="品名" rules={[{ required: true, message: '请输入品名' }]}><AutoComplete options={productNameOptions} onBlur={() => maybeSaveCatalogItem('PRODUCT_NAME', form.getFieldValue('productName'))} /></Form.Item></Col>
+                  <Col xs={24} md={12} xl={18} className="finance-entry-product-field">
+                    <Row gutter={8}>
+                      {[0, 1, 2, 3].map((index) => (
+                        <Col xs={24} sm={12} lg={6} key={index}>
+                          <Form.Item
+                            name={['productNames', index]}
+                            label={`品名${index + 1}`}
+                            rules={index === 0 ? [{ required: true, whitespace: true, message: '请输入品名1' }] : undefined}
+                          >
+                            <AutoComplete
+                              allowClear
+                              options={productNameOptions}
+                              onBlur={() => maybeSaveCatalogItem('PRODUCT_NAME', form.getFieldValue(['productNames', index]))}
+                            />
+                          </Form.Item>
+                        </Col>
+                      ))}
+                    </Row>
+                  </Col>
                 </Row>
                 <div className="finance-entry-cargo-metrics" aria-label="货物数据">
                   <div className="finance-entry-cargo-toolbar">
@@ -1607,7 +1667,7 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
       </Row>
       <div className="finance-entry-fee-stack">
         {renderFeeTable('RECEIVABLE', '应收费用', receivables)}
-        {renderFeeTable('BUSINESS_COST', '业务成本', businessCosts)}
+        {canViewOrderEntryBusinessCosts ? renderFeeTable('BUSINESS_COST', '业务成本', businessCosts) : null}
         {canEditOrderEntryPayables ? renderFeeTable('PAYABLE', '应付费用', payables) : null}
       </div>
       <div className="finance-entry-actions">
@@ -1683,7 +1743,12 @@ export function FinanceEntryPage({ apiClient, role, username, financeCatalogItem
             loading={packageLoading}
             dataSource={packages}
             columns={packageColumns}
-            pagination={packages.length > 8 ? { pageSize: 8, showSizeChanger: false } : false}
+            pagination={packages.length > 50 ? {
+              defaultPageSize: 50,
+              pageSizeOptions: [50, 100, 300],
+              showSizeChanger: true,
+              showTotal: (total) => `共 ${total} 条`
+            } : false}
             tableLayout="fixed"
             rowSelection={{ selectedRowKeys: packagePickerSelectedIds, onChange: handlePackageSelection, columnWidth: 48 }}
             locale={{ emptyText: selectedCustomer ? '暂无该客户编号可录单的在仓货物' : '请先维护客户资料' }}

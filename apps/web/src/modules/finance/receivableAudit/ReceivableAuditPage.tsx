@@ -17,6 +17,7 @@ import { applySettlementMethodCurrency, createFinanceFeeNameOptions, createSettl
 import { downloadCsv } from '../exportCsv';
 import { formatBeijingDateTime, formatBusinessDate } from '../../shared/format';
 import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, type ManagedTableColumns } from '../../shared/ui';
+import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -458,7 +459,7 @@ export function ReceivableAuditPage({
     salesperson: { title: '业务员', dataIndex: 'salesperson', width: 96, sorter: true, render: (value?: string) => value?.trim() || '-' },
     name: { title: '费用名称', dataIndex: 'name', width: 96, sorter: true },
     customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 88, sorter: true },
-    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 158, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 158, sorter: true, render: (_: string | undefined, row) => renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 138, render: (value?: string) => <Text className="table-compact-text">{value ?? '-'}</Text> },
     currency: { title: '币种', dataIndex: 'currency', width: 64, render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag> },
     amount: { title: '金额', dataIndex: 'amount', width: 92, align: 'right', sorter: true, render: (value: number) => formatAmount(value) },
@@ -534,7 +535,7 @@ export function ReceivableAuditPage({
           columns={4}
           labelWidth={66}
           fields={[
-            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(row.systemOrderNo), title: row.systemOrderNo },
+            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)), title: resolveShipmentOutboundOrderNo(row) },
             { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
             { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
@@ -584,7 +585,7 @@ export function ReceivableAuditPage({
               { key: 'salesperson', label: '业务员' },
               { key: 'name', label: '费用名称' },
               { key: 'customerCode', label: '客户编号' },
-              { key: 'systemOrderNo', label: '出货单号' },
+              { key: 'outboundOrderNo', label: '出货单号' },
               { key: 'transferNo', label: '转单号' },
               { key: 'currency', label: '币种' },
               { key: 'amount', label: '金额' },
@@ -709,8 +710,8 @@ export function ReceivableAuditPage({
 
       <Modal title="新增应收" className="finance-modal" width={760} open={createOpen} onCancel={() => setCreateOpen(false)} onOk={submitCreate} okText="保存应收" cancelText="取消">
         <Form form={form} layout="vertical" initialValues={{ name: '运费', currency: 'RMB' }}>
-          <Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="按出货单号匹配订单" /></Form.Item>
-          <Form.Item name="customerOrderNo" label="客户单号"><Input /></Form.Item>
+          <Form.Item name="systemOrderNo" label="关联订单"><Input placeholder="按出货单号或内部单号匹配" /></Form.Item>
+          <Form.Item name="customerOrderNo" label="出货单号"><Input /></Form.Item>
           <Form.Item name="transferNo" label="转单号"><Input /></Form.Item>
           <Form.Item name="customerCode" label="客户编号"><Input /></Form.Item>
           <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请选择或填写费用名称' }]}><AutoComplete options={feeNameOptions} /></Form.Item>

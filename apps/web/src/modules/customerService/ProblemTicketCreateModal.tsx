@@ -34,6 +34,7 @@ export function ProblemTicketCreateModal({
   shipment,
   apiClient,
   role,
+  permissions = [],
   defaultCustomerVisible = true,
   showCustomerVisible = true,
   showPushToSales = false,
@@ -43,6 +44,7 @@ export function ProblemTicketCreateModal({
   shipment: Shipment | null;
   apiClient: ApiClient;
   role: string;
+  permissions?: readonly string[];
   defaultCustomerVisible?: boolean;
   showCustomerVisible?: boolean;
   showPushToSales?: boolean;
@@ -62,7 +64,7 @@ export function ProblemTicketCreateModal({
   const [reason, setReason] = useState('');
   const [reasonError, setReasonError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const canManage = role === 'ADMIN';
+  const canManage = role === 'ADMIN' || permissions.includes('customer-service:problem:tag-manage');
 
   useEffect(() => {
     if (!shipment) return;

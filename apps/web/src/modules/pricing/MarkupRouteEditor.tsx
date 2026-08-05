@@ -7,6 +7,7 @@ import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedTable } from '../shared/ui';
 import { formatCurrency } from '../shared/format';
 import { getMarkupRuleLabel } from './markupRuleLabel';
+import { useGlobalUnsavedWork } from '../../appUpdate';
 
 const { Text } = Typography;
 
@@ -139,6 +140,7 @@ export function MarkupRouteEditor({ apiClient, permissions, onNotice, context, e
   const [error, setError] = useState<string | null>(null);
   const dirty = Boolean(scope) && JSON.stringify(tiers) !== savedTierKey;
   const batchDirty = batchInitialized && JSON.stringify(batchTiers) !== batchSavedTierKey;
+  useGlobalUnsavedWork('pricing-markup-route-editor', dirty || batchDirty);
   const canEdit = permissions.includes('pricing:markup-tier:update') || permissions.includes('pricing:manage');
   useEffect(() => {
     let alive = true;

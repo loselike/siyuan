@@ -70,6 +70,7 @@ export function currentPageIds<T extends { id: string }>(rows: T[], page: number
 export interface WarehouseInboundPackage {
   id: string;
   shipmentId?: string;
+  actualSystemOrderNo?: string;
   systemOrderNo: string;
   customerCode: string;
   customerMaintained?: boolean;
@@ -433,6 +434,7 @@ export function mapWarehouseApiPackageToInbound(pkg: WarehousePackageSummary): W
   return {
     id: pkg.id,
     shipmentId: pkg.shipmentId,
+    actualSystemOrderNo: pkg.systemOrderNo,
     systemOrderNo: pkg.systemOrderNo ?? `API仓库-${pkg.customerOrderNo}`,
     customerCode: pkg.customerCode,
     customerMaintained: pkg.customerMaintained,

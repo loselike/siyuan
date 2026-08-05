@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
-import { Activity, AlertTriangle, Building2, ChevronDown, ClipboardCheck, Edit, Ellipsis, FileInput, FileText, LockKeyhole, PlusCircle, Power, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users } from 'lucide-react';
+import { Activity, AlertTriangle, Building2, ChevronDown, ClipboardCheck, Copy, Edit, Ellipsis, FileInput, FileText, LockKeyhole, PlusCircle, Power, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users } from 'lucide-react';
 import { Alert, Button, Card, Checkbox, Col, DatePicker, Dropdown, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
 import type { DatePickerProps } from 'antd/es/date-picker';
 import zhCNDatePickerLocale from 'antd/es/date-picker/locale/zh_CN';
@@ -24,6 +24,7 @@ import {
   updatePermissionControl,
   type PermissionControl
 } from './rolePermissionPresentation';
+import { createUserGroupSiteOptions, matchesUserGroupSiteOption } from './userGroupSiteOptions';
 
 const { Text } = Typography;
 const auditDateTimeFormat = 'YYYY-MM-DD HH:mm';
@@ -51,6 +52,11 @@ interface RoleGroupFormValues {
   site?: string;
   enabled: 'true' | 'false';
   templateRole?: RoleKey;
+  sourceRoleKey?: RoleKey;
+}
+
+interface RolePermissionCopyFormValues {
+  sourceRoleKey: RoleKey;
 }
 
 const staffGenderOptions: Array<{ label: string; value: StaffGender }> = [
@@ -213,6 +219,7 @@ export function SettingsPage({
   const [auditDetailOpen, setAuditDetailOpen] = useState(false);
   const [auditAdvancedOpen, setAuditAdvancedOpen] = useState(false);
   const [staffAccounts, setStaffAccounts] = useState<StaffAccountSummary[]>([]);
+  const [staffManagerAccounts, setStaffManagerAccounts] = useState<StaffAccountSummary[]>([]);
   const [staffAccountsLoading, setStaffAccountsLoading] = useState(false);
   const [selectedStaffAccountIds, setSelectedStaffAccountIds] = useState<string[]>([]);
   const [staffFilters, setStaffFilters] = useState<StaffAccountQuery>({ status: 'ALL' });
@@ -220,6 +227,7 @@ export function SettingsPage({
   const [staffCreateOpen, setStaffCreateOpen] = useState(false);
   const [editingStaffAccount, setEditingStaffAccount] = useState<StaffAccountSummary | null>(null);
   const [staffCreateForm] = Form.useForm<StaffAccountCreateInput>();
+  const selectedStaffSite = Form.useWatch('site', staffCreateForm);
   const staffImportInputRef = useRef<HTMLInputElement | null>(null);
   const [departments, setDepartments] = useState<DepartmentSummary[]>([]);
   const [departmentsLoading, setDepartmentsLoading] = useState(false);
@@ -240,6 +248,12 @@ export function SettingsPage({
   const [roleGroupDetailOpen, setRoleGroupDetailOpen] = useState(false);
   const [editingRoleGroup, setEditingRoleGroup] = useState<RolePermissionRow | null>(null);
   const [roleGroupForm] = Form.useForm<RoleGroupFormValues>();
+  const [rolePermissionCopyOpen, setRolePermissionCopyOpen] = useState(false);
+  const [rolePermissionCopyLoading, setRolePermissionCopyLoading] = useState(false);
+  const [rolePermissionCopyError, setRolePermissionCopyError] = useState<string | null>(null);
+  const [rolePermissionCopyTarget, setRolePermissionCopyTarget] = useState<RolePermissionRow | null>(null);
+  const [rolePermissionCopyForm] = Form.useForm<RolePermissionCopyFormValues>();
+  const selectedRolePermissionCopySourceKey = Form.useWatch('sourceRoleKey', rolePermissionCopyForm);
   const [selectedPermissionRoleKey, setSelectedPermissionRoleKey] = useState<RoleKey | null>(null);
   const [selectedPermissionWorkspace, setSelectedPermissionWorkspace] = useState<'operations' | 'pricing' | 'business' | 'warehouse' | 'market' | 'customerService' | 'tracking' | 'finance' | 'master' | 'system'>('operations');
   const [selectedWorkspacePermissionGroup, setSelectedWorkspacePermissionGroup] = useState<string | null>(null);
@@ -363,7 +377,7 @@ export function SettingsPage({
       site: values.site?.trim(),
       sortOrder: Number(values.sortOrder) || 0,
       enabled: values.enabled === 'true',
-      templateRole: values.templateRole
+      sourceRoleKey: values.sourceRoleKey
     };
     const role = editingRoleGroup ? await apiClient.updateRoleGroup(editingRoleGroup.key, input) : await apiClient.createRoleGroup(input);
     upsertRoleRow(role);
@@ -380,11 +394,51 @@ export function SettingsPage({
     setSettingsNotice(`${updated.label} 已停用`);
   }
 
+  async function deleteRoleGroup(role: RolePermissionRow) {
+    const deleted = await apiClient.deleteRoleGroup(role.key);
+    setRoleMatrix((current) => current ? { ...current, roles: current.roles.filter((item) => item.key !== role.key) } : current);
+    setDraftPermissions((current) => {
+      const next = { ...current };
+      delete next[role.key];
+      return next;
+    });
+    setSelectedRoleGroupKey(null);
+    setRoleGroupDetailOpen(false);
+    setSettingsNotice(`${deleted.label} 已删除`);
+  }
+
+  function openRolePermissionCopy(role: RolePermissionRow) {
+    setRolePermissionCopyTarget(role);
+    setRolePermissionCopyError(null);
+    rolePermissionCopyForm.resetFields();
+    setRolePermissionCopyOpen(true);
+  }
+
+  async function submitRolePermissionCopy() {
+    if (!rolePermissionCopyTarget) return;
+    const values = await rolePermissionCopyForm.validateFields();
+    setRolePermissionCopyLoading(true);
+    setRolePermissionCopyError(null);
+    try {
+      const updated = await apiClient.copyRolePermissions(rolePermissionCopyTarget.key, values.sourceRoleKey);
+      upsertRoleRow(updated);
+      setRolePermissionCopyOpen(false);
+      rolePermissionCopyForm.resetFields();
+      setSettingsNotice(`已用${selectedRolePermissionCopySource?.label ?? '来源用户组'}的权限覆盖${updated.label}`);
+      setRolePermissionCopyTarget(null);
+    } catch (error) {
+      setRolePermissionCopyError(error instanceof Error ? error.message : '复制权限失败');
+    } finally {
+      setRolePermissionCopyLoading(false);
+    }
+  }
+
   async function submitStaffAccountCreate() {
     const values = await staffCreateForm.validateFields();
+    const input = { ...values, directManagerId: values.directManagerId ?? null };
     const saved = editingStaffAccount
-      ? await apiClient.updateStaffAccount(editingStaffAccount.id, values)
-      : await apiClient.createStaffAccount(values);
+      ? await apiClient.updateStaffAccount(editingStaffAccount.id, input)
+      : await apiClient.createStaffAccount(input);
     setStaffCreateOpen(false);
     setEditingStaffAccount(null);
     staffCreateForm.resetFields();
@@ -393,6 +447,10 @@ export function SettingsPage({
   }
 
   function openStaffAccountEditor(account: StaffAccountSummary | null) {
+    void apiClient.staffAccounts({ status: 'ENABLED' }).then(setStaffManagerAccounts).catch((error) => {
+      setStaffManagerAccounts([]);
+      setSettingsNotice(error instanceof Error ? error.message : '直属经理候选加载失败');
+    });
     setEditingStaffAccount(account);
     staffCreateForm.resetFields();
     staffCreateForm.setFieldsValue(account
@@ -400,13 +458,14 @@ export function SettingsPage({
           username: account.username,
           name: account.name,
           departmentId: account.departmentId,
+          directManagerId: account.directManagerId,
           phone: account.phone,
           gender: account.gender ?? 'UNKNOWN',
           site: account.site,
           enabled: account.enabled,
           role: account.role
         }
-      : { role: 'OPERATOR', gender: 'UNKNOWN', enabled: true });
+      : { role: 'OPERATOR', gender: 'UNKNOWN', enabled: true, directManagerId: null });
     setStaffCreateOpen(true);
   }
 
@@ -560,7 +619,7 @@ export function SettingsPage({
     ?? rolePermissionRows[0]
     ?? null;
   const userGroupRows = useMemo(() => roleRows.filter((role) => !role.systemBuiltin), [roleRows]);
-  const enabledSiteOptions = useMemo(() => sites.filter((site) => site.enabled).map((site) => ({ label: site.name, value: site.name })), [sites]);
+  const enabledSiteOptions = useMemo(() => createUserGroupSiteOptions(sites), [sites]);
   const departmentOptions = useMemo(
     () => departments.map((department) => ({ label: department.name, value: department.id, disabled: !department.enabled })),
     [departments]
@@ -588,7 +647,34 @@ export function SettingsPage({
       .filter((role) => !role.systemBuiltin)
       .map((role) => ({ label: role.label, value: role.key as StaffAccountRoleKey }))
     : builtinStaffRoleOptions;
-  const templateRoleOptions = builtinStaffRoleOptions.filter((role) => role.value !== 'ADMIN');
+  const directManagerRoleKeys = useMemo(
+    () => new Set((roleMatrix?.roles ?? [])
+      .filter((role) => role.enabled !== false
+        && role.permissions.includes('business:shipment:team-view')
+        && !role.permissions.includes('business:shipment:all-view'))
+      .map((role) => role.key)),
+    [roleMatrix]
+  );
+  const directManagerOptions = useMemo(
+    () => staffManagerAccounts
+      .filter((account) => account.enabled
+        && account.id !== editingStaffAccount?.id
+        && Boolean(selectedStaffSite)
+        && (account.site ?? undefined) === (selectedStaffSite ?? undefined)
+        && directManagerRoleKeys.has(account.role))
+      .map((account) => ({
+        label: `${account.name || account.nickname || account.username} · ${account.username} · ${account.roleLabel}`,
+        value: account.id
+      })),
+    [directManagerRoleKeys, editingStaffAccount?.id, selectedStaffSite, staffManagerAccounts]
+  );
+  const rolePermissionSourceOptions = rolePermissionRows
+    .filter((role) => role.key !== 'ADMIN' && role.enabled !== false)
+    .map((role) => ({
+      label: `${role.label}${role.site ? ` · ${role.site}` : ''}`,
+      value: role.key
+    }));
+  const selectedRolePermissionCopySource = rolePermissionRows.find((role) => role.key === selectedRolePermissionCopySourceKey) ?? null;
   const permissionGroups = useMemo(() => Object.entries(
     (roleMatrix?.availablePermissions ?? []).reduce<Record<string, RolePermissionMatrix['availablePermissions']>>((acc, permission) => {
       acc[permission.group] = [...(acc[permission.group] ?? []), permission];
@@ -764,17 +850,21 @@ export function SettingsPage({
   }
 
   async function saveRolePermissions(role: RolePermissionRow) {
-    const updated = await apiClient.updateRolePermissions(role.key, draftPermissions[role.key] ?? []);
-    setRoleMatrix((current) =>
-      current
-        ? {
-            ...current,
-      roles: current.roles.map((item) => (item.key === updated.key ? updated : item))
-          }
-        : current
-    );
-    setDraftPermissions((current) => ({ ...current, [updated.key]: updated.permissions }));
-    setSettingsNotice(`${updated.label}权限已保存，RBAC 即时生效`);
+    try {
+      const updated = await apiClient.updateRolePermissions(role.key, draftPermissions[role.key] ?? []);
+      setRoleMatrix((current) =>
+        current
+          ? {
+              ...current,
+              roles: current.roles.map((item) => (item.key === updated.key ? updated : item))
+            }
+          : current
+      );
+      setDraftPermissions((current) => ({ ...current, [updated.key]: updated.permissions }));
+      setSettingsNotice(`${updated.label}权限已保存，RBAC 即时生效`);
+    } catch (error) {
+      setSettingsNotice(`保存权限失败：${error instanceof Error ? error.message : '请稍后重试'}`);
+    }
   }
 
   function toggleRolePermissionControl(roleKey: RoleKey, control: PermissionControl, checked: boolean) {
@@ -882,14 +972,16 @@ export function SettingsPage({
       description: role.description ?? '',
       site: role.site ?? '',
       enabled: role.enabled === false ? 'false' : 'true',
-      templateRole: 'OPERATOR'
+      templateRole: undefined,
+      sourceRoleKey: undefined
     } : {
       sortOrder: String(Math.max(0, ...userGroupRows.map((item) => item.sortOrder ?? 0)) + 1),
       label: '',
       description: '',
-      site: enabledSiteOptions[0]?.value ?? '深圳思远',
+      site: enabledSiteOptions[0]?.value,
       enabled: 'true',
-      templateRole: 'OPERATOR'
+      templateRole: undefined,
+      sourceRoleKey: undefined
     });
     setRoleGroupOpen(true);
   }
@@ -907,6 +999,20 @@ export function SettingsPage({
       cancelText: '取消',
       okButtonProps: { danger: true },
       onOk: () => disableRoleGroup(role)
+    });
+  }
+
+  function confirmRoleGroupDelete(role: RolePermissionRow) {
+    const boundStaffCount = staffAccounts.filter((account) => account.role === role.key).length;
+    Modal.confirm({
+      title: `确认删除用户组“${role.label}”？`,
+      content: boundStaffCount > 0
+        ? `该用户组仍绑定 ${boundStaffCount} 名员工，请先调整员工用户组后再删除。`
+        : '删除后该用户组及其权限配置将永久移除，无法恢复。',
+      okText: '确认删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true, disabled: boundStaffCount > 0 },
+      onOk: () => deleteRoleGroup(role)
     });
   }
 
@@ -1053,13 +1159,15 @@ export function SettingsPage({
                       items: [
                         { key: 'detail', label: '查看当前组详情', disabled: !selectedRoleGroup },
                         { key: 'edit', label: '编辑当前用户组', disabled: !selectedRoleGroup },
-                        { key: 'disable', label: '停用当前用户组', danger: true, disabled: !selectedRoleGroup || selectedRoleGroup.enabled === false }
+                        { key: 'disable', label: '停用当前用户组', danger: true, disabled: !selectedRoleGroup || selectedRoleGroup.enabled === false },
+                        ...(hasSystemPermission('system:user-groups:delete') ? [{ key: 'delete', label: '删除当前用户组', danger: true, disabled: !selectedRoleGroup || selectedRoleGroup.key === 'ADMIN' }] : [])
                       ],
                       onClick: ({ key }) => {
                         if (!selectedRoleGroup) return;
                         if (key === 'detail') openRoleGroupDetail(selectedRoleGroup);
                         if (key === 'edit') openRoleGroupEditor(selectedRoleGroup);
                         if (key === 'disable') confirmRoleGroupDisable(selectedRoleGroup);
+                        if (key === 'delete') confirmRoleGroupDelete(selectedRoleGroup);
                       }
                     }}
                   >
@@ -1130,9 +1238,15 @@ export function SettingsPage({
                   )}
                   toolbarActions={selectedRoleGroup ? (
                     <Space size={6} wrap className="user-group-batch-actions">
+                      {hasSystemPermission('system:role-permissions:copy-role') ? (
+                        <Button size="small" icon={<Copy size={14} />} onClick={() => openRolePermissionCopy(selectedRoleGroup)}>复制权限</Button>
+                      ) : null}
                       <Button size="small" icon={<Edit size={14} />} onClick={() => openRoleGroupEditor(selectedRoleGroup)}>修改</Button>
                       {selectedRoleGroup.enabled !== false ? (
                         <Button size="small" icon={<Power size={14} />} danger onClick={() => confirmRoleGroupDisable(selectedRoleGroup)}>停用</Button>
+                      ) : null}
+                      {hasSystemPermission('system:user-groups:delete') && selectedRoleGroup.key !== 'ADMIN' ? (
+                        <Button size="small" icon={<Trash2 size={14} />} danger onClick={() => confirmRoleGroupDelete(selectedRoleGroup)}>删除</Button>
                       ) : null}
                     </Space>
                   ) : null}
@@ -1170,7 +1284,8 @@ export function SettingsPage({
                               items: [
                                 { key: 'detail', label: '查看详情' },
                                 { key: 'edit', label: '编辑' },
-                                { key: 'disable', label: '停用', danger: true, disabled: role.enabled === false }
+                                { key: 'disable', label: '停用', danger: true, disabled: role.enabled === false },
+                                ...(hasSystemPermission('system:user-groups:delete') && role.key !== 'ADMIN' ? [{ key: 'delete', label: '删除', danger: true }] : [])
                               ],
                               onClick: ({ key, domEvent }) => {
                                 domEvent.stopPropagation();
@@ -1178,6 +1293,7 @@ export function SettingsPage({
                                 if (key === 'detail') openRoleGroupDetail(role);
                                 if (key === 'edit') openRoleGroupEditor(role);
                                 if (key === 'disable') confirmRoleGroupDisable(role);
+                                if (key === 'delete') confirmRoleGroupDelete(role);
                               }
                             }}
                           >
@@ -1430,17 +1546,16 @@ export function SettingsPage({
                   />
                 ))}
                 {renderFilterField('状态', (
-                  <Space.Compact>
-                    {(['ALL', 'ENABLED', 'DISABLED'] as const).map((status) => (
-                      <Button
-                        key={status}
-                        type={(staffFilters.status ?? 'ALL') === status ? 'primary' : 'default'}
-                        onClick={() => setStaffFilters((current) => ({ ...current, status }))}
-                      >
-                        {status === 'ALL' ? '全部' : status === 'ENABLED' ? '在职' : '停用'}
-                      </Button>
-                    ))}
-                  </Space.Compact>
+                  <Select
+                    aria-label="员工账号状态"
+                    options={[
+                      { label: '全部状态', value: 'ALL' },
+                      { label: '在职', value: 'ENABLED' },
+                      { label: '停用', value: 'DISABLED' }
+                    ]}
+                    value={staffFilters.status ?? 'ALL'}
+                    onChange={(status) => setStaffFilters((current) => ({ ...current, status }))}
+                  />
                 ))}
                 {renderFilterField('所属用户组', (
                   <Select
@@ -1539,6 +1654,13 @@ export function SettingsPage({
                       <Text type="secondary">{record.department || '未分配部门'} / {record.roleLabel}</Text>
                     </Space>
                   ) : null
+                },
+                {
+                  title: '直属经理',
+                  width: 130,
+                  render: (_, record?: StaffAccountSummary) => record
+                    ? (record.directManagerName || record.directManagerUsername || '-')
+                    : null
                 },
                 { title: '站点', dataIndex: 'site', width: 120, render: (value?: string) => value || '-' },
                 {
@@ -1729,7 +1851,7 @@ export function SettingsPage({
                                       <Text strong>{control.label}</Text>
                                       {riskLabel ? <Tag color={riskLabel.color}>{riskLabel.label}</Tag> : null}
                                       {state.indeterminate ? <Tag>部分授权</Tag> : null}
-                                      {control.restrictedToMarketFinance ? <Tag color="red">默认不开放，按需授权</Tag> : null}
+                                      {control.adminGrantOnly ? <Tag color="red">仅管理员可授权</Tag> : null}
                                     </Space>
                                     <Text type="secondary">{control.description}</Text>
                                   </div>
@@ -2293,7 +2415,15 @@ export function SettingsPage({
           <Row gutter={12}>
             <Col xs={24} md={12}>
               <Form.Item name="site" label="站点">
-                <Input placeholder="例如 深圳思远" />
+                <Select
+                  allowClear
+                  showSearch
+                  filterOption={matchesUserGroupSiteOption}
+                  loading={sitesLoading}
+                  options={enabledSiteOptions}
+                  placeholder="请选择或搜索站点"
+                  notFoundContent={sitesLoading ? '站点加载中' : '未匹配到启用站点'}
+                />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
@@ -2305,12 +2435,70 @@ export function SettingsPage({
               </Form.Item>
             </Col>
           </Row>
-          {!editingRoleGroup ? (
-            <Form.Item name="templateRole" label="初始权限模板" initialValue="OPERATOR">
-              <Select options={templateRoleOptions} />
+          {!editingRoleGroup
+          && hasSystemPermission('system:user-groups:create-from-template')
+          && hasSystemPermission('system:role-permissions:copy-role') ? (
+            <Form.Item
+              name="sourceRoleKey"
+              label="复制已有用户组权限（可选）"
+              extra="不选择时使用业务员默认权限；仅复制权限，不复制站点、成员和用户组资料。"
+            >
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                placeholder="搜索并选择已有用户组"
+                options={rolePermissionSourceOptions}
+              />
             </Form.Item>
           ) : null}
         </Form>
+      </Modal>
+      <Modal
+        title="复制权限"
+        open={rolePermissionCopyOpen}
+        destroyOnHidden
+        okText="确认覆盖"
+        cancelText="取消"
+        confirmLoading={rolePermissionCopyLoading}
+        okButtonProps={{ danger: true }}
+        onOk={() => void submitRolePermissionCopy()}
+        onCancel={() => {
+          if (rolePermissionCopyLoading) return;
+          setRolePermissionCopyOpen(false);
+          setRolePermissionCopyTarget(null);
+          setRolePermissionCopyError(null);
+          rolePermissionCopyForm.resetFields();
+        }}
+      >
+        <Space direction="vertical" size={14} style={{ width: '100%' }}>
+          <Form form={rolePermissionCopyForm} layout="vertical">
+            <Form.Item label="覆盖到当前用户组">
+              <Input value={rolePermissionCopyTarget?.label ?? ''} readOnly />
+            </Form.Item>
+            <Form.Item
+              name="sourceRoleKey"
+              label="复制权限自"
+              rules={[{ required: true, message: '请选择权限来源用户组' }]}
+            >
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder="搜索并选择已有用户组"
+                options={rolePermissionSourceOptions.filter((option) => option.value !== rolePermissionCopyTarget?.key)}
+              />
+            </Form.Item>
+          </Form>
+          <Alert
+            type="warning"
+            showIcon
+            message={selectedRolePermissionCopySource
+              ? `将用“${selectedRolePermissionCopySource.label}”的 ${selectedRolePermissionCopySource.permissions.length} 项权限，完整覆盖“${rolePermissionCopyTarget?.label ?? ''}”当前 ${rolePermissionCopyTarget?.permissions.length ?? 0} 项权限。`
+              : '确认后将完整覆盖当前用户组原有权限。'}
+            description="用户组名称、站点、说明、状态和绑定员工不会改变；来源组后续调整也不会自动同步。"
+          />
+          {rolePermissionCopyError ? <Alert type="error" showIcon message={rolePermissionCopyError} /> : null}
+        </Space>
       </Modal>
       <Modal
         title={editingStaffAccount ? '修改用户' : '新建用户'}
@@ -2383,7 +2571,26 @@ export function SettingsPage({
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item name="site" label="所属站点">
-                  <Select allowClear options={enabledSiteOptions} placeholder="请选择站点" />
+                  <Select
+                    allowClear
+                    options={enabledSiteOptions}
+                    placeholder="请选择站点"
+                    onChange={() => staffCreateForm.setFieldValue('directManagerId', null)}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={12}>
+                <Form.Item
+                  name="directManagerId"
+                  label="直属经理"
+                  extra="仅可选择同站点、启用且所属用户组具备团队运单权限的经理账号。"
+                >
+                  <Select
+                    allowClear
+                    disabled={!selectedStaffSite}
+                    options={directManagerOptions}
+                    placeholder={selectedStaffSite ? '请选择直属经理' : '请先选择所属站点'}
+                  />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>

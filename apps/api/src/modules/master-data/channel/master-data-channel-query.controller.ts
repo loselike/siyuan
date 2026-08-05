@@ -1,7 +1,6 @@
-import { Controller, ForbiddenException, Get, Inject, Req } from '@nestjs/common';
+import { Controller, Get, Inject } from '@nestjs/common';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
-import { isBusinessAgentRestrictedRole, type Principal } from '../../rbac.js';
 
 @Controller()
 export class MasterDataChannelQueryController {
@@ -27,19 +26,13 @@ export class MasterDataChannelQueryController {
 
   @Get('master-data/agents')
   @RequirePermission('master-data:agents:read')
-  async masterDataAgents(@Req() request: { user: Principal }) {
-    if (isBusinessAgentRestrictedRole(request.user.role)) {
-      throw new ForbiddenException('业务角色不能查看真实代理资料');
-    }
+  async masterDataAgents() {
     return (await this.repository.getMasterData()).agents;
   }
 
   @Get('master-data/agent-channels')
   @RequirePermission('master-data:agent-channels:read')
-  async masterDataAgentChannels(@Req() request: { user: Principal }) {
-    if (isBusinessAgentRestrictedRole(request.user.role)) {
-      throw new ForbiddenException('业务角色不能查看真实代理渠道');
-    }
+  async masterDataAgentChannels() {
     return (await this.repository.getMasterData()).agentChannels;
   }
 }

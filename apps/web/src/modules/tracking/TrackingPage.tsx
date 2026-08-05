@@ -7,6 +7,7 @@ import { shipmentStatusLabels, type BulkTrackingImportResult, type BulkTrackingI
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
 import { formatBeijingDateTime } from '../shared/format';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { formatTrackingImportDate } from './bulkImport';
 
 const { Text } = Typography;
@@ -93,7 +94,7 @@ export function TrackingPage({
     );
   };
   const taskColumns: ColumnsType<CarrierTaskSummary> = [
-    { key: 'systemOrderNo', title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (value: string, task) => renderTrackingShipmentNo(value, task.shipmentId) },
+    { key: 'systemOrderNo', title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (_: string, task) => renderTrackingShipmentNo(resolveShipmentOutboundOrderNo(task), task.shipmentId) },
     { key: 'customerName', title: '客户', dataIndex: 'customerName', width: 170 },
     { key: 'carrier', title: '承运商', dataIndex: 'carrier', width: 90 },
     { key: 'transferNo', title: '转单号', dataIndex: 'transferNo', width: 180 },
@@ -137,7 +138,7 @@ export function TrackingPage({
       width: 170,
       render: (_, shipment) => formatLatestTrackingTime(shipment)
     },
-    { key: 'systemOrderNo', title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (value: string, shipment) => renderTrackingShipmentNo(value, shipment.id) },
+    { key: 'systemOrderNo', title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (_: string, shipment) => renderTrackingShipmentNo(resolveShipmentOutboundOrderNo(shipment), shipment.id) },
     { key: 'customerName', title: '客户', dataIndex: 'customerName', width: 180 },
     { key: 'transferNo', title: '转单号', dataIndex: 'transferNo', width: 170, render: (value?: string) => value || '-' },
     { key: 'latestTracking', title: '最新物流轨迹', dataIndex: 'latestTracking', width: 320, render: (value?: string) => value || '-' },
@@ -172,7 +173,7 @@ export function TrackingPage({
         <ManagedMatrixCell
           labelWidth={54}
           fields={[
-            { key: 'systemOrderNo', label: '出货单号', value: renderTrackingShipmentNo(task.systemOrderNo, task.shipmentId) },
+            { key: 'systemOrderNo', label: '出货单号', value: renderTrackingShipmentNo(resolveShipmentOutboundOrderNo(task), task.shipmentId) },
             { key: 'customerName', label: '客户', value: task.customerName || '-', title: task.customerName, wrap: true }
           ]}
         />
@@ -258,7 +259,7 @@ export function TrackingPage({
         <ManagedMatrixCell
           labelWidth={54}
           fields={[
-            { key: 'systemOrderNo', label: '出货单号', value: renderTrackingShipmentNo(shipment.systemOrderNo, shipment.id) },
+            { key: 'systemOrderNo', label: '出货单号', value: renderTrackingShipmentNo(resolveShipmentOutboundOrderNo(shipment), shipment.id) },
             { key: 'customerName', label: '客户', value: shipment.customerName || '-', title: shipment.customerName, wrap: true },
             { key: 'transferNo', label: '转单号', value: shipment.transferNo || '-', title: shipment.transferNo }
           ]}
@@ -303,14 +304,14 @@ export function TrackingPage({
   ];
   const rowColumns: ColumnsType<BulkTrackingUpdatePreview> = [
     { key: 'rowNumber', title: '行号', dataIndex: 'rowNumber', width: 70 },
-    { key: 'customerOrderNo', title: '客户单号', dataIndex: 'customerOrderNo', width: 160 },
+    { key: 'customerOrderNo', title: '出货单号', dataIndex: 'customerOrderNo', width: 160 },
     { key: 'trackingDate', title: '轨迹日期时间', dataIndex: 'trackingDate', width: 170, render: (value: string | number) => formatTrackingImportDate(value) },
     { key: 'location', title: '地点', dataIndex: 'location', width: 120, render: (value?: string) => value || '-' },
     { key: 'latestTracking', title: '轨迹信息', dataIndex: 'latestTracking', width: 260 }
   ];
   const errorColumns: ColumnsType<NonNullable<BulkTrackingImportResult['errorRows']>[number]> = [
     { key: 'rowNumber', title: '行号', dataIndex: 'rowNumber', width: 70 },
-    { key: 'customerOrderNo', title: '客户单号', dataIndex: 'customerOrderNo', width: 160, render: (value?: string) => value || '-' },
+    { key: 'customerOrderNo', title: '出货单号', dataIndex: 'customerOrderNo', width: 160, render: (value?: string) => value || '-' },
     { key: 'reason', title: '错误原因', dataIndex: 'reason', width: 260 }
   ];
   const hasBulkImportPreview = Boolean(bulkTrackingResult?.shipmentPreviews?.length);

@@ -59,6 +59,10 @@ export class WarehouseQueryClient {
     return this.request(`/warehouse/tally-tasks${search ? `?${search}` : ''}`);
   }
 
+  warehouseTallyTaskSourcePackages(id: string): Promise<WarehousePackageSummary[]> {
+    return this.request(`/warehouse/tally-tasks/${encodeURIComponent(id)}/source-packages`);
+  }
+
   warehouseTallyTaskOutputPackages(id: string): Promise<WarehousePackageSummary[]> {
     return this.request(`/warehouse/tally-tasks/${id}/output-packages`);
   }

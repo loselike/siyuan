@@ -36,6 +36,10 @@ import type {
   CustomerContactSummary,
   CustomerContactUpdateInput,
   CustomerCreateInput,
+  CustomerSourceInput,
+  CustomerSourceListQuery,
+  CustomerSourceListResponse,
+  CustomerSourceSummary,
   CustomerSummary,
   CustomerUpdateInput,
   CustomerUserCreateInput,
@@ -243,6 +247,9 @@ import type {
   WarehouseConsolidationSummary,
   WarehouseManualReceiptCreateInput,
   WarehouseManualReceiptCreateResponse,
+  WarehouseMachineImportResponse,
+  WarehouseSameSpecReplenishInput,
+  WarehouseSameSpecReplenishResponse,
   WarehousePackageCreateInput,
   WarehousePackageSplitInput,
   WarehousePackageSplitResponse,
@@ -256,6 +263,9 @@ import type {
   WarehouseTallyLabelScanInput,
   WarehouseTallyLabelScanResponse,
   WarehouseTallyTaskCompleteInput,
+  WarehouseTallyHistoricalAggregateCorrectionPreview,
+  WarehouseTallyHistoricalAggregateCorrectionInput,
+  WarehouseTallyHistoricalAggregateCorrectionResult,
   WarehouseTallyTaskCreateInput,
   WarehouseTallyRepeatStatisticsQuery,
   WarehouseTallyRepeatStatisticsResponse,
@@ -297,6 +307,10 @@ import { WarehouseQueryClient } from './api/warehouseQueryClient';
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type RoleKey = BuiltinRoleKey | (string & {});
 export type PermissionKey =
+  | 'data-scope:sales-own'
+  | 'data-scope:misc-fee-all'
+  | 'data-scope:misc-fee-warehouse-site'
+  | 'data-scope:misc-fee-market'
   | `customer-service:${string}`
   | `tracking:${string}`
   | `finance:${string}`
@@ -338,6 +352,8 @@ export type PermissionKey =
   | 'business:order-entry:submit-review'
   | 'business:order-entry:invoice-upload'
   | 'business:order-entry:label-upload'
+  | 'business:order-entry:business-cost-view'
+  | 'business:order-entry:business-cost-write'
   | 'business:order-fee:view'
   | 'business:order-fee:create'
   | 'business:order-fee:update'
@@ -427,7 +443,9 @@ export type PermissionKey =
   | 'warehouse:today-receipt:device-log-view'
   | 'warehouse:today-receipt:column-setting'
   | 'warehouse:in-stock:view'
+  | 'warehouse:in-stock:machine-import'
   | 'warehouse:in-stock:update'
+  | 'warehouse:in-stock:same-spec-replenish'
   | 'warehouse:in-stock:split'
   | 'warehouse:in-stock:batch-select'
   | 'warehouse:in-stock:tally-start'
@@ -449,6 +467,7 @@ export type PermissionKey =
   | 'warehouse:tally-completed:view'
   | 'warehouse:tally-completed:history-view'
   | 'warehouse:tally-completed:detail-view'
+  | 'warehouse:tally-history:correct'
   | 'warehouse:tally-label:generate'
   | 'warehouse:tally-label:reprint'
   | 'warehouse:tally-label:print'
@@ -612,6 +631,7 @@ export interface RoleGroupInput {
   sortOrder?: number;
   enabled?: boolean;
   templateRole?: RoleKey;
+  sourceRoleKey?: RoleKey;
 }
 
 export interface CaptchaChallenge {
@@ -700,6 +720,27 @@ export class ApiClient {
     return this.request('/auth/me');
   }
 
+  async currentSession(): Promise<Pick<Session, 'user' | 'permissions'>> {
+    return this.request('/auth/session');
+  }
+
+  async downloadProtectedAsset(url: string): Promise<Blob> {
+    const headers: Record<string, string> = {};
+    const token = this.getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const assetUrl = resolveApiAssetUrl(url);
+    if (!assetUrl) throw new Error('文件地址不存在');
+    const response = await fetch(assetUrl, { headers });
+    if (response.status === 401) {
+      this.onUnauthorized();
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    if (!response.ok) {
+      throw new Error(formatApiErrorMessage(await response.text(), response.status));
+    }
+    return response.blob();
+  }
+
   async updateProfile(input: ProfileUpdateInput): Promise<Principal> {
     return this.request('/auth/profile', { method: 'PUT', body: JSON.stringify(input) });
   }
@@ -726,6 +767,10 @@ export class ApiClient {
 
   async shipmentReviewDetail(id: string): Promise<ShipmentReviewDetailSummary> {
     return this.request(`/shipments/${id}/review-detail`);
+  }
+
+  async shipmentPackageDetail(id: string): Promise<Pick<ShipmentReviewDetailSummary, 'shipment' | 'packages'>> {
+    return this.request(`/shipments/${id}/package-detail`);
   }
 
   async updateShipmentReviewBasic(id: string, input: ShipmentReviewBasicUpdateInput): Promise<ShipmentReviewDetailSummary> {
@@ -865,6 +910,10 @@ export class ApiClient {
     return this.request(`/operations/line-shipments/${id}/operational`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
+  async customerServiceShipments(): Promise<Shipment[]> {
+    return this.request('/customer-service/shipments');
+  }
+
   async customerServiceTransferShipments(): Promise<Shipment[]> {
     return this.request('/customer-service/transfer-shipments');
   }
@@ -949,13 +998,14 @@ export class ApiClient {
     return response.json() as Promise<{ shipment: Shipment; fileName: string; url: string }>;
   }
 
-  async downloadShipmentInvoiceTemplate(id: string): Promise<{ fileName: string; blob: Blob }> {
+  async downloadShipmentInvoiceTemplate(id: string, templateId?: string): Promise<{ fileName: string; blob: Blob }> {
     const headers: Record<string, string> = {};
     const token = this.getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
     let response: Response;
     try {
-      response = await fetch(`${API_BASE}/shipments/${encodeURIComponent(id)}/invoice-template/download`, { headers });
+      const query = templateId ? `?templateId=${encodeURIComponent(templateId)}` : '';
+      response = await fetch(`${API_BASE}/shipments/${encodeURIComponent(id)}/invoice-template/download${query}`, { headers });
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
@@ -1351,8 +1401,19 @@ export class ApiClient {
     return this.request('/warehouse/packages', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async warehouseMachineImport(file: File, commit = false): Promise<WarehouseMachineImportResponse> {
+    const body = new FormData();
+    body.append('file', file);
+    body.append('commit', String(commit));
+    return this.request('/warehouse/packages/machine-import', { method: 'POST', body });
+  }
+
   async createWarehouseManualReceipt(input: WarehouseManualReceiptCreateInput): Promise<WarehouseManualReceiptCreateResponse> {
     return this.request('/warehouse/packages/manual-receipt', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async replenishWarehouseSameSpec(id: string, input: WarehouseSameSpecReplenishInput): Promise<WarehouseSameSpecReplenishResponse> {
+    return this.request(`/warehouse/packages/${id}/same-spec-replenish`, { method: 'POST', body: JSON.stringify(input) });
   }
 
   async splitWarehousePackage(id: string, input: WarehousePackageSplitInput): Promise<WarehousePackageSplitResponse> {
@@ -1402,6 +1463,20 @@ export class ApiClient {
 
   async completeWarehouseTallyTask(id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/complete`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async warehouseTallyHistoricalAggregateCorrectionPreview(id: string): Promise<WarehouseTallyHistoricalAggregateCorrectionPreview> {
+    return this.request(`/warehouse/tally-tasks/${id}/historical-aggregate-correction`);
+  }
+
+  async correctWarehouseTallyHistoricalAggregate(
+    id: string,
+    input: WarehouseTallyHistoricalAggregateCorrectionInput
+  ): Promise<WarehouseTallyHistoricalAggregateCorrectionResult> {
+    return this.request(`/warehouse/tally-tasks/${id}/historical-aggregate-correction`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
   }
 
   async generateWarehouseTallyTaskLabel(id: string): Promise<WarehouseTallyTaskSummary> {
@@ -1854,6 +1929,10 @@ export class ApiClient {
     return this.request(`/finance/payment-vouchers${this.queryString(query)}`);
   }
 
+  async deletePendingPaymentBillVoucher(id: string): Promise<{ deleted: true }> {
+    return this.request(`/finance/pending-payment-bill-vouchers/${id}`, { method: 'DELETE' });
+  }
+
   async updatePaymentVoucherDifference(id: string, input: PaymentVoucherDifferenceInput): Promise<PaymentVoucherSummary> {
     return this.request(`/finance/payment-vouchers/${id}/difference`, { method: 'PATCH', body: JSON.stringify(input) });
   }
@@ -2032,6 +2111,26 @@ export class ApiClient {
     return this.request('/master-data/customers');
   }
 
+  async customerSources(query: CustomerSourceListQuery = {}): Promise<CustomerSourceListResponse> {
+    const params = new globalThis.URLSearchParams();
+    if (query.keyword?.trim()) params.set('keyword', query.keyword.trim());
+    if (query.enabledOnly !== undefined) params.set('enabledOnly', String(query.enabledOnly));
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return this.request(`/master-data/customer-sources${suffix}`);
+  }
+
+  async createCustomerSource(input: CustomerSourceInput): Promise<CustomerSourceSummary> {
+    return this.request('/master-data/customer-sources', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateCustomerSource(id: string, input: Partial<CustomerSourceInput>): Promise<CustomerSourceSummary> {
+    return this.request(`/master-data/customer-sources/${id}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deleteCustomerSource(id: string): Promise<{ id: string; deleted: boolean }> {
+    return this.request(`/master-data/customer-sources/${id}`, { method: 'DELETE' });
+  }
+
   async createCustomer(input: CustomerCreateInput): Promise<CustomerSummary> {
     return this.request('/master-data/customers', { method: 'POST', body: JSON.stringify(input) });
   }
@@ -2180,6 +2279,10 @@ export class ApiClient {
     return this.request(`/system/roles/${role}/enabled`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
+  async deleteRoleGroup(role: RoleKey): Promise<RolePermissionRow> {
+    return this.request(`/system/roles/${role}`, { method: 'DELETE' });
+  }
+
   async staffAccounts(query: StaffAccountQuery = {}): Promise<StaffAccountSummary[]> {
     const params = new URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
@@ -2214,6 +2317,13 @@ export class ApiClient {
 
   async updateRolePermissions(role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
     return this.request(`/system/roles/${role}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions }) });
+  }
+
+  async copyRolePermissions(role: RoleKey, sourceRoleKey: RoleKey): Promise<RolePermissionRow> {
+    return this.request(`/system/roles/${role}/permissions/copy`, {
+      method: 'PUT',
+      body: JSON.stringify({ sourceRoleKey })
+    });
   }
 
   async notificationSummary(): Promise<NotificationUnreadSummary> {

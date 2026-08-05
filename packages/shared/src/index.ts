@@ -3,6 +3,73 @@ export * from './finance-catalog.js';
 export * from './problem-ticket.js';
 
 import type { CanadaAddressType } from './pricing-rule-engine.js';
+
+export const FINANCIAL_DECIMAL_SCALE = 8;
+export const MONETARY_TOTAL_DECIMAL_SCALE = 2;
+
+function decimalParts(value: number): { sign: 1 | -1; unscaled: bigint; scale: number } {
+  if (!Number.isFinite(value)) throw new RangeError('Financial values must be finite numbers');
+  const sign: 1 | -1 = value < 0 ? -1 : 1;
+  const [coefficient, exponentText] = Math.abs(value).toString().toLowerCase().split('e');
+  const [integerPart, fractionalPart = ''] = coefficient.split('.');
+  const exponent = Number(exponentText ?? 0);
+  let scale = fractionalPart.length - exponent;
+  let unscaled = BigInt(`${integerPart}${fractionalPart}`);
+  if (scale < 0) {
+    unscaled *= 10n ** BigInt(-scale);
+    scale = 0;
+  }
+  return { sign, unscaled, scale };
+}
+
+function roundDecimalParts(sign: 1 | -1, unscaled: bigint, scale: number, targetScale: number): number {
+  if (scale > targetScale) {
+    const divisor = 10n ** BigInt(scale - targetScale);
+    const remainder = unscaled % divisor;
+    unscaled = unscaled / divisor + (remainder * 2n >= divisor ? 1n : 0n);
+    scale = targetScale;
+  }
+  const numeric = Number(unscaled) / 10 ** scale;
+  const rounded = sign * numeric;
+  if (!Number.isFinite(rounded)) throw new RangeError('Financial calculation exceeds the supported numeric range');
+  return rounded;
+}
+
+export function roundFinancialDecimal(value: number): number {
+  const parts = decimalParts(value);
+  return roundDecimalParts(parts.sign, parts.unscaled, parts.scale, FINANCIAL_DECIMAL_SCALE);
+}
+
+export function calculateMonetaryTotal(left: number, right: number): number {
+  const leftParts = decimalParts(left);
+  const rightParts = decimalParts(right);
+  return roundDecimalParts(
+    leftParts.sign === rightParts.sign ? 1 : -1,
+    leftParts.unscaled * rightParts.unscaled,
+    leftParts.scale + rightParts.scale,
+    MONETARY_TOTAL_DECIMAL_SCALE
+  );
+}
+
+export function isFinancialDecimalWithinScale(value: number): boolean {
+  if (!Number.isFinite(value)) return false;
+  return decimalParts(value).scale <= FINANCIAL_DECIMAL_SCALE;
+}
+
+export function formatFinancialDecimal(value: number): string {
+  if (!Number.isFinite(value)) return '-';
+  return value.toFixed(FINANCIAL_DECIMAL_SCALE).replace(/\.?(?:0+)$/, '');
+}
+
+export function roundMonetaryTotal(value: number): number {
+  const parts = decimalParts(value);
+  return roundDecimalParts(parts.sign, parts.unscaled, parts.scale, MONETARY_TOTAL_DECIMAL_SCALE);
+}
+
+export function formatMonetaryTotal(value: number): string {
+  if (!Number.isFinite(value)) return '-';
+  return value.toFixed(MONETARY_TOTAL_DECIMAL_SCALE);
+}
 import type { ProblemTicketSummary } from './problem-ticket.js';
 
 export type BusinessType = 'EXPRESS' | 'SMALL_PACKET' | 'DEDICATED_LINE';
@@ -66,6 +133,9 @@ export interface StaffAccountSummary {
   nickname?: string;
   departmentId?: string;
   department?: string;
+  directManagerId?: string | null;
+  directManagerUsername?: string;
+  directManagerName?: string;
   site?: string;
   role: StaffAccountRoleKey;
   roleLabel: string;
@@ -83,6 +153,7 @@ export interface StaffAccountCreateInput {
   gender?: StaffGender;
   nickname?: string;
   departmentId?: string;
+  directManagerId?: string | null;
   site?: string;
   enabled?: boolean;
   role: StaffAccountRoleKey;
@@ -96,6 +167,7 @@ export interface StaffAccountUpdateInput {
   gender?: StaffGender;
   nickname?: string;
   departmentId?: string;
+  directManagerId?: string | null;
   site?: string;
   enabled?: boolean;
   role?: StaffAccountRoleKey;
@@ -148,6 +220,7 @@ export interface RoleGroupInput {
   sortOrder?: number;
   enabled?: boolean;
   templateRole?: StaffAccountRoleKey;
+  sourceRoleKey?: StaffAccountRoleKey;
 }
 
 export type ShipmentStatus =
@@ -185,6 +258,46 @@ export type FulfillmentAction =
 
 export type ShipmentPaymentMethod = '对公' | '对私' | '阿里店铺' | '外汇';
 
+export const MAX_SHIPMENT_PRODUCT_NAMES = 4;
+
+export function isShipmentProductNamesInput(value: unknown): value is string[] | undefined {
+  return value === undefined || (Array.isArray(value) && value.every((item) => typeof item === 'string'));
+}
+
+export function normalizeShipmentProductNames(
+  productNames?: readonly (string | null | undefined)[],
+  legacyProductName?: string | null
+) {
+  const candidates = productNames?.length ? productNames : [legacyProductName];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const name = candidate?.trim();
+    if (!name) continue;
+    const key = name.toLocaleLowerCase('zh-CN');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(name);
+  }
+  return normalized;
+}
+
+export function formatShipmentProductNames(
+  productNames?: readonly (string | null | undefined)[],
+  legacyProductName?: string | null
+) {
+  return normalizeShipmentProductNames(productNames, legacyProductName).join('、');
+}
+
+/**
+ * 运单下全部有效应收费用的展示汇总。它描述应收计价，不代表实际到账。
+ */
+export interface ShipmentReceivableSummary {
+  amounts: Array<{ currency: string; amount: number }>;
+  currencies: string[];
+  settlementMethods: string[];
+}
+
 export interface Shipment {
   id: string;
   createdAt: string;
@@ -207,6 +320,7 @@ export interface Shipment {
   outboundBy?: string;
   batchDispatchSource?: string;
   productName?: string;
+  productNames?: string[];
   site?: string;
   declarationRequired?: boolean;
   sensitive?: boolean;
@@ -276,10 +390,29 @@ export interface Shipment {
   businessInvoiceUploadedBy?: string;
   businessInvoiceUploadedAt?: string;
   invoiceTemplateAvailable?: boolean;
+  invoiceTemplateOptions?: AgentInvoiceTemplateOption[];
   paymentAmountUsd?: number;
   paymentAmountCny?: number;
   paymentMethod?: ShipmentPaymentMethod;
+  receivableSummary?: ShipmentReceivableSummary;
   hasProblemTicket: boolean;
+}
+
+export interface ShipmentOutboundOrderNoSource {
+  customerOrderNo?: string | null;
+  outboundOrderNo?: string | null;
+  systemOrderNo?: string | null;
+}
+
+/**
+ * Resolve the business-facing outbound order number while retaining the
+ * historical internal system number as a compatibility fallback.
+ */
+export function resolveShipmentOutboundOrderNo(source: ShipmentOutboundOrderNoSource): string {
+  return source.customerOrderNo?.trim()
+    || source.outboundOrderNo?.trim()
+    || source.systemOrderNo?.trim()
+    || '-';
 }
 
 export type CustomerServiceDataReviewStatus = 'PENDING' | 'APPROVED';
@@ -497,6 +630,7 @@ export interface ShipmentOperationalUpdateInput {
   channelId?: string;
   customerOrderNo?: string;
   productName?: string;
+  productNames?: string[];
   destinationCountry?: string;
   packageCount?: number;
   receivableWeightKg?: number;
@@ -654,6 +788,8 @@ export interface LabelCreateResponse {
 export interface CarrierTaskSummary {
   id: string;
   shipmentId: string;
+  customerOrderNo?: string;
+  outboundOrderNo?: string;
   systemOrderNo: string;
   customerName: string;
   type: CarrierTaskType;
@@ -2001,9 +2137,71 @@ export interface WarehouseManualReceiptCreateResponse {
   totalPackages: number;
 }
 
+/** 从一条原始过机箱生成同箱规、单件补录的请求。 */
+export interface WarehouseSameSpecReplenishInput {
+  supplementCount: number;
+  requestId: string;
+}
+
+export interface WarehouseSameSpecReplenishResponse {
+  sourcePackageId: string;
+  totalPackageCount: number;
+  packages: WarehousePackageSummary[];
+  idempotent?: boolean;
+}
+
 export interface WarehouseManualReceiptCustomerOption {
   code: string;
   name: string;
+}
+
+export type WarehouseMachineImportIssueType =
+  | 'INVALID'
+  | 'DUPLICATE_FILE'
+  | 'CONFLICT_FILE'
+  | 'DUPLICATE_SYSTEM'
+  | 'DUPLICATE_BATCH';
+
+export interface WarehouseMachineImportIssue {
+  type: WarehouseMachineImportIssueType;
+  sheetName: string;
+  rowNumber: number;
+  barcode?: string;
+  reason: string;
+}
+
+export interface WarehouseMachineImportSampleRow {
+  sheetName: string;
+  rowNumber: number;
+  barcode: string;
+  customerCode: string;
+  domesticTrackingNo: string;
+  packageCount: number;
+  weightKg: number;
+  lengthCm: number;
+  widthCm: number;
+  heightCm: number;
+  cbm: number;
+  volumetricWeightKg: number;
+  scanTime: string;
+  remark?: string;
+}
+
+export interface WarehouseMachineImportResponse {
+  fileName: string;
+  committed: boolean;
+  totalRows: number;
+  validRows: number;
+  importableRows: number;
+  importedRows: number;
+  invalidRows: number;
+  duplicateFileRows: number;
+  duplicateSystemRows: number;
+  issueCount: number;
+  issues: WarehouseMachineImportIssue[];
+  samples: WarehouseMachineImportSampleRow[];
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 export interface WarehousePackageUpdateInput {
@@ -2026,6 +2224,7 @@ export interface WarehousePackageUpdateInput {
 export type WarehouseTodayDatePreset = 'TODAY' | 'WEEK' | 'LAST_7_DAYS' | 'MONTH' | 'CUSTOM';
 
 export interface WarehouseTodayQuery {
+  dataScope?: 'OWN' | 'ALL';
   datePreset?: WarehouseTodayDatePreset;
   customFrom?: string;
   customTo?: string;
@@ -2051,6 +2250,7 @@ export interface WarehouseTodayResponse {
 }
 
 export interface WarehouseInStockQuery {
+  dataScope?: 'OWN' | 'ALL';
   site?: string;
   customerOrderNo?: string;
   domesticTrackingNo?: string;
@@ -2349,10 +2549,8 @@ export interface WarehouseTallyTaskCompleteInput {
   widthCm?: number;
   heightCm?: number;
   remark?: string;
-  /**
-   * 任务内每个最终包裹的来源与确认后件重尺。省略时保留兼容旧的单一完成动作。
-   */
-  results?: WarehouseTallyTaskPackageResultInput[];
+  /** 任务内每个最终包裹的来源；服务端据此按理货后实体件逐条建档。 */
+  results: WarehouseTallyTaskPackageResultInput[];
 }
 
 export interface WarehouseTallyTaskPackageResultInput {
@@ -2362,6 +2560,43 @@ export interface WarehouseTallyTaskPackageResultInput {
   lengthCm?: number;
   widthCm?: number;
   heightCm?: number;
+}
+
+export interface WarehouseTallyHistoricalAggregateScanSummary {
+  sampleId: string;
+  receivedAt: string;
+  deviceNo?: string;
+  result: 'SUCCESS' | 'FAILED';
+  weightKg: number;
+  lengthCm: number;
+  widthCm: number;
+  heightCm: number;
+}
+
+export interface WarehouseTallyHistoricalAggregateCorrectionPreview {
+  taskId: string;
+  taskNo: string;
+  eligible: boolean;
+  reason?: string;
+  alreadyCorrected: boolean;
+  legacyPackageId?: string;
+  legacyPackageNo?: string;
+  expectedPackageCount: number;
+  scans: WarehouseTallyHistoricalAggregateScanSummary[];
+  previewFingerprint?: string;
+}
+
+export interface WarehouseTallyHistoricalAggregateCorrectionInput {
+  sampleIds: string[];
+  previewFingerprint: string;
+  confirmedPhysicalPieces: boolean;
+}
+
+export interface WarehouseTallyHistoricalAggregateCorrectionResult {
+  task: WarehouseTallyTaskSummary;
+  correctedPackages: WarehousePackageSummary[];
+  archivedAggregatePackageId: string;
+  alreadyCorrected: boolean;
 }
 
 export interface WarehouseTallyLabelScanInput {
@@ -2757,6 +2992,7 @@ export interface WaterReceiptSummary {
   arrivedBy?: string;
   archivedAt?: string;
   voidedAt?: string;
+  voidedBy?: string;
   voidedReason?: string;
   accountLedgerId?: string;
   createdBy?: string;
@@ -4259,6 +4495,7 @@ export interface BusinessCostAuditExportResponse {
 
 export interface ShipmentFinanceDetailSummary {
   shipmentId: string;
+  customerOrderNo?: string;
   outboundOrderNo?: string;
   systemOrderNo: string;
   agentName?: string;
@@ -4431,6 +4668,7 @@ export interface OrderEntryShipmentInput {
   sensitive?: boolean;
   cargoType: string;
   productName: string;
+  productNames?: string[];
   settlementMethod: string;
   tradeTerms?: string;
   fbaInboundNo?: string;
@@ -4554,8 +4792,36 @@ export interface CustomerSummary {
   customerType?: string;
   customerSource?: string;
   salesperson?: string;
+  salespersonSite?: string;
   defaultSettlementMethod?: string;
   enabled: boolean;
+}
+
+export interface CustomerSourceSummary {
+  id: string;
+  name: string;
+  normalizedName: string;
+  remark?: string;
+  sortOrder: number;
+  enabled: boolean;
+  customerCount: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CustomerSourceInput {
+  name: string;
+  remark?: string;
+  enabled?: boolean;
+}
+
+export interface CustomerSourceListQuery {
+  keyword?: string;
+  enabledOnly?: boolean;
+}
+
+export interface CustomerSourceListResponse {
+  items: CustomerSourceSummary[];
 }
 
 export interface CustomerContactSummary {
@@ -4585,6 +4851,23 @@ export interface CustomerUserSummary {
 export type AgentIntegrationType = 'MANUAL' | 'API' | 'PLATFORM' | 'OTHER';
 export type AgentSettlementCycle = 'WEEKLY' | 'MONTHLY' | 'PER_SHIPMENT';
 
+export interface AgentInvoiceTemplateOption {
+  id: string;
+  name: string;
+}
+
+export interface AgentInvoiceTemplate {
+  id: string;
+  name: string;
+  url: string;
+}
+
+export interface AgentInvoiceTemplateInput {
+  id?: string;
+  name?: string;
+  url?: string;
+}
+
 export interface AgentSummary {
   id: string;
   code?: string;
@@ -4605,6 +4888,11 @@ export interface AgentSummary {
   warehouseContactPhone3?: string;
   invoiceTemplateName?: string;
   invoiceTemplateUrl?: string;
+  invoiceTemplateName2?: string;
+  invoiceTemplateUrl2?: string;
+  invoiceTemplateName3?: string;
+  invoiceTemplateUrl3?: string;
+  invoiceTemplates?: AgentInvoiceTemplate[];
   trackingWebsite?: string;
   enabled: boolean;
 }
@@ -4632,8 +4920,8 @@ export interface CarrierSummary {
 export interface ChannelSummary {
   id: string;
   name: string;
-  carrierId: string;
-  carrierName: string;
+  carrierId?: string;
+  carrierName?: string;
   businessType: CompanyChannelBusinessType;
   category: string;
   volumeDivisor: number;
@@ -4888,6 +5176,7 @@ export interface CustomerCreateInput {
   fullName?: string;
   customerType?: string;
   customerSource?: string;
+  saveCustomerSourceToCatalog?: boolean;
   salesperson?: string;
   defaultSettlementMethod?: string;
 }
@@ -4935,6 +5224,11 @@ export interface AgentCreateInput {
   warehouseContactPhone3?: string;
   invoiceTemplateName?: string;
   invoiceTemplateUrl?: string;
+  invoiceTemplateName2?: string;
+  invoiceTemplateUrl2?: string;
+  invoiceTemplateName3?: string;
+  invoiceTemplateUrl3?: string;
+  invoiceTemplates?: AgentInvoiceTemplateInput[];
   trackingWebsite?: string;
 }
 
@@ -4957,8 +5251,8 @@ export interface CarrierCreateInput {
 
 export interface ChannelCreateInput {
   name: string;
-  carrierId: string;
-  carrierName?: string;
+  carrierId?: string | null;
+  carrierName?: string | null;
   businessType?: CompanyChannelBusinessType;
   category?: string;
   volumeDivisor?: number;
@@ -5124,6 +5418,7 @@ export interface ShipmentCreateInput {
   initialStatus?: ShipmentStatus;
   latestTracking?: string;
   productName?: string;
+  productNames?: string[];
   declarationRequired?: boolean;
   sensitive?: boolean;
   cargoType?: string;
@@ -5268,6 +5563,25 @@ export const shipmentStatusLabels: Record<ShipmentStatus, string> = {
   REVIEW_REJECTED: '审核不通过',
   CANCELLED: '已取消'
 };
+
+const invoiceTemplateDownloadableShipmentStatuses = new Set<ShipmentStatus>([
+  'WAITING_DISPATCH',
+  'OUTBOUNDED',
+  'WAITING_DEPARTURE',
+  'DEPARTED',
+  'ARRIVED_PORT',
+  'DELIVERING',
+  'WAITING_ONLINE',
+  'WAITING_SIGNED',
+  'WAITING_RETURN',
+  'PROBLEM',
+  'STUCK',
+  'SIGNED'
+]);
+
+export function canDownloadShipmentInvoiceTemplate(status: ShipmentStatus): boolean {
+  return invoiceTemplateDownloadableShipmentStatuses.has(status);
+}
 
 export const businessTypeLabels: Record<BusinessType, string> = {
   EXPRESS: '快递',
@@ -5586,9 +5900,9 @@ export function validateShipmentImportRows(rows: ShipmentImportRow[]): ShipmentI
     const rowErrors: ShipmentImportError[] = [];
 
     if (!normalizedOrderNo) {
-      rowErrors.push({ rowNumber, field: 'customerOrderNo', message: '客户单号不能为空' });
+      rowErrors.push({ rowNumber, field: 'customerOrderNo', message: '出货单号不能为空' });
     } else if (seenOrderNos.has(normalizedOrderNo)) {
-      rowErrors.push({ rowNumber, field: 'customerOrderNo', message: '客户单号重复' });
+      rowErrors.push({ rowNumber, field: 'customerOrderNo', message: '出货单号重复' });
     }
 
     if (!row.destinationCountry.trim()) {
@@ -5837,7 +6151,11 @@ export function createBulkTrackingImportResult(rows: BulkTrackingImportRow[], sh
     if (!currentLatest || compareTrackingDate(update.trackingDate, currentLatest.trackingDate) > 0) {
       latestByShipmentId.set(shipment.id, update);
     }
-    const meta = previewMetaByShipmentId.get(shipment.id) ?? { systemOrderNo: shipment.systemOrderNo, matchedOrderNo: orderNo, trackingCount: 0 };
+    const meta = previewMetaByShipmentId.get(shipment.id) ?? {
+      systemOrderNo: resolveShipmentOutboundOrderNo(shipment),
+      matchedOrderNo: orderNo,
+      trackingCount: 0
+    };
     previewMetaByShipmentId.set(shipment.id, { ...meta, trackingCount: meta.trackingCount + 1 });
   }
 

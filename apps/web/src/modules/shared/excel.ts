@@ -1,6 +1,7 @@
 import type readXlsxFile from 'read-excel-file/browser';
 import type { CellValue as ReadCellValue } from 'read-excel-file/browser';
 import writeXlsxFile from 'write-excel-file/browser';
+import type { Cell, SheetData } from 'write-excel-file/browser';
 import type * as XLSX from '@e965/xlsx';
 
 export type ExcelModule = {
@@ -11,6 +12,8 @@ export type ExcelCellValue = string | number | null;
 export type SimpleWorksheet = {
   name: string;
   rows: ExcelCellValue[][];
+  columnWidths?: number[];
+  headerRow?: boolean;
 };
 export type SimpleWorkbook = {
   worksheets: SimpleWorksheet[];
@@ -59,21 +62,57 @@ export function worksheetToRows(sheet: SimpleWorksheet): ExcelCellValue[][] {
   return sheet.rows;
 }
 
-export function addRowsWorksheet(workbook: SimpleWorkbook, name: string, rows: Array<Array<string | number | null | undefined>>) {
+export function addRowsWorksheet(
+  workbook: SimpleWorkbook,
+  name: string,
+  rows: Array<Array<string | number | null | undefined>>,
+  options: Pick<SimpleWorksheet, 'columnWidths' | 'headerRow'> = {}
+) {
   const sheet = {
     name,
-    rows: rows.map((row) => row.map((cell) => cell ?? null))
+    rows: rows.map((row) => row.map((cell) => cell ?? null)),
+    ...options
   };
   workbook.worksheets.push(sheet);
   return sheet;
 }
 
+function worksheetToWritableRows(sheet: SimpleWorksheet): SheetData {
+  return sheet.rows.map((row, rowIndex) => {
+    if (!sheet.headerRow || rowIndex !== 0) return row;
+    return row.map((value): Cell => ({
+      value: value ?? '',
+      type: typeof value === 'number' ? Number : String,
+      fontWeight: 'bold',
+      textColor: '#1F2937',
+      backgroundColor: '#EAF2FF',
+      align: 'center',
+      alignVertical: 'center',
+      height: 26,
+      bottomBorderColor: '#B4C7E7',
+      bottomBorderStyle: 'thin'
+    }));
+  });
+}
+
+function worksheetWriteOptions(sheet: SimpleWorksheet) {
+  return {
+    sheet: sheet.name,
+    columns: sheet.columnWidths?.map((width) => ({ width })),
+    stickyRowsCount: sheet.headerRow ? 1 : undefined
+  };
+}
+
 export async function writeWorkbookBlob(workbook: SimpleWorkbook): Promise<Blob> {
   if (workbook.worksheets.length === 1) {
-    return writeXlsxFile(workbook.worksheets[0].rows).toBlob();
+    const sheet = workbook.worksheets[0];
+    return writeXlsxFile(worksheetToWritableRows(sheet), worksheetWriteOptions(sheet)).toBlob();
   }
   return writeXlsxFile(
-    workbook.worksheets.map((sheet) => ({ sheet: sheet.name, data: sheet.rows }))
+    workbook.worksheets.map((sheet) => ({
+      ...worksheetWriteOptions(sheet),
+      data: worksheetToWritableRows(sheet)
+    }))
   ).toBlob();
 }
 

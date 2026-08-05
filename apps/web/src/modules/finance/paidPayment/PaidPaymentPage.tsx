@@ -1,13 +1,15 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AutoComplete, Button, Card, Col, Descriptions, Form, Image, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { AutoComplete, Button, Card, Col, Descriptions, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import type { PaidPaymentListQuery, PaidPaymentListResponse, PaidPaymentSummary, PayerBankAccountSummary, PaymentVoucherSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { downloadCsv } from '../exportCsv';
 import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput';
+import { ProtectedVoucherImage } from '../ProtectedVoucherImage';
 import { formatBeijingDate, formatBusinessDate } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, type ManagedTableColumns } from '../../shared/ui';
+import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -69,15 +71,16 @@ function formatBankInfo(row: PaidPaymentSummary) {
   return `${row.payeeBankAccount.accountName} / ${row.payeeBankAccount.bankName} / ${row.payeeBankAccount.bankAccountNo}`;
 }
 
-function renderVoucherThumb(vouchers: PaymentVoucherSummary[], alt: string, onPreview: (url: string) => void) {
+function renderVoucherThumb(apiClient: ApiClient, vouchers: PaymentVoucherSummary[], alt: string, onPreview: (url: string) => void) {
   const voucher = vouchers.find((item) => item.url) ?? vouchers[0];
   if (!voucher) return '-';
   return (
     <Space size={6} wrap={false} className="finance-paid-voucher-cell">
       {voucher.url ? (
         <Tooltip title="双击查看凭证">
-          <Image
-            src={voucher.url}
+          <ProtectedVoucherImage
+            apiClient={apiClient}
+            url={voucher.url}
             alt={alt}
             width={42}
             height={32}
@@ -265,7 +268,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
         { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
         { key: 'salesperson', label: '业务员' },
         { key: 'customerCode', label: '客户编号' },
-        { key: 'systemOrderNo', label: '出货单号' },
+        { key: 'outboundOrderNo', label: '出货单号' },
         { key: 'feeName', label: '应付费用' },
         { key: 'currency', label: '币种' },
         { key: 'totalAmount', label: '合计金额' },
@@ -316,7 +319,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
     { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value ?? '-' },
     { title: '业务员', dataIndex: 'salesperson', width: 120, render: (value?: string) => value ?? '-' },
     { title: '客户编号', dataIndex: 'customerCode', width: 120, render: (value?: string) => value ?? '-' },
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, render: (_: string | undefined, row) => renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)) },
     { title: '应付费用', dataIndex: 'feeName', width: 180, render: (value?: string) => value ?? '-' },
     { title: '状态', dataIndex: 'status', width: 100, render: statusTag },
     { title: '币种', dataIndex: 'currency', width: 90, render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag> },
@@ -326,7 +329,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
       title: '对账单凭证',
       dataIndex: 'billVouchers',
       width: 190,
-      render: (_, row) => renderVoucherThumb(row.billVouchers, '对账单凭证', setPreviewUrl)
+      render: (_, row) => renderVoucherThumb(apiClient, row.billVouchers, '对账单凭证', setPreviewUrl)
     },
     {
       title: '收款方银行信息',
@@ -340,7 +343,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
       title: '水单',
       dataIndex: 'waterReceipts',
       width: 180,
-      render: (_, row) => renderVoucherThumb(row.waterReceipts, '付款水单', setPreviewUrl)
+      render: (_, row) => renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl)
     },
     {
       title: '操作',
@@ -375,7 +378,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
                   size="small"
                   column={{ xs: 1, sm: 2, md: 5 }}
                   items={[
-                    { key: 'systemOrderNo', label: '出货单号', children: item.systemOrderNo || '-' },
+                    { key: 'systemOrderNo', label: '出货单号', children: resolveShipmentOutboundOrderNo(item) },
                     { key: 'customerCode', label: '客户编号', children: item.customerCode || '-' },
                     { key: 'feeName', label: '应付费用', children: item.feeName || '-' },
                     { key: 'currency', label: '币种', children: item.currency },
@@ -416,7 +419,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
         <ManagedMatrixCell
           labelWidth={54}
           fields={[
-            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(row.systemOrderNo), title: row.systemOrderNo },
+            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)), title: resolveShipmentOutboundOrderNo(row) },
             { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
             { key: 'feeName', label: '应付费用', value: row.feeName || '-', title: row.feeName, wrap: true },
@@ -433,11 +436,11 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
         <ManagedMatrixCell
           labelWidth={66}
           fields={[
-            { key: 'billVouchers', label: '对账凭证', value: renderVoucherThumb(row.billVouchers, '对账单凭证', setPreviewUrl) },
+            { key: 'billVouchers', label: '对账凭证', value: renderVoucherThumb(apiClient, row.billVouchers, '对账单凭证', setPreviewUrl) },
             { key: 'payeeBankAccount', label: '收款银行', value: formatBankInfo(row), title: formatBankInfo(row), wrap: true },
             { key: 'payerBankName', label: '付款方银行', value: row.payerBankName || '-', title: row.payerBankName },
             { key: 'paidAt', label: '付款日期', value: formatBusinessDate(row.paidAt) },
-            { key: 'waterReceipts', label: '水单', value: renderVoucherThumb(row.waterReceipts, '付款水单', setPreviewUrl) }
+            { key: 'waterReceipts', label: '水单', value: renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl) }
           ]}
         />
       )
@@ -581,14 +584,14 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
           <Form.Item label="付款备注" name="paidRemark"><Input.TextArea rows={2} /></Form.Item>
           {canUploadVoucher ? (
             <Form.Item label="付款水单截图" name="waterReceiptImage">
-              <VoucherImageInput disabled={!canUploadVoucher} onFileChange={setConfirmReceiptFile} />
+              <VoucherImageInput apiClient={apiClient} disabled={!canUploadVoucher} onFileChange={setConfirmReceiptFile} />
             </Form.Item>
           ) : null}
         </Form>
       </Modal>
 
       <Modal title="凭证预览" className="finance-modal finance-preview-modal" width={760} open={Boolean(previewUrl)} footer={null} onCancel={() => setPreviewUrl(undefined)} destroyOnHidden>
-        {previewUrl ? <Image src={previewUrl} alt="付款凭证" style={{ maxWidth: '100%' }} /> : null}
+        {previewUrl ? <ProtectedVoucherImage apiClient={apiClient} url={previewUrl} alt="付款凭证" style={{ maxWidth: '100%' }} /> : null}
       </Modal>
 
       <Modal title="补充付款信息" className="finance-modal" width={720} open={Boolean(supplementRow)} onCancel={() => setSupplementRow(undefined)} onOk={() => void submitSupplement()} okText="保存" cancelText="取消" destroyOnHidden>
@@ -597,6 +600,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
           {canUploadVoucher ? (
             <Form.Item label="付款水单截图" name="waterReceiptImage">
               <VoucherImageInput
+                apiClient={apiClient}
                 disabled={!canUploadVoucher || !supplementRow}
                 uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PAID_PAYMENT_RECEIPT', paymentApplicationId: supplementRow?.id }) as Promise<VoucherImageValue>}
               />

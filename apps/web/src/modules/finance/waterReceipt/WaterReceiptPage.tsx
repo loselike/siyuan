@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Col, Form, Image, Input, InputNumber, message, Modal, Popconfirm, Row, Segmented, Select, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Segmented, Select, Space, Tag, Typography } from 'antd';
 import type {
   CustomerSummary,
   ReceivableAuditSummary,
@@ -15,8 +15,8 @@ import type {
   WaterReceiptSummary
 } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
-import { resolveApiAssetUrl } from '../../../apiClient';
 import { downloadCsv } from '../exportCsv';
+import { ProtectedVoucherImage } from '../ProtectedVoucherImage';
 import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput';
 import { formatBeijingDate, formatBusinessDate, formatCurrency } from '../../shared/format';
 import { AppDatePicker, ConfirmActionButton, ManagedDualViewTable, ManagedMatrixCell, ManagedTable, type ManagedTableColumns } from '../../shared/ui';
@@ -30,6 +30,7 @@ type WaterReceiptPageProps = {
   customers: CustomerSummary[];
   settlementOptions: Array<{ label: string; value: string }>;
   renderShipmentOrderNoLink: (systemOrderNo?: string) => ReactNode;
+  readOnlyMatching?: boolean;
   notificationTargetId?: string;
   onNotificationTargetHandled?: () => void;
 };
@@ -84,6 +85,33 @@ function statusLabel(status: WaterReceiptSummary['status']) {
 function formatPlainAmount(value?: number) {
   const amount = Number(value ?? 0);
   return Number.isFinite(amount) ? amount.toFixed(2) : '0.00';
+}
+
+export async function copyWaterReceiptPaymentNo(
+  paymentNo?: string,
+  clipboard: Pick<Clipboard, 'writeText'> | null = typeof navigator === 'undefined' ? null : navigator.clipboard
+) {
+  const value = paymentNo?.trim();
+  if (!value) return false;
+  try {
+    if (clipboard?.writeText) {
+      await clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // HTTP deployments may not expose the Clipboard API; continue with the legacy browser fallback.
+  }
+  if (typeof document === 'undefined' || typeof document.execCommand !== 'function') return false;
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  return copied;
 }
 
 export function formatWaterReceiptAmount(value?: number, currency?: string) {
@@ -254,6 +282,10 @@ export function createWaterReceiptCustomerOptions(customers: CustomerSummary[]) 
     .map((customer) => ({ label: customer.code, value: customer.code }));
 }
 
+export function resolveWaterReceiptCustomerSite(customers: CustomerSummary[], customerCode?: string) {
+  return customers.find((customer) => customer.code === customerCode)?.salespersonSite?.trim() || undefined;
+}
+
 export function createWaterReceiptSiteOptions(sites: SiteSummary[], currentSite?: string) {
   const options = sites
     .filter((site) => site.enabled)
@@ -296,7 +328,7 @@ export function createWaterReceiptUpdatePayload(
   return payload;
 }
 
-export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, customers, settlementOptions, renderShipmentOrderNoLink, notificationTargetId, onNotificationTargetHandled }: WaterReceiptPageProps) {
+export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, customers, settlementOptions, renderShipmentOrderNoLink, notificationTargetId, onNotificationTargetHandled, readOnlyMatching = false }: WaterReceiptPageProps) {
   const [queryForm] = Form.useForm<WaterReceiptListQuery>();
   const [form] = Form.useForm<WaterReceiptFormValues>();
   const [voucherForm] = Form.useForm<VoucherFormValues>();
@@ -338,9 +370,9 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
   const canManage = hasPermission(permissions, 'finance:water-receipt:update');
   const canCreate = hasPermission(permissions, 'finance:water-receipt:create');
   const canArrive = hasPermission(permissions, 'finance:water-receipt:arrive');
-  const canMatch = hasPermission(permissions, 'finance:water-match:create');
-  const canDeleteMatch = hasPermission(permissions, 'finance:water-match:cancel');
-  const canAdjustMatch = hasPermission(permissions, 'finance:water-match:adjust');
+  const canMatch = !readOnlyMatching && hasPermission(permissions, 'finance:water-match:create');
+  const canDeleteMatch = !readOnlyMatching && hasPermission(permissions, 'finance:water-match:cancel');
+  const canAdjustMatch = !readOnlyMatching && hasPermission(permissions, 'finance:water-match:adjust');
   const canViewMatchRecords = hasPermission(permissions, 'finance:water-match:receivable-view');
   const isMatchReviewMode = matchPanelMode === 'manage';
   const canVoid = hasPermission(permissions, 'finance:water-receipt:void');
@@ -787,7 +819,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
         { key: 'rmbAvailableAllocationAmount', label: '人民币折算可分配余额' },
         { key: 'rmbBalance', label: '人民币折算账面余额' },
         { key: 'exchangeRate', label: '折算汇率' },
-        { key: 'remark', label: '备注' }
+        { key: 'remark', label: '水单备注' }
       ], result.rows.map((row) => ({ ...row, receiptDate: formatBusinessDate(row.receiptDate) })) as unknown as Array<Record<string, unknown>>);
       message.success(`已导出 ${result.rows.length} 条水单`);
     } catch (error) {
@@ -823,8 +855,9 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
           if (!row.voucher.url) return row.voucher.fileName;
           return (
             <Space size={14} align="center" wrap className="finance-paid-voucher-cell">
-              <Image
-                src={resolveApiAssetUrl(row.voucher.url)}
+              <ProtectedVoucherImage
+                apiClient={apiClient}
+                url={row.voucher.url}
                 alt={`水单图片：${row.voucher.fileName}`}
                 width={168}
                 height={112}
@@ -888,6 +921,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
         ) : '-';
       }
     },
+    { title: '水单备注', dataIndex: 'remark', width: 180, ellipsis: true, render: (value?: string) => value?.trim() || '-' },
     { title: '已落账金额', dataIndex: 'matchedAmount', width: 130, align: 'right', render: (value: number, row) => formatWaterReceiptAmount(value, row.currency) },
     { title: '待审核占用', dataIndex: 'pendingAllocatedAmount', width: 130, align: 'right', render: (value: number | undefined, row) => formatWaterReceiptAmount(value, row.currency) },
     { title: '可分配余额', dataIndex: 'availableAllocationAmount', width: 130, align: 'right', render: (value: number | undefined, row) => formatWaterReceiptAmount(value ?? row.balance, row.currency) },
@@ -951,8 +985,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
               count={1}
               amount={formatPlainAmount(row.amount)}
               currency={row.currency ?? 'RMB'}
-              riskTip="作废后该水单不能再用于到账或匹配，本次原因会写入审计。"
-              requireReason
+              riskTip="作废后该水单不能再用于到账或匹配；如填写原因会写入审计。"
               risk="danger"
               onConfirm={async (reason) => {
                 await apiClient.voidWaterReceipt(row.id, { reason });
@@ -997,7 +1030,27 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
             fields={[
               { key: 'site', label: '站点', value: row.site || '-' },
               { key: 'receiptNo', label: '水单编号', value: row.receiptNo || '-', title: row.receiptNo },
-              { key: 'paymentNo', label: '付款编号', value: row.paymentNo || '-', title: row.paymentNo },
+              {
+                key: 'paymentNo',
+                label: '付款编号',
+                value: row.paymentNo ? (
+                  <Space size={4}>
+                    <Text title={row.paymentNo}>{row.paymentNo}</Text>
+                    <Button
+                      size="small"
+                      aria-label={`复制付款编号 ${row.paymentNo}`}
+                      onClick={async () => {
+                        const copied = await copyWaterReceiptPaymentNo(row.paymentNo);
+                        if (copied) message.success('付款编号已复制');
+                        else message.warning('复制失败，请手动复制付款编号');
+                      }}
+                    >
+                      复制
+                    </Button>
+                  </Space>
+                ) : '-',
+                title: row.paymentNo
+              },
               { key: 'salesperson', label: '业务员归属', value: row.salesperson || '-' },
               { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
               { key: 'receiptMethod', label: '结算方式', value: row.receiptMethod || '-' },
@@ -1012,6 +1065,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
               { key: 'matchStatus', label: '分配状态', value: matchStatusTag(row) },
               isMatchingMode ? { key: 'arrivedBy', label: '到账确认人', value: row.arrivedBy || '-' } : null,
               { key: 'voucher', label: '水单凭证', value: voucherValue },
+              { key: 'remark', label: '水单备注', value: row.remark?.trim() || '-', title: row.remark, wrap: true },
               {
                 key: 'allocations',
                 label: '分配明细',
@@ -1226,6 +1280,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
             <Col xs={24} md={6}><Form.Item name="salesperson" label="业务员归属"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="receiptMethod" label="结算方式"><Select allowClear options={settlementOptions} /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="paymentNo" label="付款编号"><Input allowClear /></Form.Item></Col>
+            <Col xs={24} md={6}><Form.Item name="remark" label="水单备注"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="status" label="到账状态"><Select options={statusOptions} /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="dateFrom" label="日期起"><AppDatePicker /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="dateTo" label="日期止"><AppDatePicker /></Form.Item></Col>
@@ -1361,6 +1416,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
               optionFilterProp="label"
               placeholder="输入客户编号搜索"
               options={customerOptions}
+              onChange={(customerCode: string) => form.setFieldValue('site', resolveWaterReceiptCustomerSite(customers, customerCode))}
             />
           </Form.Item>
           <Form.Item name="site" label="站点">
@@ -1382,7 +1438,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
           <Form.Item name="amount" label="到账金额" rules={[{ required: true, message: '请填写到账金额' }]}><InputNumber disabled={editingAfterArrival && !canAdjust} min={Math.max(0.01, Number(editing?.matchedAmount ?? 0))} precision={2} style={{ width: '100%' }} /></Form.Item>
           {amountChanged ? <Form.Item name="adjustReason" label="已到账金额修改原因" rules={[{ required: true, whitespace: true, message: '修改已到账金额必须填写原因' }]}><Input placeholder="请说明本次金额调整原因" /></Form.Item> : null}
           <Form.Item name="paymentNo" label="付款编号" rules={[{ required: true, whitespace: true, message: '请填写付款编号' }]}><Input aria-label="付款编号" /></Form.Item>
-          {!editing ? <Form.Item label="水单图片（可选）"><VoucherImageInput onFileChange={setCreateVoucherFile} /></Form.Item> : null}
+          {!editing ? <Form.Item label="水单图片（可选）"><VoucherImageInput apiClient={apiClient} onFileChange={setCreateVoucherFile} /></Form.Item> : null}
           <Form.Item name="remark" label="备注"><Input.TextArea rows={3} /></Form.Item>
         </Form>
       </Modal>
@@ -1391,6 +1447,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
         <Form form={voucherForm} layout="vertical">
           <Form.Item name="voucherImage" label="水单凭证截图">
             <VoucherImageInput
+              apiClient={apiClient}
               disabled={!canVoucher || !voucherRow}
               uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'WATER_RECEIPT', waterReceiptId: voucherRow?.id }) as Promise<VoucherImageValue>}
               onUploaded={(voucher) => setVoucherRow((current) => current
@@ -1600,8 +1657,9 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
           <Space direction="vertical" className="full-width">
             <Text>{previewVoucher.fileName}</Text>
             {previewVoucher.url ? (
-              <Image
-                src={resolveApiAssetUrl(previewVoucher.url)}
+              <ProtectedVoucherImage
+                apiClient={apiClient}
+                url={previewVoucher.url}
                 alt={previewVoucher.fileName}
                 style={{ maxWidth: '100%' }}
                 onError={() => message.error('图片预览加载失败')}

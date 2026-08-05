@@ -134,7 +134,7 @@ const rolePermissions: Record<(typeof roles)[number], string[]> = Object.fromEnt
 ) as Record<(typeof roles)[number], string[]>;
 
 const roleMetadata: Record<(typeof roles)[number], { label: string; description?: string; site?: string; sortOrder: number; systemBuiltin: boolean }> = {
-  ADMIN: { label: '管理员组', description: '系统管理员', sortOrder: 0, systemBuiltin: false },
+  ADMIN: { label: '管理员组', description: '系统管理员', sortOrder: 0, systemBuiltin: true },
   CUSTOMER_SERVICE: { label: '客服', sortOrder: 103, systemBuiltin: true },
   OPERATOR: { label: '业务员', sortOrder: 104, systemBuiltin: true },
   WAREHOUSE: { label: '仓库', sortOrder: 102, systemBuiltin: true },

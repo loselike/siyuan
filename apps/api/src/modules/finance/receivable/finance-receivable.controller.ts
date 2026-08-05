@@ -145,7 +145,7 @@ export class FinanceReceivableController {
   }
 
   @Post('finance/receivable-audits/:id/match-receipt')
-  @RequirePermission('finance:receivable:match-water')
+  @RequirePermission('finance:water-match:create')
   async matchReceivableReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ReceivableReceiptMatchInput) {
     return this.service.matchReceivableReceipt(request.user, id, body);
   }
@@ -199,7 +199,7 @@ export class FinanceReceivableController {
   }
 
   @Post('finance/water-receipts/:id/match-orders')
-  @RequirePermission('finance:water-match:create')
+  @RequirePermission('finance:water-receipt:match')
   async matchWaterReceiptOrders(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptMatchOrdersInput) {
     return this.service.matchWaterReceiptOrders(request.user, id, body);
   }

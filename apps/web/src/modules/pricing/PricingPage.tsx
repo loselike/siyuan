@@ -1,6 +1,6 @@
 import type { ChangeEvent, Key } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, AutoComplete, Button, Card, Col, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Progress, Row, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
+import { Alert, AutoComplete, Button, Card, Col, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { AlertTriangle, CheckCircle2, Copy, Download, Eye, FileInput, MoreHorizontal, PackageCheck, Power, RefreshCw, Search, Settings, SlidersHorizontal, Trash2 } from 'lucide-react';
 import { normalizeCanadaAmazonWarehouseCode, normalizeUsPostalCode, type AgentMarkupListQuery, type AgentMarkupListResponse, type AgentMarkupMetrics, type AgentMarkupSummary, type AgentMarkupType, type AgentMarkupUnit, type AgentSummary, type DubaiPriceDisplayPageSummary, type DubaiPriceDisplayResponse, type DubaiPriceDisplayVersionSummary, type LegacyPricingMetaResponse, type LegacyPricingModule, type LegacyPricingQuoteResponse, type LegacyPricingRecommendation, type MasterDataSnapshot, type PriceBookImportJobSummary, type PriceBookImportTargetModule, type PriceBookSummary, type PriceLookupRecommendation, type PriceLookupResponse, type PricingRuleRefreshProgressResponse, type PricingSyncHealthResponse, type PricingSyncHealthRow, type SouthAfricaLookupResponse, type SouthAfricaRateRuleInput, type SouthAfricaRateRuleSummary, type StaffRoleKey } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
@@ -10,6 +10,8 @@ import { countryOptions, filterLocationOption } from '../finance/entry/countrySt
 import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, paginationWhenNeeded, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import { calculatePriceChargeableWeight, seedImportedPriceRows, type ImportedPriceRow } from './excel';
 import { MarkupRouteEditor, type MarkupRouteEditorContext } from './MarkupRouteEditor';
+import { PriceBookManagementStatus } from './PriceBookManagementStatus';
+import { PriceBookManagementToolbar } from './PriceBookManagementToolbar';
 import { getLegacyRecommendationScopeColumnTitle, getLegacyRecommendationScopeLabel } from './canadaPricingScope';
 import { getMarkupRuleLabel } from './markupRuleLabel';
 import {
@@ -31,7 +33,6 @@ import {
   buildPriceBookImportAgentOptions,
   calculateDimensionVolumeCbm,
   describeLargeCargo,
-  filterPriceBookImportAgentOption,
   getAgentMarkupGroupId,
   getLegacyModuleLabel,
   getMarkupRowLookupChannel,
@@ -2974,76 +2975,25 @@ export function PricingPage({
                   <Tag color="blue">南非专线查询</Tag>
                   {canViewSouthAfricaCostMarkup && can('pricing:south-africa:rules-create') ? <Button htmlType="button" type="primary" size="small" onClick={openCreateSouthAfricaRateRule}>新增物料规则</Button> : null}
                 </Space>
-              ) : <Space>
-                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:upload') ? <Select
-                  aria-label="选择代理简称"
-                  showSearch
-                  placeholder="选择代理简称"
-                  value={priceBookImportAgentId}
-                  style={{ width: 180 }}
-                  disabled={priceBookImporting}
-                  optionFilterProp="searchText"
-                  filterOption={(input, option) => filterPriceBookImportAgentOption(input, option as { searchText?: string; label?: unknown })}
-                  options={enabledAgentOptions}
-                  onChange={(value) => setPriceBookImportAgentId(value)}
-                /> : null}
-                <Tag color={priceBookManagementModule === 'unclassified' ? 'orange' : 'blue'}>{priceBookManagementModule === 'unclassified' ? '未归类数据' : priceBookImportModules.find((item) => item.key === priceBookManagementModule)?.label}</Tag>
-                {can('pricing:price-books:import-job-view') ? <Button htmlType="button" size="small" icon={<RefreshCw size={14} />} loading={priceBookImportHistoryLoading} onClick={() => void loadPriceBookImportHistory(1)}>导入记录</Button> : null}
-                {can('pricing:price-books:sync-health-view') ? <Button
-                  htmlType="button"
-                  size="small"
-                  icon={<Settings size={14} />}
-                  loading={pricingSyncHealthLoading}
-                  onClick={() => void openPricingSyncHealth()}
-                >
-                  同步体检
-                </Button> : null}
-                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:upload') ? <Button
-                  htmlType="button"
-                  size="small"
-                  icon={<FileInput size={14} />}
-                  loading={priceBookImporting}
-                  disabled={priceBookImporting || (priceBookManagementModule !== 'dubaiAirSea' && !priceBookImportAgentId)}
-                  title={priceBookManagementModule !== 'dubaiAirSea' && !priceBookImportAgentId ? '请先选择代理简称' : '上传并导入当前查价模块价格表'}
-                  onClick={() => priceBookFileInputRef.current?.click()}
-                >
-                  增加价格表
-                </Button> : null}
-                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:upload') ? <input
-                  ref={priceBookFileInputRef}
-                  className="visually-hidden-file-input"
-                  aria-label="增加价格表"
-                  type="file"
-                  accept=".xls,.xlsx"
-                  onChange={(event) => void handlePriceFileChange(event)}
-                /> : null}
-                {canViewPriceBookRows ? <Button
-                  htmlType="button"
-                  size="small"
-                  icon={<Download size={14} />}
-                  disabled={selectedPriceBookIds.length !== 1}
-                  title="下载导入时保留的原始 xls/xlsx 价格表"
-                  onClick={() => void downloadSelectedPriceBook()}
-                >
-                  下载价格表
-                </Button> : null}
-                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:remark-update') ? <Button htmlType="button" size="small" disabled={selectedPriceBookIds.length !== 1} onClick={openEditPriceBookRemark}>
-                  编辑自定义备注
-                </Button> : null}
-                {priceBookManagementModule !== 'unclassified' && can('pricing:price-books:delete') ? <Popconfirm
-                  title={selectedPriceBookIds.length > 1 ? `确认删除 ${selectedPriceBookIds.length} 张价格表？` : '确认删除该价格表？'}
-                  description="删除后该价格表导入的报价行会从当前报价库移除。"
-                  okText="删除价格表"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  disabled={selectedPriceBookIds.length === 0}
-                  onConfirm={deleteSelectedPriceBooks}
-                >
-                  <Button htmlType="button" size="small" disabled={selectedPriceBookIds.length === 0}>
-                    删除价格表
-                  </Button>
-                </Popconfirm> : null}
-              </Space>
+              ) : <PriceBookManagementToolbar
+                module={priceBookManagementModule}
+                can={can}
+                canViewRows={canViewPriceBookRows}
+                importAgentId={priceBookImportAgentId}
+                importAgentOptions={enabledAgentOptions}
+                importing={priceBookImporting}
+                importHistoryLoading={priceBookImportHistoryLoading}
+                syncHealthLoading={pricingSyncHealthLoading}
+                selectedCount={selectedPriceBookIds.length}
+                fileInputRef={priceBookFileInputRef}
+                onImportAgentChange={setPriceBookImportAgentId}
+                onLoadImportHistory={() => void loadPriceBookImportHistory(1)}
+                onOpenSyncHealth={() => void openPricingSyncHealth()}
+                onFileChange={(event) => void handlePriceFileChange(event)}
+                onDownload={() => void downloadSelectedPriceBook()}
+                onEditRemark={openEditPriceBookRemark}
+                onDelete={deleteSelectedPriceBooks}
+              />
             }
           >
             <div className="pricing-module-section-tabs" role="tablist" aria-label="价格表查价模块分区">
@@ -3088,39 +3038,15 @@ export function PricingPage({
               />
               <Text type="secondary">当前模块已选 {selectedPriceBookIds.length} 张</Text>
             </div>
-            {priceBookManagementModule === 'unclassified' ? <Alert type="warning" showIcon message="未归类数据处理区" description="这里只读展示历史未绑定查价模块的数据，可下载原文件核对；确认归属后请在对应模块重新导入，系统不会自动迁移或删除。" /> : null}
-            {priceBookManagementSlowLoading && priceBookManagementLoading ? <Alert type="info" showIcon message="当前模块价格表加载较慢，正在继续加载" /> : null}
-            {priceBookManagementLoadError ? <Alert type="error" showIcon message={priceBookManagementLoadError} action={<Button size="small" onClick={() => setPriceBookManagementReloadVersion((version) => version + 1)}>重新加载</Button>} /> : null}
-            {activePriceBookRuleRefresh ? (
-              <div className="pricing-rule-refresh-progress" role="status" aria-label="当前模块规则同步进度">
-                <div className="pricing-rule-refresh-progress__summary">
-                  <Space size={8} wrap>
-                    <Text strong>规则同步</Text>
-                    <Tag color={activePriceBookRuleRefresh.latestRuleApplied ? 'green' : activePriceBookRuleRefresh.failedBooks || activePriceBookRuleRefresh.unavailableBooks ? 'red' : 'blue'}>
-                      {activePriceBookRuleRefresh.latestRuleApplied ? '已是最新规则' : activePriceBookRuleRefresh.runningBooks ? '正在同步' : activePriceBookRuleRefresh.pendingBooks ? '等待同步' : '需处理'}
-                    </Tag>
-                    <Text type="secondary">规则 v{activePriceBookRuleRefresh.ruleVersion} · 已同步 {activePriceBookRuleRefresh.currentBooks}/{activePriceBookRuleRefresh.totalBooks} 张</Text>
-                    {activePriceBookRuleRefresh.failedBooks ? <Text type="danger">失败 {activePriceBookRuleRefresh.failedBooks} 张</Text> : null}
-                    {activePriceBookRuleRefresh.unavailableBooks ? <Text type="danger">原文件不可用 {activePriceBookRuleRefresh.unavailableBooks} 张</Text> : null}
-                  </Space>
-                  {activePriceBookRuleRefresh.updatedAt ? <Text type="secondary">最近完成：{formatBeijingDateTime(activePriceBookRuleRefresh.updatedAt)}</Text> : null}
-                </div>
-                <Progress
-                  percent={activePriceBookRuleRefresh.progressPercent}
-                  status={activePriceBookRuleRefresh.failedBooks || activePriceBookRuleRefresh.unavailableBooks ? 'exception' : activePriceBookRuleRefresh.latestRuleApplied ? 'success' : 'active'}
-                  format={(percent) => `${percent ?? 0}%`}
-                />
-              </div>
-            ) : null}
-            {priceBookImportJob ? (
-              <Alert
-                className="notice-bar"
-                type={priceBookImportJob.status === 'FAILED' ? 'error' : priceBookImportJob.status === 'SUCCESS' ? 'success' : 'info'}
-                showIcon
-                message={`导入任务：${priceBookImportJob.status}`}
-                description={`${priceBookImportJob.message ?? '处理中'}；进度 ${priceBookImportJob.processedRows}/${priceBookImportJob.totalRows || '?'} 行${priceBookImportJob.errorSummary?.length ? `；导入提示：${priceBookImportJob.errorSummary.map((item) => item.reason).join('；')}` : ''}`}
-              />
-            ) : null}
+            <PriceBookManagementStatus
+              unclassified={priceBookManagementModule === 'unclassified'}
+              loading={priceBookManagementLoading}
+              slowLoading={priceBookManagementSlowLoading}
+              loadError={priceBookManagementLoadError}
+              onReload={() => setPriceBookManagementReloadVersion((version) => version + 1)}
+              ruleRefresh={activePriceBookRuleRefresh}
+              importJob={priceBookImportJob}
+            />
             <ManagedTable
               recordDetail={{ title: '价格表详情' }}
               rowKey="id"

@@ -457,6 +457,8 @@ export type ConfirmDangerActionOptions = {
   amount?: ReactNode;
   currency?: ReactNode;
   riskTip?: ReactNode;
+  /** 展示原因输入，但不强制填写。 */
+  showReason?: boolean;
   requireReason?: boolean;
   reasonLabel?: string;
   confirmText?: string;
@@ -493,14 +495,14 @@ function ConfirmActionContent({ options, onReasonChange }: { options: ConfirmDan
           </div>
         ))}
       </div>
-      {options.requireReason ? (
+      {options.showReason || options.requireReason ? (
         <Input.TextArea
           aria-label={options.reasonLabel ?? '操作原因'}
           className="confirm-action-reason"
           rows={3}
           maxLength={300}
           showCount
-          placeholder="请填写操作原因，至少 2 个字符"
+          placeholder={options.requireReason ? '请填写操作原因，至少 2 个字符' : '可填写操作原因（选填）'}
           onChange={(event) => onReasonChange(event.target.value)}
         />
       ) : null}
@@ -539,6 +541,7 @@ export function ConfirmActionButton({
   amount,
   currency,
   riskTip,
+  showReason,
   requireReason,
   reasonLabel,
   confirmText,
@@ -559,6 +562,7 @@ export function ConfirmActionButton({
     amount,
     currency,
     riskTip,
+    showReason,
     requireReason,
     reasonLabel,
     confirmText,
@@ -669,6 +673,7 @@ export type ManagedTableColumnRecordDetail<RecordType extends object> = false | 
   label?: string;
   value?: (record: RecordType, index?: number) => ReactNode;
   span?: 1 | 2 | 3;
+  interactive?: boolean;
 };
 
 export type ManagedTableRecordDetailOptions<RecordType extends object> = {
@@ -1568,7 +1573,7 @@ function buildManagedTableRecordDetailFields<RecordType extends object>(
       return [{
         key,
         label,
-        value: makeManagedTableRecordDetailValueReadOnly(renderedCell.children ?? '-'),
+        value: detail?.interactive ? (renderedCell.children ?? '-') : makeManagedTableRecordDetailValueReadOnly(renderedCell.children ?? '-'),
         span: detail?.span ?? 1
       }];
     }
@@ -1581,7 +1586,9 @@ function buildManagedTableRecordDetailFields<RecordType extends object>(
         ? (rawValue ? '是' : '否')
         : Array.isArray(rawValue)
           ? rawValue.join('、') || '-'
-          : makeManagedTableRecordDetailValueReadOnly(rawValue as ReactNode);
+          : detail?.interactive
+            ? rawValue as ReactNode
+            : makeManagedTableRecordDetailValueReadOnly(rawValue as ReactNode);
     return [{
       key,
       label,

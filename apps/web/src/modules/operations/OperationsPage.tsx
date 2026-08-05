@@ -7,6 +7,7 @@ import type { ApiClient, PermissionKey, RoleKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, MetricCard, riskLabel, type ManagedTableColumn } from '../shared/ui';
 import { formatBeijingDateTime } from '../shared/format';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { ProblemTicketCreateModal } from '../customerService/ProblemTicketCreateModal';
 
 const { Title } = Typography;
@@ -125,7 +126,7 @@ const linePoolLedgerColumnSettings = {
     createdAt: '创建时间',
     customerName: '客户名称',
     salesperson: '业务员',
-    orderNo: '单号',
+    orderNo: '出货单号',
     destinationCountry: '目的地',
     channelName: '公司渠道',
     agentName: '代理详细公司名',
@@ -241,6 +242,12 @@ export function formatLinePoolPackageSummary(row: LineShipmentPoolRow) {
     ?? row.shipment.receivableWeightKg
     ?? row.shipment.weightKg;
   return `${formatOptionalNumber(row.shipment.packageCount, 0)}件 / ${formatOptionalNumber(fallbackWeight, 3)}kg`;
+}
+
+export const linePoolOutboundOrderNoColumnTitle = '出货单号';
+
+export function formatLinePoolOutboundOrderNo(row: LineShipmentPoolRow) {
+  return resolveShipmentOutboundOrderNo(row.shipment);
 }
 
 export function OperationsPage({
@@ -450,10 +457,10 @@ export function OperationsPage({
     },
     orderNo: {
       key: 'orderNo',
-      title: '单号',
+      title: linePoolOutboundOrderNoColumnTitle,
       width: 190,
-      sortValue: (row) => row.shipment.systemOrderNo,
-      render: (_, row) => <div className="line-pool-cell-stack"><Button type="link" className="line-pool-link" onClick={() => onViewShipment(row.shipment)}>{row.shipment.systemOrderNo}</Button><OperationText type="secondary">{row.shipment.transferNo || '待获取快递号'}</OperationText></div>
+      sortValue: formatLinePoolOutboundOrderNo,
+      render: (_, row) => <div className="line-pool-cell-stack"><Button type="link" className="line-pool-link" onClick={() => onViewShipment(row.shipment)}>{formatLinePoolOutboundOrderNo(row)}</Button><OperationText type="secondary">{row.shipment.transferNo || '待获取快递号'}</OperationText></div>
     },
     destinationCountry: {
       key: 'destinationCountry',
@@ -577,13 +584,13 @@ export function OperationsPage({
         title: '运单信息',
         width: linePoolMatrixColumnWeights.matrixOrder,
         className: 'line-pool-matrix-group-order',
-        sortValue: (row) => row.shipment.systemOrderNo,
+        sortValue: formatLinePoolOutboundOrderNo,
         render: (_, row) => (
           <LinePoolMatrixCell fields={[
             {
               key: 'systemOrderNo',
               label: '出货单号',
-              value: <Button type="link" className="line-pool-link" onClick={() => onViewShipment(row.shipment)}>{row.shipment.systemOrderNo}</Button>
+              value: <Button type="link" className="line-pool-link" onClick={() => onViewShipment(row.shipment)}>{resolveShipmentOutboundOrderNo(row.shipment)}</Button>
             },
             { key: 'transferNo', label: '转单号', value: row.shipment.transferNo || '待获取快递号' }
           ]} />
@@ -1083,6 +1090,7 @@ export function OperationsPage({
         shipment={problemShipment}
         apiClient={apiClient}
         role={role}
+        permissions={permissions}
         defaultCustomerVisible={false}
         showCustomerVisible={false}
         onCancel={() => setProblemShipment(null)}

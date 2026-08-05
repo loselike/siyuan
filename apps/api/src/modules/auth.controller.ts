@@ -63,9 +63,9 @@ export class AuthController {
       nickname: account.nickname,
       mustChangePassword: account.mustChangePassword
     };
-    await this.repository.recordLoginLog(principal, loginMeta);
-
     const permissions = await this.repository.getPermissionsForRole(account.role);
+    principal.dataScope = permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
+    await this.repository.recordLoginLog(principal, loginMeta);
 
     return {
       accessToken: jwt.sign(principal, jwtSecret(), { expiresIn: '8h' }),
@@ -80,10 +80,24 @@ export class AuthController {
     return this.repository.getProfile(request.user);
   }
 
+  @Get('session')
+  @RequireAuth()
+  async session(@Req() request: { user: Principal }) {
+    const user = await this.repository.getProfile(request.user);
+    const permissions = await this.repository.getPermissionsForRole(user.role);
+    user.dataScope = permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
+    return { user, permissions };
+  }
+
   @Put('profile')
   @RequireAuth()
   updateProfile(@Req() request: { user: Principal }, @Body() body: { name?: string; phone?: string; gender?: string; nickname?: string }) {
-    return this.repository.updateProfile(request.user, body);
+    return this.repository.updateProfile(request.user, {
+      name: body?.name,
+      phone: body?.phone,
+      gender: body?.gender,
+      nickname: body?.nickname
+    });
   }
 
   @Get('login-logs')

@@ -18,6 +18,7 @@ import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
 import { ChargeWeightChangeTag } from '../ChargeWeightChangeTag';
+import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -242,7 +243,7 @@ export function BusinessCostAuditPage({
     agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 170, ellipsis: true, render: (value?: string) => value ?? '-' },
     name: { title: '费用名称', dataIndex: 'name', width: 80, ellipsis: true, sorter: true },
     customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 80, ellipsis: true, sorter: true },
-    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 130, sorter: true, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 130, sorter: true, render: (_: string | undefined, row) => renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 115, render: (value?: string) => <Text className="table-compact-text">{value ?? '-'}</Text> },
     reconciliationStatus: {
       title: '对账状态',
@@ -323,7 +324,7 @@ export function BusinessCostAuditPage({
           columns={4}
           labelWidth={66}
           fields={[
-            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(row.systemOrderNo), title: row.systemOrderNo },
+            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)), title: resolveShipmentOutboundOrderNo(row) },
             { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
             { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
@@ -375,7 +376,7 @@ export function BusinessCostAuditPage({
               { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
               { key: 'name', label: '费用名称' },
               { key: 'customerCode', label: '客户编号' },
-              { key: 'systemOrderNo', label: '出货单号' },
+              { key: 'outboundOrderNo', label: '出货单号' },
               { key: 'transferNo', label: '转单号' },
               { key: 'reconciliationStatus', label: '对账状态' },
               { key: 'currency', label: '币种' },
@@ -498,8 +499,8 @@ export function BusinessCostAuditPage({
         >
           {!editingRow ? (
             <>
-              <Form.Item name="systemOrderNo" label="出货单号"><Input placeholder="按出货单号匹配订单" /></Form.Item>
-              <Form.Item name="customerOrderNo" label="客户单号"><Input placeholder="可选，按客户单号匹配" /></Form.Item>
+              <Form.Item name="systemOrderNo" label="关联订单"><Input placeholder="按出货单号或内部单号匹配" /></Form.Item>
+              <Form.Item name="customerOrderNo" label="出货单号"><Input placeholder="可选，按出货单号匹配" /></Form.Item>
               <Form.Item name="transferNo" label="转单号"><Input placeholder="可选，按转单号匹配" /></Form.Item>
               <Form.Item name="customerCode" label="客户编号"><Input placeholder="可选，按客户编号匹配" /></Form.Item>
             </>

@@ -35,6 +35,7 @@ export class RbacGuard implements CanActivate {
 
     try {
       const principal = jwt.verify(authorization.slice(7), jwtSecret()) as Principal;
+      const effectivePermissions = await this.repository.hydratePrincipalDepartmentScope(principal);
       request.user = principal;
 
       if (!permission) {
@@ -42,8 +43,7 @@ export class RbacGuard implements CanActivate {
       }
 
       const permissions = Array.isArray(permission) ? permission : [permission];
-      const allowed = await Promise.all(permissions.map((item) => this.repository.hasPermission(principal.role, item)));
-      if (!allowed.some(Boolean)) {
+      if (!permissions.some((item) => effectivePermissions.includes(item))) {
         await (this.repository as any).recordPermissionDenied?.(principal, {
           permissions,
           method: request.method,

@@ -10,7 +10,7 @@ export interface PermissionControl {
   category: PermissionControlCategory;
   risk: PermissionControlRisk;
   codes: PermissionKey[];
-  restrictedToMarketFinance?: boolean;
+  adminGrantOnly?: boolean;
   bulkGrantEligible?: boolean;
 }
 
@@ -34,7 +34,7 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:dashboard:agent-stats-view', 'market:dashboard:channel-mode-stats-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-dashboard-sensitive-analysis',
@@ -71,25 +71,25 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:pending-routing:business-cost-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-pending-payable-cost',
       label: '查看真实应付成本',
-      description: '查看代理真实应付金额，仅限市场和授权财务岗位。',
+      description: '查看代理真实应付金额，仅管理员可向有业务需要的用户组授权。',
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:pending-routing:payable-cost-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-pending-agent-channel',
       label: '查看真实代理与代理渠道',
-      description: '显示代理完整身份及真实代理渠道，业务岗位不可授权。',
+      description: '显示代理完整身份及真实代理渠道，仅管理员可授权。',
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:pending-routing:agent-channel-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-pending-market-cost',
@@ -98,7 +98,7 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:pending-routing:cost-field-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-pending-confirm',
@@ -142,16 +142,16 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:routed:agent-channel-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-routed-cost',
       label: '查看代理成本与市场成本',
-      description: '查看代理成本及市场成本合计，不对业务岗位开放。',
+      description: '查看代理成本及市场成本合计，仅管理员可授权。',
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:routed:agent-cost-view', 'market:routed:cost-total-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-routed-reroute',
@@ -187,7 +187,7 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:weekly-routing:agent-stats-view', 'market:weekly-routing:channel-mode-stats-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-period-cost',
@@ -196,7 +196,7 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       category: '敏感字段',
       risk: 'sensitive',
       codes: ['market:weekly-routing:cost-view'],
-      restrictedToMarketFinance: true
+      adminGrantOnly: true
     },
     {
       id: 'market-period-export',
@@ -209,21 +209,8 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
   ]
 };
 
-const marketSensitiveGrantRoleKeys = new Set<RoleKey>([
-  'ADMIN',
-  'FINANCE',
-  'UG_FINANCE',
-  'UG_PAYABLE_FINANCE',
-  'UG_MARKET'
-]);
-
-export function isMarketSensitiveGrantRestricted(role: RoleKey): boolean {
-  return !marketSensitiveGrantRoleKeys.has(role);
-}
-
-export function canBulkGrantPermissionControl(control: PermissionControl, role: RoleKey): boolean {
-  if (control.bulkGrantEligible !== true || control.risk !== 'normal') return false;
-  return !(control.restrictedToMarketFinance && isMarketSensitiveGrantRestricted(role));
+export function canBulkGrantPermissionControl(control: PermissionControl, _role: RoleKey): boolean {
+  return control.bulkGrantEligible === true && control.risk === 'normal';
 }
 
 export function requiresPermissionGrantConfirmation(control: PermissionControl, checked: boolean): boolean {
@@ -291,6 +278,12 @@ export function updatePermissionControl(
 ): PermissionKey[] {
   const next = new Set(grantedPermissions);
   control.codes.forEach((code) => checked ? next.add(code) : next.delete(code));
+  if (checked && control.codes.includes('business:order-entry:business-cost-write')) {
+    next.add('business:order-entry:business-cost-view');
+  }
+  if (!checked && control.codes.includes('business:order-entry:business-cost-view')) {
+    next.delete('business:order-entry:business-cost-write');
+  }
   return [...next];
 }
 

@@ -1,6 +1,10 @@
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type RoleKey = BuiltinRoleKey | (string & {});
 export type PermissionKey =
+  | 'data-scope:sales-own'
+  | 'data-scope:misc-fee-all'
+  | 'data-scope:misc-fee-warehouse-site'
+  | 'data-scope:misc-fee-market'
   | 'operations:line-shipment:view'
   | 'operations:line-shipment:detail'
   | 'operations:line-shipment:process'
@@ -37,6 +41,8 @@ export type PermissionKey =
   | 'business:order-entry:submit-review'
   | 'business:order-entry:invoice-upload'
   | 'business:order-entry:label-upload'
+  | 'business:order-entry:business-cost-view'
+  | 'business:order-entry:business-cost-write'
   | 'business:order-fee:view'
   | 'business:order-fee:create'
   | 'business:order-fee:update'
@@ -126,7 +132,9 @@ export type PermissionKey =
   | 'warehouse:today-receipt:device-log-view'
   | 'warehouse:today-receipt:column-setting'
   | 'warehouse:in-stock:view'
+  | 'warehouse:in-stock:machine-import'
   | 'warehouse:in-stock:update'
+  | 'warehouse:in-stock:same-spec-replenish'
   | 'warehouse:in-stock:split'
   | 'warehouse:in-stock:batch-select'
   | 'warehouse:in-stock:tally-start'
@@ -148,6 +156,7 @@ export type PermissionKey =
   | 'warehouse:tally-completed:view'
   | 'warehouse:tally-completed:history-view'
   | 'warehouse:tally-completed:detail-view'
+  | 'warehouse:tally-history:correct'
   | 'warehouse:tally-label:generate'
   | 'warehouse:tally-label:reprint'
   | 'warehouse:tally-label:print'
@@ -266,6 +275,7 @@ export type PermissionKey =
   | 'customer-service:signed:after-sale-close'
   | 'customer-service:signed:column-setting'
   | 'customer-service:problem:view'
+  | 'customer-service:problem:tag-manage'
   | 'customer-service:problem:create'
   | 'customer-service:problem:reply'
   | 'customer-service:problem:close'
@@ -439,12 +449,18 @@ export interface Principal {
   gender?: string;
   nickname?: string;
   mustChangePassword?: boolean;
+  dataScope?: 'SALES_OWN';
+  departmentId?: string;
+  directManagerId?: string;
+  departmentTeamScope?: string[];
+  shipmentAllView?: boolean;
 }
 
 export interface PermissionDefinition {
   code: PermissionKey;
   label: string;
   group: string;
+  assignable?: boolean;
 }
 
 export interface RolePermissionRow {
@@ -462,6 +478,10 @@ export interface RolePermissionRow {
 }
 
 export const permissionDefinitions: PermissionDefinition[] = [
+  { code: 'data-scope:sales-own', label: '业务员本人客户数据范围', group: '系统管理 / 数据范围', assignable: false },
+  { code: 'data-scope:misc-fee-all', label: '杂费全部数据范围', group: '系统管理 / 数据范围', assignable: false },
+  { code: 'data-scope:misc-fee-warehouse-site', label: '杂费仓库本站数据范围', group: '系统管理 / 数据范围', assignable: false },
+  { code: 'data-scope:misc-fee-market', label: '杂费市场数据范围', group: '系统管理 / 数据范围', assignable: false },
   { code: 'operations:line-shipment:view', label: '查看专线运单池', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:detail', label: '查看运单详情', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:process', label: '处理运单', group: '运营工作台 / 专线运单池' },
@@ -498,6 +518,8 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'business:order-entry:submit-review', label: '提交审核', group: '业务管理 / 录单' },
   { code: 'business:order-entry:invoice-upload', label: '上传业务发票', group: '业务管理 / 录单' },
   { code: 'business:order-entry:label-upload', label: '上传业务标签', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:business-cost-view', label: '显示业务成本', group: '业务管理 / 录单' },
+  { code: 'business:order-entry:business-cost-write', label: '填写业务成本', group: '业务管理 / 录单' },
   { code: 'business:order-fee:view', label: '查看订单费用', group: '业务管理 / 录单' },
   { code: 'business:order-fee:create', label: '新增订单费用', group: '业务管理 / 录单' },
   { code: 'business:order-fee:update', label: '修改订单费用', group: '业务管理 / 录单' },
@@ -587,7 +609,9 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:today-receipt:device-log-view', label: '查看设备推送日志', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:column-setting', label: '保存今日收货列设置', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:in-stock:view', label: '查看在仓数据', group: '仓库管理 / 在仓数据' },
+  { code: 'warehouse:in-stock:machine-import', label: '批量导入机器过机数据', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:update', label: '修改在仓包裹', group: '仓库管理 / 在仓数据' },
+  { code: 'warehouse:in-stock:same-spec-replenish', label: '同箱规补录', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:split', label: '拆分在仓包裹', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:batch-select', label: '批量勾选在仓包裹', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:tally-start', label: '发起理货', group: '仓库管理 / 在仓数据' },
@@ -609,6 +633,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:tally-completed:view', label: '查看已完成理货', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:history-view', label: '查看已完成理货历史', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:detail-view', label: '查看已完成理货详情', group: '仓库管理 / 已完成理货' },
+  { code: 'warehouse:tally-history:correct', label: '纠正历史聚合理货数据', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:generate', label: '生成理货标签', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:reprint', label: '重打理货标签', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:print', label: '打印理货标签', group: '仓库管理 / 已完成理货' },
@@ -644,6 +669,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'customer-service:dashboard:after-sale-summary-view', label: '查看需协助摘要', group: '客服管理 / 客服看板' },
   { code: 'customer-service:dashboard:team-view', label: '查看团队看板数据', group: '客服管理 / 客服看板' },
   { code: 'customer-service:dashboard:all-view', label: '查看全部客服看板数据', group: '客服管理 / 客服看板' },
+  { code: 'customer-service:problem:tag-manage', label: '维护问题件常用标签', group: '客服管理 / 问题件' },
   { code: 'customer-service:data-confirm:view', label: '查看数据确认', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:business-view', label: '查看业务数据', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:agent-view', label: '查看代理数据', group: '客服管理 / 数据确认' },
@@ -758,7 +784,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
     ['assistant', 'read', '查看资料辅助'], ['assistant', 'ai-check', '执行 AI 资料体检'], ['assistant', 'missing-warning-view', '查看资料缺失提醒'], ['assistant', 'stats-view', '查看资料快捷统计'], ['assistant', 'suggestion-generate', '生成维护建议']
   ].map(([section, action, label]) => ({ code: `master-data:${section}:${action}` as PermissionKey, label, group: `基础资料库 / ${({ customers: '客户资料', finance: '财务资料', 'payer-banks': '付款银行资料', agents: '代理资料', 'agent-channels': '代理渠道', channels: '公司渠道', 'channel-categories': '渠道类别', 'remote-areas': '偏远', 'exchange-rates': '汇率', assistant: '资料辅助' } as Record<string, string>)[section]}` })),
   ...[
-    ['user-groups', 'read', '查看用户组'], ['user-groups', 'detail', '查看用户组详情'], ['user-groups', 'create', '新建用户组'], ['user-groups', 'update', '编辑用户组'], ['user-groups', 'enable', '启用停用用户组'], ['user-groups', 'create-from-template', '从模板创建用户组'], ['user-groups', 'staff-view', '查看用户组绑定员工'], ['user-groups', 'audit-view', '查看用户组审计日志'], ['user-groups', 'export', '导出用户组'],
+    ['user-groups', 'read', '查看用户组'], ['user-groups', 'detail', '查看用户组详情'], ['user-groups', 'create', '新建用户组'], ['user-groups', 'update', '编辑用户组'], ['user-groups', 'enable', '启用停用用户组'], ['user-groups', 'delete', '删除用户组'], ['user-groups', 'create-from-template', '从模板创建用户组'], ['user-groups', 'staff-view', '查看用户组绑定员工'], ['user-groups', 'audit-view', '查看用户组审计日志'], ['user-groups', 'export', '导出用户组'],
     ['accounts', 'read', '查看员工账号'], ['accounts', 'filter', '筛选员工账号'], ['accounts', 'create', '新建员工账号'], ['accounts', 'update-profile', '编辑员工资料'], ['accounts', 'update-role', '修改员工用户组'], ['accounts', 'update-site', '修改员工站点'], ['accounts', 'enable', '启用停用员工账号'], ['accounts', 'delete', '删除员工账号'], ['accounts', 'reset-password', '重置员工密码'], ['accounts', 'import', '导入员工账号'], ['accounts', 'export', '导出员工账号'], ['accounts', 'view-sensitive', '查看员工敏感资料'], ['accounts', 'must-change-password-view', '查看需改密账号'], ['accounts', 'incomplete-view', '查看资料未完善账号'],
     ['sites', 'read', '查看站点'], ['sites', 'create', '新建站点'], ['sites', 'update', '编辑站点'], ['sites', 'enable', '启用停用站点'], ['sites', 'sort', '调整站点排序'], ['sites', 'staff-view', '查看站点绑定员工'], ['sites', 'export', '导出站点'],
     ['audit', 'read', '查看操作日志'], ['audit', 'failed-view', '查看失败操作'], ['audit', 'important-view', '查看重要操作'], ['audit', 'permission-finance-view', '查看权限与财务变更'], ['audit', 'filter-actor', '按操作人筛选'], ['audit', 'filter-module', '按模块筛选'], ['audit', 'filter-target', '按对象筛选'], ['audit', 'filter-time', '按时间筛选'], ['audit', 'ip-view', '查看 IP 地址'], ['audit', 'detail-view', '查看审计详情'], ['audit', 'before-after-view', '查看变更前后'], ['audit', 'raw-request-view', '查看原始请求'], ['audit', 'export', '导出操作日志'], ['audit', 'lineage-view', '查看链路追溯'], ['audit', 'permission-denied-view', '查看权限拒绝日志'],
@@ -804,9 +830,9 @@ export function assertPermissionDefinitionsIntegrity(definitions: readonly Permi
   }
 }
 
-export function getPermissionDefinitions(): typeof permissionDefinitions {
+export function getPermissionDefinitions(): PermissionDefinition[] {
   assertPermissionDefinitionsIntegrity();
-  return permissionDefinitions;
+  return permissionDefinitions.filter((permission) => permission.assignable !== false);
 }
 
 export function isBuiltinRoleKey(role: string): role is BuiltinRoleKey {
@@ -837,7 +863,7 @@ export const defaultRoleGroups: Array<{
 
 const warehouseBasePermissions: PermissionKey[] = [
   'warehouse:today-receipt:view', 'warehouse:today-receipt:filter', 'warehouse:today-receipt:manual-create', 'warehouse:today-receipt:update', 'warehouse:today-receipt:remark-update', 'warehouse:today-receipt:exception-manage', 'warehouse:today-receipt:column-setting',
-  'warehouse:in-stock:view', 'warehouse:in-stock:update', 'warehouse:in-stock:split', 'warehouse:in-stock:batch-select', 'warehouse:in-stock:tally-start', 'warehouse:in-stock:batch-tally-start', 'warehouse:in-stock:tally-record-view', 'warehouse:in-stock:column-setting',
+  'warehouse:in-stock:view', 'warehouse:in-stock:machine-import', 'warehouse:in-stock:update', 'warehouse:in-stock:same-spec-replenish', 'warehouse:in-stock:split', 'warehouse:in-stock:batch-select', 'warehouse:in-stock:tally-start', 'warehouse:in-stock:batch-tally-start', 'warehouse:in-stock:tally-record-view', 'warehouse:in-stock:column-setting',
   'warehouse:tally-pending:view', 'warehouse:tally-pending:task-create', 'warehouse:tally-pending:task-update', 'warehouse:tally-pending:task-process', 'warehouse:tally-pending:merge-only', 'warehouse:tally-pending:merge-and-ship', 'warehouse:tally-pending:split', 'warehouse:tally-pending:detail-view', 'warehouse:tally-pending:history-view', 'warehouse:tally-pending:filter',
   'warehouse:tally-completed:view', 'warehouse:tally-completed:history-view', 'warehouse:tally-completed:detail-view', 'warehouse:tally-label:generate', 'warehouse:tally-label:print', 'warehouse:tally-label:download', 'warehouse:tally-label:scan-apply',
   'warehouse:dispatch-pending:view', 'warehouse:dispatch-pending:batch-select', 'warehouse:dispatch-pending:handover-preview', 'warehouse:dispatch-pending:handover-print', 'warehouse:dispatch-pending:dispatch-confirm', 'warehouse:dispatch-pending:batch-dispatch-confirm', 'warehouse:dispatch-pending:shipping-mark-confirm', 'warehouse:dispatch-pending:label-generate', 'warehouse:dispatch-pending:label-view', 'warehouse:dispatch-pending:column-setting',
@@ -916,7 +942,10 @@ const masterDataReferencePermissions: PermissionKey[] = [
 ];
 
 const businessMasterDataReferencePermissions: PermissionKey[] = [
+  'data-scope:sales-own',
   'business:shipment:finance-detail-view',
+  'business:order-entry:business-cost-view',
+  'business:order-entry:business-cost-write',
   'master-data:customers:read',
   'master-data:customers:view-own',
   'master-data:customers:detail',
@@ -938,7 +967,7 @@ const businessMasterDataReferencePermissions: PermissionKey[] = [
 export const rolePermissions: Record<BuiltinRoleKey, PermissionKey[]> = {
   ADMIN: allPermissions(),
   CUSTOMER_SERVICE: [...pricingLookupBusinessPermissions, ...masterDataReferencePermissions, 'tracking:external:view', 'tracking:external:latest-view', 'tracking:external:stale-days-view', 'tracking:external:detail', ...customerServiceBasePermissions],
-  OPERATOR: [...pricingLookupBusinessPermissions, ...pricingSouthAfricaBusinessReadPermissions, 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'finance:water-receipt:detail', 'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-view', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete', 'finance:water-match:read', 'finance:water-match:receivable-view', 'finance:water-match:create', 'finance:water-match:adjust', 'finance:water-match:cancel', ...businessMasterDataReferencePermissions, 'operations:line-shipment:view', 'operations:line-shipment:detail', 'operations:line-shipment:process', 'operations:line-shipment:status-update', 'operations:line-shipment:tracking-add', 'operations:line-shipment:problem-create', 'operations:line-shipment:import', 'operations:line-shipment:internal-log-view', 'operations:ai-queue:view', 'operations:ai-queue:assist', 'operations:ai-queue:mark-read', 'operations:ai-queue:handle', 'operations:product-map:view', 'operations:product-map:route-view', 'operations:import-quality:view', 'operations:import-quality:upload', 'operations:import-quality:retry', 'operations:import-quality:error-detail-view', 'operations:import-quality:confirm', 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-save', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:order-fee:view', 'business:order-fee:create', 'business:order-fee:update', 'business:order-fee:delete', 'business:review:list', 'business:review:detail', 'business:review:approve', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:shipment:column-setting', 'business:order-ai:view', 'business:order-ai:assist'],
+  OPERATOR: [...pricingLookupBusinessPermissions, ...pricingSouthAfricaBusinessReadPermissions, 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'finance:water-receipt:detail', 'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-view', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete', 'finance:water-match:read', 'finance:water-match:receivable-view', 'finance:water-match:create', ...businessMasterDataReferencePermissions, 'operations:line-shipment:view', 'operations:line-shipment:detail', 'operations:line-shipment:process', 'operations:line-shipment:status-update', 'operations:line-shipment:tracking-add', 'operations:line-shipment:problem-create', 'operations:line-shipment:import', 'operations:line-shipment:internal-log-view', 'operations:ai-queue:view', 'operations:ai-queue:assist', 'operations:ai-queue:mark-read', 'operations:ai-queue:handle', 'operations:product-map:view', 'operations:product-map:route-view', 'operations:import-quality:view', 'operations:import-quality:upload', 'operations:import-quality:retry', 'operations:import-quality:error-detail-view', 'operations:import-quality:confirm', 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-save', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:order-fee:view', 'business:order-fee:create', 'business:order-fee:update', 'business:order-fee:delete', 'business:review:list', 'business:review:detail', 'business:review:approve', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:shipment:column-setting', 'business:order-ai:view', 'business:order-ai:assist', 'warehouse:in-stock:view'],
   WAREHOUSE: ['operations:line-shipment:view', 'operations:line-shipment:detail', ...warehouseBasePermissions],
   FINANCE: ['business:shipment:list', 'business:review:restore', ...pricingLookupBusinessPermissions, ...financeFunctionPermissions, 'master-data:finance:read', 'master-data:payer-banks:read', 'master-data:payer-banks:manage', 'master-data:agents:read', 'master-data:agents:bank-view', 'master-data:exchange-rates:read'],
   CUSTOMER: [
@@ -954,9 +983,10 @@ export const rolePermissions: Record<BuiltinRoleKey, PermissionKey[]> = {
   ]
 };
 
+rolePermissions.OPERATOR.push('warehouse:in-stock:machine-import');
 rolePermissions.OPERATOR.push(...miscFeeBusinessPermissions);
-rolePermissions.WAREHOUSE.push(...miscFeeWarehousePermissions);
-rolePermissions.FINANCE.push(...miscFeeAllPermissions);
+rolePermissions.WAREHOUSE.push('data-scope:misc-fee-warehouse-site', ...miscFeeWarehousePermissions);
+rolePermissions.FINANCE.push('data-scope:misc-fee-all', ...miscFeeAllPermissions);
 
 export const roleMetadata: Record<BuiltinRoleKey, Omit<RolePermissionRow, 'permissions'>> = {
   ADMIN: {
@@ -964,7 +994,8 @@ export const roleMetadata: Record<BuiltinRoleKey, Omit<RolePermissionRow, 'permi
     label: '管理员组',
     account: 'admin',
     scope: '全局数据',
-    restriction: '系统管理员：全部权限，运单、财务、基础资料、系统管理'
+    restriction: '系统管理员：全部权限，运单、财务、基础资料、系统管理',
+    systemBuiltin: true
   },
   CUSTOMER_SERVICE: {
     key: 'CUSTOMER_SERVICE',
@@ -1057,18 +1088,70 @@ export function withImpliedUiPreferencePermissions(permissions: readonly Permiss
 }
 
 export function hasPermission(role: RoleKey, permission: PermissionKey): boolean {
-  if (role === 'ADMIN') {
-    return true;
+  return effectivePermissionsForRole(role).includes(permission);
+}
+
+export const protectedDataScopePermissions: readonly PermissionKey[] = [
+  'data-scope:sales-own',
+  'data-scope:misc-fee-all',
+  'data-scope:misc-fee-warehouse-site',
+  'data-scope:misc-fee-market'
+];
+
+export function effectivePermissionsForRole(
+  role: RoleKey,
+  configuredPermissions?: readonly PermissionKey[]
+): PermissionKey[] {
+  if (role === 'ADMIN') return allPermissions();
+  if (role === 'CUSTOMER') {
+    return withImpliedUiPreferencePermissions(defaultPermissionsForRole(role));
   }
-  return withImpliedUiPreferencePermissions(defaultPermissionsForRole(role)).includes(permission);
+  const permissions = configuredPermissions === undefined
+    ? defaultPermissionsForRole(role)
+    : normalizeRolePermissions(role, [...configuredPermissions]);
+  if (role === 'UG_BUSINESS_MANAGER') {
+    const crossTeamPermissions = new Set<PermissionKey>([
+      'business:dashboard:all-view',
+      'business:shipment:all-view'
+    ]);
+    for (let index = permissions.length - 1; index >= 0; index -= 1) {
+      if (crossTeamPermissions.has(permissions[index]!)) permissions.splice(index, 1);
+    }
+    permissions.push('business:dashboard:team-view', 'business:shipment:team-view');
+  }
+  const defaultProtectedScopes = protectedDataScopePermissions.filter((permission) =>
+    defaultPermissionsForRole(role).includes(permission)
+  );
+  const protectedScopes = defaultProtectedScopes.length
+    ? defaultProtectedScopes
+    : protectedDataScopePermissions.filter((permission) => configuredPermissions?.includes(permission));
+  const effective = [
+    ...new Set<PermissionKey>([
+      ...permissions,
+      ...protectedScopes
+    ])
+  ];
+  if (effective.includes('data-scope:sales-own')) {
+    effective.push('warehouse:in-stock:machine-import');
+  }
+  return withImpliedUiPreferencePermissions([...new Set(effective)]);
 }
 
 export function normalizeRolePermissions(role: RoleKey, permissions: PermissionKey[]): PermissionKey[] {
   if (role === 'ADMIN') {
     return allPermissions();
   }
-  const allowed = new Set(allPermissions());
-  return [...new Set(permissions)].filter((permission) => allowed.has(permission));
+  if (role === 'CUSTOMER') {
+    const customerPermissions = new Set(defaultPermissionsForRole('CUSTOMER'));
+    return [...new Set(permissions)].filter((permission) => customerPermissions.has(permission));
+  }
+  const allowed = new Set(permissionDefinitions.filter((permission) => permission.assignable !== false).map((permission) => permission.code));
+  const normalized = [...new Set(permissions)].filter((permission) => allowed.has(permission));
+  if (normalized.includes('business:order-entry:business-cost-write')
+    && !normalized.includes('business:order-entry:business-cost-view')) {
+    normalized.push('business:order-entry:business-cost-view');
+  }
+  return normalized;
 }
 
 const marketSensitivePermissionKeys = new Set<PermissionKey>([
@@ -1083,23 +1166,15 @@ const marketSensitivePermissionKeys = new Set<PermissionKey>([
   'market:routed:agent-channel-view',
   'market:weekly-routing:agent-stats-view',
   'market:weekly-routing:channel-mode-stats-view',
-  'market:weekly-routing:cost-view'
+  'market:weekly-routing:cost-view',
+  'finance:payable:view-sensitive',
+  'finance:business-cost:view-agent'
 ]);
 
-const marketSensitiveGrantRoleKeys = new Set<RoleKey>([
-  'ADMIN',
-  'FINANCE',
-  'UG_FINANCE',
-  'UG_PAYABLE_FINANCE',
-  'UG_MARKET'
-]);
-
-export function getNewlyForbiddenMarketSensitivePermissions(
-  role: RoleKey,
+export function getNewlyAddedMarketSensitivePermissions(
   before: readonly PermissionKey[],
   after: readonly PermissionKey[]
 ): PermissionKey[] {
-  if (marketSensitiveGrantRoleKeys.has(role)) return [];
   const existing = new Set(before);
   return after.filter((permission) => marketSensitivePermissionKeys.has(permission) && !existing.has(permission));
 }
@@ -1108,16 +1183,6 @@ const warehouseInStockUpdateRoleKeys = new Set<RoleKey>([
   'ADMIN',
   'WAREHOUSE',
   'UG_WAREHOUSE_RECEIVE'
-]);
-
-const warehouseInStockBusinessViewRoleKeys = new Set<RoleKey>([
-  'OPERATOR',
-  'UG_BUSINESS',
-  'UG_SZ_WUHAN',
-  'UG_ZZ_SIHUA',
-  'UG_WH_JIUYULIAN',
-  'UG_BUSINESS_MANAGER',
-  'UG_BUSINESS_SUPERVISOR'
 ]);
 
 export function filterWarehousePackageUpdatePermissions(
@@ -1132,14 +1197,6 @@ export function filterWarehousePackageUpdatePermissions(
     }
     return true;
   });
-  if ((warehouseInStockUpdateRoleKeys.has(role) || isWarehouseTally)
-    && !filtered.includes('warehouse:in-stock:update')) {
-    filtered.push('warehouse:in-stock:update');
-  }
-  if (warehouseInStockBusinessViewRoleKeys.has(role)
-    && !filtered.includes('warehouse:in-stock:view')) {
-    filtered.push('warehouse:in-stock:view');
-  }
   return filtered;
 }
 
@@ -1177,11 +1234,14 @@ export function defaultPermissionsForRole(role: RoleKey): PermissionKey[] {
     }
     if (role === 'UG_MARKET') {
       const marketInherited = inherited.filter((permission) =>
-        !permission.startsWith('finance:water-receipt:')
+        permission !== 'data-scope:sales-own'
+        && permission !== 'warehouse:in-stock:machine-import'
+        && !permission.startsWith('finance:water-receipt:')
         && !permission.startsWith('finance:water-match:')
         && !permission.startsWith('misc-fee:purchase:'));
       return [...new Set<PermissionKey>([
         ...marketInherited,
+        'data-scope:misc-fee-market',
         'master-data:agents:read',
         'master-data:agent-channels:read',
         ...marketBasePermissions,
@@ -1189,7 +1249,13 @@ export function defaultPermissionsForRole(role: RoleKey): PermissionKey[] {
         ...pricingManagementPermissions
       ])];
     }
-    if (role === 'UG_BUSINESS_MANAGER' || role === 'UG_BUSINESS_SUPERVISOR') {
+    if (role === 'UG_BUSINESS_MANAGER') {
+      inherited.push(
+        'business:dashboard:team-view',
+        'business:shipment:team-view'
+      );
+    }
+    if (role === 'UG_BUSINESS_SUPERVISOR') {
       inherited.push(
         'business:dashboard:team-view',
         'business:review:deleted-list',

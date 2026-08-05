@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Flex, Form, Image, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
-import { RefreshCw } from 'lucide-react';
+import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
+import { RefreshCw, Trash2 } from 'lucide-react';
 import type {
   PayeeBankAccountInput,
   PayeeBankAccountSummary,
@@ -9,14 +9,17 @@ import type {
   PendingPaymentListResponse,
   PendingPaymentSummary,
   PaymentApplicationCreateInput,
-  PaymentVoucherInput
+  PaymentVoucherInput,
+  PaymentVoucherSummary
 } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { downloadCsv } from '../exportCsv';
 import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput';
+import { ProtectedVoucherImage } from '../ProtectedVoucherImage';
 import { formatBeijingDateTime } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
+import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 const bankAccountOrdinals = ['一', '二', '三'];
@@ -116,6 +119,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
   const applicationSubmittingRef = useRef(false);
   const [voucherTarget, setVoucherTarget] = useState<PendingPaymentSummary | null>(null);
   const [previewTarget, setPreviewTarget] = useState<PendingPaymentSummary | null>(null);
+  const [deletingVoucherId, setDeletingVoucherId] = useState<string | null>(null);
   const [bankOptions, setBankOptions] = useState<PayeeBankAccountSummary[]>([]);
   const [bankOptionsLoading, setBankOptionsLoading] = useState(false);
   const [manualBankMode, setManualBankMode] = useState(false);
@@ -351,6 +355,22 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     await loadRows();
   };
 
+  const deleteBillVoucher = async (voucher: PaymentVoucherSummary) => {
+    if (!previewTarget || deletingVoucherId) return;
+    setDeletingVoucherId(voucher.id);
+    try {
+      await apiClient.deletePendingPaymentBillVoucher(voucher.id);
+      const remainingVouchers = previewTarget.vouchers.filter((item) => item.id !== voucher.id);
+      setPreviewTarget(remainingVouchers.length ? { ...previewTarget, vouchers: remainingVouchers } : null);
+      message.success('凭证已删除，操作已记录');
+      await loadRows();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '凭证删除失败');
+    } finally {
+      setDeletingVoucherId(null);
+    }
+  };
+
   const cancelApplication = async (row: PendingPaymentSummary) => {
     if (!row.paymentApplicationId) {
       message.warning('该记录缺少付款申请关联，无法撤回');
@@ -373,7 +393,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       { key: 'agentShortName', label: agentFieldLabels.shortName },
       { key: 'salesperson', label: '业务员' },
       { key: 'customerCode', label: '客户编号' },
-      { key: 'systemOrderNo', label: '出货单号' },
+      { key: 'outboundOrderNo', label: '出货单号' },
       { key: 'feeName', label: '应付费用' },
       { key: 'currency', label: '币种' },
       { key: 'amount', label: '合计金额' },
@@ -389,7 +409,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     { title: agentFieldLabels.shortName, dataIndex: 'agentShortName', width: 130, render: (value?: string) => value ?? '-' },
     { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value ?? '-' },
     { title: '客户编号', dataIndex: 'customerCode', width: 110 },
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (value?: string) => renderShipmentOrderNoLink(value) },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 190, render: (_: string | undefined, row) => renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)) },
     { title: '应付费用', dataIndex: 'feeName', width: 140 },
     { title: '币种', dataIndex: 'currency', width: 90 },
     { title: '合计金额', dataIndex: 'amount', width: 130, align: 'right', sorter: true, render: (value: number) => <Text strong className="finance-payment-amount">{formatMoney(value)}</Text> },
@@ -439,7 +459,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
             { key: 'date', label: '日期', value: <ManagedMatrixDateTime value={row.date ? formatBeijingDateTime(row.date) : undefined} /> },
             { key: 'customerCode', label: '客户编号', value: row.customerCode || '-' },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
-            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(row.systemOrderNo), title: row.systemOrderNo },
+            { key: 'systemOrderNo', label: '出货单号', value: renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)), title: resolveShipmentOutboundOrderNo(row) },
             { key: 'agentShortName', label: agentFieldLabels.shortName, value: row.agentShortName || '-' },
             { key: 'feeName', label: '应付费用', value: row.feeName || '-', title: row.feeName, wrap: true },
             row.remark ? { key: 'remark', label: '备注', value: row.remark, title: row.remark, wrap: true } : null,
@@ -660,6 +680,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
                   <div className="finance-payment-section-title">供应商账单截图</div>
                   <Form.Item name="voucherImage">
                     <VoucherImageInput
+                      apiClient={apiClient}
                       disabled={!canUploadAttachment}
                       uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: selectedRows[0]?.id }) as Promise<VoucherImageValue>}
                     />
@@ -684,6 +705,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
             <Text type="secondary">支持选择、粘贴或拖入图片，保存后会回到当前待付款列表。</Text>
             <Form.Item name="voucherImage" label="供应商账单截图">
               <VoucherImageInput
+                apiClient={apiClient}
                 disabled={!canUploadAttachment || !voucherTarget}
                 uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: voucherTarget?.id }) as Promise<VoucherImageValue>}
               />
@@ -695,8 +717,38 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       <Modal title="对账单凭证预览" className="finance-modal finance-preview-modal finance-payment-preview-modal" open={Boolean(previewTarget)} footer={null} onCancel={() => setPreviewTarget(null)} width={780}>
         <Space direction="vertical" className="full-width" size={12}>
           {previewTarget?.vouchers.map((voucher) => (
-            <Card key={voucher.id} size="small" title={voucher.fileName} className="finance-payment-preview-card">
-              {voucher.url ? <Image src={voucher.url} alt={voucher.fileName} fallback="" /> : <Text type="secondary">{voucher.mimeType ?? '图片凭证'} / {voucher.sizeBytes ?? 0} Bytes</Text>}
+            <Card
+              key={voucher.id}
+              size="small"
+              title={voucher.fileName}
+              className="finance-payment-preview-card"
+              extra={canUploadAttachment
+                && previewTarget.status !== 'PAID'
+                && previewTarget.status !== 'INVALIDATED'
+                && !(previewTarget.status === 'APPLIED' && previewTarget.vouchers.length <= 1) ? (
+                <Popconfirm
+                  title="确认删除这张凭证？"
+                  description="删除后无法恢复，操作会记录到审计日志。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true, loading: deletingVoucherId === voucher.id }}
+                  disabled={Boolean(deletingVoucherId)}
+                  onConfirm={() => void deleteBillVoucher(voucher)}
+                >
+                  <Button
+                    aria-label={`删除凭证 ${voucher.fileName}`}
+                    danger
+                    type="text"
+                    size="small"
+                    icon={<Trash2 size={14} />}
+                    disabled={Boolean(deletingVoucherId)}
+                  >
+                    删除
+                  </Button>
+                </Popconfirm>
+              ) : null}
+            >
+              {voucher.url ? <ProtectedVoucherImage apiClient={apiClient} url={voucher.url} alt={voucher.fileName} fallback="" /> : <Text type="secondary">{voucher.mimeType ?? '图片凭证'} / {voucher.sizeBytes ?? 0} Bytes</Text>}
             </Card>
           ))}
         </Space>

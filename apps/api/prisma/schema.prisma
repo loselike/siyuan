@@ -46,18 +46,24 @@ model User {
   gender       String?
   nickname     String?
   departmentId String?
+  directManagerId String?
   site         String?
   mustChangePassword Boolean @default(false)
   enabled      Boolean  @default(true)
   createdAt    DateTime @default(now())
   role         Role     @relation(fields: [roleId], references: [id])
   department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  directManager User? @relation("UserDirectManager", fields: [directManagerId], references: [id], onDelete: SetNull)
+  directReports User[] @relation("UserDirectManager")
   customer     Customer? @relation(fields: [customerId], references: [id])
   loginLogs    LoginLog[]
   moduleReadStates UserModuleReadState[]
   notificationDeliveries NotificationDelivery[]
   notificationPreferences NotificationPreference[]
   createdWaterReceipts WaterReceipt[] @relation("WaterReceiptCreator")
+
+  @@index([departmentId])
+  @@index([directManagerId])
 }
 
 model UserModuleReadState {
@@ -117,6 +123,19 @@ model Customer {
   miscFees MiscFeeRecord[]
 }
 
+model CustomerSource {
+  id             String   @id @default(cuid())
+  name           String
+  normalizedName String   @unique
+  remark         String?
+  sortOrder      Int      @default(0)
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([enabled, sortOrder])
+}
+
 model CustomerContact {
   id         String   @id @default(cuid())
   customerId String
@@ -160,6 +179,11 @@ model Agent {
   warehouseContactPhone3 String?
   invoiceTemplateName String?
   invoiceTemplateUrl String?
+  invoiceTemplateName2 String?
+  invoiceTemplateUrl2 String?
+  invoiceTemplateName3 String?
+  invoiceTemplateUrl3 String?
+  invoiceTemplates Json?
   trackingWebsite String?
   createdAt DateTime @default(now())
   enabled   Boolean    @default(true)
@@ -192,13 +216,13 @@ model Carrier {
 model Channel {
   id        String     @id @default(cuid())
   name      String
-  carrierId String
+  carrierId String?
   enabled   Boolean    @default(true)
   deletedAt DateTime?
   volumeDivisor Int     @default(5000)
   roundingRule  String  @default("NONE")
   businessType String @default("EXPRESS")
-  category String @default("DHL")
+  category String @default("")
   multiPieceWeightRule String @default("SUM_THEN_COMPARE")
   singleWeightRoundingRule String @default("ACTUAL")
   settlementWeightRule String @default("MAX_ACTUAL_VOLUME")
@@ -212,7 +236,7 @@ model Channel {
   perShipmentMinimumChargeUnit String?
   densityRatio Decimal? @db.Decimal(12, 4)
   remoteAreaRule String @default("NONE")
-  carrier   Carrier    @relation(fields: [carrierId], references: [id])
+  carrier   Carrier?   @relation(fields: [carrierId], references: [id])
   shipments Shipment[]
   pricingRules PricingRule[]
 
@@ -249,6 +273,7 @@ model Shipment {
   subOrderNo          String?
   inboundNo           String?
   productName         String?
+  productNames        String[]                    @default([])
   declarationRequired Boolean           @default(false)
   sensitive           Boolean           @default(false)
   cargoType           String?
@@ -1028,6 +1053,7 @@ model ShipmentFinanceItem {
   agentName                  String?
   agentId                    String?
   chargeWeightKg             Decimal?
+  chargeUnit                 String                      @default("KG")
   unitPrice                  Decimal?
   amountOverridden           Boolean                     @default(false)
   remark                     String?

@@ -640,6 +640,16 @@
   --sy-page-gap: 16px;
 }
 
+.shipment-risk-flag-active {
+  color: var(--sy-danger);
+  font-weight: 600;
+}
+
+.shipment-risk-input-active {
+  color: var(--sy-danger) !important;
+  font-weight: 600;
+}
+
 body {
   margin: 0;
   background: var(--sy-bg);
@@ -1923,6 +1933,18 @@ a:focus-visible,
   background: var(--sy-bg);
 }
 
+.app-update-notice {
+  margin-bottom: 12px;
+}
+
+.app-update-notice .ant-alert-message {
+  font-weight: 700;
+}
+
+.app-update-notice .ant-alert-description {
+  color: var(--sy-text-muted);
+}
+
 .content > .ant-row,
 .content > .ant-card,
 .content > .ant-alert,
@@ -2462,6 +2484,11 @@ a:focus-visible,
 
 .routing-assignment-cost-body .ant-typography {
   font-size: 11px;
+}
+
+.routing-assignment-cost-table .ant-select,
+.routing-assignment-cost-table .ant-input-number {
+  width: 100%;
 }
 
 @media (max-width: 767px) {
@@ -3583,12 +3610,13 @@ body.is-resizing-table-column {
 
 .staff-account-filter-strip {
   display: grid;
-  grid-template-columns: minmax(240px, 1.35fr) minmax(150px, 0.8fr) minmax(150px, 0.8fr) minmax(170px, 0.9fr) auto auto;
+  grid-template-columns: minmax(250px, 1.35fr) minmax(148px, 0.75fr) minmax(148px, 0.75fr) 188px minmax(170px, 0.8fr) auto;
   gap: 8px 10px;
   align-items: center;
-  padding: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid #e5edf7;
+  border-radius: 8px;
   background: #f8fbff;
-  border-bottom: 1px solid #edf2fb;
 }
 
 .staff-account-filter-strip .module-filter-field {
@@ -3612,7 +3640,7 @@ body.is-resizing-table-column {
 }
 
 .settings-account-card .ant-card-body {
-  padding: 0 16px 14px;
+  padding: 12px 16px 14px;
 }
 
 .settings-account-card .managed-table-toolbar {
@@ -5732,6 +5760,24 @@ body.is-resizing-table-column {
   color: #000;
   border: 2px solid #111;
   background: #fff;
+}
+
+.warehouse-agent-handover-print-setting {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.warehouse-agent-handover-print-setting > span,
+.warehouse-agent-handover-remark-editor label {
+  color: var(--ant-color-text);
+  font-weight: 600;
+}
+
+.warehouse-agent-handover-remark-editor {
+  display: grid;
+  gap: 6px;
 }
 
 .warehouse-agent-handover-company {
@@ -11066,6 +11112,10 @@ body.is-resizing-table-column {
   font-size: 13px;
   font-weight: 800;
   overflow-wrap: anywhere;
+}
+
+.shipment-package-weight-summary {
+  margin-bottom: 14px;
 }
 
 .shipment-detail-finance-section {

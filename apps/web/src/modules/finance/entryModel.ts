@@ -28,6 +28,7 @@ export interface FinanceEntryFormValues {
   cargoDataSource?: 'AUTO_MATCHED' | 'MANUAL_ADJUSTED';
   chargeWeightOverridden?: boolean;
   productName?: string;
+  productNames?: string[];
   declarationRequired?: boolean;
   sensitive?: boolean;
   tradeTerms?: string;

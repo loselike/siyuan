@@ -1,6 +1,6 @@
 import { Controller, ForbiddenException, Get, Inject, Param, Req } from '@nestjs/common';
 import { PrismaRepository } from '../../prisma.repository.js';
-import { RequireAuth, RequirePermission } from '../../require-permission.decorator.js';
+import { RequireAuth } from '../../require-permission.decorator.js';
 import type { PermissionKey, Principal } from '../../rbac.js';
 
 @Controller()
@@ -15,15 +15,6 @@ export class ShipmentFulfillmentQueryController {
     }
     await this.ensureAnyPermission(request.user, ['warehouse:dispatch-pending:label-view', 'customer-service:transfer:label-view']);
     return this.repository.getShipmentLabels(request.user, id);
-  }
-
-  @Get('carrier-tasks')
-  @RequirePermission('tracking:carrier-task:view')
-  async carrierTasks(@Req() request: { user: Principal }) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能查看承运商任务');
-    }
-    return this.repository.getCarrierTasks(request.user);
   }
 
   private async ensureAnyPermission(principal: Principal, permissions: PermissionKey[]) {

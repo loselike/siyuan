@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type {
   FinanceCatalogCategory,
   FinanceCatalogItemInput,
@@ -6,7 +6,11 @@ import type {
   FinanceCatalogListResponse,
   FinanceCatalogReorderInput
 } from '@siyuan/shared/finance-catalog';
-import type { Principal } from '../../rbac.js';
+import type { PermissionKey, Principal } from '../../rbac.js';
+import {
+  FINANCE_CATALOG_AUTHORIZER,
+  type FinanceCatalogAuthorizer
+} from './finance-catalog.authorization.js';
 import {
   FINANCE_CATALOG_AUDIT_WRITER,
   type FinanceCatalogAuditWriter
@@ -29,7 +33,8 @@ import {
 export class FinanceCatalogService {
   constructor(
     @Inject(FINANCE_CATALOG_REPOSITORY) private readonly repository: FinanceCatalogRepository,
-    @Inject(FINANCE_CATALOG_AUDIT_WRITER) private readonly auditWriter: FinanceCatalogAuditWriter
+    @Inject(FINANCE_CATALOG_AUDIT_WRITER) private readonly auditWriter: FinanceCatalogAuditWriter,
+    @Inject(FINANCE_CATALOG_AUTHORIZER) private readonly authorizer: FinanceCatalogAuthorizer
   ) {}
 
   async list(queryOrCategory?: FinanceCatalogListQuery | FinanceCatalogCategory): Promise<FinanceCatalogListResponse> {
@@ -46,6 +51,7 @@ export class FinanceCatalogService {
   async create(principal: Principal, input: FinanceCatalogItemInput) {
     const data = this.normalizeInput(input, { requireCategory: true, requireName: true });
     const category = data.category as FinanceCatalogCategory;
+    await this.ensureWritePermission(principal, category, 'create');
     const name = data.name as string;
     await this.ensureUniqueName(category, name);
     if (data.sortOrder === undefined || data.sortOrder === 0) {
@@ -71,6 +77,7 @@ export class FinanceCatalogService {
     if (!current) {
       throw new NotFoundException('财务资料不存在');
     }
+    await this.ensureWritePermission(principal, current.category as FinanceCatalogCategory, 'update');
     const data = this.normalizeInput(input, { requireCategory: false, requireName: false });
     delete data.category;
     const nextName = (data.name as string | undefined) ?? current.name;
@@ -100,6 +107,7 @@ export class FinanceCatalogService {
     if (!current) {
       throw new NotFoundException('财务资料不存在');
     }
+    await this.ensureWritePermission(principal, current.category as FinanceCatalogCategory, 'update');
     const row = await this.repository.update(id, { enabled: false });
     const summary = mapFinanceCatalogItem(row);
     await this.auditWriter.write({
@@ -118,6 +126,7 @@ export class FinanceCatalogService {
     if (!current) {
       throw new NotFoundException('财务资料不存在');
     }
+    await this.ensureWritePermission(principal, current.category as FinanceCatalogCategory, 'delete');
     const deleted = await this.repository.delete(id);
     const summary = mapFinanceCatalogItem(deleted);
     await this.auditWriter.write({
@@ -134,6 +143,7 @@ export class FinanceCatalogService {
     if (!financeCatalogCategories.includes(input.category)) {
       throw new BadRequestException('财务资料库分类不正确');
     }
+    await this.ensureWritePermission(principal, input.category, 'reorder');
     if (!Array.isArray(input.orderedIds) || input.orderedIds.length === 0) {
       throw new BadRequestException('排序列表不能为空');
     }
@@ -163,6 +173,21 @@ export class FinanceCatalogService {
     }
   }
 
+  private async ensureWritePermission(
+    principal: Principal,
+    category: FinanceCatalogCategory,
+    action: 'create' | 'update' | 'delete' | 'reorder'
+  ) {
+    const permission = financeCatalogWritePermission(category, action);
+    if (await this.authorizer.hasPermission(principal.role, permission)) return;
+    await this.authorizer.recordPermissionDenied(principal, {
+      permissions: [permission],
+      method: 'SERVER',
+      path: `finance/catalog/${category.toLowerCase()}/${action}`
+    }).catch(() => undefined);
+    throw new ForbiddenException('没有维护该类财务资料的权限');
+  }
+
   private normalizeInput(
     input: Partial<FinanceCatalogItemInput>,
     options: { requireCategory: boolean; requireName: boolean }
@@ -176,4 +201,20 @@ export class FinanceCatalogService {
       throw error;
     }
   }
+}
+
+function financeCatalogWritePermission(
+  category: FinanceCatalogCategory,
+  action: 'create' | 'update' | 'delete' | 'reorder'
+): PermissionKey {
+  if (category === 'FEE_NAME') {
+    return `master-data:finance:fee-name:${action}` as PermissionKey;
+  }
+  const section = category === 'SETTLEMENT_METHOD'
+    ? 'settlement'
+    : category === 'CARGO_TYPE'
+      ? 'cargo-type'
+      : 'product-name';
+  const effectiveAction = action === 'reorder' ? 'update' : action;
+  return `master-data:finance:${section}:${effectiveAction}` as PermissionKey;
 }

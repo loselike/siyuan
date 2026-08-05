@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import type { BusinessCostAuditSummary, PayableAuditSummary, Shipment } from '@siyuan/shared';
 import { agentFieldLabels } from './agentFieldLabels';
 import { formatBeijingDateTime } from './format';
+import { resolveShipmentOutboundOrderNo } from './shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -225,7 +226,7 @@ export function createPendingRoutingColumns(options: {
     { title: '站点', dataIndex: 'site', width: 76, render: (value?: string) => value || '-' },
     { title: '业务员', dataIndex: 'salesperson', width: 86, ellipsis: true, render: (value?: string) => value || '-' },
     { title: '客户编号', dataIndex: 'customerCode', width: 96, ellipsis: true, render: (value: string | undefined, record) => <Text className="pending-routing-identifier">{value || record.customerName.split('-')[0] || '-'}</Text> },
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150, ellipsis: true, render: (value?: string) => <Text strong className="pending-routing-order-no">{value || '-'}</Text> },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150, ellipsis: true, render: (_: string | undefined, record) => <Text strong className="pending-routing-order-no">{resolveShipmentOutboundOrderNo(record)}</Text> },
     { title: '公司渠道', dataIndex: 'channelName', width: 124, ellipsis: true, render: (value?: string) => value || '-' },
     {
       title: '国家',
@@ -233,7 +234,15 @@ export function createPendingRoutingColumns(options: {
       width: 78,
       render: (value?: string) => value?.trim() ? value : <Text type="danger">缺国家</Text>
     },
-    { key: 'cargoData', title: '货物数据', width: 176, render: (_, record) => <span className="pending-routing-cargo">{record.packageCount} 件 · 实重 {(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg · 计费 {record.receivableWeightKg.toFixed(2)} kg</span> },
+    {
+      key: 'cargoData',
+      title: '货物数据',
+      width: 230,
+      render: (_, record) => {
+        const productName = record.productName?.trim() || '-';
+        return <span className="pending-routing-cargo" title={productName}>品名 {productName} · {record.packageCount} 件 · 实重 {(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg · 计费 {record.receivableWeightKg.toFixed(2)} kg</span>;
+      }
+    },
     ...businessCostColumns,
     ...(mode === 'market' ? [] : [{
       key: 'routingAction',
@@ -288,7 +297,7 @@ export function createPendingRoutingColumns(options: {
         const customerCode = record.customerCode || record.customerName.split('-')[0] || '-';
         return renderMatrixCell([
           { label: '客户编号', value: <Text className="pending-routing-identifier">{customerCode}</Text>, title: customerCode },
-          { label: '出货单号', value: <Text className="pending-routing-order-no">{record.systemOrderNo || '-'}</Text>, title: record.systemOrderNo || '-' }
+          { label: '出货单号', value: <Text className="pending-routing-order-no">{resolveShipmentOutboundOrderNo(record)}</Text>, title: resolveShipmentOutboundOrderNo(record) }
         ]);
       }
     },
@@ -316,15 +325,19 @@ export function createPendingRoutingColumns(options: {
     {
       key: 'matrixCargo',
       title: '货物数据',
-      width: 150,
+      width: 190,
       className: 'pending-routing-matrix-group-cargo',
       sorter: (left, right) => left.receivableWeightKg - right.receivableWeightKg,
       showSorterTooltip: { title: '按计费重排序' },
-      render: (_, record) => renderMatrixCell([
-        { label: '件数', value: `${record.packageCount} 件` },
-        { label: '实重', value: `${(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg` },
-        { label: '计费重', value: `${record.receivableWeightKg.toFixed(2)} kg` }
-      ])
+      render: (_, record) => {
+        const productName = record.productName?.trim() || '-';
+        return renderMatrixCell([
+          { label: '品名', value: productName, title: productName },
+          { label: '件数', value: `${record.packageCount} 件` },
+          { label: '实重', value: `${(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg` },
+          { label: '计费重', value: `${record.receivableWeightKg.toFixed(2)} kg` }
+        ]);
+      }
     },
     ...(canViewBusinessCost ? [{
       key: 'matrixBusinessCost',

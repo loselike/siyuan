@@ -26,8 +26,6 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
     return menuItems.map((item) => item.key);
   }
   const permissionSet = new Set(permissions);
-  const isCustomerServiceRole = role === 'CUSTOMER_SERVICE' || role === 'UG_CUSTOMER_SERVICE';
-  const isFinanceRole = role === 'FINANCE' || role === 'UG_FINANCE' || role === 'UG_FINANCE_CASHIER';
   const canAny = (...keys: PermissionKey[]) => keys.some((key) => permissionSet.has(key));
   const rules: Array<[StaffMenuKey, boolean]> = [
     ['workspace', canAny(
@@ -58,9 +56,9 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
       'market:routed:view',
       'market:weekly-routing:view'
     )],
-    ['customerService', isCustomerServiceRole && canAny('customer-service:dashboard:view', 'customer-service:data-confirm:view', 'customer-service:transfer:view', 'customer-service:pending-routing:view', 'customer-service:waiting-departure:view', 'customer-service:departed:view', 'customer-service:arrived-port:view', 'customer-service:delivering:view', 'customer-service:signed:view', 'customer-service:problem:view')],
+    ['customerService', canAny('customer-service:dashboard:view', 'customer-service:data-confirm:view', 'customer-service:transfer:view', 'customer-service:pending-routing:view', 'customer-service:waiting-departure:view', 'customer-service:departed:view', 'customer-service:arrived-port:view', 'customer-service:delivering:view', 'customer-service:signed:view', 'customer-service:problem:view')],
     ['logisticsTracking', canAny('tracking:carrier-task:view', 'tracking:external:view')],
-    ['finance', (isFinanceRole && canAny('finance:dashboard:view', 'finance:receivable:read', 'finance:business-cost:read', 'finance:payable:read', 'finance:pending-payment:read', 'finance:paid-payment:read', 'finance:water-receipt:read', 'finance:water-match:read', 'finance:agent-bill:read'))],
+    ['finance', canAny('finance:dashboard:view', 'finance:receivable:read', 'finance:business-cost:read', 'finance:payable:read', 'finance:pending-payment:read', 'finance:paid-payment:read', 'finance:water-receipt:read', 'finance:water-match:read', 'finance:agent-bill:read')],
     ['miscFees', permissions.some((permission) => permission.startsWith('misc-fee:') && permission.endsWith(':read'))],
     ['master', canAny('master-data:customers:read', 'master-data:finance:read', 'master-data:agents:read', 'master-data:agent-channels:read', 'master-data:channels:read', 'master-data:channel-categories:read', 'master-data:remote-areas:read', 'master-data:exchange-rates:read', 'master-data:assistant:read')],
     ['settings', canAny('system:user-groups:read', 'system:accounts:read', 'system:sites:read', 'system:audit:read', 'system:role-permissions:read', 'system:security:read', 'system:ai-security:read', 'system:base-config:read')]

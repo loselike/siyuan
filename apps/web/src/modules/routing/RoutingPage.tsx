@@ -27,6 +27,7 @@ import { countryOptions, filterLocationOption } from '../finance/entry/countrySt
 import { AppActionGroup, AppDateRangePicker, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, MetricCard, RoutingStatusTag, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
 import type { PermissionKey } from '../../apiClient';
 import { formatBeijingDate, formatBeijingDateTime, getBeijingDayStartTimestamp } from '../shared/format';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -73,7 +74,7 @@ export function filterPendingRoutingShipments(shipments: Shipment[], filters: Pe
   return shipments.filter((shipment) => (
     matchesRoutingFilter(shipment.salesperson, filters.salesperson)
     && matchesRoutingFilter(shipment.customerCode, filters.customerCode)
-    && matchesRoutingFilter(shipment.systemOrderNo, filters.systemOrderNo)
+    && (matchesRoutingFilter(resolveShipmentOutboundOrderNo(shipment), filters.systemOrderNo) || matchesRoutingFilter(shipment.systemOrderNo, filters.systemOrderNo))
   ));
 }
 
@@ -107,6 +108,16 @@ type PendingRoutingCostRow = {
   customerCode?: string;
   systemOrderNo?: string;
   transferNo?: string;
+};
+
+type PendingRoutingCostEditor = {
+  type: 'BUSINESS_COST' | 'PAYABLE';
+  id?: string;
+  name: string;
+  currency: string;
+  chargeWeightKg?: number;
+  unitPrice?: number;
+  amount?: number;
 };
 
 function inferRoutingMode(shipment: Shipment) {
@@ -215,7 +226,8 @@ export function RoutingPage({
   const [rerouteShipment, setRerouteShipment] = useState<Shipment | null>(null);
   const [assignmentSubmitting, setAssignmentSubmitting] = useState(false);
   const [rerouteForm] = Form.useForm<{ reason?: string }>();
-  const [costEditor, setCostEditor] = useState<{ type: 'BUSINESS_COST' | 'PAYABLE'; id?: string } | null>(null);
+  const [costEditor, setCostEditor] = useState<PendingRoutingCostEditor | null>(null);
+  const [costSaving, setCostSaving] = useState(false);
   const [pendingFilterDraft, setPendingFilterDraft] = useState<PendingRoutingFilters>(emptyPendingRoutingFilters);
   const [pendingFilters, setPendingFilters] = useState<PendingRoutingFilters>(emptyPendingRoutingFilters);
   const [pendingPagination, setPendingPagination] = useState({ current: 1, pageSize: 10 });
@@ -223,7 +235,6 @@ export function RoutingPage({
   const [routedFilters, setRoutedFilters] = useState<RoutedShipmentFilters>(emptyRoutedShipmentFilters);
   const [routedPagination, setRoutedPagination] = useState({ current: 1, pageSize: 10 });
   const [routedView, setRoutedView] = useState<'recent' | 'history'>('recent');
-  const [costForm] = Form.useForm<{ name?: string; currency?: string; chargeWeightKg?: number; unitPrice?: number; amount?: number }>();
   const watchedAgentId = Form.useWatch('agentId', assignmentForm);
   const watchedAgentChannelName = Form.useWatch('agentChannelName', assignmentForm);
   const feeNameOptions = useMemo(() => createRoutingFeeNameOptions(feeNameCatalogItems), [feeNameCatalogItems]);
@@ -240,6 +251,10 @@ export function RoutingPage({
   }, []);
 
   const submitAssignment = async () => {
+    if (costEditor) {
+      messageApi.warning('请先保存或取消正在编辑的费用明细。');
+      return false;
+    }
     try {
       const values = await assignmentForm.validateFields();
       if (!values.agentId) {
@@ -513,7 +528,7 @@ export function RoutingPage({
       { title: '业务员', dataIndex: 'salesperson', width: 100, render: (value?: string) => value || '-' },
       { title: '客户编号', dataIndex: 'customerCode', width: 100, render: (value: string | undefined, record) => value || record.customerName.split('-')[0] },
       { title: '客户', dataIndex: 'customerName', width: 150 },
-      { title: '出货单号', dataIndex: 'systemOrderNo', width: 180 },
+      { title: '出货单号', dataIndex: 'systemOrderNo', width: 180, render: (_: string, record) => resolveShipmentOutboundOrderNo(record) },
       { key: 'cargoData', title: '货物数据', width: 140, render: (_, record) => `${record.packageCount} 件 / ${record.receivableWeightKg.toFixed(2)} kg` },
       { title: '目的地', dataIndex: 'destinationCountry', width: 90 },
       ...(canViewAgentChannel ? [
@@ -619,57 +634,160 @@ export function RoutingPage({
   const assignmentBusinessCosts = useMemo(
     () => assignmentShipment
       ? (assignmentFinanceDetail?.businessCosts ?? (businessCostAudits ?? []).filter((fee) => fee.shipmentId === assignmentShipment.id || fee.systemOrderNo === assignmentShipment.systemOrderNo))
-        .map((fee) => ({ ...fee, customerCode: assignmentShipment.customerCode, systemOrderNo: assignmentShipment.systemOrderNo, transferNo: assignmentShipment.transferNo }))
+        .map((fee) => ({ ...fee, customerCode: assignmentShipment.customerCode, systemOrderNo: resolveShipmentOutboundOrderNo(assignmentShipment), transferNo: assignmentShipment.transferNo }))
       : [],
     [assignmentShipment, assignmentFinanceDetail, businessCostAudits]
   );
   const assignmentPayables = useMemo(
     () => assignmentShipment
       ? (assignmentFinanceDetail?.payables ?? (payableAudits ?? []).filter((fee) => fee.shipmentId === assignmentShipment.id || fee.systemOrderNo === assignmentShipment.systemOrderNo))
-        .map((fee) => ({ ...fee, customerCode: assignmentShipment.customerCode, systemOrderNo: assignmentShipment.systemOrderNo, transferNo: assignmentShipment.transferNo }))
+        .map((fee) => ({ ...fee, customerCode: assignmentShipment.customerCode, systemOrderNo: resolveShipmentOutboundOrderNo(assignmentShipment), transferNo: assignmentShipment.transferNo }))
       : [],
     [assignmentShipment, assignmentFinanceDetail, payableAudits]
   );
 
   function openCostEditor(type: 'BUSINESS_COST' | 'PAYABLE', row?: { id: string; name: string; currency?: string; chargeWeightKg?: number; unitPrice?: number; amount?: number }) {
-    costForm.setFieldsValue({
-      name: row?.name ?? '', currency: row?.currency ?? 'RMB', chargeWeightKg: row?.chargeWeightKg,
-      unitPrice: row?.unitPrice, amount: row?.amount
+    setCostEditor({
+      type,
+      id: row?.id,
+      name: row?.name ?? '',
+      currency: row?.currency ?? 'RMB',
+      chargeWeightKg: row?.chargeWeightKg,
+      unitPrice: row?.unitPrice,
+      amount: row?.amount
     });
-    setCostEditor({ type, id: row?.id });
+  }
+
+  function updateCostEditor(values: Partial<PendingRoutingCostEditor>, calculateAmount = false) {
+    setCostEditor((current) => {
+      if (!current) return current;
+      const next = { ...current, ...values };
+      if (calculateAmount && next.chargeWeightKg !== undefined && next.unitPrice !== undefined) {
+        next.amount = Number((next.chargeWeightKg * next.unitPrice).toFixed(2));
+      }
+      return next;
+    });
+  }
+
+  async function saveCostEditor() {
+    if (!assignmentShipment || !costEditor) return;
+    if (!costEditor.name.trim()) {
+      messageApi.warning('请选择费用名称。');
+      return;
+    }
+    if (!costEditor.currency) {
+      messageApi.warning('请选择币种。');
+      return;
+    }
+    if (costEditor.amount === undefined) {
+      messageApi.warning('请填写总金额。');
+      return;
+    }
+    setCostSaving(true);
+    try {
+      await onSavePendingRoutingCost(assignmentShipment, costEditor.type, costEditor.id, {
+        name: costEditor.name.trim(),
+        currency: costEditor.currency,
+        chargeWeightKg: costEditor.chargeWeightKg,
+        unitPrice: costEditor.unitPrice,
+        amount: costEditor.amount
+      });
+      setCostEditor(null);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : '费用保存失败，请稍后重试。');
+    } finally {
+      setCostSaving(false);
+    }
   }
 
   function renderCostTab(type: 'BUSINESS_COST' | 'PAYABLE', rows: PendingRoutingCostRow[]) {
     const total = rows.reduce((sum, row) => sum + Number(row.rmbAmount ?? row.amount ?? 0), 0);
     const canEditCost = canUpdatePending && (type === 'BUSINESS_COST' ? canViewBusinessCost : canViewPayableCost);
+    const editingThisType = costEditor?.type === type;
+    const editableRows: PendingRoutingCostRow[] = editingThisType && !costEditor.id && assignmentShipment
+      ? [...rows, {
+          id: '__new_cost__',
+          shipmentId: assignmentShipment.id,
+          name: '',
+          amount: 0,
+          currency: costEditor.currency,
+          customerCode: assignmentShipment.customerCode,
+          systemOrderNo: resolveShipmentOutboundOrderNo(assignmentShipment),
+          transferNo: assignmentShipment.transferNo
+        }]
+      : rows;
+    const isEditingRow = (row: PendingRoutingCostRow) => editingThisType && (costEditor.id ? row.id === costEditor.id : row.id === '__new_cost__');
     return (
       <Space direction="vertical" size={12} className="full-width">
         <Flex justify="space-between" align="center">
           <Text type="secondary">按运单归并；金额优先按计费重 × 单价自动计算，合计按 RMB 口径展示。</Text>
-          {canEditCost ? <Button size="small" onClick={() => openCostEditor(type)}>新增费用</Button> : null}
+          {canEditCost ? <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type)}>新增费用</Button> : null}
         </Flex>
         <Table
+          className="routing-assignment-cost-table"
           size="small"
           rowKey="id"
           pagination={false}
-          scroll={{ x: 920 }}
-          dataSource={rows}
+          scroll={{ x: 1080 }}
+          dataSource={editableRows}
           locale={{ emptyText: '暂无费用明细' }}
           columns={[
-            { title: '费用名称', dataIndex: 'name', width: 130 },
+            {
+              title: '费用名称', dataIndex: 'name', width: 150,
+              render: (value: string, row: PendingRoutingCostRow) => isEditingRow(row) ? (
+                <Select
+                  aria-label="费用名称"
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="选择费用名称"
+                  value={costEditor?.name || undefined}
+                  options={feeNameOptions}
+                  notFoundContent="暂无启用费用名称"
+                  onChange={(name) => {
+                    const currency = feeNameOptions.find((item) => item.value === name)?.currency;
+                    updateCostEditor({ name, ...(currency === 'RMB' || currency === 'USD' ? { currency } : {}) });
+                  }}
+                />
+              ) : value
+            },
             { title: '客户编号', dataIndex: 'customerCode', width: 100 },
             { title: '出货单号', dataIndex: 'systemOrderNo', width: 150 },
             { title: '转单号', dataIndex: 'transferNo', width: 130, render: (value?: string) => value || '-' },
             { title: '对账状态', dataIndex: 'reconciliationStatus', width: 100, render: (value?: string) => formatRoutingFeeStatus(value) },
-            { title: '币种', dataIndex: 'currency', width: 76 },
-            { title: '计费重', dataIndex: 'chargeWeightKg', width: 90, render: (value?: number) => value ? `${value.toFixed(2)} kg` : '-' },
-            { title: '单价', dataIndex: 'unitPrice', width: 86, render: (value?: number) => value?.toFixed(2) ?? '-' },
-            { title: '总金额', dataIndex: 'amount', width: 110, render: (value: number, row: PendingRoutingCostRow) => `${value.toFixed(2)} ${row.currency ?? 'RMB'}` },
+            {
+              title: '币种', dataIndex: 'currency', width: 90,
+              render: (value: string | undefined, row: PendingRoutingCostRow) => isEditingRow(row) ? (
+                <Select aria-label="币种" value={costEditor?.currency} options={[{ label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} onChange={(currency) => updateCostEditor({ currency })} />
+              ) : value
+            },
+            {
+              title: '计费重', dataIndex: 'chargeWeightKg', width: 105,
+              render: (value: number | undefined, row: PendingRoutingCostRow) => isEditingRow(row) ? (
+                <InputNumber aria-label="计费重" min={0} precision={3} value={costEditor?.chargeWeightKg} onChange={(chargeWeightKg) => updateCostEditor({ chargeWeightKg: chargeWeightKg ?? undefined }, true)} />
+              ) : value ? `${value.toFixed(2)} kg` : '-'
+            },
+            {
+              title: '单价', dataIndex: 'unitPrice', width: 100,
+              render: (value: number | undefined, row: PendingRoutingCostRow) => isEditingRow(row) ? (
+                <InputNumber aria-label="单价" min={0} precision={2} value={costEditor?.unitPrice} onChange={(unitPrice) => updateCostEditor({ unitPrice: unitPrice ?? undefined }, true)} />
+              ) : value?.toFixed(2) ?? '-'
+            },
+            {
+              title: '总金额', dataIndex: 'amount', width: 120,
+              render: (value: number, row: PendingRoutingCostRow) => isEditingRow(row) ? (
+                <InputNumber aria-label="总金额" min={0} precision={2} value={costEditor?.amount} onChange={(amount) => updateCostEditor({ amount: amount ?? undefined })} />
+              ) : `${value.toFixed(2)} ${row.currency ?? 'RMB'}`
+            },
             canEditCost ? {
-              title: '操作', width: 112, fixed: 'right' as const, render: (_: unknown, row: PendingRoutingCostRow) => (
+              title: '操作', width: 120, fixed: 'right' as const, render: (_: unknown, row: PendingRoutingCostRow) => isEditingRow(row) ? (
                 <Space size={4}>
-                  <Button size="small" onClick={() => openCostEditor(type, row)}>修改</Button>
-                  <Button size="small" danger onClick={() => assignmentShipment && void onDeletePendingRoutingCost(assignmentShipment, row.id)}>删除</Button>
+                  <Button size="small" type="primary" loading={costSaving} onClick={() => void saveCostEditor()}>保存</Button>
+                  <Button size="small" disabled={costSaving} onClick={() => setCostEditor(null)}>取消</Button>
+                </Space>
+              ) : (
+                <Space size={4}>
+                  <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type, row)}>修改</Button>
+                  <Button size="small" danger disabled={Boolean(costEditor)} onClick={() => assignmentShipment && void onDeletePendingRoutingCost(assignmentShipment, row.id)}>删除</Button>
                 </Space>
               )
             } : null
@@ -838,7 +956,7 @@ export function RoutingPage({
                 { key: 'salesperson', label: '业务员', value: record.salesperson || '-' },
                 { key: 'customerCode', label: '客户编号', value: record.customerCode || record.customerName.split('-')[0] || '-' },
                 { key: 'customer', label: '客户', value: record.customerName, title: record.customerName, wrap: true, emphasis: true },
-                { key: 'systemOrderNo', label: '出货单号', value: record.systemOrderNo, title: record.systemOrderNo, emphasis: true },
+                { key: 'systemOrderNo', label: '出货单号', value: resolveShipmentOutboundOrderNo(record), title: resolveShipmentOutboundOrderNo(record), emphasis: true },
                 { key: 'transferNo', label: '转单号', value: record.transferNo || '-', title: record.transferNo },
                 { key: 'destinationCountry', label: '目的地', value: record.destinationCountry || '-' },
                 { key: 'packageCount', label: '件数', value: `${record.packageCount} 件` },
@@ -1000,16 +1118,42 @@ export function RoutingPage({
 
             {activeSection === 'pending-routing' ? (
               <Card className="module-grid routing-pending-card" title="待排货">
-                <ManagedTable
-                  recordDetail={{ title: '待排货详情', columns: pendingDetailColumns }}
+                <ManagedDualViewTable
+                  viewStorageKey="sunny.routing.pending.view-v1"
+                  viewAriaLabel="待排货表格视图"
+                  defaultView="matrix"
+                  shellClassName="routing-pending-dual-table"
+                  views={{
+                    matrix: {
+                      label: '矩阵视图',
+                      columns: pendingColumns,
+                      tableProps: {
+                        className: 'routing-pending-table routing-pending-matrix-table',
+                        rowClassName: 'pending-routing-matrix-row',
+                        minimumScrollX: 1220,
+                        recordDetail: { title: '待排货详情', columns: pendingDetailColumns },
+                        columnSettings: can('market:pending-routing:column-setting')
+                          ? { storageKey: 'sunny.routing.pending.columns.market-matrix-v3', title: '待排货矩阵列设置' }
+                          : undefined
+                      }
+                    },
+                    ledger: {
+                      label: '精密台账模式',
+                      columns: pendingDetailColumns,
+                      tableProps: {
+                        className: 'routing-pending-table routing-pending-ledger-table',
+                        minimumScrollX: 1750,
+                        recordDetail: { title: '待排货详情', columns: pendingDetailColumns },
+                        columnSettings: can('market:pending-routing:column-setting')
+                          ? { storageKey: 'sunny.routing.pending.columns.market-ledger-v1', title: '待排货精密台账列设置' }
+                          : undefined
+                      }
+                    }
+                  }}
                   rowKey="id"
                   size="small"
                   density="compact"
-                  className="routing-pending-table"
-                  rowClassName="pending-routing-matrix-row"
-                  columns={pendingColumns}
                   dataSource={filteredPendingShipments}
-                  minimumScrollX={1220}
                   pagination={{
                     ...tenRowTablePagination,
                     current: pendingPagination.current,
@@ -1059,7 +1203,6 @@ export function RoutingPage({
                     </div>
                   )}
                   columnSettingsPlacement="toolbar"
-                  columnSettings={can('market:pending-routing:column-setting') ? { storageKey: 'sunny.routing.pending.columns.market-matrix-v3', title: '待排货列设置' } : undefined}
                 />
               </Card>
             ) : null}
@@ -1212,11 +1355,11 @@ export function RoutingPage({
         className="routing-assignment-modal"
         footer={(
           <Space>
-            <Button disabled={assignmentSubmitting} onClick={onCancelAssignment}>取消</Button>
+            <Button disabled={assignmentSubmitting || costSaving} onClick={() => { setCostEditor(null); onCancelAssignment(); }}>取消</Button>
             {canSaveDraft ? <Button type="primary" loading={assignmentSubmitting} onClick={() => void submitAssignment()}>保存</Button> : null}
           </Space>
         )}
-        onCancel={onCancelAssignment}
+        onCancel={() => { setCostEditor(null); onCancelAssignment(); }}
       >
         <Alert
           className="notice-bar"
@@ -1238,7 +1381,7 @@ export function RoutingPage({
                     <Col xs={12} md={6}>站点：{assignmentShipment.site || '-'}</Col>
                     <Col xs={12} md={6}>业务员：{assignmentShipment.salesperson || '-'}</Col>
                     <Col xs={12} md={6}>客户编号：{assignmentShipment.customerCode || '-'}</Col>
-                    <Col xs={12} md={6}>出货单号：{assignmentShipment.systemOrderNo}</Col>
+                    <Col xs={12} md={6}>出货单号：{resolveShipmentOutboundOrderNo(assignmentShipment)}</Col>
                     <Col xs={12} md={6}>公司渠道：{assignmentShipment.channelName || '-'}</Col>
                     <Col xs={24} md={12}>货物数据：{assignmentShipment.packageCount} 件 / {assignmentShipment.receivableWeightKg.toFixed(2)} kg / {assignmentShipment.volumeCbm?.toFixed(3) ?? '0.000'} CBM</Col>
                   </Row>
@@ -1342,65 +1485,6 @@ export function RoutingPage({
             </section>
           ) : null}
         </div>
-      </Modal>
-
-      <Modal
-        title={costEditor ? `${costEditor.type === 'BUSINESS_COST' ? '业务成本' : '应付成本'}费用` : '费用'}
-        open={Boolean(costEditor)}
-        destroyOnHidden
-        okText="保存费用"
-        cancelText="取消"
-        onCancel={() => { setCostEditor(null); costForm.resetFields(); }}
-        onOk={() => void costForm.validateFields().then(async (values) => {
-          if (!assignmentShipment || !costEditor) return;
-          await onSavePendingRoutingCost(assignmentShipment, costEditor.type, costEditor.id, {
-            name: values.name!.trim(), currency: values.currency ?? 'RMB', chargeWeightKg: values.chargeWeightKg,
-            unitPrice: values.unitPrice, amount: values.amount!
-          });
-          setCostEditor(null);
-          costForm.resetFields();
-        })}
-      >
-        <Form
-          form={costForm}
-          layout="vertical"
-          onValuesChange={(changedValues, values) => {
-            if (!('chargeWeightKg' in changedValues) && !('unitPrice' in changedValues)) return;
-            if (values.chargeWeightKg === undefined || values.chargeWeightKg === null || values.unitPrice === undefined || values.unitPrice === null) return;
-            const calculated = Number(values.chargeWeightKg) * Number(values.unitPrice);
-            if (Number.isFinite(calculated)) {
-              costForm.setFieldValue('amount', Number(calculated.toFixed(2)));
-            }
-          }}
-        >
-          <Row gutter={12}>
-            <Col xs={24} md={12}>
-              <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请选择费用名称' }]}>
-                <Select
-                  showSearch
-                  optionFilterProp="label"
-                  placeholder="从费用名称资料库选择"
-                  options={feeNameOptions}
-                  notFoundContent="暂无启用费用名称，请先到基础资料库维护"
-                  onChange={(value) => {
-                    const currency = feeNameOptions.find((item) => item.value === value)?.currency;
-                    if (currency === 'RMB' || currency === 'USD') {
-                      costForm.setFieldValue('currency', currency);
-                    }
-                  }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}><Form.Item name="currency" label="币种" rules={[{ required: true }]}><Select options={[{ label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
-            <Col xs={24} md={12}><Form.Item name="chargeWeightKg" label="计费重"><InputNumber min={0} precision={3} className="full-width" /></Form.Item></Col>
-            <Col xs={24} md={12}><Form.Item name="unitPrice" label="单价"><InputNumber min={0} precision={2} className="full-width" /></Form.Item></Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="amount" label="总金额" rules={[{ required: true, message: '请填写总金额' }]} extra="默认按计费重 × 单价计算，可直接修改计算结果">
-                <InputNumber min={0} precision={2} className="full-width" />
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
       </Modal>
 
       <Modal

@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { App as AntdApp, Button, Image, Space, Typography } from 'antd';
+import { App as AntdApp, Button, Space, Typography } from 'antd';
 import type { PaymentVoucherInput } from '@siyuan/shared';
-import { resolveApiAssetUrl } from '../../apiClient';
+import type { ApiClient } from '../../apiClient';
+import { ProtectedVoucherImage } from './ProtectedVoucherImage';
 
 const { Text } = Typography;
 
 export type VoucherImageValue = Pick<PaymentVoucherInput, 'fileName' | 'mimeType' | 'sizeBytes' | 'url'>;
 
 type VoucherImageInputProps = {
+  apiClient: ApiClient;
   disabled?: boolean;
   value?: VoucherImageValue;
   onChange?: (value?: VoucherImageValue) => void;
@@ -48,7 +50,7 @@ function withReadablePastedFileName(file: File) {
   return new File([file], readableName, { type: file.type, lastModified: file.lastModified });
 }
 
-export function VoucherImageInput({ disabled, value, onChange, onFileChange, onUploaded, uploadFile }: VoucherImageInputProps) {
+export function VoucherImageInput({ apiClient, disabled, value, onChange, onFileChange, onUploaded, uploadFile }: VoucherImageInputProps) {
   const { message } = AntdApp.useApp();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | undefined>(value?.url);
@@ -124,8 +126,9 @@ export function VoucherImageInput({ disabled, value, onChange, onFileChange, onU
       />
       <Space direction="vertical" className="full-width" size={8}>
         {previewUrl ? (
-          <Image
-            src={resolveApiAssetUrl(previewUrl)}
+          <ProtectedVoucherImage
+            apiClient={apiClient}
+            url={previewUrl}
             alt={value?.fileName ?? '凭证图片'}
             style={{ maxHeight: 180, objectFit: 'contain' }}
             onError={() => {
