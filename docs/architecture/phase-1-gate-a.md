@@ -2,7 +2,7 @@
 
 ## 1. 目标
 
-Gate A 不一次性修完历史债务，也不改变运行时业务行为。它把阶段 0 的高风险事实转换为“旧债可下降、新债不能静默增加”的机器门，避免治理期间 `DataController`、总 Repository、根 `ApiClient`、Shared 根桶和 lint 债务继续膨胀。
+Gate A 不一次性修完历史债务，也不改变运行时业务行为。它把阶段 0 的高风险事实转换为“旧债可下降、新债不能静默增加”的机器门，避免治理期间 `DataController`、总 Repository、根 `ApiClient`、Shared 根桶、全局 CSS、巨型页面、全局测试桩和 lint 债务继续膨胀。
 
 统一入口：
 
@@ -26,7 +26,7 @@ npm run architecture:check:self-test
 
 ## 2. 路由鉴权契约
 
-[`config/architecture/governance-baseline.json`](../../config/architecture/governance-baseline.json) 固化当前 357 个 HTTP method + path 的：
+[`config/architecture/governance-baseline.json`](../../config/architecture/governance-baseline.json) 固化当前 414 个 Controller/handler 路由契约（对应当前全部 HTTP method + path）的：
 
 - Controller/handler owner。
 - `auth` / `permission` / `none` 策略。
@@ -53,17 +53,32 @@ Mojia 检查使用 AST 验证设备 token validator 是 handler 第一条有效�
 
 当前预算阻止以下指标增长：
 
-- `DataController` 路由数：292。
-- 根 `ApiClient` 方法/直接请求数：332/321。
-- Shared 根导入生产文件：75。
-- 生产源码 `as any`：718。
+- `DataController` 路由数：267。
+- 根 `ApiClient` 方法/直接请求数：347/334。
+- Shared 根导入生产文件：116。
+- 生产源码 `as any`：865。
 - 直接 `process.env`：33。
 - 静态循环依赖：0。
-- 总 Prisma/InMemory Repository 方法：541/523。
+- 总 Prisma/InMemory Repository 方法：660/550。
 
-同时保存 4 个已知孤儿候选和 1 组完全重复源码；出现新的孤儿候选或重复组会失败。已有债务可以直接下降；下降后应在独立治理变更中收紧 baseline，不能重新扩大。
+以下集中热点同时被冻结为逐文件行数上限；任何一个文件继续变长都会直接失败：
 
-预算不是架构 KPI。合理新增内部依赖边、文件和领域模块不受总量限制；被限制的都是阶段 0 已确认需要停止增长的集中点。
+| 热点 | 行数上限 |
+| --- | ---: |
+| Prisma Repository | 29,429 |
+| InMemory Repository | 17,674 |
+| DataController | 2,878 |
+| Shared 根入口 | 6,455 |
+| 根 ApiClient | 2,448 |
+| 全局 CSS | 12,291 |
+| 全局测试桩 | 6,439 |
+| WarehousePage | 4,584 |
+| PricingPage | 3,628 |
+| MasterDataPage | 3,222 |
+
+同时保存 2 个已知孤儿候选、1 组完全重复源码和当前重复路由集合；出现新的孤儿候选、重复源码或重复路由会失败。已有债务可以直接下降；下降后应在独立治理变更中收紧 baseline，不能重新扩大。
+
+预算不是架构 KPI。合理新增内部依赖边、文件和领域模块不受总量限制；被限制的都是阶段 0 已确认需要停止增长的集中点。新功能应进入领域 Controller、Service、Repository adapter、领域 API Client 或页面子模块，不能靠提高热点预算继续向巨型文件追加。
 
 ## 4. Lint no-new-debt
 
@@ -71,8 +86,8 @@ Mojia 检查使用 AST 验证设备 token validator 是 handler 第一条有效�
 
 | Workspace | 当前错误 | 规则分布 |
 | --- | ---: | --- |
-| API | 96 | unused 48、no-undef 38、其余 10 |
-| Web | 270 | unused 165、no-undef 94、hooks 7、其余 4 |
+| API | 89 | unused 42、no-undef 36、其余 11 |
+| Web | 130 | unused 27、no-undef 94、hooks 7、其余 2 |
 
 检查器重新运行 ESLint JSON 输出，并同时按 workspace/rule 与 file/rule 比较：任何既有 rule 总量增长、任一文件同规则增长、新文件产生错误，或出现新的错误 rule，都会失败；错误减少允许通过。这样既不能靠把错误从一个文件挪到另一个文件绕过，也可以逐批修复配置和源码问题。
 
@@ -87,7 +102,9 @@ node scripts/check-architecture-governance.mjs --print-current --compact > /tmp/
 diff -u config/architecture/governance-baseline.json /tmp/sunny-architecture-baseline.candidate.json
 ```
 
-评审必须说明每一项上升或鉴权变化。只有新增债务有明确例外、替代保护和退出条件时，才能更新正式 baseline；不得用“让 CI 通过”为理由整体重采样。
+评审必须说明每一项上升或鉴权变化。只有新增债务有明确例外、替代保护和退出条件时，才能更新正式 baseline；热点行数预算原则上只允许下降，不得用“让 CI 通过”为理由整体重采样。
+
+2026-08-05 已从47当前运行源码建立独立干净集成分支，Web、API、迁移三类指纹逐字一致后重新冻结路由、结构、lint 与热点预算。该动作是可追溯治理快照，不代表对已有业务权限语义完成独立安全审计。
 
 ## 6. 已知边界
 
@@ -95,4 +112,4 @@ diff -u config/architecture/governance-baseline.json /tmp/sunny-architecture-bas
 - 路由 metadata 不证明对象归属和字段裁剪正确。
 - lint baseline 只阻止数量增加，不证明旧错误无风险。
 - Baseline 的 route/debt/lint 结构和所有数值预算均先做 schema 校验，字段缺失、`null`、负数或非整数都会失败。
-- 当前工作树不是干净提交；进入旧业务迁移前仍需独立 clean worktree。
+- 运行时迁移必须从 `codex/architecture-integration-baseline` 的干净提交继续，禁止从共享脏工作树复制或发布。

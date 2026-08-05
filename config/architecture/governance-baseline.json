@@ -9,152 +9,227 @@
   "routes": [
     [
       "DELETE /customer-service/problem-tags/:id @ DataController.deleteProblemTicketCommonTag",
-      "auth",
-      [],
+      "permission",
+      [
+        "customer-service:problem:tag-manage"
+      ],
       "DataController.deleteProblemTicketCommonTag"
     ],
     [
       "DELETE /finance/business-cost-audits/:id @ DataController.deleteBusinessCostAudit",
       "permission",
-      ["finance:business-cost:batch-void"],
+      [
+        "finance:business-cost:batch-void"
+      ],
       "DataController.deleteBusinessCostAudit"
     ],
     [
       "DELETE /finance/catalog/:id @ FinanceCatalogController.deleteFinanceCatalogItem",
       "permission",
-      ["finance:dashboard:view", "master-data:finance:write"],
+      [
+        "finance:dashboard:view",
+        "master-data:finance:write"
+      ],
       "FinanceCatalogController.deleteFinanceCatalogItem"
     ],
     [
       "DELETE /finance/payable-audits/:id @ DataController.deletePayableAudit",
       "permission",
-      ["finance:payable:batch-void"],
+      [
+        "finance:payable:batch-void"
+      ],
       "DataController.deletePayableAudit"
+    ],
+    [
+      "DELETE /finance/pending-payment-bill-vouchers/:id @ DataController.deletePendingPaymentBillVoucher",
+      "permission",
+      [
+        "finance:pending-payment:bill-voucher-upload"
+      ],
+      "DataController.deletePendingPaymentBillVoucher"
     ],
     [
       "DELETE /finance/receivable-audits/:id @ FinanceReceivableController.deleteReceivableAudit",
       "permission",
-      ["finance:receivable:void"],
+      [
+        "finance:receivable:void"
+      ],
       "FinanceReceivableController.deleteReceivableAudit"
     ],
     [
       "DELETE /finance/receivable-match-requests/:id @ FinanceReceivableController.deleteReceivableMatchRequest",
       "permission",
-      ["finance:water-match:cancel"],
+      [
+        "finance:water-match:cancel"
+      ],
       "FinanceReceivableController.deleteReceivableMatchRequest"
     ],
     [
       "DELETE /finance/water-receipts/:id/voucher @ FinanceReceivableController.deleteWaterReceiptVoucher",
       "permission",
-      ["finance:water-receipt:voucher-delete"],
+      [
+        "finance:water-receipt:voucher-delete"
+      ],
       "FinanceReceivableController.deleteWaterReceiptVoucher"
     ],
     [
       "DELETE /master-data/agent-channels/:id @ DataController.deleteMasterDataAgentChannel",
       "permission",
-      ["master-data:agent-channels:delete"],
+      [
+        "master-data:agent-channels:delete"
+      ],
       "DataController.deleteMasterDataAgentChannel"
     ],
     [
       "DELETE /master-data/agents/:id @ DataController.deleteMasterDataAgent",
       "permission",
-      ["master-data:agents:delete"],
+      [
+        "master-data:agents:delete"
+      ],
       "DataController.deleteMasterDataAgent"
     ],
     [
       "DELETE /master-data/channel-categories/:id @ DataController.deleteMasterDataChannelCategory",
       "permission",
-      ["master-data:channel-categories:delete"],
+      [
+        "master-data:channel-categories:delete"
+      ],
       "DataController.deleteMasterDataChannelCategory"
     ],
     [
       "DELETE /master-data/channels/:id @ DataController.deleteMasterDataChannel",
       "permission",
-      ["master-data:channels:delete"],
+      [
+        "master-data:channels:delete"
+      ],
       "DataController.deleteMasterDataChannel"
+    ],
+    [
+      "DELETE /master-data/customer-sources/:id @ DataController.deleteMasterDataCustomerSource",
+      "permission",
+      [
+        "master-data:customers:delete"
+      ],
+      "DataController.deleteMasterDataCustomerSource"
     ],
     [
       "DELETE /master-data/customers/:id @ DataController.deleteMasterDataCustomer",
       "permission",
-      ["master-data:customers:delete"],
+      [
+        "master-data:customers:delete"
+      ],
       "DataController.deleteMasterDataCustomer"
     ],
     [
       "DELETE /master-data/exchange-rates/:id @ DataController.deleteMasterDataExchangeRate",
       "permission",
-      ["master-data:exchange-rates:disable"],
+      [
+        "master-data:exchange-rates:disable"
+      ],
       "DataController.deleteMasterDataExchangeRate"
     ],
     [
       "DELETE /master-data/payer-bank-accounts/:id @ PayerBankAccountController.delete",
       "permission",
-      ["master-data:payer-banks:manage"],
+      [
+        "master-data:payer-banks:manage"
+      ],
       "PayerBankAccountController.delete"
     ],
     [
       "DELETE /pricing/books/:id @ DataController.deletePriceBook",
       "permission",
-      ["pricing:price-books:delete"],
+      [
+        "pricing:price-books:delete"
+      ],
       "DataController.deletePriceBook"
     ],
     [
       "DELETE /pricing/legacy/sources/:id @ DataController.deleteLegacyPricingSource",
       "permission",
-      ["pricing:price-books:legacy-source-delete"],
+      [
+        "pricing:price-books:legacy-source-delete"
+      ],
       "DataController.deleteLegacyPricingSource"
     ],
     [
       "DELETE /pricing/markup-rules/:id @ DataController.deleteAgentMarkupRule",
       "permission",
-      ["pricing:markup:delete"],
+      [
+        "pricing:markup:delete"
+      ],
       "DataController.deleteAgentMarkupRule"
     ],
     [
       "DELETE /pricing/south-africa/rules/:id @ DataController.deleteSouthAfricaRateRule",
       "permission",
-      ["pricing:south-africa:rules-delete"],
+      [
+        "pricing:south-africa:rules-delete"
+      ],
       "DataController.deleteSouthAfricaRateRule"
     ],
     [
       "DELETE /shipments/:id @ DataController.deleteShipment",
       "permission",
-      ["business:shipment:delete"],
+      [
+        "business:shipment:delete"
+      ],
       "DataController.deleteShipment"
     ],
     [
       "DELETE /shipments/:id/finance-items/:feeId @ DataController.deleteShipmentFinanceItem",
       "permission",
-      ["business:order-fee:delete"],
+      [
+        "business:order-fee:delete"
+      ],
       "DataController.deleteShipmentFinanceItem"
     ],
     [
       "DELETE /shipments/:id/order-entry-draft @ DataController.deleteOrderEntryDraft",
       "permission",
-      ["business:order-entry:draft-delete"],
+      [
+        "business:order-entry:draft-delete"
+      ],
       "DataController.deleteOrderEntryDraft"
     ],
     [
       "DELETE /shipments/:id/pending-routing @ DataController.deletePendingRoutingShipment",
       "permission",
-      ["market:pending-routing:delete"],
+      [
+        "market:pending-routing:delete"
+      ],
       "DataController.deletePendingRoutingShipment"
     ],
     [
       "DELETE /shipments/:id/review @ DataController.deleteShipmentReview",
       "permission",
-      ["business:review:delete"],
+      [
+        "business:review:delete"
+      ],
       "DataController.deleteShipmentReview"
     ],
     [
       "DELETE /shipments/:id/review/permanent @ DataController.permanentlyDeleteShipmentReview",
       "permission",
-      ["business:review:purge"],
+      [
+        "business:review:purge"
+      ],
       "DataController.permanentlyDeleteShipmentReview"
+    ],
+    [
+      "DELETE /system/roles/:role @ DataController.deleteSystemRole",
+      "permission",
+      [
+        "system:user-groups:delete"
+      ],
+      "DataController.deleteSystemRole"
     ],
     [
       "DELETE /system/staff-accounts/:id @ DataController.deleteSystemStaffAccount",
       "permission",
-      ["system:accounts:delete"],
+      [
+        "system:accounts:delete"
+      ],
       "DataController.deleteSystemStaffAccount"
     ],
     [
@@ -175,17 +250,32 @@
       [],
       "AuthController.loginLogs"
     ],
-    ["GET /auth/me @ AuthController.me", "auth", [], "AuthController.me"],
     [
-      "GET /carrier-tasks @ ShipmentFulfillmentQueryController.carrierTasks",
+      "GET /auth/me @ AuthController.me",
+      "auth",
+      [],
+      "AuthController.me"
+    ],
+    [
+      "GET /auth/session @ AuthController.session",
+      "auth",
+      [],
+      "AuthController.session"
+    ],
+    [
+      "GET /carrier-tasks @ TrackingQueryController.carrierTasks",
       "permission",
-      ["tracking:carrier-task:view"],
-      "ShipmentFulfillmentQueryController.carrierTasks"
+      [
+        "tracking:carrier-task:view"
+      ],
+      "TrackingQueryController.carrierTasks"
     ],
     [
       "GET /customer-service/data-confirm-shipments @ DataController.customerServiceDataConfirmShipments",
       "permission",
-      ["customer-service:data-confirm:view"],
+      [
+        "customer-service:data-confirm:view"
+      ],
       "DataController.customerServiceDataConfirmShipments"
     ],
     [
@@ -195,117 +285,166 @@
       "DataController.problemTicketCommonTags"
     ],
     [
+      "GET /customer-service/shipments @ DataController.customerServiceShipments",
+      "auth",
+      [],
+      "DataController.customerServiceShipments"
+    ],
+    [
       "GET /customer-service/transfer-shipments @ CustomerServiceQueryController.customerServiceTransferShipments",
       "permission",
-      ["customer-service:transfer:view"],
+      [
+        "customer-service:transfer:view"
+      ],
       "CustomerServiceQueryController.customerServiceTransferShipments"
     ],
     [
       "GET /finance/account-ledger @ DataController.accountLedger",
       "permission",
-      ["finance:customer-account:read", "finance:dashboard:view"],
+      [
+        "finance:customer-account:read"
+      ],
       "DataController.accountLedger"
     ],
     [
       "GET /finance/agent-bank-accounts @ DataController.agentBankAccounts",
       "permission",
-      ["finance:paid-payment:bank-view", "master-data:agents:bank-view"],
+      [
+        "finance:paid-payment:bank-view",
+        "master-data:agents:bank-view"
+      ],
       "DataController.agentBankAccounts"
     ],
     [
       "GET /finance/business-cost-audits @ DataController.businessCostAudits",
       "permission",
-      ["finance:business-cost:read"],
+      [
+        "finance:business-cost:read"
+      ],
       "DataController.businessCostAudits"
     ],
     [
       "GET /finance/catalog @ FinanceCatalogController.financeCatalogItems",
       "permission",
-      ["finance:dashboard:view", "master-data:finance:read"],
+      [
+        "finance:dashboard:view",
+        "master-data:finance:read"
+      ],
       "FinanceCatalogController.financeCatalogItems"
     ],
     [
       "GET /finance/customer-accounts @ DataController.customerAccounts",
       "permission",
-      ["finance:customer-account:read", "finance:dashboard:view"],
+      [
+        "finance:customer-account:read"
+      ],
       "DataController.customerAccounts"
     ],
     [
       "GET /finance/customer-statements @ DataController.customerStatements",
       "permission",
-      ["finance:customer-account:read", "finance:dashboard:view"],
+      [
+        "finance:customer-account:read"
+      ],
       "DataController.customerStatements"
     ],
     [
       "GET /finance/dashboard @ DataController.financeDashboard",
       "permission",
-      ["finance:dashboard:view"],
+      [
+        "finance:dashboard:view"
+      ],
       "DataController.financeDashboard"
     ],
     [
       "GET /finance/paid-payments @ DataController.paidPayments",
       "permission",
-      ["finance:paid-payment:read"],
+      [
+        "finance:paid-payment:read"
+      ],
       "DataController.paidPayments"
     ],
     [
       "GET /finance/payable-audits @ DataController.payableAudits",
       "permission",
-      ["finance:payable:read"],
+      [
+        "finance:payable:read"
+      ],
       "DataController.payableAudits"
     ],
     [
       "GET /finance/payee-bank-accounts @ DataController.payeeBankAccounts",
       "permission",
-      ["finance:pending-payment:bank-select"],
+      [
+        "finance:pending-payment:bank-select"
+      ],
       "DataController.payeeBankAccounts"
     ],
     [
       "GET /finance/payment-vouchers @ DataController.paymentVouchers",
       "permission",
-      ["finance:agent-bill:read"],
+      [
+        "finance:agent-bill:read"
+      ],
       "DataController.paymentVouchers"
     ],
     [
       "GET /finance/pending-payments @ DataController.pendingPayments",
       "permission",
-      ["finance:pending-payment:read"],
+      [
+        "finance:pending-payment:read"
+      ],
       "DataController.pendingPayments"
     ],
     [
       "GET /finance/receivable-audits @ FinanceReceivableController.receivableAudits",
       "permission",
-      ["finance:receivable:read"],
+      [
+        "finance:receivable:read"
+      ],
       "FinanceReceivableController.receivableAudits"
     ],
     [
       "GET /finance/receivable-audits/:id/water-receipt-candidates @ FinanceReceivableController.receivableWaterReceiptCandidates",
       "permission",
-      ["finance:receivable:match-water"],
+      [
+        "finance:receivable:match-water"
+      ],
       "FinanceReceivableController.receivableWaterReceiptCandidates"
     ],
     [
       "GET /finance/receivables @ FinanceReceivableController.receivables",
       "permission",
-      ["finance:customer-account:read", "finance:receivable:read"],
+      [
+        "finance:customer-account:read",
+        "finance:receivable:read"
+      ],
       "FinanceReceivableController.receivables"
     ],
     [
       "GET /finance/water-receipts @ FinanceReceivableController.waterReceipts",
       "permission",
-      ["finance:water-match:read", "finance:water-receipt:read"],
+      [
+        "finance:water-match:read",
+        "finance:water-receipt:read"
+      ],
       "FinanceReceivableController.waterReceipts"
     ],
     [
       "GET /finance/water-receipts/:id/matchable-receivables @ FinanceReceivableController.waterReceiptMatchableReceivables",
       "permission",
-      ["finance:water-match:receivable-view"],
+      [
+        "finance:water-match:receivable-view"
+      ],
       "FinanceReceivableController.waterReceiptMatchableReceivables"
     ],
     [
       "GET /finance/water-receipts/site-options @ FinanceReceivableController.waterReceiptSiteOptions",
       "permission",
-      ["finance:water-receipt:create", "finance:water-receipt:update"],
+      [
+        "finance:water-receipt:create",
+        "finance:water-receipt:update"
+      ],
       "FinanceReceivableController.waterReceiptSiteOptions"
     ],
     [
@@ -333,61 +472,89 @@
     [
       "GET /master-data/agent-channels @ MasterDataChannelQueryController.masterDataAgentChannels",
       "permission",
-      ["master-data:agent-channels:read"],
+      [
+        "master-data:agent-channels:read"
+      ],
       "MasterDataChannelQueryController.masterDataAgentChannels"
     ],
     [
       "GET /master-data/agents @ MasterDataChannelQueryController.masterDataAgents",
       "permission",
-      ["master-data:agents:read"],
+      [
+        "master-data:agents:read"
+      ],
       "MasterDataChannelQueryController.masterDataAgents"
     ],
     [
       "GET /master-data/carriers @ MasterDataChannelQueryController.masterDataCarriers",
       "permission",
-      ["master-data:channels:read"],
+      [
+        "master-data:channels:read"
+      ],
       "MasterDataChannelQueryController.masterDataCarriers"
     ],
     [
       "GET /master-data/channel-categories @ MasterDataChannelQueryController.masterDataChannelCategories",
       "permission",
-      ["master-data:channel-categories:read"],
+      [
+        "master-data:channel-categories:read"
+      ],
       "MasterDataChannelQueryController.masterDataChannelCategories"
     ],
     [
       "GET /master-data/channels @ MasterDataChannelQueryController.masterDataChannels",
       "permission",
-      ["master-data:channels:read"],
+      [
+        "master-data:channels:read"
+      ],
       "MasterDataChannelQueryController.masterDataChannels"
+    ],
+    [
+      "GET /master-data/customer-sources @ DataController.masterDataCustomerSources",
+      "permission",
+      [
+        "master-data:customers:read"
+      ],
+      "DataController.masterDataCustomerSources"
     ],
     [
       "GET /master-data/customers @ DataController.masterDataCustomers",
       "permission",
-      ["master-data:customers:read"],
+      [
+        "master-data:customers:read"
+      ],
       "DataController.masterDataCustomers"
     ],
     [
       "GET /master-data/exchange-rates @ DataController.masterDataExchangeRates",
       "permission",
-      ["master-data:exchange-rates:read"],
+      [
+        "master-data:exchange-rates:read"
+      ],
       "DataController.masterDataExchangeRates"
     ],
     [
       "GET /master-data/fuel-rates @ DataController.masterDataFuelRates",
       "permission",
-      ["master-data:finance:read"],
+      [
+        "master-data:finance:read"
+      ],
       "DataController.masterDataFuelRates"
     ],
     [
       "GET /master-data/payer-bank-accounts @ PayerBankAccountController.list",
       "permission",
-      ["master-data:payer-banks:read"],
+      [
+        "master-data:payer-banks:read"
+      ],
       "PayerBankAccountController.list"
     ],
     [
       "GET /master-data/surcharges @ DataController.masterDataSurcharges",
       "permission",
-      ["master-data:finance:read"],
+      [
+        "master-data:finance:read"
+      ],
       "DataController.masterDataSurcharges"
     ],
     [
@@ -471,7 +638,9 @@
     [
       "GET /navigation/unread-badges @ ShipmentOverviewQueryController.navigationUnreadBadges",
       "permission",
-      ["business:shipment:list"],
+      [
+        "business:shipment:list"
+      ],
       "ShipmentOverviewQueryController.navigationUnreadBadges"
     ],
     [
@@ -501,175 +670,219 @@
     [
       "GET /operations/line-shipments @ OperationsLineShipmentQueryController.lineShipments",
       "permission",
-      ["operations:line-shipment:view"],
+      [
+        "operations:line-shipment:view"
+      ],
       "OperationsLineShipmentQueryController.lineShipments"
     ],
     [
       "GET /operations/line-shipments/:id/internal-flow-log @ OperationsLineShipmentQueryController.lineShipmentInternalFlowLog",
       "permission",
-      ["operations:line-shipment:internal-log-view"],
+      [
+        "operations:line-shipment:internal-log-view"
+      ],
       "OperationsLineShipmentQueryController.lineShipmentInternalFlowLog"
     ],
     [
       "GET /pricing/book-rows @ DataController.priceBookRows",
       "permission",
-      ["pricing:price-books:rows-view"],
+      [
+        "pricing:price-books:rows-view"
+      ],
       "DataController.priceBookRows"
-    ],
-    [
-      "GET /pricing/books @ DataController.priceBooks",
-      "permission",
-      ["pricing:price-books:list-view"],
-      "DataController.priceBooks"
     ],
     [
       "GET /pricing/books @ PriceBookQueryController.priceBooks",
       "permission",
-      ["pricing:price-books:list-view"],
+      [
+        "pricing:price-books:list-view"
+      ],
       "PriceBookQueryController.priceBooks"
     ],
     [
       "GET /pricing/books/:id/download @ DataController.downloadPriceBook",
       "permission",
-      ["pricing:price-books:rows-view"],
+      [
+        "pricing:price-books:rows-view"
+      ],
       "DataController.downloadPriceBook"
     ],
     [
       "GET /pricing/books/:id/markup-routes @ DataController.markupRoutesByBook",
       "permission",
-      ["pricing:markup-tier:read"],
+      [
+        "pricing:markup-tier:read"
+      ],
       "DataController.markupRoutesByBook"
     ],
     [
       "GET /pricing/books/:id/rows @ DataController.priceBookRowsByBook",
       "permission",
-      ["pricing:price-books:rows-view"],
+      [
+        "pricing:price-books:rows-view"
+      ],
       "DataController.priceBookRowsByBook"
     ],
     [
-      "GET /pricing/books/import-jobs @ DataController.priceBookImportJobs",
+      "GET /pricing/books/import-jobs @ PriceBookQueryController.priceBookImportJobs",
       "permission",
-      ["pricing:price-books:import-job-view"],
-      "DataController.priceBookImportJobs"
-    ],
-    [
-      "GET /pricing/books/import-jobs/:id @ DataController.priceBookImportJob",
-      "permission",
-      ["pricing:price-books:import-job-view"],
-      "DataController.priceBookImportJob"
+      [
+        "pricing:price-books:import-job-view"
+      ],
+      "PriceBookQueryController.priceBookImportJobs"
     ],
     [
       "GET /pricing/books/import-jobs/:id @ PriceBookQueryController.priceBookImportJob",
       "permission",
-      ["pricing:price-books:import-job-view"],
+      [
+        "pricing:price-books:import-job-view"
+      ],
       "PriceBookQueryController.priceBookImportJob"
     ],
     [
       "GET /pricing/books/rule-refresh-progress @ DataController.priceBookRuleRefreshProgress",
       "permission",
-      ["pricing:price-books:sync-health-view"],
+      [
+        "pricing:price-books:sync-health-view"
+      ],
       "DataController.priceBookRuleRefreshProgress"
     ],
     [
       "GET /pricing/legacy/dubai-air-sea/display @ PriceBookQueryController.legacyDubaiAirSeaDisplay",
       "permission",
-      ["pricing:dubai-display:active-view", "pricing:lookup:dubai-image-view"],
+      [
+        "pricing:dubai-display:active-view",
+        "pricing:lookup:dubai-image-view"
+      ],
       "PriceBookQueryController.legacyDubaiAirSeaDisplay"
     ],
     [
       "GET /pricing/legacy/dubai-air-sea/display-pages/:id/image @ DataController.legacyDubaiAirSeaDisplayPageImage",
       "permission",
-      ["pricing:dubai-display:active-view", "pricing:lookup:dubai-image-view"],
+      [
+        "pricing:dubai-display:active-view",
+        "pricing:lookup:dubai-image-view"
+      ],
       "DataController.legacyDubaiAirSeaDisplayPageImage"
     ],
     [
       "GET /pricing/legacy/dubai-air-sea/display-versions @ PriceBookQueryController.legacyDubaiAirSeaDisplayVersions",
       "permission",
-      ["pricing:dubai-display:versions-view"],
+      [
+        "pricing:dubai-display:versions-view"
+      ],
       "PriceBookQueryController.legacyDubaiAirSeaDisplayVersions"
     ],
     [
       "GET /pricing/legacy/dubai-air-sea/display-versions/:versionId/pages/:pageId/image @ DataController.legacyDubaiAirSeaDisplayVersionPageImage",
       "permission",
-      ["pricing:dubai-display:versions-view"],
+      [
+        "pricing:dubai-display:versions-view"
+      ],
       "DataController.legacyDubaiAirSeaDisplayVersionPageImage"
     ],
     [
       "GET /pricing/legacy/dubai-air-sea/table @ DataController.legacyDubaiAirSeaTable",
       "permission",
-      ["pricing:dubai-display:markup-view"],
+      [
+        "pricing:dubai-display:markup-view"
+      ],
       "DataController.legacyDubaiAirSeaTable"
     ],
     [
       "GET /pricing/legacy/health-report @ PriceBookQueryController.legacyPricingHealth",
       "permission",
-      ["pricing:price-books:health-report-view"],
+      [
+        "pricing:price-books:health-report-view"
+      ],
       "PriceBookQueryController.legacyPricingHealth"
     ],
     [
       "GET /pricing/legacy/quote-meta @ PriceBookQueryController.legacyPricingMeta",
       "permission",
-      ["pricing:lookup:meta-view"],
+      [
+        "pricing:lookup:meta-view"
+      ],
       "PriceBookQueryController.legacyPricingMeta"
     ],
     [
       "GET /pricing/legacy/sources @ PriceBookQueryController.legacyPricingSources",
       "permission",
-      ["pricing:price-books:legacy-source-view"],
+      [
+        "pricing:price-books:legacy-source-view"
+      ],
       "PriceBookQueryController.legacyPricingSources"
     ],
     [
       "GET /pricing/markup-rules @ DataController.agentMarkupRules",
       "permission",
-      ["pricing:markup:read"],
+      [
+        "pricing:markup:read"
+      ],
       "DataController.agentMarkupRules"
     ],
     [
       "GET /pricing/markup-rules/:id/preview @ DataController.previewAgentMarkupRule",
       "permission",
-      ["pricing:markup:preview"],
+      [
+        "pricing:markup:preview"
+      ],
       "DataController.previewAgentMarkupRule"
     ],
     [
       "GET /pricing/markup-rules/export @ DataController.exportAgentMarkupRules",
       "permission",
-      ["pricing:markup:export"],
+      [
+        "pricing:markup:export"
+      ],
       "DataController.exportAgentMarkupRules"
     ],
     [
       "GET /pricing/rules @ DataController.pricingRules",
       "permission",
-      ["pricing:markup-tier:read"],
+      [
+        "pricing:markup-tier:read"
+      ],
       "DataController.pricingRules"
     ],
     [
       "GET /pricing/south-africa/images @ PriceBookQueryController.southAfricaRateImages",
       "permission",
-      ["pricing:south-africa:image-view"],
+      [
+        "pricing:south-africa:image-view"
+      ],
       "PriceBookQueryController.southAfricaRateImages"
     ],
     [
       "GET /pricing/south-africa/rules @ DataController.southAfricaRateRules",
       "permission",
-      ["pricing:south-africa:rules-read"],
+      [
+        "pricing:south-africa:rules-read"
+      ],
       "DataController.southAfricaRateRules"
     ],
     [
       "GET /pricing/sync-health @ PriceBookQueryController.pricingSyncHealth",
       "permission",
-      ["pricing:price-books:sync-health-view"],
+      [
+        "pricing:price-books:sync-health-view"
+      ],
       "PriceBookQueryController.pricingSyncHealth"
     ],
     [
       "GET /problem-tickets @ CustomerServiceQueryController.problemTickets",
       "permission",
-      ["customer-service:problem:view"],
+      [
+        "customer-service:problem:view"
+      ],
       "CustomerServiceQueryController.problemTickets"
     ],
     [
       "GET /shipments @ ShipmentOverviewQueryController.shipments",
       "permission",
-      ["business:shipment:list"],
+      [
+        "business:shipment:list"
+      ],
       "ShipmentOverviewQueryController.shipments"
     ],
     [
@@ -695,7 +908,9 @@
     [
       "GET /shipments/:id/invoice-template/download @ DataController.downloadShipmentInvoiceTemplate",
       "permission",
-      ["business:order-entry:invoice-upload"],
+      [
+        "business:order-entry:invoice-upload"
+      ],
       "DataController.downloadShipmentInvoiceTemplate"
     ],
     [
@@ -707,229 +922,334 @@
     [
       "GET /shipments/:id/order-entry @ OrderEntryQueryController.orderEntryDetail",
       "permission",
-      ["business:order-entry:view"],
+      [
+        "business:order-entry:view"
+      ],
       "OrderEntryQueryController.orderEntryDetail"
+    ],
+    [
+      "GET /shipments/:id/package-detail @ DataController.shipmentPackageDetail",
+      "permission",
+      [
+        "business:review:detail",
+        "business:shipment:detail",
+        "operations:line-shipment:detail",
+        "warehouse:outbounded:detail-view"
+      ],
+      "DataController.shipmentPackageDetail"
     ],
     [
       "GET /shipments/:id/review-detail @ DataController.shipmentReviewDetail",
       "permission",
-      ["business:review:detail"],
+      [
+        "business:review:detail"
+      ],
       "DataController.shipmentReviewDetail"
     ],
     [
       "GET /shipments/order-entry/drafts @ DataController.orderEntryDrafts",
       "permission",
-      ["business:order-entry:draft-view"],
+      [
+        "business:order-entry:draft-view"
+      ],
       "DataController.orderEntryDrafts"
     ],
     [
       "GET /shipments/order-entry/packages @ OrderEntryQueryController.orderEntryPackages",
       "permission",
-      ["business:order-entry:warehouse-package-select"],
+      [
+        "business:order-entry:warehouse-package-select"
+      ],
       "OrderEntryQueryController.orderEntryPackages"
     ],
     [
       "GET /shipments/review-deleted @ DataController.reviewDeletedShipments",
       "permission",
-      ["business:review:deleted-list"],
+      [
+        "business:review:deleted-list"
+      ],
       "DataController.reviewDeletedShipments"
     ],
     [
       "GET /shipments/review-pending @ DataController.reviewPendingShipments",
       "permission",
-      ["business:review:list"],
+      [
+        "business:review:list"
+      ],
       "DataController.reviewPendingShipments"
     ],
     [
       "GET /shipments/status-counts @ ShipmentOverviewQueryController.shipmentStatusCounts",
       "permission",
-      ["business:shipment:list"],
+      [
+        "business:shipment:list"
+      ],
       "ShipmentOverviewQueryController.shipmentStatusCounts"
     ],
     [
       "GET /system/announcements @ AnnouncementController.list",
       "permission",
-      ["system:announcements:read"],
+      [
+        "system:announcements:read"
+      ],
       "AnnouncementController.list"
     ],
     [
       "GET /system/announcements/audience-options @ AnnouncementController.audienceOptions",
       "permission",
-      ["system:announcements:read"],
+      [
+        "system:announcements:read"
+      ],
       "AnnouncementController.audienceOptions"
     ],
     [
       "GET /system/audit-logs @ DataController.systemAuditLogs",
       "permission",
-      ["system:audit:read"],
+      [
+        "system:audit:read"
+      ],
       "DataController.systemAuditLogs"
     ],
     [
       "GET /system/departments @ SystemDirectoryController.getDepartments",
       "permission",
-      ["system:accounts:read"],
+      [
+        "system:accounts:read"
+      ],
       "SystemDirectoryController.getDepartments"
     ],
     [
       "GET /system/lineage-event-coverage @ DataController.systemLineageEventCoverage",
       "permission",
-      ["system:audit:lineage-view"],
+      [
+        "system:audit:lineage-view"
+      ],
       "DataController.systemLineageEventCoverage"
     ],
     [
       "GET /system/lineage-source/:nodeType/:id @ DataController.systemLineageSourceTrace",
       "permission",
-      ["system:audit:lineage-view"],
+      [
+        "system:audit:lineage-view"
+      ],
       "DataController.systemLineageSourceTrace"
     ],
     [
       "GET /system/lineage/:resultType/:businessId @ DataController.systemLineageTrace",
       "permission",
-      ["system:audit:lineage-view"],
+      [
+        "system:audit:lineage-view"
+      ],
       "DataController.systemLineageTrace"
     ],
     [
       "GET /system/lineage/shipment/:shipmentId @ DataController.systemShipmentLineageTrace",
       "permission",
-      ["system:audit:lineage-view"],
+      [
+        "system:audit:lineage-view"
+      ],
       "DataController.systemShipmentLineageTrace"
     ],
     [
       "GET /system/notification-operations @ NotificationOperationsController.list",
       "permission",
-      ["system:notifications:operations-read"],
+      [
+        "system:notifications:operations-read"
+      ],
       "NotificationOperationsController.list"
     ],
     [
       "GET /system/roles @ DataController.systemRoles",
       "permission",
-      ["system:role-permissions:read", "system:user-groups:read"],
+      [
+        "system:role-permissions:read",
+        "system:user-groups:read"
+      ],
       "DataController.systemRoles"
     ],
     [
       "GET /system/sites @ SystemDirectoryController.getSites",
       "permission",
-      ["system:sites:read"],
+      [
+        "system:sites:read"
+      ],
       "SystemDirectoryController.getSites"
     ],
     [
       "GET /system/staff-accounts @ DataController.systemStaffAccounts",
       "permission",
-      ["system:accounts:read"],
+      [
+        "system:accounts:read"
+      ],
       "DataController.systemStaffAccounts"
+    ],
+    [
+      "GET /uploads/vouchers/:fileName @ DataController.downloadVoucherImage",
+      "auth",
+      [],
+      "DataController.downloadVoucherImage"
     ],
     [
       "GET /warehouse/consolidations/:id/items @ WarehouseTallyQueryController.warehouseConsolidationItems",
       "permission",
-      ["warehouse:tally-pending:detail-view"],
+      [
+        "warehouse:tally-pending:detail-view"
+      ],
       "WarehouseTallyQueryController.warehouseConsolidationItems"
     ],
     [
       "GET /warehouse/dispatch-shipments @ WarehouseDispatchQueryController.warehouseDispatchShipments",
       "permission",
-      ["warehouse:dispatch-pending:view", "warehouse:outbounded:view"],
+      [
+        "warehouse:dispatch-pending:view",
+        "warehouse:outbounded:view"
+      ],
       "WarehouseDispatchQueryController.warehouseDispatchShipments"
     ],
     [
       "GET /warehouse/handover/:shipmentId @ WarehouseDispatchQueryController.warehouseHandover",
       "permission",
-      ["warehouse:dispatch-pending:handover-preview"],
+      [
+        "warehouse:dispatch-pending:handover-preview"
+      ],
       "WarehouseDispatchQueryController.warehouseHandover"
     ],
     [
       "GET /warehouse/in-stock @ WarehouseInventoryQueryController.warehouseInStock",
       "permission",
-      ["warehouse:in-stock:view"],
+      [
+        "warehouse:in-stock:view"
+      ],
       "WarehouseInventoryQueryController.warehouseInStock"
     ],
     [
       "GET /warehouse/in-stock-summary @ WarehouseInventoryQueryController.warehouseInStockSummary",
       "permission",
-      ["warehouse:in-stock:view"],
+      [
+        "warehouse:in-stock:view"
+      ],
       "WarehouseInventoryQueryController.warehouseInStockSummary"
     ],
     [
       "GET /warehouse/manual-receipt/customers @ WarehouseInventoryQueryController.warehouseManualReceiptCustomers",
       "permission",
-      ["warehouse:today-receipt:manual-create"],
+      [
+        "warehouse:today-receipt:manual-create"
+      ],
       "WarehouseInventoryQueryController.warehouseManualReceiptCustomers"
     ],
     [
       "GET /warehouse/package-groups @ WarehouseInventoryQueryController.warehousePackageGroups",
       "permission",
-      ["warehouse:in-stock:view"],
+      [
+        "warehouse:in-stock:view"
+      ],
       "WarehouseInventoryQueryController.warehousePackageGroups"
     ],
     [
       "GET /warehouse/packages @ WarehouseInventoryQueryController.warehousePackages",
       "permission",
-      ["warehouse:in-stock:view", "warehouse:today-receipt:view"],
+      [
+        "warehouse:in-stock:view",
+        "warehouse:today-receipt:view"
+      ],
       "WarehouseInventoryQueryController.warehousePackages"
     ],
     [
       "GET /warehouse/rent-details @ DataController.warehouseRentDetails",
       "permission",
-      ["warehouse:rent-detail:view"],
+      [
+        "warehouse:rent-detail:view"
+      ],
       "DataController.warehouseRentDetails"
     ],
     [
       "GET /warehouse/rent-details/export @ DataController.exportWarehouseRentDetails",
       "permission",
-      ["warehouse:rent-detail:export"],
+      [
+        "warehouse:rent-detail:export"
+      ],
       "DataController.exportWarehouseRentDetails"
     ],
     [
       "GET /warehouse/rent-rules @ DataController.warehouseRentRules",
       "permission",
-      ["warehouse:rent-rule:view"],
+      [
+        "warehouse:rent-rule:view"
+      ],
       "DataController.warehouseRentRules"
     ],
     [
       "GET /warehouse/tally-repeat-statistics @ DataController.warehouseTallyRepeatStatistics",
       "permission",
-      ["warehouse:tally-completed:view"],
+      [
+        "warehouse:tally-completed:view"
+      ],
       "DataController.warehouseTallyRepeatStatistics"
-    ],
-    [
-      "GET /warehouse/tally-task-history-chain @ DataController.warehouseTallyTaskHistoryChain",
-      "permission",
-      ["warehouse:in-stock:tally-record-view"],
-      "DataController.warehouseTallyTaskHistoryChain"
     ],
     [
       "GET /warehouse/tally-task-history-chain @ WarehouseTallyQueryController.warehouseTallyTaskHistoryChain",
       "permission",
-      ["warehouse:tally-completed:view"],
+      [
+        "warehouse:in-stock:tally-record-view"
+      ],
       "WarehouseTallyQueryController.warehouseTallyTaskHistoryChain"
     ],
     [
       "GET /warehouse/tally-tasks @ WarehouseTallyQueryController.warehouseTallyTasks",
       "permission",
-      ["warehouse:tally-completed:view", "warehouse:tally-pending:view"],
+      [
+        "warehouse:tally-completed:view",
+        "warehouse:tally-pending:view"
+      ],
       "WarehouseTallyQueryController.warehouseTallyTasks"
+    ],
+    [
+      "GET /warehouse/tally-tasks/:id/historical-aggregate-correction @ DataController.warehouseTallyHistoricalAggregateCorrectionPreview",
+      "permission",
+      [
+        "warehouse:tally-history:correct"
+      ],
+      "DataController.warehouseTallyHistoricalAggregateCorrectionPreview"
     ],
     [
       "GET /warehouse/tally-tasks/:id/output-packages @ WarehouseTallyQueryController.warehouseTallyTaskOutputPackages",
       "permission",
-      ["warehouse:tally-completed:view"],
+      [
+        "warehouse:tally-completed:view"
+      ],
       "WarehouseTallyQueryController.warehouseTallyTaskOutputPackages"
+    ],
+    [
+      "GET /warehouse/tally-tasks/:id/source-packages @ WarehouseTallyQueryController.warehouseTallyTaskSourcePackages",
+      "permission",
+      [
+        "warehouse:tally-pending:detail-view"
+      ],
+      "WarehouseTallyQueryController.warehouseTallyTaskSourcePackages"
     ],
     [
       "GET /warehouse/today-receipts @ WarehouseInventoryQueryController.warehouseTodayReceipts",
       "permission",
-      ["warehouse:today-receipt:view"],
+      [
+        "warehouse:today-receipt:view"
+      ],
       "WarehouseInventoryQueryController.warehouseTodayReceipts"
     ],
     [
       "PATCH /finance/payment-vouchers/:id/archive @ DataController.updatePaymentVoucherArchive",
       "permission",
-      ["finance:agent-bill:archive"],
+      [
+        "finance:agent-bill:archive"
+      ],
       "DataController.updatePaymentVoucherArchive"
     ],
     [
       "PATCH /finance/payment-vouchers/:id/difference @ DataController.updatePaymentVoucherDifference",
       "permission",
-      ["finance:agent-bill:difference-manage"],
+      [
+        "finance:agent-bill:difference-manage"
+      ],
       "DataController.updatePaymentVoucherDifference"
     ],
     [
@@ -965,25 +1285,33 @@
     [
       "PATCH /operations/line-shipments/:id/operational @ DataController.updateOperationShipmentOperational",
       "permission",
-      ["operations:line-shipment:status-update"],
+      [
+        "operations:line-shipment:status-update"
+      ],
       "DataController.updateOperationShipmentOperational"
     ],
     [
       "PATCH /pricing/south-africa/rules/:id/enabled @ DataController.updateSouthAfricaRateRuleEnabled",
       "permission",
-      ["pricing:south-africa:rules-enable"],
+      [
+        "pricing:south-africa:rules-enable"
+      ],
       "DataController.updateSouthAfricaRateRuleEnabled"
     ],
     [
       "PATCH /shipments/:id/agent-data @ DataController.updateShipmentAgentData",
       "permission",
-      ["customer-service:data-confirm:agent-update"],
+      [
+        "customer-service:data-confirm:agent-update"
+      ],
       "DataController.updateShipmentAgentData"
     ],
     [
       "PATCH /shipments/:id/business-data @ DataController.updateShipmentBusinessData",
       "permission",
-      ["customer-service:data-confirm:business-update"],
+      [
+        "customer-service:data-confirm:business-update"
+      ],
       "DataController.updateShipmentBusinessData"
     ],
     [
@@ -995,19 +1323,25 @@
     [
       "PATCH /warehouse/packages/:id @ DataController.updateWarehousePackage",
       "permission",
-      ["warehouse:in-stock:update"],
+      [
+        "warehouse:in-stock:update"
+      ],
       "DataController.updateWarehousePackage"
     ],
     [
       "PATCH /warehouse/packages/:id/exception @ DataController.updateWarehousePackageException",
       "permission",
-      ["warehouse:in-stock:update"],
+      [
+        "warehouse:in-stock:update"
+      ],
       "DataController.updateWarehousePackageException"
     ],
     [
       "PATCH /warehouse/tally-tasks/:id @ DataController.updateWarehouseTallyTask",
       "permission",
-      ["warehouse:tally-pending:task-update"],
+      [
+        "warehouse:tally-pending:task-update"
+      ],
       "DataController.updateWarehouseTallyTask"
     ],
     [
@@ -1031,25 +1365,33 @@
     [
       "POST /business/shipments/:id/problem-tickets @ DataController.createBusinessProblemTicket",
       "permission",
-      ["business:shipment:problem-create"],
+      [
+        "business:shipment:problem-create"
+      ],
       "DataController.createBusinessProblemTicket"
     ],
     [
       "POST /carrier-tasks/:id/retry @ DataController.retryCarrierTask",
       "permission",
-      ["tracking:carrier-task:retry"],
+      [
+        "tracking:carrier-task:retry"
+      ],
       "DataController.retryCarrierTask"
     ],
     [
       "POST /carrier-tasks/:id/run @ DataController.runCarrierTask",
       "permission",
-      ["tracking:carrier-task:run"],
+      [
+        "tracking:carrier-task:run"
+      ],
       "DataController.runCarrierTask"
     ],
     [
       "POST /customer-service/problem-tags @ DataController.createProblemTicketCommonTag",
-      "auth",
-      [],
+      "permission",
+      [
+        "customer-service:problem:tag-manage"
+      ],
       "DataController.createProblemTicketCommonTag"
     ],
     [
@@ -1061,247 +1403,331 @@
     [
       "POST /finance/agent-bank-accounts @ DataController.upsertAgentBankAccount",
       "permission",
-      ["finance:pending-payment:bank-manage", "master-data:agents:bank-manage"],
+      [
+        "finance:pending-payment:bank-manage",
+        "master-data:agents:bank-manage"
+      ],
       "DataController.upsertAgentBankAccount"
     ],
     [
       "POST /finance/business-cost-audits @ DataController.createBusinessCostAudit",
       "permission",
-      ["finance:business-cost:manage"],
+      [
+        "finance:business-cost:manage"
+      ],
       "DataController.createBusinessCostAudit"
     ],
     [
       "POST /finance/business-cost-audits/:id/audit @ DataController.auditBusinessCostAudit",
       "permission",
-      ["finance:business-cost:batch-audit"],
+      [
+        "finance:business-cost:batch-audit"
+      ],
       "DataController.auditBusinessCostAudit"
     ],
     [
       "POST /finance/business-cost-audits/:id/reverse-audit @ DataController.reverseAuditBusinessCostAudit",
       "permission",
-      ["finance:business-cost:batch-reverse"],
+      [
+        "finance:business-cost:batch-reverse"
+      ],
       "DataController.reverseAuditBusinessCostAudit"
     ],
     [
       "POST /finance/business-cost-audits/batch-audit @ DataController.batchAuditBusinessCostAudits",
       "permission",
-      ["finance:business-cost:audit"],
+      [
+        "finance:business-cost:audit"
+      ],
       "DataController.batchAuditBusinessCostAudits"
     ],
     [
       "POST /finance/business-cost-audits/batch-reverse-audit @ DataController.batchReverseAuditBusinessCostAudits",
       "permission",
-      ["finance:business-cost:reverse"],
+      [
+        "finance:business-cost:reverse"
+      ],
       "DataController.batchReverseAuditBusinessCostAudits"
     ],
     [
       "POST /finance/business-cost-audits/batch-void @ DataController.batchVoidBusinessCostAudits",
       "permission",
-      ["finance:business-cost:void"],
+      [
+        "finance:business-cost:void"
+      ],
       "DataController.batchVoidBusinessCostAudits"
     ],
     [
       "POST /finance/business-cost-audits/export @ DataController.exportBusinessCostAudits",
       "permission",
-      ["finance:business-cost:export"],
+      [
+        "finance:business-cost:export"
+      ],
       "DataController.exportBusinessCostAudits"
     ],
     [
       "POST /finance/catalog @ FinanceCatalogController.createFinanceCatalogItem",
       "permission",
-      ["finance:dashboard:view", "master-data:finance:write"],
+      [
+        "finance:dashboard:view",
+        "master-data:finance:write"
+      ],
       "FinanceCatalogController.createFinanceCatalogItem"
     ],
     [
       "POST /finance/customer-statements @ DataController.createCustomerStatement",
       "permission",
-      ["finance:receivable:create"],
+      [
+        "finance:receivable:create"
+      ],
       "DataController.createCustomerStatement"
     ],
     [
       "POST /finance/paid-payments/:id/reverse @ DataController.reversePaidPayment",
       "permission",
-      ["finance:paid-payment:reverse"],
+      [
+        "finance:paid-payment:reverse"
+      ],
       "DataController.reversePaidPayment"
     ],
     [
       "POST /finance/paid-payments/export @ DataController.exportPaidPayments",
       "permission",
-      ["finance:paid-payment:export"],
+      [
+        "finance:paid-payment:export"
+      ],
       "DataController.exportPaidPayments"
     ],
     [
       "POST /finance/payable-audits @ DataController.createPayableAudit",
       "permission",
-      ["finance:payable:match-shipment"],
+      [
+        "finance:payable:match-shipment"
+      ],
       "DataController.createPayableAudit"
     ],
     [
       "POST /finance/payable-audits/:id/audit @ DataController.auditPayableAudit",
       "permission",
-      ["finance:payable:batch-audit"],
+      [
+        "finance:payable:batch-audit"
+      ],
       "DataController.auditPayableAudit"
     ],
     [
       "POST /finance/payable-audits/:id/reverse-audit @ DataController.reverseAuditPayableAudit",
       "permission",
-      ["finance:payable:batch-reverse"],
+      [
+        "finance:payable:batch-reverse"
+      ],
       "DataController.reverseAuditPayableAudit"
     ],
     [
       "POST /finance/payable-audits/batch-audit @ DataController.batchAuditPayableAudits",
       "permission",
-      ["finance:payable:audit"],
+      [
+        "finance:payable:audit"
+      ],
       "DataController.batchAuditPayableAudits"
     ],
     [
       "POST /finance/payable-audits/batch-reverse-audit @ DataController.batchReverseAuditPayableAudits",
       "permission",
-      ["finance:payable:reverse"],
+      [
+        "finance:payable:reverse"
+      ],
       "DataController.batchReverseAuditPayableAudits"
     ],
     [
       "POST /finance/payable-audits/batch-void @ DataController.batchVoidPayableAudits",
       "permission",
-      ["finance:payable:void"],
+      [
+        "finance:payable:void"
+      ],
       "DataController.batchVoidPayableAudits"
     ],
     [
       "POST /finance/payable-audits/export @ DataController.exportPayableAudits",
       "permission",
-      ["finance:payable:export"],
+      [
+        "finance:payable:export"
+      ],
       "DataController.exportPayableAudits"
     ],
     [
       "POST /finance/payable-audits/match-shipment @ DataController.matchPayableAuditShipment",
       "permission",
-      ["finance:payable:manage"],
+      [
+        "finance:payable:manage"
+      ],
       "DataController.matchPayableAuditShipment"
     ],
     [
       "POST /finance/payee-bank-accounts @ DataController.upsertPayeeBankAccount",
       "permission",
-      ["finance:pending-payment:bank-manage"],
+      [
+        "finance:pending-payment:bank-manage"
+      ],
       "DataController.upsertPayeeBankAccount"
     ],
     [
       "POST /finance/payment-applications @ DataController.createPaymentApplications",
       "permission",
-      ["finance:pending-payment:create"],
+      [
+        "finance:pending-payment:create"
+      ],
       "DataController.createPaymentApplications"
     ],
     [
       "POST /finance/payment-applications/:id/cancel @ DataController.cancelPaymentApplication",
       "permission",
-      ["finance:pending-payment:cancel"],
+      [
+        "finance:pending-payment:cancel"
+      ],
       "DataController.cancelPaymentApplication"
     ],
     [
       "POST /finance/payment-applications/:id/confirm-paid @ DataController.confirmPaymentApplicationPaid",
       "permission",
-      ["finance:paid-payment:confirm"],
+      [
+        "finance:paid-payment:confirm"
+      ],
       "DataController.confirmPaymentApplicationPaid"
     ],
     [
       "POST /finance/payment-applications/export @ DataController.exportPaymentApplications",
       "permission",
-      ["finance:pending-payment:export"],
+      [
+        "finance:pending-payment:export"
+      ],
       "DataController.exportPaymentApplications"
     ],
     [
       "POST /finance/payment-vouchers @ DataController.addPaymentVoucher",
       "permission",
-      ["finance:agent-bill:import"],
+      [
+        "finance:agent-bill:import"
+      ],
       "DataController.addPaymentVoucher"
     ],
     [
       "POST /finance/payment-water-receipts @ DataController.addPaymentWaterReceipt",
       "permission",
-      ["finance:paid-payment:voucher-upload"],
+      [
+        "finance:paid-payment:voucher-upload"
+      ],
       "DataController.addPaymentWaterReceipt"
     ],
     [
       "POST /finance/payments @ DataController.createPayment",
       "permission",
-      ["finance:pending-payment:create"],
+      [
+        "finance:pending-payment:create"
+      ],
       "DataController.createPayment"
     ],
     [
       "POST /finance/receivable-audits @ FinanceReceivableController.createReceivableAudit",
       "permission",
-      ["finance:receivable:create"],
+      [
+        "finance:receivable:create"
+      ],
       "FinanceReceivableController.createReceivableAudit"
     ],
     [
       "POST /finance/receivable-audits/:id/audit @ FinanceReceivableController.auditReceivableAudit",
       "permission",
-      ["finance:receivable:audit"],
+      [
+        "finance:receivable:audit"
+      ],
       "FinanceReceivableController.auditReceivableAudit"
     ],
     [
       "POST /finance/receivable-audits/:id/match-receipt @ FinanceReceivableController.matchReceivableReceipt",
       "permission",
-      ["finance:receivable:match-water"],
+      [
+        "finance:water-match:create"
+      ],
       "FinanceReceivableController.matchReceivableReceipt"
     ],
     [
       "POST /finance/receivable-audits/:id/reverse-audit @ FinanceReceivableController.reverseAuditReceivableAudit",
       "permission",
-      ["finance:receivable:reverse"],
+      [
+        "finance:receivable:reverse"
+      ],
       "FinanceReceivableController.reverseAuditReceivableAudit"
     ],
     [
       "POST /finance/receivable-audits/batch-audit @ FinanceReceivableController.batchAuditReceivableAudits",
       "permission",
-      ["finance:receivable:batch-audit"],
+      [
+        "finance:receivable:batch-audit"
+      ],
       "FinanceReceivableController.batchAuditReceivableAudits"
     ],
     [
       "POST /finance/receivable-audits/batch-reverse-audit @ FinanceReceivableController.batchReverseAuditReceivableAudits",
       "permission",
-      ["finance:receivable:batch-reverse"],
+      [
+        "finance:receivable:batch-reverse"
+      ],
       "FinanceReceivableController.batchReverseAuditReceivableAudits"
     ],
     [
       "POST /finance/receivable-audits/batch-void @ FinanceReceivableController.batchVoidReceivableAudits",
       "permission",
-      ["finance:receivable:batch-void"],
+      [
+        "finance:receivable:batch-void"
+      ],
       "FinanceReceivableController.batchVoidReceivableAudits"
     ],
     [
       "POST /finance/receivable-audits/export @ FinanceReceivableController.exportReceivableAudits",
       "permission",
-      ["finance:receivable:export"],
+      [
+        "finance:receivable:export"
+      ],
       "FinanceReceivableController.exportReceivableAudits"
     ],
     [
       "POST /finance/receivable-match-requests/:id/approve @ FinanceReceivableController.approveReceivableMatchRequest",
       "permission",
-      ["finance:water-match:audit"],
+      [
+        "finance:water-match:audit"
+      ],
       "FinanceReceivableController.approveReceivableMatchRequest"
     ],
     [
       "POST /finance/receivable-match-requests/:id/reverse-audit @ FinanceReceivableController.reverseReceivableMatchRequest",
       "permission",
-      ["finance:water-match:reverse"],
+      [
+        "finance:water-match:reverse"
+      ],
       "FinanceReceivableController.reverseReceivableMatchRequest"
     ],
     [
       "POST /finance/receivable-match-requests/batch-approve @ FinanceReceivableController.batchApproveReceivableMatchRequests",
       "permission",
-      ["finance:water-match:audit"],
+      [
+        "finance:water-match:audit"
+      ],
       "FinanceReceivableController.batchApproveReceivableMatchRequests"
     ],
     [
       "POST /finance/receivable-match-requests/batch-delete @ FinanceReceivableController.batchDeleteReceivableMatchRequests",
       "permission",
-      ["finance:water-match:cancel"],
+      [
+        "finance:water-match:cancel"
+      ],
       "FinanceReceivableController.batchDeleteReceivableMatchRequests"
     ],
     [
       "POST /finance/receivable-match-requests/batch-reverse-audit @ FinanceReceivableController.batchReverseReceivableMatchRequests",
       "permission",
-      ["finance:water-match:reverse"],
+      [
+        "finance:water-match:reverse"
+      ],
       "FinanceReceivableController.batchReverseReceivableMatchRequests"
     ],
     [
@@ -1313,43 +1739,57 @@
     [
       "POST /finance/water-receipts @ FinanceReceivableController.createWaterReceipt",
       "permission",
-      ["finance:water-receipt:create"],
+      [
+        "finance:water-receipt:create"
+      ],
       "FinanceReceivableController.createWaterReceipt"
     ],
     [
       "POST /finance/water-receipts/:id/archive @ FinanceReceivableController.archiveWaterReceipt",
       "permission",
-      ["finance:water-receipt:archive"],
+      [
+        "finance:water-receipt:archive"
+      ],
       "FinanceReceivableController.archiveWaterReceipt"
     ],
     [
       "POST /finance/water-receipts/:id/mark-arrived @ FinanceReceivableController.markWaterReceiptArrived",
       "permission",
-      ["finance:water-receipt:arrive"],
+      [
+        "finance:water-receipt:arrive"
+      ],
       "FinanceReceivableController.markWaterReceiptArrived"
     ],
     [
       "POST /finance/water-receipts/:id/match-orders @ FinanceReceivableController.matchWaterReceiptOrders",
       "permission",
-      ["finance:water-match:create"],
+      [
+        "finance:water-receipt:match"
+      ],
       "FinanceReceivableController.matchWaterReceiptOrders"
     ],
     [
       "POST /finance/water-receipts/:id/unmatch @ FinanceReceivableController.unmatchWaterReceipt",
       "permission",
-      ["finance:water-match:cancel"],
+      [
+        "finance:water-match:cancel"
+      ],
       "FinanceReceivableController.unmatchWaterReceipt"
     ],
     [
       "POST /finance/water-receipts/:id/void @ FinanceReceivableController.voidWaterReceipt",
       "permission",
-      ["finance:water-receipt:void"],
+      [
+        "finance:water-receipt:void"
+      ],
       "FinanceReceivableController.voidWaterReceipt"
     ],
     [
       "POST /finance/water-receipts/export @ FinanceReceivableController.exportWaterReceipts",
       "permission",
-      ["finance:water-receipt:export"],
+      [
+        "finance:water-receipt:export"
+      ],
       "FinanceReceivableController.exportWaterReceipts"
     ],
     [
@@ -1361,97 +1801,137 @@
     [
       "POST /master-data/agent-channels @ DataController.createMasterDataAgentChannel",
       "permission",
-      ["master-data:agent-channels:create"],
+      [
+        "master-data:agent-channels:create"
+      ],
       "DataController.createMasterDataAgentChannel"
     ],
     [
       "POST /master-data/agent-invoice-template/upload @ DataController.uploadAgentInvoiceTemplate",
       "permission",
-      ["master-data:agents:invoice-template-manage"],
+      [
+        "master-data:agents:invoice-template-manage"
+      ],
       "DataController.uploadAgentInvoiceTemplate"
     ],
     [
       "POST /master-data/agents @ DataController.createMasterDataAgent",
       "permission",
-      ["master-data:agents:create"],
+      [
+        "master-data:agents:create"
+      ],
       "DataController.createMasterDataAgent"
     ],
     [
       "POST /master-data/agents/batch-delete @ DataController.batchDeleteMasterDataAgents",
       "permission",
-      ["master-data:agents:batch-delete"],
+      [
+        "master-data:agents:batch-delete"
+      ],
       "DataController.batchDeleteMasterDataAgents"
     ],
     [
       "POST /master-data/agents/batch-enabled @ DataController.batchUpdateMasterDataAgentsEnabled",
       "permission",
-      ["master-data:agents:batch-enable"],
+      [
+        "master-data:agents:batch-enable"
+      ],
       "DataController.batchUpdateMasterDataAgentsEnabled"
     ],
     [
       "POST /master-data/carriers @ DataController.createMasterDataCarrier",
       "permission",
-      ["master-data:channels:carrier-manage"],
+      [
+        "master-data:channels:carrier-manage"
+      ],
       "DataController.createMasterDataCarrier"
     ],
     [
       "POST /master-data/channel-categories @ DataController.createMasterDataChannelCategory",
       "permission",
-      ["master-data:channel-categories:create"],
+      [
+        "master-data:channel-categories:create"
+      ],
       "DataController.createMasterDataChannelCategory"
     ],
     [
       "POST /master-data/channels @ DataController.createMasterDataChannel",
       "permission",
-      ["master-data:channels:create"],
+      [
+        "master-data:channels:create"
+      ],
       "DataController.createMasterDataChannel"
     ],
     [
       "POST /master-data/channels/batch-delete @ DataController.batchDeleteMasterDataChannels",
       "permission",
-      ["master-data:channels:batch-delete"],
+      [
+        "master-data:channels:batch-delete"
+      ],
       "DataController.batchDeleteMasterDataChannels"
+    ],
+    [
+      "POST /master-data/customer-sources @ DataController.createMasterDataCustomerSource",
+      "permission",
+      [
+        "master-data:customers:create"
+      ],
+      "DataController.createMasterDataCustomerSource"
     ],
     [
       "POST /master-data/customers @ DataController.createMasterDataCustomer",
       "permission",
-      ["master-data:customers:create"],
+      [
+        "master-data:customers:create"
+      ],
       "DataController.createMasterDataCustomer"
     ],
     [
       "POST /master-data/customers/:id/contacts @ DataController.createMasterDataCustomerContact",
       "permission",
-      ["master-data:customers:contacts-manage"],
+      [
+        "master-data:customers:contacts-manage"
+      ],
       "DataController.createMasterDataCustomerContact"
     ],
     [
       "POST /master-data/customers/:id/users @ DataController.createMasterDataCustomerUser",
       "permission",
-      ["master-data:customers:user-create"],
+      [
+        "master-data:customers:user-create"
+      ],
       "DataController.createMasterDataCustomerUser"
     ],
     [
       "POST /master-data/exchange-rates @ DataController.createMasterDataExchangeRate",
       "permission",
-      ["master-data:exchange-rates:create"],
+      [
+        "master-data:exchange-rates:create"
+      ],
       "DataController.createMasterDataExchangeRate"
     ],
     [
       "POST /master-data/fuel-rates @ DataController.createMasterDataFuelRate",
       "permission",
-      ["master-data:finance:fuel-rate-manage"],
+      [
+        "master-data:finance:fuel-rate-manage"
+      ],
       "DataController.createMasterDataFuelRate"
     ],
     [
       "POST /master-data/payer-bank-accounts @ PayerBankAccountController.create",
       "permission",
-      ["master-data:payer-banks:manage"],
+      [
+        "master-data:payer-banks:manage"
+      ],
       "PayerBankAccountController.create"
     ],
     [
       "POST /master-data/surcharges @ DataController.createMasterDataSurcharge",
       "permission",
-      ["master-data:finance:surcharge-manage"],
+      [
+        "master-data:finance:surcharge-manage"
+      ],
       "DataController.createMasterDataSurcharge"
     ],
     [
@@ -1613,7 +2093,9 @@
     [
       "POST /navigation/read-state @ DataController.markNavigationRead",
       "permission",
-      ["business:shipment:list"],
+      [
+        "business:shipment:list"
+      ],
       "DataController.markNavigationRead"
     ],
     [
@@ -1631,271 +2113,361 @@
     [
       "POST /operations/line-shipments/:id/problem-tickets @ DataController.createOperationProblemTicket",
       "permission",
-      ["operations:line-shipment:problem-create"],
+      [
+        "operations:line-shipment:problem-create"
+      ],
       "DataController.createOperationProblemTicket"
     ],
     [
       "POST /operations/line-shipments/:id/tracking-events @ DataController.addOperationTrackingEvent",
       "permission",
-      ["operations:line-shipment:tracking-add"],
+      [
+        "operations:line-shipment:tracking-add"
+      ],
       "DataController.addOperationTrackingEvent"
     ],
     [
       "POST /pricing/books/batch-delete @ DataController.batchDeletePriceBooks",
       "permission",
-      ["pricing:price-books:delete"],
+      [
+        "pricing:price-books:delete"
+      ],
       "DataController.batchDeletePriceBooks"
     ],
     [
       "POST /pricing/books/import @ DataController.importPriceBook",
       "permission",
-      ["pricing:price-books:import"],
+      [
+        "pricing:price-books:import"
+      ],
       "DataController.importPriceBook"
     ],
     [
       "POST /pricing/books/import-jobs @ DataController.createPriceBookImportJob",
       "permission",
-      ["pricing:price-books:upload"],
+      [
+        "pricing:price-books:upload"
+      ],
       "DataController.createPriceBookImportJob"
     ],
     [
       "POST /pricing/books/import-jobs/:id/retry @ DataController.retryPriceBookImportJob",
       "permission",
-      ["pricing:price-books:upload"],
+      [
+        "pricing:price-books:upload"
+      ],
       "DataController.retryPriceBookImportJob"
     ],
     [
       "POST /pricing/cleanup-old-original-agents @ DataController.cleanupOldOriginalAgents",
       "permission",
-      ["pricing:price-books:cleanup-original-agents"],
+      [
+        "pricing:price-books:cleanup-original-agents"
+      ],
       "DataController.cleanupOldOriginalAgents"
     ],
     [
       "POST /pricing/legacy/amazon/quote @ DataController.legacyAmazonQuote",
       "permission",
-      ["pricing:lookup:amazon"],
+      [
+        "pricing:lookup:amazon"
+      ],
       "DataController.legacyAmazonQuote"
     ],
     [
       "POST /pricing/legacy/canada-air-sea/quote @ DataController.legacyCanadaAirSeaQuote",
       "permission",
-      ["pricing:lookup:canada-air-sea"],
+      [
+        "pricing:lookup:canada-air-sea"
+      ],
       "DataController.legacyCanadaAirSeaQuote"
     ],
     [
       "POST /pricing/legacy/dubai-air-sea/display-versions/:id/retry @ DataController.retryLegacyDubaiAirSeaDisplayVersion",
       "permission",
-      ["pricing:dubai-display:retry"],
+      [
+        "pricing:dubai-display:retry"
+      ],
       "DataController.retryLegacyDubaiAirSeaDisplayVersion"
     ],
     [
       "POST /pricing/legacy/dubai-air-sea/display-versions/:id/sea-markup @ DataController.updateLegacyDubaiSeaMarkup",
       "permission",
-      ["pricing:dubai-display:markup-update"],
+      [
+        "pricing:dubai-display:markup-update"
+      ],
       "DataController.updateLegacyDubaiSeaMarkup"
     ],
     [
       "POST /pricing/legacy/dubai-air-sea/quote @ DataController.legacyDubaiAirSeaQuote",
       "permission",
-      ["pricing:lookup:dubai-air-sea"],
+      [
+        "pricing:lookup:dubai-air-sea"
+      ],
       "DataController.legacyDubaiAirSeaQuote"
     ],
     [
       "POST /pricing/legacy/europe-express/quote @ DataController.legacyEuropeExpressQuote",
       "permission",
-      ["pricing:lookup:europe-express"],
+      [
+        "pricing:lookup:europe-express"
+      ],
       "DataController.legacyEuropeExpressQuote"
     ],
     [
       "POST /pricing/legacy/inquiry/quote @ DataController.legacyInquiryQuote",
       "permission",
-      ["pricing:lookup:europe-oversize"],
+      [
+        "pricing:lookup:europe-oversize"
+      ],
       "DataController.legacyInquiryQuote"
     ],
     [
       "POST /pricing/legacy/rebuild @ DataController.rebuildLegacyPricing",
       "permission",
-      ["pricing:price-books:legacy-rebuild"],
+      [
+        "pricing:price-books:legacy-rebuild"
+      ],
       "DataController.rebuildLegacyPricing"
     ],
     [
       "POST /pricing/legacy/sources/import @ DataController.importLegacyPricingSource",
       "permission",
-      ["pricing:price-books:legacy-source-import"],
+      [
+        "pricing:price-books:legacy-source-import"
+      ],
       "DataController.importLegacyPricingSource"
     ],
     [
       "POST /pricing/legacy/south-africa/quote @ DataController.legacySouthAfricaQuote",
       "permission",
-      ["pricing:lookup:south-africa"],
+      [
+        "pricing:lookup:south-africa"
+      ],
       "DataController.legacySouthAfricaQuote"
     ],
     [
       "POST /pricing/legacy/usa-air-sea/quote @ DataController.legacyUsaAirSeaQuote",
       "permission",
-      ["pricing:lookup:usa-air-sea"],
+      [
+        "pricing:lookup:usa-air-sea"
+      ],
       "DataController.legacyUsaAirSeaQuote"
     ],
     [
       "POST /pricing/lookup @ DataController.priceLookup",
       "permission",
-      ["pricing:lookup:view"],
+      [
+        "pricing:lookup:view"
+      ],
       "DataController.priceLookup"
     ],
     [
       "POST /pricing/markup-rules @ DataController.createAgentMarkupRule",
       "permission",
-      ["pricing:markup:default-create"],
+      [
+        "pricing:markup:default-create"
+      ],
       "DataController.createAgentMarkupRule"
     ],
     [
       "POST /pricing/markup-rules/batch-delete @ DataController.batchDeleteAgentMarkupRules",
       "permission",
-      ["pricing:markup:batch-delete"],
+      [
+        "pricing:markup:batch-delete"
+      ],
       "DataController.batchDeleteAgentMarkupRules"
     ],
     [
       "POST /pricing/markup-rules/batch-status @ DataController.batchUpdateAgentMarkupRules",
       "permission",
-      ["pricing:markup:batch-enable"],
+      [
+        "pricing:markup:batch-enable"
+      ],
       "DataController.batchUpdateAgentMarkupRules"
     ],
     [
       "POST /pricing/markup-rules/batch-upsert @ DataController.batchUpsertAgentMarkupRules",
       "permission",
-      ["pricing:markup:batch-upsert"],
+      [
+        "pricing:markup:batch-upsert"
+      ],
       "DataController.batchUpsertAgentMarkupRules"
     ],
     [
       "POST /pricing/markup-rules/import @ DataController.importAgentMarkupRules",
       "permission",
-      ["pricing:markup:import"],
+      [
+        "pricing:markup:import"
+      ],
       "DataController.importAgentMarkupRules"
     ],
     [
       "POST /pricing/markup-rules/migrate-pricebook-scopes @ DataController.migrateLegacyMarkupRouteScopes",
       "permission",
-      ["pricing:markup:update"],
+      [
+        "pricing:markup:update"
+      ],
       "DataController.migrateLegacyMarkupRouteScopes"
     ],
     [
       "POST /pricing/markup-rules/route-preview @ DataController.previewMarkupRoute",
       "permission",
-      ["pricing:markup-tier:read"],
+      [
+        "pricing:markup-tier:read"
+      ],
       "DataController.previewMarkupRoute"
     ],
     [
       "POST /pricing/markup-rules/route-preview/batch @ DataController.previewMarkupRoutesBatch",
       "permission",
-      ["pricing:markup-tier:read"],
+      [
+        "pricing:markup-tier:read"
+      ],
       "DataController.previewMarkupRoutesBatch"
     ],
     [
       "POST /pricing/markup-rules/route-tiers @ DataController.replaceMarkupRouteTiers",
       "permission",
-      ["pricing:markup-tier:update"],
+      [
+        "pricing:markup-tier:update"
+      ],
       "DataController.replaceMarkupRouteTiers"
     ],
     [
       "POST /pricing/markup-rules/route-tiers/batch @ DataController.replaceMarkupRouteTiersBatch",
       "permission",
-      ["pricing:markup-tier:update"],
+      [
+        "pricing:markup-tier:update"
+      ],
       "DataController.replaceMarkupRouteTiersBatch"
     ],
     [
       "POST /pricing/quote @ DataController.quote",
       "permission",
-      ["pricing:lookup:view"],
+      [
+        "pricing:lookup:view"
+      ],
       "DataController.quote"
     ],
     [
       "POST /pricing/rules @ DataController.createPricingRule",
       "permission",
-      ["pricing:markup-tier:create"],
+      [
+        "pricing:markup-tier:create"
+      ],
       "DataController.createPricingRule"
     ],
     [
       "POST /pricing/rules/quote @ DataController.quotePricingRule",
       "permission",
-      ["pricing:lookup:view"],
+      [
+        "pricing:lookup:view"
+      ],
       "DataController.quotePricingRule"
     ],
     [
       "POST /pricing/south-africa/images @ DataController.uploadSouthAfricaRateImage",
       "permission",
-      ["pricing:south-africa:image-upload"],
+      [
+        "pricing:south-africa:image-upload"
+      ],
       "DataController.uploadSouthAfricaRateImage"
     ],
     [
       "POST /pricing/south-africa/lookup @ DataController.southAfricaLookup",
       "permission",
-      ["pricing:lookup:south-africa"],
+      [
+        "pricing:lookup:south-africa"
+      ],
       "DataController.southAfricaLookup"
     ],
     [
       "POST /pricing/south-africa/rules @ DataController.createSouthAfricaRateRule",
       "permission",
-      ["pricing:south-africa:rules-create"],
+      [
+        "pricing:south-africa:rules-create"
+      ],
       "DataController.createSouthAfricaRateRule"
     ],
     [
       "POST /problem-tickets/:id/assist @ DataController.assistProblemTicket",
       "permission",
-      ["customer-service:problem:assist"],
+      [
+        "customer-service:problem:assist"
+      ],
       "DataController.assistProblemTicket"
     ],
     [
       "POST /problem-tickets/:id/close @ DataController.closeProblemTicket",
       "permission",
-      ["customer-service:problem:close"],
+      [
+        "customer-service:problem:close"
+      ],
       "DataController.closeProblemTicket"
     ],
     [
       "POST /problem-tickets/:id/replies @ DataController.replyProblemTicket",
       "permission",
-      ["customer-service:problem:reply"],
+      [
+        "customer-service:problem:reply"
+      ],
       "DataController.replyProblemTicket"
     ],
     [
       "POST /shipments @ DataController.createShipment",
       "permission",
-      ["business:order-entry:create"],
+      [
+        "business:order-entry:create"
+      ],
       "DataController.createShipment"
     ],
     [
       "POST /shipments/:id/agent-data/approve @ DataController.approveShipmentAgentData",
       "permission",
-      ["customer-service:data-confirm:agent-approve"],
+      [
+        "customer-service:data-confirm:agent-approve"
+      ],
       "DataController.approveShipmentAgentData"
     ],
     [
       "POST /shipments/:id/agent-data/reverse @ DataController.reverseShipmentAgentData",
       "permission",
-      ["customer-service:data-confirm:reverse"],
+      [
+        "customer-service:data-confirm:reverse"
+      ],
       "DataController.reverseShipmentAgentData"
     ],
     [
       "POST /shipments/:id/business-data/approve @ DataController.approveShipmentBusinessData",
       "permission",
-      ["customer-service:data-confirm:business-approve"],
+      [
+        "customer-service:data-confirm:business-approve"
+      ],
       "DataController.approveShipmentBusinessData"
     ],
     [
       "POST /shipments/:id/business-data/reverse @ DataController.reverseShipmentBusinessData",
       "permission",
-      ["customer-service:data-confirm:reverse"],
+      [
+        "customer-service:data-confirm:reverse"
+      ],
       "DataController.reverseShipmentBusinessData"
     ],
     [
       "POST /shipments/:id/data-confirmation/approve-all @ DataController.approveShipmentAllData",
       "permission",
-      ["customer-service:data-confirm:approve-all"],
+      [
+        "customer-service:data-confirm:approve-all"
+      ],
       "DataController.approveShipmentAllData"
     ],
     [
       "POST /shipments/:id/data-confirmation/reverse-all @ DataController.reverseShipmentAllData",
       "permission",
-      ["customer-service:data-confirm:reverse"],
+      [
+        "customer-service:data-confirm:reverse"
+      ],
       "DataController.reverseShipmentAllData"
     ],
     [
@@ -1907,43 +2479,57 @@
     [
       "POST /shipments/:id/fees/generate @ DataController.generateShipmentFees",
       "permission",
-      ["finance:receivable:create"],
+      [
+        "finance:receivable:create"
+      ],
       "DataController.generateShipmentFees"
     ],
     [
       "POST /shipments/:id/finance-items @ DataController.createShipmentFinanceItem",
       "permission",
-      ["business:order-fee:create"],
+      [
+        "business:order-fee:create"
+      ],
       "DataController.createShipmentFinanceItem"
     ],
     [
       "POST /shipments/:id/finance-items/:feeId/lock @ DataController.lockShipmentFinanceItem",
       "permission",
-      ["business:order-fee:lock"],
+      [
+        "business:order-fee:lock"
+      ],
       "DataController.lockShipmentFinanceItem"
     ],
     [
       "POST /shipments/:id/finance-items/:feeId/unlock @ DataController.unlockShipmentFinanceItem",
       "permission",
-      ["business:order-fee:unlock"],
+      [
+        "business:order-fee:unlock"
+      ],
       "DataController.unlockShipmentFinanceItem"
     ],
     [
       "POST /shipments/:id/invoice/upload @ DataController.uploadShipmentBusinessInvoice",
       "permission",
-      ["business:order-entry:invoice-upload"],
+      [
+        "business:order-entry:invoice-upload"
+      ],
       "DataController.uploadShipmentBusinessInvoice"
     ],
     [
       "POST /shipments/:id/labels @ DataController.createShipmentLabel",
       "permission",
-      ["warehouse:dispatch-pending:label-generate"],
+      [
+        "warehouse:dispatch-pending:label-generate"
+      ],
       "DataController.createShipmentLabel"
     ],
     [
       "POST /shipments/:id/labels/:labelId/void @ DataController.voidShipmentLabel",
       "permission",
-      ["warehouse:dispatch-pending:label-void"],
+      [
+        "warehouse:dispatch-pending:label-void"
+      ],
       "DataController.voidShipmentLabel"
     ],
     [
@@ -1955,7 +2541,9 @@
     [
       "POST /shipments/:id/payment @ DataController.registerShipmentPayment",
       "permission",
-      ["business:shipment:payment-record"],
+      [
+        "business:shipment:payment-record"
+      ],
       "DataController.registerShipmentPayment"
     ],
     [
@@ -1967,43 +2555,57 @@
     [
       "POST /shipments/:id/receivable-adjustments @ DataController.addReceivableAdjustment",
       "permission",
-      ["finance:receivable:update"],
+      [
+        "finance:receivable:update"
+      ],
       "DataController.addReceivableAdjustment"
     ],
     [
       "POST /shipments/:id/receive @ DataController.receiveShipment",
       "permission",
-      ["warehouse:today-receipt:update"],
+      [
+        "warehouse:today-receipt:update"
+      ],
       "DataController.receiveShipment"
     ],
     [
       "POST /shipments/:id/reroute @ DataController.rerouteShipment",
       "permission",
-      ["market:routed:reroute"],
+      [
+        "market:routed:reroute"
+      ],
       "DataController.rerouteShipment"
     ],
     [
       "POST /shipments/:id/restore @ DataController.restoreShipment",
       "permission",
-      ["business:review:restore"],
+      [
+        "business:review:restore"
+      ],
       "DataController.restoreShipment"
     ],
     [
       "POST /shipments/:id/review/approve @ DataController.approveShipmentReview",
       "permission",
-      ["business:review:approve"],
+      [
+        "business:review:approve"
+      ],
       "DataController.approveShipmentReview"
     ],
     [
       "POST /shipments/:id/review/reject @ DataController.rejectShipmentReview",
       "permission",
-      ["business:review:reject"],
+      [
+        "business:review:reject"
+      ],
       "DataController.rejectShipmentReview"
     ],
     [
       "POST /shipments/:id/review/reverse @ DataController.reverseShipmentReview",
       "permission",
-      ["business:review:reverse"],
+      [
+        "business:review:reverse"
+      ],
       "DataController.reverseShipmentReview"
     ],
     [
@@ -2015,19 +2617,26 @@
     [
       "POST /shipments/:id/tracking-events @ DataController.addTrackingEvent",
       "permission",
-      ["tracking:external:single-add"],
+      [
+        "tracking:external:single-add"
+      ],
       "DataController.addTrackingEvent"
     ],
     [
       "POST /shipments/import @ DataController.importShipments",
       "permission",
-      ["operations:import-quality:upload", "operations:line-shipment:import"],
+      [
+        "operations:import-quality:upload",
+        "operations:line-shipment:import"
+      ],
       "DataController.importShipments"
     ],
     [
       "POST /shipments/order-entry @ DataController.createOrderEntry",
       "permission",
-      ["business:order-entry:create"],
+      [
+        "business:order-entry:create"
+      ],
       "DataController.createOrderEntry"
     ],
     [
@@ -2039,13 +2648,17 @@
     [
       "POST /system/announcements @ AnnouncementController.create",
       "permission",
-      ["system:announcements:publish"],
+      [
+        "system:announcements:publish"
+      ],
       "AnnouncementController.create"
     ],
     [
       "POST /system/announcements/:id/withdraw @ AnnouncementController.withdraw",
       "permission",
-      ["system:announcements:withdraw"],
+      [
+        "system:announcements:withdraw"
+      ],
       "AnnouncementController.withdraw"
     ],
     [
@@ -2057,31 +2670,41 @@
     [
       "POST /system/notification-operations/:id/retry @ NotificationOperationsController.retry",
       "permission",
-      ["system:notifications:retry"],
+      [
+        "system:notifications:retry"
+      ],
       "NotificationOperationsController.retry"
     ],
     [
       "POST /system/roles @ DataController.createSystemRole",
       "permission",
-      ["system:user-groups:create"],
+      [
+        "system:user-groups:create"
+      ],
       "DataController.createSystemRole"
     ],
     [
       "POST /system/sites @ DataController.createSystemSite",
       "permission",
-      ["system:sites:create"],
+      [
+        "system:sites:create"
+      ],
       "DataController.createSystemSite"
     ],
     [
       "POST /system/staff-accounts @ DataController.createSystemStaffAccount",
       "permission",
-      ["system:accounts:create"],
+      [
+        "system:accounts:create"
+      ],
       "DataController.createSystemStaffAccount"
     ],
     [
       "POST /system/staff-accounts/reset-passwords @ DataController.resetSystemStaffAccountPasswords",
       "permission",
-      ["system:accounts:reset-password"],
+      [
+        "system:accounts:reset-password"
+      ],
       "DataController.resetSystemStaffAccountPasswords"
     ],
     [
@@ -2093,73 +2716,122 @@
     [
       "POST /warehouse/consolidations/:id/create-shipment @ DataController.createWarehouseConsolidationShipment",
       "permission",
-      ["warehouse:tally-pending:merge-and-ship"],
+      [
+        "warehouse:tally-pending:merge-and-ship"
+      ],
       "DataController.createWarehouseConsolidationShipment"
     ],
     [
       "POST /warehouse/handover/print @ DataController.printWarehouseHandover",
       "permission",
-      ["warehouse:dispatch-pending:handover-print"],
+      [
+        "warehouse:dispatch-pending:handover-print"
+      ],
       "DataController.printWarehouseHandover"
     ],
     [
       "POST /warehouse/packages @ DataController.createWarehousePackage",
       "permission",
-      ["warehouse:today-receipt:manual-create"],
+      [
+        "warehouse:today-receipt:manual-create"
+      ],
       "DataController.createWarehousePackage"
+    ],
+    [
+      "POST /warehouse/packages/:id/same-spec-replenish @ DataController.replenishWarehouseSameSpec",
+      "permission",
+      [
+        "warehouse:in-stock:same-spec-replenish"
+      ],
+      "DataController.replenishWarehouseSameSpec"
     ],
     [
       "POST /warehouse/packages/:id/split @ DataController.splitWarehousePackage",
       "permission",
-      ["warehouse:in-stock:split"],
+      [
+        "warehouse:in-stock:split"
+      ],
       "DataController.splitWarehousePackage"
+    ],
+    [
+      "POST /warehouse/packages/machine-import @ DataController.warehouseMachineImport",
+      "permission",
+      [
+        "warehouse:in-stock:machine-import"
+      ],
+      "DataController.warehouseMachineImport"
     ],
     [
       "POST /warehouse/packages/manual-receipt @ DataController.createWarehouseManualReceipt",
       "permission",
-      ["warehouse:today-receipt:manual-create"],
+      [
+        "warehouse:today-receipt:manual-create"
+      ],
       "DataController.createWarehouseManualReceipt"
     ],
     [
       "POST /warehouse/rent-rules @ DataController.createWarehouseRentRule",
       "permission",
-      ["warehouse:rent-rule:manage"],
+      [
+        "warehouse:rent-rule:manage"
+      ],
       "DataController.createWarehouseRentRule"
     ],
     [
       "POST /warehouse/tally-tasks @ DataController.createWarehouseTallyTask",
       "permission",
-      ["warehouse:tally-pending:task-create"],
+      [
+        "warehouse:tally-pending:task-create"
+      ],
       "DataController.createWarehouseTallyTask"
     ],
     [
       "POST /warehouse/tally-tasks/:id/complete @ DataController.completeWarehouseTallyTask",
       "permission",
-      ["warehouse:tally-pending:task-process"],
+      [
+        "warehouse:tally-pending:task-process"
+      ],
       "DataController.completeWarehouseTallyTask"
+    ],
+    [
+      "POST /warehouse/tally-tasks/:id/historical-aggregate-correction @ DataController.correctWarehouseTallyHistoricalAggregate",
+      "permission",
+      [
+        "warehouse:tally-history:correct"
+      ],
+      "DataController.correctWarehouseTallyHistoricalAggregate"
     ],
     [
       "POST /warehouse/tally-tasks/:id/label @ DataController.generateWarehouseTallyTaskLabel",
       "permission",
-      ["warehouse:tally-label:generate"],
+      [
+        "warehouse:tally-label:generate"
+      ],
       "DataController.generateWarehouseTallyTaskLabel"
     ],
     [
       "POST /warehouse/tally-tasks/:id/label/download @ DataController.downloadWarehouseTallyTaskLabel",
       "permission",
-      ["warehouse:tally-label:download"],
+      [
+        "warehouse:tally-label:download"
+      ],
       "DataController.downloadWarehouseTallyTaskLabel"
     ],
     [
       "POST /warehouse/tally-tasks/:id/label/print @ DataController.printWarehouseTallyTaskLabel",
       "permission",
-      ["warehouse:tally-label:print", "warehouse:tally-label:reprint"],
+      [
+        "warehouse:tally-label:print",
+        "warehouse:tally-label:reprint"
+      ],
       "DataController.printWarehouseTallyTaskLabel"
     ],
     [
       "POST /warehouse/tally-tasks/label-scan @ DataController.applyWarehouseTallyTaskLabel",
       "permission",
-      ["warehouse:tally-label:scan-apply"],
+      [
+        "warehouse:tally-label:scan-apply"
+      ],
       "DataController.applyWarehouseTallyTaskLabel"
     ],
     [
@@ -2170,275 +2842,381 @@
     ],
     [
       "PUT /customer-service/problem-tags/:id @ DataController.updateProblemTicketCommonTag",
-      "auth",
-      [],
+      "permission",
+      [
+        "customer-service:problem:tag-manage"
+      ],
       "DataController.updateProblemTicketCommonTag"
     ],
     [
       "PUT /finance/business-cost-audits/:id @ DataController.updateBusinessCostAudit",
       "permission",
-      ["finance:business-cost:manage"],
+      [
+        "finance:business-cost:manage"
+      ],
       "DataController.updateBusinessCostAudit"
     ],
     [
       "PUT /finance/catalog/:id @ FinanceCatalogController.updateFinanceCatalogItem",
       "permission",
-      ["finance:dashboard:view", "master-data:finance:write"],
+      [
+        "finance:dashboard:view",
+        "master-data:finance:write"
+      ],
       "FinanceCatalogController.updateFinanceCatalogItem"
     ],
     [
       "PUT /finance/catalog/reorder @ FinanceCatalogController.reorderFinanceCatalogItems",
       "permission",
-      ["finance:dashboard:view", "master-data:finance:write"],
+      [
+        "finance:dashboard:view",
+        "master-data:finance:write"
+      ],
       "FinanceCatalogController.reorderFinanceCatalogItems"
     ],
     [
       "PUT /finance/paid-payments/:id @ DataController.updatePaidPayment",
       "permission",
-      ["finance:paid-payment:update"],
+      [
+        "finance:paid-payment:update"
+      ],
       "DataController.updatePaidPayment"
     ],
     [
       "PUT /finance/payable-audits/:id @ DataController.updatePayableAudit",
       "permission",
-      ["finance:payable:manage"],
+      [
+        "finance:payable:manage"
+      ],
       "DataController.updatePayableAudit"
     ],
     [
       "PUT /finance/payment-applications/:id @ DataController.updatePaymentApplication",
       "permission",
-      ["finance:pending-payment:update"],
+      [
+        "finance:pending-payment:update"
+      ],
       "DataController.updatePaymentApplication"
     ],
     [
       "PUT /finance/receivable-audits/:id @ FinanceReceivableController.updateReceivableAudit",
       "permission",
-      ["finance:receivable:update"],
+      [
+        "finance:receivable:update"
+      ],
       "FinanceReceivableController.updateReceivableAudit"
     ],
     [
       "PUT /finance/receivable-match-requests/:id @ FinanceReceivableController.updateReceivableMatchRequest",
       "permission",
-      ["finance:water-match:adjust"],
+      [
+        "finance:water-match:adjust"
+      ],
       "FinanceReceivableController.updateReceivableMatchRequest"
     ],
     [
       "PUT /finance/water-receipts/:id @ FinanceReceivableController.updateWaterReceipt",
       "permission",
-      ["finance:water-receipt:update"],
+      [
+        "finance:water-receipt:update"
+      ],
       "FinanceReceivableController.updateWaterReceipt"
     ],
     [
       "PUT /master-data/agent-channels/:id @ DataController.updateMasterDataAgentChannel",
       "permission",
-      ["master-data:agent-channels:update"],
+      [
+        "master-data:agent-channels:update"
+      ],
       "DataController.updateMasterDataAgentChannel"
     ],
     [
       "PUT /master-data/agent-channels/:id/enabled @ DataController.updateMasterDataAgentChannelEnabled",
       "permission",
-      ["master-data:agent-channels:enable"],
+      [
+        "master-data:agent-channels:enable"
+      ],
       "DataController.updateMasterDataAgentChannelEnabled"
     ],
     [
       "PUT /master-data/agents/:id @ DataController.updateMasterDataAgent",
       "permission",
-      ["master-data:agents:update"],
+      [
+        "master-data:agents:update"
+      ],
       "DataController.updateMasterDataAgent"
     ],
     [
       "PUT /master-data/agents/:id/enabled @ DataController.updateMasterDataAgentEnabled",
       "permission",
-      ["master-data:agents:enable"],
+      [
+        "master-data:agents:enable"
+      ],
       "DataController.updateMasterDataAgentEnabled"
     ],
     [
       "PUT /master-data/carriers/:id/enabled @ DataController.updateMasterDataCarrierEnabled",
       "permission",
-      ["master-data:channels:carrier-enable"],
+      [
+        "master-data:channels:carrier-enable"
+      ],
       "DataController.updateMasterDataCarrierEnabled"
     ],
     [
       "PUT /master-data/channel-categories/:id @ DataController.updateMasterDataChannelCategory",
       "permission",
-      ["master-data:channel-categories:update"],
+      [
+        "master-data:channel-categories:update"
+      ],
       "DataController.updateMasterDataChannelCategory"
     ],
     [
       "PUT /master-data/channel-categories/:id/enabled @ DataController.updateMasterDataChannelCategoryEnabled",
       "permission",
-      ["master-data:channel-categories:enable"],
+      [
+        "master-data:channel-categories:enable"
+      ],
       "DataController.updateMasterDataChannelCategoryEnabled"
     ],
     [
       "PUT /master-data/channels/:id @ DataController.updateMasterDataChannel",
       "permission",
-      ["master-data:channels:update"],
+      [
+        "master-data:channels:update"
+      ],
       "DataController.updateMasterDataChannel"
     ],
     [
       "PUT /master-data/channels/:id/enabled @ DataController.updateMasterDataChannelEnabled",
       "permission",
-      ["master-data:channels:enable"],
+      [
+        "master-data:channels:enable"
+      ],
       "DataController.updateMasterDataChannelEnabled"
+    ],
+    [
+      "PUT /master-data/customer-sources/:id @ DataController.updateMasterDataCustomerSource",
+      "permission",
+      [
+        "master-data:customers:update"
+      ],
+      "DataController.updateMasterDataCustomerSource"
     ],
     [
       "PUT /master-data/customers/:id @ DataController.updateMasterDataCustomer",
       "permission",
-      ["master-data:customers:update"],
+      [
+        "master-data:customers:update"
+      ],
       "DataController.updateMasterDataCustomer"
     ],
     [
       "PUT /master-data/customers/:id/contacts/:contactId @ DataController.updateMasterDataCustomerContact",
       "permission",
-      ["master-data:customers:contacts-manage"],
+      [
+        "master-data:customers:contacts-manage"
+      ],
       "DataController.updateMasterDataCustomerContact"
     ],
     [
       "PUT /master-data/customers/:id/enabled @ DataController.updateMasterDataCustomerEnabled",
       "permission",
-      ["master-data:customers:enable"],
+      [
+        "master-data:customers:enable"
+      ],
       "DataController.updateMasterDataCustomerEnabled"
     ],
     [
       "PUT /master-data/exchange-rates/:id @ DataController.updateMasterDataExchangeRate",
       "permission",
-      ["master-data:exchange-rates:update"],
+      [
+        "master-data:exchange-rates:update"
+      ],
       "DataController.updateMasterDataExchangeRate"
     ],
     [
       "PUT /master-data/payer-bank-accounts/:id @ PayerBankAccountController.update",
       "permission",
-      ["master-data:payer-banks:manage"],
+      [
+        "master-data:payer-banks:manage"
+      ],
       "PayerBankAccountController.update"
     ],
     [
       "PUT /master-data/surcharges/:id/enabled @ DataController.updateMasterDataSurchargeEnabled",
       "permission",
-      ["master-data:finance:surcharge-enable"],
+      [
+        "master-data:finance:surcharge-enable"
+      ],
       "DataController.updateMasterDataSurchargeEnabled"
     ],
     [
       "PUT /pricing/books/:id/remark @ DataController.updatePriceBookRemark",
       "permission",
-      ["pricing:price-books:remark-update"],
+      [
+        "pricing:price-books:remark-update"
+      ],
       "DataController.updatePriceBookRemark"
     ],
     [
       "PUT /pricing/legacy/dubai-air-sea/display-versions/:id/activate @ DataController.activateLegacyDubaiAirSeaDisplayVersion",
       "permission",
-      ["pricing:dubai-display:activate"],
+      [
+        "pricing:dubai-display:activate"
+      ],
       "DataController.activateLegacyDubaiAirSeaDisplayVersion"
     ],
     [
       "PUT /pricing/markup-rules/:id @ DataController.updateAgentMarkupRule",
       "permission",
-      ["pricing:markup:update"],
+      [
+        "pricing:markup:update"
+      ],
       "DataController.updateAgentMarkupRule"
     ],
     [
       "PUT /pricing/rules/:id/enabled @ DataController.updatePricingRuleEnabled",
       "permission",
-      ["pricing:markup-tier:enable"],
+      [
+        "pricing:markup-tier:enable"
+      ],
       "DataController.updatePricingRuleEnabled"
     ],
     [
       "PUT /pricing/south-africa/rules/:id @ DataController.updateSouthAfricaRateRule",
       "permission",
-      ["pricing:south-africa:rules-update"],
+      [
+        "pricing:south-africa:rules-update"
+      ],
       "DataController.updateSouthAfricaRateRule"
     ],
     [
       "PUT /shipments/:id/finance-items/:feeId @ DataController.updateShipmentFinanceItem",
       "permission",
-      ["business:order-fee:update"],
+      [
+        "business:order-fee:update"
+      ],
       "DataController.updateShipmentFinanceItem"
     ],
     [
       "PUT /shipments/:id/order-entry-draft @ DataController.updateOrderEntryDraft",
       "permission",
-      ["business:order-entry:draft-save"],
+      [
+        "business:order-entry:draft-save"
+      ],
       "DataController.updateOrderEntryDraft"
     ],
     [
       "PUT /shipments/:id/review-basic @ DataController.updateShipmentReviewBasic",
       "permission",
-      ["business:shipment:update-basic"],
+      [
+        "business:shipment:update-basic"
+      ],
       "DataController.updateShipmentReviewBasic"
     ],
     [
       "PUT /system/roles/:role @ DataController.updateSystemRole",
       "permission",
-      ["system:user-groups:update"],
+      [
+        "system:user-groups:update"
+      ],
       "DataController.updateSystemRole"
     ],
     [
       "PUT /system/roles/:role/enabled @ DataController.updateSystemRoleEnabled",
       "permission",
-      ["system:user-groups:enable"],
+      [
+        "system:user-groups:enable"
+      ],
       "DataController.updateSystemRoleEnabled"
     ],
     [
       "PUT /system/roles/:role/permissions @ DataController.updateRolePermissions",
       "permission",
-      ["system:role-permissions:save"],
+      [
+        "system:role-permissions:save"
+      ],
       "DataController.updateRolePermissions"
+    ],
+    [
+      "PUT /system/roles/:role/permissions/copy @ DataController.copyRolePermissions",
+      "permission",
+      [
+        "system:role-permissions:copy-role"
+      ],
+      "DataController.copyRolePermissions"
     ],
     [
       "PUT /system/sites/:id @ DataController.updateSystemSite",
       "permission",
-      ["system:sites:update"],
+      [
+        "system:sites:update"
+      ],
       "DataController.updateSystemSite"
     ],
     [
       "PUT /system/sites/:id/enabled @ DataController.updateSystemSiteEnabled",
       "permission",
-      ["system:sites:enable"],
+      [
+        "system:sites:enable"
+      ],
       "DataController.updateSystemSiteEnabled"
     ],
     [
       "PUT /system/staff-accounts/:id @ DataController.updateSystemStaffAccount",
       "permission",
-      ["system:accounts:update-profile"],
+      [
+        "system:accounts:update-profile"
+      ],
       "DataController.updateSystemStaffAccount"
     ],
     [
       "PUT /system/staff-accounts/:id/enabled @ DataController.updateSystemStaffAccountEnabled",
       "permission",
-      ["system:accounts:enable"],
+      [
+        "system:accounts:enable"
+      ],
       "DataController.updateSystemStaffAccountEnabled"
     ],
     [
       "PUT /system/staff-accounts/:id/site @ DataController.updateSystemStaffAccountSite",
       "permission",
-      ["system:accounts:update-site"],
+      [
+        "system:accounts:update-site"
+      ],
       "DataController.updateSystemStaffAccountSite"
     ],
     [
       "PUT /warehouse/packages/:id/remark @ DataController.updateWarehousePackageRemark",
       "permission",
-      ["warehouse:in-stock:update"],
+      [
+        "warehouse:in-stock:update"
+      ],
       "DataController.updateWarehousePackageRemark"
     ],
     [
       "PUT /warehouse/rent-rules/:id @ DataController.updateWarehouseRentRule",
       "permission",
-      ["warehouse:rent-rule:manage"],
+      [
+        "warehouse:rent-rule:manage"
+      ],
       "DataController.updateWarehouseRentRule"
     ],
     [
       "PUT /warehouse/rent-rules/:id/enabled @ DataController.updateWarehouseRentRuleEnabled",
       "permission",
-      ["warehouse:rent-rule:manage"],
+      [
+        "warehouse:rent-rule:manage"
+      ],
       "DataController.updateWarehouseRentRuleEnabled"
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 257,
-    "apiClientMethodsMax": 332,
-    "apiClientDirectRequestsMax": 320,
-    "sharedRootImportFilesMax": 108,
-    "asAnyMax": 787,
+    "dataControllerRoutesMax": 267,
+    "apiClientMethodsMax": 347,
+    "apiClientDirectRequestsMax": 334,
+    "sharedRootImportFilesMax": 116,
+    "asAnyMax": 865,
     "directProcessEnvMax": 33,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
@@ -2448,28 +3226,41 @@
     "knownExactDuplicateGroups": [
       "apps/api/src/modules/notifications/notification.types.ts = apps/web/src/modules/notifications/notificationTypes.ts"
     ],
-    "knownDuplicateRouteGroups": [
-      "GET /pricing/books/import-jobs/:id: DataController.priceBookImportJob|permission|pricing:price-books:import-job-view = PriceBookQueryController.priceBookImportJob|permission|pricing:price-books:import-job-view",
-      "GET /pricing/books: DataController.priceBooks|permission|pricing:price-books:list-view = PriceBookQueryController.priceBooks|permission|pricing:price-books:list-view",
-      "GET /warehouse/tally-task-history-chain: DataController.warehouseTallyTaskHistoryChain|permission|warehouse:in-stock:tally-record-view = WarehouseTallyQueryController.warehouseTallyTaskHistoryChain|permission|warehouse:tally-completed:view"
-    ],
-    "prismaRepositoryMethodsMax": 631,
-    "inMemoryRepositoryMethodsMax": 524
+    "knownDuplicateRouteGroups": [],
+    "prismaRepositoryMethodsMax": 660,
+    "inMemoryRepositoryMethodsMax": 550,
+    "hotspotLinesMax": {
+      "apps/api/src/modules/prisma.repository.ts": 29429,
+      "apps/api/src/modules/in-memory.repository.ts": 17674,
+      "apps/api/src/modules/data.controller.ts": 2878,
+      "packages/shared/src/index.ts": 6455,
+      "apps/web/src/apiClient.ts": 2448,
+      "apps/web/src/styles.css": 12291,
+      "apps/web/src/modules/testSupport/appTestHarness.tsx": 6439,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4584,
+      "apps/web/src/modules/pricing/PricingPage.tsx": 3628,
+      "apps/web/src/modules/masterData/MasterDataPage.tsx": 3222
+    }
   },
   "lint": {
     "api": {
-      "errors": 76,
+      "errors": 89,
       "warnings": 0,
       "rules": {
-        "error:@typescript-eslint/no-unused-vars": 33,
-        "error:no-control-regex": 2,
+        "error:@typescript-eslint/no-unused-vars": 42,
+        "error:no-control-regex": 3,
         "error:no-extra-boolean-cast": 2,
         "error:no-undef": 36,
-        "error:no-unreachable": 3
+        "error:no-unreachable": 3,
+        "error:no-useless-escape": 3
       },
       "files": {
-        "scripts/import-legacy-pricing.ts": { "error:no-undef": 2 },
-        "src/modules/app.lineage.e2e.test.ts": { "error:no-undef": 3 },
+        "scripts/import-legacy-pricing.ts": {
+          "error:no-undef": 2
+        },
+        "src/modules/app.lineage.e2e.test.ts": {
+          "error:no-undef": 3
+        },
         "src/modules/app.orders.e2e.test.ts": {
           "error:@typescript-eslint/no-unused-vars": 2,
           "error:no-undef": 1
@@ -2485,11 +3276,13 @@
           "error:@typescript-eslint/no-unused-vars": 6
         },
         "src/modules/in-memory.repository.ts": {
-          "error:@typescript-eslint/no-unused-vars": 9,
+          "error:@typescript-eslint/no-unused-vars": 12,
           "error:no-control-regex": 1,
           "error:no-undef": 3
         },
-        "src/modules/lineage-event-coverage.test.ts": { "error:no-undef": 1 },
+        "src/modules/lineage-event-coverage.test.ts": {
+          "error:no-undef": 1
+        },
         "src/modules/notifications/notification-domain.ts": {
           "error:no-undef": 1
         },
@@ -2504,35 +3297,50 @@
           "error:no-extra-boolean-cast": 2
         },
         "src/modules/prisma.repository.ts": {
-          "error:@typescript-eslint/no-unused-vars": 12,
+          "error:@typescript-eslint/no-unused-vars": 17,
           "error:no-control-regex": 1,
           "error:no-undef": 9,
           "error:no-unreachable": 3
+        },
+        "src/modules/warehouse-machine-import.ts": {
+          "error:no-control-regex": 1,
+          "error:no-useless-escape": 3
+        },
+        "src/modules/warehouse/inventory/warehouse-inventory-query.repository.ts": {
+          "error:@typescript-eslint/no-unused-vars": 1
         }
       }
     },
     "web": {
-      "errors": 115,
+      "errors": 130,
       "warnings": 0,
       "rules": {
-        "error:@typescript-eslint/no-unused-vars": 25,
+        "error:@typescript-eslint/no-unused-vars": 27,
         "error:no-control-regex": 2,
-        "error:no-undef": 81,
+        "error:no-undef": 94,
         "error:react-hooks/exhaustive-deps": 7
       },
       "files": {
         "scripts/apply-antd-typography-stability-patch.mjs": {
           "error:no-undef": 2
         },
-        "src/App.tsx": { "error:no-undef": 1 },
+        "src/App.tsx": {
+          "error:@typescript-eslint/no-unused-vars": 2,
+          "error:no-undef": 1
+        },
         "src/apiClient.ts": {
           "error:@typescript-eslint/no-unused-vars": 2,
-          "error:no-undef": 20
+          "error:no-undef": 22
+        },
+        "src/appUpdate.tsx": {
+          "error:no-undef": 8
         },
         "src/modules/appShell/AppPageBoundary.test.tsx": {
           "error:no-undef": 1
         },
-        "src/modules/appShell/AppPageBoundary.tsx": { "error:no-undef": 1 },
+        "src/modules/appShell/AppPageBoundary.tsx": {
+          "error:no-undef": 1
+        },
         "src/modules/appShell/config.tsx": {
           "error:@typescript-eslint/no-unused-vars": 1
         },
@@ -2542,15 +3350,21 @@
         "src/modules/customerService/customerService.test.tsx": {
           "error:no-undef": 2
         },
-        "src/modules/finance/FinancePage.tsx": { "error:no-undef": 1 },
+        "src/modules/finance/FinancePage.tsx": {
+          "error:no-undef": 1
+        },
         "src/modules/finance/agentBill/AgentBillPage.tsx": {
           "error:react-hooks/exhaustive-deps": 1
         },
         "src/modules/finance/businessCostAudit/BusinessCostAuditPage.tsx": {
           "error:react-hooks/exhaustive-deps": 1
         },
-        "src/modules/finance/exportCsv.ts": { "error:no-undef": 1 },
-        "src/modules/finance/finance.test.tsx": { "error:no-undef": 1 },
+        "src/modules/finance/exportCsv.ts": {
+          "error:no-undef": 1
+        },
+        "src/modules/finance/finance.test.tsx": {
+          "error:no-undef": 1
+        },
         "src/modules/finance/payableAudit/PayableAuditPage.tsx": {
           "error:react-hooks/exhaustive-deps": 1
         },
@@ -2561,8 +3375,15 @@
           "error:@typescript-eslint/no-unused-vars": 2,
           "error:react-hooks/exhaustive-deps": 1
         },
-        "src/modules/masterData/MasterDataPage.tsx": { "error:no-undef": 1 },
-        "src/modules/masterData/masterData.test.tsx": { "error:no-undef": 1 },
+        "src/modules/finance/waterReceipt/WaterReceiptPage.tsx": {
+          "error:no-undef": 2
+        },
+        "src/modules/masterData/MasterDataPage.tsx": {
+          "error:no-undef": 1
+        },
+        "src/modules/masterData/masterData.test.tsx": {
+          "error:no-undef": 1
+        },
         "src/modules/miscFees/MiscFeesPage.tsx": {
           "error:@typescript-eslint/no-unused-vars": 2
         },
@@ -2583,11 +3404,15 @@
         "src/modules/pricing/excel.ts": {
           "error:@typescript-eslint/no-unused-vars": 1
         },
-        "src/modules/pricing/pricing.test.tsx": { "error:no-undef": 1 },
+        "src/modules/pricing/pricing.test.tsx": {
+          "error:no-undef": 1
+        },
         "src/modules/problemTickets/ProblemTicketsPage.tsx": {
           "error:@typescript-eslint/no-unused-vars": 2
         },
-        "src/modules/reports/reports.test.tsx": { "error:no-undef": 1 },
+        "src/modules/reports/reports.test.tsx": {
+          "error:no-undef": 1
+        },
         "src/modules/routing/RoutingPage.tsx": {
           "error:@typescript-eslint/no-unused-vars": 1
         },
@@ -2595,9 +3420,15 @@
           "error:@typescript-eslint/no-unused-vars": 3,
           "error:no-undef": 1
         },
-        "src/modules/settings/settings.test.tsx": { "error:no-undef": 2 },
-        "src/modules/shared/excel.ts": { "error:no-undef": 1 },
-        "src/modules/shared/ui-table.test.tsx": { "error:no-undef": 1 },
+        "src/modules/settings/settings.test.tsx": {
+          "error:no-undef": 2
+        },
+        "src/modules/shared/excel.ts": {
+          "error:no-undef": 1
+        },
+        "src/modules/shared/ui-table.test.tsx": {
+          "error:no-undef": 1
+        },
         "src/modules/shared/ui.tsx": {
           "error:@typescript-eslint/no-unused-vars": 3,
           "error:no-control-regex": 1,
@@ -2611,7 +3442,9 @@
         "src/modules/tracking/TrackingPage.tsx": {
           "error:@typescript-eslint/no-unused-vars": 1
         },
-        "src/modules/warehouse/WarehousePage.tsx": { "error:no-undef": 1 },
+        "src/modules/warehouse/WarehousePage.tsx": {
+          "error:no-undef": 1
+        },
         "src/modules/warehouse/WarehouseRentDetailPanel.tsx": {
           "error:no-undef": 1,
           "error:react-hooks/exhaustive-deps": 1
@@ -2622,8 +3455,15 @@
         "src/modules/warehouse/warehouse-tally-print.ts": {
           "error:no-undef": 1
         },
-        "src/modules/warehouse/warehouse.test.tsx": { "error:no-undef": 6 },
-        "src/modules/workspace/workspace.test.tsx": { "error:no-undef": 3 }
+        "src/modules/warehouse/warehouse.test.tsx": {
+          "error:no-undef": 6
+        },
+        "src/modules/workspace/workspace.test.tsx": {
+          "error:no-undef": 3
+        },
+        "vite.config.ts": {
+          "error:no-undef": 1
+        }
       }
     }
   }

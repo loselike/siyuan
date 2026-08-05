@@ -14,6 +14,19 @@ const skipLint = process.argv.includes('--skip-lint');
 const compact = process.argv.includes('--compact');
 const selfTest = process.argv.includes('--self-test');
 
+const hotspotFiles = [
+  'apps/api/src/modules/prisma.repository.ts',
+  'apps/api/src/modules/in-memory.repository.ts',
+  'apps/api/src/modules/data.controller.ts',
+  'packages/shared/src/index.ts',
+  'apps/web/src/apiClient.ts',
+  'apps/web/src/styles.css',
+  'apps/web/src/modules/testSupport/appTestHarness.tsx',
+  'apps/web/src/modules/warehouse/WarehousePage.tsx',
+  'apps/web/src/modules/pricing/PricingPage.tsx',
+  'apps/web/src/modules/masterData/MasterDataPage.tsx'
+];
+
 const publicRoutePolicies = {
   'GET /auth/captcha': 'public-captcha',
   'POST /auth/login': 'public-login',
@@ -146,7 +159,11 @@ function currentBaseline({ includeLint }) {
       knownExactDuplicateGroups: exactDuplicateGroups,
       knownDuplicateRouteGroups: duplicateRouteGroups(snapshot.routes),
       prismaRepositoryMethodsMax: snapshot.parity.prisma.length,
-      inMemoryRepositoryMethodsMax: snapshot.parity.memory.length
+      inMemoryRepositoryMethodsMax: snapshot.parity.memory.length,
+      hotspotLinesMax: Object.fromEntries(hotspotFiles.map((file) => {
+        const source = readFileSync(path.join(repositoryRoot, file), 'utf8');
+        return [file, source.match(/\n/g)?.length ?? 0];
+      }))
     }
   };
   if (includeLint) {
@@ -209,6 +226,18 @@ function compareDebt(expected, actual, failures) {
   const knownDuplicateRoutes = new Set(expected.knownDuplicateRouteGroups);
   for (const group of actual.knownDuplicateRouteGroups) {
     if (!knownDuplicateRoutes.has(group)) failures.push(`new duplicate HTTP route group: ${group}`);
+  }
+  const expectedHotspots = expected.hotspotLinesMax ?? {};
+  const actualHotspots = actual.hotspotLinesMax ?? {};
+  for (const file of Object.keys(expectedHotspots)) {
+    if (!(file in actualHotspots)) failures.push(`recorded hotspot is no longer governed: ${file}`);
+  }
+  for (const [file, lines] of Object.entries(actualHotspots)) {
+    if (!(file in expectedHotspots)) {
+      failures.push(`new hotspot requires an explicit line budget: ${file}`);
+      continue;
+    }
+    assertMaximum(`hotspot lines ${file}`, lines, expectedHotspots[file], failures);
   }
 }
 
@@ -329,6 +358,17 @@ function assertGovernanceSchema(value, { includeLint }) {
   for (const key of ['knownOrphanCandidates', 'knownExactDuplicateGroups', 'knownDuplicateRouteGroups']) {
     if (!Array.isArray(value.debt[key]) || value.debt[key].some((item) => typeof item !== 'string')) throw new Error(`debt.${key} must be a string array`);
   }
+  if (!value.debt.hotspotLinesMax || typeof value.debt.hotspotLinesMax !== 'object' || Array.isArray(value.debt.hotspotLinesMax)) {
+    throw new Error('debt.hotspotLinesMax must be an object');
+  }
+  for (const file of hotspotFiles) {
+    if (!Number.isInteger(value.debt.hotspotLinesMax[file]) || value.debt.hotspotLinesMax[file] < 0) {
+      throw new Error(`debt.hotspotLinesMax.${file} must be a finite nonnegative integer`);
+    }
+  }
+  for (const file of Object.keys(value.debt.hotspotLinesMax)) {
+    if (!hotspotFiles.includes(file)) throw new Error(`debt.hotspotLinesMax contains an unrecognized hotspot: ${file}`);
+  }
   if (!includeLint) return;
   if (!value.lint || typeof value.lint !== 'object') throw new Error('lint baseline must be an object');
   for (const workspace of ['api', 'web']) {
@@ -373,7 +413,8 @@ function runSelfTest() {
       knownExactDuplicateGroups: [],
       knownDuplicateRouteGroups: [],
       prismaRepositoryMethodsMax: 1,
-      inMemoryRepositoryMethodsMax: 1
+      inMemoryRepositoryMethodsMax: 1,
+      hotspotLinesMax: Object.fromEntries(hotspotFiles.map((file) => [file, 1]))
     },
     {
       dataControllerRoutesMax: 2,
@@ -387,7 +428,8 @@ function runSelfTest() {
       knownExactDuplicateGroups: ['a.ts = b.ts'],
       knownDuplicateRouteGroups: ['GET /duplicate: A.get|auth| = B.get|auth|'],
       prismaRepositoryMethodsMax: 1,
-      inMemoryRepositoryMethodsMax: 1
+      inMemoryRepositoryMethodsMax: 1,
+      hotspotLinesMax: Object.fromEntries(hotspotFiles.map((file, index) => [file, index === 0 ? 2 : 1]))
     },
     failures
   );
@@ -407,6 +449,7 @@ function runSelfTest() {
     'new orphan candidate',
     'new exact duplicate source group',
     'new duplicate HTTP route group',
+    'hotspot lines apps/api/src/modules/prisma.repository.ts increased',
     'api lint debt increased',
     'web lint debt increased'
   ];
