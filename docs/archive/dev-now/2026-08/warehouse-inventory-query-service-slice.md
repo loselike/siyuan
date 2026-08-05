@@ -1,6 +1,6 @@
 # Sunny｜仓库查询垂直切片｜01
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - 会话 slug：`warehouse-inventory-query-service-slice`
 - 分支：`codex/warehouse-query-service-slice`
 - worktree：`/private/tmp/sunny-warehouse-query-service-slice`
@@ -31,4 +31,11 @@
 
 ## 发布
 
-- 待按 API 白名单精确发布47；无 Prisma schema/migration、Web 或生产数据写入。
+- 已按 API 白名单精确发布47，仅同步4个运行时文件并构建、重启 API：
+  - `apps/api/src/modules/app.module.ts`
+  - `apps/api/src/modules/data.controller.ts`
+  - `apps/api/src/modules/warehouse/inventory/warehouse-inventory-query.controller.ts`
+  - `apps/api/src/modules/warehouse/inventory/warehouse-inventory-query.service.ts`
+- 47 发布标识：`whitelist-bc9b25c14e8b8a9eae183173`，发布时间 `2026-08-05T23:35:48+08:00`。
+- 线上4个源码 checksum 与本地候选一致；API 容器内和公网 health 均返回200，未登录库存查询返回401，最近10分钟无启动/依赖注入异常。
+- 无 Prisma schema/migration、Web 或生产数据写入。
