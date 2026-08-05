@@ -83,6 +83,7 @@ import {
   WAREHOUSE_TALLY_QUERY_REPOSITORY
 } from './warehouse/tally/warehouse-tally-query.repository.js';
 import { WarehouseTallyQueryController } from './warehouse/tally/warehouse-tally-query.controller.js';
+import { WarehouseTallyQueryService } from './warehouse/tally/warehouse-tally-query.service.js';
 
 const usePrismaRepository =
   process.env.USE_PRISMA_REPOSITORY === 'false'
@@ -182,6 +183,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     PayerBankAccountService,
     FinanceReceivableService,
     WarehouseInventoryQueryService,
+    WarehouseTallyQueryService,
     notificationServiceProvider,
     ...(usePrismaRepository ? [NotificationAuditWorker] : []),
     MiscFeeService,
