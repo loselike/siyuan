@@ -381,6 +381,7 @@ import {
   warehousePackageSplitTotals
 } from './warehouse/warehouse-domain.shared.js';
 import { resolveWarehouseTallyRecentCutoff } from './warehouse/warehouse-query.shared.js';
+import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
 import {
   allPermissions,
   buildRolePermissionRow,
@@ -5359,10 +5360,6 @@ export class InMemoryRepository {
       ...pkg,
       customerMaintained: Boolean(this.findCustomerByCode(pkg.customerCode))
     }));
-    const grouped = new Map<string, WarehousePackageSummary[]>();
-    confirmedRows.forEach((row) => {
-      grouped.set(row.combinedOrderNo, [...(grouped.get(row.combinedOrderNo) ?? []), row]);
-    });
     const waitingDispatchTickets = this.shipments.filter((shipment) =>
       shipment.status === 'WAITING_DISPATCH' && (!ownedCustomerIds || ownedCustomerIds.has(shipment.customerId))
     ).length;
@@ -5370,15 +5367,11 @@ export class InMemoryRepository {
       ? confirmedRows.map(({ site: _site, ...row }) => row)
       : confirmedRows;
     const response = {
-      totals: {
-        receiptTickets: grouped.size,
-        totalPackages: confirmedRows.reduce((sum, row) => sum + row.packageCount, 0),
-        totalWeightKg: roundMoney(confirmedRows.reduce((sum, row) => sum + row.weightKg * row.packageCount, 0)),
-        totalCbm: roundMoney(confirmedRows.reduce((sum, row) => sum + row.cbm, 0)),
+      totals: summarizeWarehouseInStockTotals(
+        confirmedRows,
         waitingDispatchTickets,
-        pendingTallyTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.status === 'RECEIVED')).length,
-        exceptionTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.manualException || item.exceptions.length)).length
-      },
+        (row) => row.combinedOrderNo ?? ''
+      ),
       rows: visibleRows.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }))
     };
     this.audit('warehouse.today_receipts.view', 'warehouse:today-receipts', principal, null, { query, rowCount: response.rows.length });

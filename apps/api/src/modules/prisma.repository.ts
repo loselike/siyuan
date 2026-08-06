@@ -443,6 +443,7 @@ import {
   mapWarehouseTallyTask,
   resolveWarehouseTallyRecentCutoff
 } from './warehouse/warehouse-query.shared.js';
+import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
 import {
   allPermissions,
   buildRolePermissionRow,
@@ -7738,11 +7739,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const visibleRows = businessCustomerScoped
       ? scopedSummaries.map(({ site: _site, ...row }) => row)
       : scopedSummaries;
-    const grouped = new Map<string, WarehousePackageSummary[]>();
-    scopedSummaries.forEach((row) => {
-      const key = row.combinedOrderNo || `${row.customerOrderNo}-${row.domesticTrackingNo}`;
-      grouped.set(key, [...(grouped.get(key) ?? []), row]);
-    });
     const waitingDispatchTickets = await this.prisma.shipment.count({
       where: {
         status: 'WAITING_DISPATCH',
@@ -7750,15 +7746,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
     });
     const response = {
-      totals: {
-        receiptTickets: grouped.size,
-        totalPackages: scopedSummaries.reduce((sum, row) => sum + row.packageCount, 0),
-        totalWeightKg: roundMoney(scopedSummaries.reduce((sum, row) => sum + row.weightKg * row.packageCount, 0)),
-        totalCbm: roundMoney(scopedSummaries.reduce((sum, row) => sum + row.cbm, 0)),
-        waitingDispatchTickets,
-        pendingTallyTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.status === 'RECEIVED')).length,
-        exceptionTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.manualException || item.exceptions.length)).length
-      },
+      totals: summarizeWarehouseInStockTotals(scopedSummaries, waitingDispatchTickets),
       rows: visibleRows
     };
     await this.prisma.auditLog.create({
@@ -7812,11 +7800,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const scopedRows = currentlyOwnedCustomerCodes
       ? rows.filter((row: any) => currentlyOwnedCustomerCodes.has(row.customerCode))
       : rows;
-    const grouped = new Map<string, any[]>();
-    scopedRows.forEach((row: any) => {
-      const key = row.combinedOrderNo || `${row.customerOrderNo}-${row.domesticTrackingNo}`;
-      grouped.set(key, [...(grouped.get(key) ?? []), row]);
-    });
     const waitingDispatchTickets = await this.prisma.shipment.count({
       where: {
         status: 'WAITING_DISPATCH',
@@ -7824,15 +7807,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
     });
     const response = {
-      totals: {
-        receiptTickets: grouped.size,
-        totalPackages: scopedRows.reduce((sum: number, row: any) => sum + Number(row.packageCount ?? 0), 0),
-        totalWeightKg: roundMoney(scopedRows.reduce((sum: number, row: any) => sum + Number(row.weightKg ?? 0) * Number(row.packageCount ?? 0), 0)),
-        totalCbm: roundMoney(scopedRows.reduce((sum: number, row: any) => sum + Number(row.cbm ?? 0), 0)),
-        waitingDispatchTickets,
-        pendingTallyTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.status === 'RECEIVED')).length,
-        exceptionTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.manualException || (Array.isArray(item.exceptions) && item.exceptions.length))).length
-      }
+      totals: summarizeWarehouseInStockTotals(scopedRows, waitingDispatchTickets)
     };
     await this.prisma.auditLog.create({
       data: {
