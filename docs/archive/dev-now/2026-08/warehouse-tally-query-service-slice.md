@@ -1,6 +1,6 @@
 # Sunny｜理货查询垂直切片｜02
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - 会话 slug：`warehouse-tally-query-service-slice`
 - 分支：`codex/warehouse-tally-query-service-slice`
 - worktree：`/private/tmp/sunny-warehouse-tally-query-service-slice`
@@ -37,4 +37,11 @@
 
 ## 发布
 
-- 待按 API 白名单精确发布47；无 Prisma schema/migration、Web、权限或生产数据写入。
+- 已按 API 白名单精确发布47，仅同步并构建、重启以下3个运行时文件：
+  - `apps/api/src/modules/app.module.ts`
+  - `apps/api/src/modules/warehouse/tally/warehouse-tally-query.controller.ts`
+  - `apps/api/src/modules/warehouse/tally/warehouse-tally-query.service.ts`
+- 47 发布标识：`whitelist-ebeaf861f900e2f1c6525bfc`，发布时间 `2026-08-06T07:56:55+08:00`。
+- 线上3个源码 checksum 与本地候选一致；API 容器内和公网 health 均返回200。
+- 启用管理员短期JWT对不存在客户的已完成理货查询返回 `200 []`；未登录同端点返回401，证明真实 Controller -> Service -> Repository 与鉴权链路可用。
+- 无 Prisma schema/migration、Web、权限或生产数据写入。
