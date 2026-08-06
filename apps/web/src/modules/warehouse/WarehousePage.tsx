@@ -31,12 +31,12 @@ import {
   validateWarehouseSplitPieces,
   type WarehouseSplitPiece
 } from './warehouseSplitDraft';
-import { areAllTallyMergeSourcesSelected, toggleAllTallyMergeSources } from './tallyMergeSelection';
 import { composeWarehouseDeviceRemark, splitWarehouseDeviceRemark } from './warehouseDeviceRemark';
 import { resolveWarehouseMeasurementStatusPresentation } from './warehouseMeasurementStatus';
 import { WarehouseRentDetailPanel } from './WarehouseRentDetailPanel';
 import { WarehouseMachineImportModal } from './WarehouseMachineImportModal';
 import { WarehouseCreateTallyModal } from './WarehouseCreateTallyModal';
+import { WarehouseCompleteTallyModal, type WarehouseTallySourceItem } from './WarehouseCompleteTallyModal';
 import { downloadWarehouseMachineExport, isWarehouseMachineExportReady, resolveWarehouseMachineExportRecords } from './warehouseMachineExport';
 import {
   calculateCartonSpecTotals,
@@ -3039,8 +3039,13 @@ export function WarehousePage({
   }
 
   const pendingRoutingColumns = createPendingRoutingColumns({ businessCostAudits, mode: 'warehouse' });
-  const tallyTaskSourceIds = completingTallyTask?.packageIds ?? [];
-  const allTallyMergeSourcesSelected = areAllTallyMergeSourcesSelected(tallyTaskSourceIds, tallyProcessSourceIds);
+  const tallySourceItems: WarehouseTallySourceItem[] = (completingTallyTask?.packageIds ?? []).map((packageId) => {
+    const pkg = [...inStockRows, ...warehousePackages, ...todayReceiptRows].find((item) => item.id === packageId);
+    return {
+      id: packageId,
+      label: pkg ? `${formatWarehousePackageNo(pkg)} / ${pkg.packageCount} 件 / ${pkg.weightKg.toFixed(2)} kg` : packageId
+    };
+  });
 
   return (
     <AppPage>
@@ -4422,97 +4427,30 @@ export function WarehousePage({
         }}
         onConfirm={() => void createWarehouseTallyTask()}
       />
-      <Modal
-        title="处理理货"
+      <WarehouseCompleteTallyModal
         open={Boolean(completingTallyTask)}
+        taskNo={completingTallyTask?.taskNo}
+        sourceItems={tallySourceItems}
+        error={tallyCompleteError}
+        submitting={tallyCompleteSubmitting}
+        mode={tallyProcessMode}
+        selectedSourceIds={tallyProcessSourceIds}
+        splitPieces={tallySplitPieces}
+        draft={tallyCompleteDraft}
         onCancel={() => {
           if (tallyCompleteSubmittingRef.current) return;
           setCompletingTallyTask(null);
           setTallyCompleteError(null);
         }}
-        onOk={() => void completeWarehouseTallyTask()}
-        okText="确认完成"
-        cancelText="取消"
-        confirmLoading={tallyCompleteSubmitting}
-        cancelButtonProps={{ disabled: tallyCompleteSubmitting }}
-        closable={!tallyCompleteSubmitting}
-        maskClosable={!tallyCompleteSubmitting}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            type="info"
-            showIcon
-            message={completingTallyTask ? `任务 ${completingTallyTask.taskNo}：理货后每个实体件单独生成一条在仓记录，件重尺将在逐件重新过机或人工录入后覆盖` : '请选择理货任务'}
-          />
-          {tallyCompleteError ? <Alert type="error" showIcon message="理货未完成" description={tallyCompleteError} /> : null}
-          <Segmented
-            block
-            value={tallyProcessMode}
-            options={[
-              { label: '保留原包裹', value: 'KEEP' },
-              { label: '合并选中包裹', value: 'MERGE' },
-              { label: '拆分单个包裹', value: 'SPLIT' }
-            ]}
-            onChange={(value) => {
-              setTallyProcessMode(value as 'KEEP' | 'MERGE' | 'SPLIT');
-              setTallyProcessSourceIds([]);
-            }}
-          />
-          {completingTallyTask ? (
-            <div>
-              <Flex align="center" justify="space-between" gap={12}>
-                <Text strong>{tallyProcessMode === 'MERGE' ? '选择要合并的原始包裹' : tallyProcessMode === 'SPLIT' ? '选择要拆分的原始包裹' : '原始包裹'}</Text>
-                {tallyProcessMode === 'MERGE' ? (
-                  <Button
-                    size="small"
-                    aria-label={allTallyMergeSourcesSelected ? '取消全选原始包裹' : '全选原始包裹'}
-                    onClick={() => setTallyProcessSourceIds(toggleAllTallyMergeSources(tallyTaskSourceIds, tallyProcessSourceIds))}
-                  >
-                    {allTallyMergeSourcesSelected ? '取消全选' : '全选'}
-                  </Button>
-                ) : null}
-              </Flex>
-              <Checkbox.Group
-                value={tallyProcessMode === 'KEEP' ? completingTallyTask.packageIds : tallyProcessSourceIds}
-                onChange={(values) => setTallyProcessSourceIds(
-                  (tallyProcessMode === 'SPLIT' ? values.slice(-1) : values).map(String)
-                )}
-              >
-                <Space direction="vertical" size={4} style={{ marginTop: 8 }}>
-                  {completingTallyTask.packageIds.map((packageId) => {
-                    const pkg = [...inStockRows, ...warehousePackages, ...todayReceiptRows].find((item) => item.id === packageId);
-                    return <Checkbox key={packageId} value={packageId} disabled={tallyProcessMode === 'KEEP'}>{pkg ? `${formatWarehousePackageNo(pkg)} / ${pkg.packageCount} 件 / ${pkg.weightKg.toFixed(2)} kg` : packageId}</Checkbox>;
-                  })}
-                </Space>
-              </Checkbox.Group>
-            </div>
-          ) : null}
-          {tallyProcessMode === 'SPLIT' ? (
-            <div>
-              <Text strong>拆分件数组合</Text>
-              <Input
-                aria-label="任务内拆分件数组合"
-                placeholder="例如 50,25；合计必须等于原包裹件数"
-                value={tallySplitPieces}
-                onChange={(event) => setTallySplitPieces(event.target.value)}
-              />
-            </div>
-          ) : null}
-          {tallyProcessMode === 'MERGE' ? (
-          <Row gutter={[10, 10]}>
-            <Col span={12}>
-              {renderFilterField('理货后件数', (
-                <InputNumber min={1} value={tallyCompleteDraft.packageCount} onChange={(value) => setTallyCompleteDraft((current) => ({ ...current, packageCount: Number(value ?? 1) }))} />
-              ))}
-            </Col>
-          </Row>
-          ) : null}
-          <div>
-            <Text strong>备注</Text>
-            <Input.TextArea rows={3} value={tallyCompleteDraft.remark} onChange={(event) => setTallyCompleteDraft((current) => ({ ...current, remark: event.target.value }))} />
-          </div>
-        </Space>
-      </Modal>
+        onConfirm={() => void completeWarehouseTallyTask()}
+        onModeChange={(mode) => {
+          setTallyProcessMode(mode);
+          setTallyProcessSourceIds([]);
+        }}
+        onSourceIdsChange={setTallyProcessSourceIds}
+        onSplitPiecesChange={setTallySplitPieces}
+        onDraftChange={(patch) => setTallyCompleteDraft((current) => ({ ...current, ...patch }))}
+      />
       <Modal
         title="拆分入库箱"
         open={Boolean(splittingPackage)}
