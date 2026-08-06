@@ -1,6 +1,7 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AutoComplete, Button, Card, Col, Descriptions, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { Download, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 import type { PaidPaymentListQuery, PaidPaymentListResponse, PaidPaymentSummary, PayerBankAccountSummary, PaymentVoucherSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { downloadCsv } from '../exportCsv';
@@ -116,6 +117,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
   const [confirmReceiptFile, setConfirmReceiptFile] = useState<File>();
   const [selectedPaymentIds, setSelectedPaymentIds] = useState<Key[]>([]);
   const [payerBankAccounts, setPayerBankAccounts] = useState<PayerBankAccountSummary[]>([]);
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
 
   const canConfirm = hasPermission(permissions, 'finance:paid-payment:confirm');
   const canUpdate = hasPermission(permissions, 'finance:paid-payment:update');
@@ -452,36 +454,55 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
     <Space direction="vertical" size={12} className="finance-workspace">
       <Card
         title={`深圳思远国际货运代理有限公司${pageLabel}单`}
-        className="finance-filter-card"
-        extra={<Space><Button onClick={() => void load()}>刷新</Button>{canExport ? <Button onClick={() => void exportRows()}>导出</Button> : null}</Space>}
+        className="finance-filter-card finance-paid-filter-card"
+        extra={(
+          <Space size={8}>
+            <Button icon={<RefreshCw size={15} />} onClick={() => void load()}>刷新</Button>
+            {canExport ? <Button icon={<Download size={15} />} onClick={() => void exportRows()}>导出</Button> : null}
+          </Space>
+        )}
       >
         <Form
           form={queryForm}
+          className="finance-paid-filter-form"
           layout="vertical"
           initialValues={defaultQuery(viewMode)}
           onFinish={(values) => setQuery({ ...defaultQuery(viewMode), ...values, status: fixedStatus, page: 1 })}
         >
-          <Row gutter={12}>
-            <Col xs={24} md={6}><Form.Item name="agent" label={`${agentFieldLabels.detailedCompanyName}筛选`}><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="salesperson" label="业务员"><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="customerCode" label="客户编号"><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="systemOrderNo" label="出货单号"><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="feeName" label="应付费用"><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="currency" label="币种"><Select options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="amount" label="合计金额"><InputNumber min={0} style={{ width: '100%' }} /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="payeeName" label="收款方名称"><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="payerBank" label="付款方银行信息"><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="remark" label="备注"><Input allowClear /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="applicationDateFrom" label="申请付款日期起"><AppDatePicker /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="applicationDateTo" label="申请付款日期止"><AppDatePicker /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="paidDateFrom" label="付款日期起"><AppDatePicker /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item name="paidDateTo" label="付款日期止"><AppDatePicker /></Form.Item></Col>
+          <Row gutter={[10, 10]} className="finance-filter-bar finance-audit-filter-grid finance-paid-filter-primary">
+            <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={agentFieldLabels.detailedCompanyName}><Input allowClear placeholder="输入代理名称" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="salesperson" label="业务员"><Input allowClear placeholder="输入业务员" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="customerCode" label="客户编号"><Input allowClear placeholder="输入客户编号" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="systemOrderNo" label="出货单号"><Input allowClear placeholder="输入出货单号" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="payeeName" label="收款方名称"><Input allowClear placeholder="输入收款方名称" /></Form.Item></Col>
+            <Col xs={24} md={16} xl={4} className="finance-audit-filter-actions finance-paid-filter-actions">
+              <Space size={8} wrap>
+                <Button type="primary" htmlType="submit" icon={<Search size={15} />}>查询</Button>
+                <Button onClick={() => { queryForm.resetFields(); setQuery(defaultQuery(viewMode)); }}>重置</Button>
+                <Button
+                  icon={<SlidersHorizontal size={15} />}
+                  aria-expanded={advancedFiltersOpen}
+                  onClick={() => setAdvancedFiltersOpen((current) => !current)}
+                >
+                  {advancedFiltersOpen ? '收起筛选' : '更多筛选'}
+                </Button>
+              </Space>
+            </Col>
           </Row>
-          <Space>
-            <Button type="primary" htmlType="submit">查询</Button>
-            <Button onClick={() => { queryForm.resetFields(); setQuery(defaultQuery(viewMode)); }}>重置</Button>
-          </Space>
+          {advancedFiltersOpen ? (
+            <Row gutter={[10, 10]} className="finance-audit-filter-grid finance-audit-filter-advanced finance-paid-filter-advanced">
+              <Col xs={24} md={8} xl={4}><Form.Item name="feeName" label="应付费用"><Input allowClear placeholder="输入费用名称" /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="currency" label="币种"><Select placeholder="全部币种" options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="amount" label="合计金额"><InputNumber min={0} placeholder="输入金额" style={{ width: '100%' }} /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear placeholder="输入收款账号" /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="payerBank" label="付款方银行信息"><Input allowClear placeholder="输入付款银行" /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="remark" label="备注"><Input allowClear placeholder="输入备注关键词" /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="applicationDateFrom" label="申请付款日期起"><AppDatePicker /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="applicationDateTo" label="申请付款日期止"><AppDatePicker /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="paidDateFrom" label="付款日期起"><AppDatePicker /></Form.Item></Col>
+              <Col xs={24} md={8} xl={4}><Form.Item name="paidDateTo" label="付款日期止"><AppDatePicker /></Form.Item></Col>
+            </Row>
+          ) : null}
         </Form>
       </Card>
 
