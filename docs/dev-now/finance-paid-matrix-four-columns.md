@@ -29,6 +29,8 @@
 
 ## 发布状态
 
-- `local_complete_not_published`
-- 用户于 2026-08-06 明确要求停止本会话发布；47 目标文件 checksum 仍为发布前的 `0e1fca2432e42631ef4f16391fb4140a6d15c6e7ecd8577582177b934c5fb969`，本任务候选未写入 47。
-- 其他会话的发布不属于本任务，本会话不再占用或操作 47 发布队列。
+- `published`
+- 用户随后明确要求完成本次发布；已基于 47 当前目标文件 checksum `0e1fca2432e42631ef4f16391fb4140a6d15c6e7ecd8577582177b934c5fb969` 条件发布单个 Web 文件。
+- 发布 ID：`whitelist-18bddcecc1cf3bd00a6007b7`；线上目标文件 checksum：`6312de8ec2c7e36703d06a4a2fe78f879d896590240c7f089be9cfebee1fec71`。
+- 47 Web production build、容器镜像一致性、公网 Web/API 200、最近 Web 错误日志、发布锁与 recovery 状态均通过。
+- 页面视觉最终检查点：`/app/finance/paid-payments` 的矩阵视图中，除选择列外四个业务分组应等宽，操作按钮仍在“操作”组内。
