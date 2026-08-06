@@ -13,6 +13,7 @@ import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, type ManagedTab
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
+const PAID_PAYMENT_MATRIX_COLUMN_WIDTH = 280;
 
 type PaidPaymentPageProps = {
   apiClient: ApiClient;
@@ -399,7 +400,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
     {
       key: 'matrixPayment',
       title: '付款与代理',
-      width: 260,
+      width: PAID_PAYMENT_MATRIX_COLUMN_WIDTH,
       className: 'managed-matrix-group-primary',
       render: (_value, row) => (
         <ManagedMatrixCell
@@ -416,7 +417,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
     {
       key: 'matrixOrder',
       title: '运单与费用',
-      width: 300,
+      width: PAID_PAYMENT_MATRIX_COLUMN_WIDTH,
       render: (_value, row) => (
         <ManagedMatrixCell
           labelWidth={54}
@@ -433,7 +434,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
     {
       key: 'matrixEvidence',
       title: '凭证与银行',
-      width: 360,
+      width: PAID_PAYMENT_MATRIX_COLUMN_WIDTH,
       render: (_value, row) => (
         <ManagedMatrixCell
           labelWidth={66}
@@ -447,7 +448,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
         />
       )
     },
-    { ...columns[columns.length - 1], key: 'action', width: 190, fixed: 'right' }
+    { ...columns[columns.length - 1], key: 'action', width: PAID_PAYMENT_MATRIX_COLUMN_WIDTH, fixed: 'right' }
   ], [columns, renderShipmentOrderNoLink]);
 
   return (
