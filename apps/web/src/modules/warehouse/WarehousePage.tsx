@@ -36,6 +36,7 @@ import { composeWarehouseDeviceRemark, splitWarehouseDeviceRemark } from './ware
 import { resolveWarehouseMeasurementStatusPresentation } from './warehouseMeasurementStatus';
 import { WarehouseRentDetailPanel } from './WarehouseRentDetailPanel';
 import { WarehouseMachineImportModal } from './WarehouseMachineImportModal';
+import { WarehouseCreateTallyModal } from './WarehouseCreateTallyModal';
 import { downloadWarehouseMachineExport, isWarehouseMachineExportReady, resolveWarehouseMachineExportRecords } from './warehouseMachineExport';
 import {
   calculateCartonSpecTotals,
@@ -4410,31 +4411,17 @@ export function WarehousePage({
           </Space>
         ) : null}
       </Modal>
-      <Modal
-        title="发起理货"
+      <WarehouseCreateTallyModal
         open={Boolean(tallyTaskPackageIds.length)}
+        selectedCount={tallyTaskPackageIds.length}
+        requirement={tallyRequirementDraft}
+        onRequirementChange={setTallyRequirementDraft}
         onCancel={() => {
           setTallyTaskPackageIds([]);
           setTallyRequirementDraft('');
         }}
-        onOk={() => void createWarehouseTallyTask()}
-        okText="确认发起"
-        cancelText="取消"
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert type="info" showIcon message={`已选择 ${tallyTaskPackageIds.length} 个在仓包裹，提交后进入未完成理货。`} />
-          <div>
-            <Text strong>理货需求</Text>
-            <Input.TextArea
-              aria-label="理货需求"
-              rows={4}
-              placeholder="例如拆分 50/25，保留原箱唛头"
-              value={tallyRequirementDraft}
-              onChange={(event) => setTallyRequirementDraft(event.target.value)}
-            />
-          </div>
-        </Space>
-      </Modal>
+        onConfirm={() => void createWarehouseTallyTask()}
+      />
       <Modal
         title="处理理货"
         open={Boolean(completingTallyTask)}
