@@ -1,6 +1,6 @@
 # Shared warehouse contract slice
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - 分支：`codex/shared-warehouse-contract-slice`
 - worktree：`/private/tmp/sunny-shared-warehouse-contract-slice`
 
@@ -34,6 +34,15 @@
 - `npm run architecture:check:fast`：通过，414 条路由契约。
 - `git diff --check`：通过。
 
-## 待完成
+## 47 证据
 
-- 精确白名单发布 47 Shared，按影响范围重建 Web 与 API，并核对源码 checksum、容器、health 和错误日志。
+- 发布 ID：`whitelist-a5c442c999a1885f996b21d7`，时间：`2026-08-06T09:46:24+08:00`。
+- 线上源码 checksum 与本地候选一致：
+  - `packages/shared/src/index.ts`：`e57276374bbee67045921924dd6da657715d6b8af7510603ba5facf6aa68a9d5`
+  - `packages/shared/src/warehouse.ts`：`f63f0791c1713b42ac918342d2a80c45857369b3d33ead9f03a1cb70117d1cc0`
+- Web、API 生产构建成功并正常运行；内网页面/API health、公网页面/API health 均为 200。
+- Web/API 最近 10 分钟日志未发现 ERROR/FATAL/PANIC/EMERG；发布锁 free，恢复标记 clear。
+
+## 人工检查点
+
+- 本切片不改变界面；仓库管理相关页面只需确认正常加载，原理货生命周期标签与操作入口保持不变。
