@@ -1,6 +1,6 @@
 # Warehouse complete tally modal slice
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - 分支：`codex/warehouse-complete-tally-modal-slice`
 - worktree：`/private/tmp/sunny-warehouse-complete-tally-modal-slice`
 
@@ -34,6 +34,15 @@
 - `npm run architecture:check:fast`：通过，414 条路由契约。
 - `git diff --check`：通过。
 
-## 待完成
+## 47 证据
 
-- 精确白名单发布 47 Web 并核对源码 checksum、容器、health 和错误日志。
+- 发布 ID：`whitelist-6a76124d627a1fa28371711c`，时间：`2026-08-06T09:19:01+08:00`。
+- 线上源码 checksum 与本地候选一致：
+  - `WarehousePage.tsx`：`76f44484132a31b6e7cfcfa5b833ffa4e71645e8cd2fd9b238cc7a7cb9f8581f`
+  - `WarehouseCompleteTallyModal.tsx`：`2d9184eff925b7076ba703d3c028fda847ba8577c5229596757f1eff7e729a6c`
+- Web 生产构建成功，容器运行；内网首页、内网 API health、公网页面和公网 API health 均为 200。
+- 最近 10 分钟 Web 日志未发现 error/fatal/panic/emerg；发布锁 free，恢复标记 clear。
+
+## 人工检查点
+
+- 47 的仓库管理中打开未完成理货任务，进入“处理理货”，核对保留、合并、拆分三个模式的布局和交互与发布前一致。
