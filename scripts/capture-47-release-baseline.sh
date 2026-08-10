@@ -12,6 +12,18 @@ if [[ -n "$(git status --porcelain --untracked-files=all)" ]]; then
   exit 3
 fi
 
+branch="$(git branch --show-current)"
+base_commit="$(git rev-parse HEAD)"
+if [[ -z "$branch" || ! "$base_commit" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Release baseline capture requires an attached Git branch and a full source commit." >&2
+  exit 85
+fi
+remote_branch_commit="$(git ls-remote --heads origin "refs/heads/$branch" | awk 'NR == 1 {print $1}')"
+if [[ "$remote_branch_commit" != "$base_commit" ]]; then
+  echo "Release baseline capture requires HEAD to match the durable origin branch exactly." >&2
+  exit 86
+fi
+
 cleanup_release_lock() {
   local exit_code=$?
   trap - EXIT INT TERM
@@ -30,6 +42,8 @@ siyuan_47_acquire_release_lock
 trap cleanup_release_lock EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+bash "$SCRIPT_DIR/audit-47-runtime-provenance.sh" --require-traceable
 
 remote_release_id="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" \
   "sed -n 's/^RELEASE_ID=//p' '$SIYUAN_47_DIR/.siyuan-release-state' 2>/dev/null | tail -1")"
@@ -57,8 +71,6 @@ baseline_dir="$(git rev-parse --git-path siyuan-release-baselines)"
 mkdir -p "$baseline_dir"
 baseline_file="$baseline_dir/$remote_release_id"
 baseline_tmp="$baseline_file.tmp.$$"
-branch="$(git branch --show-current)"
-base_commit="$(git rev-parse HEAD)"
 cat > "$baseline_tmp" <<BASELINE
 REMOTE_RELEASE_ID=$remote_release_id
 WORKTREE_ROOT=$REPO_ROOT

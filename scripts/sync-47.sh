@@ -41,6 +41,8 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='.git/' \
   --exclude='.siyuan-release-lock/' \
   --exclude='.siyuan-release-recovery-required' \
+  --exclude='.release-whitelist.lock' \
+  --exclude='/9' \
   --exclude='.siyuan-release-state' \
   --exclude='node_modules/' \
   --exclude='dist/' \
@@ -49,6 +51,10 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='apps/api/uploads/' \
   --exclude='backups/' \
   --exclude='.release-backups/' \
+  --exclude='.release-manifests/' \
+  --exclude='.release-receipts/' \
+  --exclude='docs/release-manifests/' \
+  --exclude='config/' \
   --exclude='data/quotes.json' \
   --exclude='inquiry_data/prices.json' \
   --exclude='europe-express-data/' \

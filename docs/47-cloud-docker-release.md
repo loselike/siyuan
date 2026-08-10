@@ -5,7 +5,9 @@
 ## 发布原则
 
 - 47 是全局串行发布资源。Web、API、Shared、迁移和纯源码白名单共用同一把远端发布锁，不按服务拆锁；多个会话可以并行开发，但不得并行同步、构建、迁移、重启或写发布状态。
-- 标准发布开始前先用 `npm run release:47:baseline`：它要求发布协调 worktree 干净，并核对当前提交的 Web/API/Prisma manifest 与 47 实际树完全一致，随后生成绑定 worktree、分支和祖先 commit 的 receipt。完成候选合并与验证后执行 `npm run deploy:47 -- --expected-release-id <记录值>`；远端 ID、receipt 或祖先关系任一不一致都会阻断。
+- 标准发布只允许从完整 Git 源码构建。禁止把既有镜像作为基底覆盖编译后 JavaScript、从 source map 反向恢复源码、复用未由当前源码生成的 Shared `dist`/声明文件，或复用旧 Prisma Client 来绕过类型检查。此类产物只能作为故障取证，不能成为新基线。
+- 标准发布开始前先把候选分支推送到 `origin`，再用 `npm run release:47:baseline`：它要求发布协调 worktree 干净、HEAD 与同名远端分支精确一致，并核对当前提交的 Web/API/Prisma manifest 与 47 实际树完全一致，随后生成绑定 worktree、分支和祖先 commit 的 receipt。完成候选合并与验证后再次推送，并执行 `npm run deploy:47 -- --expected-release-id <记录值>`；远端 ID、receipt、远端分支 HEAD 或祖先关系任一不一致都会阻断。
+- baseline 捕获与标准 deploy 都会先执行 `audit:47:provenance -- --require-traceable`。当前这类 `legacy-untraceable` 线上状态不能进入标准同步；首次切换到统一 Git 基线必须走单独审查的 bootstrap cutover，不能用普通 deploy 参数绕过。
 - `npm run deploy:47 -- --lock-status` 只读查看当前锁、heartbeat 和 recovery-required 状态。锁目录异常残留时不得直接删除；先确认没有发布、构建或迁移进程，再由主推进会话处理。
 - 代码可以同步到 `/opt/siyuan`，但依赖安装、构建、Prisma 命令都必须在 Docker 镜像或 Compose 服务里执行。
 - 线上迁移只运行 `prisma migrate deploy`，通过 `db-migrate` 工具容器执行。
@@ -54,6 +56,8 @@ npm run deploy:47 -- --expected-release-id <上一步记录的值>
 
 同步脚本会排除 `node_modules`、构建产物、`.git`、`.release-backups`、`.codex-release-staging`、`tmp`、`scraped_docs`、`outputs`、`.env` 等目录、远端发布备份和敏感文件。标准发布只允许发布协调 worktree 在 captured baseline 匹配时用 `rsync --delete` 形成精确候选镜像，并在构建前核对远端实际 manifest；功能 worktree 与白名单流程不得使用全树删除。
 
+同步与 Docker context 同时排除 `.release-manifests`、`.release-receipts`、staging、临时目录和配置取证目录，避免删除审计证据或把历史候选带入构建缓存。发布后用 `npm run audit:47:provenance -- --require-traceable` 校验 Git commit、运行镜像 ID、API 容器实际 release ID 与不可变 receipt；缺一项即视为不可追溯。
+
 同步脚本还会排除旧亮崽报价源路径，例如 `data/quotes.json`、`inquiry_data/prices.json`、`europe-express-data/`、`europe-truck-data/` 和 `south-africa/*.json`。发布只同步代码和迁移，不携带旧报价数据副本。
 
 ## 一键智能发布
@@ -73,6 +77,10 @@ npm run deploy:47 -- --expected-release-id <任务开始时记录的值>
 任务因网络或流式响应中断后继续时，先重新读取当前 `AGENTS.md` 和任务状态，再恢复发布链路。旧会话中的“尚未发布”“等待浏览器截图”不构成阻断；本地安全门已通过的运行时代码必须实际尝试精确发布，并以发布命令或明确错误作为结果证据。
 
 一键 apply 只允许运行时代码工作树干净的已验证候选；只要 Web、API、Shared、Prisma、根运行时依赖或 Docker 配置存在未提交修改，脚本就输出 `DIRTY_RUNTIME_COUNT` 并拒绝 apply。当前这类多任务脏工作树必须继续使用“以 47 当前文件为基线生成白名单补丁”的精确发布流程，不能通过全仓同步或跳过守卫绕开。
+
+标准发布成功后写入只读 `.release-receipts/<release-id>.env`，记录 Git commit/branch、三类源码指纹和 Web/API 实际镜像 ID；实际发布时间保存在原子状态文件中，不参与 receipt 内容，保证“receipt 已写但 state 回包失败”时可安全重试。同一 release ID 的来源内容不同会直接阻断。白名单 CAS 仅用于紧急、边界明确的小范围恢复，状态必须标记 `SOURCE_MODE=WHITELIST_CAS`，不冒充 Git 可追溯标准发布；统一基线完成后，普通功能不得再以白名单替代干净 commit 发布。
+
+幂等 receipt 只解决“状态已成功写入但客户端未收到返回”等确认重试。若新镜像已运行而 state 尚未更新，下一次标准 deploy 会因旧 state 与实际 image 不一致而阻断；此时必须按 recovery-required 流程回滚镜像，或在核实 manifest、容器和 health 后由单独的恢复动作补全 state，禁止直接重跑掩盖部分成功。
 
 多任务脏工作树的白名单发布统一使用 checksum 条件更新，并在同一把锁内完成上传、构建和健康检查：
 

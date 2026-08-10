@@ -71,7 +71,7 @@ for (const [path, content, requiredText] of [
   if (!content.includes(requiredText)) failures.push(`${path} is missing acceptance rule: ${requiredText}`);
 }
 
-for (const requiredScript of ['context:check', 'context:archive', 'validation:select', 'release:47:baseline', 'deploy:47:whitelist', 'architecture:check']) {
+for (const requiredScript of ['context:check', 'context:archive', 'validation:select', 'release:47:baseline', 'release:47:manifest', 'audit:47:provenance', 'deploy:47:whitelist', 'architecture:check']) {
   if (!packageJson.scripts?.[requiredScript]) failures.push(`package.json is missing governance command: ${requiredScript}`);
 }
 if (!packageJson.scripts?.['governance:check']?.includes('npm run context:check')) {
@@ -140,14 +140,46 @@ if (!syncScript.includes('SIYUAN_47_EXPECTED_RELEASE_ID') || !syncScript.include
 if (!syncScript.includes("--exclude='.codex-release-staging/'") || !syncScript.includes("--exclude='tmp/'")) {
   failures.push('sync:47 must preserve release staging and temporary candidate directories');
 }
+if (!syncScript.includes("--exclude='.release-manifests/'") || !syncScript.includes("--exclude='.release-receipts/'")) {
+  failures.push('sync:47 must preserve immutable release manifests and receipts');
+}
+if (!syncScript.includes("--exclude='.release-whitelist.lock'")) {
+  failures.push('sync:47 must preserve the whitelist coordination marker');
+}
+if (!syncScript.includes("--exclude='docs/release-manifests/'") || !syncScript.includes("--exclude='config/'")) {
+  failures.push('sync:47 must preserve local/remote evidence and configuration namespaces');
+}
 if (!deployScript.includes('siyuan_47_acquire_release_lock') || deployScript.indexOf('siyuan_47_acquire_release_lock') > deployScript.indexOf('REMOTE_STATE=')) {
   failures.push('deploy:47 must acquire the global release lock before reading remote release state');
 }
 if (!deployScript.includes('REMOTE_RELEASE_BASELINE_MISMATCH') || !deployScript.includes('--expected-release-id')) {
   failures.push('standard deploy must reject a candidate whose captured 47 release baseline changed');
 }
+if (!deployScript.includes('audit-47-runtime-provenance.sh" --require-traceable') || !captureBaselineScript.includes('audit-47-runtime-provenance.sh" --require-traceable')) {
+  failures.push('standard baseline capture and deploy must block untraceable remote runtime state');
+}
 if (!deployScript.includes('REMOTE_RELEASE_MANIFEST_MISMATCH') || deployScript.lastIndexOf('.siyuan-release-state') < deployScript.lastIndexOf('curl --retry 10')) {
   failures.push('standard deploy must verify the remote manifest and write success state only after public health checks');
+}
+for (const requiredReceiptField of ['SOURCE_MODE=GIT_SOURCE_BUILD', 'GIT_COMMIT=$git_commit', 'WEB_IMAGE_ID=$web_image_id', 'API_IMAGE_ID=$api_image_id', 'RELEASE_RECEIPT_SHA256=$receipt_sha256']) {
+  if (!deployScript.includes(requiredReceiptField)) {
+    failures.push(`standard deploy receipt is missing field: ${requiredReceiptField}`);
+  }
+}
+if (!deployScript.includes('.release-receipts') || !deployScript.includes('Immutable release receipt already exists with different content')) {
+  failures.push('standard deploy must write an immutable, conflict-detecting release receipt');
+}
+if (!deployScript.includes('requires an attached Git branch and a full source commit')) {
+  failures.push('standard deploy must reject detached or invalid Git candidates');
+}
+if (!deployScript.includes('requires HEAD to match the durable origin branch exactly') || !captureBaselineScript.includes('requires HEAD to match the durable origin branch exactly')) {
+  failures.push('standard release candidates must be recoverable from an exact durable origin branch');
+}
+if (!deployScript.includes('Release receipt directory must not be a symlink') || !deployScript.includes('Existing release receipt must be read-only')) {
+  failures.push('standard release receipts must reject symlink escapes and writable prior receipts');
+}
+if (!whitelistDeployScript.includes('SOURCE_MODE=WHITELIST_CAS')) {
+  failures.push('whitelist releases must identify their non-Git source mode explicitly');
 }
 if (!deployScript.includes('Standard deploy does not execute an implicit pending migration set.')) {
   failures.push('standard deploy must route reviewed migrations through the pending-set-aware whitelist flow');
@@ -188,11 +220,8 @@ if (!whitelistDeployScript.includes('WEB_FINGERPRINT=$web_fingerprint') || !whit
 if (!fingerprintScript.includes('scope_hash web') || !fingerprintScript.includes('scope_hash migrate')) {
   failures.push('portable release fingerprint helper must cover web, api and migration manifests');
 }
-if (!fingerprintScript.includes('*/test-support/*') || !fingerprintScript.includes('*/testSupport/*')) {
-  failures.push('release fingerprints must exclude both test-support naming variants');
-}
-if (!deployScript.includes('*/test-support/*') || !deployScript.includes('*/testSupport/*')) {
-  failures.push('standard deploy fingerprints must exclude the same test-support naming variants as the portable helper');
+if (fingerprintScript.includes('*/test-support/*') || fingerprintScript.includes('*/testSupport/*') || deployScript.includes('*/test-support/*') || deployScript.includes('*/testSupport/*')) {
+  failures.push('release fingerprints must include non-test files under test-support because API TypeScript compiles all src/**/*.ts');
 }
 if (!whitelistDeployScript.includes('PENDING_MIGRATION_SET_MISMATCH') || !whitelistDeployScript.includes('APPROVED_MIGRATIONS_CSV')) {
   failures.push('whitelist migration release must reject an unapproved remote pending-migration set');

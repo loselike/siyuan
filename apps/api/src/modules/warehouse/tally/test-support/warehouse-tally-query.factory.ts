@@ -83,7 +83,8 @@ export function warehouseTallyPackageRow(overrides: Record<string, unknown> = {}
 }
 
 export function warehouseTallyTaskRow(overrides: Record<string, unknown> = {}) {
-  const { labelStatus: _labelStatus, ...summary } = warehouseTallyTaskSummary();
+  const { labelStatus, ...summary } = warehouseTallyTaskSummary();
+  void labelStatus;
   return {
     ...summary,
     sourcePackageId: undefined,

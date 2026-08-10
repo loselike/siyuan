@@ -77,7 +77,7 @@ fi
 
 is_test_file() {
   case "$1" in
-    *.test.ts|*.test.tsx|*.spec.ts|*.spec.tsx|*/__tests__/*|*/test-support/*|*/testSupport/*|*/test/*|*/tests/*) return 0 ;;
+    *.test.ts|*.test.tsx|*.spec.ts|*.spec.tsx|*/__tests__/*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -145,7 +145,21 @@ sha256_file() {
 WEB_FINGERPRINT="$(scope_hash web)"
 API_FINGERPRINT="$(scope_hash api)"
 MIGRATE_FINGERPRINT="$(scope_hash migrate)"
-RELEASE_ID="web-${WEB_FINGERPRINT:0:12}_api-${API_FINGERPRINT:0:12}"
+GIT_COMMIT="$(git rev-parse HEAD)"
+GIT_BRANCH="$(git branch --show-current)"
+RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RELEASE_ID="git-${GIT_COMMIT:0:12}_web-${WEB_FINGERPRINT:0:12}_api-${API_FINGERPRINT:0:12}"
+if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false && ( ! "$GIT_COMMIT" =~ ^[0-9a-f]{40}$ || -z "$GIT_BRANCH" ) ]]; then
+  echo "deploy:47 apply requires an attached Git branch and a full source commit." >&2
+  exit 85
+fi
+if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false ]]; then
+  remote_branch_commit="$(git ls-remote --heads origin "refs/heads/$GIT_BRANCH" | awk 'NR == 1 {print $1}')"
+  if [[ "$remote_branch_commit" != "$GIT_COMMIT" ]]; then
+    echo "deploy:47 apply requires HEAD to match the durable origin branch exactly." >&2
+    exit 86
+  fi
+fi
 
 if [[ "$PRINT_FINGERPRINTS" == true ]]; then
   printf 'WEB_FINGERPRINT=%s\nAPI_FINGERPRINT=%s\nMIGRATE_FINGERPRINT=%s\nRELEASE_ID=%s\n' \
@@ -191,6 +205,10 @@ REMOTE_API="$(state_value API_FINGERPRINT)"
 REMOTE_MIGRATE="$(state_value MIGRATE_FINGERPRINT)"
 REMOTE_RELEASE_ID="$(state_value RELEASE_ID)"
 [[ -n "$REMOTE_RELEASE_ID" ]] || REMOTE_RELEASE_ID="MISSING"
+
+if [[ "$MODE" == "apply" ]]; then
+  bash "$SCRIPT_DIR/audit-47-runtime-provenance.sh" --require-traceable
+fi
 
 echo "REMOTE_RELEASE_ID=$REMOTE_RELEASE_ID"
 if [[ -n "$EXPECTED_RELEASE_ID" && "$EXPECTED_RELEASE_ID" != "$REMOTE_RELEASE_ID" ]]; then
@@ -352,7 +370,8 @@ curl --retry 10 --retry-delay 1 --retry-connrefused -fsS "$PUBLIC_URL/api/health
 curl --retry 10 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/"
 ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
   "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
-  "$WEB_FINGERPRINT" "$API_FINGERPRINT" "$MIGRATE_FINGERPRINT" "$RELEASE_ID" <<'REMOTE_SCRIPT'
+  "$WEB_FINGERPRINT" "$API_FINGERPRINT" "$MIGRATE_FINGERPRINT" "$RELEASE_ID" \
+  "$GIT_COMMIT" "$GIT_BRANCH" "$RELEASED_AT" <<'REMOTE_SCRIPT'
 set -eu
 remote_dir="$1"
 lock_dir="$2"
@@ -361,11 +380,65 @@ web_fingerprint="$4"
 api_fingerprint="$5"
 migrate_fingerprint="$6"
 release_id="$7"
+git_commit="$8"
+git_branch="$9"
+released_at="${10}"
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [ "$actual_token" != "$expected_token" ]; then
   echo "47 release lock ownership changed before success-state update." >&2
   exit 75
 fi
+cd "$remote_dir"
+web_container="$(docker compose ps -q web | tail -1)"
+api_container="$(docker compose ps -q api | tail -1)"
+web_image_id="$(docker inspect --format '{{.Image}}' "$web_container")"
+api_image_id="$(docker inspect --format '{{.Image}}' "$api_container")"
+[ -n "$web_image_id" ] && [ -n "$api_image_id" ]
+
+receipt_dir="$remote_dir/.release-receipts"
+receipt_path="$receipt_dir/$release_id.env"
+receipt_tmp="$receipt_path.tmp.$expected_token"
+if [ -L "$receipt_dir" ]; then
+  echo "Release receipt directory must not be a symlink." >&2
+  exit 83
+fi
+mkdir -p "$receipt_dir"
+if [ "$(readlink -f "$receipt_dir")" != "$(readlink -f "$remote_dir")/.release-receipts" ] || \
+   { [ -e "$receipt_path" ] && { [ -L "$receipt_path" ] || [ ! -f "$receipt_path" ]; }; }; then
+  echo "Release receipt path is not a canonical regular file." >&2
+  exit 83
+fi
+cat > "$receipt_tmp" <<RECEIPT
+RECEIPT_FORMAT_VERSION=1
+SOURCE_MODE=GIT_SOURCE_BUILD
+RELEASE_ID=$release_id
+GIT_COMMIT=$git_commit
+GIT_BRANCH=$git_branch
+WEB_FINGERPRINT=$web_fingerprint
+API_FINGERPRINT=$api_fingerprint
+MIGRATE_FINGERPRINT=$migrate_fingerprint
+WEB_IMAGE_ID=$web_image_id
+API_IMAGE_ID=$api_image_id
+RECEIPT
+if [ -e "$receipt_path" ]; then
+  receipt_mode="$(stat -c '%a' "$receipt_path")"
+  if [ $((8#$receipt_mode & 0222)) -ne 0 ]; then
+    rm -f "$receipt_tmp"
+    echo "Existing release receipt must be read-only." >&2
+    exit 83
+  fi
+  if ! cmp -s "$receipt_tmp" "$receipt_path"; then
+    rm -f "$receipt_tmp"
+    echo "Immutable release receipt already exists with different content: $receipt_path" >&2
+    exit 83
+  fi
+  rm -f "$receipt_tmp"
+else
+  chmod 0444 "$receipt_tmp"
+  mv "$receipt_tmp" "$receipt_path"
+fi
+receipt_sha256="$(sha256sum "$receipt_path" | awk '{print $1}')"
+
 state_file="$remote_dir/.siyuan-release-state"
 state_tmp="$state_file.tmp.$expected_token"
 cat > "$state_tmp" <<STATE
@@ -373,7 +446,14 @@ WEB_FINGERPRINT=$web_fingerprint
 API_FINGERPRINT=$api_fingerprint
 MIGRATE_FINGERPRINT=$migrate_fingerprint
 RELEASE_ID=$release_id
-RELEASED_AT=$(date -Iseconds)
+RELEASED_AT=$released_at
+SOURCE_MODE=GIT_SOURCE_BUILD
+GIT_COMMIT=$git_commit
+GIT_BRANCH=$git_branch
+WEB_IMAGE_ID=$web_image_id
+API_IMAGE_ID=$api_image_id
+RELEASE_RECEIPT_PATH=.release-receipts/$release_id.env
+RELEASE_RECEIPT_SHA256=$receipt_sha256
 STATE
 mv "$state_tmp" "$state_file"
 REMOTE_SCRIPT

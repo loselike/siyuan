@@ -379,12 +379,19 @@ web_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^WEB_FINGERPRINT=//
 api_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^API_FINGERPRINT=//p')"
 migrate_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^MIGRATE_FINGERPRINT=//p')"
 [[ -n "$web_fingerprint" && -n "$api_fingerprint" && -n "$migrate_fingerprint" ]]
+web_container="$(cd "$remote_dir" && docker compose ps -q web 2>/dev/null | tail -1)"
+api_container="$(cd "$remote_dir" && docker compose ps -q api 2>/dev/null | tail -1)"
+web_image_id="$(docker inspect --format '{{.Image}}' "$web_container" 2>/dev/null || true)"
+api_image_id="$(docker inspect --format '{{.Image}}' "$api_container" 2>/dev/null || true)"
 cat > "$state_tmp" <<STATE
 WEB_FINGERPRINT=$web_fingerprint
 API_FINGERPRINT=$api_fingerprint
 MIGRATE_FINGERPRINT=$migrate_fingerprint
 RELEASE_ID=$release_id
 RELEASED_AT=$(date -Iseconds)
+SOURCE_MODE=WHITELIST_CAS
+WEB_IMAGE_ID=$web_image_id
+API_IMAGE_ID=$api_image_id
 STATE
 mv "$state_tmp" "$state_file"
 REMOTE_SCRIPT
