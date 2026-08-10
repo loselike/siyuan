@@ -77,6 +77,7 @@ import { WarehouseInventoryQueryController } from './warehouse/inventory/warehou
 import { LegacyWarehouseInventoryQueryRepository } from './warehouse/inventory/legacy-warehouse-inventory-query.repository.js';
 import {
   PrismaWarehouseInventoryQueryRepository,
+  WAREHOUSE_INVENTORY_QUERY_AUTHORIZER,
   WAREHOUSE_INVENTORY_QUERY_REPOSITORY
 } from './warehouse/inventory/warehouse-inventory-query.repository.js';
 import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
@@ -149,6 +150,14 @@ const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
   ? { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: PrismaWarehouseInventoryQueryRepository }
   : { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: LegacyWarehouseInventoryQueryRepository };
 
+const warehouseInventoryQueryAuthorizerProvider = {
+  provide: WAREHOUSE_INVENTORY_QUERY_AUTHORIZER,
+  useFactory: (repository: PrismaRepository) => ({
+    hasPermission: repository.hasPermission.bind(repository)
+  }),
+  inject: [PrismaRepository]
+};
+
 const trackingQueryRepositoryProvider = usePrismaRepository
   ? { provide: TRACKING_QUERY_REPOSITORY, useClass: PrismaTrackingQueryRepository }
   : { provide: TRACKING_QUERY_REPOSITORY, useClass: LegacyTrackingQueryRepository };
@@ -210,6 +219,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     priceBookQueryRepositoryProvider,
     SystemDirectoryService,
     warehouseInventoryQueryRepositoryProvider,
+    warehouseInventoryQueryAuthorizerProvider,
     warehouseTallyQueryRepositoryProvider,
     {
       provide: APP_GUARD,

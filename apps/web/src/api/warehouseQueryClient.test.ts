@@ -124,6 +124,27 @@ describe('WarehouseQueryClient', () => {
     expect(request).toHaveBeenNthCalledWith(3, '/warehouse/today-receipts');
   });
 
+  it('serializes server-side in-stock pagination on the dedicated compatibility path', async () => {
+    const response = {
+      totals: emptyTotals,
+      rows: [],
+      pagination: { page: 2, pageSize: 20, totalItems: 47 }
+    };
+    const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;
+    const client = new WarehouseQueryClient(request);
+
+    await expect(client.warehouseInStockPage({
+      dataScope: 'OWN',
+      customerOrderNo: 'SO 001',
+      page: 2,
+      pageSize: 20
+    })).resolves.toBe(response);
+
+    expect(request).toHaveBeenCalledWith(
+      '/warehouse/in-stock-page?dataScope=OWN&customerOrderNo=SO+001&page=2&pageSize=20'
+    );
+  });
+
   it('loads dashboard totals from the dedicated summary path', async () => {
     const response: Pick<WarehouseInStockResponse, 'totals'> = { totals: emptyTotals };
     const request = vi.fn().mockResolvedValue(response) as WarehouseQueryRequest;

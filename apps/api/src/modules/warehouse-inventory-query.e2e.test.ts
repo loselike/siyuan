@@ -33,6 +33,21 @@ describe('Warehouse inventory query API', () => {
       rows: expect.any(Array)
     }));
 
+    const inStockPage = await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock-page?page=1&pageSize=1')
+      .set('Authorization', authorization)
+      .expect(200);
+    expect(inStockPage.body).toEqual(expect.objectContaining({
+      totals: inStock.body.totals,
+      rows: expect.any(Array),
+      pagination: {
+        page: 1,
+        pageSize: 1,
+        totalItems: inStock.body.rows.length
+      }
+    }));
+    expect(inStockPage.body.rows.length).toBeLessThanOrEqual(1);
+
     const inStockSummary = await request(app.getHttpServer())
       .get('/api/warehouse/in-stock-summary')
       .set('Authorization', authorization)
@@ -77,6 +92,13 @@ describe('Warehouse inventory query API', () => {
       .expect(401);
     await request(app.getHttpServer())
       .get('/api/warehouse/in-stock-summary')
+      .set('Authorization', app.auth(customerToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock-page?page=1&pageSize=10')
+      .expect(401);
+    await request(app.getHttpServer())
+      .get('/api/warehouse/in-stock-page?page=1&pageSize=10')
       .set('Authorization', app.auth(customerToken))
       .expect(403);
   });

@@ -5681,8 +5681,9 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
       throw new ForbiddenException('当前角色不能查看在仓数据');
     }
-    // 在仓包裹是仓库共享事实；获得查看权限后允许跨客户查看，修改权限仍单独受控。
-    const businessCustomerScoped = false;
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
+      || await this.hasPermission(principal.role, 'warehouse:in-stock:update');
+    const businessCustomerScoped = !warehouseWideScope;
     const ownedCustomers = businessCustomerScoped
       ? this.customers.filter((customer) => customer.salesperson === principal.username)
       : undefined;

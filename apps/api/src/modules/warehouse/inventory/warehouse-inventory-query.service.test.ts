@@ -11,6 +11,19 @@ function repositoryStub(
 ): WarehouseInventoryQueryRepository {
   return {
     getWarehousePackages: vi.fn().mockResolvedValue([]),
+    getWarehouseInStockPage: vi.fn().mockResolvedValue({
+      totals: {
+        receiptTickets: 0,
+        totalPackages: 0,
+        totalWeightKg: 0,
+        totalCbm: 0,
+        waitingDispatchTickets: 0,
+        pendingTallyTickets: 0,
+        exceptionTickets: 0
+      },
+      rows: [],
+      pagination: { page: 1, pageSize: 10, totalItems: 0 }
+    }),
     getWarehousePackageGroups: vi.fn().mockResolvedValue([]),
     getWarehouseManualReceiptCustomers: vi.fn().mockResolvedValue([]),
     findDuplicateMojiaPackage: vi.fn().mockResolvedValue(undefined),
@@ -29,6 +42,17 @@ describe('WarehouseInventoryQueryService', () => {
 
     await expect(service.listPackages(principal)).resolves.toBe(packages);
     expect(repository.getWarehousePackages).toHaveBeenCalledWith(principal);
+  });
+
+  it('passes the in-stock page query through the module service boundary', async () => {
+    const principal = warehousePrincipal();
+    const query = { customerOrderNo: 'SO-001', page: 2, pageSize: 20 };
+    const getWarehouseInStockPage = vi.fn().mockResolvedValue({ rows: [], pagination: { page: 2 } });
+    const service = new WarehouseInventoryQueryService(repositoryStub({ getWarehouseInStockPage }));
+
+    await service.listInStockPage(principal, query);
+
+    expect(getWarehouseInStockPage).toHaveBeenCalledWith(principal, query);
   });
 
   it('keeps package groups, customer options and Mojia duplicate queries on the same adapter', async () => {

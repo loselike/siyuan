@@ -7573,14 +7573,36 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const salesScope = this.operatorCustomerScope(principal);
     const siteScope = await this.warehouseRentSiteScope(principal);
-    const rows = await (this.prisma as any).warehousePackage.findMany({
+    const rawPackageIds = (query as WarehouseRentDetailQuery & { packageIds?: string | string[] }).packageIds;
+    const packageIds = (Array.isArray(rawPackageIds) ? rawPackageIds : [rawPackageIds])
+      .flatMap((value) => typeof value === 'string' ? value.split(',') : [])
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .slice(0, 100);
+    const rentScopeWhere = {
+      status: { in: ['RECEIVED', 'CONSOLIDATED', 'SHIPPED'] },
+      ...(siteScope ? { site: siteScope } : {}),
+      ...(salesScope ? { salesperson: { in: salesScope } } : {})
+    };
+    const pageGroupKeys = packageIds.length
+      ? await (this.prisma as any).warehousePackage.findMany({
+          where: { ...rentScopeWhere, id: { in: packageIds } },
+          select: { site: true, customerCode: true, domesticTrackingNo: true }
+        })
+      : [];
+    const groupConditions = Array.from(new Map(pageGroupKeys.map((row: any) => [
+      `${row.site ?? ''}\u0000${row.customerCode}\u0000${row.domesticTrackingNo}`,
+      { site: row.site ?? null, customerCode: row.customerCode, domesticTrackingNo: row.domesticTrackingNo }
+    ])).values());
+    const rows = groupConditions.length || !packageIds.length
+      ? await (this.prisma as any).warehousePackage.findMany({
       where: {
-        status: { in: ['RECEIVED', 'CONSOLIDATED', 'SHIPPED'] },
-        ...(siteScope ? { site: siteScope } : {}),
-        ...(salesScope ? { salesperson: { in: salesScope } } : {})
+        ...rentScopeWhere,
+        ...(groupConditions.length ? { OR: groupConditions } : {})
       },
       orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
-    });
+    })
+      : [];
     const shipmentIds = Array.from(new Set(rows.map((row: any) => row.shipmentId).filter(Boolean))) as string[];
     const shipments = shipmentIds.length
       ? await this.prisma.shipment.findMany({
@@ -8038,7 +8060,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
       || await this.hasPermission(principal.role, 'warehouse:in-stock:update');
     // 业务员默认只看当前归属给自己的客户；只有主动选择“全部”才放开至全仓数据。
-    const businessCustomerScoped = !warehouseWideScope && query.dataScope !== 'ALL';
+    // dataScope cannot grant full-warehouse access; only role/permission can.
+    const businessCustomerScoped = !warehouseWideScope;
     const ownedCustomerCodes = businessCustomerScoped
       ? (await this.prisma.customer.findMany({
           where: { salesperson: principal.username },
@@ -8136,7 +8159,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
       throw new ForbiddenException('当前角色不能查看在仓数据');
     }
-    const businessCustomerScoped = false;
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
+      || await this.hasPermission(principal.role, 'warehouse:in-stock:update');
+    const businessCustomerScoped = !warehouseWideScope;
     const ownedCustomerCodes = businessCustomerScoped
       ? (await this.prisma.customer.findMany({
           where: { salesperson: principal.username },

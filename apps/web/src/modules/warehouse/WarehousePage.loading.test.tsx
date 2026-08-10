@@ -42,8 +42,9 @@ describe('WarehousePage scoped loading', () => {
     const warehouseTodayReceipts = vi.fn().mockResolvedValue({ rows: [row], totals });
     const warehouseInStock = vi.fn().mockResolvedValue({ rows: [row], totals });
     const warehouseInStockSummary = vi.fn().mockResolvedValue({ totals });
+    const warehouseInStockPage = vi.fn().mockResolvedValue({ rows: [row], totals, pagination: { page: 1, pageSize: 10, totalItems: 1 } });
     const apiClient = {
-      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockSummary }
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockPage, warehouseInStockSummary }
     } as unknown as ApiClient;
 
     render(
@@ -73,8 +74,9 @@ describe('WarehousePage scoped loading', () => {
     const warehouseTodayReceipts = vi.fn().mockRejectedValue(new Error('today unavailable'));
     const warehouseInStock = vi.fn().mockRejectedValue(new Error('in-stock unavailable'));
     const warehouseInStockSummary = vi.fn().mockRejectedValue(new Error('summary unavailable'));
+    const warehouseInStockPage = vi.fn().mockRejectedValue(new Error('page unavailable'));
     const apiClient = {
-      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockSummary }
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockPage, warehouseInStockSummary }
     } as unknown as ApiClient;
 
     render(
@@ -98,13 +100,14 @@ describe('WarehousePage scoped loading', () => {
     expect(warehousePackages).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the full in-stock response for the in-stock workspace', async () => {
+  it('loads only one server-side page for the in-stock workspace', async () => {
     const warehousePackages = vi.fn().mockResolvedValue([row]);
     const warehouseTodayReceipts = vi.fn().mockResolvedValue({ rows: [row], totals });
     const warehouseInStock = vi.fn().mockResolvedValue({ rows: [row], totals });
+    const warehouseInStockPage = vi.fn().mockResolvedValue({ rows: [row], totals, pagination: { page: 1, pageSize: 10, totalItems: 47 } });
     const warehouseInStockSummary = vi.fn().mockResolvedValue({ totals });
     const apiClient = {
-      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockSummary }
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockPage, warehouseInStockSummary }
     } as unknown as ApiClient;
 
     render(
@@ -121,7 +124,9 @@ describe('WarehousePage scoped loading', () => {
       />
     );
 
-    await waitFor(() => expect(warehouseInStock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(warehouseInStockPage).toHaveBeenCalledTimes(1));
+    expect(warehouseInStockPage).toHaveBeenCalledWith(expect.objectContaining({ page: 1, pageSize: 10 }));
+    expect(warehouseInStock).not.toHaveBeenCalled();
     expect(warehouseInStockSummary).not.toHaveBeenCalled();
   });
 });

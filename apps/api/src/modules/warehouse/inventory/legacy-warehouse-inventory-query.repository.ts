@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PrismaRepository } from '../../prisma.repository.js';
 import type { Principal } from '../../rbac.js';
+import type { WarehouseInStockPageQuery } from '@siyuan/shared';
 import type {
   MojiaWarehouseDuplicateQuery,
   WarehouseInventoryQueryRepository
@@ -12,6 +13,17 @@ export class LegacyWarehouseInventoryQueryRepository implements WarehouseInvento
 
   getWarehousePackages(principal: Principal) {
     return this.repository.getWarehousePackages(principal);
+  }
+
+  async getWarehouseInStockPage(principal: Principal, query: WarehouseInStockPageQuery) {
+    const page = Math.max(1, Math.trunc(Number(query.page) || 1));
+    const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(query.pageSize) || 10)));
+    const response = await (this.repository as unknown as PrismaRepository).getWarehouseInStock(principal, query);
+    return {
+      ...response,
+      rows: response.rows.slice((page - 1) * pageSize, page * pageSize),
+      pagination: { page, pageSize, totalItems: response.rows.length }
+    };
   }
 
   getWarehousePackageGroups(principal: Principal) {

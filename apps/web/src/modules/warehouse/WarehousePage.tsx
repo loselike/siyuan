@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Download, FileText, PackageCheck, PackagePlus, Plus, Trash2 } from 'lucide-react';
-import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
+import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockPageResponse, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from '../shared/shipmentStageDwell';
 import { ApiClient, type PermissionKey } from '../../apiClient';
@@ -362,7 +362,6 @@ export function WarehousePage({
     ? initialCache.packages.rows
     : [];
   const cachedToday = initialCache.todayByQuery.get(warehouseQueryKey(defaultWarehouseTodayFilters));
-  const cachedInStock = initialCache.inStockByQuery.get(warehouseQueryKey(defaultWarehouseInStockFilters));
   const cachedCompletedArchive = initialCache.completedArchive && isFreshWarehouseSnapshot(initialCache.completedArchive.updatedAt)
     ? initialCache.completedArchive.rows
     : [];
@@ -418,18 +417,10 @@ export function WarehousePage({
   const [inStockRefreshVersion, setInStockRefreshVersion] = useState(0);
   const [inStockLoading, setInStockLoading] = useState(false);
   const inStockQueryFeedbackRef = useRef(false);
-  const [inStockRows, setInStockRows] = useState<WarehouseInboundPackage[]>(
-    cachedInStock && isFreshWarehouseSnapshot(cachedInStock.updatedAt) ? cachedInStock.rows : []
-  );
-  const [inStockRowsQueryKey, setInStockRowsQueryKey] = useState<string | null>(
-    cachedInStock && isFreshWarehouseSnapshot(cachedInStock.updatedAt)
-      ? warehouseQueryKey(defaultWarehouseInStockFilters)
-      : null
-  );
+  const [inStockRows, setInStockRows] = useState<WarehouseInboundPackage[]>([]);
+  const [inStockRowsQueryKey, setInStockRowsQueryKey] = useState<string | null>(null);
   const [completedTallyArchiveRows, setCompletedTallyArchiveRows] = useState<WarehouseInboundPackage[]>(cachedCompletedArchive);
-  const [inStockTotals, setInStockTotals] = useState<WarehouseInStockTotals>(cachedInStock && isFreshWarehouseSnapshot(cachedInStock.updatedAt)
-    ? cachedInStock.totals
-    : {
+  const [inStockTotals, setInStockTotals] = useState<WarehouseInStockTotals>({
     receiptTickets: 0,
     totalPackages: 0,
     totalWeightKg: 0,
@@ -438,6 +429,7 @@ export function WarehousePage({
     pendingTallyTickets: 0,
     exceptionTickets: 0
   });
+  const [inStockTotalItems, setInStockTotalItems] = useState(0);
   const [selectedInStockPackageIds, setSelectedInStockPackageIds] = useState<string[]>([]);
   const [inStockPagination, setInStockPagination] = useState({ current: 1, pageSize: warehouseTablePageSize });
   const [tallyTaskPackageIds, setTallyTaskPackageIds] = useState<string[]>([]);
@@ -538,11 +530,16 @@ export function WarehousePage({
   const needsInStock = ['packages', 'consolidation'].includes(activeReceiveSection);
   const needsCompletedArchive = activeReceiveSection === 'dashboard' || activeReceiveSection === 'completed-consolidation';
   const needsTallyTasks = ['dashboard', 'consolidation', 'completed-consolidation'].includes(activeReceiveSection);
-  const mergeWarehousePackages = useCallback((rows: WarehouseInboundPackage[]) => {
+  const mergeWarehousePackages = useCallback((
+    rows: WarehouseInboundPackage[],
+    options: { recalculateCustomerProgress?: boolean } = {}
+  ) => {
     setWarehousePackages((current) => {
       const rowById = new Map(current.map((row) => [row.id, row]));
       rows.forEach((row) => rowById.set(row.id, row));
-      const mergedRows = withWarehouseCustomerProgress([...rowById.values()]);
+      const mergedRows = options.recalculateCustomerProgress === false
+        ? [...rowById.values()]
+        : withWarehouseCustomerProgress([...rowById.values()]);
       getWarehousePageCache(apiClient).packages = { updatedAt: Date.now(), rows: mergedRows };
       return mergedRows;
     });
@@ -711,6 +708,7 @@ export function WarehousePage({
     if (!canInStockView) {
       setInStockRows([]);
       setInStockRowsQueryKey(null);
+      setInStockTotalItems(0);
       setInStockLoading(false);
       return;
     }
@@ -721,38 +719,56 @@ export function WarehousePage({
     const queryKey = warehouseQueryKey(inStockFilters);
     setInStockLoading(true);
     setInStockRowsQueryKey(null);
-    apiClient.warehouseQuery.warehouseInStock(inStockFilters)
+    const serverPaginated = activeReceiveSection === 'packages';
+    const request = serverPaginated
+      ? apiClient.warehouseQuery.warehouseInStockPage({
+          ...inStockFilters,
+          page: inStockPagination.current,
+          pageSize: inStockPagination.pageSize
+        })
+      : apiClient.warehouseQuery.warehouseInStock(inStockFilters);
+    request
       .then((response) => {
         if (!alive) return;
         const mappedRows = response.rows.map(mapWarehouseApiPackageToInbound);
-        getWarehousePageCache(apiClient).inStockByQuery.set(queryKey, {
-          updatedAt: Date.now(),
-          rows: mappedRows,
-          totals: response.totals
-        });
+        const totalItems = serverPaginated
+          ? (response as WarehouseInStockPageResponse).pagination.totalItems
+          : mappedRows.length;
+        if (!serverPaginated) {
+          getWarehousePageCache(apiClient).inStockByQuery.set(queryKey, {
+            updatedAt: Date.now(),
+            rows: mappedRows,
+            totals: response.totals
+          });
+        }
         setInStockRows(mappedRows);
         setInStockRowsQueryKey(queryKey);
-        mergeWarehousePackages(mappedRows);
+        setInStockTotalItems(totalItems);
+        mergeWarehousePackages(mappedRows, { recalculateCustomerProgress: !serverPaginated });
         setInStockTotals(response.totals);
         setSelectedInStockPackageIds([]);
-        setInStockPagination((current) => ({ ...current, current: 1 }));
         if (shouldShowQueryFeedback) {
-          message.success(`查询成功，共 ${mappedRows.length} 条`);
+          message.success(`查询成功，共 ${totalItems} 条`);
         }
 
         // 仓租是辅助展示数据，不应阻塞在仓主查询。主结果先显示，仓租返回后再补齐。
-        if (canRentDetailView) {
-          void apiClient.warehouseRentDetails({ status: 'IN_STOCK' })
+        if (canRentDetailView && mappedRows.length) {
+          void apiClient.warehouseRentDetails({
+            status: 'IN_STOCK',
+            packageIds: mappedRows.map((row) => row.id)
+          })
             .then((rentResponse) => {
               if (!alive) return;
               const rowsWithRent = attachWarehouseRentDetails(mappedRows, rentResponse.rows);
-              getWarehousePageCache(apiClient).inStockByQuery.set(queryKey, {
-                updatedAt: Date.now(),
-                rows: rowsWithRent,
-                totals: response.totals
-              });
+              if (!serverPaginated) {
+                getWarehousePageCache(apiClient).inStockByQuery.set(queryKey, {
+                  updatedAt: Date.now(),
+                  rows: rowsWithRent,
+                  totals: response.totals
+                });
+              }
               setInStockRows(rowsWithRent);
-              mergeWarehousePackages(rowsWithRent);
+              mergeWarehousePackages(rowsWithRent, { recalculateCustomerProgress: !serverPaginated });
             })
             .catch(() => undefined);
         }
@@ -762,17 +778,22 @@ export function WarehousePage({
         if (!alive) return;
         // OWN 视图不能在接口失败时退回未经客户归属过滤的全仓快照。
         const businessCustomerScoped = !['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(role)
-          && !canInStockUpdate
-          && inStockFilters.dataScope !== 'ALL';
+          && !canInStockUpdate;
         const fallbackRows = businessCustomerScoped
           ? []
           : filterInStockRows(warehousePackageFallback, inStockFilters, role);
         mergeWarehousePackages(fallbackRows);
-        setInStockRows(fallbackRows);
+        const pageRows = serverPaginated
+          ? fallbackRows.slice(
+              (inStockPagination.current - 1) * inStockPagination.pageSize,
+              inStockPagination.current * inStockPagination.pageSize
+            )
+          : fallbackRows;
+        setInStockRows(pageRows);
         setInStockRowsQueryKey(null);
+        setInStockTotalItems(fallbackRows.length);
         setInStockTotals(calculateTodayTotals(fallbackRows, workQueue.length));
         setSelectedInStockPackageIds([]);
-        setInStockPagination((current) => ({ ...current, current: 1 }));
         if (shouldShowQueryFeedback) {
           message.error(error instanceof Error ? error.message : '查询失败，请稍后重试');
         }
@@ -783,7 +804,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canInStockUpdate, canInStockView, canRentDetailView, inStockFilters, inStockRefreshVersion, loadWarehousePackagesFallback, mergeWarehousePackages, message, needsInStock, refreshVersion, role, workQueue.length]);
+  }, [activeReceiveSection, apiClient, canInStockUpdate, canInStockView, canRentDetailView, inStockFilters, inStockPagination.current, inStockPagination.pageSize, inStockRefreshVersion, loadWarehousePackagesFallback, mergeWarehousePackages, message, needsInStock, refreshVersion, role, workQueue.length]);
   useEffect(() => {
     if (!canInStockView || !needsInStockSummary) return;
     let alive = true;
@@ -901,9 +922,7 @@ export function WarehousePage({
     !keyword.trim() || (value ?? '').toLowerCase().includes(keyword.trim().toLowerCase());
   const isOperatorView = !['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(role)
     && !canInStockUpdate;
-  const canToggleInStockDataScope = isOperatorView;
   const viewingAllTodayData = canToggleTodayDataScope && todayFilters.dataScope === 'ALL';
-  const viewingAllInStockData = canToggleInStockDataScope && inStockFilters.dataScope === 'ALL';
   const orderEntryActionLabel = '录单';
   function filterTodayRows(rows: WarehouseInboundPackage[], filters: WarehouseTodayQuery, currentRole: StaffRoleKey) {
     const keyword = (value: string | undefined, needle: string | undefined) =>
@@ -3184,13 +3203,19 @@ export function WarehousePage({
       setWarehouseNotice('在仓数据正在更新，请加载完成后再下载');
       return;
     }
-    const { selected, records } = resolveWarehouseMachineExportRecords(inStockRows, selectedInStockPackageIds);
-    if (!records.length) {
-      setWarehouseNotice('当前没有可下载的在仓数据');
-      return;
-    }
     setMachineExporting(true);
     try {
+      const selectedPageRecords = resolveWarehouseMachineExportRecords(inStockRows, selectedInStockPackageIds);
+      const fullResponse = selectedPageRecords.selected
+        ? undefined
+        : await apiClient.warehouseQuery.warehouseInStock(inStockFilters);
+      const { selected, records } = selectedPageRecords.selected
+        ? selectedPageRecords
+        : resolveWarehouseMachineExportRecords(fullResponse?.rows.map(mapWarehouseApiPackageToInbound) ?? [], []);
+      if (!records.length) {
+        setWarehouseNotice('当前没有可下载的在仓数据');
+        return;
+      }
       const physicalPieceCount = await downloadWarehouseMachineExport(records, selected);
       setWarehouseNotice(selected
         ? `已下载勾选的 ${physicalPieceCount} 件在仓数据`
@@ -3755,29 +3780,9 @@ export function WarehousePage({
           <Flex className="warehouse-in-stock-table-toolbar" justify="space-between" align="center" gap={12} wrap>
             <Space size={12}>
               <span>在仓数据</span>
-              <Text type="secondary">共 {inStockRows.length} 条</Text>
-              {canToggleInStockDataScope ? <Space.Compact>
-                <Button
-                  size="small"
-                  type={viewingAllInStockData ? 'default' : 'primary'}
-                  onClick={() => {
-                    setInStockFilterDraft((current) => ({ ...current, dataScope: 'OWN' }));
-                    setInStockFilters((current) => ({ ...current, dataScope: 'OWN' }));
-                    setInStockPagination((current) => ({ ...current, current: 1 }));
-                  }}
-                >查看我的客户数据</Button>
-                <Button
-                  size="small"
-                  type={viewingAllInStockData ? 'primary' : 'default'}
-                  onClick={() => {
-                    setInStockFilterDraft((current) => ({ ...current, dataScope: 'ALL' }));
-                    setInStockFilters((current) => ({ ...current, dataScope: 'ALL' }));
-                    setInStockPagination((current) => ({ ...current, current: 1 }));
-                  }}
-                >查看仓库全部数据</Button>
-              </Space.Compact> : null}
+              <Text type="secondary">共 {inStockTotalItems} 条</Text>
               <Button size="small" disabled={!inStockPackageIds.length} onClick={toggleAllInStockPackages}>
-                {allInStockPackagesSelected ? '取消全选' : `全选筛选结果（${inStockPackageIds.length}）`}
+                {allInStockPackagesSelected ? '取消全选本页' : `全选本页（${inStockPackageIds.length}）`}
               </Button>
               {selectedInStockPackageCount ? <Space size={8} aria-live="polite">
                 <Tag color="blue">已选 {selectedInStockPackageCount} 条</Tag>
@@ -3876,6 +3881,7 @@ export function WarehousePage({
             pagination={{
               ...tenRowTablePagination,
               ...inStockPagination,
+              total: inStockTotalItems,
               onChange: (current, pageSize) => setInStockPagination((previous) => resolveListPaginationChange(previous, current, pageSize))
             }}
             columnSettingsPlacement="toolbar"

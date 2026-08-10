@@ -52,8 +52,9 @@ describe('PrismaRepository warehouse in-stock summary', () => {
     });
 
     expect(warehousePackageFindMany).toHaveBeenCalledWith({
-      where: { status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] } },
+      where: { status: 'RECEIVED' },
       select: {
+        customerCode: true,
         combinedOrderNo: true,
         customerOrderNo: true,
         domesticTrackingNo: true,

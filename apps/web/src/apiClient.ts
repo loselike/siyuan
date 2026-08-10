@@ -1442,6 +1442,10 @@ export class ApiClient {
   async warehouseRentDetails(query: WarehouseRentDetailQuery = {}): Promise<WarehouseRentDetailResponse> {
     const params = new globalThis.URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.filter(Boolean).forEach((item) => params.append(key, String(item)));
+        return;
+      }
       if (value !== undefined && value !== null && value !== '') {
         params.set(key, String(value));
       }

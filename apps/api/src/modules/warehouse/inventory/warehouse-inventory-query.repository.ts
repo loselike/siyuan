@@ -1,13 +1,25 @@
 import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
-import type { WarehousePackageGroupSummary, WarehousePackageSummary } from '@siyuan/shared';
+import type {
+  WarehouseInStockPageQuery,
+  WarehouseInStockPageResponse,
+  WarehousePackageGroupSummary,
+  WarehousePackageSummary
+} from '@siyuan/shared';
 import { PrismaService } from '../../prisma.service.js';
 import type { Principal } from '../../rbac.js';
+import { summarizeWarehouseInStockTotals } from './warehouse-inventory-query.logic.js';
 import {
   mapWarehousePackagesWithConfirmedTally,
+  resolveWarehouseTallyRecentCutoff,
   summarizeWarehousePackageGroups
 } from '../warehouse-query.shared.js';
 
 export const WAREHOUSE_INVENTORY_QUERY_REPOSITORY = 'WAREHOUSE_INVENTORY_QUERY_REPOSITORY';
+export const WAREHOUSE_INVENTORY_QUERY_AUTHORIZER = 'WAREHOUSE_INVENTORY_QUERY_AUTHORIZER';
+
+export interface WarehouseInventoryQueryAuthorizer {
+  hasPermission(role: Principal['role'], permission: 'warehouse:in-stock:update'): Promise<boolean>;
+}
 
 export interface MojiaWarehouseDuplicateQuery {
   combinedOrderNo: string;
@@ -17,6 +29,7 @@ export interface MojiaWarehouseDuplicateQuery {
 
 export interface WarehouseInventoryQueryRepository {
   getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]>;
+  getWarehouseInStockPage(principal: Principal, query: WarehouseInStockPageQuery): Promise<WarehouseInStockPageResponse>;
   getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]>;
   getWarehouseManualReceiptCustomers(principal: Principal): Promise<Array<{ code: string; name: string }>>;
   findDuplicateMojiaPackage(
@@ -27,13 +40,128 @@ export interface WarehouseInventoryQueryRepository {
 
 @Injectable()
 export class PrismaWarehouseInventoryQueryRepository implements WarehouseInventoryQueryRepository {
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(WAREHOUSE_INVENTORY_QUERY_AUTHORIZER)
+    private readonly authorizer: WarehouseInventoryQueryAuthorizer
+  ) {}
 
   async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
     const rows = await (this.prisma as any).warehousePackage.findMany({
       orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
     });
     return mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
+  }
+
+  async getWarehouseInStockPage(
+    principal: Principal,
+    query: WarehouseInStockPageQuery
+  ): Promise<WarehouseInStockPageResponse> {
+    const page = Math.max(1, Math.trunc(Number(query.page) || 1));
+    const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(query.pageSize) || 10)));
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
+      || await this.authorizer.hasPermission(principal.role, 'warehouse:in-stock:update');
+    // dataScope is a view preference, not authorization. Business roles stay customer-scoped.
+    const businessCustomerScoped = !warehouseWideScope;
+    const ownedCustomerCodes = businessCustomerScoped
+      ? (await this.prisma.customer.findMany({
+          where: { salesperson: principal.username },
+          select: { code: true }
+        })).map((customer) => customer.code)
+      : undefined;
+    const where: Record<string, unknown> = query.status === 'TALLIED_ARCHIVED'
+      ? { status: 'TALLIED_ARCHIVED', archivedAt: { gte: resolveWarehouseTallyRecentCutoff() } }
+      : { status: 'RECEIVED' };
+    if (query.site?.trim() && !businessCustomerScoped) where.site = query.site.trim();
+    if (query.customerOrderNo?.trim()) {
+      where.customerOrderNo = { contains: query.customerOrderNo.trim(), mode: 'insensitive' };
+    }
+    if (query.domesticTrackingNo?.trim()) {
+      where.domesticTrackingNo = { contains: query.domesticTrackingNo.trim(), mode: 'insensitive' };
+    }
+    if (query.combinedOrderNo?.trim()) {
+      where.combinedOrderNo = { contains: query.combinedOrderNo.trim(), mode: 'insensitive' };
+    }
+    if (ownedCustomerCodes) where.customerCode = { in: ownedCustomerCodes };
+    if (query.operationKeyword?.trim()) {
+      const normalizedKeyword = query.operationKeyword.trim().toLowerCase();
+      const logs = await this.prisma.auditLog.findMany({
+        where: { action: { startsWith: 'warehouse.' } },
+        select: { target: true, action: true, before: true, after: true },
+        take: 500
+      });
+      const ids = Array.from(new Set(logs
+        .filter((row) => `${row.action} ${row.target} ${JSON.stringify(row.before ?? '')} ${JSON.stringify(row.after ?? '')}`.toLowerCase().includes(normalizedKeyword))
+        .map((row) => row.target)
+        .filter(Boolean)));
+      where.id = ids.length ? { in: ids } : { in: ['__none__'] };
+    }
+
+    const totalsSelect = {
+      customerCode: true,
+      combinedOrderNo: true,
+      customerOrderNo: true,
+      domesticTrackingNo: true,
+      packageCount: true,
+      weightKg: true,
+      cbm: true,
+      status: true,
+      manualException: true,
+      exceptions: true
+    } as const;
+    const [totalsRows, pageRows, waitingDispatchTickets] = await Promise.all([
+      this.prisma.warehousePackage.findMany({ where, select: totalsSelect }),
+      this.prisma.warehousePackage.findMany({
+        where,
+        orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize
+      }),
+      this.prisma.shipment.count({
+        where: {
+          status: 'WAITING_DISPATCH',
+          ...(businessCustomerScoped ? { customer: { salesperson: principal.username } } : {})
+        }
+      })
+    ]);
+    const summaries = await mapWarehousePackagesWithConfirmedTally(this.prisma, pageRows);
+    const customerCodes = Array.from(new Set(summaries.map((row) => row.customerCode).filter(Boolean)));
+    const maintainedCustomers = customerCodes.length
+      ? await this.prisma.customer.findMany({
+          where: { code: { in: customerCodes } },
+          select: { code: true, salesperson: true }
+        })
+      : [];
+    const maintainedCustomerCodes = new Set(maintainedCustomers.map((customer) => customer.code));
+    const salespersonByCustomerCode = new Map(
+      maintainedCustomers.map((customer) => [customer.code, customer.salesperson?.trim() || undefined])
+    );
+    const scopedRows = summaries.map((row) => ({
+      ...row,
+      customerMaintained: maintainedCustomerCodes.has(row.customerCode),
+      salesperson: salespersonByCustomerCode.get(row.customerCode)
+    }));
+    const visibleRows = businessCustomerScoped
+      ? scopedRows.map(({ site: _site, ...row }) => row)
+      : scopedRows;
+    const response: WarehouseInStockPageResponse = {
+      totals: summarizeWarehouseInStockTotals(totalsRows.map((row) => ({
+        ...row,
+        weightKg: Number(row.weightKg),
+        cbm: Number(row.cbm)
+      })), waitingDispatchTickets),
+      rows: visibleRows,
+      pagination: { page, pageSize, totalItems: totalsRows.length }
+    };
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'warehouse.in_stock.view',
+        target: 'warehouse:in-stock',
+        after: JSON.parse(JSON.stringify({ query, rowCount: visibleRows.length, totalItems: totalsRows.length }))
+      }
+    });
+    return response;
   }
 
   async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {

@@ -248,11 +248,24 @@ export interface WarehouseInStockQuery {
   status?: WarehousePackageStatus;
 }
 
+export interface WarehouseInStockPageQuery extends WarehouseInStockQuery {
+  page?: number;
+  pageSize?: number;
+}
+
 export type WarehouseInStockTotals = WarehouseTodayTotals;
 
 export interface WarehouseInStockResponse {
   totals: WarehouseInStockTotals;
   rows: WarehousePackageSummary[];
+}
+
+export interface WarehouseInStockPageResponse extends WarehouseInStockResponse {
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalItems: number;
+  };
 }
 
 export type WarehouseRentBillingUnit = 'CBM' | 'KG';
@@ -302,6 +315,7 @@ export interface WarehouseRentRuleEnabledInput {
 }
 
 export interface WarehouseRentDetailQuery {
+  packageIds?: string[];
   site?: string;
   salesperson?: string;
   customerCode?: string;
