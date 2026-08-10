@@ -1,6 +1,6 @@
 # 47 统一可追溯发布基线
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 会话标题：`Sunny｜47 发布基线修复｜01`
 - 输入来源：`当前会话明确请求`
 - 会话 slug：`47-unified-release-baseline-20260810`
@@ -50,6 +50,7 @@
 
 ## 发布状态
 
-- 用户明确不使用 GitHub；候选改用锁内不可变 Git bundle 作为耐久来源证据。bundle 路径和 SHA-256 将写入 release receipt/state，并由线上 provenance audit 校验，不再依赖 origin 分支。
-- 候选已达到 bootstrap 前本地门禁，待 source-bundle 发布门复审、提交后执行一次性 cutover。
-- 截至本记录更新，47 仍未被写入、未迁移、未重启。
+- 用户明确不使用 GitHub；候选改用锁内不可变 Git bundle 作为耐久来源证据。发布提交为 `767f408ed0c5c7ebd1c68861479ed8d393772fa1`，未推送远端仓库。
+- 2026-08-10 已完成一次性 bootstrap cutover；release ID 为 `git-767f408ed0c5_web-71cebb1f292f_api-530ee27d274d`，Web/API 均由统一源码重新构建并重启，数据库 migration 未执行。
+- 线上 provenance audit 为 `traceable/ok`，bundle 为只读 `0444` 且 SHA-256、exact HEAD、receipt、运行镜像和 API `RELEASE_ID` 全部匹配；公网 API health 与 Web 均为 200。
+- 发布完成后发现原发布主进程异常退出遗留同 owner 的孤儿心跳；已核对 state/receipt/health 后按原 token 精确停止心跳并释放锁。最终 release lock 为 `free`，recovery 为 `clear`。
