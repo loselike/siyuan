@@ -2,6 +2,7 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 
 const requiredAgentFiles = [
   '.codex/config.toml',
@@ -107,14 +108,30 @@ const releaseLockScript = readFileSync('scripts/lib/47-release-lock.sh', 'utf8')
 const whitelistDeployScript = readFileSync('scripts/deploy-47-whitelist.sh', 'utf8');
 const casSyncScript = readFileSync('scripts/cas-sync-47-file.sh', 'utf8');
 const captureBaselineScript = readFileSync('scripts/capture-47-release-baseline.sh', 'utf8');
+const bootstrapMigrationExceptions = readFileSync('config/release/47-legacy-migration-checksums.tsv', 'utf8');
+const bootstrapMigrationExceptionsSha256 = createHash('sha256').update(bootstrapMigrationExceptions).digest('hex');
 const fingerprintScript = readFileSync('scripts/print-47-release-fingerprints.sh', 'utf8');
 const resolveRecoveryScript = readFileSync('scripts/resolve-47-release-recovery.sh', 'utf8');
 const forceFullBlock = deployScript.match(/if \[\[ "\$FORCE_FULL" == true \]\]; then([\s\S]*?)\nfi/)?.[1] ?? '';
 if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
   failures.push('--full must not force Prisma migration execution');
 }
-if (!deployScript.includes('MIGRATION_REQUIRED=$MIGRATE_CHANGED')) {
+if (!deployScript.includes('MIGRATION_REQUIRED=$DB_MIGRATION_REQUIRED')) {
   failures.push('deploy dry-run must print MIGRATION_REQUIRED');
+}
+for (const bootstrapGate of [
+  '--bootstrap-manifest',
+  '--confirm-bootstrap',
+  'BOOTSTRAP_REMOTE_BASELINE_DRIFT',
+  'BOOTSTRAP_APPLIED_MIGRATION_SET_MISMATCH',
+  'Bootstrap is only allowed for the explicitly frozen legacy-untraceable runtime.'
+]) {
+  if (!deployScript.includes(bootstrapGate)) failures.push(`bootstrap cutover is missing fail-closed gate: ${bootstrapGate}`);
+}
+if (!deployScript.includes('47-legacy-migration-checksums.tsv')
+  || !deployScript.includes('13e4dcb6aabeef0ba3585de72c105f4b7bb48c24d1159b3579e403aea2746a84')
+  || bootstrapMigrationExceptionsSha256 !== '13e4dcb6aabeef0ba3585de72c105f4b7bb48c24d1159b3579e403aea2746a84') {
+  failures.push('bootstrap cutover must bind the exact reviewed legacy migration checksum exceptions');
 }
 if (!deployScript.includes('DIRTY_RUNTIME_COUNT=$DIRTY_RUNTIME_COUNT') || !deployScript.includes('Refusing deploy:47 apply because the runtime worktree is dirty.')) {
   failures.push('deploy:47 must fail closed on a dirty runtime worktree');

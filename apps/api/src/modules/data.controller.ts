@@ -1146,13 +1146,13 @@ export class DataController {
   }
 
   @Post('shipments/:id/review-business-costs')
-  @RequirePermission(['business:order-entry:business-cost-write', 'business:order-entry:view'])
+  @RequirePermission('business:order-entry:business-cost-write')
   async createPendingReviewBusinessCost(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentFinanceItemCreateInput) {
     return this.repository.createPendingReviewBusinessCost(request.user, id, body);
   }
 
   @Put('shipments/:id/review-business-costs/:feeId')
-  @RequirePermission(['business:order-entry:business-cost-write', 'business:order-entry:view'])
+  @RequirePermission('business:order-entry:business-cost-write')
   async updatePendingReviewBusinessCost(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -1163,7 +1163,7 @@ export class DataController {
   }
 
   @Delete('shipments/:id/review-business-costs/:feeId')
-  @RequirePermission(['business:order-entry:business-cost-write', 'business:order-entry:view'])
+  @RequirePermission('business:order-entry:business-cost-write')
   async deletePendingReviewBusinessCost(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
     return this.repository.deletePendingReviewBusinessCost(request.user, id, feeId);
   }

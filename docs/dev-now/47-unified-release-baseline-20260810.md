@@ -40,20 +40,15 @@
 
 ## 当前进度
 
-- 已选定 `8be0a0b` 作为新的隔离候选起点：它包含 2026-08-05 的 47 运行源码捕获以及后续已发布的仓库架构切片，并已具备发布锁、CAS 白名单、baseline receipt 和同步临时目录排除能力。
-- 已冻结 47 远端源码、Prisma、容器、镜像和运行产物的不可变 v1/v2 manifest；v2 纳入全部真实构建输入，419 个重叠源码 hash、release state、Prisma、容器、镜像和运行产物均与 v1 一致。远端未发生写入、迁移或重启。
+- 已在全局发布锁内重新审计并冻结当前 47；实际 release ID 仍为 `runtime-stage-view-20260810020229`，来源状态为 `legacy-untraceable`。批准的 v2 manifest 为 `docs/release-manifests/47/20260810-042420-runtime-stage-view-20260810020229`，覆盖 423 个真实构建输入及 Prisma、release state、容器、镜像和运行产物。
 - 已确认根因：当前运行镜像来自“旧镜像 + 编译后 JavaScript 覆盖”和“恢复的 Web source map + 预构建 Shared dist”，不是由 47 当前宿主机完整源码构建；因此容器健康与源码可构建性互不证明。
-- `8be0a0b` 有 88 个远端侧运行时路径需要收敛（33 个远端独有、55 个内容不同），另有 2 个干净基线独有的构建支持文件。47 个远端 blob 可在本地 Git 对象库找到，但只有 2 个属于可达 commit；其余 45 个仅为 loose/index 对象，另有 41 个完全不存在，合计 86 个远端版本必须语义重放，不能直接覆盖。
-- 已补充只读 provenance 审计、标准 Git 发布不可变 receipt、实际镜像 ID 绑定，以及 staging/receipt/manifest/临时证据的同步和 Docker context 排除。
-- `8be0a0b` 隔离基线已完成 `npm ci -> prisma generate -> Shared/API/Web build`，三端构建通过；治理检查通过。
-- 当前 47 审计固定返回 `legacy-untraceable` / exit `84`，在来源闭环前阻断标准发布。
-- 专项风险复审确认当前治理代码无 P0/P1；bootstrap cutover 仍未实现，必须等 88 个源码差异完成语义收敛后单独审查。
-- 已完成第一批源码收敛：恢复已提交的仓库库存汇总策略和财务已付款四等分矩阵，定向测试 2/2、1/1 及 Shared/API/Web 构建通过。
-- 已按 v2 manifest 精确恢复 9 个远端 migration 文件，文件 SHA-256 全部一致。生产 `_prisma_migrations` 只读核对显示前 7 个已完成且 checksum 一致；`20260809143000_add_shipment_transport_time` 与 `20260810121500_add_warehouse_tally_completed_mask_permissions` 仍为 pending，禁止在 bootstrap 前隐式执行。
-- 第一批后候选与 v2 仍有 81 个文件差异：23 个远端独有、56 个内容不同、2 个候选独有；该数字是源码差异，不等同于 81 个独立业务功能。
-- 待完成：按真实 Git 源码逐批重放 b983 权限切片和后续本地权限遮罩，统一 Shared/Prisma/API/Web 契约；每批构建、审查并形成唯一 commit 后，才能进入 47 候选发布。
+- 已按 manifest 精确导入 47 源码并提交快照 `02df09a`；随后用已审查的完整 union 源补齐 Shared、Prisma、API、Web 契约，提交 `1ed328c`。两个未在生产应用的迁移及其功能切片未纳入 bootstrap。
+- 候选与生产 `_prisma_migrations` 均为 141 个已完成名称；138 个 checksum 一致，3 个历史 checksum 差异由 `config/release/47-legacy-migration-checksums.tsv` 精确绑定候选 hash 与生产记录 hash。bootstrap 不执行 migration。
+- 已实现一次性 fail-closed bootstrap：只接受上述 v2 manifest 及固定 bundle SHA；锁内从当前 Git commit 重新落只读副本，复核 HEAD/origin、线上源码、状态、容器、镜像、运行产物和严格 migration 行，再强制重建 Web/API；成功后写首个 `GIT_SOURCE_BUILD` receipt，失败则进入 recovery-required。
+- 对抗式审查发现并修复待审核业务成本越权：只读录单权限不再可写；定向验证覆盖只读 403、本人 201、直属主管 201、非直属主管 404。业务员默认不再继承水单匹配写权限。
+- 已完成 `prisma generate -> Shared/API/Web build`；业务成本权限、RBAC、角色权限页面定向测试通过；治理与 429 条路由契约检查通过。architecture baseline 仅在逐项审查新增/迁移路由后刷新，并保留现有债务计数。
 
 ## 发布状态
 
-- 未发布；47 未被写入、未迁移、未重启。
-- 阻断原因不是“构建工具报错”，而是当前运行镜像、宿主机源码与 Git 三者没有可证明的同源关系；此时覆盖 47 会删除未纳入候选的迁移和已上线模块。
+- 候选已达到 bootstrap 前本地门禁，待最终专项复审、提交并推送后执行一次性 cutover。
+- 截至本记录更新，47 仍未被写入、未迁移、未重启。

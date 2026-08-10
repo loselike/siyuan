@@ -13878,8 +13878,7 @@ export class InMemoryRepository {
     return type === 'BUSINESS_COST'
       && shipment?.status === 'REVIEW_PENDING'
       && !this.canMaskOrderEntryBusinessCosts(principal)
-      && (await this.hasPermission(principal.role, 'business:order-entry:view')
-        || await this.hasPermission(principal.role, 'business:order-entry:business-cost-write'));
+      && await this.hasPermission(principal.role, 'business:order-entry:business-cost-write');
   }
 
   private async ensurePendingReviewBusinessCostWrite(
@@ -13892,8 +13891,7 @@ export class InMemoryRepository {
     }
     if (type !== 'BUSINESS_COST'
       || this.canMaskOrderEntryBusinessCosts(principal)
-      || (!await this.hasPermission(principal.role, 'business:order-entry:view')
-        && !await this.hasPermission(principal.role, 'business:order-entry:business-cost-write'))) {
+      || !await this.hasPermission(principal.role, 'business:order-entry:business-cost-write')) {
       throw new ForbiddenException('没有填写业务成本权限');
     }
   }
@@ -13961,7 +13959,7 @@ export class InMemoryRepository {
   private canWriteOrderEntryBusinessCosts(principal: Principal) {
     const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
     return !this.canMaskOrderEntryBusinessCosts(principal)
-      && (permissions.includes('business:order-entry:view') || permissions.includes('business:order-entry:business-cost-write'));
+      && permissions.includes('business:order-entry:business-cost-write');
   }
 
   private canViewOrderEntryBusinessCosts(principal: Principal) {

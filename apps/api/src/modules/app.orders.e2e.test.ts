@@ -75,6 +75,121 @@ describe('Siyuan API orders', () => {
       .expect(200);
   });
 
+  it('requires business-cost write permission and preserves owner/team scope for review costs', async () => {
+    const adminToken = await app.loginAs('admin');
+    const createRole = async (label: string, permissions: string[]) => {
+      const role = await request(app.getHttpServer())
+        .post('/api/system/roles')
+        .set('Authorization', app.auth(adminToken))
+        .send({ label, templateRole: 'OPERATOR' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .put(`/api/system/roles/${role.body.key}/permissions`)
+        .set('Authorization', app.auth(adminToken))
+        .send({ permissions })
+        .expect(200);
+      return role.body.key as string;
+    };
+    const createStaff = async (username: string, role: string, directManagerId?: string) => {
+      const account = await request(app.getHttpServer())
+        .post('/api/system/staff-accounts')
+        .set('Authorization', app.auth(adminToken))
+        .send({ username, password: 'ReviewCost@123', role, site: '深圳思远', directManagerId });
+      if (account.status !== 201) throw new Error(`创建测试员工失败: ${JSON.stringify(account.body)}`);
+      return account.body;
+    };
+    const login = async (username: string) => {
+      const response = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ username, password: 'ReviewCost@123' })
+        .expect(201);
+      const accessToken = response.body.accessToken as string;
+      await request(app.getHttpServer())
+        .post('/api/auth/change-password')
+        .set('Authorization', app.auth(accessToken))
+        .send({ currentPassword: 'ReviewCost@123', newPassword: 'ReadyCost@123' })
+        .expect(201);
+      const refreshed = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ username, password: 'ReadyCost@123' })
+        .expect(201);
+      return refreshed.body.accessToken as string;
+    };
+
+    const viewOnlyRole = await createRole('只读成本权限组', [
+      'workspace:access',
+      'business:order-entry:view',
+      'business:order-entry:business-cost-view'
+    ]);
+    await createStaff('review-cost-view', viewOnlyRole);
+    const viewOnlyToken = await login('review-cost-view');
+
+    const managerRole = await createRole('主管成本权限组', [
+      'workspace:access',
+      'business:order-entry:view',
+      'business:order-entry:create',
+      'business:order-entry:business-cost-view',
+      'business:order-entry:business-cost-write',
+      'business:shipment:team-view'
+    ]);
+    const ownerRole = await createRole('录单成本权限组', [
+      'workspace:access',
+      'business:order-entry:view',
+      'business:order-entry:create',
+      'business:order-entry:business-cost-view',
+      'business:order-entry:business-cost-write'
+    ]);
+    const manager = await createStaff('review-cost-manager', managerRole);
+    await createStaff('review-cost-outsider', managerRole);
+    await createStaff('review-cost-owner', ownerRole, manager.id);
+    const ownerToken = await login('review-cost-owner');
+    const managerToken = await login('review-cost-manager');
+    const outsiderToken = await login('review-cost-outsider');
+    const customer = await request(app.getHttpServer())
+      .post('/api/master-data/customers')
+      .set('Authorization', app.auth(adminToken))
+      .send({ code: 'RCOST', name: '待审核成本权限测试客户', salesperson: 'review-cost-owner' })
+      .expect(201);
+
+    const shipment = await request(app.getHttpServer())
+      .post('/api/shipments')
+      .set('Authorization', app.auth(ownerToken))
+      .send({
+        customerId: customer.body.id,
+        customerOrderNo: 'REVIEW-COST-SCOPE-001',
+        businessType: 'EXPRESS',
+        packageType: 'WPX',
+        destinationCountry: '美国',
+        packageCount: 1,
+        receivableWeightKg: 2,
+        agentWeightKg: 2,
+        channelId: 'ch-dhl-hk',
+        initialStatus: 'REVIEW_PENDING'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${shipment.body.id}/review-business-costs`)
+      .set('Authorization', app.auth(viewOnlyToken))
+      .send({ type: 'BUSINESS_COST', name: '只读越权成本', amount: 1, currency: 'RMB' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${shipment.body.id}/review-business-costs`)
+      .set('Authorization', app.auth(ownerToken))
+      .send({ type: 'BUSINESS_COST', name: '录单人成本', amount: 10, currency: 'RMB' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${shipment.body.id}/review-business-costs`)
+      .set('Authorization', app.auth(managerToken))
+      .send({ type: 'BUSINESS_COST', name: '直属主管成本', amount: 20, currency: 'RMB' })
+      .expect(201);
+    await request(app.getHttpServer())
+      .post(`/api/shipments/${shipment.body.id}/review-business-costs`)
+      .set('Authorization', app.auth(outsiderToken))
+      .send({ type: 'BUSINESS_COST', name: '非直属主管成本', amount: 30, currency: 'RMB' })
+      .expect(404);
+  });
+
   it('keeps navigation unread badges per user read state and permission scope', async () => {
     const adminToken = await app.loginAs('admin');
     const operatorToken = await app.loginAs('operator');

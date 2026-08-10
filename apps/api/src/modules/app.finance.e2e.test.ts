@@ -2482,6 +2482,12 @@ describe('Siyuan API finance', () => {
       .expect(201);
 
     await request(app.getHttpServer())
+      .post(`/api/shipments/${shipment.body.id}/finance-items`)
+      .set('Authorization', app.auth(adminToken))
+      .send({ type: 'BUSINESS_COST', name: '基础运费', amount: 280, currency: 'RMB' })
+      .expect(201);
+
+    await request(app.getHttpServer())
       .get(`/api/shipments/${shipment.body.id}/finance-detail`)
       .set('Authorization', app.auth(adminToken))
       .expect(200)

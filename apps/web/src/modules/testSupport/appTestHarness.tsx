@@ -1731,6 +1731,24 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     });
   }
 
+  if (url.endsWith('/api/auth/session')) {
+    const account = actorAccount();
+    const permissions = systemRoleMatrix.roles.find((item) => item.key === account.role)?.permissions ?? [];
+    return jsonResponse({
+      user: {
+        id: account.id,
+        username: account.username,
+        role: account.role,
+        name: account.name,
+        phone: account.phone,
+        gender: account.gender,
+        nickname: account.nickname,
+        mustChangePassword: account.mustChangePassword
+      },
+      permissions
+    });
+  }
+
   if (url.endsWith('/api/auth/me')) {
     const account = actorAccount();
     return jsonResponse({
@@ -2891,7 +2909,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(employeeShipments.filter((shipment) => shipment.status === 'OUTBOUNDED' && approved(shipment.id, 'business') && approved(shipment.id, 'agent')));
   }
 
-  if (url.endsWith('/api/shipments')) {
+  if (new URL(url, 'http://test.local').pathname === '/api/shipments') {
     const token = String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '');
     return jsonResponse(token.includes('CUSTOMER') ? customerShipments : employeeShipments);
   }

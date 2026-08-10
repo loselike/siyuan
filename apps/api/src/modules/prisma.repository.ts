@@ -20412,8 +20412,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return type === 'BUSINESS_COST'
       && shipment?.status === 'REVIEW_PENDING'
       && !(await this.canMaskOrderEntryBusinessCosts(principal))
-      && (await this.hasPermission(principal.role, 'business:order-entry:view')
-        || await this.hasPermission(principal.role, 'business:order-entry:business-cost-write'));
+      && await this.hasPermission(principal.role, 'business:order-entry:business-cost-write');
   }
 
   private async ensurePendingReviewBusinessCostWrite(
@@ -20426,8 +20425,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     if (type !== 'BUSINESS_COST'
       || await this.canMaskOrderEntryBusinessCosts(principal)
-      || (!await this.hasPermission(principal.role, 'business:order-entry:view')
-        && !await this.hasPermission(principal.role, 'business:order-entry:business-cost-write'))) {
+      || !await this.hasPermission(principal.role, 'business:order-entry:business-cost-write')) {
       throw new ForbiddenException('没有填写业务成本权限');
     }
   }
@@ -20597,7 +20595,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async canWriteOrderEntryBusinessCosts(principal: Principal) {
     return !(await this.canMaskOrderEntryBusinessCosts(principal))
-      && await this.hasAnyPermission(principal.role, ['business:order-entry:view', 'business:order-entry:business-cost-write']);
+      && await this.hasPermission(principal.role, 'business:order-entry:business-cost-write');
   }
 
   private async canViewOrderEntryBusinessCosts(principal: Principal) {
@@ -21279,10 +21277,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       actor.role.name as RoleKey,
       actor.role.permissions.map((item: { code: string }) => item.code as PermissionKey)
     );
-    const hasRequiredPermission = requiredPermission === 'business:order-entry:business-cost-write'
-      ? (permissions.includes('business:order-entry:view') || permissions.includes(requiredPermission))
-        && !permissions.includes('business:order-entry:business-cost-mask')
-      : permissions.includes(requiredPermission);
+    const hasRequiredPermission = permissions.includes(requiredPermission)
+      && (requiredPermission !== 'business:order-entry:business-cost-write'
+        || !permissions.includes('business:order-entry:business-cost-mask'));
     if (
       !permissions.includes('business:shipment:team-view')
       || !hasRequiredPermission
@@ -21319,7 +21316,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     );
     if (
       !permissions.includes('business:shipment:team-view')
-      || !(permissions.includes('business:order-entry:view') || permissions.includes('business:order-entry:business-cost-write'))
+      || !permissions.includes('business:order-entry:business-cost-write')
       || permissions.includes('business:order-entry:business-cost-mask')
       || !owner
       || owner.enabled !== true
