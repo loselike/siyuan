@@ -50,7 +50,7 @@
 
 ## 发布状态
 
-- 用户明确不使用 GitHub；候选改用锁内不可变 Git bundle 作为耐久来源证据。发布提交为 `767f408ed0c5c7ebd1c68861479ed8d393772fa1`，未推送远端仓库。
+- bootstrap 发布时采用锁内不可变 Git bundle 作为耐久来源证据，发布提交为 `767f408ed0c5c7ebd1c68861479ed8d393772fa1`；随后按用户确认将统一基线分支与发布记录同步到 GitHub `main`。
 - 2026-08-10 已完成一次性 bootstrap cutover；release ID 为 `git-767f408ed0c5_web-71cebb1f292f_api-530ee27d274d`，Web/API 均由统一源码重新构建并重启，数据库 migration 未执行。
 - 线上 provenance audit 为 `traceable/ok`，bundle 为只读 `0444` 且 SHA-256、exact HEAD、receipt、运行镜像和 API `RELEASE_ID` 全部匹配；公网 API health 与 Web 均为 200。
 - 发布完成后发现原发布主进程异常退出遗留同 owner 的孤儿心跳；已核对 state/receipt/health 后按原 token 精确停止心跳并释放锁。最终 release lock 为 `free`，recovery 为 `clear`。
