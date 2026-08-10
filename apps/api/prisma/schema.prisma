@@ -36,32 +36,32 @@ enum ShipmentStatus {
 }
 
 model User {
-  id                      String                   @id @default(cuid())
-  username                String                   @unique
-  passwordHash            String
-  roleId                  String
-  customerId              String?
-  name                    String?
-  phone                   String?
-  gender                  String?
-  nickname                String?
-  departmentId            String?
-  directManagerId         String?
-  site                    String?
-  mustChangePassword      Boolean                  @default(false)
-  enabled                 Boolean                  @default(true)
-  createdAt               DateTime                 @default(now())
-  role                    Role                     @relation(fields: [roleId], references: [id])
-  department              Department?              @relation(fields: [departmentId], references: [id], onDelete: SetNull)
-  directManager           User?                    @relation("UserDirectManager", fields: [directManagerId], references: [id], onDelete: SetNull)
-  directReports           User[]                   @relation("UserDirectManager")
-  customer                Customer?                @relation(fields: [customerId], references: [id])
-  loginLogs               LoginLog[]
-  moduleReadStates        UserModuleReadState[]
-  tablePreferences        UserTablePreference[]
-  notificationDeliveries  NotificationDelivery[]
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String
+  roleId       String
+  customerId   String?
+  name         String?
+  phone        String?
+  gender       String?
+  nickname     String?
+  departmentId String?
+  directManagerId String?
+  site         String?
+  mustChangePassword Boolean @default(false)
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  role         Role     @relation(fields: [roleId], references: [id])
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  directManager User? @relation("UserDirectManager", fields: [directManagerId], references: [id], onDelete: SetNull)
+  directReports User[] @relation("UserDirectManager")
+  customer     Customer? @relation(fields: [customerId], references: [id])
+  loginLogs    LoginLog[]
+  moduleReadStates UserModuleReadState[]
+  tablePreferences UserTablePreference[]
+  notificationDeliveries NotificationDelivery[]
   notificationPreferences NotificationPreference[]
-  createdWaterReceipts    WaterReceipt[]           @relation("WaterReceiptCreator")
+  createdWaterReceipts WaterReceipt[] @relation("WaterReceiptCreator")
 
   @@index([departmentId])
   @@index([directManagerId])
@@ -109,31 +109,32 @@ model Role {
 }
 
 model Permission {
-  id    String @id @default(cuid())
-  code  String @unique
-  roles Role[]
+  id     String @id @default(cuid())
+  code   String @unique
+  roles  Role[]
 }
 
 model Department {
-  id      String  @id @default(cuid())
+  id      String @id @default(cuid())
   name    String
   enabled Boolean @default(true)
   users   User[]
 }
 
 model Customer {
-  id                      String            @id @default(cuid())
-  code                    String            @unique
-  name                    String
-  customerSource          String?
-  salesperson             String?
+  id        String            @id @default(cuid())
+  code      String            @unique
+  name      String
+  customerSource String?
+  salesperson String?
   defaultSettlementMethod String?
-  enabled                 Boolean           @default(true)
-  users                   User[]
-  contacts                CustomerContact[]
-  accounts                CustomerAccount[]
-  shipments               Shipment[]
-  waterReceipts           WaterReceipt[]
+  enabled   Boolean           @default(true)
+  users     User[]
+  contacts  CustomerContact[]
+  accounts  CustomerAccount[]
+  shipments Shipment[]
+  waterReceipts WaterReceipt[]
+  miscFees MiscFeeRecord[]
 }
 
 model CustomerSource {
@@ -150,19 +151,19 @@ model CustomerSource {
 }
 
 model CustomerContact {
-  id               String   @id @default(cuid())
-  customerId       String
-  name             String
-  company          String?
-  phone            String?
-  email            String?
+  id         String   @id @default(cuid())
+  customerId String
+  name       String
+  company    String?
+  phone      String?
+  email      String?
   fbaWarehouseCode String?
-  address          String?
-  country          String?
-  state            String?
-  postalCode       String?
-  enabled          Boolean  @default(true)
-  customer         Customer @relation(fields: [customerId], references: [id])
+  address    String?
+  country    String?
+  state      String?
+  postalCode String?
+  enabled    Boolean  @default(true)
+  customer   Customer @relation(fields: [customerId], references: [id])
 }
 
 model CustomerAccount {
@@ -174,38 +175,39 @@ model CustomerAccount {
 }
 
 model Agent {
-  id                     String                @id @default(cuid())
-  name                   String
-  code                   String?
-  shortName              String?
-  integrationType        String                @default("MANUAL")
-  settlementCycle        String?
-  warehouseAddress1      String?
-  warehouseAddress2      String?
-  warehouseAddress3      String?
-  warehouseContact       String?
-  warehouseContactName1  String?
+  id        String     @id @default(cuid())
+  name      String
+  code      String?
+  shortName String?
+  integrationType String @default("MANUAL")
+  settlementCycle String?
+  warehouseAddress1 String?
+  warehouseAddress2 String?
+  warehouseAddress3 String?
+  warehouseContact String?
+  warehouseContactName1 String?
   warehouseContactPhone1 String?
-  warehouseContactName2  String?
+  warehouseContactName2 String?
   warehouseContactPhone2 String?
-  warehouseContactName3  String?
+  warehouseContactName3 String?
   warehouseContactPhone3 String?
-  invoiceTemplateName    String?
-  invoiceTemplateUrl     String?
-  invoiceTemplateName2   String?
-  invoiceTemplateUrl2    String?
-  invoiceTemplateName3   String?
-  invoiceTemplateUrl3    String?
-  invoiceTemplates       Json?
-  trackingWebsite        String?
-  createdAt              DateTime              @default(now())
-  enabled                Boolean               @default(true)
-  shipments              Shipment[]
-  financeItems           ShipmentFinanceItem[] @relation("FinanceItemAgent")
-  paymentVouchers        PaymentVoucher[]      @relation("PaymentVoucherAgent")
-  bankAccounts           AgentBankAccount[]
-  payeeBankAccounts      PayeeBankAccount[]
-  agentChannels          AgentChannel[]
+  invoiceTemplateName String?
+  invoiceTemplateUrl String?
+  invoiceTemplateName2 String?
+  invoiceTemplateUrl2 String?
+  invoiceTemplateName3 String?
+  invoiceTemplateUrl3 String?
+  invoiceTemplates Json?
+  trackingWebsite String?
+  createdAt DateTime @default(now())
+  enabled   Boolean    @default(true)
+  shipments Shipment[]
+  financeItems ShipmentFinanceItem[] @relation("FinanceItemAgent")
+  paymentVouchers PaymentVoucher[] @relation("PaymentVoucherAgent")
+  bankAccounts AgentBankAccount[]
+  payeeBankAccounts PayeeBankAccount[]
+  agentChannels AgentChannel[]
+  miscFees MiscFeeRecord[]
 }
 
 model AgentChannel {
@@ -226,31 +228,31 @@ model Carrier {
 }
 
 model Channel {
-  id                                           String        @id @default(cuid())
-  name                                         String
-  carrierId                                    String?
-  enabled                                      Boolean       @default(true)
-  deletedAt                                    DateTime?
-  volumeDivisor                                Int           @default(5000)
-  roundingRule                                 String        @default("NONE")
-  businessType                                 String        @default("EXPRESS")
-  category                                     String        @default("")
-  multiPieceWeightRule                         String        @default("SUM_THEN_COMPARE")
-  singleWeightRoundingRule                     String        @default("ACTUAL")
-  settlementWeightRule                         String        @default("MAX_ACTUAL_VOLUME")
-  settlementWeightRoundingRule                 String        @default("NONE")
-  largeCargoThresholdKg                        Decimal?
-  overweightWarningThresholdKg                 Decimal?      @db.Decimal(12, 4)
-  overGirthLengthWidthHeightThresholdCm        Decimal?      @db.Decimal(12, 4)
-  overGirthLengthPlusTwoWidthHeightThresholdCm Decimal?      @db.Decimal(12, 4)
-  perPieceMinimumChargeWeightKg                Decimal?      @db.Decimal(12, 4)
-  perShipmentMinimumCharge                     Decimal?      @db.Decimal(12, 4)
-  perShipmentMinimumChargeUnit                 String?
-  densityRatio                                 Decimal?      @db.Decimal(12, 4)
-  remoteAreaRule                               String        @default("NONE")
-  carrier                                      Carrier?      @relation(fields: [carrierId], references: [id])
-  shipments                                    Shipment[]
-  pricingRules                                 PricingRule[]
+  id        String     @id @default(cuid())
+  name      String
+  carrierId String?
+  enabled   Boolean    @default(true)
+  deletedAt DateTime?
+  volumeDivisor Int     @default(5000)
+  roundingRule  String  @default("NONE")
+  businessType String @default("EXPRESS")
+  category String @default("")
+  multiPieceWeightRule String @default("SUM_THEN_COMPARE")
+  singleWeightRoundingRule String @default("ACTUAL")
+  settlementWeightRule String @default("MAX_ACTUAL_VOLUME")
+  settlementWeightRoundingRule String @default("NONE")
+  largeCargoThresholdKg Decimal?
+  overweightWarningThresholdKg Decimal? @db.Decimal(12, 4)
+  overGirthLengthWidthHeightThresholdCm Decimal? @db.Decimal(12, 4)
+  overGirthLengthPlusTwoWidthHeightThresholdCm Decimal? @db.Decimal(12, 4)
+  perPieceMinimumChargeWeightKg Decimal? @db.Decimal(12, 4)
+  perShipmentMinimumCharge Decimal? @db.Decimal(12, 4)
+  perShipmentMinimumChargeUnit String?
+  densityRatio Decimal? @db.Decimal(12, 4)
+  remoteAreaRule String @default("NONE")
+  carrier   Carrier?   @relation(fields: [carrierId], references: [id])
+  shipments Shipment[]
+  pricingRules PricingRule[]
 
   @@index([deletedAt, enabled, name])
 }
@@ -275,98 +277,117 @@ model Site {
 }
 
 model Shipment {
-  id                         String                      @id @default(cuid())
-  customerId                 String
-  agentId                    String?
-  channelId                  String?
-  customerOrderNo            String
-  systemOrderNo              String                      @unique
-  transferNo                 String?
-  transportStartedAt         DateTime?
-  transportCompletedAt       DateTime?
-  subOrderNo                 String?
-  inboundNo                  String?
-  productName                String?
-  productNames               String[]                    @default([])
-  declarationRequired        Boolean                     @default(false)
-  sensitive                  Boolean                     @default(false)
-  cargoType                  String?
-  volumeCbm                  Decimal?
-  actualWeightKg             Decimal?
-  cargoDataSource            String                      @default("AUTO_MATCHED")
-  chargeWeightOverridden     Boolean                     @default(false)
-  settlementMethod           String?
-  tradeTerms                 String?
-  fbaInboundNo               String?
-  receiverName               String?
-  receiverCompany            String?
-  receiverPhone              String?
-  receiverAddress            String?
-  receiverCountry            String?
-  receiverState              String?
-  receiverPostalCode         String?
-  fbaWarehouseCode           String?
-  entryBy                    String?
-  entryAt                    DateTime?
-  businessReviewedBy         String?
-  businessReviewedAt         DateTime?
-  reviewedBy                 String?
-  reviewedAt                 DateTime?
-  reviewRejectedReason       String?
-  businessType               BusinessType
-  status                     ShipmentStatus
-  destinationCountry         String
-  packageType                String
-  packageCount               Int                         @default(1)
-  receivableWeightKg         Decimal
-  agentWeightKg              Decimal
-  latestTracking             String?
-  trackingStaleDays          Int                         @default(0)
-  isRemoteArea               Boolean                     @default(false)
-  paymentAmountUsd           Decimal?
-  paymentAmountCny           Decimal?
-  paymentMethod              String?
-  shippingMarkRequired       Boolean                     @default(false)
-  businessInvoiceName        String?
-  businessInvoiceUrl         String?
-  businessInvoiceUploadedBy  String?
-  businessInvoiceUploadedAt  DateTime?
-  outboundAt                 DateTime?
-  etaAt                      DateTime?
-  etdAt                      DateTime?
-  vesselVoyage               String?
-  remark                     String?
-  draftWarehousePackageIds   String[]                    @default([])
-  createdAt                  DateTime                    @default(now())
-  updatedAt                  DateTime                    @updatedAt
-  deletedAt                  DateTime?
-  deletedBy                  String?
-  deletedReason              String?
-  deleteType                 String?
-  restoredAt                 DateTime?
-  restoredBy                 String?
-  restoreMode                String?
-  customer                   Customer                    @relation(fields: [customerId], references: [id])
-  agent                      Agent?                      @relation(fields: [agentId], references: [id])
-  channel                    Channel?                    @relation(fields: [channelId], references: [id])
-  packages                   ShipmentPackage[]
-  events                     ShipmentEvent[]
-  stageHistories             ShipmentStageHistory[]
-  trackingEvents             TrackingEvent[]
-  problemTickets             ProblemTicket[]
-  receivableFees             ReceivableFee[]
-  payableFees                PayableFee[]
-  financeItems               ShipmentFinanceItem[]
+  id                  String            @id @default(cuid())
+  customerId          String
+  agentId             String?
+  channelId           String?
+  customerOrderNo     String
+  systemOrderNo       String            @unique
+  transferNo          String?
+  subOrderNo          String?
+  inboundNo           String?
+  productName         String?
+  productNames        String[]                    @default([])
+  declarationRequired Boolean           @default(false)
+  sensitive           Boolean           @default(false)
+  cargoType           String?
+  volumeCbm           Decimal?
+  actualWeightKg      Decimal?
+  cargoDataSource     String            @default("AUTO_MATCHED")
+  chargeWeightOverridden Boolean         @default(false)
+  settlementMethod    String?
+  tradeTerms          String?
+  fbaInboundNo        String?
+  receiverName        String?
+  receiverCompany     String?
+  receiverPhone       String?
+  receiverAddress     String?
+  receiverCountry     String?
+  receiverState       String?
+  receiverPostalCode  String?
+  fbaWarehouseCode    String?
+  entryBy             String?
+  entryAt             DateTime?
+  businessReviewedBy  String?
+  businessReviewedAt  DateTime?
+  reviewedBy          String?
+  reviewedAt          DateTime?
+  reviewRejectedReason String?
+  businessType        BusinessType
+  status              ShipmentStatus
+  destinationCountry  String
+  packageType         String
+  packageCount        Int               @default(1)
+  receivableWeightKg  Decimal
+  agentWeightKg       Decimal
+  latestTracking      String?
+  trackingStaleDays   Int               @default(0)
+  isRemoteArea        Boolean           @default(false)
+  paymentAmountUsd    Decimal?
+  paymentAmountCny    Decimal?
+  paymentMethod       String?
+  shippingMarkRequired Boolean          @default(false)
+  warehouseOutboundRemark String?
+  businessInvoiceName String?
+  businessInvoiceUrl  String?
+  businessInvoiceUploadedBy String?
+  businessInvoiceUploadedAt DateTime?
+  outboundAt          DateTime?
+  etaAt               DateTime?
+  etdAt               DateTime?
+  remark              String?
+  draftWarehousePackageIds String[]          @default([])
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+  deletedAt           DateTime?
+  deletedBy           String?
+  deletedReason       String?
+  deleteType          String?
+  restoredAt          DateTime?
+  restoredBy          String?
+  restoreMode         String?
+  customer            Customer          @relation(fields: [customerId], references: [id])
+  agent               Agent?            @relation(fields: [agentId], references: [id])
+  channel             Channel?          @relation(fields: [channelId], references: [id])
+  packages            ShipmentPackage[]
+  events              ShipmentEvent[]
+  trackingEvents      TrackingEvent[]
+  problemTickets      ProblemTicket[]
+  receivableFees      ReceivableFee[]
+  payableFees         PayableFee[]
+  financeItems        ShipmentFinanceItem[]
   payablePaymentApplications PayablePaymentApplication[]
-  paymentApplicationItems    PaymentApplicationItem[]
-  waterReceiptMatches        WaterReceiptMatch[]
-  waterReceiptMatchRequests  WaterReceiptMatchRequest[]
-  labels                     ShipmentLabel[]
-  carrierTasks               CarrierTask[]
+  paymentApplicationItems PaymentApplicationItem[]
+  waterReceiptMatches WaterReceiptMatch[]
+  waterReceiptMatchRequests WaterReceiptMatchRequest[]
+  labels              ShipmentLabel[]
+  carrierTasks        CarrierTask[]
+  miscFees             MiscFeeRecord[]
+  miscFeeMatchHistory  MiscFeeMatchHistory[]
+  profitSettlementLines ProfitSettlementLine[]
+  stageHistories       ShipmentStageHistory[]
 
   @@index([status, createdAt])
   @@index([customerId, createdAt])
   @@index([deletedAt, createdAt])
+}
+
+model ShipmentStageHistory {
+  id          String   @id @default(cuid())
+  shipmentId  String
+  stageKey    String
+  enteredAt   DateTime
+  exitedAt    DateTime?
+  visitNo     Int      @default(1)
+  source      String   @default("STATUS_EVENT")
+  exitReason  String?
+  createdAt   DateTime @default(now())
+  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+
+  @@index([shipmentId, enteredAt])
+  @@index([shipmentId, stageKey, enteredAt])
+  @@index([stageKey, exitedAt, enteredAt])
+  @@unique([shipmentId, stageKey, visitNo])
 }
 
 model ShipmentLabel {
@@ -399,76 +420,58 @@ model CarrierTask {
 }
 
 model ShipmentPackage {
-  id         String   @id @default(cuid())
-  shipmentId String
-  lengthCm   Decimal
-  widthCm    Decimal
-  heightCm   Decimal
-  actualKg   Decimal
-  volumeKg   Decimal
-  shipment   Shipment @relation(fields: [shipmentId], references: [id])
+  id          String   @id @default(cuid())
+  shipmentId  String
+  lengthCm    Decimal
+  widthCm     Decimal
+  heightCm    Decimal
+  actualKg    Decimal
+  volumeKg    Decimal
+  shipment    Shipment @relation(fields: [shipmentId], references: [id])
 }
 
 model ShipmentEvent {
-  id         String          @id @default(cuid())
+  id         String         @id @default(cuid())
   shipmentId String
   fromStatus ShipmentStatus?
   toStatus   ShipmentStatus
   note       String?
-  createdAt  DateTime        @default(now())
-  shipment   Shipment        @relation(fields: [shipmentId], references: [id])
-}
-
-model ShipmentStageHistory {
-  id          String   @id @default(cuid())
-  shipmentId  String
-  stageKey    String
-  enteredAt   DateTime
-  exitedAt    DateTime?
-  visitNo     Int
-  source      String   @default("STATUS_EVENT")
-  exitReason  String?
-  createdAt   DateTime @default(now())
-  shipment    Shipment @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
-
-  @@index([shipmentId, enteredAt])
-  @@index([shipmentId, stageKey, enteredAt])
-  @@index([stageKey, exitedAt, enteredAt])
-  @@unique([shipmentId, stageKey, visitNo])
+  createdAt  DateTime       @default(now())
+  shipment   Shipment       @relation(fields: [shipmentId], references: [id])
 }
 
 model TrackingEvent {
   id                String   @id @default(cuid())
-  shipmentId        String
-  status            String
-  happenedAt        DateTime
-  visibleToCustomer Boolean  @default(true)
-  location          String?
-  carrier           String?
-  transferNo        String?
-  rawContent        String?
-  source            String   @default("MANUAL_ENTRY")
-  kind              String   @default("LOGISTICS")
-  shipment          Shipment @relation(fields: [shipmentId], references: [id])
+  shipmentId         String
+  status             String
+  happenedAt         DateTime
+  visibleToCustomer  Boolean  @default(true)
+  location           String?
+  carrier            String?
+  transferNo         String?
+  rawContent         String?
+  source             String   @default("MANUAL_ENTRY")
+  kind               String   @default("LOGISTICS")
+  shipment           Shipment @relation(fields: [shipmentId], references: [id])
 
   @@index([shipmentId, kind, happenedAt])
 }
 
 model ProblemTicket {
-  id               String         @id @default(cuid())
-  shipmentId       String
-  reason           String
-  status           String
-  customerVisible  Boolean        @default(true)
-  createdAt        DateTime       @default(now())
-  closedAt         DateTime?
-  closedBy         String?
-  closeReason      String?
-  assistanceReason String?
-  assistanceAt     DateTime?
-  tagSnapshot      Json?
-  shipment         Shipment       @relation(fields: [shipmentId], references: [id])
-  replies          ProblemReply[]
+  id                String         @id @default(cuid())
+  shipmentId         String
+  reason             String
+  status             String
+  customerVisible    Boolean        @default(true)
+  createdAt          DateTime       @default(now())
+  closedAt           DateTime?
+  closedBy           String?
+  closeReason        String?
+  assistanceReason   String?
+  assistanceAt       DateTime?
+  tagSnapshot        Json?
+  shipment           Shipment       @relation(fields: [shipmentId], references: [id])
+  replies            ProblemReply[]
 }
 
 model CommonTag {
@@ -482,7 +485,6 @@ model CommonTag {
   updatedBy              String?
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
-
   @@unique([scene, name])
   @@index([scene, enabled, sortOrder])
 }
@@ -513,44 +515,44 @@ model PriceZone {
 }
 
 model PriceRule {
-  id          String       @id @default(cuid())
-  productId   String
-  zoneName    String
-  minWeightKg Decimal
-  maxWeightKg Decimal
-  ratePerKg   Decimal
-  product     PriceProduct @relation(fields: [productId], references: [id])
+  id            String       @id @default(cuid())
+  productId     String
+  zoneName      String
+  minWeightKg   Decimal
+  maxWeightKg   Decimal
+  ratePerKg     Decimal
+  product       PriceProduct @relation(fields: [productId], references: [id])
 }
 
 model PricingRule {
-  id                 String  @id @default(cuid())
+  id                 String   @id @default(cuid())
   channelId          String
   destinationCountry String
   minWeightKg        Decimal
   maxWeightKg        Decimal
   ratePerKg          Decimal
   currency           String
-  enabled            Boolean @default(true)
-  channel            Channel @relation(fields: [channelId], references: [id])
+  enabled            Boolean  @default(true)
+  channel            Channel  @relation(fields: [channelId], references: [id])
 }
 
 model PriceBook {
-  id                String                @id @default(cuid())
-  fileName          String
-  agentId           String?
-  agentShortName    String?
-  targetModule      String?
-  remark            String?
+  id                 String         @id @default(cuid())
+  fileName           String
+  agentId            String?
+  agentShortName     String?
+  targetModule       String?
+  remark             String?
   // The parser/normalizer revision used to build the current rows. A new
   // revision is rebuilt from the retained original file by the background
   // worker; it never requires an operator to upload the workbook again.
-  parserRuleVersion Int                   @default(0)
-  refreshStatus     String                @default("CURRENT")
-  lastRuleRefreshAt DateTime?
-  importedAt        DateTime              @default(now())
-  deletedAt         DateTime?
-  rows              PriceBookRow[]
-  legacySources     LegacyPricingSource[]
+  parserRuleVersion  Int            @default(0)
+  refreshStatus      String         @default("CURRENT")
+  lastRuleRefreshAt  DateTime?
+  importedAt         DateTime       @default(now())
+  deletedAt          DateTime?
+  rows               PriceBookRow[]
+  legacySources      LegacyPricingSource[]
 
   @@index([deletedAt, targetModule, importedAt])
   @@index([deletedAt, targetModule, parserRuleVersion])
@@ -569,28 +571,28 @@ model AgentPriceBookDefaultRemark {
 }
 
 model PriceBookImportJob {
-  id                String    @id @default(cuid())
-  fileName          String
-  agentId           String?
-  agentShortName    String?
-  status            String    @default("PENDING")
-  filePath          String?
-  priceBookId       String?
-  targetModule      String?
+  id             String    @id @default(cuid())
+  fileName       String
+  agentId        String?
+  agentShortName String?
+  status         String    @default("PENDING")
+  filePath       String?
+  priceBookId    String?
+  targetModule   String?
   // IMPORT is the user upload flow. RULE_REFRESH is an idempotent,
   // server-side rebuild from the retained original workbook.
-  kind              String    @default("IMPORT")
+  kind           String    @default("IMPORT")
   parserRuleVersion Int?
-  dedupeKey         String?   @unique
-  totalRows         Int       @default(0)
-  processedRows     Int       @default(0)
-  failedRows        Int       @default(0)
-  message           String?
-  errorSummary      Json?
-  createdBy         String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
-  completedAt       DateTime?
+  dedupeKey      String?   @unique
+  totalRows      Int       @default(0)
+  processedRows  Int       @default(0)
+  failedRows     Int       @default(0)
+  message        String?
+  errorSummary   Json?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  completedAt    DateTime?
 
   @@index([status, createdAt])
   @@index([priceBookId])
@@ -598,24 +600,24 @@ model PriceBookImportJob {
 }
 
 model DubaiPriceDisplayVersion {
-  id                 String                  @id @default(cuid())
-  priceBookId        String?
-  originalName       String
-  status             String                  @default("PROCESSING")
-  isActive           Boolean                 @default(false)
-  isActiveAir        Boolean                 @default(false)
-  isActiveSea        Boolean                 @default(false)
-  salesSafe          Boolean                 @default(false)
-  seaMarkupPerCbm    Decimal                 @default(20) @db.Decimal(12, 2)
-  seaMarkupApplied   Boolean                 @default(false)
-  seaMarkupCellCount Int                     @default(0)
-  renderScope        String                  @default("AIR_SEA")
-  message            String?
-  unassignedSheets   Json?
-  createdBy          String?
-  createdAt          DateTime                @default(now())
-  updatedAt          DateTime                @updatedAt
-  pages              DubaiPriceDisplayPage[]
+  id           String   @id @default(cuid())
+  priceBookId  String?
+  originalName String
+  status       String   @default("PROCESSING")
+  isActive     Boolean  @default(false)
+  isActiveAir  Boolean  @default(false)
+  isActiveSea  Boolean  @default(false)
+  salesSafe    Boolean  @default(false)
+  seaMarkupPerCbm Decimal @default(20) @db.Decimal(12, 2)
+  seaMarkupApplied Boolean @default(false)
+  seaMarkupCellCount Int @default(0)
+  renderScope  String    @default("AIR_SEA")
+  message      String?
+  unassignedSheets Json?
+  createdBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  pages        DubaiPriceDisplayPage[]
 
   @@index([isActive, status, createdAt])
   @@index([isActiveAir, status, updatedAt])
@@ -624,15 +626,15 @@ model DubaiPriceDisplayVersion {
 }
 
 model DubaiPriceDisplayPage {
-  id        String                   @id @default(cuid())
+  id        String   @id @default(cuid())
   versionId String
   mode      String
   sheetName String
   pageNo    Int
   fileName  String
-  mimeType  String                   @default("image/png")
+  mimeType  String   @default("image/png")
   sizeBytes Int
-  createdAt DateTime                 @default(now())
+  createdAt DateTime @default(now())
   version   DubaiPriceDisplayVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
 
   @@unique([versionId, sheetName, pageNo])
@@ -640,29 +642,29 @@ model DubaiPriceDisplayPage {
 }
 
 model PriceBookRow {
-  id                     String    @id @default(cuid())
-  priceBookId            String
-  agentName              String
-  carrierName            String?
-  sourceSheetName        String?
-  channelName            String
-  businessRouteName      String?
-  realChannelName        String?
-  warehouseCode          String?
-  destinationCountry     String
-  postalRule             String?
-  minWeightKg            Decimal
-  maxWeightKg            Decimal
-  costPerKg              Decimal
-  currency               String
-  transitDays            Int?
-  transitLabel           String?
-  quoteSourceType        String?
-  surchargeFee           Decimal?
-  surchargeDetails       Json?
+  id                 String    @id @default(cuid())
+  priceBookId        String
+  agentName          String
+  carrierName        String?
+  sourceSheetName    String?
+  channelName        String
+  businessRouteName  String?
+  realChannelName    String?
+  warehouseCode      String?
+  destinationCountry String
+  postalRule        String?
+  minWeightKg        Decimal
+  maxWeightKg        Decimal
+  costPerKg          Decimal
+  currency           String
+  transitDays        Int?
+  transitLabel       String?
+  quoteSourceType    String?
+  surchargeFee       Decimal?
+  surchargeDetails   Json?
   productSurchargeRemark String?
-  specialRemark          String?
-  priceBook              PriceBook @relation(fields: [priceBookId], references: [id])
+  specialRemark      String?
+  priceBook          PriceBook @relation(fields: [priceBookId], references: [id])
 
   @@index([priceBookId])
   @@index([destinationCountry, minWeightKg, maxWeightKg])
@@ -674,44 +676,44 @@ model PriceBookRow {
 }
 
 model LegacyPricingSource {
-  id          String             @id @default(cuid())
+  id         String             @id @default(cuid())
   priceBookId String?
-  module      String
-  fileName    String
-  rowCount    Int                @default(0)
-  status      String             @default("ok")
-  message     String?
-  importedAt  DateTime           @default(now())
-  deletedAt   DateTime?
-  rows        LegacyPricingRow[]
-  priceBook   PriceBook?         @relation(fields: [priceBookId], references: [id])
+  module     String
+  fileName   String
+  rowCount   Int                @default(0)
+  status     String             @default("ok")
+  message    String?
+  importedAt DateTime           @default(now())
+  deletedAt  DateTime?
+  rows       LegacyPricingRow[]
+  priceBook  PriceBook?         @relation(fields: [priceBookId], references: [id])
 
   @@index([module, deletedAt, importedAt])
   @@index([priceBookId, deletedAt])
 }
 
 model LegacyPricingRow {
-  id                     String              @id @default(cuid())
-  sourceId               String
-  module                 String
-  agentName              String
-  origin                 String?
-  channelName            String
-  serviceName            String?
-  warehouseCode          String?
-  destinationCountry     String?
-  postalRule             String?
-  minWeightKg            Decimal?
-  maxWeightKg            Decimal?
-  costPerKg              Decimal?
-  cbmPrice               Decimal?
-  tierLabel              String?
-  transitLabel           String?
+  id                 String              @id @default(cuid())
+  sourceId           String
+  module             String
+  agentName          String
+  origin             String?
+  channelName        String
+  serviceName        String?
+  warehouseCode      String?
+  destinationCountry String?
+  postalRule         String?
+  minWeightKg        Decimal?
+  maxWeightKg        Decimal?
+  costPerKg          Decimal?
+  cbmPrice           Decimal?
+  tierLabel          String?
+  transitLabel       String?
   productSurchargeRemark String?
-  specialRemark          String?
-  remark                 String?
-  raw                    Json
-  source                 LegacyPricingSource @relation(fields: [sourceId], references: [id])
+  specialRemark      String?
+  remark             String?
+  raw                Json
+  source             LegacyPricingSource @relation(fields: [sourceId], references: [id])
 
   @@index([module, agentName])
   @@index([module, warehouseCode])
@@ -726,7 +728,7 @@ model LegacyPricingRow {
 }
 
 model AgentMarkupRule {
-  id                 String    @id @default(cuid())
+  id                 String   @id @default(cuid())
   legacyModule       String?
   priceBookId        String?
   agentName          String
@@ -734,15 +736,15 @@ model AgentMarkupRule {
   realChannelName    String?
   destinationCountry String?
   markupPerKg        Decimal
-  markupType         String    @default("WEIGHT")
-  markupValue        Decimal   @default(0)
+  markupType         String   @default("WEIGHT")
+  markupValue        Decimal  @default(0)
   markupUnit         String?
   minChargeableValue Decimal?
   maxChargeableValue Decimal?
-  priority           Int       @default(100)
-  enabled            Boolean   @default(true)
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  priority           Int      @default(100)
+  enabled            Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
   deletedAt          DateTime?
 
   @@index([legacyModule, priceBookId, agentName, enabled, deletedAt])
@@ -820,7 +822,7 @@ model SouthAfricaLookupPendingReview {
 }
 
 model WarehousePackage {
-  id                        String                       @id @default(cuid())
+  id                        String    @id @default(cuid())
   customerCode              String
   customerName              String?
   site                      String?
@@ -843,7 +845,7 @@ model WarehousePackage {
   destinationCountry        String?
   expectedTotalPackageCount Int?
   packageIndex              Int?
-  packageCount              Int                          @default(1)
+  packageCount              Int       @default(1)
   weightKg                  Decimal
   lengthCm                  Decimal
   widthCm                   Decimal
@@ -851,20 +853,20 @@ model WarehousePackage {
   cbm                       Decimal
   volumetricWeightKg        Decimal
   chargeableWeightKg        Decimal
-  divisor                   Int                          @default(6000)
-  roundingRule              String                       @default("NONE")
+  divisor                   Int       @default(6000)
+  roundingRule              String    @default("NONE")
   scanTime                  DateTime?
   remark                    String?
   manualException           String?
   scanSource                String?
-  measurementStatus         String                       @default("MEASURED")
+  measurementStatus         String    @default("MEASURED")
   measurementMatchedAt      DateTime?
   measurementMatchedBy      String?
-  status                    String                       @default("RECEIVED")
+  status                    String    @default("RECEIVED")
   exceptions                String[]
   createdBy                 String?
-  createdAt                 DateTime                     @default(now())
-  updatedAt                 DateTime                     @updatedAt
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
   consolidationItems        WarehouseConsolidationItem[]
 
   @@index([customerOrderNo, domesticTrackingNo])
@@ -877,16 +879,16 @@ model WarehousePackage {
 }
 
 model MojiaRequestSample {
-  id                 String    @id @default(cuid())
+  id                 String   @id @default(cuid())
   deviceNo           String?
-  payload            Json
-  payloadHash        String
-  result             String    @default("PENDING")
+  payload             Json
+  payloadHash         String
+  result              String   @default("PENDING")
   warehousePackageId String?
-  errorMessage       String?
-  receivedAt         DateTime  @default(now())
-  completedAt        DateTime?
-  expiresAt          DateTime
+  errorMessage        String?
+  receivedAt          DateTime @default(now())
+  completedAt         DateTime?
+  expiresAt           DateTime
 
   @@index([expiresAt])
   @@index([deviceNo, receivedAt])
@@ -895,100 +897,100 @@ model MojiaRequestSample {
 }
 
 model WarehouseRentRule {
-  id               String    @id @default(cuid())
-  name             String
-  site             String?
-  effectiveFrom    DateTime
-  effectiveTo      DateTime?
-  freeDays         Int
-  freePeriodUnit   String    @default("DAY")
-  billingUnit      String
-  billingCycleUnit String    @default("DAY")
-  densityMin       Decimal   @default(0)
-  densityMax       Decimal?
-  unitRate         Decimal
-  currency         String    @default("RMB")
-  enabled          Boolean   @default(true)
-  remark           String?
-  createdBy        String?
-  createdAt        DateTime  @default(now())
-  updatedBy        String?
-  updatedAt        DateTime  @updatedAt
+  id            String   @id @default(cuid())
+  name          String
+  site          String?
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+  freeDays      Int
+  freePeriodUnit String  @default("DAY")
+  billingUnit   String
+  billingCycleUnit String @default("DAY")
+  densityMin    Decimal  @default(0)
+  densityMax    Decimal?
+  unitRate      Decimal
+  currency      String   @default("RMB")
+  enabled       Boolean  @default(true)
+  remark        String?
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedBy     String?
+  updatedAt     DateTime @updatedAt
 
   @@index([site, enabled, effectiveFrom])
   @@index([effectiveFrom, effectiveTo])
 }
 
 model WarehouseConsolidation {
-  id                      String                       @id @default(cuid())
-  consolidationNo         String                       @unique
-  mode                    String
-  shipmentId              String?
-  systemOrderNo           String?
-  totalPackages           Int
-  totalActualWeightKg     Decimal
-  totalVolumetricWeightKg Decimal
-  totalChargeableWeightKg Decimal
-  createdAt               DateTime                     @default(now())
-  items                   WarehouseConsolidationItem[]
+  id                       String    @id @default(cuid())
+  consolidationNo          String    @unique
+  mode                     String
+  shipmentId               String?
+  systemOrderNo            String?
+  totalPackages            Int
+  totalActualWeightKg      Decimal
+  totalVolumetricWeightKg  Decimal
+  totalChargeableWeightKg  Decimal
+  createdAt                DateTime  @default(now())
+  items                    WarehouseConsolidationItem[]
 }
 
 model WarehouseConsolidationItem {
-  id              String                 @id @default(cuid())
+  id              String @id @default(cuid())
   consolidationId String
   packageId       String
   consolidation   WarehouseConsolidation @relation(fields: [consolidationId], references: [id])
-  package         WarehousePackage       @relation(fields: [packageId], references: [id])
+  package         WarehousePackage @relation(fields: [packageId], references: [id])
 
   @@unique([consolidationId, packageId])
 }
 
 model WarehouseTallyTask {
-  id                              String    @id @default(cuid())
-  taskNo                          String    @unique
-  status                          String    @default("PENDING")
-  rootTallyTaskId                 String
-  previousTallyTaskId             String?
-  tallySequence                   Int       @default(1)
-  packageIds                      String[]
-  sourcePackageId                 String
-  sourceCombinedOrderNo           String
-  customerCode                    String
-  customerName                    String?
-  salesperson                     String?
-  packageCount                    Int
-  originalWeightKg                Decimal
-  originalLengthCm                Decimal
-  originalWidthCm                 Decimal
-  originalHeightCm                Decimal
-  originalVolumetricWeightKg      Decimal
-  originalVolumetricWeightKg5000  Decimal
-  tallyRequirement                String
-  remark                          String?
-  createdBy                       String?
-  createdAt                       DateTime  @default(now())
-  completedPackageCount           Int?
-  completedWeightKg               Decimal?
-  completedLengthCm               Decimal?
-  completedWidthCm                Decimal?
-  completedHeightCm               Decimal?
-  completedVolumetricWeightKg     Decimal?
+  id                            String    @id @default(cuid())
+  taskNo                        String    @unique
+  status                        String    @default("PENDING")
+  rootTallyTaskId               String
+  previousTallyTaskId           String?
+  tallySequence                 Int       @default(1)
+  packageIds                    String[]
+  sourcePackageId               String
+  sourceCombinedOrderNo         String
+  customerCode                  String
+  customerName                  String?
+  salesperson                   String?
+  packageCount                  Int
+  originalWeightKg              Decimal
+  originalLengthCm              Decimal
+  originalWidthCm               Decimal
+  originalHeightCm              Decimal
+  originalVolumetricWeightKg    Decimal
+  originalVolumetricWeightKg5000 Decimal
+  tallyRequirement              String
+  remark                        String?
+  createdBy                     String?
+  createdAt                     DateTime  @default(now())
+  completedPackageCount         Int?
+  completedWeightKg             Decimal?
+  completedLengthCm             Decimal?
+  completedWidthCm              Decimal?
+  completedHeightCm             Decimal?
+  completedVolumetricWeightKg   Decimal?
   completedVolumetricWeightKg5000 Decimal?
-  completedBy                     String?
-  completedAt                     DateTime?
-  labelStatus                     String    @default("NOT_GENERATED")
-  labelNo                         String?
-  labelQrContent                  String?
-  labelGeneratedAt                DateTime?
-  labelGeneratedBy                String?
-  labelPrintedAt                  DateTime?
-  labelPrintedBy                  String?
-  labelDownloadedAt               DateTime?
-  labelDownloadedBy               String?
-  appliedPackageId                String?
-  appliedPackageNo                String?
-  labelAppliedAt                  DateTime?
-  labelAppliedBy                  String?
+  completedBy                   String?
+  completedAt                   DateTime?
+  labelStatus                   String    @default("NOT_GENERATED")
+  labelNo                       String?
+  labelQrContent                String?
+  labelGeneratedAt              DateTime?
+  labelGeneratedBy              String?
+  labelPrintedAt                DateTime?
+  labelPrintedBy                String?
+  labelDownloadedAt             DateTime?
+  labelDownloadedBy             String?
+  appliedPackageId              String?
+  appliedPackageNo              String?
+  labelAppliedAt                DateTime?
+  labelAppliedBy                String?
 
   @@index([status, createdAt])
   @@index([rootTallyTaskId, status, completedAt])
@@ -1014,44 +1016,48 @@ model FuelRate {
 }
 
 model ExchangeRate {
-  id            String    @id @default(cuid())
+  id            String   @id @default(cuid())
   baseCurrency  String
   quoteCurrency String
   rate          Decimal
   activeAt      DateTime
   endAt         DateTime?
-  enabled       Boolean   @default(true)
+  enabled       Boolean  @default(true)
 }
 
 model ReceivableFee {
-  id                        String                     @id @default(cuid())
-  shipmentId                String
-  amount                    Decimal
-  name                      String
-  settled                   Boolean                    @default(false)
-  currency                  String                     @default("RMB")
-  settlementMethod          String?
-  paymentNo                 String?
-  reconciliationStatus      String                     @default("PENDING")
-  receivedAmount            Decimal                    @default(0)
-  receiptStatus             String                     @default("UNPAID")
-  receiptMatchSource        String?
-  receiptMatchHint          String?
-  receivedAt                DateTime?
-  createdBy                 String?
-  reviewedBy                String?
-  reviewedAt                DateTime?
-  remark                    String?
-  voided                    Boolean                    @default(false)
-  voidedAt                  DateTime?
-  createdAt                 DateTime                   @default(now())
-  updatedAt                 DateTime                   @updatedAt
-  shipment                  Shipment                   @relation(fields: [shipmentId], references: [id])
-  waterReceiptMatches       WaterReceiptMatch[]
+  id                   String   @id @default(cuid())
+  shipmentId           String
+  amount               Decimal
+  name                 String
+  settled              Boolean  @default(false)
+  currency             String   @default("RMB")
+  settlementMethod     String?
+  paymentNo            String?
+  reconciliationStatus String   @default("PENDING")
+  receivedAmount       Decimal  @default(0)
+  receiptStatus        String   @default("UNPAID")
+  receiptMatchSource   String?
+  receiptMatchHint     String?
+  receivedAt           DateTime?
+  createdBy            String?
+  reviewedBy           String?
+  reviewedAt           DateTime?
+  profitExchangeRate   Decimal? @db.Decimal(18, 8)
+  profitRmbAmount      Decimal? @db.Decimal(18, 2)
+  profitEffectiveAt    DateTime?
+  remark               String?
+  voided               Boolean  @default(false)
+  voidedAt             DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  shipment             Shipment @relation(fields: [shipmentId], references: [id])
+  waterReceiptMatches  WaterReceiptMatch[]
   waterReceiptMatchRequests WaterReceiptMatchRequest[]
 
   @@index([shipmentId, createdAt])
   @@index([voided, reconciliationStatus, createdAt])
+  @@index([profitEffectiveAt])
 }
 
 model PayableFee {
@@ -1083,6 +1089,7 @@ model ShipmentFinanceItem {
   billingUnit                String?
   billingQuantity            Decimal?
   chargeWeightKg             Decimal?
+  chargeUnit                 String                      @default("KG")
   unitPrice                  Decimal?
   amountOverridden           Boolean                     @default(false)
   remark                     String?
@@ -1091,36 +1098,44 @@ model ShipmentFinanceItem {
   createdBy                  String?
   reviewedBy                 String?
   reviewedAt                 DateTime?
+  profitExchangeRate         Decimal?                   @db.Decimal(18, 8)
+  profitRmbAmount            Decimal?                   @db.Decimal(18, 2)
+  profitEffectiveAt          DateTime?
   voidedAt                   DateTime?
   createdAt                  DateTime                    @default(now())
   updatedAt                  DateTime                    @updatedAt
+  miscFeeRecordId            String?
+  miscFeeCostRole            String?
   shipment                   Shipment                    @relation(fields: [shipmentId], references: [id])
   agent                      Agent?                      @relation("FinanceItemAgent", fields: [agentId], references: [id], onDelete: Restrict)
   payablePaymentApplications PayablePaymentApplication[]
   paymentApplicationItems    PaymentApplicationItem[]
   waterReceiptMatches        WaterReceiptMatch[]
   waterReceiptMatchRequests  WaterReceiptMatchRequest[]
+  miscFeeRecord              MiscFeeRecord?              @relation(fields: [miscFeeRecordId], references: [id], onDelete: SetNull)
 
+  @@unique([miscFeeRecordId, miscFeeCostRole])
   @@index([shipmentId, type])
   @@index([agentId])
   @@index([type, voided, createdAt])
   @@index([reconciliationStatus, createdAt])
   @@index([receiptStatus, createdAt])
+  @@index([type, profitEffectiveAt])
 }
 
 model AgentBankAccount {
-  id                  String                      @id @default(cuid())
-  agentId             String?
-  agentName           String
-  accountName         String
-  bankName            String
-  bankAccountNo       String
-  currency            String                      @default("RMB")
-  remark              String?
-  enabled             Boolean                     @default(true)
-  createdAt           DateTime                    @default(now())
-  updatedAt           DateTime                    @updatedAt
-  agent               Agent?                      @relation(fields: [agentId], references: [id])
+  id            String   @id @default(cuid())
+  agentId       String?
+  agentName     String
+  accountName   String
+  bankName      String
+  bankAccountNo String
+  currency      String   @default("RMB")
+  remark        String?
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  agent         Agent?   @relation(fields: [agentId], references: [id])
   paymentApplications PayablePaymentApplication[]
 
   @@index([agentName, enabled])
@@ -1129,8 +1144,10 @@ model AgentBankAccount {
 
 model PayablePaymentApplication {
   id                     String                  @id @default(cuid())
-  payableFinanceItemId   String
-  shipmentId             String
+  sourceType             String                  @default("ORDER_PAYABLE")
+  payableFinanceItemId   String?                 @unique
+  miscFeeRecordId        String?                 @unique
+  shipmentId             String?
   agentBankAccountId     String?
   payeeBankAccountId     String?
   amount                 Decimal
@@ -1143,47 +1160,47 @@ model PayablePaymentApplication {
   invalidatedAt          DateTime?
   createdAt              DateTime                @default(now())
   updatedAt              DateTime                @updatedAt
-  payableFinanceItem     ShipmentFinanceItem     @relation(fields: [payableFinanceItemId], references: [id])
-  shipment               Shipment                @relation(fields: [shipmentId], references: [id])
+  payableFinanceItem     ShipmentFinanceItem?    @relation(fields: [payableFinanceItemId], references: [id])
+  miscFeeRecord          MiscFeeRecord?          @relation(fields: [miscFeeRecordId], references: [id])
+  shipment               Shipment?               @relation(fields: [shipmentId], references: [id])
   bankAccount            AgentBankAccount?       @relation(fields: [agentBankAccountId], references: [id])
   payeeBankAccount       PayeeBankAccount?       @relation(fields: [payeeBankAccountId], references: [id])
   attachments            PayableBillAttachment[]
   paymentApplicationItem PaymentApplicationItem?
 
-  @@unique([payableFinanceItemId])
   @@index([status, createdAt])
   @@index([applicationStatus, createdAt])
   @@index([shipmentId])
 }
 
 model PayableBillAttachment {
-  id                          String                    @id @default(cuid())
+  id                          String   @id @default(cuid())
   payablePaymentApplicationId String
   fileName                    String
   mimeType                    String?
   sizeBytes                   Int?
   url                         String?
   uploadedBy                  String?
-  createdAt                   DateTime                  @default(now())
+  createdAt                   DateTime @default(now())
   payablePaymentApplication   PayablePaymentApplication @relation(fields: [payablePaymentApplicationId], references: [id])
 
   @@index([payablePaymentApplicationId, createdAt])
 }
 
 model PayeeBankAccount {
-  id                  String                      @id @default(cuid())
-  agentId             String?
-  agentName           String
-  accountName         String
-  bankName            String
-  bankAccountNo       String
-  currency            String                      @default("RMB")
-  remark              String?
-  enabled             Boolean                     @default(true)
-  createdAt           DateTime                    @default(now())
-  updatedAt           DateTime                    @updatedAt
-  agent               Agent?                      @relation(fields: [agentId], references: [id])
-  pendingPayments     PayablePaymentApplication[]
+  id            String   @id @default(cuid())
+  agentId       String?
+  agentName     String
+  accountName   String
+  bankName      String
+  bankAccountNo String
+  currency      String   @default("RMB")
+  remark        String?
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  agent         Agent?   @relation(fields: [agentId], references: [id])
+  pendingPayments PayablePaymentApplication[]
   paymentApplications PaymentApplication[]
 
   @@index([agentName, currency, enabled])
@@ -1191,32 +1208,32 @@ model PayeeBankAccount {
 }
 
 model PaymentApplication {
-  id                   String                   @id @default(cuid())
-  applicationNo        String                   @unique
-  agentName            String
-  currency             String                   @default("RMB")
-  totalAmount          Decimal
-  status               String                   @default("WAITING_PAYMENT")
-  payeeBankAccountId   String?
-  remark               String?
-  appliedBy            String?
-  appliedAt            DateTime                 @default(now())
-  canceledAt           DateTime?
-  cancelReason         String?
-  payerBankName        String?
+  id                 String   @id @default(cuid())
+  applicationNo      String   @unique
+  agentName          String
+  currency           String   @default("RMB")
+  totalAmount        Decimal
+  status             String   @default("WAITING_PAYMENT")
+  payeeBankAccountId String?
+  remark             String?
+  appliedBy          String?
+  appliedAt          DateTime @default(now())
+  canceledAt         DateTime?
+  cancelReason       String?
+  payerBankName      String?
   payerBankAccountName String?
-  payerBankAccountNo   String?
-  paidAt               DateTime?
-  paidBy               String?
-  paidRemark           String?
-  reversedAt           DateTime?
-  reversedBy           String?
-  reverseReason        String?
-  createdAt            DateTime                 @default(now())
-  updatedAt            DateTime                 @updatedAt
-  bankAccount          PayeeBankAccount?        @relation(fields: [payeeBankAccountId], references: [id])
-  items                PaymentApplicationItem[]
-  vouchers             PaymentVoucher[]
+  payerBankAccountNo String?
+  paidAt             DateTime?
+  paidBy             String?
+  paidRemark         String?
+  reversedAt         DateTime?
+  reversedBy         String?
+  reverseReason      String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  bankAccount        PayeeBankAccount? @relation(fields: [payeeBankAccountId], references: [id])
+  items              PaymentApplicationItem[]
+  vouchers           PaymentVoucher[]
 
   @@index([status, appliedAt])
   @@index([status, paidAt])
@@ -1227,63 +1244,318 @@ model PaymentApplicationItem {
   id                          String                    @id @default(cuid())
   paymentApplicationId        String
   payablePaymentApplicationId String                    @unique
-  payableFinanceItemId        String
-  shipmentId                  String
+  sourceType                  String                    @default("ORDER_PAYABLE")
+  payableFinanceItemId        String?
+  miscFeeRecordId             String?
+  shipmentId                  String?
   amount                      Decimal
   currency                    String                    @default("RMB")
   createdAt                   DateTime                  @default(now())
   paymentApplication          PaymentApplication        @relation(fields: [paymentApplicationId], references: [id])
   payablePaymentApplication   PayablePaymentApplication @relation(fields: [payablePaymentApplicationId], references: [id])
-  payableFinanceItem          ShipmentFinanceItem       @relation(fields: [payableFinanceItemId], references: [id])
-  shipment                    Shipment                  @relation(fields: [shipmentId], references: [id])
+  payableFinanceItem          ShipmentFinanceItem?      @relation(fields: [payableFinanceItemId], references: [id])
+  miscFeeRecord               MiscFeeRecord?            @relation(fields: [miscFeeRecordId], references: [id])
+  shipment                    Shipment?                 @relation(fields: [shipmentId], references: [id])
 
   @@index([paymentApplicationId])
   @@index([payableFinanceItemId])
+  @@index([miscFeeRecordId])
+}
+
+model MiscFeeRecord {
+  id                        String                     @id @default(cuid())
+  sourceType                String
+  businessNo                String?
+  feeName                   String
+  ownerType                 String                     @default("EXTERNAL")
+  ownerName                 String?
+  agentId                   String?
+  agentName                 String?
+  customerId                String
+  customerCodeSnapshot      String
+  customerNameSnapshot      String
+  salespersonSnapshot       String?
+  shipmentId                String?
+  systemOrderNoSnapshot     String?
+  customerOrderNoSnapshot   String?
+  transferNoSnapshot        String?
+  cargoSnapshot             Json?
+  customerSnapshot          Json?
+  shipmentSnapshot          Json?
+  agentSnapshot             Json?
+  occurredAt                DateTime
+  businessAmount            Decimal?                   @db.Decimal(14, 2)
+  businessCurrency          String                     @default("RMB")
+  businessSettlementMethod  String?
+  businessExchangeRate      Decimal?                   @db.Decimal(18, 8)
+  businessRmbAmount         Decimal?                   @db.Decimal(14, 2)
+  payableAmount             Decimal                    @default(0) @db.Decimal(14, 2)
+  payableCurrency           String                     @default("RMB")
+  payableSettlementMethod   String?
+  payableExchangeRate       Decimal?                   @db.Decimal(18, 8)
+  payableRmbAmount          Decimal?                   @db.Decimal(14, 2)
+  matchStatus               String                     @default("UNMATCHED")
+  confirmationStatus        String                     @default("PENDING")
+  auditStatus               String                     @default("PENDING")
+  hangStatus                String                     @default("NONE")
+  confirmedBy               String?
+  confirmedAt               DateTime?
+  reviewedBy                String?
+  reviewedAt                DateTime?
+  archivedAt                DateTime?
+  voidedAt                  DateTime?
+  voidedBy                  String?
+  voidReason                String?
+  createdBy                 String
+  createdRole               String
+  createdSite               String?
+  ownerSiteSnapshot         String?
+  profitEligibleAt          DateTime?
+  remark                    String?
+  version                   Int                        @default(1)
+  idempotencyKey            String?                    @unique
+  legacyPaymentVoucherId    String?                    @unique
+  importBatchId             String?
+  importLineId              String?                    @unique
+  sourceDedupeKey           String?                    @unique
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  customer                  Customer                   @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  shipment                  Shipment?                  @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+  agent                     Agent?                     @relation(fields: [agentId], references: [id], onDelete: Restrict)
+  importBatch               MiscFeeImportBatch?        @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  importLine                MiscFeeImportLine?         @relation(fields: [importLineId], references: [id], onDelete: SetNull)
+  financeItems              ShipmentFinanceItem[]
+  attachments               MiscFeeAttachment[]
+  hangRequests              MiscFeeHangRequest[]
+  payablePaymentApplication PayablePaymentApplication?
+  paymentApplicationItems   PaymentApplicationItem[]
+  matchHistory              MiscFeeMatchHistory[]
+  settlementLines           ProfitSettlementLine[]
+
+  @@index([sourceType, occurredAt])
+  @@index([customerId, occurredAt])
+  @@index([businessNo])
+  @@index([shipmentId, occurredAt])
+  @@index([confirmationStatus, auditStatus, hangStatus])
+  @@index([ownerType, occurredAt])
+  @@index([ownerType, ownerSiteSnapshot, profitEligibleAt])
+  @@index([createdBy, occurredAt])
+}
+
+model MiscFeeImportBatch {
+  id            String              @id @default(cuid())
+  sourceType    String              @default("KUAYUE")
+  fileName      String
+  mimeType      String?
+  sizeBytes     Int?
+  fileUrl       String?
+  checksum      String              @unique
+  previewToken  String              @unique
+  status        String              @default("PREVIEW")
+  totalRows     Int                 @default(0)
+  validRows     Int                 @default(0)
+  invalidRows   Int                 @default(0)
+  duplicateRows Int                 @default(0)
+  importedRows  Int                 @default(0)
+  createdBy     String
+  committedBy   String?
+  committedAt   DateTime?
+  createdAt     DateTime            @default(now())
+  lines         MiscFeeImportLine[]
+  records       MiscFeeRecord[]
+
+  @@index([status, createdAt])
+}
+
+model MiscFeeImportLine {
+  id              String             @id @default(cuid())
+  batchId         String
+  rowNo           Int
+  dedupeKey       String?
+  kuayueBillNo    String?
+  occurredAt      DateTime?
+  pieceCount      Int?
+  chargeWeightKg  Decimal?           @db.Decimal(14, 4)
+  freightAmount   Decimal?           @db.Decimal(14, 2)
+  insuranceAmount Decimal?           @db.Decimal(14, 2)
+  overageAmount   Decimal?           @db.Decimal(14, 2)
+  oversizeAmount  Decimal?           @db.Decimal(14, 2)
+  discountAmount  Decimal?           @db.Decimal(14, 2)
+  payableAmount   Decimal?           @db.Decimal(14, 2)
+  sender          String?
+  receiver        String?
+  serviceType     String?
+  raw             Json
+  valid           Boolean            @default(false)
+  duplicate       Boolean            @default(false)
+  errors          Json?
+  createdAt       DateTime           @default(now())
+  batch           MiscFeeImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  record          MiscFeeRecord?
+
+  @@unique([batchId, rowNo])
+  @@index([dedupeKey])
+  @@index([kuayueBillNo])
+}
+
+model MiscFeeAttachment {
+  id              String              @id @default(cuid())
+  miscFeeRecordId String
+  hangRequestId   String?
+  purpose         String
+  fileName        String
+  mimeType        String?
+  sizeBytes       Int?
+  url             String?
+  uploadedBy      String?
+  createdAt       DateTime            @default(now())
+  miscFeeRecord   MiscFeeRecord       @relation(fields: [miscFeeRecordId], references: [id], onDelete: Cascade)
+  hangRequest     MiscFeeHangRequest? @relation(fields: [hangRequestId], references: [id], onDelete: Cascade)
+
+  @@index([miscFeeRecordId, purpose, createdAt])
+  @@index([hangRequestId, createdAt])
+}
+
+model MiscFeeHangRequest {
+  id              String              @id @default(cuid())
+  miscFeeRecordId String
+  status          String              @default("PENDING")
+  requestedBy     String
+  requestedAt     DateTime            @default(now())
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  withdrawnBy     String?
+  withdrawnAt     DateTime?
+  remark          String?
+  rejectionReason String?
+  idempotencyKey  String?             @unique
+  version         Int                 @default(1)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  miscFeeRecord   MiscFeeRecord       @relation(fields: [miscFeeRecordId], references: [id], onDelete: Restrict)
+  attachments     MiscFeeAttachment[]
+
+  @@index([status, requestedAt])
+  @@index([miscFeeRecordId, status])
+}
+
+model MiscFeeMatchHistory {
+  id              String        @id @default(cuid())
+  miscFeeRecordId String
+  shipmentId      String?
+  action          String
+  reason          String?
+  actor           String
+  fromShipmentId  String?
+  createdAt       DateTime      @default(now())
+  miscFeeRecord   MiscFeeRecord @relation(fields: [miscFeeRecordId], references: [id], onDelete: Cascade)
+  shipment        Shipment?     @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+
+  @@index([miscFeeRecordId, createdAt])
+  @@index([shipmentId, createdAt])
+}
+
+model ProfitSettlement {
+  id                        String                 @id @default(cuid())
+  settlementNo              String                 @unique
+  type                      String
+  siteScope                 String?
+  status                    String                 @default("DRAFT")
+  periodFrom                DateTime
+  periodTo                  DateTime
+  receivableRmbAmount       Decimal                @default(0) @db.Decimal(16, 2)
+  businessRmbAmount         Decimal                @default(0) @db.Decimal(16, 2)
+  payableRmbAmount          Decimal                @default(0) @db.Decimal(16, 2)
+  unmatchedPayableRmbAmount Decimal                @default(0) @db.Decimal(16, 2)
+  profitRmbAmount           Decimal                @default(0) @db.Decimal(16, 2)
+  remark                    String?
+  createdBy                 String
+  submittedBy               String?
+  submittedAt               DateTime?
+  reviewedBy                String?
+  reviewedAt                DateTime?
+  archivedAt                DateTime?
+  version                   Int                    @default(1)
+  idempotencyKey            String?                @unique
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
+  lines                     ProfitSettlementLine[]
+
+  @@index([type, siteScope, status, periodFrom, periodTo])
+}
+
+model ProfitSettlementLine {
+  id                  String           @id @default(cuid())
+  settlementId        String
+  sourceKey           String           @unique
+  miscFeeRecordId     String?
+  shipmentId          String?
+  customerCode        String?
+  systemOrderNo       String?
+  salesperson         String?
+  agentName           String?
+  feeName             String
+  sourceType          String?
+  businessRmbAmount   Decimal          @default(0) @db.Decimal(16, 2)
+  payableRmbAmount    Decimal          @default(0) @db.Decimal(16, 2)
+  receivableRmbAmount Decimal          @default(0) @db.Decimal(16, 2)
+  profitRmbAmount     Decimal          @default(0) @db.Decimal(16, 2)
+  unmatched           Boolean          @default(false)
+  snapshot            Json?
+  createdAt           DateTime         @default(now())
+  settlement          ProfitSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  miscFeeRecord       MiscFeeRecord?   @relation(fields: [miscFeeRecordId], references: [id], onDelete: Restrict)
+  shipment            Shipment?        @relation(fields: [shipmentId], references: [id], onDelete: Restrict)
+
+  @@unique([settlementId, miscFeeRecordId])
+  @@index([miscFeeRecordId])
+  @@index([shipmentId])
 }
 
 model PaymentVoucher {
-  id                    String              @id @default(cuid())
-  paymentApplicationId  String?
-  pendingPaymentId      String?
-  voucherType           String              @default("BILL")
-  billNo                String?
-  transferNo            String?
-  agentName             String?
-  agentId               String?
-  billDate              DateTime?
-  currency              String?
-  billAmount            Decimal?
-  status                String              @default("IMPORTED")
-  differenceType        String?
-  differenceAmount      Decimal?
-  differenceReason      String?
-  differenceStatus      String?
-  differenceHandledBy   String?
-  differenceHandledAt   DateTime?
-  extraFeeType          String?
-  extraFeeAmount        Decimal?
-  extraFeeCurrency      String?
-  extraFeeAgentName     String?
-  extraFeeCustomerCode  String?
+  id                   String   @id @default(cuid())
+  paymentApplicationId String?
+  pendingPaymentId     String?
+  voucherType          String   @default("BILL")
+  billNo               String?
+  transferNo           String?
+  agentName            String?
+  agentId              String?
+  billDate             DateTime?
+  currency             String?
+  billAmount           Decimal?
+  status               String   @default("IMPORTED")
+  differenceType       String?
+  differenceAmount     Decimal?
+  differenceReason     String?
+  differenceStatus     String?
+  differenceHandledBy  String?
+  differenceHandledAt  DateTime?
+  extraFeeType         String?
+  extraFeeAmount       Decimal?
+  extraFeeCurrency     String?
+  extraFeeAgentName    String?
+  extraFeeCustomerCode String?
   extraFeeSystemOrderNo String?
-  extraFeeOccurredAt    DateTime?
+  extraFeeOccurredAt   DateTime?
   extraFeeFinanceItemId String?
-  extraFeeRemark        String?
-  kuayueBillNo          String?
-  kuayueCustomerCode    String?
-  kuayueSystemOrderNo   String?
-  kuayueAmount          Decimal?
-  kuayueCurrency        String?
-  kuayueBillDate        DateTime?
-  kuayueStatus          String?
-  fileName              String
-  mimeType              String?
-  sizeBytes             Int?
-  url                   String?
-  uploadedBy            String?
-  createdAt             DateTime            @default(now())
-  paymentApplication    PaymentApplication? @relation(fields: [paymentApplicationId], references: [id])
-  agent                 Agent?              @relation("PaymentVoucherAgent", fields: [agentId], references: [id], onDelete: Restrict)
+  extraFeeRemark       String?
+  kuayueBillNo         String?
+  kuayueCustomerCode   String?
+  kuayueSystemOrderNo  String?
+  kuayueAmount         Decimal?
+  kuayueCurrency       String?
+  kuayueBillDate       DateTime?
+  kuayueStatus         String?
+  fileName             String
+  mimeType             String?
+  sizeBytes            Int?
+  url                  String?
+  uploadedBy           String?
+  createdAt            DateTime @default(now())
+  paymentApplication   PaymentApplication? @relation(fields: [paymentApplicationId], references: [id])
+  agent                Agent? @relation("PaymentVoucherAgent", fields: [agentId], references: [id], onDelete: Restrict)
 
   @@index([paymentApplicationId, createdAt])
   @@index([pendingPaymentId, createdAt])
@@ -1353,33 +1625,33 @@ model Settlement {
 }
 
 model AccountLedger {
-  id           String        @id @default(cuid())
-  partyType    String
-  partyId      String
-  amount       Decimal
-  balance      Decimal
-  note         String?
-  createdAt    DateTime      @default(now())
+  id        String   @id @default(cuid())
+  partyType String
+  partyId   String
+  amount    Decimal
+  balance   Decimal
+  note      String?
+  createdAt DateTime @default(now())
   waterReceipt WaterReceipt? @relation("WaterReceiptAccountLedger")
 }
 
 model WaterReceipt {
-  id              String                     @id @default(cuid())
-  receiptNo       String                     @unique
-  site            String                     @default("思远收款")
+  id              String   @id @default(cuid())
+  receiptNo       String   @unique
+  site            String   @default("思远收款")
   customerId      String?
   customerCode    String?
   customerName    String?
   salesperson     String?
   receiptMethod   String?
   receiptDate     DateTime
-  currency        String                     @default("RMB")
+  currency        String   @default("RMB")
   amount          Decimal
-  matchedAmount   Decimal                    @default(0)
+  matchedAmount   Decimal  @default(0)
   balance         Decimal
   paymentNo       String?
-  paymentNoKey    String?                    @unique
-  status          String                     @default("PENDING")
+  paymentNoKey    String?  @unique
+  status          String   @default("PENDING")
   remark          String?
   arrivedAt       DateTime?
   arrivedBy       String?
@@ -1389,14 +1661,14 @@ model WaterReceipt {
   voidedBy        String?
   voidedReason    String?
   adjustReason    String?
-  accountLedgerId String?                    @unique
+  accountLedgerId String?  @unique
   createdBy       String?
   createdByUserId String?
-  createdAt       DateTime                   @default(now())
-  updatedAt       DateTime                   @updatedAt
-  customer        Customer?                  @relation(fields: [customerId], references: [id])
-  accountLedger   AccountLedger?             @relation("WaterReceiptAccountLedger", fields: [accountLedgerId], references: [id])
-  createdByUser   User?                      @relation("WaterReceiptCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  customer        Customer? @relation(fields: [customerId], references: [id])
+  accountLedger   AccountLedger? @relation("WaterReceiptAccountLedger", fields: [accountLedgerId], references: [id])
+  createdByUser   User? @relation("WaterReceiptCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   matches         WaterReceiptMatch[]
   matchRequests   WaterReceiptMatchRequest[]
   voucher         WaterReceiptVoucher?
@@ -1408,28 +1680,28 @@ model WaterReceipt {
 }
 
 model WaterReceiptMatch {
-  id                      String               @id @default(cuid())
-  waterReceiptId          String
-  receivableFinanceItemId String?
-  receivableFeeId         String?
-  receivableSourceType    String               @default("MANUAL")
-  shipmentId              String
-  amount                  Decimal
-  rmbAmount               Decimal?
-  receivableAmount        Decimal?
-  receivableCurrency      String?
-  receiptExchangeRate     Decimal?
-  receivableExchangeRate  Decimal?
-  source                  String               @default("MANUAL")
-  voided                  Boolean              @default(false)
-  voidedAt                DateTime?
-  voidedBy                String?
-  voidReason              String?
-  createdAt               DateTime             @default(now())
-  waterReceipt            WaterReceipt         @relation(fields: [waterReceiptId], references: [id])
-  receivableFinanceItem   ShipmentFinanceItem? @relation(fields: [receivableFinanceItemId], references: [id])
-  receivableFee           ReceivableFee?       @relation(fields: [receivableFeeId], references: [id])
-  shipment                Shipment             @relation(fields: [shipmentId], references: [id])
+  id                      String   @id @default(cuid())
+  waterReceiptId           String
+  receivableFinanceItemId  String?
+  receivableFeeId          String?
+  receivableSourceType     String   @default("MANUAL")
+  shipmentId               String
+  amount                   Decimal
+  rmbAmount                Decimal?
+  receivableAmount         Decimal?
+  receivableCurrency       String?
+  receiptExchangeRate      Decimal?
+  receivableExchangeRate   Decimal?
+  source                   String   @default("MANUAL")
+  voided                   Boolean  @default(false)
+  voidedAt                 DateTime?
+  voidedBy                 String?
+  voidReason               String?
+  createdAt                DateTime @default(now())
+  waterReceipt             WaterReceipt @relation(fields: [waterReceiptId], references: [id])
+  receivableFinanceItem    ShipmentFinanceItem? @relation(fields: [receivableFinanceItemId], references: [id])
+  receivableFee            ReceivableFee? @relation(fields: [receivableFeeId], references: [id])
+  shipment                 Shipment @relation(fields: [shipmentId], references: [id])
 
   @@index([waterReceiptId, createdAt])
   @@index([receivableFinanceItemId, voided])
@@ -1438,12 +1710,12 @@ model WaterReceiptMatch {
 }
 
 model WaterReceiptMatchRequest {
-  id                      String               @id @default(cuid())
+  id                      String   @id @default(cuid())
   reviewBatchId           String
   waterReceiptId          String
   receivableFinanceItemId String?
   receivableFeeId         String?
-  receivableSourceType    String               @default("MANUAL")
+  receivableSourceType    String   @default("MANUAL")
   shipmentId              String
   amount                  Decimal
   rmbAmount               Decimal?
@@ -1451,10 +1723,10 @@ model WaterReceiptMatchRequest {
   receivableCurrency      String?
   receiptExchangeRate     Decimal?
   receivableExchangeRate  Decimal?
-  status                  String               @default("PENDING")
+  status                  String   @default("PENDING")
   requestedBy             String
   requestedByUserId       String?
-  requestedAt             DateTime             @default(now())
+  requestedAt             DateTime @default(now())
   reviewedBy              String?
   reviewedAt              DateTime?
   rejectionReason         String?
@@ -1462,12 +1734,12 @@ model WaterReceiptMatchRequest {
   reversedBy              String?
   reversedAt              DateTime?
   reverseReason           String?
-  createdAt               DateTime             @default(now())
-  updatedAt               DateTime             @updatedAt
-  waterReceipt            WaterReceipt         @relation(fields: [waterReceiptId], references: [id])
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  waterReceipt            WaterReceipt @relation(fields: [waterReceiptId], references: [id])
   receivableFinanceItem   ShipmentFinanceItem? @relation(fields: [receivableFinanceItemId], references: [id])
-  receivableFee           ReceivableFee?       @relation(fields: [receivableFeeId], references: [id])
-  shipment                Shipment             @relation(fields: [shipmentId], references: [id])
+  receivableFee           ReceivableFee? @relation(fields: [receivableFeeId], references: [id])
+  shipment                Shipment @relation(fields: [shipmentId], references: [id])
 
   @@index([waterReceiptId, status, requestedAt])
   @@index([reviewBatchId, status])
@@ -1478,14 +1750,14 @@ model WaterReceiptMatchRequest {
 }
 
 model WaterReceiptVoucher {
-  id             String       @id @default(cuid())
-  waterReceiptId String       @unique
+  id             String   @id @default(cuid())
+  waterReceiptId String   @unique
   fileName       String
   mimeType       String?
   sizeBytes      Int?
   url            String?
   uploadedBy     String?
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime @default(now())
   waterReceipt   WaterReceipt @relation(fields: [waterReceiptId], references: [id])
 
   @@index([waterReceiptId, createdAt])
@@ -1521,22 +1793,22 @@ model AuditLog {
 }
 
 model Announcement {
-  id                      String         @id @default(cuid())
-  requestId               String         @unique
+  id                      String   @id @default(cuid())
+  requestId               String   @unique
   title                   String
   body                    String
-  severity                String         @default("INFO")
+  severity                String   @default("INFO")
   audienceType            String
   audienceValues          Json?
-  status                  String         @default("PUBLISHED")
-  requiresAcknowledgement Boolean        @default(false)
+  status                  String   @default("PUBLISHED")
+  requiresAcknowledgement Boolean  @default(false)
   expiresAt               DateTime?
-  publishedAt             DateTime       @default(now())
+  publishedAt             DateTime @default(now())
   withdrawnAt             DateTime?
   createdById             String
   withdrawnById           String?
-  createdAt               DateTime       @default(now())
-  updatedAt               DateTime       @updatedAt
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
   notifications           Notification[]
 
   @@index([status, publishedAt])
@@ -1544,11 +1816,11 @@ model Announcement {
 }
 
 model Notification {
-  id                      String                 @id @default(cuid())
+  id                      String   @id @default(cuid())
   kind                    String
   type                    String
   category                String
-  severity                String                 @default("INFO")
+  severity                String   @default("INFO")
   title                   String
   body                    String
   actorId                 String?
@@ -1559,13 +1831,13 @@ model Notification {
   targetSection           String?
   targetEntityType        String?
   targetEntityId          String?
-  dedupeKey               String                 @unique
-  requiresAcknowledgement Boolean                @default(false)
+  dedupeKey               String   @unique
+  requiresAcknowledgement Boolean  @default(false)
   expiresAt               DateTime?
   withdrawnAt             DateTime?
   announcementId          String?
-  createdAt               DateTime               @default(now())
-  announcement            Announcement?          @relation(fields: [announcementId], references: [id], onDelete: SetNull)
+  createdAt               DateTime @default(now())
+  announcement            Announcement? @relation(fields: [announcementId], references: [id], onDelete: SetNull)
   deliveries              NotificationDelivery[]
 
   @@index([category, createdAt])
@@ -1574,15 +1846,15 @@ model Notification {
 }
 
 model NotificationDelivery {
-  id             String       @id @default(cuid())
+  id             String   @id @default(cuid())
   notificationId String
   userId         String?
-  deliveredAt    DateTime     @default(now())
+  deliveredAt    DateTime @default(now())
   readAt         DateTime?
   archivedAt     DateTime?
   acknowledgedAt DateTime?
   notification   Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  user           User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  user           User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@unique([notificationId, userId])
   @@index([userId, archivedAt, deliveredAt])
@@ -1590,42 +1862,39 @@ model NotificationDelivery {
 }
 
 model NotificationActionTask {
-  id                   String    @id @default(cuid())
-  type                 String
-  sourceRequestId      String    @unique
-  ownerUserId          String
-  receivableSourceType String
-  receivableId         String
-  waterReceiptId       String
-  shipmentId           String?
-  title                String
-  body                 String
-  targetModule         String
-  targetSection        String
-  targetEntityType     String
-  targetEntityId       String
-  status               String    @default("OPEN")
-  openedAt             DateTime  @default(now())
-  resolvedAt           DateTime?
-  resolvedByAuditLogId String?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  id                       String   @id @default(cuid())
+  type                     String
+  sourceRequestId          String   @unique
+  ownerUserId              String
+  receivableSourceType     String
+  receivableId             String
+  waterReceiptId           String
+  shipmentId               String?
+  title                    String
+  body                     String
+  targetModule             String
+  targetSection            String
+  targetEntityType         String
+  targetEntityId           String
+  status                   String   @default("OPEN")
+  openedAt                 DateTime
+  resolvedAt               DateTime?
+  resolvedByAuditLogId     String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
   @@index([ownerUserId, status, openedAt])
   @@index([ownerUserId, receivableSourceType, receivableId, status])
 }
 
-// Records the newest correction submission for the one return-work task flow.
-// It makes retrying audit events safe when their delivery order differs from
-// their business-event order.
 model NotificationActionTaskWatermark {
   ownerUserId              String
   receivableSourceType     String
   receivableId             String
   lastSubmissionAt         DateTime?
   lastSubmissionAuditLogId String?
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 
   @@id([ownerUserId, receivableSourceType, receivableId])
 }
@@ -1639,19 +1908,19 @@ model NotificationEventCursor {
 }
 
 model NotificationEventProcessing {
-  id             String    @id @default(cuid())
-  auditLogId     String    @unique
+  id             String   @id @default(cuid())
+  auditLogId     String   @unique
   action         String
-  status         String    @default("PENDING")
-  attempts       Int       @default(0)
-  recipientCount Int       @default(0)
+  status         String   @default("PENDING")
+  attempts       Int      @default(0)
+  recipientCount Int      @default(0)
   error          String?
   nextRetryAt    DateTime?
   lockToken      String?
   lockedAt       DateTime?
   processedAt    DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   @@index([status, nextRetryAt, lockedAt])
   @@index([action, status])

@@ -2,23 +2,20 @@ import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Boxes, ChevronDown, ChevronUp, ClipboardList, FileInput, Filter, PackagePlus, RotateCcw, Search, Send, ShieldAlert, Sparkles, Truck, Wallet, Warehouse } from 'lucide-react';
 import { Alert, Badge, Button, Card, Col, Dropdown, Flex, Input, Modal, Progress, Row, Select, Space, Tag, Typography, message } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
 import { businessTypeLabels, shipmentStatusLabels, type BusinessType, type LineShipmentFinanceTotal, type LineShipmentPoolQuery, type LineShipmentPoolResponse, type LineShipmentPoolRow, type LineShipmentStatusGroup, type ProblemTicketCreateInput, type Shipment, type ShipmentStatus, type ShipmentInternalFlowLogResponse } from '@siyuan/shared';
-import { isAdministratorRole, type ApiClient, type PermissionKey, type RoleKey } from '../../apiClient';
+import type { ApiClient, PermissionKey, RoleKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
-import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, MetricCard, riskLabel, tenRowTablePagination, type ManagedTableColumn } from '../shared/ui';
+import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, MetricCard, riskLabel, type ManagedTableColumn } from '../shared/ui';
 import { formatBeijingDateTime } from '../shared/format';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from '../shared/shipmentStageDwell';
-import { getShipmentTransportTimeSeconds, getShipmentTransportTimeText } from '../shared/shipmentTransportTime';
-import { getGlobalFieldVisibility } from '../shared/globalFieldMask';
 import { ProblemTicketCreateModal } from '../customerService/ProblemTicketCreateModal';
 
 const { Title } = Typography;
 
-type ShipmentColumnOrderMode = 'default' | 'customerFirst' | 'agentFirst' | 'custom';
 type LinePoolDetailColumnKey =
   | 'createdAt'
+  | 'stageDwell'
   | 'customerName'
   | 'customerCode'
   | 'salesperson'
@@ -43,8 +40,6 @@ type LinePoolDetailColumnKey =
   | 'packageNos'
   | 'payment'
   | 'remark'
-  | 'stageDwell'
-  | 'transportTime'
   | 'action';
 type LinePoolMatrixColumnKey = 'matrixBasic' | 'matrixOrder' | 'matrixCompany' | 'matrixAgent' | 'matrixPayment' | 'matrixFulfillment' | 'action';
 
@@ -93,6 +88,7 @@ const linePoolLedgerColumnSettingsStorageKey = 'siyuan-line-pool-ledger-columns-
 const linePoolViewStorageKey = 'siyuan-line-pool-table-view-v1';
 const defaultLinePoolDetailColumnOrder: LinePoolDetailColumnKey[] = [
   'createdAt',
+  'stageDwell',
   'customerCode',
   'salesperson',
   'orderNo',
@@ -107,8 +103,6 @@ const defaultLinePoolDetailColumnOrder: LinePoolDetailColumnKey[] = [
   'businessCost',
   'payableStatus',
   'status',
-  'stageDwell',
-  'transportTime',
   'latestTracking',
   'action'
 ];
@@ -146,13 +140,14 @@ const linePoolLedgerColumnSettings = {
   title: '专线运单池精密台账列设置',
   labels: {
     createdAt: '创建时间',
+    stageDwell: '停留时间',
     customerName: '客户名称',
     customerCode: '客户编号',
     salesperson: '业务员归属',
     orderNo: '出货单号',
     transferNo: '转单号',
     destinationCountry: '目的地',
-    packageSummary: '件数/重量/体积',
+    packageSummary: '件数/重量/体积 CBM',
     channelName: '公司渠道',
     receivable: '应收',
     agentName: '代理详细公司名',
@@ -163,12 +158,10 @@ const linePoolLedgerColumnSettings = {
     businessCost: '业务成本',
     payableStatus: '应付状态',
     status: '运单状态',
-    stageDwell: '停留时间',
-    transportTime: '运输时间',
     latestTracking: '物流最新轨迹',
     packageCount: '件数',
     weightKg: '重量',
-    volumeCbm: '体积',
+    volumeCbm: '体积 CBM',
     packageNos: '包裹单号',
     payment: '收款',
     remark: '备注',
@@ -180,8 +173,32 @@ const linePoolLedgerColumnSettings = {
 };
 const linePoolTableLocale = { emptyText: '暂无符合条件的运单' };
 
+type OperationsFieldMaskKey = 'agent-short-name' | 'agent-company-name' | 'agent-channel' | 'agent-data' | 'payable-cost' | 'payable-status';
+
+function operationsFieldMaskPermissionCode(key: OperationsFieldMaskKey): string {
+  return `system:workspace-mask:operations:${key}`;
+}
+
 export function getOperationsFieldVisibility(role: RoleKey, permissions: readonly string[]) {
-  return getGlobalFieldVisibility(role, permissions);
+  if (role === 'ADMIN') {
+    return {
+      showAgentShortName: true,
+      showAgentCompanyName: true,
+      showAgentChannel: true,
+      showPayableCost: true,
+      showPayableStatus: true
+    };
+  }
+  const permissionSet = new Set(permissions);
+  const isMasked = (key: OperationsFieldMaskKey) => permissionSet.has(operationsFieldMaskPermissionCode(key));
+  const agentDataMasked = isMasked('agent-data');
+  return {
+    showAgentShortName: !agentDataMasked && !isMasked('agent-short-name'),
+    showAgentCompanyName: !agentDataMasked && !isMasked('agent-company-name'),
+    showAgentChannel: !agentDataMasked && !isMasked('agent-channel'),
+    showPayableCost: !isMasked('payable-cost'),
+    showPayableStatus: !isMasked('payable-status')
+  };
 }
 
 function getLinePoolRowKey(row: LineShipmentPoolRow) {
@@ -326,7 +343,6 @@ export function OperationsPage({
   businessType,
   onAiAssist,
   aiLoading,
-  onOpenColumnSettings,
   activeWorkspaceSection,
   onActiveWorkspaceSectionChange,
   automationPlan,
@@ -339,22 +355,11 @@ export function OperationsPage({
   onProcessShipment
 }: {
   businessWorkspaceConfig: BusinessWorkspaceConfig;
-  businessShipments: Shipment[];
   aiQueue: Array<{ shipment: Shipment; insight: RiskInsight }>;
   importValidation: ImportValidationSummary;
   businessType: BusinessType;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
-  selectedStatus: ShipmentStatus | 'ALL';
-  onSelectStatus: (status: ShipmentStatus | 'ALL') => void;
-  statusOrder: ShipmentStatus[];
-  statusCounts: Partial<Record<ShipmentStatus, number>>;
-  shipmentColumnOrderMode: ShipmentColumnOrderMode;
-  onShipmentColumnOrderModeChange: (mode: ShipmentColumnOrderMode) => void;
-  shipmentColumnOrderOptions: Array<{ value: ShipmentColumnOrderMode; label: string }>;
-  onOpenColumnSettings: () => void;
-  workspaceColumns: ColumnsType<Shipment>;
-  visibleShipments: Shipment[];
   activeWorkspaceSection: string;
   onActiveWorkspaceSectionChange: (section: string) => void;
   automationPlan: AutomationPlanItem[];
@@ -368,8 +373,6 @@ export function OperationsPage({
 }) {
   const permissionSet = useMemo(() => new Set(permissions), [permissions]);
   const can = useCallback((permission: PermissionKey) => role === 'ADMIN' || permissionSet.has(permission), [permissionSet, role]);
-  const canViewReviewPendingStage = isAdministratorRole(role)
-    || !permissionSet.has('operations:line-shipment:stage-view-block:review-pending');
   const canViewLinePool = can('operations:line-shipment:view');
   const canViewAiQueue = can('operations:ai-queue:view');
   const canViewProductMap = can('operations:product-map:view');
@@ -379,8 +382,9 @@ export function OperationsPage({
   const canProcess = can('operations:line-shipment:process') && can('operations:line-shipment:status-update');
   const canProcessLineShipment = useCallback((row: LineShipmentPoolRow) => {
     if (!canProcess || role === 'ADMIN') return canProcess;
-    const blockedStages = row.editStages ?? [];
-    return !blockedStages.some((stage) => permissionSet.has(`operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey));
+    return !(row.editStages ?? []).some((stage) =>
+      permissionSet.has(`operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey)
+    );
   }, [canProcess, permissionSet, role]);
   const workspaceItems = useMemo(() => [
     canViewLinePool ? { key: 'shipmentPool', label: `${businessTypeLabels[businessType]}运单池`, description: '筛选与批量处理' } : null,
@@ -428,11 +432,6 @@ export function OperationsPage({
     if (activeWorkspaceSection !== 'shipmentPool') return;
     void fetchLinePool(linePoolQuery);
   }, [activeWorkspaceSection, fetchLinePool, linePoolQuery]);
-
-  useEffect(() => {
-    if (canViewReviewPendingStage || linePoolQuery.statusGroup !== 'REVIEW_PENDING') return;
-    setLinePoolQuery((current) => ({ ...current, statusGroup: 'ALL', page: 1 }));
-  }, [canViewReviewPendingStage, linePoolQuery.statusGroup]);
 
   useEffect(() => {
     if (activeWorkspaceSection !== 'shipmentPool') return;
@@ -586,6 +585,13 @@ export function OperationsPage({
       ellipsis: true,
       render: (_, row) => row.shipment.channelName || '-'
     },
+    stageDwell: {
+      key: 'stageDwell',
+      title: '停留时间',
+      width: 105,
+      sortValue: (row) => getShipmentStageDwellSeconds(row.shipment),
+      render: (_, row) => getShipmentStageDwellText(row.shipment)
+    },
     packageSummary: {
       key: 'packageSummary',
       title: '件数/重量/体积 CBM',
@@ -636,20 +642,6 @@ export function OperationsPage({
         : '-'
     },
     status: { key: 'status', title: '运单状态', width: 100, sortValue: (row) => row.shipment.status, render: (_, row) => <Tag color={statusColor(row.shipment.status)}>{shipmentStatusLabels[row.shipment.status]}</Tag> },
-    stageDwell: {
-      key: 'stageDwell',
-      title: '停留时间',
-      width: 105,
-      sortValue: (row) => getShipmentStageDwellSeconds(row.shipment),
-      render: (_, row) => getShipmentStageDwellText(row.shipment)
-    },
-    transportTime: {
-      key: 'transportTime',
-      title: '运输时间',
-      width: 105,
-      sortValue: (row) => getShipmentTransportTimeSeconds(row.shipment),
-      render: (_, row) => getShipmentTransportTimeText(row.shipment)
-    },
     receivableStatus: {
       key: 'receivableStatus',
       title: '应收状态',
@@ -731,10 +723,7 @@ export function OperationsPage({
       render: (_, row) => (
         <div className="line-pool-row-actions">
           {canProcessLineShipment(row) ? <Button size="small" type="primary" onClick={() => onProcessShipment(row.shipment)}>处理</Button> : null}
-          {can('operations:line-shipment:detail')
-            && (canViewReviewPendingStage || !['DRAFT', 'REVIEW_PENDING'].includes(row.shipment.status))
-            ? <Button size="small" onClick={() => onViewShipment(row.shipment)}>详情</Button>
-            : null}
+          {can('operations:line-shipment:detail') ? <Button size="small" onClick={() => onViewShipment(row.shipment)}>详情</Button> : null}
           {can('operations:line-shipment:internal-log-view') ? (
             <Button
               size="small"
@@ -746,7 +735,7 @@ export function OperationsPage({
         </div>
       )
     }
-  }), [apiClient, can, canProcessLineShipment, canViewReviewPendingStage, canViewSensitive, onProcessShipment, onViewShipment]);
+  }), [apiClient, can, canProcessLineShipment, canViewSensitive, onProcessShipment, onViewShipment]);
   const linePoolDetailColumns = useMemo(
     () => defaultLinePoolDetailColumnOrder
       .filter((key) => key !== 'agentName' || fieldVisibility.showAgentCompanyName)
@@ -809,8 +798,8 @@ export function OperationsPage({
         title: '代理数据',
         width: linePoolMatrixColumnWeights.matrixAgent,
         className: 'line-pool-matrix-group-agent',
-        sortValue: (row) => `${row.shipment.agentName ?? ''}|${row.shipment.routeAgentChannelName ?? ''}`,
-        render: (_, row) => (
+        sortValue: (row: LineShipmentPoolRow) => `${row.shipment.agentName ?? ''}|${row.shipment.routeAgentChannelName ?? ''}`,
+        render: (_: unknown, row: LineShipmentPoolRow) => (
           <LinePoolMatrixCell fields={[
             ...(fieldVisibility.showAgentShortName ? [{ key: 'agentShortName', label: '代理简称', value: row.shipment.agentShortName || '-' }] : []),
             ...(fieldVisibility.showAgentChannel ? [{ key: 'agentChannel', label: '代理渠道', value: row.shipment.routeAgentChannelName || '-', wrap: true }] : []),
@@ -865,9 +854,8 @@ export function OperationsPage({
               label: '运单状态',
               value: <Tag color={statusColor(row.shipment.status)}>{shipmentStatusLabels[row.shipment.status]}</Tag>
             },
-            { key: 'stageDwell', label: '停留时间', value: getShipmentStageDwellText(row.shipment) },
-            { key: 'transportTime', label: '运输时间', value: getShipmentTransportTimeText(row.shipment) },
             { key: 'latestTracking', label: '物流最新轨迹', value: row.latestTracking || '-', wrap: true },
+            { key: 'stageDwell', label: '停留时间', value: getShipmentStageDwellText(row.shipment) },
             {
               key: 'trackingFreshness',
               label: '更新时效',
@@ -989,7 +977,7 @@ export function OperationsPage({
                 <div className="line-pool-status-strip">
                   <div className="line-pool-status-group">
                     <LinePoolStatusButton active={linePoolQuery.statusGroup === 'ALL'} onClick={() => handleLinePoolStatus('ALL')}>全部 {linePoolResponse?.statusCounts?.ALL ?? 0}</LinePoolStatusButton>
-                    {canViewReviewPendingStage ? <LinePoolStatusButton active={linePoolQuery.statusGroup === 'REVIEW_PENDING'} onClick={() => handleLinePoolStatus('REVIEW_PENDING')}>待审核 {linePoolResponse?.statusCounts?.REVIEW_PENDING ?? 0}</LinePoolStatusButton> : null}
+                    <LinePoolStatusButton active={linePoolQuery.statusGroup === 'REVIEW_PENDING'} onClick={() => handleLinePoolStatus('REVIEW_PENDING')}>待审核 {linePoolResponse?.statusCounts?.REVIEW_PENDING ?? 0}</LinePoolStatusButton>
                     <LinePoolStatusButton active={linePoolQuery.statusGroup === 'REVIEW_REJECTED'} onClick={() => handleLinePoolStatus('REVIEW_REJECTED')}>审核不通过 {linePoolResponse?.statusCounts?.REVIEW_REJECTED ?? 0}</LinePoolStatusButton>
                     <LinePoolStatusButton active={linePoolQuery.statusGroup === 'OUTBOUNDED'} onClick={() => handleLinePoolStatus('OUTBOUNDED')}>已出库 {linePoolResponse?.statusCounts?.OUTBOUNDED ?? 0}</LinePoolStatusButton>
                   </div>

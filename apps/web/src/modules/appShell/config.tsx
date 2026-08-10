@@ -1,8 +1,7 @@
 import type { ReactNode } from 'react';
 import type { ThemeConfig } from 'antd/es/config-provider/context';
-import { Activity, Boxes, CircleDollarSign, Gauge, Headphones, Landmark, PackagePlus, Route, Settings, Truck, Users } from 'lucide-react';
+import { Activity, Boxes, CircleDollarSign, Gauge, Headphones, Landmark, PackagePlus, ReceiptText, Route, Settings, Truck, Users } from 'lucide-react';
 import {
-  summarizeFulfillmentStages,
   type BusinessType,
   type MasterDataSnapshot,
   type Shipment,
@@ -112,7 +111,6 @@ export type ShipmentColumnKey =
   | 'latestTracking'
   | 'status'
   | 'stageDwell'
-  | 'transportTime'
   | 'transitTime'
   | 'paymentAmount'
   | 'paymentCurrency'
@@ -137,7 +135,6 @@ export const defaultShipmentColumnOrder: ShipmentColumnKey[] = [
   'latestTracking',
   'status',
   'stageDwell',
-  'transportTime',
   'transitTime',
   'paymentAmount',
   'paymentCurrency',
@@ -145,12 +142,6 @@ export const defaultShipmentColumnOrder: ShipmentColumnKey[] = [
   'remark'
 ];
 export const defaultHiddenShipmentColumns: ShipmentColumnKey[] = [];
-export const shipmentColumnOrderOptions: Array<{ value: ShipmentColumnOrderMode; label: string }> = [
-  { value: 'default', label: '默认顺序' },
-  { value: 'customerFirst', label: '客户优先' },
-  { value: 'agentFirst', label: '代理优先' },
-  { value: 'custom', label: '自定义顺序' }
-];
 export const shipmentColumnOrders: Record<ShipmentColumnOrderMode, ShipmentColumnKey[]> = {
   default: defaultShipmentColumnOrder,
   customerFirst: [
@@ -168,7 +159,6 @@ export const shipmentColumnOrders: Record<ShipmentColumnOrderMode, ShipmentColum
     'latestTracking',
     'status',
     'stageDwell',
-    'transportTime',
     'transitTime',
     'paymentAmount',
     'paymentCurrency',
@@ -190,7 +180,6 @@ export const shipmentColumnOrders: Record<ShipmentColumnOrderMode, ShipmentColum
     'latestTracking',
     'status',
     'stageDwell',
-    'transportTime',
     'transitTime',
     'paymentAmount',
     'paymentCurrency',
@@ -214,7 +203,6 @@ export const shipmentColumnLabels: Record<ShipmentColumnKey, string> = {
   latestTracking: '最新物流轨迹',
   status: '状态',
   stageDwell: '当前阶段停留时间',
-  transportTime: '运输时间',
   transitTime: '时效',
   paymentAmount: '收款金额',
   paymentCurrency: '收款币种',
@@ -302,6 +290,7 @@ export const menuItems: Array<{ key: StaffMenuKey; icon: ReactNode; label: strin
   { key: 'customerService', icon: <Headphones size={16} />, label: '客服管理' },
   { key: 'logisticsTracking', icon: <Truck size={16} />, label: '物流轨迹管理' },
   { key: 'finance', icon: <Landmark size={16} />, label: '财务管理' },
+  { key: 'miscFees', icon: <ReceiptText size={16} />, label: '杂费' },
   { key: 'master', icon: <Users size={16} />, label: '基础资料库' },
   { key: 'settings', icon: <Settings size={16} />, label: '系统管理' }
 ];
@@ -332,6 +321,7 @@ const staffMenuRouteSegments: Record<MenuKey, string> = {
   problems: 'customer-service',
   pricing: 'pricing',
   finance: 'finance',
+  miscFees: 'misc-fees',
   reports: 'workspace',
   master: 'master',
   settings: 'settings'
@@ -346,6 +336,7 @@ const routeSegmentAliases: Record<string, MenuKey> = {
   'customer-service': 'customerService',
   tracking: 'logisticsTracking',
   finance: 'finance',
+  'misc-fees': 'miscFees',
   master: 'master',
   settings: 'settings'
 };
@@ -391,7 +382,6 @@ export function resolveStaffSectionKey(menuKey: MenuKey, sectionSegment: string 
   return sectionKeys.find((key) => toRouteSegment(key) === sectionSegment);
 }
 
-export type FulfillmentStageKey = 'all' | 'reviewing' | 'declared' | 'receiving' | 'sorting' | 'dispatching' | 'online' | 'signing' | 'exception';
 export const businessWorkspaceConfigs: Record<
   BusinessType,
   {
@@ -456,22 +446,8 @@ export const businessWorkspaceConfigs: Record<
   }
 };
 
-export const routingFulfillmentStages: Array<{ key: FulfillmentStageKey; label: string; statuses: ShipmentStatus[] }> = [
-  { key: 'all', label: '全部', statuses: [] },
-  { key: 'sorting', label: '待排货', statuses: ['WAITING_SORT'] },
-  { key: 'dispatching', label: '待出库', statuses: ['WAITING_DISPATCH'] }
-];
-
 export function getRouteCategory(channelName: string) {
   return channelName.trim().split(/[\s/-]+/)[0] || channelName;
-}
-
-export function getFulfillmentStageCount(summary: ReturnType<typeof summarizeFulfillmentStages>, stageKey: FulfillmentStageKey) {
-  if (stageKey === 'all') {
-    return Object.values(summary).reduce((total, count) => total + count, 0);
-  }
-
-  return summary[stageKey];
 }
 
 export function getShipmentLifecycleStageCount(shipments: Shipment[], stageKey: OrdersLifecycleStageKey) {

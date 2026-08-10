@@ -26,8 +26,6 @@ import {
   permissionWorkspaceCatalog,
   lineShipmentStageEditBlockControls,
   lineShipmentStageEditBlockPermissionCode,
-  lineShipmentStageViewBlockControls,
-  lineShipmentStageViewBlockPermissionCode,
   pricingLookupModuleBlockControls,
   pricingPriceBookCreateBlockControls,
   pricingPriceBookDeleteBlockControls,
@@ -756,10 +754,6 @@ export function SettingsPage({
     const granted = new Set(selectedRoleGrantedPermissions);
     return lineShipmentStageEditBlockControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
   }, [selectedRoleGrantedPermissions]);
-  const selectedLineShipmentStageViewBlockStates = useMemo(() => {
-    const granted = new Set(selectedRoleGrantedPermissions);
-    return lineShipmentStageViewBlockControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
   const selectedPricingModuleBlockScope: PricingModuleBlockScope | null = selectedWorkspacePermissions?.[0] === '报价查价 / 查价'
     ? 'lookup'
     : selectedWorkspacePermissions?.[0] === '报价查价 / 代理加价规则'
@@ -943,8 +937,7 @@ export function SettingsPage({
       return {
         ...current,
         [roleKey]: !checked && group === '运营工作台 / 专线运单池'
-          ? next.filter((code) => !code.startsWith('operations:line-shipment:stage-edit-block:')
-            && !code.startsWith('operations:line-shipment:stage-view-block:'))
+          ? next.filter((code) => !code.startsWith('operations:line-shipment:stage-edit-block:'))
           : !checked && group === '报价查价 / 查价'
             ? next.filter((code) => !code.startsWith('pricing:lookup:module-block:'))
             : !checked && group === '报价查价 / 代理加价规则'
@@ -973,20 +966,6 @@ export function SettingsPage({
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
       const code = lineShipmentStageEditBlockPermissionCode(stage);
-      if (checked) next.add(code);
-      else next.delete(code);
-      return { ...current, [roleKey]: [...next] };
-    });
-  }
-
-  function toggleLineShipmentStageViewBlock(
-    roleKey: RoleKey,
-    stage: Parameters<typeof lineShipmentStageViewBlockPermissionCode>[0],
-    checked: boolean
-  ) {
-    setDraftPermissions((current) => {
-      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
-      const code = lineShipmentStageViewBlockPermissionCode(stage);
       if (checked) next.add(code);
       else next.delete(code);
       return { ...current, [roleKey]: [...next] };
@@ -2057,26 +2036,6 @@ export function SettingsPage({
                       </div>
                     ) : selectedLineShipmentPool ? (
                       <div className="role-permission-stage-block-panel">
-                        <div className="role-permission-section-heading">
-                          <Text strong>阶段访问屏蔽</Text>
-                          <Tag color={selectedLineShipmentStageViewBlockStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedLineShipmentStageViewBlockStates.some((control) => control.checked) ? '已屏蔽待审核' : '默认全部可查看'}
-                          </Tag>
-                        </div>
-                        <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedLineShipmentStageViewBlockStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
-                              <span className="role-permission-option-copy role-permission-compact-copy">
-                                <Text strong>{control.label}</Text>
-                              </span>
-                              <Checkbox
-                                aria-label={control.label}
-                                checked={control.checked}
-                                onChange={(event) => toggleLineShipmentStageViewBlock(selectedPermissionRole.key, control.stage, event.target.checked)}
-                              />
-                            </label>
-                          ))}
-                        </div>
                         <div className="role-permission-section-heading">
                           <Text strong>阶段编辑屏蔽</Text>
                           <Tag color={selectedLineShipmentStageBlockStates.some((control) => control.checked) ? 'orange' : 'blue'}>

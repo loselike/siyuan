@@ -224,8 +224,7 @@ export function isUiPreferencePermission(permission: Pick<PermissionDefinition, 
 }
 
 export function isLineShipmentStageEditBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
-  return permission.code.startsWith('operations:line-shipment:stage-edit-block:')
-    || permission.code.startsWith('operations:line-shipment:stage-view-block:');
+  return permission.code.startsWith('operations:line-shipment:stage-edit-block:');
 }
 
 export function isPricingModuleBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {

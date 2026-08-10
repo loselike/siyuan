@@ -18,7 +18,6 @@ export type PermissionKey =
   | 'operations:line-shipment:detail'
   | 'operations:line-shipment:process'
   | 'operations:line-shipment:status-update'
-  | `operations:line-shipment:stage-view-block:${string}`
   | `operations:line-shipment:stage-edit-block:${string}`
   | 'operations:line-shipment:tracking-add'
   | 'operations:line-shipment:problem-create'
@@ -169,10 +168,6 @@ export type PermissionKey =
   | 'warehouse:tally-pending:history-view'
   | 'warehouse:tally-pending:filter'
   | 'warehouse:tally-completed:view'
-  | 'warehouse:tally-completed:view-block'
-  | 'warehouse:tally-completed:reprint-block'
-  | 'warehouse:tally-completed:download-block'
-  | 'warehouse:tally-completed:reverse-block'
   | 'warehouse:tally-completed:history-view'
   | 'warehouse:tally-completed:detail-view'
   | 'warehouse:tally-completed:reverse-review'
@@ -578,7 +573,6 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'operations:line-shipment:import', label: '导入运单', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:internal-log-view', label: '查看内部流通日志', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:export', label: '导出专线运单池', group: '运营工作台 / 专线运单池' },
-  { code: 'operations:line-shipment:stage-view-block:review-pending', label: '屏蔽待审核', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:stage-edit-block:review-pending', label: '屏蔽待审核编辑', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:stage-edit-block:waiting-sort', label: '屏蔽待排货编辑', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:stage-edit-block:waiting-dispatch', label: '屏蔽待出库编辑', group: '运营工作台 / 专线运单池' },
@@ -736,10 +730,6 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:tally-pending:history-view', label: '查看理货记录', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:filter', label: '筛选未完成理货', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-completed:view', label: '查看已完成理货', group: '仓库管理 / 已完成理货' },
-  { code: 'warehouse:tally-completed:view-block', label: '屏蔽查看', group: '仓库管理 / 已完成理货' },
-  { code: 'warehouse:tally-completed:reprint-block', label: '屏蔽重新打印', group: '仓库管理 / 已完成理货' },
-  { code: 'warehouse:tally-completed:download-block', label: '屏蔽下载', group: '仓库管理 / 已完成理货' },
-  { code: 'warehouse:tally-completed:reverse-block', label: '屏蔽反审核', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:history-view', label: '查看已完成理货历史', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:detail-view', label: '查看已完成理货详情', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:reverse-review', label: '反审核已完成理货', group: '仓库管理 / 已完成理货' },

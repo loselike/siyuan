@@ -1189,7 +1189,7 @@ export class DataController {
   @Post('operations/line-shipments/:id/tracking-events')
   @RequirePermission('operations:line-shipment:tracking-add')
   async addOperationTrackingEvent(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: TrackingEventInput) {
-    return this.repository.addTrackingEvent(request.user, id, body, { enforceOperationsLineShipmentStageVisibility: true });
+    return this.repository.addTrackingEvent(request.user, id, body);
   }
 
   @Get('customer-service/problem-tags')
@@ -1234,12 +1234,7 @@ export class DataController {
   @Post('operations/line-shipments/:id/problem-tickets')
   @RequirePermission('operations:line-shipment:problem-create')
   async createOperationProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    return this.repository.createProblemTicket(
-      request.user,
-      id,
-      { ...body, customerVisible: false, pushToSales: undefined },
-      { enforceOperationsLineShipmentStageVisibility: true }
-    );
+    return this.repository.createProblemTicket(request.user, id, { ...body, customerVisible: false, pushToSales: undefined });
   }
 
   @Post('problem-tickets/:id/replies')

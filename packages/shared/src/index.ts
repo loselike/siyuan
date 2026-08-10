@@ -1,4 +1,9 @@
+export * from './misc-fee-workflow.js';
+export * from './finance-catalog.js';
+export * from './problem-ticket.js';
+
 import type { CanadaAddressType } from './pricing-rule-engine.js';
+import type { WarehousePackageSummary } from './warehouse.js';
 
 export const FINANCIAL_DECIMAL_SCALE = 8;
 export const MONETARY_TOTAL_DECIMAL_SCALE = 2;
@@ -66,6 +71,7 @@ export function formatMonetaryTotal(value: number): string {
   if (!Number.isFinite(value)) return '-';
   return value.toFixed(MONETARY_TOTAL_DECIMAL_SCALE);
 }
+import type { ProblemTicketSummary } from './problem-ticket.js';
 
 export type BusinessType = 'EXPRESS' | 'SMALL_PACKET' | 'DEDICATED_LINE';
 export const companyChannelBusinessTypes = ['EXPRESS', 'AIRPORT_AIR', 'SEA_PORT', 'DEDICATED_LINE'] as const;
@@ -97,16 +103,17 @@ export type StaffMenuKey =
   | 'problems'
   | 'pricing'
   | 'finance'
+  | 'miscFees'
   | 'reports'
   | 'master'
   | 'settings';
 
 const roleMenuMatrix: Record<BuiltinStaffRoleKey, StaffMenuKey[]> = {
-  ADMIN: ['workspace', 'pricing', 'business', 'receive', 'market', 'customerService', 'logisticsTracking', 'finance', 'master', 'settings'],
+  ADMIN: ['workspace', 'pricing', 'business', 'receive', 'market', 'customerService', 'logisticsTracking', 'finance', 'miscFees', 'master', 'settings'],
   CUSTOMER_SERVICE: ['workspace', 'business', 'customerService', 'logisticsTracking', 'pricing', 'master'],
-  OPERATOR: ['workspace', 'business', 'receive', 'market', 'logisticsTracking', 'pricing', 'master'],
-  WAREHOUSE: ['workspace', 'receive', 'logisticsTracking'],
-  FINANCE: ['workspace', 'pricing', 'finance', 'master'],
+  OPERATOR: ['workspace', 'business', 'receive', 'market', 'logisticsTracking', 'pricing', 'miscFees', 'master'],
+  WAREHOUSE: ['workspace', 'receive', 'logisticsTracking', 'miscFees'],
+  FINANCE: ['workspace', 'pricing', 'finance', 'miscFees', 'master'],
   CUSTOMER: []
 };
 
@@ -281,16 +288,6 @@ export interface ShipmentStageDwellHistoryItem {
   durationText: string;
 }
 
-export type ShipmentTransportTimeStatus = 'IN_TRANSIT' | 'COMPLETED';
-
-export interface ShipmentTransportTime {
-  startedAt: string;
-  completedAt?: string;
-  durationSeconds: number;
-  durationText: string;
-  status: ShipmentTransportTimeStatus;
-}
-
 export function shipmentDwellStageForStatus(status: ShipmentStatus): ShipmentDwellStageKey | undefined {
   switch (status) {
     case 'DRAFT':
@@ -328,27 +325,6 @@ export function formatShipmentDwellSeconds(seconds: number): string {
   if (days > 0) return `${days}天${hours}小时`;
   if (hours > 0) return `${hours}小时${minutes}分`;
   return `${Math.max(1, minutes)}分`;
-}
-
-export function buildShipmentTransportTime(
-  startedAt?: Date | string | null,
-  completedAt?: Date | string | null,
-  now: Date | string = new Date()
-): ShipmentTransportTime | undefined {
-  if (!startedAt) return undefined;
-  const startedTimestamp = startedAt instanceof Date ? startedAt.getTime() : Date.parse(startedAt);
-  const endTimestamp = completedAt
-    ? completedAt instanceof Date ? completedAt.getTime() : Date.parse(completedAt)
-    : now instanceof Date ? now.getTime() : Date.parse(now);
-  if (!Number.isFinite(startedTimestamp) || !Number.isFinite(endTimestamp) || endTimestamp < startedTimestamp) return undefined;
-  const durationSeconds = Math.max(0, Math.floor((endTimestamp - startedTimestamp) / 1000));
-  return {
-    startedAt: new Date(startedTimestamp).toISOString(),
-    ...(completedAt ? { completedAt: new Date(endTimestamp).toISOString() } : {}),
-    durationSeconds,
-    durationText: formatShipmentDwellSeconds(durationSeconds),
-    status: completedAt ? 'COMPLETED' : 'IN_TRANSIT'
-  };
 }
 
 export type RiskLevel = 'low' | 'medium' | 'high';
@@ -541,7 +517,6 @@ export interface Shipment {
   restoreMode?: 'KEEP_ORIGINAL_TIME' | 'RESET_CREATED_TIME' | 'MANUAL_TIME';
   etaAt?: string;
   etdAt?: string;
-  vesselVoyage?: string;
   remark?: string;
   businessType: BusinessType;
   packageType: 'DOC' | 'WPX' | 'PAK';
@@ -561,12 +536,11 @@ export interface Shipment {
   status: ShipmentStatus;
   stageDwell?: ShipmentStageDwell;
   stageDwellHistory?: ShipmentStageDwellHistoryItem[];
-  transportTime?: ShipmentTransportTime;
   channelId?: string;
   channelName: string;
   agentId?: string;
-  agentShortName?: string;
   agentName: string;
+  agentShortName?: string;
   routedAt?: string;
   routeReturnedAt?: string;
   routeAgentChannelName?: string;
@@ -576,7 +550,9 @@ export interface Shipment {
   routeCostTotal?: number;
   routeCurrency?: string;
   routeCostSummary?: ShipmentRouteCostSummary;
+  linePoolFinanceSummary?: LineShipmentFinanceSummary;
   shippingMarkRequired?: boolean;
+  warehouseOutboundRemark?: string;
   businessInvoiceName?: string;
   businessInvoiceUrl?: string;
   businessInvoiceUploadedBy?: string;
@@ -587,19 +563,18 @@ export interface Shipment {
   paymentAmountCny?: number;
   paymentMethod?: ShipmentPaymentMethod;
   receivableSummary?: ShipmentReceivableSummary;
-  linePoolFinanceSummary?: LineShipmentFinanceSummary;
   hasProblemTicket: boolean;
 }
 
-export type ShipmentOutboundOrderNoSource = {
+export interface ShipmentOutboundOrderNoSource {
   customerOrderNo?: string | null;
   outboundOrderNo?: string | null;
   systemOrderNo?: string | null;
-};
+}
 
 /**
- * 业务界面统一展示的“出货单号”。历史数据把真实出货单号保存在
- * customerOrderNo，systemOrderNo 仅作为内部兼容标识。
+ * Resolve the business-facing outbound order number while retaining the
+ * historical internal system number as a compatibility fallback.
  */
 export function resolveShipmentOutboundOrderNo(source: ShipmentOutboundOrderNoSource): string {
   return source.customerOrderNo?.trim()
@@ -650,13 +625,8 @@ export interface CustomerServiceDataUpdateInput extends CustomerServiceDataSnaps
   expectedOutboundAt: string;
   remark?: string;
   pushToSales?: boolean;
-  version?: number;
   selectedFinanceItemIds?: string[];
-  /**
-   * When supplied for a business-data update, this is the complete editable
-   * business-cost list. Quantities and amounts are derived on the server from
-   * the business snapshot and each row's billing unit.
-   */
+  version?: number;
   businessCosts?: CustomerServiceBusinessCostInput[];
 }
 
@@ -978,6 +948,8 @@ export interface ShipmentRouteInput {
   otherFeeRemark?: string;
   currency?: string;
   shippingMarkRequired?: boolean;
+  /** Internal warehouse instruction supplied by market routing. */
+  warehouseOutboundRemark?: string;
   /** false only saves market routing data and keeps the shipment in WAITING_SORT. */
   approve?: boolean;
 }
@@ -987,6 +959,7 @@ export interface ShipmentDispatchInput {
   shippingMarkConfirmed?: boolean;
   handoverNo?: string;
   batchDispatchSource?: string;
+  miscFeeIdsToMatch?: string[];
 }
 
 export interface WarehouseDispatchDeclarationUpdateInput {
@@ -1083,7 +1056,6 @@ export interface ShipmentOperationalUpdateInput {
   status?: ShipmentStatus;
   etaAt?: string;
   etdAt?: string;
-  vesselVoyage?: string;
   statusRemark?: string;
 }
 
@@ -1229,9 +1201,9 @@ export interface LabelCreateResponse {
 export interface CarrierTaskSummary {
   id: string;
   shipmentId: string;
-  systemOrderNo: string;
   customerOrderNo?: string;
   outboundOrderNo?: string;
+  systemOrderNo: string;
   customerName: string;
   type: CarrierTaskType;
   carrier: CarrierAdapterCode;
@@ -1816,7 +1788,6 @@ export interface AgentMarkupMetrics {
   enabledRules: number;
   disabledRules: number;
   unmatchedQuotes: number;
-  /** 使用系统默认加价而非代理自定义默认规则的价格表范围数。 */
   systemDefaultScopes: number;
   latestUpdatedAt?: string;
 }
@@ -2451,597 +2422,7 @@ export interface SouthAfricaLookupResponse {
   };
 }
 
-export type WarehousePackageStatus = 'RECEIVED' | 'CONSOLIDATED' | 'SHIPPED' | 'TALLIED_ARCHIVED';
-export type WarehouseConsolidationMode = 'MERGE_ONLY' | 'MERGE_AND_SHIP';
-export type WarehouseRoundingRule = 'NONE' | 'HALF_UP' | 'INTEGER_UP';
-export type WarehouseTallyTaskStatus = 'PENDING' | 'COMPLETED' | 'CANCELLED';
-export type WarehouseTallyLabelStatus = 'NOT_GENERATED' | 'GENERATED';
-export type WarehouseMeasurementStatus = 'MEASURED' | 'PENDING_REMEASURE';
-export type WarehouseTallyLifecycleStatus = '待理货' | '理货中' | '已理货' | '二次理货';
-
-/**
- * 同一包裹在首次理货任务号后追加 02、03...，均属于二次理货生命周期。
- * 同日不同任务的序号位于 LH 之前，不应被误判为二次理货。
- */
-export function isWarehouseRetallyTaskNo(taskNo?: string) {
-  const round = Number(taskNo?.trim().match(/LH(\d{2})$/)?.[1]);
-  return Number.isInteger(round) && round >= 2;
-}
-
-/** 统一生成包裹在任意模块展示的理货生命周期标签。 */
-export function resolveWarehouseTallyLifecycleStatus(input: {
-  tallyTaskId?: string;
-  tallyTaskNo?: string;
-  tallyCompleted?: boolean;
-}): WarehouseTallyLifecycleStatus {
-  if (!input.tallyTaskId && !input.tallyTaskNo) return '待理货';
-  if (input.tallyCompleted !== true) return '理货中';
-  if (isWarehouseRetallyTaskNo(input.tallyTaskNo)) return '二次理货';
-  return '已理货';
-}
-
-export interface WarehousePackageSummary {
-  id: string;
-  customerCode: string;
-  /** Whether the package customer code currently exists in customer master data. */
-  customerMaintained?: boolean;
-  customerName?: string;
-  site?: string;
-  salesperson?: string;
-  customerOrderNo: string;
-  domesticTrackingNo: string;
-  combinedOrderNo: string;
-  labelNo?: string;
-  sourcePackageId?: string;
-  sourcePackageNo?: string;
-  archivedByPackageId?: string;
-  archivedByPackageNo?: string;
-  archivedReason?: string;
-  archivedAt?: string;
-  tallyTaskId?: string;
-  tallyTaskNo?: string;
-  /** Only true when a matching warehouse tally task has actually completed. */
-  tallyCompleted?: boolean;
-  outboundOrderNo?: string;
-  systemOrderNo?: string;
-  shipmentId?: string;
-  receivingChannel: string;
-  destinationCountry?: string;
-  expectedTotalPackageCount?: number;
-  packageIndex?: number;
-  packageCount: number;
-  weightKg: number;
-  lengthCm: number;
-  widthCm: number;
-  heightCm: number;
-  girthCm?: number;
-  cbm: number;
-  totalCbm?: number;
-  volumetricWeightKg: number;
-  volumetricWeightKg5000?: number;
-  totalVolumetricWeightKg?: number;
-  totalVolumetricWeightKg5000?: number;
-  chargeableWeightKg: number;
-  divisor: number;
-  roundingRule: WarehouseRoundingRule;
-  scanTime?: string;
-  remark?: string;
-  manualException?: string;
-  scanSource?: string;
-  measurementStatus?: WarehouseMeasurementStatus;
-  measurementMatchedAt?: string;
-  measurementMatchedBy?: string;
-  inboundAt?: string;
-  receiptSourceId?: string;
-  tallyStatus?: WarehouseTallyLifecycleStatus;
-  splitStatus?: string;
-  consolidationStatus?: string;
-  outboundStatus?: string;
-  status: WarehousePackageStatus;
-  exceptions: string[];
-  createdBy?: string;
-  createdAt: string;
-}
-
-export interface WarehousePackageCreateInput {
-  customerCode?: string;
-  customerOrderNo?: string;
-  combinedOrderNo?: string;
-  domesticTrackingNo: string;
-  expectedTotalPackageCount: number;
-  packageIndex: number;
-  packageCount?: number;
-  weightKg: number;
-  lengthCm: number;
-  widthCm: number;
-  heightCm: number;
-  scanTime?: string;
-  remark?: string;
-  manualException?: string;
-  scanSource?: string;
-}
-
-export interface WarehouseManualReceiptCartonSpecInput {
-  weightKg: number;
-  lengthCm: number;
-  widthCm: number;
-  heightCm: number;
-  packageCount: number;
-}
-
-export interface WarehouseManualReceiptCreateInput extends Omit<WarehousePackageCreateInput, 'expectedTotalPackageCount' | 'packageIndex' | 'packageCount' | 'weightKg' | 'lengthCm' | 'widthCm' | 'heightCm'> {
-  cartonSpecs: WarehouseManualReceiptCartonSpecInput[];
-}
-
-export interface WarehouseManualReceiptCreateResponse {
-  packages: WarehousePackageSummary[];
-  totalCartonSpecs: number;
-  totalPackages: number;
-}
-
-export interface WarehouseManualReceiptCustomerOption {
-  code: string;
-  name: string;
-}
-
-export type WarehouseMachineImportIssueType =
-  | 'INVALID'
-  | 'DUPLICATE_FILE'
-  | 'CONFLICT_FILE'
-  | 'DUPLICATE_SYSTEM'
-  | 'DUPLICATE_BATCH';
-
-export interface WarehouseMachineImportIssue {
-  type: WarehouseMachineImportIssueType;
-  sheetName: string;
-  rowNumber: number;
-  barcode?: string;
-  reason: string;
-}
-
-export interface WarehouseMachineImportSampleRow {
-  sheetName: string;
-  rowNumber: number;
-  barcode: string;
-  customerCode: string;
-  domesticTrackingNo: string;
-  packageCount: number;
-  weightKg: number;
-  lengthCm: number;
-  widthCm: number;
-  heightCm: number;
-  cbm: number;
-  volumetricWeightKg: number;
-  scanTime: string;
-  remark?: string;
-}
-
-export interface WarehouseMachineImportResponse {
-  fileName: string;
-  committed: boolean;
-  totalRows: number;
-  validRows: number;
-  importableRows: number;
-  importedRows: number;
-  invalidRows: number;
-  duplicateFileRows: number;
-  duplicateSystemRows: number;
-  issueCount: number;
-  issues: WarehouseMachineImportIssue[];
-  samples: WarehouseMachineImportSampleRow[];
-  dateFrom?: string;
-  dateTo?: string;
-}
-
-export interface WarehousePackageUpdateInput {
-  customerCode?: string;
-  customerOrderNo?: string;
-  domesticTrackingNo?: string;
-  combinedOrderNo?: string;
-  expectedTotalPackageCount?: number;
-  packageIndex?: number;
-  packageCount?: number;
-  weightKg?: number;
-  lengthCm?: number;
-  widthCm?: number;
-  heightCm?: number;
-  scanTime?: string;
-  remark?: string;
-  manualException?: string;
-}
-
-export type WarehouseTodayDatePreset = 'TODAY' | 'WEEK' | 'LAST_7_DAYS' | 'MONTH' | 'CUSTOM';
-
-export interface WarehouseTodayQuery {
-  dataScope?: 'OWN' | 'ALL';
-  datePreset?: WarehouseTodayDatePreset;
-  customFrom?: string;
-  customTo?: string;
-  site?: string;
-  customerOrderNo?: string;
-  domesticTrackingNo?: string;
-  combinedOrderNo?: string;
-}
-
-export interface WarehouseTodayTotals {
-  receiptTickets: number;
-  totalPackages: number;
-  totalWeightKg: number;
-  totalCbm: number;
-  waitingDispatchTickets: number;
-  pendingTallyTickets: number;
-  exceptionTickets: number;
-}
-
-export interface WarehouseTodayResponse {
-  totals: WarehouseTodayTotals;
-  rows: WarehousePackageSummary[];
-}
-
-export interface WarehouseInStockQuery {
-  dataScope?: 'OWN' | 'ALL';
-  site?: string;
-  customerOrderNo?: string;
-  domesticTrackingNo?: string;
-  combinedOrderNo?: string;
-  operationKeyword?: string;
-  status?: WarehousePackageStatus;
-}
-
-export type WarehouseInStockTotals = WarehouseTodayTotals;
-
-export interface WarehouseInStockResponse {
-  totals: WarehouseInStockTotals;
-  rows: WarehousePackageSummary[];
-}
-
-export type WarehouseRentBillingUnit = 'CBM' | 'KG';
-export type WarehouseRentPeriodUnit = 'DAY' | 'MONTH';
-export type WarehouseRentStatus = 'IN_STOCK' | 'OUTBOUNDED';
-
-export interface WarehouseRentRuleSummary {
-  id: string;
-  name: string;
-  site?: string;
-  effectiveFrom: string;
-  effectiveTo?: string;
-  freeDays: number;
-  freePeriodUnit: WarehouseRentPeriodUnit;
-  billingUnit: WarehouseRentBillingUnit;
-  billingCycleUnit: WarehouseRentPeriodUnit;
-  densityMin: number;
-  densityMax?: number;
-  unitRate: number;
-  currency: 'RMB';
-  enabled: boolean;
-  remark?: string;
-  createdBy?: string;
-  createdAt: string;
-  updatedBy?: string;
-  updatedAt: string;
-}
-
-export interface WarehouseRentRuleInput {
-  name: string;
-  site?: string;
-  effectiveFrom: string;
-  effectiveTo?: string;
-  freeDays: number;
-  freePeriodUnit?: WarehouseRentPeriodUnit;
-  billingUnit: WarehouseRentBillingUnit;
-  billingCycleUnit?: WarehouseRentPeriodUnit;
-  densityMin: number;
-  densityMax?: number;
-  unitRate: number;
-  enabled?: boolean;
-  remark?: string;
-}
-
-export interface WarehouseRentRuleEnabledInput {
-  enabled: boolean;
-}
-
-export interface WarehouseRentDetailQuery {
-  site?: string;
-  salesperson?: string;
-  customerCode?: string;
-  domesticTrackingNo?: string;
-  inboundFrom?: string;
-  inboundTo?: string;
-  outboundFrom?: string;
-  outboundTo?: string;
-  status?: WarehouseRentStatus;
-  hasRent?: boolean;
-}
-
-export interface WarehouseRentDetailSummary {
-  id: string;
-  site?: string;
-  salesperson?: string;
-  customerCode: string;
-  customerName?: string;
-  domesticTrackingNo: string;
-  packageCount: number;
-  totalWeightKg: number;
-  totalCbm: number;
-  densityKgPerCbm: number;
-  inboundAt: string;
-  outboundAt?: string;
-  warehouseDays: number;
-  freeDays: number;
-  freePeriodUnit?: WarehouseRentPeriodUnit;
-  chargeDays: number;
-  billingUnit?: WarehouseRentBillingUnit;
-  billingCycleUnit?: WarehouseRentPeriodUnit;
-  billingQuantity: number;
-  unitRate: number;
-  rentAmountRmb: number;
-  status: WarehouseRentStatus;
-  matchedRuleId?: string;
-  matchedRuleName?: string;
-}
-
-export interface WarehouseRentDetailTotals {
-  inStockCount: number;
-  overdueCount: number;
-  currentRentAmountRmb: number;
-  outboundedRentAmountRmb: number;
-}
-
-export interface WarehouseRentDetailResponse {
-  totals: WarehouseRentDetailTotals;
-  rows: WarehouseRentDetailSummary[];
-  sites: string[];
-  salespeople: string[];
-}
-
-export interface WarehousePackageSplitInput {
-  splitCount?: number;
-  pieces?: number[];
-  remark?: string;
-}
-
-export interface WarehousePackageSplitResponse {
-  sourcePackage: WarehousePackageSummary;
-  packages: WarehousePackageSummary[];
-}
-
-export interface WarehousePackageGroupSummary {
-  id: string;
-  customerCode: string;
-  customerOrderNo: string;
-  domesticTrackingNo: string;
-  combinedOrderNo: string;
-  expectedTotalPackageCount: number;
-  arrivedPackageCount: number;
-  remainingPackageCount: number;
-  totalActualWeightKg: number;
-  totalCbm: number;
-  maxLengthCm: number;
-  maxWidthCm: number;
-  maxHeightCm: number;
-  maxVolumetricWeightKg: number;
-  totalChargeableWeightKg: number;
-  latestScanTime?: string;
-}
-
-export interface WarehouseConsolidationSummary {
-  id: string;
-  consolidationNo: string;
-  mode: WarehouseConsolidationMode;
-  shipmentId?: string;
-  outboundOrderNo?: string;
-  systemOrderNo?: string;
-  packageIds: string[];
-  totalPackages: number;
-  totalActualWeightKg: number;
-  totalVolumetricWeightKg: number;
-  totalChargeableWeightKg: number;
-  createdAt: string;
-}
-
-export interface WarehouseConsolidationCreateInput {
-  packageIds: string[];
-  mode: WarehouseConsolidationMode;
-  tallyRequirement?: string;
-}
-
-export interface WarehouseTallyTaskSummary {
-  id: string;
-  taskNo: string;
-  status: WarehouseTallyTaskStatus;
-  rootTallyTaskId?: string;
-  previousTallyTaskId?: string;
-  tallySequence?: number;
-  packageIds: string[];
-  sourcePackageId: string;
-  sourceCombinedOrderNo: string;
-  customerCode: string;
-  customerName?: string;
-  salesperson?: string;
-  packageCount: number;
-  originalWeightKg: number;
-  originalLengthCm: number;
-  originalWidthCm: number;
-  originalHeightCm: number;
-  originalVolumetricWeightKg: number;
-  originalVolumetricWeightKg5000: number;
-  tallyRequirement: string;
-  remark?: string;
-  createdBy?: string;
-  createdAt: string;
-  completedPackageCount?: number;
-  completedWeightKg?: number;
-  completedLengthCm?: number;
-  completedWidthCm?: number;
-  completedHeightCm?: number;
-  completedVolumetricWeightKg?: number;
-  completedVolumetricWeightKg5000?: number;
-  completedBy?: string;
-  completedAt?: string;
-  labelStatus: WarehouseTallyLabelStatus;
-  labelNo?: string;
-  labelQrContent?: string;
-  labelGeneratedAt?: string;
-  labelGeneratedBy?: string;
-  labelPrintedAt?: string;
-  labelPrintedBy?: string;
-  labelDownloadedAt?: string;
-  labelDownloadedBy?: string;
-  appliedPackageId?: string;
-  appliedPackageNo?: string;
-  labelAppliedAt?: string;
-  labelAppliedBy?: string;
-  outputPackages?: WarehousePackageSummary[];
-}
-
-export interface WarehouseTallyTaskListQuery {
-  status?: WarehouseTallyTaskStatus;
-  customerCode?: string;
-  combinedOrderNo?: string;
-  completedScope?: 'RECENT' | 'HISTORY' | 'ALL';
-  completedFrom?: string;
-  completedTo?: string;
-}
-
-export type WarehouseTallyRepeatDatePreset = '30D' | '90D' | 'ALL';
-
-export interface WarehouseTallyRepeatStatisticsQuery {
-  datePreset?: WarehouseTallyRepeatDatePreset;
-  salesperson?: string;
-  operator?: string;
-  keyword?: string;
-  onlyRepeated?: boolean | string;
-}
-
-export interface WarehouseTallyRepeatStatisticsSummary {
-  completedBatchCount: number;
-  repeatedBatchCount: number;
-  extraTallyCount: number;
-  repeatRate: number;
-  maxTallyCount: number;
-}
-
-export interface WarehouseTallyRepeatSalespersonSummary extends WarehouseTallyRepeatStatisticsSummary {
-  salesperson: string;
-  latestRepeatedAt?: string;
-}
-
-export interface WarehouseTallyRepeatOperatorSummary extends WarehouseTallyRepeatStatisticsSummary {
-  operator: string;
-  completedTaskCount: number;
-  latestCompletedAt?: string;
-  latestRepeatedAt?: string;
-}
-
-export interface WarehouseTallyRepeatBatchSummary {
-  rootTallyTaskId: string;
-  rootTaskNo: string;
-  salesperson: string;
-  tallyOperators: string[];
-  customerCode: string;
-  customerName?: string;
-  sourceCombinedOrderNo: string;
-  tallyCount: number;
-  firstCompletedAt: string;
-  lastCompletedAt: string;
-  latestTaskId: string;
-  latestTaskNo: string;
-  latestSourcePackageId: string;
-  latestTallyRequirement: string;
-  latestCompletedBy?: string;
-}
-
-export interface WarehouseTallyRepeatStatisticsResponse {
-  summary: WarehouseTallyRepeatStatisticsSummary;
-  salespeople: WarehouseTallyRepeatSalespersonSummary[];
-  operators: WarehouseTallyRepeatOperatorSummary[];
-  batches: WarehouseTallyRepeatBatchSummary[];
-  updatedAt: string;
-}
-
-export interface WarehouseTallyTaskCreateInput {
-  packageIds: string[];
-  tallyRequirement: string;
-  remark?: string;
-}
-
-export interface WarehouseTallyTaskUpdateInput {
-  packageIds?: string[];
-  tallyRequirement?: string;
-  remark?: string;
-}
-
-export interface WarehouseTallyTaskCompletedCountUpdateInput {
-  packageCount: number;
-}
-
-export interface WarehouseTallyTaskCompleteInput {
-  packageCount: number;
-  weightKg?: number;
-  lengthCm?: number;
-  widthCm?: number;
-  heightCm?: number;
-  remark?: string;
-  /** 任务内每个最终包裹的来源；服务端据此按理货后实体件逐条建档。 */
-  results: WarehouseTallyTaskPackageResultInput[];
-}
-
-export interface WarehouseTallyTaskPackageResultInput {
-  sourcePackageIds: string[];
-  packageCount: number;
-  weightKg?: number;
-  lengthCm?: number;
-  widthCm?: number;
-  heightCm?: number;
-}
-
-export interface WarehouseTallyHistoricalAggregateScanSummary {
-  sampleId: string;
-  receivedAt: string;
-  deviceNo?: string;
-  result: 'SUCCESS' | 'FAILED';
-  weightKg: number;
-  lengthCm: number;
-  widthCm: number;
-  heightCm: number;
-}
-
-export interface WarehouseTallyHistoricalAggregateCorrectionPreview {
-  taskId: string;
-  taskNo: string;
-  eligible: boolean;
-  reason?: string;
-  alreadyCorrected: boolean;
-  legacyPackageId?: string;
-  legacyPackageNo?: string;
-  expectedPackageCount: number;
-  scans: WarehouseTallyHistoricalAggregateScanSummary[];
-  previewFingerprint?: string;
-}
-
-export interface WarehouseTallyHistoricalAggregateCorrectionInput {
-  sampleIds: string[];
-  previewFingerprint: string;
-  confirmedPhysicalPieces: boolean;
-}
-
-export interface WarehouseTallyHistoricalAggregateCorrectionResult {
-  task: WarehouseTallyTaskSummary;
-  correctedPackages: WarehousePackageSummary[];
-  archivedAggregatePackageId: string;
-  alreadyCorrected: boolean;
-}
-
-export interface WarehouseTallyLabelScanInput {
-  labelNo: string;
-}
-
-export interface WarehouseTallyLabelScanResponse {
-  task: WarehouseTallyTaskSummary;
-  package: WarehousePackageSummary;
-  alreadyApplied: boolean;
-}
+export * from './warehouse.js';
 
 export interface FeeLineInput {
   name: string;
@@ -3057,43 +2438,6 @@ export type FinanceBillingUnit = 'KG' | 'CBM';
 export type ShipmentFinanceItemStatus = 'PENDING' | 'CONFIRMED' | 'LOCKED' | 'VOIDED';
 export type ShipmentFinanceItemSourceType = 'SYSTEM' | 'MANUAL';
 export type ReceivableMatchReviewStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CANCELLED' | 'REVERSED';
-export type FinanceCatalogCategory = 'FEE_NAME' | 'SETTLEMENT_METHOD' | 'CARGO_TYPE' | 'PRODUCT_NAME';
-
-export interface FinanceCatalogItemSummary {
-  id: string;
-  category: FinanceCatalogCategory;
-  sortOrder: number;
-  name: string;
-  currency?: string;
-  remark?: string;
-  enabled: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface FinanceCatalogItemInput {
-  category: FinanceCatalogCategory;
-  sortOrder?: number;
-  name: string;
-  currency?: string;
-  remark?: string;
-  enabled?: boolean;
-}
-
-export interface FinanceCatalogListQuery {
-  category?: FinanceCatalogCategory;
-  keyword?: string;
-  enabledOnly?: boolean;
-}
-
-export interface FinanceCatalogReorderInput {
-  category: FinanceCatalogCategory;
-  orderedIds: string[];
-}
-
-export interface FinanceCatalogListResponse {
-  items: FinanceCatalogItemSummary[];
-}
 
 export interface PayerBankAccountSummary {
   id: string;
@@ -3120,52 +2464,6 @@ export interface PayerBankAccountListResponse {
   items: PayerBankAccountSummary[];
 }
 
-export const defaultFinanceCatalogItems: Array<Omit<FinanceCatalogItemSummary, 'id' | 'createdAt' | 'updatedAt'>> = [
-  { category: 'FEE_NAME', sortOrder: 1, name: '运费', remark: '根据结算方式自动匹配', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 2, name: '报关费', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 3, name: '纸箱', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 4, name: '胶带', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 5, name: '围膜', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 6, name: '标签', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 7, name: '麻袋', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 8, name: '绑带', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 9, name: 'A4纸', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 10, name: '托盘', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 11, name: '雨布', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 12, name: '临时工', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 13, name: '木工', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 14, name: '临时工', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 15, name: '装柜', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 16, name: '叉车', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 17, name: '送货费销', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 18, name: '其他工具', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 19, name: '基础运费', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 20, name: '客户运费', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 21, name: '业务员成本', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 22, name: '业务成本', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 23, name: 'USD 附加费', currency: 'USD', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 24, name: '出货成本', currency: 'RMB', enabled: true },
-  { category: 'FEE_NAME', sortOrder: 25, name: '代理运费', currency: 'RMB', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 1, name: '思远阿里', currency: 'USD', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 2, name: '科沃尔阿里', currency: 'USD', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 3, name: '华侨银行', currency: 'USD', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 4, name: 'SH阿里', currency: 'USD', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 5, name: 'JYL阿里', currency: 'USD', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 6, name: '西联', currency: 'USD', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 7, name: '农村商业银行', currency: 'RMB', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 8, name: '中国银行', currency: 'RMB', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 9, name: '招商银行', currency: 'RMB', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 10, name: '思远微信', currency: 'RMB', enabled: true },
-  { category: 'SETTLEMENT_METHOD', sortOrder: 11, name: '思远支付宝', currency: 'RMB', enabled: true },
-  { category: 'CARGO_TYPE', sortOrder: 1, name: '普货', enabled: true },
-  { category: 'CARGO_TYPE', sortOrder: 2, name: '液体', enabled: true },
-  { category: 'CARGO_TYPE', sortOrder: 3, name: '带电', enabled: true },
-  { category: 'CARGO_TYPE', sortOrder: 4, name: '仿牌', enabled: true },
-  { category: 'CARGO_TYPE', sortOrder: 5, name: '带磁', enabled: true },
-  { category: 'CARGO_TYPE', sortOrder: 6, name: '粉末', enabled: true },
-  { category: 'PRODUCT_NAME', sortOrder: 1, name: '服饰', enabled: true },
-  { category: 'PRODUCT_NAME', sortOrder: 2, name: '配件', enabled: true }
-];
 
 export interface ShipmentFinanceItemCommon {
   type?: ShipmentFinanceItemType;
@@ -3237,10 +2535,8 @@ export interface ReceivableMatchRequestSummary {
   waterReceiptId: string;
   shipmentId: string;
   receiptNo: string;
-  /** 水单原币侧金额；旧数据与应收金额一致。 */
   amount: number;
   currency: string;
-  /** 提交时锁定的人民币金额和应收侧金额。 */
   rmbAmount?: number;
   receivableAmount?: number;
   receivableCurrency?: string;
@@ -3449,10 +2745,8 @@ export interface WaterReceiptMatchSummary {
   customerCode: string;
   feeName: string;
   amount: number;
-  /** 跨币种匹配时的应收侧金额。 */
-  receivableAmount?: number;
-  /** 提交时锁定的人民币匹配金额。 */
   rmbAmount?: number;
+  receivableAmount?: number;
   receivableCurrency?: string;
   receiptExchangeRate?: number;
   receivableExchangeRate?: number;
@@ -3529,6 +2823,7 @@ export interface WaterReceiptSummary {
   arrivedBy?: string;
   archivedAt?: string;
   voidedAt?: string;
+  voidedBy?: string;
   voidedReason?: string;
   accountLedgerId?: string;
   createdBy?: string;
@@ -3596,7 +2891,6 @@ export interface ReceivableWaterReceiptCandidate {
   pendingAllocatedAmount?: number;
   availableAllocationAmount?: number;
   balance: number;
-  /** 按当前应收币种折算的人民币余额。 */
   rmbBalance?: number;
   rmbAvailableAllocationAmount?: number;
   exchangeRate?: number;
@@ -3717,6 +3011,9 @@ export interface ChargeWeightChangeSummary {
 }
 
 export interface PayableAuditSummary extends PayableFeeSummary {
+  auditSource?: 'ORDER_PAYABLE' | 'MISC_FEE_HANG';
+  miscFeeRecordId?: string;
+  miscFeeHangRequestId?: string;
   salesperson?: string;
   customerCode: string;
   customerName: string;
@@ -4020,9 +3317,11 @@ export interface PaymentVoucherArchiveInput {
 
 export interface PendingPaymentSummary {
   id: string;
-  payableFinanceItemId: string;
+  sourceType?: 'ORDER_PAYABLE' | 'MISC_FEE_PAYABLE';
+  payableFinanceItemId?: string;
+  miscFeeRecordId?: string;
   paymentApplicationId?: string;
-  shipmentId: string;
+  shipmentId?: string;
   date: string;
   agentName?: string;
   agentShortName?: string;
@@ -4030,7 +3329,7 @@ export interface PendingPaymentSummary {
   customerCode: string;
   customerName: string;
   outboundOrderNo?: string;
-  systemOrderNo: string;
+  systemOrderNo?: string;
   transferNo?: string;
   feeName: string;
   amount: number;
@@ -4077,14 +3376,643 @@ export interface PendingPaymentListResponse {
 export interface PaymentApplicationItemSummary {
   id: string;
   pendingPaymentId: string;
-  payableFinanceItemId: string;
-  shipmentId: string;
+  sourceType?: 'ORDER_PAYABLE' | 'MISC_FEE_PAYABLE';
+  payableFinanceItemId?: string;
+  miscFeeRecordId?: string;
+  shipmentId?: string;
   outboundOrderNo?: string;
-  systemOrderNo: string;
+  systemOrderNo?: string;
   customerCode: string;
   feeName: string;
   amount: number;
   currency: 'RMB' | 'USD';
+}
+
+export const miscFeeSourceTypes = [
+  'KUAYUE',
+  'WAREHOUSE_PICKUP',
+  'MARKET_PICKUP',
+  'OTHER_PICKUP',
+  'TALLY_MISC',
+  'PURCHASE',
+  'DELIVERY'
+] as const;
+
+export type MiscFeeSourceType = (typeof miscFeeSourceTypes)[number];
+export type MiscFeeMatchStatus = 'UNMATCHED' | 'MATCHED';
+export type MiscFeeConfirmationStatus = 'PENDING' | 'CONFIRMED';
+export type MiscFeeAuditStatus = 'PENDING' | 'APPROVED';
+export type MiscFeeHangStatus = 'NONE' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN';
+export type MiscFeeHangProgressStatus =
+  | 'PENDING_APPROVAL'
+  | 'PENDING_PAYMENT'
+  | 'PAYMENT_IN_PROGRESS'
+  | 'PAID'
+  | 'REJECTED'
+  | 'WITHDRAWN'
+  | 'INVALIDATED'
+  | 'PAYMENT_MISSING';
+export type MiscFeeCostOwnerType = 'MARKET' | 'WAREHOUSE' | 'EXTERNAL';
+export type MiscFeeAttachmentPurpose = 'SOURCE' | 'PURCHASE_EVIDENCE' | 'HANG_VOUCHER' | 'OTHER';
+
+export interface MiscFeeAttachmentSummary {
+  id: string;
+  purpose: MiscFeeAttachmentPurpose;
+  fileName: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  url?: string;
+  uploadedBy?: string;
+  createdAt: string;
+}
+
+export interface MiscFeePaymentReceiptSummary {
+  id: string;
+  fileName: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  url?: string;
+  uploadedBy?: string;
+  createdAt: string;
+}
+
+export interface MiscFeeSummary {
+  id: string;
+  sourceType: MiscFeeSourceType;
+  sourceLabel: string;
+  businessNo?: string;
+  feeName: string;
+  ownerType: MiscFeeCostOwnerType;
+  ownerName?: string;
+  agentId?: string;
+  agentName?: string;
+  customerId: string;
+  customerCode: string;
+  customerName: string;
+  salesperson?: string;
+  shipmentId?: string;
+  systemOrderNo?: string;
+  customerOrderNo?: string;
+  transferNo?: string;
+  cargoData?: {
+    packageCount?: number;
+    actualWeightKg?: number;
+    volumeCbm?: number;
+  };
+  dispatchAgentName?: string;
+  occurredAt: string;
+  businessAmount?: number;
+  businessCurrency: string;
+  businessSettlementMethod?: string;
+  businessExchangeRate?: number;
+  businessRmbAmount?: number;
+  payableAmount?: number;
+  payableCurrency?: string;
+  payableSettlementMethod?: string;
+  payableExchangeRate?: number;
+  payableRmbAmount?: number;
+  matchStatus: MiscFeeMatchStatus;
+  confirmationStatus: MiscFeeConfirmationStatus;
+  auditStatus?: MiscFeeAuditStatus;
+  hangStatus?: MiscFeeHangStatus;
+  paymentStatus?: 'NONE' | 'PENDING' | 'READY' | 'APPLIED' | 'PAID' | 'INVALIDATED';
+  archivedAt?: string;
+  voidedAt?: string;
+  voidReason?: string;
+  createdBy: string;
+  createdByLabel?: string;
+  createdRole: string;
+  createdSite?: string;
+  ownerSite?: string;
+  profitEligibleAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  confirmedBy?: string;
+  confirmedAt?: string;
+  remark?: string;
+  version: number;
+  businessCostFinanceItemId?: string;
+  payableCostFinanceItemId?: string;
+  latestHangRequestId?: string;
+  attachments?: MiscFeeAttachmentSummary[];
+  paymentReceipts?: MiscFeePaymentReceiptSummary[];
+  kuayueBill?: KuayueBillDetails;
+}
+
+export interface MiscFeeDeliveryShipmentOption {
+  id: string;
+  systemOrderNo: string;
+  transferNo?: string;
+  packageCount: number;
+  actualWeightKg?: number;
+  volumeCbm?: number;
+  agentId?: string;
+  agentName?: string;
+}
+
+export interface KuayueBillDetails {
+  kuayueBillNo?: string;
+  importedAt?: string;
+  senderCompany?: string;
+  sender?: string;
+  senderCity?: string;
+  destinationCity?: string;
+  receiverAreaCode?: string;
+  receiverCompany?: string;
+  receiver?: string;
+  serviceType?: string;
+  pieceCount?: number;
+  chargeWeightKg?: number;
+  freightAmount?: number;
+  insuranceAmount?: number;
+  overageAmount?: number;
+  oversizeAmount?: number;
+  deliveryAmount?: number;
+  resourceAllocationAmount?: number;
+  discountAmount?: number;
+}
+
+export interface MiscFeeDetail extends MiscFeeSummary {
+  attachments: MiscFeeAttachmentSummary[];
+  customerSnapshot?: Record<string, unknown>;
+  shipmentSnapshot?: Record<string, unknown>;
+  cargoSnapshot?: Record<string, unknown>;
+  agentSnapshot?: Record<string, unknown>;
+}
+
+export interface MiscFeeInput {
+  sourceType: MiscFeeSourceType;
+  feeName: string;
+  ownerType?: MiscFeeCostOwnerType;
+  ownerName?: string;
+  agentId?: string;
+  agentName?: string;
+  customerCode: string;
+  shipmentId?: string;
+  systemOrderNo?: string;
+  occurredAt: string;
+  businessAmount?: number;
+  businessCurrency?: string;
+  businessSettlementMethod?: string;
+  payableAmount?: number;
+  payableCurrency?: string;
+  payableSettlementMethod?: string;
+  remark?: string;
+  version?: number;
+  idempotencyKey?: string;
+}
+
+export type MiscFeeUpdateInput = Partial<Omit<MiscFeeInput, 'sourceType'>> & {
+  version: number;
+};
+
+export interface MiscFeeQuery {
+  sourceType?: MiscFeeSourceType;
+  keyword?: string;
+  kuayueBillNo?: string;
+  customerCode?: string;
+  systemOrderNo?: string;
+  matchStatus?: MiscFeeMatchStatus;
+  confirmationStatus?: MiscFeeConfirmationStatus;
+  auditStatus?: MiscFeeAuditStatus;
+  hangStatus?: MiscFeeHangStatus;
+  ownerType?: MiscFeeCostOwnerType;
+  occurredFrom?: string;
+  occurredTo?: string;
+  includeArchived?: boolean;
+  includeVoided?: boolean;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface MiscFeeListResponse {
+  rows: MiscFeeSummary[];
+  totals: {
+    count: number;
+    businessRmbAmount: number;
+    payableRmbAmount?: number;
+    pendingConfirmation: number;
+    pendingAudit?: number;
+    pendingHang?: number;
+  };
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+export interface MiscFeeMatchInput {
+  shipmentId: string;
+  version: number;
+  reason?: string;
+  idempotencyKey?: string;
+}
+
+export interface MiscFeeBusinessAssignmentInput {
+  shipmentId: string;
+  businessAmount: number;
+  businessCurrency?: string;
+  businessSettlementMethod?: string;
+  version: number;
+  reason?: string;
+  idempotencyKey?: string;
+}
+
+export interface MiscFeeActionInput {
+  version: number;
+  reason?: string;
+  idempotencyKey?: string;
+}
+
+export interface MiscFeeVoidInput extends MiscFeeActionInput {
+  reason: string;
+}
+
+export interface MiscFeeHangRequestInput {
+  version: number;
+  remark?: string;
+  idempotencyKey?: string;
+  attachment?: Omit<MiscFeeAttachmentSummary, 'id' | 'createdAt'>;
+}
+
+export interface MiscFeeHangRequestSummary {
+  id: string;
+  miscFeeRecordId: string;
+  status: Exclude<MiscFeeHangStatus, 'NONE'>;
+  requestedBy: string;
+  requestedAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  withdrawnBy?: string;
+  withdrawnAt?: string;
+  remark?: string;
+  rejectionReason?: string;
+  pendingPaymentId?: string;
+  progressStatus: MiscFeeHangProgressStatus;
+  canWithdraw: boolean;
+  version: number;
+  fee: MiscFeeSummary;
+  attachments: MiscFeeAttachmentSummary[];
+  sourceAttachments: MiscFeeAttachmentSummary[];
+}
+
+export interface MiscFeeHangBatchApproveInput {
+  items: Array<Pick<MiscFeeActionInput, 'version'> & { id: string }>;
+}
+
+export interface MiscFeeHangBatchApproveResult {
+  rows: MiscFeeHangRequestSummary[];
+  approvedCount: number;
+}
+
+export interface MiscFeeHangQuery {
+  status?: Exclude<MiscFeeHangStatus, 'NONE'> | 'ALL';
+  sourceType?: MiscFeeSourceType;
+  customerCode?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface MiscFeeHangListResponse {
+  rows: MiscFeeHangRequestSummary[];
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+export interface MiscFeeTallyDueItem {
+  id: string;
+  feeName: string;
+  businessAmount?: number;
+  businessCurrency: string;
+  occurredAt: string;
+  registeredAt: string;
+  confirmationStatus: MiscFeeConfirmationStatus;
+  ageDays: number;
+  dueLevel: 'OPTIONAL' | 'WAREHOUSE_DUE' | 'MANDATORY';
+}
+
+export interface MiscFeeTallyDueSummary {
+  customerCode: string;
+  total: number;
+  warehouseDueCount: number;
+  mandatoryCount: number;
+  rows: MiscFeeTallyDueItem[];
+}
+
+export interface KuayueImportPreviewLine {
+  rowNo: number;
+  kuayueBillNo?: string;
+  occurredAt?: string;
+  pieceCount?: number;
+  chargeWeightKg?: number;
+  freightAmount?: number;
+  insuranceAmount?: number;
+  overageAmount?: number;
+  oversizeAmount?: number;
+  deliveryAmount?: number;
+  resourceAllocationAmount?: number;
+  discountAmount?: number;
+  businessAmount?: number;
+  payableAmount?: number;
+  senderCompany?: string;
+  sender?: string;
+  senderCity?: string;
+  destinationCity?: string;
+  receiverAreaCode?: string;
+  receiverCompany?: string;
+  receiver?: string;
+  serviceType?: string;
+  valid: boolean;
+  duplicate: boolean;
+  errors: string[];
+  raw: Record<string, unknown>;
+}
+
+export interface KuayueImportPreview {
+  previewToken: string;
+  fileName: string;
+  checksum: string;
+  totalRows: number;
+  validRows: number;
+  invalidRows: number;
+  duplicateRows: number;
+  declaredPayableAmount?: number;
+  parsedPayableAmount: number;
+  lines: KuayueImportPreviewLine[];
+}
+
+export interface KuayueImportCommitInput {
+  previewToken: string;
+  idempotencyKey?: string;
+}
+
+export interface KuayueImportCommitResult {
+  batchId: string;
+  createdCount: number;
+  skippedDuplicateCount: number;
+  failedCount: number;
+}
+
+export interface KuayueImportLineSummary extends KuayueImportPreviewLine {
+  id: string;
+  batchId: string;
+  batchFileName: string;
+  batchCommittedAt?: string;
+  claimedRecordId?: string;
+}
+
+export interface KuayueImportLineQuery {
+  status?: 'UNCLAIMED' | 'CLAIMED' | 'ALL';
+  keyword?: string;
+  kuayueBillNo?: string;
+  occurredFrom?: string;
+  occurredTo?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface KuayueImportLineListResponse {
+  rows: KuayueImportLineSummary[];
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+export interface KuayueImportLineClaimInput {
+  customerCode: string;
+  shipmentId?: string;
+  systemOrderNo?: string;
+  remark?: string;
+  idempotencyKey?: string;
+}
+
+export type ProfitSettlementType = 'MARKET' | 'WAREHOUSE' | 'FINANCE';
+export type ProfitSettlementStatus = 'DRAFT' | 'PENDING_AUDIT' | 'APPROVED' | 'ARCHIVED';
+
+export interface ProfitSettlementLineSummary {
+  id: string;
+  sourceKey: string;
+  miscFeeRecordId?: string;
+  shipmentId?: string;
+  customerCode?: string;
+  systemOrderNo?: string;
+  salesperson?: string;
+  agentName?: string;
+  feeName: string;
+  sourceType?: MiscFeeSourceType;
+  businessRmbAmount: number;
+  payableRmbAmount: number;
+  receivableRmbAmount: number;
+  profitRmbAmount: number;
+  unmatched: boolean;
+  snapshot?: Record<string, unknown>;
+}
+
+export interface ProfitSettlementSummary {
+  id: string;
+  settlementNo: string;
+  type: ProfitSettlementType;
+  siteScope?: string;
+  status: ProfitSettlementStatus;
+  periodFrom: string;
+  periodTo: string;
+  receivableRmbAmount: number;
+  businessRmbAmount: number;
+  payableRmbAmount: number;
+  unmatchedPayableRmbAmount: number;
+  profitRmbAmount: number;
+  createdBy: string;
+  createdAt: string;
+  submittedBy?: string;
+  submittedAt?: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  archivedAt?: string;
+  version: number;
+}
+
+export interface ProfitSettlementDetail extends ProfitSettlementSummary {
+  lines: ProfitSettlementLineSummary[];
+}
+
+export interface ProfitSettlementInput {
+  type: ProfitSettlementType;
+  siteScope?: string;
+  periodFrom: string;
+  periodTo: string;
+  remark?: string;
+  idempotencyKey?: string;
+}
+
+export interface ProfitSettlementQuery {
+  type?: ProfitSettlementType;
+  status?: ProfitSettlementStatus | 'ALL';
+  periodFrom?: string;
+  periodTo?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface ProfitSettlementListResponse {
+  rows: ProfitSettlementSummary[];
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+export interface ProfitSettlementReleaseResult {
+  id: string;
+  settlementNo: string;
+  releasedLineCount: number;
+}
+
+export interface MarketProfitLedgerRow {
+  id: string;
+  shipmentId: string;
+  agentName?: string;
+  feeName: string;
+  customerCode: string;
+  systemOrderNo: string;
+  transferNo?: string;
+  reconciliationStatus: ShipmentFinanceItemStatus;
+  currency: 'RMB';
+  businessCostRmbAmount: number;
+  agentCostRmbAmount: number;
+  businessProfitRmbAmount: number;
+  salesperson?: string;
+  createdAt?: string;
+  createdBy?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
+export interface MarketProfitLedgerQuery {
+  agent?: string;
+  reviewedFrom?: string;
+  reviewedTo?: string;
+  orderKeyword?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface MarketProfitLedgerResponse {
+  rows: MarketProfitLedgerRow[];
+  totals: {
+    businessCostRmbAmount: number;
+    agentCostRmbAmount: number;
+    businessProfitRmbAmount: number;
+  };
+  agentOptions: string[];
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+export type WarehouseProfitEligibilityStatus = 'PENDING_PRICING' | 'READY';
+
+export interface WarehouseProfitLedgerRow {
+  id: string;
+  miscFeeRecordId: string;
+  sourceType: MiscFeeSourceType;
+  ownerSite: string;
+  feeName: string;
+  customerCode: string;
+  systemOrderNo?: string;
+  agentName?: string;
+  matchStatus: MiscFeeMatchStatus;
+  eligibilityStatus: WarehouseProfitEligibilityStatus;
+  businessCostRmbAmount?: number;
+  payableCostRmbAmount: number;
+  warehouseProfitRmbAmount?: number;
+  settlementStatus?: ProfitSettlementStatus;
+  ledgerAt: string;
+  createdAt: string;
+  createdBy?: string;
+  confirmedAt?: string;
+  confirmedBy?: string;
+  reviewedAt: string;
+  reviewedBy?: string;
+}
+
+export interface WarehouseProfitLedgerQuery {
+  site?: string;
+  feeName?: string;
+  eligibilityStatus?: WarehouseProfitEligibilityStatus | 'ALL';
+  ledgerFrom?: string;
+  ledgerTo?: string;
+  keyword?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface WarehouseProfitLedgerResponse {
+  rows: WarehouseProfitLedgerRow[];
+  totals: {
+    pendingPricingCount: number;
+    pendingPricingPayableRmbAmount: number;
+    businessCostRmbAmount: number;
+    payableCostRmbAmount: number;
+    warehouseProfitRmbAmount: number;
+    unmatchedCount: number;
+  };
+  siteOptions: string[];
+  feeNameOptions: string[];
+  pagination: { page: number; pageSize: number; totalItems: number };
+}
+
+export type FinanceProfitLedgerType = 'RECEIVABLE' | 'BUSINESS_COST' | 'PAYABLE';
+export type FinanceProfitSourceOrigin = 'SYSTEM_RECEIVABLE' | 'ORDER_FINANCE_ITEM' | 'MISC_FEE';
+export type FinanceProfitAttributionStatus = 'ASSIGNED' | 'PENDING_BUSINESS_COST' | 'PENDING_ORDER';
+export type FinanceProfitCashStatus = 'NOT_APPLICABLE' | 'UNPAID' | 'PARTIAL' | 'READY' | 'PAYMENT_PENDING' | 'PAID';
+export type FinanceProfitCostOwner = 'MARKET' | 'WAREHOUSE' | 'EXTERNAL' | 'INTERNAL';
+
+export interface FinanceProfitLedgerRow {
+  id: string;
+  sourceKey: string;
+  financeType: FinanceProfitLedgerType;
+  sourceOrigin: FinanceProfitSourceOrigin;
+  miscFeeRecordId?: string;
+  shipmentId?: string;
+  customerCode?: string;
+  systemOrderNo?: string;
+  transferNo?: string;
+  feeName: string;
+  agentName?: string;
+  costOwner: FinanceProfitCostOwner;
+  receivableRmbAmount: number;
+  businessCostRmbAmount: number;
+  payableRmbAmount: number;
+  companyProfitImpactRmbAmount: number;
+  attributionStatus: FinanceProfitAttributionStatus;
+  cashStatus: FinanceProfitCashStatus;
+  settlementStatus?: ProfitSettlementStatus;
+  effectiveAt: string;
+  createdAt: string;
+  createdBy?: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+}
+
+export interface FinanceProfitLedgerQuery {
+  ledgerFrom?: string;
+  ledgerTo?: string;
+  keyword?: string;
+  agent?: string;
+  feeName?: string;
+  financeType?: FinanceProfitLedgerType | 'ALL';
+  attributionStatus?: FinanceProfitAttributionStatus | 'ALL';
+  cashStatus?: FinanceProfitCashStatus | 'ALL';
+  settlementStatus?: ProfitSettlementStatus | 'UNSETTLED' | 'ALL';
+  page?: number;
+  pageSize?: number;
+}
+
+export interface FinanceProfitLedgerResponse {
+  rows: FinanceProfitLedgerRow[];
+  totals: {
+    receivableRmbAmount: number;
+    businessCostRmbAmount: number;
+    payableRmbAmount: number;
+    unmatchedPayableRmbAmount: number;
+    marketProfitRmbAmount: number;
+    warehouseProfitRmbAmount: number;
+    companyProfitRmbAmount: number;
+  };
+  agentOptions: string[];
+  feeNameOptions: string[];
+  pagination: { page: number; pageSize: number; totalItems: number };
 }
 
 export interface PaymentApplicationSummary {
@@ -4148,7 +4076,6 @@ export interface PaidPaymentSummary {
   applicationNo: string;
   date: string;
   agentName: string;
-  agentShortName?: string;
   salesperson?: string;
   customerCode?: string;
   outboundOrderNo?: string;
@@ -4627,6 +4554,7 @@ export interface OrderEntryCreateInput {
   businessCosts: OrderEntryFinanceItemInput[];
   businessCostSnapshotVersion?: string;
   payables?: OrderEntryFinanceItemInput[];
+  miscFeeIdsToMatch?: string[];
   submitForReview: boolean;
 }
 
@@ -4644,7 +4572,7 @@ export interface OrderEntryDetailSummary {
   packages: WarehousePackageSummary[];
   receivables: ReceivableFeeSummary[];
   receivableSnapshotVersion?: string;
-  businessCosts: BusinessCostFeeSummary[];
+  businessCosts?: BusinessCostFeeSummary[];
   businessCostSnapshotVersion?: string;
   payables: PayableFeeSummary[];
   canViewPayables: boolean;
@@ -5426,50 +5354,6 @@ export interface TrackingEventInput {
   source?: 'CARRIER_API' | 'THIRD_PARTY' | 'MANUAL_IMPORT' | 'MANUAL_ENTRY';
 }
 
-export interface ProblemTicketCreateInput {
-  reason: string;
-  customerVisible?: boolean;
-  tags?: string[];
-  pushToSales?: boolean;
-}
-
-export interface ProblemTicketSummary {
-  id: string;
-  shipmentId: string;
-  systemOrderNo: string;
-  customerOrderNo?: string;
-  outboundOrderNo?: string;
-  customerName: string;
-  reason: string;
-  status: string;
-  customerVisible: boolean;
-  createdAt: string;
-  closedAt?: string;
-  closedBy?: string;
-  closeReason?: string;
-  assistanceReason?: string;
-  assistanceRequestedAt?: string;
-  tagSnapshot?: string[];
-  replies: Array<{ id: string; author: string; message: string; createdAt: string }>;
-}
-
-export interface CommonTagSummary {
-  id: string;
-  name: string;
-  scene: 'PROBLEM_TICKET';
-  enabled: boolean;
-  customerVisibleAllowed: boolean;
-  sortOrder: number;
-}
-
-export interface CommonTagCreateInput {
-  name: string;
-}
-
-export interface CommonTagUpdateInput {
-  name: string;
-}
-
 export type AutomationPriority = 'urgent' | 'high' | 'normal';
 
 export interface AutomationPlanItem {
@@ -5534,6 +5418,25 @@ export const shipmentStatusLabels: Record<ShipmentStatus, string> = {
   REVIEW_REJECTED: '审核不通过',
   CANCELLED: '已取消'
 };
+
+const invoiceTemplateDownloadableShipmentStatuses = new Set<ShipmentStatus>([
+  'WAITING_DISPATCH',
+  'OUTBOUNDED',
+  'WAITING_DEPARTURE',
+  'DEPARTED',
+  'ARRIVED_PORT',
+  'DELIVERING',
+  'WAITING_ONLINE',
+  'WAITING_SIGNED',
+  'WAITING_RETURN',
+  'PROBLEM',
+  'STUCK',
+  'SIGNED'
+]);
+
+export function canDownloadShipmentInvoiceTemplate(status: ShipmentStatus): boolean {
+  return invoiceTemplateDownloadableShipmentStatuses.has(status);
+}
 
 export const businessTypeLabels: Record<BusinessType, string> = {
   EXPRESS: '快递',
@@ -6103,7 +6006,11 @@ export function createBulkTrackingImportResult(rows: BulkTrackingImportRow[], sh
     if (!currentLatest || compareTrackingDate(update.trackingDate, currentLatest.trackingDate) > 0) {
       latestByShipmentId.set(shipment.id, update);
     }
-    const meta = previewMetaByShipmentId.get(shipment.id) ?? { systemOrderNo: resolveShipmentOutboundOrderNo(shipment), matchedOrderNo: orderNo, trackingCount: 0 };
+    const meta = previewMetaByShipmentId.get(shipment.id) ?? {
+      systemOrderNo: resolveShipmentOutboundOrderNo(shipment),
+      matchedOrderNo: orderNo,
+      trackingCount: 0
+    };
     previewMetaByShipmentId.set(shipment.id, { ...meta, trackingCount: meta.trackingCount + 1 });
   }
 

@@ -90,23 +90,8 @@ export const lineShipmentStageEditBlockControls = lineShipmentEditStageKeys.map(
   code: lineShipmentStageEditBlockPermissionCode(stage)
 }));
 
-export function lineShipmentStageViewBlockPermissionCode(stage: LineShipmentEditStageKey): PermissionKey {
-  return `operations:line-shipment:stage-view-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey;
-}
-
-export const lineShipmentStageViewBlockControls = [{
-  stage: 'REVIEW_PENDING' as const,
-  label: '屏蔽待审核',
-  description: '勾选后，专线运单池不显示待审核订单，也不能打开或编辑。',
-  code: lineShipmentStageViewBlockPermissionCode('REVIEW_PENDING')
-}];
-
 export function isLineShipmentStageEditBlockPermission(code: string): boolean {
   return code.startsWith('operations:line-shipment:stage-edit-block:');
-}
-
-export function isLineShipmentStageViewBlockPermission(code: string): boolean {
-  return code.startsWith('operations:line-shipment:stage-view-block:');
 }
 
 export type PricingModuleBlockScope = 'lookup' | 'markup';

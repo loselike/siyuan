@@ -340,7 +340,6 @@ export type PermissionKey =
   | 'operations:line-shipment:detail'
   | 'operations:line-shipment:process'
   | 'operations:line-shipment:status-update'
-  | `operations:line-shipment:stage-view-block:${string}`
   | `operations:line-shipment:stage-edit-block:${string}`
   | 'operations:line-shipment:tracking-add'
   | 'operations:line-shipment:problem-create'
@@ -491,10 +490,6 @@ export type PermissionKey =
   | 'warehouse:tally-pending:history-view'
   | 'warehouse:tally-pending:filter'
   | 'warehouse:tally-completed:view'
-  | 'warehouse:tally-completed:view-block'
-  | 'warehouse:tally-completed:reprint-block'
-  | 'warehouse:tally-completed:download-block'
-  | 'warehouse:tally-completed:reverse-block'
   | 'warehouse:tally-completed:history-view'
   | 'warehouse:tally-completed:detail-view'
   | 'warehouse:tally-completed:reverse-review'

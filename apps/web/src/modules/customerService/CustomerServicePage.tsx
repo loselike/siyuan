@@ -1,19 +1,19 @@
 import { useEffect, useRef, useMemo, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Typography, message } from 'antd';
 import { Download } from 'lucide-react';
 import type { ColumnsType } from 'antd/es/table';
-import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentStatus } from '@siyuan/shared';
-import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
-import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from '../shared/shipmentStageDwell';
-import { getShipmentTransportTimeSeconds, getShipmentTransportTimeText } from '../shared/shipmentTransportTime';
+import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
 import type { ApiClient } from '../../apiClient';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, isBeijingCurrentWeek, isBeijingToday, parseBeijingDateTimeInputToIso } from '../shared/format';
-import { downloadCsv } from '../finance/exportCsv';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
 import { ShipmentRiskFlag, isShipmentRiskFlagActive } from '../shared/ShipmentRiskFlag';
 import { AppDateTimePicker, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, StatusTag, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
+import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from '../shared/shipmentStageDwell';
+import { canViewOrderLifecycleBusinessCosts } from '../shared/businessCostAccess';
+import { downloadCsv } from '../finance/exportCsv';
 import { TrackingWebsiteLink } from './TrackingWebsiteLink';
 import { ProblemTicketCreateModal } from './ProblemTicketCreateModal';
 
@@ -23,6 +23,48 @@ const dataConfirmRowsCache = new WeakMap<ApiClient, Map<string, CustomerServiceD
 
 function dataConfirmCacheKey(page: number, pageSize: number, outboundOrderNo: string) {
   return `${page}:${pageSize}:${outboundOrderNo}`;
+}
+
+type CustomerServiceBusinessCostDraft = CustomerServiceBusinessCostInput & {
+  key: string;
+  editable: boolean;
+  statusLabel: string;
+};
+
+function createCustomerServiceBusinessCostDraft(row: CustomerServiceFinanceUpdatePreviewRow, key = row.id): CustomerServiceBusinessCostDraft {
+  return {
+    key,
+    id: row.id,
+    name: row.name,
+    currency: row.currency ?? 'RMB',
+    billingUnit: row.billingUnit ?? 'KG',
+    unitPrice: row.unitPrice,
+    editable: row.selectable,
+    statusLabel: row.locked ? '已锁定' : row.reconciliationStatus === 'CONFIRMED' ? '已审核' : '可修改'
+  };
+}
+
+export const customerServiceOutboundOrderSearchSections = [
+  'dataConfirm',
+  'transferNo',
+  'waitingDeparture',
+  'departed',
+  'arrivedPort',
+  'delivering',
+  'signed',
+  'problems',
+  'afterSale'
+] as const;
+
+export function matchesExactOutboundOrderNo(source: ShipmentOutboundOrderNoSource, keyword: string) {
+  const normalizedKeyword = keyword.trim().toLocaleLowerCase();
+  if (!normalizedKeyword) return true;
+  return [
+    resolveShipmentOutboundOrderNo(source),
+    source.systemOrderNo,
+    source.outboundOrderNo,
+    source.customerOrderNo
+  ].some((value) => value?.trim().toLocaleLowerCase() === normalizedKeyword);
 }
 
 const statusSections: Record<string, ShipmentStatus[]> = {
@@ -40,7 +82,6 @@ type DepartureFormValues = {
   subOrderNo?: string;
   etdAt?: string;
   etaAt?: string;
-  vesselVoyage?: string;
   trackingWebsite?: string;
   trackingWebsiteVisibleToSales?: boolean;
   pushToSales?: boolean;
@@ -62,37 +103,59 @@ type CustomerServiceDashboardGroup = {
   items: CustomerServiceDashboardTask[];
 };
 
-type CustomerServiceBusinessCostDraft = CustomerServiceBusinessCostInput & {
-  key: string;
-  editable: boolean;
-  statusLabel: string;
-};
-
-function createCustomerServiceBusinessCostDraft(row: CustomerServiceFinanceUpdatePreviewRow, key = row.id): CustomerServiceBusinessCostDraft {
-  return {
-    key,
-    id: row.id,
-    name: row.name,
-    currency: row.currency ?? 'RMB',
-    billingUnit: row.billingUnit ?? 'KG',
-    unitPrice: row.unitPrice,
-    editable: row.selectable,
-    statusLabel: row.locked ? '已锁定' : row.reconciliationStatus === 'CONFIRMED' ? '已审核' : '可修改'
-  };
-}
-
-function getDashboardTaskNumericValue(value: number | string) {
-  if (typeof value === 'number') return value;
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function formatDashboardExportDate(value?: string) {
   return value ? formatBeijingDateTime(value) : '';
 }
 
 function formatDashboardExportBoolean(value?: boolean) {
   return value === undefined ? '' : value ? '是' : '否';
+}
+
+type CustomerServiceAuditIndex = Map<string, AuditLogSummary>;
+
+function auditIndexKey(target: string, discriminator: string) {
+  return `${target}\u0000${discriminator}`;
+}
+
+function rememberLatest(map: Map<string, AuditLogSummary>, key: string, row: AuditLogSummary) {
+  const current = map.get(key);
+  if (!current || Date.parse(row.createdAt) > Date.parse(current.createdAt)) map.set(key, row);
+}
+
+export function buildCustomerServiceAuditIndex(
+  logs: AuditLogSummary[],
+  dataConfirmationCycleStartedAtByShipment: ReadonlyMap<string, string | undefined> = new Map()
+): CustomerServiceAuditIndex {
+  const index: CustomerServiceAuditIndex = new Map();
+  logs.forEach((row) => {
+    rememberLatest(index, auditIndexKey(row.target, `action:${row.action}`), row);
+    const reviewMatch = /^customer_service\.(business|agent)_data\.(approved|reversed)$/.exec(row.action);
+    const dataCycleStartedAt = dataConfirmationCycleStartedAtByShipment.get(row.target);
+    if (reviewMatch && auditBelongsToDataConfirmationCycle(row, dataCycleStartedAt)) {
+      rememberLatest(index, auditIndexKey(row.target, `review:${reviewMatch[1]}`), row);
+    }
+    const updateMatch = /^customer_service\.(business|agent)_data\.updated$/.exec(row.action);
+    if (updateMatch && auditBelongsToDataConfirmationCycle(row, dataCycleStartedAt)) {
+      rememberLatest(index, auditIndexKey(row.target, `data:${updateMatch[1]}`), row);
+    }
+    const after = getAuditAfter(row);
+    if (row.action === 'customer_service.status.update' && typeof after.statusTo === 'string') {
+      rememberLatest(index, auditIndexKey(row.target, `status:${after.statusTo}`), row);
+    }
+    if (row.action === 'shipment.operational.update' && 'trackingWebsite' in after) {
+      rememberLatest(index, auditIndexKey(row.target, 'tracking'), row);
+    }
+    if (['customer_service.issue.attach', 'customer_service.issue.update', 'customer_service.issue.close'].includes(row.action)) {
+      rememberLatest(index, auditIndexKey(row.target, 'problem'), row);
+    }
+  });
+  return index;
+}
+
+function getDashboardTaskNumericValue(value: number | string) {
+  if (typeof value === 'number') return value;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function formatFeeAmount(amount?: number, currency = 'RMB') {
@@ -128,7 +191,6 @@ type WaitingColumnKey =
   | 'entryAt'
   | 'outboundAt'
   | 'stageDwell'
-  | 'transportTime'
   | 'salesperson'
   | 'customerCode'
   | 'destinationCountry'
@@ -155,8 +217,6 @@ type WaitingColumnKey =
 type DepartedColumnKey =
   | 'entryAt'
   | 'outboundAt'
-  | 'stageDwell'
-  | 'transportTime'
   | 'salesperson'
   | 'customerCode'
   | 'destinationCountry'
@@ -185,7 +245,6 @@ type ProblemColumnKey =
   | 'outboundAt'
   | 'category'
   | 'dwellDays'
-  | 'transportTime'
   | 'salesperson'
   | 'customerCode'
   | 'destinationCountry'
@@ -220,7 +279,6 @@ const defaultWaitingColumnOrder: WaitingColumnKey[] = [
   'entryAt',
   'outboundAt',
   'stageDwell',
-  'transportTime',
   'salesperson',
   'customerCode',
   'destinationCountry',
@@ -244,8 +302,6 @@ const defaultWaitingColumnOrder: WaitingColumnKey[] = [
 const defaultDepartedColumnOrder: DepartedColumnKey[] = [
   'entryAt',
   'outboundAt',
-  'stageDwell',
-  'transportTime',
   'salesperson',
   'customerCode',
   'destinationCountry',
@@ -274,7 +330,6 @@ const defaultProblemColumnOrder: ProblemColumnKey[] = [
   'outboundAt',
   'category',
   'dwellDays',
-  'transportTime',
   'salesperson',
   'customerCode',
   'destinationCountry',
@@ -360,6 +415,7 @@ export function CustomerServicePage({
   permissions?: string[];
   role?: string;
 }) {
+  const canViewBusinessCosts = canViewOrderLifecycleBusinessCosts(role, permissions);
   const canReadWorkspaceShipments = permissions.includes('business:shipment:list');
   const canReadCustomerServiceStatusPool = [
     'customer-service:pending-routing:view',
@@ -383,11 +439,11 @@ export function CustomerServicePage({
   const [dataConfirmShipment, setDataConfirmShipment] = useState<Shipment | null>(null);
   const [dataConfirmApproveTarget, setDataConfirmApproveTarget] = useState<DataConfirmApproveTarget | null>(null);
   const [dataEditTarget, setDataEditTarget] = useState<{ shipment: Shipment; kind: 'business' | 'agent'; snapshot?: CustomerServiceDataConfirmRow['agentDataSnapshot'] } | null>(null);
-  const [dataEditCostPreview, setDataEditCostPreview] = useState<CustomerServiceFinanceUpdatePreview | null>(null);
-  const [dataEditCostPreviewLoading, setDataEditCostPreviewLoading] = useState(false);
-  const [dataEditBusinessData, setDataEditBusinessData] = useState<DataConfirmFormValues>({});
+  const [dataEditBusinessData, setDataEditBusinessData] = useState({ packageCount: undefined as number | undefined, weightKg: undefined as number | undefined, volumeCbm: undefined as number | undefined, chargeWeightKg: undefined as number | undefined });
   const [dataEditBusinessCosts, setDataEditBusinessCosts] = useState<CustomerServiceBusinessCostDraft[]>([]);
   const [dataEditPayableCosts, setDataEditPayableCosts] = useState<CustomerServiceBusinessCostDraft[]>([]);
+  const [dataEditCostPreview, setDataEditCostPreview] = useState<CustomerServiceFinanceUpdatePreview | null>(null);
+  const [dataEditCostPreviewLoading, setDataEditCostPreviewLoading] = useState(false);
   const [dataReverseTarget, setDataReverseTarget] = useState<{ shipment: Shipment; kind: 'business' | 'agent' | 'all' } | null>(null);
   const [labelShipment, setLabelShipment] = useState<Shipment | null>(null);
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
@@ -411,19 +467,26 @@ export function CustomerServicePage({
     salesperson: '',
     minDwellDays: '',
     customerCode: '',
-    systemOrderNo: '',
     destinationCountry: '',
     agentName: ''
   });
   const [customerServiceAuditLogs, setCustomerServiceAuditLogs] = useState<AuditLogSummary[]>([]);
-  const [dataConfirmRows, setDataConfirmRows] = useState<CustomerServiceDataConfirmRow[]>(() => apiClient ? dataConfirmRowsCache.get(apiClient)?.get(dataConfirmCacheKey(1, 10, ''))?.rows ?? [] : []);
-  const [dataConfirmSearchInput, setDataConfirmSearchInput] = useState('');
-  const [dataConfirmSearch, setDataConfirmSearch] = useState('');
+  const [dataConfirmRows, setDataConfirmRows] = useState(() => apiClient ? dataConfirmRowsCache.get(apiClient)?.get(dataConfirmCacheKey(1, 10, ''))?.rows ?? [] : []);
   const [dataConfirmPagination, setDataConfirmPagination] = useState({ page: 1, pageSize: 10, totalItems: 0 });
   const [dataConfirmHasLoaded, setDataConfirmHasLoaded] = useState(() => Boolean(apiClient && dataConfirmRowsCache.get(apiClient)?.has(dataConfirmCacheKey(1, 10, ''))));
   const [dataConfirmLoading, setDataConfirmLoading] = useState(false);
   const [dataConfirmLoadError, setDataConfirmLoadError] = useState<string | null>(null);
+  const [outboundOrderSearchInput, setOutboundOrderSearchInput] = useState('');
+  const [outboundOrderSearchQuery, setOutboundOrderSearchQuery] = useState('');
   const dataConfirmRequestIdRef = useRef(0);
+  const dataConfirmationCycleStartedAtByShipment = useMemo(
+    () => new Map([...shipments, ...dataConfirmRows.map((row) => row.shipment)].map((shipment) => [shipment.id, shipment.outboundAt])),
+    [dataConfirmRows, shipments]
+  );
+  const customerServiceAuditIndex = useMemo(
+    () => buildCustomerServiceAuditIndex(customerServiceAuditLogs, dataConfirmationCycleStartedAtByShipment),
+    [customerServiceAuditLogs, dataConfirmationCycleStartedAtByShipment]
+  );
   const [submittingDeparture, setSubmittingDeparture] = useState(false);
   const [submittingDataConfirm, setSubmittingDataConfirm] = useState(false);
   const [submittingSingleDataConfirm, setSubmittingSingleDataConfirm] = useState(false);
@@ -439,7 +502,6 @@ export function CustomerServicePage({
   const [feeDetailShipment, setFeeDetailShipment] = useState<Shipment | null>(null);
   const [feeDetail, setFeeDetail] = useState<ShipmentFinanceDetailSummary | null>(null);
   const [feeDetailLoading, setFeeDetailLoading] = useState(false);
-  const dataEditPreviewRequestIdRef = useRef(0);
   const [lifecycleStatusAction, setLifecycleStatusAction] = useState<LifecycleStatusAction | null>(null);
   const [lifecycleStatusRemark, setLifecycleStatusRemark] = useState('');
   const [submittingLifecycleStatus, setSubmittingLifecycleStatus] = useState(false);
@@ -507,6 +569,10 @@ export function CustomerServicePage({
     setActiveSection(initialSection);
   }, [initialSection]);
   useEffect(() => {
+    setOutboundOrderSearchInput('');
+    setOutboundOrderSearchQuery('');
+  }, [activeSection]);
+  useEffect(() => {
     if (items.length && !items.some((item) => item.key === activeSection)) setActiveSection(items[0].key);
   }, [activeSection, items]);
   useEffect(() => {
@@ -520,16 +586,23 @@ export function CustomerServicePage({
     [dataConfirmRows]
   );
   const rows = useMemo(() => {
-    if (activeSection === 'dataConfirm') return dataConfirmRows.map((row) => row.shipment);
+    if (activeSection === 'dataConfirm') {
+      return dataConfirmRows.map((row) => row.shipment);
+    }
     const statuses = statusSections[activeSection] ?? [];
     if (!statuses.length) return [];
     return shipments.filter((shipment) => {
       if (!statuses.includes(shipment.status)) return false;
-      if (activeSection === 'transferNo') return isBusinessDataApproved(shipment.id, customerServiceAuditLogs, shipment.outboundAt)
-        && isAgentDataApproved(shipment.id, customerServiceAuditLogs, shipment.outboundAt);
+      if (!matchesExactOutboundOrderNo(shipment, outboundOrderSearchQuery)) return false;
+      if (activeSection === 'transferNo') return isBusinessDataApproved(shipment.id, customerServiceAuditIndex)
+        && isAgentDataApproved(shipment.id, customerServiceAuditIndex);
       return true;
     });
-  }, [activeSection, customerServiceAuditLogs, dataConfirmRows, shipments]);
+  }, [activeSection, customerServiceAuditIndex, dataConfirmRows, outboundOrderSearchQuery, shipments]);
+  const filteredTransferRows = useMemo(
+    () => transferRows.filter((shipment) => matchesExactOutboundOrderNo(shipment, outboundOrderSearchQuery)),
+    [outboundOrderSearchQuery, transferRows]
+  );
   const shipmentById = useMemo(() => new Map(shipments.map((shipment) => [shipment.id, shipment])), [shipments]);
   const waitingDepartureDateHint = useMemo(() => {
     const waitingRows = shipments.filter((shipment) => shipment.status === 'WAITING_DEPARTURE');
@@ -572,7 +645,6 @@ export function CustomerServicePage({
     entryAt: { title: '运单创建时间', dataIndex: 'entryAt', width: 170, render: (_: string | undefined, row) => formatBeijingDateTime(row.entryAt ?? row.createdAt) },
     outboundAt: { title: '出库时间', dataIndex: 'outboundAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     stageDwell: { title: '停留时间', key: 'stageDwell', width: 105, sorter: (left, right) => getShipmentStageDwellSeconds(left) - getShipmentStageDwellSeconds(right), render: (_, row) => getShipmentStageDwellText(row) },
-    transportTime: { title: '运输时间', key: 'transportTime', width: 105, sorter: (left, right) => getShipmentTransportTimeSeconds(left) - getShipmentTransportTimeSeconds(right), render: (_, row) => getShipmentTransportTimeText(row) },
     salesperson: { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value || '-' },
     customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 110, render: (value?: string) => value || '-' },
     destinationCountry: { title: '目的地', dataIndex: 'destinationCountry', width: 100 },
@@ -582,9 +654,9 @@ export function CustomerServicePage({
     volumeCbm: { title: '业务体积 CBM', dataIndex: 'volumeCbm', width: 115, render: (value: number | undefined) => value ?? '-' },
     chargeWeight: { title: '计费重', dataIndex: 'receivableWeightKg', width: 90 },
     agentWeightKg: { title: '代理计费重', dataIndex: 'agentWeightKg', width: 110 },
-    agentPackageCount: { title: '代理件数', key: 'agentPackageCount', width: 100, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditLogs, 'agent', row.outboundAt)?.packageCount ?? row.packageCount ?? '-' },
-    agentActualWeight: { title: '代理重量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditLogs, 'agent', row.outboundAt)?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
-    agentVolumeCbm: { title: '代理体积 CBM', key: 'agentVolumeCbm', width: 115, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditLogs, 'agent', row.outboundAt)?.volumeCbm ?? row.volumeCbm ?? '-' },
+    agentPackageCount: { title: '代理件数', key: 'agentPackageCount', width: 100, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.packageCount ?? row.packageCount ?? '-' },
+    agentActualWeight: { title: '代理重量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
+    agentVolumeCbm: { title: '代理体积 CBM', key: 'agentVolumeCbm', width: 115, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.volumeCbm ?? row.volumeCbm ?? '-' },
     declarationRequired: { title: '报关', dataIndex: 'declarationRequired', width: 80, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> },
     sensitive: { title: '敏感', dataIndex: 'sensitive', width: 80, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> },
     agentName: { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value || '-' },
@@ -619,8 +691,6 @@ export function CustomerServicePage({
           fields={[
             { key: 'entryAt', label: '运单创建时间', value: <ManagedMatrixDateTime value={formatBeijingDateTime(row.entryAt ?? row.createdAt)} /> },
             { key: 'outboundAt', label: '出库时间', value: row.outboundAt ? <ManagedMatrixDateTime value={formatBeijingDateTime(row.outboundAt)} /> : '-' },
-            { key: 'stageDwell', label: '停留时间', value: getShipmentStageDwellText(row) },
-            { key: 'transportTime', label: '运输时间', value: getShipmentTransportTimeText(row) },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
             { key: 'customerCode', label: '客户编号', value: row.customerCode || '-', emphasis: true }
           ]}
@@ -781,8 +851,6 @@ export function CustomerServicePage({
   const departedColumnMap: Record<DepartedColumnKey, ColumnsType<Shipment>[number]> = {
     entryAt: { title: '运单创建时间', dataIndex: 'entryAt', width: 170, render: (_: string | undefined, row) => formatBeijingDateTime(row.entryAt ?? row.createdAt) },
     outboundAt: { title: '出库时间', dataIndex: 'outboundAt', width: 170, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
-    stageDwell: { title: '停留时间', key: 'stageDwell', width: 105, sorter: (left, right) => getShipmentStageDwellSeconds(left) - getShipmentStageDwellSeconds(right), render: (_, row) => getShipmentStageDwellText(row) },
-    transportTime: { title: '运输时间', key: 'transportTime', width: 105, sorter: (left, right) => getShipmentTransportTimeSeconds(left) - getShipmentTransportTimeSeconds(right), render: (_, row) => getShipmentTransportTimeText(row) },
     salesperson: { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value || '-' },
     customerCode: { title: '客户编号', dataIndex: 'customerCode', width: 110, render: (value?: string) => value || '-' },
     destinationCountry: { title: '目的地', dataIndex: 'destinationCountry', width: 100 },
@@ -798,17 +866,17 @@ export function CustomerServicePage({
     routeAgentChannelName: { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '-' },
     systemOrderNo: { title: '出货单号', dataIndex: 'systemOrderNo', width: 170, render: (_: string, row) => resolveShipmentOutboundOrderNo(row) },
     transferNo: { title: '转单号', dataIndex: 'transferNo', width: 150, render: (value?: string) => value || '-' },
-    agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditLogs, row.outboundAt) ? '已确认' : '-' },
+    agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => isAgentDataApproved(row.id, customerServiceAuditIndex) ? '已确认' : '-' },
     etdAt: { title: 'ETD/ATD', dataIndex: 'etdAt', width: 150, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     etaAt: { title: 'ETA/ATA', dataIndex: 'etaAt', width: 150, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     trackingWebsite: {
       title: '查件网址',
       key: 'trackingWebsite',
       width: 220,
-      render: (_, row) => renderTrackingWebsite(row, customerServiceAuditLogs)
+      render: (_, row) => renderTrackingWebsite(row, customerServiceAuditIndex)
     },
-    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getDepartedStatusLog(row.id, customerServiceAuditLogs)?.actorUsername ?? '-' },
-    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getDepartedStatusLog(row.id, customerServiceAuditLogs)?.createdAt) },
+    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getStatusLog(row.id, customerServiceAuditIndex, 'DEPARTED')?.actorUsername ?? '-' },
+    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getStatusLog(row.id, customerServiceAuditIndex, 'DEPARTED')?.createdAt) },
     action: {
       title: '操作',
       key: 'action',
@@ -834,7 +902,7 @@ export function CustomerServicePage({
     .map((key) => departedColumnMap[key]);
   const arrivedPortColumnMap: Record<DepartedColumnKey, ColumnsType<Shipment>[number]> = {
     ...departedColumnMap,
-    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getArrivedPortStatusLog(row.id, customerServiceAuditLogs)?.actorUsername ?? '-' },
+    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getStatusLog(row.id, customerServiceAuditIndex, 'ARRIVED_PORT')?.actorUsername ?? '-' },
     handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: () => '-' },
     action: {
       title: '操作',
@@ -861,8 +929,8 @@ export function CustomerServicePage({
     .map((key) => arrivedPortColumnMap[key]);
   const deliveringColumnMap: Record<DepartedColumnKey, ColumnsType<Shipment>[number]> = {
     ...departedColumnMap,
-    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getArrivedPortStatusLog(row.id, customerServiceAuditLogs)?.actorUsername ?? '-' },
-    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getDeliveringStatusLog(row.id, customerServiceAuditLogs)?.createdAt) },
+    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getStatusLog(row.id, customerServiceAuditIndex, 'ARRIVED_PORT')?.actorUsername ?? '-' },
+    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getStatusLog(row.id, customerServiceAuditIndex, 'DELIVERING')?.createdAt) },
     action: {
       title: '操作',
       key: 'action',
@@ -886,25 +954,6 @@ export function CustomerServicePage({
   const deliveringColumns = deliveringColumnOrder
     .filter((key) => !hiddenDeliveringColumns.includes(key))
     .map((key) => deliveringColumnMap[key]);
-  const actionColumns: ColumnsType<Shipment> = [
-    {
-      title: '操作',
-      key: 'action',
-      fixed: 'right',
-      width: 220,
-      render: (_, row) => (
-        <Space size={6}>
-          {can('customer-service:waiting-departure:update-info') ? <Button size="small" onClick={() => openDepartureModal(row)}>
-            修改
-          </Button> : null}
-          {can('customer-service:waiting-departure:label-upload') || can('customer-service:transfer:label-upload') ? <Button size="small" onClick={() => openLabelModal(row)}>
-            {hasShipmentLabel(row, labelRows) ? '查看面单' : '上传面单'}
-          </Button> : null}
-          {hasShipmentLabel(row, labelRows) ? <Tag color="green">已上传面单</Tag> : null}
-        </Space>
-      )
-    }
-  ];
   const signedProblemActionColumns: ColumnsType<Shipment> = [
     {
       title: '操作',
@@ -927,7 +976,7 @@ export function CustomerServicePage({
   const rawProblemRows = useMemo(() => {
     return problemTickets.map((ticket) => {
       const shipment = shipmentById.get(ticket.shipmentId);
-      const category = getProblemCategory(ticket, shipment, customerServiceAuditLogs);
+      const category = getProblemCategory(ticket, shipment, customerServiceAuditIndex);
       return {
         ticket,
         shipment,
@@ -936,7 +985,7 @@ export function CustomerServicePage({
         dwellDays: problemDwellDays(ticket.createdAt)
       };
     });
-  }, [customerServiceAuditLogs, problemTickets, shipmentById]);
+  }, [customerServiceAuditIndex, problemTickets, shipmentById]);
   const problemRows = useMemo(() => {
     const minDwellDays = Number(problemFilters.minDwellDays);
     return rawProblemRows.filter((row) => {
@@ -946,34 +995,43 @@ export function CustomerServicePage({
       return keywordMatch(shipment?.salesperson, problemFilters.salesperson)
         && (!Number.isFinite(minDwellDays) || !problemFilters.minDwellDays || row.dwellDays >= minDwellDays)
         && keywordMatch(shipment?.customerCode, problemFilters.customerCode)
-        && keywordMatch(resolveShipmentOutboundOrderNo(row.shipment ?? row.ticket), problemFilters.systemOrderNo)
+        && matchesExactOutboundOrderNo(row.shipment ?? row.ticket, outboundOrderSearchQuery)
         && keywordMatch(shipment?.destinationCountry, problemFilters.destinationCountry)
         && keywordMatch(shipment?.agentName, problemFilters.agentName);
     });
-  }, [problemCategory, problemFilters, rawProblemRows]);
-  const afterSaleRows = useMemo(() => rawProblemRows.filter((row) => row.category === 'assistance'), [rawProblemRows]);
+  }, [outboundOrderSearchQuery, problemCategory, problemFilters, rawProblemRows]);
+  const afterSaleRows = useMemo(
+    () => rawProblemRows.filter((row) => row.category === 'assistance'
+      && matchesExactOutboundOrderNo(row.shipment ?? row.ticket, outboundOrderSearchQuery)),
+    [outboundOrderSearchQuery, rawProblemRows]
+  );
   const problemCategoryCounts = useMemo(() => {
     const counts: Record<Exclude<ProblemCategory, 'all'>, number> = { preDeparture: 0, arrivedPort: 0, delivering: 0, assistance: 0, history: 0 };
-    problemTickets.forEach((ticket) => {
-      const category = getProblemCategory(ticket, shipmentById.get(ticket.shipmentId), customerServiceAuditLogs);
-      counts[category] += 1;
+    rawProblemRows.forEach((row) => {
+      counts[row.category] += 1;
     });
     return counts;
-  }, [customerServiceAuditLogs, problemTickets, shipmentById]);
+  }, [rawProblemRows]);
   const dashboardMetrics = useMemo(() => {
-    const currentStatusCount = (status: ShipmentStatus) => shipments.filter((shipment) => shipment.status === status).length;
-    const weeklyStatusCount = (status: ShipmentStatus) => customerServiceAuditLogs.filter((row) => {
+    const currentStatusCounts = new Map<ShipmentStatus, number>();
+    shipments.forEach((shipment) => currentStatusCounts.set(shipment.status, (currentStatusCounts.get(shipment.status) ?? 0) + 1));
+    const weeklyStatusCounts = new Map<string, number>();
+    customerServiceAuditLogs.forEach((row) => {
       const after = getAuditAfter(row);
-      return row.action === 'customer_service.status.update' && after.statusTo === status && isCurrentWeek(row.createdAt);
-    }).length;
+      if (row.action === 'customer_service.status.update' && typeof after.statusTo === 'string' && isCurrentWeek(row.createdAt)) {
+        weeklyStatusCounts.set(after.statusTo, (weeklyStatusCounts.get(after.statusTo) ?? 0) + 1);
+      }
+    });
+    const currentStatusCount = (status: ShipmentStatus) => currentStatusCounts.get(status) ?? 0;
+    const weeklyStatusCount = (status: ShipmentStatus) => weeklyStatusCounts.get(status) ?? 0;
     const todayEntryCount = shipments.filter((shipment) => isToday(shipment.entryAt ?? shipment.createdAt)).length;
     const dataConfirmCount = shipments.filter((shipment) => shipment.status === 'OUTBOUNDED'
-      && (!isBusinessDataApproved(shipment.id, customerServiceAuditLogs, shipment.outboundAt)
-        || !isAgentDataApproved(shipment.id, customerServiceAuditLogs, shipment.outboundAt))).length;
+      && (!isBusinessDataApproved(shipment.id, customerServiceAuditIndex)
+        || !isAgentDataApproved(shipment.id, customerServiceAuditIndex))).length;
     const missingTransferCount = shipments.filter((shipment) =>
       ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status)
-      && isBusinessDataApproved(shipment.id, customerServiceAuditLogs, shipment.outboundAt)
-      && isAgentDataApproved(shipment.id, customerServiceAuditLogs, shipment.outboundAt)
+      && isBusinessDataApproved(shipment.id, customerServiceAuditIndex)
+      && isAgentDataApproved(shipment.id, customerServiceAuditIndex)
       && !shipment.transferNo
     ).length;
     const pendingRoutingCount = pendingRoutingShipments.length;
@@ -1037,7 +1095,7 @@ export function CustomerServicePage({
     ];
     const maxValue = Math.max(1, ...groups.flatMap((group) => group.items.map((item) => getDashboardTaskNumericValue(item.value))));
     return { groups, maxValue, totalShipmentCount: shipments.length };
-  }, [customerServiceAuditLogs, pendingRoutingShipments.length, problemTickets, rawProblemRows, shipments]);
+  }, [customerServiceAuditIndex, customerServiceAuditLogs, pendingRoutingShipments.length, problemTickets, rawProblemRows, shipments]);
 
   function exportCustomerServiceDashboardOrders() {
     if (!shipments.length) {
@@ -1046,10 +1104,6 @@ export function CustomerServicePage({
     }
     setDashboardExporting(true);
     try {
-      const canViewAgent = permissions.includes('customer-service:transfer:view-agent');
-      const canViewAgentData = permissions.includes('customer-service:transfer:view-agent-data')
-        || permissions.includes('customer-service:data-confirm:agent-view');
-      const canViewSensitive = permissions.includes('customer-service:transfer:view-sensitive');
       const headers = [
         { key: 'outboundOrderNo', label: '出货单号' },
         { key: 'customerOrderNo', label: '客户订单号' },
@@ -1070,13 +1124,13 @@ export function CustomerServicePage({
         { key: 'etaAt', label: 'ETA/ATA' },
         { key: 'latestTracking', label: '最新物流轨迹' },
         { key: 'carrier', label: '承运商' },
-        ...(canViewAgent ? [
+        ...(canViewTransferAgent ? [
           { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
           { key: 'channelName', label: '公司渠道' },
           { key: 'routeAgentChannelName', label: agentFieldLabels.channel }
         ] : []),
-        ...(canViewAgentData ? [{ key: 'agentWeightKg', label: '代理计费重 KG' }] : []),
-        ...(canViewSensitive ? [
+        ...(canViewTransferAgentData ? [{ key: 'agentWeightKg', label: '代理计费重 KG' }] : []),
+        ...(canViewTransferSensitive ? [
           { key: 'declarationRequired', label: '报关' },
           { key: 'sensitive', label: '敏感' }
         ] : [])
@@ -1091,9 +1145,9 @@ export function CustomerServicePage({
         customerCode: shipment.customerCode ?? '',
         customerName: shipment.customerName ?? '',
         destinationCountry: shipment.destinationCountry,
-        productName: shipment.productName ?? shipment.productNames?.join('、') ?? '',
+        productName: shipment.productName ?? '',
         packageCount: shipment.packageCount,
-        actualWeightKg: shipment.actualWeightKg ?? shipment.receivableWeightKg,
+        actualWeightKg: shipment.actualWeightKg ?? shipment.receivableWeightKg ?? '',
         volumeCbm: shipment.volumeCbm ?? '',
         receivableWeightKg: shipment.receivableWeightKg,
         transferNo: shipment.transferNo ?? '',
@@ -1114,12 +1168,31 @@ export function CustomerServicePage({
       setDashboardExporting(false);
     }
   }
+
+  const renderProblemActions = (row: ProblemRow, compact = false) => (
+    <Space size={4} wrap>
+      {can('customer-service:problem:close') ? <Button size="small" type="primary" disabled={row.ticket.status === 'CLOSED'} onClick={() => void closeProblem(row.ticket)}>
+        {compact ? '已解决' : '问题件已经解决'}
+      </Button> : null}
+      {can('customer-service:problem:assist') ? <Popconfirm
+        title="确认标记需协助？"
+        description="确认后售后状态会标记为需协助。"
+        okText="确认需协助"
+        cancelText="取消"
+        onConfirm={() => void requestProblemAssist(row.ticket)}
+        disabled={row.ticket.status === 'CLOSED'}
+      >
+        <Button size="small" disabled={row.ticket.status === 'CLOSED'}>
+          {compact ? '需协助' : '问题件需协助'}
+        </Button>
+      </Popconfirm> : null}
+    </Space>
+  );
   const problemColumnMap: Record<ProblemColumnKey, ColumnsType<ProblemRow>[number]> = {
     entryAt: { title: '运单创建时间', key: 'entryAt', width: 170, render: (_, row) => row.shipment ? formatBeijingDateTime(row.shipment.entryAt ?? row.shipment.createdAt) : '-' },
     outboundAt: { title: '出库时间', key: 'outboundAt', width: 170, render: (_, row) => row.shipment?.outboundAt ? formatBeijingDateTime(row.shipment.outboundAt) : '-' },
     category: { title: '问题件类别', dataIndex: 'categoryLabel', width: 130 },
     dwellDays: { title: '问题件停留时间', dataIndex: 'dwellDays', width: 130, render: (value: number) => `${value}天` },
-    transportTime: { title: '运输时间', key: 'transportTime', width: 105, sorter: (left, right) => getShipmentTransportTimeSeconds(left.shipment ?? ({} as Shipment)) - getShipmentTransportTimeSeconds(right.shipment ?? ({} as Shipment)), render: (_, row) => row.shipment ? getShipmentTransportTimeText(row.shipment) : '-' },
     salesperson: { title: '业务员', key: 'salesperson', width: 110, render: (_, row) => row.shipment?.salesperson || '-' },
     customerCode: { title: '客户编号', key: 'customerCode', width: 110, render: (_, row) => row.shipment?.customerCode || '-' },
     destinationCountry: { title: '目的地', key: 'destinationCountry', width: 100, render: (_, row) => row.shipment?.destinationCountry || '-' },
@@ -1136,36 +1209,18 @@ export function CustomerServicePage({
     reason: { title: '问题件内容', key: 'reason', width: 220, render: (_, row) => row.ticket.reason },
     declarationRequired: { title: '报关', key: 'declarationRequired', width: 80, render: (_, row) => <ShipmentRiskFlag value={row.shipment ? row.shipment.declarationRequired : '-'} /> },
     sensitive: { title: '敏感', key: 'sensitive', width: 80, render: (_, row) => <ShipmentRiskFlag value={row.shipment ? row.shipment.sensitive : '-'} /> },
-    agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => row.shipment && isAgentDataApproved(row.shipment.id, customerServiceAuditLogs, row.shipment.outboundAt) ? '已确认' : '-' },
+    agentData: { title: '代理数据', key: 'agentData', width: 100, render: (_, row) => row.shipment && isAgentDataApproved(row.shipment.id, customerServiceAuditIndex) ? '已确认' : '-' },
     etdAt: { title: 'ETD/ATD', key: 'etdAt', width: 150, render: (_, row) => row.shipment?.etdAt ? formatBeijingDateTime(row.shipment.etdAt) : '-' },
     etaAt: { title: 'ETA/ATA', key: 'etaAt', width: 150, render: (_, row) => row.shipment?.etaAt ? formatBeijingDateTime(row.shipment.etaAt) : '-' },
-    trackingWebsite: { title: '查件网址', key: 'trackingWebsite', width: 220, render: (_, row) => row.shipment ? renderTrackingWebsite(row.shipment, customerServiceAuditLogs) : '-' },
-    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getProblemHandleLog(row.ticket.id, customerServiceAuditLogs)?.actorUsername ?? '-' },
-    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getProblemHandleLog(row.ticket.id, customerServiceAuditLogs)?.createdAt) },
+    trackingWebsite: { title: '查件网址', key: 'trackingWebsite', width: 220, render: (_, row) => row.shipment ? renderTrackingWebsite(row.shipment, customerServiceAuditIndex) : '-' },
+    handler: { title: '处理人', key: 'handler', width: 110, render: (_, row) => getProblemHandleLog(row.ticket.id, customerServiceAuditIndex)?.actorUsername ?? '-' },
+    handledAt: { title: '处理时间', key: 'handledAt', width: 170, render: (_, row) => formatMaybeDateTime(getProblemHandleLog(row.ticket.id, customerServiceAuditIndex)?.createdAt) },
     action: {
       title: '操作',
       key: 'action',
       fixed: 'right',
       width: 220,
-      render: (_, row) => (
-        <Space size={6}>
-          {can('customer-service:problem:close') ? <Button size="small" type="primary" disabled={row.ticket.status === 'CLOSED'} onClick={() => void closeProblem(row.ticket)}>
-            问题件已经解决
-          </Button> : null}
-          {can('customer-service:problem:assist') ? <Popconfirm
-            title="确认标记需协助？"
-            description="确认后售后状态会标记为需协助。"
-            okText="确认需协助"
-            cancelText="取消"
-            onConfirm={() => void requestProblemAssist(row.ticket)}
-            disabled={row.ticket.status === 'CLOSED'}
-          >
-            <Button size="small" disabled={row.ticket.status === 'CLOSED'}>
-              问题件需协助
-            </Button>
-          </Popconfirm> : null}
-        </Space>
-      )
+      render: (_, row) => renderProblemActions(row)
     }
   };
   const baseProblemColumns = problemColumnOrder.map((key) => problemColumnMap[key]);
@@ -1180,6 +1235,73 @@ export function CustomerServicePage({
     },
     problemColumnMap.action
   ];
+  const createProblemMatrixColumns = (afterSale: boolean): ManagedTableColumns<ProblemRow> => [
+    {
+      key: 'matrixInformation',
+      title: '问题件信息',
+      className: 'managed-matrix-group-primary',
+      width: 980,
+      render: (_, row) => {
+        const shipment = row.shipment;
+        const handleLog = getProblemHandleLog(row.ticket.id, customerServiceAuditIndex);
+        return (
+          <Space direction="vertical" size={5} className="full-width">
+            <ManagedMatrixCell
+              columns={4}
+              labelWidth={76}
+              gap={5}
+              fields={[
+                { key: 'entryAt', label: '运单创建时间', value: shipment ? <ManagedMatrixDateTime value={formatBeijingDateTime(shipment.entryAt ?? shipment.createdAt)} /> : '-' },
+                { key: 'outboundAt', label: '出库时间', value: shipment?.outboundAt ? <ManagedMatrixDateTime value={formatBeijingDateTime(shipment.outboundAt)} /> : '-' },
+                afterSale
+                  ? { key: 'afterSaleStatus', label: '售后状态', value: getAfterSaleStatus(row) }
+                  : { key: 'category', label: '问题件类别', value: row.categoryLabel },
+                { key: 'dwellDays', label: '问题件停留时间', value: `${row.dwellDays}天` },
+                { key: 'salesperson', label: '业务员', value: shipment?.salesperson || '-' },
+                { key: 'customerCode', label: '客户编号', value: shipment?.customerCode || '-', emphasis: true },
+                { key: 'destinationCountry', label: '目的地', value: shipment?.destinationCountry || '-' },
+                { key: 'systemOrderNo', label: '出货单号', value: resolveShipmentOutboundOrderNo(shipment ?? row.ticket), emphasis: true },
+                { key: 'transferNo', label: '转单号', value: shipment?.transferNo || '-' },
+                { key: 'productName', label: '品名', value: shipment?.productName || '-', title: shipment?.productName, wrap: true },
+                { key: 'packageCount', label: '件数', value: shipment?.packageCount ?? '-' },
+                { key: 'actualWeight', label: '实重', value: shipment?.receivableWeightKg ?? '-' },
+                { key: 'chargeWeight', label: '计费重', value: shipment?.receivableWeightKg ?? '-' },
+                { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: shipment?.agentName || '-', title: shipment?.agentName, wrap: true },
+                { key: 'carrier', label: '承运商', value: shipment?.carrier || '-' },
+                { key: 'channelName', label: '公司渠道', value: shipment?.channelName || '-', title: shipment?.channelName, wrap: true },
+                { key: 'routeAgentChannelName', label: agentFieldLabels.channel, value: shipment?.routeAgentChannelName || '-', title: shipment?.routeAgentChannelName, wrap: true },
+                { key: 'reason', label: '问题件内容', value: row.ticket.reason, title: row.ticket.reason, wrap: true },
+                { key: 'declarationRequired', label: '报关', value: <ShipmentRiskFlag value={shipment ? shipment.declarationRequired : '-'} /> },
+                { key: 'sensitive', label: '敏感', value: <ShipmentRiskFlag value={shipment ? shipment.sensitive : '-'} /> },
+                { key: 'agentData', label: '代理数据', value: shipment && isAgentDataApproved(shipment.id, customerServiceAuditIndex) ? '已确认' : '-' },
+                { key: 'etdAt', label: 'ETD/ATD', value: shipment?.etdAt ? <ManagedMatrixDateTime value={formatBeijingDateTime(shipment.etdAt)} /> : '-' },
+                { key: 'etaAt', label: 'ETA/ATA', value: shipment?.etaAt ? <ManagedMatrixDateTime value={formatBeijingDateTime(shipment.etaAt)} /> : '-' },
+                { key: 'trackingWebsite', label: '查件网址', value: shipment ? renderTrackingWebsite(shipment, customerServiceAuditIndex) : '-' }
+              ]}
+            />
+            <ManagedMatrixCell
+              columns={2}
+              labelWidth={76}
+              gap={5}
+              fields={[
+                { key: 'handler', label: '处理人', value: handleLog?.actorUsername ?? '-' },
+                { key: 'handledAt', label: '处理时间', value: handleLog ? <ManagedMatrixDateTime value={formatMaybeDateTime(handleLog.createdAt)} /> : '-' }
+              ]}
+            />
+          </Space>
+        );
+      }
+    },
+    {
+      key: 'matrixActions',
+      title: '操作',
+      fixed: 'right',
+      width: 156,
+      render: (_, row) => renderProblemActions(row, true)
+    }
+  ];
+  const problemMatrixColumns = createProblemMatrixColumns(false);
+  const afterSaleMatrixColumns = createProblemMatrixColumns(true);
   const pendingRoutingColumns = useMemo(
     () => createPendingRoutingColumns({
       businessCostAudits,
@@ -1191,56 +1313,83 @@ export function CustomerServicePage({
     }),
     [businessCostAudits, permissions]
   );
+  const pendingRoutingMatrixColumns = useMemo(
+    () => createPendingRoutingColumns({
+      businessCostAudits,
+      mode: 'customerService',
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      canViewBusinessCost: false,
+      canViewPayableCost: false,
+      canViewAgentChannel: can('customer-service:pending-routing:agent-view'),
+      presentation: 'matrix'
+    }),
+    [businessCostAudits, permissions]
+  );
   const activeLabel = items.find((item) => item.key === activeSection)?.label ?? '客服管理';
+  const outboundOrderSearch = customerServiceOutboundOrderSearchSections.includes(activeSection as typeof customerServiceOutboundOrderSearchSections[number]) ? (
+    <Input.Search
+      allowClear
+      aria-label="出货单号精准搜索"
+      enterButton="查询"
+      placeholder="请输入完整出货单号"
+      value={outboundOrderSearchInput}
+      onChange={(event) => {
+        const value = event.target.value;
+        setOutboundOrderSearchInput(value);
+        if (!value.trim()) {
+          setOutboundOrderSearchQuery('');
+          if (activeSection === 'dataConfirm') void refreshCustomerServiceDataConfirmRows({ page: 1, outboundOrderNo: '' });
+        }
+      }}
+      onSearch={(value) => {
+        const normalizedValue = value.trim();
+        setOutboundOrderSearchInput(normalizedValue);
+        setOutboundOrderSearchQuery(normalizedValue);
+        if (activeSection === 'dataConfirm') void refreshCustomerServiceDataConfirmRows({ page: 1, outboundOrderNo: normalizedValue });
+      }}
+      style={{ width: 360, maxWidth: '100%' }}
+    />
+  ) : null;
 
   async function refreshCustomerServiceAuditLogs() {
     if (!apiClient) return;
     const responses = await Promise.all([
-      apiClient.auditLogs({ action: 'customer_service.status.update' }),
-      apiClient.auditLogs({ action: 'customer_service.business_data.approved' }),
-      apiClient.auditLogs({ action: 'customer_service.agent_data.approved' }),
-      apiClient.auditLogs({ action: 'customer_service.business_data.reversed' }),
-      apiClient.auditLogs({ action: 'customer_service.agent_data.reversed' }),
-      apiClient.auditLogs({ action: 'customer_service.business_data.updated' }),
-      apiClient.auditLogs({ action: 'customer_service.agent_data.updated' }),
-      apiClient.auditLogs({ action: 'shipment.operational.update' }),
-      apiClient.auditLogs({ action: 'customer_service.signature.confirm' }),
-      apiClient.auditLogs({ action: 'customer_service.issue.attach' }),
-      apiClient.auditLogs({ action: 'customer_service.issue.update' }),
-      apiClient.auditLogs({ action: 'customer_service.issue.close' })
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.status.update' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.business_data.approved' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.agent_data.approved' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.business_data.reversed' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.agent_data.reversed' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.business_data.updated' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.agent_data.updated' }),
+      apiClient.auditQuery.auditLogs({ action: 'shipment.operational.update' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.attach' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.update' }),
+      apiClient.auditQuery.auditLogs({ action: 'customer_service.issue.close' })
     ]);
     setCustomerServiceAuditLogs(responses.flatMap((response) => response.rows));
   }
 
-  async function refreshCustomerServiceDataConfirmRows(nextQuery: { page?: number; pageSize?: number; outboundOrderNo?: string } = {}) {
+  async function refreshCustomerServiceDataConfirmRows(query: { page?: number; pageSize?: number; outboundOrderNo?: string } = {}) {
     if (!apiClient) return;
     const requestId = ++dataConfirmRequestIdRef.current;
-    const page = nextQuery.page ?? dataConfirmPagination.page;
-    const pageSize = nextQuery.pageSize ?? dataConfirmPagination.pageSize;
-    const outboundOrderNo = nextQuery.outboundOrderNo ?? dataConfirmSearch;
-    const cache = dataConfirmRowsCache.get(apiClient);
+    const page = query.page ?? dataConfirmPagination.page;
+    const pageSize = query.pageSize ?? dataConfirmPagination.pageSize;
+    const outboundOrderNo = query.outboundOrderNo ?? outboundOrderSearchQuery;
     const cacheKey = dataConfirmCacheKey(page, pageSize, outboundOrderNo);
-    const cachedResponse = cache?.get(cacheKey);
+    const cache = dataConfirmRowsCache.get(apiClient) ?? new Map<string, CustomerServiceDataConfirmListResponse>();
+    dataConfirmRowsCache.set(apiClient, cache);
+    const cachedResponse = cache.get(cacheKey);
     if (cachedResponse) {
       setDataConfirmRows(cachedResponse.rows);
-      setDataConfirmHasLoaded(true);
       setDataConfirmPagination(cachedResponse.pagination);
-    } else if (page !== dataConfirmPagination.page || pageSize !== dataConfirmPagination.pageSize || outboundOrderNo !== dataConfirmSearch) {
-      setDataConfirmRows([]);
-      setDataConfirmHasLoaded(false);
+      setDataConfirmHasLoaded(true);
     }
     setDataConfirmLoading(true);
     setDataConfirmLoadError(null);
     try {
-      const nextResponse = await apiClient.customerServiceDataConfirmShipments({
-        page,
-        pageSize,
-        outboundOrderNo: outboundOrderNo || undefined
-      });
+      const nextResponse = await apiClient.customerServiceDataConfirmShipments({ page, pageSize, outboundOrderNo: outboundOrderNo || undefined });
       if (requestId === dataConfirmRequestIdRef.current) {
-        const nextCache = cache ?? new Map<string, CustomerServiceDataConfirmListResponse>();
-        nextCache.set(dataConfirmCacheKey(nextResponse.pagination.page, nextResponse.pagination.pageSize, outboundOrderNo), nextResponse);
-        dataConfirmRowsCache.set(apiClient, nextCache);
+        cache.set(cacheKey, nextResponse);
         setDataConfirmRows(nextResponse.rows);
         setDataConfirmPagination(nextResponse.pagination);
         setDataConfirmHasLoaded(true);
@@ -1324,8 +1473,6 @@ export function CustomerServicePage({
     const result: ColumnsType<Shipment> = [
       { title: '运单创建时间', dataIndex: 'createdAt', width: 165, sorter: (a, b) => a.createdAt.localeCompare(b.createdAt), render: formatBeijingDateTime },
       ...(canViewTransferOutboundAt ? [{ title: '出库时间', dataIndex: 'outboundAt', width: 165, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' }] : []),
-      { title: '停留时间', key: 'stageDwell', width: 105, sorter: (a, b) => getShipmentStageDwellSeconds(a) - getShipmentStageDwellSeconds(b), render: (_: unknown, row: Shipment) => getShipmentStageDwellText(row) },
-      { title: '运输时间', key: 'transportTime', width: 105, sorter: (a, b) => getShipmentTransportTimeSeconds(a) - getShipmentTransportTimeSeconds(b), render: (_: unknown, row: Shipment) => getShipmentTransportTimeText(row) },
       { title: '业务员', dataIndex: 'salesperson', width: 95 }, { title: '出货单号', dataIndex: 'systemOrderNo', width: 170, render: (_: string, row) => resolveShipmentOutboundOrderNo(row) },
       ...(canViewTransferAgent ? [{ title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190 }, { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 140, render: (value?: string) => value || '-' }] : []),
       { title: '客户编号', dataIndex: 'customerCode', width: 100 }, { title: '目的地', dataIndex: 'destinationCountry', width: 95 }, { title: '业务渠道', dataIndex: 'channelName', width: 130 },
@@ -1340,13 +1487,12 @@ export function CustomerServicePage({
 
   function openDepartureModal(shipment: Shipment) {
     setDepartureShipment(shipment);
-    const tracking = getShipmentTrackingMeta(shipment.id, customerServiceAuditLogs);
+    const tracking = getShipmentTrackingMeta(shipment.id, customerServiceAuditIndex);
     departureForm.setFieldsValue({
       newTransferNo: shipment.transferNo ?? '',
       subOrderNo: shipment.subOrderNo ?? '',
       etdAt: toDatetimeLocalValue(shipment.etdAt),
       etaAt: toDatetimeLocalValue(shipment.etaAt),
-      vesselVoyage: shipment.vesselVoyage ?? '',
       trackingWebsite: tracking.url ?? agentTrackingWebsiteForShipment(shipment, agents) ?? trackingWebsiteForShipment(shipment),
       trackingWebsiteVisibleToSales: tracking.visibleToSales ?? false,
       pushToSales: false,
@@ -1356,13 +1502,12 @@ export function CustomerServicePage({
 
   function openDepartedEditModal(shipment: Shipment) {
     setDepartureShipment(shipment);
-    const tracking = getShipmentTrackingMeta(shipment.id, customerServiceAuditLogs);
+    const tracking = getShipmentTrackingMeta(shipment.id, customerServiceAuditIndex);
     departureForm.setFieldsValue({
       newTransferNo: shipment.transferNo ?? '',
       subOrderNo: shipment.subOrderNo ?? '',
       etdAt: toDatetimeLocalValue(shipment.etdAt),
       etaAt: toDatetimeLocalValue(shipment.etaAt),
-      vesselVoyage: shipment.vesselVoyage ?? '',
       trackingWebsite: tracking.url ?? agentTrackingWebsiteForShipment(shipment, agents) ?? trackingWebsiteForShipment(shipment),
       trackingWebsiteVisibleToSales: tracking.visibleToSales ?? false,
       pushToSales: false,
@@ -1390,44 +1535,40 @@ export function CustomerServicePage({
       volumeCbm: snapshot?.volumeCbm ?? shipment.volumeCbm,
       chargeWeightKg: snapshot?.chargeWeightKg ?? shipment.receivableWeightKg
     });
+    setDataEditCostPreviewLoading(Boolean(apiClient));
     setDataEditTarget({ shipment, kind, snapshot });
-    const requestId = dataEditPreviewRequestIdRef.current + 1;
-    dataEditPreviewRequestIdRef.current = requestId;
-    if (!apiClient) return;
-    setDataEditCostPreviewLoading(true);
-    void apiClient.customerServiceFinanceUpdatePreview(shipment.id, kind)
-      .then((preview) => {
-        if (dataEditPreviewRequestIdRef.current !== requestId) return;
-        setDataEditCostPreview(preview);
-        if (kind === 'business') {
-          setDataEditBusinessCosts(preview.rows
-            .filter((row) => row.type === 'BUSINESS_COST')
-            .map((row) => createCustomerServiceBusinessCostDraft(row)));
-        } else {
+    if (apiClient) {
+      apiClient.customerServiceFinanceUpdatePreview(shipment.id, kind)
+        .then((preview) => {
+          setDataEditCostPreview(preview);
+          if (kind === 'business') {
+            setDataEditBusinessCosts(preview.rows.filter((row) => row.type === 'BUSINESS_COST').map((row) => createCustomerServiceBusinessCostDraft(row)));
+            return;
+          }
           setDataEditPayableCosts(preview.rows
             .filter((row) => row.type === 'PAYABLE')
             .map((row) => createCustomerServiceBusinessCostDraft(row)));
-        }
-      })
-      .catch((error) => {
-        if (dataEditPreviewRequestIdRef.current !== requestId) return;
-        const errorMessage = error instanceof Error ? error.message : '费用修改预览加载失败';
-        setDataEditError(errorMessage);
-        message.error(errorMessage);
-      })
-      .finally(() => {
-        if (dataEditPreviewRequestIdRef.current === requestId) setDataEditCostPreviewLoading(false);
-      });
+        })
+        .catch((error) => {
+          setDataEditError(error instanceof Error ? error.message : '费用预览加载失败');
+        })
+        .finally(() => {
+          setDataEditCostPreviewLoading(false);
+        });
+    }
+  }
+
+  function updateBusinessDataField(field: keyof typeof dataEditBusinessData, value: number | undefined) {
+    setDataEditBusinessData((current) => ({ ...current, [field]: value }));
   }
 
   function getBusinessCostQuantity(row: CustomerServiceBusinessCostDraft) {
-    const source = row.billingUnit === 'CBM' ? dataEditBusinessData.volumeCbm : dataEditBusinessData.chargeWeightKg;
-    return Number(source ?? 0);
+    return row.billingUnit === 'CBM' ? dataEditBusinessData.volumeCbm ?? 0 : dataEditBusinessData.chargeWeightKg ?? 0;
   }
 
   function getBusinessCostAmount(row: CustomerServiceBusinessCostDraft) {
-    const unitPrice = row.unitPrice === undefined || row.unitPrice === null ? undefined : Number(row.unitPrice);
-    return unitPrice === undefined ? 0 : Number((getBusinessCostQuantity(row) * unitPrice).toFixed(2));
+    const quantity = getBusinessCostQuantity(row);
+    return row.unitPrice === undefined || row.unitPrice === null ? 0 : Number((quantity * Number(row.unitPrice)).toFixed(2));
   }
 
   function getPayableCostQuantity(row: CustomerServiceBusinessCostDraft) {
@@ -1443,28 +1584,22 @@ export function CustomerServicePage({
     return unitPrice === undefined ? 0 : Number((getPayableCostQuantity(row) * unitPrice).toFixed(2));
   }
 
-  function updateBusinessDataField(field: keyof DataConfirmFormValues, value: number | undefined) {
-    setDataEditBusinessData((current) => ({ ...current, [field]: value }));
-  }
-
   function updateBusinessCostDraft(key: string, patch: Partial<CustomerServiceBusinessCostDraft>) {
     setDataEditBusinessCosts((current) => current.map((row) => row.key === key ? { ...row, ...patch } : row));
   }
 
   function addBusinessCostDraft() {
-    setDataEditBusinessCosts((current) => [...current, {
-      key: `new-${Date.now()}-${current.length}`,
-      name: '',
-      currency: 'RMB',
-      billingUnit: 'KG',
-      unitPrice: undefined,
-      editable: true,
-      statusLabel: '新增'
-    }]);
+    const key = `new-${Date.now()}`;
+    setDataEditBusinessCosts((current) => [...current, { key, name: '', currency: 'RMB', billingUnit: 'KG' as FinanceBillingUnit, unitPrice: undefined, editable: true, statusLabel: '新增' }]);
   }
 
   function removeBusinessCostDraft(key: string) {
     setDataEditBusinessCosts((current) => current.filter((row) => row.key !== key));
+  }
+
+  function openDataReverse(shipment: Shipment, kind: 'business' | 'agent' | 'all') {
+    setDataReverseTarget({ shipment, kind });
+    dataReverseForm.setFieldsValue({ reason: '' });
   }
 
   async function savePayableCostDrafts(): Promise<boolean> {
@@ -1507,11 +1642,6 @@ export function CustomerServicePage({
     return true;
   }
 
-  function openDataReverse(shipment: Shipment, kind: 'business' | 'agent' | 'all') {
-    setDataReverseTarget({ shipment, kind });
-    dataReverseForm.setFieldsValue({ reason: '' });
-  }
-
   function openLabelModal(shipment: Shipment) {
     setLabelShipment(shipment);
     clearPendingLabelFile();
@@ -1543,7 +1673,6 @@ export function CustomerServicePage({
         latestTracking: departureShipment.latestTracking,
         etdAt: values.etdAt ? parseBeijingDateTimeInputToIso(values.etdAt) : undefined,
         etaAt: values.etaAt ? parseBeijingDateTimeInputToIso(values.etaAt) : undefined,
-        vesselVoyage: values.vesselVoyage?.trim() || '',
         trackingWebsite: values.trackingWebsite,
         trackingWebsiteVisibleToSales: values.trackingWebsiteVisibleToSales ?? false,
         ...(statusRemark ? { statusRemark } : {})
@@ -1741,54 +1870,48 @@ export function CustomerServicePage({
 
   async function submitDataEdit() {
     if (!dataEditTarget || !apiClient) return;
-    if (dataEditCostPreviewLoading) {
-      message.warning('费用修改预览仍在加载，请稍候');
-      return;
-    }
-    if (!dataEditCostPreview) {
-      const errorMessage = '费用修改预览加载失败，请关闭后重新打开';
-      setDataEditError(errorMessage);
-      message.error(errorMessage);
+    if (dataEditCostPreviewLoading) return;
+    if (dataEditTarget.kind === 'business') {
+      const businessData = dataEditBusinessData;
+      if (![businessData.packageCount, businessData.weightKg, businessData.volumeCbm, businessData.chargeWeightKg].every((value) => Number.isFinite(Number(value)) && Number(value) > 0)) {
+        message.error('件数、业务重量、业务体积和计费重必须为大于 0 的有效值');
+        return;
+      }
+      if (dataEditBusinessCosts.some((row) => !row.name.trim())) {
+        message.error('业务成本费用名称不能为空');
+        return;
+      }
+      setDataEditError(null);
+      setSubmittingDataEdit(true);
+      try {
+        await apiClient.updateShipmentBusinessData(dataEditTarget.shipment.id, {
+          expectedOutboundAt: dataEditTarget.shipment.outboundAt!,
+          packageCount: Math.floor(Number(businessData.packageCount)),
+          weightKg: Number(businessData.weightKg),
+          volumeCbm: Number(businessData.volumeCbm),
+          chargeWeightKg: Number(businessData.chargeWeightKg),
+          businessCosts: dataEditBusinessCosts.map((row) => ({ id: row.id, name: row.name.trim(), currency: row.currency, billingUnit: row.billingUnit, unitPrice: row.unitPrice ?? null }))
+        });
+        await refreshCustomerServiceDataConfirmRows();
+        onNotice?.(`${dataEditTarget.shipment.systemOrderNo}业务数据和业务成本已同步`);
+        setDataEditTarget(null);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : '业务数据修改失败';
+        setDataEditError(errorMessage);
+        message.error(errorMessage);
+      } finally {
+        setSubmittingDataEdit(false);
+      }
       return;
     }
     setDataEditError(null);
     setSubmittingDataEdit(true);
     try {
-      if (dataEditTarget.kind === 'business') {
-        const businessData = dataEditBusinessData;
-        if (![businessData.packageCount, businessData.weightKg, businessData.volumeCbm, businessData.chargeWeightKg].every((value) => Number.isFinite(Number(value)) && Number(value) > 0) || !Number.isInteger(Number(businessData.packageCount))) {
-          message.warning('件数、业务重量、业务体积和计费重必须填写有效值');
-          return;
-        }
-        if (dataEditBusinessCosts.some((row) => !row.name.trim())) {
-          message.warning('请填写全部业务成本费用名称');
-          return;
-        }
-        const updated = await apiClient.updateShipmentBusinessData(dataEditTarget.shipment.id, {
-          expectedOutboundAt: dataEditTarget.shipment.outboundAt!,
-          packageCount: Number(businessData.packageCount),
-          weightKg: Number(businessData.weightKg),
-          volumeCbm: Number(businessData.volumeCbm),
-          chargeWeightKg: Number(businessData.chargeWeightKg),
-          businessCosts: dataEditBusinessCosts.map((row) => ({
-            id: row.id,
-            name: row.name.trim(),
-            currency: row.currency?.trim() || 'RMB',
-            billingUnit: row.billingUnit,
-            unitPrice: row.unitPrice === undefined || row.unitPrice === null ? null : Number(row.unitPrice)
-          }))
-        });
-        onShipmentUpdated?.(updated);
+      const saved = await savePayableCostDrafts();
+      if (saved) {
         await refreshCustomerServiceDataConfirmRows();
-        onNotice?.(`${dataEditTarget.shipment.systemOrderNo}业务数据和业务成本已同步`);
+        onNotice?.(`${dataEditTarget.shipment.systemOrderNo}应付成本已同步`);
         setDataEditTarget(null);
-      } else {
-        const saved = await savePayableCostDrafts();
-        if (saved) {
-          await refreshCustomerServiceDataConfirmRows();
-          onNotice?.(`${dataEditTarget.shipment.systemOrderNo}应付成本已同步`);
-          setDataEditTarget(null);
-        }
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '数据修改失败';
@@ -1877,7 +2000,7 @@ export function CustomerServicePage({
       const link = document.createElement('a');
       link.href = url;
       link.download = file.fileName;
-      document.body.append(link);
+      document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
@@ -2047,12 +2170,6 @@ export function CustomerServicePage({
     return columns;
   }
 
-  function submitDataConfirmSearch() {
-    const outboundOrderNo = dataConfirmSearchInput.trim();
-    setDataConfirmSearch(outboundOrderNo);
-    void refreshCustomerServiceDataConfirmRows({ page: 1, outboundOrderNo });
-  }
-
   return (
     <>
       <AppPageHeader title="客服管理" description="客服状态池、轨迹跟进、问题件和售后。" />
@@ -2127,6 +2244,7 @@ export function CustomerServicePage({
         {activeSection === 'problems' ? (
           <Card title="问题件">
             <Space direction="vertical" size={12} className="full-width">
+              {outboundOrderSearch}
               <Space wrap>
                 <Button type={problemCategory === 'all' ? 'primary' : 'default'} onClick={() => setProblemCategory('all')}>
                   全部 {problemTickets.length}
@@ -2141,31 +2259,102 @@ export function CustomerServicePage({
                 <Input allowClear placeholder="业务员" value={problemFilters.salesperson} onChange={(event) => setProblemFilters((current) => ({ ...current, salesperson: event.target.value }))} />
                 <Input allowClear type="number" min={0} placeholder="停留时间最少天数" value={problemFilters.minDwellDays} onChange={(event) => setProblemFilters((current) => ({ ...current, minDwellDays: event.target.value }))} />
                 <Input allowClear placeholder="客户编号" value={problemFilters.customerCode} onChange={(event) => setProblemFilters((current) => ({ ...current, customerCode: event.target.value }))} />
-                <Input allowClear placeholder="出货单号" value={problemFilters.systemOrderNo} onChange={(event) => setProblemFilters((current) => ({ ...current, systemOrderNo: event.target.value }))} />
                 <Input allowClear placeholder="目的地" value={problemFilters.destinationCountry} onChange={(event) => setProblemFilters((current) => ({ ...current, destinationCountry: event.target.value }))} />
                 <Input allowClear placeholder={agentFieldLabels.detailedCompanyName} value={problemFilters.agentName} onChange={(event) => setProblemFilters((current) => ({ ...current, agentName: event.target.value }))} />
-                <Button onClick={() => setProblemFilters({ salesperson: '', minDwellDays: '', customerCode: '', systemOrderNo: '', destinationCountry: '', agentName: '' })}>重置</Button>
+                <Button onClick={() => setProblemFilters({ salesperson: '', minDwellDays: '', customerCode: '', destinationCountry: '', agentName: '' })}>重置</Button>
               </Space>
-              <ManagedTable recordDetail={{ title: '问题件详情' }} rowKey={(row) => row.ticket.id} size="small" columns={problemColumns} dataSource={problemRows} pagination={tenRowTablePagination} minimumScrollX={3300} columnSettings={canColumnSetting.problems ? { storageKey: 'sunny.customer-service.problem.columns', title: '问题件列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined} />
+              <ManagedDualViewTable
+                viewStorageKey="sunny.customer-service.problem.table-view-v1"
+                defaultView="ledger"
+                viewAriaLabel="问题件表格视图"
+                rowKey={(row) => row.ticket.id}
+                size="small"
+                dataSource={problemRows}
+                pagination={tenRowTablePagination}
+                views={{
+                  matrix: {
+                    columns: problemMatrixColumns,
+                    tableProps: {
+                      tableLayout: 'fixed',
+                      minimumScrollX: 1136,
+                      recordDetail: { title: '问题件详情' },
+                      columnSettings: canColumnSetting.problems ? { storageKey: 'sunny.customer-service.problem.matrix-columns-v1', title: '问题件矩阵列设置', lockedKeys: ['matrixInformation', 'matrixActions'] } : undefined
+                    }
+                  },
+                  ledger: {
+                    columns: problemColumns,
+                    tableProps: {
+                      minimumScrollX: 3300,
+                      recordDetail: { title: '问题件详情' },
+                      columnSettings: canColumnSetting.problems ? { storageKey: 'sunny.customer-service.problem.columns', title: '问题件列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined
+                    }
+                  }
+                }}
+              />
             </Space>
           </Card>
         ) : null}
         {activeSection === 'afterSale' ? (
           <Card title="需协助问题件">
-            <ManagedTable recordDetail={{ title: '需协助问题件详情' }} rowKey={(row) => row.ticket.id} size="small" columns={afterSaleColumns} dataSource={afterSaleRows} pagination={tenRowTablePagination} minimumScrollX={3300} columnSettings={canColumnSetting.afterSale ? { storageKey: 'sunny.customer-service.after-sale.columns', title: '需协助问题件列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined} />
+            <Space direction="vertical" size={12} className="full-width">
+              {outboundOrderSearch}
+              <ManagedDualViewTable
+                viewStorageKey="sunny.customer-service.after-sale.table-view-v1"
+                defaultView="ledger"
+                viewAriaLabel="需协助问题件表格视图"
+                rowKey={(row) => row.ticket.id}
+                size="small"
+                dataSource={afterSaleRows}
+                pagination={tenRowTablePagination}
+                views={{
+                  matrix: {
+                    columns: afterSaleMatrixColumns,
+                    tableProps: {
+                      tableLayout: 'fixed',
+                      minimumScrollX: 1136,
+                      recordDetail: { title: '需协助问题件详情' },
+                      columnSettings: canColumnSetting.afterSale ? { storageKey: 'sunny.customer-service.after-sale.matrix-columns-v1', title: '需协助问题件矩阵列设置', lockedKeys: ['matrixInformation', 'matrixActions'] } : undefined
+                    }
+                  },
+                  ledger: {
+                    columns: afterSaleColumns,
+                    tableProps: {
+                      minimumScrollX: 3300,
+                      recordDetail: { title: '需协助问题件详情' },
+                      columnSettings: canColumnSetting.afterSale ? { storageKey: 'sunny.customer-service.after-sale.columns', title: '需协助问题件列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined
+                    }
+                  }
+                }}
+              />
+            </Space>
           </Card>
         ) : null}
         {activeSection === 'pending-routing' ? (
           <Card title="待排货">
-            <ManagedTable
-              recordDetail={{ title: '客服待排货详情' }}
+            <ManagedDualViewTable
+              viewStorageKey="sunny.customer-service.pending-routing.table-view-v1"
+              defaultView="matrix"
+              viewAriaLabel="客服待排货表格视图"
               rowKey="id"
               size="small"
-              columns={pendingRoutingColumns}
               dataSource={pendingRoutingShipments}
               pagination={tenRowTablePagination}
-              minimumScrollX={2100}
               locale={{ emptyText: '暂无待排货订单' }}
+              views={{
+                matrix: {
+                  columns: pendingRoutingMatrixColumns,
+                  tableProps: {
+                    tableLayout: 'fixed',
+                    minimumScrollX: 980,
+                    recordDetail: { title: '客服待排货详情' },
+                    columnSettings: { storageKey: 'sunny.customer-service.pending-routing.matrix-columns-v1', title: '客服待排货矩阵列设置', lockedKeys: ['actions'] }
+                  }
+                },
+                ledger: {
+                  columns: pendingRoutingColumns,
+                  tableProps: { minimumScrollX: 2100, recordDetail: { title: '客服待排货详情' } }
+                }
+              }}
             />
           </Card>
         ) : null}
@@ -2179,18 +2368,7 @@ export function CustomerServicePage({
                 : undefined}
           >
             <Space direction="vertical" size={12} className="full-width">
-              {activeSection === 'dataConfirm' ? (
-                <Space.Compact block>
-                  <Input
-                    allowClear
-                    value={dataConfirmSearchInput}
-                    placeholder="请输入出货单号"
-                    onChange={(event) => setDataConfirmSearchInput(event.target.value)}
-                    onPressEnter={submitDataConfirmSearch}
-                  />
-                  <Button type="primary" onClick={submitDataConfirmSearch}>查询</Button>
-                </Space.Compact>
-              ) : null}
+              {outboundOrderSearch}
               {activeSection === 'waitingDeparture' && departureConfirmError ? (
                 <Alert type="error" showIcon message={departureConfirmError} />
               ) : null}
@@ -2254,7 +2432,7 @@ export function CustomerServicePage({
                   rowKey="id"
                   size="small"
                   columns={tableColumnsForSection()}
-                  dataSource={activeSection === 'transferNo' ? transferRows : rows}
+                  dataSource={activeSection === 'transferNo' ? filteredTransferRows : rows}
                   loading={false}
                   locale={activeSection === 'dataConfirm' ? {
                     emptyText: dataConfirmLoading && !dataConfirmHasLoaded
@@ -2298,7 +2476,7 @@ export function CustomerServicePage({
                       </div>
                       <div>
                         <Text type="secondary">出货单号</Text>
-                        <Text strong copyable>{resolveShipmentOutboundOrderNo(shipment)}</Text>
+                        <Text strong copyable>{shipment.systemOrderNo || '-'}</Text>
                       </div>
                     </div>
                     <Form.Item name={[index, 'transferNo']} label="转单号" rules={[{ required: true, whitespace: true, message: '请填写转单号' }]}>
@@ -2337,7 +2515,7 @@ export function CustomerServicePage({
       >
         <Space direction="vertical" size={16} className="full-width">
           <Space direction="vertical" size={2}>
-            <Text strong>{feeDetailShipment?.systemOrderNo}</Text>
+            <Text strong>{feeDetailShipment ? resolveShipmentOutboundOrderNo(feeDetailShipment) : '-'}</Text>
             <Text type="secondary">客户：{feeDetailShipment?.customerCode || feeDetailShipment?.customerName || '-'}</Text>
           </Space>
           {feeDetailLoading ? (
@@ -2349,11 +2527,13 @@ export function CustomerServicePage({
                 {renderFinanceRows(feeDetail?.receivables ?? [], '暂无应收费用')}
                 <Text type="secondary">应收合计：{formatFeeAmount(feeDetail?.receivableTotal, feeDetail?.receivables?.[0]?.currency)}</Text>
               </Space>
-              <Space direction="vertical" size={8} className="full-width">
-                <Text strong>业务成本</Text>
-                {renderFinanceRows(feeDetail?.businessCosts ?? [], '暂无业务成本')}
-                <Text type="secondary">业务成本合计：{formatFeeAmount(feeDetail?.businessCostTotal, feeDetail?.businessCosts?.[0]?.currency)}</Text>
-              </Space>
+              {canViewBusinessCosts ? (
+                <Space direction="vertical" size={8} className="full-width">
+                  <Text strong>业务成本</Text>
+                  {renderFinanceRows(feeDetail?.businessCosts ?? [], '暂无业务成本')}
+                  <Text type="secondary">业务成本合计：{formatFeeAmount(feeDetail?.businessCostTotal, feeDetail?.businessCosts?.[0]?.currency)}</Text>
+                </Space>
+              ) : null}
             </>
           )}
         </Space>
@@ -2380,7 +2560,7 @@ export function CustomerServicePage({
             </div>
             <div>
               <Text type="secondary">出货单号</Text>
-              <Text strong>{departureShipment ? resolveShipmentOutboundOrderNo(departureShipment) : '-'}</Text>
+              <Text strong>{departureShipment?.systemOrderNo || '-'}</Text>
             </div>
             <div>
               <Text type="secondary">当前转单号</Text>
@@ -2407,9 +2587,6 @@ export function CustomerServicePage({
                 </Form.Item>
                 <Form.Item name="etaAt" label="ETA/ATA">
                   <AppDateTimePicker size="small" />
-                </Form.Item>
-                <Form.Item name="vesselVoyage" label="船名航次" className="customer-service-operational-edit-wide-field">
-                  <Input size="small" placeholder="选填，例如：MSC MAYA / 123E" />
                 </Form.Item>
                 <Form.Item name="trackingWebsite" label="查询网站" className="customer-service-operational-edit-wide-field">
                   <Input size="small" placeholder="默认按转单号生成，可手动填写" />
@@ -2453,7 +2630,7 @@ export function CustomerServicePage({
       >
         <Space direction="vertical" size={12} className="full-width">
           <Space direction="vertical" size={2}>
-            <Text strong>{lifecycleStatusAction?.shipment.systemOrderNo}</Text>
+            <Text strong>{lifecycleStatusAction ? resolveShipmentOutboundOrderNo(lifecycleStatusAction.shipment) : '-'}</Text>
             <Text type="secondary">客户编号：{lifecycleStatusAction?.shipment.customerCode || '-'}</Text>
             <Text type="secondary">转单号：{lifecycleStatusAction?.shipment.transferNo || '-'}</Text>
             <Text type="secondary">当前状态：{lifecycleStatusAction ? shipmentStatusLabels[lifecycleStatusAction.shipment.status] : '-'}</Text>
@@ -2509,7 +2686,7 @@ export function CustomerServicePage({
       >
         <Form form={dataConfirmForm} layout="vertical" className="customer-service-all-audit-form">
           <div className="customer-service-all-audit-summary">
-            <Text strong>{dataConfirmShipment?.systemOrderNo}</Text>
+            <Text strong>{dataConfirmShipment ? resolveShipmentOutboundOrderNo(dataConfirmShipment) : '-'}</Text>
             <Text type="secondary">客户：{dataConfirmShipment?.customerCode || '-'}</Text>
           </div>
           <div className="customer-service-all-audit-grid">
@@ -2535,22 +2712,22 @@ export function CustomerServicePage({
         </Form>
       </Modal>
       <Modal
-        className="customer-service-data-edit-modal"
         title={`${dataEditTarget?.kind === 'business' ? '业务' : '代理'}数据修改 · ${dataEditTarget?.shipment.systemOrderNo || '-'}`}
         open={Boolean(dataEditTarget)}
+        width={1120}
+        className="customer-service-data-edit-modal"
         onCancel={() => {
-          dataEditPreviewRequestIdRef.current += 1;
           setDataEditError(null);
           setDataEditCostPreview(null);
+          setDataEditCostPreviewLoading(false);
           setDataEditBusinessCosts([]);
           setDataEditPayableCosts([]);
-          setDataEditBusinessData({});
           setDataEditTarget(null);
         }}
         onOk={() => void submitDataEdit()}
         okText="保存修改"
+        okButtonProps={{ disabled: dataEditCostPreviewLoading }}
         confirmLoading={submittingDataEdit}
-        width={1120}
         styles={{ body: { maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' } }}
         destroyOnHidden
       >
@@ -2563,10 +2740,7 @@ export function CustomerServicePage({
           <div className="customer-service-business-edit" aria-label="业务数据与业务成本编辑">
             <section className="customer-service-business-data-card" aria-label="业务数据">
               <div className="customer-service-data-edit-cost-header">
-                <div>
-                  <Text strong>业务数据</Text>
-                  <Text type="secondary">修改业务数据后，业务成本的计费数量和金额会实时联动</Text>
-                </div>
+                <div><Text strong>业务数据</Text><Text type="secondary">修改业务数据后，业务成本的计费数量和金额会实时联动</Text></div>
               </div>
               <div className="customer-service-business-data-grid">
                 <label><span>件数</span><InputNumber aria-label="业务数据-件数" min={1} precision={0} value={dataEditBusinessData.packageCount} onChange={(value) => updateBusinessDataField('packageCount', value === null ? undefined : Number(value))} /></label>
@@ -2577,21 +2751,15 @@ export function CustomerServicePage({
             </section>
             <section className="customer-service-business-cost-card" aria-label="业务成本">
               <div className="customer-service-data-edit-cost-header">
-                <div>
-                  <Text strong>业务成本</Text>
-                  <Text type="secondary">只维护业务成本；应付成本不在此处展示或修改</Text>
-                </div>
+                <div><Text strong>业务成本</Text><Text type="secondary">只维护业务成本；应付成本不在此处展示或修改</Text></div>
                 <Button type="primary" ghost size="small" onClick={addBusinessCostDraft}>新增费用</Button>
               </div>
-              {dataEditCostPreviewLoading ? <div className="customer-service-data-edit-loading"><Spin size="small" /><Text type="secondary">费用加载中...</Text></div> : null}
-              {!dataEditCostPreviewLoading ? (
+              {dataEditCostPreviewLoading ? <div className="customer-service-data-edit-loading"><Spin size="small" /><Text type="secondary">费用加载中...</Text></div> : (
                 <div className="customer-service-business-cost-table" role="table" aria-label="业务成本费用表">
-                  <div className="customer-service-business-cost-head" role="row">
-                    <span>费用名称</span><span>币种</span><span>计费方式</span><span>计费数量</span><span>单价</span><span>总金额</span><span>操作</span>
-                  </div>
+                  <div className="customer-service-business-cost-head" role="row"><span>费用名称</span><span>币种</span><span>计费方式</span><span>计费数量</span><span>单价</span><span>总金额</span><span>操作</span></div>
                   {dataEditBusinessCosts.map((row) => (
                     <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-business-cost-row">
-                      <Input aria-label={`业务成本费用名称-${row.key}`} value={row.name} disabled={!row.editable} placeholder="选择费用名称" onChange={(event) => updateBusinessCostDraft(row.key, { name: event.target.value })} />
+                      <Input aria-label={`业务成本费用名称-${row.key}`} value={row.name} disabled={!row.editable} placeholder="费用名称" onChange={(event) => updateBusinessCostDraft(row.key, { name: event.target.value })} />
                       <Select aria-label={`业务成本币种-${row.key}`} value={row.currency ?? 'RMB'} disabled={!row.editable} options={[{ value: 'RMB', label: 'RMB' }, { value: 'USD', label: 'USD' }]} onChange={(value) => updateBusinessCostDraft(row.key, { currency: value })} />
                       <Select aria-label={`业务成本计费方式-${row.key}`} value={row.billingUnit} disabled={!row.editable} options={[{ value: 'KG', label: '计费重（KG）' }, { value: 'CBM', label: '计费体积（CBM）' }]} onChange={(value: FinanceBillingUnit) => updateBusinessCostDraft(row.key, { billingUnit: value })} />
                       <InputNumber aria-label={`业务成本计费数量-${row.key}`} value={getBusinessCostQuantity(row)} readOnly addonAfter={row.billingUnit === 'CBM' ? 'CBM' : 'KG'} />
@@ -2603,24 +2771,19 @@ export function CustomerServicePage({
                   {!dataEditBusinessCosts.length ? <div className="customer-service-business-cost-empty">暂无业务成本，点击“新增费用”录入。</div> : null}
                   <div className="customer-service-business-cost-total"><Text strong>合计</Text><Text strong>{formatFeeTotals(dataEditBusinessCosts.map((row) => ({ amount: getBusinessCostAmount(row), currency: row.currency })))}</Text></div>
                 </div>
-              ) : null}
+              )}
             </section>
           </div>
         ) : (
           <div className="customer-service-business-edit customer-service-agent-edit" aria-label="代理数据与应付成本编辑">
             <section className="customer-service-business-cost-card" aria-label="应付成本">
               <div className="customer-service-data-edit-cost-header">
-                <div>
-                  <Text strong>应付成本</Text>
-                  <Text type="secondary">类型固定为应付成本；切换计费方式后，计费数量和金额实时联动</Text>
-                </div>
+                <div><Text strong>应付成本</Text><Text type="secondary">类型固定为应付成本；切换计费方式后，计费数量和金额实时联动</Text></div>
               </div>
               {dataEditCostPreviewLoading ? <div className="customer-service-data-edit-loading"><Spin size="small" /><Text type="secondary">费用加载中...</Text></div> : null}
               {!dataEditCostPreviewLoading ? (
                 <div className="customer-service-business-cost-table" role="table" aria-label="应付成本费用表">
-                  <div className="customer-service-business-cost-head" role="row">
-                    <span>费用名称</span><span>币种</span><span>计费方式</span><span>计费数量</span><span>单价</span><span>总金额</span><span>操作</span>
-                  </div>
+                  <div className="customer-service-business-cost-head" role="row"><span>费用名称</span><span>币种</span><span>计费方式</span><span>计费数量</span><span>单价</span><span>总金额</span><span>操作</span></div>
                   {dataEditPayableCosts.map((row) => (
                     <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-payable-cost-row">
                       <Input aria-label={`应付成本费用名称-${row.key}`} value={row.name} disabled={!row.editable} placeholder="费用名称" onChange={(event) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, name: event.target.value } : item))} />
@@ -2650,7 +2813,7 @@ export function CustomerServicePage({
         destroyOnHidden
       >
         <Form form={dataReverseForm} layout="vertical">
-          <Text type="secondary">{dataReverseTarget?.shipment.systemOrderNo} 将回到可修改的数据确认状态。</Text>
+          <Text type="secondary">{dataReverseTarget ? resolveShipmentOutboundOrderNo(dataReverseTarget.shipment) : '-'} 将回到可修改的数据确认状态。</Text>
           <Form.Item name="reason" label="反审核原因" rules={[{ required: true, whitespace: true, message: '请填写反审核原因' }]}><Input.TextArea rows={3} /></Form.Item>
         </Form>
       </Modal>
@@ -2885,45 +3048,14 @@ function getAuditAfter(row: AuditLogSummary): Record<string, unknown> {
   return row.after && typeof row.after === 'object' ? row.after as Record<string, unknown> : {};
 }
 
-function getDepartedStatusLog(shipmentId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => {
-      const after = getAuditAfter(row);
-      return row.action === 'customer_service.status.update' && row.target === shipmentId && after.statusTo === 'DEPARTED';
-    })
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function getStatusLog(shipmentId: string, index: CustomerServiceAuditIndex, status: ShipmentStatus) {
+  return index.get(auditIndexKey(shipmentId, `status:${status}`));
 }
 
-function getArrivedPortStatusLog(shipmentId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => {
-      const after = getAuditAfter(row);
-      return row.action === 'customer_service.status.update' && row.target === shipmentId && after.statusTo === 'ARRIVED_PORT';
-    })
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
-}
-
-function getDeliveringStatusLog(shipmentId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => {
-      const after = getAuditAfter(row);
-      return row.action === 'customer_service.status.update' && row.target === shipmentId && after.statusTo === 'DELIVERING';
-    })
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
-}
-
-function getSignatureConfirmLog(shipmentId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => row.action === 'customer_service.signature.confirm' && row.target === shipmentId)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
-}
-
-function getProblemCategory(ticket: ProblemTicketSummary, shipment: Shipment | undefined, logs: AuditLogSummary[]): Exclude<ProblemCategory, 'all'> {
+function getProblemCategory(ticket: ProblemTicketSummary, shipment: Shipment | undefined, index: CustomerServiceAuditIndex): Exclude<ProblemCategory, 'all'> {
   if (ticket.status === 'CLOSED') return 'history';
   if (ticket.status === 'ASSISTANCE_REQUIRED') return 'assistance';
-  const attach = logs
-    .filter((row) => row.action === 'customer_service.issue.attach' && row.target === ticket.id)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+  const attach = index.get(auditIndexKey(ticket.id, 'action:customer_service.issue.attach'));
   const after = attach ? getAuditAfter(attach) : {};
   const status = typeof after.originalStatusPool === 'string'
     ? after.originalStatusPool
@@ -2968,26 +3100,20 @@ function keywordMatch(value: unknown, keyword: string) {
   return String(value ?? '').toLowerCase().includes(normalized);
 }
 
-function getProblemHandleLog(ticketId: string, logs: AuditLogSummary[]) {
-  return logs
-    .filter((row) => ['customer_service.issue.attach', 'customer_service.issue.update', 'customer_service.issue.close'].includes(row.action) && row.target === ticketId)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function getProblemHandleLog(ticketId: string, index: CustomerServiceAuditIndex) {
+  return index.get(auditIndexKey(ticketId, 'problem'));
 }
 
-function isAgentDataApproved(shipmentId: string, logs: AuditLogSummary[], outboundAt?: string) {
-  return isCurrentDataApproved(shipmentId, logs, 'agent', outboundAt);
+function isAgentDataApproved(shipmentId: string, index: CustomerServiceAuditIndex) {
+  return isCurrentDataApproved(shipmentId, index, 'agent');
 }
 
-function isBusinessDataApproved(shipmentId: string, logs: AuditLogSummary[], outboundAt?: string) {
-  return isCurrentDataApproved(shipmentId, logs, 'business', outboundAt);
+function isBusinessDataApproved(shipmentId: string, index: CustomerServiceAuditIndex) {
+  return isCurrentDataApproved(shipmentId, index, 'business');
 }
 
-function isCurrentDataApproved(shipmentId: string, logs: AuditLogSummary[], kind: 'business' | 'agent', outboundAt?: string) {
-  const latest = logs
-    .filter((row) => row.target === shipmentId
-      && auditBelongsToDataConfirmationCycle(row, outboundAt)
-      && [`customer_service.${kind}_data.approved`, `customer_service.${kind}_data.reversed`].includes(row.action))
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function isCurrentDataApproved(shipmentId: string, index: CustomerServiceAuditIndex, kind: 'business' | 'agent') {
+  const latest = index.get(auditIndexKey(shipmentId, `review:${kind}`));
   return latest?.action === `customer_service.${kind}_data.approved`;
 }
 
@@ -2997,12 +3123,8 @@ function departureDateMissingMessage(shipment: Shipment) {
   return '确认离港前请先填写 ETA/ATA';
 }
 
-function getLatestDataSnapshot(shipmentId: string, logs: AuditLogSummary[], kind: 'business' | 'agent', outboundAt?: string) {
-  const row = logs
-    .filter((item) => item.target === shipmentId
-      && auditBelongsToDataConfirmationCycle(item, outboundAt)
-      && item.action === `customer_service.${kind}_data.updated`)
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function getLatestDataSnapshot(shipmentId: string, index: CustomerServiceAuditIndex, kind: 'business' | 'agent') {
+  const row = index.get(auditIndexKey(shipmentId, `data:${kind}`));
   const snapshot = row ? getAuditAfter(row).snapshot : undefined;
   return snapshot && typeof snapshot === 'object' ? snapshot as { packageCount?: number; weightKg?: number; volumeCbm?: number; chargeWeightKg?: number } : undefined;
 }
@@ -3015,10 +3137,8 @@ function auditBelongsToDataConfirmationCycle(row: AuditLogSummary, outboundAt?: 
   return Date.parse(row.createdAt) >= cycleStartedAt;
 }
 
-function getShipmentTrackingMeta(shipmentId: string, logs: AuditLogSummary[]) {
-  const row = logs
-    .filter((item) => item.action === 'shipment.operational.update' && item.target === shipmentId && 'trackingWebsite' in getAuditAfter(item))
-    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+function getShipmentTrackingMeta(shipmentId: string, index: CustomerServiceAuditIndex) {
+  const row = index.get(auditIndexKey(shipmentId, 'tracking'));
   const after = row ? getAuditAfter(row) : {};
   return {
     url: typeof after.trackingWebsite === 'string' ? after.trackingWebsite : undefined,
@@ -3026,8 +3146,8 @@ function getShipmentTrackingMeta(shipmentId: string, logs: AuditLogSummary[]) {
   };
 }
 
-function renderTrackingWebsite(shipment: Shipment, logs: AuditLogSummary[]) {
-  const tracking = getShipmentTrackingMeta(shipment.id, logs);
+function renderTrackingWebsite(shipment: Shipment, index: CustomerServiceAuditIndex) {
+  const tracking = getShipmentTrackingMeta(shipment.id, index);
   const url = tracking.url ?? trackingWebsiteForShipment(shipment);
   if (!url) return '-';
   return <TrackingWebsiteLink url={url} prefix={tracking.visibleToSales ? undefined : '屏蔽：'} />;
