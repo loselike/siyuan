@@ -110,9 +110,13 @@ import type {
   ShipmentFinanceItemUpdateInput,
   ShipmentImportRequest,
   ShipmentOperationalUpdateInput,
+  CustomerServiceDataConfirmListQuery,
   CustomerServiceDataReviewInput,
   CustomerServiceDataReverseInput,
   CustomerServiceDataUpdateInput,
+  CustomerServiceFinanceItemUpdateInput,
+  CustomerServiceFinanceUpdatePreview,
+  CustomerServiceFinanceUpdatePreviewRow,
   CustomerServiceTransferBatchInput,
   ShipmentPaymentUpdateInput,
   ShipmentRerouteInput,
@@ -135,6 +139,7 @@ import type {
   WarehousePackageSplitInput,
   WarehousePackageUpdateInput,
   WarehouseTallyTaskCompleteInput,
+  WarehouseTallyTaskCompletedCountUpdateInput,
   WarehouseTallyTaskCreateInput,
   WarehouseTallyLabelScanInput,
   WarehouseTallyHistoricalAggregateCorrectionInput,
@@ -148,7 +153,7 @@ import { FinanceCatalogService } from './finance/catalog/finance-catalog.service
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
 import { parseWarehouseMachineWorkbook } from './warehouse-machine-import.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
-import { isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
+import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
@@ -305,6 +310,19 @@ export class DataController {
     }
   }
 
+  private async ensureOrderEntryBusinessCostWritePermission(principal: Principal, input: OrderEntryCreateInput, method: 'POST' | 'PUT', path: string) {
+    const hasBusinessCost = (input.businessCosts ?? []).some((row) => (
+      Boolean(row.name?.trim()) || Number(row.amount ?? 0) > 0 || Number(row.unitPrice ?? 0) > 0
+    ));
+    const hasLegacyWrite = await this.repository.hasPermission(principal.role, 'business:order-entry:business-cost-write');
+    const isMasked = !isAdministratorRole(principal.role)
+      && await this.repository.hasPermission(principal.role, 'business:order-entry:business-cost-mask');
+    const hasModuleWrite = await this.repository.hasPermission(principal.role, 'business:order-entry:view');
+    if (!hasBusinessCost || (!isMasked && (hasLegacyWrite || hasModuleWrite || isAdministratorRole(principal.role)))) return;
+    await this.repository.recordPermissionDenied(principal, { permissions: ['business:order-entry:business-cost-write'], method, path });
+    throw new ForbiddenException('没有填写业务成本权限');
+  }
+
   private scopeMasterDataCustomers(principal: Principal, snapshot: MasterDataSnapshot): MasterDataSnapshot {
     if (!hasSalesOwnDataScope(principal)) return snapshot;
     const scope = new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value)));
@@ -358,47 +376,6 @@ export class DataController {
       scanSource: '墨家设备',
       remark: remark || undefined
     };
-  }
-
-  @Get('health')
-  health() {
-    return {
-      ok: true,
-      service: 'siyuan-api',
-      releaseId: process.env.RELEASE_ID?.trim() || 'local-dev'
-    };
-  }
-
-  @Post('system/client-errors')
-  @RequireAuth()
-  reportClientError(
-    @Req() request: { user: Principal },
-    @Body() body: {
-      errorId?: unknown;
-      route?: unknown;
-      releaseId?: unknown;
-      menuKey?: unknown;
-      sectionKey?: unknown;
-      message?: unknown;
-      stack?: unknown;
-      componentStack?: unknown;
-    }
-  ) {
-    const compact = (value: unknown, limit: number) => String(value ?? '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, limit);
-    const event = {
-      errorId: compact(body.errorId, 80) || 'missing-id',
-      route: compact(body.route, 240) || 'unknown-route',
-      releaseId: compact(body.releaseId, 120) || 'unknown-release',
-      menuKey: compact(body.menuKey, 80) || 'unknown-menu',
-      sectionKey: compact(body.sectionKey, 120) || 'unknown-section',
-      message: compact(body.message, 1000) || 'unknown-render-error',
-      stack: compact(body.stack, 6000),
-      componentStack: compact(body.componentStack, 3000),
-      username: request.user.username,
-      role: request.user.role
-    };
-    this.logger.error(`client-render-error ${JSON.stringify(event)}`);
-    return { ok: true as const };
   }
 
   @Post('integrations/mojia/measurements')
@@ -598,6 +575,7 @@ export class DataController {
       await this.repository.recordPermissionDenied(request.user, { permissions: [followupPermission], method: 'POST', path: '/api/shipments/order-entry' });
       throw new ForbiddenException(body.submitForReview ? '没有提交审核权限' : '没有保存草稿权限');
     }
+    await this.ensureOrderEntryBusinessCostWritePermission(request.user, body, 'POST', '/api/shipments/order-entry');
     await this.repository.ensureOrderEntryInputAccess(request.user, body);
     await this.ensureOrderEntryFeeNamesEnabled(body);
     return this.repository.createOrderEntry(request.user, body);
@@ -611,6 +589,7 @@ export class DataController {
       await this.repository.recordPermissionDenied(request.user, { permissions: ['business:order-entry:submit-review'], method: 'PUT', path: `/api/shipments/${id}/order-entry-draft` });
       throw new ForbiddenException('没有提交审核权限');
     }
+    await this.ensureOrderEntryBusinessCostWritePermission(request.user, body, 'PUT', `/api/shipments/${id}/order-entry-draft`);
     await this.repository.ensureOrderEntryInputAccess(request.user, body, id);
     await this.ensureOrderEntryFeeNamesEnabled(body);
     return this.repository.updateOrderEntryDraft(request.user, id, body);
@@ -775,15 +754,16 @@ export class DataController {
       throw new ForbiddenException('客户不能上传代理发票模板');
     }
     if (!file) throw new BadRequestException('请上传代理发票模板');
-    this.assertExcelFile(file);
+    const normalizedFile = { ...file, originalname: normalizeUploadedFileName(file.originalname) };
+    this.assertExcelFile(normalizedFile);
     const uploadRoot = resolveUploadRoot();
     const uploadDir = join(uploadRoot, 'invoice-templates');
     await mkdir(uploadDir, { recursive: true });
-    const extension = extname(file.originalname).toLowerCase();
+    const extension = extname(normalizedFile.originalname).toLowerCase();
     const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
-    await writeFile(join(uploadDir, fileName), file.buffer);
+    await writeFile(join(uploadDir, fileName), normalizedFile.buffer);
     return {
-      fileName: file.originalname,
+      fileName: normalizedFile.originalname,
       url: `/api/uploads/${basename(uploadDir)}/${fileName}`
     };
   }
@@ -804,6 +784,30 @@ export class DataController {
   @RequirePermission('customer-service:data-confirm:business-update')
   async updateShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
     return this.repository.updateShipmentBusinessData(request.user, id, body);
+  }
+
+  @Get('shipments/:id/customer-service/cost-preview')
+  @RequirePermission(['customer-service:data-confirm:business-update', 'customer-service:data-confirm:agent-update'])
+  async customerServiceCostPreview(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Query('kind') kind?: string
+  ): Promise<CustomerServiceFinanceUpdatePreview> {
+    if (kind !== undefined && kind !== 'business' && kind !== 'agent') throw new BadRequestException('费用预览类型无效');
+    return this.repository.getCustomerServiceFinanceUpdatePreview(request.user, id, kind === 'agent' ? 'agent' : 'business');
+  }
+
+  @Put('shipments/:id/customer-service/finance-items/:feeId')
+  @RequirePermission(['customer-service:data-confirm:business-update', 'customer-service:data-confirm:agent-update'])
+  async updateCustomerServiceFinanceItem(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Param('feeId') feeId: string,
+    @Query('kind') kind: string,
+    @Body() body: CustomerServiceFinanceItemUpdateInput
+  ): Promise<CustomerServiceFinanceUpdatePreviewRow> {
+    if (kind !== 'business' && kind !== 'agent') throw new BadRequestException('费用修改类型无效');
+    return this.repository.updateCustomerServiceFinanceItem(request.user, id, feeId, kind, body);
   }
 
   @Patch('shipments/:id/agent-data')
@@ -865,7 +869,7 @@ export class DataController {
   @RequirePermission('operations:line-shipment:status-update')
   async updateOperationShipmentOperational(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentOperationalUpdateInput) {
     if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能人工修改运单');
-    return this.repository.updateShipmentOperational(request.user, id, body);
+    return this.repository.updateShipmentOperational(request.user, id, body, { enforceOperationsLineShipmentStageEdit: true });
   }
 
   @Get('customer-service/shipments')
@@ -886,8 +890,8 @@ export class DataController {
 
   @Get('customer-service/data-confirm-shipments')
   @RequirePermission('customer-service:data-confirm:view')
-  async customerServiceDataConfirmShipments(@Req() request: { user: Principal }) {
-    return this.repository.customerServiceDataConfirmShipments(request.user);
+  async customerServiceDataConfirmShipments(@Req() request: { user: Principal }, @Query() query: CustomerServiceDataConfirmListQuery) {
+    return this.repository.customerServiceDataConfirmShipmentsPage(request.user, query);
   }
 
   @Post('customer-service/transfer-shipments/fill')
@@ -1023,6 +1027,32 @@ export class DataController {
     response.setHeader('Content-Type', mimeType);
     response.setHeader('Content-Length', String(file.buffer.length));
     response.setHeader('Content-Disposition', `attachment; filename="invoice-template${file.extension}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
+    response.setHeader('Cache-Control', 'private, no-store');
+    return new StreamableFile(file.buffer);
+  }
+
+  @Get('shipments/:id/invoice/download')
+  @RequirePermission('business:order-entry:invoice-upload')
+  async downloadShipmentBusinessInvoice(@Req() request: { user: Principal }, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {
+    if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能下载业务发票');
+    const file = await this.repository.downloadShipmentBusinessInvoice(request.user, id);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader('Content-Disposition', `attachment; filename="business-invoice${extname(file.fileName)}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+    response.setHeader('Cache-Control', 'private, no-store');
+    return new StreamableFile(file.buffer);
+  }
+
+  @Get('shipments/:id/labels/:labelId/file')
+  @RequireAuth()
+  async downloadShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string, @Param('labelId') labelId: string, @Res({ passthrough: true }) response: Response) {
+    if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能下载内部面单');
+    await this.ensureAnyPermission(request.user, ['warehouse:dispatch-pending:label-view', 'customer-service:transfer:label-view']);
+    const file = await this.repository.downloadShipmentLabel(request.user, id, labelId);
+    response.setHeader('Content-Type', file.mimeType);
+    response.setHeader('Content-Length', String(file.buffer.length));
+    response.setHeader('Content-Disposition', `attachment; filename="shipment-label${extname(file.fileName)}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+    response.setHeader('Cache-Control', 'private, no-store');
     return new StreamableFile(file.buffer);
   }
 
@@ -1065,7 +1095,10 @@ export class DataController {
 
   @Get('shipments/:id/finance-detail')
   @RequirePermission([
+    'customer-service:data-confirm:business-update',
     'business:shipment:finance-detail-view',
+    'business:order-entry:business-cost-view',
+    'business:order-entry:business-cost-write',
     'business:shipment:payable-view',
     'business:shipment:profit-view',
     'business:order-fee:profit-view',
@@ -1112,6 +1145,29 @@ export class DataController {
     return this.repository.deleteShipmentFinanceItem(request.user, id, feeId);
   }
 
+  @Post('shipments/:id/review-business-costs')
+  @RequirePermission(['business:order-entry:business-cost-write', 'business:order-entry:view'])
+  async createPendingReviewBusinessCost(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentFinanceItemCreateInput) {
+    return this.repository.createPendingReviewBusinessCost(request.user, id, body);
+  }
+
+  @Put('shipments/:id/review-business-costs/:feeId')
+  @RequirePermission(['business:order-entry:business-cost-write', 'business:order-entry:view'])
+  async updatePendingReviewBusinessCost(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Param('feeId') feeId: string,
+    @Body() body: ShipmentFinanceItemUpdateInput
+  ) {
+    return this.repository.updatePendingReviewBusinessCost(request.user, id, feeId, body);
+  }
+
+  @Delete('shipments/:id/review-business-costs/:feeId')
+  @RequirePermission(['business:order-entry:business-cost-write', 'business:order-entry:view'])
+  async deletePendingReviewBusinessCost(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
+    return this.repository.deletePendingReviewBusinessCost(request.user, id, feeId);
+  }
+
   @Post('shipments/:id/finance-items/:feeId/lock')
   @RequirePermission('business:order-fee:lock')
   async lockShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
@@ -1133,7 +1189,7 @@ export class DataController {
   @Post('operations/line-shipments/:id/tracking-events')
   @RequirePermission('operations:line-shipment:tracking-add')
   async addOperationTrackingEvent(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: TrackingEventInput) {
-    return this.repository.addTrackingEvent(request.user, id, body);
+    return this.repository.addTrackingEvent(request.user, id, body, { enforceOperationsLineShipmentStageVisibility: true });
   }
 
   @Get('customer-service/problem-tags')
@@ -1178,7 +1234,12 @@ export class DataController {
   @Post('operations/line-shipments/:id/problem-tickets')
   @RequirePermission('operations:line-shipment:problem-create')
   async createOperationProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    return this.repository.createProblemTicket(request.user, id, { ...body, customerVisible: false, pushToSales: undefined });
+    return this.repository.createProblemTicket(
+      request.user,
+      id,
+      { ...body, customerVisible: false, pushToSales: undefined },
+      { enforceOperationsLineShipmentStageVisibility: true }
+    );
   }
 
   @Post('problem-tickets/:id/replies')
@@ -1460,12 +1521,6 @@ export class DataController {
     return this.repository.deleteChannelCategory(request.user, id);
   }
 
-  @Get('master-data/surcharges')
-  @RequirePermission('master-data:finance:read')
-  async masterDataSurcharges() {
-    return (await this.repository.getMasterData()).surcharges;
-  }
-
   @Post('master-data/surcharges')
   @RequirePermission('master-data:finance:surcharge-manage')
   async createMasterDataSurcharge(@Req() request: { user: Principal }, @Body() body: SurchargeCreateInput) {
@@ -1478,22 +1533,10 @@ export class DataController {
     return this.repository.updateSurchargeEnabled(request.user, id, body);
   }
 
-  @Get('master-data/fuel-rates')
-  @RequirePermission('master-data:finance:read')
-  async masterDataFuelRates() {
-    return (await this.repository.getMasterData()).fuelRates;
-  }
-
   @Post('master-data/fuel-rates')
   @RequirePermission('master-data:finance:fuel-rate-manage')
   async createMasterDataFuelRate(@Req() request: { user: Principal }, @Body() body: FuelRateCreateInput) {
     return this.repository.createFuelRate(request.user, body);
-  }
-
-  @Get('master-data/exchange-rates')
-  @RequirePermission('master-data:exchange-rates:read')
-  async masterDataExchangeRates() {
-    return (await this.repository.getMasterData()).exchangeRates;
   }
 
   @Post('master-data/exchange-rates')
@@ -1637,30 +1680,6 @@ export class DataController {
   @RequirePermission('system:audit:read')
   async systemAuditLogs(@Req() request: { user: Principal }, @Query() query: AuditLogQuery) {
     return this.repository.getAuditLogs(request.user, query);
-  }
-
-  @Get('system/lineage-event-coverage')
-  @RequirePermission('system:audit:lineage-view')
-  async systemLineageEventCoverage() {
-    return getLineageEventWiringReport();
-  }
-
-  @Get('system/lineage/shipment/:shipmentId')
-  @RequirePermission('system:audit:lineage-view')
-  async systemShipmentLineageTrace(@Req() request: { user: Principal }, @Param('shipmentId') shipmentId: string) {
-    return (this.repository as any).getShipmentLineageTrace(request.user, shipmentId);
-  }
-
-  @Get('system/lineage-source/:nodeType/:id')
-  @RequirePermission('system:audit:lineage-view')
-  async systemLineageSourceTrace(@Req() request: { user: Principal }, @Param('nodeType') nodeType: string, @Param('id') id: string) {
-    return (this.repository as any).getLineageSourceTrace(request.user, nodeType, id);
-  }
-
-  @Get('system/lineage/:resultType/:businessId')
-  @RequirePermission('system:audit:lineage-view')
-  async systemLineageTrace(@Req() request: { user: Principal }, @Param('resultType') resultType: string, @Param('businessId') businessId: string) {
-    return (this.repository as any).getLineageTrace(request.user, resultType, businessId);
   }
 
   @Post('pricing/quote')
@@ -2141,6 +2160,15 @@ export class DataController {
     return this.repository.updateWarehouseRentRule(request.user, id, body);
   }
 
+  @Delete('warehouse/rent-rules/:id')
+  @RequirePermission('warehouse:rent-rule:manage')
+  async deleteWarehouseRentRule(
+    @Req() request: { user: Principal },
+    @Param('id') id: string
+  ) {
+    return this.repository.deleteWarehouseRentRule(request.user, id);
+  }
+
   @Put('warehouse/rent-rules/:id/enabled')
   @RequirePermission('warehouse:rent-rule:manage')
   async updateWarehouseRentRuleEnabled(
@@ -2249,10 +2277,32 @@ export class DataController {
     return this.repository.updateWarehouseTallyTask(request.user, id, body);
   }
 
+  @Post('warehouse/tally-tasks/:id/cancel')
+  @RequirePermission('warehouse:tally-pending:task-cancel')
+  async cancelWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.cancelWarehouseTallyTask(request.user, id);
+  }
+
   @Post('warehouse/tally-tasks/:id/complete')
   @RequirePermission('warehouse:tally-pending:task-process')
   async completeWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseTallyTaskCompleteInput) {
     return this.repository.completeWarehouseTallyTask(request.user, id, body);
+  }
+
+  @Patch('warehouse/tally-tasks/:id/completed-count')
+  @RequireAuth()
+  async updateCompletedWarehouseTallyTaskCount(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: WarehouseTallyTaskCompletedCountUpdateInput
+  ) {
+    return this.repository.updateCompletedWarehouseTallyTaskCount(request.user, id, body);
+  }
+
+  @Post('warehouse/tally-tasks/:id/reverse-review')
+  @RequirePermission('warehouse:tally-completed:reverse-review')
+  async reverseReviewWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.reverseReviewWarehouseTallyTask(request.user, id);
   }
 
   @Get('warehouse/tally-tasks/:id/historical-aggregate-correction')
@@ -2667,14 +2717,20 @@ export class DataController {
     if (!(file.mimetype in this.excelMimeExtensions) && file.mimetype !== '') {
       throw new BadRequestException('仅支持 Excel 文件');
     }
-    if (extension === '.xlsx' && file.buffer.subarray(0, 2).toString('ascii') !== 'PK') {
+    const isXlsxContent = file.buffer.subarray(0, 2).toString('ascii') === 'PK';
+    const oleHeader = file.buffer.subarray(0, 4);
+    const isXlsContent = oleHeader[0] === 0xd0 && oleHeader[1] === 0xcf && oleHeader[2] === 0x11 && oleHeader[3] === 0xe0;
+    if (extension === '.xlsx' && isXlsContent) {
+      throw new BadRequestException('文件扩展名为 .xlsx，但内容实际是 .xls，请改为 .xls 后上传');
+    }
+    if (extension === '.xlsx' && !isXlsxContent) {
       throw new BadRequestException('XLSX 内容格式无效');
     }
-    if (extension === '.xls') {
-      const oleHeader = file.buffer.subarray(0, 4);
-      if (!(oleHeader[0] === 0xd0 && oleHeader[1] === 0xcf && oleHeader[2] === 0x11 && oleHeader[3] === 0xe0)) {
-        throw new BadRequestException('XLS 内容格式无效');
-      }
+    if (extension === '.xls' && isXlsxContent) {
+      throw new BadRequestException('文件扩展名为 .xls，但内容实际是 .xlsx，请改为 .xlsx 后上传');
+    }
+    if (extension === '.xls' && !isXlsContent) {
+      throw new BadRequestException('XLS 内容格式无效');
     }
   }
 
@@ -2751,7 +2807,7 @@ export class DataController {
   }
 
   @Post('finance/payments')
-  @RequirePermission('finance:pending-payment:create')
+  @RequirePermission('finance:receivable:create')
   async createPayment(@Req() request: { user: Principal }, @Body() body: PaymentCreateInput) {
     return this.repository.createPayment(request.user, body);
   }

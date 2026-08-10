@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
+import { Button, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Tag, Tooltip, Typography, message } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   defaultFinanceCatalogItems,
   type AgentSummary,
   type BusinessCostFeeSummary,
+  type FinanceBillingUnit,
   type FinanceCatalogItemSummary,
   type PayableFeeSummary,
   type ReceivableFeeSummary,
@@ -14,16 +15,17 @@ import {
   type ShipmentFinanceItemCreateInput,
   type ShipmentFinanceItemType,
   type ShipmentFinanceItemUpdateInput,
-  type WaterReceiptSummary
+  type ReceivableWaterReceiptCandidate
 } from '@siyuan/shared';
 import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { confirmDangerousAction } from '../../shared/dangerousAction';
 import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
-import { tenRowTablePagination } from '../../shared/ui';
+import { ManagedTable, tenRowTablePagination } from '../../shared/ui';
 import { applySettlementMethodCurrency, createFinanceFeeNameOptions, createSettlementMethodOptions, financeCatalogCurrencyOptions, getSettlementMethodRows } from '../catalog';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions, resolveAgentIdByIdentity } from '../../shared/agentIdentity';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
+import { canViewOrderLifecycleBusinessCosts } from '../../shared/businessCostAccess';
 
 const { Text } = Typography;
 
@@ -38,6 +40,7 @@ interface OrderFeeEditorState {
 interface ReceiptMatchState {
   row: ReceivableFeeSummary;
   amount: number;
+  exchangeRate?: number;
 }
 
 interface OrderFeePanelProps {
@@ -96,6 +99,15 @@ function formatRmbAmount(row: Pick<OrderFeeRow, 'amount' | 'currency' | 'rmbAmou
 
 function formatOptionalDate(value?: string) {
   return value ? formatBeijingDateTime(value) : '-';
+}
+
+const businessCostBillingUnitOptions = [
+  { label: '计费重（KG）', value: 'KG' as const },
+  { label: '体积（CBM）', value: 'CBM' as const }
+];
+
+function businessCostBillingUnitLabel(unit?: FinanceBillingUnit) {
+  return unit === 'CBM' ? 'CBM' : 'KG';
 }
 
 function hasPendingReceiptMatch(row: ReceivableFeeSummary) {
@@ -167,9 +179,19 @@ function hasUiPermission(role: RoleKey, permissions: PermissionKey[] | undefined
   return role === 'ADMIN' || Boolean(permissions?.includes(permission));
 }
 
-function calculateAmountOverride(row: { amount?: number; chargeWeightKg?: number; unitPrice?: number }) {
-  if (!row.chargeWeightKg || !row.unitPrice || row.chargeWeightKg <= 0 || row.unitPrice <= 0) return false;
-  return Math.abs((row.amount ?? 0) - row.chargeWeightKg * row.unitPrice) > 0.01;
+function calculateAmountOverride(row: {
+  amount?: number;
+  type?: ShipmentFinanceItemType;
+  billingUnit?: FinanceBillingUnit;
+  billingQuantity?: number;
+  chargeWeightKg?: number;
+  unitPrice?: number;
+}) {
+  const quantity = row.type === 'BUSINESS_COST'
+    ? row.billingQuantity ?? row.chargeWeightKg
+    : row.chargeWeightKg;
+  if (!quantity || !row.unitPrice || quantity <= 0 || row.unitPrice <= 0) return false;
+  return Math.abs((row.amount ?? 0) - quantity * row.unitPrice) > 0.01;
 }
 
 function hasChargePricing(row: OrderFeeRow): row is PayableFeeSummary | BusinessCostFeeSummary {
@@ -200,7 +222,7 @@ export function OrderFeePanel({
   });
   const [submitting, setSubmitting] = useState(false);
   const [receiptMatch, setReceiptMatch] = useState<ReceiptMatchState | null>(null);
-  const [receiptRows, setReceiptRows] = useState<WaterReceiptSummary[]>([]);
+  const [receiptRows, setReceiptRows] = useState<ReceivableWaterReceiptCandidate[]>([]);
   const [receiptLoading, setReceiptLoading] = useState(false);
 
   const roleCanViewPayables = hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
@@ -210,11 +232,19 @@ export function OrderFeePanel({
       hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
       || hasUiPermission(role, permissions, 'finance:payable:view-sensitive')
     ));
+  const visibleReceivables = [
+    'business:shipment:finance-detail-view',
+    'business:review:finance-detail-view',
+    'finance:receivable:read',
+    'finance:receivable:detail',
+    'finance:receivable:update'
+  ].some((permission) => hasUiPermission(role, permissions, permission as PermissionKey));
   const canViewBusinessCostAgent = roleCanViewPayables && (hasUiPermission(role, permissions, 'finance:business-cost:view-agent')
     || hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
     || hasUiPermission(role, permissions, 'finance:payable:view-sensitive'));
+  const canViewBusinessCosts = canViewOrderLifecycleBusinessCosts(role, permissions);
   const receivableRows = (detail?.receivables ?? []).filter(isActiveFeeRow);
-  const businessCostRows = (detail?.businessCosts ?? []).filter(isActiveFeeRow);
+  const businessCostRows = canViewBusinessCosts ? (detail?.businessCosts ?? []).filter(isActiveFeeRow) : [];
   const payableRows = visiblePayables ? (detail?.payables ?? []).filter(isActiveFeeRow) : [];
   const rowsByType = useMemo<Record<OrderFeeTableType, OrderFeeRow[]>>(() => ({
     RECEIVABLE: receivableRows,
@@ -222,8 +252,12 @@ export function OrderFeePanel({
     PAYABLE: payableRows
   }), [businessCostRows, payableRows, receivableRows]);
   const visibleTypes = useMemo<OrderFeeTableType[]>(
-    () => visiblePayables ? ['RECEIVABLE', 'BUSINESS_COST', 'PAYABLE'] : ['RECEIVABLE', 'BUSINESS_COST'],
-    [visiblePayables]
+    () => [
+      ...(visibleReceivables ? ['RECEIVABLE' as const] : []),
+      ...(canViewBusinessCosts ? ['BUSINESS_COST' as const] : []),
+      ...(visiblePayables ? ['PAYABLE' as const] : [])
+    ],
+    [canViewBusinessCosts, visiblePayables, visibleReceivables]
   );
   const currentRows = rowsByType[activeType];
   const inspectedRow = currentRows.find((row) => row.id === inspectedRowId) ?? currentRows[0];
@@ -231,10 +265,38 @@ export function OrderFeePanel({
   const selectedRows = currentRows.filter((row) => selectedKeys.includes(row.id));
   const canCreateFee = hasUiPermission(role, permissions, 'business:order-fee:create');
   const canUpdateFee = hasUiPermission(role, permissions, 'business:order-fee:update');
-  const canMatchReceipt = hasUiPermission(role, permissions, 'finance:water-match:create');
+  const canAdjustCost = hasUiPermission(role, permissions, 'finance:order-fee:cost-adjust');
+  const canManageBusinessCostSensitiveFields = canAdjustCost || (
+    hasUiPermission(role, permissions, 'finance:business-cost:manage')
+    && hasUiPermission(role, permissions, 'finance:business-cost:view-agent')
+  );
+  const hasOrderEntryBusinessCostWrite = hasUiPermission(role, permissions, 'business:order-entry:business-cost-write');
+  const canWritePendingReviewBusinessCost = shipment.status === 'REVIEW_PENDING' && hasOrderEntryBusinessCostWrite;
+  const usesPendingReviewBusinessCostOnly = !canManageBusinessCostSensitiveFields && (
+    hasOrderEntryBusinessCostWrite
+    || hasUiPermission(role, permissions, 'business:shipment:team-view')
+    || hasUiPermission(role, permissions, 'data-scope:sales-own')
+  );
+  const canCreateCurrentFee = usesPendingReviewBusinessCostOnly
+    ? activeType === 'BUSINESS_COST' && canWritePendingReviewBusinessCost
+    : canCreateFee;
+  const canUpdateCurrentFee = usesPendingReviewBusinessCostOnly
+    ? activeType === 'BUSINESS_COST' && canWritePendingReviewBusinessCost
+    : activeType === 'RECEIVABLE'
+      ? canUpdateFee
+      : activeType === 'BUSINESS_COST'
+        ? canManageBusinessCostSensitiveFields
+        : canAdjustCost;
+  const canMatchReceipt = [
+    'finance:receivable:match-water',
+    'finance:water-match:create'
+  ].some((permission) => hasUiPermission(role, permissions, permission as PermissionKey));
   const canDeleteReceivable = hasUiPermission(role, permissions, 'finance:receivable:void');
   const canDeleteFee = hasUiPermission(role, permissions, 'business:order-fee:delete')
     || (activeType === 'RECEIVABLE' && canDeleteReceivable);
+  const canDeleteCurrentFee = usesPendingReviewBusinessCostOnly
+    ? activeType === 'BUSINESS_COST' && canWritePendingReviewBusinessCost
+    : canDeleteFee;
   const settlementRows = useMemo(() => getSettlementMethodRows(catalogItems), [catalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
   const agentOptions = useMemo(() => getDetailedCompanyAgentOptions(agents), [agents]);
@@ -276,42 +338,46 @@ export function OrderFeePanel({
       message.warning('该应收已有待财务审核的水单匹配申请');
       return;
     }
-    const customerCode = parseCustomerCode(shipment.customerName);
-    if (!customerCode || customerCode === '-') {
-      message.warning('当前运单缺少客户编号');
-      return;
-    }
     const unpaid = Math.max(0, row.amount - Number(row.receivedAmount ?? 0));
-    const receivableCurrency = row.currency ?? 'RMB';
     setReceiptMatch({ row, amount: Number(unpaid.toFixed(2)) });
     setReceiptLoading(true);
     try {
-      const response = await apiClient.waterReceipts({ customerCode, status: 'ALL', page: 1, pageSize: 1000 });
-      setReceiptRows(response.rows.filter((item) => (
-        ['ARRIVED', 'PARTIAL_MATCHED'].includes(item.status)
-        && Number(item.balance) > 0
-        && item.currency === receivableCurrency
-      )));
+      const response = await apiClient.receivableWaterReceiptCandidates(row.id);
+      const rows = response.rows.filter((item) => Number(item.rmbAvailableAllocationAmount ?? item.rmbBalance ?? item.balance) > 0);
+      const exchangeRate = rows[0]?.exchangeRate;
+      setReceiptRows(rows);
+      setReceiptMatch((current) => current ? {
+        ...current,
+        exchangeRate,
+        amount: exchangeRate ? Number((unpaid * exchangeRate).toFixed(2)) : current.amount
+      } : current);
     } catch (error) {
       Modal.error({ title: '水单加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
       setReceiptLoading(false);
     }
-  }, [apiClient, shipment.customerName]);
+  }, [apiClient]);
 
-  const submitReceiptMatch = useCallback(async (receipt: WaterReceiptSummary) => {
+  const submitReceiptMatch = useCallback(async (receipt: ReceivableWaterReceiptCandidate) => {
     if (!receiptMatch) return;
     const unpaid = Math.max(0, receiptMatch.row.amount - Number(receiptMatch.row.receivedAmount ?? 0));
-    const amount = Number(Math.min(receiptMatch.amount, receipt.balance, unpaid).toFixed(2));
+    const receivableExchangeRate = Number(receiptMatch.exchangeRate ?? receipt.exchangeRate ?? 1);
+    const availableRmb = Number(receipt.rmbAvailableAllocationAmount ?? receipt.rmbBalance ?? receipt.balance);
+    const amount = Number(Math.min(receiptMatch.amount, availableRmb, unpaid * receivableExchangeRate).toFixed(2));
     if (amount <= 0) {
       message.warning('匹配金额必须大于 0');
       return;
     }
     setSubmitting(true);
     try {
-      await apiClient.matchReceivableReceipt(receiptMatch.row.id, {
-        ledgerId: receipt.id,
-        amount
+      await apiClient.matchWaterReceiptOrders(receipt.id, {
+        amountCurrency: 'RMB',
+        exchangeRate: receivableExchangeRate,
+        matches: [{
+          receivableId: receiptMatch.row.id,
+          receivableSourceType: receiptMatch.row.sourceType ?? 'MANUAL',
+          amount
+        }]
       });
       setReceiptMatch(null);
       await reload();
@@ -335,6 +401,12 @@ export function OrderFeePanel({
       agentId: type !== 'RECEIVABLE' && row && 'agentId' in row
         ? row.agentId ?? resolveAgentIdByIdentity(agents, 'agentName' in row ? row.agentName : undefined)
         : shipment.agentId ?? resolveAgentIdByIdentity(agents, shipment.agentName),
+      billingUnit: type === 'BUSINESS_COST' && row && 'billingUnit' in row
+        ? row.billingUnit ?? 'KG'
+        : type === 'BUSINESS_COST' ? 'KG' : undefined,
+      billingQuantity: type === 'BUSINESS_COST' && row && 'billingQuantity' in row
+        ? row.billingQuantity ?? row.chargeWeightKg
+        : type === 'BUSINESS_COST' && row && hasChargePricing(row) ? row.chargeWeightKg : undefined,
       chargeWeightKg: row && hasChargePricing(row) ? row.chargeWeightKg : undefined,
       unitPrice: row && hasChargePricing(row) ? row.unitPrice : undefined,
       remark: row?.remark
@@ -349,11 +421,18 @@ export function OrderFeePanel({
   const submitEditor = useCallback(async () => {
     if (!editor) return;
     const values = await editorForm.validateFields();
+    const billingUnit = editor.type === 'BUSINESS_COST'
+      ? (values.billingUnit ?? 'KG') as FinanceBillingUnit
+      : undefined;
+    const billingQuantity = editor.type === 'BUSINESS_COST'
+      ? Number(values.billingQuantity ?? values.chargeWeightKg ?? 0)
+      : undefined;
+    const quantity = editor.type === 'BUSINESS_COST' ? billingQuantity : values.chargeWeightKg;
     const shouldCalculateAmount = (editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE')
-      && values.chargeWeightKg !== undefined
+      && quantity !== undefined
       && values.unitPrice !== undefined;
     const amount = shouldCalculateAmount
-      ? Number((Number(values.chargeWeightKg) * Number(values.unitPrice)).toFixed(2))
+      ? Number((Number(quantity) * Number(values.unitPrice)).toFixed(2))
       : Number(values.amount ?? 0);
     const input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput = {
       name: values.name?.trim(),
@@ -363,19 +442,32 @@ export function OrderFeePanel({
       paymentNo: editor.type === 'RECEIVABLE' ? values.paymentNo : undefined,
       reconciliationStatus: editor.row?.reconciliationStatus ?? 'PENDING',
       agentId: editor.type === 'RECEIVABLE' ? undefined : values.agentId,
-      chargeWeightKg: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE' ? values.chargeWeightKg : undefined,
+      billingUnit,
+      billingQuantity: editor.type === 'BUSINESS_COST' ? billingQuantity : undefined,
+      chargeWeightKg: editor.type === 'BUSINESS_COST'
+        ? billingUnit === 'KG' ? billingQuantity : undefined
+        : editor.type === 'PAYABLE' ? values.chargeWeightKg : undefined,
       unitPrice: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE' ? values.unitPrice : undefined,
       amountOverridden: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE'
-        ? calculateAmountOverride({ amount, chargeWeightKg: values.chargeWeightKg, unitPrice: values.unitPrice })
+        ? calculateAmountOverride({ amount, type: editor.type, billingUnit, billingQuantity, chargeWeightKg: values.chargeWeightKg, unitPrice: values.unitPrice })
         : false,
       remark: values.remark
     };
     setSubmitting(true);
     try {
       if (editor.row) {
-        await apiClient.updateShipmentFinanceItem(shipment.id, editor.row.id, input);
+        if (usesPendingReviewBusinessCostOnly && editor.type === 'BUSINESS_COST') {
+          await apiClient.updatePendingReviewBusinessCost(shipment.id, editor.row.id, input);
+        } else {
+          await apiClient.updateShipmentFinanceItem(shipment.id, editor.row.id, input);
+        }
       } else {
-        await apiClient.createShipmentFinanceItem(shipment.id, { ...input, type: editor.type } as ShipmentFinanceItemCreateInput);
+        const createInput = { ...input, type: editor.type } as ShipmentFinanceItemCreateInput;
+        if (usesPendingReviewBusinessCostOnly && editor.type === 'BUSINESS_COST') {
+          await apiClient.createPendingReviewBusinessCost(shipment.id, createInput);
+        } else {
+          await apiClient.createShipmentFinanceItem(shipment.id, createInput);
+        }
       }
       const editedId = editor.row?.id;
       closeEditor();
@@ -385,7 +477,7 @@ export function OrderFeePanel({
     } finally {
       setSubmitting(false);
     }
-  }, [apiClient, closeEditor, editor, editorForm, reload, shipment.id]);
+  }, [apiClient, closeEditor, editor, editorForm, reload, shipment.id, usesPendingReviewBusinessCostOnly]);
 
   const runRows = useCallback(async (type: OrderFeeTableType, action: 'delete' | 'lock' | 'unlock' | 'recalc', rows: OrderFeeRow[]) => {
     const targets = rows.filter((row) => row.sourceType === 'MANUAL');
@@ -399,6 +491,8 @@ export function OrderFeePanel({
         if (action === 'delete') {
           if (type === 'RECEIVABLE' && canDeleteReceivable) {
             await apiClient.deleteReceivableAudit(row.id);
+          } else if (usesPendingReviewBusinessCostOnly && type === 'BUSINESS_COST') {
+            await apiClient.deletePendingReviewBusinessCost(shipment.id, row.id);
           } else {
             await apiClient.deleteShipmentFinanceItem(shipment.id, row.id);
           }
@@ -406,9 +500,14 @@ export function OrderFeePanel({
           await apiClient.lockShipmentFinanceItem(shipment.id, row.id);
         } else if (action === 'unlock') {
           await apiClient.unlockShipmentFinanceItem(shipment.id, row.id);
-        } else if ((type === 'BUSINESS_COST' || type === 'PAYABLE') && hasChargePricing(row) && row.chargeWeightKg && row.unitPrice) {
+        } else if ((type === 'BUSINESS_COST' || type === 'PAYABLE') && hasChargePricing(row)) {
+          const quantity = type === 'BUSINESS_COST' ? row.billingQuantity ?? row.chargeWeightKg : row.chargeWeightKg;
+          if (!quantity || !row.unitPrice) continue;
           await apiClient.updateShipmentFinanceItem(shipment.id, row.id, {
-            amount: Number((row.chargeWeightKg * row.unitPrice).toFixed(2)),
+            amount: Number((quantity * row.unitPrice).toFixed(2)),
+            billingUnit: type === 'BUSINESS_COST' ? row.billingUnit ?? 'KG' : undefined,
+            billingQuantity: type === 'BUSINESS_COST' ? quantity : undefined,
+            chargeWeightKg: type === 'BUSINESS_COST' ? (row.billingUnit ?? 'KG') === 'KG' ? quantity : undefined : row.chargeWeightKg,
             amountOverridden: false
           });
         }
@@ -422,7 +521,7 @@ export function OrderFeePanel({
     } finally {
       setSubmitting(false);
     }
-  }, [apiClient, canDeleteReceivable, reload, shipment.id]);
+  }, [apiClient, canDeleteReceivable, reload, shipment.id, usesPendingReviewBusinessCostOnly]);
 
   const confirmRunRows = useCallback((type: OrderFeeTableType, action: 'delete' | 'lock' | 'unlock' | 'recalc', rows: OrderFeeRow[]) => {
     const actionText = action === 'delete' ? '删除' : action === 'lock' ? '锁定' : action === 'unlock' ? '解锁' : '重算';
@@ -467,8 +566,6 @@ export function OrderFeePanel({
     editorForm.resetFields();
     setInspectedRowId(rowId);
   }, [editorForm]);
-
-  const receiptMatchCurrency = (receiptMatch?.row.currency?.trim() || 'RMB').toUpperCase();
 
   const renderStatus = (row: OrderFeeRow) => {
     const status = getFeeAuditStatus(row);
@@ -524,7 +621,7 @@ export function OrderFeePanel({
             event.stopPropagation();
             inspectRow(row.id);
           }}>查看</Button>
-          {row.sourceType === 'MANUAL' && canUpdateFee ? (
+          {row.sourceType === 'MANUAL' && canUpdateCurrentFee ? (
             <Button type="link" size="small" disabled={!isManualEditable(row)} onClick={(event) => {
               event.stopPropagation();
               openEditor(activeType, row);
@@ -543,7 +640,7 @@ export function OrderFeePanel({
       });
     }
     return columns;
-  }, [activeType, canUpdateFee, inspectRow, openEditor]);
+  }, [activeType, canUpdateCurrentFee, inspectRow, openEditor]);
 
   const detailItem = (label: string, value: ReactNode, wide = false) => (
     <div className={`order-fee-inspector-item${wide ? ' order-fee-inspector-item-wide' : ''}`}>
@@ -579,21 +676,40 @@ export function OrderFeePanel({
                 onChange={(value) => applySettlementMethodCurrency(editorForm, settlementRows, value)}
               />
             </Form.Item>
-            {editor.type !== 'RECEIVABLE' ? (
-              <Form.Item name="agentId" label={agentFieldLabels.detailedCompanyName} className="order-fee-side-form-wide">
-                <Select showSearch allowClear optionFilterProp="searchText" options={agentOptions} placeholder="选择代理详细公司名" />
-              </Form.Item>
-            ) : (
+            {editor.type === 'RECEIVABLE' ? (
               <Form.Item name="paymentNo" label="付款编号" className="order-fee-side-form-wide">
                 <Input placeholder="匹配水单后自动回写，也可手动记录" />
               </Form.Item>
-            )}
-            {editor.type !== 'RECEIVABLE' ? (
+            ) : editor.type === 'PAYABLE' || canViewBusinessCostAgent ? (
+              <Form.Item name="agentId" label={agentFieldLabels.detailedCompanyName} className="order-fee-side-form-wide">
+                <Select showSearch allowClear optionFilterProp="searchText" options={agentOptions} placeholder="选择代理详细公司名" />
+              </Form.Item>
+            ) : null}
+            {editor.type === 'BUSINESS_COST' ? (
+              <>
+                <Form.Item name="billingUnit" label="计费方式" rules={[{ required: true, message: '请选择计费方式' }]}>
+                  <Select options={businessCostBillingUnitOptions} />
+                </Form.Item>
+                <Form.Item noStyle shouldUpdate={(previous, current) => previous.billingUnit !== current.billingUnit}>
+                  {({ getFieldValue }) => {
+                    const unit = getFieldValue('billingUnit') as FinanceBillingUnit | undefined;
+                    return (
+                      <Form.Item name="billingQuantity" label="计费数量" rules={[{ required: true, message: '请输入计费数量' }]}>
+                        <InputNumber min={0} precision={unit === 'CBM' ? 6 : 3} addonAfter={businessCostBillingUnitLabel(unit)} />
+                      </Form.Item>
+                    );
+                  }}
+                </Form.Item>
+                <Form.Item name="unitPrice" label="单价">
+                  <InputNumber min={0} precision={2} />
+                </Form.Item>
+              </>
+            ) : editor.type === 'PAYABLE' ? (
               <>
                 <Form.Item name="chargeWeightKg" label="计费重">
-                  <InputNumber min={0} precision={3} addonAfter="kg" />
+                  <InputNumber min={0} precision={3} addonAfter="KG" />
                 </Form.Item>
-                <Form.Item name="unitPrice" label={editor.type === 'PAYABLE' ? '代理成本单价' : '单价'}>
+                <Form.Item name="unitPrice" label="代理成本单价">
                   <InputNumber min={0} precision={2} />
                 </Form.Item>
               </>
@@ -623,7 +739,7 @@ export function OrderFeePanel({
     }
 
     const isReceivable = activeType === 'RECEIVABLE';
-    const canDeleteInspected = inspectedRow.sourceType === 'MANUAL' && canDeleteFee;
+    const canDeleteInspected = inspectedRow.sourceType === 'MANUAL' && canDeleteCurrentFee;
     const canMatchInspected = isReceivable && canMatchReceipt;
     const agentName = 'agentName' in inspectedRow ? inspectedRow.agentName || shipment.agentName || '-' : shipment.agentName || '-';
     const receiptStatus = isReceivable && 'receiptStatus' in inspectedRow ? inspectedRow.receiptStatus : undefined;
@@ -671,8 +787,21 @@ export function OrderFeePanel({
             {isReceivable && 'receiptMatchSource' in inspectedRow ? detailItem('匹配来源', inspectedRow.receiptMatchSource === 'AUTO' ? '自动匹配' : inspectedRow.receiptMatchSource === 'MANUAL' ? '手动匹配' : '-') : null}
             {isReceivable && 'receiptMatchHint' in inspectedRow && inspectedRow.receiptMatchHint ? detailItem('匹配提示', inspectedRow.receiptMatchHint, true) : null}
             {pendingMatchRequest ? detailItem('匹配申请', <Space size={6}><Tag color="gold">待财务审核</Tag><span>{pendingMatchRequest.receiptNo} · {formatFinanceAmount(pendingMatchRequest.amount, pendingMatchRequest.currency)}</span></Space>, true) : null}
-            {hasChargePricing(inspectedRow) ? detailItem('计费重', inspectedRow.chargeWeightKg === undefined ? '-' : `${inspectedRow.chargeWeightKg} kg`) : null}
-            {hasChargePricing(inspectedRow) ? detailItem('单价', inspectedRow.unitPrice === undefined ? '-' : `${formatFinanceAmount(inspectedRow.unitPrice, inspectedRow.currency)}/kg`) : null}
+            {hasChargePricing(inspectedRow) && activeType === 'BUSINESS_COST'
+              ? detailItem('计费方式', 'billingUnit' in inspectedRow && inspectedRow.billingUnit === 'CBM' ? '体积（CBM）' : '计费重（KG）')
+              : null}
+            {hasChargePricing(inspectedRow)
+              ? detailItem(activeType === 'BUSINESS_COST' ? '计费数量' : '计费重', (() => {
+                const quantity = activeType === 'BUSINESS_COST'
+                  ? ('billingQuantity' in inspectedRow ? inspectedRow.billingQuantity : undefined) ?? inspectedRow.chargeWeightKg
+                  : inspectedRow.chargeWeightKg;
+                const unit = activeType === 'BUSINESS_COST' && 'billingUnit' in inspectedRow && inspectedRow.billingUnit === 'CBM' ? 'CBM' : 'KG';
+                return quantity === undefined ? '-' : `${quantity} ${unit}`;
+              })())
+              : null}
+            {hasChargePricing(inspectedRow)
+              ? detailItem('单价', inspectedRow.unitPrice === undefined ? '-' : `${formatFinanceAmount(inspectedRow.unitPrice, inspectedRow.currency)}/${activeType === 'BUSINESS_COST' && 'billingUnit' in inspectedRow && inspectedRow.billingUnit === 'CBM' ? 'CBM' : 'KG'}`)
+              : null}
             {hasChargePricing(inspectedRow) ? detailItem('金额来源', inspectedRow.amountOverridden ? <Tag color="orange">人工覆盖</Tag> : '公式计算') : null}
             {'businessProfit' in inspectedRow ? detailItem('业务利润', inspectedRow.businessProfit === undefined ? '-' : formatCurrency(inspectedRow.businessProfit)) : null}
           </div>
@@ -712,13 +841,20 @@ export function OrderFeePanel({
     </div>
   );
 
-  const profitSections = roleCanViewPayables ? detail?.profitSections ?? [] : [];
+  const profitSections = roleCanViewPayables
+    ? (detail?.profitSections ?? []).filter((item) => canViewBusinessCosts || !['RECEIVABLE_BUSINESS', 'BUSINESS_PAYABLE'].includes(item.key))
+    : [];
   const receivableRmbTotal = receivableRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
   const businessCostRmbTotal = businessCostRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
   const payableRmbTotal = payableRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
   const hasUnsupportedRmbAmount = currentRows.some((row) => resolveRmbAmount(row) === undefined);
   const total = currentRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
-  const chargeWeightTotal = currentRows.reduce((sum, row) => sum + (hasChargePricing(row) ? Number(row.chargeWeightKg ?? 0) : 0), 0);
+  const chargeWeightTotal = currentRows.reduce((sum, row) => {
+    if (!hasChargePricing(row)) return sum;
+    if (row.type === 'BUSINESS_COST' && row.billingUnit === 'CBM') return sum;
+    return sum + Number(row.type === 'BUSINESS_COST' ? row.billingQuantity ?? row.chargeWeightKg ?? 0 : row.chargeWeightKg ?? 0);
+  }, 0);
+  const billingVolumeTotal = currentRows.reduce((sum, row) => row.type === 'BUSINESS_COST' && row.billingUnit === 'CBM' ? sum + Number(row.billingQuantity ?? 0) : sum, 0);
 
   return (
     <section className="shipment-detail-section shipment-detail-finance-section">
@@ -727,7 +863,7 @@ export function OrderFeePanel({
       {loading && !detail ? <Text type="secondary">正在加载财务明细...</Text> : null}
       <div className="shipment-finance-metrics">
         {metric('应收费用', receivableRows.length ? formatCurrency(receivableRmbTotal) : '待生成', receivableRows.length ? 'success' : 'warning')}
-        {metric('业务成本', businessCostRows.length ? formatCurrency(businessCostRmbTotal) : '待生成')}
+        {canViewBusinessCosts ? metric('业务成本', businessCostRows.length ? formatCurrency(businessCostRmbTotal) : '待生成') : null}
         {visiblePayables ? metric('应付费用', payableRows.length ? formatCurrency(payableRmbTotal) : '待生成', payableRows.length ? 'warning' : 'neutral') : null}
         {visiblePayables ? metric('利润汇总', detail?.grossProfit === undefined ? '待生成' : formatCurrency(detail.grossProfit), detail?.grossProfit === undefined ? 'neutral' : detail.grossProfit >= 0 ? 'success' : 'warning') : null}
       </div>
@@ -752,11 +888,11 @@ export function OrderFeePanel({
               </Button>
             ))}
           </div>
-          {canCreateFee ? <Button type="primary" onClick={() => openEditor(activeType)}>新增费用</Button> : null}
+          {canCreateCurrentFee ? <Button type="primary" onClick={() => openEditor(activeType)}>新增费用</Button> : null}
         </div>
         <div className="order-fee-master-detail">
           <div className="order-fee-master-pane">
-            <Table<OrderFeeRow>
+            <ManagedTable<OrderFeeRow>
               className="finance-work-table finance-embedded-table order-fee-compact-table"
               rowKey="id"
               columns={compactColumns}
@@ -765,12 +901,13 @@ export function OrderFeePanel({
               tableLayout="fixed"
               loading={loading}
               pagination={{ ...tenRowTablePagination, hideOnSinglePage: true }}
-              rowSelection={canDeleteFee ? {
+              rowSelection={canDeleteCurrentFee ? {
                 selectedRowKeys: selectedKeys,
                 onChange: (next) => setSelectedRowKeys((current) => ({ ...current, [activeType]: next.map(String) })),
                 columnWidth: 42,
                 getCheckboxProps: (row) => ({ disabled: !isManualEditable(row) })
               } : undefined}
+              showSelectionSummary={false}
               onRow={(row) => ({ onClick: () => inspectRow(row.id) })}
               rowClassName={(row) => row.id === inspectedRow?.id ? 'order-fee-row-active' : ''}
               locale={{ emptyText: `暂无${feeTypeTitles[activeType]}` }}
@@ -778,14 +915,15 @@ export function OrderFeePanel({
             <div className="order-fee-master-summary">
               <span>共 {currentRows.length} 条</span>
               <span>人民币合计 {hasUnsupportedRmbAmount ? '缺少有效汇率' : formatCurrency(total)}</span>
-              {activeType !== 'RECEIVABLE' ? <span>计费重 {chargeWeightTotal.toFixed(3)} kg</span> : null}
+              {activeType !== 'RECEIVABLE' && chargeWeightTotal > 0 ? <span>计费重 {chargeWeightTotal.toFixed(3)} KG</span> : null}
+              {activeType === 'BUSINESS_COST' && billingVolumeTotal > 0 ? <span>体积 {billingVolumeTotal.toFixed(6)} CBM</span> : null}
             </div>
-            {canCreateFee || canDeleteFee ? (
+            {canCreateCurrentFee || canDeleteCurrentFee ? (
               <div className="order-fee-toolbar">
                 <Space wrap>
-                  {canDeleteFee ? <Text type="secondary">已选 {selectedKeys.length} 条</Text> : null}
-                  {canDeleteFee ? <Button size="small" disabled={!selectedKeys.length} onClick={() => confirmRunRows(activeType, 'delete', selectedRows)}>删除</Button> : null}
-                  {canCreateFee ? (
+                  {canDeleteCurrentFee ? <Text type="secondary">已选 {selectedKeys.length} 条</Text> : null}
+                  {canDeleteCurrentFee ? <Button size="small" disabled={!selectedKeys.length} onClick={() => confirmRunRows(activeType, 'delete', selectedRows)}>删除</Button> : null}
+                  {canCreateCurrentFee ? (
                     <Dropdown
                       menu={{ items: quickFeeNames.map((name) => ({ key: name, label: name })), onClick: ({ key }) => quickAdd(activeType, String(key)) }}
                       trigger={['click']}
@@ -813,36 +951,29 @@ export function OrderFeePanel({
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Text type="secondary">提交后进入财务“水单匹配”，财务审核通过后才更新水单、应收和客户账户余额。</Text>
-          <Space size={8} wrap>
-            <Text strong>本次匹配金额</Text>
-            <InputNumber
-              min={0}
-              precision={2}
-              value={receiptMatch?.amount}
-              aria-label={`本次匹配金额（${receiptMatchCurrency}）`}
-              style={{ width: 180 }}
-              onChange={(value) => setReceiptMatch((current) => current ? { ...current, amount: Number(value ?? 0) } : current)}
-            />
-            <Tag color="blue">{receiptMatchCurrency}</Tag>
-          </Space>
-          <Table<WaterReceiptSummary>
+          <InputNumber
+            min={0}
+            precision={2}
+            value={receiptMatch?.amount}
+            addonBefore="本次匹配人民币金额"
+            onChange={(value) => setReceiptMatch((current) => current ? { ...current, amount: Number(value ?? 0) } : current)}
+          />
+          <ManagedTable<ReceivableWaterReceiptCandidate>
             className="finance-embedded-table"
             rowKey="id"
             size="small"
             loading={receiptLoading || submitting}
             dataSource={receiptRows}
             pagination={{ pageSize: 8, showSizeChanger: false }}
-            scroll={{ x: 776 }}
+            scroll={{ x: 820 }}
             columns={[
-              { title: '水单编号', dataIndex: 'receiptNo', width: 145 },
-              { title: '客户编号', dataIndex: 'customerCode', width: 96 },
-              { title: `金额（${receiptMatchCurrency}）`, dataIndex: 'amount', width: 105, align: 'right', render: (value: number) => value.toFixed(2) },
-              { title: `已匹配（${receiptMatchCurrency}）`, dataIndex: 'matchedAmount', width: 120, align: 'right', render: (value: number) => value.toFixed(2) },
-              { title: `余额（${receiptMatchCurrency}）`, dataIndex: 'balance', width: 105, align: 'right', render: (value: number) => value.toFixed(2) },
-              { title: '付款编号', dataIndex: 'paymentNo', width: 115, render: (value?: string) => value || '-' },
-              { title: '操作', key: 'actions', width: 90, fixed: 'right', render: (_, row) => <Button size="small" type="primary" onClick={() => submitReceiptMatch(row)}>提交申请</Button> }
+              { title: '水单编号', dataIndex: 'receiptNo', width: 160 },
+              { title: '原币金额', dataIndex: 'amount', width: 120, align: 'right', render: (value: number, row) => `${row.currency} ${value.toFixed(2)}` },
+              { title: '人民币可用余额', dataIndex: 'rmbAvailableAllocationAmount', width: 150, align: 'right', render: (value: number | undefined, row) => `¥${Number(value ?? row.rmbBalance ?? row.balance).toFixed(2)}` },
+              { title: '付款编号', dataIndex: 'paymentNo', width: 140, render: (value?: string) => value || '-' },
+              { title: '操作', key: 'actions', width: 100, fixed: 'right', render: (_, row) => <Button size="small" type="primary" onClick={() => submitReceiptMatch(row)}>提交申请</Button> }
             ]}
-            locale={{ emptyText: `暂无 ${receiptMatchCurrency} 可匹配水单` }}
+            locale={{ emptyText: '暂无可匹配水单' }}
           />
         </Space>
       </Modal>

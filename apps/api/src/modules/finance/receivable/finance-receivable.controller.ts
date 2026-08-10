@@ -151,7 +151,7 @@ export class FinanceReceivableController {
   }
 
   @Get('finance/receivable-audits/:id/water-receipt-candidates')
-  @RequirePermission('finance:receivable:match-water')
+  @RequirePermission(['finance:receivable:match-water', 'finance:water-match:receivable-view', 'finance:water-match:create'])
   async receivableWaterReceiptCandidates(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.service.receivableWaterReceiptCandidates(request.user, id);
   }

@@ -20,14 +20,20 @@ type WeightAuditRow = {
 };
 
 const auditConfig = {
-  BUSINESS_COST: {
+  BUSINESS_COST: [{
     action: 'customer_service.business_data.updated',
     source: 'CUSTOMER_SERVICE_BUSINESS_DATA'
-  },
-  PAYABLE: {
-    action: 'customer_service.agent_data.updated',
-    source: 'CUSTOMER_SERVICE_AGENT_DATA'
-  }
+  }],
+  PAYABLE: [
+    {
+      action: 'customer_service.agent_data.updated',
+      source: 'CUSTOMER_SERVICE_AGENT_DATA'
+    },
+    {
+      action: 'customer_service.business_data.updated',
+      source: 'CUSTOMER_SERVICE_BUSINESS_DATA'
+    }
+  ]
 } as const;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -56,11 +62,15 @@ export function buildChargeWeightChangeMap(
   financeRows: FinanceWeightRow[],
   auditRows: WeightAuditRow[]
 ): Map<string, ChargeWeightChangeSummary> {
-  const config = auditConfig[kind];
-  const auditsByShipment = new Map<string, WeightAuditRow[]>();
+  const configs = auditConfig[kind];
+  const auditsByShipment = new Map<string, Array<WeightAuditRow & { source: ChargeWeightChangeSummary['source'] }>>();
 
   auditRows
-    .filter((row) => row.action === config.action)
+    .map((row) => {
+      const config = configs.find((candidate) => candidate.action === row.action);
+      return config ? { ...row, source: config.source } : undefined;
+    })
+    .filter((row): row is WeightAuditRow & { source: ChargeWeightChangeSummary['source'] } => Boolean(row))
     .forEach((row) => {
       const rows = auditsByShipment.get(row.target) ?? [];
       rows.push(row);
@@ -110,7 +120,7 @@ export function buildChargeWeightChangeMap(
       originalChargeWeightKg,
       currentChargeWeightKg,
       changedAt,
-      source: config.source
+      source: matchedAudit.source
     });
   });
 

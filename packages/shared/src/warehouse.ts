@@ -527,8 +527,13 @@ export interface WarehouseTallyTaskCreateInput {
 }
 
 export interface WarehouseTallyTaskUpdateInput {
+  packageIds?: string[];
   tallyRequirement?: string;
   remark?: string;
+}
+
+export interface WarehouseTallyTaskCompletedCountUpdateInput {
+  packageCount: number;
 }
 
 export interface WarehouseTallyTaskCompleteInput {

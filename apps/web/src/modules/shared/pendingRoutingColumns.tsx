@@ -5,6 +5,8 @@ import type { BusinessCostAuditSummary, PayableAuditSummary, Shipment } from '@s
 import { agentFieldLabels } from './agentFieldLabels';
 import { formatBeijingDateTime } from './format';
 import { resolveShipmentOutboundOrderNo } from './shipmentOrderNo';
+import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from './shipmentStageDwell';
+import { getShipmentTransportTimeSeconds, getShipmentTransportTimeText } from './shipmentTransportTime';
 
 const { Text } = Typography;
 
@@ -120,27 +122,35 @@ export function createPendingRoutingColumns(options: {
   const canViewPayableCost = payableCostPermission ?? mode === 'market';
   const canViewBusinessCost = businessCostPermission ?? mode !== 'warehouse';
   const canViewAgentChannel = agentChannelPermission ?? mode === 'market';
-  const businessCostColumns: ColumnsType<Shipment> = canViewBusinessCost ? [
-    {
-      key: 'businessCosts',
-      title: '业务成本',
-      width: mode === 'market' ? 150 : 180,
-      render: (_, record) => mode === 'market'
-        ? renderFeeNames(getBusinessCosts(record, businessCostAudits))
-        : renderFeeRows(getBusinessCosts(record, businessCostAudits))
-    },
-    {
-      key: 'businessCostTotal',
-      title: '业务成本合计',
-      width: 130,
-      align: 'right',
-      render: (_, record) => {
-        const costs = getBusinessCosts(record, businessCostAudits);
-        const total = costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0);
-        return costs.length ? formatAmount(total) : <Text type="secondary">-</Text>;
-      }
-    }
-  ] : [];
+  const businessCostColumns: ColumnsType<Shipment> = canViewBusinessCost
+    ? [
+        {
+          key: 'businessCosts',
+          title: '业务成本',
+          width: mode === 'market' ? 150 : 180,
+          render: (_, record) => (
+            <span className={mode === 'market' ? 'pending-routing-business-cost-detail' : undefined}>
+              {mode === 'market'
+                ? renderFeeNames(getBusinessCosts(record, businessCostAudits))
+                : renderFeeRows(getBusinessCosts(record, businessCostAudits))}
+            </span>
+          )
+        },
+        {
+          key: 'businessCostTotal',
+          title: '业务成本合计',
+          width: 130,
+          align: mode === 'market' ? 'left' : 'right',
+          render: (_, record) => {
+            const costs = getBusinessCosts(record, businessCostAudits);
+            const total = costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0);
+            return costs.length
+              ? <span className="pending-routing-business-cost">{formatAmount(total)}</span>
+              : <Text type="secondary">-</Text>;
+          }
+        }
+      ]
+    : [];
   const payableCostColumns: ColumnsType<Shipment> = mode !== 'warehouse' ? [
     {
       key: 'payableCosts',
@@ -222,17 +232,31 @@ export function createPendingRoutingColumns(options: {
   };
 
   const columnLayout: ColumnsType<Shipment> = [
-    { key: 'pendingRoutingDate', title: '日期', width: 150, render: (_, record) => <span className="pending-routing-date">{formatBeijingDateTime(getPendingRoutingDate(record))}</span> },
-    { title: '站点', dataIndex: 'site', width: 76, render: (value?: string) => value || '-' },
-    { title: '业务员', dataIndex: 'salesperson', width: 86, ellipsis: true, render: (value?: string) => value || '-' },
-    { title: '客户编号', dataIndex: 'customerCode', width: 96, ellipsis: true, render: (value: string | undefined, record) => <Text className="pending-routing-identifier">{value || record.customerName.split('-')[0] || '-'}</Text> },
-    { title: '出货单号', dataIndex: 'systemOrderNo', width: 150, ellipsis: true, render: (_: string | undefined, record) => <Text strong className="pending-routing-order-no">{resolveShipmentOutboundOrderNo(record)}</Text> },
-    { title: '公司渠道', dataIndex: 'channelName', width: 124, ellipsis: true, render: (value?: string) => value || '-' },
+    { key: 'pendingRoutingDate', title: '日期', width: 128, render: (_, record) => <span className="pending-routing-date">{formatBeijingDateTime(getPendingRoutingDate(record))}</span> },
+    { key: 'stageDwell', title: '停留时间', width: 100, sorter: (left, right) => getShipmentStageDwellSeconds(left) - getShipmentStageDwellSeconds(right), render: (_, record) => getShipmentStageDwellText(record) },
+    { key: 'transportTime', title: '运输时间', width: 100, sorter: (left, right) => getShipmentTransportTimeSeconds(left) - getShipmentTransportTimeSeconds(right), render: (_, record) => getShipmentTransportTimeText(record) },
+    { title: '站点', dataIndex: 'site', width: 64, render: (value?: string) => value || '-' },
+    { title: '业务员', dataIndex: 'salesperson', width: 72, ellipsis: true, render: (value?: string) => value || '-' },
+    { title: '客户编号', dataIndex: 'customerCode', width: 82, ellipsis: true, render: (value: string | undefined, record) => <Text className="pending-routing-identifier">{value || record.customerName.split('-')[0] || '-'}</Text> },
+    { title: '出货单号', dataIndex: 'systemOrderNo', width: 104, ellipsis: true, render: (_: string | undefined, record) => <Text className="pending-routing-order-no">{resolveShipmentOutboundOrderNo(record)}</Text> },
+    { title: '公司渠道', dataIndex: 'channelName', width: 126, ellipsis: true, render: (value?: string) => value || '-' },
     {
       title: '国家',
       dataIndex: 'destinationCountry',
-      width: 78,
+      width: 60,
       render: (value?: string) => value?.trim() ? value : <Text type="danger">缺国家</Text>
+    },
+    {
+      title: '邮编',
+      dataIndex: 'receiverPostalCode',
+      width: 88,
+      render: (value?: string) => value?.trim() || '-'
+    },
+    {
+      title: '亚马逊代码',
+      dataIndex: 'fbaWarehouseCode',
+      width: 104,
+      render: (value?: string) => value?.trim() || '-'
     },
     {
       key: 'cargoData',
@@ -240,25 +264,25 @@ export function createPendingRoutingColumns(options: {
       width: 230,
       render: (_, record) => {
         const productName = record.productName?.trim() || '-';
-        return <span className="pending-routing-cargo" title={productName}>品名 {productName} · {record.packageCount} 件 · 实重 {(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg · 计费 {record.receivableWeightKg.toFixed(2)} kg</span>;
+        return <span className="pending-routing-cargo" title={productName}>品名 {productName} · {record.packageCount}件 · 实重 {(record.weightKg ?? record.receivableWeightKg).toFixed(2)} KG · 计费 {record.receivableWeightKg.toFixed(2)} KG</span>;
       }
     },
     ...businessCostColumns,
     ...(mode === 'market' ? [] : [{
       key: 'routingAction',
       title: '选项',
-      width: 84,
+      width: 76,
       render: () => <Text type="secondary">待市场排货</Text>
     }]),
     ...(canViewAgentChannel ? [
       { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 150, render: (value?: string) => value || '待分配' },
-      { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '待分配' }
+      { title: agentFieldLabels.channel, dataIndex: 'routeAgentChannelName', width: 120, render: (value?: string) => value || '待分配' }
     ] : []),
     ...payableCostColumns,
     {
       key: 'actions',
       title: '操作',
-      width: mode === 'market' ? 188 : onViewFees ? 150 : 90,
+      width: mode === 'market' ? 132 : onViewFees ? 150 : 90,
       fixed: 'right',
       render: (_, record) => renderActions(record)
     }
@@ -278,6 +302,7 @@ export function createPendingRoutingColumns(options: {
         const dateTime = formatBeijingDateTime(getPendingRoutingDate(record));
         return renderMatrixCell([
           { label: '日期', value: dateTime, title: dateTime },
+          { label: '停留时间', value: getShipmentStageDwellText(record) },
           { label: '站点', value: record.site || '-' },
           { label: '业务员', value: record.salesperson || '-', title: record.salesperson || '-' }
         ]);
@@ -304,17 +329,21 @@ export function createPendingRoutingColumns(options: {
     {
       key: 'matrixRoute',
       title: '路线与资料',
-      width: 196,
+      width: 220,
       className: 'pending-routing-matrix-group-route',
       sorter: (left, right) => comparePendingRoutingText(left.destinationCountry, right.destinationCountry),
       showSorterTooltip: { title: '按国家排序' },
       render: (_, record) => {
         const readiness = getPendingRoutingApprovalReadiness(record);
         const country = record.destinationCountry?.trim() || '';
+        const postalCode = record.receiverPostalCode?.trim() || '-';
+        const amazonCode = record.fbaWarehouseCode?.trim() || '-';
         const statusTitle = readiness.ready ? '排货资料已完整' : `待补：${readiness.missingFields.join('、')}`;
         return renderMatrixCell([
           { label: '国家', value: country || <Text type="danger">缺国家</Text>, title: country || '缺国家' },
           { label: '公司渠道', value: record.channelName || '-', title: record.channelName || '-' },
+          { label: '邮编', value: postalCode, title: postalCode },
+          { label: '亚马逊代码', value: amazonCode, title: amazonCode },
           {
             label: '资料状态',
             value: <Tag color={readiness.ready ? 'green' : 'gold'} className="pending-routing-matrix-status" title={statusTitle}>{readiness.ready ? '资料完整' : '待补资料'}</Tag>
@@ -334,8 +363,8 @@ export function createPendingRoutingColumns(options: {
         return renderMatrixCell([
           { label: '品名', value: productName, title: productName },
           { label: '件数', value: `${record.packageCount} 件` },
-          { label: '实重', value: `${(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg` },
-          { label: '计费重', value: `${record.receivableWeightKg.toFixed(2)} kg` }
+          { label: '实重', value: `${(record.weightKg ?? record.receivableWeightKg).toFixed(2)} KG` },
+          { label: '计费重', value: `${record.receivableWeightKg.toFixed(2)} KG` }
         ]);
       }
     },

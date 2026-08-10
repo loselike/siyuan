@@ -38,6 +38,7 @@ export const defaultTodayReceiptColumnKeys: string[] = [
 
 export const defaultInStockColumnKeys: string[] = [
   'site',
+  'salesperson',
   'customerCode',
   'combinedOrderNo',
   'packageCount',
@@ -262,7 +263,6 @@ export interface WarehouseHandoverRow {
   channelName: string;
   agentName: string;
   customsRefundText: string;
-  remark: string;
   status: string;
   outboundAt?: string;
   outboundBy?: string;
@@ -270,6 +270,7 @@ export interface WarehouseHandoverRow {
 
 export type WarehouseQueueColumnKey =
   | 'createdAt'
+  | 'stageDwell'
   | 'salesperson'
   | 'outboundNo'
   | 'agent'
@@ -282,6 +283,7 @@ export type WarehouseQueueColumnKey =
   | 'volume'
   | 'chargeableWeight'
   | 'shippingMark'
+  | 'warehouseOutboundRemark'
   | 'productName'
   | 'declaration'
   | 'sensitive';
@@ -290,6 +292,7 @@ export const warehouseQueueColumnSettingsKey = 'warehouse-label-queue-columns:vi
 
 export const warehouseQueueDefaultColumnKeys: WarehouseQueueColumnKey[] = [
   'createdAt',
+  'stageDwell',
   'salesperson',
   'outboundNo',
   'agent',
@@ -302,6 +305,7 @@ export const warehouseQueueDefaultColumnKeys: WarehouseQueueColumnKey[] = [
   'volume',
   'chargeableWeight',
   'shippingMark',
+  'warehouseOutboundRemark',
   'productName',
   'declaration',
   'sensitive'
@@ -309,6 +313,7 @@ export const warehouseQueueDefaultColumnKeys: WarehouseQueueColumnKey[] = [
 
 export const warehouseQueueColumnLabels: Record<WarehouseQueueColumnKey, string> = {
   createdAt: '运单创建时间',
+  stageDwell: '当前阶段停留时间',
   salesperson: '业务员',
   outboundNo: '出货单号',
   agent: agentFieldLabels.detailedCompanyName,
@@ -321,6 +326,7 @@ export const warehouseQueueColumnLabels: Record<WarehouseQueueColumnKey, string>
   volume: '业务数据：体积',
   chargeableWeight: '业务数据：计费重',
   shippingMark: '唛头',
+  warehouseOutboundRemark: '出库备注',
   productName: '品名',
   declaration: '报关',
   sensitive: '敏感'

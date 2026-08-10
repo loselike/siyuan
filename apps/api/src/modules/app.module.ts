@@ -4,6 +4,7 @@ import { AiController } from './ai.controller.js';
 import { AiService } from './ai.service.js';
 import { AuditInterceptor } from './audit.interceptor.js';
 import { AuthController } from './auth.controller.js';
+import { HealthController } from './health.controller.js';
 import { CustomerServiceQueryController } from './customer-service/query/customer-service-query.controller.js';
 import { LegacyProblemTicketQueryRepository } from './customer-service/problem-ticket/problem-ticket-query.legacy-repository.js';
 import { PrismaProblemTicketQueryRepository } from './customer-service/problem-ticket/problem-ticket-query.prisma-repository.js';
@@ -35,7 +36,9 @@ import { MiscFeeController } from './finance/misc-fee/misc-fee.controller.js';
 import { MiscFeeService } from './finance/misc-fee/misc-fee.service.js';
 import { InMemoryRepository } from './in-memory.repository.js';
 import { LineageWatcher } from './lineage-watcher.js';
+import { LineageQueryController } from './lineage-query.controller.js';
 import { MasterDataChannelQueryController } from './master-data/channel/master-data-channel-query.controller.js';
+import { MasterDataReferenceQueryController } from './master-data-reference-query.controller.js';
 import { AnnouncementController, NotificationController, NotificationOperationsController } from './notifications/notification.controller.js';
 import {
   InMemoryNotificationService,
@@ -84,6 +87,12 @@ import {
 } from './warehouse/tally/warehouse-tally-query.repository.js';
 import { WarehouseTallyQueryController } from './warehouse/tally/warehouse-tally-query.controller.js';
 import { WarehouseTallyQueryService } from './warehouse/tally/warehouse-tally-query.service.js';
+import { UserTablePreferenceController } from './user-table-preference.controller.js';
+import {
+  InMemoryUserTablePreferenceService,
+  PrismaUserTablePreferenceService,
+  UserTablePreferenceService
+} from './user-table-preference.service.js';
 
 const usePrismaRepository =
   process.env.USE_PRISMA_REPOSITORY === 'false'
@@ -124,6 +133,10 @@ const notificationServiceProvider = usePrismaRepository
   ? { provide: NotificationService, useClass: PrismaNotificationService }
   : { provide: NotificationService, useClass: InMemoryNotificationService };
 
+const userTablePreferenceServiceProvider = usePrismaRepository
+  ? { provide: UserTablePreferenceService, useClass: PrismaUserTablePreferenceService }
+  : { provide: UserTablePreferenceService, useClass: InMemoryUserTablePreferenceService };
+
 const systemDirectoryRepositoryProvider = usePrismaRepository
   ? { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: PrismaSystemDirectoryRepository }
   : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
@@ -147,7 +160,10 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
 @Module({
   controllers: [
     AuthController,
+    HealthController,
     DataController,
+    LineageQueryController,
+    MasterDataReferenceQueryController,
     AiController,
     CustomerServiceQueryController,
     FinanceCatalogController,
@@ -167,7 +183,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     TrackingQueryController,
     WarehouseDispatchQueryController,
     WarehouseInventoryQueryController,
-    WarehouseTallyQueryController
+    WarehouseTallyQueryController,
+    UserTablePreferenceController
   ],
   providers: [
     AiService,
@@ -185,6 +202,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     WarehouseInventoryQueryService,
     WarehouseTallyQueryService,
     notificationServiceProvider,
+    userTablePreferenceServiceProvider,
     ...(usePrismaRepository ? [NotificationAuditWorker] : []),
     MiscFeeService,
     systemDirectoryRepositoryProvider,

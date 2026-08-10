@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { AutoComplete, Button, Card, Col, Flex, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
+import { AutoComplete, Button, Card, Col, Flex, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Table as AntdTable, Tag, Typography } from 'antd';
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
 import { RefreshCw } from 'lucide-react';
 import type {
@@ -669,12 +669,12 @@ export function ReceivableAuditPage({
               recordDetail: { title: '应收审核详情' },
               columnSettings: { storageKey: columnStorageKey, title: '应收审核列设置', defaultHiddenKeys: defaultHiddenColumnKeys, defaultColumnOrder, lockedKeys: ['systemOrderNo', 'action'] },
               summary: () => (
-                <Table.Summary fixed>
-                  <Table.Summary.Row>
-                    <Table.Summary.Cell index={0} colSpan={8}>本筛选合计</Table.Summary.Cell>
-                    <Table.Summary.Cell index={8} align="right">{formatAmount(response.totals.rmbTotal)}</Table.Summary.Cell>
-                  </Table.Summary.Row>
-                </Table.Summary>
+                <AntdTable.Summary fixed>
+                  <AntdTable.Summary.Row>
+                    <AntdTable.Summary.Cell index={0} colSpan={8}>本筛选合计</AntdTable.Summary.Cell>
+                    <AntdTable.Summary.Cell index={8} align="right">{formatAmount(response.totals.rmbTotal)}</AntdTable.Summary.Cell>
+                  </AntdTable.Summary.Row>
+                </AntdTable.Summary>
               )
             }
           }
@@ -741,7 +741,7 @@ export function ReceivableAuditPage({
           <div><span>已选水单余额</span><strong>{selectedReceipt ? formatAmountWithCurrency(selectedReceipt.balance, selectedReceipt.currency) : '-'}</strong></div>
           <div><span>匹配后水单余额</span><strong>{selectedReceipt ? formatAmountWithCurrency(Math.max(0, selectedReceipt.balance - Number(receiptAmount ?? 0)), selectedReceipt.currency) : '-'}</strong></div>
         </div>
-        <Table
+        <ManagedTable
           className="finance-receipt-match-table"
           rowKey="id"
           size="small"

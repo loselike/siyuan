@@ -14,6 +14,8 @@ export interface PermissionControl {
   bulkGrantEligible?: boolean;
 }
 
+export type PermissionGroupAccessControl = Pick<PermissionControl, 'id' | 'label' | 'description' | 'codes'>;
+
 export const permissionControlCategoryOrder: PermissionControlCategory[] = ['页面访问', '业务操作', '敏感字段', '高风险操作'];
 
 const marketPermissionControls: Record<string, PermissionControl[]> = {
@@ -221,6 +223,21 @@ export function isUiPreferencePermission(permission: Pick<PermissionDefinition, 
   return /:(?:column-setting|list-setting)$/i.test(permission.code) || /保存.*列设置/.test(permission.label);
 }
 
+export function isLineShipmentStageEditBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
+  return permission.code.startsWith('operations:line-shipment:stage-edit-block:')
+    || permission.code.startsWith('operations:line-shipment:stage-view-block:');
+}
+
+export function isPricingModuleBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
+  return permission.code.startsWith('pricing:lookup:module-block:')
+    || permission.code.startsWith('pricing:markup:module-block:')
+    || permission.code.startsWith('pricing:markup:view-block:')
+    || permission.code.startsWith('pricing:markup:edit-block:')
+    || permission.code.startsWith('pricing:price-books:create-block:')
+    || permission.code.startsWith('pricing:price-books:delete-block:')
+    || permission.code.startsWith('pricing:price-books:remark-block:');
+}
+
 export function inferPermissionRisk(permission: Pick<PermissionDefinition, 'code' | 'label'>): PermissionControlRisk {
   const value = `${permission.code} ${permission.label}`;
   if (/^system:role-permissions:(update|save|copy-role|batch-grant|batch-revoke|clear|admin-update)$/i.test(permission.code)) return 'critical';
@@ -233,6 +250,9 @@ export function inferPermissionRisk(permission: Pick<PermissionDefinition, 'code
 }
 
 function inferPermissionCategory(permission: PermissionDefinition, risk: PermissionControlRisk): PermissionControlCategory {
+  // Exact :view/:read/:list actions are second-level entry switches. A
+  // module name such as data-confirm must not make its entry switch high-risk.
+  if (/(?:^|:)(?:view|read|list)$/i.test(permission.code)) return '页面访问';
   if (risk === 'critical' || risk === 'high') return '高风险操作';
   if (risk === 'sensitive') return '敏感字段';
   if (/(view|read|list|detail|查看|进入)/i.test(`${permission.code} ${permission.label}`)) return '页面访问';
@@ -241,7 +261,9 @@ function inferPermissionCategory(permission: PermissionDefinition, risk: Permiss
 
 export function getPermissionControls(group: string, permissions: PermissionDefinition[]): PermissionControl[] {
   const configured = marketPermissionControls[group];
-  const configurablePermissions = permissions.filter((permission) => !isUiPreferencePermission(permission));
+  const configurablePermissions = permissions.filter(
+    (permission) => !isUiPreferencePermission(permission) && !isLineShipmentStageEditBlockPermission(permission) && !isPricingModuleBlockPermission(permission)
+  );
   if (!configured) {
     return configurablePermissions.map((permission) => {
       const risk = inferPermissionRisk(permission);
@@ -261,7 +283,30 @@ export function getPermissionControls(group: string, permissions: PermissionDefi
     .filter((control) => control.codes.length > 0);
 }
 
-export function getPermissionControlState(control: PermissionControl, grantedPermissions: PermissionKey[]) {
+/**
+ * Every permission page has one human-facing entry switch. The switch maps
+ * to the existing page-access permission and does not invent a new root code.
+ * The current UI treats the whole group as one二级开关; the individual codes
+ * remain available here so existing role permissions can be carried forward.
+ */
+export function getPermissionGroupAccessControl(
+  group: string,
+  permissions: PermissionDefinition[]
+): PermissionGroupAccessControl | null {
+  const controls = getPermissionControls(group, permissions);
+  const accessControl = controls.find((control) => control.category === '页面访问');
+  if (!accessControl) return null;
+  const entryCode = accessControl.codes.find((code) => /:(?:view|read|list)$/i.test(code));
+  return entryCode ? { ...accessControl, codes: [entryCode] } : accessControl;
+}
+
+export function getPermissionDetailControls(group: string, permissions: PermissionDefinition[]): PermissionControl[] {
+  const accessControl = getPermissionGroupAccessControl(group, permissions);
+  if (!accessControl) return [];
+  return getPermissionControls(group, permissions).filter((control) => control.id !== accessControl.id);
+}
+
+export function getPermissionControlState(control: Pick<PermissionControl, 'codes'>, grantedPermissions: PermissionKey[]) {
   const granted = new Set(grantedPermissions);
   const grantedCount = control.codes.filter((code) => granted.has(code)).length;
   return {
@@ -269,6 +314,44 @@ export function getPermissionControlState(control: PermissionControl, grantedPer
     indeterminate: grantedCount > 0 && grantedCount < control.codes.length,
     grantedCount
   };
+}
+
+/**
+ * 二级入口是当前阶段唯一可配置的权限开关。历史角色可能只有入口下的
+ * 某些旧操作码，没有显式的 :view/:read/:list 入口码；只要已有任一权限，
+ * 页面就应把该二级入口显示为已开放，避免兼容旧授权时出现“权限丢失”的错觉。
+ */
+export function getPermissionGroupAccessState(
+  group: string,
+  permissions: PermissionDefinition[],
+  grantedPermissions: PermissionKey[]
+) {
+  const codes = getPermissionControls(group, permissions).flatMap((control) => control.codes);
+  const granted = new Set(grantedPermissions);
+  const grantedCount = codes.filter((code) => granted.has(code)).length;
+  return {
+    checked: grantedCount > 0,
+    indeterminate: false,
+    grantedCount
+  };
+}
+
+export function updatePermissionGroupAccess(
+  grantedPermissions: PermissionKey[],
+  group: string,
+  permissions: PermissionDefinition[],
+  checked: boolean
+): PermissionKey[] {
+  const groupCodes = getPermissionControls(group, permissions).flatMap((control) => control.codes);
+  if (!groupCodes.length) return grantedPermissions;
+
+  const next = new Set(grantedPermissions);
+  if (checked) {
+    groupCodes.forEach((code) => next.add(code));
+  } else {
+    groupCodes.forEach((code) => next.delete(code));
+  }
+  return [...next];
 }
 
 export function updatePermissionControl(

@@ -1,8 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { mkdirSync } from 'node:fs';
 import { basename, dirname, join, normalize } from 'node:path';
-import { json, static as serveStatic, urlencoded } from 'express';
-import type { NextFunction, Request, Response } from 'express';
+import { json, urlencoded } from 'express';
 
 export function resolveUploadRoot() {
   const configured = process.env.UPLOAD_DIR?.trim();
@@ -25,37 +24,8 @@ export function resolveUploadDirectory(subdir: string) {
 export function configureApp(app: INestApplication) {
   const uploadRoot = resolveUploadRoot();
   mkdirSync(uploadRoot, { recursive: true });
-  // Imported workbooks and historical Dubai conversions contain confidential
-  // source prices. Generated business images are also served only through a
-  // permission-checked API, never through the public upload tree.
-  const confidentialPricingSegments = new Set([
-    'pricing-imports',
-    'pricing-dubai',
-    'pricing-dubai-business',
-    'misc-fee-imports',
-    'misc-fee-attachments'
-  ]);
-  const authenticatedUploadSegments = new Set(['vouchers']);
-  const publicUploadStatic = serveStatic(uploadRoot, { fallthrough: false });
-  app.use('/api/uploads', (request: Request, response: Response, next: NextFunction) => {
-    let decodedPath: string;
-    try {
-      decodedPath = decodeURIComponent(request.url).replace(/\\/g, '/');
-    } catch {
-      response.sendStatus(404);
-      return;
-    }
-    const segments = decodedPath.split('/').filter(Boolean);
-    if (segments.some((segment) => confidentialPricingSegments.has(segment))) {
-      response.sendStatus(404);
-      return;
-    }
-    if (segments.some((segment) => authenticatedUploadSegments.has(segment))) {
-      next();
-      return;
-    }
-    publicUploadStatic(request, response, next);
-  });
+  // Uploads are deny-by-default. Every downloadable business file must be
+  // returned by a controller that authenticates the caller and verifies scope.
   app.use(json({ limit: '25mb' }));
   app.use(urlencoded({ extended: true, limit: '25mb' }));
   app.enableCors();

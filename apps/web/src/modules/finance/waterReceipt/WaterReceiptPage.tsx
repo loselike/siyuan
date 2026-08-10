@@ -164,14 +164,15 @@ export function getWaterReceiptAllocations(row: WaterReceiptSummary): WaterRecei
 }
 
 export function getReceivableOutstandingRmb(
-  row: Pick<ReceivableAuditSummary, 'amount' | 'receivedAmount'>,
+  row: Pick<ReceivableAuditSummary, 'amount' | 'receivedAmount' | 'rmbAmount'>,
   exchangeRate: number
 ) {
-  return Math.round(Math.max(0, Number(row.amount) - Number(row.receivedAmount ?? 0)) * exchangeRate * 100) / 100;
+  const totalRmb = row.rmbAmount !== undefined ? Number(row.rmbAmount) : Number(row.amount) * exchangeRate;
+  return Math.round(Math.max(0, totalRmb - Number(row.receivedAmount ?? 0) * exchangeRate) * 100) / 100;
 }
 
 export function getReceivableAvailableToAllocateRmb(
-  row: Pick<ReceivableAuditSummary, 'amount' | 'receivedAmount' | 'pendingMatchRequests' | 'pendingMatchRequest'>,
+  row: Pick<ReceivableAuditSummary, 'amount' | 'receivedAmount' | 'rmbAmount' | 'pendingMatchRequests' | 'pendingMatchRequest'>,
   exchangeRate: number
 ) {
   const pendingRequests = row.pendingMatchRequests?.length
@@ -179,8 +180,10 @@ export function getReceivableAvailableToAllocateRmb(
     : row.pendingMatchRequest
       ? [row.pendingMatchRequest]
       : [];
-  const pendingAmount = pendingRequests.reduce((sum, request) => sum + Number(request.amount), 0);
-  return Math.round(Math.max(0, Number(row.amount) - Number(row.receivedAmount ?? 0) - pendingAmount) * exchangeRate * 100) / 100;
+  const totalRmb = row.rmbAmount !== undefined ? Number(row.rmbAmount) : Number(row.amount) * exchangeRate;
+  const receivedRmb = Number(row.receivedAmount ?? 0) * exchangeRate;
+  const pendingRmb = pendingRequests.reduce((sum, request) => sum + Number(request.rmbAmount ?? (request.receivableAmount !== undefined ? request.receivableAmount * exchangeRate : request.amount * exchangeRate)), 0);
+  return Math.round(Math.max(0, totalRmb - receivedRmb - pendingRmb) * 100) / 100;
 }
 
 export function getCurrentReceiptMatchedAmount(
@@ -217,7 +220,7 @@ export function getWaterReceiptReceivableState(
       currentReceiptMatchedAmount
     };
   }
-  const pendingAmount = pendingRequests.reduce((sum, request) => sum + Number(request.amount), 0);
+  const pendingAmount = pendingRequests.reduce((sum, request) => sum + Number(request.receivableAmount ?? request.amount), 0);
   if (outstandingAmount > 0 && pendingAmount >= outstandingAmount) {
     return {
       selectable: false,
@@ -437,7 +440,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
           request,
           systemOrderNo: row.systemOrderNo,
           items: [{ row, request }],
-          totalAmount: request.amount
+          totalAmount: request.rmbAmount ?? request.amount
         });
       });
     });
@@ -745,7 +748,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
     setEditingReviewBatchId(group.id);
     setReviewEditAmounts(Object.fromEntries(group.items.map((item) => [
       item.request.id,
-      Math.round(item.request.amount * Number(matchRow?.exchangeRate ?? 1) * 100) / 100
+      Number(item.request.rmbAmount ?? Math.round(item.request.amount * Number(item.request.receiptExchangeRate ?? 1) * 100) / 100)
     ])));
   };
 
@@ -754,7 +757,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
     await runReviewAction(
       () => apiClient.updateReceivableMatchRequest(group.request.id, {
         amountCurrency: 'RMB',
-        exchangeRate: matchRow.exchangeRate ?? 1,
+        exchangeRate: group.request.receivableExchangeRate ?? matchRow.exchangeRate ?? 1,
         items: group.items.map((item) => ({ id: item.request.id, amount: Number(reviewEditAmounts[item.request.id]) }))
       }),
       '待审核分配金额已更新'
@@ -1130,7 +1133,11 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
       title: '已收金额',
       width: 120,
       align: 'right',
-      render: (_value, row) => <span className="water-receipt-match-amount">{formatCurrency(Number(row.receivedAmount ?? 0) * Number(matchRow?.exchangeRate ?? 1))}</span>
+      render: (_value, row) => {
+        const rate = Number(matchRow?.exchangeRate ?? 1);
+        const totalRmb = Number(row.rmbAmount ?? Number(row.amount) * rate);
+        return <span className="water-receipt-match-amount">{formatCurrency(Math.max(0, totalRmb - getReceivableOutstandingRmb(row, rate)))}</span>;
+      }
     },
     {
       key: 'availableAmount',

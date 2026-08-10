@@ -9,6 +9,11 @@ import type { ModalFuncProps } from 'antd/es/modal';
 import type { ColumnGroupType, ColumnsType, ColumnType, TablePaginationConfig, TableProps } from 'antd/es/table';
 import { CalendarDays, Search, Settings } from 'lucide-react';
 import { shipmentStatusLabels, type ShipmentStatus } from '@siyuan/shared';
+import {
+  getAccountTablePreferenceKey,
+  saveAccountTablePreference,
+  useAccountTablePreferences
+} from './tablePreferences';
 
 const { Text, Title } = Typography;
 const { RangePicker } = DatePicker;
@@ -891,6 +896,15 @@ export function ManagedTable<RecordType extends object>({
     };
   }, [className, columnKeys, columnSettings, resolvedColumns]);
   const widthStorageKey = useMemo(() => getManagedTableWidthStorageKey(resolvedColumns as ManagedColumnLike[], effectiveColumnSettings, className), [className, effectiveColumnSettings, resolvedColumns]);
+  const accountTablePreferences = useAccountTablePreferences();
+  const columnPreferenceKey = useMemo(
+    () => effectiveColumnSettings ? getAccountTablePreferenceKey('columns', effectiveColumnSettings.storageKey) : undefined,
+    [effectiveColumnSettings]
+  );
+  const widthPreferenceKey = useMemo(
+    () => getAccountTablePreferenceKey('widths', widthStorageKey),
+    [widthStorageKey]
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => readManagedTableColumnSettings(effectiveColumnSettings, columnKeys).hiddenKeys);
   const [columnOrder, setColumnOrder] = useState<string[]>(() => readManagedTableColumnSettings(effectiveColumnSettings, columnKeys).columnOrder);
@@ -898,6 +912,10 @@ export function ManagedTable<RecordType extends object>({
   const [activeRecordDetail, setActiveRecordDetail] = useState<{ record: RecordType; index?: number } | null>(null);
   const lastRecordDetailTargetKeyRef = useRef<string | null>(null);
   const resizeCleanupRef = useRef<(() => void) | null>(null);
+  const hydratedColumnPreferenceRef = useRef<string | undefined>(undefined);
+  const hydratedWidthPreferenceRef = useRef<string | undefined>(undefined);
+  const suppressColumnPreferenceSaveRef = useRef(false);
+  const suppressWidthPreferenceSaveRef = useRef(false);
 
   useEffect(() => {
     if (!recordDetailTarget) {
@@ -915,16 +933,65 @@ export function ManagedTable<RecordType extends object>({
   }, [internalRecordDetailEnabled, recordDetailOptions, recordDetailTarget]);
 
   useEffect(() => {
+    const preferenceKey = columnPreferenceKey;
+    const accountId = accountTablePreferences.accountId;
+    if (!accountId || !preferenceKey) {
+      hydratedColumnPreferenceRef.current = undefined;
+      return;
+    }
+    const identity = `${accountId}:${preferenceKey}`;
+    if (!accountTablePreferences.loaded || !effectiveColumnSettings || hydratedColumnPreferenceRef.current === identity) return;
+    hydratedColumnPreferenceRef.current = identity;
+    suppressColumnPreferenceSaveRef.current = true;
+    const remoteValue = accountTablePreferences.values[preferenceKey];
+    if (remoteValue) {
+      const next = normalizeManagedTableRemoteColumnSettings(remoteValue, effectiveColumnSettings, columnKeys);
+      setHiddenKeys(next.hiddenKeys);
+      setColumnOrder(next.columnOrder);
+      writeManagedTableColumnSettings(effectiveColumnSettings.storageKey, {
+        hiddenKeys: next.hiddenKeys,
+        columnOrder: next.columnOrder,
+        schemaKeys: columnKeys
+      });
+      return;
+    }
+    const lockedKeys = getManagedTableLockedKeys(effectiveColumnSettings, columnKeys);
+    saveAccountTablePreference(preferenceKey, {
+      version: 1,
+      localKey: effectiveColumnSettings.storageKey,
+      hiddenKeys: hiddenKeys.filter((key) => columnKeys.includes(key) && !lockedKeys.includes(key)),
+      columnOrder: normalizeManagedTableColumnOrder(columnOrder, columnKeys),
+      schemaKeys: columnKeys
+    });
+  }, [accountTablePreferences.accountId, accountTablePreferences.loaded, accountTablePreferences.values, columnKeys, columnPreferenceKey, effectiveColumnSettings]);
+
+  useEffect(() => {
     if (effectiveColumnSettings) {
       const normalizedOrder = normalizeManagedTableColumnOrder(columnOrder, columnKeys);
       const lockedKeys = getManagedTableLockedKeys(effectiveColumnSettings, columnKeys);
-      writeManagedTableColumnSettings(effectiveColumnSettings.storageKey, {
+      const settings = {
         hiddenKeys: hiddenKeys.filter((key) => columnKeys.includes(key) && !lockedKeys.includes(key)),
         columnOrder: normalizedOrder,
         schemaKeys: columnKeys
-      });
+      };
+      writeManagedTableColumnSettings(effectiveColumnSettings.storageKey, settings);
+      const preferenceKey = columnPreferenceKey;
+      const identity = accountTablePreferences.accountId && preferenceKey
+        ? `${accountTablePreferences.accountId}:${preferenceKey}`
+        : undefined;
+      if (preferenceKey && identity && accountTablePreferences.loaded && hydratedColumnPreferenceRef.current === identity) {
+        if (suppressColumnPreferenceSaveRef.current) {
+          suppressColumnPreferenceSaveRef.current = false;
+        } else {
+          saveAccountTablePreference(preferenceKey, {
+            version: 1,
+            localKey: effectiveColumnSettings.storageKey,
+            ...settings
+          });
+        }
+      }
     }
-  }, [columnKeys, columnOrder, effectiveColumnSettings, hiddenKeys]);
+  }, [accountTablePreferences.accountId, accountTablePreferences.loaded, columnKeys, columnOrder, columnPreferenceKey, effectiveColumnSettings, hiddenKeys]);
 
   useEffect(() => {
     const lockedKeys = getManagedTableLockedKeys(effectiveColumnSettings, columnKeys);
@@ -939,13 +1006,44 @@ export function ManagedTable<RecordType extends object>({
   }, [columnKeys, effectiveColumnSettings?.defaultColumnOrder, effectiveColumnSettings?.lockedKeys]);
 
   useEffect(() => {
-    if (widthStorageKey) {
-      writeManagedTableColumnWidths(
-        widthStorageKey,
-        Object.fromEntries(Object.entries(columnWidths).filter(([key]) => columnKeys.includes(key)))
-      );
+    const preferenceKey = widthPreferenceKey;
+    const identity = accountTablePreferences.accountId
+      ? `${accountTablePreferences.accountId}:${widthPreferenceKey}`
+      : undefined;
+    if (!identity) {
+      hydratedWidthPreferenceRef.current = undefined;
+      return;
     }
-  }, [columnKeys, columnWidths, widthStorageKey]);
+    if (!accountTablePreferences.loaded || hydratedWidthPreferenceRef.current === identity) return;
+    hydratedWidthPreferenceRef.current = identity;
+    suppressWidthPreferenceSaveRef.current = true;
+    const remoteValue = accountTablePreferences.values[preferenceKey];
+    if (remoteValue) {
+      const next = normalizeManagedTableRemoteColumnWidths(remoteValue, columnKeys);
+      setColumnWidths(next);
+      writeManagedTableColumnWidths(widthStorageKey, next);
+      return;
+    }
+    const widths = Object.fromEntries(Object.entries(columnWidths).filter(([key]) => columnKeys.includes(key)));
+    saveAccountTablePreference(preferenceKey, { version: 1, localKey: widthStorageKey, widths });
+  }, [accountTablePreferences.accountId, accountTablePreferences.loaded, accountTablePreferences.values, columnKeys, widthPreferenceKey, widthStorageKey]);
+
+  useEffect(() => {
+    if (widthStorageKey) {
+      const widths = Object.fromEntries(Object.entries(columnWidths).filter(([key]) => columnKeys.includes(key)));
+      writeManagedTableColumnWidths(widthStorageKey, widths);
+      const identity = accountTablePreferences.accountId && widthPreferenceKey
+        ? `${accountTablePreferences.accountId}:${widthPreferenceKey}`
+        : undefined;
+      if (identity && accountTablePreferences.loaded && hydratedWidthPreferenceRef.current === identity) {
+        if (suppressWidthPreferenceSaveRef.current) {
+          suppressWidthPreferenceSaveRef.current = false;
+        } else {
+          saveAccountTablePreference(widthPreferenceKey, { version: 1, localKey: widthStorageKey, widths });
+        }
+      }
+    }
+  }, [accountTablePreferences.accountId, accountTablePreferences.loaded, columnKeys, columnWidths, widthPreferenceKey, widthStorageKey]);
 
   useEffect(() => {
     setColumnWidths(readManagedTableColumnWidths(widthStorageKey));
@@ -1102,7 +1200,7 @@ export function ManagedTable<RecordType extends object>({
             ...rowSelection,
             columnWidth: rowSelection.columnWidth ?? 56,
             fixed: rowSelection.fixed ?? true,
-            preserveSelectedRowKeys: false
+            preserveSelectedRowKeys: rowSelection.preserveSelectedRowKeys ?? false
           }
         : undefined,
     [rowSelection]
@@ -1117,7 +1215,12 @@ export function ManagedTable<RecordType extends object>({
     const nextCurrent = nextPagination.current ?? 1;
     const nextPageSize = nextPagination.pageSize ?? tenRowTablePagination.pageSize ?? 10;
     const paginationChanged = nextCurrent !== activePagination.current || nextPageSize !== activePagination.pageSize;
-    if (rowSelection?.onChange && selectedRowKeys.length && (nextCurrent !== activePagination.current || nextPageSize !== activePagination.pageSize || extra.action !== 'paginate')) {
+    if (
+      rowSelection?.onChange
+      && !rowSelection.preserveSelectedRowKeys
+      && selectedRowKeys.length
+      && (nextCurrent !== activePagination.current || nextPageSize !== activePagination.pageSize || extra.action !== 'paginate')
+    ) {
       rowSelection.onChange([], [], { type: 'none' });
     }
     setActivePagination((current) => {
@@ -1313,9 +1416,16 @@ export function ManagedDualViewTable<RecordType extends object>({
   toolbarActions,
   ...props
 }: ManagedDualViewTableProps<RecordType>) {
+  const accountTablePreferences = useAccountTablePreferences();
+  const viewPreferenceKey = useMemo(
+    () => getAccountTablePreferenceKey('view', viewStorageKey),
+    [viewStorageKey]
+  );
   const [activeView, setActiveView] = useState<ManagedTableViewMode>(
     () => readManagedTableViewPreference(viewStorageKey, defaultView)
   );
+  const hydratedViewPreferenceRef = useRef<string | undefined>(undefined);
+  const suppressViewPreferenceSaveRef = useRef(false);
   const [uncontrolledPagination, setUncontrolledPagination] = useState(() => ({
     current: pagination === false ? 1 : pagination?.current ?? pagination?.defaultCurrent ?? 1,
     pageSize: pagination === false
@@ -1328,9 +1438,39 @@ export function ManagedDualViewTable<RecordType extends object>({
   }, [defaultView, viewStorageKey]);
 
   useEffect(() => {
+    const identity = accountTablePreferences.accountId
+      ? `${accountTablePreferences.accountId}:${viewPreferenceKey}`
+      : undefined;
+    if (!identity) {
+      hydratedViewPreferenceRef.current = undefined;
+      return;
+    }
+    if (!accountTablePreferences.loaded || hydratedViewPreferenceRef.current === identity) return;
+    hydratedViewPreferenceRef.current = identity;
+    suppressViewPreferenceSaveRef.current = true;
+    const saved = accountTablePreferences.values[viewPreferenceKey];
+    if (isManagedTableViewMode(saved?.view)) {
+      setActiveView(saved.view);
+      writeManagedTableViewPreference(viewStorageKey, saved.view);
+      return;
+    }
+    saveAccountTablePreference(viewPreferenceKey, { version: 1, localKey: viewStorageKey, view: activeView });
+  }, [accountTablePreferences.accountId, accountTablePreferences.loaded, accountTablePreferences.values, activeView, viewPreferenceKey, viewStorageKey]);
+
+  useEffect(() => {
     writeManagedTableViewPreference(viewStorageKey, activeView);
+    const identity = accountTablePreferences.accountId
+      ? `${accountTablePreferences.accountId}:${viewPreferenceKey}`
+      : undefined;
+    if (identity && accountTablePreferences.loaded && hydratedViewPreferenceRef.current === identity) {
+      if (suppressViewPreferenceSaveRef.current) {
+        suppressViewPreferenceSaveRef.current = false;
+      } else {
+        saveAccountTablePreference(viewPreferenceKey, { version: 1, localKey: viewStorageKey, view: activeView });
+      }
+    }
     onViewChange?.(activeView);
-  }, [activeView, onViewChange, viewStorageKey]);
+  }, [accountTablePreferences.accountId, accountTablePreferences.loaded, activeView, onViewChange, viewPreferenceKey, viewStorageKey]);
 
   useEffect(() => {
     if (pagination === false) return;
@@ -1977,6 +2117,31 @@ function readManagedTableColumnSettings(columnSettings: ManagedTableColumnSettin
   }
 }
 
+function normalizeManagedTableRemoteColumnSettings(
+  saved: Record<string, unknown>,
+  columnSettings: ManagedTableColumnSettings,
+  columnKeys: string[]
+) {
+  const lockedKeys = getManagedTableLockedKeys(columnSettings, columnKeys);
+  const fallback = {
+    hiddenKeys: (columnSettings.defaultHiddenKeys ?? []).filter((key) => columnKeys.includes(key) && !lockedKeys.includes(key)),
+    columnOrder: normalizeManagedTableColumnOrder(columnSettings.defaultColumnOrder, columnKeys)
+  };
+  const storedSchemaKeys = Array.isArray(saved.schemaKeys)
+    ? saved.schemaKeys.filter((key): key is string => typeof key === 'string')
+    : undefined;
+  if (storedSchemaKeys && !areManagedTableStringArraysEqual(storedSchemaKeys, columnKeys)) {
+    return fallback;
+  }
+  const hiddenKeys = Array.isArray(saved.hiddenKeys)
+    ? saved.hiddenKeys.filter((key): key is string => typeof key === 'string' && columnKeys.includes(key) && !lockedKeys.includes(key))
+    : fallback.hiddenKeys;
+  const columnOrder = Array.isArray(saved.columnOrder)
+    ? normalizeManagedTableColumnOrder(saved.columnOrder.filter((key): key is string => typeof key === 'string'), columnKeys)
+    : fallback.columnOrder;
+  return { hiddenKeys, columnOrder };
+}
+
 type ManagedTableStoredSettings = {
   hiddenKeys?: unknown;
   columnOrder?: unknown;
@@ -2128,6 +2293,18 @@ function readManagedTableColumnWidths(storageKey: string) {
   } catch {
     return {};
   }
+}
+
+function normalizeManagedTableRemoteColumnWidths(saved: Record<string, unknown>, columnKeys: string[]) {
+  const widths = saved.widths;
+  if (!widths || typeof widths !== 'object' || Array.isArray(widths)) return {};
+  return Object.fromEntries(
+    Object.entries(widths).filter((entry): entry is [string, number] => (
+      columnKeys.includes(entry[0])
+      && typeof entry[1] === 'number'
+      && Number.isFinite(entry[1])
+    ))
+  );
 }
 
 function writeManagedTableColumnWidths(storageKey: string, widths: Record<string, number>) {

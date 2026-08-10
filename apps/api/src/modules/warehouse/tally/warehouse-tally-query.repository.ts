@@ -86,7 +86,10 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     const completedRows = rows.filter((row: any) => row.status === 'COMPLETED');
     const outputRows = completedRows.length
       ? await (this.prisma as any).warehousePackage.findMany({
-        where: { tallyTaskId: { in: completedRows.map((row: any) => row.id) } },
+        where: {
+          tallyTaskId: { in: completedRows.map((row: any) => row.id) },
+          status: { not: 'TALLIED_ARCHIVED' }
+        },
         orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
       })
       : [];

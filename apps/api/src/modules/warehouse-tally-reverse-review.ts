@@ -1,0 +1,1 @@
+export const WAREHOUSE_TALLY_REVERSE_REVIEW_ARCHIVE_REASON = '理货反审核回退';

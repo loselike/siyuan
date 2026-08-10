@@ -23,13 +23,3 @@ screenshots
 **/*.spec.tsx
 **/__tests__
 .siyuan-release-state
-.siyuan-release-lock
-.siyuan-release-recovery-required
-.release-whitelist.lock
-.codex-release-staging
-.release-backups
-.release-manifests
-.release-receipts
-tmp
-config
-9

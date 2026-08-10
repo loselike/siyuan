@@ -2,25 +2,40 @@ import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Boxes, ChevronDown, ChevronUp, ClipboardList, FileInput, Filter, PackagePlus, RotateCcw, Search, Send, ShieldAlert, Sparkles, Truck, Wallet, Warehouse } from 'lucide-react';
 import { Alert, Badge, Button, Card, Col, Dropdown, Flex, Input, Modal, Progress, Row, Select, Space, Tag, Typography, message } from 'antd';
-import { businessTypeLabels, shipmentStatusLabels, type BusinessType, type LineShipmentPoolQuery, type LineShipmentPoolResponse, type LineShipmentPoolRow, type LineShipmentStatusGroup, type ProblemTicketCreateInput, type Shipment, type ShipmentStatus, type ShipmentInternalFlowLogResponse } from '@siyuan/shared';
-import type { ApiClient, PermissionKey, RoleKey } from '../../apiClient';
+import type { ColumnsType } from 'antd/es/table';
+import { businessTypeLabels, shipmentStatusLabels, type BusinessType, type LineShipmentFinanceTotal, type LineShipmentPoolQuery, type LineShipmentPoolResponse, type LineShipmentPoolRow, type LineShipmentStatusGroup, type ProblemTicketCreateInput, type Shipment, type ShipmentStatus, type ShipmentInternalFlowLogResponse } from '@siyuan/shared';
+import { isAdministratorRole, type ApiClient, type PermissionKey, type RoleKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
-import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, MetricCard, riskLabel, type ManagedTableColumn } from '../shared/ui';
+import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, MetricCard, riskLabel, tenRowTablePagination, type ManagedTableColumn } from '../shared/ui';
 import { formatBeijingDateTime } from '../shared/format';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
+import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from '../shared/shipmentStageDwell';
+import { getShipmentTransportTimeSeconds, getShipmentTransportTimeText } from '../shared/shipmentTransportTime';
+import { getGlobalFieldVisibility } from '../shared/globalFieldMask';
 import { ProblemTicketCreateModal } from '../customerService/ProblemTicketCreateModal';
 
 const { Title } = Typography;
 
+type ShipmentColumnOrderMode = 'default' | 'customerFirst' | 'agentFirst' | 'custom';
 type LinePoolDetailColumnKey =
   | 'createdAt'
   | 'customerName'
+  | 'customerCode'
   | 'salesperson'
   | 'orderNo'
+  | 'transferNo'
   | 'destinationCountry'
   | 'channelName'
   | 'agentName'
+  | 'agentShortName'
+  | 'agentChannel'
   | 'status'
+  | 'receivableStatus'
+  | 'businessCost'
+  | 'payableStatus'
+  | 'packageSummary'
+  | 'receivable'
+  | 'payableCost'
   | 'latestTracking'
   | 'packageCount'
   | 'weightKg'
@@ -28,8 +43,10 @@ type LinePoolDetailColumnKey =
   | 'packageNos'
   | 'payment'
   | 'remark'
+  | 'stageDwell'
+  | 'transportTime'
   | 'action';
-type LinePoolMatrixColumnKey = 'matrixBasic' | 'matrixOrder' | 'matrixRoute' | 'matrixCargoPayment' | 'matrixFulfillment' | 'action';
+type LinePoolMatrixColumnKey = 'matrixBasic' | 'matrixOrder' | 'matrixCompany' | 'matrixAgent' | 'matrixPayment' | 'matrixFulfillment' | 'action';
 
 interface BusinessWorkspaceConfig {
   description: string;
@@ -76,38 +93,43 @@ const linePoolLedgerColumnSettingsStorageKey = 'siyuan-line-pool-ledger-columns-
 const linePoolViewStorageKey = 'siyuan-line-pool-table-view-v1';
 const defaultLinePoolDetailColumnOrder: LinePoolDetailColumnKey[] = [
   'createdAt',
-  'customerName',
+  'customerCode',
   'salesperson',
   'orderNo',
-  'destinationCountry',
+  'transferNo',
+  'packageSummary',
   'channelName',
-  'agentName',
+  'receivable',
+  'agentShortName',
+  'agentChannel',
+  'payableCost',
+  'receivableStatus',
+  'businessCost',
+  'payableStatus',
   'status',
+  'stageDwell',
+  'transportTime',
   'latestTracking',
-  'packageCount',
-  'weightKg',
-  'volumeCbm',
-  'packageNos',
-  'payment',
-  'remark',
   'action'
 ];
-const defaultLinePoolMatrixColumnOrder: LinePoolMatrixColumnKey[] = ['matrixBasic', 'matrixOrder', 'matrixRoute', 'matrixCargoPayment', 'matrixFulfillment', 'action'];
+const defaultLinePoolMatrixColumnOrder: LinePoolMatrixColumnKey[] = ['matrixBasic', 'matrixOrder', 'matrixCompany', 'matrixAgent', 'matrixPayment', 'matrixFulfillment', 'action'];
 // The fixed, full-width table treats these values as stable allocation weights:
 // long identifiers and package summaries receive more room without making widths
 // jump when filtering or paging. ManagedTable still lets users override them by drag.
 export const linePoolMatrixColumnWeights = {
   matrixBasic: 180,
   matrixOrder: 160,
-  matrixRoute: 210,
-  matrixCargoPayment: 300,
+  matrixCompany: 220,
+  matrixAgent: 220,
+  matrixPayment: 250,
   matrixFulfillment: 160
 } as const;
 const linePoolColumnLabels: Record<LinePoolMatrixColumnKey, string> = {
   matrixBasic: '基础信息',
   matrixOrder: '运单信息',
-  matrixRoute: '路线与代理',
-  matrixCargoPayment: '货物与收款',
+  matrixCompany: '公司数据',
+  matrixAgent: '代理数据',
+  matrixPayment: '款项状态',
   matrixFulfillment: '履约与跟进',
   action: '操作'
 };
@@ -125,13 +147,25 @@ const linePoolLedgerColumnSettings = {
   labels: {
     createdAt: '创建时间',
     customerName: '客户名称',
-    salesperson: '业务员',
+    customerCode: '客户编号',
+    salesperson: '业务员归属',
     orderNo: '出货单号',
+    transferNo: '转单号',
     destinationCountry: '目的地',
+    packageSummary: '件数/重量/体积',
     channelName: '公司渠道',
+    receivable: '应收',
     agentName: '代理详细公司名',
-    status: '状态',
-    latestTracking: '最新物流轨迹',
+    agentShortName: '代理简称',
+    agentChannel: '代理渠道',
+    payableCost: '应付成本',
+    receivableStatus: '应收状态',
+    businessCost: '业务成本',
+    payableStatus: '应付状态',
+    status: '运单状态',
+    stageDwell: '停留时间',
+    transportTime: '运输时间',
+    latestTracking: '物流最新轨迹',
     packageCount: '件数',
     weightKg: '重量',
     volumeCbm: '体积',
@@ -140,11 +174,15 @@ const linePoolLedgerColumnSettings = {
     remark: '备注',
     action: '操作'
   },
-  defaultHiddenKeys: [],
+  defaultHiddenKeys: ['customerName', 'destinationCountry', 'agentName', 'packageCount', 'weightKg', 'volumeCbm', 'packageNos', 'payment', 'remark'],
   defaultColumnOrder: defaultLinePoolDetailColumnOrder,
   lockedKeys: ['action']
 };
 const linePoolTableLocale = { emptyText: '暂无符合条件的运单' };
+
+export function getOperationsFieldVisibility(role: RoleKey, permissions: readonly string[]) {
+  return getGlobalFieldVisibility(role, permissions);
+}
 
 function getLinePoolRowKey(row: LineShipmentPoolRow) {
   return row.shipment.id;
@@ -235,13 +273,44 @@ function formatOptionalNumber(value: unknown, fractionDigits: number) {
 export function formatLinePoolPackageSummary(row: LineShipmentPoolRow) {
   const summary = row.packageSummary;
   if (summary) {
-    return `${formatOptionalNumber(summary.packageCount, 0)}件 / ${formatOptionalNumber(summary.totalWeightKg, 3)}kg / ${formatOptionalNumber(summary.totalCbm, 3)}方`;
+    return `${formatOptionalNumber(summary.packageCount, 0)}件 / ${formatOptionalNumber(summary.totalWeightKg, 3)} KG / ${formatOptionalNumber(summary.totalCbm, 3)} CBM`;
   }
   const fallbackWeight = row.shipment.agentWeightKg
     ?? row.shipment.chargeableWeightKg
     ?? row.shipment.receivableWeightKg
     ?? row.shipment.weightKg;
-  return `${formatOptionalNumber(row.shipment.packageCount, 0)}件 / ${formatOptionalNumber(fallbackWeight, 3)}kg`;
+  return `${formatOptionalNumber(row.shipment.packageCount, 0)}件 / ${formatOptionalNumber(fallbackWeight, 3)} KG`;
+}
+
+function formatLinePoolFinanceAmount(amount: number, currency: string) {
+  return `${currency} ${amount.toFixed(2)}`;
+}
+
+function formatLinePoolFinanceTotals(totals: LineShipmentFinanceTotal[] | undefined, includeBillingUnits = false) {
+  if (!totals?.length) return '—';
+  return totals.map((total) => {
+    const billingUnit = includeBillingUnits && total.billingUnits?.length ? ` · ${total.billingUnits.join('/')}` : '';
+    return `${formatLinePoolFinanceAmount(total.amount, total.currency)}${billingUnit}`;
+  }).join(' / ');
+}
+
+const linePoolReceivableStatusLabels = {
+  UNMATCHED: '未匹配',
+  PENDING_REVIEW: '未审核',
+  APPROVED: '已审核'
+} as const;
+const linePoolPayableStatusLabels = {
+  UNPAID: '未付',
+  PAID: '已付',
+  APPROVED: '已审核'
+} as const;
+
+function linePoolStatusTag(label: string | undefined, color: 'default' | 'orange' | 'green' | 'red' | 'blue' = 'default') {
+  return label ? <Tag color={color}>{label}</Tag> : '—';
+}
+
+function linePoolCustomerCode(row: LineShipmentPoolRow) {
+  return row.shipment.customerCode || row.shipment.customerName.split('-')[0] || '—';
 }
 
 export const linePoolOutboundOrderNoColumnTitle = '出货单号';
@@ -257,6 +326,7 @@ export function OperationsPage({
   businessType,
   onAiAssist,
   aiLoading,
+  onOpenColumnSettings,
   activeWorkspaceSection,
   onActiveWorkspaceSectionChange,
   automationPlan,
@@ -269,11 +339,22 @@ export function OperationsPage({
   onProcessShipment
 }: {
   businessWorkspaceConfig: BusinessWorkspaceConfig;
+  businessShipments: Shipment[];
   aiQueue: Array<{ shipment: Shipment; insight: RiskInsight }>;
   importValidation: ImportValidationSummary;
   businessType: BusinessType;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
+  selectedStatus: ShipmentStatus | 'ALL';
+  onSelectStatus: (status: ShipmentStatus | 'ALL') => void;
+  statusOrder: ShipmentStatus[];
+  statusCounts: Partial<Record<ShipmentStatus, number>>;
+  shipmentColumnOrderMode: ShipmentColumnOrderMode;
+  onShipmentColumnOrderModeChange: (mode: ShipmentColumnOrderMode) => void;
+  shipmentColumnOrderOptions: Array<{ value: ShipmentColumnOrderMode; label: string }>;
+  onOpenColumnSettings: () => void;
+  workspaceColumns: ColumnsType<Shipment>;
+  visibleShipments: Shipment[];
   activeWorkspaceSection: string;
   onActiveWorkspaceSectionChange: (section: string) => void;
   automationPlan: AutomationPlanItem[];
@@ -287,12 +368,20 @@ export function OperationsPage({
 }) {
   const permissionSet = useMemo(() => new Set(permissions), [permissions]);
   const can = useCallback((permission: PermissionKey) => role === 'ADMIN' || permissionSet.has(permission), [permissionSet, role]);
+  const canViewReviewPendingStage = isAdministratorRole(role)
+    || !permissionSet.has('operations:line-shipment:stage-view-block:review-pending');
   const canViewLinePool = can('operations:line-shipment:view');
   const canViewAiQueue = can('operations:ai-queue:view');
   const canViewProductMap = can('operations:product-map:view');
   const canViewImportQuality = can('operations:import-quality:view');
   const canViewSensitive = can('operations:line-shipment:process') || can('operations:product-map:cost-sensitive-view');
+  const fieldVisibility = useMemo(() => getOperationsFieldVisibility(role, permissions), [permissions, role]);
   const canProcess = can('operations:line-shipment:process') && can('operations:line-shipment:status-update');
+  const canProcessLineShipment = useCallback((row: LineShipmentPoolRow) => {
+    if (!canProcess || role === 'ADMIN') return canProcess;
+    const blockedStages = row.editStages ?? [];
+    return !blockedStages.some((stage) => permissionSet.has(`operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey));
+  }, [canProcess, permissionSet, role]);
   const workspaceItems = useMemo(() => [
     canViewLinePool ? { key: 'shipmentPool', label: `${businessTypeLabels[businessType]}运单池`, description: '筛选与批量处理' } : null,
     canViewAiQueue ? { key: 'aiQueue', label: 'AI 优先队列', description: '风险项与建议' } : null,
@@ -339,6 +428,11 @@ export function OperationsPage({
     if (activeWorkspaceSection !== 'shipmentPool') return;
     void fetchLinePool(linePoolQuery);
   }, [activeWorkspaceSection, fetchLinePool, linePoolQuery]);
+
+  useEffect(() => {
+    if (canViewReviewPendingStage || linePoolQuery.statusGroup !== 'REVIEW_PENDING') return;
+    setLinePoolQuery((current) => ({ ...current, statusGroup: 'ALL', page: 1 }));
+  }, [canViewReviewPendingStage, linePoolQuery.statusGroup]);
 
   useEffect(() => {
     if (activeWorkspaceSection !== 'shipmentPool') return;
@@ -447,9 +541,17 @@ export function OperationsPage({
       ellipsis: true,
       render: (_, row) => row.shipment.customerName
     },
+    customerCode: {
+      key: 'customerCode',
+      title: '客户编号',
+      width: 135,
+      sortValue: (row) => linePoolCustomerCode(row),
+      ellipsis: true,
+      render: (_, row) => linePoolCustomerCode(row)
+    },
     salesperson: {
       key: 'salesperson',
-      title: '业务员',
+      title: '业务员归属',
       width: 100,
       sortValue: (row) => row.shipment.salesperson ?? '',
       ellipsis: true,
@@ -461,6 +563,13 @@ export function OperationsPage({
       width: 190,
       sortValue: formatLinePoolOutboundOrderNo,
       render: (_, row) => <div className="line-pool-cell-stack"><Button type="link" className="line-pool-link" onClick={() => onViewShipment(row.shipment)}>{formatLinePoolOutboundOrderNo(row)}</Button><OperationText type="secondary">{row.shipment.transferNo || '待获取快递号'}</OperationText></div>
+    },
+    transferNo: {
+      key: 'transferNo',
+      title: '转单号',
+      width: 160,
+      sortValue: (row) => row.shipment.transferNo ?? '',
+      render: (_, row) => row.shipment.transferNo || '待获取快递号'
     },
     destinationCountry: {
       key: 'destinationCountry',
@@ -477,6 +586,20 @@ export function OperationsPage({
       ellipsis: true,
       render: (_, row) => row.shipment.channelName || '-'
     },
+    packageSummary: {
+      key: 'packageSummary',
+      title: '件数/重量/体积 CBM',
+      width: 210,
+      sortValue: (row) => row.packageSummary?.totalWeightKg ?? row.shipment.agentWeightKg ?? row.shipment.receivableWeightKg,
+      render: (_, row) => formatLinePoolPackageSummary(row)
+    },
+    receivable: {
+      key: 'receivable',
+      title: '应收',
+      width: 155,
+      sortValue: (row) => row.financeSummary?.receivableTotals.reduce((total, item) => total + item.amount, 0) ?? 0,
+      render: (_, row) => canViewSensitive ? formatLinePoolFinanceTotals(row.financeSummary?.receivableTotals) : '-'
+    },
     agentName: {
       key: 'agentName',
       title: '代理详细公司名',
@@ -485,10 +608,72 @@ export function OperationsPage({
       ellipsis: true,
       render: (_, row) => row.shipment.agentName || '-'
     },
-    status: { key: 'status', title: '状态', width: 100, sortValue: (row) => row.shipment.status, render: (_, row) => <Tag color={statusColor(row.shipment.status)}>{shipmentStatusLabels[row.shipment.status]}</Tag> },
+    agentShortName: {
+      key: 'agentShortName',
+      title: '代理简称',
+      width: 150,
+      sortValue: (row) => row.shipment.agentShortName ?? '',
+      ellipsis: true,
+      render: (_, row) => row.shipment.agentShortName || '-'
+    },
+    agentChannel: {
+      key: 'agentChannel',
+      title: '代理渠道',
+      width: 170,
+      sortValue: (row) => row.shipment.routeAgentChannelName ?? '',
+      ellipsis: true,
+      render: (_, row) => row.shipment.routeAgentChannelName || '-'
+    },
+    payableCost: {
+      key: 'payableCost',
+      title: '应付成本',
+      width: 155,
+      sortValue: (row) => row.financeSummary?.payableCostTotals?.reduce((total, item) => total + item.amount, 0) ?? row.shipment.routeCostTotal ?? 0,
+      render: (_, row) => canViewSensitive
+        ? formatLinePoolFinanceTotals(row.financeSummary?.payableCostTotals) === '—'
+          ? row.shipment.routeCostTotal === undefined ? '—' : formatLinePoolFinanceAmount(row.shipment.routeCostTotal, row.shipment.routeCurrency || 'RMB')
+          : formatLinePoolFinanceTotals(row.financeSummary?.payableCostTotals)
+        : '-'
+    },
+    status: { key: 'status', title: '运单状态', width: 100, sortValue: (row) => row.shipment.status, render: (_, row) => <Tag color={statusColor(row.shipment.status)}>{shipmentStatusLabels[row.shipment.status]}</Tag> },
+    stageDwell: {
+      key: 'stageDwell',
+      title: '停留时间',
+      width: 105,
+      sortValue: (row) => getShipmentStageDwellSeconds(row.shipment),
+      render: (_, row) => getShipmentStageDwellText(row.shipment)
+    },
+    transportTime: {
+      key: 'transportTime',
+      title: '运输时间',
+      width: 105,
+      sortValue: (row) => getShipmentTransportTimeSeconds(row.shipment),
+      render: (_, row) => getShipmentTransportTimeText(row.shipment)
+    },
+    receivableStatus: {
+      key: 'receivableStatus',
+      title: '应收状态',
+      width: 110,
+      sortValue: (row) => row.financeSummary?.receivableStatus ?? '',
+      render: (_, row) => canViewSensitive ? linePoolStatusTag(row.financeSummary?.receivableStatus ? linePoolReceivableStatusLabels[row.financeSummary.receivableStatus] : undefined, row.financeSummary?.receivableStatus === 'APPROVED' ? 'green' : row.financeSummary?.receivableStatus === 'PENDING_REVIEW' ? 'orange' : 'default') : '-'
+    },
+    businessCost: {
+      key: 'businessCost',
+      title: '业务成本',
+      width: 170,
+      sortValue: (row) => row.financeSummary?.businessCostTotals.reduce((total, item) => total + item.amount, 0) ?? 0,
+      render: (_, row) => canViewSensitive ? formatLinePoolFinanceTotals(row.financeSummary?.businessCostTotals, true) : '-'
+    },
+    payableStatus: {
+      key: 'payableStatus',
+      title: '应付状态',
+      width: 100,
+      sortValue: (row) => row.financeSummary?.payableStatus ?? '',
+      render: (_, row) => canViewSensitive ? linePoolStatusTag(row.financeSummary?.payableStatus ? linePoolPayableStatusLabels[row.financeSummary.payableStatus] : undefined, row.financeSummary?.payableStatus === 'APPROVED' ? 'green' : row.financeSummary?.payableStatus === 'PAID' ? 'blue' : 'orange') : '-'
+    },
     latestTracking: {
       key: 'latestTracking',
-      title: '最新物流轨迹',
+      title: '物流最新轨迹',
       width: 210,
       sortValue: (row) => row.latestTracking,
       render: (_, row) => <div className="line-pool-cell-stack"><span>{row.latestTracking || '-'}</span><OperationText type="secondary">{row.shipment.trackingStaleDays > 0 ? `${row.shipment.trackingStaleDays} 天未更新` : '今日更新'}</OperationText></div>
@@ -514,17 +699,17 @@ export function OperationsPage({
           ?? row.shipment.receivableWeightKg
           ?? row.shipment.weightKg,
         3
-      )}kg`
+      )} KG`
     },
     volumeCbm: {
       key: 'volumeCbm',
-      title: '体积',
+      title: '体积 CBM',
       width: 90,
       align: 'right',
       sortValue: (row) => row.packageSummary?.totalCbm ?? row.shipment.volumeCbm ?? 0,
       render: (_, row) => {
         const value = row.packageSummary?.totalCbm ?? row.shipment.volumeCbm;
-        return value === undefined ? '—' : `${formatOptionalNumber(value, 3)}方`;
+        return value === undefined ? '—' : `${formatOptionalNumber(value, 3)} CBM`;
       }
     },
     packageNos: {
@@ -545,8 +730,11 @@ export function OperationsPage({
       sortable: false,
       render: (_, row) => (
         <div className="line-pool-row-actions">
-          {canProcess ? <Button size="small" type="primary" onClick={() => onProcessShipment(row.shipment)}>处理</Button> : null}
-          {can('operations:line-shipment:detail') ? <Button size="small" onClick={() => onViewShipment(row.shipment)}>详情</Button> : null}
+          {canProcessLineShipment(row) ? <Button size="small" type="primary" onClick={() => onProcessShipment(row.shipment)}>处理</Button> : null}
+          {can('operations:line-shipment:detail')
+            && (canViewReviewPendingStage || !['DRAFT', 'REVIEW_PENDING'].includes(row.shipment.status))
+            ? <Button size="small" onClick={() => onViewShipment(row.shipment)}>详情</Button>
+            : null}
           {can('operations:line-shipment:internal-log-view') ? (
             <Button
               size="small"
@@ -558,10 +746,16 @@ export function OperationsPage({
         </div>
       )
     }
-  }), [apiClient, can, canProcess, canViewSensitive, onProcessShipment, onViewShipment]);
+  }), [apiClient, can, canProcessLineShipment, canViewReviewPendingStage, canViewSensitive, onProcessShipment, onViewShipment]);
   const linePoolDetailColumns = useMemo(
-    () => defaultLinePoolDetailColumnOrder.map((key) => linePoolDetailColumnMap[key]),
-    [linePoolDetailColumnMap]
+    () => defaultLinePoolDetailColumnOrder
+      .filter((key) => key !== 'agentName' || fieldVisibility.showAgentCompanyName)
+      .filter((key) => key !== 'agentShortName' || fieldVisibility.showAgentShortName)
+      .filter((key) => key !== 'agentChannel' || fieldVisibility.showAgentChannel)
+      .filter((key) => key !== 'payableCost' || fieldVisibility.showPayableCost)
+      .filter((key) => key !== 'payableStatus' || fieldVisibility.showPayableStatus)
+      .map((key) => linePoolDetailColumnMap[key]),
+    [fieldVisibility, linePoolDetailColumnMap]
   );
   const linePoolColumns = useMemo<ManagedTableColumn<LineShipmentPoolRow>[]>(
     () => [
@@ -570,11 +764,11 @@ export function OperationsPage({
         title: '基础信息',
         width: linePoolMatrixColumnWeights.matrixBasic,
         className: 'line-pool-matrix-group-basic',
-        sortValue: (row) => row.shipment.createdAt,
+        sortValue: (row) => linePoolCustomerCode(row),
         render: (_, row) => (
           <LinePoolMatrixCell fields={[
-            { key: 'createdAt', label: '创建时间', value: <LinePoolMatrixDateTime value={formatBeijingDateTime(row.shipment.createdAt)} /> },
-            { key: 'customerName', label: '客户名称', value: <strong>{row.shipment.customerName}</strong> },
+            { key: 'createdAt', label: '创建时间', value: (() => { const [date, time] = formatBeijingDateTime(row.shipment.createdAt).split(' '); return <div className="line-pool-cell-stack"><span>{date}</span><OperationText type="secondary">{time}</OperationText></div>; })() },
+            { key: 'customerCode', label: '客户编号', value: <strong>{linePoolCustomerCode(row)}</strong> },
             { key: 'salesperson', label: '业务员归属', value: row.shipment.salesperson ?? '-' }
           ]} />
         )
@@ -597,43 +791,66 @@ export function OperationsPage({
         )
       },
       {
-        key: 'matrixRoute',
-        title: '路线与代理',
-        width: linePoolMatrixColumnWeights.matrixRoute,
-        className: 'line-pool-matrix-group-route',
-        sortValue: (row) => `${row.shipment.destinationCountry}|${row.shipment.channelName ?? ''}|${row.shipment.agentName ?? ''}`,
+        key: 'matrixCompany',
+        title: '公司数据',
+        width: linePoolMatrixColumnWeights.matrixCompany,
+        className: 'line-pool-matrix-group-company',
+        sortValue: (row) => row.shipment.channelName ?? '',
         render: (_, row) => (
           <LinePoolMatrixCell fields={[
-            { key: 'destinationCountry', label: '目的地', value: row.shipment.destinationCountry },
+            { key: 'packageSummary', label: '件数/重量/体积 CBM', value: formatLinePoolPackageSummary(row) },
             { key: 'channelName', label: '公司渠道', value: row.shipment.channelName || '-' },
-            { key: 'agentName', label: '代理详细公司名', value: row.shipment.agentName || '-', wrap: true }
+            { key: 'receivable', label: '应收', value: canViewSensitive ? formatLinePoolFinanceTotals(row.financeSummary?.receivableTotals) : '-' }
           ]} />
         )
       },
+      ...(fieldVisibility.showAgentShortName || fieldVisibility.showAgentChannel || fieldVisibility.showPayableCost ? [{
+        key: 'matrixAgent',
+        title: '代理数据',
+        width: linePoolMatrixColumnWeights.matrixAgent,
+        className: 'line-pool-matrix-group-agent',
+        sortValue: (row) => `${row.shipment.agentName ?? ''}|${row.shipment.routeAgentChannelName ?? ''}`,
+        render: (_, row) => (
+          <LinePoolMatrixCell fields={[
+            ...(fieldVisibility.showAgentShortName ? [{ key: 'agentShortName', label: '代理简称', value: row.shipment.agentShortName || '-' }] : []),
+            ...(fieldVisibility.showAgentChannel ? [{ key: 'agentChannel', label: '代理渠道', value: row.shipment.routeAgentChannelName || '-', wrap: true }] : []),
+            ...(fieldVisibility.showPayableCost ? [{
+              key: 'payableCost',
+              label: '应付成本',
+              value: canViewSensitive
+                ? formatLinePoolFinanceTotals(row.financeSummary?.payableCostTotals) === '—'
+                  ? row.shipment.routeCostTotal === undefined ? '—' : formatLinePoolFinanceAmount(row.shipment.routeCostTotal, row.shipment.routeCurrency || 'RMB')
+                  : formatLinePoolFinanceTotals(row.financeSummary?.payableCostTotals)
+                : '-'
+            }] : [])
+          ]} />
+        )
+      } satisfies ManagedTableColumn<LineShipmentPoolRow>] : []),
       {
-        key: 'matrixCargoPayment',
-        title: '货物与收款',
-        width: linePoolMatrixColumnWeights.matrixCargoPayment,
-        className: 'line-pool-matrix-group-cargo',
-        sortValue: (row) => row.packageSummary?.totalWeightKg ?? row.shipment.agentWeightKg ?? row.shipment.chargeableWeightKg ?? row.shipment.receivableWeightKg ?? row.shipment.weightKg,
-        render: (_, row) => {
-          const trackingPreview = Array.isArray(row.packageSummary?.domesticTrackingNos)
-            ? row.packageSummary.domesticTrackingNos.slice(0, 2).join('、')
-            : '';
-          return (
-            <LinePoolMatrixCell fields={[
-              { key: 'packageSummary', label: '件数/重量/体积', value: formatLinePoolPackageSummary(row) },
-              { key: 'domesticTrackingNos', label: '包裹单号', value: trackingPreview || '暂无包裹摘要', wrap: true },
-              {
-                key: 'payment',
-                label: '收款状态',
-                value: canViewSensitive
-                  ? <Tag color={row.receivableAmount ? 'red' : 'default'}>{row.receivableAmount ? '未收款' : '未知'}</Tag>
-                  : '-'
-              }
-            ]} />
-          );
-        }
+        key: 'matrixPayment',
+        title: '款项状态',
+        width: linePoolMatrixColumnWeights.matrixPayment,
+        className: 'line-pool-matrix-group-payment',
+        sortValue: (row) => row.financeSummary?.receivableStatus ?? '',
+        render: (_, row) => (
+          <LinePoolMatrixCell fields={[
+            {
+              key: 'receivableStatus',
+              label: '应收状态',
+              value: canViewSensitive
+                ? linePoolStatusTag(row.financeSummary?.receivableStatus ? linePoolReceivableStatusLabels[row.financeSummary.receivableStatus] : undefined, row.financeSummary?.receivableStatus === 'APPROVED' ? 'green' : row.financeSummary?.receivableStatus === 'PENDING_REVIEW' ? 'orange' : 'default')
+                : '-'
+            },
+            { key: 'businessCost', label: '业务成本', value: canViewSensitive ? formatLinePoolFinanceTotals(row.financeSummary?.businessCostTotals) : '-' },
+            ...(fieldVisibility.showPayableStatus ? [{
+              key: 'payableStatus',
+              label: '应付状态',
+              value: canViewSensitive
+                ? linePoolStatusTag(row.financeSummary?.payableStatus ? linePoolPayableStatusLabels[row.financeSummary.payableStatus] : undefined, row.financeSummary?.payableStatus === 'APPROVED' ? 'green' : row.financeSummary?.payableStatus === 'PAID' ? 'blue' : 'orange')
+                : '-'
+            }] : [])
+          ]} />
+        )
       },
       {
         key: 'matrixFulfillment',
@@ -648,7 +865,9 @@ export function OperationsPage({
               label: '运单状态',
               value: <Tag color={statusColor(row.shipment.status)}>{shipmentStatusLabels[row.shipment.status]}</Tag>
             },
-            { key: 'latestTracking', label: '最新物流轨迹', value: row.latestTracking || '-', wrap: true },
+            { key: 'stageDwell', label: '停留时间', value: getShipmentStageDwellText(row.shipment) },
+            { key: 'transportTime', label: '运输时间', value: getShipmentTransportTimeText(row.shipment) },
+            { key: 'latestTracking', label: '物流最新轨迹', value: row.latestTracking || '-', wrap: true },
             {
               key: 'trackingFreshness',
               label: '更新时效',
@@ -662,7 +881,7 @@ export function OperationsPage({
       },
       linePoolDetailColumnMap.action
     ],
-    [canViewSensitive, linePoolDetailColumnMap, onViewShipment]
+    [canViewSensitive, fieldVisibility, linePoolDetailColumnMap, onViewShipment]
   );
   const linePoolRowSelection = useMemo(
     () => ({ selectedRowKeys: selectedLineShipmentIds, onChange: setSelectedLineShipmentIds, columnWidth: 36 }),
@@ -770,7 +989,7 @@ export function OperationsPage({
                 <div className="line-pool-status-strip">
                   <div className="line-pool-status-group">
                     <LinePoolStatusButton active={linePoolQuery.statusGroup === 'ALL'} onClick={() => handleLinePoolStatus('ALL')}>全部 {linePoolResponse?.statusCounts?.ALL ?? 0}</LinePoolStatusButton>
-                    <LinePoolStatusButton active={linePoolQuery.statusGroup === 'REVIEW_PENDING'} onClick={() => handleLinePoolStatus('REVIEW_PENDING')}>待审核 {linePoolResponse?.statusCounts?.REVIEW_PENDING ?? 0}</LinePoolStatusButton>
+                    {canViewReviewPendingStage ? <LinePoolStatusButton active={linePoolQuery.statusGroup === 'REVIEW_PENDING'} onClick={() => handleLinePoolStatus('REVIEW_PENDING')}>待审核 {linePoolResponse?.statusCounts?.REVIEW_PENDING ?? 0}</LinePoolStatusButton> : null}
                     <LinePoolStatusButton active={linePoolQuery.statusGroup === 'REVIEW_REJECTED'} onClick={() => handleLinePoolStatus('REVIEW_REJECTED')}>审核不通过 {linePoolResponse?.statusCounts?.REVIEW_REJECTED ?? 0}</LinePoolStatusButton>
                     <LinePoolStatusButton active={linePoolQuery.statusGroup === 'OUTBOUNDED'} onClick={() => handleLinePoolStatus('OUTBOUNDED')}>已出库 {linePoolResponse?.statusCounts?.OUTBOUNDED ?? 0}</LinePoolStatusButton>
                   </div>

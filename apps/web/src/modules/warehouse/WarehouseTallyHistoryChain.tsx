@@ -52,11 +52,11 @@ function TallyOutputRows({
               ? <Tag color="warning">待重新过机</Tag>
               : <Tag color="success">已测量</Tag>
           },
-          { title: '复测实重', dataIndex: 'weightKg', width: 100, align: 'right', render: (value: number, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(2)} kg` },
+          { title: '复测实重', dataIndex: 'weightKg', width: 100, align: 'right', render: (value: number, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(2)} KG` },
           { title: '复测尺寸', width: 130, render: (_value, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${row.lengthCm}×${row.widthCm}×${row.heightCm}` },
-          { title: '体积', dataIndex: 'cbm', width: 100, align: 'right', render: (value: number, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : value.toFixed(6) },
-          { title: '6000 材积重', dataIndex: 'volumetricWeightKg', width: 110, align: 'right', render: (value: number, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(2)} kg` },
-          { title: '计费重', dataIndex: 'chargeableWeightKg', width: 100, align: 'right', render: (value: number, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(2)} kg` },
+          { title: '体积 CBM', dataIndex: 'cbm', width: 100, align: 'right', render: (value: number, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(6)} CBM` },
+          { title: '6000 材积重', dataIndex: 'volumetricWeightKg', width: 110, align: 'right', render: (value: number, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(2)} KG` },
+          { title: '计费重', dataIndex: 'chargeableWeightKg', width: 100, align: 'right', render: (value: number, row) => row.legacyAggregate ? '待恢复' : row.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(2)} KG` },
           {
             title: '数据形态',
             dataIndex: 'legacyAggregate',
@@ -136,9 +136,9 @@ export function WarehouseTallyHistoryChain({
                 render: (_, row, index) => `${row.packageIndex ?? index + 1}/${row.expectedTotalPackageCount ?? sourcePackages?.length ?? 1}`
               },
               { title: '件数', dataIndex: 'packageCount', width: 70, align: 'right' },
-              { title: '单件实重', dataIndex: 'weightKg', width: 105, align: 'right', render: (value: number) => `${value.toFixed(2)} kg` },
+              { title: '单件实重', dataIndex: 'weightKg', width: 105, align: 'right', render: (value: number) => `${value.toFixed(2)} KG` },
               { title: '尺寸 cm', width: 125, render: (_, row) => `${row.lengthCm}×${row.widthCm}×${row.heightCm}` },
-              { title: '单件方数', dataIndex: 'cbm', width: 110, align: 'right', render: (value: number) => value.toFixed(6) },
+              { title: '单件体积 CBM', dataIndex: 'cbm', width: 110, align: 'right', render: (value: number) => `${value.toFixed(6)} CBM` },
               { title: '单件5000材积', dataIndex: 'volumetricWeightKg5000', width: 125, align: 'right', render: (value?: number) => (value ?? 0).toFixed(2) },
               { title: '单件6000材积', dataIndex: 'volumetricWeightKg', width: 125, align: 'right', render: (value: number) => value.toFixed(2) },
               {
@@ -180,8 +180,8 @@ export function WarehouseTallyHistoryChain({
                 <Descriptions.Item label="理货需求" span={2}>{task.tallyRequirement || '-'}</Descriptions.Item>
                 <Descriptions.Item label="理货前件数">{task.packageCount} 件</Descriptions.Item>
                 <Descriptions.Item label="理货后件数">{task.completedPackageCount ?? '-'} 件</Descriptions.Item>
-                <Descriptions.Item label="理货前重量">{task.originalWeightKg.toFixed(2)} kg</Descriptions.Item>
-                <Descriptions.Item label="理货后重量">{task.completedWeightKg === undefined ? '-' : `${task.completedWeightKg.toFixed(2)} kg`}</Descriptions.Item>
+                <Descriptions.Item label="理货前重量">{task.originalWeightKg.toFixed(2)} KG</Descriptions.Item>
+                <Descriptions.Item label="理货后重量">{task.completedWeightKg === undefined ? '-' : `${task.completedWeightKg.toFixed(2)} KG`}</Descriptions.Item>
                 <Descriptions.Item label="理货前尺寸">{task.originalLengthCm}×{task.originalWidthCm}×{task.originalHeightCm}</Descriptions.Item>
                 <Descriptions.Item label="理货后尺寸">{task.completedLengthCm === undefined ? '-' : `${task.completedLengthCm}×${task.completedWidthCm}×${task.completedHeightCm}`}</Descriptions.Item>
                 <Descriptions.Item label="完成时间">{task.completedAt ? formatBeijingDateTime(task.completedAt) : '-'}</Descriptions.Item>

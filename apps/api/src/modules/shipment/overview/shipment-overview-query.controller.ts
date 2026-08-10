@@ -1,4 +1,4 @@
-import { Controller, ForbiddenException, Get, Inject, Req } from '@nestjs/common';
+import { BadRequestException, Controller, ForbiddenException, Get, Inject, Query, Req } from '@nestjs/common';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
@@ -9,8 +9,11 @@ export class ShipmentOverviewQueryController {
 
   @Get('shipments')
   @RequirePermission('business:shipment:list')
-  shipments(@Req() request: { user: Principal }) {
-    return this.repository.getShipments(request.user);
+  shipments(@Req() request: { user: Principal }, @Query('costScope') costScope?: string) {
+    if (costScope && costScope !== 'routed') throw new BadRequestException('不支持的成本数据范围');
+    return this.repository.getShipments(request.user, {
+      routeCostScope: costScope === 'routed' ? 'ROUTED' : undefined
+    });
   }
 
   @Get('shipments/status-counts')

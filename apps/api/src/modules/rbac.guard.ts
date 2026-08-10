@@ -38,6 +38,10 @@ export class RbacGuard implements CanActivate {
       const effectivePermissions = await this.repository.hydratePrincipalDepartmentScope(principal);
       request.user = principal;
 
+      if (principal.mustChangePassword && !isPasswordBootstrapRequest(request.method, request.url)) {
+        throw new ForbiddenException('请先修改初始密码');
+      }
+
       if (!permission) {
         return true;
       }
@@ -60,6 +64,12 @@ export class RbacGuard implements CanActivate {
       throw new UnauthorizedException('登录凭证无效');
     }
   }
+}
+
+export function isPasswordBootstrapRequest(method?: string, rawPath?: string): boolean {
+  const path = rawPath?.split('?')[0];
+  return (method === 'POST' && path === '/api/auth/change-password')
+    || (method === 'GET' && ['/api/auth/me', '/api/auth/session'].includes(path ?? ''));
 }
 
 export function jwtSecret(): string {

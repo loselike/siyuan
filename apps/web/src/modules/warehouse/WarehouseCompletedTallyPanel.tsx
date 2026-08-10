@@ -11,6 +11,8 @@ import { formatBeijingDateTime } from '../shared/format';
 import { ManagedTable, tenRowTablePagination } from '../shared/ui';
 import type { WarehouseInboundPackage } from './warehousePageModel';
 import { buildWarehouseTallyOutputDisplayRows, type WarehouseTallyOutputDisplayRow } from './warehouseTallyOutputRows';
+import { buildCompletedTallyArchiveSummaries, resolveCompletedTallyArchiveRecordKind } from './warehouseCompletedTallyHistory';
+import { WarehouseCompletedTallyHistorySummary } from './WarehouseCompletedTallyHistorySummary';
 
 const { Text } = Typography;
 
@@ -24,10 +26,12 @@ export function WarehouseCompletedTallyPanel({
   completedArchiveRows,
   completedTaskByKey,
   canViewDetail,
+  canUpdateCount,
   canGenerateLabel,
   canPrintLabel,
   canDownloadLabel,
   onViewTask,
+  onUpdateCount,
   onGenerateLabel,
   onPrintLabel,
   onDownloadLabel,
@@ -49,10 +53,12 @@ export function WarehouseCompletedTallyPanel({
   completedArchiveRows: WarehouseInboundPackage[];
   completedTaskByKey: ReadonlyMap<string, WarehouseTallyTaskSummary>;
   canViewDetail: boolean;
+  canUpdateCount: boolean;
   canGenerateLabel: boolean;
   canPrintLabel: boolean;
   canDownloadLabel: boolean;
   onViewTask: (task: WarehouseTallyTaskSummary) => void;
+  onUpdateCount: (task: WarehouseTallyTaskSummary) => void;
   onGenerateLabel: (task: WarehouseTallyTaskSummary) => void;
   onPrintLabel: (task: WarehouseTallyTaskSummary) => void;
   onDownloadLabel: (task: WarehouseTallyTaskSummary) => void;
@@ -68,6 +74,8 @@ export function WarehouseCompletedTallyPanel({
   onShowOperatorRepeatBatches: (record: WarehouseTallyRepeatOperatorSummary) => void;
   onOpenRepeatBatchHistory: (record: WarehouseTallyRepeatBatchSummary) => void;
 }) {
+  const completedTallyArchiveSummaries = buildCompletedTallyArchiveSummaries(completedArchiveRows, completedTasks);
+
   return (
     <Card
       title={(
@@ -87,7 +95,9 @@ export function WarehouseCompletedTallyPanel({
           <Text type="secondary">
             {view === 'repeat-statistics'
               ? `共 ${repeatStatistics.summary.repeatedBatchCount} 个重复批次`
-              : `共 ${view === 'tasks' ? completedTasks.length : completedArchiveRows.length} 条`}
+              : view === 'tasks'
+                ? `共 ${completedTasks.length} 个任务`
+                : `共 ${completedArchiveRows.length} 条归档记录`}
           </Text>
         </Space>
       )}
@@ -100,7 +110,7 @@ export function WarehouseCompletedTallyPanel({
           size="small"
           pagination={tenRowTablePagination}
           columnSettingsPlacement="toolbar"
-          scroll={{ x: 1900 }}
+          scroll={{ x: 2000 }}
           expandable={{
             rowExpandable: (task) => Boolean(buildWarehouseTallyOutputDisplayRows(task.outputPackages ?? []).length),
             expandedRowRender: (task) => (
@@ -130,7 +140,7 @@ export function WarehouseCompletedTallyPanel({
                   { title: '数据形态', dataIndex: 'legacyAggregate', width: 130, render: (legacy: boolean) => legacy ? <Tag>历史聚合展示</Tag> : <Tag color="blue">实体件记录</Tag> },
                   { title: '复测实重', dataIndex: 'weightKg', width: 100, align: 'right', render: (value: number, pkg) => pkg.legacyAggregate ? '聚合数据' : pkg.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(2)} kg` },
                   { title: '复测尺寸', width: 130, render: (_, pkg) => pkg.legacyAggregate ? '聚合数据' : pkg.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${pkg.lengthCm}×${pkg.widthCm}×${pkg.heightCm}` },
-                  { title: '体积', dataIndex: 'cbm', width: 100, align: 'right', render: (value: number, pkg) => pkg.legacyAggregate ? '聚合数据' : pkg.measurementStatus === 'PENDING_REMEASURE' ? '-' : value.toFixed(6) },
+                  { title: '体积 CBM', dataIndex: 'cbm', width: 100, align: 'right', render: (value: number, pkg) => pkg.legacyAggregate ? '聚合数据' : pkg.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(6)} CBM` },
                   { title: '计费重', dataIndex: 'chargeableWeightKg', width: 100, align: 'right', render: (value: number, pkg) => pkg.legacyAggregate ? '聚合数据' : pkg.measurementStatus === 'PENDING_REMEASURE' ? '-' : `${value.toFixed(2)} kg` },
                   { title: '数据来源', dataIndex: 'scanSource', width: 160, render: (value?: string) => value || '-' },
                   { title: '覆盖人/设备', dataIndex: 'measurementMatchedBy', width: 150, render: (value?: string) => value || '-' },
@@ -184,11 +194,12 @@ export function WarehouseCompletedTallyPanel({
             {
               title: '标签操作',
               key: 'labelActions',
-              width: 310,
+              width: 390,
               fixed: 'right',
               render: (_, task) => (
                 <Space size={6}>
                   {canViewDetail ? <Button size="small" onClick={() => onViewTask(task)}>查看</Button> : null}
+                  {canUpdateCount ? <Button size="small" danger onClick={() => onUpdateCount(task)}>反审核</Button> : null}
                   {canGenerateLabel || canPrintLabel || canDownloadLabel ? (
                     <>
                       {!task.labelNo && canGenerateLabel ? <Button size="small" onClick={() => onGenerateLabel(task)}>生成标签</Button> : null}
@@ -202,6 +213,8 @@ export function WarehouseCompletedTallyPanel({
           ]}
         />
       ) : view === 'history' ? (
+        <div className="warehouse-tally-history-workbench">
+        <WarehouseCompletedTallyHistorySummary summaries={completedTallyArchiveSummaries} />
         <ManagedTable<WarehouseInboundPackage>
           recordDetail={{ title: '已完成理货归档详情' }}
           rowKey="id"
@@ -209,10 +222,18 @@ export function WarehouseCompletedTallyPanel({
           size="small"
           pagination={tenRowTablePagination}
           columnSettingsPlacement="toolbar"
-          scroll={{ x: 1300 }}
+          scroll={{ x: 1450 }}
           columns={[
             { title: '原始在仓数据', dataIndex: 'combinedOrderNo', width: 210 },
             { title: '来源组合号', dataIndex: 'sourcePackageNo', width: 180, render: (_, record) => record.sourcePackageNo || record.combinedOrderNo },
+            {
+              title: '记录类型',
+              key: 'archiveRecordKind',
+              width: 130,
+              render: (_, record) => resolveCompletedTallyArchiveRecordKind(record) === 'HISTORICAL_AGGREGATE_CORRECTION'
+                ? <Tag color="gold">历史聚合纠正</Tag>
+                : <Tag color="blue">原始来源</Tag>
+            },
             { title: '原始件数', dataIndex: 'packageCount', width: 90, align: 'right' },
             { title: '原始重量', dataIndex: 'weightKg', width: 110, align: 'right', render: (value: number) => `${value.toFixed(2)} kg` },
             { title: '原始尺寸', width: 130, render: (_, record) => `${record.lengthCm}×${record.widthCm}×${record.heightCm}` },
@@ -233,6 +254,7 @@ export function WarehouseCompletedTallyPanel({
             { title: '状态', dataIndex: 'status', width: 120, render: () => <Tag color="default">理货归档</Tag> }
           ]}
         />
+        </div>
       ) : (
         <div className="warehouse-tally-repeat-workbench">
           <div className="warehouse-tally-repeat-filters">

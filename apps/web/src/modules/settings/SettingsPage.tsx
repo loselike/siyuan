@@ -6,29 +6,51 @@ import { Alert, Button, Card, Checkbox, Col, DatePicker, Dropdown, Flex, Form, I
 import type { DatePickerProps } from 'antd/es/date-picker';
 import zhCNDatePickerLocale from 'antd/es/date-picker/locale/zh_CN';
 import type { AuditLogDashboardSummary, AuditLogListResponse, AuditLogQuery, AuditLogSummary, DepartmentSummary, SiteSummary, StaffAccountCreateInput, StaffAccountQuery, StaffAccountRoleKey, StaffAccountSummary, StaffGender } from '@siyuan/shared';
-import { ApiClient, type PermissionKey, type RoleGroupInput, type RoleKey, type RolePermissionMatrix, type RolePermissionRow } from '../../apiClient';
+import { ApiClient, isAdministratorRole, type PermissionKey, type RoleGroupInput, type RoleKey, type RolePermissionMatrix, type RolePermissionRow } from '../../apiClient';
 import { getPasswordStrengthErrorForUi } from '../appShell/config';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { addRowsWorksheet, createWorkbook, downloadWorkbook, loadExcel, readWorkbook, worksheetToRows } from '../shared/excel';
 import { formatBeijingDate, formatBeijingDateTime, formatBeijingDateTimeInputValue, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, createNoticeMessage, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import {
-  canBulkGrantPermissionControl,
-  getPermissionControlState,
-  getPermissionControls,
-  getUnrepresentedPermissionCount,
+  getPermissionGroupAccessState,
+  getPermissionGroupAccessControl,
   isUiPreferencePermission,
-  inferPermissionRisk,
-  permissionControlCategoryOrder,
-  requiresPermissionGrantConfirmation,
-  updatePermissionControl,
-  type PermissionControl
+  updatePermissionGroupAccess
 } from './rolePermissionPresentation';
 import { createUserGroupSiteOptions, matchesUserGroupSiteOption } from './userGroupSiteOptions';
+import {
+  getPermissionWorkspaceDefinition,
+  getWorkspacePermissionGroups,
+  getFirstLevelFieldMaskCatalog,
+  permissionWorkspaceCatalog,
+  lineShipmentStageEditBlockControls,
+  lineShipmentStageEditBlockPermissionCode,
+  lineShipmentStageViewBlockControls,
+  lineShipmentStageViewBlockPermissionCode,
+  pricingLookupModuleBlockControls,
+  pricingPriceBookCreateBlockControls,
+  pricingPriceBookDeleteBlockControls,
+  pricingPriceBookRemarkBlockControls,
+  pricingPriceBookBlockPermissionCode,
+  pricingMarkupEditBlockControls,
+  pricingMarkupModuleBlockPermissionCode,
+  pricingMarkupViewBlockControls,
+  pricingModuleBlockPermissionCode,
+  orderEntryFinanceMaskControls,
+  isPricingPriceBookBlockPermission,
+  isPricingMarkupModuleBlockPermission,
+  workspaceFieldMaskPermissionCode,
+  type PricingMarkupBlockMode,
+  type PricingModuleBlockScope,
+  type PermissionWorkspaceKey
+} from './rolePermissionCatalog';
 
 const { Text } = Typography;
 const auditDateTimeFormat = 'YYYY-MM-DD HH:mm';
 const auditDatePickerLocale = { ...zhCNDatePickerLocale, lang: { ...zhCNDatePickerLocale.lang, ok: '确认' } } as DatePickerProps['locale'];
+const isAdministratorRoleRow = (role: Pick<RolePermissionRow, 'key' | 'administratorEquivalent'> | null | undefined) =>
+  role?.administratorEquivalent === true || isAdministratorRole(role?.key);
 
 function getAuditDateTimeValue(value?: string) {
   const parsed = value ? dayjs(formatBeijingDateTimeInputValue(value)) : null;
@@ -255,13 +277,9 @@ export function SettingsPage({
   const [rolePermissionCopyForm] = Form.useForm<RolePermissionCopyFormValues>();
   const selectedRolePermissionCopySourceKey = Form.useWatch('sourceRoleKey', rolePermissionCopyForm);
   const [selectedPermissionRoleKey, setSelectedPermissionRoleKey] = useState<RoleKey | null>(null);
-  const [selectedPermissionWorkspace, setSelectedPermissionWorkspace] = useState<'operations' | 'pricing' | 'business' | 'warehouse' | 'market' | 'customerService' | 'tracking' | 'finance' | 'master' | 'system'>('operations');
+  const [selectedPermissionWorkspace, setSelectedPermissionWorkspace] = useState<PermissionWorkspaceKey>('operations');
   const [selectedWorkspacePermissionGroup, setSelectedWorkspacePermissionGroup] = useState<string | null>(null);
-  const [pendingPermissionGrant, setPendingPermissionGrant] = useState<{
-    roleKey: RoleKey;
-    control: PermissionControl;
-    isPartialGrant: boolean;
-  } | null>(null);
+  const [selectedPermissionWorkspaceView, setSelectedPermissionWorkspaceView] = useState<'entries' | 'rules'>('entries');
   const hasSystemPermission = (...keys: PermissionKey[]) => keys.some((key) => permissions.includes(key));
   const settingsSubItems: ModuleSubNavItem[] = [
     hasSystemPermission('system:user-groups:read') && { key: 'userGroups', label: '用户组', description: '组织与角色组' },
@@ -442,7 +460,10 @@ export function SettingsPage({
     setStaffCreateOpen(false);
     setEditingStaffAccount(null);
     staffCreateForm.resetFields();
-    setSettingsNotice(editingStaffAccount ? `${saved.username} 已更新` : `已新建用户 ${saved.username}，该账号首次登录必须修改密码。`);
+    const createdTemporaryPassword = (saved as StaffAccountSummary & { temporaryPassword?: string }).temporaryPassword;
+    setSettingsNotice(editingStaffAccount
+      ? `${saved.username} 已更新`
+      : `已新建用户 ${saved.username}${createdTemporaryPassword ? `，随机初始密码：${createdTemporaryPassword}` : ''}。该账号首次登录必须修改密码。`);
     await loadStaffAccounts();
   }
 
@@ -457,6 +478,7 @@ export function SettingsPage({
       ? {
           username: account.username,
           name: account.name,
+          nickname: account.nickname,
           departmentId: account.departmentId,
           directManagerId: account.directManagerId,
           phone: account.phone,
@@ -496,7 +518,7 @@ export function SettingsPage({
     if (action === 'reset') {
       Modal.confirm({
         title: '确认重置密码？',
-        content: `账号 ${account.username} 的密码会重置为 ${account.username}@123，并要求下次登录修改密码。`,
+        content: `账号 ${account.username} 将生成新的随机临时密码，并要求下次登录修改密码。重置后请立即安全转交临时密码。`,
         okText: '确认重置',
         cancelText: '取消',
         onOk: () => resetStaffAccountPasswords([account.id])
@@ -612,13 +634,13 @@ export function SettingsPage({
     [auditLogs, selectedAuditLogId]
   );
   const roleRows = useMemo(() => allRoleRows.filter((role) => role.key !== 'CUSTOMER'), [allRoleRows]);
-  const rolePermissionRows = useMemo(() => roleRows.filter((role) => role.enabled !== false && (!role.systemBuiltin || role.key === 'ADMIN')), [roleRows]);
+  const rolePermissionRows = useMemo(() => roleRows.filter((role) => role.enabled !== false && (!role.systemBuiltin || isAdministratorRoleRow(role))), [roleRows]);
   const selectedPermissionRole =
     rolePermissionRows.find((role) => role.key === selectedPermissionRoleKey)
-    ?? rolePermissionRows.find((role) => role.key !== 'ADMIN')
+    ?? rolePermissionRows.find((role) => !isAdministratorRoleRow(role))
     ?? rolePermissionRows[0]
     ?? null;
-  const userGroupRows = useMemo(() => roleRows.filter((role) => !role.systemBuiltin), [roleRows]);
+  const userGroupRows = useMemo(() => roleRows.filter((role) => !role.systemBuiltin || role.administratorEquivalent === true), [roleRows]);
   const enabledSiteOptions = useMemo(() => createUserGroupSiteOptions(sites), [sites]);
   const departmentOptions = useMemo(
     () => departments.map((department) => ({ label: department.name, value: department.id, disabled: !department.enabled })),
@@ -644,7 +666,7 @@ export function SettingsPage({
   };
   const staffRoleOptions: Array<{ label: string; value: StaffAccountRoleKey }> = roleMatrix
     ? rolePermissionRows
-      .filter((role) => !role.systemBuiltin)
+      .filter((role) => !role.systemBuiltin || role.administratorEquivalent === true)
       .map((role) => ({ label: role.label, value: role.key as StaffAccountRoleKey }))
     : builtinStaffRoleOptions;
   const directManagerRoleKeys = useMemo(
@@ -669,7 +691,7 @@ export function SettingsPage({
     [directManagerRoleKeys, editingStaffAccount?.id, selectedStaffSite, staffManagerAccounts]
   );
   const rolePermissionSourceOptions = rolePermissionRows
-    .filter((role) => role.key !== 'ADMIN' && role.enabled !== false)
+    .filter((role) => !isAdministratorRoleRow(role) && role.enabled !== false)
     .map((role) => ({
       label: `${role.label}${role.site ? ` · ${role.site}` : ''}`,
       value: role.key
@@ -696,54 +718,75 @@ export function SettingsPage({
       console.warn('角色权限矩阵包含重复 permission code', duplicatePermissionCodes);
     }
   }, [duplicatePermissionCodes]);
-  const permissionWorkspace = selectedPermissionWorkspace === 'system'
-    ? { key: 'system', label: '系统管理', prefix: '系统管理 / ' }
-    : selectedPermissionWorkspace === 'pricing'
-      ? { key: 'pricing' as const, label: '报价查价', prefix: '报价查价 / ' }
-    : selectedPermissionWorkspace === 'business'
-    ? { key: 'business' as const, label: '业务管理', prefix: '业务管理 / ' }
-    : selectedPermissionWorkspace === 'warehouse'
-      ? { key: 'warehouse' as const, label: '仓库管理', prefix: '仓库管理 / ' }
-      : selectedPermissionWorkspace === 'market'
-        ? { key: 'market' as const, label: '市场管理', prefix: '市场管理 / ' }
-        : selectedPermissionWorkspace === 'customerService'
-          ? { key: 'customerService' as const, label: '客服管理', prefix: '客服管理 / ' }
-          : selectedPermissionWorkspace === 'tracking'
-            ? { key: 'tracking' as const, label: '物流轨迹管理', prefix: '物流轨迹管理 / ' }
-            : selectedPermissionWorkspace === 'finance'
-              ? { key: 'finance' as const, label: '财务管理', prefix: '财务管理 / ' }
-              : selectedPermissionWorkspace === 'master'
-                ? { key: 'master' as const, label: '基础资料库', prefix: '基础资料库 / ' }
-        : { key: 'operations' as const, label: '运营工作台', prefix: '运营工作台 / ' };
+  const permissionWorkspace = getPermissionWorkspaceDefinition(selectedPermissionWorkspace);
   const workspacePermissionGroups = useMemo(
-    () => permissionGroups.filter(([group]) => group.startsWith(permissionWorkspace.prefix)),
-    [permissionGroups, permissionWorkspace.prefix]
+    () => getWorkspacePermissionGroups(permissionGroups, selectedPermissionWorkspace),
+    [permissionGroups, selectedPermissionWorkspace]
   );
   const selectedWorkspacePermissions = workspacePermissionGroups.find(([group]) => group === selectedWorkspacePermissionGroup)
-    ?? workspacePermissionGroups[0]
     ?? null;
-  const selectedPermissionControls = selectedWorkspacePermissions
-    ? getPermissionControls(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1])
-    : [];
+  const firstLevelFieldMaskControls = useMemo(
+    () => getFirstLevelFieldMaskCatalog(selectedPermissionWorkspace).map((rule) => ({
+      ...rule,
+      code: workspaceFieldMaskPermissionCode(selectedPermissionWorkspace, rule.key)
+    })),
+    [selectedPermissionWorkspace]
+  );
+  const selectedPermissionAccessControl = selectedWorkspacePermissions
+    ? getPermissionGroupAccessControl(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1])
+    : null;
   const selectedRoleGrantedPermissions = selectedPermissionRole
     ? draftPermissions[selectedPermissionRole.key] ?? selectedPermissionRole.permissions
     : [];
-  const unrepresentedPermissionCount = selectedWorkspacePermissions
-    ? getUnrepresentedPermissionCount(selectedWorkspacePermissions[1], selectedPermissionControls)
-    : 0;
-  const grantedSelectedControlCount = selectedPermissionControls.filter((control) => (
-    getPermissionControlState(control, selectedRoleGrantedPermissions).checked
-  )).length;
-  const canBulkGrantSelectedControls = selectedPermissionRole
-    ? selectedPermissionControls.some((control) => canBulkGrantPermissionControl(control, selectedPermissionRole.key))
-    : false;
-  const availablePermissionByCode = new Map((roleMatrix?.availablePermissions ?? []).map((permission) => [permission.code, permission]));
-  const highRiskGrantedPermissionCount = selectedRoleGrantedPermissions.filter((code) => {
-    const permission = availablePermissionByCode.get(code);
-    if (!permission) return false;
-    const risk = inferPermissionRisk(permission);
-    return risk === 'high' || risk === 'critical';
-  }).length;
+  const selectedPermissionAccessState = selectedPermissionAccessControl
+    ? getPermissionGroupAccessState(
+        selectedWorkspacePermissions![0],
+        selectedWorkspacePermissions![1],
+        selectedRoleGrantedPermissions
+      )
+    : { checked: false, indeterminate: false, grantedCount: 0 };
+  const selectedTotalRules = selectedPermissionWorkspaceView === 'rules';
+  const selectedLineShipmentPool = selectedWorkspacePermissions?.[0] === '运营工作台 / 专线运单池';
+  const selectedOrderEntry = selectedWorkspacePermissions?.[0] === '业务管理 / 录单';
+  const selectedOrderEntryFinanceMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return orderEntryFinanceMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedLineShipmentStageBlockStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return lineShipmentStageEditBlockControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedLineShipmentStageViewBlockStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return lineShipmentStageViewBlockControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedPricingModuleBlockScope: PricingModuleBlockScope | null = selectedWorkspacePermissions?.[0] === '报价查价 / 查价'
+    ? 'lookup'
+    : selectedWorkspacePermissions?.[0] === '报价查价 / 代理加价规则'
+      ? 'markup'
+      : null;
+  const selectedPricingModuleBlockControls = selectedPricingModuleBlockScope === 'lookup'
+    ? pricingLookupModuleBlockControls
+    : selectedPricingModuleBlockScope === 'markup'
+      ? [...pricingMarkupViewBlockControls, ...pricingMarkupEditBlockControls]
+      : [];
+  const selectedPricingModuleBlockStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return selectedPricingModuleBlockControls.map((control) => ({
+      ...control,
+      checked: granted.has(control.code)
+        || (selectedPricingModuleBlockScope === 'markup' && granted.has(pricingModuleBlockPermissionCode('markup', control.module)))
+    }));
+  }, [selectedPricingModuleBlockControls, selectedRoleGrantedPermissions]);
+  const selectedPriceBookManagementEntry = selectedWorkspacePermissions?.[0] === '报价查价 / 价格表管理';
+  const selectedPricingPriceBookBlockControls = selectedPriceBookManagementEntry
+    ? [...pricingPriceBookCreateBlockControls, ...pricingPriceBookDeleteBlockControls, ...pricingPriceBookRemarkBlockControls]
+    : [];
+  const selectedPricingPriceBookBlockStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return selectedPricingPriceBookBlockControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedPricingPriceBookBlockControls, selectedRoleGrantedPermissions]);
+  const selectedPermissionRoleIsAdministrator = isAdministratorRoleRow(selectedPermissionRole);
   const filteredSites = sites.filter((site) => {
     const keyword = siteAppliedFilters.name.trim().toLowerCase();
     const matchesName = !keyword || site.name.toLowerCase().includes(keyword);
@@ -867,33 +910,127 @@ export function SettingsPage({
     }
   }
 
-  function toggleRolePermissionControl(roleKey: RoleKey, control: PermissionControl, checked: boolean) {
-    setDraftPermissions((current) => ({
-      ...current,
-      [roleKey]: updatePermissionControl(current[roleKey] ?? selectedPermissionRole?.permissions ?? [], control, checked)
-    }));
-  }
-
-  function confirmAndToggleRolePermissionControl(
+  function togglePermissionGroupAccess(
     roleKey: RoleKey,
-    control: PermissionControl,
-    checked: boolean,
-    isPartialGrant: boolean
+    group: string,
+    permissions: RolePermissionMatrix['availablePermissions'],
+    checked: boolean
   ) {
-    if (!requiresPermissionGrantConfirmation(control, checked)) {
-      toggleRolePermissionControl(roleKey, control, checked);
-      return;
-    }
-    setPendingPermissionGrant({ roleKey, control, isPartialGrant });
+    setDraftPermissions((current) => {
+      const next = updatePermissionGroupAccess(
+        current[roleKey] ?? selectedPermissionRole?.permissions ?? [],
+        group,
+        permissions,
+        checked
+      );
+      if (group === '业务管理 / 录单' && !checked) {
+        return {
+          ...current,
+          [roleKey]: next.filter((code) => !orderEntryFinanceMaskControls.some((control) => control.code === code)
+            && code !== 'business:order-entry:business-cost-view'
+            && code !== 'business:order-entry:business-cost-write')
+        };
+      }
+      if (group === '业务管理 / 录单') {
+        const legacyFinancePermissions = [
+          'business:order-entry:business-cost-view' as PermissionKey,
+          'business:order-entry:business-cost-write' as PermissionKey
+        ];
+        const normalized = new Set(next);
+        legacyFinancePermissions.forEach((code) => normalized.add(code));
+        return { ...current, [roleKey]: Array.from(normalized) };
+      }
+      return {
+        ...current,
+        [roleKey]: !checked && group === '运营工作台 / 专线运单池'
+          ? next.filter((code) => !code.startsWith('operations:line-shipment:stage-edit-block:')
+            && !code.startsWith('operations:line-shipment:stage-view-block:'))
+          : !checked && group === '报价查价 / 查价'
+            ? next.filter((code) => !code.startsWith('pricing:lookup:module-block:'))
+            : !checked && group === '报价查价 / 代理加价规则'
+              ? next.filter((code) => !isPricingMarkupModuleBlockPermission(code))
+              : !checked && group === '报价查价 / 价格表管理'
+                ? next.filter((code) => !isPricingPriceBookBlockPermission(code))
+              : next
+      };
+    });
   }
 
-  function toggleSelectedPermissionControls(roleKey: RoleKey, checked: boolean) {
+  function toggleWorkspaceFieldMask(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
     setDraftPermissions((current) => {
-      let next = current[roleKey] ?? selectedPermissionRole?.permissions ?? [];
-      selectedPermissionControls.forEach((control) => {
-        if (!checked || canBulkGrantPermissionControl(control, roleKey)) next = updatePermissionControl(next, control, checked);
-      });
-      return { ...current, [roleKey]: next };
+      const granted = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      if (checked) granted.add(code);
+      else granted.delete(code);
+      return { ...current, [roleKey]: Array.from(granted) };
+    });
+  }
+
+  function toggleLineShipmentStageBlock(
+    roleKey: RoleKey,
+    stage: Parameters<typeof lineShipmentStageEditBlockPermissionCode>[0],
+    checked: boolean
+  ) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      const code = lineShipmentStageEditBlockPermissionCode(stage);
+      if (checked) next.add(code);
+      else next.delete(code);
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function toggleLineShipmentStageViewBlock(
+    roleKey: RoleKey,
+    stage: Parameters<typeof lineShipmentStageViewBlockPermissionCode>[0],
+    checked: boolean
+  ) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      const code = lineShipmentStageViewBlockPermissionCode(stage);
+      if (checked) next.add(code);
+      else next.delete(code);
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function togglePricingModuleBlock(
+    roleKey: RoleKey,
+    scope: PricingModuleBlockScope,
+    module: Parameters<typeof pricingModuleBlockPermissionCode>[1],
+    checked: boolean,
+    mode?: PricingMarkupBlockMode
+  ) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      const code = scope === 'markup' && mode
+        ? pricingMarkupModuleBlockPermissionCode(mode, module)
+        : pricingModuleBlockPermissionCode(scope, module);
+      if (scope === 'markup' && mode) {
+        const legacyCode = pricingModuleBlockPermissionCode('markup', module);
+        const hadLegacyBlock = next.delete(legacyCode);
+        if (hadLegacyBlock) {
+          const oppositeMode: PricingMarkupBlockMode = mode === 'view' ? 'edit' : 'view';
+          next.add(pricingMarkupModuleBlockPermissionCode(oppositeMode, module));
+        }
+      }
+      if (checked) next.add(code);
+      else next.delete(code);
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function togglePricingPriceBookBlock(
+    roleKey: RoleKey,
+    mode: Parameters<typeof pricingPriceBookBlockPermissionCode>[0],
+    module: Parameters<typeof pricingPriceBookBlockPermissionCode>[1],
+    checked: boolean
+  ) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      const code = pricingPriceBookBlockPermissionCode(mode, module);
+      if (checked) next.add(code);
+      else next.delete(code);
+      return { ...current, [roleKey]: [...next] };
     });
   }
 
@@ -1158,9 +1295,9 @@ export function SettingsPage({
                     menu={{
                       items: [
                         { key: 'detail', label: '查看当前组详情', disabled: !selectedRoleGroup },
-                        { key: 'edit', label: '编辑当前用户组', disabled: !selectedRoleGroup },
-                        { key: 'disable', label: '停用当前用户组', danger: true, disabled: !selectedRoleGroup || selectedRoleGroup.enabled === false },
-                        ...(hasSystemPermission('system:user-groups:delete') ? [{ key: 'delete', label: '删除当前用户组', danger: true, disabled: !selectedRoleGroup || selectedRoleGroup.key === 'ADMIN' }] : [])
+                        { key: 'edit', label: '编辑当前用户组', disabled: !selectedRoleGroup || isAdministratorRoleRow(selectedRoleGroup) },
+                        { key: 'disable', label: '停用当前用户组', danger: true, disabled: !selectedRoleGroup || isAdministratorRoleRow(selectedRoleGroup) || selectedRoleGroup.enabled === false },
+                        ...(hasSystemPermission('system:user-groups:delete') ? [{ key: 'delete', label: '删除当前用户组', danger: true, disabled: !selectedRoleGroup || isAdministratorRoleRow(selectedRoleGroup) }] : [])
                       ],
                       onClick: ({ key }) => {
                         if (!selectedRoleGroup) return;
@@ -1238,14 +1375,14 @@ export function SettingsPage({
                   )}
                   toolbarActions={selectedRoleGroup ? (
                     <Space size={6} wrap className="user-group-batch-actions">
-                      {hasSystemPermission('system:role-permissions:copy-role') ? (
+                      {hasSystemPermission('system:role-permissions:copy-role') && !isAdministratorRoleRow(selectedRoleGroup) ? (
                         <Button size="small" icon={<Copy size={14} />} onClick={() => openRolePermissionCopy(selectedRoleGroup)}>复制权限</Button>
                       ) : null}
-                      <Button size="small" icon={<Edit size={14} />} onClick={() => openRoleGroupEditor(selectedRoleGroup)}>修改</Button>
-                      {selectedRoleGroup.enabled !== false ? (
+                      {!isAdministratorRoleRow(selectedRoleGroup) ? <Button size="small" icon={<Edit size={14} />} onClick={() => openRoleGroupEditor(selectedRoleGroup)}>修改</Button> : null}
+                      {!isAdministratorRoleRow(selectedRoleGroup) && selectedRoleGroup.enabled !== false ? (
                         <Button size="small" icon={<Power size={14} />} danger onClick={() => confirmRoleGroupDisable(selectedRoleGroup)}>停用</Button>
                       ) : null}
-                      {hasSystemPermission('system:user-groups:delete') && selectedRoleGroup.key !== 'ADMIN' ? (
+                      {hasSystemPermission('system:user-groups:delete') && !isAdministratorRoleRow(selectedRoleGroup) ? (
                         <Button size="small" icon={<Trash2 size={14} />} danger onClick={() => confirmRoleGroupDelete(selectedRoleGroup)}>删除</Button>
                       ) : null}
                     </Space>
@@ -1283,9 +1420,9 @@ export function SettingsPage({
                             menu={{
                               items: [
                                 { key: 'detail', label: '查看详情' },
-                                { key: 'edit', label: '编辑' },
-                                { key: 'disable', label: '停用', danger: true, disabled: role.enabled === false },
-                                ...(hasSystemPermission('system:user-groups:delete') && role.key !== 'ADMIN' ? [{ key: 'delete', label: '删除', danger: true }] : [])
+                                { key: 'edit', label: '编辑', disabled: isAdministratorRoleRow(role) },
+                                { key: 'disable', label: '停用', danger: true, disabled: isAdministratorRoleRow(role) || role.enabled === false },
+                                ...(hasSystemPermission('system:user-groups:delete') && !isAdministratorRoleRow(role) ? [{ key: 'delete', label: '删除', danger: true }] : [])
                               ],
                               onClick: ({ key, domEvent }) => {
                                 domEvent.stopPropagation();
@@ -1588,7 +1725,7 @@ export function SettingsPage({
               size="small"
               density="compact"
               className="settings-account-table"
-              minimumScrollX={1080}
+              minimumScrollX={1180}
               scroll={{ y: 'calc(100vh - 470px)' }}
               pagination={tenRowTablePagination}
               dataSource={staffAccounts}
@@ -1617,7 +1754,7 @@ export function SettingsPage({
                   </Popconfirm>
                   <Popconfirm
                     title="确认批量重置密码？"
-                    description="选中员工的密码会重置为“用户名@123”，且下次登录必须修改密码。"
+                    description="选中员工将分别生成新的随机临时密码，且下次登录必须修改密码。"
                     okText="确认重置"
                     cancelText="取消"
                     onConfirm={() => resetStaffAccountPasswords(selectedStaffAccountIds)}
@@ -1654,6 +1791,12 @@ export function SettingsPage({
                       <Text type="secondary">{record.department || '未分配部门'} / {record.roleLabel}</Text>
                     </Space>
                   ) : null
+                },
+                {
+                  title: '英文名',
+                  dataIndex: 'nickname',
+                  width: 110,
+                  render: (value?: string) => value || '-'
                 },
                 {
                   title: '直属经理',
@@ -1716,7 +1859,7 @@ export function SettingsPage({
           ) : null}
 
           {activeSettingsSection === 'rolePermissions' ? (
-          <Card className="module-grid role-permission-card" title="角色权限分配" extra={<Text type="secondary">列设置随页面查看权限开放，保存仅影响个人账号</Text>}>
+          <Card className="module-grid role-permission-card" title="角色权限分配" extra={<Text type="secondary">保存后对该用户组下所有账号生效</Text>}>
             {roleMatrix && selectedPermissionRole ? (
               <div className="role-permission-editor role-permission-console">
                 <aside className="role-permission-roles" aria-label="角色列表">
@@ -1745,147 +1888,276 @@ export function SettingsPage({
                           <Text strong>{role.label}</Text>
                           <Text type="secondary">{role.systemBuiltin ? '系统角色' : role.site || '用户组'}</Text>
                         </span>
-                        <Tag color={role.key === 'ADMIN' ? 'red' : 'blue'}>{permissionCount}</Tag>
+                        <Tag color={isAdministratorRoleRow(role) ? 'red' : 'blue'}>{permissionCount}</Tag>
                       </button>
                     );
                   })}
                 </aside>
-                <aside className="role-permission-modules" aria-label="权限模块">
+                <section className="role-permission-modules" aria-label="权限模块">
                   <div className="role-permission-pane-title">
-                    <Text strong>权限模块</Text>
-                    <Text type="secondary">功能权限</Text>
+                    <Text strong>模块入口</Text>
+                    <Text type="secondary">一级目录固定 11 个，另设总规则；勾选二级入口后默认拥有该入口下全部操作权限</Text>
                   </div>
-                  <div className="role-permission-workspace-switch" role="tablist" aria-label="业务模块树">
-                    {(['operations', 'pricing', 'business', 'warehouse', 'market', 'customerService', 'tracking', 'finance', 'master', 'system'] as const).map((workspace) => (
+                  <div className="role-permission-workspace-switch" role="tablist" aria-label="一级模块">
+                    {permissionWorkspaceCatalog.map((workspace) => (
                       <button
                         type="button"
                         role="tab"
-                        aria-selected={selectedPermissionWorkspace === workspace}
-                        className={selectedPermissionWorkspace === workspace ? 'is-active' : ''}
-                        key={workspace}
-                        onClick={() => setSelectedPermissionWorkspace(workspace)}
+                        aria-label={workspace.label}
+                        aria-selected={!selectedTotalRules && selectedPermissionWorkspace === workspace.key}
+                        className={`role-permission-workspace-tab${!selectedTotalRules && selectedPermissionWorkspace === workspace.key ? ' is-active' : ''}`}
+                        key={workspace.key}
+                        onClick={() => {
+                          setSelectedPermissionWorkspace(workspace.key);
+                          setSelectedWorkspacePermissionGroup(null);
+                          setSelectedPermissionWorkspaceView('entries');
+                        }}
                       >
-                        {workspace === 'pricing' ? '报价查价' : workspace === 'business' ? '业务管理' : workspace === 'warehouse' ? '仓库管理' : workspace === 'market' ? '市场管理' : workspace === 'customerService' ? '客服管理' : workspace === 'tracking' ? '物流轨迹管理' : workspace === 'finance' ? '财务管理' : workspace === 'master' ? '基础资料库' : workspace === 'system' ? '系统管理' : '运营工作台'}
+                        <span>{workspace.label}</span>
+                        {!selectedTotalRules && selectedPermissionWorkspace === workspace.key ? <span className="role-permission-workspace-current">当前</span> : null}
                       </button>
                     ))}
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-label="总规则"
+                      aria-selected={selectedTotalRules}
+                      className={`role-permission-workspace-tab role-permission-workspace-rules-tab${selectedTotalRules ? ' is-active' : ''}`}
+                      onClick={() => {
+                        setSelectedPermissionWorkspace('operations');
+                        setSelectedWorkspacePermissionGroup(null);
+                        setSelectedPermissionWorkspaceView('rules');
+                      }}
+                    >
+                      <span>总规则</span>
+                      {selectedTotalRules ? <span className="role-permission-workspace-current">当前</span> : null}
+                    </button>
                   </div>
-                  <Text type="secondary" className="role-permission-tree-root">{permissionWorkspace.label}</Text>
-                  {workspacePermissionGroups.map(([group, permissions]) => {
-                    const selected = selectedWorkspacePermissions?.[0] === group;
-                    const controls = getPermissionControls(group, permissions);
-                    const granted = controls.filter((control) => getPermissionControlState(control, selectedRoleGrantedPermissions).checked).length;
-                    return (
-                      <button
-                        key={group}
-                        type="button"
-                        className={`role-permission-module${selected ? ' is-active' : ''}`}
-                        onClick={() => setSelectedWorkspacePermissionGroup(group)}
-                      >
-                        <span>{group.replace(permissionWorkspace.prefix, '')}</span>
-                        <Tag>{granted}/{controls.length}</Tag>
-                      </button>
-                    );
-                  })}
-                </aside>
+                  {!selectedTotalRules ? <div className="role-permission-module-heading">
+                    <Text type="secondary">{permissionWorkspace.label} · {workspacePermissionGroups.length} 个二级入口</Text>
+                  </div> : null}
+                  {!selectedTotalRules ? <div className="role-permission-module-grid">
+                    {workspacePermissionGroups.map(([group, permissions]) => {
+                      const selected = selectedWorkspacePermissions?.[0] === group;
+                      const accessControl = getPermissionGroupAccessControl(group, permissions);
+                      const accessState = accessControl
+                        ? getPermissionGroupAccessState(group, permissions, selectedRoleGrantedPermissions)
+                        : { checked: false, indeterminate: false, grantedCount: 0 };
+                      const administrator = isAdministratorRoleRow(selectedPermissionRole);
+                      return (
+                        <div className={`role-permission-module-card${selected ? ' is-active' : ''}${administrator || accessState.checked ? ' is-open' : ''}`} key={group}>
+                          <button
+                            type="button"
+                            className="role-permission-module-select"
+                            onClick={() => {
+                              setSelectedPermissionWorkspaceView('entries');
+                              setSelectedWorkspacePermissionGroup(group);
+                            }}
+                          >
+                            <span>
+                              <Text strong>{group.replace(`${permissionWorkspace.label} / `, '')}</Text>
+                              <Text type="secondary">{administrator || accessState.checked ? '全部操作权限随入口生效' : '未开放入口'}</Text>
+                            </span>
+                            <Tag color={administrator || accessState.checked ? 'blue' : undefined}>{administrator || accessState.checked ? '已开放' : '未开放'}</Tag>
+                          </button>
+                          <Checkbox
+                            aria-label={`授权进入${group.replace(`${permissionWorkspace.label} / `, '')}`}
+                            disabled={administrator || !accessControl}
+                            checked={administrator || accessState.checked}
+                            indeterminate={!administrator && accessState.indeterminate}
+                            onChange={(event) => {
+                              setSelectedPermissionWorkspaceView('entries');
+                              setSelectedWorkspacePermissionGroup(group);
+                              togglePermissionGroupAccess(selectedPermissionRole.key, group, permissions, event.target.checked);
+                            }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div> : null}
+                </section>
                 <section className="role-permission-detail" aria-label={`${selectedPermissionRole.label}权限`}>
                   <Flex justify="space-between" align="center" className="role-permission-detail-header">
                     <Space direction="vertical" size={2}>
-                      <Text strong>{selectedWorkspacePermissions?.[0]?.replace(permissionWorkspace.prefix, '') ?? '功能权限'}</Text>
-                      <Text type="secondary">{selectedPermissionRole.label} · {selectedPermissionRole.description || selectedPermissionRole.scope}</Text>
+                      <Text strong>{selectedTotalRules ? '总规则' : selectedWorkspacePermissions?.[0]?.replace(`${permissionWorkspace.label} / `, '') ?? '选择二级入口'}</Text>
+                      <Space size={6}>
+                        <Text type="secondary">{selectedPermissionRole.label} · {selectedPermissionRole.description || selectedPermissionRole.scope}</Text>
+                        {selectedTotalRules
+                          ? <Tag color="gold">一级规则</Tag>
+                          : null}
+                      </Space>
                     </Space>
                     <Space className="role-permission-detail-actions">
-                      <Button
-                        size="small"
-                        disabled={selectedPermissionRole.key === 'ADMIN' || !selectedWorkspacePermissions || !canBulkGrantSelectedControls}
-                        onClick={() => toggleSelectedPermissionControls(selectedPermissionRole.key, true)}
-                      >
-                        全选基础查看
-                      </Button>
-                      <Button
-                        size="small"
-                        disabled={selectedPermissionRole.key === 'ADMIN' || !selectedWorkspacePermissions}
-                        onClick={() => toggleSelectedPermissionControls(selectedPermissionRole.key, false)}
-                      >
-                        清空当前目录
-                      </Button>
-                      <Button size="small" type="primary" disabled={selectedPermissionRole.key === 'ADMIN'} onClick={() => saveRolePermissions(selectedPermissionRole)}>
+                      <Button size="small" type="primary" disabled={selectedPermissionRoleIsAdministrator} onClick={() => saveRolePermissions(selectedPermissionRole)}>
                         保存权限
                       </Button>
                     </Space>
                   </Flex>
-                  {selectedPermissionRole.key === 'ADMIN' ? (
-                    <Text type="secondary" className="role-permission-preserved-note">管理员组固定拥有全部权限，无需单独勾选；请选择其他用户组进行权限配置。</Text>
-                  ) : null}
-                  {unrepresentedPermissionCount > 0 ? (
-                    <Text type="secondary" className="role-permission-preserved-note">
-                      当前目录另有 {unrepresentedPermissionCount} 个界面偏好或待接入权限，已保留原配置，不随业务权限切换。
-                    </Text>
+                  {selectedPermissionRoleIsAdministrator ? (
+                    <Text type="secondary" className="role-permission-preserved-note">管理员及管理员等效用户组固定拥有全部权限，管理员组本身受保护，不能修改。</Text>
                   ) : null}
                   <div className="role-permission-sections" data-testid="role-permission-option-grid">
-                    {permissionControlCategoryOrder.map((category) => {
-                      const controls = selectedPermissionControls.filter((control) => control.category === category);
-                      if (!controls.length) return null;
-                      return (
-                        <section className="role-permission-section" key={category} aria-label={category}>
-                          <div className="role-permission-section-heading">
-                            <Text strong>{category}</Text>
-                            <Text type="secondary">{controls.length} 项</Text>
-                          </div>
-                          <div className="role-permission-option-grid">
-                            {controls.map((control) => {
-                              const disabled = selectedPermissionRole.key === 'ADMIN';
-                              const state = disabled
-                                ? { checked: true, indeterminate: false, grantedCount: control.codes.length }
-                                : getPermissionControlState(control, selectedRoleGrantedPermissions);
-                              const riskLabel = control.risk === 'critical'
-                                ? { label: '极高风险', color: 'red' }
-                                : control.risk === 'high'
-                                  ? { label: '高风险', color: 'orange' }
-                                  : control.risk === 'sensitive'
-                                    ? { label: '敏感字段', color: 'gold' }
-                                    : null;
-                              return (
-                                <label className={`role-permission-option role-permission-risk-${control.risk}${disabled ? ' is-disabled' : ''}`} key={control.id}>
-                                  <div className="role-permission-option-copy">
-                                    <Space size={6} wrap>
-                                      <Text strong>{control.label}</Text>
-                                      {riskLabel ? <Tag color={riskLabel.color}>{riskLabel.label}</Tag> : null}
-                                      {state.indeterminate ? <Tag>部分授权</Tag> : null}
-                                      {control.adminGrantOnly ? <Tag color="red">仅管理员可授权</Tag> : null}
-                                    </Space>
-                                    <Text type="secondary">{control.description}</Text>
-                                  </div>
-                                  <Checkbox
-                                    aria-label={`授权${control.label}`}
-                                    title={disabled ? '管理员组固定拥有全部权限，无需单独勾选' : undefined}
-                                    disabled={disabled}
-                                    checked={state.checked}
-                                    indeterminate={state.indeterminate}
-                                    onChange={(event) => confirmAndToggleRolePermissionControl(
-                                      selectedPermissionRole.key,
-                                      control,
-                                      event.target.checked,
-                                      state.indeterminate
-                                    )}
-                                  />
-                                </label>
-                              );
-                            })}
-                          </div>
-                        </section>
-                      );
-                    })}
+                    {selectedPermissionRoleIsAdministrator ? (
+                      <div className="role-permission-detail-empty">
+                        <Text strong>管理员组权限固定开放</Text>
+                        <Text type="secondary">管理员组本身不可修改；请选择普通用户组配置二级入口。</Text>
+                      </div>
+                    ) : selectedTotalRules && firstLevelFieldMaskControls.length ? (
+                      <div className="role-permission-mask-panel">
+                        <div className="role-permission-option-grid">
+                          {firstLevelFieldMaskControls.map((control) => {
+                            const granted = new Set(selectedRoleGrantedPermissions);
+                            return (
+                              <label className="role-permission-option role-permission-compact-option" key={control.code}>
+                                <span className="role-permission-option-copy role-permission-compact-copy">
+                                  <Text strong>{control.label}</Text>
+                                </span>
+                                <Checkbox
+                                  aria-label={control.label}
+                                  checked={granted.has(control.code)}
+                                  onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : !selectedWorkspacePermissions ? (
+                      <div className="role-permission-detail-empty">
+                        <Text strong>请选择二级入口</Text>
+                        <Text type="secondary">当前一级模块暂未配置一级屏蔽规则；请选择中间的二级入口查看其权限状态。</Text>
+                      </div>
+                    ) : !selectedPermissionAccessState.checked ? (
+                      <div className="role-permission-detail-empty">
+                        <Text strong>{`先开放“进入${selectedWorkspacePermissions?.[0]?.replace(`${permissionWorkspace.label} / `, '') ?? '该模块'}”`}</Text>
+                        <Text type="secondary">勾选二级入口后，该入口下现有的查看、录入、修改、审核等操作权限会一并生效。</Text>
+                      </div>
+                    ) : selectedOrderEntry ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>录单财务屏蔽</Text>
+                          <Tag color={selectedOrderEntryFinanceMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedOrderEntryFinanceMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部显示'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedOrderEntryFinanceMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedLineShipmentPool ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>阶段访问屏蔽</Text>
+                          <Tag color={selectedLineShipmentStageViewBlockStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedLineShipmentStageViewBlockStates.some((control) => control.checked) ? '已屏蔽待审核' : '默认全部可查看'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedLineShipmentStageViewBlockStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleLineShipmentStageViewBlock(selectedPermissionRole.key, control.stage, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                        <div className="role-permission-section-heading">
+                          <Text strong>阶段编辑屏蔽</Text>
+                          <Tag color={selectedLineShipmentStageBlockStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedLineShipmentStageBlockStates.some((control) => control.checked)
+                              ? `已屏蔽 ${selectedLineShipmentStageBlockStates.filter((control) => control.checked).length} 个阶段`
+                              : '默认全生命周期编辑'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedLineShipmentStageBlockStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleLineShipmentStageBlock(selectedPermissionRole.key, control.stage, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedPricingModuleBlockScope ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>模块屏蔽</Text>
+                          <Tag color={selectedPricingModuleBlockStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedPricingModuleBlockStates.some((control) => control.checked)
+                              ? `已屏蔽 ${selectedPricingModuleBlockStates.filter((control) => control.checked).length} ${selectedPricingModuleBlockScope === 'markup' ? '项' : '个模块'}`
+                              : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedPricingModuleBlockStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => togglePricingModuleBlock(selectedPermissionRole.key, selectedPricingModuleBlockScope, control.module, event.target.checked, selectedPricingModuleBlockScope === 'markup' ? (control as { mode?: PricingMarkupBlockMode }).mode : undefined)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedPriceBookManagementEntry ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>价格表管理屏蔽</Text>
+                          <Tag color={selectedPricingPriceBookBlockStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedPricingPriceBookBlockStates.some((control) => control.checked)
+                              ? `已屏蔽 ${selectedPricingPriceBookBlockStates.filter((control) => control.checked).length} 项`
+                              : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedPricingPriceBookBlockStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => togglePricingPriceBookBlock(selectedPermissionRole.key, control.mode, control.module, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="role-permission-detail-empty">
+                        <Text strong>二级入口已开放</Text>
+                        <Text type="secondary">该入口下全部现有操作权限已随二级入口统一生效，三级权限暂不单独配置。</Text>
+                      </div>
+                    )}
                   </div>
                 </section>
-                <aside className="role-permission-summary" aria-label="当前角色权限概览">
-                  <Text strong>当前角色权限概览</Text>
-                  <div className="role-permission-summary-metrics">
-                    <Statistic title="底层已授权" value={selectedRoleGrantedPermissions.length} />
-                    <Statistic title="当前目录" value={grantedSelectedControlCount} suffix={`/ ${selectedPermissionControls.length}`} />
-                    <Statistic title="高风险授权" value={highRiskGrantedPermissionCount} />
-                  </div>
-                  <Text type="secondary">业务权限会映射到现有底层权限码；保存后由后端立即执行，并记录权限变更审计。</Text>
-                </aside>
               </div>
             ) : (
               <ManagedTable rowKey="key" size="small" pagination={false} dataSource={[]} columns={[]} loading recordDetail={false} />
@@ -1894,33 +2166,6 @@ export function SettingsPage({
           ) : null}
         </Col>
         ) : null}
-
-        <Modal
-          open={Boolean(pendingPermissionGrant)}
-          title={pendingPermissionGrant
-            ? pendingPermissionGrant.isPartialGrant
-              ? `确认补齐“${pendingPermissionGrant.control.label}”？`
-              : pendingPermissionGrant.control.risk === 'sensitive'
-                ? `确认开放敏感字段“${pendingPermissionGrant.control.label}”？`
-                : `确认授予“${pendingPermissionGrant.control.label}”？`
-            : '确认授权'}
-          okText="确认授权"
-          cancelText="取消"
-          okButtonProps={pendingPermissionGrant?.control.risk === 'critical' ? { danger: true } : undefined}
-          onCancel={() => setPendingPermissionGrant(null)}
-          onOk={() => {
-            if (!pendingPermissionGrant) return;
-            toggleRolePermissionControl(pendingPermissionGrant.roleKey, pendingPermissionGrant.control, true);
-            setPendingPermissionGrant(null);
-          }}
-          destroyOnHidden
-        >
-          <Text>
-            {pendingPermissionGrant?.control.risk === 'sensitive'
-              ? `${pendingPermissionGrant.control.description} 该权限默认不开放，请确认当前岗位确有业务需要。保存后立即生效并记录权限变更审计。`
-              : `${pendingPermissionGrant?.control.description ?? ''} 保存后该岗位将立即获得对应的高风险操作权限，并记录权限变更审计。`}
-          </Text>
-        </Modal>
 
         {['security', 'aiSecurity', 'audit', 'baseConfig'].includes(activeSettingsSection) ? (
         <Col xs={24}>
@@ -2299,10 +2544,10 @@ export function SettingsPage({
         footer={selectedRoleGroup ? (
           <Space>
             <Button onClick={() => setRoleGroupDetailOpen(false)}>关闭</Button>
-            <Button type="primary" icon={<Edit size={15} />} onClick={() => {
+            {!isAdministratorRoleRow(selectedRoleGroup) ? <Button type="primary" icon={<Edit size={15} />} onClick={() => {
               setRoleGroupDetailOpen(false);
               openRoleGroupEditor(selectedRoleGroup);
-            }}>编辑用户组</Button>
+            }}>编辑用户组</Button> : null}
           </Space>
         ) : null}
       >
@@ -2322,7 +2567,7 @@ export function SettingsPage({
               <Text strong>基础信息</Text>
               <div className="user-group-detail-fields">
                 <Text type="secondary">站点范围</Text><Text>{selectedRoleGroup.site || '全部站点'}</Text>
-                <Text type="secondary">角色类型</Text><Text>{selectedRoleGroup.key === 'ADMIN' ? '平台管理' : '业务用户组'}</Text>
+                <Text type="secondary">角色类型</Text><Text>{isAdministratorRoleRow(selectedRoleGroup) ? '平台管理' : '业务用户组'}</Text>
                 <Text type="secondary">绑定员工</Text><Text>{roleGroupStaff.length} 人</Text>
                 <Text type="secondary">创建时间</Text><Text>-</Text>
                 <Text type="secondary">更新时间</Text><Text>-</Text>
@@ -2542,16 +2787,21 @@ export function SettingsPage({
                   />
                 </Form.Item>
               </Col>
-              <Col xs={24} md={12}>
+              <Col xs={24} md={6}>
                 <Form.Item name="name" label="中文名" rules={[{ max: 40, message: '中文名最多 40 个字符' }]}>
                   <Input placeholder="例如 张三" />
+                </Form.Item>
+              </Col>
+              <Col xs={24} md={6}>
+                <Form.Item name="nickname" label="英文名" rules={[{ max: 40, message: '英文名最多 40 个字符' }]}>
+                  <Input placeholder="例如 Jason" />
                 </Form.Item>
               </Col>
               <Col xs={24} md={12}>
                 <Form.Item
                   name="password"
                   label="密码"
-                  extra={editingStaffAccount ? '不填则不修改密码。' : '不填则使用“账户@123”。'}
+                  extra={editingStaffAccount ? '不填则不修改密码。' : '不填则由系统生成随机初始密码，并在创建成功后展示一次。'}
                   rules={[
                     {
                       validator(_, value?: string) {

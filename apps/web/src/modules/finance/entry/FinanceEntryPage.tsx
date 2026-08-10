@@ -1,8 +1,8 @@
 import type { Key } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Form, Input, InputNumber, Modal, Row, Select, Space, Table as AntdTable, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { calculateCompanyChannelChargeWeight, calculateCompanyChannelChargeWeightFromCargo, evaluateCompanyChannelWarnings, formatShipmentProductNames, getCompanyChannelAggregateCargoValidationError, normalizeShipmentProductNames, type AgentSummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type FinanceCatalogItemSummary, type FinanceCatalogCategory, type MiscFeeTallyDueSummary, type OrderEntryCreateInput, type OrderEntryDetailSummary, type OrderEntryWarehousePackageQuery, type ShipmentFinanceItemType, type WarehousePackageSummary, type WarehouseTallyTaskSummary, type WaterReceiptSummary } from '@siyuan/shared';
+import { calculateCompanyChannelChargeWeight, calculateCompanyChannelChargeWeightFromCargo, evaluateCompanyChannelWarnings, formatShipmentProductNames, getCompanyChannelAggregateCargoValidationError, normalizeShipmentProductNames, type AgentSummary, type ChannelSummary, type CustomerContactSummary, type CustomerSummary, type ExchangeRateSummary, type FinanceBillingUnit, type FinanceCatalogItemSummary, type FinanceCatalogCategory, type MiscFeeTallyDueSummary, type OrderEntryCreateInput, type OrderEntryDetailSummary, type OrderEntryWarehousePackageQuery, type ShipmentFinanceItemType, type WarehousePackageSummary, type WarehouseTallyTaskSummary, type WaterReceiptSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, parseBeijingDateTimeInputToIso } from '../../shared/format';
 import {
@@ -30,6 +30,15 @@ import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
 
+const businessCostBillingUnitOptions: Array<{ label: string; value: FinanceBillingUnit }> = [
+  { label: '计费重（KG）', value: 'KG' },
+  { label: '体积（CBM）', value: 'CBM' }
+];
+
+function businessCostBillingUnitLabel(unit?: FinanceBillingUnit) {
+  return unit === 'CBM' ? 'CBM' : 'KG';
+}
+
 export function resolveCurrentUsdToRmbRate(exchangeRates: ExchangeRateSummary[], now = new Date()) {
   const timestamp = now.getTime();
   return exchangeRates
@@ -53,13 +62,40 @@ export function resolveOrderEntryBusinessCostAccess(role: RoleKey, permissions: 
   };
 }
 
+export function resolveOrderEntryFinanceVisibility(role: RoleKey, permissions: readonly PermissionKey[]) {
+  const moduleGranted = role === 'ADMIN' || permissions.includes('business:order-entry:view');
+  const legacyBusinessCostAccess = resolveOrderEntryBusinessCostAccess(role, permissions);
+  const maskBusinessCosts = role !== 'ADMIN' && permissions.includes('business:order-entry:business-cost-mask');
+  const maskPayables = role !== 'ADMIN' && permissions.includes('business:order-entry:payable-fee-mask');
+  const canViewPayableByExistingPermission = role === 'ADMIN'
+    || permissions.includes('finance:order-fee:payable:view')
+    || permissions.includes('finance:order-fee:payable:manage');
+  const canEditPayableByExistingPermission = role === 'ADMIN' || permissions.includes('finance:order-fee:payable:manage');
+  const canViewFinanceAuditFields = role === 'ADMIN' || [
+    'business:review:finance-detail-view',
+    'finance:order-fee:payable:view',
+    'finance:payable:view-sensitive',
+    'finance:business-cost:view-agent',
+    'finance:business-cost:view-profit'
+  ].some((permission) => permissions.includes(permission as PermissionKey));
+
+  return {
+    canViewOrderEntryBusinessCosts: !maskBusinessCosts && (moduleGranted || legacyBusinessCostAccess.canView),
+    canWriteOrderEntryBusinessCosts: !maskBusinessCosts && (moduleGranted || legacyBusinessCostAccess.canManage),
+    canViewOrderEntryPayables: !maskPayables && (moduleGranted || canViewPayableByExistingPermission),
+    canEditOrderEntryPayables: !maskPayables && (moduleGranted || canEditPayableByExistingPermission),
+    canViewBusinessCostAuditFields: !maskBusinessCosts && canViewFinanceAuditFields,
+    canViewPayableAuditFields: !maskPayables && canViewFinanceAuditFields
+  };
+}
+
 function summarizeWarehouseCargo(packages: WarehousePackageSummary[]) {
   return packages.reduce(
     (total, pkg) => {
       const packageCount = Math.max(1, Number(pkg.packageCount) || 1);
       return {
         packageCount: total.packageCount + packageCount,
-        // 仓库记录中的重量是单件实重，方数已是该行全部件数的总方数。
+        // 仓库记录中的重量是单件实重，体积 CBM 已是该行全部件数的总体积。
         weightKg: total.weightKg + Math.max(0, Number(pkg.weightKg) || 0) * packageCount,
         cbm: total.cbm + Math.max(0, Number(pkg.totalCbm ?? pkg.cbm) || 0)
       };
@@ -85,7 +121,7 @@ interface FinanceEntryPageProps {
   customerContacts: CustomerContactSummary[];
   onCustomerContactsChange?: (contacts: CustomerContactSummary[]) => void;
   onCatalogChange?: () => Promise<void> | void;
-  onCreated?: (detail?: OrderEntryDetailSummary, submittedForReview?: boolean) => Promise<void> | void;
+  onCreated?: (detail?: OrderEntryDetailSummary, submittedForReview?: boolean, keepEditing?: boolean) => Promise<void> | void;
   draftId?: string;
   initialDraftDetail?: OrderEntryDetailSummary;
   canCreateOrderEntry: boolean;
@@ -95,6 +131,10 @@ interface FinanceEntryPageProps {
   onDraftClosed?: () => void;
   preselectedPackageIds?: string[];
   onPreselectedPackageIdsConsumed?: () => void;
+}
+
+export function resolveOrderEntrySalesperson(username: string, shipment?: { entryBy?: string; salesperson?: string }): string {
+  return shipment?.entryBy || shipment?.salesperson || username;
 }
 
 export function FinanceEntryPage({ apiClient, role, permissions, username, financeCatalogItems, customers, customerContacts, onCustomerContactsChange, onCatalogChange, onCreated, draftId, initialDraftDetail, canCreateOrderEntry, canSaveDraft, canSubmitForReview, canUseAgentFields, onDraftClosed, preselectedPackageIds, onPreselectedPackageIdsConsumed }: FinanceEntryPageProps) {
@@ -121,31 +161,30 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
   const [exchangeRates, setExchangeRates] = useState<ExchangeRateSummary[]>([]);
   const [receiptLoading, setReceiptLoading] = useState(false);
   const [draftLoading, setDraftLoading] = useState(false);
+  const [draftOwnerUsername, setDraftOwnerUsername] = useState<string>();
   const [tallyMiscFeeDue, setTallyMiscFeeDue] = useState<MiscFeeTallyDueSummary | null>(null);
   const [selectedTallyMiscFeeIds, setSelectedTallyMiscFeeIds] = useState<string[]>([]);
   const [receivables, setReceivables] = useState<FinanceEntryFeeDraft[]>([
     createFinanceEntryFeeDraft('RECEIVABLE', { name: getDefaultFeeName(financeCatalogItems, '运费') })
   ]);
+  const [receivableSnapshotVersion, setReceivableSnapshotVersion] = useState<string>();
   const [businessCosts, setBusinessCosts] = useState<FinanceEntryFeeDraft[]>([
     createFinanceEntryFeeDraft('BUSINESS_COST', { name: getDefaultFeeName(financeCatalogItems, '业务员成本') })
   ]);
+  const [businessCostSnapshotVersion, setBusinessCostSnapshotVersion] = useState<string>();
   const [payables, setPayables] = useState<FinanceEntryFeeDraft[]>([
     createFinanceEntryFeeDraft('PAYABLE')
   ]);
   const [cargoDataSource, setCargoDataSource] = useState<'AUTO_MATCHED' | 'MANUAL_ADJUSTED'>('AUTO_MATCHED');
   const [chargeWeightOverridden, setChargeWeightOverridden] = useState(false);
   const [receiverContactEdited, setReceiverContactEdited] = useState(false);
-  const canEditOrderEntryPayables = role === 'ADMIN' || permissions.includes('finance:order-fee:payable:manage');
-  const businessCostAccess = resolveOrderEntryBusinessCostAccess(role, permissions);
-  const canWriteOrderEntryBusinessCosts = businessCostAccess.canManage;
-  const canViewOrderEntryBusinessCosts = businessCostAccess.canView;
-  const canViewFinanceAuditFields = role === 'ADMIN' || [
-    'business:review:finance-detail-view',
-    'finance:order-fee:payable:view',
-    'finance:payable:view-sensitive',
-    'finance:business-cost:view-agent',
-    'finance:business-cost:view-profit'
-  ].some((permission) => permissions.includes(permission as PermissionKey));
+  const orderEntryFinanceVisibility = resolveOrderEntryFinanceVisibility(role, permissions);
+  const canEditOrderEntryPayables = orderEntryFinanceVisibility.canEditOrderEntryPayables;
+  const canViewOrderEntryPayables = orderEntryFinanceVisibility.canViewOrderEntryPayables;
+  const canWriteOrderEntryBusinessCosts = orderEntryFinanceVisibility.canWriteOrderEntryBusinessCosts;
+  const canViewOrderEntryBusinessCosts = orderEntryFinanceVisibility.canViewOrderEntryBusinessCosts;
+  const canViewBusinessCostAuditFields = orderEntryFinanceVisibility.canViewBusinessCostAuditFields;
+  const canViewPayableAuditFields = orderEntryFinanceVisibility.canViewPayableAuditFields;
   const canEditEntryAt = role === 'ADMIN' || permissions.includes('finance:payable:manage');
   const settlementRows = useMemo(() => getSettlementMethodRows(financeCatalogItems), [financeCatalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
@@ -297,11 +336,14 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     const exists = category === 'FEE_NAME' ? feeNameSet.has(name) : category === 'CARGO_TYPE' ? cargoTypeSet.has(name) : productNameSet.has(name);
     if (exists) return;
     const label = category === 'FEE_NAME' ? '费用名称' : category === 'CARGO_TYPE' ? '货物类型' : '品名';
+    const isProductName = category === 'PRODUCT_NAME';
     modal.confirm({
-      title: `保存新的${label}？`,
-      content: `${name} 不在资料库中，是否保存到资料库供下次选择？`,
-      okText: '保存',
-      cancelText: '暂不保存',
+      title: isProductName ? '是否保存新品名到资料库？' : `保存新的${label}？`,
+      content: isProductName
+        ? `“${name}”不在资料库中。保存后可供下次选择；选择“仅用于本单”也会保留在当前运单中。`
+        : `${name} 不在资料库中，是否保存到资料库供下次选择？`,
+      okText: isProductName ? '保存到资料库' : '保存',
+      cancelText: isProductName ? '仅用于本单' : '暂不保存',
       onOk: async () => {
         try {
           await apiClient.createFinanceCatalogItem({
@@ -390,9 +432,18 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
   const syncCargoChargeWeightToFees = useCallback((chargeWeightKg: number) => {
     const patch = { chargeWeightKg: chargeWeightKg > 0 ? roundFinanceNumber(chargeWeightKg) : undefined };
     setReceivables((rows) => rows.map((row) => ({ ...row, ...patch })));
-    setBusinessCosts((rows) => rows.map((row) => ({ ...row, ...patch })));
+    const volumeCbm = Number(form.getFieldValue('volumeCbm') ?? 0);
+    setBusinessCosts((rows) => rows.map((row) => {
+      const billingUnit = row.billingUnit ?? 'KG';
+      return {
+        ...row,
+        billingUnit,
+        billingQuantity: billingUnit === 'CBM' ? volumeCbm > 0 ? roundFinanceNumber(volumeCbm, 6) : undefined : patch.chargeWeightKg,
+        chargeWeightKg: billingUnit === 'KG' ? patch.chargeWeightKg : undefined
+      };
+    }));
     setPayables((rows) => rows.map((row) => ({ ...row, ...patch })));
-  }, []);
+  }, [form]);
   const calculateCurrentCargoChargeWeight = useCallback((values: Pick<FinanceEntryFormValues, 'packageCount' | 'actualWeightKg' | 'volumeCbm'>, channel = selectedCompanyChannel) => {
     const actualWeightKg = Number(values.actualWeightKg ?? 0);
     const volumeCbm = Number(values.volumeCbm ?? 0);
@@ -448,7 +499,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     setChargeWeightOverridden(false);
     syncCargoChargeWeightToFees(chargeWeightKg);
   }, [calculateCurrentCargoChargeWeight, cargoDataSource, channels, form, selectedCompanyChannel, selectedPackages, syncCargoChargeWeightToFees]);
-  const matchedSalesperson = username;
+  const matchedSalesperson = draftOwnerUsername || username;
   const clearSelectedPackages = useCallback(() => {
     setSelectedPackages([]);
     setSelectedPackageDetailsOpen(false);
@@ -547,6 +598,8 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
         name: type === 'RECEIVABLE' ? receivableDefaultFeeName : type === 'BUSINESS_COST' ? businessCostDefaultFeeName : undefined,
         currency: type === 'PAYABLE' ? 'RMB' : formCurrency,
         agentId: type !== 'RECEIVABLE' ? form.getFieldValue('agentId') : undefined,
+        billingUnit: type === 'BUSINESS_COST' ? 'KG' : undefined,
+        billingQuantity: type === 'BUSINESS_COST' ? chargeWeightKg : undefined,
         chargeWeightKg
       })
     ]);
@@ -571,14 +624,18 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     setPackageModalOpen(false);
     clearSelectedPackages();
     setReceivables([createFinanceEntryFeeDraft('RECEIVABLE', { name: receivableDefaultFeeName })]);
-    setBusinessCosts([createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })]);
-    setPayables([createFinanceEntryFeeDraft('PAYABLE')]);
+    setReceivableSnapshotVersion(undefined);
+    setBusinessCosts(canWriteOrderEntryBusinessCosts ? [createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })] : []);
+    setBusinessCostSnapshotVersion(undefined);
+    setPayables(canViewOrderEntryPayables ? [createFinanceEntryFeeDraft('PAYABLE')] : []);
+    setDraftOwnerUsername(undefined);
     onDraftClosed?.();
   };
 
   const hydrateDraftDetail = useCallback((detail: OrderEntryDetailSummary) => {
     const shipment = detail.shipment;
-    const toFeeDraft = (type: ShipmentFinanceItemType, row: typeof detail.receivables[number] | typeof detail.businessCosts[number] | typeof detail.payables[number]) =>
+    setDraftOwnerUsername(resolveOrderEntrySalesperson(username, shipment));
+    const toFeeDraft = (type: ShipmentFinanceItemType, row: typeof detail.receivables[number] | NonNullable<typeof detail.businessCosts>[number] | typeof detail.payables[number]) =>
       createFinanceEntryFeeDraft(type, {
         name: row.name,
         currency: row.currency,
@@ -589,6 +646,8 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
           ? row.agentId ?? resolveAgentIdByIdentity(agents, 'agentName' in row ? row.agentName : undefined)
           : undefined,
         agentName: canUseAgentFields && 'agentName' in row ? row.agentName : undefined,
+        billingUnit: type === 'BUSINESS_COST' && 'billingUnit' in row ? row.billingUnit : undefined,
+        billingQuantity: type === 'BUSINESS_COST' && 'billingQuantity' in row ? row.billingQuantity : undefined,
         chargeWeightKg: 'chargeWeightKg' in row ? row.chargeWeightKg : undefined,
         unitPrice: 'unitPrice' in row ? row.unitPrice : undefined,
         remark: row.remark
@@ -629,9 +688,16 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     setCargoDataSource(shipment.cargoDataSource ?? 'AUTO_MATCHED');
     setChargeWeightOverridden(Boolean(shipment.chargeWeightOverridden));
     setReceivables(detail.receivables.length ? detail.receivables.map((row) => toFeeDraft('RECEIVABLE', row)) : [createFinanceEntryFeeDraft('RECEIVABLE', { name: receivableDefaultFeeName })]);
-    setBusinessCosts(detail.businessCosts.length ? detail.businessCosts.map((row) => toFeeDraft('BUSINESS_COST', row)) : [createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })]);
-    setPayables(detail.payables.length ? detail.payables.map((row) => toFeeDraft('PAYABLE', row)) : [createFinanceEntryFeeDraft('PAYABLE')]);
-  }, [agents, businessCostDefaultFeeName, canUseAgentFields, form, receivableDefaultFeeName]);
+    setReceivableSnapshotVersion(detail.receivableSnapshotVersion);
+    const visibleBusinessCosts = detail.businessCosts ?? [];
+    setBusinessCosts(canWriteOrderEntryBusinessCosts
+      ? (visibleBusinessCosts.length ? visibleBusinessCosts.map((row) => toFeeDraft('BUSINESS_COST', row)) : [createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })])
+      : (canViewOrderEntryBusinessCosts ? visibleBusinessCosts.map((row) => toFeeDraft('BUSINESS_COST', row)) : []));
+    setBusinessCostSnapshotVersion(detail.businessCostSnapshotVersion);
+    setPayables(canViewOrderEntryPayables
+      ? (detail.payables.length ? detail.payables.map((row) => toFeeDraft('PAYABLE', row)) : [createFinanceEntryFeeDraft('PAYABLE')])
+      : []);
+  }, [agents, businessCostDefaultFeeName, canUseAgentFields, canViewOrderEntryBusinessCosts, canViewOrderEntryPayables, canWriteOrderEntryBusinessCosts, form, receivableDefaultFeeName, username]);
 
   useEffect(() => {
     if (!draftId) return;
@@ -756,7 +822,6 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       customerCode: form.getFieldValue('customerCode') || first.customerCode,
       customerName: selectedCustomer?.name ?? '',
       customerOrderNo: first.customerOrderNo || first.customerCode,
-      inboundNo: form.getFieldValue('inboundNo') || first.domesticTrackingNo || first.combinedOrderNo,
       businessType: form.getFieldValue('businessType') || 'DEDICATED_LINE',
       packageType: form.getFieldValue('packageType') || 'WPX',
       destinationCountry: first.destinationCountry || form.getFieldValue('destinationCountry') || '美国',
@@ -771,7 +836,9 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     setReceivables((rows) => rows.map((row) => ({ ...row, chargeWeightKg: totalChargeWeight })));
     setBusinessCosts((rows) => rows.map((row) => ({
       ...row,
-      chargeWeightKg: totalChargeWeight,
+      billingUnit: row.billingUnit ?? 'KG',
+      billingQuantity: row.billingUnit === 'CBM' ? warehouseCargo.cbm > 0 ? roundFinanceNumber(warehouseCargo.cbm, 6) : undefined : totalChargeWeight,
+      chargeWeightKg: row.billingUnit === 'CBM' ? undefined : totalChargeWeight,
       agentId: row.agentId || form.getFieldValue('agentId')
     })));
     setPayables((rows) => rows.map((row) => ({
@@ -814,7 +881,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       applyPackageSelection(packagePickerSelected);
     } else {
       setReceivables((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
-      setBusinessCosts((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
+      setBusinessCosts((items) => items.map((row) => ({ ...row, billingQuantity: undefined, chargeWeightKg: undefined })));
       setPayables((items) => items.map((row) => ({ ...row, chargeWeightKg: undefined })));
     }
     setPackageModalOpen(false);
@@ -896,7 +963,9 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       settlementMethod: row.settlementMethod || form.getFieldValue('settlementMethod'),
       paymentNo: row.paymentNo,
       agentId: canUseAgentFields && type !== 'RECEIVABLE' ? (row.agentId || form.getFieldValue('agentId')) : undefined,
-      chargeWeightKg: row.chargeWeightKg,
+      billingUnit: type === 'BUSINESS_COST' ? row.billingUnit ?? 'KG' : undefined,
+      billingQuantity: type === 'BUSINESS_COST' ? row.billingQuantity ?? row.chargeWeightKg : undefined,
+      chargeWeightKg: type === 'BUSINESS_COST' && row.billingUnit === 'CBM' ? undefined : row.chargeWeightKg,
       unitPrice: row.unitPrice,
       receiptId: type === 'RECEIVABLE' ? row.receiptId : undefined,
       receiptMatchAmount: type === 'RECEIVABLE' ? row.receiptMatchAmount : undefined,
@@ -968,7 +1037,9 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       },
       warehousePackageIds: selectedPackages.map((pkg) => pkg.id),
       receivables: buildFeeRows(receivables, 'RECEIVABLE'),
+      receivableSnapshotVersion: draftId ? receivableSnapshotVersion : undefined,
       businessCosts: canWriteOrderEntryBusinessCosts ? buildFeeRows(businessCosts, 'BUSINESS_COST') : [],
+      businessCostSnapshotVersion: draftId ? businessCostSnapshotVersion : undefined,
       payables: canEditOrderEntryPayables ? buildFeeRows(payables, 'PAYABLE') : [],
       miscFeeIdsToMatch: submitForReview ? selectedTallyMiscFeeIds : [],
       submitForReview
@@ -990,8 +1061,13 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
           ? `已生成出货单号 ${resolveShipmentOutboundOrderNo(detail.shipment)}`
           : `草稿已保存，可在录单草稿箱继续编辑。草稿号/出货单号：${resolveShipmentOutboundOrderNo(detail.shipment)}`
       });
+      if (savedForCompletion) {
+        hydrateDraftDetail(detail);
+        await onCreated?.(detail, false, true);
+        return;
+      }
       reset();
-      await onCreated?.(detail, submitForReview && !savedForCompletion);
+      await onCreated?.(detail, submitForReview);
     } catch (error) {
       modal.error({ title: '录单失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
@@ -1039,14 +1115,14 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     },
     { title: '出货单号', dataIndex: 'systemOrderNo', width: 125, ellipsis: true, render: (_: string | undefined, record) => resolveShipmentOutboundOrderNo(record) },
     { title: '件数', dataIndex: 'packageCount', width: 60 },
-    { title: '实重', dataIndex: 'weightKg', width: 80, render: (value: number) => `${value.toFixed(2)} kg` },
+    { title: '实重', dataIndex: 'weightKg', width: 80, render: (value: number) => `${value.toFixed(2)} KG` },
     {
       title: '5000材积',
       dataIndex: 'volumetricWeightKg5000',
       width: 92,
-      render: (value: number | undefined, record) => `${(value ?? (record.lengthCm * record.widthCm * record.heightCm * record.packageCount) / 5000).toFixed(2)} kg`
+      render: (value: number | undefined, record) => `${(value ?? (record.lengthCm * record.widthCm * record.heightCm * record.packageCount) / 5000).toFixed(2)} KG`
     },
-    { title: '6000材积', dataIndex: 'volumetricWeightKg', width: 92, render: (value: number) => `${value.toFixed(2)} kg` },
+    { title: '6000材积', dataIndex: 'volumetricWeightKg', width: 92, render: (value: number) => `${value.toFixed(2)} KG` },
     { title: '扫描时间', dataIndex: 'scanTime', width: 145, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     { title: '备注', dataIndex: 'remark', width: 120, ellipsis: true, render: (value?: string) => value || '-' }
   ];
@@ -1064,17 +1140,17 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     },
     { title: '件数', dataIndex: 'packageCount', width: 66, align: 'right' },
     { title: '规格（长 × 宽 × 高）', width: 172, align: 'right', render: (_, record) => `${record.lengthCm.toFixed(2)} × ${record.widthCm.toFixed(2)} × ${record.heightCm.toFixed(2)} cm` },
-    { title: '实重', dataIndex: 'weightKg', width: 92, align: 'right', render: (value: number) => `${value.toFixed(2)} kg` },
-    { title: '方数', width: 106, align: 'right', render: (_, record) => `${Number(record.totalCbm ?? record.cbm).toFixed(6)} CBM` },
-    { title: '5000材积', width: 104, align: 'right', render: (_, record) => `${calculateSelectedPackageVolumetricWeight(record, 5000).toFixed(2)} kg` },
-    { title: '6000材积', width: 104, align: 'right', render: (_, record) => `${calculateSelectedPackageVolumetricWeight(record, 6000).toFixed(2)} kg` },
+    { title: '实重', dataIndex: 'weightKg', width: 92, align: 'right', render: (value: number) => `${value.toFixed(2)} KG` },
+    { title: '体积 CBM', width: 106, align: 'right', render: (_, record) => `${Number(record.totalCbm ?? record.cbm).toFixed(6)} CBM` },
+    { title: '5000材积', width: 104, align: 'right', render: (_, record) => `${calculateSelectedPackageVolumetricWeight(record, 5000).toFixed(2)} KG` },
+    { title: '6000材积', width: 104, align: 'right', render: (_, record) => `${calculateSelectedPackageVolumetricWeight(record, 6000).toFixed(2)} KG` },
     {
       title: selectedCompanyChannel ? '渠道计费重' : '仓库计费重',
       width: 112,
       align: 'right',
       render: (_, record) => `${(selectedCompanyChannel
         ? calculateCompanyChannelChargeWeight(selectedCompanyChannel, [record])
-        : record.chargeableWeightKg).toFixed(2)} kg`
+        : record.chargeableWeightKg).toFixed(2)} KG`
     },
     {
       title: '预警',
@@ -1187,7 +1263,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       ];
       return (
         <Card className="finance-entry-fee-card" title={title} extra={<Button onClick={() => addFee(type)}>新增项目</Button>}>
-          <Table
+          <ManagedTable
             className="finance-entry-amount-table finance-embedded-table"
             rowKey="currency"
             size="small"
@@ -1209,16 +1285,16 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
             columnSettings={false}
             recordDetail={false}
             summary={() => (
-              <Table.Summary fixed>
-                <Table.Summary.Row>
-                  <Table.Summary.Cell index={0} colSpan={Math.max(1, columns.length - 1)}>
+              <AntdTable.Summary fixed>
+                <AntdTable.Summary.Row>
+                  <AntdTable.Summary.Cell index={0} colSpan={Math.max(1, columns.length - 1)}>
                     <Text strong>合计</Text>
-                  </Table.Summary.Cell>
-                  <Table.Summary.Cell index={columns.length - 1} align="right">
+                  </AntdTable.Summary.Cell>
+                  <AntdTable.Summary.Cell index={columns.length - 1} align="right">
                     <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
-                  </Table.Summary.Cell>
-                </Table.Summary.Row>
-              </Table.Summary>
+                  </AntdTable.Summary.Cell>
+                </AntdTable.Summary.Row>
+              </AntdTable.Summary>
             )}
             columns={columns.map((column) => ({ ...column, sortable: false }))}
           />
@@ -1241,6 +1317,8 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
               columns={[
                 { key: 'feeName', title: '费用名称', dataIndex: 'name' },
                 { key: 'currency', title: '币种', render: (_, row) => getFeeCurrency(row, type) },
+                { key: 'billingUnit', title: '计费方式', render: (_, row) => row.billingUnit === 'CBM' ? '体积（CBM）' : '计费重（KG）' },
+                { key: 'billingQuantity', title: '计费数量', align: 'right', render: (_, row) => row.billingQuantity ?? row.chargeWeightKg ?? '-' },
                 { key: 'amount', title: '总金额', align: 'right', render: (_, row) => calculateFinanceEntryFeeAmount(row).toFixed(2) },
                 { key: 'remark', title: '备注', dataIndex: 'remark', render: (value) => value || '-' }
               ]}
@@ -1250,7 +1328,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       }
       const receivableRmbTotal = getFeeRmbTotal(receivables, 'RECEIVABLE');
       const businessCostRmbTotal = getFeeRmbTotal(businessCosts, 'BUSINESS_COST');
-      const profitColumns: ColumnsType<FinanceEntryFeeDraft> = canViewFinanceAuditFields ? [
+      const profitColumns: ColumnsType<FinanceEntryFeeDraft> = canViewBusinessCostAuditFields ? [
         {
           key: 'businessProfit',
           title: '业务利润',
@@ -1272,7 +1350,31 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
         { key: 'customerCode', title: '客户编号', width: 110, render: () => renderReadonlyCell(watchedCustomerCode) },
         { key: 'systemOrderNo', title: '出货单号', width: 150, render: () => renderReadonlyCell(watchedCustomerOrderNo, '待生成') },
         { key: 'currency', title: '币种', width: 100, render: (_, row) => <Select value={getFeeCurrency(row, type)} options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} onChange={(value) => updateFee(type, row.id, { currency: value })} /> },
-        { key: 'chargeWeightKg', title: '计费重', width: 110, render: (_, row) => <InputNumber min={0} precision={2} value={row.chargeWeightKg} onChange={(value) => updateFee(type, row.id, { chargeWeightKg: value ?? undefined })} /> },
+        {
+          key: 'billingUnit', title: '计费方式', width: 135,
+          render: (_, row) => (
+            <Select
+              value={row.billingUnit ?? 'KG'}
+              options={businessCostBillingUnitOptions}
+              onChange={(billingUnit: FinanceBillingUnit) => {
+                const billingQuantity = billingUnit === 'CBM' ? totals.cbm : totals.chargeWeightKg;
+                updateFee(type, row.id, {
+                  billingUnit,
+                  billingQuantity: billingQuantity > 0 ? roundFinanceNumber(billingQuantity, billingUnit === 'CBM' ? 6 : 2) : undefined,
+                  chargeWeightKg: billingUnit === 'KG' ? (billingQuantity > 0 ? roundFinanceNumber(billingQuantity) : undefined) : undefined
+                });
+              }}
+            />
+          )
+        },
+        {
+          key: 'billingQuantity', title: '计费数量', width: 135,
+          render: (_, row) => {
+            const billingUnit = row.billingUnit ?? 'KG';
+            const billingQuantity = row.billingQuantity ?? row.chargeWeightKg;
+            return <InputNumber min={0} precision={billingUnit === 'CBM' ? 6 : 3} addonAfter={businessCostBillingUnitLabel(billingUnit)} value={billingQuantity} onChange={(value) => updateFee(type, row.id, { billingQuantity: value ?? undefined, chargeWeightKg: billingUnit === 'KG' ? value ?? undefined : undefined })} />;
+          }
+        },
         { key: 'unitPrice', title: '单价', width: 120, render: (_, row) => <InputNumber min={0} precision={2} value={row.unitPrice} onChange={(value) => updateFee(type, row.id, { unitPrice: value ?? undefined })} /> },
         { key: 'totalAmount', title: '总金额', width: 120, align: 'right', render: (_, row) => <InputNumber readOnly precision={2} value={calculateFinanceEntryFeeAmount(row)} /> },
         { key: 'totalRmb', title: '合计', width: 120, align: 'right', render: (_, row) => <Text>{formatFeeRmbAmount(getFeeRmbAmount(row, type))}</Text> },
@@ -1294,16 +1396,16 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
             columnSettings={false}
             recordDetail={false}
             summary={() => (
-              <Table.Summary fixed>
-                <Table.Summary.Row>
-                  <Table.Summary.Cell index={0} colSpan={Math.max(1, columns.length - 1)}>
+              <AntdTable.Summary fixed>
+                <AntdTable.Summary.Row>
+                  <AntdTable.Summary.Cell index={0} colSpan={Math.max(1, columns.length - 1)}>
                     <Text strong>合计</Text>
-                  </Table.Summary.Cell>
-                  <Table.Summary.Cell index={columns.length - 1} align="right">
+                  </AntdTable.Summary.Cell>
+                  <AntdTable.Summary.Cell index={columns.length - 1} align="right">
                     <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
-                  </Table.Summary.Cell>
-                </Table.Summary.Row>
-              </Table.Summary>
+                  </AntdTable.Summary.Cell>
+                </AntdTable.Summary.Row>
+              </AntdTable.Summary>
             )}
             columns={columns.map((column) => ({ ...column, sortable: false }))}
           />
@@ -1351,16 +1453,16 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
           columnSettings={false}
           recordDetail={false}
           summary={() => (
-            <Table.Summary fixed>
-              <Table.Summary.Row>
-                <Table.Summary.Cell index={0} colSpan={Math.max(1, columns.length - 1)}>
+            <AntdTable.Summary fixed>
+              <AntdTable.Summary.Row>
+                <AntdTable.Summary.Cell index={0} colSpan={Math.max(1, columns.length - 1)}>
                   <Text strong>合计</Text>
-                </Table.Summary.Cell>
-                <Table.Summary.Cell index={columns.length - 1} align="right">
+                </AntdTable.Summary.Cell>
+                <AntdTable.Summary.Cell index={columns.length - 1} align="right">
                   <Text strong>{formatFeeRmbAmount(getFeeRmbTotal(rows, type))}</Text>
-                </Table.Summary.Cell>
-              </Table.Summary.Row>
-            </Table.Summary>
+                </AntdTable.Summary.Cell>
+              </AntdTable.Summary.Row>
+            </AntdTable.Summary>
           )}
           columns={columns.map((column) => ({ ...column, sortable: false }))}
         />
@@ -1430,16 +1532,16 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
             <div className="finance-entry-summary-grid">
               <div className="finance-entry-summary-card"><Text type="secondary">已选货物</Text><Text strong>{selectedPackages.length} 条</Text></div>
               <div className="finance-entry-summary-card"><Text type="secondary">总件数</Text><Text strong>{totals.packageCount} 件</Text></div>
-              <div className="finance-entry-summary-card"><Text type="secondary">实重</Text><Text strong>{totals.weightKg.toFixed(2)} kg</Text></div>
-              <div className="finance-entry-summary-card"><Text type="secondary">方数</Text><Text strong>{totals.cbm.toFixed(6)} CBM</Text></div>
-              <div className="finance-entry-summary-card"><Text type="secondary">计费重</Text><Text strong>{totals.chargeWeightKg.toFixed(2)} kg</Text></div>
+              <div className="finance-entry-summary-card"><Text type="secondary">实重</Text><Text strong>{totals.weightKg.toFixed(2)} KG</Text></div>
+              <div className="finance-entry-summary-card"><Text type="secondary">体积 CBM</Text><Text strong>{totals.cbm.toFixed(6)} CBM</Text></div>
+              <div className="finance-entry-summary-card"><Text type="secondary">计费重</Text><Text strong>{totals.chargeWeightKg.toFixed(2)} KG</Text></div>
             </div>
             {selectedPackages.length ? (
               <div className="finance-entry-selected-packages" aria-label="已选货物列表">
                 {selectedPackages.map((pkg) => (
                   <div className="finance-entry-selected-package" key={pkg.id}>
                     {renderPackageNoWithTally(pkg)}
-                    <Text type="secondary">{pkg.packageCount} 件 / {pkg.weightKg.toFixed(2)} kg / {pkg.cbm.toFixed(6)} CBM</Text>
+                    <Text type="secondary">{pkg.packageCount} 件 / {pkg.weightKg.toFixed(2)} KG / {pkg.cbm.toFixed(6)} CBM</Text>
                   </div>
                 ))}
               </div>
@@ -1493,6 +1595,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                         </Col>
                       ))}
                     </Row>
+                    <Text type="secondary">四个框中只要填写的品名都会保留在本运单；资料库外的品名可选择保存到资料库，或仅用于本单。</Text>
                   </Col>
                 </Row>
                 <div className="finance-entry-cargo-metrics" aria-label="货物数据">
@@ -1525,9 +1628,9 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                   </div>
                   <div className="finance-entry-cargo-grid">
                     <Form.Item name="packageCount" label="件数"><InputNumber min={0} precision={0} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('packageCount', value)} /></Form.Item>
-                    <Form.Item label="实重 kg"><div className="finance-entry-cargo-unit-input"><Form.Item name="actualWeightKg" noStyle><InputNumber aria-label="实重 kg" min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('actualWeightKg', value)} /></Form.Item><span>kg</span></div></Form.Item>
+                    <Form.Item label="实重 KG"><div className="finance-entry-cargo-unit-input"><Form.Item name="actualWeightKg" noStyle><InputNumber aria-label="实重 KG" min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('actualWeightKg', value)} /></Form.Item><span>KG</span></div></Form.Item>
                     <Form.Item label="体积 CBM"><div className="finance-entry-cargo-unit-input"><Form.Item name="volumeCbm" noStyle><InputNumber aria-label="体积 CBM" min={0} precision={6} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('volumeCbm', value)} /></Form.Item><span>CBM</span></div></Form.Item>
-                    <Form.Item label="计费重 kg"><div className="finance-entry-cargo-unit-input"><Form.Item name="chargeableWeightKg" noStyle><InputNumber aria-label="计费重 kg" min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('chargeableWeightKg', value)} /></Form.Item><span>kg</span></div></Form.Item>
+                    <Form.Item label="计费重 KG"><div className="finance-entry-cargo-unit-input"><Form.Item name="chargeableWeightKg" noStyle><InputNumber aria-label="计费重 KG" min={0} precision={2} className="finance-entry-cargo-number" onChange={(value) => updateCargoMetric('chargeableWeightKg', value)} /></Form.Item><span>KG</span></div></Form.Item>
                   </div>
                   {selectedCompanyChannel ? <Text type="secondary">已按 {selectedCompanyChannel.name} 计算：除材积 {selectedCompanyChannel.volumeDivisor} / {selectedCompanyChannel.multiPieceWeightRule} / {selectedCompanyChannel.settlementWeightRule}</Text> : <Text type="secondary">请选择公司渠道；仓库货物会按该渠道规则计算计费重。</Text>}
                   {aggregateCargoRuleError ? <Alert type="warning" showIcon message={aggregateCargoRuleError} /> : null}
@@ -1647,13 +1750,13 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                     <Text type="secondary">应收审核日期</Text>
                     <Text>待生成</Text>
                   </div>
-                  {canViewFinanceAuditFields ? (
+                  {canViewBusinessCostAuditFields && canViewOrderEntryBusinessCosts ? (
                     <div className="finance-entry-system-date-item">
                       <Text type="secondary">业务成本审核日期</Text>
                       <Text>待生成</Text>
                     </div>
                   ) : null}
-                  {canViewFinanceAuditFields ? (
+                  {canViewPayableAuditFields && canViewOrderEntryPayables ? (
                     <div className="finance-entry-system-date-item">
                       <Text type="secondary">应付审核日期</Text>
                       <Text>待生成</Text>
@@ -1694,7 +1797,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
               />
             ) : <Alert type="success" showIcon message={`当前公司渠道“${selectedCompanyChannel.name}”下，所选包裹均未命中超重或超围预警`} />
           ) : <Alert type="info" showIcon message="请先选择公司渠道，系统才能按该渠道的超重和超围规则预警" />}
-          <Table<WarehousePackageSummary>
+            <ManagedTable<WarehousePackageSummary>
             className="finance-embedded-table finance-entry-package-detail-table"
             rowKey="id"
             size="small"
@@ -1736,7 +1839,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
             <Button onClick={() => void resetPackageSearch()} disabled={packageLoading}>重置</Button>
             <Button onClick={() => packageQuery ? void loadPackages(packageQuery) : void searchPackages()} loading={packageLoading}>刷新</Button>
           </Space>
-          <Table<WarehousePackageSummary>
+          <ManagedTable<WarehousePackageSummary>
             className="finance-embedded-table finance-modal-fit-table"
             rowKey="id"
             size="small"
@@ -1762,9 +1865,9 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
                       <p>客户单号：{record.customerOrderNo}</p>
                       <p>快递单号：{record.domesticTrackingNo || '-'}</p>
                       <p>件数：{record.packageCount}</p>
-                      <p>实重：{record.weightKg.toFixed(2)} kg</p>
-                      <p>体积：{record.cbm.toFixed(6)} CBM</p>
-                      <p>计费重：{record.chargeableWeightKg.toFixed(2)} kg</p>
+                      <p>实重：{record.weightKg.toFixed(2)} KG</p>
+                      <p>体积 CBM：{record.cbm.toFixed(6)} CBM</p>
+                      <p>计费重：{record.chargeableWeightKg.toFixed(2)} KG</p>
                       <p>扫描时间：{record.scanTime ? formatBeijingDateTime(record.scanTime) : '-'}</p>
                       {record.tallyStatus && record.tallyStatus !== '待理货' ? (
                         <>
@@ -1809,7 +1912,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
         width={860}
         destroyOnHidden
       >
-        <Table<WaterReceiptSummary>
+        <ManagedTable<WaterReceiptSummary>
           className="finance-embedded-table finance-modal-fit-table"
           rowKey="id"
           size="small"

@@ -1,4 +1,4 @@
-import type { BusinessType, ShipmentFinanceItemType } from '@siyuan/shared';
+import type { BusinessType, FinanceBillingUnit, ShipmentFinanceItemType } from '@siyuan/shared';
 import { normalizeFinanceCatalogCurrency } from './catalog';
 
 export type FinanceEntryPackageType = 'DOC' | 'WPX' | 'PAK';
@@ -62,6 +62,8 @@ export interface FinanceEntryFeeDraft {
   receiptMatchHint?: string;
   agentId?: string;
   agentName?: string;
+  billingUnit?: FinanceBillingUnit;
+  billingQuantity?: number;
   chargeWeightKg?: number;
   unitPrice?: number;
   remark?: string;
@@ -78,8 +80,9 @@ export function roundFinanceNumber(value: number, precision = 2) {
 }
 
 export function calculateFinanceEntryFeeAmount(row: FinanceEntryFeeDraft) {
-  if (typeof row.chargeWeightKg === 'number' && typeof row.unitPrice === 'number') {
-    return roundFinanceNumber(row.chargeWeightKg * row.unitPrice);
+  const quantity = row.type === 'BUSINESS_COST' ? row.billingQuantity ?? row.chargeWeightKg : row.chargeWeightKg;
+  if (typeof quantity === 'number' && typeof row.unitPrice === 'number') {
+    return roundFinanceNumber(quantity * row.unitPrice);
   }
   return roundFinanceNumber(row.amount ?? 0);
 }
@@ -104,6 +107,8 @@ export function createFinanceEntryFeeDraft(
     receiptMatchHint: patch.receiptMatchHint,
     agentId: patch.agentId,
     agentName: patch.agentName,
+    billingUnit: type === 'BUSINESS_COST' ? patch.billingUnit ?? 'KG' : undefined,
+    billingQuantity: type === 'BUSINESS_COST' ? patch.billingQuantity ?? patch.chargeWeightKg : undefined,
     chargeWeightKg: patch.chargeWeightKg,
     unitPrice: patch.unitPrice,
     remark: patch.remark

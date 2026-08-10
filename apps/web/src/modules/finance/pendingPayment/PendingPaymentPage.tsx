@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Table, Tag, Typography } from 'antd';
-import { RefreshCw, Trash2 } from 'lucide-react';
+import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
+import { Download, RefreshCw, Search, SlidersHorizontal, Trash2 } from 'lucide-react';
 import type {
   PayeeBankAccountInput,
   PayeeBankAccountSummary,
@@ -18,7 +18,7 @@ import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput'
 import { ProtectedVoucherImage } from '../ProtectedVoucherImage';
 import { formatBeijingDateTime } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
-import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
+import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, type ManagedTableColumns } from '../../shared/ui';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
@@ -123,6 +123,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
   const [bankOptions, setBankOptions] = useState<PayeeBankAccountSummary[]>([]);
   const [bankOptionsLoading, setBankOptionsLoading] = useState(false);
   const [manualBankMode, setManualBankMode] = useState(false);
+  const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
   const canCreatePaymentApplication = hasPermission(permissions, 'finance:pending-payment:create');
   const canCancelPaymentApplication = hasPermission(permissions, 'finance:pending-payment:cancel');
   const canSelectBank = hasPermission(permissions, 'finance:pending-payment:bank-select');
@@ -480,33 +481,50 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       className="finance-work-card"
       extra={(
         <Space>
-          <Button disabled={!canExport} onClick={() => void exportRows()}>导出</Button>
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()}>刷新</Button>
+          <Button icon={<Download size={15} />} disabled={!canExport} onClick={() => void exportRows()}>导出</Button>
         </Space>
       )}
     >
-      <Form form={queryForm} layout="vertical" className="finance-pending-filter-card">
-        <div className="finance-pending-filter-bar" role="group" aria-label="待付款筛选条件">
-          <Form.Item name="agent" label={agentFieldLabels.shortName}><Input allowClear /></Form.Item>
-          <Form.Item name="salesperson" label="业务员"><Input allowClear /></Form.Item>
-          <Form.Item name="customerCode" label="客户编号"><Input allowClear /></Form.Item>
-          <Form.Item name="systemOrderNo" label="出货单号"><Input allowClear /></Form.Item>
-          <Form.Item name="feeName" label="应付费用"><Input allowClear /></Form.Item>
-          <Form.Item name="currency" label="币种"><Select options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item>
-          <Form.Item name="amount" label="合计金额"><InputNumber className="full-width" min={0} /></Form.Item>
-          <Form.Item name="payeeName" label="收款方名称"><Input allowClear /></Form.Item>
-          <Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear /></Form.Item>
-          <Form.Item name="applicationDateFrom" label="申请付款日期起"><AppDatePicker /></Form.Item>
-          <Form.Item name="applicationDateTo" label="申请付款日期止"><AppDatePicker /></Form.Item>
-          <Form.Item name="status" label="状态"><Select options={[{ label: '全部', value: 'ALL' }, { label: '待付款', value: 'PENDING' }, { label: '资料已完善', value: 'READY' }, { label: '已进入待支付', value: 'APPLIED' }, { label: '已失效', value: 'INVALIDATED' }]} /></Form.Item>
-          <Form.Item name="remark" label="备注" className="finance-pending-filter-wide"><Input allowClear /></Form.Item>
-          <Form.Item label=" " className="finance-pending-filter-actions">
-            <Space>
-              <Button type="primary" onClick={applyFilters}>查询</Button>
-              <Button onClick={resetFilters}>重置</Button>
+      <Form
+        form={queryForm}
+        layout="vertical"
+        className="finance-pending-filter-form"
+        initialValues={defaultPendingPaymentQuery}
+        onFinish={() => void applyFilters()}
+      >
+        <Row gutter={[10, 10]} className="finance-filter-bar finance-audit-filter-grid finance-pending-filter-primary" role="group" aria-label="待付款筛选条件">
+          <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={agentFieldLabels.shortName}><Input allowClear placeholder="输入代理简称" /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="salesperson" label="业务员"><Input allowClear placeholder="输入业务员" /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="customerCode" label="客户编号"><Input allowClear placeholder="输入客户编号" /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="systemOrderNo" label="出货单号"><Input allowClear placeholder="输入出货单号" /></Form.Item></Col>
+          <Col xs={24} md={8} xl={4}><Form.Item name="status" label="状态"><Select placeholder="全部状态" options={[{ label: '全部', value: 'ALL' }, { label: '待付款', value: 'PENDING' }, { label: '资料已完善', value: 'READY' }, { label: '已进入待支付', value: 'APPLIED' }, { label: '已失效', value: 'INVALIDATED' }]} /></Form.Item></Col>
+          <Col xs={24} md={16} xl={4} className="finance-audit-filter-actions finance-pending-filter-actions">
+            <Space size={8} wrap>
+              <Button type="primary" htmlType="submit" icon={<Search size={15} />}>查询</Button>
+              <Button onClick={() => void resetFilters()}>重置</Button>
+              <Button
+                icon={<SlidersHorizontal size={15} />}
+                aria-expanded={advancedFiltersOpen}
+                onClick={() => setAdvancedFiltersOpen((current) => !current)}
+              >
+                {advancedFiltersOpen ? '收起筛选' : '更多筛选'}
+              </Button>
             </Space>
-          </Form.Item>
-        </div>
+          </Col>
+        </Row>
+        {advancedFiltersOpen ? (
+          <Row gutter={[10, 10]} className="finance-audit-filter-grid finance-audit-filter-advanced finance-pending-filter-advanced">
+            <Col xs={24} md={8} xl={4}><Form.Item name="feeName" label="应付费用"><Input allowClear placeholder="输入费用名称" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="currency" label="币种"><Select placeholder="全部币种" options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="amount" label="合计金额"><InputNumber className="full-width" min={0} placeholder="输入金额" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="payeeName" label="收款方名称"><Input allowClear placeholder="输入收款方名称" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear placeholder="输入收款账号" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="remark" label="备注"><Input allowClear placeholder="输入备注关键词" /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="applicationDateFrom" label="申请付款日期起"><AppDatePicker /></Form.Item></Col>
+            <Col xs={24} md={8} xl={4}><Form.Item name="applicationDateTo" label="申请付款日期止"><AppDatePicker /></Form.Item></Col>
+          </Row>
+        ) : null}
       </Form>
 
       <div className="finance-payment-command-bar">
@@ -613,7 +631,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
           {hasMultipleApplicationGroups ? <Alert type="warning" showIcon message="当前包含多个付款组，请关闭后按同一收款方、银行账号和币种分开提交。" /> : null}
           <section className="finance-payment-modal-section">
             <div className="finance-payment-section-title">付款摘要</div>
-            <Table
+            <ManagedTable
               className="finance-work-table finance-embedded-table finance-payment-group-table"
               rowKey="key"
               size="small"

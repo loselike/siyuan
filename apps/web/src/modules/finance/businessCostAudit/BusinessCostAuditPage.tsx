@@ -9,6 +9,7 @@ import type {
   BusinessCostAuditListResponse,
   BusinessCostAuditSummary,
   BusinessCostAuditUpdateInput,
+  FinanceBillingUnit,
   FinanceCatalogItemSummary
 } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
@@ -21,6 +22,15 @@ import { ChargeWeightChangeTag } from '../ChargeWeightChangeTag';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
+
+const businessCostBillingUnitOptions: Array<{ label: string; value: FinanceBillingUnit }> = [
+  { label: '计费重（KG）', value: 'KG' },
+  { label: '体积（CBM）', value: 'CBM' }
+];
+
+function billingUnitLabel(unit?: FinanceBillingUnit) {
+  return unit === 'CBM' ? 'CBM' : 'KG';
+}
 
 type BusinessCostAuditPageProps = {
   apiClient: ApiClient;
@@ -180,13 +190,15 @@ export function BusinessCostAuditPage({
     setEditingRow(row ?? null);
     form.setFieldsValue(row ? {
       name: row.name,
+      billingUnit: row.billingUnit ?? 'KG',
+      billingQuantity: row.billingQuantity ?? row.chargeWeightKg,
       chargeWeightKg: row.chargeWeightKg,
       unitPrice: row.unitPrice,
       amount: row.amount,
       currency: row.currency ?? 'RMB',
       paymentNo: row.paymentNo,
       remark: row.remark
-    } : { name: '业务员成本', currency: 'RMB' });
+    } : { name: '业务员成本', currency: 'RMB', billingUnit: 'KG' });
     setEditorOpen(true);
   };
 
@@ -197,10 +209,10 @@ export function BusinessCostAuditPage({
   };
 
   const syncAmount = (values: BusinessCostAuditCreateInput & BusinessCostAuditUpdateInput) => {
-    const weight = Number(values.chargeWeightKg);
+    const quantity = Number(values.billingQuantity ?? values.chargeWeightKg);
     const price = Number(values.unitPrice);
-    if (Number.isFinite(weight) && Number.isFinite(price)) {
-      form.setFieldValue('amount', Number((weight * price).toFixed(2)));
+    if (Number.isFinite(quantity) && Number.isFinite(price)) {
+      form.setFieldValue('amount', Number((quantity * price).toFixed(2)));
     }
   };
 
@@ -208,8 +220,11 @@ export function BusinessCostAuditPage({
     const values = await form.validateFields();
     const payload = {
       ...values,
-      amount: typeof values.chargeWeightKg === 'number' && typeof values.unitPrice === 'number'
-        ? Number((values.chargeWeightKg * values.unitPrice).toFixed(2))
+      billingUnit: values.billingUnit ?? 'KG',
+      billingQuantity: typeof values.billingQuantity === 'number' ? values.billingQuantity : values.chargeWeightKg,
+      chargeWeightKg: values.billingUnit === 'CBM' ? undefined : values.chargeWeightKg ?? values.billingQuantity,
+      amount: typeof (values.billingQuantity ?? values.chargeWeightKg) === 'number' && typeof values.unitPrice === 'number'
+        ? Number(((values.billingQuantity ?? values.chargeWeightKg)! * values.unitPrice).toFixed(2))
         : values.amount
     };
     if (editingRow) {
@@ -260,7 +275,12 @@ export function BusinessCostAuditPage({
       className: 'finance-business-cost-audit-currency-column',
       render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag>
     },
-    chargeWeightKg: { title: '计费重', dataIndex: 'chargeWeightKg', width: 105, align: 'right', render: (value: number | undefined, row) => <ChargeWeightChangeTag value={value} change={row.chargeWeightChange} showUnit /> },
+    chargeWeightKg: {
+      title: '计费数量', dataIndex: 'billingQuantity', width: 120, align: 'right',
+      render: (_value: number | undefined, row) => row.billingUnit === 'CBM'
+        ? `${(row.billingQuantity ?? 0).toFixed(6)} CBM`
+        : <ChargeWeightChangeTag value={row.billingQuantity ?? row.chargeWeightKg} change={row.chargeWeightChange} showUnit />
+    },
     unitPrice: { title: '单价', dataIndex: 'unitPrice', width: 85, align: 'right', render: (value: number | undefined, row) => typeof value === 'number' ? formatMoney(value, row.currency) : '-' },
     amount: { title: '总金额', dataIndex: 'amount', width: 95, align: 'right', sorter: true, render: (value: number, row) => formatMoney(value, row.currency) },
     orderRmbTotal: { title: '合计(RMB)', dataIndex: 'orderRmbTotal', width: 100, align: 'right', sorter: true, render: (value?: number) => formatCurrency(value ?? 0) },
@@ -331,7 +351,8 @@ export function BusinessCostAuditPage({
             { key: 'name', label: '费用名称', value: row.name || '-' },
             row.canViewAgent ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
             { key: 'currency', label: '币种', value: <Tag>{row.currency ?? 'RMB'}</Tag> },
-            { key: 'chargeWeightKg', label: '计费重', value: <ChargeWeightChangeTag value={row.chargeWeightKg} change={row.chargeWeightChange} showUnit /> },
+            { key: 'billingUnit', label: '计费方式', value: row.billingUnit === 'CBM' ? '体积（CBM）' : '计费重（KG）' },
+            { key: 'chargeWeightKg', label: '计费数量', value: row.billingUnit === 'CBM' ? `${(row.billingQuantity ?? 0).toFixed(6)} CBM` : <ChargeWeightChangeTag value={row.billingQuantity ?? row.chargeWeightKg} change={row.chargeWeightChange} showUnit /> },
             { key: 'unitPrice', label: '单价', value: formatMoney(row.unitPrice, row.currency) },
             { key: 'amount', label: '总金额', value: formatMoney(row.amount, row.currency) },
             { key: 'orderRmbTotal', label: '合计(RMB)', value: formatCurrency(row.orderRmbTotal ?? 0) },
@@ -380,6 +401,8 @@ export function BusinessCostAuditPage({
               { key: 'transferNo', label: '转单号' },
               { key: 'reconciliationStatus', label: '对账状态' },
               { key: 'currency', label: '币种' },
+              { key: 'billingUnit', label: '计费方式' },
+              { key: 'billingQuantity', label: '计费数量' },
               { key: 'chargeWeightKg', label: '计费重' },
               { key: 'unitPrice', label: '单价' },
               { key: 'amount', label: '总金额' },
@@ -512,7 +535,13 @@ export function BusinessCostAuditPage({
             </Card>
           )}
           <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请选择或填写费用名称' }]}><AutoComplete options={feeNameOptions} /></Form.Item>
-          <Form.Item name="chargeWeightKg" label="计费重" rules={[{ required: true, message: '请填写计费重' }]}><InputNumber className="full-width" min={0} precision={3} /></Form.Item>
+          <Form.Item name="billingUnit" label="计费方式" rules={[{ required: true, message: '请选择计费方式' }]}><Select options={businessCostBillingUnitOptions} onChange={(billingUnit: FinanceBillingUnit) => form.setFieldValue('billingQuantity', billingUnit === 'CBM' ? undefined : form.getFieldValue('billingQuantity'))} /></Form.Item>
+          <Form.Item noStyle shouldUpdate={(previous, current) => previous.billingUnit !== current.billingUnit}>
+            {({ getFieldValue }) => {
+              const billingUnit = getFieldValue('billingUnit') as FinanceBillingUnit | undefined;
+              return <Form.Item name="billingQuantity" label="计费数量" rules={[{ required: true, message: '请填写计费数量' }]}><InputNumber className="full-width" min={0} precision={billingUnit === 'CBM' ? 6 : 3} addonAfter={billingUnitLabel(billingUnit)} /></Form.Item>;
+            }}
+          </Form.Item>
           <Form.Item name="unitPrice" label="单价" rules={[{ required: true, message: '请填写单价' }]}><InputNumber className="full-width" min={0} precision={2} /></Form.Item>
           <Form.Item name="amount" label="总金额"><InputNumber className="full-width" min={0} precision={2} disabled /></Form.Item>
           <Form.Item name="currency" label="币种"><Select options={financeCatalogCurrencyOptions.map((value) => ({ label: value, value }))} /></Form.Item>

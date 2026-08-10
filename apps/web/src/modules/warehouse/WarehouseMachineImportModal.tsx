@@ -135,7 +135,7 @@ export function WarehouseMachineImportModal({
           type="info"
           showIcon
           message="先预览、再确认导入；不会覆盖系统已有数据"
-          description="请保留第 1 行列名；A-F 依次为条码、单件实重、长、宽、高、件数。件数为正整数，留空默认 1 件；总实重和总体积由系统计算。历史五列及机器原始 XLS/XLSX 仍可兼容导入。"
+          description="请保留第 1 行列名；A-F 依次为条码、单件实重、长、宽、高、件数。件数为正整数，留空默认 1 件；总实重和总体积（CBM）由系统计算。历史五列及机器原始 XLS/XLSX 仍可兼容导入。"
           action={(
             <Button
               icon={<Download size={15} />}
@@ -184,7 +184,7 @@ export function WarehouseMachineImportModal({
                   { title: '工作表/行', width: 110, render: (_, row) => `${row.sheetName} / ${row.rowNumber}` },
                   { title: '条码', dataIndex: 'barcode', width: 210 },
                   { title: '件数', dataIndex: 'packageCount', width: 70, render: (value: number) => `${value} 件` },
-                  { title: '单件实重', dataIndex: 'weightKg', width: 100, render: (value: number) => `${value} kg` },
+                  { title: '单件实重', dataIndex: 'weightKg', width: 100, render: (value: number) => `${value} KG` },
                   { title: '尺寸', width: 150, render: (_, row) => `${row.lengthCm}×${row.widthCm}×${row.heightCm} cm` },
                   { title: '过机时间', dataIndex: 'scanTime', width: 170, render: (value: string) => formatBeijingDateTime(value) },
                   { title: '备注', dataIndex: 'remark', width: 180, render: (value?: string) => value || '-' }

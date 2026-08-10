@@ -14,26 +14,30 @@ import {
   Row,
   Select,
   Space,
+  Statistic,
   Tag,
   Typography,
   Upload
 } from 'antd';
 import type { FormInstance } from 'antd/es/form';
 import type { ColumnsType } from 'antd/es/table';
-import { Bot, Boxes, FileInput, PackagePlus, Sparkles } from 'lucide-react';
+import { Bot, Boxes, FileDown, FileInput, PackagePlus, Sparkles } from 'lucide-react';
 import {
   createFulfillmentAdvice,
   shipmentStatusLabels,
   type MasterDataSnapshot,
   type Shipment,
+  type ShipmentOperationalUpdateInput,
+  type ShipmentPaymentMethod,
+  type ShipmentPaymentUpdateInput,
   type ShipmentStatus
 } from '@siyuan/shared';
 import { formatBeijingDateTime } from '../shared/format';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
+import { getShipmentTransportTimeText } from '../shared/shipmentTransportTime';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
-import { canViewOrderManagementAgentDetails } from './orderAgentPermissions';
 import type { RoutingAssignmentFormValues } from '../routing/RoutingPage';
 
 const { Text } = Typography;
@@ -42,7 +46,7 @@ export type OrdersLifecycleStageKey = 'all' | 'review' | 'approved' | 'warehouse
 
 export const orderLifecycleStages: Array<{ key: OrdersLifecycleStageKey; label: string; predicate: (shipment: Shipment) => boolean }> = [
   { key: 'all', label: '全部', predicate: () => true },
-  { key: 'review', label: '审核处理', predicate: (shipment) => ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status) },
+  { key: 'review', label: '审核处理', predicate: (shipment) => ['REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status) },
   { key: 'approved', label: '已审核', predicate: (shipment) => Boolean(shipment.businessReviewedAt) },
   { key: 'warehouse', label: '已排货', predicate: (shipment) => shipment.status === 'WAITING_DISPATCH' },
   { key: 'inTransit', label: '运输中', predicate: (shipment) => ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'WAITING_ONLINE', 'WAITING_SIGNED', 'WAITING_RETURN'].includes(shipment.status) },
@@ -60,6 +64,34 @@ export function lifecycleStatusColor(status: ShipmentStatus) {
 
 export function orderManagementStatusLabel(status: ShipmentStatus) {
   return status === 'WAITING_DISPATCH' ? '已排货' : shipmentStatusLabels[status];
+}
+
+export function canDownloadOrderInvoiceTemplate(shipment: Pick<Shipment, 'status' | 'invoiceTemplateAvailable'>) {
+  return shipment.status === 'WAITING_DISPATCH' && shipment.invoiceTemplateAvailable === true;
+}
+
+const orderManagementAgentRestrictedRoles = new Set([
+  'OPERATOR',
+  'UG_BUSINESS',
+  'UG_SZ_WUHAN',
+  'UG_ZZ_SIHUA',
+  'UG_WH_JIUYULIAN',
+  'UG_BUSINESS_MANAGER',
+  'UG_BUSINESS_SUPERVISOR'
+]);
+
+export function canViewOrderManagementAgentDetails(role: import('../../apiClient').RoleKey) {
+  return !orderManagementAgentRestrictedRoles.has(role);
+}
+
+export function canViewOrderManagementAgentWeight(
+  permissions: readonly import('../../apiClient').PermissionKey[]
+) {
+  return permissions.includes('business:shipment:agent-weight-view');
+}
+
+export function formatOrderManagementWeight(weight?: number) {
+  return typeof weight === 'number' ? weight.toFixed(3) : '-';
 }
 
 export function resolveOrderManagementAgentShortName(
@@ -107,6 +139,12 @@ export interface EditShipmentOperationalFormValues {
   etdAt?: string;
 }
 
+export interface ShipmentPaymentFormValues {
+  paymentAmountUsd?: number;
+  paymentAmountCny?: number;
+  paymentMethod: ShipmentPaymentMethod;
+}
+
 export interface ShipmentOperationLog {
   id: string;
   operatedAt: string;
@@ -127,9 +165,12 @@ const precisionLedgerColumnWidths: Record<string, number> = {
   channel: 76,
   agent: 100,
   packageCount: 50,
-  weight: 110,
+  receivableWeight: 90,
+  agentWeight: 90,
   trackingStatus: 80,
+  transportTime: 80,
   transitTime: 56,
+  stageDwell: 96,
   paymentAmount: 70,
   paymentCurrency: 62,
   paymentMethod: 68,
@@ -218,14 +259,27 @@ function renderOrderMatrixDateTime(value: string) {
 
 const receivingChannelOptions = ['海运DDP', '空运DDP', '快递', '整柜到门', '整柜到港', '拼箱到港', '空运到机场', '代购', '自定义'];
 
-type OrderManagementFilters = {
+const shipmentPaymentMethods: ShipmentPaymentMethod[] = ['对公', '对私', '阿里店铺', '外汇'];
+
+export type OrderManagementFilters = {
   createdFrom?: string;
   createdTo?: string;
   customerKeyword: string;
+  outboundOrderKeyword: string;
 };
 
 function createEmptyOrderManagementFilters(): OrderManagementFilters {
-  return { customerKeyword: '' };
+  return { customerKeyword: '', outboundOrderKeyword: '' };
+}
+
+export function matchesOrderManagementFilters(shipment: Shipment, filters: OrderManagementFilters) {
+  const createdAt = shipment.createdAt.slice(0, 10);
+  if (filters.createdFrom && createdAt < filters.createdFrom) return false;
+  if (filters.createdTo && createdAt > filters.createdTo) return false;
+  const customerKeyword = filters.customerKeyword.toLowerCase();
+  if (customerKeyword && ![shipment.customerCode, shipment.customerName].some((value) => value?.toLowerCase().includes(customerKeyword))) return false;
+  const outboundOrderKeyword = filters.outboundOrderKeyword.toLowerCase();
+  return !outboundOrderKeyword || resolveShipmentOutboundOrderNo(shipment).toLowerCase().includes(outboundOrderKeyword);
 }
 
 
@@ -233,6 +287,7 @@ function createEmptyOrderManagementFilters(): OrderManagementFilters {
 export function OrdersPage({
   notice,
   shipments,
+  visibleShipments,
   columns,
   matrixSourceColumns,
   metricCards,
@@ -256,7 +311,16 @@ export function OrdersPage({
   masterData,
   onConfirmRoutingAssignment,
   onCancelRoutingAssignment,
+  collectingShipment,
+  shipmentPaymentForm,
+  onSubmitShipmentPayment,
+  onCancelShipmentPayment,
+  pendingShipmentPayment,
+  onConfirmShipmentPayment,
+  onCancelPendingShipmentPayment,
   onUploadShipmentBusinessInvoice,
+  onDownloadShipmentInvoiceTemplate,
+  onDownloadShipmentBusinessInvoice,
   logViewingShipment,
   logViewingMode,
   shipmentLogs,
@@ -269,6 +333,7 @@ export function OrdersPage({
 }: {
   notice?: string | null;
   shipments: Shipment[];
+  visibleShipments: Shipment[];
   columns: ManagedTableColumns<Shipment>;
   matrixSourceColumns: ManagedTableColumns<Shipment>;
   metricCards: Array<{ title: string; value: string | number; extra: ReactNode; icon: ReactNode }>;
@@ -292,7 +357,16 @@ export function OrdersPage({
   masterData: MasterDataSnapshot;
   onConfirmRoutingAssignment: () => Promise<boolean>;
   onCancelRoutingAssignment: () => void;
+  collectingShipment: Shipment | null;
+  shipmentPaymentForm: FormInstance<ShipmentPaymentFormValues>;
+  onSubmitShipmentPayment: () => Promise<void>;
+  onCancelShipmentPayment: () => void;
+  pendingShipmentPayment: { shipment: Shipment; input: ShipmentPaymentUpdateInput } | null;
+  onConfirmShipmentPayment: () => Promise<void>;
+  onCancelPendingShipmentPayment: () => void;
   onUploadShipmentBusinessInvoice: (shipment: Shipment, file: File) => Promise<void>;
+  onDownloadShipmentInvoiceTemplate: (shipment: Shipment) => Promise<void>;
+  onDownloadShipmentBusinessInvoice: (shipment: Shipment) => Promise<void>;
   logViewingShipment: Shipment | null;
   logViewingMode: ShipmentLogViewMode;
   shipmentLogs: ShipmentOperationLog[];
@@ -304,23 +378,21 @@ export function OrdersPage({
   role: import('../../apiClient').RoleKey;
 }) {
   const hasBusinessPermission = (permission: import('../../apiClient').PermissionKey) => role === 'ADMIN' || permissions.includes(permission);
-  const showAgentDetails = canViewOrderManagementAgentDetails(role, permissions);
+  const showAgentDetails = canViewOrderManagementAgentDetails(role);
+  const showAgentWeight = canViewOrderManagementAgentWeight(permissions);
   const [tableDensity, setTableDensity] = useState<OrderManagementDensity>('compact');
+  const [downloadingInvoiceTemplateId, setDownloadingInvoiceTemplateId] = useState<string>();
+  const [downloadingBusinessInvoiceId, setDownloadingBusinessInvoiceId] = useState<string>();
   const [filterDraft, setFilterDraft] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
   const [appliedFilters, setAppliedFilters] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
   const filteredShipments = useMemo(() => {
-    const keyword = appliedFilters.customerKeyword.toLowerCase();
-    return shipments.filter((shipment) => {
-      const createdAt = shipment.createdAt.slice(0, 10);
-      if (appliedFilters.createdFrom && createdAt < appliedFilters.createdFrom) return false;
-      if (appliedFilters.createdTo && createdAt > appliedFilters.createdTo) return false;
-      return !keyword || [shipment.customerCode, shipment.customerName].some((value) => value?.toLowerCase().includes(keyword));
-    });
+    return shipments.filter((shipment) => matchesOrderManagementFilters(shipment, appliedFilters));
   }, [appliedFilters, shipments]);
   const applyFilters = () => {
     setAppliedFilters({
       ...filterDraft,
-      customerKeyword: filterDraft.customerKeyword.trim()
+      customerKeyword: filterDraft.customerKeyword.trim(),
+      outboundOrderKeyword: filterDraft.outboundOrderKeyword.trim()
     });
   };
   const resetFilters = () => {
@@ -332,6 +404,22 @@ export function OrdersPage({
     const stage = orderLifecycleStages.find((item) => item.key === selectedStage);
     return stage ? filteredShipments.filter(stage.predicate) : filteredShipments;
   }, [filteredShipments, selectedStage]);
+  const downloadInvoiceTemplateFromDetail = async (shipment: Shipment) => {
+    setDownloadingInvoiceTemplateId(shipment.id);
+    try {
+      await onDownloadShipmentInvoiceTemplate(shipment);
+    } finally {
+      setDownloadingInvoiceTemplateId(undefined);
+    }
+  };
+  const downloadBusinessInvoice = async (shipment: Shipment) => {
+    setDownloadingBusinessInvoiceId(shipment.id);
+    try {
+      await onDownloadShipmentBusinessInvoice(shipment);
+    } finally {
+      setDownloadingBusinessInvoiceId(undefined);
+    }
+  };
   const precisionLedgerColumns = useMemo<ManagedTableColumns<Shipment>>(
     () => columns.map((column) => {
       const key = String(column.key);
@@ -340,7 +428,37 @@ export function OrdersPage({
     }),
     [columns]
   );
-  const orderRecordDetailColumns = matrixSourceColumns;
+  const orderRecordDetailColumns: ManagedTableColumns<Shipment> = [
+    ...matrixSourceColumns,
+    ...(hasBusinessPermission('business:order-entry:invoice-upload') ? [{
+      key: 'invoiceTemplateDownload',
+      title: '发票模板',
+      render: () => null,
+      recordDetail: {
+        label: '发票模板',
+        span: 2 as const,
+        interactive: true,
+        value: (shipment: Shipment) => (
+          <Space size={10}>
+            <Button
+              type="primary"
+              icon={<FileDown size={14} />}
+              disabled={!canDownloadOrderInvoiceTemplate(shipment)}
+              loading={downloadingInvoiceTemplateId === shipment.id}
+              onClick={() => void downloadInvoiceTemplateFromDetail(shipment)}
+            >
+              下载发票模板
+            </Button>
+            {!canDownloadOrderInvoiceTemplate(shipment) ? (
+              <Text type="secondary">
+                {shipment.status === 'WAITING_DISPATCH' ? '对应代理未维护可下载的发票模板' : '仅已排货运单可下载'}
+              </Text>
+            ) : null}
+          </Space>
+        )
+      }
+    }] : [])
+  ];
   const matrixColumns = useMemo<ManagedTableColumns<Shipment>>(
     () => [
       {
@@ -389,12 +507,13 @@ export function OrdersPage({
       },
       {
         key: 'matrixCargoPayment',
-        title: '货物与应收',
-        width: 230,
+        title: '货物与计费',
+        width: showAgentWeight ? 278 : 230,
         className: 'order-matrix-group-cargo',
         render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
           { key: 'packageCount', label: '件数' },
-          { key: 'weight', label: '应收/代理计费重' },
+          { key: 'receivableWeight', label: '应收计费重' },
+          ...(showAgentWeight ? [{ key: 'agentWeight', label: '代理计费重' }] : []),
           { key: 'paymentAmount', label: '应收金额' },
           { key: 'paymentCurrency', label: '应收币种' },
           { key: 'paymentMethod', label: '结算方式' }
@@ -413,11 +532,14 @@ export function OrdersPage({
         className: 'order-matrix-group-fulfillment',
         render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
           { key: 'trackingStatus', label: '轨迹状态', className: 'order-matrix-field-wrap order-matrix-field-status-copy' },
+          { key: 'transportTime', label: '运输时间', className: 'order-matrix-field-status-copy' },
           { key: 'transitTime', label: '时效', className: 'order-matrix-field-status-copy' },
           { key: 'lifecycleStatus', label: '当前节点' },
+          { key: 'stageDwell', label: '节点停留' },
           { key: 'auditStatus', label: '审核状态' }
         ], record, index, {
           trackingStatus: <span className="order-matrix-status-text" title={record.latestTracking || '-'}>{record.latestTracking || '-'}</span>,
+          transportTime: <span className="order-matrix-status-text">{getShipmentTransportTimeText(record)}</span>,
           transitTime: <span className="order-matrix-status-text">{renderOrderColumnValue(matrixSourceColumns, 'transitTime', record, index)}</span>
         })
       },
@@ -439,7 +561,7 @@ export function OrdersPage({
         render: (_, record, index) => renderOrderColumnValue(matrixSourceColumns, 'actions', record, index)
       }
     ],
-    [formatPaymentSummary, masterData.agents, matrixSourceColumns, showAgentDetails]
+    [formatPaymentSummary, masterData.agents, matrixSourceColumns, showAgentDetails, showAgentWeight]
   );
   const tableDensityToolbar = (
     <Select<OrderManagementDensity>
@@ -475,6 +597,14 @@ export function OrdersPage({
         placeholder="客户编号 / 客户名称"
         value={filterDraft.customerKeyword}
         onChange={(event) => setFilterDraft((current) => ({ ...current, customerKeyword: event.target.value }))}
+        onPressEnter={applyFilters}
+      />
+      <Input
+        allowClear
+        aria-label="出货单号"
+        placeholder="出货单号"
+        value={filterDraft.outboundOrderKeyword}
+        onChange={(event) => setFilterDraft((current) => ({ ...current, outboundOrderKeyword: event.target.value }))}
         onPressEnter={applyFilters}
       />
       <Button type="primary" onClick={applyFilters}>查询</Button>
@@ -520,7 +650,17 @@ export function OrdersPage({
         render: (_, shipment) => {
           const agent = masterData.agents.find((item) => item.id === shipment.agentId || item.name === shipment.agentName || item.shortName === shipment.agentName);
           if (!agent?.invoiceTemplateUrl) return <Tag color="red">代理未维护模板</Tag>;
-          return <a href={agent.invoiceTemplateUrl} target="_blank" rel="noreferrer">{agent.invoiceTemplateName || '下载模板'}</a>;
+          return (
+            <Button
+              type="link"
+              size="small"
+              loading={downloadingInvoiceTemplateId === shipment.id}
+              disabled={!canDownloadOrderInvoiceTemplate(shipment)}
+              onClick={() => void downloadInvoiceTemplateFromDetail(shipment)}
+            >
+              {agent.invoiceTemplateName || '下载模板'}
+            </Button>
+          );
         }
       },
       {
@@ -529,7 +669,14 @@ export function OrdersPage({
         width: 190,
         render: (_, shipment) =>
           shipment.businessInvoiceUrl ? (
-            <a href={shipment.businessInvoiceUrl} target="_blank" rel="noreferrer">{shipment.businessInvoiceName || '下载发票'}</a>
+            <Button
+              type="link"
+              size="small"
+              loading={downloadingBusinessInvoiceId === shipment.id}
+              onClick={() => void downloadBusinessInvoice(shipment)}
+            >
+              {shipment.businessInvoiceName || '下载发票'}
+            </Button>
           ) : (
             <Tag color="orange">待业务上传发票</Tag>
           )
@@ -563,7 +710,7 @@ export function OrdersPage({
         }
       }
     ],
-    [masterData.agents, onUploadShipmentBusinessInvoice]
+    [downloadingBusinessInvoiceId, downloadingInvoiceTemplateId, masterData.agents, onUploadShipmentBusinessInvoice]
   );
 
   useEffect(() => {
@@ -640,6 +787,7 @@ export function OrdersPage({
                 })}
               </div>
             </div>
+
             <ManagedDualViewTable
               viewStorageKey="sunny.business.order-management.table-view"
               defaultView="ledger"
@@ -771,7 +919,7 @@ export function OrdersPage({
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="customerOrderNo" label="客户单号" rules={[{ required: true, message: '请输入客户单号' }]}>
+              <Form.Item name="customerOrderNo" label="出货单号" rules={[{ required: true, message: '请输入出货单号' }]}>
                 <Input />
               </Form.Item>
             </Col>
@@ -809,11 +957,13 @@ export function OrdersPage({
                 <InputNumber min={0.001} precision={3} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-            <Col xs={24} md={8}>
-              <Form.Item name="agentWeightKg" label="代理计费重" rules={[{ required: true, message: '请输入代理计费重' }]}>
-                <InputNumber min={0.001} precision={3} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
+            {showAgentWeight ? (
+              <Col xs={24} md={8}>
+                <Form.Item name="agentWeightKg" label="代理计费重" rules={[{ required: true, message: '请输入代理计费重' }]}>
+                  <InputNumber min={0.001} precision={3} style={{ width: '100%' }} />
+                </Form.Item>
+              </Col>
+            ) : null}
             <Col xs={24}>
               <Form.Item name="remark" label="备注">
                 <Input.TextArea rows={3} placeholder="可填写客户要求、入库说明、排货注意事项等" />
@@ -866,7 +1016,7 @@ export function OrdersPage({
           </Form.Item>
           <Row gutter={12}>
             <Col xs={24} md={12}>
-              <Form.Item name="customerOrderNo" label="客户单号">
+              <Form.Item name="customerOrderNo" label="出货单号">
                 <Input />
               </Form.Item>
             </Col>
@@ -1002,6 +1152,69 @@ export function OrdersPage({
             </Col>
           </Row>
         </Form>
+      </Modal>
+
+      <Modal
+        title="登记收款金额"
+        open={Boolean(collectingShipment)}
+        destroyOnHidden
+        okText="确认收款"
+        cancelText="取消"
+        width={560}
+        onOk={() => void onSubmitShipmentPayment().catch(() => undefined)}
+        onCancel={onCancelShipmentPayment}
+      >
+        <Alert
+          className="notice-bar"
+          type="info"
+          showIcon
+          message="未登记前金额和付款方式显示为未知；确认收款后会保留操作记录。"
+        />
+        <Form form={shipmentPaymentForm} layout="vertical">
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item name="paymentAmountUsd" label="收款金额 USD">
+                <InputNumber min={0} precision={2} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item name="paymentAmountCny" label="收款金额 RMB">
+                <InputNumber min={0} precision={2} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="paymentMethod" label="收款方式" rules={[{ required: true, message: '请选择收款方式' }]}>
+            <select aria-label="收款方式" className="native-select">
+              {shipmentPaymentMethods.map((method) => (
+                <option key={method} value={method}>
+                  {method}
+                </option>
+              ))}
+            </select>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="确认登记收款？"
+        open={Boolean(pendingShipmentPayment)}
+        destroyOnHidden
+        okText="确认收款"
+        cancelText="取消"
+        onOk={() => void onConfirmShipmentPayment()}
+        onCancel={onCancelPendingShipmentPayment}
+      >
+        {pendingShipmentPayment ? (
+          <Alert
+            className="notice-bar"
+            type="warning"
+            showIcon
+            message={`${pendingShipmentPayment.shipment.systemOrderNo} 将登记 ${formatPaymentSummary(
+              pendingShipmentPayment.input.paymentAmountUsd,
+              pendingShipmentPayment.input.paymentAmountCny
+            )} / ${pendingShipmentPayment.input.paymentMethod}`}
+          />
+        ) : null}
       </Modal>
 
       <Modal

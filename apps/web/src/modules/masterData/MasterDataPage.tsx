@@ -72,6 +72,54 @@ interface MasterAgentInvoiceTemplateFormValues {
   url?: string;
 }
 
+export type InvoiceTemplateFileKind = 'xls' | 'xlsx';
+
+function invoiceTemplateFileExtension(fileName: string): string {
+  const dotIndex = fileName.lastIndexOf('.');
+  return dotIndex >= 0 ? fileName.slice(dotIndex).toLowerCase() : '';
+}
+
+export function detectInvoiceTemplateFileKind(bytes: Uint8Array): InvoiceTemplateFileKind | null {
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) return 'xlsx';
+  if (bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) return 'xls';
+  return null;
+}
+
+async function readInvoiceTemplatePrefix(file: File): Promise<Uint8Array> {
+  const slice = file.slice(0, 4);
+  if (typeof slice.arrayBuffer === 'function') {
+    return new Uint8Array(await slice.arrayBuffer());
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
+    reader.onerror = () => reject(reader.error ?? new Error('无法读取 Excel 文件'));
+    reader.readAsArrayBuffer(slice);
+  });
+}
+
+export async function normalizeInvoiceTemplateFile(file: File): Promise<{ file: File; corrected: boolean; kind: InvoiceTemplateFileKind }> {
+  const extension = invoiceTemplateFileExtension(file.name);
+  if (extension !== '.xls' && extension !== '.xlsx') {
+    throw new Error('请上传 .xls/.xlsx 发票模板');
+  }
+  const bytes = await readInvoiceTemplatePrefix(file);
+  const kind = detectInvoiceTemplateFileKind(bytes);
+  if (!kind) {
+    throw new Error('Excel 文件内容无法识别，请重新导出为 .xls 或 .xlsx 文件');
+  }
+  const expectedExtension = `.${kind}`;
+  if (extension === expectedExtension) return { file, corrected: false, kind };
+  const correctedName = `${file.name.slice(0, -extension.length)}${expectedExtension}`;
+  const correctedFile = new File([file], correctedName, {
+    type: kind === 'xlsx'
+      ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      : 'application/vnd.ms-excel',
+    lastModified: file.lastModified
+  });
+  return { file: correctedFile, corrected: true, kind };
+}
+
 interface MasterAgentWarehouseFormValues {
   address?: string;
   contactName?: string;
@@ -305,6 +353,8 @@ export function MasterDataPage({
   const [editingMasterAgentChannel, setEditingMasterAgentChannel] = useState<AgentChannelSummary | null>(null);
   const [editingMasterCompanyChannel, setEditingMasterCompanyChannel] = useState<ChannelSummary | null>(null);
   const [editingMasterChannelCategory, setEditingMasterChannelCategory] = useState<ChannelCategorySummary | null>(null);
+  const [uploadingInvoiceTemplateIndex, setUploadingInvoiceTemplateIndex] = useState<number | null>(null);
+  const [invoiceUploadInputVersion, setInvoiceUploadInputVersion] = useState(0);
   const [customerFilters, setCustomerFilters] = useState({
     name: '',
     code: '',
@@ -1190,17 +1240,26 @@ export function MasterDataPage({
 
   async function handleAgentInvoiceTemplate(index: number, file: File) {
     const urlField: ['invoiceTemplates', number, 'url'] = ['invoiceTemplates', index, 'url'];
-    const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
-    if (!['.xls', '.xlsx'].includes(extension) || extension === '.xlsm') {
-      masterAgentForm.setFields([{ name: urlField, errors: ['请上传 .xls/.xlsx 发票模板'] }]);
-      return;
-    }
-    const uploaded = await apiClient.uploadAgentInvoiceTemplate(file);
-    const templates = [...(masterAgentForm.getFieldValue('invoiceTemplates') ?? [])];
-    templates[index] = { ...templates[index], name: templates[index]?.name?.trim() || uploaded.fileName, url: uploaded.url };
-    masterAgentForm.setFieldValue('invoiceTemplates', templates);
+    setUploadingInvoiceTemplateIndex(index);
     masterAgentForm.setFields([{ name: urlField, errors: [] }]);
-    onNotice(`已上传模板：${uploaded.fileName}`);
+    try {
+      const normalized = await normalizeInvoiceTemplateFile(file);
+      const uploaded = await apiClient.uploadAgentInvoiceTemplate(normalized.file);
+      const templates = [...(masterAgentForm.getFieldValue('invoiceTemplates') ?? [])];
+      templates[index] = { ...templates[index], name: templates[index]?.name?.trim() || uploaded.fileName, url: uploaded.url };
+      masterAgentForm.setFieldValue('invoiceTemplates', templates);
+      masterAgentForm.setFields([{ name: urlField, errors: [] }]);
+      onNotice(normalized.corrected
+        ? `已识别文件内容为 .${normalized.kind}，已自动修正扩展名并上传：${uploaded.fileName}`
+        : `已上传模板：${uploaded.fileName}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '发票模板上传失败，请重试';
+      masterAgentForm.setFields([{ name: urlField, errors: [message] }]);
+      onNotice(message);
+    } finally {
+      setUploadingInvoiceTemplateIndex(null);
+      setInvoiceUploadInputVersion((version) => version + 1);
+    }
   }
 
   function handleAgentInvoicePaste(index: number, event: ClipboardEvent<HTMLElement>) {
@@ -3110,7 +3169,7 @@ export function MasterDataPage({
                             <Col xs={24} md={8}><Form.Item name={[field.name, 'name']} label={`模板 ${index + 1} 名称`} rules={[{ required: true, whitespace: true, message: '请输入模板名称' }]}><Input placeholder={`例如 模板 ${index + 1}.xlsx`} /></Form.Item></Col>
                             <Col xs={24} md={15}><Form.Item label={`模板 ${index + 1} 文件`} required><Space.Compact className="full-width">
                               <Form.Item name={[field.name, 'url']} noStyle rules={[{ required: true, whitespace: true, message: '请上传或填写模板文件' }]}><Input aria-label={`模板 ${index + 1} 文件`} placeholder="上传或粘贴 Excel 后自动填充" onPaste={(event) => handleAgentInvoicePaste(index, event)} /></Form.Item>
-                              <Upload accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" showUploadList={false} beforeUpload={(file) => { void handleAgentInvoiceTemplate(index, file as File); return false; }}><Button>上传模板</Button></Upload>
+                              <Upload key={`invoice-template-upload-${index}-${invoiceUploadInputVersion}`} accept=".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={uploadingInvoiceTemplateIndex !== null} showUploadList={false} beforeUpload={(file) => { void handleAgentInvoiceTemplate(index, file as File); return false; }}><Button loading={uploadingInvoiceTemplateIndex === index}>上传模板</Button></Upload>
                             </Space.Compact></Form.Item></Col>
                             <Col xs={24} md={1}><Button aria-label={`删除发票模板 ${index + 1}`} danger icon={<Trash2 size={15} />} onClick={() => remove(field.name)} size="small" type="text" /></Col>
                           </Row>

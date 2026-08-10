@@ -1,24 +1,35 @@
-import { BadRequestException, Body, Controller, Get, Inject, Post, Put, UnauthorizedException, Req } from '@nestjs/common';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { BadRequestException, Body, Controller, Get, HttpException, HttpStatus, Inject, Post, Put, UnauthorizedException, Req } from '@nestjs/common';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { PrismaRepository } from './prisma.repository.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { jwtSecret } from './rbac.guard.js';
 import type { Principal } from './rbac.js';
 
-const captchaStore = new Map<string, { code: string; expiresAt: number }>();
+const captchaStore = new Map<string, { codeHash: Buffer; expiresAt: number }>();
+const captchaRateBuckets = new Map<string, RateBucket>();
+const loginRateBuckets = new Map<string, RateBucket>();
 const captchaTtlMs = 3 * 60 * 1000;
+const captchaStoreMaxEntries = 5_000;
+const rateBucketMaxEntries = 20_000;
+const captchaRateLimit = { limit: 300, windowMs: 60 * 1000 };
+const loginIpRateLimit = { limit: 300, windowMs: 5 * 60 * 1000 };
+const loginAccountRateLimit = { limit: 10, windowMs: 5 * 60 * 1000 };
+
+type RateBucket = { count: number; expiresAt: number };
 
 @Controller('auth')
 export class AuthController {
   constructor(@Inject(PrismaRepository) private readonly repository: PrismaRepository) {}
 
   @Get('captcha')
-  captcha() {
+  captcha(@Req() request: { headers: Record<string, string | string[] | undefined>; ip?: string }) {
+    enforceCaptchaRateLimit(getRequestIp(request));
     cleanupExpiredCaptchas();
     const code = randomCaptchaCode();
     const captchaId = randomUUID();
-    captchaStore.set(captchaId, { code, expiresAt: Date.now() + captchaTtlMs });
+    trimMapToCapacity(captchaStore, captchaStoreMaxEntries);
+    captchaStore.set(captchaId, { codeHash: hashCaptchaCode(captchaId, code), expiresAt: Date.now() + captchaTtlMs });
 
     return {
       captchaId,
@@ -29,25 +40,30 @@ export class AuthController {
   @Post('login')
   async login(
     @Req() request: { headers: Record<string, string | string[] | undefined>; ip?: string },
-    @Body() body: { username?: string; password?: string; captchaId?: string; captchaCode?: string }
+    @Body() body: { username?: unknown; password?: unknown; captchaId?: unknown; captchaCode?: unknown }
   ) {
+    const username = typeof body.username === 'string' ? body.username : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+    const captchaId = typeof body.captchaId === 'string' ? body.captchaId : undefined;
+    const captchaCode = typeof body.captchaCode === 'string' ? body.captchaCode : undefined;
     const loginMeta = {
       ip: getRequestIp(request),
       userAgent: getHeaderValue(request.headers['user-agent'])
     };
+    const loginAccountRateKey = enforceLoginRateLimit(loginMeta.ip, username);
     if (shouldValidateLoginCaptcha()) {
       try {
-        validateCaptcha(body.captchaId, body.captchaCode);
+        validateCaptcha(captchaId, captchaCode);
       } catch (error) {
-        await (this.repository as any).recordLoginFailure?.({ username: body.username, ...loginMeta }).catch(() => undefined);
+        await (this.repository as any).recordLoginFailure?.({ username, ...loginMeta }).catch(() => undefined);
         throw error;
       }
     }
 
-    const account = await this.repository.findAccount(body.username ?? '', body.password ?? '');
+    const account = await this.repository.findAccount(username, password);
 
     if (!account) {
-      await (this.repository as any).recordLoginFailure?.({ username: body.username, ...loginMeta }).catch(() => undefined);
+      await (this.repository as any).recordLoginFailure?.({ username, ...loginMeta }).catch(() => undefined);
       throw new UnauthorizedException('用户名或密码错误');
     }
 
@@ -66,6 +82,7 @@ export class AuthController {
     const permissions = await this.repository.getPermissionsForRole(account.role);
     principal.dataScope = permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
     await this.repository.recordLoginLog(principal, loginMeta);
+    loginRateBuckets.delete(loginAccountRateKey);
 
     return {
       accessToken: jwt.sign(principal, jwtSecret(), { expiresIn: '8h' }),
@@ -124,8 +141,10 @@ function shouldValidateLoginCaptcha() {
 }
 
 function getRequestIp(request: { headers: Record<string, string | string[] | undefined>; ip?: string }) {
-  const forwardedFor = getHeaderValue(request.headers['x-forwarded-for']);
-  return forwardedFor?.split(',')[0]?.trim() || getHeaderValue(request.headers['x-real-ip']) || request.ip || '未知';
+  return getHeaderValue(request.headers['x-real-ip'])
+    || getHeaderValue(request.headers['x-forwarded-for'])?.split(',').at(-1)?.trim()
+    || request.ip
+    || '未知';
 }
 
 function getHeaderValue(value: string | string[] | undefined) {
@@ -133,7 +152,7 @@ function getHeaderValue(value: string | string[] | undefined) {
 }
 
 function randomCaptchaCode() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const chars = '23456789';
   const bytes = randomBytes(4);
   return Array.from(bytes, (byte) => chars[byte % chars.length]).join('');
 }
@@ -150,7 +169,8 @@ function validateCaptcha(captchaId?: string, captchaCode?: string) {
   if (!record || record.expiresAt < Date.now()) {
     throw new BadRequestException('验证码已过期，请刷新后重试');
   }
-  if (record.code.toLowerCase() !== captchaCode.trim().toLowerCase()) {
+  const candidateHash = hashCaptchaCode(captchaId, captchaCode.trim());
+  if (record.codeHash.length !== candidateHash.length || !timingSafeEqual(record.codeHash, candidateHash)) {
     throw new BadRequestException('验证码不正确，请重新输入');
   }
 }
@@ -158,20 +178,20 @@ function validateCaptcha(captchaId?: string, captchaCode?: string) {
 function cleanupExpiredCaptchas() {
   const now = Date.now();
   for (const [id, record] of captchaStore.entries()) {
-    if (record.expiresAt < now) {
-      captchaStore.delete(id);
-    }
+    if (record.expiresAt >= now) break;
+    captchaStore.delete(id);
   }
 }
 
 function createCaptchaSvgDataUri(code: string) {
-  const chars = code.split('');
-  const text = chars
-    .map((char, index) => {
-      const x = 18 + index * 25;
-      const y = 36 + (index % 2 === 0 ? -2 : 3);
-      const rotate = [-9, 7, -4, 8][index] ?? 0;
-      return `<text x="${x}" y="${y}" transform="rotate(${rotate} ${x} ${y})">${char}</text>`;
+  const rotations = randomBytes(code.length);
+  const glyphs = code.split('')
+    .map((digit, index) => {
+      const segments = captchaDigitSegments[digit] ?? [];
+      const path = segments.map((segment) => captchaSegmentPaths[segment]).join(' ');
+      const x = 14 + index * 28;
+      const rotate = (rotations[index] % 13) - 6;
+      return `<g transform="translate(${x} 7) rotate(${rotate} 10 18)"><path d="${path}"/></g>`;
     })
     .join('');
   const noise = Array.from({ length: 8 }, (_, index) => {
@@ -185,7 +205,82 @@ function createCaptchaSvgDataUri(code: string) {
     <rect width="132" height="52" rx="8" fill="#f4f7fb"/>
     <path d="M8 36 C32 12, 54 48, 82 20 S115 42, 126 18" fill="none" stroke="#8fb3ff" stroke-width="2" opacity=".65"/>
     <g stroke="#b8c8dc" stroke-width="1" opacity=".55">${noise}</g>
-    <g font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="25" font-weight="800" fill="#102033" letter-spacing="3">${text}</g>
+    <g fill="none" stroke="#102033" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round">${glyphs}</g>
   </svg>`;
   return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+}
+
+const captchaSegmentPaths = {
+  a: 'M4 2 L18 2',
+  b: 'M19 4 L17 17',
+  c: 'M16 21 L14 34',
+  d: 'M3 36 L14 36',
+  e: 'M2 21 L4 34',
+  f: 'M3 4 L5 17',
+  g: 'M5 19 L17 19'
+} as const;
+
+type CaptchaSegment = keyof typeof captchaSegmentPaths;
+
+const captchaDigitSegments: Record<string, CaptchaSegment[]> = {
+  '2': ['a', 'b', 'g', 'e', 'd'],
+  '3': ['a', 'b', 'g', 'c', 'd'],
+  '4': ['f', 'g', 'b', 'c'],
+  '5': ['a', 'f', 'g', 'c', 'd'],
+  '6': ['a', 'f', 'g', 'e', 'c', 'd'],
+  '7': ['a', 'b', 'c'],
+  '8': ['a', 'b', 'c', 'd', 'e', 'f', 'g'],
+  '9': ['a', 'b', 'c', 'd', 'f', 'g']
+};
+
+function hashCaptchaCode(captchaId: string, code: string) {
+  return createHash('sha256').update(`${captchaId}:${code.toLowerCase()}`).digest();
+}
+
+function enforceCaptchaRateLimit(ip: string) {
+  if (!shouldApplyAuthRateLimit()) return;
+  consumeRateLimit(captchaRateBuckets, `captcha:${ip}`, captchaRateLimit.limit, captchaRateLimit.windowMs);
+}
+
+function enforceLoginRateLimit(ip: string, username?: string) {
+  const accountKey = `login-account:${ip}:${username?.trim().toLowerCase() || 'empty'}`;
+  if (!shouldApplyAuthRateLimit()) return accountKey;
+  consumeRateLimit(loginRateBuckets, `login-ip:${ip}`, loginIpRateLimit.limit, loginIpRateLimit.windowMs);
+  consumeRateLimit(loginRateBuckets, accountKey, loginAccountRateLimit.limit, loginAccountRateLimit.windowMs);
+  return accountKey;
+}
+
+function shouldApplyAuthRateLimit() {
+  return process.env.NODE_ENV !== 'test';
+}
+
+export function consumeRateLimit(store: Map<string, RateBucket>, key: string, limit: number, windowMs: number, now = Date.now()) {
+  pruneExpiredRateBuckets(store, now);
+  const current = store.get(key);
+  if (!current || current.expiresAt <= now) {
+    trimMapToCapacity(store, rateBucketMaxEntries);
+    store.set(key, { count: 1, expiresAt: now + windowMs });
+    return;
+  }
+  if (current.count >= limit) {
+    throw new HttpException('请求过于频繁，请稍后再试', HttpStatus.TOO_MANY_REQUESTS);
+  }
+  current.count += 1;
+}
+
+function pruneExpiredRateBuckets(store: Map<string, RateBucket>, now: number) {
+  let checked = 0;
+  for (const [key, bucket] of store.entries()) {
+    if (bucket.expiresAt <= now) store.delete(key);
+    checked += 1;
+    if (checked >= 64) break;
+  }
+}
+
+function trimMapToCapacity<T>(store: Map<string, T>, maxEntries: number) {
+  while (store.size >= maxEntries) {
+    const oldestKey = store.keys().next().value as string | undefined;
+    if (oldestKey === undefined) return;
+    store.delete(oldestKey);
+  }
 }

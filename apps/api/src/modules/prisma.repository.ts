@@ -1,25 +1,20 @@
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException, OnModuleDestroy, OnModuleInit, Optional, UnauthorizedException } from '@nestjs/common';
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { readFile, unlink } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { Prisma, type Permission as PrismaPermission, type Role as PrismaRole, type Shipment as PrismaShipment } from '@prisma/client';
-import * as xlsx from '@e965/xlsx';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
+import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields } from './finance-billing.js';
+import { applyOrderEntryChannelChargeWeight } from './order-entry-charge-weight.js';
+import { PrismaMasterDataReadRepository } from './master-data/master-data-read.repository.js';
+import { resolveShipmentTransportTime } from './shipment-transport-time.js';
 import {
   buildWarehouseMachineImportResponse,
   warehouseMachineImportKey,
   warehouseMachineImportQueryRange,
   type ParsedWarehouseMachineImport
 } from './warehouse-machine-import.js';
-import { buildMarketProfitLedgerRows, type MarketProfitLedgerCandidate } from './finance/misc-fee/market-profit-ledger.js';
-import { buildWarehouseProfitLedgerRows, warehouseProfitSettlementSourceWhere, type WarehouseProfitLedgerCandidate } from './finance/misc-fee/warehouse-profit-ledger.js';
 import {
-  buildFinanceProfitLedgerRows,
-  summarizeFinanceProfitLedgerRows,
-  type FinanceProfitLedgerCandidate
-} from './finance/misc-fee/finance-profit-ledger.js';
-import {
-  canDownloadShipmentInvoiceTemplate,
   canTransitionShipment,
   calculateCompanyChannelChargeWeight,
   calculateCompanyChannelChargeWeightFromCargo,
@@ -38,25 +33,33 @@ import {
   summarizeStatement,
   summarizePaymentSettlement,
   summarizeLineShipmentPool,
+  getLineShipmentEditStages,
+  summarizeLineShipmentFinance,
   summarizeStatusCounts,
   matchUsPostalRule,
   matchesEuropeanPostalRule,
+  isUsPostalRuleSyntax,
+  hasScopedUsPostalRuleOverlap,
   normalizeUsPostalCode,
   canadaAddressTypeMatchesWarehouseCode,
   sanitizePricingChannelRequirement,
   sanitizePricingTransitLabel,
+  isCanadaAddressScopeWarehouseCode,
   normalizeCanadaAddressType,
   normalizeCanadaAmazonWarehouseCode,
   normalizeShipmentProductNames,
+  isInvalidWarehouseCodeRule,
   isShipmentProductNamesInput,
   isCompanyChannelBusinessType,
   isCompanyChannelVolumeDivisor,
   matchWarehouseCodeRule,
+  parseWarehouseCodeRules,
   parseTrackingDateTimeToTimestamp,
   calculateMonetaryTotal,
   isFinancialDecimalWithinScale,
   roundFinancialDecimal,
   roundMonetaryTotal,
+  summarizeShipmentRouteCosts,
   resolveShipmentOutboundOrderNo,
   resolveWarehouseTallyLifecycleStatus,
   warehouseCodePrefixCandidates,
@@ -64,9 +67,9 @@ import {
   MAX_SHIPMENT_PRODUCT_NAMES,
   type AccountLedgerSummary,
   type AgentCreateInput,
-  type AgentDeleteResponse,
   type AgentInvoiceTemplate,
   type AgentInvoiceTemplateInput,
+  type AgentDeleteResponse,
   type AgentChannelCreateInput,
   type AgentChannelSummary,
   type AgentChannelUpdateInput,
@@ -109,10 +112,13 @@ import {
   type BusinessCostAuditSummary,
   type BusinessCostAuditUpdateInput,
   type BusinessType,
+  type FinanceBillingUnit,
   type CompanyChannelBusinessType,
+  type CarrierAdapterCode,
   type CarrierCreateInput,
   type CarrierSummary,
   type CarrierTaskRunResponse,
+  type CarrierTaskSummary,
   type ChannelCreateInput,
   type ChannelDeleteResponse,
   type ChannelCategoryCreateInput,
@@ -135,6 +141,7 @@ import {
   type CustomerUpdateInput,
   type CustomerUserCreateInput,
   type CustomerUserSummary,
+  DepartmentSummary,
   type EnabledUpdateInput,
   type ExchangeRateCreateInput,
   type ExchangeRateUpdateInput,
@@ -174,7 +181,10 @@ import {
   type PaymentWaterReceiptInput,
   type PriceBookImportInput,
   type PriceBookBatchDeleteResponse,
+  type PriceBookImportJobListQuery,
+  type PriceBookImportJobListResponse,
   type PriceBookImportJobResponse,
+  type PriceBookImportJobSummary,
   type PriceBookImportResult,
   type PriceBookImportTargetModule,
   type PriceBookRemarkUpdateInput,
@@ -188,6 +198,7 @@ import {
   type DubaiPriceDisplayResponse,
   type DubaiPriceDisplayVersionListResponse,
   type DubaiPriceTableResponse,
+  type DubaiPriceTableRow,
   type PricingOldOriginalAgentCleanupResponse,
   type LegacyPricingImportInput,
   type LegacyPricingMetaResponse,
@@ -230,55 +241,13 @@ import {
   type PayableAuditShipmentMatchInput,
   type PayableAuditShipmentMatchSummary,
   type PayableAuditUpdateInput,
+  type BusinessCostFeeSummary,
   type PayableFeeSummary,
   type PayeeBankAccountInput,
   type PayeeBankAccountSummary,
   type PendingPaymentListQuery,
   type PendingPaymentListResponse,
   type PendingPaymentSummary,
-  type MiscFeeActionInput,
-  type MiscFeeBusinessAssignmentInput,
-  type MiscFeeHangBatchApproveInput,
-  type MiscFeeHangBatchApproveResult,
-  type MiscFeeHangProgressStatus,
-  type MiscFeeDetail,
-  type MiscFeeDeliveryShipmentOption,
-  type MiscFeeHangListResponse,
-  type MiscFeeTallyDueSummary,
-  type MiscFeeHangQuery,
-  type MiscFeeHangRequestInput,
-  type MiscFeeHangRequestSummary,
-  type MiscFeeInput,
-  type MiscFeeListResponse,
-  type MiscFeeMatchInput,
-  type MiscFeeQuery,
-  type MiscFeeSourceType,
-  type MiscFeeSummary,
-  type MiscFeeUpdateInput,
-  type MiscFeeVoidInput,
-  type KuayueImportCommitInput,
-  type KuayueImportCommitResult,
-  type KuayueImportLineClaimInput,
-  type KuayueImportLineListResponse,
-  type KuayueImportLineQuery,
-  type KuayueImportLineSummary,
-  type KuayueImportPreview,
-  type KuayueImportPreviewLine,
-  type MarketProfitLedgerQuery,
-  type MarketProfitLedgerResponse,
-  type WarehouseProfitLedgerQuery,
-  type WarehouseProfitLedgerResponse,
-  type FinanceProfitLedgerQuery,
-  type FinanceProfitLedgerResponse,
-  type ProfitSettlementDetail,
-  type ProfitSettlementInput,
-  type ProfitSettlementListResponse,
-  type ProfitSettlementQuery,
-  type ProfitSettlementSummary,
-  canAuditPickupFee,
-  isPickupFeeSourceType,
-  shouldMaterializePickupFinanceItems,
-  type ProfitSettlementType,
   type ReceivableAdjustmentInput,
   type ReceivableAuditBatchInput,
   type ReceivableAuditBatchResult,
@@ -315,6 +284,7 @@ import {
   type BulkTrackingApplyRequest,
   type BulkTrackingApplyResponse,
   type Shipment,
+  type LineShipmentEditStageSource,
   type ShipmentCreateInput,
   type ShipmentFinanceItemStatus,
   type ShipmentFinanceDetailSummary,
@@ -323,19 +293,28 @@ import {
   type LineShipmentPoolQuery,
   type ShipmentInternalFlowLogResponse,
   type LineShipmentPackageSummary,
+  type LineShipmentFinanceSourceItem,
+  type LineShipmentFinanceSummary,
   type LineShipmentPoolResponse,
   type ShipmentLabelSummary,
   type ShipmentOperationalUpdateInput,
+  type CustomerServiceDataConfirmListQuery,
+  type CustomerServiceDataConfirmListResponse,
   type CustomerServiceDataConfirmRow,
   type CustomerServiceDataReviewInput,
   type CustomerServiceDataReverseInput,
   type CustomerServiceDataSnapshot,
   type CustomerServiceDataUpdateInput,
+  type CustomerServiceBusinessCostInput,
+  type CustomerServiceFinanceItemUpdateInput,
+  type CustomerServiceFinanceUpdatePreview,
+  type CustomerServiceFinanceUpdatePreviewRow,
   type CustomerServiceTransferBatchInput,
   type CustomerServiceTransferBatchResponse,
   type ShipmentPaymentUpdateInput,
   type ShipmentPaymentMethod,
   type ShipmentDispatchInput,
+  type WarehouseDispatchDeclarationUpdateInput,
   type WarehouseHandoverPrintInput,
   type WarehouseHandoverPrintResponse,
   type WarehouseHandoverSummary,
@@ -355,11 +334,11 @@ import {
   type WarehouseConsolidationSummary,
   type WarehouseInStockQuery,
   type WarehouseInStockResponse,
+  type WarehouseManualReceiptCartonSpecInput,
   type WarehouseManualReceiptCreateInput,
   type WarehouseManualReceiptCreateResponse,
-  type WarehouseSameSpecReplenishInput,
-  type WarehouseSameSpecReplenishResponse,
   type WarehousePackageCreateInput,
+  type WarehousePackageGroupSummary,
   type WarehousePackageSplitInput,
   type WarehousePackageSplitResponse,
   type WarehousePackageStatus,
@@ -372,12 +351,14 @@ import {
   type WarehouseRentRuleSummary,
   type WarehouseTallyLabelScanInput,
   type WarehouseTallyLabelScanResponse,
-  type WarehouseTallyHistoricalAggregateCorrectionInput,
   type WarehouseTallyHistoricalAggregateCorrectionPreview,
+  type WarehouseTallyHistoricalAggregateCorrectionInput,
   type WarehouseTallyHistoricalAggregateCorrectionResult,
   type WarehouseTallyTaskCompleteInput,
+  type WarehouseTallyTaskCompletedCountUpdateInput,
   type WarehouseTallyTaskPackageResultInput,
   type WarehouseTallyTaskCreateInput,
+  type WarehouseTallyTaskListQuery,
   type WarehouseTallyRepeatStatisticsQuery,
   type WarehouseTallyRepeatStatisticsResponse,
   type WarehouseTallyTaskSummary,
@@ -400,16 +381,8 @@ import {
   type WaterReceiptVoucherInput,
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
-import { getPasswordStrengthError, hashPassword } from './password.js';
+import { generateTemporaryPassword, getPasswordStrengthError, hashPassword, passwordHashNeedsRehash, verifyPassword } from './password.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
-import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
-import { mapPriceBook, mapPriceBookImportJob } from './pricing/price-book/price-book-query.mapper.js';
-import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
-import { isShipmentReceivableFullySettled } from './finance/misc-fee/delivery-settlement.js';
-import { createLargeCargoProfile, isEuropeTransportMode, largeCargoRedirectMessage, type LargeCargoProfile } from './pricing/legacy-cargo-profile.shared.js';
-import { inferBackendPriceCarrierName, matchedTransitDays, publicPricingRouteCode } from './pricing/price-recommendation-display.shared.js';
-import { getUsPostalRuleHealthIssues, getWarehouseCodeRuleHealthIssues } from './pricing/pricing-rule-health.shared.js';
 import { DEFAULT_DUBAI_SEA_MARKUP_PER_CBM, renderDubaiWorkbookSheets } from './dubai-price-sheet-renderer.js';
 import { resolveUploadDirectory } from '../configure-app.js';
 import { buildLineagePriceBookMetrics, LineageWatcher } from './lineage-watcher.js';
@@ -423,55 +396,51 @@ import {
   WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON
 } from './warehouse-tally-aggregate-correction.js';
 import { expandWarehouseTallyPhysicalResults } from './warehouse-tally-physical-results.js';
+import { WAREHOUSE_TALLY_REVERSE_REVIEW_ARCHIVE_REASON } from './warehouse-tally-reverse-review.js';
 import { summarizeWarehouseTallyRepeats } from './warehouse-tally-repeat-statistics.js';
 import { canUpdateUnenteredWarehousePackage } from './warehouse-package-editability.js';
 import { calculateWarehouseRentDetails } from './warehouse-rent.js';
-import {
-  buildWarehouseManualReceiptPackageInputs,
-  buildWarehouseTallyLabelQrContent,
-  createWarehouseInboundLabelNo,
-  nextWarehouseSplitSequence,
-  normalizeOrderEntryPackageIds,
-  parseWarehouseCombinedOrderNo,
-  resolveWarehouseTodayRange,
-  warehousePackageActualWeightTotal,
-  warehousePackageSplitTotals
-} from './warehouse/warehouse-domain.shared.js';
-import {
-  mapWarehousePackage,
-  mapWarehousePackagesWithConfirmedTally,
-  mapWarehouseTallyTask,
-  resolveWarehouseTallyRecentCutoff
-} from './warehouse/warehouse-query.shared.js';
-import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
 import {
   allPermissions,
   buildRolePermissionRow,
   defaultPermissionsForRole,
   effectivePermissionsForRole,
   filterWarehousePackageUpdatePermissions,
+  globalFieldMaskPermissionCode,
   getForbiddenWarehousePackageUpdatePermissions,
   getPermissionDefinitions,
   getNewlyAddedMarketSensitivePermissions,
   getRoleMetadata,
+  isAdministratorRole,
   isBuiltinRoleKey,
   normalizeRolePermissions,
   permissionDefinitions,
-  protectedDataScopePermissions,
+  workspaceFieldMaskKeys,
+  workspaceFieldMaskKeysForWorkspace,
+  workspaceFieldMaskPermissionCode,
   roleMetadata,
-  withImpliedUiPreferencePermissions,
+  toSessionRole,
+  type PermissionWorkspaceKey,
   type PermissionKey,
   type Principal,
   type RoleKey,
-  type RolePermissionRow
+  type RolePermissionRow,
+  type WorkspaceFieldMaskKey
 } from './rbac.js';
 import { customerServiceProblemPermissionsForStatus } from './problem-ticket-permissions.js';
-import { mapCarrierTask, toCarrierAdapterCode } from './tracking/tracking.shared.js';
+import {
+  buildShipmentStageDwell,
+  buildShipmentStageDwellHistory,
+  stageFallbackEnteredAt,
+  stageForShipmentStatus,
+  type ShipmentStageHistoryRecord
+} from './shipment-stage-dwell.js';
 
 type ShipmentWithRelations = PrismaShipment & {
   customer: { id: string; code: string; name: string; salesperson: string | null };
   channel: ({ name: string; carrier: { name: string } | null } | null);
   agent: ({
+    shortName?: string | null;
     name: string;
     invoiceTemplateName?: string | null;
     invoiceTemplateUrl?: string | null;
@@ -482,9 +451,35 @@ type ShipmentWithRelations = PrismaShipment & {
     invoiceTemplates?: unknown;
   } | null);
   problemTickets: Array<{ id: string; status: string }>;
-  financeItems?: Array<{ type: string; name: string; amount: unknown; currency?: string | null; settlementMethod?: string | null; chargeWeightKg?: unknown; unitPrice?: unknown; remark?: string | null; voided?: boolean; createdAt?: Date | string }>;
-  receivableFees?: Array<{ amount: unknown; currency?: string | null; settlementMethod?: string | null; voided?: boolean }>;
+  financeItems?: Array<{
+    type: string;
+    name: string;
+    amount: unknown;
+    currency?: string | null;
+    settlementMethod?: string | null;
+    reconciliationStatus?: string | null;
+    settled?: boolean;
+    receiptStatus?: string | null;
+    billingUnit?: string | null;
+    chargeWeightKg?: unknown;
+    unitPrice?: unknown;
+    remark?: string | null;
+    voided?: boolean;
+    createdAt?: Date | string;
+  }>;
+  payableFees?: Array<{ name: string; amount: unknown; settled?: boolean; voided?: boolean }>;
+  receivableFees?: Array<{
+    amount: unknown;
+    currency?: string | null;
+    settlementMethod?: string | null;
+    reconciliationStatus?: string | null;
+    settled?: boolean;
+    receiptStatus?: string | null;
+    voided?: boolean;
+  }>;
 };
+
+type WorkspaceFieldMaskState = Record<WorkspaceFieldMaskKey, boolean>;
 
 type ShipmentRouteArchiveFields = {
   agentChannelId?: string;
@@ -533,38 +528,6 @@ const PRICE_BOOK_IMPORT_BATCH_SIZE = 1000;
 const AGENT_MARKUP_EXPORT_ROW_LIMIT = 2000;
 
 const DEFAULT_RECEIVABLE_SETTLEMENT_METHOD = '自动匹配';
-const MISC_FEE_PROFIT_SETTLEMENT_LOCK_ID = BigInt('7265469301');
-const legacyMiscFeeVoucherFields: Array<keyof PaymentVoucherInput> = [
-  'extraFeeType', 'extraFeeAmount', 'extraFeeCurrency', 'extraFeeAgentName',
-  'extraFeeCustomerCode', 'extraFeeSystemOrderNo', 'extraFeeOccurredAt',
-  'extraFeeFinanceItemId', 'extraFeeRemark', 'kuayueBillNo', 'kuayueCustomerCode',
-  'kuayueSystemOrderNo', 'kuayueAmount', 'kuayueCurrency', 'kuayueBillDate', 'kuayueStatus'
-];
-
-function hasLegacyMiscFeeVoucherPayload(input: PaymentVoucherInput) {
-  return legacyMiscFeeVoucherFields.some((field) => Object.prototype.hasOwnProperty.call(input, field));
-}
-const miscFeeSourceTypes: MiscFeeSourceType[] = ['KUAYUE', 'WAREHOUSE_PICKUP', 'MARKET_PICKUP', 'OTHER_PICKUP', 'TALLY_MISC', 'PURCHASE', 'DELIVERY'];
-const miscFeePayableFirstSourceTypes = new Set<MiscFeeSourceType>([
-  'WAREHOUSE_PICKUP',
-  'MARKET_PICKUP',
-  'OTHER_PICKUP',
-  'TALLY_MISC',
-  'DELIVERY'
-]);
-const miscFeeReadPermissions: PermissionKey[] = ['kuayue', 'pickup', 'tally', 'purchase', 'delivery', 'hang', 'market-profit', 'warehouse-profit', 'finance-profit']
-  .map((section) => `misc-fee:${section}:read` as PermissionKey);
-const miscFeePayableViewPermissions: PermissionKey[] = ['kuayue', 'pickup', 'tally', 'purchase', 'delivery']
-  .map((section) => `misc-fee:${section}:view-payable` as PermissionKey);
-const miscFeeHangReadPermissions: PermissionKey[] = [
-  'misc-fee:hang:read',
-  'misc-fee:pickup:hang',
-  'misc-fee:tally:hang',
-  'misc-fee:purchase:hang',
-  'misc-fee:delivery:hang',
-  'misc-fee:kuayue:hang'
-];
-type MiscFeeDataScope = 'ALL' | 'WAREHOUSE_SITE' | 'MARKET' | 'SALES_OWN';
 const auditModuleLabels: Record<string, string> = {
   auth: '认证登录',
   system: '系统设置',
@@ -828,7 +791,6 @@ function buildAuditDashboard(rows: AuditLogSummary[], now = new Date()): NonNull
 
 @Injectable()
 export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
-  private readonly salesScopedRoleCache = new Set<RoleKey>();
   private priceBookRefreshWorkerRunning = false;
   private priceBookRefreshWorkerTimer?: ReturnType<typeof setTimeout>;
   private mojiaRequestSampleRetentionTimer?: ReturnType<typeof setInterval>;
@@ -836,11 +798,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaRepository.name);
   private readonly markupRouteDirectoryCache = new Map<string, { expiresAt: number; response: MarkupRouteListResponse }>();
   private readonly markupRoutePreviewCache = new Map<string, { expiresAt: number; calculation?: PricingCalculationBreakdown }>();
+  private readonly salesScopedRoleCache = new Set<string>();
+  private readonly masterDataReadRepository: PrismaMasterDataReadRepository;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Optional() @Inject(LineageWatcher) private readonly lineage?: LineageWatcher
-  ) {}
+    @Optional() @Inject(LineageWatcher) private readonly lineage?: LineageWatcher,
+    @Optional() @Inject(PrismaMasterDataReadRepository) masterDataReadRepository?: PrismaMasterDataReadRepository
+  ) {
+    this.masterDataReadRepository = masterDataReadRepository ?? new PrismaMasterDataReadRepository(prisma);
+  }
 
   private async lockCompanyChannelForMutation(tx: Prisma.TransactionClient, channelId: string): Promise<void> {
     await tx.$queryRaw<Array<{ locked: number }>>`SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtextextended(${`company-channel:${channelId}`}, 0))`;
@@ -990,14 +957,23 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       include: { role: true }
     });
 
-    if (!user || user.role.enabled !== true || user.passwordHash !== hashPassword(password)) {
+    if (!user || user.role.enabled !== true || !await verifyPassword(password, user.passwordHash)) {
       return undefined;
+    }
+
+    if (passwordHashNeedsRehash(user.passwordHash)) {
+      const migrated = await this.prisma.user.updateMany({
+        where: { id: user.id, passwordHash: user.passwordHash },
+        data: { passwordHash: hashPassword(password) }
+      });
+      if (migrated.count !== 1) return undefined;
     }
 
     return {
       id: user.id,
       username: user.username,
-      role: user.role.name as RoleKey,
+      role: toSessionRole(user.role.name as RoleKey),
+      assignedRole: user.role.name as RoleKey,
       site: user.site ?? undefined,
       customerId: user.customerId ?? undefined,
       name: user.name ?? undefined,
@@ -1019,7 +995,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return {
       id: user.id,
       username: user.username,
-      role: user.role.name as RoleKey,
+      role: toSessionRole(user.role.name as RoleKey),
+      assignedRole: user.role.name as RoleKey,
       site: user.site ?? undefined,
       customerId: user.customerId ?? undefined,
       name: user.name ?? undefined,
@@ -1035,7 +1012,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!before || !before.enabled) {
       throw new NotFoundException('账号不存在或已停用');
     }
-    const profile = normalizeSelfStaffProfile(input);
+    const profile = normalizeStaffProfile(input);
     const user = await this.prisma.user.update({
       where: { id: principal.id },
       data: profile,
@@ -1141,7 +1118,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
 
     const user = await this.prisma.user.findUnique({ where: { id: principal.id } });
-    if (!user || user.passwordHash !== hashPassword(currentPassword)) {
+    if (!user || !await verifyPassword(currentPassword, user.passwordHash)) {
       throw new ForbiddenException('当前密码不正确');
     }
 
@@ -1161,27 +1138,52 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return { ok: true };
   }
 
-  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean } = {}): Promise<Shipment[]> {
-    const [canViewAgentIdentity, canViewMarketCosts, canViewReceivableSummary, canViewCustomerServiceAgent] = await Promise.all([
+  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; fieldMaskWorkspace?: PermissionWorkspaceKey; includeLinePoolFinanceSummary?: boolean } = {}): Promise<Shipment[]> {
+    const [canViewMarketAgent, canViewLegacyMarketCostDetails, canViewLegacyMarketCostTotals, canViewRoutedCostDetails, canViewRoutedCostTotals, canViewReceivableSummary, canViewCustomerServiceAgent, canViewCustomerServiceTransferAgentWeight, canViewShipmentAgentWeight] = await Promise.all([
       this.hasAnyPermission(principal.role, [
-        'master-data:agents:read',
-        'master-data:agent-channels:read',
         'market:pending-routing:agent-channel-view',
-        'market:routed:agent-channel-view',
-        'finance:business-cost:view-agent',
-        'finance:payable:view-sensitive'
+        'market:routed:agent-channel-view'
       ]),
       this.hasAnyPermission(principal.role, [
         'market:pending-routing:cost-field-view',
         'market:routed:agent-cost-view',
+        'market:weekly-routing:cost-view'
+      ]),
+      this.hasAnyPermission(principal.role, [
+        'market:pending-routing:cost-field-view',
         'market:routed:cost-total-view',
         'market:weekly-routing:cost-view'
       ]),
+      options.routeCostScope === 'ROUTED'
+        ? this.hasPermission(principal.role, 'market:routed:agent-cost-view')
+        : Promise.resolve(false),
+      options.routeCostScope === 'ROUTED'
+        ? this.hasPermission(principal.role, 'market:routed:cost-total-view')
+        : Promise.resolve(false),
       this.canViewShipmentFinanceDetail(principal),
       options.customerServiceFieldScope
         ? this.hasPermission(principal.role, 'customer-service:data-confirm:agent-view')
-        : Promise.resolve(false)
+        : Promise.resolve(false),
+      options.customerServiceTransferAgentWeight
+        ? this.hasPermission(principal.role, 'customer-service:transfer:view-agent-data')
+        : Promise.resolve(false),
+      this.canViewShipmentAgentWeight(principal)
     ]);
+    const fieldMaskWorkspace = options.fieldMaskWorkspace
+      ?? (options.customerServiceFieldScope || options.customerServiceTransferAgentWeight
+        ? 'customerService'
+        : options.exposeWarehouseRouting
+          ? 'warehouse'
+          : options.routeCostScope === 'ROUTED'
+            ? 'market'
+            : options.salesScopeMode === 'ENTRY_ONLY'
+              ? 'operations'
+              : 'business');
+    const fieldMasks = await this.getWorkspaceFieldMaskState(principal, fieldMaskWorkspace);
+    const canViewLinePoolFinanceSummary = options.includeLinePoolFinanceSummary === true && (
+      await this.hasPermission(principal.role, 'operations:line-shipment:process')
+      || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view')
+    );
     const shipmentOwnerWhere = this.shipmentOwnerWhere(principal, options.salesScopeMode);
     const rows = await this.prisma.shipment.findMany({
       where: {
@@ -1229,19 +1231,40 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
     });
 
-    return rows.map((row) => this.maskShipmentListFields(principal, {
-      ...applyShipmentDispatchArchiveFields(
-        applyShipmentRouteArchiveFields(mapShipment(row), latestRouteByShipmentId.get(row.id)),
-        latestDispatchByShipmentId.get(row.id)
-      ),
-      ...(canViewReceivableSummary ? { receivableSummary: summarizeShipmentReceivables(row) } : {}),
-      site: row.customer.salesperson ? salespersonSites.get(row.customer.salesperson) : undefined
-    }, {
-      canViewAgentIdentity: canViewAgentIdentity || canViewCustomerServiceAgent,
-      canViewMarketCosts,
-      exposeWarehouseRouting: options.exposeWarehouseRouting ?? false,
-      allowSalesScopedAgent: canViewCustomerServiceAgent
-    }));
+    const mappedRows = rows.map((row) => {
+      const mappedShipment = mapShipment(row);
+      const visibleShipment = {
+        ...mappedShipment,
+        ...(canViewLinePoolFinanceSummary ? { linePoolFinanceSummary: summarizeLinePoolFinanceRow(row) } : {}),
+        ...applyShipmentDispatchArchiveFields(
+          applyShipmentRouteArchiveFields(mapShipment(row), latestRouteByShipmentId.get(row.id)),
+          latestDispatchByShipmentId.get(row.id)
+        ),
+        ...(canViewReceivableSummary ? { receivableSummary: summarizeShipmentReceivables(row) } : {}),
+        site: row.customer.salesperson ? salespersonSites.get(row.customer.salesperson) : undefined
+      };
+      const routeCostSummary = visibleShipment.routedAt && this.isAfterRouteDispatch(visibleShipment.status)
+        ? scopeShipmentRouteCostSummary(
+            summarizeShipmentRouteCostsFromRow(row),
+            { canViewDetails: canViewRoutedCostDetails, canViewTotals: canViewRoutedCostTotals }
+          )
+        : undefined;
+      return this.maskShipmentListFields(principal, {
+        ...visibleShipment,
+        ...(routeCostSummary ? { routeCostSummary } : {}),
+      }, {
+        canViewMarketAgent: canViewMarketAgent || canViewCustomerServiceAgent,
+        canViewLegacyMarketCostDetails,
+        canViewLegacyMarketCostTotals,
+        canViewRoutedCostDetails,
+        canViewRoutedCostTotals,
+        exposeWarehouseRouting: options.exposeWarehouseRouting ?? false,
+        allowSalesScopedAgent: canViewCustomerServiceAgent,
+        canViewAgentWeight: canViewShipmentAgentWeight || canViewCustomerServiceAgent || canViewCustomerServiceTransferAgentWeight,
+        fieldMasks
+      });
+    });
+    return this.attachShipmentStageDwell(mappedRows);
   }
 
   async getWarehouseDispatchShipments(principal: Principal): Promise<Shipment[]> {
@@ -1257,12 +1280,61 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       .filter((shipment) => visibleStatuses.has(shipment.status));
   }
 
+  async updateWarehouseDispatchDeclaration(
+    principal: Principal,
+    shipmentId: string,
+    input: WarehouseDispatchDeclarationUpdateInput
+  ): Promise<Shipment> {
+    if (typeof input.declarationRequired !== 'boolean') {
+      throw new BadRequestException('请选择是否报关');
+    }
+    const shipment = await this.getVisibleShipment(principal, shipmentId);
+    if (shipment.status !== 'WAITING_DISPATCH') {
+      throw new BadRequestException('只有待出库订单可以修改报关');
+    }
+    if (shipment.declarationRequired === input.declarationRequired) {
+      return this.scopeShipmentAgentWeight(mapShipment(shipment), await this.canViewShipmentAgentWeight(principal));
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lockShipmentRow(tx, shipmentId);
+      const lockedShipment = await tx.shipment.findUniqueOrThrow({ where: { id: shipmentId }, include: shipmentIncludes });
+      if (lockedShipment.status !== 'WAITING_DISPATCH') {
+        throw new BadRequestException('订单已出库，不能修改报关');
+      }
+      const updatedShipment = await tx.shipment.update({
+        where: { id: shipmentId },
+        data: { declarationRequired: input.declarationRequired },
+        include: shipmentIncludes
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.dispatch.declaration.update',
+          target: shipmentId,
+          before: { declarationRequired: lockedShipment.declarationRequired },
+          after: {
+            declarationRequired: updatedShipment.declarationRequired,
+            status: updatedShipment.status,
+            systemOrderNo: updatedShipment.systemOrderNo,
+            changedBy: principal.username
+          }
+        }
+      });
+      return updatedShipment;
+    });
+
+    return this.scopeShipmentAgentWeight(mapShipment(updated), await this.canViewShipmentAgentWeight(principal));
+  }
+
   async getShipmentStatusCounts(principal: Principal) {
     return summarizeStatusCounts(await this.getShipments(principal));
   }
 
   async getNavigationUnreadBadges(principal: Principal) {
     const shipments = await this.getShipments(principal);
+    const canViewReviewPendingStage = isAdministratorRole(principal.role)
+      || !(await this.hasPermission(principal.role, 'operations:line-shipment:stage-view-block:review-pending'));
     const shipmentIds = shipments.map((row) => row.id);
     const auditRows = shipmentIds.length
       ? await this.prisma.auditLog.findMany({ where: { target: { in: shipmentIds } }, select: { target: true, createdAt: true, action: true } })
@@ -1279,8 +1351,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     const readStates = await this.prisma.userModuleReadState.findMany({ where: { userId: principal.id } });
     const stateByKey = new Map(readStates.map((state) => [`${state.moduleKey}:${state.sectionKey}`, state.watermark.toISOString()]));
-    const shipmentRows = (statuses: ShipmentStatus[], businessType?: BusinessType) => shipments
-      .filter((row) => (statuses.length === 0 || statuses.includes(row.status)) && (!businessType || row.businessType === businessType))
+    const shipmentRows = (statuses: ShipmentStatus[], businessType?: BusinessType, hiddenStatuses: ShipmentStatus[] = []) => shipments
+      .filter((row) => (statuses.length === 0 || statuses.includes(row.status)) && (!businessType || row.businessType === businessType) && !hiddenStatuses.includes(row.status))
       .map((row) => ({ id: row.id, watermark: auditWatermarks.get(row.id) ?? row.createdAt }));
     const ticketRows = await this.prisma.problemTicket.findMany({
       where: { status: { not: 'CLOSED' }, ...(principal.role === 'CUSTOMER' ? { customerVisible: true, shipment: { customerId: principal.customerId } } : { shipment: { id: { in: shipmentIds } } }) },
@@ -1319,7 +1391,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       read('receive', 'consolidation', pendingTallyRows.map((row) => ({ id: row.id, watermark: row.createdAt.toISOString() }))),
       read('receive', 'packages', warehouseRows.map((row) => ({ id: row.id, watermark: row.updatedAt.toISOString() }))),
       read('receive', 'queue', shipmentRows(['WAITING_DISPATCH'])),
-      read('workspace', 'shipmentPool', shipmentRows([], 'DEDICATED_LINE')),
+      read('workspace', 'shipmentPool', shipmentRows([], 'DEDICATED_LINE', canViewReviewPendingStage ? [] : ['DRAFT', 'REVIEW_PENDING'])),
       read('business', 'order-entry-drafts', shipmentRows(['DRAFT', 'REVIEW_REJECTED'])),
       read('business', 'pending-review', shipmentRows(['REVIEW_PENDING'])),
       read('business', 'order-management', shipmentRows([
@@ -1435,10 +1507,149 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       .map((row) => scopeCustomerServiceDataConfirmRow(row, { canViewBusiness, canViewAgent }));
   }
 
+  async customerServiceDataConfirmShipmentsPage(
+    principal: Principal,
+    query: CustomerServiceDataConfirmListQuery = {}
+  ): Promise<CustomerServiceDataConfirmListResponse> {
+    if (!await this.hasPermission(principal.role, 'customer-service:data-confirm:view')) {
+      throw new ForbiddenException('无权查看数据确认');
+    }
+    const [canViewBusiness, canViewAgent, canViewCustomerServiceAgent, canViewShipmentAgentWeight] = await Promise.all([
+      this.hasPermission(principal.role, 'customer-service:data-confirm:business-view'),
+      this.hasPermission(principal.role, 'customer-service:data-confirm:agent-view'),
+      this.hasPermission(principal.role, 'customer-service:data-confirm:agent-view'),
+      this.canViewShipmentAgentWeight(principal)
+    ]);
+    const pageSize = Math.min(50, Math.max(10, Math.trunc(Number(query.pageSize) || 10)));
+    const requestedPage = Math.max(1, Math.trunc(Number(query.page) || 1));
+    const outboundOrderNo = query.outboundOrderNo?.trim();
+    const shipmentOwnerWhere = this.shipmentOwnerWhere(principal);
+    const searchWhere = outboundOrderNo ? {
+      OR: [
+        { customerOrderNo: { contains: outboundOrderNo, mode: 'insensitive' as const } },
+        { systemOrderNo: { contains: outboundOrderNo, mode: 'insensitive' as const } }
+      ]
+    } : undefined;
+    const andWhere = [shipmentOwnerWhere, searchWhere].filter((value): value is NonNullable<typeof value> => Boolean(value));
+    const shipmentWhere = {
+      deletedAt: null,
+      status: 'OUTBOUNDED' as const,
+      ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
+      ...(andWhere.length ? { AND: andWhere } : {})
+    };
+
+    // 先只取当前权限范围内的轻量候选和审核动作，避免把所有关联费用、轨迹和问题件装载进内存。
+    const candidateRows = await this.prisma.shipment.findMany({
+      where: shipmentWhere,
+      select: { id: true, outboundAt: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }]
+    });
+    if (!candidateRows.length) {
+      return { rows: [], pagination: { page: 1, pageSize, totalItems: 0 } };
+    }
+
+    const oldestCycleStart = oldestCustomerServiceDataCycleStart(candidateRows);
+    // 首屏筛选只需要每个运单最新的审核/反审核状态，不需要把所有修改快照一起装入内存。
+    // 修改快照只在当前页加载，用于编辑回显和当前页阶段停留时间计算。
+    const approvalAuditRows = await this.prisma.auditLog.findMany({
+      where: {
+        target: { in: candidateRows.map((row) => row.id) },
+        ...(oldestCycleStart ? { createdAt: { gte: oldestCycleStart } } : {}),
+        action: {
+          in: [
+            'customer_service.business_data.approved',
+            'customer_service.business_data.reversed',
+            'customer_service.agent_data.approved',
+            'customer_service.agent_data.reversed'
+          ]
+        }
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { target: true, action: true, after: true, createdAt: true }
+    });
+    const auditRowsByShipmentId = new Map<string, typeof approvalAuditRows>();
+    approvalAuditRows.forEach((row) => auditRowsByShipmentId.set(row.target, [...(auditRowsByShipmentId.get(row.target) ?? []), row]));
+    const pendingCandidateIds = candidateRows
+      .filter((shipment) => {
+        const review = buildCustomerServiceDataConfirmRow(
+          { outboundAt: shipment.outboundAt?.toISOString() } as Shipment,
+          auditRowsByShipmentId.get(shipment.id) ?? []
+        );
+        return !(review.businessDataApproved && review.agentDataApproved);
+      })
+      .map((shipment) => shipment.id);
+    const totalItems = pendingCandidateIds.length;
+    const page = Math.min(requestedPage, Math.max(1, Math.ceil(totalItems / pageSize)));
+    const pageIds = pendingCandidateIds.slice((page - 1) * pageSize, page * pageSize);
+    if (!pageIds.length) {
+      return { rows: [], pagination: { page, pageSize, totalItems } };
+    }
+
+    const pageCandidateRows = candidateRows.filter((row) => pageIds.includes(row.id));
+    const pageOldestCycleStart = oldestCustomerServiceDataCycleStart(pageCandidateRows);
+    const pageUpdateRows = await this.prisma.auditLog.findMany({
+      where: {
+        target: { in: pageIds },
+        ...(pageOldestCycleStart ? { createdAt: { gte: pageOldestCycleStart } } : {}),
+        action: { in: ['customer_service.business_data.updated', 'customer_service.agent_data.updated'] }
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { target: true, action: true, after: true, createdAt: true }
+    });
+    pageUpdateRows.forEach((row) => auditRowsByShipmentId.set(row.target, [...(auditRowsByShipmentId.get(row.target) ?? []), row]));
+
+    const pageShipmentRows = await this.prisma.shipment.findMany({
+      where: { id: { in: pageIds } },
+      include: customerServiceDataConfirmShipmentIncludes,
+    });
+    const pageShipmentById = new Map(pageShipmentRows.map((shipment) => [shipment.id, shipment]));
+    const routeLogs = await this.prisma.auditLog.findMany({
+      where: {
+        action: { in: ['shipment.route', 'shipment.route.update'] },
+        target: { in: pageIds }
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { target: true, after: true, createdAt: true }
+    });
+    const latestRouteByShipmentId = new Map<string, ShipmentRouteArchiveFields>();
+    routeLogs.forEach((row) => {
+      if (!latestRouteByShipmentId.has(row.target)) {
+        latestRouteByShipmentId.set(row.target, normalizeShipmentRouteArchive(row.after, row.createdAt));
+      }
+    });
+    const rows = pageIds.flatMap((shipmentId) => {
+      const shipment = pageShipmentById.get(shipmentId);
+      if (!shipment) return [];
+      const mappedShipment = this.maskShipmentListFields(principal, applyShipmentRouteArchiveFields(
+        mapShipment(shipment),
+        latestRouteByShipmentId.get(shipment.id)
+      ), {
+        canViewMarketAgent: canViewCustomerServiceAgent,
+        canViewLegacyMarketCostDetails: false,
+        canViewLegacyMarketCostTotals: false,
+        canViewRoutedCostDetails: false,
+        canViewRoutedCostTotals: false,
+        exposeWarehouseRouting: false,
+        allowSalesScopedAgent: canViewCustomerServiceAgent,
+        canViewAgentWeight: canViewShipmentAgentWeight || canViewCustomerServiceAgent
+      });
+      return [scopeCustomerServiceDataConfirmRow(
+        buildCustomerServiceDataConfirmRow(mappedShipment, auditRowsByShipmentId.get(shipmentId) ?? []),
+        { canViewBusiness, canViewAgent }
+      )];
+    });
+    const enrichedShipments = await this.attachShipmentStageDwell(rows.map((row) => row.shipment));
+    const enrichedByShipmentId = new Map(enrichedShipments.map((shipment) => [shipment.id, shipment]));
+    return {
+      rows: rows.map((row) => ({ ...row, shipment: enrichedByShipmentId.get(row.shipment.id) ?? row.shipment })),
+      pagination: { page, pageSize, totalItems }
+    };
+  }
+
   async customerServiceTransferShipments(principal: Principal): Promise<Shipment[]> {
     if (!await this.hasPermission(principal.role, 'customer-service:transfer:view')) throw new ForbiddenException('无权查看转单号');
     const canViewAll = await this.hasPermission(principal.role, 'customer-service:transfer:view-all');
-    const rows = (await this.getShipments(principal))
+    const rows = (await this.getShipments(principal, { customerServiceTransferAgentWeight: true }))
       .filter((shipment) => shipment.status === 'OUTBOUNDED' && !shipment.transferNo)
       .filter((shipment) => canViewAll || shipment.salesperson === principal.username);
     const approvalRows = await this.prisma.auditLog.findMany({
@@ -1478,7 +1689,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       try {
         const transferNo = row.transferNo?.trim();
         if (!transferNo) throw new BadRequestException('转单号不能为空');
-        const updated = await this.updateShipmentOperational(principal, row.shipmentId, { transferNo, subOrderNo: row.subOrderNo?.trim() || undefined, status: 'WAITING_DEPARTURE', latestTracking: '已填写转单号，待离港' });
+        const updated = await this.updateShipmentOperational(
+          principal,
+          row.shipmentId,
+          { transferNo, subOrderNo: row.subOrderNo?.trim() || undefined, status: 'WAITING_DEPARTURE', latestTracking: '已填写转单号，待离港' },
+          { allowCustomerServiceTransferAgentWeight: true }
+        );
         await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'customer_service.transfer.fill', target: updated.id, after: { transferNo, subOrderNo: row.subOrderNo?.trim(), pushToSales: row.pushToSales === true, pushStatus: row.pushToSales ? 'PENDING' : undefined } } });
         results.push({ shipmentId: row.shipmentId, systemOrderNo: updated.systemOrderNo, success: true, shipment: updated });
       } catch (error) {
@@ -1490,7 +1706,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getLineShipmentPool(principal: Principal, query: LineShipmentPoolQuery = {}): Promise<LineShipmentPoolResponse> {
-    const allRows = (await this.getShipments(principal, { salesScopeMode: 'ENTRY_ONLY' })).filter((shipment) => shipment.businessType === 'DEDICATED_LINE');
+    const canViewReviewPendingStage = isAdministratorRole(principal.role)
+      || !(await this.hasPermission(principal.role, 'operations:line-shipment:stage-view-block:review-pending'));
+    const allRows = (await this.getShipments(principal, {
+      salesScopeMode: 'ENTRY_ONLY',
+      includeLinePoolFinanceSummary: true,
+      fieldMaskWorkspace: 'operations'
+    }))
+      .filter((shipment) => shipment.businessType === 'DEDICATED_LINE')
+      .filter((shipment) => canViewReviewPendingStage || !['DRAFT', 'REVIEW_PENDING'].includes(shipment.status));
     const packageSummariesByShipmentId = await this.buildLineShipmentPackageSummaries(allRows);
     const shipmentIds = allRows.map((shipment) => shipment.id);
     const oldestCycleStart = oldestCustomerServiceDataCycleStart(allRows);
@@ -1532,7 +1756,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
               : [];
           })
       : [];
-    const response = summarizeLineShipmentPool(allRows, query, { businessDataApprovedShipmentIds, agentDataApprovedShipmentIds, afterSaleShipmentIds, packageSummariesByShipmentId });
+    const financeSummariesByShipmentId = Object.fromEntries(allRows.flatMap((shipment) => shipment.linePoolFinanceSummary ? [[shipment.id, shipment.linePoolFinanceSummary] as const] : []));
+    const response = summarizeLineShipmentPool(allRows, query, { businessDataApprovedShipmentIds, agentDataApprovedShipmentIds, afterSaleShipmentIds, packageSummariesByShipmentId, financeSummariesByShipmentId });
     const canViewSensitive = await this.hasPermission(principal.role, 'operations:line-shipment:process')
       || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view');
     if (canViewSensitive) return response;
@@ -1542,13 +1767,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       rows: response.rows.map((row) => ({
         ...row,
         receivableAmount: undefined,
-        shipment: { ...row.shipment, remark: undefined, agentName: '', agentChannelName: '' }
+        shipment: {
+          ...row.shipment,
+          remark: undefined,
+          ...(Object.prototype.hasOwnProperty.call(row.shipment, 'agentName') ? { agentName: '' } : {}),
+          ...(Object.prototype.hasOwnProperty.call(row.shipment, 'routeAgentChannelName') ? { routeAgentChannelName: '' } : {})
+        }
       }))
     };
   }
 
   async getShipmentInternalFlowLog(principal: Principal, shipmentId: string): Promise<ShipmentInternalFlowLogResponse> {
-    const shipment = await this.getVisibleShipment(principal, shipmentId);
+    const shipment = await this.getVisibleShipment(principal, shipmentId, true);
+    await this.ensureOperationLineShipmentStageVisible(principal, shipment, 'GET', `/api/operations/line-shipments/${shipment.id}/internal-flow-log`);
     const [warehousePackages, financeItems, problemTickets] = await Promise.all([
       (this.prisma as any).warehousePackage.findMany({
         where: {
@@ -1615,142 +1846,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getMasterData(): Promise<MasterDataSnapshot> {
-    const [customers, contacts, customerUsers, salespersonAccounts, carriers, channels, channelCategories, roles, agents, agentChannels, surcharges, fuelRates, exchangeRates] = await Promise.all([
-      this.prisma.customer.findMany({ orderBy: { code: 'asc' } }),
-      this.prisma.customerContact.findMany({ include: { customer: true }, orderBy: { name: 'asc' } }),
-      this.prisma.user.findMany({ where: { customerId: { not: null }, role: { name: 'CUSTOMER' } }, include: { customer: true }, orderBy: { username: 'asc' } }),
-      this.prisma.user.findMany({ where: { site: { not: null } }, select: { username: true, site: true } }),
-      this.prisma.carrier.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.channel.findMany({ where: { deletedAt: null }, include: { carrier: true }, orderBy: { name: 'asc' } }),
-      this.prisma.channelCategory.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.role.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.agent.findMany({ orderBy: [{ createdAt: 'desc' } as any, { name: 'asc' }] }),
-      this.prisma.agentChannel.findMany({ include: { agent: true }, orderBy: [{ agent: { name: 'asc' } }, { channelName: 'asc' }] }),
-      this.prisma.surcharge.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.fuelRate.findMany({ orderBy: { activeAt: 'desc' } }),
-      (this.prisma as any).exchangeRate.findMany({ orderBy: { activeAt: 'desc' } })
-    ]);
-    const channelMap = new Map(channels.map((channel) => [channel.id, channel.name]));
-    const salespersonSiteByUsername = new Map(salespersonAccounts.map((account) => [account.username, account.site]));
-
-    return {
-      customers: customers.map((customer) => ({
-        id: customer.id,
-        code: customer.code,
-        name: customer.name,
-        shortName: customer.name,
-        fullName: `${customer.name} Co., Ltd.`,
-        customerType: '直客',
-        customerSource: (customer as any).customerSource ?? undefined,
-        salesperson: customer.salesperson ?? '',
-        salespersonSite: customer.salesperson ? salespersonSiteByUsername.get(customer.salesperson) ?? undefined : undefined,
-        defaultSettlementMethod: (customer as any).defaultSettlementMethod ?? undefined,
-        enabled: customer.enabled
-      })),
-      contacts: contacts.map((contact) => ({
-        id: contact.id,
-        customerId: contact.customerId,
-        customerName: `${contact.customer.code}-${contact.customer.name}`,
-        name: contact.name,
-        company: contact.company ?? undefined,
-        phone: contact.phone ?? undefined,
-        email: contact.email ?? undefined,
-        fbaWarehouseCode: contact.fbaWarehouseCode ?? undefined,
-        address: contact.address ?? undefined,
-        country: contact.country ?? undefined,
-        state: contact.state ?? undefined,
-        postalCode: contact.postalCode ?? undefined,
-        enabled: contact.enabled
-      })),
-      customerUsers: customerUsers.map((user) => ({
-        id: user.id,
-        customerId: user.customerId!,
-        customerName: user.customer ? `${user.customer.code}-${user.customer.name}` : user.customerId!,
-        username: user.username,
-        enabled: user.enabled
-      })),
-      carriers: carriers.map((carrier) => ({
-        id: carrier.id,
-        name: carrier.name,
-        enabled: carrier.enabled
-      })),
-      channelCategories: channelCategories.map((category) => mapChannelCategory(category)),
-      channels: channels.map((channel) => ({
-        id: channel.id,
-        name: channel.name,
-        carrierId: channel.carrierId ?? undefined,
-        carrierName: channel.carrier?.name,
-        businessType: (channel.businessType ?? 'EXPRESS') as CompanyChannelBusinessType,
-        category: channel.category ?? '',
-        volumeDivisor: channel.volumeDivisor,
-        multiPieceWeightRule: channel.multiPieceWeightRule ?? 'SUM_THEN_COMPARE',
-        singleWeightRoundingRule: channel.singleWeightRoundingRule ?? channel.roundingRule ?? 'ACTUAL',
-        settlementWeightRule: channel.settlementWeightRule ?? 'MAX_ACTUAL_VOLUME',
-        settlementWeightRoundingRule: channel.settlementWeightRoundingRule ?? channel.roundingRule ?? 'NONE',
-        largeCargoThresholdKg: channel.largeCargoThresholdKg === null ? undefined : Number(channel.largeCargoThresholdKg),
-        overweightWarningThresholdKg: channel.overweightWarningThresholdKg === null ? undefined : Number(channel.overweightWarningThresholdKg),
-        overGirthLengthWidthHeightThresholdCm: channel.overGirthLengthWidthHeightThresholdCm === null ? undefined : Number(channel.overGirthLengthWidthHeightThresholdCm),
-        overGirthLengthPlusTwoWidthHeightThresholdCm: channel.overGirthLengthPlusTwoWidthHeightThresholdCm === null ? undefined : Number(channel.overGirthLengthPlusTwoWidthHeightThresholdCm),
-        perPieceMinimumChargeWeightKg: channel.perPieceMinimumChargeWeightKg === null ? undefined : Number(channel.perPieceMinimumChargeWeightKg),
-        perShipmentMinimumCharge: channel.perShipmentMinimumCharge === null ? undefined : Number(channel.perShipmentMinimumCharge),
-        perShipmentMinimumChargeUnit: channel.perShipmentMinimumChargeUnit as 'KG' | 'CBM' | null ?? undefined,
-        densityRatio: channel.densityRatio === null ? undefined : Number(channel.densityRatio),
-        remoteAreaRule: channel.remoteAreaRule ?? 'NONE',
-        enabled: channel.enabled
-      })),
-      agents: agents.map((agent) => ({
-        id: agent.id,
-        code: agent.code ?? agent.name.toUpperCase().slice(0, 6),
-        shortName: agent.shortName ?? agent.name,
-        name: agent.name,
-        createdAt: ((agent as any).createdAt instanceof Date ? (agent as any).createdAt : new Date()).toISOString(),
-        integrationType: (agent.integrationType ?? 'MANUAL') as AgentSummary['integrationType'],
-        settlementCycle: normalizeAgentSettlementCycle(agent.settlementCycle),
-        warehouseAddress1: agent.warehouseAddress1 ?? undefined,
-        warehouseAddress2: agent.warehouseAddress2 ?? undefined,
-        warehouseAddress3: agent.warehouseAddress3 ?? undefined,
-        warehouseContact: agent.warehouseContact ?? undefined,
-        warehouseContactName1: (agent as any).warehouseContactName1 ?? agent.warehouseContact ?? undefined,
-        warehouseContactPhone1: (agent as any).warehouseContactPhone1 ?? undefined,
-        warehouseContactName2: (agent as any).warehouseContactName2 ?? undefined,
-        warehouseContactPhone2: (agent as any).warehouseContactPhone2 ?? undefined,
-        warehouseContactName3: (agent as any).warehouseContactName3 ?? undefined,
-        warehouseContactPhone3: (agent as any).warehouseContactPhone3 ?? undefined,
-        invoiceTemplateName: agent.invoiceTemplateName ?? undefined,
-        invoiceTemplateUrl: agent.invoiceTemplateUrl ?? undefined,
-        invoiceTemplateName2: (agent as any).invoiceTemplateName2 ?? undefined,
-        invoiceTemplateUrl2: (agent as any).invoiceTemplateUrl2 ?? undefined,
-        invoiceTemplateName3: (agent as any).invoiceTemplateName3 ?? undefined,
-        invoiceTemplateUrl3: (agent as any).invoiceTemplateUrl3 ?? undefined,
-        invoiceTemplates: agentInvoiceTemplates(agent as any),
-        trackingWebsite: (agent as any).trackingWebsite ?? undefined,
-        enabled: agent.enabled
-      })),
-      agentChannels: agentChannels.map((channel) => mapAgentChannel(channel)),
-      surcharges: surcharges.map((surcharge) => ({
-        id: surcharge.id,
-        name: surcharge.name,
-        amount: Number(surcharge.amount),
-        enabled: surcharge.enabled
-      })),
-      fuelRates: fuelRates.filter((fuelRate) => channelMap.has(fuelRate.channelId)).map((fuelRate) => ({
-        id: fuelRate.id,
-        channelId: fuelRate.channelId,
-        channelName: channelMap.get(fuelRate.channelId) ?? fuelRate.channelId,
-        rate: Number(fuelRate.rate),
-        activeAt: fuelRate.activeAt.toISOString()
-      })),
-      exchangeRates: exchangeRates.map((exchangeRate: any) => ({
-        id: exchangeRate.id,
-        baseCurrency: exchangeRate.baseCurrency,
-        quoteCurrency: exchangeRate.quoteCurrency,
-        rate: Number(exchangeRate.rate),
-        activeAt: exchangeRate.activeAt.toISOString(),
-        endAt: exchangeRate.endAt?.toISOString(),
-        enabled: exchangeRate.enabled
-      })),
-      roles: roles.map((role) => role.name)
-    };
+    return this.masterDataReadRepository.getSnapshot();
   }
 
   async getPricingAgentNames(): Promise<string[]> {
@@ -1942,7 +2038,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     this.ensureCustomerMasterAccess(principal, before);
     const salesperson = await this.resolveCustomerSalespersonAssignment(principal, input.salesperson, before?.salesperson ?? undefined);
     const assignmentChanged = before?.salesperson !== (salesperson ?? null);
-    const nameChanged = before?.name !== input.name.trim();
     const { customer, affectedShipmentCount, affectedPackageCount, affectedPackageNameCount, affectedWaterReceiptCount } = await this.prisma.$transaction(async (tx) => {
       await this.lockWarehouseCustomers(tx, [before?.code ?? code, code]);
       const customerSource = await this.resolveCustomerSourceForWrite(tx, principal, input);
@@ -2173,21 +2268,26 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async updateCustomerEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<CustomerSummary> {
     const before = await this.prisma.customer.findUnique({ where: { id } });
     this.ensureCustomerMasterAccess(principal, before);
-    const customer = await this.prisma.customer.update({ where: { id }, data: { enabled: input.enabled === true } });
-    const summary = {
-      id: customer.id,
-      code: customer.code,
-      name: customer.name,
-      shortName: customer.name,
-      fullName: `${customer.name} Co., Ltd.`,
-      customerType: '直客',
-      customerSource: customer.customerSource ?? undefined,
-      salesperson: customer.salesperson ?? '',
-      defaultSettlementMethod: customer.defaultSettlementMethod ?? undefined,
-      enabled: customer.enabled
-    };
-    await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'master_data.customer.update', target: id, before: before ? JSON.parse(JSON.stringify(before)) : undefined, after: JSON.parse(JSON.stringify(summary)) } });
-    return summary;
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockWarehouseCustomer(tx, before!.code);
+      const lockedBefore = await tx.customer.findUnique({ where: { id } });
+      this.ensureCustomerMasterAccess(principal, lockedBefore);
+      const customer = await tx.customer.update({ where: { id }, data: { enabled: input.enabled === true } });
+      const summary = {
+        id: customer.id,
+        code: customer.code,
+        name: customer.name,
+        shortName: customer.name,
+        fullName: `${customer.name} Co., Ltd.`,
+        customerType: '直客',
+        customerSource: customer.customerSource ?? undefined,
+        salesperson: customer.salesperson ?? '',
+        defaultSettlementMethod: customer.defaultSettlementMethod ?? undefined,
+        enabled: customer.enabled
+      };
+      await tx.auditLog.create({ data: { actorId: principal.id, action: 'master_data.customer.update', target: id, before: lockedBefore ? JSON.parse(JSON.stringify(lockedBefore)) : undefined, after: JSON.parse(JSON.stringify(summary)) } });
+      return summary;
+    });
   }
 
   async deleteCustomer(principal: Principal, id: string): Promise<CustomerSummary> {
@@ -3050,7 +3150,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
-    if (role === 'ADMIN') {
+    if (isAdministratorRole(role)) {
       return true;
     }
     const row = await this.prisma.role.findUnique({
@@ -3069,7 +3169,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getPermissionsForRole(role: RoleKey): Promise<PermissionKey[]> {
-    if (role === 'ADMIN') {
+    if (isAdministratorRole(role)) {
       return allPermissions();
     }
     const row = await this.prisma.role.findUnique({
@@ -3121,13 +3221,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async resolveStaffDirectManagerId(
     staffId: string | undefined,
+    departmentId: string | null,
     directManagerId: string | null | undefined,
     site: string | null | undefined,
     client: Prisma.TransactionClient | PrismaService = this.prisma
   ): Promise<string | null> {
     const normalizedManagerId = directManagerId?.trim();
     if (!normalizedManagerId) return null;
-    if (!site) throw new BadRequestException('选择直属经理前必须先选择所属站点');
+    if (!departmentId) throw new BadRequestException('选择直属经理前必须先选择所属部门');
     if (staffId && normalizedManagerId === staffId) throw new BadRequestException('员工不能选择自己作为直属经理');
     const manager = await client.user.findUnique({
       where: { id: normalizedManagerId },
@@ -3136,7 +3237,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!manager || !manager.enabled || manager.role.enabled !== true || manager.role.name === 'CUSTOMER') {
       throw new BadRequestException('直属经理不存在或已停用');
     }
-    if ((manager.site ?? null) !== (site ?? null)) throw new BadRequestException('直属经理必须属于员工当前站点');
+    if ((manager.site ?? null) !== (site ?? null)) {
+      throw new BadRequestException('直属经理必须属于员工当前站点');
+    }
     const permissions = resolveStoredRolePermissions(
       manager.role.name as RoleKey,
       manager.role.permissions.map((item) => item.code as PermissionKey)
@@ -3159,7 +3262,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new UnauthorizedException('账号已停用或不存在');
     }
     principal.username = account.username;
-    principal.role = account.role.name as RoleKey;
+    principal.assignedRole = account.role.name as RoleKey;
+    principal.role = toSessionRole(account.role.name as RoleKey);
     principal.site = account.site ?? undefined;
     principal.customerId = account.customerId ?? undefined;
     principal.name = account.name ?? undefined;
@@ -3172,10 +3276,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     principal.departmentTeamScope = undefined;
     const permissions = await this.getPermissionsForRole(principal.role);
     principal.shipmentAllView = permissions.includes('business:shipment:all-view');
-    principal.dataScope = principal.shipmentAllView
+    principal.dataScope = permissions.includes('business:shipment:all-view')
       ? undefined
       : permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
-    if (principal.role === 'ADMIN' || !permissions.includes('business:shipment:team-view')) return permissions;
+    if (isAdministratorRole(principal.role) || !permissions.includes('business:shipment:team-view')) return permissions;
     const hasDirectReports = await this.prisma.user.count({ where: { directManagerId: account.id } }) > 0;
     if (!account.site) {
       if (principal.shipmentAllView && !hasDirectReports) return permissions;
@@ -3190,7 +3294,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         role: { name: { not: 'CUSTOMER' } },
         OR: [{ id: account.id }, { directManagerId: account.id }]
       },
-      select: { id: true, username: true }
+      select: { username: true }
     });
     if (principal.shipmentAllView && !hasDirectReports) return permissions;
     principal.shipmentAllView = false;
@@ -3246,6 +3350,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       ...mapStaffAccount(user),
       lastLoginAt: lastLoginByUserId.get(user.id),
     }));
+  }
+
+  async getDepartments(principal: Principal): Promise<DepartmentSummary[]> {
+    await this.ensurePermission(principal, 'system:accounts:read', '无权查看部门');
+    const departments = await this.prisma.department.findMany({ orderBy: [{ enabled: 'desc' }, { name: 'asc' }] });
+    return departments.map((department) => ({ id: department.id, name: department.name, enabled: department.enabled }));
+  }
+
+  async getSites(principal: Principal): Promise<SiteSummary[]> {
+    await this.ensurePermission(principal, 'system:sites:read', '无权查看站点');
+    const sites = await this.prisma.site.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
+    return sites.map(mapSite);
   }
 
   async getEnabledSitesForReference(): Promise<SiteSummary[]> {
@@ -3330,7 +3446,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!isStaffRoleName(input.role)) {
       throw new BadRequestException('员工角色不正确');
     }
-    const initialPassword = input.password?.trim() || `${username}@123`;
+    const suppliedPassword = input.password?.trim();
+    const initialPassword = suppliedPassword || generateTemporaryPassword();
     const strengthError = getPasswordStrengthError(initialPassword);
     if (strengthError) {
       throw new BadRequestException(strengthError);
@@ -3342,21 +3459,24 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException('账号已存在');
       }
       const selectedRole = await transaction.role.findUnique({ where: { name: input.role }, include: { permissions: true } });
-      const assigningAdmin = selectedRole?.name === 'ADMIN';
-      if (assigningAdmin && principal.role !== 'ADMIN') {
-        throw new ForbiddenException('只有管理员可以创建管理员账号');
-      }
-      if (!selectedRole || selectedRole.enabled !== true || (selectedRole.systemBuiltin === true && !assigningAdmin)) {
+      if (!selectedRole || selectedRole.enabled !== true || (selectedRole.systemBuiltin === true && !isAdministratorRole(selectedRole.name))) {
         throw new BadRequestException('员工角色不正确');
+      }
+      if (isAdministratorRole(selectedRole.name) && !isAdministratorRole(principal.role)) {
+        throw new ForbiddenException('只有管理员可以分配管理员等效用户组');
+      }
+      const permissions = resolveStoredRolePermissions(input.role, selectedRole.permissions.map((item) => item.code as PermissionKey));
+      if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions([], permissions).length > 0) {
+        throw new ForbiddenException('只有管理员可以分配包含真实代理、真实应付和市场成本等敏感权限的用户组');
       }
       const departmentId = await this.resolveStaffDepartmentId(input.departmentId, undefined, transaction);
       const directManagerId = await this.resolveStaffDirectManagerId(
         undefined,
+        departmentId,
         input.directManagerId,
         input.site?.trim() || null,
         transaction
       );
-      const permissions = resolveStoredRolePermissions(input.role, selectedRole.permissions.map((item) => item.code as PermissionKey));
       for (const permission of permissions) {
         await transaction.permission.upsert({
           where: { code: permission },
@@ -3385,7 +3505,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           after: { username: user.username, role: user.role.name, enabled: user.enabled, ...pickStaffProfile(user), mustChangePassword: user.mustChangePassword }
         }
       });
-      return mapStaffAccount(user);
+      return {
+        ...mapStaffAccount(user),
+        ...(suppliedPassword ? {} : { temporaryPassword: initialPassword })
+      };
     });
   }
 
@@ -3397,7 +3520,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!existing || !isStaffRoleName(existing.role.name)) {
       throw new NotFoundException('员工账号不存在');
     }
-    if (existing.role.name === 'ADMIN' && principal.role !== 'ADMIN') throw new ForbiddenException('只有管理员可以维护管理员账号');
+    if (isAdministratorRole(existing.role.name) && !isAdministratorRole(principal.role)) throw new ForbiddenException('只有管理员可以维护管理员账号');
     const username = input.username?.trim();
     if (username && (!/^[a-zA-Z0-9_.-]{5,32}$/.test(username) || !/[a-zA-Z]/.test(username))) {
       throw new BadRequestException('账号需为 5-32 位，并至少包含一个英文字母，可包含数字、点、下划线或短横线');
@@ -3407,28 +3530,30 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (duplicated && duplicated.id !== id) {
         throw new BadRequestException('账号已存在');
       }
+      if (username !== existing.username
+        && await transaction.shipment.count({ where: { entryBy: existing.username } }) > 0) {
+        throw new BadRequestException('该账号已有录单归属记录，不能修改用户名');
+      }
     }
     let roleId: string | undefined;
     if (input.role !== undefined) {
       const selectedRole = await transaction.role.findUnique({ where: { name: input.role }, include: { permissions: true } });
-      const assigningAdmin = selectedRole?.name === 'ADMIN';
-      if (assigningAdmin && principal.role !== 'ADMIN') {
-        throw new ForbiddenException('只有管理员可以分配管理员角色');
-      }
-      if (!selectedRole || selectedRole.enabled !== true || (selectedRole.systemBuiltin === true && !assigningAdmin) || !isStaffRoleName(selectedRole.name)) {
+      if (!selectedRole || selectedRole.enabled !== true || (selectedRole.systemBuiltin === true && !isAdministratorRole(selectedRole.name)) || !isStaffRoleName(selectedRole.name)) {
         throw new BadRequestException('员工角色不正确');
+      }
+      if (isAdministratorRole(selectedRole.name) && !isAdministratorRole(principal.role)) {
+        throw new ForbiddenException('只有管理员可以分配管理员等效用户组');
       }
       const selectedPermissions = resolveStoredRolePermissions(
         selectedRole.name as RoleKey,
         selectedRole.permissions.map((item) => item.code as PermissionKey)
       );
+      if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions([], selectedPermissions).length > 0) {
+        throw new ForbiddenException('只有管理员可以分配包含真实代理、真实应付和市场成本等敏感权限的用户组');
+      }
       if (!selectedPermissions.includes('business:shipment:team-view')
         && await transaction.user.count({ where: { directManagerId: id } }) > 0) {
         throw new BadRequestException('该员工仍有直属下属，不能移除团队管理权限');
-      }
-      if (selectedPermissions.includes('business:shipment:all-view')
-        && await transaction.user.count({ where: { directManagerId: id } }) > 0) {
-        throw new BadRequestException('该员工仍有直属下属，不能切换到全部运单查看用户组');
       }
       roleId = selectedRole.id;
     }
@@ -3446,16 +3571,25 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const departmentId = input.departmentId !== undefined
       ? await this.resolveStaffDepartmentId(input.departmentId, existing.departmentId, transaction)
       : undefined;
+    const nextDepartmentId = departmentId !== undefined ? departmentId : existing.departmentId;
     const nextSite = input.site !== undefined ? input.site?.trim() || null : existing.site;
+    if (nextDepartmentId !== existing.departmentId
+      && await transaction.user.count({ where: { directManagerId: id } }) > 0) {
+      throw new BadRequestException('该员工仍有直属下属，不能调整部门；请先调整直属经理');
+    }
     if (nextSite !== existing.site
       && await transaction.user.count({ where: { directManagerId: id } }) > 0) {
       throw new BadRequestException('该员工仍有直属下属，不能调整站点；请先调整直属经理');
     }
-    const directManagerId = input.directManagerId !== undefined
-      ? await this.resolveStaffDirectManagerId(id, input.directManagerId, nextSite, transaction)
-      : input.site !== undefined && nextSite !== existing.site
-        ? null
-        : undefined;
+    const directManagerId = input.directManagerId !== undefined || departmentId !== undefined || input.site !== undefined
+      ? await this.resolveStaffDirectManagerId(
+          id,
+          nextDepartmentId,
+          input.directManagerId !== undefined ? input.directManagerId : null,
+          nextSite,
+          transaction
+        )
+      : undefined;
     const data: Record<string, unknown> = {
       ...(username ? { username } : {}),
       ...normalizeStaffProfileUpdate(input),
@@ -3499,7 +3633,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!existing || !isStaffRoleName(existing.role.name)) {
       throw new NotFoundException('员工账号不存在');
     }
-    if (existing.role.name === 'ADMIN' && principal.role !== 'ADMIN') throw new ForbiddenException('只有管理员可以启停管理员账号');
+    if (isAdministratorRole(existing.role.name) && !isAdministratorRole(principal.role)) throw new ForbiddenException('只有管理员可以启停管理员账号');
     if (input.enabled !== true && await this.prisma.user.count({ where: { directManagerId: id } }) > 0) {
       throw new BadRequestException('该员工仍有直属下属，不能停用；请先调整直属经理');
     }
@@ -3525,7 +3659,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!existing || !isStaffRoleName(existing.role.name)) {
       throw new NotFoundException('员工账号不存在');
     }
-    if (existing.role.name === 'ADMIN' && principal.role !== 'ADMIN') throw new ForbiddenException('只有管理员可以删除管理员账号');
+    if (isAdministratorRole(existing.role.name) && !isAdministratorRole(principal.role)) throw new ForbiddenException('只有管理员可以删除管理员账号');
     if (await this.prisma.user.count({ where: { directManagerId: id } }) > 0) {
       throw new BadRequestException('该员工仍有直属下属，不能删除；请先调整直属经理');
     }
@@ -3559,12 +3693,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (users.length !== userIds.length) {
       throw new NotFoundException('部分员工账号不存在或不是员工账号');
     }
-    if (users.some((user) => user.role.name === 'ADMIN') && principal.role !== 'ADMIN') {
+    if (users.some((user) => isAdministratorRole(user.role.name)) && !isAdministratorRole(principal.role)) {
       throw new ForbiddenException('只有管理员可以重置管理员密码');
     }
     const results: StaffAccountPasswordResetResult[] = [];
     for (const user of users) {
-      const temporaryPassword = `${user.username}@123`;
+      const temporaryPassword = generateTemporaryPassword();
       await this.prisma.user.update({
         where: { id: user.id },
         data: { passwordHash: hashPassword(temporaryPassword), mustChangePassword: true }
@@ -3577,7 +3711,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         action: 'system.staff.password_reset',
         target: `users:${users.map((user) => user.id).join(',')}`,
         before: users.map((user) => ({ id: user.id, username: user.username })),
-        after: users.map((user) => ({ id: user.id, username: user.username, passwordRule: 'username@123' }))
+        after: users.map((user) => ({ id: user.id, username: user.username, passwordRule: 'random-96-bit' }))
       }
     });
     return results;
@@ -3585,18 +3719,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async updateStaffAccountSite(principal: Principal, id: string, input: { site?: string }): Promise<StaffAccountSummary> {
     await this.ensurePermission(principal, 'system:accounts:update-site', '无权维护员工站点');
-    const existing = await this.prisma.user.findUnique({ where: { id }, include: { role: true, department: true, directManager: { select: { id: true, username: true, name: true } } } });
+    const existing = await this.prisma.user.findUnique({ where: { id }, include: { role: true, department: true } });
     if (!existing || !isStaffRoleName(existing.role.name)) {
       throw new NotFoundException('员工账号不存在');
     }
-    const site = normalizeOptionalText(input.site, 40);
-    if (site !== existing.site && await this.prisma.user.count({ where: { directManagerId: id } }) > 0) {
-      throw new BadRequestException('该员工仍有直属下属，不能调整站点；请先调整直属经理');
+    if (isAdministratorRole(existing.role.name) && !isAdministratorRole(principal.role)) {
+      throw new ForbiddenException('只有管理员可以维护管理员账号站点');
     }
+    const site = normalizeOptionalText(input.site, 40);
     const user = await this.prisma.user.update({
       where: { id },
-      data: { site, ...(site !== existing.site ? { directManagerId: null } : {}) },
-      include: { role: true, department: true, directManager: { select: { id: true, username: true, name: true } } }
+      data: { site },
+      include: { role: true, department: true }
     });
     await this.prisma.auditLog.create({
       data: {
@@ -3624,27 +3758,30 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         await this.ensurePermission(principal, 'system:role-permissions:save', '新建仓库理货岗位需要用户组授权权限');
       }
       const code = createRoleGroupCode(normalized.label);
+      if (isAdministratorRole(code)) {
+        throw new BadRequestException('该用户组名称属于系统保留管理员组，不能通过普通用户组创建');
+      }
       const existing = await transaction.role.findFirst({ where: { OR: [{ name: code }, { label: normalized.label }] } });
       if (existing) {
         throw new BadRequestException('用户组名称已存在');
       }
       const sourceRoleKey = normalized.sourceRoleKey ?? 'OPERATOR';
-      if (sourceRoleKey === 'ADMIN' || sourceRoleKey === 'CUSTOMER') {
+      if (isAdministratorRole(sourceRoleKey) || sourceRoleKey === 'CUSTOMER') {
         throw new BadRequestException('管理员组和客户组不能作为权限复制来源');
       }
-      const source = await transaction.role.findUnique({ where: { name: sourceRoleKey }, include: { permissions: true } });
-      if (!source && !isBuiltinRoleKey(sourceRoleKey)) {
+      const template = await transaction.role.findUnique({ where: { name: sourceRoleKey }, include: { permissions: true } });
+      if (!template && !isBuiltinRoleKey(sourceRoleKey)) {
         throw new NotFoundException('权限来源用户组不存在');
       }
-      if (source?.enabled === false) {
+      if (template?.enabled === false) {
         throw new BadRequestException('停用用户组不能作为权限复制来源');
       }
-      const sourcePermissions = resolveStoredRolePermissions(sourceRoleKey, source?.permissions.map((item) => item.code as PermissionKey));
-      if (getForbiddenWarehousePackageUpdatePermissions(code, normalized.label, sourcePermissions).length > 0) {
+      const inheritedPermissions = resolveStoredRolePermissions(sourceRoleKey, template?.permissions.map((item) => item.code as PermissionKey));
+      if (getForbiddenWarehousePackageUpdatePermissions(code, normalized.label, inheritedPermissions).length > 0) {
         throw new ForbiddenException('来源用户组包含新用户组不能继承的仓库包裹修改权限');
       }
-      const permissions = filterWarehousePackageUpdatePermissions(code, normalized.label, sourcePermissions);
-      if (principal.role !== 'ADMIN' && getNewlyAddedMarketSensitivePermissions([], permissions).length > 0) {
+      const permissions = filterWarehousePackageUpdatePermissions(code, normalized.label, inheritedPermissions);
+      if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions([], permissions).length > 0) {
         throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
       }
       for (const permission of permissions) {
@@ -3673,7 +3810,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           after: JSON.parse(JSON.stringify({
             ...after,
             ...(normalized.sourceRoleKey ? {
-              permissionSource: { roleKey: sourceRoleKey, label: source?.label ?? getRoleMetadata(sourceRoleKey).label }
+              permissionSource: { roleKey: sourceRoleKey, label: template?.label ?? getRoleMetadata(sourceRoleKey).label }
             } : {})
           }))
         }
@@ -3686,77 +3823,77 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async updateRoleGroup(principal: Principal, role: RoleKey, input: RoleGroupInput): Promise<RolePermissionRow> {
     await this.ensurePermission(principal, 'system:user-groups:update', '无权维护用户组');
     return this.prisma.$transaction(async (transaction) => {
-    await this.lockRolePermissionGraphMutation(transaction);
-    const before = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
-    if (!before) {
-      throw new NotFoundException('用户组不存在');
-    }
-    if (before.systemBuiltin || role === 'ADMIN') {
-      throw new BadRequestException('内置角色不能在用户组中修改');
-    }
-    const normalized = normalizeRoleGroupInput(input, before.sortOrder);
-    if (normalized.enabled === false
-      && await transaction.user.findFirst({ where: { role: { name: role }, directReports: { some: {} } }, select: { id: true } })) {
-      throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能停用；请先调整直属经理');
-    }
-    if ((before.label ?? '').trim() !== '仓库理货' && normalized.label === '仓库理货') {
-      await this.ensurePermission(principal, 'system:role-permissions:save', '改为仓库理货岗位需要用户组授权权限');
-    }
-    const currentPermissions = resolveStoredRolePermissions(role, before.permissions.map((item) => item.code as PermissionKey));
-    const effectivePermissions = filterWarehousePackageUpdatePermissions(role, normalized.label, currentPermissions);
-    const persistedPermissions = before.permissions.some((item) => item.code === rolePermissionConfigurationMarker)
-      ? [...effectivePermissions, rolePermissionConfigurationMarker]
-      : effectivePermissions;
-    const duplicated = await transaction.role.findFirst({ where: { label: normalized.label, name: { not: role } } });
-    if (duplicated) {
-      throw new BadRequestException('用户组名称已存在');
-    }
-    const updated = await transaction.role.update({
-      where: { name: role },
-      data: {
-        label: normalized.label,
-        description: normalized.description,
-        site: normalized.site,
-        sortOrder: normalized.sortOrder,
-        enabled: normalized.enabled,
-        permissions: { set: persistedPermissions.map((code) => ({ code })) }
-      },
-      include: { permissions: true }
-    });
-    const beforeRow = mapRoleRow(before);
-    const after = mapRoleRow(updated);
-    await transaction.auditLog.create({
-      data: { actorId: principal.id, action: 'system.role.update', target: `role:${role}`, before: JSON.parse(JSON.stringify(beforeRow)), after: JSON.parse(JSON.stringify(after)) }
-    });
-    return after;
+      await this.lockRolePermissionGraphMutation(transaction);
+      const before = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
+      if (!before) {
+        throw new NotFoundException('用户组不存在');
+      }
+      if (before.systemBuiltin || isAdministratorRole(role)) {
+        throw new BadRequestException('内置角色不能在用户组中修改');
+      }
+      const normalized = normalizeRoleGroupInput(input, before.sortOrder);
+      if ((before.label ?? '').trim() !== '仓库理货' && normalized.label === '仓库理货') {
+        await this.ensurePermission(principal, 'system:role-permissions:save', '改为仓库理货岗位需要用户组授权权限');
+      }
+      const currentPermissions = resolveStoredRolePermissions(role, before.permissions.map((item) => item.code as PermissionKey));
+      const effectivePermissions = filterWarehousePackageUpdatePermissions(role, normalized.label, currentPermissions);
+      const persistedPermissions = before.permissions.some((item) => item.code === rolePermissionConfigurationMarker)
+        ? [...effectivePermissions, rolePermissionConfigurationMarker]
+        : effectivePermissions;
+      if (normalized.enabled === false
+        && await transaction.user.count({ where: { directManager: { roleId: before.id } } }) > 0) {
+        throw new BadRequestException('该用户组仍有直属经理被下属引用，不能停用');
+      }
+      const duplicated = await transaction.role.findFirst({ where: { label: normalized.label, name: { not: role } } });
+      if (duplicated) {
+        throw new BadRequestException('用户组名称已存在');
+      }
+      const updated = await transaction.role.update({
+        where: { name: role },
+        data: {
+          label: normalized.label,
+          description: normalized.description,
+          site: normalized.site,
+          sortOrder: normalized.sortOrder,
+          enabled: normalized.enabled,
+          permissions: { set: persistedPermissions.map((code) => ({ code })) }
+        },
+        include: { permissions: true }
+      });
+      const beforeRow = mapRoleRow(before);
+      const after = mapRoleRow(updated);
+      await transaction.auditLog.create({
+        data: { actorId: principal.id, action: 'system.role.update', target: `role:${role}`, before: JSON.parse(JSON.stringify(beforeRow)), after: JSON.parse(JSON.stringify(after)) }
+      });
+      return after;
     });
   }
 
   async updateRoleGroupEnabled(principal: Principal, role: RoleKey, input: EnabledUpdateInput): Promise<RolePermissionRow> {
     await this.ensurePermission(principal, 'system:user-groups:enable', '无权启停用户组');
     return this.prisma.$transaction(async (transaction) => {
-    await this.lockRolePermissionGraphMutation(transaction);
-    const before = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
-    if (!before) {
-      throw new NotFoundException('用户组不存在');
-    }
-    if (before.systemBuiltin || role === 'ADMIN') {
-      throw new BadRequestException('内置角色不能停用');
-    }
-    if (input.enabled !== true
-      && await transaction.user.findFirst({ where: { role: { name: role }, directReports: { some: {} } }, select: { id: true } })) {
-      throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能停用；请先调整直属经理');
-    }
-    const updated = await transaction.role.update({
-      where: { name: role },
-      data: { enabled: input.enabled === true },
-      include: { permissions: true }
-    });
-    const beforeRow = mapRoleRow(before);
-    const after = mapRoleRow(updated);
-    await transaction.auditLog.create({
-      data: { actorId: principal.id, action: 'system.role.enabled', target: `role:${role}`, before: JSON.parse(JSON.stringify(beforeRow)), after: JSON.parse(JSON.stringify(after)) }
-    });
+      await this.lockRolePermissionGraphMutation(transaction);
+      const before = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
+      if (!before) {
+        throw new NotFoundException('用户组不存在');
+      }
+      if (before.systemBuiltin || isAdministratorRole(role)) {
+        throw new BadRequestException('内置角色不能停用');
+      }
+      if (input.enabled !== true
+        && await transaction.user.count({ where: { directManager: { roleId: before.id } } }) > 0) {
+        throw new BadRequestException('该用户组仍有直属经理被下属引用，不能停用');
+      }
+      const updated = await transaction.role.update({
+        where: { name: role },
+        data: { enabled: input.enabled === true },
+        include: { permissions: true }
+      });
+      const beforeRow = mapRoleRow(before);
+      const after = mapRoleRow(updated);
+      await transaction.auditLog.create({
+        data: { actorId: principal.id, action: 'system.role.enabled', target: `role:${role}`, before: JSON.parse(JSON.stringify(beforeRow)), after: JSON.parse(JSON.stringify(after)) }
+      });
       return after;
     });
   }
@@ -3766,10 +3903,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return this.prisma.$transaction(async (transaction) => {
       await this.lockRolePermissionGraphMutation(transaction);
       const before = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
-      if (!before) throw new NotFoundException('用户组不存在');
-      if (before.systemBuiltin || role === 'ADMIN') throw new BadRequestException('内置角色不能删除');
+      if (!before) {
+        throw new NotFoundException('用户组不存在');
+      }
+      if (before.systemBuiltin || isAdministratorRole(role)) {
+        throw new BadRequestException('内置角色不能删除');
+      }
       const boundStaffCount = await transaction.user.count({ where: { roleId: before.id } });
-      if (boundStaffCount > 0) throw new BadRequestException(`该用户组仍绑定 ${boundStaffCount} 名员工，请先调整员工用户组`);
+      if (boundStaffCount > 0) {
+        throw new BadRequestException(`该用户组仍绑定 ${boundStaffCount} 名员工，请先调整员工用户组`);
+      }
       const beforeRow = mapRoleRow(before);
       await transaction.role.delete({ where: { id: before.id } });
       await transaction.auditLog.create({
@@ -3787,79 +3930,71 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async updateRolePermissions(principal: Principal, role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
     await this.ensurePermission(principal, 'system:role-permissions:save', '无权维护用户组权限');
-    if (role === 'ADMIN' && principal.role !== 'ADMIN') {
-      throw new ForbiddenException('只有管理员可以访问管理员组');
-    }
-    if (role === 'ADMIN') {
+    if (isAdministratorRole(role)) {
       throw new BadRequestException('管理员组是受保护的内置角色，不能修改权限');
     }
     const normalized = normalizeRolePermissions(role, permissions);
     return this.prisma.$transaction(async (transaction) => {
-    await this.lockRolePermissionGraphMutation(transaction);
-    const existing = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
-    if (!existing && !isBuiltinRoleKey(role)) {
-      throw new NotFoundException('用户组不存在');
-    }
-    const before = resolveStoredRolePermissions(role, existing?.permissions.map((item) => item.code as PermissionKey));
-    normalized.push(...protectedDataScopePermissions.filter((permission) => before.includes(permission)));
-    const roleLabel = existing?.label ?? getRoleMetadata(role).label;
-    if (getForbiddenWarehousePackageUpdatePermissions(role, roleLabel, normalized).length > 0) {
-      throw new ForbiddenException('仓库包裹修改权限只能授予仓库综合、仓库收货或仓库理货岗位');
-    }
-    if (principal.role !== 'ADMIN' && getNewlyAddedMarketSensitivePermissions(before, normalized).length > 0) {
-      throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
-    }
-    const effectivePermissions = filterWarehousePackageUpdatePermissions(role, roleLabel, normalized);
-    const roleHasDirectReports = await transaction.user.findFirst({
-      where: { role: { name: role }, directReports: { some: {} } },
-      select: { id: true }
-    });
-    if (roleHasDirectReports && !effectivePermissions.includes('business:shipment:team-view')) {
-      throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能移除团队管理权限');
-    }
-    if (roleHasDirectReports && effectivePermissions.includes('business:shipment:all-view')) {
-      throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能授予全部运单查看权限');
-    }
-    for (const permission of effectivePermissions) {
+      await this.lockRolePermissionGraphMutation(transaction);
+      const existing = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
+      if (!existing && !isBuiltinRoleKey(role)) {
+        throw new NotFoundException('用户组不存在');
+      }
+      const before = resolveStoredRolePermissions(role, existing?.permissions.map((item) => item.code as PermissionKey));
+      if (before.includes('data-scope:sales-own')) normalized.push('data-scope:sales-own');
+      const roleLabel = existing?.label ?? getRoleMetadata(role).label;
+      if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, normalized).length > 0) {
+        throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
+      }
+      if (getForbiddenWarehousePackageUpdatePermissions(role, roleLabel, normalized).length > 0) {
+        throw new ForbiddenException('仓库包裹修改权限只能授予仓库综合、仓库收货或仓库理货岗位');
+      }
+      const effectivePermissions = filterWarehousePackageUpdatePermissions(role, roleLabel, normalized);
+      if (!effectivePermissions.includes('business:shipment:team-view')
+        && existing
+        && await transaction.user.count({ where: { directManager: { roleId: existing.id } } }) > 0) {
+        throw new BadRequestException('该用户组仍有直属经理被下属引用，不能移除团队运单权限');
+      }
+      for (const permission of effectivePermissions) {
+        await transaction.permission.upsert({
+          where: { code: permission },
+          create: { code: permission },
+          update: {}
+        });
+      }
       await transaction.permission.upsert({
-        where: { code: permission },
-        create: { code: permission },
+        where: { code: rolePermissionConfigurationMarker },
+        create: { code: rolePermissionConfigurationMarker },
         update: {}
       });
-    }
-    await transaction.permission.upsert({
-      where: { code: rolePermissionConfigurationMarker },
-      create: { code: rolePermissionConfigurationMarker },
-      update: {}
-    });
-    const persistedPermissions = [...effectivePermissions, rolePermissionConfigurationMarker];
-    const updated = await transaction.role.upsert({
-      where: { name: role },
-      create: {
-        id: `r-${String(role).toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`,
-        name: role,
-        label: getRoleMetadata(role).label,
-        sortOrder: getRoleMetadata(role).sortOrder ?? 0,
-        enabled: true,
-        systemBuiltin: isBuiltinRoleKey(role),
-        permissions: { connect: persistedPermissions.map((code) => ({ code })) }
-      },
-      update: { permissions: { set: persistedPermissions.map((code) => ({ code })) } },
-      include: { permissions: true }
-    });
-    const after = resolveStoredRolePermissions(role, updated.permissions.map((item) => item.code as PermissionKey));
-    if (after.includes('data-scope:sales-own')) this.salesScopedRoleCache.add(role);
-    else this.salesScopedRoleCache.delete(role);
-    await transaction.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'system.role_permissions.update',
-        target: `role:${role}`,
-        before,
-        after
-      }
-    });
-    return mapRoleRow(updated);
+      const persistedPermissions = [...effectivePermissions, rolePermissionConfigurationMarker];
+      const updated = await transaction.role.upsert({
+        where: { name: role },
+        create: {
+          id: `r-${String(role).toLowerCase().replace(/[^a-z0-9_-]/g, '-')}`,
+          name: role,
+          label: getRoleMetadata(role).label,
+          sortOrder: getRoleMetadata(role).sortOrder ?? 0,
+          enabled: true,
+          systemBuiltin: isBuiltinRoleKey(role),
+          permissions: { connect: persistedPermissions.map((code) => ({ code })) }
+        },
+        update: { permissions: { set: persistedPermissions.map((code) => ({ code })) } },
+        include: { permissions: true }
+      });
+      const after = resolveStoredRolePermissions(role, updated.permissions.map((item) => item.code as PermissionKey));
+      await transaction.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'system.role_permissions.update',
+          target: `role:${role}`,
+          before,
+          after
+        }
+      });
+      if (after.includes('data-scope:sales-own')) this.salesScopedRoleCache.add(role);
+      else this.salesScopedRoleCache.delete(role);
+      return mapRoleRow(updated);
     });
   }
 
@@ -3872,7 +4007,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (sourceRoleKey === role) {
       throw new BadRequestException('权限来源不能是当前用户组');
     }
-    if (sourceRoleKey === 'ADMIN' || sourceRoleKey === 'CUSTOMER') {
+    if (isAdministratorRole(sourceRoleKey) || sourceRoleKey === 'CUSTOMER') {
       throw new BadRequestException('管理员组和客户组不能作为权限复制来源');
     }
 
@@ -3885,7 +4020,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!target) {
         throw new NotFoundException('目标用户组不存在');
       }
-      if (target.systemBuiltin || role === 'ADMIN' || role === 'CUSTOMER') {
+      if (target.systemBuiltin || isAdministratorRole(role) || role === 'CUSTOMER') {
         throw new BadRequestException('内置角色不能通过复制权限覆盖');
       }
       if (!source && !isBuiltinRoleKey(sourceRoleKey)) {
@@ -3897,21 +4032,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
       const before = resolveStoredRolePermissions(role, target.permissions.map((item) => item.code as PermissionKey));
       const sourcePermissions = resolveStoredRolePermissions(sourceRoleKey, source?.permissions.map((item) => item.code as PermissionKey));
-      if (principal.role !== 'ADMIN' && getNewlyAddedMarketSensitivePermissions(before, sourcePermissions).length > 0) {
+      if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, sourcePermissions).length > 0) {
         throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
       }
       if (getForbiddenWarehousePackageUpdatePermissions(role, target.label ?? undefined, sourcePermissions).length > 0) {
         throw new ForbiddenException('来源用户组包含目标岗位不能继承的仓库包裹修改权限');
       }
-      const roleHasDirectReports = await transaction.user.findFirst({
-        where: { role: { name: role }, directReports: { some: {} } },
-        select: { id: true }
-      });
-      if (roleHasDirectReports && !sourcePermissions.includes('business:shipment:team-view')) {
-        throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能覆盖为不含团队管理的权限');
-      }
-      if (roleHasDirectReports && sourcePermissions.includes('business:shipment:all-view')) {
-        throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能覆盖为全部运单查看权限');
+      if (!sourcePermissions.includes('business:shipment:team-view')
+        && await transaction.user.count({ where: { directManager: { roleId: target.id } } }) > 0) {
+        throw new BadRequestException('该用户组仍有直属经理被下属引用，不能覆盖为不含团队运单的权限');
       }
 
       for (const permission of sourcePermissions) {
@@ -4042,42 +4171,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async getVoucherImageFileAccess(principal: Principal, storedFileName: string): Promise<{ fileName: string; mimeType?: string }> {
-    const url = `/api/uploads/vouchers/${storedFileName}`;
-    const waterReceiptVoucher = await this.prisma.waterReceiptVoucher.findFirst({
-      where: { url },
-      include: { waterReceipt: true }
-    });
-    if (waterReceiptVoucher) {
-      await this.ensurePermission(principal, 'finance:water-receipt:voucher-view', '无权查看水单凭证');
-      const receipt = waterReceiptVoucher.waterReceipt;
-      const teamScope = principal.departmentTeamScope?.filter(Boolean);
-      const ownScope = [principal.username, principal.name, principal.nickname]
-        .filter((value): value is string => Boolean(value));
-      if (teamScope?.length
-        && ![receipt.salesperson, receipt.createdBy].some((value) => Boolean(value && teamScope.includes(value)))) {
-        throw new NotFoundException('凭证图片不存在');
-      }
-      if (principal.dataScope === 'SALES_OWN'
-        && ![receipt.salesperson, receipt.createdBy].some((value) => Boolean(value && ownScope.includes(value)))) {
-        throw new NotFoundException('凭证图片不存在');
-      }
-      return { fileName: waterReceiptVoucher.fileName, mimeType: waterReceiptVoucher.mimeType ?? undefined };
-    }
-
-    const voucher = await this.prisma.paymentVoucher.findFirst({ where: { url } });
-    if (!voucher) throw new NotFoundException('凭证图片不存在');
-    const permissions: PermissionKey[] = voucher.pendingPaymentId
-      ? ['finance:pending-payment:bill-voucher-view']
-      : voucher.paymentApplicationId && voucher.voucherType === 'PAYMENT_RECEIPT'
-        ? ['finance:paid-payment:voucher-view']
-        : voucher.paymentApplicationId
-          ? ['finance:pending-payment:payment-voucher-view']
-          : ['finance:agent-bill:read'];
-    await this.ensureAnyPermission(principal, permissions, '无权查看付款凭证');
-    return { fileName: voucher.fileName, mimeType: voucher.mimeType ?? undefined };
-  }
-
   async recordHttpAudit(
     principal: Principal,
     input: { method: string; path: string; result: 'SUCCESS' | 'FAILED'; durationMs: number; errorMessage?: string; ipAddress?: string; userAgent?: string }
@@ -4132,11 +4225,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     this.ensureStaffPricingAccess(principal);
     const canViewInternalSource = await this.hasPermission(principal.role, 'pricing:lookup:internal-source-view');
     const rows = await this.loadQuoteEligibleLegacyPricingRows();
-    return buildLegacyPricingMeta(rows, canViewInternalSource);
+    const response = buildLegacyPricingMeta(rows, canViewInternalSource);
+    return {
+      ...response,
+      modules: (await Promise.all(response.modules.map(async (module) => (await this.isPricingModuleBlocked(principal, 'lookup', module.key) ? null : module)))).filter((module): module is typeof response.modules[number] => Boolean(module))
+    };
   }
 
   async getDubaiPriceTable(principal: Principal): Promise<DubaiPriceTableResponse> {
     this.ensureStaffPricingAccess(principal);
+    await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
     const [legacyRows, persistedMarkupRules, activeBooks] = await Promise.all([
       this.loadQuoteEligibleLegacyPricingRows('dubaiAirSea'),
       this.loadAgentMarkupRules(),
@@ -4151,13 +4249,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       scopedRules,
       buildLegacyAgentSourcesFromRows(legacyRows, activeBooks, 'dubaiAirSea')
     ).filter((rule) => rule.enabled && !rule.deletedAt);
-    return buildDubaiPriceTableResponse(rows, markupRules, (row, rules, mode) =>
-      mode === 'SEA' ? Number(resolvePriceBookRowMarkup(row, rules, row.agentName).lineMarkupPerKg ?? 0.5) : 0
-    );
+    return buildDubaiPriceTableResponse(rows, markupRules);
   }
 
   async getDubaiPriceDisplay(principal: Principal): Promise<DubaiPriceDisplayResponse> {
     this.ensureStaffPricingAccess(principal);
+    await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
     const activeDubaiBooks = await (this.prisma as any).priceBook.findMany({
       where: { deletedAt: null, targetModule: 'dubaiAirSea' },
       select: { id: true }
@@ -4191,6 +4288,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async getDubaiPriceDisplayPageImage(principal: Principal, id: string) {
     this.ensureStaffPricingAccess(principal);
+    await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
     const page = await (this.prisma as any).dubaiPriceDisplayPage.findUnique({ where: { id }, include: { version: true } });
     const version = page?.version;
     const modeIsActive = page?.mode === 'AIR' ? version?.isActiveAir : page?.mode === 'SEA' ? version?.isActiveSea : false;
@@ -4206,6 +4304,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getDubaiPriceDisplayVersionPageImage(principal: Principal, versionId: string, pageId: string) {
+    await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
     await this.ensurePermission(principal, 'pricing:dubai-display:versions-view', '无权查看迪拜价格表完整图片');
     const page = await (this.prisma as any).dubaiPriceDisplayPage.findFirst({
       where: { id: pageId, versionId },
@@ -4312,6 +4411,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async updateDubaiSeaMarkup(principal: Principal, id: string, input: DubaiSeaMarkupUpdateInput) {
     await this.ensurePermission(principal, 'pricing:dubai-display:markup-update', '无权调整迪拜海运图片加价');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', 'dubaiAirSea', '代理加价规则', 'edit');
     const source = await (this.prisma as any).dubaiPriceDisplayVersion.findFirst({ where: { id }, include: { pages: true } });
     if (!source) throw new NotFoundException('迪拜价格表展示版本不存在');
     if (source.status !== 'READY' || !source.salesSafe || !source.seaMarkupApplied || !source.isActiveSea) {
@@ -4579,6 +4679,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async quoteLegacyPricing(principal: Principal, input: LegacyPricingQuoteRequest): Promise<LegacyPricingQuoteResponse> {
     this.ensureStaffPricingAccess(principal);
+    await this.ensurePricingModuleNotBlocked(principal, 'lookup', input.module, '查价');
     const pricingVisibility = await this.getPricingFieldVisibility(principal);
     const startedAt = Date.now();
     const chargeableWeightKg = calculateLookupChargeableWeight({
@@ -4987,6 +5088,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async getAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
     await this.ensurePermission(principal, 'pricing:markup:read', '无权查看代理加价规则');
     const legacyModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
+    if (legacyModule && legacyModule !== 'unclassified') {
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则');
+    }
     if (legacyModule === 'dubaiAirSea') {
       if (!await this.hasPermission(principal.role, 'pricing:dubai-display:markup-view')) {
         throw new ForbiddenException('无权查看迪拜海运图片加价');
@@ -5020,8 +5124,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const scopedPriceRows = shouldLoadPriceRows
       ? await this.loadPriceBookRowsForMarkupValidation(legacyModule, agentSources)
       : [];
-    const scopedSources = filterAgentMarkupSourcesByModule(agentSources, legacyModule);
-    const scopedRules = filterAgentMarkupRulesByModuleSources(rules, legacyModule, scopedSources);
+    const blockedModules = new Set<LegacyPricingModule>();
+    if (!legacyModule) {
+      for (const module of ['amazon', 'inquiry', 'europeExpress', 'southAfrica', 'usaAirSea', 'canadaAirSea', 'dubaiAirSea'] as LegacyPricingModule[]) {
+        if (await this.isPricingModuleBlocked(principal, 'markup', module)) blockedModules.add(module);
+      }
+    }
+    const scopedSources = filterAgentMarkupSourcesByModule(agentSources, legacyModule)
+      .filter((source) => !source.legacyModule || !blockedModules.has(source.legacyModule));
+    const scopedRules = filterAgentMarkupRulesByModuleSources(rules, legacyModule, scopedSources)
+      .filter((rule) => {
+        const module = normalizeAgentMarkupLegacyModule(rule.legacyModule);
+        return !module || !blockedModules.has(module);
+      });
     return buildAgentMarkupListResponse(
       buildSyncedAgentMarkupRules(scopedRules, scopedSources),
       scopedPriceRows,
@@ -5039,11 +5154,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
     }
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(current.legacyModule), '代理加价规则');
     return buildAgentMarkupPreview(mapAgentMarkupRule(current), books, logs);
   }
 
   async getMarkupRoutes(principal: Principal, priceBookId: string, query: MarkupRouteListQuery = {}): Promise<MarkupRouteListResponse> {
     await this.ensurePermission(principal, 'pricing:markup-tier:read', '无权查看线路阶梯加价');
+    const book = await (this.prisma as any).priceBook.findFirst({
+      where: { id: priceBookId, deletedAt: null },
+      select: { id: true, targetModule: true, agentShortName: true }
+    });
+    if (!book) throw new NotFoundException('价格表不存在或已删除');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则');
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 50)));
     const keyword = query.keyword?.trim();
@@ -5055,12 +5177,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const cached = this.markupRouteDirectoryCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.response;
     if (cached) this.markupRouteDirectoryCache.delete(cacheKey);
-
-    const book = await (this.prisma as any).priceBook.findFirst({
-      where: { id: priceBookId, deletedAt: null },
-      select: { id: true, agentShortName: true }
-    });
-    if (!book) throw new NotFoundException('价格表不存在或已删除');
 
     const search = keyword ? `%${keyword}%` : undefined;
     const directoryRows = Prisma.sql`
@@ -5166,6 +5282,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const route = normalizeMarkupRoutePreviewInput(input);
     const book = await (this.prisma as any).priceBook.findFirst({ where: { id: route.priceBookId, deletedAt: null }, select: { id: true, targetModule: true, agentShortName: true } });
     if (!book) throw new NotFoundException('价格表不存在或已删除');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则');
     if (book.agentShortName?.trim() && book.agentShortName.trim() !== route.agentName) throw new BadRequestException('代理与价格表绑定不一致');
     const [routeRows, scopedRules] = await Promise.all([
       this.loadMarkupRouteRows(route),
@@ -5193,6 +5310,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!validRoutes.length) return { items: prepared.map(({ key, error }) => ({ key, error })) };
     const priceBookIds = Array.from(new Set(validRoutes.map((item) => item.route.priceBookId)));
     if (priceBookIds.length !== 1) throw new BadRequestException('批量预览只能选择同一价格表的线路');
+    const book = await (this.prisma as any).priceBook.findFirst({
+      where: { id: priceBookIds[0], deletedAt: null },
+      select: { id: true, targetModule: true, agentShortName: true }
+    });
+    if (!book) throw new NotFoundException('价格表不存在或已删除');
+    const legacyModule = normalizeAgentMarkupLegacyModule(book.targetModule);
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则');
     const now = Date.now();
     const cachedCalculations = new Map<string, { calculation?: PricingCalculationBreakdown }>();
     validRoutes.forEach(({ key, route }) => {
@@ -5205,12 +5329,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!uncachedRoutes.length) {
       return { items: prepared.map(({ key, route, error }) => route ? { key, preview: { calculation: cachedCalculations.get(key)!.calculation } } : { key, error }) };
     }
-    const book = await (this.prisma as any).priceBook.findFirst({
-      where: { id: priceBookIds[0], deletedAt: null },
-      select: { id: true, targetModule: true, agentShortName: true }
-    });
-    if (!book) throw new NotFoundException('价格表不存在或已删除');
-    const legacyModule = normalizeAgentMarkupLegacyModule(book.targetModule);
     const channelNames = Array.from(new Set(uncachedRoutes.map((item) => item.route.channelName)));
     const destinationCountries = Array.from(new Set(uncachedRoutes.map((item) => item.route.destinationCountry)));
     const [normalizedRows, legacySources, scopedRuleRows] = await Promise.all([
@@ -5285,6 +5403,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const tiers = normalizeMarkupRouteTiers(input.tiers, route.markupUnit);
     const book = await (this.prisma as any).priceBook.findFirst({ where: { id: route.priceBookId, deletedAt: null }, select: { id: true, targetModule: true, agentShortName: true } });
     if (!book) throw new NotFoundException('价格表不存在或已删除');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则', 'edit');
     if (!book.agentShortName?.trim()) throw new BadRequestException('价格表未绑定代理，不能维护线路阶梯加价');
     if (book.agentShortName.trim() !== route.agentName) throw new BadRequestException('代理与价格表绑定不一致');
     const routeRows = await this.loadMarkupRouteRows(route);
@@ -5347,6 +5466,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       select: { id: true, targetModule: true, agentShortName: true }
     });
     if (!book) throw new NotFoundException('价格表不存在或已删除');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则', 'edit');
     if (!book.agentShortName?.trim()) throw new BadRequestException('价格表未绑定代理，不能批量维护线路阶梯加价');
     prepared.forEach(({ route }) => {
       if (book.agentShortName.trim() !== route.agentName) throw new BadRequestException('代理与价格表绑定不一致');
@@ -5450,6 +5570,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const moduleByBookId = new Map<string, LegacyPricingModule | undefined>(books.map((book: any) => [book.id, normalizeAgentMarkupLegacyModule(book.targetModule)]));
     const agentByBookId = new Map<string, string | undefined>(books.map((book: any) => [book.id, book.agentShortName?.trim() || rows.find((row) => row.priceBookId === book.id)?.agentName]));
     const legacyTiers = rules.filter((rule) => !rule.deletedAt && rule.enabled && rule.markupUnit && !rule.priceBookId);
+    for (const rule of legacyTiers) {
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+    }
     let migratedCount = 0;
     let archivedCount = 0;
     let skippedCount = 0;
@@ -5559,6 +5682,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         if (!normalized.legacyModule && normalized.priceBookId) {
           normalized.legacyModule = agentSources.find((source) => source.priceBookId === normalized.priceBookId)?.legacyModule;
         }
+        await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(normalized.legacyModule), '代理加价规则', 'edit');
         const existingRules = findAgentMarkupRulesByScope(workingRules, normalized);
         const existingRuleIds = new Set(existingRules.map((rule) => rule.id));
         validateAgentMarkupRule(normalized, priceRows, workingRules.filter((rule) => !existingRuleIds.has(rule.id)));
@@ -5625,6 +5749,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const where = buildAgentMarkupBatchWhere(input);
     const before = await (this.prisma as any).agentMarkupRule.findMany({ where });
+    for (const rule of before) {
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+    }
+    for (const scope of normalizeAgentMarkupBatchScopes(input)) {
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', scope.legacyModule, '代理加价规则', 'edit');
+    }
     const ids = before.map((row: any) => row.id);
     if (ids.length) {
       await (this.prisma as any).agentMarkupRule.updateMany({ where: { id: { in: ids } }, data: { enabled: input.enabled } });
@@ -5674,6 +5804,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.ensurePermission(principal, 'pricing:markup:batch-delete', '无权批量删除代理加价规则');
     const where = buildAgentMarkupBatchWhere(input);
     const before = await (this.prisma as any).agentMarkupRule.findMany({ where });
+    for (const rule of before) {
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+    }
     const ids = before.map((row: any) => row.id);
     if (ids.length) {
       await (this.prisma as any).agentMarkupRule.deleteMany({ where: { id: { in: ids } } });
@@ -5706,6 +5839,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!normalized.legacyModule && normalized.priceBookId) {
       normalized.legacyModule = agentSources.find((source) => source.priceBookId === normalized.priceBookId)?.legacyModule;
     }
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(normalized.legacyModule), '代理加价规则', 'edit');
     validateAgentMarkupRule(normalized, priceRows, currentRules);
     const markupValue = normalized.markupValue ?? normalized.markupPerKg;
     if (!input.agentName?.trim() || !Number.isFinite(markupValue) || markupValue < 0) {
@@ -5749,14 +5883,25 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
     }
-    const normalized = normalizeAgentMarkupInput({ ...mapAgentMarkupRule(current), ...input });
     const [priceRows, currentRules, agentSources] = await Promise.all([
       this.loadPriceBookRowsForMarkupValidation(),
       this.loadAgentMarkupRules(true),
       this.loadActivePriceBookAgentSources()
     ]);
-    if (!normalized.legacyModule && normalized.priceBookId) {
-      normalized.legacyModule = agentSources.find((source) => source.priceBookId === normalized.priceBookId)?.legacyModule;
+    const currentModule = normalizeAgentMarkupLegacyModule(current.legacyModule)
+      ?? agentSources.find((source) => source.priceBookId === current.priceBookId)?.legacyModule;
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', currentModule, '代理加价规则', 'edit');
+    const normalized = normalizeAgentMarkupInput({ ...mapAgentMarkupRule(current), ...input });
+    const priceBookModule = normalized.priceBookId
+      ? agentSources.find((source) => source.priceBookId === normalized.priceBookId)?.legacyModule
+      : undefined;
+    const explicitModule = input.legacyModule === undefined ? undefined : normalizeAgentMarkupLegacyModule(input.legacyModule);
+    if (priceBookModule && explicitModule && priceBookModule !== explicitModule) {
+      throw new BadRequestException('价格表与代理加价模块不一致');
+    }
+    normalized.legacyModule = priceBookModule ?? explicitModule ?? normalizeAgentMarkupLegacyModule(normalized.legacyModule) ?? currentModule;
+    if (input.priceBookId !== undefined || input.legacyModule !== undefined) {
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalized.legacyModule, '代理加价规则', 'edit');
     }
     validateAgentMarkupRule(normalized, priceRows, currentRules, id);
     const row = await (this.prisma as any).agentMarkupRule.update({
@@ -5797,6 +5942,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
     }
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(current.legacyModule), '代理加价规则', 'edit');
     await (this.prisma as any).agentMarkupRule.delete({ where: { id } });
     await this.prisma.auditLog.create({
       data: { actorId: principal.id, action: 'pricing.markup_rule.delete', target: id, before: JSON.parse(JSON.stringify(mapAgentMarkupRule(current))), after: { hardDelete: true } }
@@ -6404,6 +6550,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async importPriceBook(principal: Principal, input: PriceBookImportInput, options: { returnRows?: boolean } = {}): Promise<PriceBookImportResult> {
     await this.ensurePermission(principal, 'pricing:price-books:import', '无权导入价格表');
     const targetModule = normalizePriceBookImportTargetModule(input.targetModule);
+    await this.ensurePriceBookOperationNotBlocked(principal, 'create', targetModule, '新增价格表');
     const boundAgent = await this.resolveEnabledPriceBookAgent(input);
     if (!input.fileName?.trim()) {
       throw new BadRequestException('价格表名称不能为空');
@@ -6420,6 +6567,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async createPriceBookImportJob(principal: Principal, input: { fileName: string; targetModule?: PriceBookImportTargetModule; agentId?: string; agentShortName?: string; buffer: Buffer; filePath?: string }): Promise<PriceBookImportJobResponse> {
     await this.ensurePermission(principal, 'pricing:price-books:upload', '无权上传价格表');
     const targetModule = normalizePriceBookImportTargetModule(input.targetModule);
+    await this.ensurePriceBookOperationNotBlocked(principal, 'create', targetModule, '新增价格表');
     // 迪拜模块只发布原表图片，不参与代理成本和加价，允许不绑定代理。
     const boundAgent = targetModule === 'dubaiAirSea' && !input.agentId?.trim() && !input.agentShortName?.trim()
       ? undefined
@@ -6475,6 +6623,45 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('请选择所属代理');
     }
     return { id: agent.id, shortName: agent.shortName?.trim() || agent.name };
+  }
+
+  async getPriceBookImportJob(principal: Principal, id: string): Promise<PriceBookImportJobResponse> {
+    await this.ensurePermission(principal, 'pricing:price-books:import-job-view', '无权查看价格表导入任务');
+    const job = await (this.prisma as any).priceBookImportJob.findFirst({ where: { id } });
+    if (!job) throw new NotFoundException('价格表导入任务不存在');
+    const book = job.priceBookId
+      ? await (this.prisma as any).priceBook.findFirst({ where: { id: job.priceBookId } })
+      : null;
+    const legacySources = book
+      ? await (this.prisma as any).legacyPricingSource.findMany({ where: { priceBookId: book.id, deletedAt: null } })
+      : [];
+    const legacyCounts = book
+      ? Object.fromEntries(legacySources.map((source: any) => [source.module, source.rowCount])) as Partial<Record<LegacyPricingModule, number>>
+      : undefined;
+    return { job: mapPriceBookImportJob(job, book ? mapPriceBook(book, legacyCounts) : undefined) };
+  }
+
+  async getPriceBookImportJobs(principal: Principal, query: PriceBookImportJobListQuery = {}): Promise<PriceBookImportJobListResponse> {
+    await this.ensurePermission(principal, 'pricing:price-books:import-job-view', '无权查看价格表导入任务');
+    const page = Math.max(1, Number(query.page ?? 1));
+    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 20)));
+    const where: Record<string, unknown> = {};
+    if (query.status) where.status = query.status;
+    if (query.targetModule === 'unclassified') where.targetModule = null;
+    else if (query.targetModule) where.targetModule = query.targetModule;
+    const [rows, totalItems] = await Promise.all([
+      (this.prisma as any).priceBookImportJob.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize
+      }),
+      (this.prisma as any).priceBookImportJob.count({ where })
+    ]);
+    return {
+      jobs: rows.map((row: any) => mapPriceBookImportJob(row)),
+      pagination: { page, pageSize, totalItems }
+    };
   }
 
   async retryPriceBookImportJob(principal: Principal, id: string): Promise<PriceBookImportJobResponse> {
@@ -7131,6 +7318,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!current) {
       throw new NotFoundException('价格表不存在');
     }
+    await this.ensurePriceBookOperationNotBlocked(principal, 'remark', current.targetModule as PriceBookImportTargetModule | undefined, '修改价格表备注');
     const customRemark = input.customRemark?.trim() || input.remark?.trim() || null;
     const updated = await this.prisma.$transaction(async (tx: any) => {
       const next = await tx.priceBook.update({
@@ -7178,6 +7366,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!current) {
       throw new NotFoundException('价格表不存在');
     }
+    await this.ensurePriceBookOperationNotBlocked(principal, 'delete', current.targetModule as PriceBookImportTargetModule | undefined, '删减价格表');
     const legacySources = await (this.prisma as any).legacyPricingSource.findMany({
       where: { priceBookId: current.id, deletedAt: null },
       select: { id: true }
@@ -7391,7 +7580,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     principal: Principal,
     input: WarehouseRentRuleInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
+    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
       throw new ForbiddenException('当前角色不能维护仓租规则');
     }
     const normalized = normalizeWarehouseRentRuleInput(input);
@@ -7427,7 +7616,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     id: string,
     input: WarehouseRentRuleInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
+    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
       throw new ForbiddenException('当前角色不能维护仓租规则');
     }
     const normalized = normalizeWarehouseRentRuleInput(input);
@@ -7440,6 +7629,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
         if (normalized.effectiveFrom <= current.effectiveFrom) {
           throw new BadRequestException('新版本生效日期必须晚于原规则生效日期');
+        }
+        if (!normalized.enabled) {
+          throw new BadRequestException('修改仓租规则时，新版本必须保持启用');
         }
         const existing = await tx.warehouseRentRule.findMany({ where: { id: { not: id } } });
         assertWarehouseRentRuleDoesNotOverlap(existing.map(mapWarehouseRentRule), normalized);
@@ -7475,12 +7667,117 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  async deleteWarehouseRentRule(
+    principal: Principal,
+    id: string
+  ): Promise<WarehouseRentRuleSummary> {
+    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
+      throw new ForbiddenException('当前角色不能维护仓租规则');
+    }
+    try {
+      return await this.prisma.$transaction(async (tx: any) => {
+        const current = await tx.warehouseRentRule.findUnique({ where: { id } });
+        if (!current) throw new NotFoundException('仓租规则不存在');
+        const today = parseWarehouseRentDate(new Date().toISOString());
+        if (current.effectiveFrom <= today) {
+          throw new BadRequestException('已生效的仓租规则不能删除，只能停用');
+        }
+
+        const versionAudits = await tx.auditLog.findMany({
+          where: { action: 'warehouse.rent_rule.version' },
+          orderBy: { createdAt: 'asc' }
+        });
+        const readPreviousId = (row: any) => {
+          const before = row?.before && typeof row.before === 'object' ? row.before as Record<string, unknown> : undefined;
+          return typeof before?.id === 'string' ? before.id : undefined;
+        };
+        const auditByTarget = new Map<string, any>();
+        const childIdsByParent = new Map<string, string[]>();
+        for (const audit of versionAudits) {
+          auditByTarget.set(audit.target, audit);
+          const parentId = readPreviousId(audit);
+          if (!parentId) continue;
+          childIdsByParent.set(parentId, [...(childIdsByParent.get(parentId) ?? []), audit.target]);
+        }
+        const visited = new Set<string>([id]);
+        let previousId = readPreviousId(auditByTarget.get(id));
+        let previous: any;
+        while (previousId && !visited.has(previousId)) {
+          visited.add(previousId);
+          previous = await tx.warehouseRentRule.findUnique({ where: { id: previousId } });
+          if (previous) break;
+          previousId = readPreviousId(auditByTarget.get(previousId));
+        }
+        const descendantIds: string[] = [];
+        const descendantQueue = [...(childIdsByParent.get(id) ?? [])];
+        const visitedDescendants = new Set<string>();
+        while (descendantQueue.length) {
+          const descendantId = descendantQueue.shift()!;
+          if (visitedDescendants.has(descendantId)) continue;
+          visitedDescendants.add(descendantId);
+          descendantIds.push(descendantId);
+          descendantQueue.push(...(childIdsByParent.get(descendantId) ?? []));
+        }
+        const survivingRules = await tx.warehouseRentRule.findMany({ where: { id: { not: id } } });
+        const existingSuccessors = survivingRules.filter((rule: any) => visitedDescendants.has(rule.id));
+        existingSuccessors.sort((left: any, right: any) => left.effectiveFrom.getTime() - right.effectiveFrom.getTime());
+        if (existingSuccessors.length > 1
+          && existingSuccessors[0].effectiveFrom.getTime() === existingSuccessors[1].effectiveFrom.getTime()) {
+          throw new ConflictException('仓租规则版本链存在多个同日后继版本，请先核对规则历史');
+        }
+        const businessSuccessor = previous
+          ? survivingRules
+            .filter((rule: any) =>
+              rule.id !== previous.id
+              && (rule.site?.trim() || null) === (previous.site?.trim() || null)
+              && Math.abs(Number(rule.densityMin) - Number(previous.densityMin)) < 0.000001
+              && rule.effectiveFrom > previous.effectiveFrom
+            )
+            .sort((left: any, right: any) => left.effectiveFrom.getTime() - right.effectiveFrom.getTime())[0]
+          : undefined;
+        const successor = [existingSuccessors[0], businessSuccessor]
+          .filter(Boolean)
+          .sort((left: any, right: any) => left.effectiveFrom.getTime() - right.effectiveFrom.getTime())[0];
+
+        await tx.warehouseRentRule.delete({ where: { id } });
+        let restoredPrevious: WarehouseRentRuleSummary | undefined;
+        if (previous) {
+          const restored = await tx.warehouseRentRule.update({
+            where: { id: previous.id },
+            data: {
+              effectiveTo: successor
+                ? new Date(successor.effectiveFrom.getTime() - 1)
+                : null,
+              enabled: !successor,
+              updatedBy: principal.username
+            }
+          });
+          restoredPrevious = mapWarehouseRentRule(restored);
+        }
+
+        const summary = mapWarehouseRentRule(current);
+        await tx.auditLog.create({
+          data: {
+            actorId: principal.id,
+            action: 'warehouse.rent_rule.delete',
+            target: id,
+            before: toAuditJson(summary),
+            after: toAuditJson({ deleted: true, restoredPrevious })
+          }
+        });
+        return summary;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      translateWarehouseRentRuleWriteError(error);
+    }
+  }
+
   async updateWarehouseRentRuleEnabled(
     principal: Principal,
     id: string,
     input: WarehouseRentRuleEnabledInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
+    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
       throw new ForbiddenException('当前角色不能维护仓租规则');
     }
     try {
@@ -7489,6 +7786,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         if (!current) throw new NotFoundException('仓租规则不存在');
         if (current.enabled === (input.enabled === true)) {
           return mapWarehouseRentRule(current);
+        }
+        const today = parseWarehouseRentDate(new Date().toISOString());
+        if (input.enabled !== true && current.effectiveFrom > today) {
+          throw new BadRequestException('尚未生效的仓租规则请直接删除');
         }
         if (input.enabled === true) {
           const effectiveFrom = parseWarehouseRentDate(new Date().toISOString());
@@ -7575,7 +7876,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async warehouseRentSiteScope(principal: Principal): Promise<string | undefined> {
-    if (principal.role === 'ADMIN') {
+    if (isAdministratorRole(principal.role)) {
       return undefined;
     }
     const site = principal.site?.trim()
@@ -7587,6 +7888,69 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException('仓库账号未配置站点，不能查看仓租数据');
     }
     return site;
+  }
+
+  async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
+    await this.ensureAnyPermission(principal, ['warehouse:today-receipt:view', 'warehouse:in-stock:view'], '没有仓库包裹查看权限');
+    const rows = await (this.prisma as any).warehousePackage.findMany({
+      orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
+    });
+    return this.mapWarehousePackagesWithConfirmedTally(rows);
+  }
+
+  private async mapWarehousePackagesWithConfirmedTally(rows: any[]): Promise<WarehousePackageSummary[]> {
+    const rowIds = rows.map((row) => row.id);
+    const tallyTasks = rowIds.length
+      ? await (this.prisma as any).warehouseTallyTask.findMany({
+        where: {
+          OR: [
+            { packageIds: { hasSome: rowIds } },
+            { appliedPackageId: { in: rowIds } },
+            { id: { in: rows.map((row) => row.tallyTaskId).filter(Boolean) } }
+          ]
+        },
+        select: { id: true, taskNo: true, status: true, packageIds: true, appliedPackageId: true, createdAt: true },
+        orderBy: { createdAt: 'asc' }
+      })
+      : [];
+    const completedTaskByPackageId = new Map<string, { id: string; taskNo: string }>();
+    const pendingTaskByPackageId = new Map<string, { id: string; taskNo: string }>();
+    const taskById = new Map<string, { id: string; taskNo: string; status: string }>(
+      tallyTasks.map((task: any) => [task.id, { id: task.id, taskNo: task.taskNo, status: task.status }])
+    );
+    tallyTasks.forEach((task: any) => {
+      const packageIds = task.status === 'PENDING' ? task.packageIds : [...task.packageIds, task.appliedPackageId].filter(Boolean);
+      packageIds.forEach((packageId: string) => {
+        const target = task.status === 'PENDING' ? pendingTaskByPackageId : completedTaskByPackageId;
+        target.set(packageId, { id: task.id, taskNo: task.taskNo });
+      });
+    });
+    return rows.map((row) => {
+      const summary = mapWarehousePackage(row);
+      const directTask = row.tallyTaskId ? taskById.get(row.tallyTaskId) : undefined;
+      const pendingTask = pendingTaskByPackageId.get(row.id)
+        ?? (directTask?.status === 'PENDING' ? { id: directTask.id, taskNo: directTask.taskNo } : undefined);
+      if (pendingTask) {
+        return {
+          ...summary,
+          tallyTaskId: pendingTask.id,
+          tallyTaskNo: pendingTask.taskNo,
+          tallyCompleted: false,
+          tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false })
+        };
+      }
+      const task = completedTaskByPackageId.get(row.id)
+        ?? (row.tallyTaskId && row.tallyTaskNo ? { id: row.tallyTaskId, taskNo: row.tallyTaskNo } : undefined);
+      return task
+        ? {
+          ...summary,
+          tallyTaskId: task.id,
+          tallyTaskNo: task.taskNo,
+          tallyCompleted: true,
+          tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true })
+        }
+        : { ...summary, tallyTaskId: undefined, tallyTaskNo: undefined, tallyCompleted: false, tallyStatus: '待理货' };
+    });
   }
 
   async getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery): Promise<WarehouseTodayResponse> {
@@ -7623,7 +7987,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       where,
       orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
     });
-    const summaries = await mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
+    const summaries = await this.mapWarehousePackagesWithConfirmedTally(rows);
     const visibleRows = businessCustomerScoped
       ? summaries.map(({ site: _site, ...row }) => row)
       : summaries;
@@ -7678,6 +8042,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         })).map((customer) => customer.code)
       : undefined;
     const archivedOnly = query.status === 'TALLIED_ARCHIVED';
+    if (archivedOnly) {
+      await this.ensureWarehouseTallyUnblocked(principal, 'warehouse:tally-completed:view-block');
+    }
     const where: any = archivedOnly
       ? { status: 'TALLIED_ARCHIVED', archivedAt: { gte: resolveWarehouseTallyRecentCutoff() } }
       : { status: 'RECEIVED' };
@@ -7716,7 +8083,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       where,
       orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
     });
-    const summaries = await mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
+    const summaries = await this.mapWarehousePackagesWithConfirmedTally(rows);
     const customerCodes = Array.from(new Set(summaries.map((row) => row.customerCode).filter(Boolean)));
     const maintainedCustomers = customerCodes.length
       ? await this.prisma.customer.findMany({
@@ -7725,20 +8092,29 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       })
       : [];
     const maintainedCustomerCodes = new Set(maintainedCustomers.map((customer) => customer.code));
+    const salespersonByCustomerCode = new Map(
+      maintainedCustomers.map((customer) => [customer.code, customer.salesperson?.trim() || undefined])
+    );
     const currentlyOwnedCustomerCodes = businessCustomerScoped
       ? new Set(maintainedCustomers
         .filter((customer) => customer.salesperson === principal.username)
         .map((customer) => customer.code))
       : undefined;
-    const scopedSummaries = summaries
+    const rowsWithCustomerMaintenance = summaries
       .filter((row) => !currentlyOwnedCustomerCodes || currentlyOwnedCustomerCodes.has(row.customerCode))
       .map((row) => ({
         ...row,
-        customerMaintained: maintainedCustomerCodes.has(row.customerCode)
+        customerMaintained: maintainedCustomerCodes.has(row.customerCode),
+        salesperson: salespersonByCustomerCode.get(row.customerCode)
       }));
     const visibleRows = businessCustomerScoped
-      ? scopedSummaries.map(({ site: _site, ...row }) => row)
-      : scopedSummaries;
+      ? rowsWithCustomerMaintenance.map(({ site: _site, ...row }) => row)
+      : rowsWithCustomerMaintenance;
+    const grouped = new Map<string, WarehousePackageSummary[]>();
+    rowsWithCustomerMaintenance.forEach((row) => {
+      const key = row.combinedOrderNo || `${row.customerOrderNo}-${row.domesticTrackingNo}`;
+      grouped.set(key, [...(grouped.get(key) ?? []), row]);
+    });
     const waitingDispatchTickets = await this.prisma.shipment.count({
       where: {
         status: 'WAITING_DISPATCH',
@@ -7746,7 +8122,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
     });
     const response = {
-      totals: summarizeWarehouseInStockTotals(scopedSummaries, waitingDispatchTickets),
+      totals: {
+        receiptTickets: grouped.size,
+        totalPackages: rowsWithCustomerMaintenance.reduce((sum, row) => sum + row.packageCount, 0),
+        totalWeightKg: roundMoney(rowsWithCustomerMaintenance.reduce((sum, row) => sum + row.weightKg * row.packageCount, 0)),
+        totalCbm: roundMoney(rowsWithCustomerMaintenance.reduce((sum, row) => sum + row.cbm, 0)),
+        waitingDispatchTickets,
+        pendingTallyTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.status === 'RECEIVED')).length,
+        exceptionTickets: Array.from(grouped.values()).filter((items) => items.some((item) => item.manualException || item.exceptions.length)).length
+      },
       rows: visibleRows
     };
     await this.prisma.auditLog.create({
@@ -7760,67 +8144,22 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return response;
   }
 
-  async getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
-      throw new ForbiddenException('当前角色不能查看在仓数据');
-    }
-    const businessCustomerScoped = false;
-    const ownedCustomerCodes = businessCustomerScoped
-      ? (await this.prisma.customer.findMany({
-          where: { salesperson: principal.username },
-          select: { code: true }
-        })).map((customer) => customer.code)
-      : undefined;
-    const rows = await (this.prisma as any).warehousePackage.findMany({
-      where: {
-        status: 'RECEIVED',
-        ...(ownedCustomerCodes ? { customerCode: { in: ownedCustomerCodes } } : {})
-      },
-      select: {
-        customerCode: true,
-        combinedOrderNo: true,
-        customerOrderNo: true,
-        domesticTrackingNo: true,
-        packageCount: true,
-        weightKg: true,
-        cbm: true,
-        status: true,
-        manualException: true,
-        exceptions: true
-      }
-    });
-    const currentlyOwnedCustomerCodes = businessCustomerScoped && rows.length
-      ? new Set((await this.prisma.customer.findMany({
-          where: { code: { in: Array.from(new Set(rows.map((row: any) => row.customerCode).filter(Boolean))) } },
-          select: { code: true, salesperson: true }
-        }))
-          .filter((customer) => customer.salesperson === principal.username)
-          .map((customer) => customer.code))
-      : undefined;
-    const scopedRows = currentlyOwnedCustomerCodes
-      ? rows.filter((row: any) => currentlyOwnedCustomerCodes.has(row.customerCode))
-      : rows;
-    const waitingDispatchTickets = await this.prisma.shipment.count({
-      where: {
-        status: 'WAITING_DISPATCH',
-        ...(businessCustomerScoped ? { customer: { salesperson: principal.username } } : {})
-      }
-    });
-    const response = {
-      totals: summarizeWarehouseInStockTotals(scopedRows, waitingDispatchTickets)
-    };
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'warehouse.in_stock.view',
-        target: 'warehouse:in-stock',
-        after: toAuditJson({ query: {}, rowCount: scopedRows.length })
-      }
-    });
-    return response;
+  async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {
+    const packages = await this.getWarehousePackages(principal);
+    return summarizeWarehousePackageGroups(packages);
   }
 
-  async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string) {
+  async getWarehouseManualReceiptCustomers(principal: Principal) {
+    await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
+    const customers = await this.prisma.customer.findMany({
+      where: { enabled: true },
+      select: { code: true, name: true },
+      orderBy: { code: 'asc' }
+    });
+    return customers.map((customer) => ({ code: customer.code, name: customer.name }));
+  }
+
+  async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string, db: any = this.prisma) {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
     const normalizedCode = customerCode?.trim() ?? '';
     if (!normalizedCode) {
@@ -7829,30 +8168,32 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (normalizedCode.length > 8) {
       throw new BadRequestException('客户编号最长 8 位');
     }
+    const customer = await db.customer.findFirst({
+      where: { code: normalizedCode },
+      select: { enabled: true, salesperson: true }
+    });
+    // 与机器过机一致：客户尚未建档时先允许入仓，包裹保持无业务员归属，建档后再自动匹配。
+    if (!customer) return;
+    if (!customer.enabled) {
+      throw new BadRequestException('客户已停用，不能收货');
+    }
+    if (isAdministratorRole(principal.role) || principal.shipmentAllView) return;
     const salesScope = principal.dataScope === 'SALES_OWN'
       ? [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))
       : principal.departmentTeamScope?.filter(Boolean);
     let siteSalespeople: string[] | undefined;
-    if (principal.role !== 'ADMIN' && !principal.shipmentAllView && !salesScope?.length) {
+    if (!salesScope?.length) {
       if (!principal.site) throw new ForbiddenException('当前岗位未配置客户或站点数据范围');
-      siteSalespeople = (await this.prisma.user.findMany({ where: { site: principal.site, enabled: true }, select: { username: true } }))
-        .map((user) => user.username);
+      siteSalespeople = (await db.user.findMany({ where: { site: principal.site, enabled: true }, select: { username: true } }))
+        .map((user: any) => user.username);
     }
-    const customer = await this.prisma.customer.findFirst({
-      where: {
-        code: normalizedCode,
-        ...(principal.role !== 'ADMIN' && !principal.shipmentAllView ? { salesperson: { in: salesScope?.length ? salesScope : siteSalespeople ?? [] } } : {})
-      },
-      select: { enabled: true }
-    });
-    if (!customer) throw new ForbiddenException('无权为该客户登记收货');
-    if (customer && !customer.enabled) {
-      throw new BadRequestException('客户已停用，不能收货');
+    if (!customer.salesperson || !(salesScope?.length ? salesScope : siteSalespeople ?? []).includes(customer.salesperson)) {
+      throw new ForbiddenException('无权为该客户登记收货');
     }
   }
 
   async previewWarehouseMachineImport(principal: Principal, parsed: ParsedWarehouseMachineImport) {
-    await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
+    await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库批量导入权限');
     const existingKeys = await this.findExistingWarehouseMachineImportKeys(this.prisma, parsed);
     return buildWarehouseMachineImportResponse(parsed, existingKeys);
   }
@@ -7862,7 +8203,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     parsed: ParsedWarehouseMachineImport,
     meta: { fileHash: string }
   ) {
-    await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
+    await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库批量导入权限');
     return this.prisma.$transaction(async (tx: any) => {
       await tx.$queryRaw(Prisma.sql`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext('warehouse.machine-history-import'))`);
       const auditTargets = [
@@ -7974,6 +8315,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const data = buildWarehousePackageData(input);
     const result = await this.prisma.$transaction(async (tx: any) => {
       await this.lockWarehouseCustomer(tx, data.customerCode);
+      if (data.scanSource !== '墨家设备') {
+        await this.assertWarehouseManualReceiptCustomer(principal, data.customerCode, tx);
+      }
       if (data.scanSource === '墨家设备' && data.scanTime) {
         const scanSecond = Math.floor(data.scanTime.getTime() / 1000) * 1000;
         const duplicate = await tx.warehousePackage.findFirst({
@@ -8033,6 +8377,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const created = await (this.prisma as any).$transaction(async (tx: any) => {
       await this.lockWarehouseCustomer(tx, firstPackageData.customerCode);
+      await this.assertWarehouseManualReceiptCustomer(principal, firstPackageData.customerCode, tx);
       const owner = await this.resolveWarehousePackageOwner(firstPackageData.customerCode, tx);
       const rows = [];
       for (const data of packageData) {
@@ -8087,214 +8432,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async replenishWarehouseSameSpec(principal: Principal, id: string, input: WarehouseSameSpecReplenishInput): Promise<WarehouseSameSpecReplenishResponse> {
-    await this.ensurePermission(principal, 'warehouse:in-stock:same-spec-replenish', '没有同箱规补录权限');
-    const permissions = await this.getPermissionsForRole(principal.role);
-    const salesOwnScope = permissions.includes('data-scope:sales-own');
-    const supplementCount = Number(input.supplementCount);
-    const requestId = typeof input.requestId === 'string' ? input.requestId.trim() : '';
-    if (!Number.isInteger(supplementCount) || supplementCount < 1 || supplementCount > 500) {
-      throw new BadRequestException('补录箱数必须为 1 至 500 的正整数');
-    }
-    if (!requestId || requestId.length > 100) {
-      throw new BadRequestException('页面已更新，请刷新后重新发起补录');
-    }
-    const result = await this.prisma.$transaction(async (tx: any) => {
-      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "id" = ${id} FOR UPDATE`);
-      const source = await tx.warehousePackage.findUnique({ where: { id } });
-      if (!source) throw new NotFoundException('仓库包裹不存在');
-      if (principal.role !== 'ADMIN' && !principal.shipmentAllView) {
-        if (salesOwnScope) {
-          const customer = await tx.customer.findUnique({ where: { code: source.customerCode }, select: { salesperson: true } });
-          const identities = [principal.username, principal.name, principal.nickname].filter(Boolean);
-          if (!customer?.salesperson || !identities.includes(customer.salesperson)) {
-            throw new ForbiddenException('只能对本人归属客户的包裹补录');
-          }
-        } else if (!principal.site || source.site !== principal.site) {
-          throw new ForbiddenException('只能对本站包裹补录');
-        }
-      }
-      if (source.status !== 'RECEIVED' || source.systemOrderNo || source.shipmentId || source.tallyTaskId) {
-        throw new BadRequestException('仅未录单、未理货、未合票且未出库的在仓过机记录可以同箱规补录');
-      }
-      if (!source.scanSource || source.scanSource === '手动添加' || source.sourcePackageId || source.scanSource === '同箱规补录') {
-        throw new BadRequestException('请从原始过机记录发起同箱规补录');
-      }
-      if (source.measurementStatus !== 'MEASURED'
-        || Number(source.weightKg) <= 0
-        || Number(source.lengthCm) <= 0
-        || Number(source.widthCm) <= 0
-        || Number(source.heightCm) <= 0) {
-        throw new BadRequestException('只有已完成过机并具备有效重尺的包裹可以同箱规补录');
-      }
-      if (Number(source.packageCount) !== 1) {
-        throw new BadRequestException('同箱规补录的来源记录件数必须为 1');
-      }
-      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${source.combinedOrderNo}))`);
-      const priorAudit = await tx.auditLog.findFirst({
-        where: {
-          action: 'warehouse.package.same_spec_replenish',
-          target: source.id,
-          after: { path: ['requestId'], equals: requestId }
-        },
-        orderBy: { createdAt: 'desc' },
-        select: { before: true, after: true }
-      });
-      const prior = priorAudit?.after as {
-        packageIds?: string[];
-        totalPackageCount?: number;
-        supplementCount?: number;
-      } | null | undefined;
-      const priorSource = priorAudit?.before as {
-        customerCode?: string;
-        domesticTrackingNo?: string;
-        combinedOrderNo?: string;
-        packageCount?: number;
-        weightKg?: number;
-        lengthCm?: number;
-        widthCm?: number;
-        heightCm?: number;
-      } | null | undefined;
-      if (prior) {
-        if (Number(prior.supplementCount) !== supplementCount) {
-          throw new BadRequestException('同一补录请求不能修改补录数量');
-        }
-        const sourceMatchesPriorRequest = priorSource
-          && priorSource.customerCode === source.customerCode
-          && priorSource.domesticTrackingNo === source.domesticTrackingNo
-          && priorSource.combinedOrderNo === source.combinedOrderNo
-          && Number(priorSource.packageCount) === Number(source.packageCount)
-          && Number(priorSource.weightKg) === Number(source.weightKg)
-          && Number(priorSource.lengthCm) === Number(source.lengthCm)
-          && Number(priorSource.widthCm) === Number(source.widthCm)
-          && Number(priorSource.heightCm) === Number(source.heightCm);
-        if (!sourceMatchesPriorRequest) {
-          throw new BadRequestException('补录请求与当前包裹数据不一致，请联系管理员核对');
-        }
-        const packages = await tx.warehousePackage.findMany({
-          where: { id: { in: prior.packageIds ?? [] } },
-          orderBy: { packageIndex: 'asc' }
-        });
-        return {
-          packages,
-          expectedTotalPackageCount: prior.totalPackageCount ?? packages.length,
-          idempotent: true
-        };
-      }
-      const siblings = await tx.warehousePackage.findMany({
-        where: { combinedOrderNo: source.combinedOrderNo, status: 'RECEIVED', shipmentId: null },
-        orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
-      });
-      if (siblings.some((item: any) => item.systemOrderNo || item.tallyTaskId)) {
-        throw new BadRequestException('该票已有录单或理货记录，不能同箱规补录');
-      }
-      const existingCount = siblings.length;
-      const expectedTotalPackageCount = existingCount + supplementCount;
-      const startPackageIndex = Math.max(siblings.length, ...siblings.map((item: any) => Number(item.packageIndex || 0)));
-      const createData = Array.from({ length: supplementCount }, (_, index) => ({
-        customerCode: source.customerCode,
-        customerName: source.customerName,
-        site: source.site,
-        salesperson: source.salesperson,
-        customerOrderNo: source.customerOrderNo,
-        domesticTrackingNo: source.domesticTrackingNo,
-        combinedOrderNo: source.combinedOrderNo,
-        labelNo: createWarehouseInboundLabelNo(source.customerCode, source.domesticTrackingNo, startPackageIndex + index + 1, expectedTotalPackageCount),
-        sourcePackageId: source.id,
-        sourcePackageNo: source.combinedOrderNo,
-        receivingChannel: '同箱规补录',
-        destinationCountry: source.destinationCountry,
-        expectedTotalPackageCount,
-        packageIndex: startPackageIndex + index + 1,
-        packageCount: 1,
-        weightKg: source.weightKg,
-        lengthCm: source.lengthCm,
-        widthCm: source.widthCm,
-        heightCm: source.heightCm,
-        cbm: source.cbm,
-        volumetricWeightKg: source.volumetricWeightKg,
-        chargeableWeightKg: source.chargeableWeightKg,
-        divisor: source.divisor,
-        roundingRule: source.roundingRule,
-        scanTime: source.scanTime,
-        remark: null,
-        manualException: null,
-        scanSource: '同箱规补录',
-        measurementStatus: source.measurementStatus,
-        measurementMatchedAt: source.measurementMatchedAt,
-        measurementMatchedBy: source.measurementMatchedBy,
-        status: 'RECEIVED',
-        exceptions: [],
-        createdBy: principal.username
-      }));
-      await tx.warehousePackage.createMany({ data: createData });
-      const packages = await tx.warehousePackage.findMany({
-        where: {
-          sourcePackageId: source.id,
-          sourcePackageNo: source.combinedOrderNo,
-          scanSource: '同箱规补录',
-          packageIndex: { gt: startPackageIndex, lte: startPackageIndex + supplementCount }
-        },
-        orderBy: { packageIndex: 'asc' }
-      });
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'warehouse.package.same_spec_replenish',
-          target: source.id,
-          before: toAuditJson(mapWarehousePackage(source)),
-          after: toAuditJson({
-            requestId,
-            supplementCount,
-            existingRecordCount: existingCount,
-            totalPackageCount: expectedTotalPackageCount,
-            originalPackageIds: siblings.map((item: any) => item.id),
-            packageIds: packages.map((item: any) => item.id)
-          })
-        }
-      });
-      return { packages, expectedTotalPackageCount, idempotent: false };
-    });
-    const packages: WarehousePackageSummary[] = result.packages.map(mapWarehousePackage);
-    if (!result.idempotent) {
-      packages.forEach((pkg) => {
-        void this.lineage?.recordEvent('warehouse.today.receive', {
-          actorUsername: principal.username,
-          businessId: pkg.id,
-          payload: {
-            package: pkg,
-            source: 'same_spec_replenish',
-            sourcePackageId: id,
-            requestId
-          },
-          sourceRefs: [{ nodeType: 'warehouse_package', id }],
-          metrics: {
-            packageCount: pkg.packageCount,
-            weightKg: pkg.weightKg,
-            volumeCbm: pkg.cbm,
-            chargeableWeightKg: pkg.chargeableWeightKg
-          }
-        });
-      });
-    }
-    return {
-      sourcePackageId: id,
-      totalPackageCount: result.expectedTotalPackageCount,
-      packages,
-      idempotent: result.idempotent
-    };
-  }
-
   async splitWarehousePackage(principal: Principal, id: string, input: WarehousePackageSplitInput): Promise<WarehousePackageSplitResponse> {
     await this.ensurePermission(principal, 'warehouse:in-stock:split', '没有仓库拆分权限');
-    const requestedPieces = Array.isArray(input.pieces) ? input.pieces.map((piece) => Number(piece)) : [];
-    if (requestedPieces.some((piece) => !Number.isInteger(piece) || piece <= 0)) {
-      throw new BadRequestException('每票件数必须是大于 0 的整数');
-    }
-    const pieces = requestedPieces;
+    const pieces = Array.isArray(input.pieces)
+      ? input.pieces.map((piece) => Math.floor(Number(piece))).filter((piece) => Number.isFinite(piece) && piece > 0)
+      : [];
     const splitCount = pieces.length || Math.floor(Number(input.splitCount));
     if (!Number.isFinite(splitCount) || splitCount < 2) {
-      throw new BadRequestException('拆分票数至少为 2');
+      throw new BadRequestException('拆分箱数至少为 2');
     }
     const splitPieces = pieces.length ? pieces : Array.from({ length: splitCount }, () => 1);
     const pieceTotal = splitPieces.reduce((sum, piece) => sum + piece, 0);
@@ -8305,7 +8450,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!sourceSnapshot) {
       throw new NotFoundException('仓库包裹不存在');
     }
-    const { source, updatedSource, created, rootCombinedOrderNo } = await this.prisma.$transaction(async (tx: any) => {
+    const { source, updatedSource, created } = await this.prisma.$transaction(async (tx: any) => {
       await this.lockWarehouseCustomer(tx, sourceSnapshot.customerCode);
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "id" = ${id} FOR UPDATE`);
       const source = await tx.warehousePackage.findUnique({ where: { id } });
@@ -8320,8 +8465,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException('包裹数据已发生变化，请刷新后重试');
       }
       await this.ensureWarehousePackagesNotInPendingTally([id], tx);
+      if (pieces.length && pieceTotal !== Number(source.packageCount)) {
+        throw new BadRequestException('拆分件数合计必须等于原包裹件数');
+      }
       const rootCombinedOrderNo = source.sourcePackageNo || source.combinedOrderNo;
-      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${rootCombinedOrderNo}))`);
       const owner = await this.resolveWarehousePackageOwner(source.customerCode, tx);
       const existingSplitRows = await tx.warehousePackage.findMany({
         where: {
@@ -8349,7 +8496,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           sourcePackageNo: rootCombinedOrderNo,
           systemOrderNo: source.systemOrderNo,
           shipmentId: source.shipmentId,
-          receivingChannel: source.receivingChannel,
+          receivingChannel: '理货拆分',
           destinationCountry: source.destinationCountry,
           expectedTotalPackageCount: splitCount,
           packageIndex: index + 1,
@@ -8361,15 +8508,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           cbm: roundMoney(Number(source.cbm) * ratio),
           volumetricWeightKg: roundMoney(Number(source.volumetricWeightKg) * ratio),
           chargeableWeightKg: roundMoney(Number(source.chargeableWeightKg) * ratio),
-          divisor: source.divisor,
-          roundingRule: source.roundingRule,
+          divisor: 6000,
+          roundingRule: 'NONE',
           scanTime: source.scanTime,
           remark: input.remark?.trim() || source.remark,
-          manualException: source.manualException,
-          scanSource: source.scanSource,
-          measurementStatus: source.measurementStatus,
-          measurementMatchedAt: source.measurementMatchedAt,
-          measurementMatchedBy: source.measurementMatchedBy,
           createdBy: principal.username,
           status: 'RECEIVED',
           exceptions: []
@@ -8395,11 +8537,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           before: toAuditJson(mapWarehousePackage(source)),
           after: toAuditJson({
             sourcePackageId: source.id,
-            sourcePackageNo: rootCombinedOrderNo,
+            sourcePackageNo: source.combinedOrderNo,
             splitCount,
-            sourcePackageCount: Number(source.packageCount),
-            splitPackageCount: pieceTotal,
-            packageCountDelta: pieceTotal - Number(source.packageCount),
             pieces: pieces.length ? pieces : undefined,
             before: warehousePackageSplitTotals([mapWarehousePackage(source)]),
             after: warehousePackageSplitTotals(created.map(mapWarehousePackage)),
@@ -8420,21 +8559,17 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           })
         }
       });
-      return { source, updatedSource, created, rootCombinedOrderNo };
+      return { source, updatedSource, created };
     });
     const sourceSummary = mapWarehousePackage(updatedSource);
     const createdSummaries: WarehousePackageSummary[] = created.map(mapWarehousePackage);
-    const packageCountDelta = pieceTotal - Number(source.packageCount);
     void this.lineage?.recordEvent('warehouse.packages.split', {
       actorUsername: principal.username,
       businessId: id,
       payload: {
         sourcePackageId: source.id,
-        sourcePackageNo: rootCombinedOrderNo,
+        sourcePackageNo: source.combinedOrderNo,
         splitCount,
-        sourcePackageCount: Number(source.packageCount),
-        splitPackageCount: pieceTotal,
-        packageCountDelta,
         pieces: pieces.length ? pieces : undefined,
         packageIds: createdSummaries.map((pkg) => pkg.id),
         children: createdSummaries.map((pkg) => ({
@@ -8451,7 +8586,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         splitCount,
         sourcePackageCount: Number(source.packageCount),
         childPackageCount: createdSummaries.reduce((sum, pkg) => sum + pkg.packageCount, 0),
-        childWeightKg: warehousePackageSplitTotals(createdSummaries).weightKg,
+        childWeightKg: roundMoney(createdSummaries.reduce((sum, pkg) => sum + pkg.weightKg * pkg.packageCount, 0)),
         childVolumeCbm: roundMoney(createdSummaries.reduce((sum, pkg) => sum + pkg.cbm, 0))
       }
     });
@@ -8929,11 +9064,97 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return mapWarehouseConsolidation(updated, updated.items.map((item: any) => item.packageId));
   }
 
+  async getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
+    await this.ensurePermission(principal, 'warehouse:tally-pending:detail-view', '没有仓库合并明细权限');
+    const items = await (this.prisma as any).warehouseConsolidationItem.findMany({
+      where: { consolidationId: id },
+      include: { package: true },
+      orderBy: { id: 'asc' }
+    });
+    return items.map((item: any) => mapWarehousePackage(item.package));
+  }
+
+  async getWarehouseTallyTasks(principal: Principal, query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {
+    const canViewPending = await this.hasPermission(principal.role, 'warehouse:tally-pending:view');
+    const canViewCompleted = await this.hasPermission(principal.role, 'warehouse:tally-completed:view')
+      && !(await this.isWarehouseTallyMaskEnabled(principal, 'warehouse:tally-completed:view-block'));
+    if (!canViewPending && !canViewCompleted) {
+      throw new ForbiddenException('当前角色不能查看理货任务');
+    }
+    const completedQuery = query.status === 'COMPLETED'
+      || query.completedScope === 'RECENT'
+      || query.completedScope === 'HISTORY'
+      || Boolean(query.completedFrom)
+      || Boolean(query.completedTo);
+    if (query.status === 'PENDING' && !canViewPending) {
+      throw new ForbiddenException('当前角色不能查看未完成理货');
+    }
+    if (completedQuery && !canViewCompleted) {
+      throw new ForbiddenException('当前角色不能查看已完成理货');
+    }
+    const scope = this.operatorCustomerScope(principal);
+    const where: any = {};
+    if (query.status) {
+      where.status = query.status;
+    }
+    if (query.customerCode?.trim()) {
+      where.customerCode = { contains: query.customerCode.trim(), mode: 'insensitive' };
+    }
+    if (query.combinedOrderNo?.trim()) {
+      where.sourceCombinedOrderNo = { contains: query.combinedOrderNo.trim(), mode: 'insensitive' };
+    }
+    if (query.completedScope === 'RECENT' || query.completedScope === 'HISTORY' || query.completedFrom || query.completedTo) {
+      where.status = 'COMPLETED';
+      const completedAt: Record<string, Date> = {};
+      if (query.completedScope === 'RECENT') {
+        completedAt.gte = resolveWarehouseTallyRecentCutoff();
+      } else if (query.completedScope === 'HISTORY') {
+        completedAt.lt = resolveWarehouseTallyRecentCutoff();
+      }
+      if (query.completedFrom?.trim()) {
+        completedAt.gte = new Date(query.completedFrom.trim());
+      }
+      if (query.completedTo?.trim()) {
+        completedAt.lt = new Date(query.completedTo.trim());
+      }
+      where.completedAt = completedAt;
+    }
+    if (scope) {
+      where.salesperson = { in: scope };
+    }
+    const rows = await (this.prisma as any).warehouseTallyTask.findMany({
+      where,
+      orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
+    });
+    const completedRows = rows.filter((row: any) => row.status === 'COMPLETED');
+    const outputRows = completedRows.length
+      ? await (this.prisma as any).warehousePackage.findMany({
+        where: {
+          tallyTaskId: { in: completedRows.map((row: any) => row.id) },
+          status: { not: 'TALLIED_ARCHIVED' }
+        },
+        orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
+      })
+      : [];
+    const sourceIdsByTask = new Map<string, Set<string>>(completedRows.map((row: any) => [row.id, new Set<string>(row.packageIds ?? [])]));
+    const outputsByTask = new Map<string, WarehousePackageSummary[]>();
+    outputRows.forEach((output: any) => {
+      if (sourceIdsByTask.get(output.tallyTaskId)?.has(output.id)) return;
+      if (output.archivedReason === WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON) return;
+      outputsByTask.set(output.tallyTaskId, [...(outputsByTask.get(output.tallyTaskId) ?? []), mapWarehousePackage(output)]);
+    });
+    return rows.map((row: any) => ({
+      ...mapWarehouseTallyTask(row),
+      outputPackages: outputsByTask.get(row.id) ?? []
+    }));
+  }
+
   async getWarehouseTallyRepeatStatistics(
     principal: Principal,
     query: WarehouseTallyRepeatStatisticsQuery = {}
   ): Promise<WarehouseTallyRepeatStatisticsResponse> {
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
+    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))
+      || await this.isWarehouseTallyMaskEnabled(principal, 'warehouse:tally-completed:view-block')) {
       throw new ForbiddenException('当前角色不能查看重复理货统计');
     }
     const scope = this.operatorCustomerScope(principal);
@@ -8959,7 +9180,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string): Promise<WarehouseTallyTaskSummary[]> {
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:in-stock:tally-record-view']))) {
+    if (!(await this.hasAnyPermission(principal.role, ['warehouse:in-stock:tally-record-view']))
+      || await this.isWarehouseTallyMaskEnabled(principal, 'warehouse:tally-completed:view-block')) {
       throw new ForbiddenException('当前角色不能查看理货历史');
     }
     const normalizedPackageId = packageId.trim();
@@ -9028,18 +9250,23 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
       });
       const nextTaskPackageIds = orderedChain[taskIndex + 1]?.packageIds ?? [];
-      const carriedForwardRows = !nextTaskPackageIds.length ? [] : await (this.prisma as any).warehousePackage.findMany({
-        where: { id: { in: nextTaskPackageIds } },
-        orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
-      });
+      const carriedForwardRows = !nextTaskPackageIds.length
+        ? []
+        : await (this.prisma as any).warehousePackage.findMany({
+          where: { id: { in: nextTaskPackageIds } },
+          orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
+        });
       const outputById = new Map([...outputRows, ...carriedForwardRows].map((row: any) => [row.id, row]));
       const resultRows = outputById.size
         ? Array.from(outputById.values()).sort((left: any, right: any) => Number(left.packageIndex ?? 0) - Number(right.packageIndex ?? 0))
         : await (this.prisma as any).warehousePackage.findMany({
-          where: { id: { in: task.packageIds } },
-          orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
-        });
-      detailedChain.push({ ...task, outputPackages: resultRows.map(mapWarehousePackage) });
+            where: { id: { in: task.packageIds } },
+            orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
+          });
+      detailedChain.push({
+        ...task,
+        outputPackages: resultRows.map(mapWarehousePackage)
+      });
     }
     return detailedChain;
   }
@@ -9163,41 +9390,486 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async updateWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskUpdateInput): Promise<WarehouseTallyTaskSummary> {
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-update', '没有修改理货任务权限');
-    const existing = await (this.prisma as any).warehouseTallyTask.findUnique({ where: { id } });
-    if (!existing) {
-      throw new NotFoundException('理货任务不存在');
-    }
     const scope = this.operatorCustomerScope(principal);
-    const scopedPackageCount = !scope ? 1 : await (this.prisma as any).warehousePackage.count({
-      where: {
-        salesperson: { in: scope },
-        OR: [{ id: { in: existing.packageIds } }, { tallyTaskId: existing.id }]
-      }
-    });
-    if (!scopedPackageCount) {
-      throw new ForbiddenException('当前账号不能处理该理货任务');
+    const requestedPackageIds = input.packageIds === undefined
+      ? undefined
+      : Array.from(new Set(input.packageIds.map((packageId) => packageId.trim()).filter(Boolean)));
+    if (requestedPackageIds && !requestedPackageIds.length) {
+      throw new BadRequestException('理货任务至少保留一个在仓包裹');
     }
-    if (existing.status !== 'PENDING') {
-      throw new BadRequestException('已完成理货不能修改需求');
+    if (input.tallyRequirement !== undefined && !input.tallyRequirement.trim()) {
+      throw new BadRequestException('请填写理货需求');
     }
-    const updated = await (this.prisma as any).warehouseTallyTask.update({
-      where: { id },
-      data: {
-        ...(input.tallyRequirement !== undefined ? { tallyRequirement: input.tallyRequirement.trim() } : {}),
-        ...(input.remark !== undefined ? { remark: input.remark.trim() || null } : {})
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "WarehouseTallyTask" WHERE "id" = ${id} FOR UPDATE
+      `);
+      const existing = await tx.warehouseTallyTask.findUnique({ where: { id } });
+      if (!existing) {
+        throw new NotFoundException('理货任务不存在');
       }
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'warehouse.tally.update',
-        target: id,
-        before: toAuditJson(mapWarehouseTallyTask(existing)),
-        after: toAuditJson(mapWarehouseTallyTask(updated))
+      if (existing.status !== 'PENDING') {
+        throw new BadRequestException('只有未完成理货任务可以修改');
       }
+      const packageIds = requestedPackageIds ?? existing.packageIds;
+      const sortedPackageIds = [...packageIds].sort();
+      await tx.$queryRaw(Prisma.sql`
+        SELECT "id"
+        FROM "WarehousePackage"
+        WHERE "id" IN (${Prisma.join(sortedPackageIds)})
+        ORDER BY "id"
+        FOR UPDATE
+      `);
+      const packageRows = await tx.warehousePackage.findMany({
+        where: { id: { in: packageIds } },
+        orderBy: [{ createdAt: 'asc' }]
+      });
+      if (packageRows.length !== packageIds.length || packageRows.some((pkg: any) => pkg.status !== 'RECEIVED')) {
+        throw new BadRequestException('只有有效在仓包裹可以加入理货任务');
+      }
+      const packages: WarehousePackageSummary[] = packageRows.map(mapWarehousePackage);
+      if (packages.some((pkg) => pkg.measurementStatus === 'PENDING_REMEASURE')) {
+        throw new BadRequestException('理货后包裹待重新过机，完成测量后才能加入任务');
+      }
+      if (new Set(packages.map((pkg) => pkg.customerCode)).size !== 1 || packages[0]?.customerCode !== existing.customerCode) {
+        throw new BadRequestException('理货任务只能保留同一客户的包裹');
+      }
+      const existingSourceRows = await tx.warehousePackage.findMany({ where: { id: { in: existing.packageIds } } });
+      if (scope && !existingSourceRows.some((pkg: any) => pkg.salesperson && scope.includes(pkg.salesperson))) {
+        throw new ForbiddenException('当前账号不能处理该理货任务');
+      }
+      if (scope && packages.some((pkg) => !pkg.salesperson || !scope.includes(pkg.salesperson))) {
+        throw new ForbiddenException('不能把当前账号数据范围外的包裹加入理货任务');
+      }
+      const conflictingTask = await tx.warehouseTallyTask.findFirst({
+        where: { id: { not: id }, status: 'PENDING', packageIds: { hasSome: packageIds } }
+      });
+      if (conflictingTask) {
+        throw new BadRequestException('所选包裹中存在正在其他任务理货的包裹');
+      }
+      const first = packages[0]!;
+      const updated = await tx.warehouseTallyTask.update({
+        where: { id },
+        data: {
+          packageIds,
+          sourcePackageId: first.id,
+          sourceCombinedOrderNo: first.combinedOrderNo,
+          customerName: first.customerName ?? null,
+          salesperson: first.salesperson ?? null,
+          packageCount: packages.reduce((sum, pkg) => sum + pkg.packageCount, 0),
+          originalWeightKg: roundMoney(packages.reduce((sum, pkg) => sum + pkg.weightKg * pkg.packageCount, 0)),
+          originalLengthCm: first.lengthCm,
+          originalWidthCm: first.widthCm,
+          originalHeightCm: first.heightCm,
+          originalVolumetricWeightKg: roundMoney(packages.reduce((sum, pkg) => sum + (pkg.totalVolumetricWeightKg ?? pkg.volumetricWeightKg), 0)),
+          originalVolumetricWeightKg5000: roundMoney(packages.reduce((sum, pkg) => sum + (pkg.totalVolumetricWeightKg5000 ?? pkg.volumetricWeightKg5000 ?? 0), 0)),
+          ...(input.tallyRequirement !== undefined ? { tallyRequirement: input.tallyRequirement.trim() } : {}),
+          ...(input.remark !== undefined ? { remark: input.remark.trim() || null } : {})
+        }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally.update',
+          target: id,
+          before: toAuditJson(mapWarehouseTallyTask(existing)),
+          after: toAuditJson(mapWarehouseTallyTask(updated))
+        }
+      });
+      return mapWarehouseTallyTask(updated);
     });
-    const updatedSummary = mapWarehouseTallyTask(updated);
-    return updatedSummary;
+  }
+
+  async cancelWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensurePermission(principal, 'warehouse:tally-pending:task-cancel', '没有取消理货任务权限');
+    const scope = this.operatorCustomerScope(principal);
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "WarehouseTallyTask" WHERE "id" = ${id} FOR UPDATE
+      `);
+      const existing = await tx.warehouseTallyTask.findUnique({ where: { id } });
+      if (!existing) {
+        throw new NotFoundException('理货任务不存在');
+      }
+      const scopedPackageCount = !scope ? 1 : await tx.warehousePackage.count({
+        where: { id: { in: existing.packageIds }, salesperson: { in: scope } }
+      });
+      if (!scopedPackageCount) {
+        throw new ForbiddenException('当前账号不能处理该理货任务');
+      }
+      if (existing.status === 'CANCELLED') {
+        return mapWarehouseTallyTask(existing);
+      }
+      if (existing.status !== 'PENDING') {
+        throw new BadRequestException('只有未完成理货任务可以取消');
+      }
+      const updated = await tx.warehouseTallyTask.update({
+        where: { id },
+        data: { status: 'CANCELLED' }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally.cancel',
+          target: id,
+          before: toAuditJson(mapWarehouseTallyTask(existing)),
+          after: toAuditJson(mapWarehouseTallyTask(updated))
+        }
+      });
+      return mapWarehouseTallyTask(updated);
+    });
+  }
+
+  async reverseReviewWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有反审核已完成理货权限');
+    await this.ensureWarehouseTallyUnblocked(principal, 'warehouse:tally-completed:reverse-block');
+    const scope = this.operatorCustomerScope(principal);
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "WarehouseTallyTask" WHERE "id" = ${id} FOR UPDATE
+      `);
+      const existing = await tx.warehouseTallyTask.findUnique({ where: { id } });
+      if (!existing) {
+        throw new NotFoundException('理货任务不存在');
+      }
+      const scopedPackageCount = !scope ? 1 : await tx.warehousePackage.count({
+        where: {
+          salesperson: { in: scope },
+          OR: [{ id: { in: existing.packageIds } }, { tallyTaskId: existing.id }]
+        }
+      });
+      if (!scopedPackageCount) {
+        throw new ForbiddenException('当前账号不能处理该理货任务');
+      }
+      if (existing.status !== 'COMPLETED') {
+        throw new BadRequestException('只有已完成理货任务可以反审核');
+      }
+
+      const sourceRows = await tx.warehousePackage.findMany({
+        where: { id: { in: existing.packageIds } },
+        orderBy: [{ createdAt: 'asc' }]
+      });
+      const outputRows = await tx.warehousePackage.findMany({
+        where: {
+          tallyTaskId: id,
+          id: { notIn: existing.packageIds },
+          status: { not: 'TALLIED_ARCHIVED' }
+        },
+        orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
+      });
+      if (sourceRows.length !== existing.packageIds.length || !outputRows.length) {
+        throw new ConflictException('理货结果或原始包裹不完整，不能反审核');
+      }
+      if (sourceRows.some((row: any) => row.status !== 'TALLIED_ARCHIVED' || row.tallyTaskId !== id)) {
+        throw new ConflictException('原始包裹状态已变化，请刷新后重试');
+      }
+      if (sourceRows.some((row: any) => row.systemOrderNo || row.shipmentId)) {
+        throw new BadRequestException('理货结果已经录单、合票或出库，不能反审核');
+      }
+      if (outputRows.some((row: any) => row.status !== 'RECEIVED' || row.systemOrderNo || row.shipmentId)) {
+        throw new BadRequestException('理货结果已经录单、合票或出库，不能反审核');
+      }
+      const packageIds = [...sourceRows, ...outputRows].map((row: any) => row.id);
+      const downstreamItemCount = await tx.warehouseConsolidationItem.count({
+        where: { packageId: { in: packageIds } }
+      });
+      if (downstreamItemCount > 0) {
+        throw new BadRequestException('理货结果已经录单、合票或出库，不能反审核');
+      }
+
+      const now = new Date();
+      const previousTask = existing.previousTallyTaskId
+        ? await tx.warehouseTallyTask.findUnique({ where: { id: existing.previousTallyTaskId }, select: { id: true, taskNo: true } })
+        : null;
+      const archivedOutputs = await tx.warehousePackage.updateMany({
+        where: {
+          id: { in: outputRows.map((row: any) => row.id) },
+          status: 'RECEIVED',
+          systemOrderNo: null,
+          shipmentId: null
+        },
+        data: {
+          status: 'TALLIED_ARCHIVED',
+          archivedReason: WAREHOUSE_TALLY_REVERSE_REVIEW_ARCHIVE_REASON,
+          archivedAt: now,
+          archivedByPackageId: null,
+          archivedByPackageNo: null
+        }
+      });
+      if (archivedOutputs.count !== outputRows.length) {
+        throw new ConflictException('理货结果状态已变化，请刷新后重试');
+      }
+      const restoredSources = await tx.warehousePackage.updateMany({
+        where: {
+          id: { in: sourceRows.map((row: any) => row.id) },
+          status: 'TALLIED_ARCHIVED',
+          tallyTaskId: id
+        },
+        data: {
+          status: 'RECEIVED',
+          archivedByPackageId: null,
+          archivedByPackageNo: null,
+          archivedReason: null,
+          archivedAt: null,
+          tallyTaskId: previousTask?.id ?? null,
+          tallyTaskNo: previousTask?.taskNo ?? null
+        }
+      });
+      if (restoredSources.count !== sourceRows.length) {
+        throw new ConflictException('原始包裹状态已变化，请刷新后重试');
+      }
+      const updated = await tx.warehouseTallyTask.update({
+        where: { id },
+        data: {
+          status: 'PENDING',
+          completedPackageCount: null,
+          completedWeightKg: null,
+          completedLengthCm: null,
+          completedWidthCm: null,
+          completedHeightCm: null,
+          completedVolumetricWeightKg: null,
+          completedVolumetricWeightKg5000: null,
+          completedBy: null,
+          completedAt: null,
+          labelStatus: 'NOT_GENERATED',
+          labelNo: null,
+          labelQrContent: null,
+          labelGeneratedAt: null,
+          labelGeneratedBy: null,
+          labelPrintedAt: null,
+          labelPrintedBy: null,
+          labelDownloadedAt: null,
+          labelDownloadedBy: null,
+          appliedPackageId: null,
+          appliedPackageNo: null,
+          labelAppliedAt: null,
+          labelAppliedBy: null
+        }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally.reverse_review',
+          target: id,
+          before: toAuditJson({ task: mapWarehouseTallyTask(existing), sourcePackageIds: existing.packageIds, outputPackageIds: outputRows.map((row: any) => row.id) }),
+          after: toAuditJson({
+            task: mapWarehouseTallyTask(updated),
+            restoredSourcePackageIds: sourceRows.map((row: any) => row.id),
+            archivedOutputPackageIds: outputRows.map((row: any) => row.id),
+            archiveReason: WAREHOUSE_TALLY_REVERSE_REVIEW_ARCHIVE_REASON
+          })
+        }
+      });
+      return mapWarehouseTallyTask(updated);
+    });
+  }
+
+  async updateCompletedWarehouseTallyTaskCount(
+    principal: Principal,
+    id: string,
+    input: WarehouseTallyTaskCompletedCountUpdateInput
+  ): Promise<WarehouseTallyTaskSummary> {
+    void principal;
+    void id;
+    void input;
+    throw new BadRequestException('已完成理货不允许直接修改件数，请先反审核');
+    /* const scope = this.operatorCustomerScope(principal);
+    const desiredPackageCount = Number(input.packageCount);
+    const result = await this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "WarehouseTallyTask" WHERE "id" = ${id} FOR UPDATE
+      `);
+      const existing = await tx.warehouseTallyTask.findUnique({ where: { id } });
+      if (!existing) {
+        throw new NotFoundException('理货任务不存在');
+      }
+      if (scope) {
+        const scopedPackageCount = await tx.warehousePackage.count({
+          where: {
+            salesperson: { in: scope },
+            OR: [{ id: { in: existing.packageIds } }, { tallyTaskId: existing.id }]
+          }
+        });
+        if (!scopedPackageCount) {
+          throw new ForbiddenException('当前账号不能处理该理货任务');
+        }
+      }
+      const task = mapWarehouseTallyTask(existing);
+      const rawOutputs = await tx.warehousePackage.findMany({
+        where: {
+          tallyTaskId: id,
+          id: { notIn: existing.packageIds },
+          status: { not: 'TALLIED_ARCHIVED' }
+        },
+        orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
+      });
+      const outputIds = rawOutputs.map((row: any) => row.id);
+      if (outputIds.length) {
+        await tx.$queryRaw(Prisma.sql`
+          SELECT "id"
+          FROM "WarehousePackage"
+          WHERE "id" IN (${Prisma.join(outputIds)})
+          ORDER BY "id"
+          FOR UPDATE
+        `);
+      }
+      const outputs: WarehousePackageSummary[] = rawOutputs.map((row: any) => mapWarehousePackage(row));
+      const consolidationCount = outputIds.length
+        ? await tx.warehouseConsolidationItem.count({ where: { packageId: { in: outputIds } } })
+        : 0;
+      if (consolidationCount > 0) {
+        throw new BadRequestException('理货结果已进入合票或出库流程，不能修改件数');
+      }
+      const plan = planWarehouseTallyCompletedCountEdit(task, outputs, desiredPackageCount);
+      if (!plan.ok) {
+        throw new BadRequestException(plan.reason);
+      }
+      const beforeOutputSummaries: WarehousePackageSummary[] = outputs.map((output) => ({
+        ...output,
+        exceptions: [...output.exceptions]
+      }));
+      if (!plan.changed) {
+        return { task, outputPackages: beforeOutputSummaries };
+      }
+      const now = new Date();
+      if (plan.archiveOutputIds.length) {
+        const archived = await tx.warehousePackage.updateMany({
+          where: {
+            id: { in: plan.archiveOutputIds },
+            status: 'RECEIVED',
+            measurementStatus: 'PENDING_REMEASURE'
+          },
+          data: {
+            status: 'TALLIED_ARCHIVED',
+            archivedReason: WAREHOUSE_TALLY_COUNT_ADJUSTMENT_ARCHIVE_REASON,
+            archivedAt: now,
+            archivedByPackageId: null,
+            archivedByPackageNo: null
+          }
+        });
+        if (archived.count !== plan.archiveOutputIds.length) {
+          throw new ConflictException('理货结果状态已变化，请刷新后重试');
+        }
+      }
+      const template = outputs[0]!;
+      for (let packageIndex = outputs.length + 1; packageIndex <= plan.desiredPackageCount; packageIndex += 1) {
+        const labelNo = createWarehouseTallyPackageLabelNo(task.taskNo, packageIndex, plan.desiredPackageCount);
+        await tx.warehousePackage.create({
+          data: {
+            customerCode: template.customerCode,
+            customerName: template.customerName,
+            site: template.site,
+            salesperson: template.salesperson,
+            customerOrderNo: template.customerOrderNo,
+            domesticTrackingNo: template.domesticTrackingNo,
+            combinedOrderNo: labelNo,
+            labelNo,
+            sourcePackageId: template.sourcePackageId,
+            sourcePackageNo: template.sourcePackageNo,
+            tallyTaskId: task.id,
+            tallyTaskNo: task.taskNo,
+            systemOrderNo: null,
+            shipmentId: null,
+            receivingChannel: '理货完成',
+            destinationCountry: template.destinationCountry,
+            expectedTotalPackageCount: plan.desiredPackageCount,
+            packageIndex,
+            packageCount: 1,
+            weightKg: template.weightKg,
+            lengthCm: template.lengthCm,
+            widthCm: template.widthCm,
+            heightCm: template.heightCm,
+            cbm: template.cbm,
+            volumetricWeightKg: template.volumetricWeightKg,
+            chargeableWeightKg: template.chargeableWeightKg,
+            divisor: template.divisor,
+            roundingRule: template.roundingRule,
+            remark: template.remark,
+            manualException: template.manualException,
+            scanSource: '理货待重新过机',
+            measurementStatus: 'PENDING_REMEASURE',
+            status: 'RECEIVED',
+            exceptions: [...template.exceptions],
+            createdBy: principal.username
+          }
+        });
+      }
+      const activeRows = await tx.warehousePackage.findMany({
+        where: {
+          tallyTaskId: id,
+          id: { notIn: existing.packageIds },
+          status: { not: 'TALLIED_ARCHIVED' }
+        },
+        orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
+      });
+      if (activeRows.length !== plan.desiredPackageCount) {
+        throw new ConflictException('理货结果件数调整不完整，请刷新后重试');
+      }
+      const normalizedRows = await Promise.all(activeRows.map((row: any, index: number) => {
+        const labelNo = createWarehouseTallyPackageLabelNo(task.taskNo, index + 1, plan.desiredPackageCount);
+        return tx.warehousePackage.update({
+          where: { id: row.id },
+          data: {
+            combinedOrderNo: labelNo,
+            labelNo,
+            expectedTotalPackageCount: plan.desiredPackageCount,
+            packageIndex: index + 1
+          }
+        });
+      }));
+     const nextTaskSnapshot = {
+       ...task,
+       completedPackageCount: plan.desiredPackageCount,
+       labelNo: task.taskNo,
+        labelStatus: 'GENERATED' as const,
+        labelPrintedAt: undefined,
+        labelDownloadedAt: undefined,
+        labelAppliedAt: undefined
+      };
+      const updated = await tx.warehouseTallyTask.update({
+        where: { id },
+        data: {
+          completedPackageCount: plan.desiredPackageCount,
+         completedWeightKg: null,
+         completedLengthCm: null,
+         completedWidthCm: null,
+         completedHeightCm: null,
+         completedVolumetricWeightKg: null,
+         completedVolumetricWeightKg5000: null,
+          labelStatus: 'GENERATED',
+          labelNo: task.taskNo,
+          labelQrContent: buildWarehouseTallyLabelQrContent(nextTaskSnapshot, task.taskNo),
+          labelGeneratedAt: now,
+          labelGeneratedBy: principal.username,
+          labelPrintedAt: null,
+          labelPrintedBy: null,
+          labelDownloadedAt: null,
+          labelDownloadedBy: null,
+          labelAppliedAt: null,
+          labelAppliedBy: null,
+          appliedPackageId: null,
+          appliedPackageNo: null
+        }
+      });
+      const updatedSummary = mapWarehouseTallyTask(updated);
+      const updatedOutputSummaries = normalizedRows.map(mapWarehousePackage);
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally.completed_count.update',
+          target: id,
+          before: toAuditJson({ task, outputPackages: beforeOutputSummaries }),
+          after: toAuditJson({
+            task: updatedSummary,
+            outputPackages: updatedOutputSummaries,
+           archivedOutputIds: plan.archiveOutputIds,
+            sourcePackageIds: task.packageIds
+          })
+        }
+      });
+      return { task: updatedSummary, outputPackages: updatedOutputSummaries };
+    });
+    return { ...result.task, outputPackages: result.outputPackages }; */
   }
 
   async completeWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {
@@ -9477,6 +10149,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (before.status !== 'COMPLETED') {
       throw new BadRequestException('请先完成理货再生成标签');
     }
+    await this.ensureWarehouseTallyVisible(principal);
+    if (before.labelNo) {
+      await this.ensureWarehouseTallyUnblocked(principal, 'warehouse:tally-completed:reprint-block');
+    }
     const labelNo = before.taskNo;
     const labelQrContent = buildWarehouseTallyLabelQrContent(before, labelNo);
     const outputRows = await (this.prisma as any).warehousePackage.findMany({
@@ -9484,12 +10160,22 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
     });
     await Promise.all(outputRows
-      .filter((pkg: any) => !pkg.labelNo
-        && Number.isSafeInteger(pkg.packageIndex) && pkg.packageIndex > 0
-        && Number.isSafeInteger(pkg.expectedTotalPackageCount) && pkg.expectedTotalPackageCount > 0)
+      .filter((pkg: any) => (
+        !pkg.labelNo
+        && Number.isSafeInteger(pkg.packageIndex)
+        && pkg.packageIndex > 0
+        && Number.isSafeInteger(pkg.expectedTotalPackageCount)
+        && pkg.expectedTotalPackageCount > 0
+      ))
       .map((pkg: any) => (this.prisma as any).warehousePackage.update({
         where: { id: pkg.id },
-        data: { labelNo: createWarehouseTallyPackageLabelNo(before.taskNo, pkg.packageIndex, pkg.expectedTotalPackageCount) }
+        data: {
+          labelNo: createWarehouseTallyPackageLabelNo(
+            before.taskNo,
+            pkg.packageIndex,
+            pkg.expectedTotalPackageCount
+          )
+        }
       })));
     const updated = await (this.prisma as any).warehouseTallyTask.update({
       where: { id },
@@ -9529,20 +10215,27 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getWarehouseTallyTaskOutputPackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
+    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))
+      || await this.isWarehouseTallyMaskEnabled(principal, 'warehouse:tally-completed:view-block')) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
     const task = await (this.prisma as any).warehouseTallyTask.findUnique({ where: { id } });
     if (!task) throw new NotFoundException('理货任务不存在');
     const scope = this.operatorCustomerScope(principal);
     const scopedPackageCount = !scope ? 1 : await (this.prisma as any).warehousePackage.count({
-      where: { salesperson: { in: scope }, OR: [{ id: { in: task.packageIds } }, { tallyTaskId: task.id }] }
+      where: {
+        salesperson: { in: scope },
+        OR: [{ id: { in: task.packageIds } }, { tallyTaskId: task.id }]
+      }
     });
-    if (!scopedPackageCount) throw new ForbiddenException('当前账号不能查看该理货任务结果');
+    if (!scopedPackageCount) {
+      throw new ForbiddenException('当前账号不能查看该理货任务结果');
+    }
     const rows = await (this.prisma as any).warehousePackage.findMany({
       where: {
         tallyTaskId: id,
         id: { notIn: task.packageIds },
+        status: { not: 'TALLIED_ARCHIVED' },
         OR: [
           { archivedReason: null },
           { archivedReason: { not: WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } }
@@ -9552,14 +10245,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     if (rows.length) return rows.map(mapWarehousePackage);
     const legacyRows = await (this.prisma as any).warehousePackage.findMany({
-      where: { id: { in: task.packageIds } },
+      where: { id: { in: task.packageIds }, status: { not: 'TALLIED_ARCHIVED' } },
       orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
     });
     return legacyRows.map(mapWarehousePackage);
   }
 
   private assertWarehouseTallyCorrectionSite(principal: Principal, packageSite?: string | null) {
-    if (principal.role === 'ADMIN') return;
+    if (isAdministratorRole(principal.role)) return;
     if (principal.dataScope === 'SALES_OWN') {
       throw new ForbiddenException('销售员数据范围账号不能纠正历史理货数据');
     }
@@ -9619,16 +10312,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         },
         orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
       });
-      const expectedPackageCount = Number(correctedAggregate.packageCount);
-      const correctedPackagesComplete = correctedPackages.length === expectedPackageCount
-        && correctedPackages.every((row: any, index: number) => Number(row.packageCount) === 1 && Number(row.packageIndex) === index + 1);
       return {
         preview: {
           taskId: task.id,
           taskNo: task.taskNo,
           eligible: false,
-          reason: correctedPackagesComplete ? '该历史聚合结果已经纠正' : '纠正审计存在，但结果包裹不完整，请联系管理员',
-          alreadyCorrected: correctedPackagesComplete,
+          reason: correctedPackages.length ? '该历史聚合结果已经纠正' : '纠正审计存在，但结果包裹不完整，请联系管理员',
+          alreadyCorrected: correctedPackages.length > 0,
           legacyPackageId: correctedAggregate.id,
           legacyPackageNo: correctedAggregate.combinedOrderNo,
           expectedPackageCount: Number(correctedAggregate.packageCount),
@@ -9672,11 +10362,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (legacyPackage.status !== 'RECEIVED') reason = '历史聚合包裹已不在仓，不能纠正';
     if (legacyPackage.systemOrderNo || legacyPackage.shipmentId) reason = '历史聚合包裹已经录单或关联运单，不能纠正';
     const sourcePackageIds = Array.from(new Set((task.packageIds ?? []).map(String).filter(Boolean)));
-    if (lock) {
-      for (const packageId of [...sourcePackageIds].sort()) {
-        await client.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "id" = ${packageId} FOR UPDATE`);
-      }
-    }
     const sourcePackages = sourcePackageIds.length
       ? await client.warehousePackage.findMany({ where: { id: { in: sourcePackageIds } } })
       : [];
@@ -9705,22 +10390,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     ) {
       reason = '历史聚合记录与原来源包裹或理货任务的关联不完整，不能自动纠正';
     }
-    const protectedPackageIds = [legacyPackage.id, ...sourcePackageIds];
     const [consolidationCount, laterTask, draftShipment] = await Promise.all([
-      client.warehouseConsolidationItem.count({ where: { packageId: { in: protectedPackageIds } } }),
+      client.warehouseConsolidationItem.count({ where: { packageId: legacyPackage.id } }),
       client.warehouseTallyTask.findFirst({
         where: {
           id: { not: task.id },
           OR: [
-            { packageIds: { hasSome: protectedPackageIds } },
-            { sourcePackageId: { in: protectedPackageIds } },
-            { appliedPackageId: { in: protectedPackageIds } }
+            { packageIds: { has: legacyPackage.id } },
+            { sourcePackageId: legacyPackage.id },
+            { appliedPackageId: legacyPackage.id }
           ]
         },
         select: { taskNo: true }
       }),
       client.shipment.findFirst({
-        where: { deletedAt: null, draftWarehousePackageIds: { hasSome: protectedPackageIds } },
+        where: { deletedAt: null, draftWarehousePackageIds: { has: legacyPackage.id } },
         select: { systemOrderNo: true }
       })
     ]);
@@ -9818,6 +10502,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const task = state.task;
       const aggregate = state.legacyPackage;
       const scans = state.scans;
+      for (const packageId of [...(task.packageIds ?? [])].sort()) {
+        await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "id" = ${packageId} FOR UPDATE`);
+      }
       const totalPackages = scans.length;
       const labelNos = scans.map((_, index) => createWarehouseTallyPackageLabelNo(task.taskNo, index + 1, totalPackages));
       const labelConflict = await tx.warehousePackage.findFirst({
@@ -10062,7 +10749,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const pkg = await (tx as any).warehousePackage.findUnique({ where: { id: existing.id } });
       const task = await (tx as any).warehouseTallyTask.findUnique({ where: { id: existing.tallyTaskId } });
       const outputs = await (tx as any).warehousePackage.findMany({
-        where: { tallyTaskId: existing.tallyTaskId, id: { notIn: task.packageIds } },
+        where: { tallyTaskId: existing.tallyTaskId, id: { notIn: task.packageIds }, status: { not: 'TALLIED_ARCHIVED' } },
         orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
       });
       let updatedTask = task;
@@ -10090,7 +10777,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           action: 'warehouse.tally.measurement.apply',
           target: existing.id,
           before: toAuditJson(mapWarehousePackage(existing)),
-          after: toAuditJson({ ...mapWarehousePackage(pkg), tallyTaskSnapshot: mapWarehouseTallyTask(updatedTask) })
+          after: toAuditJson({
+            ...mapWarehousePackage(pkg),
+            tallyTaskSnapshot: mapWarehouseTallyTask(updatedTask)
+          })
         }
       });
       return { pkg, alreadyApplied: false };
@@ -10110,6 +10800,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async applyWarehouseTallyTaskLabel(principal: Principal, input: WarehouseTallyLabelScanInput): Promise<WarehouseTallyLabelScanResponse> {
+    await this.ensureWarehouseTallyVisible(principal);
     await this.ensurePermission(principal, 'warehouse:tally-label:scan-apply', '没有扫描应用理货标签权限');
     const labelNo = input.labelNo?.trim();
     if (!labelNo) {
@@ -10135,6 +10826,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async markWarehouseTallyTaskLabelOutput(principal: Principal, id: string, action: 'print' | 'download'): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyVisible(principal);
+    if (action === 'download') {
+      await this.ensureWarehouseTallyUnblocked(principal, 'warehouse:tally-completed:download-block');
+    }
     await this.ensurePermission(principal, action === 'print' ? 'warehouse:tally-label:print' : 'warehouse:tally-label:download', '没有输出理货标签权限');
     const existing = await (this.prisma as any).warehouseTallyTask.findUnique({ where: { id } });
     if (!existing) {
@@ -10259,116 +10954,126 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async updateReceivableAudit(principal: Principal, id: string, input: ReceivableAuditUpdateInput): Promise<ReceivableAuditSummary> {
     await this.ensureFinanceItemManageAccess(principal);
-    const systemFee = await (this.prisma as any).receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
-    if (systemFee) {
-      this.ensureReceivableRowAccess(principal, systemFee);
-      this.ensureReceivableAuditEditable(systemFee);
-      await this.ensureReceivableWaterMatchEditable(this.prisma as any, 'SYSTEM', id, 'update');
-      const updated = await (this.prisma as any).receivableFee.update({
+    return this.prisma.$transaction(async (tx) => {
+      let systemFee = await (tx as any).receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
+      if (systemFee) {
+        await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ReceivableFee" WHERE "id" = ${id} FOR UPDATE`);
+        systemFee = await (tx as any).receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
+        if (!systemFee) throw new NotFoundException('应收费用不存在');
+        this.ensureReceivableRowAccess(principal, systemFee);
+        this.ensureReceivableAuditEditable(systemFee);
+        await this.ensureReceivableWaterMatchEditable(tx, 'SYSTEM', id, 'update');
+        const updateResult = await (tx as any).receivableFee.updateMany({
+          where: { id, voided: false, updatedAt: systemFee.updatedAt },
+          data: {
+            name: input.name ?? systemFee.name,
+            amount: input.amount ?? systemFee.amount,
+            currency: input.currency ?? systemFee.currency,
+            settlementMethod: input.settlementMethod ?? systemFee.settlementMethod,
+            paymentNo: input.paymentNo ?? systemFee.paymentNo,
+            remark: input.remark ?? systemFee.remark
+          }
+        });
+        if (updateResult.count !== 1) throw new BadRequestException('应收费用已被更新，请刷新后重试');
+        const updated = await (tx as any).receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
+        await tx.auditLog.create({
+          data: { actorId: principal.id, action: 'finance.receivable.update', target: id, before: systemFee, after: updated }
+        });
+        return this.toReceivableAuditSummary(updated, 'SYSTEM');
+      }
+      let current = await (tx as any).shipmentFinanceItem.findUnique({
         where: { id },
+        include: { shipment: { include: { customer: true, agent: true } } }
+      });
+      if (!current || current.type !== 'RECEIVABLE') throw new NotFoundException('应收费用不存在');
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ShipmentFinanceItem" WHERE "id" = ${id} FOR UPDATE`);
+      current = await (tx as any).shipmentFinanceItem.findUnique({
+        where: { id },
+        include: { shipment: { include: { customer: true, agent: true } } }
+      });
+      if (!current || current.type !== 'RECEIVABLE') throw new NotFoundException('应收费用不存在');
+      this.ensureReceivableRowAccess(principal, current);
+      this.ensureReceivableAuditEditable(current);
+      await this.ensureReceivableWaterMatchEditable(tx, 'MANUAL', id, 'update');
+      const updateResult = await (tx as any).shipmentFinanceItem.updateMany({
+        where: { id, voided: false, updatedAt: current.updatedAt },
         data: {
-          name: input.name ?? systemFee.name,
-          amount: input.amount ?? systemFee.amount,
-          currency: input.currency ?? systemFee.currency,
-          settlementMethod: input.settlementMethod ?? systemFee.settlementMethod,
-          paymentNo: input.paymentNo ?? systemFee.paymentNo,
-          remark: input.remark ?? systemFee.remark
-        },
-        include: { shipment: { include: { customer: true } } }
+          name: input.name ?? current.name,
+          amount: input.amount ?? current.amount,
+          currency: input.currency ?? current.currency,
+          settlementMethod: input.settlementMethod ?? current.settlementMethod ?? this.resolveReceivableSettlementMethod(current.shipment),
+          paymentNo: input.paymentNo ?? current.paymentNo,
+          remark: input.remark ?? current.remark
+        }
       });
-      await this.prisma.auditLog.create({
-        data: { actorId: principal.id, action: 'finance.receivable.update', target: id, before: systemFee, after: updated }
+      if (updateResult.count !== 1) throw new BadRequestException('应收费用已被更新，请刷新后重试');
+      const updated = await (tx as any).shipmentFinanceItem.findUnique({
+        where: { id },
+        include: { shipment: { include: { customer: true, agent: true } } }
       });
-      return this.toReceivableAuditSummary(updated, 'SYSTEM');
-    }
-    const current = await this.findReceivableFinanceItemById(id);
-    this.ensureReceivableRowAccess(principal, current);
-    this.ensureReceivableAuditEditable(current);
-    await this.ensureReceivableWaterMatchEditable(this.prisma as any, 'MANUAL', id, 'update');
-    const updated = await (this.prisma as any).shipmentFinanceItem.update({
-      where: { id },
-      data: {
-        name: input.name ?? current.name,
-        amount: input.amount ?? current.amount,
-        currency: input.currency ?? current.currency,
-        settlementMethod: input.settlementMethod ?? current.settlementMethod ?? this.resolveReceivableSettlementMethod(current.shipment),
-        paymentNo: input.paymentNo ?? current.paymentNo,
-        remark: input.remark ?? current.remark
-      },
-      include: { shipment: { include: { customer: true, agent: true } } }
+      await tx.auditLog.create({
+        data: { actorId: principal.id, action: 'finance.receivable.update', target: id, before: current, after: updated }
+      });
+      return this.toManualReceivableAuditSummary(updated);
     });
-    await this.prisma.auditLog.create({
-      data: { actorId: principal.id, action: 'finance.receivable.update', target: id, before: current, after: updated }
-    });
-    return this.toManualReceivableAuditSummary(updated);
   }
 
   async auditReceivableAudit(principal: Principal, id: string): Promise<ReceivableAuditSummary> {
     await this.ensureFinanceItemManageAccess(principal);
     const reviewedAt = new Date();
-    const systemFee = await (this.prisma as any).receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
-    if (systemFee) {
-      this.ensureReceivableRowAccess(principal, systemFee);
-      if (systemFee.voided) {
-        throw new BadRequestException('已作废应收不能审核');
+    const result = await this.prisma.$transaction(async (tx) => {
+      let systemFee = await (tx as any).receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
+      if (systemFee) {
+        await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ReceivableFee" WHERE "id" = ${id} FOR UPDATE`);
+        systemFee = await (tx as any).receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
+        if (!systemFee) throw new NotFoundException('应收费用不存在');
+        this.ensureReceivableRowAccess(principal, systemFee);
+        if (systemFee.voided) throw new BadRequestException('已作废应收不能审核');
+        if ((systemFee.reconciliationStatus ?? 'PENDING') !== 'PENDING') throw new BadRequestException('只有待审核应收可以审核');
+        const pendingAllocation = await (tx as any).waterReceiptMatchRequest.findFirst({ where: { receivableFeeId: id, status: 'PENDING' } });
+        if (pendingAllocation) throw new BadRequestException('该应收存在待审核水单分配，请审核具体分配');
+        const updateResult = await (tx as any).receivableFee.updateMany({
+          where: { id, voided: false, reconciliationStatus: 'PENDING', updatedAt: systemFee.updatedAt },
+          data: { reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt }
+        });
+        if (updateResult.count !== 1) throw new BadRequestException('应收费用已被更新，请刷新后重试');
+        const updated = await (tx as any).receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
+        await tx.auditLog.create({
+          data: { actorId: principal.id, action: 'finance.receivable.audit', target: id, before: systemFee, after: toAuditJson(this.toReceivableReviewAuditSnapshot(updated, principal, systemFee.reconciliationStatus, 'CONFIRMED', 'audit')) }
+        });
+        return { updated, sourceType: 'SYSTEM' as const, statusFrom: systemFee.reconciliationStatus ?? 'PENDING' };
       }
-      if ((systemFee.reconciliationStatus ?? 'PENDING') !== 'PENDING') {
-        throw new BadRequestException('只有待审核应收可以审核');
-      }
-      const pendingAllocation = await (this.prisma as any).waterReceiptMatchRequest.findFirst({
-        where: { receivableFeeId: id, status: 'PENDING' }
-      });
-      if (pendingAllocation) throw new BadRequestException('该应收存在待审核水单分配，请审核具体分配');
-      const profitSnapshot = await this.financeProfitReviewSnapshotData(systemFee.amount, systemFee.currency, reviewedAt);
-      const updated = await (this.prisma as any).receivableFee.update({
+      let current = await (tx as any).shipmentFinanceItem.findUnique({
         where: { id },
-        data: { reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt, ...profitSnapshot },
-        include: { shipment: { include: { customer: true } } }
+        include: { shipment: { include: { customer: true, agent: true } } }
       });
-      await this.prisma.auditLog.create({
-        data: { actorId: principal.id, action: 'finance.receivable.audit', target: id, before: systemFee, after: toAuditJson(this.toReceivableReviewAuditSnapshot(updated, principal, systemFee.reconciliationStatus, 'CONFIRMED', 'audit')) }
+      if (!current || current.type !== 'RECEIVABLE') throw new NotFoundException('应收费用不存在');
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ShipmentFinanceItem" WHERE "id" = ${id} FOR UPDATE`);
+      current = await (tx as any).shipmentFinanceItem.findUnique({
+        where: { id },
+        include: { shipment: { include: { customer: true, agent: true } } }
       });
-      void this.lineage?.recordEvent('finance.receivables.audit', {
-        actorUsername: principal.username,
-        businessId: updated.id,
-        payload: {
-          action: 'audit',
-          financeItemId: updated.id,
-          shipmentId: updated.shipmentId,
-          feeName: updated.name,
-          amount: Number(updated.amount),
-          currency: updated.currency ?? 'RMB',
-          statusFrom: systemFee.reconciliationStatus ?? 'PENDING',
-          statusTo: 'CONFIRMED',
-          reviewedBy: principal.username,
-          reviewedAt: reviewedAt.toISOString()
-        },
-        sourceRefs: [{ nodeType: 'shipment', id: updated.shipmentId }],
-        metrics: { amount: Number(updated.amount), statusTo: 'CONFIRMED' }
+      if (!current || current.type !== 'RECEIVABLE') throw new NotFoundException('应收费用不存在');
+      this.ensureReceivableRowAccess(principal, current);
+      if (current.voided) throw new BadRequestException('已作废应收不能审核');
+      if ((current.reconciliationStatus ?? 'PENDING') !== 'PENDING') throw new BadRequestException('只有待审核应收可以审核');
+      const pendingAllocation = await (tx as any).waterReceiptMatchRequest.findFirst({ where: { receivableFinanceItemId: id, status: 'PENDING' } });
+      if (pendingAllocation) throw new BadRequestException('该应收存在待审核水单分配，请审核具体分配');
+      const updateResult = await (tx as any).shipmentFinanceItem.updateMany({
+        where: { id, voided: false, reconciliationStatus: 'PENDING', updatedAt: current.updatedAt },
+        data: { locked: false, reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt }
       });
-      return this.toReceivableAuditSummary(updated, 'SYSTEM');
-    }
-    const current = await this.findReceivableFinanceItemById(id);
-    this.ensureReceivableRowAccess(principal, current);
-    if (current.voided) {
-      throw new BadRequestException('已作废应收不能审核');
-    }
-    if ((current.reconciliationStatus ?? 'PENDING') !== 'PENDING') {
-      throw new BadRequestException('只有待审核应收可以审核');
-    }
-    const pendingAllocation = await (this.prisma as any).waterReceiptMatchRequest.findFirst({
-      where: { receivableFinanceItemId: id, status: 'PENDING' }
+      if (updateResult.count !== 1) throw new BadRequestException('应收费用已被更新，请刷新后重试');
+      const updated = await (tx as any).shipmentFinanceItem.findUnique({
+        where: { id },
+        include: { shipment: { include: { customer: true, agent: true } } }
+      });
+      await tx.auditLog.create({
+        data: { actorId: principal.id, action: 'finance.receivable.audit', target: id, before: current, after: toAuditJson(this.toReceivableReviewAuditSnapshot(updated, principal, current.reconciliationStatus, 'CONFIRMED', 'audit')) }
+      });
+      return { updated, sourceType: 'MANUAL' as const, statusFrom: current.reconciliationStatus ?? 'PENDING' };
     });
-    if (pendingAllocation) throw new BadRequestException('该应收存在待审核水单分配，请审核具体分配');
-    const profitSnapshot = await this.financeProfitReviewSnapshotData(current.amount, current.currency, reviewedAt);
-    const updated = await (this.prisma as any).shipmentFinanceItem.update({
-      where: { id },
-      data: { locked: false, reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt, ...profitSnapshot },
-      include: { shipment: { include: { customer: true, agent: true } } }
-    });
-    await this.prisma.auditLog.create({
-      data: { actorId: principal.id, action: 'finance.receivable.audit', target: id, before: current, after: toAuditJson(this.toReceivableReviewAuditSnapshot(updated, principal, current.reconciliationStatus, 'CONFIRMED', 'audit')) }
-    });
+    const { updated } = result;
     void this.lineage?.recordEvent('finance.receivables.audit', {
       actorUsername: principal.username,
       businessId: updated.id,
@@ -10379,7 +11084,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         feeName: updated.name,
         amount: Number(updated.amount),
         currency: updated.currency ?? 'RMB',
-        statusFrom: current.reconciliationStatus ?? 'PENDING',
+        statusFrom: result.statusFrom,
         statusTo: 'CONFIRMED',
         reviewedBy: principal.username,
         reviewedAt: reviewedAt.toISOString()
@@ -10387,7 +11092,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment', id: updated.shipmentId }],
       metrics: { amount: Number(updated.amount), statusTo: 'CONFIRMED' }
     });
-    return this.toManualReceivableAuditSummary(updated);
+    return result.sourceType === 'SYSTEM'
+      ? this.toReceivableAuditSummary(updated, 'SYSTEM')
+      : this.toManualReceivableAuditSummary(updated);
   }
 
   async approveReceivableMatchRequest(principal: Principal, id: string): Promise<ReceivableAuditSummary> {
@@ -10468,17 +11175,28 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         if (receivable.shipmentId !== initialRequest.shipmentId) throw new ConflictException('费用分配关联订单不一致');
         if (receivable.shipment.customerId !== lockedReceipt.customerId) throw new BadRequestException('水单与应收客户不一致');
         if (receivable.voided) throw new BadRequestException('不能匹配已作废的应收');
-        if ((receivable.currency ?? 'RMB') !== (lockedReceipt.currency ?? 'RMB')) throw new BadRequestException('水单币种与应收币种不一致');
         const amount = Number(request.amount);
+        const receivableAmount = Number(request.receivableAmount ?? request.amount);
+        const rmbAmount = Number(request.rmbAmount ?? request.amount);
         const unpaid = roundMoney(Number(receivable.amount) - Number(receivable.receivedAmount ?? 0));
-        if (!Number.isFinite(amount) || amount <= 0 || amount > unpaid) throw new BadRequestException('匹配金额不能超过订单未收金额');
-        return { request, sourceType, receivableId, receivable, amount };
+        if (!Number.isFinite(amount) || amount <= 0 || amount > Number(lockedReceipt.balance)) throw new BadRequestException('匹配金额不能超过水单余额');
+        if (!Number.isFinite(receivableAmount) || receivableAmount <= 0 || receivableAmount > unpaid) throw new BadRequestException('匹配金额不能超过订单未收金额');
+        return { request, sourceType, receivableId, receivable, amount, receivableAmount, rmbAmount };
       });
       const totalAmount = roundMoney(resolved.reduce((sum: number, row: any) => sum + row.amount, 0));
+      const totalRmbAmount = roundMoney(resolved.reduce((sum: number, row: any) => sum + row.rmbAmount, 0));
       if (totalAmount > Number(lockedReceipt.balance)) throw new BadRequestException('匹配金额不能超过水单余额');
 
       const reviewedAt = new Date();
-      const approvedMatches: Array<{ requestId: string; matchId: string; receivableId: string; sourceType: 'SYSTEM' | 'MANUAL'; amount: number }> = [];
+      const approvedMatches: Array<{
+        requestId: string;
+        matchId: string;
+        receivableId: string;
+        sourceType: 'SYSTEM' | 'MANUAL';
+        amount: number;
+        rmbAmount: number;
+        receivableAmount: number;
+      }> = [];
       for (const row of resolved) {
         const match = await (tx as any).waterReceiptMatch.create({
           data: {
@@ -10489,11 +11207,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             receivableSourceType: row.sourceType,
             shipmentId: row.receivable.shipmentId,
             amount: row.amount,
+            rmbAmount: row.rmbAmount,
+            receivableAmount: row.receivableAmount,
+            receivableCurrency: row.request.receivableCurrency ?? this.normalizeWaterReceiptCurrency(row.receivable.currency),
+            receiptExchangeRate: row.request.receiptExchangeRate ?? 1,
+            receivableExchangeRate: row.request.receivableExchangeRate ?? 1,
             source: 'MANUAL',
             createdAt: reviewedAt
           }
         });
-        const nextReceived = roundMoney(Number(row.receivable.receivedAmount ?? 0) + row.amount);
+        const nextReceived = roundMoney(Number(row.receivable.receivedAmount ?? 0) + row.receivableAmount);
         const receivableData = {
           receivedAmount: nextReceived,
           receiptStatus: nextReceived >= Number(row.receivable.amount) ? 'RECEIVED' : 'PARTIAL',
@@ -10503,15 +11226,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           receiptMatchHint: null,
           reconciliationStatus: 'CONFIRMED',
           reviewedBy: row.receivable.reviewedBy ?? principal.username,
-          reviewedAt: row.receivable.reviewedAt ?? reviewedAt,
-          ...(row.receivable.profitRmbAmount === null || row.receivable.profitRmbAmount === undefined
-            ? await this.financeProfitReviewSnapshotData(
-                row.receivable.amount,
-                row.receivable.currency,
-                row.receivable.reviewedAt ?? reviewedAt,
-                tx
-              )
-            : {})
+          reviewedAt: row.receivable.reviewedAt ?? reviewedAt
         };
         if (row.sourceType === 'SYSTEM') {
           await (tx as any).receivableFee.update({ where: { id: row.receivable.id }, data: receivableData });
@@ -10534,9 +11249,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         approvedMatches.push({
           requestId: row.request.id,
           matchId: match.id,
-          receivableId: row.receivableId,
-          sourceType: row.sourceType,
-          amount: row.amount
+            receivableId: row.receivableId,
+            sourceType: row.sourceType,
+          amount: row.amount,
+          rmbAmount: row.rmbAmount,
+          receivableAmount: row.receivableAmount
         });
       }
 
@@ -10572,6 +11289,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             receiptNo: lockedReceipt.receiptNo,
             shipmentId: initialRequest.shipmentId,
             totalAmount,
+            totalRmbAmount,
+            totalReceivableAmount: roundMoney(resolved.reduce((sum: number, row: any) => sum + row.receivableAmount, 0)),
             matches: approvedMatches,
             reviewedBy: principal.username,
             reviewedAt: reviewedAt.toISOString(),
@@ -10608,13 +11327,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const amountCurrency = input.amountCurrency ?? 'SOURCE';
     if (!['SOURCE', 'RMB'].includes(amountCurrency)) throw new BadRequestException('匹配金额币种无效');
     const receipt = await this.findWaterReceiptById(initialRequest.waterReceiptId);
-    const exchangeRate = amountCurrency === 'RMB'
-      ? await this.resolveWaterReceiptRmbExchangeRate(receipt.currency)
-      : 1;
-    if (amountCurrency === 'RMB' && (receipt.currency ?? 'RMB').toUpperCase() === 'USD') {
+    const lockedRequestRate = Number(
+      initialRequest.receiptExchangeRate && Number(initialRequest.receiptExchangeRate) !== 1
+        ? initialRequest.receiptExchangeRate
+        : initialRequest.receivableExchangeRate ?? initialRequest.receiptExchangeRate ?? 1
+    );
+    if (amountCurrency === 'RMB' && lockedRequestRate !== 1) {
       const submittedRate = Number(input.exchangeRate);
       if (!Number.isFinite(submittedRate) || submittedRate <= 0) throw new BadRequestException('缺少匹配汇率，请刷新后重试');
-      if (Math.abs(submittedRate - exchangeRate) > 0.000001) throw new ConflictException('汇率已更新，请刷新后重新编辑');
+      if (Math.abs(submittedRate - lockedRequestRate) > 0.000001) throw new ConflictException('匹配申请使用的汇率已锁定，请按原汇率重新编辑');
     }
 
     const receivableRef = await this.prisma.$transaction(async (tx) => {
@@ -10655,9 +11376,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         const receivable = sourceType === 'SYSTEM' ? systemMap.get(receivableId) : manualMap.get(receivableId);
         if (!receivable || !receivableId) throw new BadRequestException('应收费用不存在');
         const submittedAmount = Number(submitted.amount);
-        const amount = amountCurrency === 'RMB' ? roundMoney(submittedAmount / exchangeRate) : submittedAmount;
+        if (!Number.isFinite(submittedAmount) || submittedAmount <= 0) throw new BadRequestException('匹配金额必须大于 0');
+        const receiptExchangeRate = Number(request.receiptExchangeRate ?? 1);
+        const receivableExchangeRate = Number(request.receivableExchangeRate ?? 1);
+        const rmbAmount = amountCurrency === 'RMB' ? roundMoney(submittedAmount) : undefined;
+        const amount = amountCurrency === 'RMB' ? roundMoney(submittedAmount / receiptExchangeRate) : submittedAmount;
+        const receivableAmount = amountCurrency === 'RMB' ? roundMoney(submittedAmount / receivableExchangeRate) : submittedAmount;
         const unpaid = roundMoney(Number(receivable.amount) - Number(receivable.receivedAmount ?? 0));
-        const otherPending = await (tx as any).waterReceiptMatchRequest.aggregate({
+        const otherPending = await (tx as any).waterReceiptMatchRequest.findMany({
           where: {
             status: 'PENDING',
             id: { not: initialRequest.id },
@@ -10665,13 +11391,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
               ? { receivableFeeId: receivableId }
               : { receivableFinanceItemId: receivableId })
           },
-          _sum: { amount: true }
+          select: { amount: true, receivableAmount: true }
         });
-        const otherPendingAmount = Number(otherPending._sum.amount ?? 0);
-        if (!Number.isFinite(amount) || amount <= 0 || roundMoney(amount + otherPendingAmount) > unpaid) {
+        const otherPendingAmount = roundMoney(otherPending.reduce((sum: number, row: any) => sum + Number(row.receivableAmount ?? row.amount), 0));
+        if (!Number.isFinite(receivableAmount) || receivableAmount <= 0 || roundMoney(receivableAmount + otherPendingAmount) > unpaid) {
           throw new BadRequestException('已匹配金额与待审核分配合计不能超过应收未收金额');
         }
-        updatedAmounts.push({ request, receivableId, sourceType, amount });
+        updatedAmounts.push({ request, receivableId, sourceType, amount, rmbAmount, receivableAmount, receiptExchangeRate, receivableExchangeRate });
       }
       const otherPending = await (tx as any).waterReceiptMatchRequest.aggregate({
         where: {
@@ -10686,7 +11412,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException('匹配申请金额不能超过水单可用余额');
       }
       for (const row of updatedAmounts) {
-        await (tx as any).waterReceiptMatchRequest.update({ where: { id: row.request.id }, data: { amount: row.amount } });
+        await (tx as any).waterReceiptMatchRequest.update({
+          where: { id: row.request.id },
+          data: {
+            amount: row.amount,
+            rmbAmount: row.rmbAmount,
+            receivableAmount: row.receivableAmount,
+            receiptExchangeRate: row.receiptExchangeRate,
+            receivableExchangeRate: row.receivableExchangeRate
+          }
+        });
       }
       await tx.auditLog.create({
         data: {
@@ -10697,7 +11432,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           after: toAuditJson({
             reviewBatchId: initialRequest.reviewBatchId,
             totalAmount,
-            items: updatedAmounts.map((row: any) => ({ id: row.request.id, amount: row.amount })),
+            items: updatedAmounts.map((row: any) => ({
+              id: row.request.id,
+              amount: row.amount,
+              rmbAmount: row.rmbAmount,
+              receivableAmount: row.receivableAmount
+            })),
             updatedBy: principal.username
           })
         }
@@ -10917,29 +11657,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (Number(systemFee.receivedAmount ?? 0) > 0 || (systemFee.receiptStatus && systemFee.receiptStatus !== 'UNPAID') || activeMatch) {
         throw new BadRequestException('该应收已匹配水单，请先在水单匹配撤销匹配后再反审核');
       }
-      const updated = await this.withMiscFeeFinancialLock(async (tx: any) => {
-        const locked = await tx.receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
-        if (!locked || locked.reconciliationStatus !== 'CONFIRMED') throw new ConflictException('应收状态已变化，请刷新');
-        const [lockedPendingRequest, lockedActiveMatch, settlementLine] = await Promise.all([
-          tx.waterReceiptMatchRequest.findFirst({ where: { receivableFeeId: id, status: 'PENDING' } }),
-          tx.waterReceiptMatch.findFirst({ where: { receivableFeeId: id, voided: false } }),
-          tx.profitSettlementLine.findUnique({ where: { sourceKey: `FINANCE:RECEIVABLE_FEE:${id}` } })
-        ]);
-        if (lockedPendingRequest) throw new BadRequestException('该应收存在待审核水单匹配申请，请先处理申请');
-        if (Number(locked.receivedAmount ?? 0) > 0 || (locked.receiptStatus && locked.receiptStatus !== 'UNPAID') || lockedActiveMatch) {
-          throw new BadRequestException('该应收已匹配水单，请先在水单匹配撤销匹配后再反审核');
-        }
-        if (settlementLine) throw new BadRequestException('该应收已进入财务利润结算单，请先反审核结算单');
-        const changed = await tx.receivableFee.updateMany({
-          where: { id, reconciliationStatus: 'CONFIRMED', voided: false },
-          data: { reconciliationStatus: 'PENDING', reviewedBy: null, reviewedAt: null, profitExchangeRate: null, profitRmbAmount: null, profitEffectiveAt: null }
-        });
-        if (changed.count !== 1) throw new ConflictException('应收状态已变化，请刷新');
-        const next = await tx.receivableFee.findUnique({ where: { id }, include: { shipment: { include: { customer: true } } } });
-        await tx.auditLog.create({
-          data: { actorId: principal.id, action: 'finance.receivable.reverse_audit', target: id, before: toAuditJson(locked), after: toAuditJson(this.toReceivableReviewAuditSnapshot(next, principal, locked.reconciliationStatus, 'PENDING', 'reverse')) }
-        });
-        return next;
+      const updated = await (this.prisma as any).receivableFee.update({
+        where: { id },
+        data: { reconciliationStatus: 'PENDING', reviewedBy: null, reviewedAt: null },
+        include: { shipment: { include: { customer: true } } }
+      });
+      await this.prisma.auditLog.create({
+        data: { actorId: principal.id, action: 'finance.receivable.reverse_audit', target: id, before: systemFee, after: toAuditJson(this.toReceivableReviewAuditSnapshot(updated, principal, systemFee.reconciliationStatus, 'PENDING', 'reverse')) }
       });
       return this.toReceivableAuditSummary(updated, 'SYSTEM');
     }
@@ -10953,35 +11677,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     if (pendingRequest) throw new BadRequestException('该应收存在待审核水单匹配申请，请先处理申请');
     await this.ensureReceivableNotSettledForReverseAudit(current.id);
-    const updated = await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const locked = await tx.shipmentFinanceItem.findUnique({
-        where: { id },
-        include: { shipment: { include: { customer: true, agent: true } } }
-      });
-      if (!locked || locked.reconciliationStatus !== 'CONFIRMED') throw new ConflictException('应收状态已变化，请刷新');
-      const [lockedPendingRequest, activeMatch, settlementLine] = await Promise.all([
-        tx.waterReceiptMatchRequest.findFirst({ where: { receivableFinanceItemId: id, status: 'PENDING' } }),
-        tx.waterReceiptMatch.findFirst({ where: { receivableFinanceItemId: id, voided: false } }),
-        tx.profitSettlementLine.findUnique({ where: { sourceKey: financeProfitSettlementSourceKey(locked) } })
-      ]);
-      if (lockedPendingRequest) throw new BadRequestException('该应收存在待审核水单匹配申请，请先处理申请');
-      if (Number(locked.receivedAmount ?? 0) > 0 || (locked.receiptStatus && locked.receiptStatus !== 'UNPAID') || activeMatch) {
-        throw new BadRequestException('该应收已匹配水单，请先在水单匹配撤销匹配后再反审核');
-      }
-      if (settlementLine) throw new BadRequestException('该应收已进入财务利润结算单，请先反审核结算单');
-      const changed = await tx.shipmentFinanceItem.updateMany({
-        where: { id, reconciliationStatus: 'CONFIRMED' },
-        data: { locked: false, reconciliationStatus: 'PENDING', reviewedBy: null, reviewedAt: null, profitExchangeRate: null, profitRmbAmount: null, profitEffectiveAt: null }
-      });
-      if (changed.count !== 1) throw new ConflictException('应收状态已变化，请刷新');
-      const next = await tx.shipmentFinanceItem.findUnique({
-        where: { id },
-        include: { shipment: { include: { customer: true, agent: true } } }
-      });
-      await tx.auditLog.create({
-        data: { actorId: principal.id, action: 'finance.receivable.reverse_audit', target: id, before: toAuditJson(locked), after: toAuditJson(this.toReceivableReviewAuditSnapshot(next, principal, locked.reconciliationStatus, 'PENDING', 'reverse')) }
-      });
-      return next;
+    const updated = await (this.prisma as any).shipmentFinanceItem.update({
+      where: { id },
+      data: { locked: false, reconciliationStatus: 'PENDING', reviewedBy: null, reviewedAt: null },
+      include: { shipment: { include: { customer: true, agent: true } } }
+    });
+    await this.prisma.auditLog.create({
+      data: { actorId: principal.id, action: 'finance.receivable.reverse_audit', target: id, before: current, after: toAuditJson(this.toReceivableReviewAuditSnapshot(updated, principal, current.reconciliationStatus, 'PENDING', 'reverse')) }
     });
     return this.toManualReceivableAuditSummary(updated);
   }
@@ -11354,8 +12056,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       where: {
         type: 'RECEIVABLE',
         voided: false,
-        shipment: { customerId: receipt.customerId },
-        currency: receipt.currency ?? 'RMB'
+        shipment: { customerId: receipt.customerId }
       },
       include: {
         shipment: { include: { customer: true, agent: true } },
@@ -11370,8 +12071,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const systemRows = await (this.prisma as any).receivableFee.findMany({
       where: {
         shipment: { customerId: receipt.customerId },
-        voided: false,
-        currency: receipt.currency ?? 'RMB'
+        voided: false
       },
       include: {
         shipment: { include: { customer: true } },
@@ -11408,11 +12108,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async getReceivableWaterReceiptCandidates(principal: Principal, id: string): Promise<ReceivableWaterReceiptCandidatesResponse> {
     const receivable = (await this.getReceivableAudits(principal, { page: 1, pageSize: -1 })).rows.find((row) => row.id === id);
     if (!receivable?.customerId) throw new NotFoundException('当前权限范围内未找到应收记录');
-    const canViewAll = await this.hasPermission(principal.role, 'finance:water-receipt:view-all');
+    await this.ensureWaterReceiptCurrentCustomerAccess(principal, { customerId: receivable.customerId });
+    const receivableExchangeRate = await this.resolveWaterReceiptRmbExchangeRate(receivable.currency);
     const receipts = await (this.prisma as any).waterReceipt.findMany({
       where: {
         customerId: receivable.customerId,
-        ...(canViewAll ? {} : { createdByUserId: principal.id })
+        status: { in: ['ARRIVED', 'PARTIAL_MATCHED'] },
+        balance: { gt: 0 }
       },
       select: {
         id: true,
@@ -11434,11 +12136,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return {
       receivableId: receivable.id,
       customerCode: receivable.customerCode,
-      rows: receipts
-        .map((row: any) => {
+      rows: (await Promise.all(receipts.map(async (row: any) => {
           const balance = Number(row.balance);
+          const receiptExchangeRate = await this.resolveWaterReceiptRmbExchangeRate(row.currency);
           const pendingAllocatedAmount = roundMoney((row.matchRequests ?? [])
             .reduce((sum: number, request: any) => sum + Number(request.amount), 0));
+          const availableAllocationAmount = roundMoney(Math.max(0, balance - pendingAllocatedAmount));
           return {
             id: row.id,
             receiptNo: row.receiptNo,
@@ -11448,36 +12151,32 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             amount: Number(row.amount),
             matchedAmount: Number(row.matchedAmount),
             pendingAllocatedAmount,
-            availableAllocationAmount: roundMoney(Math.max(0, balance - pendingAllocatedAmount)),
+            availableAllocationAmount,
             balance,
+            rmbBalance: roundMoney(balance * receiptExchangeRate),
+            rmbAvailableAllocationAmount: roundMoney(availableAllocationAmount * receiptExchangeRate),
+            exchangeRate: this.normalizeWaterReceiptCurrency(row.currency) !== 'RMB' ? receiptExchangeRate : receivableExchangeRate,
             status: row.status
           };
-        })
+        })))
+        .filter((row: any) => row.availableAllocationAmount > 0)
     };
   }
 
   async matchWaterReceiptOrders(principal: Principal, id: string, input: WaterReceiptMatchOrdersInput): Promise<WaterReceiptSummary> {
     await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:match');
     const receipt = await this.findWaterReceiptById(id);
-    await this.ensureWaterReceiptRecordAccess(principal, receipt);
+    await this.ensureWaterReceiptMatchAccess(principal, receipt);
     if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(receipt.status)) throw new BadRequestException('水单未到账，不能匹配订单');
     if (!receipt.customerId) throw new BadRequestException('水单缺少客户编号');
     const rawMatches = input.matches ?? [];
     if (!rawMatches.length) throw new BadRequestException('请选择要匹配的应收费用');
     const amountCurrency = input.amountCurrency ?? 'SOURCE';
     if (!['SOURCE', 'RMB'].includes(amountCurrency)) throw new BadRequestException('匹配金额币种无效');
-    const exchangeRate = amountCurrency === 'RMB'
-      ? await this.resolveWaterReceiptRmbExchangeRate(receipt.currency)
+    const receiptCurrency = this.normalizeWaterReceiptCurrency(receipt.currency);
+    const receiptExchangeRate = amountCurrency === 'RMB'
+      ? await this.resolveWaterReceiptRmbExchangeRate(receiptCurrency)
       : 1;
-    if (amountCurrency === 'RMB' && (receipt.currency ?? 'RMB').toUpperCase() === 'USD') {
-      const submittedRate = Number(input.exchangeRate);
-      if (!Number.isFinite(submittedRate) || submittedRate <= 0) {
-        throw new BadRequestException('缺少匹配汇率，请刷新后重试');
-      }
-      if (Math.abs(submittedRate - exchangeRate) > 0.000001) {
-        throw new ConflictException('汇率已更新，请刷新后重新匹配');
-      }
-    }
     const matchIds = rawMatches.map((row) => row.receivableId ?? row.receivableFinanceItemId).filter((value): value is string => Boolean(value));
     if (matchIds.length !== rawMatches.length) throw new BadRequestException('应收费用不能为空');
     const [manualItems, systemFees] = await Promise.all([
@@ -11492,29 +12191,51 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     ]);
     const manualMap = new Map<string, any>(manualItems.map((item: any) => [item.id, item]));
     const systemMap = new Map<string, any>(systemFees.map((item: any) => [item.id, item]));
-    const matches = rawMatches.map((row) => {
+    const submittedRate = amountCurrency === 'RMB' ? Number(input.exchangeRate ?? 1) : undefined;
+    const matches = await Promise.all(rawMatches.map(async (row) => {
       const receivableId = row.receivableId ?? row.receivableFinanceItemId!;
       const sourceType = row.receivableSourceType ?? (systemMap.has(receivableId) ? 'SYSTEM' : 'MANUAL');
       const receivable = sourceType === 'SYSTEM' ? systemMap.get(receivableId) : manualMap.get(receivableId);
       if (!receivable) throw new BadRequestException('应收费用不存在');
       const submittedAmount = Number(row.amount);
+      if (!Number.isFinite(submittedAmount) || submittedAmount <= 0) throw new BadRequestException('匹配金额必须大于 0');
+      const receivableCurrency = this.normalizeWaterReceiptCurrency(receivable.currency);
+      const receivableExchangeRate = amountCurrency === 'RMB'
+        ? await this.resolveWaterReceiptRmbExchangeRate(receivableCurrency)
+        : 1;
+      const expectedRate = receiptCurrency !== 'RMB'
+        ? receiptExchangeRate
+        : receivableCurrency !== 'RMB'
+          ? receivableExchangeRate
+          : 1;
+      if (amountCurrency === 'RMB' && (!Number.isFinite(submittedRate) || submittedRate! <= 0 || Math.abs(submittedRate! - expectedRate) > 0.000001)) {
+        throw new ConflictException('汇率已更新，请刷新后重新匹配');
+      }
+      const rmbAmount = amountCurrency === 'RMB' ? roundMoney(submittedAmount) : undefined;
       return {
         receivableId,
         sourceType,
         receivable,
-        amount: amountCurrency === 'RMB' ? roundMoney(submittedAmount / exchangeRate) : submittedAmount,
-        submittedRmbAmount: amountCurrency === 'RMB' ? roundMoney(submittedAmount) : undefined
+        amount: amountCurrency === 'RMB' ? roundMoney(submittedAmount / receiptExchangeRate) : submittedAmount,
+        receivableAmount: amountCurrency === 'RMB' ? roundMoney(submittedAmount / receivableExchangeRate) : submittedAmount,
+        rmbAmount,
+        receiptExchangeRate,
+        receivableExchangeRate,
+        receivableCurrency
       };
-    });
+    }));
+    if (amountCurrency === 'RMB' && new Set(matches.map((match) => receiptCurrency !== 'RMB' ? match.receiptExchangeRate : match.receivableExchangeRate)).size > 1) {
+      throw new BadRequestException('不同应收币种请分开提交匹配申请');
+    }
     const matchKeys = matches.map((match) => `${match.sourceType}:${match.receivableId}`);
     if (new Set(matchKeys).size !== matchKeys.length) throw new BadRequestException('同一应收费用不能重复匹配');
     const totalMatch = roundMoney(matches.reduce((sum, row) => sum + row.amount, 0));
     if (totalMatch <= 0) throw new BadRequestException('匹配金额必须大于 0');
     if (totalMatch > Number(receipt.balance)) throw new BadRequestException('匹配金额不能超过水单余额');
     const totalRmbMatch = amountCurrency === 'RMB'
-      ? roundMoney(matches.reduce((sum, row) => sum + Number(row.submittedRmbAmount ?? 0), 0))
+      ? roundMoney(matches.reduce((sum, row) => sum + Number(row.rmbAmount ?? 0), 0))
       : undefined;
-    if (totalRmbMatch !== undefined && totalRmbMatch > roundMoney(Number(receipt.balance) * exchangeRate)) {
+    if (totalRmbMatch !== undefined && totalRmbMatch > roundMoney(Number(receipt.balance) * receiptExchangeRate)) {
       throw new BadRequestException('匹配金额不能超过水单余额');
     }
     for (const match of matches) {
@@ -11522,18 +12243,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (receivable.shipment.customerId !== receipt.customerId) throw new BadRequestException('只能匹配同客户编号下的应收');
       if (receivable.voided) throw new BadRequestException('不能匹配已作废的应收');
       if ((receivable.receiptStatus ?? 'UNPAID') === 'RECEIVED' || Number(receivable.receivedAmount ?? 0) >= Number(receivable.amount)) throw new BadRequestException('应收已收满，不能继续匹配');
-      if ((receivable.currency ?? 'RMB') !== (receipt.currency ?? 'RMB')) throw new BadRequestException('水单币种与应收币种不一致');
       const unpaid = roundMoney(Number(receivable.amount) - Number(receivable.receivedAmount ?? 0));
-      if (amountCurrency === 'RMB' && Number(match.submittedRmbAmount) > roundMoney(unpaid * exchangeRate)) {
+      if (amountCurrency === 'RMB' && Number(match.rmbAmount) > roundMoney(unpaid * Number(match.receivableExchangeRate ?? 1))) {
         throw new BadRequestException('匹配金额不能超过订单未收金额');
       }
-      if (!Number.isFinite(amount) || amount <= 0 || amount > unpaid) throw new BadRequestException('匹配金额不能超过订单未收金额');
+      if (!Number.isFinite(match.amount) || match.amount <= 0 || match.amount > Number(receipt.balance)) throw new BadRequestException('匹配金额不能超过水单余额');
+      if (!Number.isFinite(Number(match.receivableAmount)) || Number(match.receivableAmount) <= 0 || Number(match.receivableAmount) > unpaid) throw new BadRequestException('匹配金额不能超过订单未收金额');
     }
     return this.createWaterReceiptMatchRequests(principal, receipt, matches, totalMatch);
     /* istanbul ignore next -- legacy direct-post path retained only for migration rollback compatibility */
     const updated = await this.prisma.$transaction(async (tx) => {
       const lockedReceipt = await this.lockWaterReceiptForUpdate(tx, id);
-      await this.ensureWaterReceiptRecordAccess(principal, lockedReceipt);
+      await this.ensureWaterReceiptMatchAccess(principal, lockedReceipt);
       if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(lockedReceipt.status)) throw new BadRequestException('水单未到账，不能匹配订单');
       if (!lockedReceipt.customerId) throw new BadRequestException('水单缺少客户编号');
       const account = await this.lockCustomerAccountForUpdate(
@@ -11657,7 +12378,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             matchedAmountDelta: totalMatch,
             matchedRmbAmountDelta: totalRmbMatch,
             submittedAmountCurrency: amountCurrency,
-            exchangeRate: amountCurrency === 'RMB' ? exchangeRate : undefined,
+            exchangeRate: amountCurrency === 'RMB' ? receiptExchangeRate : undefined,
             receiptBalanceBefore: Number(lockedReceipt.balance),
             receiptBalanceAfter: nextBalance,
             accountBalanceBefore,
@@ -11725,7 +12446,17 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   private async createWaterReceiptMatchRequests(
     principal: Principal,
     receipt: any,
-    matches: Array<{ receivableId: string; sourceType: 'SYSTEM' | 'MANUAL'; receivable: any; amount: number }>,
+    matches: Array<{
+      receivableId: string;
+      sourceType: 'SYSTEM' | 'MANUAL';
+      receivable: any;
+      amount: number;
+      rmbAmount?: number;
+      receivableAmount: number;
+      receivableCurrency: string;
+      receiptExchangeRate: number;
+      receivableExchangeRate: number;
+    }>,
     totalMatch: number
   ): Promise<WaterReceiptSummary> {
     const canViewAll = await this.canViewAllWaterReceipts(principal);
@@ -11744,7 +12475,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
     const row = await this.prisma.$transaction(async (tx) => {
       const lockedReceipt = await this.lockWaterReceiptForUpdate(tx, receipt.id);
-      await this.ensureWaterReceiptRecordAccess(principal, lockedReceipt);
+      await this.ensureWaterReceiptMatchAccess(principal, lockedReceipt);
       if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(lockedReceipt.status)) {
         throw new BadRequestException('水单未到账，不能匹配订单');
       }
@@ -11774,6 +12505,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
       });
       const pendingAmountByReceivable = new Map<string, number>();
+      const pendingRmbByReceivable = new Map<string, number>();
       for (const request of existingRequests) {
         const key = request.receivableSourceType === 'SYSTEM'
           ? `SYSTEM:${request.receivableFeeId}`
@@ -11783,7 +12515,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
         pendingAmountByReceivable.set(
           key,
-          roundMoney((pendingAmountByReceivable.get(key) ?? 0) + Number(request.amount))
+          roundMoney((pendingAmountByReceivable.get(key) ?? 0) + Number(request.receivableAmount ?? request.amount))
+        );
+        pendingRmbByReceivable.set(
+          key,
+          roundMoney((pendingRmbByReceivable.get(key) ?? 0) + Number(request.rmbAmount ?? request.amount))
         );
       }
 
@@ -11820,12 +12556,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
         if (receivable.shipment.customerId !== lockedReceipt.customerId) throw new BadRequestException('只能匹配同客户编号下的应收');
         if (receivable.voided) throw new BadRequestException('不能匹配已作废的应收');
-        if ((receivable.currency ?? 'RMB') !== (lockedReceipt.currency ?? 'RMB')) throw new BadRequestException('水单币种与应收币种不一致');
         const unpaid = roundMoney(Number(receivable.amount) - Number(receivable.receivedAmount ?? 0));
         const receivableKey = `${match.sourceType}:${match.receivableId}`;
         const pendingAmount = pendingAmountByReceivable.get(receivableKey) ?? 0;
-        if (match.amount <= 0 || roundMoney(match.amount + pendingAmount) > unpaid) {
+        const pendingRmb = pendingRmbByReceivable.get(receivableKey) ?? 0;
+        if (match.receivableAmount <= 0 || roundMoney(match.receivableAmount + pendingAmount) > unpaid) {
           throw new BadRequestException('已匹配金额与待审核分配合计不能超过应收未收金额');
+        }
+        if (match.rmbAmount !== undefined && roundMoney(match.rmbAmount + pendingRmb) > roundMoney(unpaid * match.receivableExchangeRate)) {
+          throw new BadRequestException('人民币匹配金额与待审核分配合计不能超过应收未收金额');
         }
         const reviewBatchId = `wrmb-${randomUUID()}`;
         reviewBatchIds.push(reviewBatchId);
@@ -11839,6 +12578,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             receivableSourceType: match.sourceType,
             shipmentId: receivable.shipmentId,
             amount: match.amount,
+            rmbAmount: match.rmbAmount,
+            receivableAmount: match.receivableAmount,
+            receivableCurrency: match.receivableCurrency,
+            receiptExchangeRate: match.receiptExchangeRate,
+            receivableExchangeRate: match.receivableExchangeRate,
             status: 'PENDING',
             requestedBy: principal.username,
             requestedByUserId: principal.id,
@@ -11862,7 +12606,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             matches: matches.map((match) => ({
               receivableId: match.receivableId,
               receivableSourceType: match.sourceType,
-              amount: match.amount
+              amount: match.amount,
+              rmbAmount: match.rmbAmount,
+              receivableAmount: match.receivableAmount,
+              receivableCurrency: match.receivableCurrency,
+              receiptExchangeRate: match.receiptExchangeRate,
+              receivableExchangeRate: match.receivableExchangeRate
             }))
           } as any
         }
@@ -11921,7 +12670,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           ? systemMap.get(match.receivableFeeId)
           : manualMap.get(match.receivableFinanceItemId);
         if (!item) throw new BadRequestException('应收费用不存在');
-        const nextReceived = Math.max(0, roundMoney(Number(item.receivedAmount ?? 0) - Number(match.amount)));
+        const receivableAmount = Number(match.receivableAmount ?? match.amount);
+        const nextReceived = Math.max(0, roundMoney(Number(item.receivedAmount ?? 0) - receivableAmount));
         const voided = await (tx as any).waterReceiptMatch.updateMany({
           where: { id: match.id, waterReceiptId: lockedReceipt.id, voided: false },
           data: { voided: true, voidedAt: new Date(), voidedBy: principal.username, voidReason: reason }
@@ -12143,7 +12893,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const canViewAgent = await this.hasPermission(principal.role, 'finance:business-cost:view-agent');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:business-cost:view-profit');
     const rows = await (this.prisma as any).shipmentFinanceItem.findMany({
-      where: { type: 'BUSINESS_COST', miscFeeRecordId: null },
+      where: { type: 'BUSINESS_COST' },
       include: {
         shipment: {
           include: {
@@ -12194,10 +12944,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const canViewAgent = await this.hasPermission(principal.role, 'finance:business-cost:view-agent');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:business-cost:view-profit');
     const shipment = await this.findShipmentForFinanceAudit(principal, input);
-    if (!this.canAccessBusinessCostShipment(principal, shipment)) {
+    if (!this.canAccessBusinessCostShipment(principal, shipment, await this.hasPermission(principal.role, 'finance:business-cost:view-all'))) {
       throw new ForbiddenException('不能维护其他业务员的业务成本');
     }
-    const amount = this.calculateBusinessCostAmount(input.chargeWeightKg, input.unitPrice, input.amount ?? 0);
+    const billing = resolveBusinessCostBillingFields(input);
+    const amount = calculateFinanceItemAmount('BUSINESS_COST', { ...input, ...billing }, undefined, input.amount ?? 0);
     if (!Number.isFinite(amount) || amount < 0) {
       throw new BadRequestException('业务成本金额必须大于等于 0');
     }
@@ -12214,7 +12965,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         reconciliationStatus: 'PENDING',
         agentId: financeAgent?.id,
         agentName: financeAgent?.name,
-        chargeWeightKg: input.chargeWeightKg,
+        billingUnit: billing.billingUnit,
+        billingQuantity: billing.billingQuantity,
+        chargeWeightKg: billing.chargeWeightKg,
         unitPrice: input.unitPrice,
         remark: input.remark,
         createdBy: principal.username
@@ -12236,9 +12989,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException('不能维护其他业务员的业务成本');
     }
     this.ensureBusinessCostAuditEditable(current);
-    const nextChargeWeight = input.chargeWeightKg ?? (current.chargeWeightKg === null ? undefined : Number(current.chargeWeightKg));
+    const billing = resolveBusinessCostBillingFields(input, current);
     const nextUnitPrice = input.unitPrice ?? (current.unitPrice === null ? undefined : Number(current.unitPrice));
-    const amount = this.calculateBusinessCostAmount(nextChargeWeight, nextUnitPrice, input.amount ?? Number(current.amount));
+    const amount = calculateFinanceItemAmount('BUSINESS_COST', { ...input, ...billing }, current, input.amount ?? Number(current.amount));
     const financeAgent = input.agentId !== undefined || input.agentName !== undefined
       ? await this.resolveFinanceAgent(this.prisma, input)
       : { id: current.agentId ?? current.shipment?.agent?.id, name: current.agentName ?? current.shipment?.agent?.name };
@@ -12252,7 +13005,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         paymentNo: input.paymentNo ?? current.paymentNo,
         agentId: financeAgent?.id,
         agentName: financeAgent?.name,
-        chargeWeightKg: input.chargeWeightKg ?? current.chargeWeightKg,
+        billingUnit: billing.billingUnit,
+        billingQuantity: billing.billingQuantity,
+        chargeWeightKg: billing.chargeWeightKg,
         unitPrice: input.unitPrice ?? current.unitPrice,
         remark: input.remark ?? current.remark
       },
@@ -12266,27 +13021,65 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async auditBusinessCostAudit(principal: Principal, id: string): Promise<BusinessCostAuditSummary> {
     await this.ensureBusinessCostPermission(principal, 'finance:business-cost:audit');
-    const canViewAgent = await this.hasPermission(principal.role, 'finance:business-cost:view-agent');
-    const canViewProfit = await this.hasPermission(principal.role, 'finance:business-cost:view-profit');
-    const current = await this.findBusinessCostFinanceItemById(id);
-    if (!this.canAccessBusinessCostRow(principal, current, await this.hasPermission(principal.role, 'finance:business-cost:view-all'))) {
-      throw new ForbiddenException('不能操作其他业务员的业务成本');
-    }
-    if (current.voided) {
-      throw new BadRequestException('已作废业务成本不能审核');
-    }
-    if (current.reconciliationStatus !== 'PENDING') {
-      throw new BadRequestException('只有待审核业务成本可以审核');
-    }
-    const reviewedAt = new Date();
-    const profitSnapshot = await this.financeProfitReviewSnapshotData(current.amount, current.currency, reviewedAt);
-    const updated = await (this.prisma as any).shipmentFinanceItem.update({
-      where: { id },
-      data: { locked: true, reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt, ...profitSnapshot },
-      include: this.businessCostAuditInclude()
-    });
-    await this.prisma.auditLog.create({
-      data: { actorId: principal.id, action: 'finance.business_cost.audit', target: id, before: current, after: toAuditJson(this.toBusinessCostReviewAuditSnapshot(updated, principal, current.reconciliationStatus, 'CONFIRMED', 'audit')) }
+    const snapshot = await this.findBusinessCostFinanceItemById(id);
+    const { current, updated, visibility } = await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, snapshot.shipmentId);
+      await tx.$queryRaw(Prisma.sql`
+        SELECT "id"
+        FROM "User"
+        WHERE "id" = ${principal.id}
+        FOR UPDATE
+      `);
+      const actor = await tx.user.findUnique({
+        where: { id: principal.id },
+        include: { role: { include: { permissions: true } } }
+      });
+      if (!actor || actor.enabled !== true || actor.role.enabled !== true) {
+        throw new UnauthorizedException('账号已停用或不存在');
+      }
+      const lockedPermissions = resolveStoredRolePermissions(
+        actor.role.name as RoleKey,
+        actor.role.permissions.map((item: { code: string }) => item.code as PermissionKey)
+      );
+      if (!lockedPermissions.includes('finance:business-cost:audit')) {
+        throw new ForbiddenException('没有业务员成本权限');
+      }
+      principal.username = actor.username;
+      principal.role = actor.role.name as RoleKey;
+      principal.site = actor.site ?? undefined;
+      principal.departmentId = actor.departmentId ?? undefined;
+      const lockedCurrent = await tx.shipmentFinanceItem.findFirst({
+        where: { id, type: 'BUSINESS_COST' },
+        include: this.businessCostAuditInclude()
+      });
+      if (!lockedCurrent) {
+        throw new NotFoundException('业务成本不存在');
+      }
+      if (!this.canAccessBusinessCostRow(principal, lockedCurrent, lockedPermissions.includes('finance:business-cost:view-all'))) {
+        throw new ForbiddenException('不能操作其他业务员的业务成本');
+      }
+      if (lockedCurrent.voided) {
+        throw new BadRequestException('已作废业务成本不能审核');
+      }
+      if (lockedCurrent.reconciliationStatus !== 'PENDING') {
+        throw new BadRequestException('只有待审核业务成本可以审核');
+      }
+      const next = await tx.shipmentFinanceItem.update({
+        where: { id },
+        data: { locked: true, reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt: new Date() },
+        include: this.businessCostAuditInclude()
+      });
+      await tx.auditLog.create({
+        data: { actorId: principal.id, action: 'finance.business_cost.audit', target: id, before: lockedCurrent, after: toAuditJson(this.toBusinessCostReviewAuditSnapshot(next, principal, lockedCurrent.reconciliationStatus, 'CONFIRMED', 'audit')) }
+      });
+      return {
+        current: lockedCurrent,
+        updated: next,
+        visibility: {
+          canViewAgent: lockedPermissions.includes('finance:business-cost:view-agent'),
+          canViewProfit: lockedPermissions.includes('finance:business-cost:view-profit')
+        }
+      };
     });
     void this.lineage?.recordEvent('finance.business_costs.audit', {
       actorUsername: principal.username,
@@ -12306,7 +13099,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment', id: updated.shipmentId }],
       metrics: { amount: Number(updated.amount), statusTo: 'CONFIRMED' }
     });
-    return this.toBusinessCostAuditSummary(updated, { canViewAgent, canViewProfit });
+    return this.toBusinessCostAuditSummary(updated, visibility);
   }
 
   async reverseAuditBusinessCostAudit(principal: Principal, id: string): Promise<BusinessCostAuditSummary> {
@@ -12314,15 +13107,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const canViewAgent = await this.hasPermission(principal.role, 'finance:business-cost:view-agent');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:business-cost:view-profit');
     const current = await this.findBusinessCostFinanceItemById(id);
-    if (!this.canAccessBusinessCostRow(principal, current, await this.hasPermission(principal.role, 'finance:business-cost:view-all'))) {
-      throw new ForbiddenException('不能操作其他业务员的业务成本');
-    }
+    await this.ensureBusinessCostRowAccess(principal, current);
     if (current.reconciliationStatus !== 'CONFIRMED') {
       throw new BadRequestException('只有已审核业务成本可以反审核');
     }
     const updated = await (this.prisma as any).shipmentFinanceItem.update({
       where: { id },
-      data: { locked: false, reconciliationStatus: 'PENDING', reviewedBy: null, reviewedAt: null, profitExchangeRate: null, profitRmbAmount: null, profitEffectiveAt: null },
+      data: { locked: false, reconciliationStatus: 'PENDING', reviewedBy: null, reviewedAt: null },
       include: this.businessCostAuditInclude()
     });
     await this.prisma.auditLog.create({
@@ -12336,9 +13127,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const canViewAgent = await this.hasPermission(principal.role, 'finance:business-cost:view-agent');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:business-cost:view-profit');
     const current = await this.findBusinessCostFinanceItemById(id);
-    if (!this.canAccessBusinessCostRow(principal, current, await this.hasPermission(principal.role, 'finance:business-cost:view-all'))) {
-      throw new ForbiddenException('不能操作其他业务员的业务成本');
-    }
+    await this.ensureBusinessCostRowAccess(principal, current);
     this.ensureBusinessCostAuditEditable(current);
     const updated = await (this.prisma as any).shipmentFinanceItem.update({
       where: { id },
@@ -12392,29 +13181,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.ensurePayablePermission(principal, 'finance:payable:read');
     const canViewSensitivePayable = await this.hasPermission(principal.role, 'finance:payable:view-sensitive');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:payable:view-profit');
-    const [rows, kuayueHangRows] = await Promise.all([
-      (this.prisma as any).shipmentFinanceItem.findMany({
-        where: { type: 'PAYABLE', miscFeeRecordId: null },
-        include: this.payableAuditInclude(),
-        orderBy: { createdAt: 'desc' }
-      }),
-      (this.prisma as any).miscFeeHangRequest.findMany({
-        where: {
-          status: { in: ['PENDING', 'APPROVED'] },
-          miscFeeRecord: { sourceType: 'KUAYUE', voidedAt: null }
-        },
-        include: { miscFeeRecord: { include: { shipment: { include: { customer: true, agent: true, channel: true } } } } },
-        orderBy: { requestedAt: 'desc' }
-      })
-    ]);
+    const rows = await (this.prisma as any).shipmentFinanceItem.findMany({
+      where: { type: 'PAYABLE' },
+      include: this.payableAuditInclude(),
+      orderBy: { createdAt: 'desc' }
+    });
     const visibleRows = [];
     for (const row of rows) {
       if (await this.canExposePayableToFinance(row)) visibleRows.push(row);
     }
-    const response = await this.buildPayableAuditListResponse([
-      ...visibleRows.map((row: any) => this.toPayableAuditSummary(row, { canViewSensitivePayable, canViewProfit })),
-      ...kuayueHangRows.map((row: any) => this.toKuayuePayableAuditSummary(row, { canViewSensitivePayable, canViewProfit }))
-    ], query);
+    const response = await this.buildPayableAuditListResponse(
+      visibleRows.map((row: any) => this.toPayableAuditSummary(row, { canViewSensitivePayable, canViewProfit })),
+      query
+    );
     const responseIds = new Set(response.rows.map((row) => row.id));
     const responseSourceRows = visibleRows.filter((row: any) => responseIds.has(row.id));
     const currentCycleStarts = responseSourceRows
@@ -12423,7 +13202,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const auditRows = responseSourceRows.length && canViewSensitivePayable
       ? await this.prisma.auditLog.findMany({
           where: {
-            action: 'customer_service.agent_data.updated',
+            action: { in: ['customer_service.agent_data.updated', 'customer_service.business_data.updated'] },
             target: { in: [...new Set<string>(responseSourceRows.map((row: any) => String(row.shipmentId)))] },
             ...(currentCycleStarts.length ? { createdAt: { gte: new Date(Math.min(...currentCycleStarts.map((value: Date) => value.getTime()))) } } : {})
           },
@@ -12628,21 +13407,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.ensurePayablePermission(principal, 'finance:payable:audit');
     const canViewSensitivePayable = await this.hasPermission(principal.role, 'finance:payable:view-sensitive');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:payable:view-profit');
-    if (id.startsWith('misc-hang:')) {
-      const hangRequestId = id.slice('misc-hang:'.length);
-      const currentRequest = await (this.prisma as any).miscFeeHangRequest.findUnique({
-        where: { id: hangRequestId },
-        select: { version: true }
-      });
-      if (!currentRequest) throw new NotFoundException('跨越挂账审核记录不存在');
-      await this.approveMiscFeeHangRequest(principal, hangRequestId, { version: currentRequest.version });
-      const approvedRequest = await (this.prisma as any).miscFeeHangRequest.findUnique({
-        where: { id: hangRequestId },
-        include: { miscFeeRecord: { include: { shipment: { include: { customer: true, agent: true, channel: true } } } } }
-      });
-      if (!approvedRequest) throw new NotFoundException('跨越挂账审核记录不存在');
-      return this.toKuayuePayableAuditSummary(approvedRequest, { canViewSensitivePayable, canViewProfit });
-    }
     const current = await this.findPayableFinanceItemById(id);
     await this.ensurePayableReadyForFinance(current);
     if (current.voided) {
@@ -12651,11 +13415,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (current.reconciliationStatus !== 'PENDING') {
       throw new BadRequestException('只有待审核应付费用可以审核');
     }
-    const reviewedAt = new Date();
-    const profitSnapshot = await this.financeProfitReviewSnapshotData(current.amount, current.currency, reviewedAt);
     const updated = await (this.prisma as any).shipmentFinanceItem.update({
       where: { id },
-      data: { locked: true, reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt, ...profitSnapshot },
+      data: { locked: true, reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt: new Date() },
       include: this.payableAuditInclude()
     });
     const application = await this.upsertPayablePaymentApplication(updated);
@@ -12725,56 +13487,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (billVoucher) {
       throw new BadRequestException('该应付已生成付款凭证，请先处理凭证后再反审核');
     }
-    const { updated } = await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const locked = await tx.shipmentFinanceItem.findUnique({ where: { id }, include: this.payableAuditInclude() });
-      if (!locked || locked.reconciliationStatus !== 'CONFIRMED') throw new ConflictException('应付状态已变化，请刷新');
-      const lockedPendingRows = await tx.payablePaymentApplication.findMany({
-        where: { payableFinanceItemId: id },
-        select: { id: true, status: true }
-      });
-      const lockedPendingIds = lockedPendingRows.map((row: any) => row.id);
-      const [lockedActivePaymentItem, lockedBillVoucher, settlementLine] = await Promise.all([
-        tx.paymentApplicationItem.findFirst({
-          where: { payableFinanceItemId: id, paymentApplication: { status: { in: ['WAITING_PAYMENT', 'PAID'] } } },
-          include: { paymentApplication: true }
-        }),
-        tx.paymentVoucher.findFirst({
-          where: {
-            voucherType: { not: 'PAYMENT_RECEIPT' },
-            OR: [
-              ...(lockedPendingIds.length ? [{ pendingPaymentId: { in: lockedPendingIds } }] : []),
-              { paymentApplication: { items: { some: { payableFinanceItemId: id } } } }
-            ]
-          }
-        }),
-        tx.profitSettlementLine.findUnique({ where: { sourceKey: financeProfitSettlementSourceKey(locked) } })
-      ]);
-      if (lockedActivePaymentItem?.paymentApplication?.status === 'PAID' || lockedPendingRows.some((row: any) => row.status === 'PAID')) {
-        throw new BadRequestException('该应付已支付，请先在已付款模块反核销');
-      }
-      if (lockedActivePaymentItem?.paymentApplication?.status === 'WAITING_PAYMENT' || lockedPendingRows.some((row: any) => row.status === 'APPLIED')) {
-        throw new BadRequestException('该应付已进入付款申请，请先撤回付款申请');
-      }
-      if (lockedBillVoucher) throw new BadRequestException('该应付已生成付款凭证，请先处理凭证后再反审核');
-      if (settlementLine) throw new BadRequestException('该应付已进入财务利润结算单，请先反审核结算单');
-      const changed = await tx.shipmentFinanceItem.updateMany({
-        where: { id, reconciliationStatus: 'CONFIRMED' },
-        data: { locked: false, reconciliationStatus: 'PENDING', reviewedBy: null, reviewedAt: null, profitExchangeRate: null, profitRmbAmount: null, profitEffectiveAt: null }
-      });
-      if (changed.count !== 1) throw new ConflictException('应付状态已变化，请刷新');
-      await tx.payablePaymentApplication.updateMany({
-        where: { payableFinanceItemId: id, status: { not: 'PAID' } },
-        data: { status: 'INVALIDATED', applicationStatus: 'INVALIDATED', invalidatedAt: new Date() }
-      });
-      const next = await tx.shipmentFinanceItem.findUnique({ where: { id }, include: this.payableAuditInclude() });
-      const invalidated = await tx.payablePaymentApplication.findFirst({
-        where: { payableFinanceItemId: id, status: 'INVALIDATED' },
-        orderBy: { updatedAt: 'desc' }
-      });
-      await tx.auditLog.create({
-        data: { actorId: principal.id, action: 'finance.payable.reverse_audit', target: id, before: toAuditJson(locked), after: toAuditJson(this.toPayableReviewAuditSnapshot(next, principal, locked.reconciliationStatus, 'PENDING', 'reverse', invalidated)) }
-      });
-      return { updated: next, invalidatedApplication: invalidated };
+    const updated = await (this.prisma as any).shipmentFinanceItem.update({
+      where: { id },
+      data: { locked: false, reconciliationStatus: 'PENDING', reviewedBy: null, reviewedAt: null },
+      include: this.payableAuditInclude()
+    });
+    await (this.prisma as any).payablePaymentApplication.updateMany({
+      where: { payableFinanceItemId: id, status: { not: 'PAID' } },
+      data: { status: 'INVALIDATED', applicationStatus: 'INVALIDATED', invalidatedAt: new Date() }
+    });
+    const invalidatedApplication = await (this.prisma as any).payablePaymentApplication.findFirst({
+      where: { payableFinanceItemId: id, status: 'INVALIDATED' },
+      orderBy: { updatedAt: 'desc' }
+    });
+    await this.prisma.auditLog.create({
+      data: { actorId: principal.id, action: 'finance.payable.reverse_audit', target: id, before: current, after: toAuditJson(this.toPayableReviewAuditSnapshot(updated, principal, current.reconciliationStatus, 'PENDING', 'reverse', invalidatedApplication)) }
     });
     return this.toPayableAuditSummary(updated, { canViewSensitivePayable, canViewProfit });
   }
@@ -12793,8 +13520,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       where: {
         voucherType: { not: 'PAYMENT_RECEIPT' },
         OR: [
-          ...(pendingPaymentCount ? [{ pendingPaymentId: { in: (await (this.prisma as any).payablePaymentApplication.findMany({ where: { payableFinanceItemId: id }, select: { id: true } })).map((row: { id: string }) => row.id) } }] : []),
-          { paymentApplication: { items: { some: { payableFinanceItemId: id } } } }
+          { payableFinanceItemId: id },
+          ...(pendingPaymentCount ? [{ pendingPaymentId: { in: (await (this.prisma as any).payablePaymentApplication.findMany({ where: { payableFinanceItemId: id }, select: { id: true } })).map((row: { id: string }) => row.id) } }] : [])
         ]
       },
       select: { id: true }
@@ -13089,98 +13816,59 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const created: PaymentApplicationSummary[] = [];
     for (const rows of groups.values()) {
-      const rowIds = rows.map((row: any) => row.id);
       const first = this.toPendingPaymentSummary(rows[0]);
       const bank = selectedBank ?? rows[0].payeeBankAccount;
       const bankSummary = bank ? this.toPayeeBankAccountSummary(bank) : undefined;
       const payeeName = first.agentName?.trim() || bankSummary?.agentName || '未指定代理';
-      const application = await this.withMiscFeeFinancialLock(async (tx: any) => {
-        const lockedRows = await tx.payablePaymentApplication.findMany({
-          where: { id: { in: rowIds } },
-          include: this.payablePaymentApplicationInclude()
-        });
-        if (lockedRows.length !== rowIds.length) throw new ConflictException('部分待付款记录已变化，请刷新');
-        for (const row of lockedRows) {
-          await this.ensurePendingPaymentReadyForFinance(row);
-          const canSubmit = (row.status === 'PENDING' || row.status === 'READY')
-            && row.applicationStatus === 'PENDING'
-            && !row.paymentApplicationItem;
-          if (!canSubmit) throw new ConflictException('待付款记录状态已变化，请刷新');
-        }
-        const miscFeeIds = lockedRows.map((row: any) => row.miscFeeRecordId).filter(Boolean);
-        if (miscFeeIds.length) {
-          const validMiscFeeCount = await tx.miscFeeRecord.count({
-            where: { id: { in: miscFeeIds }, auditStatus: 'APPROVED', voidedAt: null }
-          });
-          if (validMiscFeeCount !== new Set(miscFeeIds).size) {
-            throw new ConflictException('杂费应付状态已变化，请刷新');
-          }
-        }
-        const lockedFirst = this.toPendingPaymentSummary(lockedRows[0]);
-        const totalAmount = lockedRows.reduce((sum: number, row: any) => sum + Number(row.amount), 0);
-        const createdApplication = await tx.paymentApplication.create({
-          data: {
-            applicationNo: await this.nextPaymentApplicationNo(tx),
-            agentName: payeeName,
-            currency: lockedFirst.currency,
-            totalAmount,
-            status: 'WAITING_PAYMENT',
-            payeeBankAccountId: bank?.id,
-            remark: input.remark,
-            appliedBy: principal.username,
-            items: {
-              create: lockedRows.map((row: any) => ({
-                payablePaymentApplicationId: row.id,
-                sourceType: row.sourceType ?? 'ORDER_PAYABLE',
-                payableFinanceItemId: row.payableFinanceItemId,
-                miscFeeRecordId: row.miscFeeRecordId,
-                shipmentId: row.shipmentId,
-                amount: row.amount,
-                currency: row.currency ?? 'RMB'
-              }))
-            },
-            ...(input.voucher?.fileName ? {
-              vouchers: {
-                create: [{
-                  voucherType: input.voucher.voucherType ?? 'BILL',
-                  fileName: input.voucher.fileName.trim(),
-                  mimeType: input.voucher.mimeType,
-                  sizeBytes: input.voucher.sizeBytes,
-                  url: input.voucher.url,
-                  uploadedBy: principal.username
-                }]
-              }
-            } : {})
+      const totalAmount = rows.reduce((sum: number, row: any) => sum + Number(row.amount), 0);
+      const applicationNo = await this.nextPaymentApplicationNo();
+      const application = await (this.prisma as any).paymentApplication.create({
+        data: {
+          applicationNo,
+          agentName: payeeName,
+          currency: first.currency,
+          totalAmount,
+          status: 'WAITING_PAYMENT',
+          payeeBankAccountId: bank?.id,
+          remark: input.remark,
+          appliedBy: principal.username,
+          items: {
+            create: rows.map((row: any) => ({
+              payablePaymentApplicationId: row.id,
+              payableFinanceItemId: row.payableFinanceItemId,
+              shipmentId: row.shipmentId,
+              amount: row.amount,
+              currency: row.currency ?? 'RMB'
+            }))
           },
-          include: this.paymentApplicationInclude()
-        });
-        const updatedPending = await tx.payablePaymentApplication.updateMany({
-          where: {
-            id: { in: rowIds },
-            status: { in: ['PENDING', 'READY'] },
-            applicationStatus: 'PENDING'
-          },
-          data: {
-            status: 'APPLIED',
-            applicationStatus: 'APPLIED',
-            payeeBankAccountId: bank?.id,
-            appliedAt: createdApplication.appliedAt,
-            remark: input.remark
-          }
-        });
-        if (updatedPending.count !== rowIds.length) throw new ConflictException('待付款记录状态已变化，请刷新');
-        await tx.auditLog.create({
-          data: {
-            actorId: principal.id,
-            action: 'finance.payment_application.create',
-            target: createdApplication.id,
-            after: toAuditJson(this.toPaymentApplicationAuditSnapshot(this.toPaymentApplicationSummary(createdApplication)))
-          }
-        });
-        return createdApplication;
+          ...(input.voucher?.fileName ? {
+            vouchers: {
+              create: [{
+                voucherType: input.voucher.voucherType ?? 'BILL',
+                fileName: input.voucher.fileName.trim(),
+                mimeType: input.voucher.mimeType,
+                sizeBytes: input.voucher.sizeBytes,
+                url: input.voucher.url,
+                uploadedBy: principal.username
+              }]
+            }
+          } : {})
+        },
+        include: this.paymentApplicationInclude()
+      });
+      await (this.prisma as any).payablePaymentApplication.updateMany({
+        where: { id: { in: rows.map((row: any) => row.id) } },
+        data: {
+          status: 'APPLIED',
+          applicationStatus: 'APPLIED',
+          payeeBankAccountId: bank?.id,
+          appliedAt: application.appliedAt,
+          remark: input.remark
+        }
       });
       const [enriched] = await this.withPendingBillVouchers([application]);
       const summary = this.toPaymentApplicationSummary(enriched);
+      await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'finance.payment_application.create', target: application.id, after: toAuditJson(this.toPaymentApplicationAuditSnapshot(summary)) } });
       void this.lineage?.recordEvent('finance.payment_applications.create', {
         actorUsername: principal.username,
         businessId: summary.id,
@@ -13197,7 +13885,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           items: summary.items.map((item) => ({
             pendingPaymentId: item.pendingPaymentId,
             payableFinanceItemId: item.payableFinanceItemId,
-            miscFeeRecordId: item.miscFeeRecordId,
             shipmentId: item.shipmentId,
             amount: item.amount,
             currency: item.currency
@@ -13205,9 +13892,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         },
         sourceRefs: [
           ...summary.items.map((item) => ({ nodeType: 'pending_payment', id: item.pendingPaymentId })),
-          ...summary.items.filter((item) => item.payableFinanceItemId).map((item) => ({ nodeType: 'payable_finance_item', id: item.payableFinanceItemId! })),
-          ...summary.items.filter((item) => item.miscFeeRecordId).map((item) => ({ nodeType: 'misc_fee', id: item.miscFeeRecordId! })),
-          ...summary.items.filter((item) => item.shipmentId).map((item) => ({ nodeType: 'shipment', id: item.shipmentId! }))
+          ...summary.items.map((item) => ({ nodeType: 'payable_finance_item', id: item.payableFinanceItemId })),
+          ...summary.items.map((item) => ({ nodeType: 'shipment', id: item.shipmentId }))
         ],
         metrics: { totalAmount: summary.totalAmount, itemCount: summary.items.length, currency: summary.currency }
       });
@@ -13238,38 +13924,29 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       selectedBank = current.bankAccount ? this.toPayeeBankAccountSummary(current.bankAccount) : undefined;
     }
     this.assertPayeeBankMatchesPending(selectedBank, (current.items ?? []).map((item: any) => this.toPendingPaymentSummary(item.payablePaymentApplication)));
-    const updated = await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const locked = await tx.paymentApplication.findUnique({ where: { id }, include: this.paymentApplicationInclude() });
-      if (!locked || locked.status !== 'WAITING_PAYMENT') throw new ConflictException('付款申请已被其他会话处理，请刷新');
-      const lockedBank = selectedBank ?? (locked.bankAccount ? this.toPayeeBankAccountSummary(locked.bankAccount) : undefined);
-      this.assertPayeeBankMatchesPending(lockedBank, (locked.items ?? []).map((item: any) => this.toPendingPaymentSummary(item.payablePaymentApplication)));
-      const next = await tx.paymentApplication.update({
-        where: { id },
-        data: {
-          payeeBankAccountId: bankAccountId,
-          remark: input.remark ?? locked.remark,
-          ...(input.voucher?.fileName ? {
-            vouchers: {
-              create: [{
-                voucherType: input.voucher.voucherType ?? 'BILL',
-                fileName: input.voucher.fileName.trim(),
-                mimeType: input.voucher.mimeType,
-                sizeBytes: input.voucher.sizeBytes,
-                url: input.voucher.url,
-                uploadedBy: principal.username
-              }]
-            }
-          } : {})
-        },
-        include: this.paymentApplicationInclude()
-      });
-      await tx.auditLog.create({
-        data: { actorId: principal.id, action: 'finance.payment_application.update', target: id, before: toAuditJson(locked), after: toAuditJson(this.toPaymentApplicationAuditSnapshot(this.toPaymentApplicationSummary(next))) }
-      });
-      return next;
+    const updated = await (this.prisma as any).paymentApplication.update({
+      where: { id },
+      data: {
+        payeeBankAccountId: bankAccountId,
+        remark: input.remark ?? current.remark,
+        ...(input.voucher?.fileName ? {
+          vouchers: {
+            create: [{
+              voucherType: input.voucher.voucherType ?? 'BILL',
+              fileName: input.voucher.fileName.trim(),
+              mimeType: input.voucher.mimeType,
+              sizeBytes: input.voucher.sizeBytes,
+              url: input.voucher.url,
+              uploadedBy: principal.username
+            }]
+          }
+        } : {})
+      },
+      include: this.paymentApplicationInclude()
     });
     const [enriched] = await this.withPendingBillVouchers([updated]);
     const summary = this.toPaymentApplicationSummary(enriched);
+    await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'finance.payment_application.update', target: id, before: current, after: toAuditJson(this.toPaymentApplicationAuditSnapshot(summary)) } });
     return summary;
   }
 
@@ -13277,38 +13954,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.ensurePendingPaymentPermission(principal, 'finance:pending-payment:cancel');
     const current = await this.findPaymentApplicationById(id);
     if (current.status !== 'WAITING_PAYMENT') throw new BadRequestException('只有待支付申请可以撤回');
-    const canceled = await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const locked = await tx.paymentApplication.findUnique({ where: { id }, include: this.paymentApplicationInclude() });
-      if (!locked || locked.status !== 'WAITING_PAYMENT') throw new ConflictException('付款申请已被其他会话处理，请刷新');
-      const changed = await tx.paymentApplication.updateMany({
-        where: { id, status: 'WAITING_PAYMENT' },
-        data: { status: 'CANCELED', canceledAt: new Date(), cancelReason: input.reason }
-      });
-      if (changed.count !== 1) throw new ConflictException('付款申请已被其他会话处理，请刷新');
-      const pendingIds = (locked.items ?? []).map((item: any) => item.payablePaymentApplicationId);
-      if (pendingIds.length) {
-        const released = await tx.payablePaymentApplication.updateMany({
-          where: { id: { in: pendingIds }, status: 'APPLIED' },
-          data: { status: 'READY', applicationStatus: 'PENDING', appliedAt: null }
-        });
-        if (released.count !== new Set(pendingIds).size) throw new ConflictException('待付款记录状态已变化，请刷新');
-      }
-      const next = await tx.paymentApplication.findUnique({ where: { id }, include: this.paymentApplicationInclude() });
-      const transactionSummary = this.toPaymentApplicationSummary(next);
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'finance.payment_application.cancel',
-          target: id,
-          before: toAuditJson(locked),
-          after: toAuditJson(this.toPaymentApplicationAuditSnapshot(transactionSummary, locked.status, 'CANCELED', principal.username))
-        }
-      });
-      await tx.paymentApplicationItem.deleteMany({ where: { paymentApplicationId: id } });
-      return next;
+    const canceled = await (this.prisma as any).paymentApplication.update({
+      where: { id },
+      data: { status: 'CANCELED', canceledAt: new Date(), cancelReason: input.reason },
+      include: this.paymentApplicationInclude()
+    });
+    await (this.prisma as any).payablePaymentApplication.updateMany({
+      where: { paymentApplicationItem: { paymentApplicationId: id } },
+      data: { status: 'READY', applicationStatus: 'PENDING', appliedAt: null }
     });
     const [enriched] = await this.withPendingBillVouchers([canceled]);
     const summary = this.toPaymentApplicationSummary(enriched);
+    await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'finance.payment_application.cancel', target: id, before: current, after: toAuditJson(this.toPaymentApplicationAuditSnapshot(summary, current.status, 'CANCELED', principal.username)) } });
+    await (this.prisma as any).paymentApplicationItem.deleteMany({ where: { paymentApplicationId: id } });
     return summary;
   }
 
@@ -13332,9 +13990,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     if (!input.fileName?.trim()) throw new BadRequestException('凭证文件名不能为空');
     if (!input.paymentApplicationId && !input.pendingPaymentId) throw new BadRequestException('凭证必须关联待付款或付款申请');
-    if (hasLegacyMiscFeeVoucherPayload(input)) {
-      throw new BadRequestException('杂费和跨越账单已迁移到杂费模块，请从杂费入口登记');
-    }
     if (input.billAmount !== undefined && input.billAmount < 0) throw new BadRequestException('账单金额不能小于 0');
     if (input.extraFeeAmount !== undefined && input.extraFeeAmount < 0) throw new BadRequestException('杂费金额不能小于 0');
     if (input.kuayueAmount !== undefined && input.kuayueAmount < 0) throw new BadRequestException('跨越账单金额不能小于 0');
@@ -13560,13 +14215,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async getPaidPayments(principal: Principal, query: PaidPaymentListQuery = {}): Promise<PaidPaymentListResponse> {
     await this.ensurePayablePermission(principal, 'finance:paid-payment:read');
     const canViewBank = await this.hasPermission(principal.role, 'finance:paid-payment:bank-view');
-    const applications = await (this.prisma as any).paymentApplication.findMany({
-      where: { status: query.status && query.status !== 'ALL' ? query.status : { in: ['WAITING_PAYMENT', 'PAID'] } },
-      include: this.paymentApplicationInclude(),
-      orderBy: [{ paidAt: 'desc' }, { appliedAt: 'desc' }]
-    });
+    const [applications, agents] = await Promise.all([
+      (this.prisma as any).paymentApplication.findMany({
+        where: { status: query.status && query.status !== 'ALL' ? query.status : { in: ['WAITING_PAYMENT', 'PAID'] } },
+        include: this.paymentApplicationInclude(),
+        orderBy: [{ paidAt: 'desc' }, { appliedAt: 'desc' }]
+      }),
+      (this.prisma as any).agent.findMany({
+        select: { id: true, name: true, shortName: true, code: true }
+      })
+    ]);
     const enriched = await this.withPendingBillVouchers(applications);
-    const rows = enriched.map((row: any) => this.toPaidPaymentSummary(row, canViewBank));
+    const rows = enriched.map((row: any) => this.toPaidPaymentSummary(row, canViewBank, agents));
     return this.buildPaidPaymentListResponse(rows, query);
   }
 
@@ -13577,122 +14237,50 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!input.paidAt) throw new BadRequestException('付款日期不能为空');
     const current = await this.findPaymentApplicationById(id);
     if (current.status !== 'WAITING_PAYMENT') throw new BadRequestException('只有待支付申请可以确认付款');
-    const pendingIds = (current.items ?? []).map((item: any) => item.payablePaymentApplicationId);
-    const payableIds = (current.items ?? [])
-      .map((item: any) => item.payableFinanceItemId)
-      .filter((value: unknown): value is string => typeof value === 'string' && Boolean(value));
-    const miscFeeIds = (current.items ?? []).map((item: any) => item.miscFeeRecordId).filter(Boolean);
-    const paidAt = new Date(input.paidAt);
-    const { updated, createdWaterReceipt } = await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const lockedCurrent = await tx.paymentApplication.findUnique({ where: { id }, include: this.paymentApplicationInclude() });
-      if (!lockedCurrent || lockedCurrent.status !== 'WAITING_PAYMENT') {
-        throw new ConflictException('付款申请已被其他会话处理，请刷新');
-      }
-      const lockedPendingCount = await tx.payablePaymentApplication.count({
-        where: { id: { in: pendingIds }, status: 'APPLIED' }
-      });
-      if (lockedPendingCount !== new Set(pendingIds).size) {
-        throw new ConflictException('待付款记录状态已变化，请刷新');
-      }
-      if (miscFeeIds.length) {
-        const validMiscFeeCount = await tx.miscFeeRecord.count({
-          where: { id: { in: miscFeeIds }, auditStatus: 'APPROVED', voidedAt: null }
-        });
-        if (validMiscFeeCount !== new Set(miscFeeIds).size) {
-          throw new ConflictException('杂费应付状态已变化，请刷新');
-        }
-      }
-      const changed = await tx.paymentApplication.updateMany({
-        where: { id, status: 'WAITING_PAYMENT' },
-        data: {
-          status: 'PAID',
-          payerBankName: input.payerBankName!.trim(),
-          payerBankAccountName: input.payerBankAccountName?.trim(),
-          payerBankAccountNo: input.payerBankAccountNo?.trim(),
-          paidAt,
-          paidBy: principal.username,
-          paidRemark: input.paidRemark
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('付款申请已被其他会话处理，请刷新');
-      const createdReceipt = input.waterReceipt?.fileName
-        ? await tx.paymentVoucher.create({
-            data: {
-              paymentApplicationId: id,
+    const updated = await (this.prisma as any).paymentApplication.update({
+      where: { id },
+      data: {
+        status: 'PAID',
+        payerBankName: input.payerBankName.trim(),
+        payerBankAccountName: input.payerBankAccountName?.trim(),
+        payerBankAccountNo: input.payerBankAccountNo?.trim(),
+        paidAt: new Date(input.paidAt),
+        paidBy: principal.username,
+        paidRemark: input.paidRemark,
+        ...(input.waterReceipt?.fileName ? {
+          vouchers: {
+            create: [{
               voucherType: 'PAYMENT_RECEIPT',
               fileName: input.waterReceipt.fileName.trim(),
               mimeType: input.waterReceipt.mimeType,
               sizeBytes: input.waterReceipt.sizeBytes,
               url: input.waterReceipt.url,
               uploadedBy: principal.username
-            }
-          })
-        : undefined;
-      const updatedPending = await tx.payablePaymentApplication.updateMany({
-        where: { id: { in: pendingIds }, status: 'APPLIED' },
-        data: { status: 'PAID', applicationStatus: 'PAID', paymentNo: lockedCurrent.applicationNo }
-      });
-      if (updatedPending.count !== new Set(pendingIds).size) throw new ConflictException('待付款记录状态已变化，请刷新');
-      if (payableIds.length) {
-        await tx.shipmentFinanceItem.updateMany({
-          where: { id: { in: payableIds }, type: 'PAYABLE' },
-          data: { locked: true, paymentNo: lockedCurrent.applicationNo }
-        });
-      }
-      if (miscFeeIds.length) {
-        const archived = await tx.miscFeeRecord.findMany({
-          where: {
-            id: { in: miscFeeIds },
-            sourceType: 'KUAYUE',
-            confirmationStatus: 'CONFIRMED',
-            auditStatus: 'APPROVED',
-            archivedAt: null,
-            voidedAt: null
-          },
-          select: { id: true }
-        });
-        if (archived.length) {
-          await tx.miscFeeRecord.updateMany({
-            where: { id: { in: archived.map((row: any) => row.id) }, archivedAt: null },
-            data: { archivedAt: paidAt, version: { increment: 1 } }
-          });
-          for (const row of archived) {
-            await tx.auditLog.create({
-              data: {
-                actorId: principal.id,
-                action: 'misc_fee.kuayue.auto_archive',
-                target: row.id,
-                after: toAuditJson({ paymentApplicationId: id, paidAt })
-              }
-            });
+            }]
           }
-        }
-      }
-      const next = await tx.paymentApplication.findUnique({ where: { id }, include: this.paymentApplicationInclude() });
-      const transactionSummary = this.toPaidPaymentSummary(next, true);
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'finance.paid_payment.confirm',
-          target: id,
-          before: toAuditJson(lockedCurrent),
-          after: toAuditJson(this.toPaidPaymentAuditSnapshot(transactionSummary, lockedCurrent.status, 'PAID'))
-        }
-      });
-      if (createdReceipt) {
-        await tx.auditLog.create({
-          data: {
-            actorId: principal.id,
-            action: 'finance.paid_payment.water_receipt.add',
-            target: createdReceipt.id,
-            after: toAuditJson(this.toPaidPaymentVoucherAuditSnapshot(this.toPaymentVoucherSummary(createdReceipt), transactionSummary))
-          }
-        });
-      }
-      return { updated: next, createdWaterReceipt: createdReceipt };
+        } : {})
+      },
+      include: this.paymentApplicationInclude()
+    });
+    const createdWaterReceipt = input.waterReceipt?.fileName
+      ? [...(updated.vouchers ?? [])]
+        .filter((voucher: any) => voucher.voucherType === 'PAYMENT_RECEIPT' && voucher.fileName === input.waterReceipt?.fileName?.trim())
+        .sort((left: any, right: any) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())[0]
+      : undefined;
+    const pendingIds = (current.items ?? []).map((item: any) => item.payablePaymentApplicationId);
+    const payableIds = (current.items ?? []).map((item: any) => item.payableFinanceItemId);
+    await (this.prisma as any).payablePaymentApplication.updateMany({
+      where: { id: { in: pendingIds } },
+      data: { status: 'PAID', applicationStatus: 'PAID', paymentNo: current.applicationNo }
+    });
+    await (this.prisma as any).shipmentFinanceItem.updateMany({
+      where: { id: { in: payableIds }, type: 'PAYABLE' },
+      data: { locked: true, paymentNo: current.applicationNo }
     });
     const [enriched] = await this.withPendingBillVouchers([updated]);
     const summary = this.toPaidPaymentSummary(enriched, true);
+    await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'finance.paid_payment.confirm', target: id, before: current, after: toAuditJson(this.toPaidPaymentAuditSnapshot(summary, current.status, 'PAID')) } });
+    if (createdWaterReceipt) await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'finance.paid_payment.water_receipt.add', target: createdWaterReceipt.id, after: toAuditJson(this.toPaidPaymentVoucherAuditSnapshot(this.toPaymentVoucherSummary(createdWaterReceipt), summary)) } });
     void this.lineage?.recordEvent('finance.paid_verification.confirm', {
       actorUsername: principal.username,
       businessId: summary.id,
@@ -13708,9 +14296,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         itemCount: summary.items.length,
         items: summary.items.map((item) => ({
           pendingPaymentId: item.pendingPaymentId,
-          sourceType: item.sourceType,
           payableFinanceItemId: item.payableFinanceItemId,
-          miscFeeRecordId: item.miscFeeRecordId,
           shipmentId: item.shipmentId,
           amount: item.amount,
           currency: item.currency
@@ -13720,9 +14306,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [
         { nodeType: 'payment_application', id: summary.id },
         ...summary.items.map((item) => ({ nodeType: 'pending_payment', id: item.pendingPaymentId })),
-        ...summary.items.filter((item) => item.payableFinanceItemId).map((item) => ({ nodeType: 'payable_finance_item', id: item.payableFinanceItemId! })),
-        ...summary.items.filter((item) => item.miscFeeRecordId).map((item) => ({ nodeType: 'misc_fee', id: item.miscFeeRecordId! })),
-        ...summary.items.filter((item) => item.shipmentId).map((item) => ({ nodeType: 'shipment', id: item.shipmentId! })),
+        ...summary.items.map((item) => ({ nodeType: 'payable_finance_item', id: item.payableFinanceItemId })),
+        ...summary.items.map((item) => ({ nodeType: 'shipment', id: item.shipmentId })),
         ...(createdWaterReceipt ? [{ nodeType: 'payment_voucher', id: createdWaterReceipt.id }] : [])
       ],
       metrics: { totalAmount: summary.totalAmount, itemCount: summary.items.length, currency: summary.currency }
@@ -13769,108 +14354,34 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.ensurePayablePermission(principal, 'finance:paid-payment:reverse');
     const current = await this.findPaymentApplicationById(id);
     if (current.status !== 'PAID') throw new BadRequestException('只有已支付记录可以反核销');
+    const updated = await (this.prisma as any).paymentApplication.update({
+      where: { id },
+      data: {
+        status: 'WAITING_PAYMENT',
+        reversedAt: new Date(),
+        reversedBy: principal.username,
+        reverseReason: input.reason,
+        paidAt: null,
+        paidBy: null,
+        paidRemark: null,
+        payerBankName: null,
+        payerBankAccountName: null,
+        payerBankAccountNo: null
+      },
+      include: this.paymentApplicationInclude()
+    });
     const pendingIds = (current.items ?? []).map((item: any) => item.payablePaymentApplicationId);
-    const payableIds = (current.items ?? [])
-      .map((item: any) => item.payableFinanceItemId)
-      .filter((value: unknown): value is string => typeof value === 'string' && Boolean(value));
-    const miscFeeIds = (current.items ?? []).map((item: any) => item.miscFeeRecordId).filter(Boolean);
-    const reversedAt = new Date();
-    const updated = await (this.prisma as any).$transaction(async (tx: any) => {
-      const changed = await tx.paymentApplication.updateMany({
-        where: { id, status: 'PAID' },
-        data: {
-          status: 'WAITING_PAYMENT',
-          reversedAt,
-          reversedBy: principal.username,
-          reverseReason: input.reason,
-          paidAt: null,
-          paidBy: null,
-          paidRemark: null,
-          payerBankName: null,
-          payerBankAccountName: null,
-          payerBankAccountNo: null
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('付款记录已被其他会话处理，请刷新');
-      await tx.payablePaymentApplication.updateMany({
-        where: { id: { in: pendingIds } },
-        data: { status: 'APPLIED', applicationStatus: 'APPLIED', paymentNo: null }
-      });
-      if (payableIds.length) {
-        await tx.shipmentFinanceItem.updateMany({
-          where: { id: { in: payableIds }, type: 'PAYABLE' },
-          data: { paymentNo: null }
-        });
-      }
-      if (miscFeeIds.length && current.paidAt) {
-        const autoArchived = await tx.miscFeeRecord.findMany({
-          where: { id: { in: miscFeeIds }, sourceType: 'KUAYUE', archivedAt: current.paidAt, voidedAt: null },
-          select: { id: true }
-        });
-        if (autoArchived.length) {
-          await tx.miscFeeRecord.updateMany({
-            where: { id: { in: autoArchived.map((row: any) => row.id) }, archivedAt: current.paidAt },
-            data: { archivedAt: null, version: { increment: 1 } }
-          });
-          for (const row of autoArchived) {
-            await tx.auditLog.create({
-              data: {
-                actorId: principal.id,
-                action: 'misc_fee.kuayue.auto_unarchive',
-                target: row.id,
-                after: toAuditJson({ paymentApplicationId: id, reason: input.reason })
-              }
-            });
-          }
-        }
-      }
-      const next = await tx.paymentApplication.findUnique({ where: { id }, include: this.paymentApplicationInclude() });
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'finance.paid_payment.reverse',
-          target: id,
-          before: toAuditJson(current),
-          after: toAuditJson(this.toPaidPaymentAuditSnapshot(this.toPaidPaymentSummary(next, true), current.status, 'WAITING_PAYMENT', principal.username, reversedAt.toISOString()))
-        }
-      });
-      return next;
+    const payableIds = (current.items ?? []).map((item: any) => item.payableFinanceItemId);
+    await (this.prisma as any).payablePaymentApplication.updateMany({
+      where: { id: { in: pendingIds } },
+      data: { status: 'APPLIED', applicationStatus: 'APPLIED', paymentNo: null }
+    });
+    await (this.prisma as any).shipmentFinanceItem.updateMany({
+      where: { id: { in: payableIds }, type: 'PAYABLE' },
+      data: { paymentNo: null }
     });
     const [enriched] = await this.withPendingBillVouchers([updated]);
-    const summary = this.toPaidPaymentSummary(enriched, true);
-    void this.lineage?.recordEvent('finance.paid_verification.reverse', {
-      actorUsername: principal.username,
-      businessId: summary.id,
-      payload: {
-        paymentApplicationId: summary.id,
-        applicationNo: summary.applicationNo,
-        totalAmount: summary.totalAmount,
-        currency: summary.currency,
-        statusFrom: current.status,
-        statusTo: 'WAITING_PAYMENT',
-        reversedBy: principal.username,
-        reversedAt: reversedAt.toISOString(),
-        reason: input.reason,
-        itemCount: summary.items.length,
-        items: summary.items.map((item) => ({
-          pendingPaymentId: item.pendingPaymentId,
-          sourceType: item.sourceType,
-          payableFinanceItemId: item.payableFinanceItemId,
-          miscFeeRecordId: item.miscFeeRecordId,
-          shipmentId: item.shipmentId,
-          amount: item.amount,
-          currency: item.currency
-        }))
-      },
-      sourceRefs: [
-        { nodeType: 'payment_application', id: summary.id },
-        ...summary.items.map((item) => ({ nodeType: 'pending_payment', id: item.pendingPaymentId })),
-        ...summary.items.filter((item) => item.payableFinanceItemId).map((item) => ({ nodeType: 'payable_finance_item', id: item.payableFinanceItemId! })),
-        ...summary.items.filter((item) => item.miscFeeRecordId).map((item) => ({ nodeType: 'misc_fee', id: item.miscFeeRecordId! })),
-        ...summary.items.filter((item) => item.shipmentId).map((item) => ({ nodeType: 'shipment', id: item.shipmentId! }))
-      ],
-      metrics: { totalAmount: summary.totalAmount, itemCount: summary.items.length, currency: summary.currency }
-    });
+    await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'finance.paid_payment.reverse', target: id, before: current, after: toAuditJson(this.toPaidPaymentAuditSnapshot(this.toPaidPaymentSummary(enriched, true), current.status, 'WAITING_PAYMENT', principal.username, updated.reversedAt?.toISOString?.() ?? updated.reversedAt)) } });
     return this.toPaidPaymentSummary(enriched, await this.hasPermission(principal.role, 'finance:paid-payment:bank-view'));
   }
 
@@ -13977,13 +14488,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       await this.recordPermissionDenied(principal, { permissions: ['finance:order-fee:payable:view'], method: 'GET', path: `/api/shipments/${shipmentId}/finance-detail` });
       throw new ForbiddenException('当前角色不能查看单票费用明细');
     }
+    const canViewReceivables = await this.canViewShipmentReceivables(principal);
 
+    const shipmentOwnerWhere = this.shipmentOwnerWhere(principal);
     const shipment = await this.prisma.shipment.findFirst({
       where: {
         id: shipmentId,
         ...(options.includeDeleted ? {} : { deletedAt: null }),
         ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-        ...(this.shipmentOwnerWhere(principal) ?? {})
+        ...(shipmentOwnerWhere ?? {})
       },
       include: {
         customer: true,
@@ -13994,6 +14507,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
     });
     if (!shipment) {
+      throw new NotFoundException('运单不存在');
+    }
+    const canViewBeyondOrderEntry = await this.canViewShipmentFinanceDetailBeyondOrderEntry(principal);
+    if (!canViewBeyondOrderEntry && !['DRAFT', 'REVIEW_REJECTED', 'REVIEW_PENDING'].includes(shipment.status)) {
       throw new NotFoundException('运单不存在');
     }
     const pendingMatchRequests = await (this.prisma as any).waterReceiptMatchRequest.findMany({
@@ -14090,10 +14607,25 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const canViewBusinessPayableProfit = await this.hasAnyPermission(principal.role, ['finance:order-fee:profit:business-payable', 'finance:payable:view-profit', 'business:shipment:profit-view']);
     const canViewSensitivePayable = await this.hasPermission(principal.role, 'finance:payable:view-sensitive');
     const canViewBusinessCostAgent = await this.hasAnyPermission(principal.role, ['finance:business-cost:view-agent', 'finance:payable:view-sensitive']);
-    const visiblePayables = canViewPayables
-      ? payables.map((row) => canViewSensitivePayable
-          ? row
-          : { ...row, agentId: undefined, agentName: undefined, paymentNo: undefined })
+    const financeFieldMasks = await this.getWorkspaceFieldMaskState(principal, 'finance');
+    const hideFinanceAgent = financeFieldMasks['agent-company-name'] || financeFieldMasks['agent-data'];
+    const exposePayables = canViewPayables && !financeFieldMasks['payable-cost'];
+    const visiblePayables = exposePayables
+      ? payables.map((row) => {
+          const visible = canViewSensitivePayable
+            ? { ...row }
+            : { ...row, agentId: undefined, agentName: undefined, paymentNo: undefined };
+          if (hideFinanceAgent) {
+            delete (visible as Partial<PayableFeeSummary>).agentId;
+            delete (visible as Partial<PayableFeeSummary>).agentName;
+          }
+          if (financeFieldMasks['payable-status']) {
+            delete (visible as Partial<PayableFeeSummary>).settled;
+            delete (visible as Partial<PayableFeeSummary>).reconciliationStatus;
+            delete (visible as Partial<PayableFeeSummary>).locked;
+          }
+          return visible;
+        })
       : [];
     const receivableTotal = roundMoney(receivables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
     const payableTotal = roundMoney(payables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
@@ -14102,11 +14634,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const businessProfit = roundMoney(receivableTotal - businessCostTotal);
     businessCosts.forEach((row) => {
       row.businessProfit = canViewReceivableBusinessProfit ? businessProfit : undefined;
-      if (!canViewBusinessCostAgent) {
-        row.agentName = undefined;
+      if (!canViewBusinessCostAgent || hideFinanceAgent) {
+        delete (row as Partial<BusinessCostFeeSummary>).agentId;
+        delete (row as Partial<BusinessCostFeeSummary>).agentName;
       }
     });
-    const hasPayables = payables.length > 0;
+    const hasPayables = exposePayables && payables.length > 0;
     const profitSections = [
       ...(canViewReceivablePayableProfit
         ? [{ key: 'RECEIVABLE_PAYABLE' as const, title: '应收与应付利润', amount: Number((receivableTotal - payableTotal).toFixed(2)), currency: 'RMB' as const }]
@@ -14117,20 +14650,20 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       ...(canViewBusinessPayableProfit
         ? [{ key: 'BUSINESS_PAYABLE' as const, title: '业务与应付利润', amount: Number((businessCostTotal - payableTotal).toFixed(2)), currency: 'RMB' as const }]
         : [])
-    ];
+    ].filter((section) => !financeFieldMasks['payable-cost'] || !section.key.includes('PAYABLE'));
 
     return {
       shipmentId: shipment.id,
       customerOrderNo: shipment.customerOrderNo,
       outboundOrderNo: resolveShipmentOutboundOrderNo(shipment),
       systemOrderNo: shipment.systemOrderNo,
-      receivables,
+      receivables: canViewReceivables ? receivables : [],
       businessCosts,
-      receivableTotal,
+      receivableTotal: canViewReceivables ? receivableTotal : 0,
       businessCostTotal: businessCostTotal || undefined,
-      ...(canViewPayables
+      ...(exposePayables
         ? {
-            ...(canViewSensitivePayable ? { agentName } : {}),
+            ...(canViewSensitivePayable && !hideFinanceAgent ? { agentName } : {}),
             payables: visiblePayables,
             payableTotal: visiblePayableTotal,
             canViewPayables: true
@@ -14140,7 +14673,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         ? { grossProfit: receivableTotal - payableTotal }
         : {}),
       ...(profitSections.length ? { profitSections } : {}),
-      ...(canViewSensitivePayable
+      ...(canViewSensitivePayable && !financeFieldMasks['payable-cost']
         ? {
             paymentAmountUsd: shipment.paymentAmountUsd === null ? undefined : Number(shipment.paymentAmountUsd),
             paymentAmountCny: shipment.paymentAmountCny === null ? undefined : Number(shipment.paymentAmountCny),
@@ -14148,6 +14681,129 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           }
         : {})
     };
+  }
+
+  async getCustomerServiceFinanceUpdatePreview(
+    principal: Principal,
+    shipmentId: string,
+    kind: 'business' | 'agent'
+  ): Promise<CustomerServiceFinanceUpdatePreview> {
+    const shipment = await this.getVisibleShipment(principal, shipmentId);
+    const permission = kind === 'business'
+      ? 'customer-service:data-confirm:business-update'
+      : 'customer-service:data-confirm:agent-update';
+    if (!(await this.hasPermission(principal.role, permission))) throw new ForbiddenException('无权查看费用修改预览');
+    const types = kind === 'business' ? ['BUSINESS_COST', 'PAYABLE'] : ['PAYABLE'];
+    const items = await (this.prisma as any).shipmentFinanceItem.findMany({
+      where: { shipmentId: shipment.id, type: { in: types }, voided: false },
+      orderBy: { createdAt: 'asc' }
+    });
+    const rows = items.map((item: any): CustomerServiceFinanceUpdatePreviewRow => {
+      const billing = ['BUSINESS_COST', 'PAYABLE'].includes(item.type) ? resolveFinanceCostBillingFields(item.type, item) : undefined;
+      return {
+        id: item.id,
+        type: item.type as 'BUSINESS_COST' | 'PAYABLE',
+        name: item.name,
+        amount: Number(item.amount),
+        currency: item.currency ?? 'RMB',
+        billingUnit: billing?.billingUnit,
+        billingQuantity: billing?.billingQuantity === undefined ? undefined : Number(billing.billingQuantity),
+        chargeWeightKg: billing?.chargeWeightKg === undefined ? (item.chargeWeightKg === null ? undefined : Number(item.chargeWeightKg)) : Number(billing.chargeWeightKg),
+        unitPrice: item.unitPrice === null || item.unitPrice === undefined ? undefined : Number(item.unitPrice),
+        amountOverridden: item.amountOverridden === true,
+        reconciliationStatus: (item.reconciliationStatus ?? 'PENDING') as any,
+        locked: item.locked === true,
+        selectable: item.locked !== true && item.reconciliationStatus !== 'CONFIRMED'
+      };
+    });
+    return { shipmentId: shipment.id, rows };
+  }
+
+  async updateCustomerServiceFinanceItem(
+    principal: Principal,
+    shipmentId: string,
+    feeId: string,
+    kind: 'business' | 'agent',
+    input: CustomerServiceFinanceItemUpdateInput
+  ): Promise<CustomerServiceFinanceUpdatePreviewRow> {
+    const shipment = await this.getVisibleShipment(principal, shipmentId);
+    const permission = kind === 'business'
+      ? 'customer-service:data-confirm:business-update'
+      : 'customer-service:data-confirm:agent-update';
+    if (!(await this.hasPermission(principal.role, permission))) throw new ForbiddenException('无权修改费用条目');
+    this.ensureCustomerServiceDataCycle(shipment, input.expectedOutboundAt);
+    if (shipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改费用条目');
+    if (!input.name?.trim()) throw new BadRequestException('费用名称不能为空');
+    if (!['BUSINESS_COST', 'PAYABLE'].includes(input.type)) throw new BadRequestException('费用类型无效');
+    if (kind === 'agent' && input.type !== 'PAYABLE') throw new BadRequestException('代理数据只能修改应付成本');
+    if (!isFinanceBillingUnit(input.billingUnit)) throw new BadRequestException('计费依据只能选择 KG 或 CBM');
+    if (!Number.isFinite(Number(input.billingQuantity)) || Number(input.billingQuantity) < 0) throw new BadRequestException('计费数量必须为大于等于 0 的有效值');
+    if (input.unitPrice !== undefined && input.unitPrice !== null && (!Number.isFinite(Number(input.unitPrice)) || Number(input.unitPrice) < 0)) throw new BadRequestException('单价必须为大于等于 0 的有效值');
+    const currency = input.currency === undefined ? undefined : input.currency.trim().toUpperCase() || 'RMB';
+    if (currency !== undefined && !['RMB', 'USD'].includes(currency)) throw new BadRequestException('费用币种只能选择 RMB 或 USD');
+
+    await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, shipmentId);
+      const lockedShipment = await tx.shipment.findUnique({ where: { id: shipmentId }, include: shipmentIncludes });
+      if (!lockedShipment) throw new NotFoundException('运单不存在');
+      this.ensureCustomerServiceDataCycle(lockedShipment, input.expectedOutboundAt);
+      if (lockedShipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改费用条目');
+      const lockedCurrent = await tx.shipmentFinanceItem.findFirst({ where: { id: feeId, shipmentId, voided: false } });
+      if (!lockedCurrent || !['BUSINESS_COST', 'PAYABLE'].includes(lockedCurrent.type) || (kind === 'agent' && lockedCurrent.type !== 'PAYABLE')) {
+        throw new NotFoundException('费用项目不存在');
+      }
+      if (lockedCurrent.locked || ['CONFIRMED', 'LOCKED'].includes(lockedCurrent.reconciliationStatus ?? 'PENDING')) {
+        throw new BadRequestException('费用已审核或锁定，不能修改');
+      }
+      const typeChanged = lockedCurrent.type !== input.type;
+      if (typeChanged) {
+        if (kind !== 'business') throw new BadRequestException('代理数据不能切换费用类型');
+        await this.ensureCustomerServiceFinanceTypeSwitchable(tx, feeId);
+      }
+      this.ensureBusinessCostEditableAfterDispatch(principal, lockedCurrent.type, lockedShipment);
+      this.ensureBusinessCostEditableAfterDispatch(principal, input.type, lockedShipment);
+      const quantity = Number(input.billingQuantity);
+      const unitPrice = input.unitPrice === undefined
+        ? lockedCurrent.unitPrice === null || lockedCurrent.unitPrice === undefined ? undefined : Number(lockedCurrent.unitPrice)
+        : input.unitPrice === null ? undefined : Number(input.unitPrice);
+      const amount = unitPrice === undefined ? lockedCurrent.amount : roundMoney(quantity * unitPrice);
+      const updated = await tx.shipmentFinanceItem.update({
+        where: { id: feeId },
+        data: {
+          name: input.name.trim(),
+          type: input.type,
+          currency: currency ?? lockedCurrent.currency ?? 'RMB',
+          billingUnit: input.billingUnit,
+          billingQuantity: quantity,
+          chargeWeightKg: input.billingUnit === 'KG' ? quantity : null,
+          unitPrice: unitPrice ?? null,
+          amount,
+          amountOverridden: unitPrice === undefined
+        }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'shipment.finance_item.update',
+          target: updated.id,
+          before: lockedCurrent,
+          after: updated
+        }
+      });
+      await tx.shipmentEvent.create({
+        data: {
+          shipmentId: lockedShipment.id,
+          fromStatus: lockedShipment.status,
+          toStatus: lockedShipment.status,
+          note: `客服费用修改：${lockedCurrent.type} -> ${updated.type} / ${updated.name}`
+        }
+      });
+    });
+    await this.ensureCustomerServiceDataCycleStillCurrent(shipmentId, input.expectedOutboundAt);
+    const preview = await this.getCustomerServiceFinanceUpdatePreview(principal, shipmentId, kind);
+    const updatedRow = preview.rows.find((row) => row.id === feeId);
+    if (!updatedRow) throw new NotFoundException('费用项目不存在');
+    return updatedRow;
   }
 
   async getReviewPendingShipments(principal: Principal): Promise<Shipment[]> {
@@ -14163,7 +14819,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       include: shipmentIncludes,
       orderBy: { createdAt: 'asc' }
     });
-    return Promise.all((await this.decorateReviewPendingListShipments(rows)).map((shipment) => this.redactOrderEntrySensitiveShipment(principal, shipment)));
+    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
+    return (await this.decorateReviewPendingListShipments(rows)).map((shipment) => this.redactOrderEntrySensitiveShipment(principal, shipment, canViewAgentWeight));
   }
 
   async getOrderEntryDrafts(principal: Principal): Promise<Shipment[]> {
@@ -14180,7 +14837,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       include: shipmentIncludes,
       orderBy: { createdAt: 'desc' }
     });
-    return Promise.all((await this.decorateReviewPendingListShipments(rows)).map((shipment) => this.redactOrderEntrySensitiveShipment(principal, shipment)));
+    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
+    return (await this.decorateReviewPendingListShipments(rows)).map((shipment) => this.redactOrderEntrySensitiveShipment(principal, shipment, canViewAgentWeight));
   }
 
   private async decorateReviewPendingListShipments(rows: any[]): Promise<Shipment[]> {
@@ -14288,7 +14946,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       include: shipmentIncludes,
       orderBy: [{ deletedAt: 'desc' }, { createdAt: 'asc' }]
     });
-    return rows.map(mapShipment);
+    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
+    return rows.map((row) => this.scopeShipmentAgentWeight(mapShipment(row), canViewAgentWeight));
   }
 
   async getShipmentReviewDetail(principal: Principal, shipmentId: string): Promise<ShipmentReviewDetailSummary> {
@@ -14304,8 +14963,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     shipmentId: string
   ): Promise<Pick<ShipmentReviewDetailSummary, 'shipment' | 'packages'>> {
     const shipment = await this.getVisibleShipment(principal, shipmentId, true);
-    const detail = await this.buildShipmentReviewDetail(principal, shipment);
-    return { shipment: detail.shipment, packages: detail.packages };
+    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
+    return {
+      shipment: this.redactOrderEntrySensitiveShipment(principal, mapShipment(shipment), canViewAgentWeight),
+      packages: await this.buildShipmentReviewPackages(shipment)
+    };
   }
 
   async updateShipmentReviewBasic(principal: Principal, shipmentId: string, input: ShipmentReviewBasicUpdateInput): Promise<ShipmentReviewDetailSummary> {
@@ -14321,7 +14983,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const cargoType = input.cargoType?.trim();
     const settlementMethod = input.settlementMethod?.trim();
     if (!customerCode || !customerOrderNo || !companyChannelName || !productName || !destinationCountry || !cargoType || !settlementMethod || typeof input.declarationRequired !== 'boolean') {
-      throw new BadRequestException('请补齐客户、客户单号、公司渠道、品名、目的地、报关、货物类型和结算方式');
+      throw new BadRequestException('请补齐客户、出货单号、公司渠道、品名、目的地、报关、货物类型和结算方式');
     }
     const currentProductNames = normalizeShipmentProductNames((shipment as any).productNames, (shipment as any).productName);
     const productNames = productName === formatShipmentProductNames(currentProductNames) ? currentProductNames : [productName];
@@ -14337,7 +14999,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         where: { id: shipment.id },
         select: { id: true, deletedAt: true, status: true, updatedAt: true, entryBy: true }
       });
-      if (!lockedCurrent || lockedCurrent.deletedAt) throw new NotFoundException('运单不存在');
+      if (!lockedCurrent || lockedCurrent.deletedAt) {
+        throw new NotFoundException('运单不存在');
+      }
       if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(lockedCurrent.status)) {
         throw new BadRequestException('订单已进入后续流程，不能再直接修改待审核资料');
       }
@@ -14396,54 +15060,84 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (principal.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能审核运单');
     }
-    const shipment = await this.getReviewVisibleShipment(principal, shipmentId, false);
-    if (!this.isReviewPendingStatus(shipment.status as ShipmentStatus)) {
+    const shipment = await this.getReviewVisibleShipment(principal, shipmentId, false, true);
+    if (shipment.status !== 'REVIEW_PENDING') {
       throw new BadRequestException('只有待审核运单可以审核通过');
     }
-    const detail = await this.buildShipmentReviewDetail(principal, shipment);
-    if (detail.approvalWarnings.length > 0) {
-      throw new BadRequestException(`审核资料未完整：${detail.approvalWarnings.join('；')}`);
-    }
     const canBusinessReview = await this.hasPermission(principal.role, 'business:review:approve')
-      && (principal.role !== 'ADMIN' || options.businessReview === true);
+      && (!isAdministratorRole(principal.role) || options.businessReview === true);
     if (canBusinessReview) {
-      if ((shipment as any).businessReviewedAt) {
-        throw new BadRequestException('该订单已完成业务员自审，已进入待排货与业务成本审核');
-      }
-      const updated = await this.prisma.shipment.update({
-        where: { id: shipment.id },
-        data: {
-          status: 'WAITING_SORT',
-          businessReviewedBy: principal.username,
-          businessReviewedAt: new Date(),
-          reviewRejectedReason: null,
-          trackingStaleDays: shipment.trackingStaleDays
-        } as any,
-        include: shipmentIncludes
-      });
-      await this.createEvent(shipment.id, shipment.status as ShipmentStatus, 'WAITING_SORT', `业务员自审通过并进入待排货：${principal.username}`);
-      const mappedUpdated = mapShipment(updated);
-      await this.prisma.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'shipment.review.business_approve',
-          target: shipment.id,
-          before: toAuditJson(mapShipment(shipment)),
-          after: toAuditJson({
-            ...mappedUpdated,
-            reviewStatus: 'BUSINESS_APPROVED',
-            statusFrom: shipment.status,
-            statusTo: mappedUpdated.status,
-            businessReviewer: principal.username,
-            businessReviewedBy: mappedUpdated.businessReviewedBy,
-            businessReviewedAt: mappedUpdated.businessReviewedAt,
-            receivableTotal: detail.finance.receivableTotal,
-            businessCostTotal: detail.finance.businessCostTotal ?? 0,
-            payableTotal: detail.finance.payableTotal,
-            approvalWarnings: detail.approvalWarnings
-          })
+      const result = await this.prisma.$transaction(async (tx: any) => {
+        await this.lockShipmentRow(tx, shipment.id);
+        const lockedShipment = await tx.shipment.findUnique({ where: { id: shipment.id }, include: shipmentIncludes });
+        if (!lockedShipment || lockedShipment.deletedAt) throw new NotFoundException('运单不存在');
+        await this.assertDepartmentTeamShipmentAccessAfterLock(tx, principal, lockedShipment, 'business:review:approve');
+        if (!await this.hasPermission(principal.role, 'business:review:approve')) {
+          throw new ForbiddenException('当前角色不能终审运单');
         }
+        if (lockedShipment.status !== 'REVIEW_PENDING') {
+          throw new BadRequestException('只有待审核运单可以审核通过');
+        }
+        if (lockedShipment.businessReviewedAt) {
+          throw new BadRequestException('该订单已完成业务员自审，已进入待排货与业务成本审核');
+        }
+        const packages = await this.buildShipmentReviewPackages(lockedShipment, tx);
+        const finance = this.getShipmentReviewFinanceCompleteness(lockedShipment);
+        const approvalWarnings = this.getShipmentReviewApprovalWarnings(mapShipment(lockedShipment), packages, finance);
+        if (approvalWarnings.length > 0) {
+          throw new BadRequestException(`审核资料未完整：${approvalWarnings.join('；')}`);
+        }
+        const updated = await tx.shipment.update({
+          where: { id: lockedShipment.id },
+          data: {
+            status: 'WAITING_SORT',
+            businessReviewedBy: principal.username,
+            businessReviewedAt: new Date(),
+            reviewRejectedReason: null,
+            trackingStaleDays: lockedShipment.trackingStaleDays
+          } as any,
+          include: shipmentIncludes
+        });
+        await tx.shipmentEvent.create({
+          data: {
+            shipmentId: lockedShipment.id,
+            fromStatus: lockedShipment.status,
+            toStatus: 'WAITING_SORT',
+            note: `业务员自审通过并进入待排货：${principal.username}`
+          }
+        });
+        const mappedUpdated = mapShipment(updated);
+        await tx.auditLog.create({
+          data: {
+            actorId: principal.id,
+            action: 'shipment.review.business_approve',
+            target: lockedShipment.id,
+            before: toAuditJson(mapShipment(lockedShipment)),
+            after: toAuditJson({
+              ...mappedUpdated,
+              reviewStatus: 'BUSINESS_APPROVED',
+              statusFrom: lockedShipment.status,
+              statusTo: mappedUpdated.status,
+              businessReviewer: principal.username,
+              businessReviewedBy: mappedUpdated.businessReviewedBy,
+              businessReviewedAt: mappedUpdated.businessReviewedAt,
+              receivableTotal: finance.receivableTotal,
+              businessCostTotal: finance.businessCostTotal ?? 0,
+              payableTotal: finance.payableTotal ?? 0,
+              approvalWarnings
+            })
+          }
+        });
+        return { updated, mappedUpdated, finance, approvalWarnings, statusFrom: lockedShipment.status as ShipmentStatus };
       });
+      const { updated, mappedUpdated, finance, approvalWarnings, statusFrom } = result;
+      await this.recordShipmentStageStatusTransition(
+        shipment.id,
+        statusFrom,
+        mappedUpdated.status,
+        mappedUpdated.businessReviewedAt ? new Date(mappedUpdated.businessReviewedAt) : new Date(),
+        'REVIEW_APPROVE'
+      );
       void this.lineage?.recordEvent('orders.review.approve', {
         actorUsername: principal.username,
         businessId: shipment.id,
@@ -14452,17 +15146,17 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           systemOrderNo: mappedUpdated.systemOrderNo,
           customerOrderNo: mappedUpdated.customerOrderNo,
           reviewStatus: 'BUSINESS_APPROVED',
-          statusFrom: shipment.status,
+          statusFrom,
           statusTo: mappedUpdated.status,
           reviewedBy: mappedUpdated.businessReviewedBy,
           reviewedAt: mappedUpdated.businessReviewedAt
         },
         sourceRefs: [{ nodeType: 'shipment', id: shipment.id }],
         metrics: {
-          receivableTotal: detail.finance.receivableTotal,
-          businessCostTotal: detail.finance.businessCostTotal ?? 0,
-          payableTotal: detail.finance.payableTotal,
-          approvalWarningCount: detail.approvalWarnings.length
+          receivableTotal: finance.receivableTotal,
+          businessCostTotal: finance.businessCostTotal ?? 0,
+          payableTotal: finance.payableTotal ?? 0,
+          approvalWarningCount: approvalWarnings.length
         }
       });
       return this.buildShipmentReviewDetail(principal, updated);
@@ -14827,10 +15521,27 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return { id: shipmentId, deleted: true };
   }
 
-  async createShipmentFinanceItem(principal: Principal, shipmentId: string, input: ShipmentFinanceItemCreateInput) {
+  async createPendingReviewBusinessCost(principal: Principal, shipmentId: string, input: ShipmentFinanceItemCreateInput) {
+    return this.createShipmentFinanceItem(
+      principal,
+      shipmentId,
+      { ...input, type: 'BUSINESS_COST' },
+      { allowDepartmentTeam: true, pendingReviewBusinessCostOnly: true }
+    );
+  }
+
+  async createShipmentFinanceItem(
+    principal: Principal,
+    shipmentId: string,
+    input: ShipmentFinanceItemCreateInput,
+    options: { allowDepartmentTeam?: boolean; pendingReviewBusinessCostOnly?: boolean } = {}
+  ) {
     this.validateFinanceItemInput(input.type, input);
-    const shipment = await this.getVisibleShipment(principal, shipmentId);
-    await this.ensureFinanceItemManageAccess(principal, input.type, shipment);
+    const shipment = await this.getVisibleShipment(principal, shipmentId, options.allowDepartmentTeam === true);
+    if (options.pendingReviewBusinessCostOnly) {
+      await this.ensurePendingReviewBusinessCostWrite(principal, input.type, shipment);
+    }
+    await this.ensureFinanceItemManageAccess(principal, input.type, shipment, options.pendingReviewBusinessCostOnly === true);
     this.ensureBusinessCostEditableAfterDispatch(principal, input.type, shipment);
     const { item, currentShipment } = await this.prisma.$transaction(async (tx: any) => {
       await this.lockShipmentRow(tx, shipment.id);
@@ -14839,11 +15550,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         include: shipmentIncludes
       });
       if (!lockedShipment) throw new NotFoundException('运单不存在');
-      await this.ensureFinanceItemManageAccess(principal, input.type, lockedShipment);
+      if (options.allowDepartmentTeam) {
+        await this.assertDepartmentTeamShipmentAccessAfterLock(tx, principal, lockedShipment, 'business:order-entry:business-cost-write');
+      }
+      if (options.pendingReviewBusinessCostOnly) {
+        await this.ensurePendingReviewBusinessCostWrite(principal, input.type, lockedShipment);
+      }
+      await this.ensureFinanceItemManageAccess(principal, input.type, lockedShipment, options.pendingReviewBusinessCostOnly === true);
       this.ensureBusinessCostEditableAfterDispatch(principal, input.type, lockedShipment);
+      const pendingReviewBusinessCostWrite = options.pendingReviewBusinessCostOnly === true;
+      const billing = input.type === 'BUSINESS_COST' ? resolveBusinessCostBillingFields(input) : undefined;
       const amount = this.resolveShipmentFinanceItemAmount(input.type, input);
       const financeAgent = input.type === 'PAYABLE' || input.type === 'BUSINESS_COST'
-        ? await this.resolveFinanceAgent(tx, input, lockedShipment.agent)
+        ? pendingReviewBusinessCostWrite
+          ? await this.resolveFinanceAgent(tx, {}, lockedShipment.agent)
+          : await this.resolveFinanceAgent(tx, input, lockedShipment.agent)
         : undefined;
       const created = await tx.shipmentFinanceItem.create({
         data: {
@@ -14853,13 +15574,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           amount,
           currency: input.currency ?? 'RMB',
           settlementMethod: input.settlementMethod ?? (input.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(lockedShipment) : undefined),
-          paymentNo: input.paymentNo,
-          reconciliationStatus: input.reconciliationStatus ?? 'PENDING',
+          paymentNo: pendingReviewBusinessCostWrite ? undefined : input.paymentNo,
+          reconciliationStatus: pendingReviewBusinessCostWrite ? 'PENDING' : input.reconciliationStatus ?? 'PENDING',
           agentId: financeAgent?.id,
           agentName: financeAgent?.name,
-          chargeWeightKg: input.chargeWeightKg,
+          billingUnit: billing?.billingUnit,
+          billingQuantity: billing?.billingQuantity,
+          chargeWeightKg: billing ? billing.chargeWeightKg : input.chargeWeightKg,
           unitPrice: input.unitPrice,
-          amountOverridden: this.isFinanceAmountOverridden({ ...input, amount }),
+          amountOverridden: this.isFinanceAmountOverridden({ ...input, ...billing, type: input.type, amount }),
           remark: input.remark,
           createdBy: principal.username
         }
@@ -14884,23 +15607,41 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       return { item: created, currentShipment: lockedShipment };
     });
     await this.createBusinessCostChangeNotificationAudit(principal, input.type, currentShipment, null, item);
-    return this.toFinanceItemSummary(item, currentShipment);
+    return this.scopeFinanceItemSummary(principal, input.type, this.toFinanceItemSummary(item, currentShipment));
   }
 
   async getOrderEntryWarehousePackages(principal: Principal, query: OrderEntryWarehousePackageQuery): Promise<WarehousePackageSummary[]> {
     await this.ensurePermission(principal, 'business:order-entry:warehouse-package-select', '没有录单仓库包裹选择权限');
     const packageIds = normalizeOrderEntryPackageIds(query.packageIds);
     const customerCode = query.customerCode?.trim();
+    const editingShipmentId = query.shipmentId?.trim();
     if (!customerCode && !packageIds.length) {
       return [];
     }
     const scope = this.operatorCustomerScope(principal);
+    const editingShipment = editingShipmentId
+      ? await this.prisma.shipment.findFirst({
+          where: {
+            id: editingShipmentId,
+            deletedAt: null,
+            ...(this.shipmentOwnerWhere(principal) ?? {})
+          } as any,
+          select: { id: true, status: true, customer: { select: { code: true } } }
+        })
+      : undefined;
+    if (editingShipmentId && (!editingShipment || !['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(editingShipment.status))) {
+      throw new BadRequestException('只有待审核或录单编辑状态的运单才能查看当前包裹');
+    }
+    if (editingShipment?.customer.code && customerCode && editingShipment.customer.code !== customerCode) {
+      throw new BadRequestException('当前运单客户与筛选客户不一致');
+    }
+    const effectiveCustomerCode = customerCode || editingShipment?.customer.code;
     const customer = customerCode ? await this.prisma.customer.findFirst({
       where: {
         code: customerCode,
         ...(scope ? { salesperson: { in: scope } } : {})
       },
-      select: { code: true }
+      select: { code: true, salesperson: true }
     }) : undefined;
     if (customerCode && !customer) {
       return [];
@@ -14914,16 +15655,25 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const requestedCustomerCodes: string[] = customer
       ? [customer.code]
       : Array.from(new Set(requestedPackages.map((item) => item.customerCode)));
-    const maintainedCustomerCodes = new Set((await this.prisma.customer.findMany({
-      where: { code: { in: requestedCustomerCodes } },
-      select: { code: true }
-    })).map((item) => item.code));
+    const maintainedCustomers = customer
+      ? [customer]
+      : await this.prisma.customer.findMany({
+        where: { code: { in: requestedCustomerCodes } },
+        select: { code: true, salesperson: true }
+      });
+    const maintainedCustomerCodes = new Set(maintainedCustomers.map((item) => item.code));
     const missingCustomerCodes = requestedCustomerCodes.filter((code) => !maintainedCustomerCodes.has(code));
     const visibleMissingCustomerCodes = scope
       ? missingCustomerCodes.filter((code) => requestedPackages.some((pkg) => pkg.customerCode === code && pkg.salesperson && scope.includes(pkg.salesperson)))
       : missingCustomerCodes;
     if (packageIds.length && visibleMissingCustomerCodes.length) {
       throw new BadRequestException(`客户资料不存在，请先在基础资料库维护客户 ${visibleMissingCustomerCodes.join('、')} 后再录单`);
+    }
+    const selectableCustomerCodes = maintainedCustomers
+      .filter((item) => !scope || (item.salesperson && scope.includes(item.salesperson)))
+      .map((item) => item.code);
+    if (!selectableCustomerCodes.length) {
+      return [];
     }
     const draftShipments = await this.prisma.shipment.findMany({
       where: {
@@ -14935,14 +15685,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     const draftOccupiedPackageIds = Array.from(new Set(draftShipments.flatMap((shipment) => shipment.draftWarehousePackageIds ?? []).filter(Boolean)));
     const where: any = {
-      shipmentId: null,
-      systemOrderNo: null,
       measurementStatus: { not: 'PENDING_REMEASURE' },
       status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] }
     };
-    if (customer) {
-      where.customerCode = customer.code;
-    }
+    where.customerCode = customer ? customer.code : effectiveCustomerCode ? effectiveCustomerCode : { in: selectableCustomerCodes };
+    where.OR = editingShipmentId
+      ? [{ shipmentId: null, systemOrderNo: null }, { shipmentId: editingShipmentId }]
+      : [{ shipmentId: null, systemOrderNo: null }];
     if (packageIds.length) {
       where.id = { in: packageIds };
     }
@@ -14954,18 +15703,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (query.domesticTrackingNo?.trim()) {
       where.domesticTrackingNo = { contains: query.domesticTrackingNo.trim(), mode: 'insensitive' };
     }
-    if (scope && !customer) {
-      const customers = await this.prisma.customer.findMany({
-        where: { salesperson: { in: scope } },
-        select: { code: true }
-      });
-      where.customerCode = { in: customers.map((item) => item.code) };
-    }
     const rows = await (this.prisma as any).warehousePackage.findMany({
       where,
       orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
     });
-    return mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
+    return this.mapWarehousePackagesWithConfirmedTally(rows);
   }
 
   async createOrderEntry(principal: Principal, input: OrderEntryCreateInput): Promise<OrderEntryDetailSummary> {
@@ -14983,22 +15725,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
       throw error;
     }
-    const miscFeeIdsToMatch = Array.from(new Set(input.miscFeeIdsToMatch ?? []));
-    if (input.submitForReview) {
-      const due = await this.getTallyMiscFeeDueInternal(principal, normalized.customer.code);
-      const mandatoryUnconfirmed = due.rows.filter((row) => row.dueLevel === 'MANDATORY' && row.confirmationStatus !== 'CONFIRMED');
-      if (mandatoryUnconfirmed.length) {
-        throw new BadRequestException(`该客户有 ${mandatoryUnconfirmed.length} 笔满 60 天理货杂费尚未完成仓库确认，请先由仓库确认`);
-      }
-      const missingMandatoryIds = due.rows
-        .filter((row) => row.dueLevel === 'MANDATORY' && !miscFeeIdsToMatch.includes(row.id))
-        .map((row) => row.id);
-      if (missingMandatoryIds.length) {
-        throw new BadRequestException(`该客户有 ${missingMandatoryIds.length} 笔登记满 60 天的理货杂费，必须先在录单页勾选处理`);
-      }
-    }
     const now = new Date();
-    const entryAt = await this.resolveOrderEntryEntryAt(principal, normalized.shipment.entryAt, now);
+    const entryAt = this.resolveOrderEntryEntryAt(principal, normalized.shipment.entryAt, now);
     const status = input.submitForReview ? 'REVIEW_PENDING' : 'DRAFT';
     const latestTracking = input.submitForReview ? '财务录单创建，待审核' : '财务录单保存草稿';
     const systemOrderNo = normalized.shipment.outboundOrderNo?.trim() || normalized.shipment.systemOrderNo?.trim() || (await this.nextSystemOrderNo(normalized.shipment.businessType, now));
@@ -15066,10 +15794,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         },
         include: shipmentIncludes
       });
-
-      if (input.submitForReview && miscFeeIdsToMatch.length) {
-        await this.matchTallyMiscFeesToShipment(tx, principal, normalized.customer.id, shipment, miscFeeIdsToMatch, 'ORDER_ENTRY');
-      }
 
       if (input.submitForReview) {
         const bound = await tx.warehousePackage.updateMany({
@@ -15154,6 +15878,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       return shipment;
     });
 
+    await this.recordShipmentStageStatusTransition(
+      created.id,
+      null,
+      created.status as ShipmentStatus,
+      created.createdAt,
+      'ORDER_ENTRY_CREATE'
+    );
     void this.lineage?.recordEvent(input.submitForReview ? 'orders.entry.submit' : 'orders.entry.draft', {
       actorUsername: principal.username,
       businessId: created.id,
@@ -15205,32 +15936,50 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const financeItems = ((shipment as any).financeItems ?? []) as any[];
     const canViewPayables = await this.canViewOrderEntryPayables(principal);
     const canViewBusinessCosts = await this.canViewOrderEntryBusinessCosts(principal);
-    const canViewSensitivePayables = await this.canUseSensitiveOrderEntryPayables(principal);
-    const visibleShipment = await this.redactOrderEntrySensitiveShipment(principal, mappedShipment);
+    const exposePayables = canViewPayables && !(await this.canMaskOrderEntryPayables(principal));
+    const exposeBusinessCosts = canViewBusinessCosts && !(await this.canMaskOrderEntryBusinessCosts(principal));
+    const canViewSensitivePayables = this.canUseSensitiveOrderEntryPayables(principal);
+    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
+    const visibleShipment = this.redactOrderEntrySensitiveShipment(principal, mappedShipment, canViewAgentWeight);
     return {
       shipment: visibleShipment,
       packages: packages.map(mapWarehousePackage),
       receivables: financeItems
         .filter((item) => item.type === 'RECEIVABLE')
         .map((item) => this.toReceivableFinanceSummary(item, shipment, mappedShipment.customerName)),
-      businessCosts: canViewBusinessCosts
+      receivableSnapshotVersion: buildBusinessCostSnapshotVersion(financeItems.filter((item) => item.type === 'RECEIVABLE')),
+      businessCosts: exposeBusinessCosts
         ? financeItems
             .filter((item) => item.type === 'BUSINESS_COST')
             .map((item) => this.toBusinessCostFinanceSummary(item, shipment))
             .map((item) => canViewSensitivePayables ? item : { ...item, agentId: undefined, agentName: undefined })
         : [],
-      payables: canViewPayables
+      businessCostSnapshotVersion: exposeBusinessCosts
+        ? buildBusinessCostSnapshotVersion(financeItems.filter((item) => item.type === 'BUSINESS_COST'))
+        : undefined,
+      payables: exposePayables
         ? financeItems.filter((item) => item.type === 'PAYABLE').map((item) => {
           const row = this.toPayableFinanceSummary(item, shipment);
           return canViewSensitivePayables ? row : { ...row, agentId: undefined, agentName: undefined, paymentNo: undefined };
         })
         : [],
-      canViewPayables
+      canViewPayables: exposePayables
     };
   }
 
   async updateOrderEntryDraft(principal: Principal, shipmentId: string, input: OrderEntryDraftUpdateInput): Promise<OrderEntryDetailSummary> {
+    return this.updateOrderEntryDraftInternal(principal, shipmentId, input);
+  }
+
+  private async updateOrderEntryDraftInternal(principal: Principal, shipmentId: string, input: OrderEntryDraftUpdateInput, serverReviewValidationError?: string): Promise<OrderEntryDetailSummary> {
+    input = {
+      ...input,
+      shipment: { ...input.shipment, reviewValidationError: serverReviewValidationError }
+    };
     await this.ensurePermission(principal, 'business:order-entry:draft-save', '没有保存录单草稿权限');
+    if (input.submitForReview) {
+      await this.ensurePermission(principal, 'business:order-entry:submit-review', '没有提交审核权限');
+    }
     if (input.shipment.transferNo?.trim()) {
       throw new BadRequestException('录单阶段不能填写转单号，请在出库后完成双审核再填写');
     }
@@ -15246,63 +15995,60 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!current) {
       throw new NotFoundException('录单草稿不存在');
     }
-    if (!['DRAFT', 'REVIEW_REJECTED'].includes(current.status)) {
+    if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(current.status)) {
       throw new BadRequestException('只有草稿或退回修改的录单可以继续编辑');
     }
-    const isDepartmentTeamEdit = Boolean(current.entryBy && current.entryBy !== principal.username && principal.role !== 'ADMIN');
-    if (isDepartmentTeamEdit && input.submitForReview) {
-      throw new ForbiddenException('经理只能修改部门成员录单的基础资料，不能代为提交审核');
-    }
+    const isPendingReviewEdit = current.status === 'REVIEW_PENDING';
+    const isDepartmentTeamEdit = Boolean(current.entryBy && current.entryBy !== principal.username && !isAdministratorRole(principal.role));
     if (isDepartmentTeamEdit && (input.payables ?? []).length) {
       throw new ForbiddenException('经理不能修改部门成员录单的应付费用');
     }
-    const canWriteBusinessCosts = await this.canWriteOrderEntryBusinessCosts(principal);
-    const canWritePayables = await this.canManageOrderEntryPayables(principal);
-    if (input.submitForReview && !canWriteBusinessCosts && !current.financeItems.some((item: any) => item.type === 'BUSINESS_COST')) {
-      throw new BadRequestException('提交审核前必须由有权岗位录入至少一条业务成本');
+    const canWriteBusinessCosts = (await this.canWriteOrderEntryBusinessCosts(principal))
+      && !(await this.canMaskOrderEntryBusinessCosts(principal));
+    const canManagePayables = (await this.canManageOrderEntryPayables(principal))
+      && !(await this.canMaskOrderEntryPayables(principal));
+    if (isDepartmentTeamEdit && input.submitForReview && !canWriteBusinessCosts) {
+      throw new ForbiddenException('经理代下属提交审核前必须具备填写业务成本权限');
     }
     const effectiveInput = isDepartmentTeamEdit
-      ? { ...input, shipment: { ...input.shipment, agentId: current.agentId ?? undefined }, receivables: [], businessCosts: [], payables: [], submitForReview: false }
-      : {
+      ? {
           ...input,
-          businessCosts: canWriteBusinessCosts ? input.businessCosts : [],
-          payables: canWritePayables ? input.payables : []
-        };
+          shipment: { ...input.shipment, agentId: undefined },
+          businessCosts: canWriteBusinessCosts ? sanitizeDepartmentTeamBusinessCosts(input.businessCosts) : [],
+          payables: []
+        }
+      : input;
     let normalized: Awaited<ReturnType<PrismaRepository['prepareOrderEntryInput']>>;
     try {
-      normalized = await this.prepareOrderEntryInput(principal, effectiveInput, current.id);
+      normalized = await this.prepareOrderEntryInput(principal, effectiveInput, current.id, isPendingReviewEdit);
     } catch (error) {
       if (error instanceof BadRequestException && String(error.message).includes('待重新过机')) throw error;
       if (input.submitForReview && error instanceof BadRequestException) {
-        return this.updateOrderEntryDraft(principal, shipmentId, { ...input, shipment: { ...input.shipment, reviewValidationError: error.message }, submitForReview: false });
+        return this.updateOrderEntryDraftInternal(principal, shipmentId, { ...input, submitForReview: false }, error.message);
       }
       throw error;
     }
-    const miscFeeIdsToMatch = Array.from(new Set(input.miscFeeIdsToMatch ?? []));
-    if (input.submitForReview) {
-      const due = await this.getTallyMiscFeeDueInternal(principal, normalized.customer.code);
-      const mandatoryUnconfirmed = due.rows.filter((row) => row.dueLevel === 'MANDATORY' && row.confirmationStatus !== 'CONFIRMED');
-      if (mandatoryUnconfirmed.length) {
-        throw new BadRequestException(`该客户有 ${mandatoryUnconfirmed.length} 笔满 60 天理货杂费尚未完成仓库确认，请先由仓库确认`);
-      }
-      const missingMandatoryIds = due.rows
-        .filter((row) => row.dueLevel === 'MANDATORY' && !miscFeeIdsToMatch.includes(row.id))
-        .map((row) => row.id);
-      if (missingMandatoryIds.length) {
-        throw new BadRequestException(`该客户有 ${missingMandatoryIds.length} 笔登记满 60 天的理货杂费，必须先在录单页勾选处理`);
-      }
-    }
     const now = new Date();
+    const entryAt = this.resolveOrderEntryEntryAt(principal, normalized.shipment.entryAt, current.entryAt ?? current.createdAt ?? now);
     const entryBy = current.entryBy ?? principal.username;
-    const entryAt = await this.resolveOrderEntryEntryAt(principal, normalized.shipment.entryAt, current.entryAt ?? current.createdAt ?? now);
-    const nextStatus = input.submitForReview ? 'REVIEW_PENDING' : 'DRAFT';
-    const latestTracking = input.submitForReview ? '财务录单提交审核' : '财务录单草稿已更新';
+    const nextStatus = isPendingReviewEdit ? 'REVIEW_PENDING' : input.submitForReview ? 'REVIEW_PENDING' : 'DRAFT';
+    const latestTracking = input.submitForReview
+      ? '财务录单提交审核'
+      : isPendingReviewEdit
+        ? '待审核运单资料已修改'
+        : '财务录单草稿已更新';
     const nextSystemOrderNo = normalized.shipment.outboundOrderNo?.trim() || normalized.shipment.systemOrderNo?.trim() || current.systemOrderNo;
+    const financeItemsToWrite = isDepartmentTeamEdit
+      ? normalized.financeItems.filter((item) => item.type === 'RECEIVABLE' || item.type === 'BUSINESS_COST')
+      : normalized.financeItems;
     const duplicated = await this.prisma.shipment.findUnique({ where: { systemOrderNo: nextSystemOrderNo } });
     if (duplicated && duplicated.id !== current.id) {
       throw new BadRequestException(`出货单号 ${nextSystemOrderNo} 已存在，请更换后再提交`);
     }
 
+    let createdFinanceItems: any[] = [];
+    let replacedTeamReceivables: any[] = [];
+    let replacedTeamBusinessCosts: any[] = [];
     await this.prisma.$transaction(async (tx) => {
       await this.lockShipmentRow(tx, current.id);
       const lockedCurrent = await tx.shipment.findUnique({
@@ -15312,20 +16058,119 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!lockedCurrent || lockedCurrent.deletedAt) {
         throw new NotFoundException('录单草稿不存在');
       }
-      if (!['DRAFT', 'REVIEW_REJECTED'].includes(lockedCurrent.status)) {
+      if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(lockedCurrent.status)) {
         throw new BadRequestException('只有草稿或退回修改的录单可以继续编辑');
       }
       if (lockedCurrent.updatedAt.getTime() !== current.updatedAt.getTime()) {
         throw new BadRequestException('录单草稿已被更新，请刷新后重试');
       }
       await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:order-entry:draft-save');
+      if (isDepartmentTeamEdit && input.submitForReview) {
+        await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:order-entry:submit-review');
+      }
+      if (isDepartmentTeamEdit && canWriteBusinessCosts) {
+        await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:order-entry:business-cost-write');
+      }
+      if (isDepartmentTeamEdit && canWriteBusinessCosts) {
+        const activeBusinessCosts = await tx.shipmentFinanceItem.findMany({
+          where: { shipmentId: current.id, type: 'BUSINESS_COST', voided: false },
+          orderBy: { id: 'asc' }
+        });
+        if (input.businessCostSnapshotVersion !== buildBusinessCostSnapshotVersion(activeBusinessCosts)) {
+          throw new BadRequestException('业务成本已被更新，请刷新录单后重试');
+        }
+        replacedTeamBusinessCosts = activeBusinessCosts.map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          amount: Number(item.amount),
+          currency: item.currency,
+          updatedAt: item.updatedAt?.toISOString?.() ?? item.updatedAt
+        }));
+      }
+      if (isDepartmentTeamEdit) {
+        const [activeReceivables, activeLegacyReceivables] = await Promise.all([
+          tx.shipmentFinanceItem.findMany({
+            where: { shipmentId: current.id, type: 'RECEIVABLE', voided: false },
+            orderBy: { id: 'asc' }
+          }),
+          tx.receivableFee.findMany({
+            where: { shipmentId: current.id, voided: false },
+            orderBy: { id: 'asc' }
+          })
+        ]);
+        if (activeLegacyReceivables.length) {
+          throw new BadRequestException('该草稿包含历史应收费用，请联系财务迁移后再由经理编辑');
+        }
+        if (input.receivableSnapshotVersion !== buildBusinessCostSnapshotVersion(activeReceivables)) {
+          throw new BadRequestException('应收费用已被更新，请刷新录单后重试');
+        }
+        replacedTeamReceivables = [...activeReceivables, ...activeLegacyReceivables].map((item: any) => ({
+          id: item.id,
+          name: item.name,
+          amount: Number(item.amount),
+          currency: item.currency,
+          updatedAt: item.updatedAt?.toISOString?.() ?? item.updatedAt
+        }));
+      }
       await this.lockAndAssertOrderEntryPackageSnapshot(tx, normalized.packageSnapshots);
+      let packageIdsBefore: string[] = [];
+      let addedPackageIds: string[] = [];
+      let removedPackageIds: string[] = [];
+      if (input.submitForReview || isPendingReviewEdit) {
+        const currentBoundPackages = await tx.warehousePackage.findMany({
+          where: { shipmentId: current.id },
+          select: { id: true, status: true, measurementStatus: true }
+        });
+        packageIdsBefore = currentBoundPackages.map((pkg: { id: string }) => pkg.id);
+        const requestedPackageIds = new Set(normalized.packageIds);
+        removedPackageIds = packageIdsBefore.filter((id) => !requestedPackageIds.has(id));
+        addedPackageIds = normalized.packageIds.filter((id) => !packageIdsBefore.includes(id));
+        if (isPendingReviewEdit && removedPackageIds.length) {
+          const blockedRemovedPackage = currentBoundPackages.find((pkg: { id: string; status: string; measurementStatus?: string | null }) => (
+            removedPackageIds.includes(pkg.id)
+            && (['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'].includes(pkg.status) || pkg.measurementStatus === 'PENDING_REMEASURE')
+          ));
+          if (blockedRemovedPackage) {
+            throw new BadRequestException('已出库或待重新过机的包裹不能从待审核运单移除');
+          }
+          const released = await tx.warehousePackage.updateMany({
+            where: {
+              id: { in: removedPackageIds },
+              shipmentId: current.id,
+              measurementStatus: { not: 'PENDING_REMEASURE' },
+              status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] }
+            },
+            data: { shipmentId: null, systemOrderNo: null }
+          });
+          if (released.count !== removedPackageIds.length) {
+            throw new BadRequestException('部分待移除包裹状态已变化，请刷新后重新选择');
+          }
+        }
+        if (normalized.packageIds.length) {
+          const bound = await tx.warehousePackage.updateMany({
+            where: {
+              id: { in: normalized.packageIds },
+              customerCode: normalized.customer.code,
+              measurementStatus: { not: 'PENDING_REMEASURE' },
+              status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] },
+              OR: [
+                { shipmentId: null, systemOrderNo: null },
+                { shipmentId: current.id }
+              ]
+            },
+            data: { shipmentId: current.id, systemOrderNo: nextSystemOrderNo }
+          });
+          if (bound.count !== normalized.packageIds.length) {
+            throw new BadRequestException('部分仓库包裹已被其他录单占用，请刷新后重新选择');
+          }
+        }
+      }
       await tx.shipment.update({
         where: { id: current.id },
         data: {
           customerId: normalized.customer.id,
           channelId: normalized.shipment.channelId,
-          agentId: normalized.shipment.agentId,
+          agentId: isDepartmentTeamEdit ? current.agentId : normalized.shipment.agentId,
           customerOrderNo: normalized.shipment.customerOrderNo.trim(),
           systemOrderNo: nextSystemOrderNo,
           subOrderNo: normalized.shipment.subOrderNo?.trim() || null,
@@ -15359,31 +16204,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           packageCount: normalized.totals.packageCount,
           receivableWeightKg: normalized.totals.chargeWeightKg,
           agentWeightKg: normalized.totals.chargeWeightKg,
-          latestTracking: '',
-          draftWarehousePackageIds: input.submitForReview ? [] : normalized.packageIds,
+          latestTracking,
+          draftWarehousePackageIds: input.submitForReview || isPendingReviewEdit ? [] : normalized.packageIds,
           reviewRejectedReason: input.submitForReview ? null : normalized.shipment.reviewValidationError ?? current.reviewRejectedReason,
           remark: normalized.shipment.remark?.trim() || null
         }
       });
 
-      if (input.submitForReview && miscFeeIdsToMatch.length) {
-        await this.matchTallyMiscFeesToShipment(tx, principal, normalized.customer.id, {
-          id: current.id,
-          systemOrderNo: nextSystemOrderNo,
-          customerOrderNo: normalized.shipment.customerOrderNo.trim(),
-          transferNo: current.transferNo,
-          packageCount: normalized.totals.packageCount,
-          actualWeightKg: normalized.totals.weightKg,
-          volumeCbm: normalized.totals.cbm
-        }, miscFeeIdsToMatch, 'ORDER_ENTRY');
-      }
-
-      if (!isDepartmentTeamEdit) {
-        const editableFinanceTypes = [
-          'RECEIVABLE',
-          ...(canWriteBusinessCosts ? ['BUSINESS_COST'] : []),
-          ...(canWritePayables ? ['PAYABLE'] : [])
-        ];
+      const editableFinanceTypes = isDepartmentTeamEdit
+        ? ['RECEIVABLE', ...(canWriteBusinessCosts ? ['BUSINESS_COST'] : [])]
+        : [
+            'RECEIVABLE',
+            ...(canWriteBusinessCosts ? ['BUSINESS_COST'] : []),
+            ...(canManagePayables ? ['PAYABLE'] : [])
+          ];
+      if (editableFinanceTypes.length) {
         await tx.shipmentFinanceItem.updateMany({
           where: {
             shipmentId: current.id,
@@ -15394,32 +16229,26 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           },
           data: { voided: true, reconciliationStatus: 'VOIDED', voidedAt: now }
         });
-        const createdItems = await this.createOrderEntryFinanceItems(tx, principal, current.id, normalized.financeItems);
-        if (input.submitForReview) {
+        const createdItems = await this.createOrderEntryFinanceItems(tx, principal, current.id, financeItemsToWrite);
+        createdFinanceItems = createdItems;
+        if (!isDepartmentTeamEdit && input.submitForReview) {
           await this.applyOrderEntryReceiptMatches(tx, principal, normalized.customer.id, normalized.financeItems, createdItems);
         }
       }
 
-      if (input.submitForReview) {
-        const bound = await tx.warehousePackage.updateMany({
-          where: {
-            id: { in: normalized.packageIds },
-            customerCode: normalized.customer.code,
-            measurementStatus: { not: 'PENDING_REMEASURE' },
-            status: { notIn: ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'] },
-            OR: [
-              { shipmentId: null, systemOrderNo: null },
-              { shipmentId: current.id }
-            ]
-          },
-          data: { shipmentId: current.id, systemOrderNo: nextSystemOrderNo }
-        });
-        if (bound.count !== normalized.packageIds.length) {
-          throw new BadRequestException('部分仓库包裹已被其他录单占用，请刷新后重新选择');
-        }
-      }
       await tx.shipmentEvent.create({
-        data: { shipmentId: current.id, fromStatus: current.status, toStatus: nextStatus, note: input.submitForReview ? '录单草稿提交审核' : '录单草稿更新' }
+        data: {
+          shipmentId: current.id,
+          fromStatus: current.status,
+          toStatus: nextStatus,
+          note: input.submitForReview
+            ? '录单草稿提交审核'
+            : normalized.shipment.reviewValidationError
+              ? `录单提交校验未通过：${normalized.shipment.reviewValidationError}`
+            : isPendingReviewEdit
+              ? '待审核运单资料修改'
+              : '录单草稿更新'
+        }
       });
       await tx.auditLog.create({
         data: {
@@ -15427,11 +16256,50 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           action: input.submitForReview ? 'shipment.order_entry.draft_submit' : 'shipment.order_entry.draft_update',
           target: `shipment:${current.id}`,
           before: toAuditJson(mapShipment(current)),
-          after: toAuditJson({ warehousePackageIds: normalized.packageIds, entryBy, updatedBy: principal.username, financeItemCount: isDepartmentTeamEdit ? current.financeItems.length : normalized.financeItems.length })
+          after: toAuditJson({
+            warehousePackageIds: normalized.packageIds,
+            entryBy,
+            updatedBy: principal.username,
+            financeItemCount: financeItemsToWrite.length,
+            departmentTeamEdit: isDepartmentTeamEdit,
+            submitAttempted: Boolean(normalized.shipment.reviewValidationError),
+            reviewValidationError: normalized.shipment.reviewValidationError,
+            ...(input.submitForReview || isPendingReviewEdit ? {
+              packageAdjustment: {
+                before: packageIdsBefore,
+                after: normalized.packageIds,
+                added: addedPackageIds,
+                removed: removedPackageIds
+              }
+            } : {}),
+            ...(isDepartmentTeamEdit ? {
+              receivableMutation: {
+                voided: replacedTeamReceivables,
+                created: createdFinanceItems
+                  .filter((item) => item.type === 'RECEIVABLE')
+                  .map((item) => ({ id: item.id, name: item.name, amount: Number(item.amount), currency: item.currency }))
+              }
+            } : {}),
+            ...(isDepartmentTeamEdit && canWriteBusinessCosts ? {
+              businessCostMutation: {
+                voided: replacedTeamBusinessCosts,
+                created: createdFinanceItems
+                  .filter((item) => item.type === 'BUSINESS_COST')
+                  .map((item) => ({ id: item.id, name: item.name, amount: Number(item.amount), currency: item.currency }))
+              }
+            } : {})
+          })
         }
       });
     });
 
+    await this.recordShipmentStageStatusTransition(
+      current.id,
+      current.status as ShipmentStatus,
+      nextStatus as ShipmentStatus,
+      now,
+      'ORDER_ENTRY_UPDATE'
+    );
     void this.lineage?.recordEvent(input.submitForReview ? 'orders.entry.submit' : 'orders.entry.draft', {
       actorUsername: principal.username,
       businessId: current.id,
@@ -15442,17 +16310,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         statusFrom: current.status,
         statusTo: nextStatus,
         warehousePackageIds: normalized.packageIds,
-        financeItems: normalized.financeItems.map((item) => ({ type: item.type, name: item.name, amount: item.amount, currency: item.currency }))
+        financeItems: createdFinanceItems.map((item) => ({ id: item.id, type: item.type, name: item.name, amount: Number(item.amount), currency: item.currency })),
+        departmentTeamEdit: isDepartmentTeamEdit
       },
       sourceRefs: [
         { nodeType: 'shipment_draft', id: current.id },
-        ...normalized.packageIds.map((id) => ({ nodeType: 'warehouse_package', id }))
+        ...normalized.packageIds.map((id) => ({ nodeType: 'warehouse_package', id })),
+        ...createdFinanceItems.map((item) => ({ nodeType: 'finance_item', id: item.id }))
       ],
       metrics: {
         packageCount: normalized.totals.packageCount,
         weightKg: normalized.totals.weightKg,
         volumeCbm: normalized.totals.cbm,
-        financeItemCount: normalized.financeItems.length
+        financeItemCount: financeItemsToWrite.length
       }
     });
 
@@ -15461,15 +16331,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async deleteOrderEntryDraft(principal: Principal, shipmentId: string, input: ShipmentReviewDeleteInput = {}): Promise<OrderEntryDetailSummary> {
     await this.ensurePermission(principal, 'business:order-entry:draft-delete', '没有删除录单草稿权限');
-    const operatorCustomerScope = this.operatorCustomerScope(principal);
-    const scopedOwnerWhere = operatorCustomerScope
-      ? { OR: [{ entryBy: { in: operatorCustomerScope } }, { customer: { salesperson: { in: operatorCustomerScope } } }] }
-      : {};
+    const shipmentOwnerWhere = this.shipmentOwnerWhere(principal, 'CUSTOMER_OR_ENTRY', false);
     const current = await this.prisma.shipment.findFirst({
       where: {
         id: shipmentId,
         deletedAt: null,
-        ...(operatorCustomerScope ? scopedOwnerWhere : {})
+        ...(shipmentOwnerWhere ?? {})
       } as any,
       include: { ...shipmentIncludes, financeItems: { where: { voided: false } } }
     });
@@ -15547,19 +16414,38 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment_draft', id: current.id }],
       metrics: { draftWarehousePackageCount: (current.draftWarehousePackageIds ?? []).length }
     });
-    return { ...detailBeforeDelete, shipment: mapShipment(current) };
+    return detailBeforeDelete;
   }
 
-  async updateShipmentFinanceItem(principal: Principal, shipmentId: string, feeId: string, input: ShipmentFinanceItemUpdateInput) {
-    const shipment = await this.getVisibleShipment(principal, shipmentId);
+  async updatePendingReviewBusinessCost(principal: Principal, shipmentId: string, feeId: string, input: ShipmentFinanceItemUpdateInput) {
+    return this.updateShipmentFinanceItem(principal, shipmentId, feeId, input, {
+      allowDepartmentTeam: true,
+      requiredType: 'BUSINESS_COST',
+      pendingReviewBusinessCostOnly: true
+    });
+  }
+
+  async updateShipmentFinanceItem(
+    principal: Principal,
+    shipmentId: string,
+    feeId: string,
+    input: ShipmentFinanceItemUpdateInput,
+    options: { allowDepartmentTeam?: boolean; requiredType?: ShipmentFinanceItemType; pendingReviewBusinessCostOnly?: boolean } = {}
+  ) {
+    const shipment = await this.getVisibleShipment(principal, shipmentId, options.allowDepartmentTeam === true);
+    if (options.pendingReviewBusinessCostOnly) {
+      await this.ensurePendingReviewBusinessCostWrite(principal, options.requiredType, shipment);
+    }
     const current = await this.findFinanceItem(shipment.id, feeId);
-    this.ensureStandaloneShipmentFinanceItem(current);
-    await this.ensureFinanceItemManageAccess(principal, current.type, shipment);
+    if (options.requiredType && current.type !== options.requiredType) {
+      throw new NotFoundException('费用项目不存在');
+    }
+    await this.ensureShipmentFinanceItemUpdateAccess(principal, current.type, shipment, options.pendingReviewBusinessCostOnly === true);
     if (current.voided) {
       throw new BadRequestException('已作废费用不能继续操作');
     }
-    if (current.type === 'RECEIVABLE' && ['CONFIRMED', 'LOCKED'].includes(current.reconciliationStatus ?? 'PENDING')) {
-      throw new BadRequestException('应收费用已审核，请先反审核');
+    if (['CONFIRMED', 'LOCKED'].includes(current.reconciliationStatus ?? 'PENDING')) {
+      throw new BadRequestException(`${current.type === 'BUSINESS_COST' ? '业务成本' : current.type === 'PAYABLE' ? '应付费用' : '应收费用'}已审核，请先反审核`);
     }
     if (current.type === 'RECEIVABLE') {
       await this.ensureReceivableWaterMatchEditable(this.prisma as any, 'MANUAL', current.id, 'update');
@@ -15573,13 +16459,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       await this.lockShipmentRow(tx, shipment.id);
       const lockedShipment = await tx.shipment.findUnique({ where: { id: shipment.id }, include: shipmentIncludes });
       if (!lockedShipment) throw new NotFoundException('运单不存在');
+      if (options.allowDepartmentTeam) {
+        await this.assertDepartmentTeamShipmentAccessAfterLock(tx, principal, lockedShipment, 'business:order-entry:business-cost-write');
+      }
+      if (options.pendingReviewBusinessCostOnly) {
+        await this.ensurePendingReviewBusinessCostWrite(principal, options.requiredType, lockedShipment);
+      }
       const lockedCurrent = await tx.shipmentFinanceItem.findFirst({ where: { id: feeId, shipmentId: shipment.id } });
       if (!lockedCurrent) throw new NotFoundException('费用项目不存在');
-      this.ensureStandaloneShipmentFinanceItem(lockedCurrent);
-      await this.ensureFinanceItemManageAccess(principal, lockedCurrent.type, lockedShipment);
+      if (options.requiredType && lockedCurrent.type !== options.requiredType) {
+        throw new NotFoundException('费用项目不存在');
+      }
+      await this.ensureShipmentFinanceItemUpdateAccess(principal, lockedCurrent.type, lockedShipment, options.pendingReviewBusinessCostOnly === true);
       if (lockedCurrent.voided) throw new BadRequestException('已作废费用不能继续操作');
-      if (lockedCurrent.type === 'RECEIVABLE' && ['CONFIRMED', 'LOCKED'].includes(lockedCurrent.reconciliationStatus ?? 'PENDING')) {
-        throw new BadRequestException('应收费用已审核，请先反审核');
+      if (['CONFIRMED', 'LOCKED'].includes(lockedCurrent.reconciliationStatus ?? 'PENDING')) {
+        throw new BadRequestException(`${lockedCurrent.type === 'BUSINESS_COST' ? '业务成本' : lockedCurrent.type === 'PAYABLE' ? '应付费用' : '应收费用'}已审核，请先反审核`);
       }
       if (lockedCurrent.type === 'RECEIVABLE') {
         await this.ensureReceivableWaterMatchEditable(tx, 'MANUAL', lockedCurrent.id, 'update');
@@ -15587,9 +16481,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (lockedCurrent.locked) throw new BadRequestException('费用已锁定，请先解锁');
       this.ensureBusinessCostEditableAfterDispatch(principal, lockedCurrent.type, lockedShipment);
       this.validateFinanceItemInput(lockedCurrent.type, { ...lockedCurrent, ...input });
+      const pendingReviewBusinessCostWrite = options.pendingReviewBusinessCostOnly === true;
+      const billing = lockedCurrent.type === 'BUSINESS_COST' ? resolveBusinessCostBillingFields(input, lockedCurrent) : undefined;
       const amount = this.resolveShipmentFinanceItemAmount(lockedCurrent.type, input, lockedCurrent);
       const financeAgent = lockedCurrent.type === 'PAYABLE' || lockedCurrent.type === 'BUSINESS_COST'
-        ? input.agentId !== undefined || input.agentName !== undefined
+        ? pendingReviewBusinessCostWrite
+          ? { id: lockedCurrent.agentId ?? lockedShipment.agent?.id, name: lockedCurrent.agentName ?? lockedShipment.agent?.name }
+          : input.agentId !== undefined || input.agentName !== undefined
           ? await this.resolveFinanceAgent(tx, input)
           : { id: lockedCurrent.agentId ?? lockedShipment.agent?.id, name: lockedCurrent.agentName ?? lockedShipment.agent?.name }
         : undefined;
@@ -15600,13 +16498,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           amount,
           currency: input.currency ?? lockedCurrent.currency,
           settlementMethod: input.settlementMethod ?? lockedCurrent.settlementMethod ?? (lockedCurrent.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(lockedShipment) : undefined),
-          paymentNo: input.paymentNo ?? lockedCurrent.paymentNo,
-          reconciliationStatus: input.reconciliationStatus ?? lockedCurrent.reconciliationStatus,
+          paymentNo: pendingReviewBusinessCostWrite ? lockedCurrent.paymentNo : input.paymentNo ?? lockedCurrent.paymentNo,
+          reconciliationStatus: pendingReviewBusinessCostWrite ? lockedCurrent.reconciliationStatus : input.reconciliationStatus ?? lockedCurrent.reconciliationStatus,
           agentId: financeAgent?.id,
           agentName: financeAgent?.name,
-          chargeWeightKg: input.chargeWeightKg ?? lockedCurrent.chargeWeightKg,
+          billingUnit: billing?.billingUnit ?? lockedCurrent.billingUnit,
+          billingQuantity: billing?.billingQuantity ?? lockedCurrent.billingQuantity,
+          chargeWeightKg: billing ? billing.chargeWeightKg : input.chargeWeightKg ?? lockedCurrent.chargeWeightKg,
           unitPrice: input.unitPrice ?? lockedCurrent.unitPrice,
-          amountOverridden: this.isFinanceAmountOverridden({ ...lockedCurrent, ...input, amount }),
+          amountOverridden: this.isFinanceAmountOverridden({ ...lockedCurrent, ...input, ...billing, type: lockedCurrent.type, amount }),
           remark: input.remark ?? lockedCurrent.remark
         }
       });
@@ -15630,19 +16530,40 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       return { before: lockedCurrent, updated, currentShipment: lockedShipment };
     });
     await this.createBusinessCostChangeNotificationAudit(principal, result.before.type, result.currentShipment, result.before, result.updated);
-    return this.toFinanceItemSummary(result.updated, result.currentShipment);
+    return this.scopeFinanceItemSummary(principal, result.before.type, this.toFinanceItemSummary(result.updated, result.currentShipment));
   }
 
-  async deleteShipmentFinanceItem(principal: Principal, shipmentId: string, feeId: string) {
-    const shipment = await this.getVisibleShipment(principal, shipmentId);
+  async deletePendingReviewBusinessCost(principal: Principal, shipmentId: string, feeId: string) {
+    return this.deleteShipmentFinanceItem(principal, shipmentId, feeId, {
+      allowDepartmentTeam: true,
+      requiredType: 'BUSINESS_COST',
+      pendingReviewBusinessCostOnly: true
+    });
+  }
+
+  async deleteShipmentFinanceItem(
+    principal: Principal,
+    shipmentId: string,
+    feeId: string,
+    options: { allowDepartmentTeam?: boolean; requiredType?: ShipmentFinanceItemType; pendingReviewBusinessCostOnly?: boolean } = {}
+  ) {
+    const shipment = await this.getVisibleShipment(principal, shipmentId, options.allowDepartmentTeam === true);
+    if (options.pendingReviewBusinessCostOnly) {
+      await this.ensurePendingReviewBusinessCostWrite(principal, options.requiredType, shipment);
+    }
     const current = await this.findFinanceItem(shipment.id, feeId);
-    this.ensureStandaloneShipmentFinanceItem(current);
-    await this.ensureFinanceItemManageAccess(principal, current.type, shipment);
+    if (options.requiredType && current.type !== options.requiredType) {
+      throw new NotFoundException('费用项目不存在');
+    }
+    await this.ensureFinanceItemManageAccess(principal, current.type, shipment, options.pendingReviewBusinessCostOnly === true);
     if (current.voided) {
       throw new BadRequestException('费用已作废');
     }
     if (current.type === 'RECEIVABLE' && ['CONFIRMED', 'LOCKED'].includes(current.reconciliationStatus ?? 'PENDING')) {
       throw new BadRequestException('应收费用已审核，请先反审核');
+    }
+    if (current.type === 'BUSINESS_COST' && ['CONFIRMED', 'LOCKED'].includes(current.reconciliationStatus ?? 'PENDING')) {
+      throw new BadRequestException('业务成本已审核，请先反审核');
     }
     if (current.type === 'RECEIVABLE') {
       await this.ensureReceivableWaterMatchEditable(this.prisma as any, 'MANUAL', current.id, 'delete');
@@ -15655,13 +16576,24 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       await this.lockShipmentRow(tx, shipment.id);
       const lockedShipment = await tx.shipment.findUnique({ where: { id: shipment.id }, include: shipmentIncludes });
       if (!lockedShipment) throw new NotFoundException('运单不存在');
+      if (options.allowDepartmentTeam) {
+        await this.assertDepartmentTeamShipmentAccessAfterLock(tx, principal, lockedShipment, 'business:order-entry:business-cost-write');
+      }
+      if (options.pendingReviewBusinessCostOnly) {
+        await this.ensurePendingReviewBusinessCostWrite(principal, options.requiredType, lockedShipment);
+      }
       const lockedCurrent = await tx.shipmentFinanceItem.findFirst({ where: { id: feeId, shipmentId: shipment.id } });
       if (!lockedCurrent) throw new NotFoundException('费用项目不存在');
-      this.ensureStandaloneShipmentFinanceItem(lockedCurrent);
-      await this.ensureFinanceItemManageAccess(principal, lockedCurrent.type, lockedShipment);
+      if (options.requiredType && lockedCurrent.type !== options.requiredType) {
+        throw new NotFoundException('费用项目不存在');
+      }
+      await this.ensureFinanceItemManageAccess(principal, lockedCurrent.type, lockedShipment, options.pendingReviewBusinessCostOnly === true);
       if (lockedCurrent.voided) throw new BadRequestException('费用已作废');
       if (lockedCurrent.type === 'RECEIVABLE' && ['CONFIRMED', 'LOCKED'].includes(lockedCurrent.reconciliationStatus ?? 'PENDING')) {
         throw new BadRequestException('应收费用已审核，请先反审核');
+      }
+      if (lockedCurrent.type === 'BUSINESS_COST' && ['CONFIRMED', 'LOCKED'].includes(lockedCurrent.reconciliationStatus ?? 'PENDING')) {
+        throw new BadRequestException('业务成本已审核，请先反审核');
       }
       if (lockedCurrent.type === 'RECEIVABLE') {
         await this.ensureReceivableWaterMatchEditable(tx, 'MANUAL', lockedCurrent.id, 'delete');
@@ -15686,10 +16618,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         ? await tx.paymentVoucher.findFirst({
           where: {
             voucherType: { not: 'PAYMENT_RECEIPT' },
-            OR: [
-              ...(pendingPaymentIds.length ? [{ pendingPaymentId: { in: pendingPaymentIds } }] : []),
-              { paymentApplication: { items: { some: { payableFinanceItemId: lockedCurrent.id } } } }
-            ]
+            OR: [{ payableFinanceItemId: lockedCurrent.id }, ...(pendingPaymentIds.length ? [{ pendingPaymentId: { in: pendingPaymentIds } }] : [])]
           },
           select: { id: true }
         })
@@ -15719,13 +16648,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       return { deleted: lockedCurrent, currentShipment: lockedShipment };
     });
     await this.createBusinessCostChangeNotificationAudit(principal, result.deleted.type, result.currentShipment, result.deleted, { ...result.deleted, hardDelete: true });
-    return this.toFinanceItemSummary(result.deleted, result.currentShipment);
+    return this.scopeFinanceItemSummary(principal, result.deleted.type, this.toFinanceItemSummary(result.deleted, result.currentShipment));
   }
 
   async lockShipmentFinanceItem(principal: Principal, shipmentId: string, feeId: string) {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     const current = await this.findFinanceItem(shipment.id, feeId);
-    this.ensureStandaloneShipmentFinanceItem(current);
     await this.ensureFinanceItemManageAccess(principal, current.type, shipment);
     if (current.voided) {
       throw new BadRequestException('已作废费用不能锁定');
@@ -15736,7 +16664,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!lockedShipment) throw new NotFoundException('运单不存在');
       const lockedCurrent = await tx.shipmentFinanceItem.findFirst({ where: { id: feeId, shipmentId: shipment.id } });
       if (!lockedCurrent) throw new NotFoundException('费用项目不存在');
-      this.ensureStandaloneShipmentFinanceItem(lockedCurrent);
       await this.ensureFinanceItemManageAccess(principal, lockedCurrent.type, lockedShipment);
       if (lockedCurrent.voided) throw new BadRequestException('已作废费用不能锁定');
       const updated = await tx.shipmentFinanceItem.update({
@@ -15762,7 +16689,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async unlockShipmentFinanceItem(principal: Principal, shipmentId: string, feeId: string) {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     const current = await this.findFinanceItem(shipment.id, feeId);
-    this.ensureStandaloneShipmentFinanceItem(current);
     await this.ensureFinanceItemManageAccess(principal, current.type, shipment);
     if (current.voided) {
       throw new BadRequestException('已作废费用不能解锁');
@@ -15773,7 +16699,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!lockedShipment) throw new NotFoundException('运单不存在');
       const lockedCurrent = await tx.shipmentFinanceItem.findFirst({ where: { id: feeId, shipmentId: shipment.id } });
       if (!lockedCurrent) throw new NotFoundException('费用项目不存在');
-      this.ensureStandaloneShipmentFinanceItem(lockedCurrent);
       await this.ensureFinanceItemManageAccess(principal, lockedCurrent.type, lockedShipment);
       if (lockedCurrent.voided) throw new BadRequestException('已作废费用不能解锁');
       const updated = await tx.shipmentFinanceItem.update({
@@ -16007,13 +16932,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
   }
 
-  async createPayment(_principal: Principal, input: PaymentCreateInput): Promise<PaymentCreateResponse> {
-    if (input.amount <= 0) {
+  async createPayment(principal: Principal, input: PaymentCreateInput): Promise<PaymentCreateResponse> {
+    await this.ensurePermission(principal, 'finance:receivable:create', '无权登记客户收款');
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
       throw new BadRequestException('收款金额必须大于 0');
     }
     const customer = await this.prisma.customer.findUnique({ where: { id: input.customerId } });
     if (!customer) {
       throw new BadRequestException('客户不存在');
+    }
+    const scope = this.operatorCustomerScope(principal);
+    if (scope && (!customer.salesperson || !scope.includes(customer.salesperson))) {
+      throw new ForbiddenException('只能登记本人归属客户的收款');
     }
     const account = await this.prisma.customerAccount.upsert({
       where: { id: `ca-${customer.code}-cny` },
@@ -16021,7 +16951,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       create: { id: `ca-${customer.code}-cny`, customerId: customer.id, balance: 0, currency: 'RMB' },
       include: { customer: true }
     });
-    const feeIds = input.feeIds ?? [];
+    const feeIds = [...new Set(input.feeIds ?? [])];
     const fees = await this.prisma.receivableFee.findMany({
       where: { id: { in: feeIds } },
       include: { shipment: { include: { customer: true } } }
@@ -16048,8 +16978,53 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('收款金额不足以核销选中费用');
     }
 
-    const legacyReviewedAt = new Date();
     const result = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`finance-payment:${input.customerId}`}))`);
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "CustomerAccount" WHERE "id" = ${account.id} FOR UPDATE`);
+      if (systemFeeIds.size > 0) {
+        await tx.$queryRaw(Prisma.sql`
+          SELECT "id" FROM "ReceivableFee"
+          WHERE "id" IN (${Prisma.join([...systemFeeIds].sort())})
+          ORDER BY "id" FOR UPDATE
+        `);
+      }
+      if (manualFeeIds.length > 0) {
+        await tx.$queryRaw(Prisma.sql`
+          SELECT "id" FROM "ShipmentFinanceItem"
+          WHERE "id" IN (${Prisma.join([...manualFeeIds].sort())})
+          ORDER BY "id" FOR UPDATE
+        `);
+      }
+      const [lockedAccount, lockedFees, lockedManualFees] = await Promise.all([
+        tx.customerAccount.findUnique({ where: { id: account.id } }),
+        tx.receivableFee.findMany({
+          where: { id: { in: [...systemFeeIds] } },
+          include: { shipment: { include: { customer: true } } }
+        }),
+        (tx as any).shipmentFinanceItem.findMany({
+          where: { id: { in: manualFeeIds }, type: 'RECEIVABLE', voided: false },
+          include: { shipment: { include: { customer: true } } }
+        })
+      ]);
+      if (!lockedAccount) throw new BadRequestException('客户账户不存在');
+      if (lockedFees.length + lockedManualFees.length !== feeIds.length) {
+        throw new BadRequestException('应收费用不存在');
+      }
+      if (lockedFees.some((fee) => fee.shipment.customerId !== input.customerId)
+        || lockedManualFees.some((fee: any) => fee.shipment.customerId !== input.customerId)) {
+        throw new BadRequestException('应收费用不属于该客户');
+      }
+      if (lockedFees.some((fee) => fee.settled)
+        || lockedManualFees.some((fee: any) => fee.reconciliationStatus === 'CONFIRMED' || fee.reconciliationStatus === 'LOCKED')) {
+        throw new BadRequestException('应收费用已核销');
+      }
+      const lockedSettledAmount = roundMoney(
+        lockedFees.reduce((sum, fee) => sum + Number(fee.amount), 0)
+          + lockedManualFees.reduce((sum: number, fee: any) => sum + Number(fee.amount), 0)
+      );
+      if (input.amount < lockedSettledAmount) {
+        throw new BadRequestException('收款金额不足以核销选中费用');
+      }
       const payment = await tx.payment.create({
         data: {
           partyType: 'CUSTOMER',
@@ -16057,7 +17032,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           amount: input.amount
         }
       });
-      const afterReceiptBalance = roundMoney(Number(account.balance) + input.amount);
+      const afterReceiptBalance = roundMoney(Number(lockedAccount.balance) + input.amount);
       await tx.customerAccount.update({
         where: { id: account.id },
         data: { balance: afterReceiptBalance }
@@ -16073,17 +17048,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       });
 
       let finalBalance = afterReceiptBalance;
-      if (settledAmount > 0) {
-        finalBalance = roundMoney(afterReceiptBalance - settledAmount);
-        await tx.receivableFee.updateMany({ where: { id: { in: fees.map((fee) => fee.id) } }, data: { settled: true } });
-        if (manualFees.length > 0) {
-          for (const fee of manualFees) {
-            const profitSnapshot = await this.financeProfitReviewSnapshotData(fee.amount, fee.currency, legacyReviewedAt, tx);
-            await (tx as any).shipmentFinanceItem.update({
-              where: { id: fee.id },
-              data: { reconciliationStatus: 'CONFIRMED', locked: true, reviewedBy: 'system', reviewedAt: legacyReviewedAt, ...profitSnapshot }
-            });
-          }
+      if (lockedSettledAmount > 0) {
+        finalBalance = roundMoney(afterReceiptBalance - lockedSettledAmount);
+        await tx.receivableFee.updateMany({ where: { id: { in: lockedFees.map((fee) => fee.id) }, settled: false }, data: { settled: true } });
+        if (lockedManualFees.length > 0) {
+          await (tx as any).shipmentFinanceItem.updateMany({
+            where: { id: { in: lockedManualFees.map((fee: any) => fee.id) }, reconciliationStatus: 'PENDING', locked: false },
+            data: { reconciliationStatus: 'CONFIRMED', locked: true, reviewedBy: 'system', reviewedAt: new Date() }
+          });
         }
         await tx.customerAccount.update({
           where: { id: account.id },
@@ -16093,19 +17065,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           data: {
             partyType: 'CUSTOMER',
             partyId: input.customerId,
-            amount: -settledAmount,
+            amount: -lockedSettledAmount,
             balance: finalBalance,
             note: '核销应收费用'
           }
         });
         await tx.settlement.createMany({
           data: [
-            ...fees.map((fee) => ({
+            ...lockedFees.map((fee) => ({
               paymentId: payment.id,
               feeId: fee.id,
               amount: Number(fee.amount)
             })),
-            ...manualFees.map((fee: any) => ({
+            ...lockedManualFees.map((fee: any) => ({
               paymentId: payment.id,
               feeId: fee.id,
               amount: Number(fee.amount)
@@ -16138,10 +17110,28 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
       }
 
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'finance.customer_payment.create',
+          target: `payment:${payment.id}`,
+          after: {
+            customerId: input.customerId,
+            amount: input.amount,
+            settledAmount: lockedSettledAmount,
+            feeIds,
+            statementId: input.statementId ?? null
+          }
+        }
+      });
+
       return {
         payment,
         accountBalance: finalBalance,
-        statement
+        statement,
+        settledAmount: lockedSettledAmount,
+        fees: lockedFees,
+        manualFees: lockedManualFees
       };
     });
 
@@ -16150,7 +17140,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       customerId: customer.id,
       customerName: `${customer.code}-${customer.name}`,
       amount: Number(result.payment.amount),
-      settledAmount,
+      settledAmount: result.settledAmount,
       createdAt: result.payment.createdAt.toISOString()
     });
 
@@ -16163,7 +17153,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         currency: account.currency
       },
       settledFees: [
-        ...fees.map((fee) => ({
+        ...result.fees.map((fee) => ({
           id: fee.id,
           shipmentId: fee.shipmentId,
           systemOrderNo: fee.shipment.systemOrderNo,
@@ -16172,7 +17162,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           amount: Number(fee.amount),
           settled: true
         })),
-        ...manualFees.map((fee: any) => ({
+        ...result.manualFees.map((fee: any) => ({
           id: fee.id,
           shipmentId: fee.shipmentId,
           systemOrderNo: fee.shipment.systemOrderNo,
@@ -16187,13 +17177,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async createShipment(principal: Principal, input: ShipmentCreateInput): Promise<Shipment> {
-    if (principal.role !== 'CUSTOMER'
-      && principal.role !== 'ADMIN'
-      && !principal.shipmentAllView
-      && principal.dataScope !== 'SALES_OWN'
-      && !principal.departmentTeamScope?.length) {
-      throw new ForbiddenException('当前岗位未配置录单数据范围');
-    }
+    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     const customerId = principal.role === 'CUSTOMER' ? principal.customerId : input.customerId;
     if (!customerId) {
       throw new BadRequestException('缺少客户');
@@ -16215,23 +17199,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (principal.role === 'CUSTOMER' && input.customerId && input.customerId !== principal.customerId) {
       throw new ForbiddenException('客户不能为其他客户创建预报');
     }
-    if (principal.role === 'CUSTOMER' && input.agentId?.trim()) {
-      throw new ForbiddenException('客户预报不能指定内部代理');
-    }
 
     if (input.channelId) {
       const channel = await this.prisma.channel.findFirst({ where: { id: input.channelId, enabled: true, deletedAt: null }, select: { id: true } });
       if (!channel) throw new BadRequestException('渠道不存在或已删除');
     }
 
-    const shipmentCustomer = await this.prisma.customer.findUnique({
-      where: { id: customerId },
-      select: { code: true, salesperson: true }
-    });
-    if (!shipmentCustomer) throw new BadRequestException('客户不存在');
-    const scope = principal.role === 'CUSTOMER' ? undefined : this.orderEntryCustomerScope(principal, true);
+    const scope = this.operatorCustomerScope(principal);
     if (scope) {
-      if (!shipmentCustomer.salesperson || !scope.includes(shipmentCustomer.salesperson)) {
+      const customer = await this.prisma.customer.findUnique({ where: { id: customerId }, select: { salesperson: true } });
+      if (!customer || !customer.salesperson || !scope.includes(customer.salesperson)) {
         throw new ForbiddenException('业务员只能操作自己名下客户');
       }
     }
@@ -16249,22 +17226,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const requestedWarehousePackageIds = Array.from(
       new Set([...(input.warehousePackageIds ?? []), ...(input.draftWarehousePackageIds ?? [])].map((id) => id.trim()).filter(Boolean))
     );
-    if (principal.role === 'CUSTOMER' && requestedWarehousePackageIds.length) {
-      throw new ForbiddenException('客户预报不能直接绑定仓库包裹');
-    }
     const shouldBindWarehousePackages = input.bindWarehousePackages ?? Boolean((input.warehousePackageIds ?? []).length);
     const warehousePackageIdsToBind = shouldBindWarehousePackages ? requestedWarehousePackageIds : [];
     const draftWarehousePackageIds = shouldBindWarehousePackages ? [] : requestedWarehousePackageIds;
     if (requestedWarehousePackageIds.length) {
       const packages = await this.prisma.warehousePackage.findMany({
         where: { id: { in: requestedWarehousePackageIds } },
-        select: { id: true, customerCode: true, shipmentId: true, systemOrderNo: true, measurementStatus: true }
+        select: { id: true, shipmentId: true, systemOrderNo: true, measurementStatus: true }
       });
       if (packages.length !== requestedWarehousePackageIds.length) {
         throw new BadRequestException('部分仓库包裹不存在');
-      }
-      if (packages.some((pkg) => pkg.customerCode !== shipmentCustomer.code)) {
-        throw new ForbiddenException('只能绑定当前客户的仓库包裹');
       }
       const boundPackage = shouldBindWarehousePackages ? packages.find((pkg) => pkg.shipmentId || pkg.systemOrderNo) : undefined;
       if (boundPackage) {
@@ -16287,13 +17258,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         `);
         const currentPackages = await tx.warehousePackage.findMany({
           where: { id: { in: requestedWarehousePackageIds } },
-          select: { id: true, customerCode: true, shipmentId: true, systemOrderNo: true, measurementStatus: true, status: true }
+          select: { id: true, shipmentId: true, systemOrderNo: true, measurementStatus: true, status: true }
         });
         if (currentPackages.length !== requestedWarehousePackageIds.length) {
           throw new BadRequestException('部分仓库包裹不存在');
-        }
-        if (currentPackages.some((pkg) => pkg.customerCode !== shipmentCustomer.code)) {
-          throw new ForbiddenException('只能绑定当前客户的仓库包裹');
         }
         if (currentPackages.some((pkg) => pkg.measurementStatus === 'PENDING_REMEASURE')) {
           throw new BadRequestException('理货后包裹待重新过机，完成测量后才能录单');
@@ -16342,7 +17310,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           packageType: input.packageType,
           packageCount: input.packageCount,
           receivableWeightKg: input.receivableWeightKg,
-          agentWeightKg: input.agentWeightKg ?? input.receivableWeightKg,
+          agentWeightKg: canViewAgentWeight ? input.agentWeightKg ?? input.receivableWeightKg : input.receivableWeightKg,
           latestTracking: '',
           trackingStaleDays: 0,
           isRemoteArea: false,
@@ -16366,7 +17334,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         const packageUpdate = await tx.warehousePackage.updateMany({
           where: {
             id: { in: warehousePackageIdsToBind },
-            customerCode: shipmentCustomer.code,
             shipmentId: null,
             systemOrderNo: null,
             status: { in: ['RECEIVED', 'CONSOLIDATED'] }
@@ -16398,7 +17365,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       return shipment;
     });
 
-    return mapShipment(created);
+    return this.scopeShipmentAgentWeight(mapShipment(created), canViewAgentWeight);
   }
 
   async importShipments(principal: Principal, request: ShipmentImportRequest): Promise<ShipmentImportResponse> {
@@ -16448,7 +17415,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           after: { status: updated.status }
         }
       });
-      return updated;
+      return this.scopeShipmentAgentWeight(updated, await this.canViewShipmentAgentWeight(principal));
     }
 
     throw new BadRequestException('当前状态不允许确认收货');
@@ -16742,6 +17709,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       agentChannelName: routeAgentChannelName,
       routedAt
     });
+    if (shouldApprove) {
+      await this.recordShipmentStageStatusTransition(
+        updated.id,
+        routeBeforeStatus,
+        updated.status,
+        new Date(routedAt),
+        'ROUTE'
+      );
+    }
     if (shouldApprove) void this.lineage?.recordEvent('market.pending_routing.route', {
       actorUsername: principal.username,
       businessId: updated.id,
@@ -16776,23 +17752,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         shippingMarkRequired: body.shippingMarkRequired === true
       }
     });
-    return updated;
+    return this.scopeShipmentAgentWeight(updated, await this.canViewShipmentAgentWeight(principal));
   }
 
   async dispatchShipment(principal: Principal, shipmentId: string, body: ShipmentDispatchInput): Promise<Shipment> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
-    const miscFeeIdsToMatch = Array.from(new Set(body.miscFeeIdsToMatch ?? []));
-    const tallyDue = await this.getTallyMiscFeeDueInternal(principal, shipment.customer.code);
-    const mandatoryUnconfirmed = tallyDue.rows.filter((row) => row.dueLevel === 'MANDATORY' && row.confirmationStatus !== 'CONFIRMED');
-    if (mandatoryUnconfirmed.length) {
-      throw new BadRequestException(`该客户存在满 60 天但尚未仓库确认的理货杂费，请先确认：${mandatoryUnconfirmed.map((row) => row.feeName).join('、')}`);
-    }
-    const missingMandatory = tallyDue.rows
-      .filter((row) => row.dueLevel === 'MANDATORY' && !miscFeeIdsToMatch.includes(row.id))
-      .map((row) => row.feeName);
-    if (missingMandatory.length) {
-      throw new BadRequestException(`该客户存在满 60 天未处理理货杂费，请先匹配：${missingMandatory.join('、')}`);
-    }
     const transferNo = body.transferNo ?? shipment.transferNo;
     if (transferNo) {
       const voidedLabel = await this.prisma.shipmentLabel.findFirst({
@@ -16859,9 +17823,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         `);
       }
       await this.ensureWarehousePackagesNotInPendingTally(warehousePackageIds, tx);
-      if (miscFeeIdsToMatch.length) {
-        await this.matchTallyMiscFeesToShipment(tx, principal, shipment.customerId, shipment, miscFeeIdsToMatch, 'WAREHOUSE_DISPATCH');
-      }
       const outboundAt = new Date();
       await tx.shipment.update({
         where: { id: shipment.id },
@@ -16931,6 +17892,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       return { updated, warehousePackageIds };
     });
     const { updated, warehousePackageIds } = dispatchState;
+    await this.recordShipmentStageStatusTransition(
+      updated.id,
+      shipment.status,
+      updated.status,
+      updated.outboundAt ? new Date(updated.outboundAt) : new Date(),
+      'DISPATCH'
+    );
     if (updated.transferNo) {
       await this.ensureCarrierTask(updated.id, updated.carrier, updated.transferNo);
     }
@@ -16965,7 +17933,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         warehousePackageCount: warehousePackageIds.length
       }
     });
-    return result;
+    return this.scopeShipmentAgentWeight(result, await this.canViewShipmentAgentWeight(principal));
   }
 
   async printWarehouseHandover(principal: Principal, input: WarehouseHandoverPrintInput): Promise<WarehouseHandoverPrintResponse> {
@@ -17074,7 +18042,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment', id: shipment.id }],
       metrics: { statusFrom: shipment.status, statusTo: 'WAITING_SORT' }
     });
-    return { ...mapShipment(updatedRow), routeReturnedAt: returnedAt };
+    return this.scopeShipmentAgentWeight(
+      { ...mapShipment(updatedRow), routeReturnedAt: returnedAt },
+      await this.canViewShipmentAgentWeight(principal)
+    );
   }
 
   async deletePendingRoutingShipment(principal: Principal, shipmentId: string, input: ShipmentReviewDeleteInput = {}): Promise<Shipment> {
@@ -17130,7 +18101,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment', id: shipment.id }],
       metrics: { statusBefore: shipment.status, deleteType: 'MANUAL' }
     });
-    return mapShipment(deleted);
+    return this.scopeShipmentAgentWeight(mapShipment(deleted), await this.canViewShipmentAgentWeight(principal));
   }
 
   async approveShipmentBusinessData(principal: Principal, shipmentId: string, body: CustomerServiceDataReviewInput): Promise<Shipment> {
@@ -17177,6 +18148,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         })
       }
     });
+    await this.syncCustomerServiceDataStage(shipment.id, new Date(reviewedAt));
     await this.ensureCustomerServiceDataCycleStillCurrent(shipment.id, dataConfirmationCycleStartedAt);
     void this.lineage?.recordEvent('customer_service.data_confirm.approve', {
       actorUsername: principal.username,
@@ -17257,6 +18229,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         })
       }
     });
+    await this.syncCustomerServiceDataStage(shipment.id, new Date(reviewedAt));
     await this.ensureCustomerServiceDataCycleStillCurrent(shipment.id, dataConfirmationCycleStartedAt);
     void this.lineage?.recordEvent('customer_service.data_confirm.approve', {
       actorUsername: principal.username,
@@ -17296,38 +18269,142 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const dataConfirmationCycleStartedAt = this.ensureCustomerServiceDataCycle(shipment, body.expectedOutboundAt);
     await this.ensureCustomerServiceDataEditable(shipment, 'business');
     this.validateCustomerServiceData(body);
+    const managedBusinessCostChanges: Array<{ type: ShipmentFinanceItemType; before: any; after: any }> = [];
     const updated = await this.prisma.$transaction(async (tx) => {
       await this.lockShipmentRow(tx, shipmentId);
       const lockedShipment = await tx.shipment.findUniqueOrThrow({ where: { id: shipmentId }, include: shipmentIncludes });
       const lockedMappedShipment = mapShipment(lockedShipment);
       const lockedCycleStartedAt = this.ensureCustomerServiceDataCycle(lockedShipment, body.expectedOutboundAt);
       if (lockedShipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改数据确认');
-      const costs = await (tx as any).shipmentFinanceItem.findMany({ where: { shipmentId, type: 'BUSINESS_COST', voided: false } });
-      if (costs.some((item: any) => item.locked || item.reconciliationStatus === 'CONFIRMED')) throw new BadRequestException('业务成本已锁定，不能修改计费重');
-      const updatedCosts = await Promise.all(costs.map((item: any) => (tx as any).shipmentFinanceItem.update({
-        where: { id: item.id },
-        data: {
-          chargeWeightKg: body.chargeWeightKg,
-          ...(item.unitPrice && !item.amountOverridden ? { amount: roundMoney(Number(body.chargeWeightKg) * Number(item.unitPrice)) } : {})
-        }
-      })));
-      const financeItemChanges = updatedCosts.flatMap((updatedCost: any, index: number) => {
-        const originalCost = costs[index];
-        const originalChargeWeightKg = originalCost.chargeWeightKg === null || originalCost.chargeWeightKg === undefined
-          ? undefined
-          : Number(originalCost.chargeWeightKg);
-        const currentChargeWeightKg = Number(updatedCost.chargeWeightKg);
-        return originalChargeWeightKg !== undefined && originalChargeWeightKg !== currentChargeWeightKg
-          ? [{
-              financeItemId: originalCost.id,
-              feeName: originalCost.name,
-              originalChargeWeightKg,
-              currentChargeWeightKg,
-              originalAmount: Number(originalCost.amount),
-              currentAmount: Number(updatedCost.amount)
-            }]
-          : [];
+      const managesBusinessCosts = body.businessCosts !== undefined;
+      const costs = await (tx as any).shipmentFinanceItem.findMany({
+        where: { shipmentId, type: managesBusinessCosts ? 'BUSINESS_COST' : { in: ['BUSINESS_COST', 'PAYABLE'] }, voided: false }
       });
+      let selectedCosts = this.selectCustomerServiceFinanceItems(costs, body.selectedFinanceItemIds);
+      let updatedCosts: any[] = [];
+      let createdCosts: any[] = [];
+      let deletedCosts: any[] = [];
+      let financeItemChanges: any[] = [];
+
+      if (managesBusinessCosts) {
+        const requestedCosts = body.businessCosts ?? [];
+        const requestedIds = requestedCosts.map((row) => row.id).filter((id): id is string => Boolean(id));
+        if (new Set(requestedIds).size !== requestedIds.length) throw new BadRequestException('业务成本费用不能重复选择');
+        const costById = new Map<string, any>(costs.map((item: any) => [item.id, item] as [string, any]));
+        const invalidIds = requestedIds.filter((id) => !costById.has(id));
+        if (invalidIds.length) throw new BadRequestException('选择的业务成本费用不存在或不属于当前运单');
+        selectedCosts = costs.filter((item: any) => requestedIds.includes(item.id));
+        deletedCosts = costs.filter((item: any) => !requestedIds.includes(item.id));
+        if (deletedCosts.some((item: any) => item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))) {
+          throw new BadRequestException('业务成本已审核或锁定，不能删除');
+        }
+        for (const row of requestedCosts) {
+          if (!row.name?.trim()) throw new BadRequestException('费用名称不能为空');
+          if (!['KG', 'CBM'].includes(row.billingUnit)) throw new BadRequestException('计费依据只能选择 KG 或 CBM');
+          const quantity = row.billingUnit === 'CBM' ? Number(body.volumeCbm) : Number(body.chargeWeightKg);
+          if (!Number.isFinite(quantity) || quantity < 0) throw new BadRequestException('业务成本计费数量必须为有效值');
+          const unitPrice = row.unitPrice === undefined || row.unitPrice === null ? undefined : Number(row.unitPrice);
+          if (unitPrice !== undefined && (!Number.isFinite(unitPrice) || unitPrice < 0)) throw new BadRequestException('单价必须为大于等于 0 的有效值');
+          const amount = unitPrice === undefined ? 0 : roundMoney(quantity * unitPrice);
+          const commonData = {
+            name: row.name.trim(),
+            currency: row.currency?.trim() || 'RMB',
+            billingUnit: row.billingUnit,
+            billingQuantity: quantity,
+            chargeWeightKg: row.billingUnit === 'KG' ? quantity : null,
+            unitPrice: unitPrice ?? null,
+            amount,
+            amountOverridden: unitPrice === undefined
+          };
+          if (row.id) {
+            const current = costById.get(row.id);
+            if (current?.locked || ['CONFIRMED', 'LOCKED'].includes(current?.reconciliationStatus ?? 'PENDING')) {
+              const unchanged = current.name === commonData.name
+                && (current.currency ?? 'RMB') === commonData.currency
+                && (current.billingUnit ?? 'KG') === commonData.billingUnit
+                && Number(current.billingQuantity ?? current.chargeWeightKg ?? 0) === Number(commonData.billingQuantity)
+                && Number(current.unitPrice ?? 0) === Number(commonData.unitPrice ?? 0);
+              if (!unchanged) throw new BadRequestException('业务成本已审核或锁定，不能修改');
+              continue;
+            }
+            const updated = await (tx as any).shipmentFinanceItem.update({ where: { id: row.id }, data: commonData });
+            updatedCosts.push(updated);
+            financeItemChanges.push({
+              financeItemId: updated.id,
+              feeName: updated.name,
+              originalChargeWeightKg: current?.billingUnit === 'KG' ? Number(current.billingQuantity ?? current.chargeWeightKg) : undefined,
+              currentChargeWeightKg: row.billingUnit === 'KG' ? quantity : undefined,
+              originalAmount: Number(current?.amount ?? 0),
+              currentAmount: Number(updated.amount),
+              action: 'UPDATE'
+            });
+            await tx.auditLog.create({ data: { actorId: principal.id, action: 'shipment.finance_item.update', target: updated.id, before: current, after: updated } });
+            await tx.shipmentEvent.create({ data: { shipmentId: lockedShipment.id, fromStatus: lockedShipment.status, toStatus: lockedShipment.status, note: `客服业务成本修改：${updated.name}` } });
+            managedBusinessCostChanges.push({ type: updated.type, before: current, after: updated });
+          } else {
+            const created = await (tx as any).shipmentFinanceItem.create({
+              data: {
+                shipmentId: lockedShipment.id,
+                type: 'BUSINESS_COST',
+                ...commonData,
+                reconciliationStatus: 'PENDING',
+                locked: false,
+                voided: false,
+                createdBy: principal.username
+              }
+            });
+            createdCosts.push(created);
+            financeItemChanges.push({ financeItemId: created.id, feeName: created.name, currentChargeWeightKg: row.billingUnit === 'KG' ? quantity : undefined, originalAmount: 0, currentAmount: Number(created.amount), action: 'CREATE' });
+            await tx.auditLog.create({ data: { actorId: principal.id, action: 'shipment.finance_item.create', target: created.id, before: Prisma.JsonNull, after: toAuditJson(created) } });
+            await tx.shipmentEvent.create({ data: { shipmentId: lockedShipment.id, fromStatus: lockedShipment.status, toStatus: lockedShipment.status, note: `客服业务成本新增：${created.name}` } });
+            managedBusinessCostChanges.push({ type: created.type, before: null, after: created });
+          }
+        }
+        for (const current of deletedCosts) {
+          await (tx as any).shipmentFinanceItem.delete({ where: { id: current.id } });
+          financeItemChanges.push({ financeItemId: current.id, feeName: current.name, originalAmount: Number(current.amount), currentAmount: 0, action: 'DELETE' });
+          await tx.auditLog.create({ data: { actorId: principal.id, action: 'shipment.finance_item.delete', target: current.id, before: current, after: { hardDelete: true } } });
+          await tx.shipmentEvent.create({ data: { shipmentId: lockedShipment.id, fromStatus: lockedShipment.status, toStatus: lockedShipment.status, note: `客服业务成本删除：${current.name}` } });
+          managedBusinessCostChanges.push({ type: current.type, before: current, after: { ...current, hardDelete: true } });
+        }
+      } else {
+        if (selectedCosts.some((item: any) => item.locked || item.reconciliationStatus === 'CONFIRMED')) {
+          const message = await this.canViewOrderEntryBusinessCosts(principal)
+            ? '业务成本或应付成本已审核或锁定，不能修改计费重'
+            : '关联费用已审核或锁定，不能修改计费重';
+          throw new BadRequestException(message);
+        }
+        updatedCosts = await Promise.all(selectedCosts.map((item: any) => {
+          const billing = ['BUSINESS_COST', 'PAYABLE'].includes(item.type) ? resolveFinanceCostBillingFields(item.type, item) : undefined;
+          const quantity = billing?.billingUnit === 'CBM' ? Number(body.volumeCbm) : Number(body.chargeWeightKg);
+          return (tx as any).shipmentFinanceItem.update({
+            where: { id: item.id },
+            data: {
+              ...(billing ? {
+                billingUnit: billing.billingUnit,
+                billingQuantity: quantity,
+                chargeWeightKg: billing.billingUnit === 'KG' ? quantity : null
+              } : { chargeWeightKg: body.chargeWeightKg }),
+              ...(item.unitPrice && !item.amountOverridden ? { amount: roundMoney(quantity * Number(item.unitPrice)) } : {})
+            }
+          });
+        }));
+        financeItemChanges = updatedCosts.flatMap((updatedCost: any, index: number) => {
+          const originalCost = selectedCosts[index];
+          const originalBilling = originalCost.type === 'BUSINESS_COST' ? resolveBusinessCostBillingFields(originalCost) : undefined;
+          const originalChargeWeightKg = originalBilling
+            ? originalBilling.billingUnit === 'KG' ? originalBilling.billingQuantity : undefined
+            : originalCost.chargeWeightKg === null || originalCost.chargeWeightKg === undefined
+              ? undefined
+              : Number(originalCost.chargeWeightKg);
+          const currentChargeWeightKg = originalBilling
+            ? originalBilling.billingUnit === 'KG' ? Number(updatedCost.billingQuantity) : undefined
+            : Number(updatedCost.chargeWeightKg);
+          return originalChargeWeightKg !== undefined && originalChargeWeightKg !== currentChargeWeightKg
+            ? [{ financeItemId: originalCost.id, feeName: originalCost.name, originalChargeWeightKg, currentChargeWeightKg, originalAmount: Number(originalCost.amount), currentAmount: Number(updatedCost.amount) }]
+            : [];
+        });
+      }
       const result = await tx.shipment.updateMany({
         where: { id: shipmentId, status: 'OUTBOUNDED', outboundAt: lockedShipment.outboundAt },
         data: { packageCount: Math.floor(body.packageCount), actualWeightKg: body.weightKg, volumeCbm: body.volumeCbm, receivableWeightKg: body.chargeWeightKg }
@@ -17344,6 +18421,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             ...mapShipment(updatedShipment),
             reviewStatus: 'PENDING',
             snapshot: body,
+            selectedFinanceItemIds: selectedCosts.map((item: any) => item.id),
+            businessCostItemIds: managesBusinessCosts ? (body.businessCosts ?? []).map((item: CustomerServiceBusinessCostInput) => item.id).filter((id): id is string => Boolean(id)) : undefined,
             financeItemChanges,
             remark: body.remark?.trim(),
             dataConfirmationCycleStartedAt: lockedCycleStartedAt,
@@ -17353,7 +18432,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       });
       return updatedShipment;
     });
+    await this.syncCustomerServiceDataStage(shipmentId);
     await this.ensureCustomerServiceDataCycleStillCurrent(shipmentId, dataConfirmationCycleStartedAt);
+    for (const change of managedBusinessCostChanges) {
+      await this.createBusinessCostChangeNotificationAudit(principal, change.type, updated, change.before, change.after);
+    }
     if (body.pushToSales) await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'customer_service.business_data.push_pending', target: shipmentId, after: toAuditJson({ customerCode: mapShipment(updated).customerCode, systemOrderNo: mapShipment(updated).systemOrderNo, channelName: mapShipment(updated).channelName, snapshot: body, remark: body.remark?.trim(), status: 'PENDING' }) } });
     return this.scopeCustomerServiceShipment(principal, mapShipment(updated));
   }
@@ -17371,16 +18454,23 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const lockedCycleStartedAt = this.ensureCustomerServiceDataCycle(lockedShipment, body.expectedOutboundAt);
       if (lockedShipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改数据确认');
       const costs = await (tx as any).shipmentFinanceItem.findMany({ where: { shipmentId, type: 'PAYABLE', voided: false } });
-      if (costs.some((item: any) => item.locked || item.reconciliationStatus === 'CONFIRMED')) throw new BadRequestException('应付成本已锁定，不能修改计费重');
-      const updatedCosts = await Promise.all(costs.map((item: any) => (tx as any).shipmentFinanceItem.update({
+      const selectedCosts = this.selectCustomerServiceFinanceItems(costs, body.selectedFinanceItemIds);
+      if (selectedCosts.some((item: any) => item.locked || item.reconciliationStatus === 'CONFIRMED')) throw new BadRequestException('应付成本已锁定，不能修改计费重');
+      const updatedCosts = await Promise.all(selectedCosts.map((item: any) => (tx as any).shipmentFinanceItem.update({
         where: { id: item.id },
-        data: {
-          chargeWeightKg: body.chargeWeightKg,
-          ...(item.unitPrice && !item.amountOverridden ? { amount: roundMoney(Number(body.chargeWeightKg) * Number(item.unitPrice)) } : {})
-        }
+        data: (() => {
+          const billing = resolveFinanceCostBillingFields('PAYABLE', item);
+          const quantity = billing.billingUnit === 'CBM' ? billing.billingQuantity : Number(body.chargeWeightKg);
+          return {
+            billingUnit: billing.billingUnit,
+            billingQuantity: quantity,
+            chargeWeightKg: billing.billingUnit === 'KG' ? quantity : null,
+            ...(item.unitPrice && !item.amountOverridden && quantity !== undefined ? { amount: roundMoney(Number(quantity) * Number(item.unitPrice)) } : {})
+          };
+        })()
       })));
       const financeItemChanges = updatedCosts.flatMap((updatedCost: any, index: number) => {
-        const originalCost = costs[index];
+        const originalCost = selectedCosts[index];
         const originalChargeWeightKg = originalCost.chargeWeightKg === null || originalCost.chargeWeightKg === undefined
           ? undefined
           : Number(originalCost.chargeWeightKg);
@@ -17412,6 +18502,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             ...mapShipment(updatedShipment),
             reviewStatus: 'PENDING',
             snapshot: body,
+            selectedFinanceItemIds: selectedCosts.map((item: any) => item.id),
             financeItemChanges,
             remark: body.remark?.trim(),
             dataConfirmationCycleStartedAt: lockedCycleStartedAt
@@ -17420,6 +18511,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       });
       return updatedShipment;
     });
+    await this.syncCustomerServiceDataStage(shipmentId);
     await this.ensureCustomerServiceDataCycleStillCurrent(shipmentId, dataConfirmationCycleStartedAt);
     return this.scopeCustomerServiceShipment(principal, mapShipment(updated));
   }
@@ -17451,8 +18543,70 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return this.reverseCustomerServiceData(principal, shipmentId, 'agent', body.reason, body.expectedOutboundAt);
   }
 
-  async updateShipmentOperational(principal: Principal, shipmentId: string, input: ShipmentOperationalUpdateInput): Promise<Shipment> {
+  private async ensureOperationLineShipmentStageEditable(
+    principal: Principal,
+    shipment: LineShipmentEditStageSource & { id: string; outboundAt?: Date | string | null }
+  ) {
+    await this.ensureOperationLineShipmentStageVisible(principal, shipment, 'PATCH', `/api/operations/line-shipments/${shipment.id}/operational`);
+    if (isAdministratorRole(principal.role)) return;
+    const [businessDataApproved, agentDataApproved, afterSaleRows] = await Promise.all([
+      this.isCustomerServiceDataApproved(shipment.id, 'business', shipment.outboundAt),
+      this.isCustomerServiceDataApproved(shipment.id, 'agent', shipment.outboundAt),
+      this.prisma.auditLog.findMany({
+        where: { action: 'customer_service.issue.attach' as any, after: { path: ['shipmentId'], equals: shipment.id } as any },
+        select: { after: true }
+      })
+    ]);
+    const afterSale = afterSaleRows.some((row) => {
+      const after = row.after as Record<string, unknown> | null;
+      return after?.shipmentId === shipment.id && after?.originalStatusPool === 'SIGNED';
+    });
+    const stages = getLineShipmentEditStages(shipment, { businessDataApproved, agentDataApproved, afterSale });
+    const blockedPermissions = stages.map((stage) => `operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey);
+    for (const permission of blockedPermissions) {
+      if (await this.hasPermission(principal.role, permission)) {
+        await this.recordPermissionDenied(principal, {
+          permissions: [permission],
+          method: 'PATCH',
+          path: `/api/operations/line-shipments/${shipment.id}/operational`
+        });
+        throw new ForbiddenException('当前运单阶段已屏蔽编辑');
+      }
+    }
+  }
+
+  private async ensureOperationLineShipmentStageVisible(
+    principal: Principal,
+    shipment: LineShipmentEditStageSource & { id: string; status: string },
+    method: string,
+    path: string
+  ) {
+    if (isAdministratorRole(principal.role) || !['DRAFT', 'REVIEW_PENDING'].includes(shipment.status)) return;
+    const permission = 'operations:line-shipment:stage-view-block:review-pending' as PermissionKey;
+    if (!(await this.hasPermission(principal.role, permission))) return;
+    await this.recordPermissionDenied(principal, { permissions: [permission], method, path });
+    throw new ForbiddenException('当前运单阶段已屏蔽查看和编辑');
+  }
+
+  async updateShipmentOperational(
+    principal: Principal,
+    shipmentId: string,
+    input: ShipmentOperationalUpdateInput,
+    options: { allowCustomerServiceTransferAgentWeight?: boolean; enforceOperationsLineShipmentStageEdit?: boolean } = {}
+  ): Promise<Shipment> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    if (options.enforceOperationsLineShipmentStageEdit) await this.ensureOperationLineShipmentStageEditable(principal, shipment);
+    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal)
+      || (options.allowCustomerServiceTransferAgentWeight === true
+        && await this.hasPermission(principal.role, 'customer-service:transfer:view-agent-data'));
+    if (input.agentWeightKg !== undefined && !canViewAgentWeight) {
+      await this.recordPermissionDenied(principal, {
+        permissions: ['business:shipment:agent-weight-view'],
+        method: 'PATCH',
+        path: `/api/shipments/${shipmentId}/operational`
+      });
+      throw new ForbiddenException('没有查看或修改代理计费重权限');
+    }
     const latestTracking = input.latestTracking?.trim();
     const transferNo = input.transferNo !== undefined ? input.transferNo.trim() || null : shipment.transferNo ?? null;
     const subOrderNo = input.subOrderNo !== undefined ? input.subOrderNo.trim() || null : shipment.subOrderNo ?? null;
@@ -17533,12 +18687,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException(`品名最多填写${MAX_SHIPMENT_PRODUCT_NAMES}个`);
     }
 
+    const now = new Date();
+    const transportStartedAt = !(shipment as any).transportStartedAt && Boolean(transferNo) && !shipment.transferNo ? now : undefined;
+    const transportCompletedAt = currentStatus !== 'SIGNED' && nextStatus === 'SIGNED' ? now : undefined;
     const notes: string[] = [];
     if (shipment.transferNo !== transferNo) {
       notes.push(`更新转单号：${shipment.transferNo ?? '空'} -> ${transferNo ?? '空'}`);
     }
     if (shipment.subOrderNo !== subOrderNo) {
       notes.push(`更新分单号：${shipment.subOrderNo ?? '空'} -> ${subOrderNo ?? '空'}`);
+    }
+    const vesselVoyage = input.vesselVoyage !== undefined ? input.vesselVoyage.trim() || null : shipment.vesselVoyage;
+    if (shipment.vesselVoyage !== vesselVoyage) {
+      notes.push(`更新船名航次：${shipment.vesselVoyage ?? '空'} -> ${vesselVoyage ?? '空'}`);
     }
     if (latestTracking !== undefined && shipment.latestTracking !== latestTracking) {
       notes.push(`更新最新轨迹：${latestTracking}`);
@@ -17557,12 +18718,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       settlementMethod: input.settlementMethod?.trim(),
       packageCount: input.packageCount,
       receivableWeightKg: input.receivableWeightKg,
-      agentWeightKg: input.agentWeightKg ?? input.receivableWeightKg,
+      agentWeightKg: canViewAgentWeight ? input.agentWeightKg ?? input.receivableWeightKg : undefined,
       volumeCbm: input.volumeCbm,
       declarationRequired: input.declarationRequired,
       sensitive: input.sensitive
     };
-    if (factUpdates.customerOrderNo && shipment.customerOrderNo !== factUpdates.customerOrderNo) notes.push(`更新客户单号：${shipment.customerOrderNo} -> ${factUpdates.customerOrderNo}`);
+    if (factUpdates.customerOrderNo && shipment.customerOrderNo !== factUpdates.customerOrderNo) notes.push(`更新出货单号：${shipment.customerOrderNo} -> ${factUpdates.customerOrderNo}`);
     if (factUpdates.productName && (shipment as any).productName !== factUpdates.productName) notes.push(`更新品名：${(shipment as any).productName ?? '空'} -> ${factUpdates.productName}`);
     if (factUpdates.destinationCountry && shipment.destinationCountry !== factUpdates.destinationCountry) notes.push(`更新目的地：${shipment.destinationCountry} -> ${factUpdates.destinationCountry}`);
     if (etaAt) {
@@ -17578,6 +18739,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         latestTracking: latestTracking ?? shipment.latestTracking,
         transferNo,
         subOrderNo,
+        vesselVoyage,
         ...(channel ? { channelId: channel.id } : {}),
         ...(factUpdates.customerOrderNo ? { customerOrderNo: factUpdates.customerOrderNo } : {}),
         ...(factUpdates.productName ? { productName: factUpdates.productName, productNames: requestedProductNames } : {}),
@@ -17591,6 +18753,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         ...(factUpdates.declarationRequired !== undefined ? { declarationRequired: factUpdates.declarationRequired } : {}),
         ...(factUpdates.sensitive !== undefined ? { sensitive: factUpdates.sensitive } : {}),
         status: nextStatus,
+        ...(transportStartedAt ? { transportStartedAt } : {}),
+        ...(transportCompletedAt ? { transportCompletedAt } : {}),
         etaAt: etaAt ?? shipment.etaAt,
         etdAt: etdAt ?? shipment.etdAt,
         trackingStaleDays: latestTracking !== undefined ? 0 : shipment.trackingStaleDays,
@@ -17599,7 +18763,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
               trackingEvents: {
                 create: {
                   status: latestTracking,
-                  happenedAt: new Date(),
+                  happenedAt: now,
                   visibleToCustomer: true,
                   carrier: shipment.channel?.carrier?.name ?? undefined,
                   transferNo: transferNo ?? undefined,
@@ -17646,7 +18810,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
                 transferNoFrom: beforeMapped.transferNo,
                 transferNoTo: mapped.transferNo,
                 transferNoFilledBy: principal.username,
-                transferNoFilledAt: new Date().toISOString(),
+                transferNoFilledAt: transportStartedAt?.toISOString() ?? new Date().toISOString(),
                 labelUrl: label?.labelUrl ?? undefined
               }
             : {})
@@ -17654,7 +18818,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
     });
     if (currentStatus !== nextStatus || (nextStatus === 'SIGNED' && input.status === 'SIGNED')) {
-      const statusAt = new Date().toISOString();
+      const statusAt = (transportCompletedAt ?? new Date()).toISOString();
       const statusEnteredAt = await this.shipmentStatusEnteredAt(shipment, currentStatus);
       await this.prisma.auditLog.create({
         data: {
@@ -17689,7 +18853,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       });
     }
     if (currentStatus !== 'SIGNED' && nextStatus === 'SIGNED') {
-      const signedAt = new Date().toISOString();
+      const signedAt = (transportCompletedAt ?? new Date()).toISOString();
       await this.prisma.auditLog.create({
         data: {
           actorId: principal.id,
@@ -17822,7 +18986,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         });
       }
     }
-    return mapped;
+    return this.scopeShipmentAgentWeight(mapped, canViewAgentWeight);
   }
 
   async registerShipmentPayment(principal: Principal, shipmentId: string, input: ShipmentPaymentUpdateInput): Promise<Shipment> {
@@ -17855,7 +19019,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       shipment.status as ShipmentStatus,
       `登记收款：USD ${hasUsd ? Number(input.paymentAmountUsd).toFixed(2) : '未知'} / RMB ${hasCny ? Number(input.paymentAmountCny).toFixed(2) : '未知'} / ${input.paymentMethod}`
     );
-    return mapShipment(updated);
+    return this.scopeShipmentAgentWeight(mapShipment(updated), await this.canViewShipmentAgentWeight(principal));
   }
 
   async importTrackingEvents(principal: Principal, request: BulkTrackingApplyRequest): Promise<BulkTrackingApplyResponse> {
@@ -17987,8 +19151,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       })));
     })();
 
+    const visibleUpdated = updated.map((shipment) => this.scopeShipmentAgentWeight(shipment, false));
+    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     return {
-      updated,
+      updated: canViewAgentWeight ? updated : visibleUpdated,
       importedCount: updated.length,
       importedRowCount: request.updates.length,
       failedRowCount: request.failedRowCount ?? 0,
@@ -18032,7 +19198,27 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment', id: mappedDeleted.id }],
       metrics: { deleted: 1 }
     });
-    return mappedDeleted;
+    return this.scopeShipmentAgentWeight(mappedDeleted, await this.canViewShipmentAgentWeight(principal));
+  }
+
+  async getCarrierTasks(principal: Principal): Promise<CarrierTaskSummary[]> {
+    const canViewErrors = await this.hasPermission(principal.role, 'tracking:carrier-task:error-view');
+    const operatorCustomerScope = this.operatorCustomerScope(principal);
+    const tasks = await this.prisma.carrierTask.findMany({
+      where: {
+        shipment: {
+          deletedAt: null,
+          ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
+          ...(operatorCustomerScope ? { customer: { salesperson: { in: operatorCustomerScope } } } : {})
+        }
+      },
+      include: { shipment: { include: { customer: true } } },
+      orderBy: { createdAt: 'desc' }
+    });
+    return tasks.map((task) => {
+      const mapped = mapCarrierTask(task);
+      return canViewErrors ? mapped : { ...mapped, lastError: undefined };
+    });
   }
 
   async runCarrierTask(principal: Principal, taskId: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
@@ -18071,7 +19257,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       orderBy: { createdAt: 'desc' }
     });
     if (existing) {
-      return { label: mapShipmentLabel(existing), shipment: mapShipment(shipment) };
+      return {
+        label: mapShipmentLabel(existing),
+        shipment: this.scopeShipmentAgentWeight(mapShipment(shipment), await this.canViewShipmentAgentWeight(principal))
+      };
     }
 
     const now = new Date();
@@ -18097,7 +19286,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     const updated = await this.prisma.shipment.update({
       where: { id: shipment.id },
-      data: { transferNo },
+      data: {
+        transferNo,
+        ...(!(shipment as any).transportStartedAt && !shipment.transferNo ? { transportStartedAt: now } : {})
+      },
       include: shipmentIncludes
     });
     await this.prisma.auditLog.create({
@@ -18137,7 +19329,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment', id: mappedShipment.id }],
       metrics: { labelCount: 1 }
     });
-    return { label: mappedLabel, shipment: mappedShipment };
+    return {
+      label: mappedLabel,
+      shipment: this.scopeShipmentAgentWeight(mappedShipment, await this.canViewShipmentAgentWeight(principal))
+    };
   }
 
   async uploadShipmentLabel(
@@ -18174,7 +19369,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     const updated = await this.prisma.shipment.update({
       where: { id: shipment.id },
-      data: { transferNo, latestTracking: '已上传面单', trackingStaleDays: 0 },
+      data: {
+        transferNo,
+        latestTracking: '已上传面单',
+        trackingStaleDays: 0,
+        ...(!(shipment as any).transportStartedAt && !shipment.transferNo ? { transportStartedAt: now } : {})
+      },
       include: shipmentIncludes
     });
     await this.prisma.auditLog.create({
@@ -18216,7 +19416,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment', id: mappedShipment.id }],
       metrics: { labelCount: 1, sizeBytes: input.sizeBytes }
     });
-    return { label: mappedLabel, shipment: await this.scopeCustomerServiceShipment(principal, mappedShipment) };
+    return {
+      label: mappedLabel,
+      shipment: this.scopeShipmentAgentWeight(mappedShipment, await this.canViewShipmentAgentWeightForLabelUpload(principal))
+    };
   }
 
   async uploadShipmentBusinessInvoice(
@@ -18264,13 +19467,17 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         })
       }
     });
-    return { shipment: mapShipment(updated), fileName: input.fileName, url: input.url };
+    return {
+      shipment: this.scopeShipmentAgentWeight(mapShipment(updated), await this.canViewShipmentAgentWeight(principal)),
+      fileName: input.fileName,
+      url: input.url
+    };
   }
 
   async downloadShipmentInvoiceTemplate(principal: Principal, shipmentId: string, templateId?: string): Promise<{ extension: '.xls' | '.xlsx'; buffer: Buffer }> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
-    if (!canDownloadShipmentInvoiceTemplate(shipment.status)) {
-      throw new BadRequestException('仅已排货及之后状态的运单可以下载发票模板');
+    if (shipment.status !== 'WAITING_DISPATCH') {
+      throw new BadRequestException('仅已排货运单可以下载发票模板');
     }
     const templates = agentInvoiceTemplates(shipment.agent);
     const template = templateId ? templates.find((item) => item.id === templateId) : templates[0];
@@ -18296,11 +19503,73 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async getShipmentLabels(principal: Principal, shipmentId: string): Promise<ShipmentLabelSummary[]> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    await this.ensureShipmentLabelAccess(principal, shipment);
     const labels = await this.prisma.shipmentLabel.findMany({
       where: { shipmentId: shipment.id },
       orderBy: { createdAt: 'desc' }
     });
     return labels.map(mapShipmentLabel);
+  }
+
+  async downloadShipmentLabel(principal: Principal, shipmentId: string, labelId: string) {
+    const shipment = await this.getVisibleShipment(principal, shipmentId);
+    await this.ensureShipmentLabelAccess(principal, shipment);
+    const label = await this.prisma.shipmentLabel.findFirst({ where: { id: labelId, shipmentId: shipment.id } });
+    if (!label) throw new NotFoundException('面单不存在');
+    const storedFileName = resolveStoredUploadFileName(label.labelUrl, 'labels', /\.(gif|jpe?g|pdf|png|webp)$/i);
+    if (!storedFileName) throw new BadRequestException('该面单没有可下载的上传文件');
+    const buffer = await readFile(join(resolveUploadDirectory('labels').dir, storedFileName)).catch(() => null);
+    if (!buffer) throw new NotFoundException('面单文件不存在');
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'shipment.label.download',
+        target: shipment.id,
+        after: toAuditJson({ labelId: label.id, labelNo: label.labelNo, sizeBytes: buffer.length })
+      }
+    });
+    return {
+      buffer,
+      fileName: `${label.labelNo}${extname(storedFileName).toLowerCase()}`,
+      mimeType: storedUploadMimeType(storedFileName)
+    };
+  }
+
+  async downloadShipmentBusinessInvoice(principal: Principal, shipmentId: string) {
+    const shipment = await this.getVisibleShipment(principal, shipmentId);
+    const invoiceUrl = (shipment as any).businessInvoiceUrl as string | null | undefined;
+    const storedFileName = resolveStoredUploadFileName(invoiceUrl, 'business-invoices', /\.xlsx?$/i);
+    if (!storedFileName) throw new BadRequestException('该运单没有可下载的业务发票');
+    const buffer = await readFile(join(resolveUploadDirectory('business-invoices').dir, storedFileName)).catch(() => null);
+    if (!buffer) throw new NotFoundException('业务发票文件不存在');
+    const extension = extname(storedFileName).toLowerCase();
+    const originalName = String((shipment as any).businessInvoiceName ?? '').trim();
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'shipment.business_invoice.download',
+        target: shipment.id,
+        after: toAuditJson({ sizeBytes: buffer.length })
+      }
+    });
+    return {
+      buffer,
+      fileName: originalName || `业务发票${extension}`,
+      mimeType: storedUploadMimeType(storedFileName)
+    };
+  }
+
+  private async ensureShipmentLabelAccess(principal: Principal, shipment: ShipmentWithRelations) {
+    const [canViewWarehouseLabel, canViewTransferLabel] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:dispatch-pending:label-view'),
+      this.hasPermission(principal.role, 'customer-service:transfer:label-view')
+    ]);
+    const warehouseAllowed = canViewWarehouseLabel && shipment.status === 'WAITING_DISPATCH';
+    const transferStatusAllowed = ['OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status);
+    const canViewAllTransfer = canViewTransferLabel && await this.hasPermission(principal.role, 'customer-service:transfer:view-all');
+    const salesperson = shipment.customer.salesperson ?? shipment.entryBy;
+    const transferAllowed = canViewTransferLabel && transferStatusAllowed && (canViewAllTransfer || salesperson === principal.username);
+    if (!warehouseAllowed && !transferAllowed) throw new NotFoundException('面单不存在');
   }
 
   async voidShipmentLabel(principal: Principal, shipmentId: string, labelId: string): Promise<ShipmentLabelSummary> {
@@ -18331,8 +19600,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return mapShipmentLabel(updatedLabel);
   }
 
-  async addTrackingEvent(principal: Principal, shipmentId: string, input: TrackingEventInput): Promise<Shipment> {
+  async addTrackingEvent(
+    principal: Principal,
+    shipmentId: string,
+    input: TrackingEventInput,
+    options: { enforceOperationsLineShipmentStageVisibility?: boolean } = {}
+  ): Promise<Shipment> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    if (options.enforceOperationsLineShipmentStageVisibility) {
+      await this.ensureOperationLineShipmentStageVisible(principal, shipment, 'POST', `/api/operations/line-shipments/${shipment.id}/tracking-events`);
+    }
     const event = await this.prisma.trackingEvent.create({
       data: {
         shipmentId: shipment.id,
@@ -18371,7 +19648,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       metrics: { trackingStaleDays: mapped.trackingStaleDays }
     });
 
-    return mapped;
+    return this.scopeShipmentAgentWeight(mapped, await this.canViewShipmentAgentWeight(principal));
   }
 
   async getProblemTickets(principal: Principal): Promise<ProblemTicketSummary[]> {
@@ -18507,8 +19784,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!allowed) throw new ForbiddenException('当前角色不能在该运单阶段创建问题件');
   }
 
-  async createProblemTicket(principal: Principal, shipmentId: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
+  async createProblemTicket(
+    principal: Principal,
+    shipmentId: string,
+    input: ProblemTicketCreateInput,
+    options: { enforceOperationsLineShipmentStageVisibility?: boolean } = {}
+  ): Promise<ProblemTicketSummary> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    if (options.enforceOperationsLineShipmentStageVisibility) {
+      await this.ensureOperationLineShipmentStageVisible(principal, shipment, 'POST', `/api/operations/line-shipments/${shipment.id}/problem-tickets`);
+    }
     const tagSnapshot = normalizeProblemTicketTagSnapshot(input.tags);
     if (tagSnapshot?.length) {
       const activeTags = await this.prisma.commonTag.findMany({
@@ -18738,8 +20023,28 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async isPricingModuleBlocked(principal: Principal, scope: 'lookup' | 'markup', module?: LegacyPricingModule, mode: 'view' | 'edit' = 'view') {
+    if (!module || isAdministratorRole(principal.role)) return false;
+    if (await this.hasPermission(principal.role, `pricing:${scope}:module-block:${module}` as PermissionKey)) return true;
+    return scope === 'markup' && this.hasPermission(principal.role, `pricing:markup:${mode}-block:${module}` as PermissionKey);
+  }
+
+  private async ensurePriceBookOperationNotBlocked(principal: Principal, mode: 'create' | 'delete' | 'remark', module?: PriceBookImportTargetModule, label = '价格表操作') {
+    if (!module || isAdministratorRole(principal.role)) return;
+    const blocked = await this.hasPermission(principal.role, `pricing:price-books:${mode}-block:${module}` as PermissionKey);
+    if (blocked) {
+      throw new ForbiddenException(`${label}已被当前用户组屏蔽`);
+    }
+  }
+
+  private async ensurePricingModuleNotBlocked(principal: Principal, scope: 'lookup' | 'markup', module: LegacyPricingModule | undefined, label: string, mode: 'view' | 'edit' = 'view') {
+    if (await this.isPricingModuleBlocked(principal, scope, module, mode)) {
+      throw new ForbiddenException(`${label}模块已被当前用户组屏蔽`);
+    }
+  }
+
   private ensureAdmin(principal: Principal, message = '只有管理员可以执行该操作') {
-    if (principal.role !== 'ADMIN') {
+    if (!isAdministratorRole(principal.role)) {
       throw new ForbiddenException(message);
     }
   }
@@ -18778,6 +20083,33 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return false;
   }
 
+  private async isWarehouseTallyMaskEnabled(principal: Principal, permission: PermissionKey) {
+    return principal.role !== 'ADMIN' && await this.hasPermission(principal.role, permission);
+  }
+
+  private async ensureWarehouseTallyUnblocked(principal: Principal, permission: PermissionKey) {
+    if (await this.isWarehouseTallyMaskEnabled(principal, permission)) {
+      throw new ForbiddenException('当前角色已屏蔽已完成理货对应操作');
+    }
+  }
+
+  private async ensureWarehouseTallyVisible(principal: Principal) {
+    await this.ensureWarehouseTallyUnblocked(principal, 'warehouse:tally-completed:view-block');
+  }
+
+  private async getWorkspaceFieldMaskState(principal: Principal, workspace: PermissionWorkspaceKey): Promise<WorkspaceFieldMaskState> {
+    const state = Object.fromEntries(workspaceFieldMaskKeys.map((key) => [key, false])) as WorkspaceFieldMaskState;
+    if (isAdministratorRole(principal.role)) return state;
+    const workspaceKeys = new Set(workspaceFieldMaskKeysForWorkspace(workspace));
+    const entries = await Promise.all(workspaceFieldMaskKeys.map(async (key) => [
+      key,
+      await this.hasPermission(principal.role, globalFieldMaskPermissionCode(key))
+        || (workspaceKeys.has(key) && await this.hasPermission(principal.role, workspaceFieldMaskPermissionCode(workspace, key)))
+    ] as const));
+    entries.forEach(([key, enabled]) => { state[key] = enabled; });
+    return state;
+  }
+
   private async ensureTransferDataApproved(principal: Principal, shipmentId: string) {
     const shipment = await this.prisma.shipment.findUnique({ where: { id: shipmentId }, select: { outboundAt: true } });
     const missing: string[] = [];
@@ -18809,6 +20141,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return isCustomerServiceDataApprovedFromRows(rows, kind, cycleStartedAt);
   }
 
+  private selectCustomerServiceFinanceItems(rows: any[], selectedFinanceItemIds?: string[]) {
+    const selectedIds = selectedFinanceItemIds === undefined
+      ? new Set(rows.map((row) => row.id))
+      : new Set(selectedFinanceItemIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0));
+    const invalidSelectedIds = [...selectedIds].filter((id) => !rows.some((row) => row.id === id));
+    if (invalidSelectedIds.length) throw new BadRequestException('选择的费用条目不存在或不属于当前运单');
+    return rows.filter((row) => selectedIds.has(row.id));
+  }
+
   private validateCustomerServiceData(body: { packageCount: number; weightKg: number; volumeCbm: number; chargeWeightKg: number }) {
     if (!Number.isInteger(Number(body.packageCount)) || Number(body.packageCount) <= 0 || ![body.weightKg, body.volumeCbm, body.chargeWeightKg].every((value) => Number.isFinite(Number(value)) && Number(value) > 0)) {
       throw new BadRequestException('件数、总量、体积和计费重必须为大于 0 的有效值');
@@ -18821,17 +20162,25 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async scopeCustomerServiceShipment(principal: Principal, shipment: Shipment): Promise<Shipment> {
-    const [canViewBusiness, canViewAgent] = await Promise.all([
+    const [enrichedShipment] = shipment.stageDwell
+      ? [shipment]
+      : await this.attachShipmentStageDwell([shipment]);
+    const [canViewBusiness, canViewAgent, canViewBusinessAgentWeight] = await Promise.all([
       this.hasPermission(principal.role, 'customer-service:data-confirm:business-view'),
-      this.hasPermission(principal.role, 'customer-service:data-confirm:agent-view')
+      this.hasPermission(principal.role, 'customer-service:data-confirm:agent-view'),
+      this.canViewShipmentAgentWeight(principal)
     ]);
     return scopeCustomerServiceDataConfirmRow(
       {
-        shipment: this.maskShipmentListFields(principal, shipment, {
-          canViewAgentIdentity: canViewAgent,
-          canViewMarketCosts: false,
+        shipment: this.maskShipmentListFields(principal, enrichedShipment, {
+          canViewMarketAgent: canViewAgent,
+          canViewLegacyMarketCostDetails: false,
+          canViewLegacyMarketCostTotals: false,
+          canViewRoutedCostDetails: false,
+          canViewRoutedCostTotals: false,
           exposeWarehouseRouting: false,
-          allowSalesScopedAgent: canViewAgent
+          allowSalesScopedAgent: canViewAgent,
+          canViewAgentWeight: canViewAgent || canViewBusinessAgentWeight
         })
       },
       { canViewBusiness, canViewAgent }
@@ -18856,6 +20205,31 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async ensureCustomerServiceFinanceTypeSwitchable(tx: any, feeId: string) {
+    const [pendingPaymentCount, paymentItemCount, pendingPayments] = await Promise.all([
+      tx.payablePaymentApplication.count({ where: { payableFinanceItemId: feeId } }),
+      tx.paymentApplicationItem.count({ where: { payableFinanceItemId: feeId } }),
+      tx.payablePaymentApplication.findMany({ where: { payableFinanceItemId: feeId }, select: { id: true } })
+    ]);
+    const pendingPaymentIds = pendingPayments.map((row: { id: string }) => row.id);
+    const [billVoucher, extraFeeVoucher] = await Promise.all([
+      tx.paymentVoucher.findFirst({
+        where: {
+          voucherType: { not: 'PAYMENT_RECEIPT' },
+          OR: [
+            ...(pendingPaymentIds.length ? [{ pendingPaymentId: { in: pendingPaymentIds } }] : []),
+            { paymentApplication: { items: { some: { payableFinanceItemId: feeId } } } }
+          ]
+        },
+        select: { id: true }
+      }),
+      tx.paymentVoucher.findFirst({ where: { extraFeeFinanceItemId: feeId }, select: { id: true } })
+    ]);
+    if (pendingPaymentCount || paymentItemCount || billVoucher || extraFeeVoucher) {
+      throw new BadRequestException('该费用已进入付款申请、付款记录或凭证流程，不能切换类型');
+    }
+  }
+
   private async reverseCustomerServiceData(principal: Principal, shipmentId: string, kind: 'business' | 'agent', reason: string | undefined, expectedOutboundAt: string): Promise<Shipment> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     if (!(await this.hasPermission(principal.role, 'customer-service:data-confirm:reverse'))) throw new ForbiddenException('无权反审核数据确认');
@@ -18864,12 +20238,22 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const dataConfirmationCycleStartedAt = this.ensureCustomerServiceDataCycle(shipment, expectedOutboundAt);
     if (!await this.isCustomerServiceDataApproved(shipmentId, kind, shipment.outboundAt)) throw new BadRequestException(`${kind === 'business' ? '业务' : '代理'}数据尚未审核`);
     await this.prisma.auditLog.create({ data: { actorId: principal.id, action: `customer_service.${kind}_data.reversed`, target: shipmentId, after: toAuditJson({ status: shipment.status, reason: reason.trim(), reviewedBy: principal.username, reviewedAt: new Date().toISOString(), dataConfirmationCycleStartedAt }) } });
+    await this.syncCustomerServiceDataStage(shipmentId);
     await this.ensureCustomerServiceDataCycleStillCurrent(shipmentId, dataConfirmationCycleStartedAt);
     return this.scopeCustomerServiceShipment(principal, mapShipment(shipment));
   }
 
-  private async ensureFinanceItemManageAccess(principal: Principal, type?: ShipmentFinanceItemType, shipment?: { status?: string }) {
-    if (principal.role === 'ADMIN') return;
+  private async ensureFinanceItemManageAccess(
+    principal: Principal,
+    type?: ShipmentFinanceItemType,
+    shipment?: { status?: string },
+    allowPendingReviewBusinessCostWrite = false
+  ) {
+    if (isAdministratorRole(principal.role)) return;
+    if (allowPendingReviewBusinessCostWrite && await this.canWritePendingReviewBusinessCost(principal, type, shipment)) return;
+    if (type === 'BUSINESS_COST' && await this.isRestrictedBusinessCostActor(principal)) {
+      throw new ForbiddenException('业务成本只能在待审核状态修改');
+    }
     if (shipment?.status === 'WAITING_SORT'
       && ['PAYABLE', 'BUSINESS_COST'].includes(type ?? '')
       && await this.hasPermission(principal.role, 'market:pending-routing:update')) return;
@@ -18878,6 +20262,23 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (type === 'BUSINESS_COST' && await this.hasPermission(principal.role, 'finance:business-cost:manage')) return;
     if (type === 'RECEIVABLE' && await this.hasPermission(principal.role, 'finance:receivable:update')) return;
     throw new ForbiddenException('当前角色不能维护该类单票费用');
+  }
+
+  private async ensureShipmentFinanceItemUpdateAccess(
+    principal: Principal,
+    type: ShipmentFinanceItemType,
+    shipment: { status?: string },
+    allowPendingReviewBusinessCostWrite = false
+  ) {
+    if (['BUSINESS_COST', 'PAYABLE'].includes(type)) {
+      if (allowPendingReviewBusinessCostWrite && await this.canWritePendingReviewBusinessCost(principal, type, shipment)) return;
+      if (type === 'BUSINESS_COST' && await this.isRestrictedBusinessCostActor(principal)) {
+        throw new ForbiddenException('业务成本只能在待审核状态修改');
+      }
+      if (isAdministratorRole(principal.role) || await this.hasPermission(principal.role, 'finance:order-fee:cost-adjust')) return;
+      throw new ForbiddenException('没有修改单票业务/应付费用权限');
+    }
+    await this.ensureFinanceItemManageAccess(principal, type, shipment, allowPendingReviewBusinessCostWrite);
   }
 
   private isAfterRouteDispatch(status?: string): boolean {
@@ -18895,6 +20296,53 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       'STUCK',
       'SIGNED'
     ].includes(status ?? '');
+  }
+
+  private async canWritePendingReviewBusinessCost(
+    principal: Principal,
+    type?: ShipmentFinanceItemType,
+    shipment?: { status?: string }
+  ) {
+    return type === 'BUSINESS_COST'
+      && shipment?.status === 'REVIEW_PENDING'
+      && !(await this.canMaskOrderEntryBusinessCosts(principal))
+      && (await this.hasPermission(principal.role, 'business:order-entry:view')
+        || await this.hasPermission(principal.role, 'business:order-entry:business-cost-write'));
+  }
+
+  private async ensurePendingReviewBusinessCostWrite(
+    principal: Principal,
+    type: ShipmentFinanceItemType | undefined,
+    shipment: { status?: string }
+  ) {
+    if (shipment.status !== 'REVIEW_PENDING') {
+      throw new ForbiddenException('业务成本只能在待审核状态修改');
+    }
+    if (type !== 'BUSINESS_COST'
+      || await this.canMaskOrderEntryBusinessCosts(principal)
+      || (!await this.hasPermission(principal.role, 'business:order-entry:view')
+        && !await this.hasPermission(principal.role, 'business:order-entry:business-cost-write'))) {
+      throw new ForbiddenException('没有填写业务成本权限');
+    }
+  }
+
+  private async canManageBusinessCostSensitiveFields(principal: Principal) {
+    return isAdministratorRole(principal.role)
+      || await this.hasPermission(principal.role, 'finance:order-fee:cost-adjust')
+      || await this.hasPermission(principal.role, 'finance:business-cost:manage')
+        && await this.hasPermission(principal.role, 'finance:business-cost:view-agent');
+  }
+
+  private async isRestrictedBusinessCostActor(principal: Principal) {
+    if (await this.canManageBusinessCostSensitiveFields(principal)) return false;
+    return Boolean(principal.departmentTeamScope?.length || this.operatorCustomerScope(principal));
+  }
+
+  private async scopeFinanceItemSummary(principal: Principal, type: ShipmentFinanceItemType, summary: any) {
+    if (type !== 'BUSINESS_COST' || await this.hasAnyPermission(principal.role, ['finance:business-cost:view-agent', 'finance:payable:view-sensitive'])) {
+      return summary;
+    }
+    return { ...summary, agentId: undefined, agentName: undefined };
   }
 
   private ensureBusinessCostEditableAfterDispatch(principal: Principal, type: ShipmentFinanceItemType | undefined, shipment: any) {
@@ -18939,6 +20387,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (type === 'BUSINESS_COST' && input.unitPrice !== undefined && Number(input.unitPrice) < 0) {
       throw new BadRequestException('单价必须大于等于 0');
     }
+    if (type === 'BUSINESS_COST' && input.billingUnit !== undefined && !isFinanceBillingUnit(input.billingUnit)) {
+      throw new BadRequestException('业务成本只能选择计费重（KG）或体积（CBM）');
+    }
+    if (type === 'BUSINESS_COST' && input.billingQuantity !== undefined && (!Number.isFinite(Number(input.billingQuantity)) || Number(input.billingQuantity) < 0)) {
+      throw new BadRequestException('业务成本计量数量必须大于等于 0');
+    }
     if ((type === 'BUSINESS_COST' || type === 'PAYABLE') && input.chargeWeightKg !== undefined && Number(input.chargeWeightKg) < 0) {
       throw new BadRequestException('计费重必须大于等于 0');
     }
@@ -18948,25 +20402,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private resolveShipmentFinanceItemAmount(type: ShipmentFinanceItemType, input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput, current?: any) {
-    const chargeWeightKg = input.chargeWeightKg ?? current?.chargeWeightKg;
-    const unitPrice = input.unitPrice ?? current?.unitPrice;
     if (input.amount !== undefined && input.amount !== null) {
       return Number(input.amount);
     }
-    if ((type === 'BUSINESS_COST' || type === 'PAYABLE') && chargeWeightKg !== undefined && chargeWeightKg !== null && unitPrice !== undefined && unitPrice !== null) {
-      return roundMoney(Number(chargeWeightKg) * Number(unitPrice));
-    }
-    return Number(current?.amount ?? 0);
+    return calculateFinanceItemAmount(type, input, current, Number(current?.amount ?? 0));
   }
 
-  private isFinanceAmountOverridden(input: { amount?: unknown; chargeWeightKg?: unknown; unitPrice?: unknown }) {
-    const amount = Number(input.amount);
-    if (!Number.isFinite(amount)) return false;
-    if (input.chargeWeightKg === undefined || input.chargeWeightKg === null || input.unitPrice === undefined || input.unitPrice === null) return true;
-    const chargeWeightKg = Number(input.chargeWeightKg);
-    const unitPrice = Number(input.unitPrice);
-    if (!Number.isFinite(chargeWeightKg) || !Number.isFinite(unitPrice)) return true;
-    return Math.round(roundMoney(amount) * 100) !== Math.round(roundMoney(chargeWeightKg * unitPrice) * 100);
+  private isFinanceAmountOverridden(input: { type?: ShipmentFinanceItemType; amount?: unknown; billingUnit?: unknown; billingQuantity?: unknown; chargeWeightKg?: unknown; unitPrice?: unknown }) {
+    return isFinanceAmountOverridden(input);
   }
 
   private async getShipmentFinanceDetailUsdToRmbRate(rows: Array<{ currency?: string }>) {
@@ -18989,60 +20432,105 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     throw new BadRequestException(`暂不支持 ${currency} 单票费用折算 RMB`);
   }
 
-  private async redactOrderEntrySensitiveShipment(principal: Principal, shipment: Shipment): Promise<Shipment> {
-    const [canViewAgentIdentity, canViewSensitivePayables] = await Promise.all([
-      this.hasAnyPermission(principal.role, [
-        'master-data:agents:read',
-        'master-data:agent-channels:read',
-        'market:pending-routing:agent-channel-view',
-        'market:routed:agent-channel-view',
-        'finance:business-cost:view-agent',
-        'finance:payable:view-sensitive'
-      ]),
-      this.canUseSensitiveOrderEntryPayables(principal)
-    ]);
-    if (canViewAgentIdentity && canViewSensitivePayables) return shipment;
+  private redactOrderEntrySensitiveShipment(principal: Principal, shipment: Shipment, canViewAgentWeight: boolean): Shipment {
     const visibleShipment = { ...shipment } as Shipment;
-    if (!canViewAgentIdentity) {
+    if (!this.canUseSensitiveOrderEntryPayables(principal)) {
       delete (visibleShipment as any).agentId;
+      delete (visibleShipment as any).agentShortName;
       delete (visibleShipment as any).agentName;
-    }
-    if (!canViewSensitivePayables) {
       delete (visibleShipment as any).paymentAmountUsd;
       delete (visibleShipment as any).paymentAmountCny;
       delete (visibleShipment as any).paymentMethod;
+      delete (visibleShipment as any).routeAgentChannelName;
+      delete (visibleShipment as any).routeChargeWeightKg;
+      delete (visibleShipment as any).routeUnitPrice;
+      delete (visibleShipment as any).routeOtherFee;
+      delete (visibleShipment as any).routeCostTotal;
+      delete (visibleShipment as any).routeCurrency;
+      delete (visibleShipment as any).routeCostSummary;
+      delete (visibleShipment as any).invoiceTemplateAvailable;
+      delete (visibleShipment as any).invoiceTemplateOptions;
     }
-    delete (visibleShipment as any).routeAgentChannelName;
-    delete (visibleShipment as any).routeChargeWeightKg;
-    delete (visibleShipment as any).routeUnitPrice;
-    delete (visibleShipment as any).routeOtherFee;
-    delete (visibleShipment as any).routeCostTotal;
-    delete (visibleShipment as any).routeCurrency;
-    delete (visibleShipment as any).invoiceTemplateAvailable;
-    delete (visibleShipment as any).invoiceTemplateOptions;
+    return this.scopeShipmentAgentWeight(visibleShipment, canViewAgentWeight);
+  }
+
+  private scopeShipmentAgentWeight(shipment: Shipment, canViewAgentWeight: boolean): Shipment {
+    if (canViewAgentWeight) return shipment;
+    const visibleShipment = { ...shipment };
+    delete (visibleShipment as Partial<Shipment>).agentWeightKg;
     return visibleShipment;
   }
 
-  private async canViewOrderEntryPayables(principal: Principal) {
-    return this.hasAnyPermission(principal.role, ['finance:order-fee:payable:view', 'finance:order-fee:payable:manage']);
-  }
-
-  private async canManageOrderEntryPayables(principal: Principal) {
-    return this.hasPermission(principal.role, 'finance:order-fee:payable:manage');
-  }
-
-  private async canWriteOrderEntryBusinessCosts(principal: Principal) {
-    return this.hasPermission(principal.role, 'business:order-entry:business-cost-write');
-  }
-
-  private async canViewOrderEntryBusinessCosts(principal: Principal) {
+  private canViewOrderEntryPayables(principal: Principal) {
     return this.hasAnyPermission(principal.role, [
+      'business:order-entry:view',
+      'finance:order-fee:payable:view',
+      'finance:order-fee:payable:manage'
+    ]);
+  }
+
+  private async canMaskOrderEntryBusinessCosts(principal: Principal) {
+    if (isAdministratorRole(principal.role)) return false;
+    return this.hasPermission(principal.role, 'business:order-entry:business-cost-mask');
+  }
+
+  private async canMaskOrderEntryPayables(principal: Principal) {
+    if (isAdministratorRole(principal.role)) return false;
+    return this.hasPermission(principal.role, 'business:order-entry:payable-fee-mask');
+  }
+
+  private canManageOrderEntryPayables(principal: Principal) {
+    return this.hasAnyPermission(principal.role, ['business:order-entry:view', 'finance:order-fee:payable:manage']);
+  }
+
+  private canWriteOrderEntryBusinessCosts(principal: Principal) {
+    return this.hasAnyPermission(principal.role, ['business:order-entry:view', 'business:order-entry:business-cost-write']);
+  }
+
+  private canViewOrderEntryBusinessCosts(principal: Principal) {
+    return this.hasAnyPermission(principal.role, [
+      'business:order-entry:view',
       'business:order-entry:business-cost-view',
       'business:order-entry:business-cost-write'
     ]);
   }
 
   private canViewShipmentFinanceDetail(principal: Principal) {
+    return this.hasAnyPermission(principal.role, [
+      'business:order-entry:business-cost-view',
+      'business:order-entry:business-cost-write',
+      'business:shipment:finance-detail-view',
+      'business:shipment:payable-view',
+      'business:shipment:profit-view',
+      'business:order-fee:profit-view',
+      'finance:receivable:detail',
+      'finance:business-cost:read',
+      'finance:business-cost:view-profit',
+      'finance:order-fee:payable:view',
+      'finance:order-fee:profit:receivable-payable',
+      'finance:order-fee:profit:receivable-business',
+      'finance:order-fee:profit:business-payable',
+      'finance:payable:view-sensitive',
+      'finance:payable:view-profit'
+    ]);
+  }
+
+  private canViewShipmentAgentWeight(principal: Principal) {
+    return this.hasAnyPermission(principal.role, [
+      'business:shipment:agent-weight-view',
+      'market:pending-routing:cost-field-view',
+      'market:routed:agent-cost-view',
+      'market:weekly-routing:cost-view'
+    ]);
+  }
+
+  private async canViewShipmentAgentWeightForLabelUpload(principal: Principal) {
+    if (await this.canViewShipmentAgentWeight(principal)) return true;
+    return await this.hasPermission(principal.role, 'customer-service:transfer:label-upload')
+      && await this.hasPermission(principal.role, 'customer-service:transfer:view-agent-data');
+  }
+
+  private canViewShipmentFinanceDetailBeyondOrderEntry(principal: Principal) {
     return this.hasAnyPermission(principal.role, [
       'business:shipment:finance-detail-view',
       'business:shipment:payable-view',
@@ -19060,16 +20548,26 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     ]);
   }
 
-  private async canUseSensitiveOrderEntryPayables(principal: Principal) {
-    return this.hasPermission(principal.role, 'finance:payable:view-sensitive');
+  private canViewShipmentReceivables(principal: Principal) {
+    return this.hasAnyPermission(principal.role, [
+      'business:shipment:finance-detail-view',
+      'business:review:finance-detail-view',
+      'finance:receivable:read',
+      'finance:receivable:detail',
+      'finance:receivable:update'
+    ]);
   }
 
-  private async canEditOrderEntryEntryAt(principal: Principal) {
-    return this.hasPermission(principal.role, 'finance:payable:manage');
+  private canUseSensitiveOrderEntryPayables(principal: Principal) {
+    return ['ADMIN', 'FINANCE', 'UG_FINANCE'].includes(principal.role);
   }
 
-  private async resolveOrderEntryEntryAt(principal: Principal, value: string | undefined, fallback: Date) {
-    if (value && await this.canEditOrderEntryEntryAt(principal)) {
+  private canEditOrderEntryEntryAt(principal: Principal) {
+    return isAdministratorRole(principal.role) || ['FINANCE', 'UG_FINANCE'].includes(principal.role);
+  }
+
+  private resolveOrderEntryEntryAt(principal: Principal, value: string | undefined, fallback: Date) {
+    if (value && this.canEditOrderEntryEntryAt(principal)) {
       const parsed = new Date(value);
       if (!Number.isNaN(parsed.getTime())) return parsed;
     }
@@ -19078,9 +20576,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async ensureOrderEntryInputAccess(principal: Principal, input: OrderEntryCreateInput, currentShipmentId?: string) {
     await this.ensurePermission(principal, currentShipmentId ? 'business:order-entry:draft-save' : 'business:order-entry:create', '没有录单维护权限');
-    if ((input.businessCosts?.length ?? 0) > 0 && !await this.canWriteOrderEntryBusinessCosts(principal)) {
-      throw new ForbiddenException('当前岗位不能录入业务成本');
-    }
     if (currentShipmentId) {
       const shipmentOwnerWhere = this.shipmentOwnerWhere(principal);
       const current = await this.prisma.shipment.findFirst({
@@ -19094,11 +20589,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!current) {
         throw new NotFoundException('录单草稿不存在');
       }
-      if (!['DRAFT', 'REVIEW_REJECTED'].includes(current.status)) {
+      if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(current.status)) {
         throw new BadRequestException('只有草稿或退回修改的录单可以继续编辑');
       }
     }
-    const customer = await this.resolveOrderEntryCustomer(principal, input.shipment.customerId, input.shipment.customerCode, Boolean(currentShipmentId));
+    const customer = await this.resolveOrderEntryCustomer(
+      principal,
+      input.shipment.customerId,
+      input.shipment.customerCode,
+      Boolean(currentShipmentId)
+    );
     const packageIds = Array.from(new Set((input.warehousePackageIds ?? []).map((id) => id.trim()).filter(Boolean)));
     if (packageIds.length) {
       const mismatchedPackage = await (this.prisma as any).warehousePackage.findFirst({
@@ -19110,20 +20610,34 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
     }
     const rawPayables = input.payables ?? [];
-    if (!await this.canUseSensitiveOrderEntryPayables(principal) && (
+    const businessCosts = this.normalizeOrderEntryFinanceItems('BUSINESS_COST', input.businessCosts);
+    const businessCostMasked = await this.canMaskOrderEntryBusinessCosts(principal);
+    const canWriteBusinessCosts = (await this.canWriteOrderEntryBusinessCosts(principal)) && !businessCostMasked;
+    if (businessCosts.length && businessCostMasked) {
+      throw new ForbiddenException('已屏蔽业务成本，不能录入业务成本');
+    }
+    if (businessCosts.length && !canWriteBusinessCosts) {
+      throw new ForbiddenException('没有填写业务成本权限');
+    }
+    if (!this.canUseSensitiveOrderEntryPayables(principal) && (
       input.shipment.agentId?.trim()
       || rawPayables.some((row) => row.agentId?.trim() || row.agentName?.trim() || row.paymentNo?.trim())
-      || this.normalizeOrderEntryFinanceItems('BUSINESS_COST', input.businessCosts).some((row) => row.agentId?.trim() || row.agentName?.trim())
+      || (!canWriteBusinessCosts && businessCosts.some((row) => row.agentId?.trim() || row.agentName?.trim()))
     )) {
       throw new ForbiddenException('当前角色不能录入代理或付款敏感信息');
     }
     const payables = this.normalizeOrderEntryFinanceItems('PAYABLE', rawPayables);
-    if (!(await this.canManageOrderEntryPayables(principal)) && payables.length) {
+    const payableMasked = await this.canMaskOrderEntryPayables(principal);
+    const canManagePayables = (await this.canManageOrderEntryPayables(principal)) && !payableMasked;
+    if (payables.length && payableMasked) {
+      throw new ForbiddenException('已屏蔽应付费用，不能录入应付费用');
+    }
+    if (!canManagePayables && payables.length) {
       throw new ForbiddenException('当前角色不能录入应付费用');
     }
   }
 
-  private async prepareOrderEntryInput(principal: Principal, input: OrderEntryCreateInput, currentShipmentId?: string) {
+  private async prepareOrderEntryInput(principal: Principal, input: OrderEntryCreateInput, currentShipmentId?: string, allowRemoveBoundPackages = false) {
     const rawShipment = input.shipment;
     if (!isShipmentProductNamesInput(rawShipment.productNames)) {
       throw new BadRequestException('品名列表格式无效');
@@ -19143,7 +20657,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       productNames,
       productName: formatShipmentProductNames(productNames)
     };
-    const customer = await this.resolveOrderEntryCustomer(principal, shipment.customerId, shipment.customerCode, Boolean(currentShipmentId));
+    const customer = await this.resolveOrderEntryCustomer(
+      principal,
+      shipment.customerId,
+      shipment.customerCode,
+      Boolean(currentShipmentId)
+    );
     const packageIds = Array.from(new Set((input.warehousePackageIds ?? []).map((id) => id.trim()).filter(Boolean)));
     const packages = packageIds.length
       ? await (this.prisma as any).warehousePackage.findMany({ where: { id: { in: packageIds } } })
@@ -19157,14 +20676,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (currentShipmentId) {
       const boundPackages = await (this.prisma as any).warehousePackage.findMany({
         where: { shipmentId: currentShipmentId },
-        select: { id: true, customerCode: true }
+        select: { id: true, customerCode: true, status: true, measurementStatus: true }
       });
       if (boundPackages.some((pkg: { customerCode: string }) => pkg.customerCode !== customer.code)) {
         throw new BadRequestException('已绑定仓库包裹与目标客户不一致，退回录单不能变更客户');
       }
       const requestedPackageIds = new Set(packageIds);
-      if (boundPackages.some((pkg: { id: string }) => !requestedPackageIds.has(pkg.id))) {
+      const removedPackages = boundPackages.filter((pkg: { id: string }) => !requestedPackageIds.has(pkg.id));
+      if (!allowRemoveBoundPackages && removedPackages.length) {
         throw new BadRequestException('退回录单不能移除已绑定仓库包裹，请保留原包裹后再修改');
+      }
+      if (allowRemoveBoundPackages && removedPackages.some((pkg: { status: string; measurementStatus?: string | null }) => (
+        ['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'].includes(pkg.status)
+        || pkg.measurementStatus === 'PENDING_REMEASURE'
+      ))) {
+        throw new BadRequestException('已出库或待重新过机的包裹不能从待审核运单移除');
       }
     }
     if (packages.some((pkg: any) => pkg.measurementStatus === 'PENDING_REMEASURE')) {
@@ -19180,19 +20706,29 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
     const receivables = this.normalizeOrderEntryFinanceItems('RECEIVABLE', input.receivables);
     const businessCosts = this.normalizeOrderEntryFinanceItems('BUSINESS_COST', input.businessCosts);
-    if (businessCosts.length && !await this.canWriteOrderEntryBusinessCosts(principal)) {
-      throw new ForbiddenException('当前岗位不能录入业务成本');
+    const businessCostMasked = await this.canMaskOrderEntryBusinessCosts(principal);
+    const canWriteBusinessCosts = (await this.canWriteOrderEntryBusinessCosts(principal)) && !businessCostMasked;
+    const payableMasked = await this.canMaskOrderEntryPayables(principal);
+    const canManagePayables = (await this.canManageOrderEntryPayables(principal)) && !payableMasked;
+    if (businessCosts.length && businessCostMasked) {
+      throw new ForbiddenException('已屏蔽业务成本，不能录入业务成本');
+    }
+    if (businessCosts.length && !canWriteBusinessCosts) {
+      throw new ForbiddenException('没有填写业务成本权限');
     }
     const rawPayables = input.payables ?? [];
-    if (!await this.canUseSensitiveOrderEntryPayables(principal) && (
+    if (!this.canUseSensitiveOrderEntryPayables(principal) && (
       shipment.agentId?.trim()
       || rawPayables.some((row) => row.agentId?.trim() || row.agentName?.trim() || row.paymentNo?.trim())
-      || businessCosts.some((row) => row.agentId?.trim() || row.agentName?.trim())
+      || (!canWriteBusinessCosts && businessCosts.some((row) => row.agentId?.trim() || row.agentName?.trim()))
     )) {
       throw new ForbiddenException('当前角色不能录入代理或付款敏感信息');
     }
     const payables = this.normalizeOrderEntryFinanceItems('PAYABLE', rawPayables);
-    if (!(await this.canManageOrderEntryPayables(principal)) && payables.length) {
+    if (payables.length && payableMasked) {
+      throw new ForbiddenException('已屏蔽应付费用，不能录入应付费用');
+    }
+    if (!canManagePayables && payables.length) {
       throw new ForbiddenException('当前角色不能录入应付费用');
     }
     const requestedChannel = shipment.channelId?.trim() || shipment.receivingChannel?.trim();
@@ -19205,8 +20741,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (channel && !channel.enabled && input.submitForReview) throw new BadRequestException('所选公司渠道已停用，请重新选择启用渠道');
     if (input.submitForReview && !channel) throw new BadRequestException('提交审核前必须选择公司渠道');
     if (input.submitForReview) {
-      const requireBusinessCosts = !currentShipmentId || await this.canWriteOrderEntryBusinessCosts(principal);
-      this.validateOrderEntryRequiredFields({ ...input, shipment }, packageIds, receivables, businessCosts, requireBusinessCosts);
+      this.validateOrderEntryRequiredFields({ ...input, shipment }, packageIds, receivables, businessCosts, canWriteBusinessCosts);
     }
     const totals = packages.reduce(
       (summary: { packageCount: number; weightKg: number; cbm: number; chargeWeightKg: number }, pkg: any) => {
@@ -19276,11 +20811,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         updatedAtMs: new Date(pkg.updatedAt).getTime()
       })),
       financeItems: this.applyOrderEntryChannelChargeWeight(
-        [
-          ...receivables,
-          ...((await this.canWriteOrderEntryBusinessCosts(principal)) ? businessCosts : []),
-          ...((await this.canManageOrderEntryPayables(principal)) ? payables : [])
-        ],
+        [...receivables, ...(canWriteBusinessCosts ? businessCosts : []), ...(canManagePayables ? payables : [])],
         chargeWeightKg || undefined
       )
     };
@@ -19312,15 +20843,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private applyOrderEntryChannelChargeWeight(rows: OrderEntryFinanceItemInput[], chargeWeightKg?: number) {
-    if (!chargeWeightKg || chargeWeightKg <= 0) return rows;
-    return rows.map((row) => {
-      const unitPrice = Number(row.unitPrice ?? 0);
-      return {
-        ...row,
-        chargeWeightKg,
-        ...(unitPrice > 0 && !row.amountOverridden ? { amount: roundMoney(chargeWeightKg * unitPrice), amountOverridden: false } : {})
-      };
-    });
+    return applyOrderEntryChannelChargeWeight(rows, chargeWeightKg);
   }
 
   private toCompanyChannelWeightRule(channel: any) {
@@ -19338,7 +20861,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async resolveOrderEntryCustomer(principal: Principal, customerId?: string, customerCode?: string, allowDepartmentTeam = false) {
+  private async resolveOrderEntryCustomer(
+    principal: Principal,
+    customerId?: string,
+    customerCode?: string,
+    allowDepartmentTeam = false
+  ) {
     const customer = await this.prisma.customer.findFirst({
       where: {
         ...(customerId ? { id: customerId } : {}),
@@ -19362,14 +20890,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     packageIds: string[],
     receivables: OrderEntryFinanceItemInput[],
     businessCosts: OrderEntryFinanceItemInput[],
-    requireBusinessCosts = true
+    requireBusinessCosts: boolean
   ) {
     const shipment = input.shipment;
     if (!shipment.customerId && !shipment.customerCode?.trim()) {
       throw new BadRequestException('提交审核前必须选择客户');
     }
     if (!shipment.customerOrderNo?.trim()) {
-      throw new BadRequestException('提交审核前必须填写客户单号');
+      throw new BadRequestException('提交审核前必须填写出货单号');
     }
     if (!(shipment.outboundOrderNo?.trim() || shipment.systemOrderNo?.trim())) {
       throw new BadRequestException('提交审核前必须填写出货单号');
@@ -19411,12 +20939,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   private normalizeOrderEntryFinanceItems(type: ShipmentFinanceItemType, rows: OrderEntryFinanceItemInput[] = []): OrderEntryFinanceItemInput[] {
     return rows
       .map((row) => {
-        const chargeWeightKg = Number(row.chargeWeightKg ?? 0);
+        const billing = type === 'BUSINESS_COST' ? resolveBusinessCostBillingFields(row) : undefined;
+        const chargeWeightKg = type === 'BUSINESS_COST' ? Number(billing?.billingQuantity ?? 0) : Number(row.chargeWeightKg ?? 0);
         const unitPrice = Number(row.unitPrice ?? 0);
         const calculated = chargeWeightKg > 0 && unitPrice > 0 ? roundMoney(chargeWeightKg * unitPrice) : undefined;
         return {
           ...row,
           type,
+          ...(billing ?? {}),
           name: row.name?.trim() ?? '',
           amount: calculated ?? Number(row.amount ?? 0),
           currency: row.currency ?? 'RMB',
@@ -19450,9 +20980,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         reconciliationStatus: 'PENDING',
         agentId: financeAgent?.id,
         agentName: financeAgent?.name,
-        chargeWeightKg: row.chargeWeightKg,
+        billingUnit: row.type === 'BUSINESS_COST' ? resolveBusinessCostBillingFields(row).billingUnit : undefined,
+        billingQuantity: row.type === 'BUSINESS_COST' ? resolveBusinessCostBillingFields(row).billingQuantity : undefined,
+        chargeWeightKg: row.type === 'BUSINESS_COST' ? resolveBusinessCostBillingFields(row).chargeWeightKg : row.chargeWeightKg,
         unitPrice: row.unitPrice,
-        amountOverridden: row.amountOverridden ?? this.isFinanceAmountOverridden(row),
+        amountOverridden: row.amountOverridden ?? this.isFinanceAmountOverridden({ ...row, type: row.type }),
         remark: row.remark,
         createdBy: principal.username
         }
@@ -19587,42 +21119,116 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     `);
   }
 
+  private async assertDepartmentTeamShipmentAccessAfterLock(
+    tx: any,
+    principal: Principal,
+    shipment: { entryBy?: string | null },
+    requiredPermission: PermissionKey
+  ) {
+    if (!shipment.entryBy || shipment.entryBy === principal.username || isAdministratorRole(principal.role)) return;
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id"
+      FROM "User"
+      WHERE "id" = ${principal.id} OR "username" = ${shipment.entryBy}
+      ORDER BY "id"
+      FOR UPDATE
+    `);
+    const [actor, owner] = await Promise.all([
+      tx.user.findUnique({ where: { id: principal.id }, include: { role: { include: { permissions: true } } } }),
+      tx.user.findUnique({
+        where: { username: shipment.entryBy },
+        select: { id: true, enabled: true, site: true, directManagerId: true }
+      })
+    ]);
+    if (!actor || actor.enabled !== true || actor.role.enabled !== true) {
+      throw new UnauthorizedException('账号已停用或不存在');
+    }
+    const permissions = resolveStoredRolePermissions(
+      actor.role.name as RoleKey,
+      actor.role.permissions.map((item: { code: string }) => item.code as PermissionKey)
+    );
+    const hasRequiredPermission = requiredPermission === 'business:order-entry:business-cost-write'
+      ? (permissions.includes('business:order-entry:view') || permissions.includes(requiredPermission))
+        && !permissions.includes('business:order-entry:business-cost-mask')
+      : permissions.includes(requiredPermission);
+    if (
+      !permissions.includes('business:shipment:team-view')
+      || !hasRequiredPermission
+      || !owner
+      || owner.enabled !== true
+      || owner.directManagerId !== actor.id
+      || (actor.site ?? null) !== (owner.site ?? null)
+    ) {
+      throw new NotFoundException('录单不存在');
+    }
+    principal.username = actor.username;
+    principal.role = actor.role.name as RoleKey;
+    principal.site = actor.site ?? undefined;
+    principal.departmentId = actor.departmentId ?? undefined;
+  }
+
   private async assertDepartmentTeamEditAfterLock(
     tx: any,
     principal: Principal,
     shipment: { id: string; entryBy?: string | null },
     requiredPermission: PermissionKey
   ) {
-    if (!shipment.entryBy || shipment.entryBy === principal.username || principal.role === 'ADMIN') return;
+    if (!shipment.entryBy || shipment.entryBy === principal.username || isAdministratorRole(principal.role)) return;
     await tx.$queryRaw(Prisma.sql`
-      SELECT "id" FROM "User"
+      SELECT "id"
+      FROM "User"
       WHERE "id" = ${principal.id} OR "username" = ${shipment.entryBy}
-      ORDER BY "id" FOR UPDATE
+      ORDER BY "id"
+      FOR UPDATE
     `);
     const [actor, owner] = await Promise.all([
       tx.user.findUnique({ where: { id: principal.id }, include: { role: { include: { permissions: true } } } }),
-      tx.user.findUnique({ where: { username: shipment.entryBy }, select: { id: true, site: true, directManagerId: true } })
+      tx.user.findUnique({
+        where: { username: shipment.entryBy },
+        select: { id: true, enabled: true, site: true, directManagerId: true }
+      })
     ]);
-    if (!actor || actor.enabled !== true || actor.role.enabled !== true) throw new UnauthorizedException('账号已停用或不存在');
+    if (!actor || actor.enabled !== true || actor.role.enabled !== true) {
+      throw new UnauthorizedException('账号已停用或不存在');
+    }
     const permissions = resolveStoredRolePermissions(
       actor.role.name as RoleKey,
       actor.role.permissions.map((item: { code: string }) => item.code as PermissionKey)
     );
+    const hasRequiredPermission = requiredPermission === 'business:order-entry:business-cost-write'
+      ? (permissions.includes('business:order-entry:view') || permissions.includes(requiredPermission))
+        && !permissions.includes('business:order-entry:business-cost-mask')
+      : permissions.includes(requiredPermission);
     if (
       !permissions.includes('business:shipment:team-view')
-      || !permissions.includes(requiredPermission)
-      || !actor.site
+      || !hasRequiredPermission
       || !owner
-      || (actor.site ?? null) !== (owner.site ?? null)
+      || owner.enabled !== true
       || owner.directManagerId !== actor.id
-    ) throw new NotFoundException('录单不存在');
+      || (actor.site ?? null) !== (owner.site ?? null)
+    ) {
+      throw new NotFoundException('录单不存在');
+    }
     principal.username = actor.username;
     principal.role = actor.role.name as RoleKey;
+    principal.site = actor.site ?? undefined;
     principal.departmentId = actor.departmentId;
 
-    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ShipmentFinanceItem" WHERE "shipmentId" = ${shipment.id} ORDER BY "id" FOR UPDATE`);
-    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "ReceivableFee" WHERE "shipmentId" = ${shipment.id} ORDER BY "id" FOR UPDATE`);
-    await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "PayableFee" WHERE "shipmentId" = ${shipment.id} ORDER BY "id" FOR UPDATE`);
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "ShipmentFinanceItem"
+      WHERE "shipmentId" = ${shipment.id}
+      ORDER BY "id" FOR UPDATE
+    `);
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "ReceivableFee"
+      WHERE "shipmentId" = ${shipment.id}
+      ORDER BY "id" FOR UPDATE
+    `);
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "PayableFee"
+      WHERE "shipmentId" = ${shipment.id}
+      ORDER BY "id" FOR UPDATE
+    `);
     const [protectedFinanceItem, legacyReceivable, legacyPayable] = await Promise.all([
       tx.shipmentFinanceItem.findFirst({
         where: {
@@ -19636,6 +21242,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             { receivedAt: { not: null } },
             { reviewedAt: { not: null } },
             { waterReceiptMatches: { some: {} } },
+            { waterReceiptMatchRequests: { some: { status: 'PENDING' } } },
             { paymentApplicationItems: { some: {} } },
             { payablePaymentApplications: { some: {} } }
           ]
@@ -19694,12 +21301,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
     if (fallback?.id && fallback.name) return { id: fallback.id, name: fallback.name };
     return undefined;
-  }
-
-  private ensureStandaloneShipmentFinanceItem(item: { miscFeeRecordId?: string | null }) {
-    if (item.miscFeeRecordId) {
-      throw new BadRequestException('该费用由杂费模块生成，只能在杂费模块中处理');
-    }
   }
 
   private toFinanceItemSummary(item: any, shipment: { systemOrderNo: string; customer?: { code: string; name: string }; customerName?: string; agent?: { name: string } | null; agentName?: string }) {
@@ -19975,6 +21576,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return false;
   }
 
+  /** 匹配候选和提交只受客户责任范围约束，不继承水单台账的创建人可见限制。 */
+  private async ensureWaterReceiptMatchAccess(
+    principal: Principal,
+    row: Pick<WaterReceiptSummary, 'customerId'>
+  ): Promise<boolean> {
+    if (await this.canViewAllWaterReceipts(principal)) return true;
+    await this.ensureWaterReceiptCurrentCustomerAccess(principal, row);
+    return false;
+  }
+
   async assertWaterReceiptVoucherUploadAccess(principal: Principal, id: string): Promise<void> {
     const receipt = await this.findWaterReceiptById(id);
     await this.ensureWaterReceiptVoucherAccess(principal, receipt);
@@ -20104,6 +21715,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       customerCode: match.shipment?.customer?.code ?? row.customerCode ?? '',
       feeName: match.receivableFinanceItem?.name ?? match.receivableFee?.name ?? '应收费用',
       amount: Number(match.amount),
+      rmbAmount: match.rmbAmount === null || match.rmbAmount === undefined ? undefined : Number(match.rmbAmount),
+      receivableAmount: match.receivableAmount === null || match.receivableAmount === undefined ? undefined : Number(match.receivableAmount),
+      receivableCurrency: match.receivableCurrency ?? undefined,
+      receiptExchangeRate: match.receiptExchangeRate === null || match.receiptExchangeRate === undefined ? undefined : Number(match.receiptExchangeRate),
+      receivableExchangeRate: match.receivableExchangeRate === null || match.receivableExchangeRate === undefined ? undefined : Number(match.receivableExchangeRate),
       source: match.source === 'AUTO' ? 'AUTO' : 'MANUAL',
       voided: match.voided,
       voidedAt: match.voidedAt?.toISOString?.() ?? match.voidedAt ?? undefined,
@@ -20123,6 +21739,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       feeName: request.receivableFinanceItem?.name ?? request.receivableFee?.name ?? '应收费用',
       amount: Number(request.amount),
       currency: row.currency ?? 'RMB',
+      rmbAmount: request.rmbAmount === null || request.rmbAmount === undefined ? undefined : Number(request.rmbAmount),
+      receivableAmount: request.receivableAmount === null || request.receivableAmount === undefined ? undefined : Number(request.receivableAmount),
+      receivableCurrency: request.receivableCurrency ?? undefined,
+      receiptExchangeRate: request.receiptExchangeRate === null || request.receiptExchangeRate === undefined ? undefined : Number(request.receiptExchangeRate),
+      receivableExchangeRate: request.receivableExchangeRate === null || request.receivableExchangeRate === undefined ? undefined : Number(request.receivableExchangeRate),
       status: request.status === 'APPROVED' ? 'APPROVED' : 'PENDING',
       requestedBy: request.requestedBy ?? undefined,
       requestedAt: request.requestedAt?.toISOString?.() ?? request.requestedAt ?? undefined,
@@ -20143,6 +21764,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         feeName: match.feeName,
         amount: match.amount,
         currency: row.currency ?? 'RMB',
+        rmbAmount: match.rmbAmount,
+        receivableAmount: match.receivableAmount,
+        receivableCurrency: match.receivableCurrency,
+        receiptExchangeRate: match.receiptExchangeRate,
+        receivableExchangeRate: match.receivableExchangeRate,
         status: 'APPROVED',
         requestedAt: match.createdAt,
         reviewedAt: match.createdAt
@@ -20188,9 +21814,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async resolveWaterReceiptRmbExchangeRate(currencyValue?: string): Promise<number> {
-    const currency = (currencyValue ?? 'RMB').toUpperCase() === 'CNY'
-      ? 'RMB'
-      : (currencyValue ?? 'RMB').toUpperCase();
+    const currency = this.normalizeWaterReceiptCurrency(currencyValue);
     if (currency === 'RMB') return 1;
     if (currency !== 'USD') {
       throw new BadRequestException(`暂不支持 ${currencyValue} 水单折算 RMB`);
@@ -20210,6 +21834,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('缺少 USD 到 RMB 的系统汇率，无法计算水单人民币折算');
     }
     return Number(rate.rate);
+  }
+
+  private normalizeWaterReceiptCurrency(currencyValue?: string) {
+    const currency = (currencyValue ?? 'RMB').toUpperCase();
+    return currency === 'CNY' ? 'RMB' : currency;
   }
 
   private async decorateWaterReceiptRows(rows: WaterReceiptSummary[]): Promise<WaterReceiptSummary[]> {
@@ -20480,6 +22109,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       receiptNo: row.waterReceipt?.receiptNo ?? row.receiptNo ?? '',
       amount: Number(row.amount),
       currency: row.waterReceipt?.currency ?? row.currency ?? 'RMB',
+      rmbAmount: row.rmbAmount === null || row.rmbAmount === undefined ? undefined : Number(row.rmbAmount),
+      receivableAmount: row.receivableAmount === null || row.receivableAmount === undefined ? undefined : Number(row.receivableAmount),
+      receivableCurrency: row.receivableCurrency ?? undefined,
+      receiptExchangeRate: row.receiptExchangeRate === null || row.receiptExchangeRate === undefined ? undefined : Number(row.receiptExchangeRate),
+      receivableExchangeRate: row.receivableExchangeRate === null || row.receivableExchangeRate === undefined ? undefined : Number(row.receivableExchangeRate),
       receivableSourceType: row.receivableSourceType === 'SYSTEM' ? 'SYSTEM' : 'MANUAL',
       approvedMatchId: row.approvedMatchId ?? undefined,
       status: row.status,
@@ -20506,9 +22140,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       name: row.name,
       amount: Number(row.amount),
       currency: row.currency ?? 'RMB',
-      profitExchangeRate: row.profitExchangeRate === null || row.profitExchangeRate === undefined ? undefined : Number(row.profitExchangeRate),
-      profitRmbAmount: row.profitRmbAmount === null || row.profitRmbAmount === undefined ? undefined : Number(row.profitRmbAmount),
-      profitEffectiveAt: row.profitEffectiveAt?.toISOString?.() ?? row.profitEffectiveAt ?? undefined,
       paymentNo,
       matchedReceiptNo: paymentNo,
       receivedAmount,
@@ -20557,7 +22188,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       remark: item.remark ?? undefined,
       locked: item.locked,
       voided: item.voided,
-      sourceType: item.miscFeeRecordId ? 'SYSTEM' : 'MANUAL',
+      sourceType: 'MANUAL',
       amountOverridden: item.amountOverridden ?? false
     };
   }
@@ -20643,7 +22274,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       where: {
         deletedAt: null,
         ...(input.shipmentId ? { id: input.shipmentId } : {}),
-        ...(systemOrderNo ? { OR: [{ customerOrderNo: systemOrderNo }, { systemOrderNo }] } : {}),
+        ...(systemOrderNo ? { OR: [{ systemOrderNo }, { customerOrderNo: systemOrderNo }] } : {}),
         ...(input.customerOrderNo ? { customerOrderNo: input.customerOrderNo } : {}),
         ...(input.transferNo ? { transferNo: input.transferNo } : {}),
         ...(input.customerCode ? { customer: { code: input.customerCode } } : {}),
@@ -20715,7 +22346,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       attachments: { orderBy: { createdAt: 'desc' } },
       paymentApplicationItem: { include: { paymentApplication: true } },
       payableFinanceItem: { include: this.payableAuditInclude() },
-      miscFeeRecord: { include: { customer: true, shipment: true, agent: true } },
       shipment: { include: { customer: true, agent: true, channel: true } }
     };
   }
@@ -20728,7 +22358,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         include: {
           payablePaymentApplication: { include: this.payablePaymentApplicationInclude() },
           payableFinanceItem: true,
-          miscFeeRecord: true,
           shipment: { include: { customer: true } }
         },
         orderBy: { createdAt: 'asc' }
@@ -20785,7 +22414,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       where: {
         deletedAt: null,
         ...(input.shipmentId ? { id: input.shipmentId } : {}),
-        ...(systemOrderNo ? { OR: [{ customerOrderNo: systemOrderNo }, { systemOrderNo }] } : {}),
+        ...(systemOrderNo ? { OR: [{ systemOrderNo }, { customerOrderNo: systemOrderNo }] } : {}),
         ...(input.customerOrderNo ? { customerOrderNo: input.customerOrderNo } : {}),
         ...(input.transferNo ? { transferNo: input.transferNo } : {}),
         ...(input.customerCode ? { customer: { code: input.customerCode } } : {}),
@@ -20841,16 +22470,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private canAccessBusinessCostShipment(principal: Principal, shipment: any) {
+  private canAccessBusinessCostShipment(principal: Principal, shipment: any, canViewAll = false) {
     const scope = this.operatorCustomerScope(principal);
-    if (!scope) return true;
-    return [shipment.entryBy, shipment.customer?.salesperson, shipment.salespersonName, shipment.salesperson]
-      .some((owner) => Boolean(owner && scope.includes(owner)));
+    if (canViewAll || !scope) return true;
+    const salesperson = shipment.customer?.salesperson ?? shipment.salespersonName ?? shipment.salesperson;
+    return Boolean(salesperson && scope.includes(salesperson));
   }
 
   private canAccessBusinessCostRow(principal: Principal, row: any, canViewAll: boolean) {
-    if (canViewAll) return true;
-    return this.canAccessBusinessCostShipment(principal, row.shipment);
+    return this.canAccessBusinessCostShipment(principal, row.shipment, canViewAll);
+  }
+
+  private async ensureBusinessCostRowAccess(principal: Principal, row: any) {
+    if (!this.canAccessBusinessCostRow(principal, row, await this.hasPermission(principal.role, 'finance:business-cost:view-all'))) {
+      throw new ForbiddenException('不能操作其他业务员的业务成本');
+    }
   }
 
   private async buildBusinessCostAuditListResponse(rows: BusinessCostAuditSummary[], query: BusinessCostAuditListQuery): Promise<BusinessCostAuditListResponse> {
@@ -21226,7 +22860,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async findBusinessCostFinanceItemById(id: string) {
     const item = await (this.prisma as any).shipmentFinanceItem.findFirst({
-      where: { id, type: 'BUSINESS_COST', miscFeeRecordId: null },
+      where: { id, type: 'BUSINESS_COST' },
       include: this.businessCostAuditInclude()
     });
     if (!item) {
@@ -21237,7 +22871,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async findPayableFinanceItemById(id: string) {
     const item = await (this.prisma as any).shipmentFinanceItem.findFirst({
-      where: { id, type: 'PAYABLE', miscFeeRecordId: null },
+      where: { id, type: 'PAYABLE' },
       include: this.payableAuditInclude()
     });
     if (!item) {
@@ -21268,15 +22902,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return application;
   }
 
-  private async nextPaymentApplicationNo(database: any = this.prisma) {
+  private async nextPaymentApplicationNo() {
     const prefix = `FKSQ${new Date().toISOString().slice(0, 10).replaceAll('-', '')}`;
-    const latest = await database.paymentApplication.findFirst({
-      where: { applicationNo: { startsWith: prefix } },
-      select: { applicationNo: true },
-      orderBy: { applicationNo: 'desc' }
-    });
-    const latestSequence = Number(latest?.applicationNo?.slice(prefix.length) ?? 0);
-    return `${prefix}${String((Number.isInteger(latestSequence) ? latestSequence : 0) + 1).padStart(4, '0')}`;
+    const count = await (this.prisma as any).paymentApplication.count({ where: { applicationNo: { startsWith: prefix } } });
+    return `${prefix}${String(count + 1).padStart(4, '0')}`;
   }
 
   private ensureBusinessCostAuditEditable(row: any) {
@@ -21295,13 +22924,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (row.locked || row.reconciliationStatus === 'CONFIRMED' || row.reconciliationStatus === 'LOCKED') {
       throw new BadRequestException('应付费用已审核，请先反审核');
     }
-  }
-
-  private calculateBusinessCostAmount(chargeWeightKg?: number, unitPrice?: number, fallback = 0) {
-    if (chargeWeightKg !== undefined && unitPrice !== undefined) {
-      return Number((Number(chargeWeightKg) * Number(unitPrice)).toFixed(2));
-    }
-    return fallback;
   }
 
   private toBusinessCostAuditSummary(item: any, visibility: { canViewAgent: boolean; canViewProfit: boolean } = { canViewAgent: true, canViewProfit: true }): BusinessCostAuditSummary {
@@ -21338,6 +22960,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private toBusinessCostReviewAuditSnapshot(item: any, principal: Principal, statusFrom: string | undefined, statusTo: string, action: 'audit' | 'reverse') {
     const shipment = item.shipment;
+    const billing = resolveBusinessCostBillingFields(item);
     return {
       id: item.id,
       shipmentId: item.shipmentId,
@@ -21345,13 +22968,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       customerCode: shipment?.customer?.code,
       salesperson: shipment?.customer?.salesperson ?? shipment?.salespersonName ?? undefined,
       name: item.name,
-      chargeWeightKg: item.chargeWeightKg === null || item.chargeWeightKg === undefined ? undefined : Number(item.chargeWeightKg),
+      billingUnit: billing.billingUnit,
+      billingQuantity: billing.billingQuantity,
+      chargeWeightKg: billing.chargeWeightKg,
       unitPrice: item.unitPrice === null || item.unitPrice === undefined ? undefined : Number(item.unitPrice),
       amount: Number(item.amount),
       currency: item.currency ?? 'RMB',
-      profitExchangeRate: item.profitExchangeRate === null || item.profitExchangeRate === undefined ? undefined : Number(item.profitExchangeRate),
-      profitRmbAmount: item.profitRmbAmount === null || item.profitRmbAmount === undefined ? undefined : Number(item.profitRmbAmount),
-      profitEffectiveAt: item.profitEffectiveAt?.toISOString?.() ?? item.profitEffectiveAt ?? undefined,
       statusFrom: statusFrom ?? 'PENDING',
       statusTo,
       reviewStatus: statusTo,
@@ -21380,9 +23002,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       unitPrice: item.unitPrice === null || item.unitPrice === undefined ? undefined : Number(item.unitPrice),
       amount: Number(item.amount),
       currency: item.currency ?? 'RMB',
-      profitExchangeRate: item.profitExchangeRate === null || item.profitExchangeRate === undefined ? undefined : Number(item.profitExchangeRate),
-      profitRmbAmount: item.profitRmbAmount === null || item.profitRmbAmount === undefined ? undefined : Number(item.profitRmbAmount),
-      profitEffectiveAt: item.profitEffectiveAt?.toISOString?.() ?? item.profitEffectiveAt ?? undefined,
       routingSource: shipment?.agentId || shipment?.channelId ? 'ROUTING' : 'MANUAL',
       supplierBillNo: item.paymentNo ?? undefined,
       paymentNo: item.paymentNo ?? undefined,
@@ -21432,47 +23051,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       payableTotal: visibility.canViewSensitivePayable ? roundMonetaryTotal(payableTotal) : 0,
       receivableProfit: visibility.canViewProfit ? roundMonetaryTotal(receivableTotal - payableTotal) : undefined,
       operationProfit: visibility.canViewProfit ? roundMonetaryTotal(businessCostTotal - payableTotal) : undefined,
-      canViewSensitivePayable: visibility.canViewSensitivePayable,
-      canViewProfit: visibility.canViewProfit
-    };
-  }
-
-  private toKuayuePayableAuditSummary(
-    request: any,
-    visibility: { canViewSensitivePayable: boolean; canViewProfit: boolean }
-  ): PayableAuditSummary {
-    const fee = request.miscFeeRecord;
-    const shipment = fee.shipment;
-    const amount = visibility.canViewSensitivePayable ? Number(fee.payableAmount) : 0;
-    return {
-      id: `misc-hang:${request.id}`,
-      auditSource: 'MISC_FEE_HANG',
-      miscFeeRecordId: fee.id,
-      miscFeeHangRequestId: request.id,
-      shipmentId: fee.shipmentId ?? '',
-      name: fee.feeName,
-      amount,
-      settled: false,
-      salesperson: fee.salespersonSnapshot ?? shipment?.customer?.salesperson ?? undefined,
-      agentName: visibility.canViewSensitivePayable ? fee.agentName ?? '跨越物流' : undefined,
-      currency: fee.payableCurrency ?? 'RMB',
-      reconciliationStatus: request.status === 'APPROVED' ? 'CONFIRMED' : 'PENDING',
-      createdAt: request.requestedAt?.toISOString?.() ?? request.requestedAt,
-      createdBy: request.requestedBy,
-      reviewedAt: request.reviewedAt?.toISOString?.() ?? request.reviewedAt ?? undefined,
-      reviewedBy: request.reviewedBy ?? undefined,
-      remark: request.remark ?? fee.remark ?? undefined,
-      locked: request.status === 'APPROVED',
-      voided: false,
-      customerCode: fee.customerCodeSnapshot,
-      customerName: `${fee.customerCodeSnapshot}-${fee.customerNameSnapshot}`,
-      customerOrderNo: fee.customerOrderNoSnapshot ?? undefined,
-      outboundOrderNo: fee.systemOrderNoSnapshot ?? undefined,
-      systemOrderNo: fee.systemOrderNoSnapshot ?? '未匹配订单',
-      transferNo: fee.transferNoSnapshot ?? undefined,
-      agentChannel: shipment?.channel?.name ?? '跨越账单',
-      payableTotal: amount,
-      orderRmbTotal: visibility.canViewSensitivePayable ? Number(fee.payableRmbAmount ?? fee.payableAmount) : 0,
       canViewSensitivePayable: visibility.canViewSensitivePayable,
       canViewProfit: visibility.canViewProfit
     };
@@ -21590,30 +23168,26 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   ): PendingPaymentSummary {
     const shipment = row.shipment ?? row.payableFinanceItem?.shipment;
     const payable = row.payableFinanceItem;
-    const miscFee = row.miscFeeRecord;
     const paymentApplication = row.paymentApplicationItem?.paymentApplication;
     const status = (row.applicationStatus === 'APPLIED' || paymentApplication?.status === 'WAITING_PAYMENT')
       ? 'APPLIED'
       : row.status;
-    const agentShortName = miscFee?.agent?.shortName?.trim()
-      || this.resolvePendingPaymentAgentShortName(payable, shipment, agents);
+    const agentShortName = this.resolvePendingPaymentAgentShortName(payable, shipment, agents);
     return {
       id: row.id,
-      sourceType: row.sourceType === 'MISC_FEE_PAYABLE' ? 'MISC_FEE_PAYABLE' : 'ORDER_PAYABLE',
-      payableFinanceItemId: row.payableFinanceItemId ?? undefined,
-      miscFeeRecordId: row.miscFeeRecordId ?? undefined,
+      payableFinanceItemId: row.payableFinanceItemId,
       paymentApplicationId: paymentApplication?.id,
-      shipmentId: row.shipmentId ?? undefined,
+      shipmentId: row.shipmentId,
       date: row.appliedAt?.toISOString?.() ?? row.appliedAt ?? row.createdAt?.toISOString?.() ?? row.createdAt,
-      agentName: miscFee?.agentName ?? payable?.agentName ?? shipment?.agent?.name ?? undefined,
+      agentName: payable?.agentName ?? shipment.agent?.name ?? undefined,
       agentShortName,
-      salesperson: miscFee?.salespersonSnapshot ?? shipment?.customer?.salesperson ?? shipment?.entryBy ?? shipment?.salespersonName ?? undefined,
-      customerCode: miscFee?.customerCodeSnapshot ?? shipment?.customer?.code ?? '',
-      customerName: miscFee ? `${miscFee.customerCodeSnapshot}-${miscFee.customerNameSnapshot}` : `${shipment?.customer?.code ?? ''}-${shipment?.customer?.name ?? ''}`,
-      outboundOrderNo: miscFee?.customerOrderNoSnapshot ?? resolveShipmentOutboundOrderNo(shipment ?? {}),
-      systemOrderNo: miscFee?.systemOrderNoSnapshot ?? shipment?.systemOrderNo ?? undefined,
-      transferNo: miscFee?.transferNoSnapshot ?? shipment?.transferNo ?? undefined,
-      feeName: miscFee?.feeName ?? payable?.name ?? '应付费用',
+      salesperson: shipment.customer?.salesperson ?? shipment.entryBy ?? shipment.salespersonName ?? undefined,
+      customerCode: shipment.customer.code,
+      customerName: `${shipment.customer.code}-${shipment.customer.name}`,
+      outboundOrderNo: resolveShipmentOutboundOrderNo(shipment),
+      systemOrderNo: shipment.systemOrderNo,
+      transferNo: shipment.transferNo ?? undefined,
+      feeName: payable?.name ?? '应付费用',
       amount: Number(row.amount),
       currency: this.normalizePaymentCurrency(row.currency),
       remark: row.remark ?? undefined,
@@ -21720,17 +23294,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       items: (row.items ?? []).map((item: any) => ({
         id: item.id,
         pendingPaymentId: item.payablePaymentApplicationId,
-        sourceType: item.sourceType === 'MISC_FEE_PAYABLE' ? 'MISC_FEE_PAYABLE' : 'ORDER_PAYABLE',
-        payableFinanceItemId: item.payableFinanceItemId ?? undefined,
-        miscFeeRecordId: item.miscFeeRecordId ?? undefined,
-        shipmentId: item.shipmentId ?? undefined,
-        outboundOrderNo: resolveShipmentOutboundOrderNo(item.shipment ?? {
-          customerOrderNo: item.miscFeeRecord?.customerOrderNoSnapshot ?? item.payablePaymentApplication?.miscFeeRecord?.customerOrderNoSnapshot,
-          systemOrderNo: item.miscFeeRecord?.systemOrderNoSnapshot ?? item.payablePaymentApplication?.miscFeeRecord?.systemOrderNoSnapshot
-        }),
-        systemOrderNo: item.shipment?.systemOrderNo ?? item.miscFeeRecord?.systemOrderNoSnapshot ?? item.payablePaymentApplication?.miscFeeRecord?.systemOrderNoSnapshot ?? undefined,
-        customerCode: item.shipment?.customer?.code ?? item.miscFeeRecord?.customerCodeSnapshot ?? item.payablePaymentApplication?.miscFeeRecord?.customerCodeSnapshot ?? '',
-        feeName: item.payableFinanceItem?.name ?? item.miscFeeRecord?.feeName ?? item.payablePaymentApplication?.payableFinanceItem?.name ?? item.payablePaymentApplication?.miscFeeRecord?.feeName ?? '应付费用',
+        payableFinanceItemId: item.payableFinanceItemId,
+        shipmentId: item.shipmentId,
+        outboundOrderNo: resolveShipmentOutboundOrderNo(item.shipment ?? { systemOrderNo: item.payablePaymentApplication?.systemOrderNo }),
+        systemOrderNo: item.shipment?.systemOrderNo ?? item.payablePaymentApplication?.systemOrderNo ?? '',
+        customerCode: item.shipment?.customer?.code ?? item.payablePaymentApplication?.shipment?.customer?.code ?? '',
+        feeName: item.payableFinanceItem?.name ?? item.payablePaymentApplication?.payableFinanceItem?.name ?? '应付费用',
         amount: Number(item.amount),
         currency: this.normalizePaymentCurrency(item.currency)
       })),
@@ -21765,41 +23334,28 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private toPaidPaymentSummary(row: any, canViewBank: boolean): PaidPaymentSummary {
+  private toPaidPaymentSummary(
+    row: any,
+    canViewBank: boolean,
+    agents: Array<{ id: string; name: string; shortName?: string | null; code?: string | null }> = []
+  ): PaidPaymentSummary {
     const items = (row.items ?? []).map((item: any) => ({
       id: item.id,
       pendingPaymentId: item.payablePaymentApplicationId,
-      sourceType: item.miscFeeRecordId || item.payablePaymentApplication?.miscFeeRecordId
-        ? 'MISC_FEE_PAYABLE'
-        : 'ORDER_PAYABLE',
       payableFinanceItemId: item.payableFinanceItemId,
-      miscFeeRecordId: item.miscFeeRecordId ?? item.payablePaymentApplication?.miscFeeRecordId ?? undefined,
       shipmentId: item.shipmentId,
-      outboundOrderNo: resolveShipmentOutboundOrderNo(item.shipment ?? item.payablePaymentApplication?.shipment ?? {
-        customerOrderNo: item.miscFeeRecord?.customerOrderNoSnapshot ?? item.payablePaymentApplication?.miscFeeRecord?.customerOrderNoSnapshot,
-        systemOrderNo: item.miscFeeRecord?.systemOrderNoSnapshot ?? item.payablePaymentApplication?.miscFeeRecord?.systemOrderNoSnapshot
-      }),
-      systemOrderNo: item.shipment?.systemOrderNo
-        ?? item.miscFeeRecord?.systemOrderNoSnapshot
-        ?? item.payablePaymentApplication?.shipment?.systemOrderNo
-        ?? item.payablePaymentApplication?.miscFeeRecord?.systemOrderNoSnapshot
-        ?? '',
-      customerCode: item.shipment?.customer?.code
-        ?? item.miscFeeRecord?.customerCodeSnapshot
-        ?? item.payablePaymentApplication?.shipment?.customer?.code
-        ?? item.payablePaymentApplication?.miscFeeRecord?.customerCodeSnapshot
-        ?? '',
-      feeName: item.payableFinanceItem?.name
-        ?? item.miscFeeRecord?.feeName
-        ?? item.payablePaymentApplication?.payableFinanceItem?.name
-        ?? item.payablePaymentApplication?.miscFeeRecord?.feeName
-        ?? '应付费用',
+      outboundOrderNo: resolveShipmentOutboundOrderNo(item.shipment ?? item.payablePaymentApplication?.shipment ?? {}),
+      systemOrderNo: item.shipment?.systemOrderNo ?? item.payablePaymentApplication?.shipment?.systemOrderNo ?? '',
+      customerCode: item.shipment?.customer?.code ?? item.payablePaymentApplication?.shipment?.customer?.code ?? '',
+      feeName: item.payableFinanceItem?.name ?? item.payablePaymentApplication?.payableFinanceItem?.name ?? '应付费用',
       amount: Number(item.amount),
       currency: this.normalizePaymentCurrency(item.currency)
     }));
     const firstItem = row.items?.[0];
     const firstShipment = firstItem?.shipment ?? firstItem?.payablePaymentApplication?.shipment;
-    const firstMiscFee = firstItem?.miscFeeRecord ?? firstItem?.payablePaymentApplication?.miscFeeRecord;
+    const agentPayable = firstItem?.payablePaymentApplication?.payableFinanceItem ?? firstItem?.payableFinanceItem;
+    const agentShipment = firstItem?.payablePaymentApplication?.shipment ?? firstShipment;
+    const agentShortName = this.resolvePendingPaymentAgentShortName(agentPayable, agentShipment, agents);
     const vouchers = this.paymentApplicationVouchers(row);
     const bankAccount = row.bankAccount ? this.toPayeeBankAccountSummary(row.bankAccount) : undefined;
     if (bankAccount) {
@@ -21810,7 +23366,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       applicationNo: row.applicationNo,
       date: row.paidAt?.toISOString?.() ?? row.paidAt ?? row.appliedAt?.toISOString?.() ?? row.appliedAt,
       agentName: row.agentName,
-      salesperson: firstMiscFee?.salespersonSnapshot ?? firstShipment?.customer?.salesperson ?? firstShipment?.salespersonName ?? undefined,
+      agentShortName,
+      salesperson: firstShipment?.customer?.salesperson ?? firstShipment?.salespersonName ?? undefined,
       customerCode: items[0]?.customerCode,
       outboundOrderNo: items.length === 1 ? items[0]?.outboundOrderNo : `${items[0]?.outboundOrderNo ?? items[0]?.systemOrderNo ?? '-'} 等${items.length}票`,
       systemOrderNo: items.length === 1 ? items[0]?.systemOrderNo : `${items[0]?.systemOrderNo ?? '-'} 等${items.length}票`,
@@ -21850,8 +23407,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       paymentAmount: row.totalAmount,
       totalAmount: row.totalAmount,
       payableFinanceItemIds: row.items.map((item) => item.payableFinanceItemId),
-      miscFeeRecordIds: row.items.map((item) => item.miscFeeRecordId).filter(Boolean),
-      sourceTypes: row.items.map((item) => item.sourceType),
       pendingPaymentIds: row.items.map((item) => item.pendingPaymentId),
       systemOrderNos: row.items.map((item) => item.systemOrderNo),
       customerCodes: row.items.map((item) => item.customerCode),
@@ -21902,7 +23457,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const status = query.status ?? 'ALL';
       return (status === 'ALL' || row.status === status)
         && (!query.currency || query.currency === 'ALL' || row.currency === query.currency)
-        && keyword(row.agentName, query.agent)
+        && keyword(row.agentShortName, query.agent)
         && keyword(row.salesperson, query.salesperson)
         && keyword(row.customerCode, query.customerCode)
         && (keyword(resolveShipmentOutboundOrderNo(row), systemOrderNoNeedle) || keyword(row.systemOrderNo, systemOrderNoNeedle))
@@ -21921,7 +23476,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const valueOf = (row: PaidPaymentSummary) => {
         if (sortBy === 'amount') return row.totalAmount;
         if (sortBy === 'currency') return row.currency;
-        if (sortBy === 'agentName') return row.agentName;
+        if (sortBy === 'agentName') return row.agentShortName ?? '';
         if (sortBy === 'systemOrderNo') return resolveShipmentOutboundOrderNo(row);
         if (sortBy === 'customerCode') return row.customerCode ?? '';
         if (sortBy === 'paidAt') return row.paidAt ?? '';
@@ -21971,7 +23526,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       remark: item.remark ?? undefined,
       locked: item.locked,
       voided: item.voided,
-      sourceType: item.miscFeeRecordId ? 'SYSTEM' : 'MANUAL',
+      sourceType: 'MANUAL',
       chargeWeightKg: item.chargeWeightKg === null || item.chargeWeightKg === undefined ? undefined : Number(item.chargeWeightKg),
       unitPrice: item.unitPrice === null || item.unitPrice === undefined ? undefined : Number(item.unitPrice),
       amountOverridden: item.amountOverridden ?? false
@@ -21979,6 +23534,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private toBusinessCostFinanceSummary(item: any, shipment?: { agent?: { name: string } | null; agentName?: string }) {
+    const billing = resolveBusinessCostBillingFields(item);
     return {
       id: item.id,
       shipmentId: item.shipmentId,
@@ -22002,15 +23558,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       remark: item.remark ?? undefined,
       locked: item.locked,
       voided: item.voided,
-      sourceType: item.miscFeeRecordId ? 'SYSTEM' as const : 'MANUAL' as const,
-      chargeWeightKg: item.chargeWeightKg === null || item.chargeWeightKg === undefined ? undefined : Number(item.chargeWeightKg),
+      sourceType: 'MANUAL' as const,
+      billingUnit: billing.billingUnit,
+      billingQuantity: billing.billingQuantity,
+      chargeWeightKg: billing.chargeWeightKg,
       unitPrice: item.unitPrice === null || item.unitPrice === undefined ? undefined : Number(item.unitPrice),
       amountOverridden: item.amountOverridden ?? false
     };
   }
 
   private operatorCustomerScope(principal: Principal) {
-    if (principal.shipmentAllView) return undefined;
     const isSalesScoped = principal.dataScope === 'SALES_OWN'
       || this.salesScopedRoleCache.has(principal.role)
       || isSalesScopedRole(principal.role);
@@ -22022,26 +23579,27 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private shipmentOwnerWhere(
     principal: Principal,
-    salesScopeMode: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY' = 'CUSTOMER_OR_ENTRY',
+    mode: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY' = 'CUSTOMER_OR_ENTRY',
     allowDepartmentTeam = true
   ) {
     if (principal.shipmentAllView) return undefined;
     const departmentTeamScope = allowDepartmentTeam ? principal.departmentTeamScope?.filter(Boolean) : undefined;
-    if (departmentTeamScope?.length) return { entryBy: { in: departmentTeamScope } };
-    const scope = this.operatorCustomerScope(principal);
-    if (!scope) return undefined;
-    return salesScopeMode === 'ENTRY_ONLY'
-      ? { entryBy: { in: scope } }
-      : { OR: [{ entryBy: { in: scope } }, { customer: { salesperson: { in: scope } } }] };
+    if (departmentTeamScope?.length) {
+      return { entryBy: { in: departmentTeamScope } };
+    }
+    const operatorCustomerScope = this.operatorCustomerScope(principal);
+    if (!operatorCustomerScope) return undefined;
+    if (mode === 'ENTRY_ONLY') return { entryBy: { in: operatorCustomerScope } };
+    return { OR: [
+      { entryBy: { in: operatorCustomerScope } },
+      { customer: { salesperson: { in: operatorCustomerScope } } }
+    ] };
   }
 
   private orderEntryCustomerScope(principal: Principal, allowDepartmentTeam = false) {
-    if (principal.role === 'ADMIN' || principal.shipmentAllView) return undefined;
-    if (principal.departmentTeamScope?.length) return principal.departmentTeamScope;
-    if (principal.dataScope === 'SALES_OWN') {
-      return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
-    }
-    throw new ForbiddenException('当前岗位未配置内部录单数据范围');
+    if (principal.shipmentAllView) return undefined;
+    if (allowDepartmentTeam && principal.departmentTeamScope?.length) return principal.departmentTeamScope;
+    return this.operatorCustomerScope(principal);
   }
 
   private ensureCustomerMasterAccess(principal: Principal, customer: { salesperson?: string | null } | null) {
@@ -22067,23 +23625,85 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return account.username;
   }
 
-  private maskShipmentListFields(principal: Principal, shipment: Shipment, marketVisibility = { canViewAgentIdentity: false, canViewMarketCosts: false, exposeWarehouseRouting: false, allowSalesScopedAgent: false }): Shipment {
+  private maskShipmentListFields(principal: Principal, shipment: Shipment, marketVisibility: { canViewMarketAgent: boolean; canViewLegacyMarketCostDetails: boolean; canViewLegacyMarketCostTotals: boolean; canViewRoutedCostDetails: boolean; canViewRoutedCostTotals: boolean; exposeWarehouseRouting: boolean; allowSalesScopedAgent: boolean; canViewAgentWeight: boolean; fieldMasks?: WorkspaceFieldMaskState } = { canViewMarketAgent: false, canViewLegacyMarketCostDetails: false, canViewLegacyMarketCostTotals: false, canViewRoutedCostDetails: false, canViewRoutedCostTotals: false, exposeWarehouseRouting: false, allowSalesScopedAgent: false, canViewAgentWeight: false }): Shipment {
     const { paymentAmountUsd, paymentAmountCny, paymentMethod, ...visible } = shipment;
     const safeVisible = { ...visible };
-    if (this.operatorCustomerScope(principal) && principal.role !== 'UG_MARKET' && !marketVisibility.allowSalesScopedAgent) {
-      safeVisible.routeAgentChannelName = '';
+    const fieldMasks = marketVisibility.fieldMasks;
+    if (fieldMasks?.['agent-short-name'] || fieldMasks?.['agent-data']) {
+      delete (safeVisible as Partial<Shipment>).agentShortName;
     }
-    if (!marketVisibility.canViewAgentIdentity && !marketVisibility.exposeWarehouseRouting) {
+    if (fieldMasks?.['agent-company-name'] || fieldMasks?.['agent-data']) {
+      delete (safeVisible as Partial<Shipment>).agentName;
+    }
+    if (fieldMasks?.['agent-channel'] || fieldMasks?.['agent-data']) {
+      delete (safeVisible as Partial<Shipment>).routeAgentChannelName;
+    }
+    if (fieldMasks?.['agent-data']) {
+      delete (safeVisible as Partial<Shipment>).agentId;
+      delete (safeVisible as Partial<Shipment>).agentWeightKg;
+      delete (safeVisible as Partial<Shipment>).invoiceTemplateAvailable;
+      delete (safeVisible as Partial<Shipment>).invoiceTemplateOptions;
+    }
+    if (fieldMasks?.['payable-cost']) {
+      if (safeVisible.linePoolFinanceSummary) {
+        const withoutPayableCost = { ...safeVisible.linePoolFinanceSummary };
+        delete withoutPayableCost.payableCostTotals;
+        safeVisible.linePoolFinanceSummary = withoutPayableCost;
+      }
+      delete (safeVisible as Partial<Shipment>).routeChargeWeightKg;
+      delete (safeVisible as Partial<Shipment>).routeUnitPrice;
+      delete (safeVisible as Partial<Shipment>).routeOtherFee;
+      delete (safeVisible as Partial<Shipment>).routeCostTotal;
+      delete (safeVisible as Partial<Shipment>).routeCurrency;
+      delete (safeVisible as Partial<Shipment>).routeCostSummary;
+    }
+    if (fieldMasks?.['payable-status'] && safeVisible.linePoolFinanceSummary) {
+      const withoutPayableStatus = { ...safeVisible.linePoolFinanceSummary };
+      delete withoutPayableStatus.payableStatus;
+      safeVisible.linePoolFinanceSummary = withoutPayableStatus;
+    }
+    if (this.operatorCustomerScope(principal) && principal.role !== 'UG_MARKET' && !marketVisibility.allowSalesScopedAgent) {
       safeVisible.agentName = '';
       safeVisible.routeAgentChannelName = '';
     }
-    if (!marketVisibility.canViewMarketCosts) {
+    if (!marketVisibility.canViewMarketAgent && !marketVisibility.exposeWarehouseRouting) {
+      safeVisible.agentName = '';
+      safeVisible.routeAgentChannelName = '';
+    }
+    if (fieldMasks?.['agent-short-name']) {
+      delete (safeVisible as Partial<Shipment>).agentShortName;
+    }
+    if (fieldMasks?.['agent-company-name'] || fieldMasks?.['agent-data']) {
+      delete (safeVisible as Partial<Shipment>).agentName;
+    }
+    if (fieldMasks?.['agent-channel'] || fieldMasks?.['agent-data']) {
+      delete (safeVisible as Partial<Shipment>).routeAgentChannelName;
+    }
+    if (fieldMasks?.['agent-data']) {
+      delete (safeVisible as Partial<Shipment>).agentId;
+      delete (safeVisible as Partial<Shipment>).agentWeightKg;
+      delete (safeVisible as Partial<Shipment>).invoiceTemplateAvailable;
+      delete (safeVisible as Partial<Shipment>).invoiceTemplateOptions;
+    }
+    if (!marketVisibility.canViewAgentWeight) {
+      delete (safeVisible as Partial<Shipment>).agentWeightKg;
+    }
+    if (!marketVisibility.canViewLegacyMarketCostDetails) {
       delete safeVisible.routeChargeWeightKg;
       delete safeVisible.routeUnitPrice;
       delete safeVisible.routeOtherFee;
+    }
+    if (!marketVisibility.canViewLegacyMarketCostTotals) {
       delete safeVisible.routeCostTotal;
+    }
+    if (!marketVisibility.canViewLegacyMarketCostDetails && !marketVisibility.canViewLegacyMarketCostTotals) {
       delete safeVisible.routeCurrency;
     }
+    safeVisible.routeCostSummary = scopeShipmentRouteCostSummary(safeVisible.routeCostSummary, {
+      canViewDetails: marketVisibility.canViewRoutedCostDetails,
+      canViewTotals: marketVisibility.canViewRoutedCostTotals
+    });
+    if (!safeVisible.routeCostSummary) delete safeVisible.routeCostSummary;
     return safeVisible;
   }
 
@@ -22100,12 +23720,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async findExistingWarehouseMachineImportKeys(db: any, parsed: ParsedWarehouseMachineImport): Promise<Set<string>> {
     const range = warehouseMachineImportQueryRange(parsed);
-    if (!range) return new Set();
+    if (!parsed.candidates.length || !range) return new Set();
     const combinedOrderNos = Array.from(new Set(parsed.candidates.map((candidate) => candidate.barcode)));
     const rows = await db.warehousePackage.findMany({
       where: {
         combinedOrderNo: { in: combinedOrderNos },
-        scanTime: { gte: range.from, lt: range.toExclusive }
+        scanTime: {
+          gte: range.from,
+          lt: range.toExclusive
+        }
       },
       select: { combinedOrderNo: true, scanTime: true }
     });
@@ -22117,16 +23740,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   private async resolveWarehousePackageOwner(customerCode: string, db: any = this.prisma) {
     const customer = await db.customer.findFirst({ where: { code: customerCode, enabled: true }, select: { code: true, name: true, salesperson: true } });
     const salesperson = customer?.salesperson?.trim() || null;
-    const userByUsername = salesperson
+    const user = salesperson
       ? await db.user.findUnique({ where: { username: salesperson }, select: { site: true } })
       : null;
-    const user = userByUsername ?? (salesperson
-      ? await db.user.findFirst({
-          where: { enabled: true, OR: [{ name: salesperson }, { nickname: salesperson }] },
-          orderBy: { createdAt: 'asc' },
-          select: { site: true }
-        })
-      : null);
     return {
       customerName: customer ? `${customer.code}-${customer.name}` : null,
       salesperson,
@@ -22440,7 +24056,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         sourceRefs: [{ nodeType: 'shipment', id: mappedShipment.id }, { nodeType: 'carrier_tracking_task', id: task.id }],
         metrics: { attempts: failed.attempts, failed: 1, success: 0 }
       });
-      return { task: mapCarrierTask(failed), shipment: mapShipment(task.shipment) };
+      return {
+        task: mapCarrierTask(failed),
+        shipment: this.scopeShipmentAgentWeight(mapShipment(task.shipment), await this.canViewShipmentAgentWeight(principal))
+      };
     }
 
     const now = new Date();
@@ -22510,7 +24129,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       metrics: { trackingStaleDays: mappedShipment.trackingStaleDays }
     });
 
-    return { task: mappedTask, shipment: mappedShipment };
+    return {
+      task: mappedTask,
+      shipment: this.scopeShipmentAgentWeight(mappedShipment, await this.canViewShipmentAgentWeight(principal))
+    };
   }
 
   private async getVisibleShipment(principal: Principal, shipmentId: string, allowDepartmentTeam = false) {
@@ -22532,7 +24154,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return shipment;
   }
 
-  private async getReviewVisibleShipment(principal: Principal, shipmentId: string, includeDeleted: boolean, allowDepartmentTeam = false) {
+  private async getReviewVisibleShipment(
+    principal: Principal,
+    shipmentId: string,
+    includeDeleted: boolean,
+    allowDepartmentTeam = false
+  ) {
     const shipmentOwnerWhere = this.shipmentOwnerWhere(principal, 'CUSTOMER_OR_ENTRY', allowDepartmentTeam);
     const shipment = await this.prisma.shipment.findFirst({
       where: {
@@ -22557,17 +24184,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async cleanupOverdueReviewShipments(principal: Principal) {
     const cutoff = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-    const operatorCustomerScope = this.operatorCustomerScope(principal);
-    const scopedOwnerWhere = operatorCustomerScope
-      ? { OR: [{ entryBy: { in: operatorCustomerScope } }, { customer: { salesperson: { in: operatorCustomerScope } } }] }
-      : {};
+    const shipmentOwnerWhere = this.shipmentOwnerWhere(principal, 'CUSTOMER_OR_ENTRY', false);
     const rows = await this.prisma.shipment.findMany({
       where: {
         deletedAt: null,
         status: { in: ['DRAFT', 'REVIEW_PENDING'] as ShipmentStatus[] },
         createdAt: { lt: cutoff },
         ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-        ...(operatorCustomerScope ? scopedOwnerWhere : {})
+        ...(shipmentOwnerWhere ?? {})
       } as any,
       include: shipmentIncludes
     });
@@ -22602,33 +24226,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async buildShipmentReviewDetail(principal: Principal, shipment: any): Promise<ShipmentReviewDetailSummary> {
     const mappedShipment = mapShipment(shipment);
-    const packageIds = Array.from(new Set([...(shipment.draftWarehousePackageIds ?? [])].filter(Boolean)));
-    const warehousePackages = await this.prisma.warehousePackage.findMany({
-      where: {
-        OR: [
-          { shipmentId: shipment.id },
-          ...(packageIds.length ? [{ id: { in: packageIds } }] : [])
-        ]
-      },
-      orderBy: [{ scanTime: 'asc' }, { createdAt: 'asc' }]
-    });
-    const packageRows = warehousePackages.map(mapShipmentReviewWarehousePackage);
-    const packageFallback = packageRows.length > 0
-      ? packageRows
-      : [{
-          id: `${shipment.id}-package`,
-          customerOrderNo: shipment.customerOrderNo,
-          packageCount: shipment.packageCount,
-          weightKg: Number(shipment.receivableWeightKg),
-          lengthCm: 0,
-          widthCm: 0,
-          heightCm: 0,
-          cbm: Number(shipment.volumeCbm ?? 0),
-          volumetricWeightKg: Number(shipment.agentWeightKg),
-          chargeableWeightKg: Number(shipment.receivableWeightKg),
-          exceptions: []
-        } satisfies ShipmentReviewPackageSummary];
-    const canViewFinanceDetail = await this.canViewShipmentFinanceDetail(principal);
+    const packageFallback = await this.buildShipmentReviewPackages(shipment);
+    const [canViewFinanceDetail, canViewAgentWeight] = await Promise.all([
+      this.canViewShipmentFinanceDetail(principal),
+      this.canViewShipmentAgentWeight(principal)
+    ]);
     const finance = canViewFinanceDetail
       ? await this.getShipmentFinanceDetail(principal, shipment.id, { includeDeleted: Boolean(shipment.deletedAt) })
       : {
@@ -22638,6 +24240,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           businessCosts: [],
           receivableTotal: 0
         } satisfies ShipmentFinanceDetailSummary;
+    const approvalFinance = this.getShipmentReviewFinanceCompleteness(shipment);
     const statusEvents = await this.prisma.shipmentEvent.findMany({
       where: { shipmentId: shipment.id },
       orderBy: { createdAt: 'asc' }
@@ -22695,7 +24298,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       source: logisticsTrackingSourceLabel(event.source)
     }));
     return {
-      shipment: await this.redactOrderEntrySensitiveShipment(principal, mappedShipment),
+      shipment: this.redactOrderEntrySensitiveShipment(principal, mappedShipment, canViewAgentWeight),
       packages: packageFallback,
       finance,
       events,
@@ -22703,9 +24306,38 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       logisticsTrackingEvents,
       problemTickets: tickets.map(mapProblemTicketSummary),
       files: [],
-      approvalWarnings: this.getShipmentReviewApprovalWarnings(mappedShipment, packageFallback, finance),
+      approvalWarnings: this.getShipmentReviewApprovalWarnings(mappedShipment, packageFallback, approvalFinance),
       overdue: this.isShipmentReviewOverdue(mappedShipment)
     };
+  }
+
+  private async buildShipmentReviewPackages(shipment: any, db: any = this.prisma): Promise<ShipmentReviewPackageSummary[]> {
+    const packageIds = Array.from(new Set([...(shipment.draftWarehousePackageIds ?? [])].filter(Boolean)));
+    const warehousePackages = await db.warehousePackage.findMany({
+      where: {
+        OR: [
+          { shipmentId: shipment.id },
+          ...(packageIds.length ? [{ id: { in: packageIds } }] : [])
+        ]
+      },
+      orderBy: [{ scanTime: 'asc' }, { createdAt: 'asc' }]
+    });
+    const packageRows = warehousePackages.map(mapShipmentReviewWarehousePackage);
+    return packageRows.length > 0
+      ? packageRows
+      : [{
+          id: `${shipment.id}-package`,
+          customerOrderNo: shipment.customerOrderNo,
+          packageCount: shipment.packageCount,
+          weightKg: Number(shipment.receivableWeightKg),
+          lengthCm: 0,
+          widthCm: 0,
+          heightCm: 0,
+          cbm: Number(shipment.volumeCbm ?? 0),
+          volumetricWeightKg: calculateFallbackVolumetricWeightKg(shipment.volumeCbm),
+          chargeableWeightKg: Number(shipment.receivableWeightKg),
+          exceptions: []
+        } satisfies ShipmentReviewPackageSummary];
   }
 
   private getShipmentReviewApprovalWarnings(
@@ -22724,6 +24356,29 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!finance.receivables.length || finance.receivableTotal <= 0) warnings.push('应收费用缺失');
     if (!finance.businessCosts?.length || (finance.businessCostTotal ?? 0) <= 0) warnings.push('业务成本缺失');
     return warnings;
+  }
+
+  private getShipmentReviewFinanceCompleteness(shipment: any): ShipmentFinanceDetailSummary {
+    const receivables = [
+      ...(shipment.receivableFees ?? []).filter((item: any) => !item.voided),
+      ...(shipment.financeItems ?? []).filter((item: any) => item.type === 'RECEIVABLE' && !item.voided)
+    ];
+    const businessCosts = (shipment.financeItems ?? [])
+      .filter((item: any) => item.type === 'BUSINESS_COST' && !item.voided);
+    const payables = [
+      ...(shipment.payableFees ?? []).filter((item: any) => !item.voided),
+      ...(shipment.financeItems ?? []).filter((item: any) => item.type === 'PAYABLE' && !item.voided)
+    ];
+    return {
+      shipmentId: shipment.id,
+      systemOrderNo: shipment.systemOrderNo,
+      receivables,
+      businessCosts,
+      payables,
+      receivableTotal: roundMoney(receivables.reduce((sum: number, item: any) => sum + Number(item.amount ?? 0), 0)),
+      businessCostTotal: roundMoney(businessCosts.reduce((sum: number, item: any) => sum + Number(item.amount ?? 0), 0)),
+      payableTotal: roundMoney(payables.reduce((sum: number, item: any) => sum + Number(item.amount ?? 0), 0))
+    } as ShipmentFinanceDetailSummary;
   }
 
   private isShipmentReviewOverdue(shipment: Shipment): boolean {
@@ -22765,3521 +24420,212 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return shipment.outboundAt?.toISOString?.() ?? shipment.reviewedAt?.toISOString?.() ?? shipment.createdAt?.toISOString?.();
   }
 
-  async previewKuayueImport(
-    principal: Principal,
-    file: { originalname: string; mimetype?: string; size: number; buffer: Buffer }
-  ): Promise<KuayueImportPreview> {
-    await this.ensureMiscFeePermission(principal, 'kuayue', 'create');
-    if (await this.resolveMiscFeeDataScope(principal) !== 'ALL') throw new ForbiddenException('只有杂费全量数据岗位可导入跨越账单');
-    const extension = extname(file.originalname).toLowerCase();
-    if (!['.xls', '.xlsx'].includes(extension)) throw new BadRequestException('仅支持 .xls/.xlsx 跨越账单');
-    if (!file.buffer.length || file.buffer.length > 20 * 1024 * 1024) throw new BadRequestException('跨越账单为空或超过 20MB');
-    if (extension === '.xlsx' && file.buffer.subarray(0, 2).toString('ascii') !== 'PK') throw new BadRequestException('XLSX 文件内容格式无效');
-    if (extension === '.xls') {
-      const header = file.buffer.subarray(0, 4);
-      if (!(header[0] === 0xd0 && header[1] === 0xcf && header[2] === 0x11 && header[3] === 0xe0)) {
-        throw new BadRequestException('XLS 文件内容格式无效');
-      }
-    }
-    const checksum = createHash('sha256').update(file.buffer).digest('hex');
-    const existingBatch = await (this.prisma as any).miscFeeImportBatch.findUnique({
-      where: { checksum },
-      select: { status: true }
-    });
-    if (existingBatch) {
-      throw new ConflictException(existingBatch.status === 'COMMITTED' ? '相同跨越账单文件已经导入' : '相同跨越账单文件已有待确认预览');
-    }
-    const parsedWorkbook = this.parseKuayueWorkbook(file.buffer);
-    const parsedLines = parsedWorkbook.lines.map((line) => ({
-      ...line,
-      dedupeKey: this.kuayueDedupeKey(line.kuayueBillNo)
-    }));
-    const parsedDedupeKeys = parsedLines
-      .map((line) => line.dedupeKey)
-      .filter((value): value is string => Boolean(value));
-    const committedDuplicateLines = await (this.prisma as any).miscFeeImportLine.findMany({
-      where: { dedupeKey: { in: parsedDedupeKeys }, batch: { status: 'COMMITTED' } },
-      select: { dedupeKey: true }
-    });
-    const duplicateKeys = new Set(committedDuplicateLines.map((line: any) => line.dedupeKey).filter(Boolean));
-    const seenKeys = new Set<string>();
-    const lines = parsedLines.map((line) => {
-      const duplicate = Boolean(line.dedupeKey && (duplicateKeys.has(line.dedupeKey) || seenKeys.has(line.dedupeKey)));
-      if (line.dedupeKey) seenKeys.add(line.dedupeKey);
-      return { ...line, duplicate };
-    });
-    const uploadDir = resolveUploadDirectory('misc-fee-imports');
-    await mkdir(uploadDir.dir, { recursive: true });
-    const storedFileName = `${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID()}${extension}`;
-    const storedPath = join(uploadDir.dir, storedFileName);
-    await writeFile(storedPath, file.buffer);
-    const previewToken = randomUUID();
-    let batch: any;
+  private async attachShipmentStageDwell(shipments: Shipment[]): Promise<Shipment[]> {
+    if (!shipments.length) return shipments;
+    const shipmentIds = shipments.map((shipment) => shipment.id);
+    let historyRows: Array<{ shipmentId: string; stageKey: string; enteredAt: Date; exitedAt: Date | null; visitNo: number }>;
+    let reviewRows: Array<{ target: string; action: string; after: unknown; createdAt: Date }>;
     try {
-      batch = await (this.prisma as any).miscFeeImportBatch.create({
-        data: {
-        fileName: file.originalname,
-        mimeType: file.mimetype,
-        sizeBytes: file.size,
-        fileUrl: `/api/uploads/misc-fee-imports/${storedFileName}`,
-        checksum,
-        previewToken,
-        totalRows: lines.length,
-        validRows: lines.filter((line) => line.valid).length,
-        invalidRows: lines.filter((line) => !line.valid).length,
-        duplicateRows: lines.filter((line) => line.duplicate).length,
-        createdBy: principal.username,
-        lines: {
-          create: lines.map((line) => ({
-            rowNo: line.rowNo,
-            dedupeKey: line.dedupeKey,
-            kuayueBillNo: line.kuayueBillNo,
-            occurredAt: line.occurredAt ? new Date(line.occurredAt) : undefined,
-            pieceCount: line.pieceCount,
-            chargeWeightKg: line.chargeWeightKg,
-            freightAmount: line.freightAmount,
-            insuranceAmount: line.insuranceAmount,
-            overageAmount: line.overageAmount,
-            oversizeAmount: line.oversizeAmount,
-            discountAmount: line.discountAmount,
-            payableAmount: line.payableAmount,
-            sender: line.sender,
-            receiver: line.receiver,
-            serviceType: line.serviceType,
-            raw: toAuditJson(line.raw),
-            valid: line.valid,
-            duplicate: line.duplicate,
-            errors: toAuditJson(line.errors)
-          }))
-          }
-        }
-      });
-    } catch (error) {
-      await unlink(storedPath).catch(() => undefined);
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('相同跨越账单文件已由其他会话预览或导入');
-      }
-      throw error;
-    }
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'misc_fee.kuayue.import_preview',
-        target: batch.id,
-        after: toAuditJson({
-          fileName: file.originalname,
-          checksum,
-          totalRows: lines.length,
-          declaredPayableAmount: parsedWorkbook.declaredPayableAmount,
-          parsedPayableAmount: parsedWorkbook.parsedPayableAmount
-        })
-      }
-    });
-    return {
-      previewToken,
-      fileName: file.originalname,
-      checksum,
-      totalRows: lines.length,
-      validRows: lines.filter((line) => line.valid).length,
-      invalidRows: lines.filter((line) => !line.valid).length,
-      duplicateRows: lines.filter((line) => line.duplicate).length,
-      declaredPayableAmount: parsedWorkbook.declaredPayableAmount,
-      parsedPayableAmount: parsedWorkbook.parsedPayableAmount,
-      lines
-    };
-  }
-
-  async commitKuayueImport(principal: Principal, input: KuayueImportCommitInput): Promise<KuayueImportCommitResult> {
-    await this.ensureMiscFeePermission(principal, 'kuayue', 'create');
-    if (await this.resolveMiscFeeDataScope(principal) !== 'ALL') throw new ForbiddenException('只有杂费全量数据岗位可提交跨越账单');
-    if (!input.previewToken?.trim()) throw new BadRequestException('缺少导入预览凭证');
-    const batch = await (this.prisma as any).miscFeeImportBatch.findUnique({
-      where: { previewToken: input.previewToken.trim() },
-      include: { lines: true }
-    });
-    if (!batch) throw new NotFoundException('导入预览已失效');
-    if (batch.status === 'COMMITTED') {
-      return {
-        batchId: batch.id,
-        createdCount: batch.importedRows,
-        skippedDuplicateCount: batch.duplicateRows,
-        failedCount: batch.invalidRows
-      };
-    }
-    if (batch.status !== 'PREVIEW') throw new BadRequestException('当前导入批次不能确认');
-    const previouslyCommitted = await (this.prisma as any).miscFeeImportLine.findMany({
-      where: {
-        dedupeKey: { in: batch.lines.map((line: any) => line.dedupeKey).filter(Boolean) },
-        batch: { status: 'COMMITTED', id: { not: batch.id } }
-      },
-      select: { dedupeKey: true }
-    });
-    const duplicateKeys = new Set(previouslyCommitted.map((line: any) => line.dedupeKey).filter(Boolean));
-    const duplicateLineIds = batch.lines
-      .filter((line: any) => line.dedupeKey && duplicateKeys.has(line.dedupeKey))
-      .map((line: any) => line.id);
-    const acceptedCount = batch.lines.filter((line: any) => line.valid && !line.duplicate && !duplicateLineIds.includes(line.id)).length;
-    const duplicateCount = batch.lines.filter((line: any) => line.duplicate || duplicateLineIds.includes(line.id)).length;
-    await (this.prisma as any).$transaction(async (tx: any) => {
-      if (duplicateLineIds.length) {
-        await tx.miscFeeImportLine.updateMany({ where: { id: { in: duplicateLineIds } }, data: { duplicate: true } });
-      }
-      const changed = await tx.miscFeeImportBatch.updateMany({
-        where: { id: batch.id, status: 'PREVIEW' },
-        data: {
-          status: 'COMMITTED',
-          importedRows: acceptedCount,
-          duplicateRows: duplicateCount,
-          committedBy: principal.username,
-          committedAt: new Date()
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('该导入批次已被其他会话处理');
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'misc_fee.kuayue.import_commit',
-          target: batch.id,
-          after: toAuditJson({ acceptedCount, duplicateCount, failedCount: batch.invalidRows })
-        }
-      });
-    });
-    return {
-      batchId: batch.id,
-      createdCount: acceptedCount,
-      skippedDuplicateCount: duplicateCount,
-      failedCount: batch.invalidRows
-    };
-  }
-
-  async getKuayueImportLines(principal: Principal, query: KuayueImportLineQuery = {}): Promise<KuayueImportLineListResponse> {
-    await this.ensureMiscFeePermission(principal, 'kuayue', 'read');
-    const kuayueScope = await this.resolveMiscFeeDataScope(principal);
-    if (!['ALL', 'SALES_OWN'].includes(kuayueScope)) throw new ForbiddenException('当前杂费数据范围不能查看跨越认领队列');
-    const page = Math.max(1, Number(query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
-    const keyword = query.keyword?.trim();
-    const kuayueBillNo = query.kuayueBillNo?.trim();
-    const salesScoped = kuayueScope === 'SALES_OWN';
-    const salespeople = [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
-    const visibleClaimedRecord = { is: { customer: { salesperson: { in: salespeople } } } };
-    const recordWhere = salesScoped
-      ? query.status === 'CLAIMED'
-        ? { record: visibleClaimedRecord }
-        : query.status === 'ALL'
-          ? { OR: [{ record: { is: null } }, { record: visibleClaimedRecord }] }
-          : { record: { is: null } }
-      : query.status === 'CLAIMED'
-        ? { record: { isNot: null } }
-        : query.status === 'ALL'
-          ? {}
-          : { record: { is: null } };
-    const where: any = {
-      batch: { status: 'COMMITTED' },
-      valid: true,
-      duplicate: false,
-      ...recordWhere,
-      ...(kuayueBillNo ? { kuayueBillNo: { contains: kuayueBillNo, mode: 'insensitive' } } : {}),
-      ...(query.occurredFrom || query.occurredTo ? {
-        occurredAt: {
-          ...(query.occurredFrom ? { gte: new Date(query.occurredFrom) } : {}),
-          ...(query.occurredTo ? { lte: new Date(query.occurredTo) } : {})
-        }
-      } : {}),
-      ...(keyword ? {
-        OR: [
-          { kuayueBillNo: { contains: keyword, mode: 'insensitive' } },
-          { sender: { contains: keyword, mode: 'insensitive' } },
-          { receiver: { contains: keyword, mode: 'insensitive' } }
-        ]
-      } : {})
-    };
-    const [rows, totalItems] = await Promise.all([
-      (this.prisma as any).miscFeeImportLine.findMany({
-        where,
-        include: { batch: true, record: { select: { id: true } } },
-        orderBy: [{ batch: { committedAt: 'desc' } }, { rowNo: 'asc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize
-      }),
-      (this.prisma as any).miscFeeImportLine.count({ where })
-    ]);
-    const canViewAmounts = await this.canViewMiscFeePayable(principal, 'KUAYUE');
-    return {
-      rows: rows.map((row: any) => this.toKuayueImportLineSummary(
-        row,
-        canViewAmounts && !(salesScoped && !row.record),
-        salesScoped && !row.record
-      )),
-      pagination: { page, pageSize, totalItems }
-    };
-  }
-
-  async claimKuayueImportLine(
-    principal: Principal,
-    lineId: string,
-    input: KuayueImportLineClaimInput
-  ): Promise<MiscFeeDetail> {
-    await this.ensureMiscFeePermission(principal, 'kuayue', 'update');
-    const kuayueScope = await this.resolveMiscFeeDataScope(principal);
-    if (!['ALL', 'SALES_OWN'].includes(kuayueScope)) throw new ForbiddenException('当前杂费数据范围不能认领跨越账单');
-    if (!input.customerCode?.trim()) throw new BadRequestException('客户编号不能为空');
-    const line = await (this.prisma as any).miscFeeImportLine.findUnique({
-      where: { id: lineId },
-      include: { batch: true, record: true }
-    });
-    if (!line) throw new NotFoundException('跨越账单行不存在');
-    if (line.record) return this.getMiscFee(principal, line.record.id);
-    if (line.batch.status !== 'COMMITTED' || !line.valid || line.duplicate) throw new BadRequestException('该账单行不可认领');
-    const customer = await (this.prisma as any).customer.findUnique({ where: { code: input.customerCode.trim() } });
-    if (!customer || !customer.enabled) throw new NotFoundException('客户编号不存在或已停用');
-    await this.ensureMiscFeeCustomerScope(principal, customer.salesperson);
-    await this.ensureWarehouseMiscFeeShipmentSite(principal, customer.code);
-    const shipment = await this.resolveMiscFeeShipment(principal, input, customer.id);
-    if (!shipment && !customer.salesperson?.trim()) {
-      throw new BadRequestException('该客户未配置业务员，不能走客户挂账；请先补充客户资料或填写出货单号');
-    }
-    const importedPayableAmount = Number(line.payableAmount ?? 0);
-    if (!Number.isFinite(importedPayableAmount) || importedPayableAmount < 0) throw new BadRequestException('跨越应付金额必须为非负数');
-    const businessAmount = importedPayableAmount;
-    let record: any;
-    try {
-      record = await (this.prisma as any).$transaction(async (tx: any) => {
-        const created = await tx.miscFeeRecord.create({ data: {
-          sourceType: 'KUAYUE',
-          feeName: '跨越提货费',
-          ownerType: 'EXTERNAL',
-          ownerName: '跨越物流',
-          agentName: '跨越物流',
-          customerId: customer.id,
-          customerCodeSnapshot: customer.code,
-          customerNameSnapshot: customer.name,
-          salespersonSnapshot: customer.salesperson,
-          shipmentId: shipment?.id,
-          systemOrderNoSnapshot: shipment?.systemOrderNo,
-          customerOrderNoSnapshot: shipment?.customerOrderNo,
-          transferNoSnapshot: shipment?.transferNo,
-          customerSnapshot: toAuditJson({ id: customer.id, code: customer.code, name: customer.name, salesperson: customer.salesperson }),
-          shipmentSnapshot: shipment ? toAuditJson({ id: shipment.id, systemOrderNo: shipment.systemOrderNo, customerOrderNo: shipment.customerOrderNo, transferNo: shipment.transferNo }) : undefined,
-          cargoSnapshot: toAuditJson({
-            ...(shipment ? { packageCount: shipment.packageCount, actualWeightKg: shipment.actualWeightKg, volumeCbm: shipment.volumeCbm } : {}),
-            kuayueBill: this.kuayueBillDetailsFromImportLine(line)
-          }),
-          occurredAt: line.occurredAt ?? line.batch.committedAt ?? line.batch.createdAt,
-          businessAmount: roundMoney(businessAmount),
-          businessCurrency: 'RMB',
-          payableAmount: roundMoney(importedPayableAmount),
-          payableCurrency: 'RMB',
-          matchStatus: shipment ? 'MATCHED' : 'UNMATCHED',
-          createdBy: principal.username,
-          createdRole: principal.role,
-          createdSite: principal.site,
-          remark: [input.remark?.trim(), line.serviceType ? `服务方式：${line.serviceType}` : undefined].filter(Boolean).join('；') || undefined,
-          importBatchId: line.batchId,
-          importLineId: line.id,
-          sourceDedupeKey: line.dedupeKey ?? this.kuayueDedupeKey(line.kuayueBillNo),
-          idempotencyKey: input.idempotencyKey
-        } });
-        await tx.auditLog.create({
-          data: {
-            actorId: principal.id,
-            action: 'misc_fee.kuayue.claim',
-            target: created.id,
-            after: toAuditJson({
-              importLineId: line.id,
-              customerCode: customer.code,
-              shipmentId: shipment?.id,
-              attributionRoute: shipment ? 'SHIPMENT' : 'CUSTOMER_HANG'
-            })
-          }
-        });
-        return created;
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const existing = await (this.prisma as any).miscFeeRecord.findFirst({
+      [historyRows, reviewRows] = await Promise.all([
+        this.prisma.shipmentStageHistory.findMany({
+          where: { shipmentId: { in: shipmentIds } },
+          orderBy: [{ enteredAt: 'asc' }, { visitNo: 'asc' }],
+          select: { shipmentId: true, stageKey: true, enteredAt: true, exitedAt: true, visitNo: true }
+        }),
+        this.prisma.auditLog.findMany({
           where: {
-            OR: [
-              { importLineId: line.id },
-              ...(input.idempotencyKey ? [{ idempotencyKey: input.idempotencyKey }] : [])
-            ]
-          }
-        });
-        if (existing) return this.getMiscFee(principal, existing.id);
-        const sourceDedupeKey = line.dedupeKey ?? this.kuayueDedupeKey(line.kuayueBillNo);
-        if (sourceDedupeKey) {
-          const claimedByOtherLine = await (this.prisma as any).miscFeeRecord.findUnique({
-            where: { sourceDedupeKey },
-            select: { id: true }
-          });
-          if (claimedByOtherLine) throw new ConflictException('该跨越单号已被其他账单行认领');
-        }
-      }
-      throw error;
-    }
-    return this.getMiscFee(principal, record.id);
-  }
-
-  async getMiscFees(principal: Principal, query: MiscFeeQuery = {}): Promise<MiscFeeListResponse> {
-    const section = query.sourceType ? this.miscFeePermissionSection(query.sourceType) : undefined;
-    if (section) await this.ensureMiscFeePermission(principal, section, 'read');
-    else if (!await this.hasAnyPermission(principal.role, miscFeeReadPermissions)) throw new ForbiddenException('无权查看杂费');
-    const where = await this.miscFeeScopeWhere(principal, query);
-    if (!query.sourceType) {
-      const allowedSourceTypes = await this.allowedMiscFeeSourceTypes(principal, 'read');
-      if (!allowedSourceTypes.length) throw new ForbiddenException('无权查看杂费');
-      where.sourceType = { in: allowedSourceTypes };
-    }
-    const page = Math.max(1, Number(query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
-    const [rows, totalItems, aggregate] = await Promise.all([
-      (this.prisma as any).miscFeeRecord.findMany({
-        where,
-        include: this.miscFeeInclude(),
-        orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }],
-        skip: (page - 1) * pageSize,
-        take: pageSize
-      }),
-      (this.prisma as any).miscFeeRecord.count({ where }),
-      (this.prisma as any).miscFeeRecord.aggregate({
-        where,
-        _sum: { businessRmbAmount: true, payableRmbAmount: true }
-      })
-    ]);
-    const creatorLabels = await this.miscFeeCreatorLabels(rows.map((row: any) => row.createdBy));
-    const mapped = await Promise.all(rows.map(async (row: any) => ({
-      ...await this.toMiscFeeSummary(principal, row),
-      createdByLabel: creatorLabels.get(row.createdBy) ?? row.createdBy
-    })));
-    const payableCoveredSourceTypes = query.sourceType
-      ? [query.sourceType]
-      : await this.allowedMiscFeeSourceTypes(principal, 'read');
-    const canViewAnyPayable = payableCoveredSourceTypes.length > 0
-      && (await Promise.all(payableCoveredSourceTypes.map((sourceType) => this.canViewMiscFeePayable(principal, sourceType)))).every(Boolean);
-    return {
-      rows: mapped,
-      totals: {
-        count: totalItems,
-        businessRmbAmount: Number(aggregate._sum.businessRmbAmount ?? 0),
-        ...(canViewAnyPayable ? { payableRmbAmount: Number(aggregate._sum.payableRmbAmount ?? 0) } : {}),
-        pendingConfirmation: await (this.prisma as any).miscFeeRecord.count({ where: { ...where, confirmationStatus: 'PENDING' } }),
-        ...(canViewAnyPayable ? {
-          pendingAudit: await (this.prisma as any).miscFeeRecord.count({ where: { ...where, auditStatus: 'PENDING' } }),
-          pendingHang: await (this.prisma as any).miscFeeRecord.count({ where: { ...where, hangStatus: 'PENDING' } })
-        } : {})
-      },
-      pagination: { page, pageSize, totalItems }
-    };
-  }
-
-  async getMiscFeeDeliveryShipmentOptions(principal: Principal, customerCode: string): Promise<MiscFeeDeliveryShipmentOption[]> {
-    await this.ensureMiscFeePermission(principal, 'delivery', 'create');
-    await this.ensureMiscFeeSourceAccess(principal, 'DELIVERY');
-    const normalizedCustomerCode = customerCode?.trim();
-    if (!normalizedCustomerCode) return [];
-    const customer = await (this.prisma as any).customer.findUnique({
-      where: { code: normalizedCustomerCode },
-      select: { id: true, code: true, enabled: true, salesperson: true }
-    });
-    if (!customer || !customer.enabled) throw new NotFoundException('客户编号不存在或已停用');
-    await this.ensureMiscFeeCustomerScope(principal, customer.salesperson);
-    await this.ensureWarehouseMiscFeeShipmentSite(principal, customer.code);
-    const canViewAgentIdentity = await this.hasAnyPermission(principal.role, [
-      'master-data:agents:read',
-      'master-data:agent-channels:read',
-      'market:pending-routing:agent-channel-view',
-      'market:routed:agent-channel-view',
-      'finance:business-cost:view-agent',
-      'finance:payable:view-sensitive'
-    ]);
-    const shipments = await (this.prisma as any).shipment.findMany({
-      where: { customerId: customer.id, deletedAt: null, status: { not: 'CANCELLED' } },
-      select: {
-        id: true,
-        systemOrderNo: true,
-        transferNo: true,
-        packageCount: true,
-        actualWeightKg: true,
-        volumeCbm: true,
-        agentId: true,
-        agent: { select: { name: true } },
-        receivableFees: {
-          where: { voided: false },
-          select: { amount: true, settled: true, receivedAmount: true, receiptStatus: true }
-        },
-        financeItems: {
-          where: { type: 'RECEIVABLE', voided: false },
-          select: { amount: true, receivedAmount: true, receiptStatus: true }
-        }
-      },
-      orderBy: { createdAt: 'desc' }
-    });
-    return shipments
-      .filter((shipment: any) => !isShipmentReceivableFullySettled(shipment))
-      .map((shipment: any) => ({
-        id: shipment.id,
-        systemOrderNo: shipment.systemOrderNo,
-        transferNo: shipment.transferNo ?? undefined,
-        packageCount: shipment.packageCount,
-        actualWeightKg: shipment.actualWeightKg === null ? undefined : Number(shipment.actualWeightKg),
-        volumeCbm: shipment.volumeCbm === null ? undefined : Number(shipment.volumeCbm),
-        ...(canViewAgentIdentity ? {
-          agentId: shipment.agentId ?? undefined,
-          agentName: shipment.agent?.name ?? undefined
-        } : {})
-      }));
-  }
-
-  async getMiscFee(principal: Principal, id: string): Promise<MiscFeeDetail> {
-    const row = await this.findVisibleMiscFee(principal, id);
-    const creatorLabels = await this.miscFeeCreatorLabels([row.createdBy]);
-    const summary = {
-      ...await this.toMiscFeeSummary(principal, row),
-      createdByLabel: creatorLabels.get(row.createdBy) ?? row.createdBy
-    };
-    const canViewAttachments = await this.canViewMiscFeeAttachments(principal, row.sourceType);
-    const canViewPayable = await this.canViewMiscFeePayable(principal, row.sourceType);
-    const rawCargoSnapshot = row.cargoSnapshot && typeof row.cargoSnapshot === 'object'
-      ? row.cargoSnapshot as Record<string, unknown>
-      : undefined;
-    const cargoSnapshot = row.sourceType === 'KUAYUE' && !canViewPayable && rawCargoSnapshot
-      ? toAuditJson({
-          packageCount: rawCargoSnapshot.packageCount,
-          actualWeightKg: rawCargoSnapshot.actualWeightKg,
-          volumeCbm: rawCargoSnapshot.volumeCbm
-        })
-      : row.cargoSnapshot ?? undefined;
-    return {
-      ...summary,
-      attachments: canViewAttachments ? (row.attachments ?? []).map((item: any) => this.toMiscFeeAttachment(item)) : [],
-      customerSnapshot: row.customerSnapshot ?? undefined,
-      shipmentSnapshot: row.shipmentSnapshot ?? undefined,
-      cargoSnapshot,
-      ...(canViewPayable ? { agentSnapshot: row.agentSnapshot ?? undefined } : {})
-    };
-  }
-
-  async downloadMiscFeeAttachment(principal: Principal, attachmentId: string) {
-    const attachment = await (this.prisma as any).miscFeeAttachment.findUnique({ where: { id: attachmentId } });
-    if (!attachment) throw new NotFoundException('杂费附件不存在');
-    const record = await this.findVisibleMiscFee(principal, attachment.miscFeeRecordId);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(record.sourceType), 'attachment-view');
-    if (isPickupFeeSourceType(record.sourceType) && !await this.canViewMiscFeePayable(principal, record.sourceType)) {
-      await this.recordPermissionDenied(principal, {
-        permissions: [`misc-fee:${this.miscFeePermissionSection(record.sourceType)}:view-payable` as PermissionKey],
-        method: 'SERVER',
-        path: `misc-fee-attachments/${attachmentId}/file`
-      });
-      throw new ForbiddenException('业务员无权查看提货费付款凭证和应付附件');
-    }
-    const storedName = basename(String(attachment.url ?? ''));
-    if (!storedName || !String(attachment.url ?? '').startsWith('/api/uploads/misc-fee-attachments/')) throw new NotFoundException('附件文件不存在');
-    const buffer = await readFile(join(resolveUploadDirectory('misc-fee-attachments').dir, storedName)).catch(() => null);
-    if (!buffer) throw new NotFoundException('附件文件不存在');
-    return { buffer, fileName: attachment.fileName, mimeType: attachment.mimeType ?? 'application/octet-stream' };
-  }
-
-  async downloadKuayueImportFile(principal: Principal, batchId: string) {
-    await this.ensureMiscFeePermission(principal, 'kuayue', 'create');
-    if (await this.resolveMiscFeeDataScope(principal) !== 'ALL') {
-      throw new ForbiddenException('只有杂费全量数据岗位可下载跨越原始账单');
-    }
-    const batch = await (this.prisma as any).miscFeeImportBatch.findUnique({ where: { id: batchId } });
-    if (!batch) throw new NotFoundException('跨越导入批次不存在');
-    const storedName = basename(String(batch.fileUrl ?? ''));
-    if (!storedName || !String(batch.fileUrl ?? '').startsWith('/api/uploads/misc-fee-imports/')) throw new NotFoundException('原始账单文件不存在');
-    const buffer = await readFile(join(resolveUploadDirectory('misc-fee-imports').dir, storedName)).catch(() => null);
-    if (!buffer) throw new NotFoundException('原始账单文件不存在');
-    return { buffer, fileName: batch.fileName, mimeType: batch.mimeType ?? 'application/octet-stream' };
-  }
-
-  async createMiscFee(principal: Principal, input: MiscFeeInput): Promise<MiscFeeDetail> {
-    const section = this.miscFeePermissionSection(input.sourceType);
-    await this.ensureMiscFeePermission(principal, section, 'create');
-    await this.ensureMiscFeeSourceAccess(principal, input.sourceType);
-    this.validateMiscFeeInput(input);
-    if (input.sourceType === 'OTHER_PICKUP') {
-      throw new BadRequestException('其他提货仅保留历史记录；新增请选择仓库提货或市场提货');
-    }
-    if (isPickupFeeSourceType(input.sourceType) && (input.shipmentId || input.systemOrderNo?.trim())) {
-      throw new BadRequestException('提货登记只填写客户编号，运单和业务成本由负责业务员后续归属');
-    }
-    if (input.sourceType === 'TALLY_MISC' && (input.shipmentId || input.systemOrderNo?.trim())) {
-      throw new BadRequestException('理货杂费登记时只填写客户编号，运单由业务录单或仓库出库时匹配');
-    }
-    if (input.sourceType === 'PURCHASE' && (input.shipmentId || input.systemOrderNo?.trim())) {
-      throw new BadRequestException('代购申请只登记客户编号，代购业务编号由系统自动生成');
-    }
-    if (input.sourceType === 'DELIVERY' && !input.agentId?.trim()) {
-      throw new BadRequestException('请选择送货代理');
-    }
-    if (input.sourceType === 'MARKET_PICKUP' && !input.agentId?.trim()) {
-      throw new BadRequestException('市场提货必须选择实际付款对象');
-    }
-    if (input.idempotencyKey) {
-      const existing = await (this.prisma as any).miscFeeRecord.findUnique({ where: { idempotencyKey: input.idempotencyKey }, include: this.miscFeeInclude() });
-      if (existing) return this.getMiscFee(principal, existing.id);
-    }
-    const customer = await (this.prisma as any).customer.findUnique({ where: { code: input.customerCode.trim() } });
-    if (!customer || !customer.enabled) throw new NotFoundException('客户编号不存在或已停用');
-    if (isPickupFeeSourceType(input.sourceType)) await this.ensureMiscFeeCustomerHasActiveSalesperson(customer);
-    await this.ensureMiscFeeCustomerScope(principal, customer.salesperson);
-    await this.ensureWarehouseMiscFeeShipmentSite(principal, customer.code);
-    const shipment = await this.resolveMiscFeeShipment(principal, input, customer.id);
-    if (input.sourceType === 'DELIVERY' && shipment && await this.isMiscFeeShipmentFullySettledById(shipment.id)) {
-      throw new BadRequestException('该运单应收已完成核销，不能再登记送货费');
-    }
-    const canManagePayable = await this.canViewMiscFeePayable(principal, input.sourceType);
-    const payableFirstSource = miscFeePayableFirstSourceTypes.has(input.sourceType);
-    if (payableFirstSource && !canManagePayable) {
-      throw new ForbiddenException('该杂费应由仓库、市场或财务先登记真实应付');
-    }
-    if (canManagePayable && !['PURCHASE', 'TALLY_MISC'].includes(input.sourceType) && input.payableAmount === undefined) {
-      throw new BadRequestException('请先填写代理应付成本');
-    }
-    if (input.sourceType === 'TALLY_MISC'
-      && (!Number.isFinite(Number(input.businessAmount)) || Number(input.businessAmount) <= 0
-        || !Number.isFinite(Number(input.payableAmount)) || Number(input.payableAmount) <= 0)) {
-      throw new BadRequestException('理货杂费业务成本和应付成本必须大于 0');
-    }
-    if (!canManagePayable && input.businessAmount === undefined) {
-      throw new BadRequestException('业务成本金额不能为空');
-    }
-    const canManageOwner = canManagePayable;
-    const agent = canManagePayable && input.sourceType !== 'PURCHASE' && input.agentId
-      ? await (this.prisma as any).agent.findUnique({ where: { id: input.agentId } })
-      : undefined;
-    if (canManagePayable && input.agentId && (!agent || !agent.enabled)) throw new NotFoundException('代理不存在或已停用');
-    const businessCurrency = await this.resolveMiscFeeCurrency(
-      input.businessSettlementMethod,
-      input.businessCurrency,
-      input.sourceType === 'KUAYUE' || isPickupFeeSourceType(input.sourceType)
-    );
-    if (input.sourceType === 'PURCHASE' && businessCurrency !== 'RMB') {
-      throw new BadRequestException('代购费首版仅支持人民币业务成本和结算方式');
-    }
-    const payableCurrency = input.sourceType === 'PURCHASE' || input.sourceType === 'DELIVERY' || isPickupFeeSourceType(input.sourceType)
-      ? 'RMB'
-      : canManagePayable
-        ? await this.resolveMiscFeeCurrency(input.payableSettlementMethod, input.payableCurrency, input.sourceType === 'KUAYUE')
-        : businessCurrency;
-    const ownerType = isPickupFeeSourceType(input.sourceType)
-      ? this.defaultMiscFeeOwnerType(input.sourceType)
-      : canManageOwner ? input.ownerType ?? this.defaultMiscFeeOwnerType(input.sourceType) : this.defaultMiscFeeOwnerType(input.sourceType);
-    const ownerSiteSnapshot = await this.resolveMiscFeeOwnerSite(ownerType, customer.code);
-    const businessNo = input.sourceType === 'PURCHASE' ? await this.nextMiscPurchaseNo(customer.code) : undefined;
-    const data = {
-      sourceType: input.sourceType,
-      businessNo,
-      feeName: input.sourceType === 'PURCHASE' ? '代购费' : input.sourceType === 'DELIVERY' ? '送货费' : input.feeName.trim(),
-      ownerType,
-      ownerName: canManagePayable ? input.ownerName?.trim() || undefined : undefined,
-      agentId: agent?.id,
-      agentName: input.sourceType === 'PURCHASE'
-        ? '代购'
-        : agent?.name
-          ?? (canManagePayable ? input.agentName?.trim() : undefined)
-          ?? (input.sourceType === 'WAREHOUSE_PICKUP' ? '思远仓库（内部报销）' : undefined),
-      customerId: customer.id,
-      customerCodeSnapshot: customer.code,
-      customerNameSnapshot: customer.name,
-      salespersonSnapshot: customer.salesperson,
-      shipmentId: shipment?.id,
-      systemOrderNoSnapshot: shipment?.systemOrderNo,
-      customerOrderNoSnapshot: shipment?.customerOrderNo,
-      transferNoSnapshot: shipment?.transferNo,
-      cargoSnapshot: shipment ? toAuditJson({ packageCount: shipment.packageCount, actualWeightKg: shipment.actualWeightKg, volumeCbm: shipment.volumeCbm }) : undefined,
-      customerSnapshot: toAuditJson({ id: customer.id, code: customer.code, name: customer.name, salesperson: customer.salesperson }),
-      shipmentSnapshot: shipment ? toAuditJson({ id: shipment.id, systemOrderNo: shipment.systemOrderNo, customerOrderNo: shipment.customerOrderNo, transferNo: shipment.transferNo }) : undefined,
-      agentSnapshot: agent ? toAuditJson({ id: agent.id, name: agent.name, shortName: agent.shortName }) : undefined,
-      occurredAt: new Date(input.occurredAt),
-      businessAmount: payableFirstSource && input.sourceType !== 'TALLY_MISC'
-        ? null
-        : input.businessAmount === undefined ? null : roundMoney(Number(input.businessAmount)),
-      businessCurrency,
-      businessSettlementMethod: input.sourceType === 'PURCHASE' ? undefined : input.businessSettlementMethod?.trim() || undefined,
-      payableAmount: roundMoney(Number(input.sourceType === 'PURCHASE' ? input.businessAmount : canManagePayable ? input.payableAmount ?? 0 : 0)),
-      payableCurrency,
-      payableSettlementMethod: input.sourceType === 'PURCHASE' ? undefined : canManagePayable ? input.payableSettlementMethod?.trim() || undefined : undefined,
-      matchStatus: shipment ? 'MATCHED' : 'UNMATCHED',
-      createdBy: principal.username,
-      createdRole: principal.role,
-      createdSite: principal.site,
-      ownerSiteSnapshot,
-      remark: input.remark?.trim() || undefined,
-      idempotencyKey: input.idempotencyKey
-    };
-    const created = await this.prisma.$transaction(async (tx: any) => {
-      const row = await tx.miscFeeRecord.create({ data, include: this.miscFeeInclude() });
-      await tx.auditLog.create({ data: { actorId: principal.id, action: 'misc_fee.create', target: row.id, after: toAuditJson(data) } });
-      return row;
-    });
-    return this.getMiscFee(principal, created.id);
-  }
-
-  async updateMiscFee(principal: Principal, id: string, input: MiscFeeUpdateInput): Promise<MiscFeeDetail> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'update');
-    if (current.sourceType === 'TALLY_MISC' || current.sourceType === 'PURCHASE') {
-      await this.ensureMiscFeeSourceAccess(principal, current.sourceType);
-    }
-    if (current.confirmationStatus !== 'PENDING' || current.auditStatus !== 'PENDING') throw new BadRequestException('费用已确认或审核，请先撤销下游状态');
-    if (current.voidedAt) throw new BadRequestException('已作废费用不能修改');
-    if (['PENDING', 'APPROVED'].includes(current.hangStatus)) throw new BadRequestException('费用已提交挂账，不能修改金额或应付信息');
-    if (current.sourceType === 'PURCHASE' && input.businessCurrency !== undefined && this.normalizeMiscFeeCurrency(input.businessCurrency) !== 'RMB') {
-      throw new BadRequestException('代购费首版仅支持人民币业务成本');
-    }
-    const miscFeeDataScope = await this.resolveMiscFeeDataScope(principal);
-    const canManageBusiness = current.sourceType === 'TALLY_MISC'
-      ? ['ALL', 'WAREHOUSE_SITE'].includes(miscFeeDataScope)
-      : miscFeeDataScope === 'SALES_OWN';
-    if (!canManageBusiness && (input.businessAmount !== undefined || input.businessCurrency !== undefined || input.businessSettlementMethod !== undefined)) {
-      throw new ForbiddenException(current.sourceType === 'TALLY_MISC'
-        ? '理货杂费业务成本只能由仓库登记维护'
-        : '业务成本只能由负责该客户的业务员通过业务归属确认填写');
-    }
-    const nextBusinessAmount = input.businessAmount === undefined
-      ? current.businessAmount === null ? undefined : Number(current.businessAmount)
-      : Number(input.businessAmount);
-    const canManagePayable = await this.canViewMiscFeePayable(principal, current.sourceType);
-    if (isPickupFeeSourceType(current.sourceType) && !canManagePayable) {
-      throw new ForbiddenException('业务员只能通过“匹配业务成本”填写提货费业务成本，不能修改登记信息');
-    }
-    const nextPayableAmount = !canManagePayable || input.payableAmount === undefined ? Number(current.payableAmount) : Number(input.payableAmount);
-    const canManageOwner = canManagePayable;
-    if ((nextBusinessAmount !== undefined && (!Number.isFinite(nextBusinessAmount) || nextBusinessAmount < 0)) || !Number.isFinite(nextPayableAmount) || nextPayableAmount < 0) throw new BadRequestException('金额必须为非负数');
-    if (current.sourceType === 'TALLY_MISC'
-      && (nextBusinessAmount === undefined || nextBusinessAmount <= 0 || nextPayableAmount <= 0)) {
-      throw new BadRequestException('理货杂费业务成本和应付成本必须大于 0');
-    }
-    const agent = !canManagePayable || input.agentId === undefined
-      ? undefined
-      : input.agentId
-        ? await (this.prisma as any).agent.findUnique({ where: { id: input.agentId } })
-        : null;
-    if (canManagePayable && input.agentId && (!agent || !agent.enabled)) throw new NotFoundException('代理不存在或已停用');
-    if (current.sourceType === 'MARKET_PICKUP' && !(input.agentId === undefined ? current.agentId : agent?.id)) {
-      throw new BadRequestException('市场提货必须选择实际付款对象');
-    }
-    let customerUpdate: Record<string, unknown> = {};
-    let nextCustomerCode = current.customerCodeSnapshot;
-    if ((['TALLY_MISC', 'PURCHASE'].includes(current.sourceType) || isPickupFeeSourceType(current.sourceType)) && input.customerCode !== undefined) {
-      const customer = await (this.prisma as any).customer.findUnique({ where: { code: input.customerCode.trim() } });
-      if (!customer || !customer.enabled) throw new NotFoundException('客户编号不存在或已停用');
-      if (isPickupFeeSourceType(current.sourceType)) await this.ensureMiscFeeCustomerHasActiveSalesperson(customer);
-      if (current.sourceType === 'TALLY_MISC' || current.sourceType === 'WAREHOUSE_PICKUP') await this.ensureWarehouseMiscFeeShipmentSite(principal, customer.code);
-      else await this.ensureMiscFeeCustomerScope(principal, customer.salesperson);
-      customerUpdate = {
-        customerId: customer.id,
-        customerCodeSnapshot: customer.code,
-        customerNameSnapshot: customer.name,
-        salespersonSnapshot: customer.salesperson,
-        customerSnapshot: toAuditJson({ id: customer.id, code: customer.code, name: customer.name, salesperson: customer.salesperson }),
-        ...(current.sourceType === 'PURCHASE' && customer.code !== current.customerCodeSnapshot
-          ? { businessNo: await this.nextMiscPurchaseNo(customer.code) }
-          : {})
-      };
-      nextCustomerCode = customer.code;
-    }
-    const nextOwnerType = isPickupFeeSourceType(current.sourceType)
-      ? this.defaultMiscFeeOwnerType(current.sourceType)
-      : canManageOwner && input.ownerType !== undefined ? input.ownerType : current.ownerType;
-    const ownerSiteSnapshot = await this.resolveMiscFeeOwnerSite(nextOwnerType, nextCustomerCode);
-    await this.prisma.$transaction(async (tx: any) => {
-      const updated = await tx.miscFeeRecord.updateMany({
-        where: {
-        id,
-        version: input.version,
-        confirmationStatus: 'PENDING',
-        auditStatus: 'PENDING',
-        voidedAt: null,
-        hangStatus: { notIn: ['PENDING', 'APPROVED'] }
-      },
-        data: {
-        ...customerUpdate,
-        ...(current.sourceType === 'PURCHASE' ? { feeName: '代购费', agentName: '代购' } : input.feeName !== undefined ? { feeName: input.feeName.trim() } : {}),
-        ...(isPickupFeeSourceType(current.sourceType)
-          ? { ownerType: this.defaultMiscFeeOwnerType(current.sourceType) }
-          : canManageOwner && input.ownerType !== undefined ? { ownerType: input.ownerType } : {}),
-        ownerSiteSnapshot: ownerSiteSnapshot ?? null,
-        ...(canManageOwner && input.ownerName !== undefined ? { ownerName: input.ownerName?.trim() || null } : {}),
-        ...(canManagePayable && input.agentId !== undefined ? {
-          agentId: agent?.id ?? null,
-          agentName: agent?.name ?? input.agentName?.trim() ?? null,
-          agentSnapshot: agent ? toAuditJson({ id: agent.id, name: agent.name, shortName: agent.shortName }) : null
-        } : canManagePayable && input.agentName !== undefined ? { agentName: input.agentName?.trim() || null } : {}),
-        ...(input.occurredAt !== undefined ? { occurredAt: new Date(input.occurredAt) } : {}),
-        ...(canManageBusiness && input.businessAmount !== undefined ? { businessAmount: roundMoney(nextBusinessAmount!) } : {}),
-        ...(current.sourceType === 'PURCHASE' && canManageBusiness && input.businessAmount !== undefined
-          ? { payableAmount: roundMoney(nextBusinessAmount!), payableCurrency: 'RMB' }
-          : {}),
-        ...(canManageBusiness && input.businessCurrency !== undefined ? { businessCurrency: isPickupFeeSourceType(current.sourceType) ? 'RMB' : this.normalizeMiscFeeCurrency(input.businessCurrency) } : {}),
-        ...(canManageBusiness && input.businessSettlementMethod !== undefined ? { businessSettlementMethod: input.businessSettlementMethod?.trim() || null } : {}),
-        ...(current.sourceType !== 'PURCHASE' && canManagePayable && input.payableAmount !== undefined ? { payableAmount: roundMoney(nextPayableAmount) } : {}),
-        ...(canManagePayable && input.payableCurrency !== undefined ? { payableCurrency: isPickupFeeSourceType(current.sourceType) ? 'RMB' : this.normalizeMiscFeeCurrency(input.payableCurrency) } : {}),
-        ...(canManagePayable && input.payableSettlementMethod !== undefined ? { payableSettlementMethod: input.payableSettlementMethod?.trim() || null } : {}),
-        ...(input.remark !== undefined ? { remark: input.remark?.trim() || null } : {}),
-        ...(current.sourceType === 'PURCHASE' ? {
-          feeName: '代购费',
-          agentId: null,
-          agentName: '代购',
-          agentSnapshot: null,
-          businessCurrency: 'RMB',
-          businessSettlementMethod: null,
-          payableAmount: roundMoney(nextBusinessAmount!),
-          payableCurrency: 'RMB',
-          payableSettlementMethod: null
-        } : {}),
-        version: { increment: 1 }
-        }
-      });
-      if (updated.count !== 1) throw new ConflictException('数据已被其他会话修改，请刷新后重试');
-      await tx.auditLog.create({ data: { actorId: principal.id, action: 'misc_fee.update', target: id, before: toAuditJson(current), after: toAuditJson(input) } });
-    });
-    return this.getMiscFee(principal, id);
-  }
-
-  async matchMiscFee(principal: Principal, id: string, input: MiscFeeMatchInput): Promise<MiscFeeDetail> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    if (current.sourceType === 'TALLY_MISC') {
-      throw new BadRequestException('理货杂费只能在业务录单或仓库出库时勾选匹配');
-    }
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'match');
-    if (isPickupFeeSourceType(current.sourceType)) {
-      throw new BadRequestException('提货费必须由负责业务员通过“匹配业务成本”归属运单，不能使用通用匹配');
-    }
-    if (current.voidedAt) throw new BadRequestException('已作废费用不能匹配');
-    if (current.sourceType === 'KUAYUE' && (
-      current.archivedAt
-      || current.confirmationStatus !== 'PENDING'
-      || current.auditStatus !== 'PENDING'
-      || current.hangStatus !== 'NONE'
-      || current.payablePaymentApplication
-      || current.hangRequests?.length
-    )) {
-      throw new BadRequestException('跨越费用进入确认、审核、挂账或付款流程后不能改配运单');
-    }
-    const shipment = await (this.prisma as any).shipment.findFirst({ where: { id: input.shipmentId, customerId: current.customerId, deletedAt: null } });
-    if (!shipment) throw new BadRequestException('只能匹配同一客户的有效订单');
-    await this.ensureWarehouseMiscFeeShipmentSite(principal, current.customerCodeSnapshot);
-    await (this.prisma as any).$transaction(async (tx: any) => {
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: {
-          id,
-          version: input.version,
-          voidedAt: null,
-          ...(current.sourceType === 'KUAYUE' ? {
-            archivedAt: null,
-            confirmationStatus: 'PENDING',
-            auditStatus: 'PENDING',
-            hangStatus: 'NONE'
-          } : {})
-        },
-        data: {
-          shipmentId: shipment.id,
-          systemOrderNoSnapshot: shipment.systemOrderNo,
-          customerOrderNoSnapshot: shipment.customerOrderNo,
-          transferNoSnapshot: shipment.transferNo,
-          shipmentSnapshot: toAuditJson({ id: shipment.id, systemOrderNo: shipment.systemOrderNo, customerOrderNo: shipment.customerOrderNo, transferNo: shipment.transferNo }),
-          cargoSnapshot: toAuditJson({ packageCount: shipment.packageCount, actualWeightKg: shipment.actualWeightKg, volumeCbm: shipment.volumeCbm }),
-          matchStatus: 'MATCHED',
-          version: { increment: 1 }
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('数据已被其他会话修改，请刷新后重试');
-      await tx.miscFeeMatchHistory.create({ data: { miscFeeRecordId: id, shipmentId: shipment.id, fromShipmentId: current.shipmentId, action: current.shipmentId ? 'REMATCH' : 'MATCH', reason: input.reason, actor: principal.username } });
-      const refreshed = await tx.miscFeeRecord.findUnique({ where: { id } });
-      await this.ensureMiscFeeOrderFinanceItems(tx, refreshed);
-      await tx.auditLog.create({ data: { actorId: principal.id, action: 'misc_fee.match', target: id, before: toAuditJson({ shipmentId: current.shipmentId }), after: toAuditJson({ shipmentId: shipment.id, reason: input.reason }) } });
-    });
-    return this.getMiscFee(principal, id);
-  }
-
-  async assignMiscFeeBusinessCost(
-    principal: Principal,
-    id: string,
-    input: MiscFeeBusinessAssignmentInput
-  ): Promise<MiscFeeDetail> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'match');
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'confirm');
-    if (await this.resolveMiscFeeDataScope(principal) !== 'SALES_OWN') {
-      throw new ForbiddenException('只有负责该客户的业务员可以确认业务归属');
-    }
-    if (!miscFeePayableFirstSourceTypes.has(current.sourceType)) {
-      throw new BadRequestException('该费用不使用业务成本后补流程');
-    }
-    if (current.sourceType === 'TALLY_MISC') {
-      throw new BadRequestException('理货杂费金额由仓库登记，业务员只需在录单时勾选匹配');
-    }
-    const customer = await (this.prisma as any).customer.findUnique({ where: { id: current.customerId } });
-    if (!customer || !customer.enabled) throw new BadRequestException('客户不存在或已停用，不能确认业务归属');
-    await this.ensureMiscFeeCustomerHasActiveSalesperson(customer);
-    await this.ensureMiscFeeCustomerScope(principal, customer.salesperson);
-    if (current.voidedAt) throw new BadRequestException('已作废费用不能确认业务归属');
-    if (current.hangStatus === 'PENDING') throw new BadRequestException('挂账正在审核，请等待财务处理后再确认业务归属');
-    const businessAmount = Number(input.businessAmount);
-    if (!Number.isFinite(businessAmount) || businessAmount < 0) throw new BadRequestException('业务成本必须为非负数');
-    const businessCurrency = await this.resolveMiscFeeCurrency(
-      input.businessSettlementMethod,
-      input.businessCurrency,
-      isPickupFeeSourceType(current.sourceType)
-    );
-    if (current.confirmationStatus === 'CONFIRMED') {
-      const sameAssignment = current.shipmentId === input.shipmentId
-        && roundMoney(Number(current.businessAmount)) === roundMoney(businessAmount)
-        && current.businessCurrency === businessCurrency
-        && (current.businessSettlementMethod ?? '') === (input.businessSettlementMethod?.trim() ?? '');
-      if (sameAssignment) return this.getMiscFee(principal, id);
-      throw new ConflictException('业务成本已由其他会话归属，请刷新后查看');
-    }
-    const shipment = await (this.prisma as any).shipment.findFirst({
-      where: { id: input.shipmentId, customerId: current.customerId, deletedAt: null }
-    });
-    if (!shipment) throw new BadRequestException('只能匹配同一客户的有效订单');
-    const confirmedAt = new Date();
-    const snapshot = await this.miscFeeRmbSnapshot(businessAmount, businessCurrency, confirmedAt);
-    await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: { id, version: input.version, confirmationStatus: 'PENDING', auditStatus: current.auditStatus, voidedAt: null },
-        data: {
-          shipmentId: shipment.id,
-          systemOrderNoSnapshot: shipment.systemOrderNo,
-          customerOrderNoSnapshot: shipment.customerOrderNo,
-          transferNoSnapshot: shipment.transferNo,
-          shipmentSnapshot: toAuditJson({ id: shipment.id, systemOrderNo: shipment.systemOrderNo, customerOrderNo: shipment.customerOrderNo, transferNo: shipment.transferNo }),
-          cargoSnapshot: toAuditJson({ packageCount: shipment.packageCount, actualWeightKg: shipment.actualWeightKg, volumeCbm: shipment.volumeCbm }),
-          salespersonSnapshot: customer.salesperson,
-          customerSnapshot: toAuditJson({ id: customer.id, code: customer.code, name: customer.name, salesperson: customer.salesperson }),
-          matchStatus: 'MATCHED',
-          businessAmount: roundMoney(businessAmount),
-          businessCurrency,
-          businessSettlementMethod: input.businessSettlementMethod?.trim() || null,
-          businessExchangeRate: snapshot.rate,
-          businessRmbAmount: snapshot.rmbAmount,
-          confirmationStatus: 'CONFIRMED',
-          confirmedBy: principal.username,
-          confirmedAt,
-          profitEligibleAt: current.auditStatus === 'APPROVED' ? confirmedAt : null,
-          version: { increment: 1 }
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('该费用已被其他会话处理，请刷新');
-      await tx.payablePaymentApplication.updateMany({
-        where: { miscFeeRecordId: id },
-        data: { shipmentId: shipment.id }
-      });
-      await tx.paymentApplicationItem.updateMany({
-        where: { miscFeeRecordId: id },
-        data: { shipmentId: shipment.id }
-      });
-      await tx.miscFeeMatchHistory.create({
-        data: {
-          miscFeeRecordId: id,
-          shipmentId: shipment.id,
-          fromShipmentId: current.shipmentId,
-          action: current.shipmentId ? 'REMATCH' : 'MATCH',
-          reason: input.reason?.trim() || '业务归属确认',
-          actor: principal.username
-        }
-      });
-      const refreshed = await tx.miscFeeRecord.findUnique({ where: { id } });
-      await this.ensureMiscFeeOrderFinanceItems(tx, refreshed);
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'misc_fee.business_assignment',
-          target: id,
-          before: toAuditJson({ shipmentId: current.shipmentId, businessAmount: current.businessAmount, confirmationStatus: current.confirmationStatus }),
-          after: toAuditJson({ shipmentId: shipment.id, businessAmount: roundMoney(businessAmount), businessCurrency, businessExchangeRate: snapshot.rate, businessRmbAmount: snapshot.rmbAmount })
-        }
-      });
-    });
-    return this.getMiscFee(principal, id);
-  }
-
-  async confirmMiscFee(principal: Principal, id: string, input: MiscFeeActionInput): Promise<MiscFeeDetail> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'confirm');
-    if (current.sourceType === 'KUAYUE') throw new BadRequestException('跨越账单无需业务确认，由财务审核统一锁定业务成本和应付成本');
-    if (current.sourceType === 'TALLY_MISC') {
-      await this.ensureMiscFeeSourceAccess(principal, 'TALLY_MISC');
-      if (current.matchStatus !== 'UNMATCHED' || current.shipmentId) throw new BadRequestException('理货杂费必须先由仓库确认，再进入订单匹配');
-      if (!Number.isFinite(Number(current.businessAmount)) || Number(current.businessAmount) <= 0
-        || !Number.isFinite(Number(current.payableAmount)) || Number(current.payableAmount) <= 0) {
-        throw new BadRequestException('理货杂费业务成本和应付成本必须大于 0');
-      }
-    }
-    if (isPickupFeeSourceType(current.sourceType)) throw new BadRequestException('提货费的业务确认必须通过“匹配业务成本”一次完成');
-    if (current.voidedAt) throw new BadRequestException('已作废费用不能确认');
-    if (current.confirmationStatus === 'CONFIRMED') return this.getMiscFee(principal, id);
-    if (current.businessAmount === null) throw new BadRequestException('请先填写并匹配业务成本');
-    const confirmedAt = new Date();
-    const { rate, rmbAmount } = await this.miscFeeRmbSnapshot(Number(current.businessAmount), current.businessCurrency, confirmedAt);
-    await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: { id, version: input.version, confirmationStatus: 'PENDING', auditStatus: current.auditStatus, voidedAt: null },
-        data: {
-          confirmationStatus: 'CONFIRMED',
-          confirmedBy: principal.username,
-          confirmedAt,
-          businessExchangeRate: rate,
-          businessRmbAmount: rmbAmount,
-          profitEligibleAt: current.auditStatus === 'APPROVED' ? confirmedAt : null,
-          version: { increment: 1 }
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('数据已被其他会话确认，请刷新');
-      const refreshed = await tx.miscFeeRecord.findUnique({ where: { id } });
-      await this.ensureMiscFeeOrderFinanceItems(tx, refreshed);
-      await tx.auditLog.create({ data: { actorId: principal.id, action: 'misc_fee.confirm', target: id, after: toAuditJson({ businessExchangeRate: rate, businessRmbAmount: rmbAmount }) } });
-    });
-    return this.getMiscFee(principal, id);
-  }
-
-  async auditMiscFee(principal: Principal, id: string, input: MiscFeeActionInput): Promise<MiscFeeDetail> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'audit');
-    if (current.voidedAt) throw new BadRequestException('已作废费用不能审核');
-    if (!Number.isFinite(Number(current.payableAmount)) || Number(current.payableAmount) < 0) throw new BadRequestException('应付成本必须为非负数');
-    if (current.auditStatus === 'APPROVED') return this.getMiscFee(principal, id);
-    if (current.sourceType === 'TALLY_MISC') {
-      if (current.confirmationStatus !== 'CONFIRMED') throw new BadRequestException('理货杂费尚未完成仓库确认，不能财务审核');
-      if (current.matchStatus !== 'MATCHED' || !current.shipmentId) throw new BadRequestException('理货杂费尚未匹配运单，不能财务审核');
-      if (!Number.isFinite(Number(current.businessAmount)) || Number(current.businessAmount) <= 0
-        || !Number.isFinite(Number(current.payableAmount)) || Number(current.payableAmount) <= 0) {
-        throw new BadRequestException('理货杂费业务成本和应付成本必须大于 0');
-      }
-    }
-    if (isPickupFeeSourceType(current.sourceType) && !canAuditPickupFee({
-      ...current,
-      businessAmount: current.businessAmount === null ? null : Number(current.businessAmount),
-      payableAmount: Number(current.payableAmount)
-    })) {
-      if (current.hangStatus === 'PENDING') {
-        throw new BadRequestException('该提货费已提交挂账，请在挂账审核中一次完成应付审核并生成待付款');
-      }
-      throw new BadRequestException('提货费必须先由负责业务员匹配运单并填写业务成本，才能进行财务审核');
-    }
-    if (current.sourceType === 'KUAYUE') {
-      if (current.hangStatus === 'PENDING') {
-        throw new BadRequestException('该跨越费用已提交挂账，请在挂账审核中一次完成审核并生成待付款');
-      }
-      if (!Number.isFinite(Number(current.businessAmount)) || Number(current.businessAmount) < 0) {
-        throw new BadRequestException('跨越业务成本必须为非负数');
-      }
-      const reviewedAt = new Date();
-      const [businessSnapshot, payableSnapshot] = await Promise.all([
-        this.miscFeeRmbSnapshot(Number(current.businessAmount), current.businessCurrency, reviewedAt),
-        this.miscFeeRmbSnapshot(Number(current.payableAmount), current.payableCurrency, reviewedAt)
-      ]);
-      await this.withMiscFeeFinancialLock(async (tx: any) => {
-        const changed = await tx.miscFeeRecord.updateMany({
-          where: { id, version: input.version, confirmationStatus: { in: ['PENDING', 'CONFIRMED'] }, auditStatus: 'PENDING', voidedAt: null },
-          data: {
-            confirmationStatus: 'CONFIRMED',
-            confirmedBy: principal.username,
-            confirmedAt: reviewedAt,
-            businessExchangeRate: businessSnapshot.rate,
-            businessRmbAmount: businessSnapshot.rmbAmount,
-            auditStatus: 'APPROVED',
-            reviewedBy: principal.username,
-            reviewedAt,
-            payableExchangeRate: payableSnapshot.rate,
-            payableRmbAmount: payableSnapshot.rmbAmount,
-            profitEligibleAt: reviewedAt,
-            version: { increment: 1 }
-          }
-        });
-        if (changed.count !== 1) throw new ConflictException('跨越费用已被其他会话审核，请刷新');
-        const refreshed = await tx.miscFeeRecord.findUnique({ where: { id } });
-        await this.ensureMiscFeeOrderFinanceItems(tx, refreshed);
-        await tx.auditLog.create({
-          data: {
-            actorId: principal.id,
-            action: 'misc_fee.kuayue.audit',
-            target: id,
-            after: toAuditJson({
-              businessAmount: Number(current.businessAmount),
-              payableAmount: Number(current.payableAmount),
-              shipmentId: current.shipmentId,
-              reason: input.reason
-            })
-          }
-        });
-      });
-      return this.getMiscFee(principal, id);
-    }
-    const reviewedAt = new Date();
-    const { rate, rmbAmount } = await this.miscFeeRmbSnapshot(Number(current.payableAmount), current.payableCurrency, reviewedAt);
-    await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: { id, version: input.version, confirmationStatus: current.confirmationStatus, auditStatus: 'PENDING', voidedAt: null },
-        data: {
-          auditStatus: 'APPROVED',
-          reviewedBy: principal.username,
-          reviewedAt,
-          payableExchangeRate: rate,
-          payableRmbAmount: rmbAmount,
-          profitEligibleAt: current.confirmationStatus === 'CONFIRMED' ? reviewedAt : null,
-          version: { increment: 1 }
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('数据已被其他会话审核，请刷新');
-      const refreshed = await tx.miscFeeRecord.findUnique({ where: { id } });
-      await this.ensureMiscFeeOrderFinanceItems(tx, refreshed);
-      await tx.auditLog.create({ data: { actorId: principal.id, action: 'misc_fee.audit', target: id, after: toAuditJson({ payableExchangeRate: rate, payableRmbAmount: rmbAmount }) } });
-    });
-    return this.getMiscFee(principal, id);
-  }
-
-  async directPayAndArchiveKuayueMiscFee(
-    principal: Principal,
-    id: string,
-    input: MiscFeeActionInput
-  ): Promise<MiscFeeDetail> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    await this.ensurePayablePermission(principal, 'finance:payable:paid-confirm');
-    const reason = input.reason?.trim();
-    if (!reason) throw new BadRequestException('直接标记已付必须填写付款说明');
-    if (reason.length > 500) throw new BadRequestException('付款说明不能超过 500 个字符');
-    if (current.sourceType !== 'KUAYUE') throw new BadRequestException('只有跨越账单可以直接标记已付并归档');
-    if (current.voidedAt) throw new BadRequestException('已作废费用不能标记已付');
-    if (current.archivedAt) throw new BadRequestException('该跨越费用已经归档');
-    if (current.confirmationStatus !== 'CONFIRMED' || current.auditStatus !== 'APPROVED') {
-      throw new BadRequestException('只有已完成财务审核的跨越费用可以直接标记已付');
-    }
-    if (current.hangStatus !== 'NONE') throw new BadRequestException('已发起过挂账的跨越费用必须走正常付款流程');
-    if (current.payablePaymentApplication) throw new BadRequestException('该跨越费用曾进入付款链路，不能直接标记已付');
-    const paidAt = new Date();
-    await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const pending = await tx.payablePaymentApplication.findUnique({ where: { miscFeeRecordId: id } });
-      if (pending) throw new ConflictException('该跨越费用曾进入付款链路，请刷新后核对');
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: {
-          id,
-          version: input.version,
-          sourceType: 'KUAYUE',
-          confirmationStatus: 'CONFIRMED',
-          auditStatus: 'APPROVED',
-          hangStatus: 'NONE',
-          archivedAt: null,
-          voidedAt: null
-        },
-        data: { archivedAt: paidAt, version: { increment: 1 } }
-      });
-      if (changed.count !== 1) throw new ConflictException('费用状态已变化，请刷新后重新核对');
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'misc_fee.kuayue.direct_paid_archive',
-          target: id,
-          before: toAuditJson({
-            auditStatus: current.auditStatus,
-            hangStatus: current.hangStatus,
-            archivedAt: current.archivedAt
-          }),
-          after: toAuditJson({
-            paidAt,
-            paidBy: principal.username,
-            amount: Number(current.payableAmount),
-            currency: current.payableCurrency,
-            reason,
-            paymentRoute: 'DIRECT_PAID_ARCHIVE'
-          })
-        }
-      });
-    });
-    return this.getMiscFee(principal, id);
-  }
-
-  async reverseAuditMiscFee(principal: Principal, id: string, input: MiscFeeActionInput): Promise<MiscFeeDetail> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    const pickupSource = isPickupFeeSourceType(current.sourceType);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'reverse-audit');
-    if (current.archivedAt) throw new BadRequestException('已付款归档费用不能反审核');
-    if (current.auditStatus !== 'APPROVED') throw new BadRequestException('只有已审核费用可以反审核');
-    const reason = input.reason?.trim();
-    if (!reason) throw new BadRequestException('反审核原因不能为空');
-    if (reason.length > 500) throw new BadRequestException('反审核原因不能超过 500 个字符');
-    const pending = current.payablePaymentApplication;
-    if (pending?.paymentApplicationItem || (pending && ['APPLIED', 'PAID'].includes(pending.status))) {
-      throw new BadRequestException('该费用已进入付款申请或已付款，请先撤销下游付款状态');
-    }
-    await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const lockedPending = await tx.payablePaymentApplication.findUnique({ where: { miscFeeRecordId: id }, include: { paymentApplicationItem: true } });
-      if (lockedPending?.paymentApplicationItem || (lockedPending && ['APPLIED', 'PAID'].includes(lockedPending.status))) {
-        throw new BadRequestException('该费用已进入付款申请或已付款，请先撤销下游付款状态');
-      }
-      const settlementLine = await tx.profitSettlementLine.findFirst({ where: { miscFeeRecordId: id } });
-      if (settlementLine) throw new BadRequestException('该费用已进入利润结算单，请先反审核结算单');
-      const reversedAt = new Date();
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: { id, version: input.version, auditStatus: 'APPROVED', archivedAt: null },
-        data: {
-          auditStatus: 'PENDING',
-          reviewedBy: null,
-          reviewedAt: null,
-          payableExchangeRate: null,
-          payableRmbAmount: null,
-          profitEligibleAt: null,
-          hangStatus: 'NONE',
-          ...(current.sourceType === 'KUAYUE' || pickupSource ? {
-            confirmationStatus: 'PENDING',
-            confirmedBy: null,
-            confirmedAt: null,
-            businessExchangeRate: null,
-            businessRmbAmount: null
-          } : {}),
-          version: { increment: 1 }
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('数据已被其他会话修改，请刷新');
-      await tx.shipmentFinanceItem.updateMany({
-        where: {
-          miscFeeRecordId: id,
-          miscFeeCostRole: current.sourceType === 'KUAYUE' || pickupSource ? { in: ['BUSINESS_COST', 'PAYABLE'] } : 'PAYABLE',
-          voided: false
-        },
-        data: pickupSource
-          ? { voided: true, voidedAt: reversedAt, reconciliationStatus: 'VOIDED', locked: true, reviewedBy: null, reviewedAt: null, profitExchangeRate: null, profitRmbAmount: null, profitEffectiveAt: null }
-          : { reconciliationStatus: 'PENDING', locked: false, reviewedBy: null, reviewedAt: null, profitExchangeRate: null, profitRmbAmount: null, profitEffectiveAt: null }
-      });
-      await tx.payablePaymentApplication.updateMany({ where: { miscFeeRecordId: id, status: { not: 'PAID' } }, data: { status: 'INVALIDATED', applicationStatus: 'INVALIDATED', invalidatedAt: reversedAt } });
-      await tx.miscFeeHangRequest.updateMany({
-        where: { miscFeeRecordId: id, status: { in: ['PENDING', 'APPROVED'] } },
-        data: { status: 'WITHDRAWN', withdrawnBy: principal.username, withdrawnAt: reversedAt, version: { increment: 1 } }
-      });
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'misc_fee.reverse_audit',
-          target: id,
-          before: toAuditJson({
-            confirmationStatus: current.confirmationStatus,
-            auditStatus: current.auditStatus,
-            hangStatus: current.hangStatus,
-            businessAmount: current.sourceType === 'KUAYUE' ? Number(current.businessAmount) : undefined,
-            payableAmount: Number(current.payableAmount)
-          }),
-          after: toAuditJson({
-            confirmationStatus: current.sourceType === 'KUAYUE' || pickupSource ? 'PENDING' : current.confirmationStatus,
-            auditStatus: 'PENDING',
-            hangStatus: 'NONE',
-            reason
-          })
-        }
-      });
-    });
-    return this.getMiscFee(principal, id);
-  }
-
-  async voidMiscFee(principal: Principal, id: string, input: MiscFeeVoidInput): Promise<MiscFeeDetail> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'void');
-    if (current.sourceType === 'TALLY_MISC') {
-      await this.ensureMiscFeeSourceAccess(principal, 'TALLY_MISC');
-      if (current.matchStatus !== 'UNMATCHED' || current.confirmationStatus !== 'PENDING' || current.auditStatus !== 'PENDING') {
-        throw new BadRequestException('已匹配、已确认或已审核的理货杂费不能直接删除，请先撤销下游状态');
-      }
-    }
-    if (current.sourceType === 'PURCHASE') {
-      await this.ensureMiscFeeSourceAccess(principal, 'PURCHASE');
-      if (current.confirmationStatus !== 'PENDING' || current.auditStatus !== 'PENDING' || current.hangStatus !== 'NONE') {
-        throw new BadRequestException('代购申请挂账后不能删除');
-      }
-    }
-    if (!input.reason?.trim()) throw new BadRequestException('作废原因不能为空');
-    if (current.sourceType === 'KUAYUE' && current.auditStatus === 'APPROVED') {
-      throw new BadRequestException('已审核跨越费用已锁定，不能作废');
-    }
-    if (current.payablePaymentApplication && current.payablePaymentApplication.status !== 'INVALIDATED') throw new BadRequestException('已进入待付款或付款链路的费用不能直接作废');
-    if (['PENDING', 'APPROVED'].includes(current.hangStatus)) throw new BadRequestException('该费用存在有效挂账申请，请先撤回或处理挂账');
-    await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const lockedPending = await tx.payablePaymentApplication.findUnique({ where: { miscFeeRecordId: id } });
-      if (lockedPending && lockedPending.status !== 'INVALIDATED') {
-        throw new BadRequestException('已进入待付款或付款链路的费用不能直接作废');
-      }
-      const settlementLine = await tx.profitSettlementLine.findFirst({ where: { miscFeeRecordId: id } });
-      if (settlementLine) throw new BadRequestException('该费用已进入利润结算单，不能直接作废');
-      const voidedAt = new Date();
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: { id, version: input.version, voidedAt: null, hangStatus: { notIn: ['PENDING', 'APPROVED'] } },
-        data: { voidedAt, voidedBy: principal.username, voidReason: input.reason.trim(), version: { increment: 1 } }
-      });
-      if (changed.count !== 1) throw new ConflictException('数据已被其他会话修改或已进入挂账，请刷新');
-      await tx.shipmentFinanceItem.updateMany({
-        where: { miscFeeRecordId: id, voided: false },
-        data: { voided: true, voidedAt, locked: true, reconciliationStatus: 'VOIDED' }
-      });
-      await tx.auditLog.create({ data: { actorId: principal.id, action: 'misc_fee.void', target: id, before: toAuditJson(current), after: toAuditJson({ reason: input.reason }) } });
-    });
-    return this.getMiscFee(principal, id);
-  }
-
-  async createMiscFeeHangRequest(principal: Principal, id: string, input: MiscFeeHangRequestInput): Promise<MiscFeeHangRequestSummary> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(current.sourceType), 'hang');
-    if (current.sourceType !== 'KUAYUE' && !await this.canViewMiscFeePayable(principal, current.sourceType)) {
-      throw new ForbiddenException('只有可查看真实应付的岗位可以发起挂账');
-    }
-    if (current.voidedAt) throw new BadRequestException('已作废费用不能挂账');
-    if (!Number.isFinite(Number(current.payableAmount)) || Number(current.payableAmount) < 0) throw new BadRequestException('应付成本必须为非负数');
-    if (current.sourceType === 'TALLY_MISC'
-      && (current.confirmationStatus !== 'CONFIRMED' || current.matchStatus !== 'MATCHED' || !current.shipmentId || current.auditStatus !== 'APPROVED')) {
-      throw new BadRequestException('理货杂费必须完成仓库确认、订单匹配和财务审核后才能挂账');
-    }
-    if (current.sourceType === 'KUAYUE') {
-      const request = await this.withMiscFeeFinancialLock(async (tx: any) => {
-        const existing = await tx.miscFeeHangRequest.findFirst({
-          where: { miscFeeRecordId: id, status: { in: ['PENDING', 'APPROVED'] } },
-          include: this.miscFeeHangInclude()
-        });
-        if (existing) return existing;
-        const changed = await tx.miscFeeRecord.updateMany({
-          where: {
-            id,
-            version: input.version,
-            sourceType: 'KUAYUE',
-            auditStatus: { in: ['PENDING', 'APPROVED'] },
-            hangStatus: { in: ['NONE', 'REJECTED', 'WITHDRAWN'] },
-            archivedAt: null,
-            voidedAt: null
-          },
-          data: { hangStatus: 'PENDING', version: { increment: 1 } }
-        });
-        if (changed.count !== 1) throw new ConflictException('该跨越费用已挂账或数据已被其他会话更新');
-        const created = await tx.miscFeeHangRequest.create({
-          data: {
-            miscFeeRecordId: id,
-            status: 'PENDING',
-            requestedBy: principal.username,
-            remark: input.remark?.trim() || undefined,
-            idempotencyKey: input.idempotencyKey,
-            ...(input.attachment?.fileName ? {
-              attachments: {
-                create: [{
-                  miscFeeRecordId: id,
-                  purpose: 'HANG_VOUCHER',
-                  fileName: input.attachment.fileName,
-                  mimeType: input.attachment.mimeType,
-                  sizeBytes: input.attachment.sizeBytes,
-                  url: input.attachment.url,
-                  uploadedBy: principal.username
-                }]
-              }
-            } : {})
-          },
-          include: this.miscFeeHangInclude()
-        });
-        await tx.auditLog.create({
-          data: {
-            actorId: principal.id,
-            action: 'misc_fee.kuayue.hang.submit',
-            target: created.id,
-            after: toAuditJson({ miscFeeRecordId: id, remark: input.remark })
-          }
-        });
-        return created;
-      });
-      return this.toMiscFeeHangSummary(principal, request);
-    }
-    const payableFirstSource = miscFeePayableFirstSourceTypes.has(current.sourceType) && current.sourceType !== 'TALLY_MISC';
-    if (!payableFirstSource && current.auditStatus !== 'APPROVED') {
-      throw new BadRequestException('该费用需先完成应付审核再挂账');
-    }
-    this.normalizePaymentCurrency(current.payableCurrency);
-    const request = await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const existing = await tx.miscFeeHangRequest.findFirst({
-        where: { miscFeeRecordId: id, status: { in: ['PENDING', 'APPROVED'] } },
-        include: this.miscFeeHangInclude()
-      });
-      if (existing) return existing;
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: {
-          id,
-          version: input.version,
-          voidedAt: null,
-          hangStatus: { in: ['NONE', 'REJECTED', 'WITHDRAWN'] },
-          auditStatus: payableFirstSource ? { in: ['PENDING', 'APPROVED'] } : 'APPROVED'
-        },
-        data: {
-          hangStatus: 'PENDING',
-          version: { increment: 1 }
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('已有有效挂账或数据已被其他会话更新');
-      const created = await tx.miscFeeHangRequest.create({
-        data: {
-          miscFeeRecordId: id,
-          status: 'PENDING',
-          requestedBy: principal.username,
-          remark: input.remark?.trim() || undefined,
-          idempotencyKey: input.idempotencyKey,
-          ...(input.attachment?.fileName ? { attachments: { create: [{ miscFeeRecordId: id, purpose: 'HANG_VOUCHER', fileName: input.attachment.fileName, mimeType: input.attachment.mimeType, sizeBytes: input.attachment.sizeBytes, url: input.attachment.url, uploadedBy: principal.username }] } } : {})
-        },
-        include: this.miscFeeHangInclude()
-      });
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'misc_fee.hang.submit',
-          target: created.id,
-          after: toAuditJson({ miscFeeRecordId: id, remark: input.remark })
-        }
-      });
-      return created;
-    });
-    return this.toMiscFeeHangSummary(principal, request);
-  }
-
-  async createMiscFeeHangRequestWithFile(
-    principal: Principal,
-    id: string,
-    input: MiscFeeHangRequestInput,
-    file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
-    purchase: boolean
-  ): Promise<MiscFeeHangRequestSummary> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    const section = this.miscFeePermissionSection(current.sourceType);
-    if (purchase && current.sourceType !== 'PURCHASE') throw new BadRequestException('只有代购费可以申请代购付款');
-    if (file) await this.ensureMiscFeePermission(principal, section, 'attachment-upload');
-    const existing = await (this.prisma as any).miscFeeHangRequest.findFirst({
-      where: { miscFeeRecordId: id, status: { in: ['PENDING', 'APPROVED'] } },
-      include: this.miscFeeHangInclude()
-    });
-    if (existing) return this.toMiscFeeHangSummary(principal, existing);
-    let storedPath: string | undefined;
-    let storedUrl: string | undefined;
-    let attachment: MiscFeeHangRequestInput['attachment'];
-    if (file) {
-      const extension = extname(file.originalname).toLowerCase();
-      const allowedExtensions = new Set(['.pdf', '.png', '.jpg', '.jpeg', '.webp', '.xls', '.xlsx']);
-      if (!allowedExtensions.has(extension)) throw new BadRequestException('凭证仅支持 PDF、图片或 Excel 文件');
-      if (!file.buffer.length || file.buffer.length > 10 * 1024 * 1024) throw new BadRequestException('凭证文件为空或超过 10MB');
-      const uploadDir = resolveUploadDirectory('misc-fee-attachments');
-      await mkdir(uploadDir.dir, { recursive: true });
-      const storedFileName = `${new Date().toISOString().slice(0, 10).replaceAll('-', '')}-${randomUUID()}${extension}`;
-      storedPath = join(uploadDir.dir, storedFileName);
-      storedUrl = `/api/uploads/misc-fee-attachments/${storedFileName}`;
-      await writeFile(storedPath, file.buffer);
-      attachment = {
-        purpose: 'HANG_VOUCHER',
-        fileName: file.originalname,
-        mimeType: file.mimetype,
-        sizeBytes: file.size,
-        url: storedUrl
-      };
-    }
-    try {
-      const nextInput = { ...input, attachment };
-      const result = purchase
-        ? await this.applyPurchasePayment(principal, id, nextInput)
-        : await this.createMiscFeeHangRequest(principal, id, nextInput);
-      if (storedPath && storedUrl) {
-        const linked = await (this.prisma as any).miscFeeAttachment.count({ where: { url: storedUrl } });
-        if (!linked) await unlink(storedPath).catch(() => undefined);
-      }
-      return result;
-    } catch (error) {
-      if (storedPath) await unlink(storedPath).catch(() => undefined);
-      throw error;
-    }
-  }
-
-  async applyPurchasePayment(principal: Principal, id: string, input: MiscFeeHangRequestInput): Promise<MiscFeeHangRequestSummary> {
-    const current = await this.findVisibleMiscFee(principal, id);
-    if (current.sourceType !== 'PURCHASE') throw new BadRequestException('只有代购费可以使用申请付款');
-    await this.ensureMiscFeeSourceAccess(principal, 'PURCHASE');
-    await this.ensureMiscFeePermission(principal, 'purchase', 'confirm');
-    await this.ensureMiscFeePermission(principal, 'purchase', 'hang');
-    if (current.voidedAt) throw new BadRequestException('已作废费用不能申请付款');
-    const existing = await (this.prisma as any).miscFeeHangRequest.findFirst({
-      where: { miscFeeRecordId: id, status: { in: ['PENDING', 'APPROVED'] } },
-      include: this.miscFeeHangInclude()
-    });
-    if (existing) return this.toMiscFeeHangSummary(principal, existing);
-    const businessSnapshot = current.confirmationStatus === 'CONFIRMED'
-      ? undefined
-      : await this.miscFeeRmbSnapshot(Number(current.businessAmount), current.businessCurrency, new Date());
-    const request = await (this.prisma as any).$transaction(async (tx: any) => {
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: {
-          id,
-          version: input.version,
-          sourceType: 'PURCHASE',
-          confirmationStatus: { in: ['PENDING', 'CONFIRMED'] },
-          auditStatus: 'PENDING',
-          hangStatus: { in: ['NONE', 'REJECTED', 'WITHDRAWN'] },
-          voidedAt: null
-        },
-        data: {
-          ...(businessSnapshot ? {
-            confirmationStatus: 'CONFIRMED',
-            confirmedBy: principal.username,
-            confirmedAt: new Date(),
-            businessExchangeRate: businessSnapshot.rate,
-            businessRmbAmount: businessSnapshot.rmbAmount
-          } : {}),
-          hangStatus: 'PENDING',
-          version: { increment: 1 }
-        }
-      });
-      if (changed.count !== 1) throw new ConflictException('该代购费已被其他会话处理，请刷新');
-      const created = await tx.miscFeeHangRequest.create({
-        data: {
-          miscFeeRecordId: id,
-          status: 'PENDING',
-          requestedBy: principal.username,
-          remark: input.remark?.trim() || undefined,
-          idempotencyKey: input.idempotencyKey,
-          ...(input.attachment?.fileName ? {
-            attachments: {
-              create: [{
-                miscFeeRecordId: id,
-                purpose: 'HANG_VOUCHER',
-                fileName: input.attachment.fileName,
-                mimeType: input.attachment.mimeType,
-                sizeBytes: input.attachment.sizeBytes,
-                url: input.attachment.url,
-                uploadedBy: principal.username
-              }]
-            }
-          } : {})
-        },
-        include: this.miscFeeHangInclude()
-      });
-      const refreshed = await tx.miscFeeRecord.findUnique({ where: { id } });
-      await this.ensureMiscFeeOrderFinanceItems(tx, refreshed);
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'misc_fee.purchase.payment_request',
-          target: created.id,
-          after: toAuditJson({ miscFeeRecordId: id, businessConfirmed: Boolean(businessSnapshot), remark: input.remark })
-        }
-      });
-      return created;
-    });
-    return this.toMiscFeeHangSummary(principal, request);
-  }
-
-  async getMiscFeeHangRequests(principal: Principal, query: MiscFeeHangQuery = {}): Promise<MiscFeeHangListResponse> {
-    if (!await this.hasAnyPermission(principal.role, miscFeeHangReadPermissions)) throw new ForbiddenException('无权查看挂账');
-    const canReadAllHang = principal.role === 'ADMIN' || await this.hasPermission(principal.role, 'misc-fee:hang:read');
-    if (query.sourceType && !canReadAllHang) {
-      await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(query.sourceType), 'hang');
-    }
-    const page = Math.max(1, Number(query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
-    const feeWhere = await this.miscFeeScopeWhere(principal, { sourceType: query.sourceType, customerCode: query.customerCode });
-    if (!query.sourceType && !canReadAllHang) {
-      const allowedSourceTypes = await this.allowedMiscFeeSourceTypes(principal, 'hang');
-      if (!allowedSourceTypes.length) throw new ForbiddenException('无权查看挂账');
-      feeWhere.sourceType = { in: allowedSourceTypes };
-    }
-    const where = { ...(query.status && query.status !== 'ALL' ? { status: query.status } : {}), miscFeeRecord: feeWhere };
-    const [rows, totalItems] = await Promise.all([
-      (this.prisma as any).miscFeeHangRequest.findMany({ where, include: this.miscFeeHangInclude(), orderBy: { requestedAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
-      (this.prisma as any).miscFeeHangRequest.count({ where })
-    ]);
-    return { rows: await Promise.all(rows.map((row: any) => this.toMiscFeeHangSummary(principal, row))), pagination: { page, pageSize, totalItems } };
-  }
-
-  async getTallyMiscFeeDue(principal: Principal, customerCode: string): Promise<MiscFeeTallyDueSummary> {
-    await this.ensureMiscFeePermission(principal, 'tally', 'read');
-    return this.getTallyMiscFeeDueInternal(principal, customerCode);
-  }
-
-  private tallyMiscFeeAgeDays(occurredAt: Date, now = new Date()) {
-    const toDayNumber = (value: Date) => {
-      const [year, month, day] = getBeijingDateKey(value).split('-').map(Number);
-      return Math.floor(Date.UTC(year, month - 1, day) / (24 * 60 * 60 * 1000));
-    };
-    return Math.max(0, toDayNumber(now) - toDayNumber(occurredAt));
-  }
-
-  private async getTallyMiscFeeDueInternal(principal: Principal, customerCode: string): Promise<MiscFeeTallyDueSummary> {
-    const code = customerCode?.trim();
-    if (!code) throw new BadRequestException('客户编号不能为空');
-    const customer = await (this.prisma as any).customer.findUnique({ where: { code } });
-    if (!customer || !customer.enabled) throw new NotFoundException('客户编号不存在或已停用');
-    await this.ensureMiscFeeCustomerScope(principal, customer.salesperson);
-    const scopedWhere = await this.miscFeeScopeWhere(principal, { sourceType: 'TALLY_MISC', customerCode: code });
-    const rows = await (this.prisma as any).miscFeeRecord.findMany({
-      where: { ...scopedWhere, customerId: customer.id, matchStatus: 'UNMATCHED', voidedAt: null, archivedAt: null },
-      orderBy: { occurredAt: 'asc' }
-    });
-    const mapped = rows.map((row: any) => {
-      const ageDays = this.tallyMiscFeeAgeDays(row.occurredAt);
-      return {
-        id: row.id,
-        feeName: row.feeName,
-        businessAmount: row.businessAmount === null ? undefined : Number(row.businessAmount),
-        businessCurrency: row.businessCurrency,
-        occurredAt: row.occurredAt.toISOString(),
-        registeredAt: row.createdAt.toISOString(),
-        confirmationStatus: row.confirmationStatus,
-        ageDays,
-        dueLevel: ageDays >= 60 ? 'MANDATORY' as const : ageDays >= 30 ? 'WAREHOUSE_DUE' as const : 'OPTIONAL' as const
-      };
-    });
-    return {
-      customerCode: customer.code,
-      total: mapped.length,
-      warehouseDueCount: mapped.filter((row: any) => row.ageDays >= 30).length,
-      mandatoryCount: mapped.filter((row: any) => row.ageDays >= 60).length,
-      rows: mapped
-    };
-  }
-
-  async approveMiscFeeHangRequest(principal: Principal, id: string, input: MiscFeeActionInput): Promise<MiscFeeHangRequestSummary> {
-    await this.ensureCanApproveMiscFeeHangRequests(principal, [id]);
-    const approved = await this.withMiscFeeFinancialLock((tx: any) =>
-      this.approveMiscFeeHangRequestInTransaction(tx, principal, id, input));
-    return this.toMiscFeeHangSummary(principal, approved);
-  }
-
-  async batchApproveMiscFeeHangRequests(
-    principal: Principal,
-    input: MiscFeeHangBatchApproveInput
-  ): Promise<MiscFeeHangBatchApproveResult> {
-    const items: MiscFeeHangBatchApproveInput['items'] = Array.isArray(input?.items) ? input.items : [];
-    if (!items.length) throw new BadRequestException('请选择待同意挂账');
-    if (items.length > 100) throw new BadRequestException('单次最多批量同意100条挂账');
-    const ids = items.map((item) => typeof item.id === 'string' ? item.id.trim() : '');
-    if (ids.some((id) => !id) || new Set(ids).size !== ids.length) throw new BadRequestException('挂账申请参数重复或不完整');
-    if (items.some((item) => !Number.isInteger(item.version) || item.version < 1)) throw new BadRequestException('挂账申请版本不正确');
-    await this.ensureCanApproveMiscFeeHangRequests(principal, ids);
-    const approved = await this.withMiscFeeFinancialLock(async (tx: any) => {
-      const rows = [];
-      for (const item of items) {
-        rows.push(await this.approveMiscFeeHangRequestInTransaction(tx, principal, item.id, item));
-      }
-      return rows;
-    });
-    return {
-      rows: await Promise.all(approved.map((row: any) => this.toMiscFeeHangSummary(principal, row))),
-      approvedCount: approved.length
-    };
-  }
-
-  async rejectMiscFeeHangRequest(principal: Principal, id: string, input: MiscFeeActionInput): Promise<MiscFeeHangRequestSummary> {
-    await this.ensureMiscFeePermission(principal, 'hang', 'hang-approve');
-    if (!input.reason?.trim()) throw new BadRequestException('拒绝原因不能为空');
-    return this.transitionMiscFeeHangRequest(principal, id, input, 'REJECTED');
-  }
-
-  async withdrawMiscFeeHangRequest(principal: Principal, id: string, input: MiscFeeActionInput): Promise<MiscFeeHangRequestSummary> {
-    const current = await (this.prisma as any).miscFeeHangRequest.findUnique({ where: { id }, include: this.miscFeeHangInclude() });
-    if (!current) throw new NotFoundException('挂账申请不存在');
-    const fee = await this.findVisibleMiscFee(principal, current.miscFeeRecordId);
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(fee.sourceType), 'hang');
-    if (principal.role !== 'ADMIN' && current.requestedBy !== principal.username) throw new ForbiddenException('只有发起人可以撤回挂账');
-    return this.transitionMiscFeeHangRequest(principal, id, input, 'WITHDRAWN');
-  }
-
-  async getMarketProfitLedger(principal: Principal, query: MarketProfitLedgerQuery = {}): Promise<MarketProfitLedgerResponse> {
-    await this.ensureProfitSettlementDataScope(principal, 'MARKET');
-    await this.ensureMiscFeePermission(principal, 'market-profit', 'read');
-    const financeItems = await (this.prisma as any).shipmentFinanceItem.findMany({
-      where: {
-        type: { in: ['BUSINESS_COST', 'PAYABLE'] },
-        voided: false,
-        shipment: { deletedAt: null },
-        OR: [
-          { miscFeeRecordId: null },
-          { miscFeeRecord: { is: { ownerType: 'MARKET' } } }
-        ]
-      },
-      include: {
-        shipment: { include: { customer: true, agent: true } },
-        miscFeeRecord: true
-      },
-      orderBy: [{ shipment: { systemOrderNo: 'asc' } }, { name: 'asc' }, { createdAt: 'asc' }]
-    });
-    const currencies = Array.from(new Set(financeItems
-      .map((item: any) => this.normalizeMiscFeeCurrency(item.currency))
-      .filter((currency: string) => currency !== 'RMB')));
-    const exchangeRates = currencies.length
-      ? await (this.prisma as any).exchangeRate.findMany({
-          where: { baseCurrency: { in: currencies }, quoteCurrency: 'RMB', enabled: true },
-          orderBy: { activeAt: 'desc' }
-        })
-      : [];
-    const toRmbAmount = (item: any) => {
-      const miscFee = item.miscFeeRecord;
-      const frozenAmount = item.type === 'BUSINESS_COST'
-        ? miscFee?.businessRmbAmount
-        : miscFee?.payableRmbAmount;
-      if (frozenAmount !== null && frozenAmount !== undefined) return roundMoney(Number(frozenAmount));
-      const currency = this.normalizeMiscFeeCurrency(item.currency);
-      if (currency === 'RMB') return roundMoney(Number(item.amount));
-      const effectiveAt = item.reviewedAt ?? item.createdAt;
-      const rate = exchangeRates.find((row: any) =>
-        row.baseCurrency === currency
-        && row.activeAt <= effectiveAt
-        && (!row.endAt || row.endAt >= effectiveAt)
-      );
-      if (!rate) throw new ConflictException(`费用 ${item.id} 缺少 ${currency} 到 RMB 的审核日汇率，不能计算市场利润`);
-      return roundMoney(Number(item.amount) * Number(rate.rate));
-    };
-    const candidates: MarketProfitLedgerCandidate[] = financeItems.map((item: any) => ({
-      id: item.id,
-      shipmentId: item.shipmentId,
-      type: item.type,
-      feeName: item.name,
-      agentName: item.agentName ?? item.shipment?.agent?.name ?? undefined,
-      customerCode: item.shipment?.customer?.code ?? '',
-      systemOrderNo: item.shipment?.systemOrderNo ?? '',
-      transferNo: item.shipment?.transferNo ?? undefined,
-      salesperson: item.shipment?.customer?.salesperson ?? item.shipment?.entryBy ?? undefined,
-      rmbAmount: toRmbAmount(item),
-      reconciliationStatus: item.reconciliationStatus,
-      createdAt: item.createdAt?.toISOString?.() ?? String(item.createdAt),
-      createdBy: item.createdBy ?? undefined,
-      reviewedAt: item.reviewedAt?.toISOString?.() ?? (item.reviewedAt ? String(item.reviewedAt) : undefined),
-      reviewedBy: item.reviewedBy ?? undefined
-    }));
-    const actorLabels = await this.miscFeeCreatorLabels(candidates.flatMap((item) => [item.salesperson, item.createdBy, item.reviewedBy]));
-    const allRows = buildMarketProfitLedgerRows(candidates, Object.fromEntries(actorLabels));
-    const agentOptions = Array.from(new Set(allRows.map((row) => row.agentName).filter((value): value is string => Boolean(value))))
-      .sort((left, right) => left.localeCompare(right, 'zh-CN'));
-    const orderNeedle = query.orderKeyword?.trim().toLowerCase();
-    const filtered = allRows.filter((row) => {
-      const orderMatches = !orderNeedle || [row.customerCode, row.systemOrderNo, row.transferNo]
-        .some((value) => (value ?? '').toLowerCase().includes(orderNeedle));
-      const agentMatches = !query.agent?.trim() || row.agentName === query.agent.trim();
-      const dateMatches = (!query.reviewedFrom && !query.reviewedTo)
-        || Boolean(row.reviewedAt && isTimestampInBeijingDateRange(new Date(row.reviewedAt), query.reviewedFrom, query.reviewedTo));
-      return orderMatches && agentMatches && dateMatches;
-    });
-    const totals = filtered.reduce((result, row) => ({
-      businessCostRmbAmount: roundMoney(result.businessCostRmbAmount + row.businessCostRmbAmount),
-      agentCostRmbAmount: roundMoney(result.agentCostRmbAmount + row.agentCostRmbAmount),
-      businessProfitRmbAmount: roundMoney(result.businessProfitRmbAmount + row.businessProfitRmbAmount)
-    }), { businessCostRmbAmount: 0, agentCostRmbAmount: 0, businessProfitRmbAmount: 0 });
-    const { page, pageSize, rows } = this.paginateRows(filtered, query, 20);
-    return { rows, totals, agentOptions, pagination: { page, pageSize, totalItems: filtered.length } };
-  }
-
-  async getFinanceProfitLedger(principal: Principal, query: FinanceProfitLedgerQuery = {}): Promise<FinanceProfitLedgerResponse> {
-    await this.ensureProfitSettlementDataScope(principal, 'FINANCE');
-    return this.buildFinanceProfitLedger(principal, query, 'read', false);
-  }
-
-  async exportFinanceProfitLedger(principal: Principal, query: FinanceProfitLedgerQuery = {}): Promise<FinanceProfitLedgerResponse> {
-    await this.ensureProfitSettlementDataScope(principal, 'FINANCE');
-    return this.buildFinanceProfitLedger(principal, query, 'export', true);
-  }
-
-  private async buildFinanceProfitLedger(
-    principal: Principal,
-    query: FinanceProfitLedgerQuery,
-    permissionAction: 'read' | 'export',
-    exportAll: boolean
-  ): Promise<FinanceProfitLedgerResponse> {
-    await this.ensureMiscFeePermission(principal, 'finance-profit', permissionAction);
-    if (query.financeType && !['ALL', 'RECEIVABLE', 'BUSINESS_COST', 'PAYABLE'].includes(query.financeType)) {
-      throw new BadRequestException('财务类型不正确');
-    }
-    if (query.attributionStatus && !['ALL', 'ASSIGNED', 'PENDING_BUSINESS_COST', 'PENDING_ORDER'].includes(query.attributionStatus)) {
-      throw new BadRequestException('归属状态不正确');
-    }
-    if (query.cashStatus && !['ALL', 'NOT_APPLICABLE', 'UNPAID', 'PARTIAL', 'READY', 'PAYMENT_PENDING', 'PAID'].includes(query.cashStatus)) {
-      throw new BadRequestException('资金状态不正确');
-    }
-    if (query.settlementStatus && !['ALL', 'UNSETTLED', 'DRAFT', 'PENDING_AUDIT', 'APPROVED', 'ARCHIVED'].includes(query.settlementStatus)) {
-      throw new BadRequestException('结算状态不正确');
-    }
-    const paymentInclude = {
-      where: { status: { not: 'INVALIDATED' } },
-      include: { paymentApplicationItem: { include: { paymentApplication: true } } },
-      orderBy: { createdAt: 'desc' },
-      take: 1
-    } as const;
-    const [financeItems, systemReceivables, unmatchedMiscFees] = await Promise.all([
-      (this.prisma as any).shipmentFinanceItem.findMany({
-        where: {
-          type: { in: ['RECEIVABLE', 'BUSINESS_COST', 'PAYABLE'] },
-          reconciliationStatus: 'CONFIRMED',
-          reviewedAt: { not: null },
-          voided: false
-        },
-        include: {
-          shipment: { include: { customer: true, agent: true } },
-          miscFeeRecord: {
-            include: {
-              payablePaymentApplication: {
-                include: { paymentApplicationItem: { include: { paymentApplication: true } } }
-              }
+            target: { in: shipmentIds },
+            action: {
+              in: [
+                'customer_service.business_data.approved',
+                'customer_service.business_data.reversed',
+                'customer_service.business_data.updated',
+                'customer_service.agent_data.approved',
+                'customer_service.agent_data.reversed',
+                'customer_service.agent_data.updated'
+              ]
             }
           },
-          payablePaymentApplications: paymentInclude
-        },
-        orderBy: [{ reviewedAt: 'desc' }, { createdAt: 'desc' }]
-      }),
-      (this.prisma as any).receivableFee.findMany({
-        where: { reconciliationStatus: 'CONFIRMED', reviewedAt: { not: null }, voided: false },
-        include: { shipment: { include: { customer: true } } },
-        orderBy: [{ reviewedAt: 'desc' }, { createdAt: 'desc' }]
-      }),
-      (this.prisma as any).miscFeeRecord.findMany({
-        where: { shipmentId: null, auditStatus: 'APPROVED', reviewedAt: { not: null }, voidedAt: null },
-        include: {
-          payablePaymentApplication: {
-            include: { paymentApplicationItem: { include: { paymentApplication: true } } }
-          }
-        },
-        orderBy: [{ reviewedAt: 'desc' }, { createdAt: 'desc' }]
-      })
-    ]);
-    const settlementKeys = [
-      ...systemReceivables.map((item: any) => `FINANCE:RECEIVABLE_FEE:${item.id}`),
-      ...financeItems
-        .filter((item: any) => item.type !== 'BUSINESS_COST')
-        .map((item: any) => financeProfitSettlementSourceKey(item)),
-      ...unmatchedMiscFees.map((fee: any) => `FINANCE:MISC_FEE:${fee.id}`)
-    ];
-    const settlementLines = settlementKeys.length
-      ? await (this.prisma as any).profitSettlementLine.findMany({
-          where: { sourceKey: { in: Array.from(new Set(settlementKeys)) } },
-          include: { settlement: { select: { status: true } } }
-        })
-      : [];
-    const settlementStatusByKey = new Map<string, any>(settlementLines.map((line: any) => [line.sourceKey, line.settlement?.status]));
-    const currencies = Array.from(new Set([
-      ...financeItems.filter((item: any) => !item.miscFeeRecord && item.profitRmbAmount === null).map((item: any) => this.normalizeMiscFeeCurrency(item.currency)),
-      ...systemReceivables.filter((item: any) => item.profitRmbAmount === null).map((item: any) => this.normalizeMiscFeeCurrency(item.currency))
-    ].filter((currency: string) => currency !== 'RMB')));
-    const exchangeRates = currencies.length
-      ? await (this.prisma as any).exchangeRate.findMany({
-          where: { baseCurrency: { in: currencies }, quoteCurrency: 'RMB', enabled: true },
-          orderBy: { activeAt: 'desc' }
-        })
-      : [];
-    const toRmbAmount = (item: any, effectiveAt: Date) => {
-      if (item.profitRmbAmount !== null && item.profitRmbAmount !== undefined) return roundMoney(Number(item.profitRmbAmount));
-      const currency = this.normalizeMiscFeeCurrency(item.currency);
-      if (currency === 'RMB') return roundMoney(Number(item.amount));
-      const rate = exchangeRates.find((candidate: any) => candidate.baseCurrency === currency
-        && candidate.activeAt <= effectiveAt
-        && (!candidate.endAt || candidate.endAt >= effectiveAt));
-      if (!rate) throw new ConflictException(`费用 ${item.id} 缺少 ${currency} 到 RMB 的审核日汇率，不能计算财务利润`);
-      return roundMoney(Number(item.amount) * Number(rate.rate));
-    };
-    const financeCandidates: FinanceProfitLedgerCandidate[] = financeItems.map((item: any) => {
-      const miscFee = item.miscFeeRecord;
-      const sourceKey = item.type === 'BUSINESS_COST'
-        ? `FINANCE:BUSINESS_COST_ITEM:${item.id}`
-        : financeProfitSettlementSourceKey(item);
-      const pendingPayment = miscFee?.payablePaymentApplication ?? item.payablePaymentApplications?.[0];
-      const paymentApplication = pendingPayment?.paymentApplicationItem?.paymentApplication;
-      const frozenAmount = item.type === 'BUSINESS_COST'
-        ? miscFee?.businessRmbAmount
-        : item.type === 'PAYABLE'
-          ? miscFee?.payableRmbAmount
-          : undefined;
-      const effectiveAt = item.reviewedAt ?? item.createdAt;
-      return {
-        id: item.id,
-        sourceKey,
-        financeType: item.type,
-        sourceOrigin: miscFee ? 'MISC_FEE' : 'ORDER_FINANCE_ITEM',
-        miscFeeRecordId: item.miscFeeRecordId ?? undefined,
-        shipmentId: item.shipmentId,
-        customerCode: item.shipment?.customer?.code ?? miscFee?.customerCodeSnapshot ?? undefined,
-        systemOrderNo: item.shipment?.systemOrderNo ?? miscFee?.systemOrderNoSnapshot ?? undefined,
-        transferNo: item.shipment?.transferNo ?? miscFee?.transferNoSnapshot ?? undefined,
-        feeName: item.name,
-        agentName: item.agentName ?? item.shipment?.agent?.name ?? miscFee?.agentName ?? undefined,
-        ownerType: miscFee?.ownerType,
-        rmbAmount: frozenAmount !== null && frozenAmount !== undefined
-          ? roundMoney(Number(frozenAmount))
-          : toRmbAmount(item, effectiveAt),
-        confirmationStatus: miscFee?.confirmationStatus,
-        receiptStatus: item.receiptStatus,
-        pendingPaymentStatus: pendingPayment?.status,
-        paymentApplicationStatus: paymentApplication?.status,
-        settlementStatus: settlementStatusByKey.get(sourceKey),
-        effectiveAt: (item.profitEffectiveAt ?? effectiveAt).toISOString(),
-        createdAt: item.createdAt.toISOString(),
-        createdBy: item.createdBy ?? undefined,
-        reviewedAt: item.reviewedAt?.toISOString?.(),
-        reviewedBy: item.reviewedBy ?? undefined
-      } satisfies FinanceProfitLedgerCandidate;
-    });
-    const receivableCandidates: FinanceProfitLedgerCandidate[] = systemReceivables.map((item: any) => {
-      const sourceKey = `FINANCE:RECEIVABLE_FEE:${item.id}`;
-      const effectiveAt = item.reviewedAt ?? item.createdAt;
-      return {
-        id: item.id,
-        sourceKey,
-        financeType: 'RECEIVABLE',
-        sourceOrigin: 'SYSTEM_RECEIVABLE',
-        shipmentId: item.shipmentId,
-        customerCode: item.shipment?.customer?.code ?? undefined,
-        systemOrderNo: item.shipment?.systemOrderNo ?? undefined,
-        transferNo: item.shipment?.transferNo ?? undefined,
-        feeName: item.name,
-        rmbAmount: toRmbAmount(item, effectiveAt),
-        receiptStatus: item.receiptStatus,
-        settlementStatus: settlementStatusByKey.get(sourceKey),
-        effectiveAt: (item.profitEffectiveAt ?? effectiveAt).toISOString(),
-        createdAt: item.createdAt.toISOString(),
-        createdBy: item.createdBy ?? undefined,
-        reviewedAt: item.reviewedAt?.toISOString?.(),
-        reviewedBy: item.reviewedBy ?? undefined
-      } satisfies FinanceProfitLedgerCandidate;
-    });
-    const unmatchedCandidates: FinanceProfitLedgerCandidate[] = unmatchedMiscFees.map((fee: any) => {
-      const sourceKey = `FINANCE:MISC_FEE:${fee.id}`;
-      const pendingPayment = fee.payablePaymentApplication;
-      return {
-        id: fee.id,
-        sourceKey,
-        financeType: 'PAYABLE',
-        sourceOrigin: 'MISC_FEE',
-        miscFeeRecordId: fee.id,
-        customerCode: fee.customerCodeSnapshot,
-        feeName: fee.feeName,
-        agentName: fee.agentName ?? undefined,
-        ownerType: fee.ownerType,
-        rmbAmount: roundMoney(Number(fee.payableRmbAmount ?? 0)),
-        confirmationStatus: fee.confirmationStatus,
-        pendingPaymentStatus: pendingPayment?.status,
-        paymentApplicationStatus: pendingPayment?.paymentApplicationItem?.paymentApplication?.status,
-        settlementStatus: settlementStatusByKey.get(sourceKey),
-        effectiveAt: fee.reviewedAt.toISOString(),
-        createdAt: fee.createdAt.toISOString(),
-        createdBy: fee.createdBy,
-        reviewedAt: fee.reviewedAt.toISOString(),
-        reviewedBy: fee.reviewedBy ?? undefined
-      } satisfies FinanceProfitLedgerCandidate;
-    });
-    const candidates = [...financeCandidates, ...receivableCandidates, ...unmatchedCandidates];
-    const actorLabels = await this.miscFeeCreatorLabels(candidates.flatMap((candidate) => [candidate.createdBy, candidate.reviewedBy]));
-    const allRows = buildFinanceProfitLedgerRows(candidates, Object.fromEntries(actorLabels));
-    const agentOptions = Array.from(new Set(allRows.map((row) => row.agentName).filter((value): value is string => Boolean(value))))
-      .sort((left, right) => left.localeCompare(right, 'zh-CN'));
-    const feeNameOptions = Array.from(new Set(allRows.map((row) => row.feeName)))
-      .sort((left, right) => left.localeCompare(right, 'zh-CN'));
-    const keyword = query.keyword?.trim().toLowerCase();
-    const filtered = allRows.filter((row) => {
-      const keywordMatches = !keyword || [row.customerCode, row.systemOrderNo, row.transferNo, row.feeName, row.agentName]
-        .some((value) => (value ?? '').toLowerCase().includes(keyword));
-      const dateMatches = (!query.ledgerFrom && !query.ledgerTo)
-        || isTimestampInBeijingDateRange(new Date(row.effectiveAt), query.ledgerFrom, query.ledgerTo);
-      const settlementMatches = !query.settlementStatus || query.settlementStatus === 'ALL'
-        || (query.settlementStatus === 'UNSETTLED' ? !row.settlementStatus : row.settlementStatus === query.settlementStatus);
-      return keywordMatches
-        && dateMatches
-        && (!query.agent?.trim() || row.agentName === query.agent.trim())
-        && (!query.feeName?.trim() || row.feeName === query.feeName.trim())
-        && (!query.financeType || query.financeType === 'ALL' || row.financeType === query.financeType)
-        && (!query.attributionStatus || query.attributionStatus === 'ALL' || row.attributionStatus === query.attributionStatus)
-        && (!query.cashStatus || query.cashStatus === 'ALL' || row.cashStatus === query.cashStatus)
-        && settlementMatches;
-    });
-    const totals = summarizeFinanceProfitLedgerRows(filtered);
-    if (exportAll) {
-      return {
-        rows: filtered,
-        totals,
-        agentOptions,
-        feeNameOptions,
-        pagination: { page: 1, pageSize: filtered.length || 1, totalItems: filtered.length }
-      };
-    }
-    const { page, pageSize, rows } = this.paginateRows(filtered, query, 20);
-    return { rows, totals, agentOptions, feeNameOptions, pagination: { page, pageSize, totalItems: filtered.length } };
-  }
-
-  async getWarehouseProfitLedger(principal: Principal, query: WarehouseProfitLedgerQuery = {}): Promise<WarehouseProfitLedgerResponse> {
-    await this.ensureProfitSettlementDataScope(principal, 'WAREHOUSE');
-    await this.ensureMiscFeePermission(principal, 'warehouse-profit', 'read');
-    if (query.eligibilityStatus && !['ALL', 'PENDING_PRICING', 'READY'].includes(query.eligibilityStatus)) {
-      throw new BadRequestException('仓库利润归属状态不正确');
-    }
-    const principalSite = await this.resolveWarehouseSettlementSiteScope(principal);
-    if (principalSite && query.site?.trim() && query.site.trim() !== principalSite) {
-      throw new ForbiddenException('仓库岗位只能查看本站点利润');
-    }
-    const fees = await (this.prisma as any).miscFeeRecord.findMany({
-      where: {
-        ownerType: 'WAREHOUSE',
-        auditStatus: 'APPROVED',
-        reviewedAt: { not: null },
-        voidedAt: null,
-        ownerSiteSnapshot: { not: null },
-        ...(principalSite ? { ownerSiteSnapshot: principalSite } : {})
-      },
-      include: {
-        settlementLines: {
-          where: { settlement: { type: 'WAREHOUSE' } },
-          include: { settlement: true },
-          take: 1
-        }
-      },
-      orderBy: [{ profitEligibleAt: 'desc' }, { reviewedAt: 'desc' }, { createdAt: 'desc' }]
-    });
-    const actorLabels = await this.miscFeeCreatorLabels(fees.flatMap((fee: any) => [fee.createdBy, fee.confirmedBy, fee.reviewedBy]));
-    const candidates: WarehouseProfitLedgerCandidate[] = fees.map((fee: any) => ({
-      id: fee.id,
-      sourceType: fee.sourceType,
-      ownerSite: fee.ownerSiteSnapshot,
-      feeName: fee.feeName,
-      customerCode: fee.customerCodeSnapshot,
-      systemOrderNo: fee.systemOrderNoSnapshot ?? undefined,
-      agentName: fee.agentName ?? undefined,
-      matchStatus: fee.matchStatus,
-      confirmationStatus: fee.confirmationStatus,
-      businessRmbAmount: fee.businessRmbAmount === null ? undefined : Number(fee.businessRmbAmount),
-      payableRmbAmount: Number(fee.payableRmbAmount ?? 0),
-      profitEligibleAt: fee.profitEligibleAt?.toISOString?.(),
-      createdAt: fee.createdAt.toISOString(),
-      createdBy: fee.createdBy,
-      confirmedAt: fee.confirmedAt?.toISOString?.(),
-      confirmedBy: fee.confirmedBy ?? undefined,
-      reviewedAt: fee.reviewedAt.toISOString(),
-      reviewedBy: fee.reviewedBy ?? undefined,
-      settlementStatus: fee.settlementLines?.[0]?.settlement?.status
-    }));
-    const allRows = buildWarehouseProfitLedgerRows(candidates, Object.fromEntries(actorLabels));
-    const siteOptions = Array.from(new Set(allRows.map((row) => row.ownerSite))).sort((left, right) => left.localeCompare(right, 'zh-CN'));
-    const feeNameOptions = Array.from(new Set(allRows.map((row) => row.feeName))).sort((left, right) => left.localeCompare(right, 'zh-CN'));
-    const keyword = query.keyword?.trim().toLowerCase();
-    const filtered = allRows.filter((row) => {
-      const keywordMatches = !keyword || [row.customerCode, row.systemOrderNo, row.agentName, row.feeName]
-        .some((value) => (value ?? '').toLowerCase().includes(keyword));
-      const siteMatches = !query.site?.trim() || row.ownerSite === query.site.trim();
-      const feeMatches = !query.feeName?.trim() || row.feeName === query.feeName.trim();
-      const statusMatches = !query.eligibilityStatus || query.eligibilityStatus === 'ALL' || row.eligibilityStatus === query.eligibilityStatus;
-      const dateMatches = (!query.ledgerFrom && !query.ledgerTo)
-        || isTimestampInBeijingDateRange(new Date(row.ledgerAt), query.ledgerFrom, query.ledgerTo);
-      return keywordMatches && siteMatches && feeMatches && statusMatches && dateMatches;
-    });
-    const totals = filtered.reduce((result, row) => {
-      if (row.eligibilityStatus === 'PENDING_PRICING') {
-        result.pendingPricingCount += 1;
-        result.pendingPricingPayableRmbAmount = roundMoney(result.pendingPricingPayableRmbAmount + row.payableCostRmbAmount);
-      } else {
-        result.businessCostRmbAmount = roundMoney(result.businessCostRmbAmount + Number(row.businessCostRmbAmount ?? 0));
-        result.payableCostRmbAmount = roundMoney(result.payableCostRmbAmount + row.payableCostRmbAmount);
-        result.warehouseProfitRmbAmount = roundMoney(result.warehouseProfitRmbAmount + Number(row.warehouseProfitRmbAmount ?? 0));
-      }
-      if (row.matchStatus === 'UNMATCHED') result.unmatchedCount += 1;
-      return result;
-    }, {
-      pendingPricingCount: 0,
-      pendingPricingPayableRmbAmount: 0,
-      businessCostRmbAmount: 0,
-      payableCostRmbAmount: 0,
-      warehouseProfitRmbAmount: 0,
-      unmatchedCount: 0
-    });
-    const { page, pageSize, rows } = this.paginateRows(filtered, query, 20);
-    return { rows, totals, siteOptions, feeNameOptions, pagination: { page, pageSize, totalItems: filtered.length } };
-  }
-
-  async getProfitSettlements(principal: Principal, query: ProfitSettlementQuery = {}): Promise<ProfitSettlementListResponse> {
-    if (!query.type) throw new BadRequestException('结算类型不能为空');
-    this.assertProfitSettlementType(query.type);
-    await this.ensureProfitSettlementDataScope(principal, query.type);
-    await this.ensureMiscFeePermission(principal, this.profitSettlementSection(query.type), 'read');
-    const siteScope = query.type === 'WAREHOUSE' ? await this.resolveWarehouseSettlementSiteScope(principal) : undefined;
-    const page = Math.max(1, Number(query.page) || 1);
-    const pageSize = Math.min(100, Math.max(1, Number(query.pageSize) || 20));
-    const where = { type: query.type, ...(siteScope ? { siteScope } : {}), ...(query.status && query.status !== 'ALL' ? { status: query.status } : {}) };
-    const [rows, totalItems] = await Promise.all([
-      (this.prisma as any).profitSettlement.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }),
-      (this.prisma as any).profitSettlement.count({ where })
-    ]);
-    return { rows: rows.map((row: any) => this.toProfitSettlementSummary(row)), pagination: { page, pageSize, totalItems } };
-  }
-
-  async getProfitSettlement(principal: Principal, id: string): Promise<ProfitSettlementDetail> {
-    const row = await (this.prisma as any).profitSettlement.findUnique({ where: { id }, include: { lines: { orderBy: { createdAt: 'asc' } } } });
-    if (!row) throw new NotFoundException('利润结算单不存在');
-    await this.ensureProfitSettlementDataScope(principal, row.type);
-    await this.ensureMiscFeePermission(principal, this.profitSettlementSection(row.type), 'read');
-    const siteScope = row.type === 'WAREHOUSE' ? await this.resolveWarehouseSettlementSiteScope(principal) : undefined;
-    if (siteScope && row.siteScope !== siteScope) throw new NotFoundException('利润结算单不存在或无权查看');
-    return {
-      ...this.toProfitSettlementSummary(row),
-      lines: (row.lines ?? []).map((item: any) => ({
-        id: item.id,
-        sourceKey: item.sourceKey,
-        miscFeeRecordId: item.miscFeeRecordId ?? undefined,
-        shipmentId: item.shipmentId ?? undefined,
-        customerCode: item.customerCode ?? undefined,
-        systemOrderNo: item.systemOrderNo ?? undefined,
-        salesperson: item.salesperson ?? undefined,
-        agentName: item.agentName ?? undefined,
-        feeName: item.feeName,
-        sourceType: item.sourceType ?? undefined,
-        businessRmbAmount: Number(item.businessRmbAmount),
-        payableRmbAmount: Number(item.payableRmbAmount),
-        receivableRmbAmount: Number(item.receivableRmbAmount),
-        profitRmbAmount: Number(item.profitRmbAmount),
-        unmatched: item.unmatched,
-        snapshot: item.snapshot && typeof item.snapshot === 'object' ? item.snapshot : undefined
-      }))
-    };
-  }
-
-  async createProfitSettlement(principal: Principal, input: ProfitSettlementInput): Promise<ProfitSettlementDetail> {
-    this.assertProfitSettlementType(input.type);
-    await this.ensureProfitSettlementDataScope(principal, input.type);
-    const section = this.profitSettlementSection(input.type);
-    await this.ensureMiscFeePermission(principal, section, 'settlement-generate');
-    if (input.idempotencyKey) {
-      const existing = await (this.prisma as any).profitSettlement.findUnique({ where: { idempotencyKey: input.idempotencyKey } });
-      if (existing) return this.getProfitSettlement(principal, existing.id);
-    }
-    const periodFrom = new Date(input.periodFrom);
-    const periodTo = new Date(input.periodTo);
-    if (Number.isNaN(periodFrom.getTime()) || Number.isNaN(periodTo.getTime()) || periodFrom > periodTo) throw new BadRequestException('结算期间不正确');
-    let siteScope: string | undefined;
-    if (input.type === 'WAREHOUSE') {
-      const principalSite = await this.resolveWarehouseSettlementSiteScope(principal);
-      const requestedSite = input.siteScope?.trim();
-      if (principalSite && requestedSite && requestedSite !== principalSite) throw new ForbiddenException('仓库账号只能生成本站点结算单');
-      siteScope = principalSite ?? requestedSite;
-      if (!siteScope) throw new BadRequestException('仓库利润结算必须选择站点');
-      const site = await (this.prisma as any).site.findFirst({ where: { name: siteScope, enabled: true }, select: { id: true } });
-      if (!site) throw new BadRequestException('结算站点不存在或已停用');
-    } else if (input.siteScope?.trim()) {
-      throw new BadRequestException('只有仓库利润结算可以指定站点');
-    }
-    let created: any;
-    try {
-      created = await this.withMiscFeeFinancialLock(async (tx: any) => {
-        const snapshot = await this.buildProfitSettlementSnapshot(tx, input.type, periodFrom, periodTo, siteScope);
-        const settlement = await tx.profitSettlement.create({
-          data: {
-            settlementNo: await this.nextProfitSettlementNo(input.type, tx), type: input.type, siteScope, status: 'DRAFT', periodFrom, periodTo,
-            receivableRmbAmount: snapshot.receivableRmbAmount,
-            businessRmbAmount: snapshot.businessRmbAmount,
-            payableRmbAmount: snapshot.payableRmbAmount,
-            unmatchedPayableRmbAmount: snapshot.unmatchedPayableRmbAmount,
-            profitRmbAmount: snapshot.profitRmbAmount,
-            remark: input.remark?.trim() || undefined, createdBy: principal.username, idempotencyKey: input.idempotencyKey,
-            lines: { create: snapshot.lines }
-          }
-        });
-        await tx.auditLog.create({ data: { actorId: principal.id, action: 'misc_fee.profit_settlement.create', target: settlement.id, after: toAuditJson({ type: input.type, siteScope, periodFrom, periodTo, count: snapshot.lines.length, profitRmbAmount: snapshot.profitRmbAmount }) } });
-        return settlement;
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('结算期间内有费用已被其他结算单纳入，请刷新后重试');
-      }
-      throw error;
-    }
-    return this.getProfitSettlement(principal, created.id);
-  }
-
-  async recomputeProfitSettlement(principal: Principal, id: string, input: MiscFeeActionInput): Promise<ProfitSettlementDetail> {
-    const expectedVersion = Number(input.version);
-    if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw new BadRequestException('结算单版本号不正确');
-    const current = await (this.prisma as any).profitSettlement.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException('利润结算单不存在');
-    await this.ensureProfitSettlementDataScope(principal, current.type);
-    await this.ensureMiscFeePermission(principal, this.profitSettlementSection(current.type), 'settlement-generate');
-    const siteScope = current.type === 'WAREHOUSE' ? await this.resolveWarehouseSettlementSiteScope(principal) : undefined;
-    if (siteScope && current.siteScope !== siteScope) throw new NotFoundException('利润结算单不存在或无权操作');
-    try {
-      await this.withMiscFeeFinancialLock(async (tx: any) => {
-        const claimed = await (tx as any).profitSettlement.updateMany({
-          where: { id, version: expectedVersion, status: 'DRAFT' },
-          data: { version: { increment: 1 } }
-        });
-        if (claimed.count !== 1) throw new ConflictException('只有当前版本的草稿结算单可以重算');
-        const snapshot = await this.buildProfitSettlementSnapshot(
-          tx as any,
-          current.type,
-          current.periodFrom,
-          current.periodTo,
-          current.siteScope ?? undefined,
-          id
-        );
-        await (tx as any).profitSettlementLine.deleteMany({ where: { settlementId: id } });
-        await (tx as any).profitSettlement.update({
-          where: { id },
-          data: {
-            receivableRmbAmount: snapshot.receivableRmbAmount,
-            businessRmbAmount: snapshot.businessRmbAmount,
-            payableRmbAmount: snapshot.payableRmbAmount,
-            unmatchedPayableRmbAmount: snapshot.unmatchedPayableRmbAmount,
-            profitRmbAmount: snapshot.profitRmbAmount,
-            lines: { create: snapshot.lines }
-          }
-        });
-        await (tx as any).auditLog.create({
-          data: {
-            actorId: principal.id,
-            action: 'misc_fee.profit_settlement.recompute',
-            target: id,
-            after: toAuditJson({ version: expectedVersion + 1, count: snapshot.lines.length, profitRmbAmount: snapshot.profitRmbAmount })
-          }
-        });
-      });
-    } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        throw new ConflictException('重算期间有费用已被其他结算单纳入，请刷新后重试');
-      }
-      throw error;
-    }
-    return this.getProfitSettlement(principal, id);
-  }
-
-  async releaseProfitSettlement(principal: Principal, id: string, input: MiscFeeActionInput) {
-    const expectedVersion = Number(input.version);
-    if (!Number.isInteger(expectedVersion) || expectedVersion < 1) throw new BadRequestException('结算单版本号不正确');
-    const releaseReason = input.reason?.trim();
-    if (!releaseReason) throw new BadRequestException('释放原因不能为空');
-    const current = await (this.prisma as any).profitSettlement.findUnique({
-      where: { id },
-      include: { _count: { select: { lines: true } }, lines: { select: { sourceKey: true } } }
-    });
-    if (!current) throw new NotFoundException('利润结算单不存在');
-    await this.ensureProfitSettlementDataScope(principal, current.type);
-    await this.ensureMiscFeePermission(principal, this.profitSettlementSection(current.type), 'settlement-generate');
-    const siteScope = current.type === 'WAREHOUSE' ? await this.resolveWarehouseSettlementSiteScope(principal) : undefined;
-    if (siteScope && current.siteScope !== siteScope) throw new NotFoundException('利润结算单不存在或无权操作');
-    const releasedLineCount = Number(current._count?.lines ?? 0);
-    const sourceKeyChecksum = createHash('sha256')
-      .update((current.lines ?? []).map((line: any) => line.sourceKey).sort().join('\n'))
-      .digest('hex');
-    await this.prisma.$transaction(async (tx) => {
-      const removed = await (tx as any).profitSettlement.deleteMany({ where: { id, version: expectedVersion, status: 'DRAFT' } });
-      if (removed.count !== 1) throw new ConflictException('只有当前版本的草稿结算单可以释放');
-      await (tx as any).auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'misc_fee.profit_settlement.release',
-          target: id,
-          before: toAuditJson({
-            settlementNo: current.settlementNo,
-            type: current.type,
-            periodFrom: current.periodFrom,
-            periodTo: current.periodTo,
-            lineCount: releasedLineCount,
-            sourceKeyChecksum,
-            profitRmbAmount: Number(current.profitRmbAmount),
-            reason: releaseReason
-          })
-        }
-      });
-    });
-    return { id, settlementNo: current.settlementNo, releasedLineCount };
-  }
-
-  async transitionProfitSettlement(principal: Principal, id: string, action: 'submit' | 'audit' | 'reverse-audit' | 'archive', input: MiscFeeActionInput): Promise<ProfitSettlementDetail> {
-    const current = await (this.prisma as any).profitSettlement.findUnique({ where: { id } });
-    if (!current) throw new NotFoundException('利润结算单不存在');
-    await this.ensureProfitSettlementDataScope(principal, current.type);
-    const section = this.profitSettlementSection(current.type);
-    const permission = action === 'audit' ? 'settlement-audit' : action === 'reverse-audit' ? 'settlement-reverse' : 'settlement-generate';
-    await this.ensureMiscFeePermission(principal, section, permission);
-    const siteScope = current.type === 'WAREHOUSE' ? await this.resolveWarehouseSettlementSiteScope(principal) : undefined;
-    if (siteScope && current.siteScope !== siteScope) throw new NotFoundException('利润结算单不存在或无权操作');
-    const transition = {
-      submit: { from: 'DRAFT', to: 'PENDING_AUDIT', data: { submittedBy: principal.username, submittedAt: new Date() } },
-      audit: { from: 'PENDING_AUDIT', to: 'APPROVED', data: { reviewedBy: principal.username, reviewedAt: new Date() } },
-      'reverse-audit': { from: 'APPROVED', to: 'DRAFT', data: { reviewedBy: null, reviewedAt: null, submittedBy: null, submittedAt: null } },
-      archive: { from: 'APPROVED', to: 'ARCHIVED', data: { archivedAt: new Date() } }
-    }[action];
-    await (this.prisma as any).$transaction(async (tx: any) => {
-      const changed = await tx.profitSettlement.updateMany({ where: { id, version: input.version, status: transition.from }, data: { status: transition.to, ...transition.data, version: { increment: 1 } } });
-      if (changed.count !== 1) throw new ConflictException(`结算单当前状态不能${action}`);
-      await tx.auditLog.create({ data: { actorId: principal.id, action: `misc_fee.profit_settlement.${action.replace('-', '_')}`, target: id, after: toAuditJson({ from: transition.from, to: transition.to, reason: input.reason }) } });
-    });
-    return this.getProfitSettlement(principal, id);
-  }
-
-  private async buildProfitSettlementSnapshot(
-    database: any,
-    type: ProfitSettlementType,
-    periodFrom: Date,
-    periodTo: Date,
-    siteScope?: string,
-    excludedSettlementId?: string
-  ) {
-    if (type === 'WAREHOUSE' && !siteScope) throw new BadRequestException('仓库利润结算必须指定归属站点');
-    let receivableRmbAmount = 0;
-    let businessRmbAmount = 0;
-    let payableRmbAmount = 0;
-    let unmatchedPayableRmbAmount = 0;
-    let lines: any[] = [];
-    if (type === 'FINANCE') {
-      const [financeItems, unmatchedMiscFees, businessFees, systemReceivables, regularBusinessItems] = await Promise.all([
-        database.shipmentFinanceItem.findMany({
-          where: {
-            type: { in: ['RECEIVABLE', 'PAYABLE'] },
-            reconciliationStatus: 'CONFIRMED',
-            reviewedAt: { gte: periodFrom, lte: periodTo },
-            voided: false
-          },
-          include: {
-            shipment: { include: { customer: true } },
-            miscFeeRecord: true
-          }
-        }),
-        database.miscFeeRecord.findMany({
-          where: {
-            shipmentId: null,
-            auditStatus: 'APPROVED',
-            reviewedAt: { gte: periodFrom, lte: periodTo },
-            voidedAt: null
-          }
-        }),
-        database.miscFeeRecord.findMany({
-          where: {
-            confirmationStatus: 'CONFIRMED',
-            confirmedAt: { gte: periodFrom, lte: periodTo },
-            voidedAt: null
-          },
-          select: { businessRmbAmount: true }
-        }),
-        database.receivableFee.findMany({
-          where: {
-            reconciliationStatus: 'CONFIRMED',
-            reviewedAt: { gte: periodFrom, lte: periodTo },
-            voided: false
-          },
-          include: { shipment: { include: { customer: true } } }
-        }),
-        database.shipmentFinanceItem.findMany({
-          where: {
-            type: 'BUSINESS_COST',
-            miscFeeRecordId: null,
-            reconciliationStatus: 'CONFIRMED',
-            reviewedAt: { gte: periodFrom, lte: periodTo },
-            voided: false
-          }
+          orderBy: { createdAt: 'asc' },
+          select: { target: true, action: true, after: true, createdAt: true }
         })
       ]);
-      const candidateKeys = [
-        ...financeItems.map((item: any) => financeProfitSettlementSourceKey(item)),
-        ...systemReceivables.map((item: any) => `FINANCE:RECEIVABLE_FEE:${item.id}`),
-        ...unmatchedMiscFees.map((fee: any) => `FINANCE:MISC_FEE:${fee.id}`)
-      ];
-      const exchangeRateCurrencies = Array.from(new Set(
-        [...financeItems.filter((item: any) => !(item.type === 'PAYABLE' && item.miscFeeRecord) && item.profitRmbAmount === null), ...systemReceivables.filter((item: any) => item.profitRmbAmount === null), ...regularBusinessItems.filter((item: any) => item.profitRmbAmount === null)]
-          .map((item: any) => this.normalizeMiscFeeCurrency(item.currency))
-          .filter((currency: string) => currency !== 'RMB')
-      ));
-      const exchangeRates = exchangeRateCurrencies.length
-        ? await database.exchangeRate.findMany({
-            where: {
-              baseCurrency: { in: exchangeRateCurrencies },
-              quoteCurrency: 'RMB',
-              enabled: true,
-              activeAt: { lte: periodTo }
-            },
-            orderBy: { activeAt: 'desc' }
-          })
-        : [];
-      const resolveFinanceSnapshot = (item: any, effectiveAt: Date) => {
-        if (item.profitRmbAmount !== null && item.profitRmbAmount !== undefined) {
-          const rate = Number(item.profitExchangeRate);
-          const rmbAmount = Number(item.profitRmbAmount);
-          if (!Number.isFinite(rate) || rate <= 0 || !Number.isFinite(rmbAmount)) {
-            throw new ConflictException(`费用 ${item.id} 的审核汇率快照无效，不能生成利润结算单`);
-          }
-          return { rate, rmbAmount: roundMoney(rmbAmount) };
-        }
-        const currency = this.normalizeMiscFeeCurrency(item.currency);
-        if (currency === 'RMB') return { rate: 1, rmbAmount: roundMoney(Number(item.amount)) };
-        const rate = exchangeRates.find((row: any) =>
-          row.baseCurrency === currency
-          && row.activeAt <= effectiveAt
-          && (!row.endAt || row.endAt >= effectiveAt)
-        );
-        if (!rate) throw new ConflictException(`费用 ${item.id} 缺少 ${currency} 到 RMB 的审核日汇率，不能生成利润结算单`);
-        return { rate: Number(rate.rate), rmbAmount: roundMoney(Number(item.amount) * Number(rate.rate)) };
-      };
-      const existingKeys = candidateKeys.length
-        ? await database.profitSettlementLine.findMany({
-            where: {
-              sourceKey: { in: candidateKeys },
-              ...(excludedSettlementId ? { settlementId: { not: excludedSettlementId } } : {})
-            },
-            select: { sourceKey: true }
-          })
-        : [];
-      const usedKeys = new Set(existingKeys.map((row: any) => row.sourceKey));
-      for (const item of systemReceivables) {
-        const sourceKey = `FINANCE:RECEIVABLE_FEE:${item.id}`;
-        if (usedKeys.has(sourceKey)) continue;
-        const effectiveAt = item.reviewedAt ?? periodTo;
-        const snapshot = resolveFinanceSnapshot(item, effectiveAt);
-        receivableRmbAmount += snapshot.rmbAmount;
-        lines.push({
-          sourceKey,
-          shipmentId: item.shipmentId,
-          customerCode: item.shipment?.customer?.code,
-          systemOrderNo: item.shipment?.systemOrderNo,
-          salesperson: item.shipment?.customer?.salesperson,
-          feeName: item.name,
-          businessRmbAmount: 0,
-          payableRmbAmount: 0,
-          receivableRmbAmount: snapshot.rmbAmount,
-          profitRmbAmount: snapshot.rmbAmount,
-          unmatched: false,
-          snapshot: toAuditJson({
-            receivableFeeId: item.id,
-            originalAmount: Number(item.amount),
-            currency: item.currency,
-            exchangeRate: snapshot.rate,
-            effectiveAt
-          })
-        });
-        usedKeys.add(sourceKey);
-      }
-      for (const item of financeItems) {
-        const sourceKey = financeProfitSettlementSourceKey(item);
-        if (usedKeys.has(sourceKey)) continue;
-        const effectiveAt = item.reviewedAt ?? periodTo;
-        const isReceivable = item.type === 'RECEIVABLE';
-        const snapshot = !isReceivable && item.miscFeeRecord
-          ? {
-              rate: Number(item.miscFeeRecord.payableExchangeRate),
-              rmbAmount: Number(item.miscFeeRecord.payableRmbAmount)
-            }
-          : resolveFinanceSnapshot(item, effectiveAt);
-        if (!Number.isFinite(snapshot.rate) || !Number.isFinite(snapshot.rmbAmount)) {
-          throw new ConflictException(`费用 ${item.id} 缺少审核汇率快照，不能生成利润结算单`);
-        }
-        const isUnassignedPayable = !isReceivable
-          && Boolean(item.miscFeeRecord)
-          && item.miscFeeRecord.confirmationStatus !== 'CONFIRMED';
-        if (isReceivable) receivableRmbAmount += snapshot.rmbAmount;
-        else {
-          payableRmbAmount += snapshot.rmbAmount;
-          if (isUnassignedPayable) unmatchedPayableRmbAmount += snapshot.rmbAmount;
-        }
-        lines.push({
-          sourceKey,
-          miscFeeRecordId: item.miscFeeRecordId,
-          shipmentId: item.shipmentId,
-          customerCode: item.shipment?.customer?.code,
-          systemOrderNo: item.shipment?.systemOrderNo,
-          salesperson: item.shipment?.customer?.salesperson,
-          agentName: item.agentName,
-          feeName: item.name,
-          sourceType: item.miscFeeRecord?.sourceType,
-          businessRmbAmount: 0,
-          payableRmbAmount: isReceivable ? 0 : snapshot.rmbAmount,
-          receivableRmbAmount: isReceivable ? snapshot.rmbAmount : 0,
-          profitRmbAmount: isReceivable ? snapshot.rmbAmount : -snapshot.rmbAmount,
-          unmatched: isUnassignedPayable,
-          snapshot: toAuditJson({
-            financeItemId: item.id,
-            originalAmount: Number(item.amount),
-            currency: item.currency,
-            exchangeRate: snapshot.rate,
-            effectiveAt
-          })
-        });
-        usedKeys.add(sourceKey);
-      }
-      for (const fee of unmatchedMiscFees) {
-        const sourceKey = `FINANCE:MISC_FEE:${fee.id}`;
-        if (usedKeys.has(sourceKey)) continue;
-        const amount = Number(fee.payableRmbAmount ?? 0);
-        payableRmbAmount += amount;
-        unmatchedPayableRmbAmount += amount;
-        lines.push({
-          sourceKey,
-          miscFeeRecordId: fee.id,
-          customerCode: fee.customerCodeSnapshot,
-          salesperson: fee.salespersonSnapshot,
-          agentName: fee.agentName,
-          feeName: fee.feeName,
-          sourceType: fee.sourceType,
-          businessRmbAmount: 0,
-          payableRmbAmount: amount,
-          receivableRmbAmount: 0,
-          profitRmbAmount: -amount,
-          unmatched: true,
-          snapshot: toAuditJson({
-            originalAmount: Number(fee.payableAmount),
-            currency: fee.payableCurrency,
-            exchangeRate: Number(fee.payableExchangeRate ?? 0),
-            reviewedAt: fee.reviewedAt
-          })
-        });
-        usedKeys.add(sourceKey);
-      }
-      receivableRmbAmount = roundMoney(receivableRmbAmount);
-      payableRmbAmount = roundMoney(payableRmbAmount);
-      unmatchedPayableRmbAmount = roundMoney(unmatchedPayableRmbAmount);
-      const regularBusinessRmbAmount = regularBusinessItems.reduce((sum: number, item: any) => {
-        const effectiveAt = item.reviewedAt ?? periodTo;
-        return sum + resolveFinanceSnapshot(item, effectiveAt).rmbAmount;
-      }, 0);
-      businessRmbAmount = roundMoney(
-        businessFees.reduce((sum: number, row: any) => sum + Number(row.businessRmbAmount ?? 0), 0)
-        + regularBusinessRmbAmount
-      );
-    } else {
-      const sourceWhere = type === 'MARKET'
-        ? { ownerType: 'MARKET', matchStatus: 'MATCHED', confirmationStatus: 'CONFIRMED' }
-        : warehouseProfitSettlementSourceWhere(periodFrom, periodTo, siteScope as string);
-      const fees = await database.miscFeeRecord.findMany({
-        where: {
-          ...sourceWhere,
-          ...(type === 'MARKET' ? { reviewedAt: { gte: periodFrom, lte: periodTo } } : {}),
-          auditStatus: 'APPROVED',
-          voidedAt: null,
-          settlementLines: {
-            none: {
-              settlement: { type },
-              ...(excludedSettlementId ? { settlementId: { not: excludedSettlementId } } : {})
-            }
-          }
-        }
-      });
-      businessRmbAmount = roundMoney(fees.reduce((sum: number, row: any) => sum + Number(row.businessRmbAmount ?? 0), 0));
-      payableRmbAmount = roundMoney(fees.reduce((sum: number, row: any) => sum + Number(row.payableRmbAmount ?? 0), 0));
-      unmatchedPayableRmbAmount = roundMoney(fees.filter((row: any) => !row.shipmentId).reduce((sum: number, row: any) => sum + Number(row.payableRmbAmount ?? 0), 0));
-      lines = fees.map((row: any) => ({
-        sourceKey: `${type}:MISC_FEE:${row.id}`,
-        miscFeeRecordId: row.id,
-        shipmentId: row.shipmentId,
-        customerCode: row.customerCodeSnapshot,
-        systemOrderNo: row.systemOrderNoSnapshot,
-        salesperson: row.salespersonSnapshot,
-        agentName: row.agentName,
-        feeName: row.feeName,
-        sourceType: row.sourceType,
-        businessRmbAmount: row.businessRmbAmount ?? 0,
-        payableRmbAmount: row.payableRmbAmount ?? 0,
-        receivableRmbAmount: 0,
-        profitRmbAmount: Number(row.businessRmbAmount ?? 0) - Number(row.payableRmbAmount ?? 0),
-        unmatched: !row.shipmentId,
-        snapshot: toAuditJson({
-          businessAmount: row.businessAmount === null ? undefined : Number(row.businessAmount),
-          businessCurrency: row.businessCurrency,
-          businessExchangeRate: Number(row.businessExchangeRate ?? 0),
-          payableAmount: Number(row.payableAmount),
-          payableCurrency: row.payableCurrency,
-          payableExchangeRate: Number(row.payableExchangeRate ?? 0),
-          ownerSite: row.ownerSiteSnapshot,
-          confirmedAt: row.confirmedAt,
-          reviewedAt: row.reviewedAt,
-          profitEligibleAt: row.profitEligibleAt
-        })
-      }));
+    } catch (error) {
+      this.logger.error('阶段停留历史读取失败，列表继续返回基础运单数据', error instanceof Error ? error.stack : undefined);
+      return shipments;
     }
-    const profitRmbAmount = calculateMiscFeeProfitRmb({
-      type,
-      receivableRmbAmount,
-      businessRmbAmount,
-      payableRmbAmount
-    });
-    return { receivableRmbAmount, businessRmbAmount, payableRmbAmount, unmatchedPayableRmbAmount, profitRmbAmount, lines };
-  }
-
-  private miscFeeInclude() {
-    return {
-      customer: true,
-      shipment: true,
-      agent: true,
-      financeItems: { where: { voided: false } },
-      attachments: { orderBy: { createdAt: 'desc' } },
-      hangRequests: { orderBy: { requestedAt: 'desc' }, take: 1 },
-      payablePaymentApplication: {
-        include: {
-          paymentApplicationItem: {
-            include: {
-              paymentApplication: {
-                include: {
-                  vouchers: {
-                    where: { voucherType: 'PAYMENT_RECEIPT' },
-                    orderBy: { createdAt: 'desc' }
-                  }
-                }
-              }
-            }
-          }
-        }
-      },
-      importLine: { include: { batch: true } }
-    };
-  }
-
-  private kuayueDedupeKey(kuayueBillNo: string | null | undefined) {
-    const normalized = kuayueBillNo?.trim().replace(/\s+/g, '').toUpperCase();
-    return normalized ? `KUAYUE:${normalized}` : undefined;
-  }
-
-  private parseKuayueWorkbook(buffer: Buffer) {
-    let workbook: xlsx.WorkBook;
-    try {
-      workbook = xlsx.read(buffer, { type: 'buffer', cellDates: true });
-    } catch {
-      throw new BadRequestException('跨越账单无法解析，请确认文件未损坏');
-    }
-    const aliases = {
-      kuayueBillNo: ['跨越单号', '托运单号', '运单号', '单号'],
-      occurredAt: ['寄件日期', '开单日期', '寄件时间', '日期'],
-      pieceCount: ['件数', '数量', '总件数'],
-      chargeWeightKg: ['计费重量', '结算重量', '收费重量', '重量'],
-      freightAmount: ['运费', '运单运费', '基础运费', '运输费'],
-      insuranceAmount: ['保费', '保险费'],
-      overageAmount: ['超费', '超重费', '其他附加费'],
-      oversizeAmount: ['超长费', '超尺寸费'],
-      deliveryAmount: ['派送费', '送货费'],
-      resourceAllocationAmount: ['资源调配费', '调配费'],
-      discountAmount: ['优惠金额', '优惠', '折扣金额'],
-      payableAmount: ['应付金额', '应付金额（元）', '结算金额', '实付金额', '合计金额'],
-      senderCompany: ['寄件公司', '发件公司'],
-      sender: ['寄件信息', '寄件方', '寄件人', '发件人'],
-      senderCity: ['寄件城市', '发件城市'],
-      destinationCity: ['目的地城市', '收件城市'],
-      receiverAreaCode: ['收件区号', '目的地区号'],
-      receiverCompany: ['收件公司'],
-      receiver: ['收件信息', '收件方', '收件人'],
-      serviceType: ['服务方式', '产品类型', '服务类型']
-    } as const;
-    const normalizedAliases = Object.fromEntries(
-      Object.entries(aliases).map(([key, values]) => [key, new Set(values.map((value) => this.normalizeKuayueHeader(value)))])
-    ) as Record<keyof typeof aliases, Set<string>>;
-    let selected: { rows: unknown[][]; headerIndex: number; score: number } | undefined;
-    workbook.SheetNames.forEach((sheetName) => {
-      const sheet = workbook.Sheets[sheetName];
-      if (!sheet) return;
-      const rows = xlsx.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false }) as unknown[][];
-      rows.slice(0, 30).forEach((row, headerIndex) => {
-        const normalized = row.map((value) => this.normalizeKuayueHeader(value));
-        const score = Object.values(normalizedAliases).filter((set) => normalized.some((value) => set.has(value))).length;
-        if (!selected || score > selected.score) selected = { rows, headerIndex, score };
-      });
-    });
-    if (!selected || selected.score < 2) throw new BadRequestException('未识别到跨越账单表头，请检查列名');
-    const headers = selected.rows[selected.headerIndex].map((value) => String(value ?? '').trim());
-    const normalizedHeaders = headers.map((value) => this.normalizeKuayueHeader(value));
-    const columnIndex = (key: keyof typeof aliases) => normalizedHeaders.findIndex((header) => normalizedAliases[key].has(header));
-    const indexes = Object.fromEntries(Object.keys(aliases).map((key) => [key, columnIndex(key as keyof typeof aliases)])) as Record<keyof typeof aliases, number>;
-    const parsed: KuayueImportPreviewLine[] = [];
-    let declaredPayableAmount: number | undefined;
-    for (let offset = 0; offset < selected.rows.length - selected.headerIndex - 1; offset += 1) {
-      const row = selected.rows[selected.headerIndex + 1 + offset];
-      if (!row || !row.some((value) => String(value ?? '').trim())) continue;
-      const firstCell = this.normalizeKuayueHeader(row[0]);
-      if (firstCell === '合计' || firstCell === '总计') {
-        declaredPayableAmount = this.parseKuayueNumber(indexes.payableAmount >= 0 ? row[indexes.payableAmount] : undefined);
-        break;
-      }
-      const cell = (index: number) => index >= 0 ? row[index] : undefined;
-      const text = (index: number) => {
-        const value = cell(index);
-        return value === undefined || value === null ? undefined : String(value).trim() || undefined;
-      };
-      const number = (index: number) => this.parseKuayueNumber(cell(index));
-      const occurredAt = this.parseKuayueDate(cell(indexes.occurredAt));
-      const freightAmount = number(indexes.freightAmount);
-      const insuranceAmount = number(indexes.insuranceAmount);
-      const overageAmount = number(indexes.overageAmount);
-      const oversizeAmount = number(indexes.oversizeAmount);
-      const deliveryAmount = number(indexes.deliveryAmount);
-      const resourceAllocationAmount = number(indexes.resourceAllocationAmount);
-      const discountAmount = number(indexes.discountAmount);
-      const payableAmount = number(indexes.payableAmount);
-      const kuayueBillNo = text(indexes.kuayueBillNo);
-      const errors: string[] = [];
-      if (!kuayueBillNo) errors.push('缺少跨越单号');
-      if (indexes.payableAmount < 0) errors.push('缺少应付金额（元）列');
-      else if (payableAmount === undefined || !Number.isFinite(payableAmount)) errors.push('缺少有效应付金额');
-      else if (payableAmount < 0) errors.push('应付金额不能为负数');
-      if (!occurredAt) errors.push('缺少或无法识别寄件日期');
-      const raw = Object.fromEntries(headers.map((header, index) => [header || `列${index + 1}`, row[index] ?? null]));
-      parsed.push({
-        rowNo: selected!.headerIndex + offset + 2,
-        kuayueBillNo,
-        occurredAt,
-        pieceCount: number(indexes.pieceCount) === undefined ? undefined : Math.max(0, Math.round(number(indexes.pieceCount)!)),
-        chargeWeightKg: number(indexes.chargeWeightKg),
-        freightAmount,
-        insuranceAmount,
-        overageAmount,
-        oversizeAmount,
-        deliveryAmount,
-        resourceAllocationAmount,
-        discountAmount,
-        businessAmount: payableAmount,
-        payableAmount,
-        senderCompany: text(indexes.senderCompany),
-        sender: text(indexes.sender),
-        senderCity: text(indexes.senderCity),
-        destinationCity: text(indexes.destinationCity),
-        receiverAreaCode: text(indexes.receiverAreaCode),
-        receiverCompany: text(indexes.receiverCompany),
-        receiver: text(indexes.receiver),
-        serviceType: text(indexes.serviceType),
-        valid: errors.length === 0,
-        duplicate: false,
-        errors,
-        raw
-      });
-    }
-    if (!parsed.length) throw new BadRequestException('跨越账单没有可导入的数据行');
-    const parsedPayableAmount = roundMoney(parsed
-      .filter((line) => line.valid)
-      .reduce((sum, line) => sum + Number(line.payableAmount ?? 0), 0));
-    if (declaredPayableAmount !== undefined && Math.abs(roundMoney(declaredPayableAmount) - parsedPayableAmount) > 0.01) {
-      throw new BadRequestException(`跨越账单合计不一致：账单合计 ${roundMoney(declaredPayableAmount).toFixed(2)}，明细合计 ${parsedPayableAmount.toFixed(2)}`);
-    }
-    return { lines: parsed, declaredPayableAmount, parsedPayableAmount };
-  }
-
-  private normalizeKuayueHeader(value: unknown) {
-    return String(value ?? '').trim().replace(/[\s（）()：:【】\\/_-]+/g, '').toLowerCase();
-  }
-
-  private parseKuayueNumber(value: unknown) {
-    if (value === undefined || value === null || value === '') return undefined;
-    const parsed = Number(String(value).replace(/[,\s¥￥$]/g, '').replace(/[^\d.+-]/g, ''));
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-
-  private parseKuayueDate(value: unknown) {
-    if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
-    const text = String(value ?? '').trim();
-    if (!text) return undefined;
-    const normalized = text.replace(/[年/.]/g, '-').replace(/月/g, '-').replace(/日/g, '').replace(/\s+/g, ' ').trim();
-    const dateOnly = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    const date = dateOnly
-      ? new Date(`${dateOnly[1]}-${dateOnly[2].padStart(2, '0')}-${dateOnly[3].padStart(2, '0')}T12:00:00+08:00`)
-      : new Date(normalized);
-    return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-  }
-
-  private kuayueBillDetailsFromImportLine(row: any) {
-    const raw = row?.raw && typeof row.raw === 'object' ? row.raw as Record<string, unknown> : {};
-    const rawValue = (...aliases: string[]) => {
-      const normalizedAliases = new Set(aliases.map((value) => this.normalizeKuayueHeader(value)));
-      const entry = Object.entries(raw).find(([key]) => normalizedAliases.has(this.normalizeKuayueHeader(key)));
-      return entry?.[1];
-    };
-    const text = (...aliases: string[]) => {
-      const value = rawValue(...aliases);
-      return value === undefined || value === null ? undefined : String(value).trim() || undefined;
-    };
-    const amount = (stored: unknown, ...aliases: string[]) => {
-      if (stored !== undefined && stored !== null) return Number(stored);
-      return this.parseKuayueNumber(rawValue(...aliases));
-    };
-    return {
-      kuayueBillNo: row?.kuayueBillNo ?? text('跨越单号', '托运单号', '运单号', '单号'),
-      importedAt: row?.batch?.committedAt?.toISOString?.() ?? row?.batch?.committedAt ?? undefined,
-      senderCompany: text('寄件公司', '发件公司'),
-      sender: row?.sender ?? text('寄件人', '发件人'),
-      senderCity: text('寄件城市', '发件城市'),
-      destinationCity: text('目的地城市', '收件城市'),
-      receiverAreaCode: text('收件区号', '目的地区号'),
-      receiverCompany: text('收件公司'),
-      receiver: row?.receiver ?? text('收件人', '收件方'),
-      serviceType: row?.serviceType ?? text('服务方式', '产品类型', '服务类型'),
-      pieceCount: row?.pieceCount ?? this.parseKuayueNumber(rawValue('件数', '数量')),
-      chargeWeightKg: amount(row?.chargeWeightKg, '计费重量', '结算重量'),
-      freightAmount: amount(row?.freightAmount, '运费', '运单运费'),
-      insuranceAmount: amount(row?.insuranceAmount, '保费', '保险费'),
-      overageAmount: amount(row?.overageAmount, '超重费', '超费'),
-      oversizeAmount: amount(row?.oversizeAmount, '超长费', '超尺寸费'),
-      deliveryAmount: amount(row?.deliveryAmount, '派送费', '送货费'),
-      resourceAllocationAmount: amount(row?.resourceAllocationAmount, '资源调配费', '调配费'),
-      discountAmount: amount(row?.discountAmount, '优惠金额', '优惠', '折扣金额')
-    };
-  }
-
-  private redactKuayuePayableBreakdown(details: Record<string, unknown>) {
-    const safeDetails = { ...details };
-    for (const key of [
-      'freightAmount',
-      'insuranceAmount',
-      'overageAmount',
-      'oversizeAmount',
-      'deliveryAmount',
-      'resourceAllocationAmount',
-      'discountAmount'
-    ]) delete safeDetails[key];
-    return safeDetails;
-  }
-
-  private toKuayueImportLineSummary(row: any, includeAmounts = true, redactUnclaimedSensitive = false): KuayueImportLineSummary {
-    const details = this.kuayueBillDetailsFromImportLine(row);
-    const visibleDetails = includeAmounts ? details : this.redactKuayuePayableBreakdown(details);
-    const businessAmount = row.payableAmount === null ? undefined : Number(row.payableAmount);
-    const summary: KuayueImportLineSummary = {
-      id: row.id,
-      batchId: row.batchId,
-      batchFileName: redactUnclaimedSensitive ? '跨越账单' : row.batch.fileName,
-      batchCommittedAt: row.batch.committedAt?.toISOString?.(),
-      claimedRecordId: row.record?.id,
-      rowNo: row.rowNo,
-      occurredAt: row.occurredAt?.toISOString?.(),
-      ...visibleDetails,
-      businessAmount: includeAmounts ? businessAmount : undefined,
-      valid: row.valid,
-      duplicate: row.duplicate,
-      errors: Array.isArray(row.errors) ? row.errors : [],
-      raw: includeAmounts ? row.raw as Record<string, unknown> : {}
-    };
-    if (!includeAmounts) return summary;
-    return {
-      ...summary,
-      freightAmount: row.freightAmount === null ? undefined : Number(row.freightAmount),
-      insuranceAmount: row.insuranceAmount === null ? undefined : Number(row.insuranceAmount),
-      overageAmount: row.overageAmount === null ? undefined : Number(row.overageAmount),
-      oversizeAmount: row.oversizeAmount === null ? undefined : Number(row.oversizeAmount),
-      deliveryAmount: details.deliveryAmount,
-      resourceAllocationAmount: details.resourceAllocationAmount,
-      discountAmount: row.discountAmount === null ? undefined : Number(row.discountAmount),
-      payableAmount: row.payableAmount === null ? undefined : Number(row.payableAmount)
-    };
-  }
-
-  private miscFeeHangInclude() {
-    return { miscFeeRecord: { include: this.miscFeeInclude() }, attachments: { orderBy: { createdAt: 'desc' } } };
-  }
-
-  private miscFeePermissionSection(sourceType: string) {
-    return ({ KUAYUE: 'kuayue', WAREHOUSE_PICKUP: 'pickup', MARKET_PICKUP: 'pickup', OTHER_PICKUP: 'pickup', TALLY_MISC: 'tally', PURCHASE: 'purchase', DELIVERY: 'delivery' } as Record<string, string>)[sourceType] ?? 'pickup';
-  }
-
-  private async allowedMiscFeeSourceTypes(principal: Principal, action: 'read' | 'hang') {
-    const scope = await this.resolveMiscFeeDataScope(principal);
-    const scopeAllowed = scope === 'WAREHOUSE_SITE'
-      ? new Set<MiscFeeSourceType>(['WAREHOUSE_PICKUP', 'TALLY_MISC'])
-      : scope === 'MARKET'
-        ? new Set<MiscFeeSourceType>(['MARKET_PICKUP', 'DELIVERY'])
-        : new Set<MiscFeeSourceType>(miscFeeSourceTypes);
-    const allowed = await Promise.all(miscFeeSourceTypes.filter((sourceType) => scopeAllowed.has(sourceType)).map(async (sourceType) => ({
-      sourceType,
-      allowed: principal.role === 'ADMIN' || await this.hasPermission(principal.role, `misc-fee:${this.miscFeePermissionSection(sourceType)}:${action}` as PermissionKey)
-    })));
-    return allowed.filter((item) => item.allowed).map((item) => item.sourceType);
-  }
-
-  private profitSettlementSection(type: string) {
-    return ({ MARKET: 'market-profit', WAREHOUSE: 'warehouse-profit', FINANCE: 'finance-profit' } as Record<string, string>)[type] ?? 'finance-profit';
-  }
-
-  private async ensureProfitSettlementDataScope(principal: Principal, type: ProfitSettlementType) {
-    const scope = await this.resolveMiscFeeDataScope(principal);
-    const allowed = scope === 'ALL'
-      || (scope === 'MARKET' && type === 'MARKET')
-      || (scope === 'WAREHOUSE_SITE' && type === 'WAREHOUSE');
-    if (!allowed) throw new ForbiddenException('当前杂费数据范围不能查看或操作该利润结算');
-  }
-
-  private assertProfitSettlementType(type: string): asserts type is ProfitSettlementType {
-    if (!['MARKET', 'WAREHOUSE', 'FINANCE'].includes(type)) {
-      throw new BadRequestException('结算类型不正确');
-    }
-  }
-
-  private async ensureMiscFeePermission(principal: Principal, section: string, action: string) {
-    const permission = `misc-fee:${section}:${action}` as PermissionKey;
-    if (principal.role === 'ADMIN' || await this.hasPermission(principal.role, permission)) return;
-    await this.recordPermissionDenied(principal, { permissions: [permission], method: 'SERVER', path: 'misc-fee' });
-    throw new ForbiddenException('无权执行该杂费操作');
-  }
-
-  private async resolveMiscFeeDataScope(principal: Principal): Promise<MiscFeeDataScope> {
-    if (principal.role === 'ADMIN') return 'ALL';
-    const permissions = await this.getPermissionsForRole(principal.role);
-    const explicitScopes: Array<[PermissionKey, MiscFeeDataScope]> = [
-      ['data-scope:misc-fee-all', 'ALL'],
-      ['data-scope:misc-fee-warehouse-site', 'WAREHOUSE_SITE'],
-      ['data-scope:misc-fee-market', 'MARKET'],
-      ['data-scope:sales-own', 'SALES_OWN']
-    ];
-    const matched = explicitScopes.filter(([permission]) => permissions.includes(permission));
-    if (matched.length !== 1) {
-      throw new ForbiddenException(matched.length > 1
-        ? '杂费数据范围配置冲突，请联系管理员'
-        : '当前岗位尚未配置杂费数据范围');
-    }
-    return matched[0][1];
-  }
-
-  private async ensureMiscFeeCustomerScope(principal: Principal, salesperson?: string | null) {
-    if (await this.resolveMiscFeeDataScope(principal) !== 'SALES_OWN') return;
-    const scope = [principal.username, principal.name, principal.nickname].filter(Boolean);
-    if (!salesperson || !scope.includes(salesperson)) throw new ForbiddenException('只能操作本人负责客户的杂费');
-  }
-
-  private async ensureMiscFeeCustomerHasActiveSalesperson(customer: { code: string; salesperson?: string | null }) {
-    const salesperson = customer.salesperson?.trim();
-    if (!salesperson) throw new BadRequestException(`客户 ${customer.code} 未配置业务员，请先补充客户资料`);
-    const account = await (this.prisma as any).user.findFirst({
-      where: {
-        enabled: true,
-        OR: [{ username: salesperson }, { name: salesperson }, { nickname: salesperson }]
-      },
-      include: { role: true }
-    });
-    if (!account || account.role?.name === 'UG_MARKET'
-      || !(await this.getPermissionsForRole(account.role?.name as RoleKey)).includes('data-scope:sales-own')) {
-      throw new BadRequestException(`客户 ${customer.code} 的归属业务员账号无效或已停用，请先补充客户资料`);
-    }
-    return account;
-  }
-
-  private async ensureMiscFeeSourceAccess(principal: Principal, sourceType: MiscFeeSourceType) {
-    const scope = await this.resolveMiscFeeDataScope(principal);
-    if (sourceType === 'TALLY_MISC') {
-      if (!['ALL', 'WAREHOUSE_SITE'].includes(scope)) throw new ForbiddenException('理货杂费只能由仓库授权岗位登记、修改和删除');
-      return;
-    }
-    if (sourceType === 'PURCHASE') {
-      if (!['ALL', 'SALES_OWN'].includes(scope)) throw new ForbiddenException('代购申请只能由业务授权岗位登记、修改、删除和发起挂账');
-      return;
-    }
-    if (scope === 'ALL') return;
-    if (scope === 'WAREHOUSE_SITE') {
-      if (!['WAREHOUSE_PICKUP', 'TALLY_MISC'].includes(sourceType)) throw new ForbiddenException('仓库岗位只能登记仓库提货和理货杂费');
-      return;
-    }
-    if (scope === 'MARKET') {
-      if (!['MARKET_PICKUP', 'DELIVERY'].includes(sourceType)) throw new ForbiddenException('市场岗位只能登记市场提货和送货费');
-      return;
-    }
-    if (isPickupFeeSourceType(sourceType)) throw new ForbiddenException('提货费只能由仓库、市场或财务授权岗位登记');
-  }
-
-  private async miscFeeScopeWhere(principal: Principal, query: MiscFeeQuery = {}) {
-    const scope = await this.resolveMiscFeeDataScope(principal);
-    const keyword = query.keyword?.trim();
-    const where: any = {
-      ...(query.sourceType ? { sourceType: query.sourceType } : {}),
-      ...(query.kuayueBillNo?.trim() ? {
-        importLine: { is: { kuayueBillNo: { contains: query.kuayueBillNo.trim(), mode: 'insensitive' } } }
-      } : {}),
-      ...(query.customerCode?.trim() ? { customerCodeSnapshot: { contains: query.customerCode.trim(), mode: 'insensitive' } } : {}),
-      ...(query.systemOrderNo?.trim() ? { systemOrderNoSnapshot: { contains: query.systemOrderNo.trim(), mode: 'insensitive' } } : {}),
-      ...(query.matchStatus ? { matchStatus: query.matchStatus } : {}),
-      ...(query.confirmationStatus ? { confirmationStatus: query.confirmationStatus } : {}),
-      ...(query.auditStatus ? { auditStatus: query.auditStatus } : {}),
-      ...(query.hangStatus ? { hangStatus: query.hangStatus } : {}),
-      ...(query.ownerType ? { ownerType: query.ownerType } : {}),
-      ...(!query.includeArchived ? { archivedAt: null } : {}),
-      ...(!query.includeVoided ? { voidedAt: null } : {}),
-      ...(query.occurredFrom || query.occurredTo ? { occurredAt: { ...(query.occurredFrom ? { gte: new Date(query.occurredFrom) } : {}), ...(query.occurredTo ? { lte: new Date(query.occurredTo) } : {}) } } : {}),
-      ...(keyword ? { OR: [{ feeName: { contains: keyword, mode: 'insensitive' } }, { customerCodeSnapshot: { contains: keyword, mode: 'insensitive' } }, { customerNameSnapshot: { contains: keyword, mode: 'insensitive' } }, { systemOrderNoSnapshot: { contains: keyword, mode: 'insensitive' } }] } : {})
-    };
-    if (scope === 'WAREHOUSE_SITE') {
-      const allowedSourceTypes: MiscFeeSourceType[] = ['WAREHOUSE_PICKUP', 'TALLY_MISC'];
-      if (query.sourceType && !allowedSourceTypes.includes(query.sourceType)) throw new ForbiddenException('无权查看该来源的杂费');
-      const site = principal.site ?? (await this.prisma.user.findUnique({ where: { id: principal.id }, select: { site: true } }))?.site;
-      if (!site) throw new ForbiddenException('仓库账号未配置站点');
-      Object.assign(where, { ownerSiteSnapshot: site, sourceType: query.sourceType ?? { in: allowedSourceTypes } });
-    } else if (scope === 'SALES_OWN') {
-      where.customer = { salesperson: { in: [principal.username, principal.name, principal.nickname].filter(Boolean) } };
-    } else if (scope === 'MARKET') {
-      const allowedSourceTypes: MiscFeeSourceType[] = ['MARKET_PICKUP', 'DELIVERY'];
-      if (query.sourceType && !allowedSourceTypes.includes(query.sourceType)) throw new ForbiddenException('无权查看该来源的杂费');
-      where.sourceType = query.sourceType ?? { in: allowedSourceTypes };
-    }
-    return where;
-  }
-
-  private async resolveWarehouseSettlementSiteScope(principal: Principal) {
-    if (await this.resolveMiscFeeDataScope(principal) !== 'WAREHOUSE_SITE') return undefined;
-    const site = principal.site ?? (await this.prisma.user.findUnique({ where: { id: principal.id }, select: { site: true } }))?.site;
-    if (!site) throw new ForbiddenException('仓库账号未配置站点');
-    return site;
-  }
-
-  private async findVisibleMiscFee(principal: Principal, id: string) {
-    const where = await this.miscFeeScopeWhere(principal, { includeArchived: true, includeVoided: true });
-    const row = await (this.prisma as any).miscFeeRecord.findFirst({ where: { ...where, id }, include: this.miscFeeInclude() });
-    if (!row) throw new NotFoundException('杂费不存在或无权查看');
-    await this.ensureMiscFeePermission(principal, this.miscFeePermissionSection(row.sourceType), 'read');
-    return row;
-  }
-
-  private async canViewMiscFeePayable(principal: Principal, sourceType?: string) {
-    if (sourceType) return this.hasPermission(principal.role, `misc-fee:${this.miscFeePermissionSection(sourceType)}:view-payable` as PermissionKey);
-    return this.hasAnyPermission(principal.role, miscFeePayableViewPermissions);
-  }
-
-  private async toMiscFeeSummary(principal: Principal, row: any): Promise<MiscFeeSummary> {
-    const canViewPayable = await this.canViewMiscFeePayable(principal, row.sourceType);
-    const canViewAgentIdentity = await this.hasAnyPermission(principal.role, [
-      'master-data:agents:read',
-      'master-data:agent-channels:read',
-      'market:pending-routing:agent-channel-view',
-      'market:routed:agent-channel-view',
-      'finance:business-cost:view-agent',
-      'finance:payable:view-sensitive'
-    ]);
-    const canViewAttachments = await this.canViewMiscFeeAttachments(principal, row.sourceType);
-    const businessItem = (row.financeItems ?? []).find((item: any) => item.miscFeeCostRole === 'BUSINESS_COST');
-    const payableItem = (row.financeItems ?? []).find((item: any) => item.miscFeeCostRole === 'PAYABLE');
-    const pending = row.payablePaymentApplication;
-    const paymentStatus = row.sourceType === 'KUAYUE' && row.archivedAt
-      ? 'PAID'
-      : pending?.paymentApplicationItem?.paymentApplication?.status === 'PAID'
-        ? 'PAID'
-        : pending?.status ?? 'NONE';
-    const paymentReceipts = (pending?.paymentApplicationItem?.paymentApplication?.vouchers ?? []).map((item: any) => ({
-      id: item.id,
-      fileName: item.fileName,
-      mimeType: item.mimeType ?? undefined,
-      sizeBytes: item.sizeBytes ?? undefined,
-      uploadedBy: item.uploadedBy ?? undefined,
-      createdAt: item.createdAt.toISOString()
-    }));
-    const cargoSnapshot = row.cargoSnapshot && typeof row.cargoSnapshot === 'object'
-      ? row.cargoSnapshot as Record<string, unknown>
-      : {};
-    const numberOrUndefined = (value: unknown) => value === null || value === undefined || value === ''
-      ? undefined
-      : Number.isFinite(Number(value)) ? Number(value) : undefined;
-    const cargoData = {
-      packageCount: numberOrUndefined(cargoSnapshot.packageCount ?? row.shipment?.packageCount),
-      actualWeightKg: numberOrUndefined(cargoSnapshot.actualWeightKg ?? row.shipment?.actualWeightKg ?? row.shipment?.weightKg),
-      volumeCbm: numberOrUndefined(cargoSnapshot.volumeCbm ?? row.shipment?.volumeCbm)
-    };
-    const hasCargoData = Object.values(cargoData).some((value) => value !== undefined);
-    const sourceLabel = ({ KUAYUE: '跨越账单', WAREHOUSE_PICKUP: '仓库提货', MARKET_PICKUP: '市场提货', OTHER_PICKUP: '其他提货', TALLY_MISC: '理货杂费', PURCHASE: '代购费', DELIVERY: '送货费' } as Record<string, string>)[row.sourceType] ?? row.sourceType;
-    return {
-      id: row.id, sourceType: row.sourceType, sourceLabel, businessNo: row.businessNo ?? undefined, feeName: row.feeName,
-      ownerType: row.ownerType,
-      ...(canViewPayable ? { ownerName: row.ownerName ?? undefined, agentId: row.agentId ?? undefined, agentName: row.agentName ?? undefined } : {}),
-      customerId: row.customerId, customerCode: row.customerCodeSnapshot, customerName: row.customerNameSnapshot, salesperson: row.salespersonSnapshot ?? undefined,
-      shipmentId: row.shipmentId ?? undefined, systemOrderNo: row.systemOrderNoSnapshot ?? undefined, customerOrderNo: row.customerOrderNoSnapshot ?? undefined, transferNo: row.transferNoSnapshot ?? undefined,
-      ...(hasCargoData ? { cargoData } : {}), ...(canViewAgentIdentity ? { dispatchAgentName: row.shipment?.agentName ?? undefined } : {}),
-      occurredAt: row.occurredAt.toISOString(), ...(row.businessAmount === null ? {} : { businessAmount: Number(row.businessAmount) }), businessCurrency: row.businessCurrency, businessSettlementMethod: row.businessSettlementMethod ?? undefined,
-      businessExchangeRate: row.businessExchangeRate === null ? undefined : Number(row.businessExchangeRate), businessRmbAmount: row.businessRmbAmount === null ? undefined : Number(row.businessRmbAmount),
-      ...(canViewPayable ? { payableAmount: Number(row.payableAmount), payableCurrency: row.payableCurrency, payableSettlementMethod: row.payableSettlementMethod ?? undefined, payableExchangeRate: row.payableExchangeRate === null ? undefined : Number(row.payableExchangeRate), payableRmbAmount: row.payableRmbAmount === null ? undefined : Number(row.payableRmbAmount), auditStatus: row.auditStatus, hangStatus: row.hangStatus, paymentStatus, payableCostFinanceItemId: payableItem?.id, latestHangRequestId: row.hangRequests?.[0]?.id } : ['PURCHASE', 'KUAYUE'].includes(row.sourceType) ? { hangStatus: row.hangStatus, paymentStatus: row.sourceType === 'PURCHASE' ? paymentStatus : undefined } : {}),
-      matchStatus: row.matchStatus, confirmationStatus: row.confirmationStatus, archivedAt: row.archivedAt?.toISOString?.(), voidedAt: row.voidedAt?.toISOString?.(), voidReason: row.voidReason ?? undefined,
-      createdBy: row.createdBy, createdRole: row.createdRole, createdSite: row.createdSite ?? undefined, ownerSite: row.ownerSiteSnapshot ?? undefined, profitEligibleAt: row.profitEligibleAt?.toISOString?.(), createdAt: row.createdAt.toISOString(), updatedAt: row.updatedAt.toISOString(), reviewedBy: canViewPayable ? row.reviewedBy ?? undefined : undefined, reviewedAt: canViewPayable ? row.reviewedAt?.toISOString?.() : undefined, confirmedBy: row.confirmedBy ?? undefined, confirmedAt: row.confirmedAt?.toISOString?.(), remark: row.remark ?? undefined, version: row.version, businessCostFinanceItemId: businessItem?.id,
-      attachments: canViewAttachments ? (row.attachments ?? []).map((item: any) => this.toMiscFeeAttachment(item)) : [],
-      paymentReceipts: canViewPayable ? paymentReceipts : [],
-      ...(row.sourceType === 'KUAYUE' && row.importLine ? {
-        kuayueBill: canViewPayable
-          ? this.kuayueBillDetailsFromImportLine(row.importLine)
-          : this.redactKuayuePayableBreakdown(this.kuayueBillDetailsFromImportLine(row.importLine))
-      } : {})
-    };
-  }
-
-  private async miscFeeCreatorLabels(usernames: Array<string | null | undefined>) {
-    const values = Array.from(new Set(usernames.filter((value): value is string => Boolean(value))));
-    if (!values.length || !(this.prisma as any).user?.findMany) return new Map<string, string>();
-    const users = await (this.prisma as any).user.findMany({
-      where: { username: { in: values } },
-      select: { username: true, name: true, nickname: true }
-    });
-    return new Map<string, string>(users.map((user: any) => [
-      user.username,
-      user.nickname?.trim() || user.name?.trim() || user.username
+    const historyByShipmentId = new Map<string, ShipmentStageHistoryRecord[]>();
+    historyRows.forEach((row) => historyByShipmentId.set(row.shipmentId, [
+      ...(historyByShipmentId.get(row.shipmentId) ?? []),
+      { stageKey: row.stageKey as ShipmentStageHistoryRecord['stageKey'], enteredAt: row.enteredAt, exitedAt: row.exitedAt, visitNo: row.visitNo }
     ]));
+    const reviewRowsByShipmentId = new Map<string, typeof reviewRows>();
+    reviewRows.forEach((row) => reviewRowsByShipmentId.set(row.target, [...(reviewRowsByShipmentId.get(row.target) ?? []), row]));
+
+    return shipments.map((shipment) => {
+      const shipmentHistory = historyByShipmentId.get(shipment.id) ?? [];
+      const stageResolution = resolveShipmentDwellStage(shipment, reviewRowsByShipmentId.get(shipment.id) ?? []);
+      const fallbackEnteredAt = stageResolution.stageKey
+        ? stageResolution.fallbackEnteredAt ?? stageFallbackEnteredAt(shipment, stageResolution.stageKey)
+        : undefined;
+      const enrichedHistory = [...shipmentHistory];
+      if (shipment.status === 'OUTBOUNDED'
+        && stageResolution.stageKey
+        && stageResolution.stageKey !== 'OUTBOUNDED'
+        && shipment.outboundAt
+        && !enrichedHistory.some((row) => row.stageKey === 'OUTBOUNDED')) {
+        enrichedHistory.push({
+          stageKey: 'OUTBOUNDED',
+          enteredAt: shipment.outboundAt,
+          exitedAt: fallbackEnteredAt ?? shipment.outboundAt,
+          visitNo: 1
+        });
+      }
+      const currentHistory = !stageResolution.stageKey || enrichedHistory.some((row) => row.stageKey === stageResolution.stageKey)
+        ? enrichedHistory
+        : fallbackEnteredAt
+          ? [...enrichedHistory, { stageKey: stageResolution.stageKey, enteredAt: fallbackEnteredAt, visitNo: 1 }]
+          : enrichedHistory;
+      const stageDwellHistory = buildShipmentStageDwellHistory(currentHistory);
+      const stageDwell = buildShipmentStageDwell(currentHistory, stageResolution.stageKey, fallbackEnteredAt);
+      return {
+        ...shipment,
+        ...(stageDwellHistory.length ? { stageDwellHistory } : {}),
+        ...(stageDwell ? { stageDwell } : {})
+      };
+    });
   }
 
-  private toMiscFeeAttachment(row: any) {
-    return { id: row.id, purpose: row.purpose, fileName: row.fileName, mimeType: row.mimeType ?? undefined, sizeBytes: row.sizeBytes ?? undefined, url: `/api/misc-fee-attachments/${row.id}/file`, uploadedBy: row.uploadedBy ?? undefined, createdAt: row.createdAt.toISOString() };
-  }
-
-  private async toMiscFeeHangSummary(principal: Principal, row: any): Promise<MiscFeeHangRequestSummary> {
-    const canViewAttachments = await this.canViewMiscFeeAttachments(principal, row.miscFeeRecord.sourceType);
-    const canViewPayable = await this.canViewMiscFeePayable(principal, row.miscFeeRecord.sourceType);
-    const sourceAttachments = (row.miscFeeRecord.attachments ?? []).filter((item: any) => !item.hangRequestId);
-    return {
-      id: row.id,
-      miscFeeRecordId: row.miscFeeRecordId,
-      status: row.status,
-      progressStatus: this.miscFeeHangProgressStatus(row),
-      requestedBy: row.requestedBy,
-      requestedAt: row.requestedAt.toISOString(),
-      reviewedBy: row.reviewedBy ?? undefined,
-      reviewedAt: row.reviewedAt?.toISOString?.(),
-      withdrawnBy: row.withdrawnBy ?? undefined,
-      withdrawnAt: row.withdrawnAt?.toISOString?.(),
-      remark: row.remark ?? undefined,
-      rejectionReason: row.rejectionReason ?? undefined,
-      ...(canViewPayable ? { pendingPaymentId: row.miscFeeRecord?.payablePaymentApplication?.id } : {}),
-      canWithdraw: row.status === 'PENDING' && row.requestedBy === principal.username,
-      version: row.version,
-      fee: await this.toMiscFeeSummary(principal, row.miscFeeRecord),
-      attachments: canViewAttachments ? (row.attachments ?? []).map((item: any) => this.toMiscFeeAttachment(item)) : [],
-      sourceAttachments: canViewAttachments ? sourceAttachments.map((item: any) => this.toMiscFeeAttachment(item)) : []
-    };
-  }
-
-  private miscFeeHangProgressStatus(row: any): MiscFeeHangProgressStatus {
-    if (row.status === 'PENDING') return 'PENDING_APPROVAL';
-    if (row.status === 'REJECTED') return 'REJECTED';
-    if (row.status === 'WITHDRAWN') return 'WITHDRAWN';
-    const pending = row.miscFeeRecord?.payablePaymentApplication;
-    if (!pending) return 'PAYMENT_MISSING';
-    if (pending.paymentApplicationItem?.paymentApplication?.status === 'PAID' || pending.status === 'PAID') return 'PAID';
-    if (pending.status === 'APPLIED') return 'PAYMENT_IN_PROGRESS';
-    if (pending.status === 'INVALIDATED') return 'INVALIDATED';
-    if (pending.status === 'PENDING' || pending.status === 'READY') return 'PENDING_PAYMENT';
-    return 'PAYMENT_MISSING';
-  }
-
-  private async ensureCanApproveMiscFeeHangRequests(principal: Principal, ids: string[]) {
-    const feeScope = await this.miscFeeScopeWhere(principal, { includeArchived: true, includeVoided: true });
-    const visibleRequests = await (this.prisma as any).miscFeeHangRequest.count({
-      where: { id: { in: ids }, miscFeeRecord: { is: feeScope } }
-    });
-    if (visibleRequests !== ids.length) throw new NotFoundException('挂账申请不存在或不在当前数据范围');
-    const canApproveAnyMiscHang = principal.role === 'ADMIN'
-      || await this.hasPermission(principal.role, 'misc-fee:hang:hang-approve');
-    if (canApproveAnyMiscHang) return;
-    if (await this.hasPermission(principal.role, 'finance:payable:audit')) {
-      const requests = await (this.prisma as any).miscFeeHangRequest.findMany({
-        where: { id: { in: ids } },
-        select: { id: true, miscFeeRecord: { select: { sourceType: true } } }
-      });
-      if (requests.length === ids.length && requests.every((request: any) => request.miscFeeRecord?.sourceType === 'KUAYUE')) return;
-    }
-    await this.recordPermissionDenied(principal, {
-      permissions: ['misc-fee:hang:hang-approve', 'finance:payable:audit'],
-      method: 'SERVER',
-      path: 'misc-fee/hang-requests'
-    });
-    throw new ForbiddenException('无权审核挂账');
-  }
-
-  private async approveMiscFeeHangRequestInTransaction(
-    tx: any,
-    principal: Principal,
-    id: string,
-    input: MiscFeeActionInput
-  ) {
-    const feeScope = await this.miscFeeScopeWhere(principal, { includeArchived: true, includeVoided: true });
-    const current = await tx.miscFeeHangRequest.findFirst({
-      where: { id, miscFeeRecord: { is: feeScope } },
-      include: this.miscFeeHangInclude()
-    });
-    if (!current) throw new NotFoundException('挂账申请不存在');
-    if (current.status === 'APPROVED') return current;
-    if (current.status !== 'PENDING') throw new BadRequestException('只有待同意挂账可以处理');
-    const fee = current.miscFeeRecord;
-    if (fee.voidedAt) throw new BadRequestException('已作废费用不能同意挂账');
-    if (!Number.isFinite(Number(fee.payableAmount)) || Number(fee.payableAmount) < 0) throw new BadRequestException('应付成本必须为非负数');
-    if (fee.sourceType === 'TALLY_MISC'
-      && (fee.confirmationStatus !== 'CONFIRMED' || fee.matchStatus !== 'MATCHED' || !fee.shipmentId || fee.auditStatus !== 'APPROVED')) {
-      throw new BadRequestException('理货杂费必须完成仓库确认、订单匹配和财务审核后才能同意挂账');
-    }
-    if (fee.sourceType === 'KUAYUE' && (!Number.isFinite(Number(fee.businessAmount)) || Number(fee.businessAmount) < 0)) {
-      throw new BadRequestException('跨越业务成本必须为非负数');
-    }
-    const canApproveBeforePayableAudit = fee.sourceType === 'PURCHASE'
-      || fee.sourceType === 'KUAYUE'
-      || (miscFeePayableFirstSourceTypes.has(fee.sourceType) && fee.sourceType !== 'TALLY_MISC');
-    if (fee.auditStatus !== 'APPROVED' && !canApproveBeforePayableAudit) throw new BadRequestException('应付尚未审核，不能同意挂账');
-    this.normalizePaymentCurrency(fee.payableCurrency);
-    const payableSnapshot = fee.auditStatus === 'APPROVED'
-      ? undefined
-      : await this.miscFeeRmbSnapshot(Number(fee.payableAmount), fee.payableCurrency, new Date(), tx);
-    const kuayueBusinessSnapshot = fee.sourceType === 'KUAYUE' && fee.confirmationStatus !== 'CONFIRMED'
-      ? await this.miscFeeRmbSnapshot(Number(fee.businessAmount), fee.businessCurrency, new Date(), tx)
-      : undefined;
-    const existingPending = await tx.payablePaymentApplication.findUnique({
-      where: { miscFeeRecordId: fee.id },
-      include: { paymentApplicationItem: true }
-    });
-    if (existingPending?.paymentApplicationItem || (existingPending && ['APPLIED', 'PAID'].includes(existingPending.status))) {
-      throw new ConflictException('该费用已进入付款申请或已付款，不能重复生成待付款');
-    }
-    if (existingPending && !['PENDING', 'READY', 'INVALIDATED'].includes(existingPending.status)) {
-      throw new ConflictException('该费用已有不可恢复的待付款状态，请先核对付款链路');
-    }
-    const reviewedAt = new Date();
-    const changed = await tx.miscFeeHangRequest.updateMany({
-      where: { id, version: input.version, status: 'PENDING' },
-      data: { status: 'APPROVED', reviewedBy: principal.username, reviewedAt, version: { increment: 1 } }
-    });
-    if (changed.count !== 1) throw new ConflictException('挂账申请已被其他会话处理');
-    const feeChanged = await tx.miscFeeRecord.updateMany({
+  private async syncCustomerServiceDataStage(shipmentId: string, at = new Date()): Promise<void> {
+    const shipment = await this.prisma.shipment.findUnique({ where: { id: shipmentId }, select: { id: true, status: true, outboundAt: true, transferNo: true } });
+    if (!shipment || shipment.status !== 'OUTBOUNDED') return;
+    const rows = await this.prisma.auditLog.findMany({
       where: {
-        id: fee.id,
-        version: fee.version,
-        voidedAt: null,
-        hangStatus: 'PENDING',
-        auditStatus: canApproveBeforePayableAudit ? { in: ['PENDING', 'APPROVED'] } : 'APPROVED'
+        target: shipmentId,
+        action: {
+          in: [
+            'customer_service.business_data.approved',
+            'customer_service.business_data.reversed',
+            'customer_service.business_data.updated',
+            'customer_service.agent_data.approved',
+            'customer_service.agent_data.reversed',
+            'customer_service.agent_data.updated'
+          ]
+        }
       },
-      data: {
-        ...(payableSnapshot ? {
-          auditStatus: 'APPROVED',
-          reviewedBy: principal.username,
-          reviewedAt,
-          payableExchangeRate: payableSnapshot.rate,
-          payableRmbAmount: payableSnapshot.rmbAmount,
-          profitEligibleAt: fee.confirmationStatus === 'CONFIRMED' ? reviewedAt : null
-        } : {}),
-        ...(kuayueBusinessSnapshot ? {
-          confirmationStatus: 'CONFIRMED',
-          confirmedBy: principal.username,
-          confirmedAt: reviewedAt,
-          businessExchangeRate: kuayueBusinessSnapshot.rate,
-          businessRmbAmount: kuayueBusinessSnapshot.rmbAmount,
-          profitEligibleAt: reviewedAt
-        } : {}),
-        hangStatus: 'APPROVED',
-        version: { increment: 1 }
-      }
+      orderBy: { createdAt: 'asc' },
+      select: { action: true, after: true, createdAt: true }
     });
-    if (feeChanged.count !== 1) throw new ConflictException('费用金额、审核或挂账状态已变化，请刷新后重新核对');
-    const pendingData = {
-      sourceType: 'MISC_FEE_PAYABLE',
-      shipmentId: fee.shipmentId,
-      amount: fee.payableAmount,
-      currency: fee.payableCurrency,
-      status: 'READY',
-      applicationStatus: 'PENDING',
-      invalidatedAt: null,
-      remark: null
-    };
-    const pending = existingPending
-      ? await tx.payablePaymentApplication.update({ where: { id: existingPending.id }, data: pendingData })
-      : await tx.payablePaymentApplication.create({ data: { ...pendingData, miscFeeRecordId: fee.id } });
-    const refreshed = await tx.miscFeeRecord.findUnique({ where: { id: fee.id } });
-    await this.ensureMiscFeeOrderFinanceItems(tx, refreshed);
-    await tx.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'misc_fee.hang.approve',
-        target: id,
-        before: toAuditJson({
-          confirmationStatus: fee.confirmationStatus,
-          auditStatus: fee.auditStatus,
-          hangStatus: fee.hangStatus,
-          businessAmount: fee.sourceType === 'KUAYUE' ? Number(fee.businessAmount) : undefined,
-          businessCurrency: fee.sourceType === 'KUAYUE' ? fee.businessCurrency : undefined,
-          payableAmount: Number(fee.payableAmount),
-          payableCurrency: fee.payableCurrency
-        }),
-        after: toAuditJson({
-          pendingPaymentId: pending.id,
-          auditCompleted: fee.auditStatus !== 'APPROVED',
-          confirmationStatus: fee.sourceType === 'KUAYUE' ? 'CONFIRMED' : fee.confirmationStatus,
-          auditStatus: 'APPROVED',
-          hangStatus: 'APPROVED',
-          businessExchangeRate: kuayueBusinessSnapshot?.rate ?? fee.businessExchangeRate,
-          businessRmbAmount: kuayueBusinessSnapshot?.rmbAmount ?? fee.businessRmbAmount,
-          payableExchangeRate: payableSnapshot?.rate ?? fee.payableExchangeRate,
-          payableRmbAmount: payableSnapshot?.rmbAmount ?? fee.payableRmbAmount,
-          paymentRoute: 'HANG_THEN_PAYMENT'
-        })
-      }
-    });
-    return tx.miscFeeHangRequest.findUnique({ where: { id }, include: this.miscFeeHangInclude() });
-  }
-
-  private async canViewMiscFeeAttachments(principal: Principal, sourceType: string) {
-    if (isPickupFeeSourceType(sourceType) && !await this.canViewMiscFeePayable(principal, sourceType)) return false;
-    return this.hasPermission(principal.role, `misc-fee:${this.miscFeePermissionSection(sourceType)}:attachment-view` as PermissionKey);
-  }
-
-  private validateMiscFeeInput(input: MiscFeeInput) {
-    if (!input.customerCode?.trim()) throw new BadRequestException('客户编号不能为空');
-    if (!input.feeName?.trim()) throw new BadRequestException('费用名称不能为空');
-    if (!input.occurredAt || Number.isNaN(new Date(input.occurredAt).getTime())) throw new BadRequestException('发生日期不正确');
-    if (input.businessAmount !== undefined && (!Number.isFinite(Number(input.businessAmount)) || Number(input.businessAmount) < 0)) throw new BadRequestException('业务成本必须为非负数');
-    if (input.sourceType === 'PURCHASE' && input.businessAmount === undefined) throw new BadRequestException('代购费业务成本不能为空');
-    if (input.payableAmount !== undefined && (!Number.isFinite(Number(input.payableAmount)) || Number(input.payableAmount) < 0)) throw new BadRequestException('应付成本必须为非负数');
-    if (input.sourceType === 'PURCHASE' && this.normalizeMiscFeeCurrency(input.businessCurrency) !== 'RMB') {
-      throw new BadRequestException('代购费首版仅支持人民币业务成本');
-    }
-    if (input.sourceType === 'DELIVERY' && this.normalizeMiscFeeCurrency(input.payableCurrency) !== 'RMB') {
-      throw new BadRequestException('送货费应付成本仅支持人民币');
-    }
-    if (isPickupFeeSourceType(input.sourceType)
-      && (this.normalizeMiscFeeCurrency(input.businessCurrency) !== 'RMB' || this.normalizeMiscFeeCurrency(input.payableCurrency) !== 'RMB')) {
-      throw new BadRequestException('提货费业务成本和应付成本仅支持人民币');
-    }
-  }
-
-  private async isMiscFeeShipmentFullySettledById(shipmentId: string) {
-    const shipment = await (this.prisma as any).shipment.findUnique({
-      where: { id: shipmentId },
-      select: {
-        receivableFees: {
-          where: { voided: false },
-          select: { amount: true, settled: true, receivedAmount: true, receiptStatus: true }
-        },
-        financeItems: {
-          where: { type: 'RECEIVABLE', voided: false },
-          select: { amount: true, receivedAmount: true, receiptStatus: true }
+    const latestFirstRows = [...rows].sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+    const businessApproved = isCustomerServiceDataApprovedFromRows(latestFirstRows, 'business', shipment.outboundAt ?? undefined);
+    const agentApproved = isCustomerServiceDataApprovedFromRows(latestFirstRows, 'agent', shipment.outboundAt ?? undefined);
+    const targetStage = businessApproved && agentApproved && !shipment.transferNo
+      ? 'TRANSFER_NO'
+      : businessApproved || agentApproved
+        ? 'DATA_CONFIRM'
+        : 'OUTBOUNDED';
+    const targetRows = rows.filter((row) => targetStage === 'TRANSFER_NO'
+      ? row.action.endsWith('.approved')
+      : targetStage === 'DATA_CONFIRM'
+        ? row.action.endsWith('.approved') || row.action.endsWith('.updated')
+        : false);
+    const targetAt = targetStage === 'TRANSFER_NO'
+      ? targetRows[targetRows.length - 1]?.createdAt ?? at
+      : targetStage === 'DATA_CONFIRM'
+        ? targetRows[0]?.createdAt ?? at
+        : at;
+    try {
+      if (targetStage !== 'OUTBOUNDED') {
+        const outboundHistory = await this.prisma.shipmentStageHistory.findFirst({
+          where: { shipmentId, stageKey: 'OUTBOUNDED' },
+          select: { id: true }
+        });
+        if (!outboundHistory) {
+          await this.openShipmentStage(shipmentId, 'OUTBOUNDED', shipment.outboundAt ?? at, 'DISPATCH');
+          await this.closeOpenShipmentStage(shipmentId, targetAt, `DATA_REVIEW:${targetStage}`);
         }
       }
-    });
-    return shipment ? isShipmentReceivableFullySettled(shipment) : false;
-  }
-
-  private async resolveMiscFeeShipment(principal: Principal, input: Pick<MiscFeeInput, 'shipmentId' | 'systemOrderNo'>, customerId: string) {
-    if (!input.shipmentId && !input.systemOrderNo?.trim()) return undefined;
-    const shipment = await (this.prisma as any).shipment.findFirst({
-      where: { customerId, deletedAt: null, ...(input.shipmentId ? { id: input.shipmentId } : { systemOrderNo: input.systemOrderNo?.trim() }) },
-      include: { customer: true }
-    });
-    if (!shipment) throw new BadRequestException('订单不存在或不属于该客户');
-    await this.ensureWarehouseMiscFeeShipmentSite(principal, shipment.customer.code);
-    return shipment;
-  }
-
-  private async ensureWarehouseMiscFeeShipmentSite(principal: Principal, customerCode: string) {
-    if (await this.resolveMiscFeeDataScope(principal) !== 'WAREHOUSE_SITE') return;
-    const site = await this.resolveWarehouseSettlementSiteScope(principal);
-    const owner = await this.resolveWarehousePackageOwner(customerCode);
-    if (!owner.site || owner.site !== site) throw new ForbiddenException('只能匹配本站业务员客户的订单');
-  }
-
-  private defaultMiscFeeOwnerType(sourceType: MiscFeeSourceType) {
-    if (sourceType === 'WAREHOUSE_PICKUP' || sourceType === 'TALLY_MISC') return 'WAREHOUSE';
-    if (sourceType === 'MARKET_PICKUP' || sourceType === 'DELIVERY') return 'MARKET';
-    return 'EXTERNAL';
-  }
-
-  private async resolveMiscFeeOwnerSite(ownerType: string, customerCode: string, database: any = this.prisma) {
-    if (ownerType !== 'WAREHOUSE') return undefined;
-    const owner = await this.resolveWarehousePackageOwner(customerCode, database);
-    const site = owner.site?.trim();
-    if (!site) throw new BadRequestException('客户归属业务员未配置站点，不能登记仓库归属费用');
-    return site;
-  }
-
-  private normalizeMiscFeeCurrency(value?: string) {
-    const currency = (value?.trim() || 'RMB').toUpperCase();
-    return currency === 'CNY' ? 'RMB' : currency;
-  }
-
-  private async resolveMiscFeeCurrency(settlementMethod?: string, explicit?: string, forceRmb = false) {
-    if (forceRmb) return 'RMB';
-    if (explicit?.trim()) return this.normalizeMiscFeeCurrency(explicit);
-    if (settlementMethod?.trim()) {
-      const item = await (this.prisma as any).financeCatalogItem.findFirst({ where: { category: 'SETTLEMENT_METHOD', name: settlementMethod.trim(), enabled: true } });
-      if (item?.currency) return this.normalizeMiscFeeCurrency(item.currency);
+      await this.recordShipmentStageOverlayTransition(shipmentId, targetStage, targetAt, 'DATA_REVIEW');
+    } catch (error) {
+      this.logger.error('阶段停留历史写入失败，业务资料操作继续完成', error instanceof Error ? error.stack : undefined);
     }
-    return 'RMB';
   }
 
-  private async miscFeeRmbSnapshot(amount: number, currency: string, effectiveAt: Date, client: any = this.prisma) {
-    const normalized = this.normalizeMiscFeeCurrency(currency);
-    if (normalized === 'RMB') return { rate: 1, rmbAmount: roundMoney(amount) };
-    const rate = await client.exchangeRate.findFirst({ where: { baseCurrency: normalized, quoteCurrency: 'RMB', enabled: true, activeAt: { lte: effectiveAt }, OR: [{ endAt: null }, { endAt: { gte: effectiveAt } }] }, orderBy: { activeAt: 'desc' } });
-    if (!rate) throw new BadRequestException(`缺少 ${normalized} 到 RMB 的有效汇率`);
-    return { rate: Number(rate.rate), rmbAmount: roundMoney(amount * Number(rate.rate)) };
+  private async recordShipmentStageStatusTransition(
+    shipmentId: string,
+    fromStatus: ShipmentStatus | null,
+    toStatus: ShipmentStatus,
+    at = new Date(),
+    source = 'STATUS_EVENT'
+  ): Promise<void> {
+    const fromStage = fromStatus ? stageForShipmentStatus(fromStatus) : undefined;
+    const toStage = stageForShipmentStatus(toStatus);
+    if (fromStage === toStage && toStatus !== 'REVIEW_REJECTED') return;
+    try {
+      await this.closeOpenShipmentStage(shipmentId, at, `${source}:${toStatus}`);
+      if (toStage) await this.openShipmentStage(shipmentId, toStage, at, source);
+    } catch (error) {
+      this.logger.error('阶段停留历史写入失败，状态流转继续完成', error instanceof Error ? error.stack : undefined);
+    }
   }
 
-  private async financeProfitReviewSnapshotData(amountValue: unknown, currency: string | null | undefined, effectiveAt: Date, client: any = this.prisma) {
-    const amount = Number(amountValue);
-    if (!Number.isFinite(amount) || amount < 0) throw new BadRequestException('费用金额无效，不能固化利润快照');
-    const snapshot = await this.miscFeeRmbSnapshot(amount, currency ?? 'RMB', effectiveAt, client);
-    return {
-      profitExchangeRate: snapshot.rate,
-      profitRmbAmount: snapshot.rmbAmount,
-      profitEffectiveAt: effectiveAt
-    };
-  }
-
-  private async ensureMiscFeeOrderFinanceItems(tx: any, fee: any) {
-    if (!fee?.shipmentId) return;
-    const canMaterializeBusinessCost = isPickupFeeSourceType(fee.sourceType)
-      ? shouldMaterializePickupFinanceItems({ ...fee, businessAmount: fee.businessAmount === null ? null : Number(fee.businessAmount) })
-      : fee.confirmationStatus === 'CONFIRMED';
-    if (canMaterializeBusinessCost && fee.businessAmount !== null) {
-      const businessProfitSnapshot = {
-        profitExchangeRate: fee.businessExchangeRate,
-        profitRmbAmount: fee.businessRmbAmount,
-        profitEffectiveAt: fee.confirmedAt
-      };
-      await tx.shipmentFinanceItem.upsert({
-        where: { miscFeeRecordId_miscFeeCostRole: { miscFeeRecordId: fee.id, miscFeeCostRole: 'BUSINESS_COST' } },
-        create: { shipmentId: fee.shipmentId, type: 'BUSINESS_COST', name: fee.feeName, amount: fee.businessAmount, currency: fee.businessCurrency, settlementMethod: fee.businessSettlementMethod, reconciliationStatus: 'CONFIRMED', locked: true, createdBy: fee.createdBy, reviewedBy: fee.confirmedBy, reviewedAt: fee.confirmedAt, ...businessProfitSnapshot, agentId: fee.agentId, agentName: fee.agentName, remark: fee.remark, miscFeeRecordId: fee.id, miscFeeCostRole: 'BUSINESS_COST' },
-        update: { shipmentId: fee.shipmentId, name: fee.feeName, amount: fee.businessAmount, currency: fee.businessCurrency, settlementMethod: fee.businessSettlementMethod, reconciliationStatus: 'CONFIRMED', locked: true, voided: false, voidedAt: null, reviewedBy: fee.confirmedBy, reviewedAt: fee.confirmedAt, ...businessProfitSnapshot, agentId: fee.agentId, agentName: fee.agentName, remark: fee.remark }
+  private async recordShipmentStageOverlayTransition(
+    shipmentId: string,
+    stageKey: ShipmentStageHistoryRecord['stageKey'],
+    at: Date,
+    source: string
+  ): Promise<void> {
+    try {
+      const open = await this.prisma.shipmentStageHistory.findFirst({
+        where: { shipmentId, exitedAt: null },
+        orderBy: { enteredAt: 'desc' },
+        select: { stageKey: true }
       });
-    }
-    if (fee.auditStatus === 'APPROVED') {
-      const payableProfitSnapshot = {
-        profitExchangeRate: fee.payableExchangeRate,
-        profitRmbAmount: fee.payableRmbAmount,
-        profitEffectiveAt: fee.reviewedAt
-      };
-      await tx.shipmentFinanceItem.upsert({
-        where: { miscFeeRecordId_miscFeeCostRole: { miscFeeRecordId: fee.id, miscFeeCostRole: 'PAYABLE' } },
-        create: { shipmentId: fee.shipmentId, type: 'PAYABLE', name: fee.feeName, amount: fee.payableAmount, currency: fee.payableCurrency, settlementMethod: fee.payableSettlementMethod, reconciliationStatus: 'CONFIRMED', locked: true, createdBy: fee.createdBy, reviewedBy: fee.reviewedBy, reviewedAt: fee.reviewedAt, ...payableProfitSnapshot, agentId: fee.agentId, agentName: fee.agentName, remark: fee.remark, miscFeeRecordId: fee.id, miscFeeCostRole: 'PAYABLE' },
-        update: { shipmentId: fee.shipmentId, name: fee.feeName, amount: fee.payableAmount, currency: fee.payableCurrency, settlementMethod: fee.payableSettlementMethod, reconciliationStatus: 'CONFIRMED', locked: true, voided: false, voidedAt: null, reviewedBy: fee.reviewedBy, reviewedAt: fee.reviewedAt, ...payableProfitSnapshot, agentId: fee.agentId, agentName: fee.agentName, remark: fee.remark }
-      });
+      if (open?.stageKey === stageKey) return;
+      await this.closeOpenShipmentStage(shipmentId, at, `${source}:${stageKey}`);
+      await this.openShipmentStage(shipmentId, stageKey, at, source);
+    } catch (error) {
+      this.logger.error('阶段覆盖历史写入失败，业务操作继续完成', error instanceof Error ? error.stack : undefined);
     }
   }
 
-  private async matchTallyMiscFeesToShipment(
-    tx: any,
-    principal: Principal,
-    customerId: string,
-    shipment: {
-      id: string;
-      systemOrderNo: string;
-      customerOrderNo?: string | null;
-      transferNo?: string | null;
-      packageCount?: number | null;
-      actualWeightKg?: unknown;
-      volumeCbm?: unknown;
-    },
-    miscFeeIds: string[],
-    source: 'ORDER_ENTRY' | 'WAREHOUSE_DISPATCH'
-  ) {
-    if (!miscFeeIds.length) return;
-    await this.ensureMiscFeePermission(principal, 'tally', 'match');
-    await this.lockMiscFeeProfitSettlementSources(tx);
-    const rows = await tx.miscFeeRecord.findMany({
-      where: {
-        id: { in: miscFeeIds },
-        sourceType: 'TALLY_MISC',
-        customerId,
-        matchStatus: 'UNMATCHED',
-        voidedAt: null,
-        archivedAt: null
-      }
+  private async closeOpenShipmentStage(shipmentId: string, at: Date, exitReason: string): Promise<void> {
+    await this.prisma.shipmentStageHistory.updateMany({
+      where: { shipmentId, exitedAt: null },
+      data: { exitedAt: at, exitReason }
     });
-    if (rows.length !== miscFeeIds.length) throw new BadRequestException('部分理货杂费已处理或不属于该客户，请刷新后重试');
-    const unconfirmedRows = rows.filter((row: any) => row.confirmationStatus !== 'CONFIRMED');
-    if (unconfirmedRows.length) throw new BadRequestException('部分理货杂费尚未完成仓库确认，请先到理货杂费页面确认');
-    if (rows.length) await this.ensureWarehouseMiscFeeShipmentSite(principal, rows[0].customerCodeSnapshot);
-    if (source === 'WAREHOUSE_DISPATCH') {
-      const warehouseEarlyRows = rows.filter((row: any) => this.tallyMiscFeeAgeDays(row.occurredAt) < 30);
-      if (warehouseEarlyRows.length) throw new BadRequestException('发生未满 30 天的理货杂费只能由业务员在录单时匹配');
-    }
-    for (const row of rows) {
-      if (row.businessAmount === null) {
-        throw new BadRequestException(`理货杂费“${row.feeName}”尚未登记业务成本，请先由仓库补充`);
-      }
-      if (!Number.isFinite(Number(row.businessAmount)) || Number(row.businessAmount) <= 0
-        || !Number.isFinite(Number(row.payableAmount)) || Number(row.payableAmount) <= 0) {
-        throw new BadRequestException(`理货杂费“${row.feeName}”的业务成本和应付成本必须大于 0，请先由仓库修正`);
-      }
-      const confirmedAt = row.confirmedAt;
-      if (!confirmedAt) throw new BadRequestException(`理货杂费“${row.feeName}”缺少仓库确认时间，请先重新确认`);
-      const businessSnapshot = row.businessExchangeRate !== null && row.businessRmbAmount !== null
-        ? { rate: Number(row.businessExchangeRate), rmbAmount: Number(row.businessRmbAmount) }
-        : await this.miscFeeRmbSnapshot(Number(row.businessAmount), row.businessCurrency, confirmedAt, tx);
-      const changed = await tx.miscFeeRecord.updateMany({
-        where: { id: row.id, version: row.version, matchStatus: 'UNMATCHED', confirmationStatus: 'CONFIRMED', shipmentId: null },
+  }
+
+  private async openShipmentStage(
+    shipmentId: string,
+    stageKey: ShipmentStageHistoryRecord['stageKey'],
+    enteredAt: Date,
+    source: string
+  ): Promise<void> {
+    const open = await this.prisma.shipmentStageHistory.findFirst({
+      where: { shipmentId, exitedAt: null },
+      orderBy: { enteredAt: 'desc' },
+      select: { stageKey: true }
+    });
+    if (open?.stageKey === stageKey) return;
+    const latest = await this.prisma.shipmentStageHistory.findFirst({
+      where: { shipmentId, stageKey },
+      orderBy: { visitNo: 'desc' },
+      select: { visitNo: true }
+    });
+    try {
+      await this.prisma.shipmentStageHistory.create({
         data: {
-          shipmentId: shipment.id,
-          systemOrderNoSnapshot: shipment.systemOrderNo,
-          customerOrderNoSnapshot: shipment.customerOrderNo,
-          transferNoSnapshot: shipment.transferNo,
-          shipmentSnapshot: toAuditJson({
-            id: shipment.id,
-            systemOrderNo: shipment.systemOrderNo,
-            customerOrderNo: shipment.customerOrderNo,
-            transferNo: shipment.transferNo
-          }),
-          cargoSnapshot: toAuditJson({
-            packageCount: shipment.packageCount,
-            actualWeightKg: shipment.actualWeightKg,
-            volumeCbm: shipment.volumeCbm
-          }),
-          matchStatus: 'MATCHED',
-          businessExchangeRate: businessSnapshot.rate,
-          businessRmbAmount: businessSnapshot.rmbAmount,
-          profitEligibleAt: row.auditStatus === 'APPROVED' ? confirmedAt : null,
-          version: { increment: 1 }
+          shipmentId,
+          stageKey,
+          enteredAt,
+          visitNo: (latest?.visitNo ?? 0) + 1,
+          source
         }
       });
-      if (changed.count !== 1) throw new ConflictException('理货杂费已被其他会话处理，请刷新后重试');
-      await tx.miscFeeMatchHistory.create({
-        data: {
-          miscFeeRecordId: row.id,
-          shipmentId: shipment.id,
-          action: 'MATCH',
-          reason: source === 'ORDER_ENTRY' ? '业务录单匹配' : '仓库出库匹配',
-          actor: principal.username
-        }
-      });
-      await tx.payablePaymentApplication.updateMany({
-        where: { miscFeeRecordId: row.id },
-        data: { shipmentId: shipment.id }
-      });
-      await tx.paymentApplicationItem.updateMany({
-        where: { miscFeeRecordId: row.id },
-        data: { shipmentId: shipment.id }
-      });
-      const refreshed = await tx.miscFeeRecord.findUnique({ where: { id: row.id } });
-      await this.ensureMiscFeeOrderFinanceItems(tx, refreshed);
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: source === 'ORDER_ENTRY' ? 'misc_fee.tally.match_order_entry' : 'misc_fee.tally.match_dispatch',
-          target: row.id,
-          after: toAuditJson({ shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo })
-        }
-      });
+    } catch (error) {
+      if ((error as { code?: string })?.code !== 'P2002') throw error;
     }
-  }
-
-  private async transitionMiscFeeHangRequest(principal: Principal, id: string, input: MiscFeeActionInput, status: 'REJECTED' | 'WITHDRAWN'): Promise<MiscFeeHangRequestSummary> {
-    const currentScope = await this.miscFeeScopeWhere(principal, { includeArchived: true, includeVoided: true });
-    const row = await (this.prisma as any).$transaction(async (tx: any) => {
-      const current = await tx.miscFeeHangRequest.findFirst({
-        where: { id, miscFeeRecord: { is: currentScope } },
-        include: this.miscFeeHangInclude()
-      });
-      if (!current) throw new NotFoundException('挂账申请不存在');
-      if (current.status !== 'PENDING') throw new BadRequestException('只有待处理挂账可以变更');
-      if (status === 'WITHDRAWN') {
-        if (principal.role !== 'ADMIN' && current.requestedBy !== principal.username) throw new ForbiddenException('只有发起人可以撤回挂账');
-      }
-      const changed = await tx.miscFeeHangRequest.updateMany({ where: { id, version: input.version, status: 'PENDING' }, data: status === 'REJECTED' ? { status, reviewedBy: principal.username, reviewedAt: new Date(), rejectionReason: input.reason?.trim(), version: { increment: 1 } } : { status, withdrawnBy: principal.username, withdrawnAt: new Date(), version: { increment: 1 } } });
-      if (changed.count !== 1) throw new ConflictException('挂账申请已被其他会话处理');
-      await tx.miscFeeRecord.update({ where: { id: current.miscFeeRecordId }, data: { hangStatus: status, version: { increment: 1 } } });
-      await tx.auditLog.create({ data: { actorId: principal.id, action: `misc_fee.hang.${status.toLowerCase()}`, target: id, after: toAuditJson({ reason: input.reason }) } });
-      return tx.miscFeeHangRequest.findUnique({ where: { id }, include: this.miscFeeHangInclude() });
-    });
-    return this.toMiscFeeHangSummary(principal, row);
-  }
-
-  private async nextMiscPurchaseNo(customerCode: string) {
-    const now = new Date();
-    const date = getBeijingDateKey(now).replaceAll('-', '');
-    return `DG${customerCode}${date}${String(now.getTime()).slice(-9)}${randomUUID().slice(0, 4).toUpperCase()}`;
-  }
-
-  private async lockMiscFeeProfitSettlementSources(database: any) {
-    await database.$queryRaw(Prisma.sql`SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(${MISC_FEE_PROFIT_SETTLEMENT_LOCK_ID})`);
-  }
-
-  private async withMiscFeeFinancialLock<T>(work: (database: any) => Promise<T>): Promise<T> {
-    return (this.prisma as any).$transaction(async (database: any) => {
-      await this.lockMiscFeeProfitSettlementSources(database);
-      return work(database);
-    }, { maxWait: 60_000, timeout: 120_000 });
-  }
-
-  private async nextProfitSettlementNo(type: string, database: any = this.prisma) {
-    const prefix = `JF${type.slice(0, 2)}${getBeijingDateKey(new Date()).replaceAll('-', '')}`;
-    const [row] = await database.$queryRaw(
-      Prisma.sql`SELECT nextval('"ProfitSettlementNoSequence"')::bigint AS "sequence"`
-    ) as Array<{ sequence: bigint }>;
-    const sequence = Number(row?.sequence);
-    if (!Number.isInteger(sequence) || sequence < 1) throw new ConflictException('利润结算单号生成失败，请重试');
-    return `${prefix}${String(sequence).padStart(3, '0')}`;
-  }
-
-  private async reviewedReceivableRmbTotal(from: Date, to: Date) {
-    const rows = await (this.prisma as any).shipmentFinanceItem.findMany({ where: { type: 'RECEIVABLE', reconciliationStatus: 'CONFIRMED', reviewedAt: { gte: from, lte: to }, voided: false } });
-    let total = 0;
-    for (const row of rows) total += (await this.miscFeeRmbSnapshot(Number(row.amount), row.currency, row.reviewedAt ?? to)).rmbAmount;
-    return roundMoney(total);
-  }
-
-  private toProfitSettlementSummary(row: any): ProfitSettlementSummary {
-    return { id: row.id, settlementNo: row.settlementNo, type: row.type, siteScope: row.siteScope ?? undefined, status: row.status, periodFrom: row.periodFrom.toISOString(), periodTo: row.periodTo.toISOString(), receivableRmbAmount: Number(row.receivableRmbAmount), businessRmbAmount: Number(row.businessRmbAmount), payableRmbAmount: Number(row.payableRmbAmount), unmatchedPayableRmbAmount: Number(row.unmatchedPayableRmbAmount), profitRmbAmount: Number(row.profitRmbAmount), createdBy: row.createdBy, createdAt: row.createdAt.toISOString(), submittedBy: row.submittedBy ?? undefined, submittedAt: row.submittedAt?.toISOString?.(), reviewedBy: row.reviewedBy ?? undefined, reviewedAt: row.reviewedAt?.toISOString?.(), archivedAt: row.archivedAt?.toISOString?.(), version: row.version };
   }
 
   private async updateShipmentStatus(
@@ -26298,9 +24644,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async createEvent(shipmentId: string, fromStatus: ShipmentStatus | null, toStatus: ShipmentStatus, note: string) {
+    const createdAt = new Date();
     await this.prisma.shipmentEvent.create({
-      data: { shipmentId, fromStatus, toStatus, note }
+      data: { shipmentId, fromStatus, toStatus, note, createdAt }
     });
+    await this.recordShipmentStageStatusTransition(shipmentId, fromStatus, toStatus, createdAt);
   }
 
   private parseTrackingDate(value: string | number): Date {
@@ -26374,8 +24722,45 @@ const shipmentIncludes = {
   agent: true,
   receivableFees: { where: { voided: false }, orderBy: { createdAt: 'desc' } },
   financeItems: { where: { voided: false }, orderBy: { createdAt: 'desc' } },
+  payableFees: true,
   trackingEvents: { where: { kind: 'LOGISTICS' }, orderBy: { happenedAt: 'desc' }, take: 1 },
   problemTickets: true
+} as const;
+
+const customerServiceDataConfirmShipmentIncludes = {
+  customer: { select: { id: true, code: true, name: true, salesperson: true } },
+  channel: { select: { name: true, carrier: { select: { name: true } } } },
+  agent: {
+    select: {
+      id: true,
+      name: true,
+      invoiceTemplateName: true,
+      invoiceTemplateUrl: true,
+      invoiceTemplateName2: true,
+      invoiceTemplateUrl2: true,
+      invoiceTemplateName3: true,
+      invoiceTemplateUrl3: true,
+      invoiceTemplates: true
+    }
+  },
+  financeItems: {
+    where: { voided: false, type: 'PAYABLE', name: '代理成本' },
+    orderBy: { createdAt: 'desc' },
+    select: {
+      type: true,
+      name: true,
+      amount: true,
+      currency: true,
+      settlementMethod: true,
+      chargeWeightKg: true,
+      unitPrice: true,
+      remark: true,
+      voided: true,
+      createdAt: true
+    }
+  },
+  trackingEvents: { where: { kind: 'LOGISTICS' }, orderBy: { happenedAt: 'desc' }, take: 1, select: { status: true, happenedAt: true } },
+  problemTickets: { where: { status: { not: 'CLOSED' } }, select: { id: true, status: true } }
 } as const;
 
 function summarizeShipmentReceivables(row: ShipmentWithRelations): Shipment['receivableSummary'] {
@@ -26401,6 +24786,35 @@ function summarizeShipmentReceivables(row: ShipmentWithRelations): Shipment['rec
     currencies: amounts.map((item) => item.currency),
     settlementMethods: [...settlementMethods].sort((left, right) => left.localeCompare(right))
   };
+}
+
+function summarizeLinePoolFinanceRow(row: ShipmentWithRelations): LineShipmentFinanceSummary {
+  const items: LineShipmentFinanceSourceItem[] = [
+    ...(row.receivableFees ?? []).filter((item) => !item.voided).map((item) => ({
+      type: 'RECEIVABLE' as const,
+      amount: Number(item.amount),
+      currency: item.currency ?? 'RMB',
+      reconciliationStatus: (item.reconciliationStatus === 'CONFIRMED' || item.reconciliationStatus === 'LOCKED' ? item.reconciliationStatus : 'PENDING') as LineShipmentFinanceSourceItem['reconciliationStatus'],
+      receiptStatus: (item.receiptStatus === 'RECEIVED' || item.receiptStatus === 'PARTIAL' ? item.receiptStatus : 'UNPAID') as LineShipmentFinanceSourceItem['receiptStatus']
+    })),
+    ...(row.payableFees ?? []).filter((item) => !item.voided).map((item) => ({
+      type: 'PAYABLE' as const,
+      amount: Number(item.amount),
+      currency: 'RMB',
+      settled: item.settled === true,
+      reconciliationStatus: item.settled === true ? 'CONFIRMED' as const : 'PENDING' as const
+    })),
+    ...(row.financeItems ?? []).filter((item) => !item.voided && ['RECEIVABLE', 'PAYABLE', 'BUSINESS_COST'].includes(item.type)).map((item) => ({
+      type: item.type as LineShipmentFinanceSourceItem['type'],
+      amount: Number(item.amount),
+      currency: item.currency ?? 'RMB',
+      reconciliationStatus: ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? '') ? item.reconciliationStatus as 'CONFIRMED' | 'LOCKED' : 'PENDING' as const,
+      settled: item.settled === true || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? ''),
+      receiptStatus: (item.receiptStatus === 'RECEIVED' || item.receiptStatus === 'PARTIAL' ? item.receiptStatus : 'UNPAID') as LineShipmentFinanceSourceItem['receiptStatus'],
+      billingUnit: item.billingUnit === 'CBM' ? 'CBM' as const : item.billingUnit === 'KG' ? 'KG' as const : undefined
+    }))
+  ];
+  return summarizeLineShipmentFinance(items);
 }
 
 function normalizeShipmentRouteArchive(value: unknown, createdAt?: Date): ShipmentRouteArchiveFields {
@@ -26507,6 +24921,38 @@ function applyShipmentDispatchArchiveFields(shipment: Shipment, archive?: Shipme
   };
 }
 
+function summarizeShipmentRouteCostsFromRow(row: ShipmentWithRelations) {
+  return summarizeShipmentRouteCosts([
+    ...(row.financeItems ?? [])
+      .filter((item) => item.type === 'PAYABLE')
+      .map((item) => ({
+        name: item.name,
+        amount: Number(item.amount),
+        currency: item.currency,
+        chargeWeightKg: item.chargeWeightKg === null || item.chargeWeightKg === undefined ? undefined : Number(item.chargeWeightKg),
+        unitPrice: item.unitPrice === null || item.unitPrice === undefined ? undefined : Number(item.unitPrice),
+        voided: item.voided
+      })),
+    ...(row.payableFees ?? []).map((item) => ({
+      name: item.name,
+      amount: Number(item.amount),
+      currency: 'RMB'
+    }))
+  ]);
+}
+
+function scopeShipmentRouteCostSummary(
+  summary: Shipment['routeCostSummary'],
+  visibility: { canViewDetails: boolean; canViewTotals: boolean }
+): Shipment['routeCostSummary'] {
+  if (!summary || (!visibility.canViewDetails && !visibility.canViewTotals)) return undefined;
+  return {
+    mainFreight: visibility.canViewDetails ? summary.mainFreight : undefined,
+    otherFees: visibility.canViewDetails ? summary.otherFees : [],
+    totals: visibility.canViewTotals ? summary.totals : []
+  };
+}
+
 function mapShipment(row: ShipmentWithRelations): Shipment {
   const routePayable = row.financeItems?.find((item) => item.type === 'PAYABLE' && item.name === '代理成本' && !item.voided);
   const routeRemark = parseRoutePayableRemark(routePayable?.remark);
@@ -26563,6 +25009,7 @@ function mapShipment(row: ShipmentWithRelations): Shipment {
     restoreMode: (row as any).restoreMode ?? undefined,
     etaAt: row.etaAt?.toISOString(),
     etdAt: row.etdAt?.toISOString(),
+    vesselVoyage: (row as any).vesselVoyage ?? undefined,
     remark: (row as any).remark ?? undefined,
     businessType: row.businessType as BusinessType,
     packageType: row.packageType as 'DOC' | 'WPX' | 'PAK',
@@ -26577,9 +25024,17 @@ function mapShipment(row: ShipmentWithRelations): Shipment {
     trackingStaleDays: row.trackingStaleDays,
     isRemoteArea: row.isRemoteArea,
     status: row.status as ShipmentStatus,
+    transportTime: resolveShipmentTransportTime({
+      status: row.status as ShipmentStatus,
+      transferNo: row.transferNo ?? undefined,
+      transportStartedAt: (row as any).transportStartedAt,
+      transportCompletedAt: (row as any).transportCompletedAt,
+      signedAt: (row as any).signedAt?.toISOString?.() ?? (row as any).signedAt
+    }),
     channelId: row.channelId ?? undefined,
     channelName: row.channel?.name ?? '',
     agentId: row.agentId ?? undefined,
+    agentShortName: row.agent?.shortName ?? undefined,
     agentName: row.agent?.name ?? '',
     routedAt: routePayable?.createdAt instanceof Date ? routePayable.createdAt.toISOString() : routePayable?.createdAt,
     routeAgentChannelName: routeRemark.agentChannelName,
@@ -26615,6 +25070,35 @@ function resolveInvoiceTemplateStoredFileName(templateUrl: string | null | undef
   const storedFileName = path.slice(prefix.length);
   if (!storedFileName || storedFileName !== basename(storedFileName) || !/\.xlsx?$/i.test(storedFileName)) return undefined;
   return storedFileName;
+}
+
+function resolveStoredUploadFileName(url: string | null | undefined, segment: string, extensionPattern: RegExp): string | undefined {
+  if (!url?.startsWith(`/api/uploads/${segment}/`)) return undefined;
+  let path: string;
+  try {
+    path = decodeURIComponent(new URL(url, 'http://siyuan.local').pathname);
+  } catch {
+    return undefined;
+  }
+  const prefix = `/api/uploads/${segment}/`;
+  if (!path.startsWith(prefix)) return undefined;
+  const storedFileName = path.slice(prefix.length);
+  if (!storedFileName || storedFileName !== basename(storedFileName) || !extensionPattern.test(storedFileName)) return undefined;
+  return storedFileName;
+}
+
+function storedUploadMimeType(fileName: string) {
+  switch (extname(fileName).toLowerCase()) {
+    case '.gif': return 'image/gif';
+    case '.jpg':
+    case '.jpeg': return 'image/jpeg';
+    case '.pdf': return 'application/pdf';
+    case '.png': return 'image/png';
+    case '.webp': return 'image/webp';
+    case '.xls': return 'application/vnd.ms-excel';
+    case '.xlsx': return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    default: return 'application/octet-stream';
+  }
 }
 
 function agentInvoiceTemplateOptions(agent: ShipmentWithRelations['agent'] | null | undefined) {
@@ -26695,6 +25179,39 @@ function mapPricingRule(row: any): PricingRuleSummary {
     ratePerKg: Number(row.ratePerKg),
     currency: row.currency,
     enabled: row.enabled
+  };
+}
+
+function mapPriceBook(
+  row: any,
+  legacyModuleCounts?: Partial<Record<LegacyPricingModule, number>>,
+  importedRowCount = 0,
+  operational?: { source?: ActivePriceBookAgentSource; failedRowCount?: number }
+): PriceBookSummary {
+  const priceRowCount = Array.isArray(row.rows) ? row.rows.length : Number(row._count?.rows ?? row.rowCount ?? 0);
+  const legacyRowCount = legacyModuleCounts
+    ? Object.values(legacyModuleCounts).reduce((sum, value) => sum + Number(value ?? 0), 0)
+    : 0;
+  return {
+    id: row.id,
+    fileName: row.fileName,
+    agentId: row.agentId ?? undefined,
+    agentShortName: row.agentShortName ?? undefined,
+    rowCount: Math.max(priceRowCount, Number(importedRowCount ?? 0), legacyRowCount),
+    importRowCount: Math.max(Number(importedRowCount ?? 0), priceRowCount, legacyRowCount),
+    activeRouteCount: Number(operational?.source?.routeCount ?? 0),
+    activeQuoteRowCount: Number(operational?.source?.quoteRowCount ?? 0),
+    activeKgQuoteRowCount: Number(operational?.source?.kgQuoteRowCount ?? 0),
+    activeCbmQuoteRowCount: Number(operational?.source?.cbmQuoteRowCount ?? 0),
+    failedRowCount: Number(operational?.failedRowCount ?? 0),
+    importedAt: row.importedAt.toISOString(),
+    customRemark: row.remark ?? undefined,
+    remark: row.remark ?? undefined,
+    ...(row.targetModule ? { targetModule: row.targetModule } : {}),
+    ...(row.parserRuleVersion !== undefined && row.parserRuleVersion !== null ? { parserRuleVersion: Number(row.parserRuleVersion) } : {}),
+    ...(row.refreshStatus ? { refreshStatus: row.refreshStatus } : {}),
+    ...(row.lastRuleRefreshAt ? { lastRuleRefreshAt: row.lastRuleRefreshAt.toISOString?.() ?? new Date(row.lastRuleRefreshAt).toISOString() } : {}),
+    ...(legacyModuleCounts && Object.keys(legacyModuleCounts).length ? { legacyModuleCounts } : {})
   };
 }
 
@@ -26826,6 +25343,62 @@ function createDefaultAgentMarkupRule(agentName: string, priceBookId?: string, l
   };
 }
 
+function mapPriceBookImportJob(row: any, book?: PriceBookSummary): PriceBookImportJobSummary {
+  const rawErrorSummary = Array.isArray(row.errorSummary) ? row.errorSummary : [];
+  return {
+    id: row.id,
+    fileName: row.fileName,
+    targetModule: normalizeAgentMarkupLegacyModule(row.targetModule),
+    agentId: row.agentId ?? undefined,
+    agentShortName: row.agentShortName ?? undefined,
+    status: row.status as PriceBookImportJobSummary['status'],
+    processedRows: Number(row.processedRows ?? 0),
+    totalRows: Number(row.totalRows ?? 0),
+    failedRows: Number(row.failedRows ?? 0),
+    message: row.message ?? undefined,
+    errorSummary: rawErrorSummary
+      .map((item: any) => ({ index: Number(item?.index ?? 0), reason: String(item?.reason ?? '') }))
+      .filter((item: { index: number; reason: string }) => item.index > 0 && item.reason),
+    book,
+    createdAt: row.createdAt?.toISOString?.() ?? new Date(row.createdAt).toISOString(),
+    updatedAt: row.updatedAt?.toISOString?.() ?? new Date(row.updatedAt).toISOString(),
+    completedAt: row.completedAt ? row.completedAt?.toISOString?.() ?? new Date(row.completedAt).toISOString() : undefined
+  };
+}
+
+function mapCarrierTask(row: {
+  id: string;
+  shipmentId: string;
+  type: string;
+  carrier: string;
+  transferNo: string;
+  status: string;
+  attempts: number;
+  lastError: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  completedAt: Date | null;
+  shipment: { customerOrderNo: string; systemOrderNo: string; customer: { code: string; name: string } };
+}): CarrierTaskSummary {
+  return {
+      id: row.id,
+      shipmentId: row.shipmentId,
+      systemOrderNo: row.shipment.systemOrderNo,
+    customerOrderNo: row.shipment.customerOrderNo,
+    outboundOrderNo: resolveShipmentOutboundOrderNo(row.shipment),
+    customerName: `${row.shipment.customer.code}-${row.shipment.customer.name}`,
+    type: row.type as CarrierTaskSummary['type'],
+    carrier: toCarrierAdapterCode(row.carrier),
+    transferNo: row.transferNo,
+    status: row.status as CarrierTaskSummary['status'],
+    attempts: row.attempts,
+    lastError: row.lastError ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    completedAt: row.completedAt?.toISOString()
+  };
+}
+
 function normalizeAgentMarkupInput(input: AgentMarkupCreateInput | AgentMarkupUpdateInput | AgentMarkupSummary): AgentMarkupSummary {
   const markupType = input.markupType ?? 'WEIGHT';
   const rawValue = input.markupValue ?? input.markupPerKg ?? 0;
@@ -26898,6 +25471,18 @@ function chargeableRangesOverlap(leftMin: number | undefined, leftMax: number | 
 function formatChargeableRange(minimum?: number, maximum?: number, unit?: string) {
   const suffix = unit === 'CBM' ? 'CBM' : 'KG';
   return maximum === undefined ? `${minimum ?? 0}${suffix}+` : `${minimum ?? 0}${suffix}-${maximum}${suffix}`;
+}
+
+interface ActivePriceBookAgentSource {
+  agentName: string;
+  priceBookId: string;
+  fileName: string;
+  lineCount: number;
+  routeCount?: number;
+  quoteRowCount?: number;
+  kgQuoteRowCount?: number;
+  cbmQuoteRowCount?: number;
+  legacyModule?: LegacyPricingModule;
 }
 
 function findAgentMarkupRulesByScope(rules: AgentMarkupSummary[], rule: AgentMarkupSummary) {
@@ -26978,6 +25563,42 @@ function buildSyncedAgentMarkupRules(rules: AgentMarkupSummary[], agentSources: 
   });
 }
 
+function normalizeAgentSources(agentSources: Array<string | ActivePriceBookAgentSource>): ActivePriceBookAgentSource[] {
+  return agentSources
+    .map((source) => typeof source === 'string'
+      ? { agentName: source, priceBookId: '', fileName: '', lineCount: 0 }
+      : source)
+    .filter((source) => source.agentName?.trim())
+    .map((source) => ({ ...source, agentName: source.agentName.trim(), priceBookId: source.priceBookId?.trim() ?? '', fileName: source.fileName?.trim() ?? '', legacyModule: normalizeAgentMarkupLegacyModule(source.legacyModule) }));
+}
+
+function groupAgentSourcesByScope(sources: ActivePriceBookAgentSource[]) {
+  const grouped = new Map<string, ActivePriceBookAgentSource[]>();
+  for (const source of sources) {
+    const key = agentMarkupScopeKey(source);
+    const list = grouped.get(key) ?? [];
+    const existing = list.find((item) => item.priceBookId === source.priceBookId && item.fileName === source.fileName);
+    if (existing) {
+      existing.lineCount += source.lineCount;
+      existing.routeCount = Number(existing.routeCount ?? 0) + Number(source.routeCount ?? 0);
+      existing.quoteRowCount = Number(existing.quoteRowCount ?? 0) + Number(source.quoteRowCount ?? source.lineCount);
+      existing.kgQuoteRowCount = Number(existing.kgQuoteRowCount ?? 0) + Number(source.kgQuoteRowCount ?? source.lineCount);
+      existing.cbmQuoteRowCount = Number(existing.cbmQuoteRowCount ?? 0) + Number(source.cbmQuoteRowCount ?? 0);
+    } else {
+      list.push({ ...source });
+    }
+    grouped.set(key, list);
+  }
+  for (const list of grouped.values()) {
+    list.sort((left, right) => left.fileName.localeCompare(right.fileName, 'zh-CN') || left.priceBookId.localeCompare(right.priceBookId));
+  }
+  return grouped;
+}
+
+function agentMarkupScopeKey(scope: Pick<AgentMarkupSummary, 'agentName' | 'priceBookId' | 'legacyModule'> | ActivePriceBookAgentSource | { agentName: string; priceBookId?: string; legacyModule?: LegacyPricingModule }) {
+  return `${scope.legacyModule ?? ''}\u0001${scope.priceBookId ?? ''}\u0001${scope.agentName}`;
+}
+
 function derivePriceBookAgentName(fileName?: string) {
   const baseName = String(fileName ?? '')
     .trim()
@@ -27004,6 +25625,17 @@ function cleanOldOriginalAgentNameForDisplay(fileName: string | undefined, agent
 
 function normalizeStringList(value?: string[]) {
   return Array.from(new Set((Array.isArray(value) ? value : []).map((item) => String(item ?? '').trim()).filter(Boolean)));
+}
+
+function normalizeAgentMarkupLegacyModule(value: unknown): LegacyPricingModule | undefined {
+  return isLegacyPricingModule(value)
+    ? value
+    : undefined;
+}
+
+function normalizeAgentMarkupModuleQuery(value: unknown): LegacyPricingModule | 'unclassified' | undefined {
+  if (value === 'unclassified') return 'unclassified';
+  return normalizeAgentMarkupLegacyModule(value);
 }
 
 interface AgentMarkupBatchScopeInput {
@@ -27042,6 +25674,17 @@ function normalizeAgentMarkupBatchScopes(input: { agentNames?: string[]; scopes?
   return [...unique.values()];
 }
 
+function filterPriceBookRowsByAgentMarkupModule(priceRows: PriceBookRowSummary[], module: LegacyPricingModule | 'unclassified' | undefined, sources: ActivePriceBookAgentSource[]) {
+  if (!module) {
+    return priceRows;
+  }
+  if (module === 'unclassified') {
+    return [];
+  }
+  const priceBookIds = new Set(sources.filter((source) => source.legacyModule === module).map((source) => source.priceBookId).filter(Boolean));
+  return priceRows.filter((row) => row.priceBookId && priceBookIds.has(row.priceBookId));
+}
+
 function filterAgentMarkupSourcesByModule(sources: ActivePriceBookAgentSource[], module: LegacyPricingModule | 'unclassified' | undefined) {
   if (!module) {
     return sources;
@@ -27050,6 +25693,23 @@ function filterAgentMarkupSourcesByModule(sources: ActivePriceBookAgentSource[],
     return sources.filter((source) => !source.legacyModule);
   }
   return sources.filter((source) => source.legacyModule === module);
+}
+
+function filterAgentMarkupRulesByModule(rules: AgentMarkupSummary[], module: LegacyPricingModule | 'unclassified' | undefined, priceRows: PriceBookRowSummary[]) {
+  if (!module) {
+    return rules;
+  }
+  const priceBookIds = new Set(priceRows.map((row) => row.priceBookId).filter(Boolean));
+  return rules.filter((rule) => {
+    const explicitModule = normalizeAgentMarkupLegacyModule(rule.legacyModule);
+    if (module === 'unclassified') {
+      return !explicitModule && !rule.priceBookId;
+    }
+    if (explicitModule) {
+      return explicitModule === module;
+    }
+    return Boolean(rule.priceBookId && priceBookIds.has(rule.priceBookId));
+  });
 }
 
 function filterAgentMarkupRulesByModuleSources(rules: AgentMarkupSummary[], module: LegacyPricingModule | 'unclassified' | undefined, sources: ActivePriceBookAgentSource[]) {
@@ -27159,6 +25819,10 @@ function uniqueTextValues(values: Array<string | undefined>) {
   return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))).sort((left, right) => left.localeCompare(right, 'zh-CN'));
 }
 
+function shouldIncludeAgentMarkupHits(query: AgentMarkupListQuery) {
+  return query.includeHits !== false && String(query.includeHits ?? 'true') !== 'false';
+}
+
 function groupAgentMarkupRows(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[]) {
   const groups = new Map<string, AgentMarkupSummary[]>();
   for (const rule of rules) {
@@ -27234,9 +25898,171 @@ function buildAgentMarkupDisplay(primary: AgentMarkupSummary, rules: AgentMarkup
   return {
     markupDisplayMode: 'MIXED' as const,
     defaultMarkupDisplay: '混合加价',
-    markupRange: `+¥${formatMarkupNumber(min)}-${formatMarkupNumber(max)}/kg`,
+    markupRange: `+¥${formatMarkupNumber(min)}-${formatMarkupNumber(max)}/KG`,
     markupBuckets
   };
+}
+
+function enrichPriceBookRowMarkup(row: PriceBookRowSummary, markupRules: AgentMarkupSummary[], ownerAgentName: string): PriceBookRowSummary {
+  return { ...row, ...resolvePriceBookRowMarkup(row, markupRules, ownerAgentName) };
+}
+
+function resolvePriceBookRowMarkup(row: PriceBookRowSummary, markupRules: AgentMarkupSummary[], ownerAgentName: string): Pick<PriceBookRowSummary, 'lineMarkupPerKg' | 'markupSource'> {
+  const rule = findBestPriceBookRouteMarkupRule(markupRules, row)
+    ?? findBestMarkupRule(markupRules, row, ownerAgentName)
+    ?? (row.agentName !== ownerAgentName ? findBestMarkupRule(markupRules, row, row.agentName) : undefined)
+  const lineMarkupPerKg = rule?.markupValue ?? rule?.markupPerKg ?? 0.5;
+  if (!rule || rule.id.startsWith('price-agent:')) {
+    return { lineMarkupPerKg, markupSource: 'VIRTUAL_DEFAULT' };
+  }
+  if (rule.channelName || rule.realChannelName || rule.destinationCountry) {
+    return { lineMarkupPerKg, markupSource: 'LINE_CUSTOM' };
+  }
+  return { lineMarkupPerKg, markupSource: 'AGENT_DEFAULT' };
+}
+
+function buildDubaiPriceTableResponse(rows: PriceBookRowSummary[], markupRules: AgentMarkupSummary[]): DubaiPriceTableResponse {
+  const tableRows = rows
+    .filter((row) => Number(row.costPerKg ?? row.cbmPrice ?? 0) > 0)
+    .map((row): DubaiPriceTableRow => {
+      const mode = inferDubaiPriceMode(row);
+      const baseUnitPrice = mode === 'SEA' ? Number(row.cbmPrice ?? row.costPerKg) : Number(row.costPerKg);
+      const markup = mode === 'SEA' ? Number(resolvePriceBookRowMarkup(row, markupRules, row.agentName).lineMarkupPerKg ?? 0.5) : 0;
+      const channelRequirement = uniqueDubaiText([row.productSurchargeRemark, row.specialRemark]);
+      return {
+        id: row.id,
+        mode,
+        productCategory: mode === 'AIR' ? row.productCategory ?? row.realChannelName ?? row.channelName : undefined,
+        region: mode === 'AIR' ? row.region ?? row.destinationCountry : undefined,
+        serviceContent: mode === 'SEA' ? row.serviceContent ?? row.realChannelName ?? row.channelName : undefined,
+        priceTierLabel: formatDubaiPriceTier(row, mode),
+        businessUnitPrice: roundMoney(baseUnitPrice + markup),
+        unit: mode === 'SEA' ? 'RMB/CBM' : 'RMB/KG',
+        inboundRequirement: row.inboundRequirement,
+        channelCode: row.channelCode,
+        transitLabel: sanitizePricingTransitLabel(row.transitLabel),
+        channelRequirement
+      };
+    })
+    .sort((left, right) =>
+      left.mode.localeCompare(right.mode)
+      || (left.productCategory ?? left.serviceContent ?? '').localeCompare(right.productCategory ?? right.serviceContent ?? '', 'zh-CN')
+      || (left.region ?? '').localeCompare(right.region ?? '', 'zh-CN')
+      || left.priceTierLabel.localeCompare(right.priceTierLabel, 'zh-CN')
+    );
+  return {
+    air: tableRows.filter((row) => row.mode === 'AIR'),
+    sea: tableRows.filter((row) => row.mode === 'SEA'),
+    generatedAt: new Date().toISOString()
+  };
+}
+
+function inferDubaiPriceMode(row: PriceBookRowSummary): DubaiPriceTableRow['mode'] {
+  if (Number(row.cbmPrice ?? 0) > 0 || /CBM|方/.test(row.priceTierLabel ?? '')) return 'SEA';
+  const text = [
+    row.channelCode,
+    row.sourceSheetName,
+    row.channelName,
+    row.realChannelName,
+    row.businessRouteName,
+    row.serviceContent,
+    row.productCategory
+  ].filter(Boolean).join(' ');
+  if (/AH\s*海运|海运|海派|SEA/i.test(text)) return 'SEA';
+  return 'AIR';
+}
+
+function formatDubaiPriceTier(row: PriceBookRowSummary, mode: DubaiPriceTableRow['mode']) {
+  if (mode === 'SEA') {
+    return row.priceTierLabel && !/KG/i.test(row.priceTierLabel) ? row.priceTierLabel : '按方';
+  }
+  if (row.priceTierLabel) return row.priceTierLabel;
+  if (row.maxWeightKg >= 99999) return `${row.minWeightKg}KG+`;
+  return `${row.minWeightKg}-${row.maxWeightKg}KG`;
+}
+
+function uniqueDubaiText(values: Array<string | undefined>) {
+  const seen = new Set<string>();
+  const parts = values
+    .flatMap((value) => String(value ?? '').split('\n'))
+    .map((value) => value.trim())
+    .filter((value) => {
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
+  return parts.length ? parts.join('\n') : undefined;
+}
+
+function findBestPriceBookRouteMarkupRule(markupRules: AgentMarkupSummary[], row: PriceBookRowSummary): AgentMarkupSummary | undefined {
+  const destination = row.destinationCountry.trim();
+  const channel = row.channelName.trim();
+  const realChannel = row.realChannelName?.trim() || channel;
+  return [...markupRules]
+    .filter((rule) => rule.enabled && !rule.deletedAt && rule.priceBookId === row.priceBookId && Boolean(rule.channelName || rule.realChannelName || rule.destinationCountry))
+    .filter((rule) => {
+      const channelMatches = !rule.channelName || rule.channelName === channel;
+      const realChannelMatches = !rule.realChannelName || rule.realChannelName === realChannel;
+      const countryMatches = !rule.destinationCountry || rule.destinationCountry === destination;
+      return channelMatches && realChannelMatches && countryMatches;
+    })
+    .sort((left, right) =>
+      (left.priority ?? 100) - (right.priority ?? 100)
+      || markupSpecificity(right, channel, realChannel, destination) - markupSpecificity(left, channel, realChannel, destination)
+      || safeTime(right.updatedAt) - safeTime(left.updatedAt)
+    )[0];
+}
+
+function formatMarkupNumber(value: number) {
+  return (Math.round(value * 100) / 100).toFixed(2);
+}
+
+function formatMarkupPerKg(value: number) {
+  return `+¥${formatMarkupNumber(value)}/KG`;
+}
+
+function hasPriceBookRowMarkupControls(query: PriceBookRowsQuery) {
+  const amount = String(query.markupAmount ?? 'ALL').trim();
+  const source = String(query.markupSource ?? 'ALL').trim();
+  const sort = String(query.markupSort ?? 'NONE').trim();
+  return (amount && amount !== 'ALL') || (source && source !== 'ALL') || sort === 'ASC' || sort === 'DESC';
+}
+
+function applyPriceBookRowMarkupControls(rows: PriceBookRowSummary[], query: PriceBookRowsQuery) {
+  const amount = String(query.markupAmount ?? 'ALL').trim();
+  const source = String(query.markupSource ?? 'ALL').trim();
+  const sort = String(query.markupSort ?? 'NONE').trim();
+  let next = rows.filter((row) => {
+    const rowMarkup = roundMoney(Number(row.lineMarkupPerKg ?? 0.5));
+    if (source !== 'ALL' && row.markupSource !== source) {
+      return false;
+    }
+    if (!amount || amount === 'ALL') {
+      return true;
+    }
+    if (amount === 'DEFAULT') {
+      return row.markupSource === 'AGENT_DEFAULT' || row.markupSource === 'VIRTUAL_DEFAULT';
+    }
+    if (amount === 'OTHER_CUSTOM') {
+      return row.markupSource === 'LINE_CUSTOM';
+    }
+    const expected = Number(amount);
+    return Number.isFinite(expected) && rowMarkup === roundMoney(expected);
+  });
+  if (sort === 'ASC' || sort === 'DESC') {
+    const factor = sort === 'ASC' ? 1 : -1;
+    next = [...next].sort((left, right) =>
+      factor * (roundMoney(Number(left.lineMarkupPerKg ?? 0.5)) - roundMoney(Number(right.lineMarkupPerKg ?? 0.5))) ||
+      left.channelName.localeCompare(right.channelName, 'zh-CN') ||
+      left.destinationCountry.localeCompare(right.destinationCountry, 'zh-CN') ||
+      left.minWeightKg - right.minWeightKg
+    );
+  }
+  return next;
+}
+
+function markupScopeRank(rule: AgentMarkupSummary) {
+  return [rule.channelName, rule.realChannelName, rule.destinationCountry].filter(Boolean).length;
 }
 
 function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[], logs: Array<{ action: string; createdAt?: Date | string }>): AgentMarkupPreviewResponse {
@@ -27258,13 +26084,26 @@ function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookR
       channelName: row.channelName,
       realChannelName: row.realChannelName,
       destinationCountry: row.destinationCountry,
-      weightSegmentLabel: `${row.minWeightKg}-${row.maxWeightKg}kg`
+      weightSegmentLabel: `${row.minWeightKg}-${row.maxWeightKg} KG`
     })),
     recentChanges: logs.slice(0, 5).map((log) => ({
       action: log.action,
       createdAt: log.createdAt instanceof Date ? log.createdAt.toISOString() : String(log.createdAt ?? new Date().toISOString())
     }))
   };
+}
+
+function matchingPriceRowsForRule(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[]) {
+  return priceRows.filter((row) =>
+    (rule.priceBookId ? row.priceBookId === rule.priceBookId : row.agentName === rule.agentName) &&
+    (!rule.channelName || row.channelName === rule.channelName) &&
+    (!rule.realChannelName || (row.realChannelName ?? row.channelName) === rule.realChannelName) &&
+    (!rule.destinationCountry || row.destinationCountry === rule.destinationCountry)
+  );
+}
+
+function countAgentMarkupHits(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[]) {
+  return matchingPriceRowsForRule(rule, priceRows).length;
 }
 
 function countDistinctMarkupRoutes(rows: PriceBookRowSummary[]) {
@@ -27317,12 +26156,33 @@ function textMatch(value: string, keyword?: string) {
   return !keyword?.trim() || value.toLowerCase().includes(keyword.trim().toLowerCase());
 }
 
+function safeTime(value?: string) {
+  const time = Date.parse(value ?? '');
+  return Number.isFinite(time) ? time : 0;
+}
+
 function logPricingLookupTiming(stage: string, startedAt: number, details: Record<string, unknown> = {}) {
   const durationMs = Date.now() - startedAt;
   if (durationMs >= PRICING_LOOKUP_TIMING_WARN_MS) {
     console.warn(`[pricing.lookup] ${stage}`, { durationMs, ...details });
   }
   return durationMs;
+}
+
+function applyAgentMarkup(costPerKg: number, chargeableWeightKg: number, rule: AgentMarkupSummary) {
+  const type = rule.markupType ?? 'WEIGHT';
+  const value = Number(rule.markupValue ?? rule.markupPerKg ?? 0);
+  const totalCost = roundMoney(costPerKg * chargeableWeightKg);
+  if (type === 'PERCENT') {
+    const totalSales = roundMoney(totalCost * (1 + value / 100));
+    return { totalSales, salesRatePerKg: roundMoney(totalSales / chargeableWeightKg) };
+  }
+  if (type === 'PER_SHIPMENT' || type === 'FIXED') {
+    const totalSales = roundMoney(totalCost + value);
+    return { totalSales, salesRatePerKg: roundMoney(totalSales / chargeableWeightKg) };
+  }
+  const salesRatePerKg = roundMoney(costPerKg + value);
+  return { totalSales: roundMoney(salesRatePerKg * chargeableWeightKg), salesRatePerKg };
 }
 
 type NormalizedWarehouseRentRuleInput = {
@@ -27445,6 +26305,78 @@ function mapWarehouseRentRule(row: any): WarehouseRentRuleSummary {
   };
 }
 
+function mapWarehousePackage(row: any): WarehousePackageSummary {
+  const packageCount = Number(row.packageCount);
+  const lengthCm = Number(row.lengthCm);
+  const widthCm = Number(row.widthCm);
+  const heightCm = Number(row.heightCm);
+  const sides = [lengthCm, widthCm, heightCm].sort((left, right) => right - left);
+  const girthCm = roundMoney((sides[0] ?? 0) + 2 * ((sides[1] ?? 0) + (sides[2] ?? 0)));
+  const totalVolumetricWeightKg5000 = roundMoney((lengthCm * widthCm * heightCm * packageCount) / 5000);
+  const tallyTaskId = row.tallyTaskId ?? undefined;
+  const tallyTaskNo = row.tallyTaskNo ?? undefined;
+  const tallyCompleted = Boolean(tallyTaskId || tallyTaskNo);
+  return {
+    id: row.id,
+    customerCode: row.customerCode,
+    customerName: row.customerName ?? undefined,
+    site: row.site ?? undefined,
+    salesperson: row.salesperson ?? undefined,
+    customerOrderNo: row.customerOrderNo,
+    domesticTrackingNo: row.domesticTrackingNo,
+    combinedOrderNo: row.combinedOrderNo,
+    labelNo: row.labelNo ?? undefined,
+    sourcePackageId: row.sourcePackageId ?? undefined,
+    sourcePackageNo: row.sourcePackageNo ?? undefined,
+    archivedByPackageId: row.archivedByPackageId ?? undefined,
+    archivedByPackageNo: row.archivedByPackageNo ?? undefined,
+    archivedReason: row.archivedReason ?? undefined,
+    archivedAt: row.archivedAt?.toISOString?.() ?? undefined,
+    tallyTaskId,
+    tallyTaskNo,
+    tallyCompleted,
+    outboundOrderNo: resolveShipmentOutboundOrderNo(row),
+    systemOrderNo: row.systemOrderNo ?? undefined,
+    shipmentId: row.shipmentId ?? undefined,
+    receivingChannel: row.receivingChannel,
+    destinationCountry: row.destinationCountry ?? undefined,
+    expectedTotalPackageCount: row.expectedTotalPackageCount ?? undefined,
+    packageIndex: row.packageIndex ?? undefined,
+    packageCount,
+    weightKg: Number(row.weightKg),
+    lengthCm,
+    widthCm,
+    heightCm,
+    girthCm,
+    cbm: Number(row.cbm),
+    totalCbm: Number(row.cbm),
+    volumetricWeightKg: Number(row.volumetricWeightKg),
+    volumetricWeightKg5000: totalVolumetricWeightKg5000,
+    totalVolumetricWeightKg: Number(row.volumetricWeightKg),
+    totalVolumetricWeightKg5000,
+    chargeableWeightKg: Number(row.chargeableWeightKg),
+    divisor: row.divisor,
+    roundingRule: row.roundingRule,
+    scanTime: row.scanTime?.toISOString(),
+    remark: row.remark ?? undefined,
+    manualException: row.manualException ?? undefined,
+    scanSource: row.scanSource ?? undefined,
+    measurementStatus: row.measurementStatus ?? 'MEASURED',
+    measurementMatchedAt: row.measurementMatchedAt?.toISOString?.() ?? undefined,
+    measurementMatchedBy: row.measurementMatchedBy ?? undefined,
+    inboundAt: row.scanTime?.toISOString(),
+    receiptSourceId: row.sourcePackageId ?? row.id,
+    tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId, tallyTaskNo, tallyCompleted }),
+    splitStatus: row.sourcePackageId ? '拆票子票' : '原始票',
+    consolidationStatus: row.status === 'CONSOLIDATED' ? '已合票' : '未合票',
+    outboundStatus: row.status === 'SHIPPED' ? '已出库' : '未出库',
+    status: row.status as WarehousePackageStatus,
+    exceptions: row.exceptions ?? [],
+    createdBy: row.createdBy ?? undefined,
+    createdAt: row.createdAt.toISOString()
+  };
+}
+
 function mapShipmentReviewWarehousePackage(row: any): ShipmentReviewPackageSummary {
   return {
     id: row.id,
@@ -27475,10 +26407,6 @@ function mapProblemTicketCommonTag(row: { id: string; name: string; scene: strin
     customerVisibleAllowed: row.customerVisibleAllowed,
     sortOrder: row.sortOrder
   };
-}
-
-function assertProblemTicketCommonTagAdmin(principal: Principal) {
-  if (principal.role !== 'ADMIN') throw new ForbiddenException('仅管理员可以维护常用标签');
 }
 
 function normalizeProblemTicketCommonTagName(value: unknown): string {
@@ -27588,6 +26516,90 @@ function buildWarehousePackageData(input: WarehousePackageCreateInput) {
   };
 }
 
+function buildWarehouseManualReceiptPackageInputs(input: WarehouseManualReceiptCreateInput): WarehousePackageCreateInput[] {
+  const parsedCombinedOrderNo = parseWarehouseCombinedOrderNo(input.combinedOrderNo);
+  const customerOrderNo = input.customerOrderNo?.trim() || parsedCombinedOrderNo.customerOrderNo || input.customerCode?.trim() || '';
+  const domesticTrackingNo = input.domesticTrackingNo?.trim() || parsedCombinedOrderNo.domesticTrackingNo;
+  if (!Array.isArray(input.cartonSpecs) || input.cartonSpecs.length < 1) {
+    throw new BadRequestException('请至少填写一条箱规');
+  }
+  const totalCartonSpecs = input.cartonSpecs.length;
+  return input.cartonSpecs.map((spec: WarehouseManualReceiptCartonSpecInput, index: number) => {
+    const rowNo = index + 1;
+    const weightKg = Number(spec.weightKg);
+    const lengthCm = Number(spec.lengthCm);
+    const widthCm = Number(spec.widthCm);
+    const heightCm = Number(spec.heightCm);
+    const packageCount = Math.floor(Number(spec.packageCount));
+    if (!Number.isFinite(weightKg) || weightKg <= 0) {
+      throw new BadRequestException(`第 ${rowNo} 条箱规重量必须大于 0`);
+    }
+    if (!Number.isFinite(lengthCm) || lengthCm <= 0 || !Number.isFinite(widthCm) || widthCm <= 0 || !Number.isFinite(heightCm) || heightCm <= 0) {
+      throw new BadRequestException(`第 ${rowNo} 条箱规长宽高必须大于 0`);
+    }
+    if (!Number.isInteger(packageCount) || packageCount <= 0) {
+      throw new BadRequestException(`第 ${rowNo} 条箱规件数必须为正整数`);
+    }
+    return {
+      customerCode: input.customerCode,
+      customerOrderNo,
+      domesticTrackingNo,
+      combinedOrderNo: `${customerOrderNo}-${domesticTrackingNo}`,
+      expectedTotalPackageCount: totalCartonSpecs,
+      packageIndex: rowNo,
+      packageCount,
+      weightKg,
+      lengthCm,
+      widthCm,
+      heightCm,
+      scanTime: input.scanTime,
+      remark: input.remark,
+      manualException: input.manualException,
+      scanSource: input.scanSource ?? '手动添加'
+    };
+  });
+}
+
+function parseWarehouseCombinedOrderNo(value?: string) {
+  const normalized = value?.trim() ?? '';
+  const separatorIndex = normalized.search(/[-－—–]/);
+  if (separatorIndex <= 0) {
+    return { customerOrderNo: normalized, domesticTrackingNo: '' };
+  }
+  return {
+    customerOrderNo: normalized.slice(0, separatorIndex).trim(),
+    domesticTrackingNo: normalized.slice(separatorIndex + 1).trim()
+  };
+}
+
+function resolveWarehouseTodayRange(query: WarehouseTodayQuery) {
+  const now = new Date();
+  const preset = query.datePreset ?? 'TODAY';
+  const todayRange = getBeijingDayRange(now);
+  let start = todayRange.start;
+  let end = todayRange.end;
+  if (preset === 'WEEK') {
+    const day = new Date(start.getTime() + 8 * 60 * 60 * 1000).getUTCDay() || 7;
+    start = new Date(start.getTime() - (day - 1) * 24 * 60 * 60 * 1000);
+    end = new Date(start.getTime() + 7 * 24 * 60 * 60 * 1000);
+  } else if (preset === 'LAST_7_DAYS') {
+    start = new Date(start.getTime() - 6 * 24 * 60 * 60 * 1000);
+  } else if (preset === 'MONTH') {
+    const monthKey = `${getBeijingDateKey(now).slice(0, 7)}-01`;
+    start = new Date(`${monthKey}T00:00:00+08:00`);
+    const shifted = new Date(start.getTime() + 8 * 60 * 60 * 1000);
+    end = new Date(Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth() + 1, 1, -8));
+  } else if (preset === 'CUSTOM') {
+    start = query.customFrom ? new Date(`${query.customFrom}T00:00:00+08:00`) : start;
+    end = query.customTo ? new Date(Date.parse(`${query.customTo}T00:00:00+08:00`) + 24 * 60 * 60 * 1000) : end;
+  }
+  return { start, end };
+}
+
+function createWarehouseInboundLabelNo(customerCode: string, domesticTrackingNo: string, packageIndex: number, totalPackages: number): string {
+  return `${customerCode}-${domesticTrackingNo}-${packageIndex}/${totalPackages}`;
+}
+
 function mapWarehouseConsolidation(row: any, packageIds: string[]): WarehouseConsolidationSummary {
   return {
     id: row.id,
@@ -27602,6 +26614,146 @@ function mapWarehouseConsolidation(row: any, packageIds: string[]): WarehouseCon
     totalChargeableWeightKg: Number(row.totalChargeableWeightKg),
     createdAt: row.createdAt.toISOString()
   };
+}
+
+function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
+  return {
+    id: row.id,
+    taskNo: row.taskNo,
+    status: row.status,
+    rootTallyTaskId: row.rootTallyTaskId ?? row.id,
+    previousTallyTaskId: row.previousTallyTaskId ?? undefined,
+    tallySequence: row.tallySequence ?? 1,
+    packageIds: [...(row.packageIds ?? [])],
+    sourcePackageId: row.sourcePackageId,
+    sourceCombinedOrderNo: row.sourceCombinedOrderNo,
+    customerCode: row.customerCode,
+    customerName: row.customerName ?? undefined,
+    salesperson: row.salesperson ?? undefined,
+    packageCount: row.packageCount,
+    originalWeightKg: Number(row.originalWeightKg),
+    originalLengthCm: Number(row.originalLengthCm),
+    originalWidthCm: Number(row.originalWidthCm),
+    originalHeightCm: Number(row.originalHeightCm),
+    originalVolumetricWeightKg: Number(row.originalVolumetricWeightKg),
+    originalVolumetricWeightKg5000: Number(row.originalVolumetricWeightKg5000),
+    tallyRequirement: row.tallyRequirement,
+    remark: row.remark ?? undefined,
+    createdBy: row.createdBy ?? undefined,
+    createdAt: row.createdAt.toISOString(),
+    completedPackageCount: row.completedPackageCount ?? undefined,
+    completedWeightKg: row.completedWeightKg === null || row.completedWeightKg === undefined ? undefined : Number(row.completedWeightKg),
+    completedLengthCm: row.completedLengthCm === null || row.completedLengthCm === undefined ? undefined : Number(row.completedLengthCm),
+    completedWidthCm: row.completedWidthCm === null || row.completedWidthCm === undefined ? undefined : Number(row.completedWidthCm),
+    completedHeightCm: row.completedHeightCm === null || row.completedHeightCm === undefined ? undefined : Number(row.completedHeightCm),
+    completedVolumetricWeightKg: row.completedVolumetricWeightKg === null || row.completedVolumetricWeightKg === undefined ? undefined : Number(row.completedVolumetricWeightKg),
+    completedVolumetricWeightKg5000: row.completedVolumetricWeightKg5000 === null || row.completedVolumetricWeightKg5000 === undefined ? undefined : Number(row.completedVolumetricWeightKg5000),
+    completedBy: row.completedBy ?? undefined,
+    completedAt: row.completedAt?.toISOString?.() ?? undefined,
+    labelStatus: row.labelStatus ?? 'NOT_GENERATED',
+    labelNo: row.labelNo ?? undefined,
+    labelQrContent: row.labelQrContent ?? undefined,
+    labelGeneratedAt: row.labelGeneratedAt?.toISOString?.() ?? undefined,
+    labelGeneratedBy: row.labelGeneratedBy ?? undefined,
+    labelPrintedAt: row.labelPrintedAt?.toISOString?.() ?? undefined,
+    labelPrintedBy: row.labelPrintedBy ?? undefined,
+    labelDownloadedAt: row.labelDownloadedAt?.toISOString?.() ?? undefined,
+    labelDownloadedBy: row.labelDownloadedBy ?? undefined,
+    appliedPackageId: row.appliedPackageId ?? undefined,
+    appliedPackageNo: row.appliedPackageNo ?? undefined,
+    labelAppliedAt: row.labelAppliedAt?.toISOString?.() ?? undefined,
+    labelAppliedBy: row.labelAppliedBy ?? undefined
+  };
+}
+
+function buildWarehouseTallyLabelQrContent(task: WarehouseTallyTaskSummary, labelNo: string): string {
+  return JSON.stringify({
+    type: 'WAREHOUSE_TALLY_LABEL',
+    labelNo,
+    taskNo: task.taskNo,
+    customerCode: task.customerCode,
+    date: (task.completedAt ?? new Date().toISOString()).slice(0, 10),
+    packageCount: task.completedPackageCount ?? task.packageCount,
+    sourcePackageId: task.sourcePackageId,
+    sourceCombinedOrderNo: task.sourceCombinedOrderNo
+  });
+}
+
+function resolveWarehouseTallyRecentCutoff() {
+  const now = new Date();
+  const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  return new Date(Date.UTC(beijingNow.getUTCFullYear(), beijingNow.getUTCMonth() - 1, beijingNow.getUTCDate(), -8, 0, 0, 0));
+}
+
+function normalizeOrderEntryPackageIds(value?: string | string[]): string[] {
+  const values = Array.isArray(value) ? value : value ? [value] : [];
+  return Array.from(new Set(values.flatMap((item) => item.split(',')).map((item) => item.trim()).filter(Boolean)));
+}
+
+function roundWarehouseMeasure(value: number) {
+  return Math.round(value * 1000000) / 1000000;
+}
+
+function warehousePackageActualWeightTotal(pkg: Pick<WarehousePackageSummary, 'sourcePackageId' | 'weightKg' | 'packageCount'>): number {
+  return pkg.sourcePackageId ? pkg.weightKg : pkg.weightKg * pkg.packageCount;
+}
+
+function warehousePackageSplitTotals(packages: WarehousePackageSummary[]) {
+  return {
+    packageCount: packages.reduce((sum, pkg) => sum + pkg.packageCount, 0),
+    weightKg: roundMoney(packages.reduce((sum, pkg) => sum + warehousePackageActualWeightTotal(pkg), 0)),
+    cbm: roundMoney(packages.reduce((sum, pkg) => sum + pkg.cbm, 0)),
+    volumetricWeightKg: roundMoney(packages.reduce((sum, pkg) => sum + pkg.volumetricWeightKg, 0)),
+    volumetricWeightKg5000: roundMoney(packages.reduce((sum, pkg) => sum + (pkg.volumetricWeightKg5000 ?? 0), 0))
+  };
+}
+
+function summarizeWarehousePackageGroups(packages: WarehousePackageSummary[]): WarehousePackageGroupSummary[] {
+  const groups = new Map<string, WarehousePackageSummary[]>();
+  for (const pkg of packages) {
+    const key = `${pkg.customerOrderNo}__${pkg.domesticTrackingNo}`;
+    groups.set(key, [...(groups.get(key) ?? []), pkg]);
+  }
+  return Array.from(groups.values()).map((items) => {
+    const first = items[0];
+    const expected = Math.max(...items.map((item) => item.expectedTotalPackageCount ?? items.length));
+    const maxByVolume = items.reduce((best, item) => (item.volumetricWeightKg > best.volumetricWeightKg ? item : best), first);
+    return {
+      id: `${first.customerOrderNo}-${first.domesticTrackingNo}`,
+      customerCode: first.customerCode,
+      customerOrderNo: first.customerOrderNo,
+      domesticTrackingNo: first.domesticTrackingNo,
+      combinedOrderNo: first.combinedOrderNo,
+      expectedTotalPackageCount: expected,
+      arrivedPackageCount: items.length,
+      remainingPackageCount: Math.max(expected - items.length, 0),
+      totalActualWeightKg: roundMoney(items.reduce((total, item) => total + item.weightKg * item.packageCount, 0)),
+      totalCbm: roundMoney(items.reduce((total, item) => total + item.cbm, 0)),
+      maxLengthCm: maxByVolume.lengthCm,
+      maxWidthCm: maxByVolume.widthCm,
+      maxHeightCm: maxByVolume.heightCm,
+      maxVolumetricWeightKg: maxByVolume.volumetricWeightKg,
+      totalChargeableWeightKg: roundMoney(items.reduce((total, item) => total + item.chargeableWeightKg, 0)),
+      latestScanTime: items.map((item) => item.scanTime).filter(Boolean).sort().at(-1)
+    };
+  });
+}
+
+function toCarrierAdapterCode(carrier: string): CarrierAdapterCode {
+  const normalized = carrier.toUpperCase();
+  if (normalized.includes('DHL')) {
+    return 'DHL';
+  }
+  if (normalized.includes('FEDEX')) {
+    return 'FEDEX';
+  }
+  if (normalized.includes('UPS')) {
+    return 'UPS';
+  }
+  if (normalized.includes('USPS')) {
+    return 'USPS';
+  }
+  return 'OTHER';
 }
 
 function trackingWebsiteForCarrier(carrier: string, transferNo: string) {
@@ -27620,21 +26772,23 @@ function dwellHours(from?: string, to = new Date().toISOString()) {
   return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.round(((end - start) / 3600000) * 100) / 100) : 0;
 }
 
-export function calculateMiscFeeProfitRmb(input: {
-  type: ProfitSettlementType;
-  receivableRmbAmount: number;
-  businessRmbAmount: number;
-  payableRmbAmount: number;
-}): number {
-  return input.type === 'FINANCE'
-    ? roundMoney(input.receivableRmbAmount - input.payableRmbAmount)
-    : roundMoney(input.businessRmbAmount - input.payableRmbAmount);
+function buildBusinessCostSnapshotVersion(items: Array<{ id: string; updatedAt?: Date | string | null }>): string {
+  const rows = items
+    .map((item) => {
+      const timestamp = item.updatedAt instanceof Date ? item.updatedAt.toISOString() : String(item.updatedAt ?? '');
+      return `${item.id}@${timestamp}`;
+    })
+    .sort();
+  return rows.length ? rows.join('|') : 'empty';
 }
 
-export function financeProfitSettlementSourceKey(input: { id: string; type: string; miscFeeRecordId?: string | null }): string {
-  return input.type === 'PAYABLE' && input.miscFeeRecordId
-    ? `FINANCE:MISC_FEE:${input.miscFeeRecordId}`
-    : `FINANCE:FINANCE_ITEM:${input.id}`;
+function sanitizeDepartmentTeamBusinessCosts(rows: OrderEntryFinanceItemInput[] = []): OrderEntryFinanceItemInput[] {
+  return rows.map((row) => ({
+    ...row,
+    agentId: undefined,
+    agentName: undefined,
+    paymentNo: undefined
+  }));
 }
 
 function roundMoney(value: number): number {
@@ -27688,6 +26842,43 @@ const legacyModuleLabels: Record<LegacyPricingModule, string> = {
   dubaiAirSea: '迪拜空海运查询'
 };
 
+type LegacyCargoProfileInput = Pick<LegacyPricingQuoteRequest, 'productName' | 'packageInfo' | 'lengthCm' | 'widthCm' | 'heightCm' | 'packageCount' | 'volumeCbm' | 'unitActualWeightKg' | 'actualWeightKg' | 'chargeableWeightKg'>;
+
+type LargeCargoProfile = {
+  isLargeCargo: boolean;
+  reasons: string[];
+};
+
+function numericInput(value: unknown): number {
+  const numeric = Number(value ?? 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function createLargeCargoProfile(input: LegacyCargoProfileInput): LargeCargoProfile {
+  const reasons: string[] = [];
+  const lengthCm = numericInput(input.lengthCm);
+  const widthCm = numericInput(input.widthCm);
+  const heightCm = numericInput(input.heightCm);
+  if (lengthCm > 180) reasons.push(`长度 ${roundMoney(lengthCm)}cm 超过 180cm`);
+  if (widthCm > 80) reasons.push(`宽度 ${roundMoney(widthCm)}cm 超过 80cm`);
+  if (heightCm > 80) reasons.push(`高度 ${roundMoney(heightCm)}cm 超过 80cm`);
+  if (lengthCm > 0 && widthCm > 0 && heightCm > 0) {
+    const singleVolumeCbm = (lengthCm * widthCm * heightCm) / 1_000_000;
+    if (singleVolumeCbm > 0.15) {
+      reasons.push(`单件体积 ${singleVolumeCbm.toFixed(3)}CBM 超过 0.15CBM`);
+    }
+  }
+  const cargoText = `${input.productName ?? ''} ${input.packageInfo ?? ''}`;
+  if (/大件|超大件|家具|桌|椅|沙发|床|木箱|木架|托盘|卡板|打托/i.test(cargoText)) {
+    reasons.push('品名/包装包含大件关键词');
+  }
+  return { isLargeCargo: reasons.length > 0, reasons };
+}
+
+function largeCargoRedirectMessage(profile: LargeCargoProfile): string {
+  return `${profile.reasons.join('、') || '当前货物属于大件/超大件'}，应走欧洲超大件综合查询`;
+}
+
 function legacyCargoCapabilityText(row: Partial<LegacyPricingRowInternal & PriceBookRowSummary>): string {
   return [
     row.channelName,
@@ -27737,6 +26928,10 @@ function filterLegacyRowsByCargoProfile<T extends Partial<LegacyPricingRowIntern
     return rows.filter((row) => legacyRowSupportsLargeCargo(row));
   }
   return rows;
+}
+
+function isEuropeTransportMode(value: unknown): value is 'AIR' | 'SEA' | 'RAIL' | 'SEA_RAIL' {
+  return value === 'AIR' || value === 'SEA' || value === 'RAIL' || value === 'SEA_RAIL';
 }
 
 function legacyEuropeOversizeTransportMode(row: Pick<LegacyPricingRowInternal, 'channelName' | 'serviceName' | 'origin' | 'raw'>) {
@@ -27957,6 +27152,16 @@ function normalizePriceBookImportTargetModule(value: unknown): PriceBookImportTa
   throw new BadRequestException('请选择本次导入适用的查价模块');
 }
 
+function isLegacyPricingModule(value: unknown): value is LegacyPricingModule {
+  return value === 'amazon'
+    || value === 'inquiry'
+    || value === 'europeExpress'
+    || value === 'southAfrica'
+    || value === 'usaAirSea'
+    || value === 'canadaAirSea'
+    || value === 'dubaiAirSea';
+}
+
 function defaultLegacyModuleDestination(module: LegacyPricingModule): string | undefined {
   // Amazon query books are scoped by the selected import module, not by a
   // hard-coded country. A route to Canada can therefore be quoted from the
@@ -27966,6 +27171,19 @@ function defaultLegacyModuleDestination(module: LegacyPricingModule): string | u
   if (module === 'canadaAirSea') return '加拿大';
   if (module === 'dubaiAirSea') return '迪拜';
   return '美国';
+}
+
+function buildLegacyModuleCountsByFile(sources: any[]) {
+  const result = new Map<string, Partial<Record<LegacyPricingModule, number>>>();
+  for (const source of sources) {
+    const fileName = String(source.fileName ?? '');
+    if (!fileName) continue;
+    const module = source.module as LegacyPricingModule;
+    const counts = result.get(fileName) ?? {};
+    counts[module] = (counts[module] ?? 0) + Number(source.rowCount ?? source.rows?.length ?? 0);
+    result.set(fileName, counts);
+  }
+  return result;
 }
 
 function buildLegacyPricingMeta(rows: LegacyPricingRowInternal[], canViewInternalPricing = true): LegacyPricingMetaResponse {
@@ -28070,11 +27288,7 @@ function legacyRowToRecommendation(
   const kgPrice = Number(row.costPerKg);
   const cbmPrice = Number(row.cbmPrice);
   const volumeCbm = Number(input.volumeCbm ?? 0);
-  const unitPreview = input.module === 'europeExpress'
-    && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0)
-    && (!Number.isFinite(cbmPrice) || cbmPrice <= 0)
-    && Number.isFinite(kgPrice)
-    && kgPrice > 0;
+  const unitPreview = input.module === 'europeExpress' && (!Number.isFinite(chargeableWeightKg) || chargeableWeightKg <= 0) && Number(cbmPrice ?? 0) <= 0 && Number.isFinite(kgPrice) && kgPrice > 0;
   const quoteWeightKg = unitPreview ? 1 : chargeableWeightKg;
   let quoteMode: LegacyPricingRecommendation['quoteMode'] = 'kg';
   let costUnitPrice = kgPrice;
@@ -28134,8 +27348,8 @@ function legacyRowToRecommendation(
     destinationCountry: row.destinationCountry,
     postalRule: row.postalRule,
     weightSegmentLabel: input.module === 'amazon'
-      ? normalizeAmazonCbmTier(row.tierLabel) ?? row.tierLabel ?? normalizeAmazonWeightBand(input.weightBand ?? input.tier) ?? inferAmazonWeightBandFromMin(row.minWeightKg) ?? `${row.minWeightKg ?? 0}-${row.maxWeightKg ?? 99999}kg`
-      : row.tierLabel || `${row.minWeightKg ?? 0}-${row.maxWeightKg ?? 99999}kg`,
+      ? normalizeAmazonCbmTier(row.tierLabel) ?? row.tierLabel ?? normalizeAmazonWeightBand(input.weightBand ?? input.tier) ?? inferAmazonWeightBandFromMin(row.minWeightKg) ?? `${row.minWeightKg ?? 0}-${row.maxWeightKg ?? 99999} KG`
+      : row.tierLabel || `${row.minWeightKg ?? 0}-${row.maxWeightKg ?? 99999} KG`,
     quoteMode,
     tierLabel: row.tierLabel,
     ...(canViewInternalPricing ? { costUnitPrice } : {}),
@@ -28154,11 +27368,99 @@ function legacyRowToRecommendation(
   };
 }
 
+function combinePricingDisplayRemarks(...remarks: Array<string | null | undefined>) {
+  return Array.from(new Set(remarks
+    .map((remark) => remark?.trim())
+    .filter((remark): remark is string => Boolean(remark)))).join('\n') || undefined;
+}
+
+const amazonOriginWarehouseNames = [
+  '义乌仓',
+  '华东',
+  '华南',
+  '厦门/泉州/福州',
+  '天津/南昌/石家庄',
+  '武汉/长沙/成都',
+  '汕头',
+  '济南/潍坊',
+  '深圳/广州仓',
+  '西安/沧州/保定',
+  '重庆',
+  '青岛/郑州/温州/台州/连云港/南京/合肥'
+];
+
+function normalizeAmazonOriginWarehouseName(value: unknown): string | undefined {
+  const text = String(value ?? '')
+    .replace(/[／｜|、，,；;]/g, '/')
+    .replace(/\s+/g, '')
+    .replace(/^(?:出货仓|起运仓|发货仓|发货地|起运地|来源地|仓库区域|揽收区域|报价组)[:：]?/, '')
+    .trim();
+  if (!text) return undefined;
+  const compact = text.replace(/[()（）]/g, '');
+  if (/^(?:仓库编码|仓库代码|亚马逊代码|FBA仓库代码|仓库|编码)$/i.test(compact)) {
+    return undefined;
+  }
+  const matched = amazonOriginWarehouseNames.find((name) => compact.includes(name.replace(/[()（）]/g, '')));
+  if (matched) return matched;
+  if (/深圳/.test(compact) && /广州/.test(compact)) {
+    return '深圳/广州仓';
+  }
+  if (/欧洲|西班牙|英国|铁路|空派|快递|海运|专线|渠道|DHL|UPS|FEDEX|美西|美东|包税|双清|卡派|海卡/i.test(compact)) {
+    return undefined;
+  }
+  if (/(仓|华东|华南|义乌|深圳|广州|汕头|厦门|泉州|福州|天津|南昌|石家庄|武汉|长沙|成都|济南|潍坊|西安|沧州|保定|重庆|青岛|郑州|温州|台州|连云港|南京|合肥)/.test(compact)) {
+    return compact.slice(0, 30);
+  }
+  return undefined;
+}
+
+function uniqueAmazonOriginWarehouseNames(values: Array<unknown>): string[] {
+  const unique = new Set(values.map(normalizeAmazonOriginWarehouseName).filter((value): value is string => Boolean(value)));
+  return [...unique].sort((left, right) => {
+    const leftIndex = amazonOriginWarehouseNames.indexOf(left);
+    const rightIndex = amazonOriginWarehouseNames.indexOf(right);
+    if (leftIndex !== -1 || rightIndex !== -1) {
+      return (leftIndex === -1 ? 999 : leftIndex) - (rightIndex === -1 ? 999 : rightIndex);
+    }
+    return left.localeCompare(right, 'zh-CN');
+  });
+}
+
 function legacyAmazonOriginMatches(row: LegacyPricingRowInternal, origin?: string) {
   if (row.module !== 'amazon') return true;
   const normalized = normalizeAmazonOriginWarehouseName(origin);
   if (!normalized) return true;
   return normalizeAmazonOriginWarehouseName(row.origin) === normalized;
+}
+
+function normalizeAmazonCbmTier(value?: string | number | null): '按方包税' | '按方不包税' | '按方未标注' | undefined {
+  const text = String(value ?? '').trim().replace(/\s+/g, '');
+  if (!/按方|CBM|方/i.test(text)) return undefined;
+  if (/不包税|不含税|未包税/.test(text)) return '按方不包税';
+  if (/包税|含税/.test(text)) return '按方包税';
+  return '按方未标注';
+}
+
+function amazonWeightBandMinimum(value?: string | number | null): number | undefined {
+  const text = String(value ?? '').trim().toUpperCase().replace(/\s+/g, '');
+  const match = text.match(/(\d+(?:\.\d+)?)/);
+  if (!match) return undefined;
+  const weight = Number(match[1]);
+  return Number.isFinite(weight) ? weight : undefined;
+}
+
+function normalizeAmazonWeightBand(value?: string | number | null): string | undefined {
+  const weight = amazonWeightBandMinimum(value);
+  if (weight === undefined) return undefined;
+  // A source workbook's tier is authoritative. Do not collapse 21KG+, 45KG+
+  // or any other valid source tier into the historic 12/51/100 UI buckets.
+  return `${weight}KG+`;
+}
+
+function inferAmazonWeightBandFromMin(minWeightKg?: number | null): string | undefined {
+  const min = Number(minWeightKg ?? 0);
+  if (!Number.isFinite(min)) return undefined;
+  return normalizeAmazonWeightBand(min);
 }
 
 function uniqueAmazonWeightBandsFromLegacyRows(rows: Array<Pick<LegacyPricingRowInternal, 'tierLabel' | 'minWeightKg' | 'cbmPrice'>>) {
@@ -28167,6 +27469,29 @@ function uniqueAmazonWeightBandsFromLegacyRows(rows: Array<Pick<LegacyPricingRow
     .map((row) => row.tierLabel?.trim() || inferAmazonWeightBandFromMin(row.minWeightKg))
     .filter((label): label is string => Boolean(label))))
     .sort((left, right) => (amazonWeightBandMinimum(left) ?? 0) - (amazonWeightBandMinimum(right) ?? 0));
+}
+
+function inferAmazonWeightBandFromLegacyRows(rows: Array<Pick<LegacyPricingRowInternal, 'tierLabel' | 'minWeightKg' | 'maxWeightKg' | 'cbmPrice'>>, chargeableWeightKg: number) {
+  const weight = Number(chargeableWeightKg);
+  if (!Number.isFinite(weight) || weight <= 0) return undefined;
+  const matching = rows
+    .filter((row) => !normalizeAmazonCbmTier(row.tierLabel) && Number(row.cbmPrice ?? 0) <= 0)
+    .filter((row) => weight >= Number(row.minWeightKg ?? 0) && weight <= Number(row.maxWeightKg ?? Number.MAX_SAFE_INTEGER));
+  const candidates = matching.length ? matching : rows
+    .filter((row) => !normalizeAmazonCbmTier(row.tierLabel) && Number(row.cbmPrice ?? 0) <= 0)
+    .filter((row) => weight >= Number(row.minWeightKg ?? 0));
+  return candidates
+    .map((row) => ({ label: row.tierLabel?.trim() || inferAmazonWeightBandFromMin(row.minWeightKg), minimum: Number(row.minWeightKg ?? 0) }))
+    .filter((item): item is { label: string; minimum: number } => Boolean(item.label))
+    .sort((left, right) => right.minimum - left.minimum)[0]?.label;
+}
+
+function priceRowAmazonWeightBandMatches(row: PriceBookRowSummary, weightBand?: string) {
+  const cbmTier = normalizeAmazonCbmTier(weightBand);
+  const rowCbmTier = normalizeAmazonCbmTier(row.priceTierLabel);
+  if (cbmTier) return Number(row.cbmPrice ?? 0) > 0 && (rowCbmTier ? rowCbmTier === cbmTier : true);
+  if (Number(row.cbmPrice ?? 0) > 0) return false;
+  return true;
 }
 
 function legacyAmazonWeightBandMatches(row: LegacyPricingRowInternal, input: LegacyPricingQuoteRequest) {
@@ -28223,6 +27548,25 @@ function withOpenEndedHighestLegacyTiers(rows: LegacyPricingRowInternal[]) {
       ? { ...row, maxWeightKg: 99999 }
       : row;
   });
+}
+
+function isOpenEndedKgTier(label?: string) {
+  const text = String(label ?? '').trim();
+  return !normalizeAmazonCbmTier(text) && /(?:kg|kgs|公斤)?\s*(?:\+|以上)$/i.test(text);
+}
+
+function cbmTierMatches(tierLabel: string | undefined, volumeCbm: number) {
+  if (!Number.isFinite(volumeCbm) || volumeCbm <= 0) return false;
+  const text = String(tierLabel ?? '').toUpperCase().replace(/\s+/g, '');
+  const range = text.match(/(\d+(?:\.\d+)?)\s*[-~－—]\s*(\d+(?:\.\d+)?)\s*CBM?/);
+  if (range) {
+    return volumeCbm >= Number(range[1]) && volumeCbm <= Number(range[2]);
+  }
+  const above = text.match(/(\d+(?:\.\d+)?)\s*CBM?\+/) ?? text.match(/(\d+(?:\.\d+)?)\s*CBM?以上/);
+  if (above) {
+    return volumeCbm > Number(above[1]);
+  }
+  return true;
 }
 
 function legacyChannelMatches(row: LegacyPricingRowInternal, channel?: string) {
@@ -28291,6 +27635,27 @@ function selectUsPostalPriceRows(rows: LegacyPricingRowInternal[], postalCode?: 
   // specificity only explains the matched range; it must never discard a
   // different matching price line.
   return matches.map((item) => ({ ...item.row, postalRule: item.match.matchedLabel }));
+}
+
+function getUsPostalRuleHealthIssues(rows: Array<Pick<PriceBookRowSummary, 'postalRule' | 'channelName' | 'businessRouteName' | 'realChannelName' | 'minWeightKg' | 'maxWeightKg'>>) {
+  const issues: string[] = [];
+  const postalRules = rows.map((row) => row.postalRule);
+  const normalized = postalRules.map((rule) => String(rule ?? '').trim()).filter(Boolean);
+  if (postalRules.some((rule) => !String(rule ?? '').trim())) issues.push('美国价格行未配置邮编范围');
+  if (normalized.some((rule) => !isUsPostalRuleSyntax(rule))) issues.push('美国价格行邮编规则格式无法解析');
+  if (hasScopedUsPostalRuleOverlap(rows)) issues.push('同一渠道、价格组和重量段存在邮编区间重叠');
+  return issues;
+}
+
+function getWarehouseCodeRuleHealthIssues(warehouseCodes: Array<string | undefined | null>) {
+  const invalidSegments = warehouseCodes.flatMap((code) =>
+    isCanadaAddressScopeWarehouseCode(code)
+      ? []
+      : isInvalidWarehouseCodeRule(code)
+      ? [String(code).replace(/^__INVALID_WAREHOUSE_RULE__:/, '')]
+      : parseWarehouseCodeRules(code).invalidSegments
+  );
+  return Array.from(new Set(invalidSegments.map((segment) => `仓库编码规则无效：${segment}，需修正或重新导入`)));
 }
 
 function legacyRowToPriceBookRow(row: LegacyPricingRowInternal, costPerKg: number, chargeableWeightKg: number): PriceBookRowSummary {
@@ -28402,7 +27767,7 @@ function createSouthAfricaLookupResponse(input: SouthAfricaLookupRequest, rules:
   const productName = input.productName?.trim();
   const volumeCbm = Number(input.volumeCbm);
   if (!productName) throw new BadRequestException('请先填写品名');
-  if (!Number.isFinite(volumeCbm) || volumeCbm <= 0) throw new BadRequestException('请填写有效方数');
+  if (!Number.isFinite(volumeCbm) || volumeCbm <= 0) throw new BadRequestException('请填写有效体积 CBM');
   const query: SouthAfricaLookupRequest = {
     productName,
     volumeCbm,
@@ -28440,7 +27805,7 @@ function buildSouthAfricaLookupResult(rule: SouthAfricaRateRuleSummary, matchedK
       formulaText: '该物料需单询，不输出固定总价',
       remark: rule.remark,
       sourceImage,
-      quoteText: `南非专线报价：${query.productName} 属于 ${rule.category}/${rule.name}，需单独咨询；参考计费方 ${chargeableCbm.toFixed(3)} CBM。`
+      quoteText: `南非专线报价：${query.productName} 属于 ${rule.category}/${rule.name}，需单独咨询；参考计费体积 ${chargeableCbm.toFixed(3)} CBM。`
     };
   }
   const freightFee = roundMoney(chargeableCbm * Number(rule.ratePerCbm ?? 0));
@@ -28462,7 +27827,7 @@ function buildSouthAfricaLookupResult(rule: SouthAfricaRateRuleSummary, matchedK
     quoteText: [
       `南非SA海运DDP专线：${query.productName}`,
       `分类：${rule.category}/${rule.name}`,
-      `计费方：${chargeableCbm.toFixed(3)}CBM`,
+      `计费体积：${chargeableCbm.toFixed(3)} CBM`,
       `运费：${formatSouthAfricaRmb(rule.ratePerCbm ?? 0)}/CBM，运费 ${formatSouthAfricaRmb(freightFee)}`,
       `备注：${remark}`
     ].join('\n')
@@ -28593,7 +27958,7 @@ function createBackendPriceLookup(
         weightSegmentLabel: normalizeAmazonCbmTier(input.weightBand)
           ?? (input.amazonCode ? normalizeAmazonWeightBand(price.priceTierLabel) ?? inferAmazonWeightBandFromMin(price.minWeightKg) ?? normalizeAmazonWeightBand(input.weightBand) : undefined)
           ?? price.priceTierLabel
-          ?? `${price.minWeightKg}-${price.maxWeightKg}kg`,
+          ?? `${price.minWeightKg}-${price.maxWeightKg} KG`,
         salesRatePerKg,
         freightFee: totalSales,
         surchargeFee,
@@ -28649,6 +28014,31 @@ function createBackendPriceLookup(
   };
 }
 
+function findBestMarkupRule(markupRules: AgentMarkupSummary[], price: PriceBookRowSummary, ownerAgentName = price.agentName, chargeable?: { unit: 'KG' | 'CBM'; value: number }): AgentMarkupSummary | undefined {
+  const destination = price.destinationCountry.trim();
+  const channel = price.channelName.trim();
+  const realChannel = (price.realChannelName?.trim() || price.channelName.trim());
+  const candidates = [...markupRules]
+    .filter((rule) => rule.enabled && !rule.deletedAt && rule.agentName === ownerAgentName && (!rule.priceBookId || rule.priceBookId === price.priceBookId))
+    .filter((rule) => {
+      const channelMatches = !rule.channelName || rule.channelName === channel;
+      const realChannelMatches = !rule.realChannelName || rule.realChannelName === realChannel;
+      const countryMatches = !rule.destinationCountry || rule.destinationCountry === destination;
+      return channelMatches && realChannelMatches && countryMatches;
+    });
+  const matchedTiers = chargeable
+    ? candidates.filter((rule) => rule.markupUnit === chargeable.unit && rule.minChargeableValue !== undefined && chargeable.value >= rule.minChargeableValue && (rule.maxChargeableValue === undefined || chargeable.value < rule.maxChargeableValue))
+    : [];
+  const eligible = matchedTiers.length ? matchedTiers : candidates.filter((rule) => !rule.markupUnit);
+  return eligible
+    .sort((left, right) =>
+      (Boolean(right.priceBookId) ? 1 : 0) - (Boolean(left.priceBookId) ? 1 : 0)
+      || (left.priority ?? 100) - (right.priority ?? 100)
+      || markupSpecificity(right, channel, realChannel, destination) - markupSpecificity(left, channel, realChannel, destination)
+      || safeTime(right.updatedAt) - safeTime(left.updatedAt)
+    )[0];
+}
+
 function normalizeMarkupRoutePreviewInput(input: MarkupRoutePreviewInput): MarkupRoutePreviewInput & { realChannelName: string } {
   const priceBookId = input.priceBookId?.trim();
   const agentName = input.agentName?.trim();
@@ -28664,6 +28054,10 @@ function normalizeMarkupRoutePreviewInput(input: MarkupRoutePreviewInput): Marku
 
 function markupRoutePreviewCacheKey(route: MarkupRoutePreviewInput & { realChannelName: string }) {
   return [route.priceBookId, route.agentName, route.channelName, route.realChannelName, route.destinationCountry, route.markupUnit, route.chargeableValue].join('\u0001');
+}
+
+function markupUnitForRow(row: PriceBookRowSummary): AgentMarkupUnit {
+  return Number(row.cbmPrice ?? 0) > 0 ? 'CBM' : 'KG';
 }
 
 function markupRouteRowMatches(row: PriceBookRowSummary, route: MarkupRoutePreviewInput & { realChannelName: string }) {
@@ -28823,6 +28217,52 @@ function validateAgentChannelCustomRemarkScope(
   if (!exists) throw new BadRequestException('渠道必须来自当前模块该代理已导入的真实价格表');
 }
 
+function attachCustomRemarksToPriceLookup(
+  response: PriceLookupResponse,
+  priceRows: PriceBookRowSummary[],
+  priceBooks: Array<Pick<PriceBookSummary, 'id' | 'agentShortName' | 'remark' | 'targetModule'>>,
+  remarks: AgentChannelCustomRemarkSummary[]
+): PriceLookupResponse {
+  const rowById = new Map(priceRows.map((row) => [row.id, row]));
+  const bookById = new Map(priceBooks.map((book) => [book.id, book]));
+  const decorate = (recommendation: PriceLookupRecommendation) => {
+    const row = rowById.get(recommendation.price.id);
+    if (!row) return recommendation;
+    const book = bookById.get(row.priceBookId);
+    const legacyModule = book?.targetModule;
+    if (!legacyModule || legacyModule === 'dubaiAirSea') return recommendation;
+    const agentName = book.agentShortName?.trim() || row.agentName;
+    const content = remarks.find((remark) => remark.enabled && remark.legacyModule === legacyModule && remark.agentName === agentName && remark.channelName === row.channelName)?.content;
+    const safeContent = sanitizePricingChannelRequirement(content, [agentName, row.agentName]);
+    const customRemark = combinePricingDisplayRemarks(recommendation.customRemark, recommendation.remark, safeContent);
+    return customRemark ? { ...recommendation, customRemark } : recommendation;
+  };
+  const recommendations = response.recommendations.map(decorate);
+  const byId = new Map(recommendations.map((item) => [item.price.id, item]));
+  return {
+    ...response,
+    recommendations,
+    cheapestRecommendations: response.cheapestRecommendations.map((item) => byId.get(item.price.id) ?? decorate(item)),
+    fastestRecommendations: response.fastestRecommendations.map((item) => byId.get(item.price.id) ?? decorate(item))
+  };
+}
+
+function buildMarkupRuleIndex(markupRules: AgentMarkupSummary[]): Map<string, AgentMarkupSummary[]> {
+  const index = new Map<string, AgentMarkupSummary[]>();
+  for (const rule of markupRules) {
+    if (!rule.enabled || rule.deletedAt) continue;
+    const key = markupRuleIndexKey(rule.agentName, rule.priceBookId);
+    const rows = index.get(key) ?? [];
+    rows.push(rule);
+    index.set(key, rows);
+  }
+  return index;
+}
+
+function markupRuleIndexKey(agentName: string, priceBookId?: string) {
+  return `${priceBookId ?? ''}\u0001${agentName}`;
+}
+
 function buildPriceBookAgentSourcesFromRows(priceRows: PriceBookRowSummary[], fileNameByBookId: Map<string, string>, agentNameByBookId: Map<string, string | undefined> = new Map(), legacyModule?: LegacyPricingModule): ActivePriceBookAgentSource[] {
   const grouped = new Map<string, ActivePriceBookAgentSource>();
   const routeKeysByScope = new Map<string, Set<string>>();
@@ -28860,6 +28300,20 @@ function buildLegacyAgentSourcesFromRows(rows: LegacyPricingRowInternal[], activ
     grouped.set(key, current);
   }
   return [...grouped.values()];
+}
+
+function markupSpecificity(rule: AgentMarkupSummary, channel: string, realChannel: string, destination: string): number {
+  let score = 0;
+  if (rule.channelName && rule.channelName === channel) {
+    score += 2;
+  }
+  if (rule.realChannelName && rule.realChannelName === realChannel) {
+    score += 4;
+  }
+  if (rule.destinationCountry && rule.destinationCountry === destination) {
+    score += 1;
+  }
+  return score;
 }
 
 function omitInternalPriceFields(price: PriceBookRowSummary): PriceLookupRecommendation['price'] {
@@ -28927,7 +28381,30 @@ function redactPriceBookRowsResponse(response: PriceBookRowsResponse, visibility
 }
 
 function canViewPricingInternalRoute(role: string): boolean {
-  return role === 'ADMIN' || role === 'UG_MARKET';
+  return isAdministratorRole(role) || role === 'UG_MARKET';
+}
+
+function publicPricingRouteCode(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const displayName = extractChinesePricingRouteName(value);
+    if (displayName) return displayName;
+  }
+  return '可报价线路';
+}
+
+function extractChinesePricingRouteName(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  const cleaned = text
+    .replace(/[A-Za-z0-9_]+/g, '')
+    .replace(/[－–—]/g, '-')
+    .replace(/[^\u3400-\u9FFF\s\-、，,（）()]/g, '')
+    .replace(/\s*-\s*/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[-\s,，、]+|[-\s,，、]+$/g, '')
+    .trim();
+  return /[\u3400-\u9FFF]/.test(cleaned) ? cleaned : undefined;
 }
 
 function maskPriceRouteForBusiness(price: PriceBookRowSummary, publicCode: string): PriceBookRowSummary {
@@ -28939,6 +28416,160 @@ function maskPriceRouteForBusiness(price: PriceBookRowSummary, publicCode: strin
     businessRouteName: publicCode,
     sourceSheetName: undefined
   };
+}
+
+const amazonWarehouseProfiles: Record<string, { warehouseCodes: string[]; keywords: string[] }> = {
+  ONT8: {
+    warehouseCodes: [
+      'ONT8',
+      'LAX9',
+      'LAX2T',
+      'LGB8',
+      'SBD1',
+      'SBD2',
+      'SCK4',
+      'SCK8',
+      'OAK3',
+      'FAT2',
+      'SMF3',
+      'SMF6',
+      'IUSJ',
+      'IUSP',
+      'IUSQ',
+      'POC1',
+      'POC3',
+      'PSP3',
+      'VGT2',
+      'MCE1',
+      'XLX7',
+      'ABQ2'
+    ],
+    keywords: ['美西', '洛杉矶', '洛杉机', 'LAX', 'ONT', '加州']
+  }
+};
+
+function normalizeWarehouseCode(value?: string) {
+  return value?.trim().replace(/\s+/g, '').toUpperCase() ?? '';
+}
+
+function calculateLookupChargeableWeight(input: PriceLookupRequest) {
+  const manualWeightValue = Number(input.chargeableWeightKg);
+  const manualWeight = Number.isFinite(manualWeightValue) ? manualWeightValue : 0;
+  const packageCount = Number(input.packageCount ?? 1);
+  const safePackageCount = Number.isFinite(packageCount) && packageCount > 0 ? packageCount : 1;
+  const volumeWeight = Number(input.volumeCbm ?? 0) > 0 ? Number(input.volumeCbm) * 167 : 0;
+  const actualWeight = Number(input.actualWeightKg ?? 0) > 0
+    ? Number(input.actualWeightKg)
+    : (Number(input.unitActualWeightKg ?? 0) > 0 ? Number(input.unitActualWeightKg) * safePackageCount : 0);
+  const dimensionWeight =
+    Number(input.lengthCm ?? 0) > 0 && Number(input.widthCm ?? 0) > 0 && Number(input.heightCm ?? 0) > 0
+      ? (Number(input.lengthCm) * Number(input.widthCm) * Number(input.heightCm) * safePackageCount) / 6000
+      : 0;
+  return roundMoney(Math.max(manualWeight, volumeWeight, actualWeight, dimensionWeight));
+}
+
+function createWarehouseLookupProfile(input: PriceLookupRequest) {
+  const code = normalizeWarehouseCode(input.amazonCode);
+  const profile = code ? amazonWarehouseProfiles[code] : undefined;
+  return {
+    code,
+    warehouseCodes: new Set([code, ...(profile?.warehouseCodes ?? [])].filter(Boolean).map(normalizeWarehouseCode)),
+    keywords: profile?.keywords ?? []
+  };
+}
+
+function getWarehouseMatchRank(row: PriceBookRowSummary, profile: ReturnType<typeof createWarehouseLookupProfile>) {
+  const rowWarehouseCode = normalizeWarehouseCode(row.warehouseCode);
+  if (!rowWarehouseCode || !profile.code) {
+    return 3;
+  }
+  const ruleRank = matchWarehouseCodeRule(rowWarehouseCode, profile.code);
+  if (ruleRank !== undefined) {
+    return ruleRank;
+  }
+  if (profile.warehouseCodes.has(rowWarehouseCode)) {
+    return 2;
+  }
+  const searchableText = [row.channelName, row.realChannelName, row.businessRouteName, row.sourceSheetName]
+    .filter(Boolean)
+    .join(' ')
+    .toUpperCase();
+  return profile.keywords.some((keyword) => searchableText.includes(keyword.toUpperCase())) ? 3 : undefined;
+}
+
+function selectPriceRowsForLookup(
+  priceRows: PriceBookRowSummary[],
+  warehouseProfile: ReturnType<typeof createWarehouseLookupProfile>,
+  destinationCountry: string | undefined,
+  chargeableWeightKg: number,
+  weightBand?: string,
+  volumeCbm?: number
+) {
+  const strictCbmTier = normalizeAmazonCbmTier(weightBand);
+  const strictWeightBand = strictCbmTier ?? normalizeAmazonWeightBand(weightBand);
+  const candidates = priceRows
+    .map((row) => ({ row, rank: getWarehouseMatchRank(row, warehouseProfile) }))
+    .filter(
+      (candidate): candidate is { row: PriceBookRowSummary; rank: number } =>
+        candidate.rank !== undefined &&
+        (destinationCountry ? candidate.row.destinationCountry === destinationCountry : candidate.rank < 3) &&
+        priceRowAmazonWeightBandMatches(candidate.row, strictWeightBand) &&
+        (Number(candidate.row.cbmPrice ?? 0) > 0
+          ? Number(volumeCbm ?? 0) > 0 && cbmTierMatches(candidate.row.priceTierLabel, Number(volumeCbm ?? 0))
+          : strictCbmTier ? Number(volumeCbm ?? 0) > 0 : chargeableWeightKg >= candidate.row.minWeightKg)
+    );
+
+  const ranks = [...new Set(candidates.map((candidate) => candidate.rank))].sort((left, right) => left - right);
+  for (const rank of ranks) {
+    const rankCandidates = candidates.filter((candidate) => candidate.rank === rank);
+    const exactWeightRows = rankCandidates
+      .filter((candidate) => chargeableWeightKg <= candidate.row.maxWeightKg)
+      .map((candidate) => candidate.row);
+    if (exactWeightRows.length) {
+      const highestMinimum = Math.max(...exactWeightRows.map((row) => row.minWeightKg));
+      return exactWeightRows.filter((row) => row.minWeightKg === highestMinimum);
+    }
+    if (strictCbmTier) {
+      return [];
+    }
+
+    const fallbackRowsByRoute = new Map<string, PriceBookRowSummary>();
+    for (const { row } of rankCandidates) {
+      const routeKey = [
+        row.agentName,
+        row.channelName,
+        row.realChannelName?.trim() || row.channelName,
+        row.warehouseCode ?? '',
+        row.destinationCountry
+      ].join('|');
+      const current = fallbackRowsByRoute.get(routeKey);
+      if (!current || row.minWeightKg > current.minWeightKg || (row.minWeightKg === current.minWeightKg && row.costPerKg < current.costPerKg)) {
+        fallbackRowsByRoute.set(routeKey, row);
+      }
+    }
+    const fallbackRows = [...fallbackRowsByRoute.values()];
+    if (fallbackRows.length) {
+      return fallbackRows;
+    }
+  }
+
+  return [];
+}
+
+function withOpenEndedHighestPriceTiers(rows: PriceBookRowSummary[]) {
+  const highestMinimumByRoute = new Map<string, number>();
+  for (const row of rows) {
+    if (Number(row.cbmPrice ?? 0) > 0 || !isOpenEndedKgTier(row.priceTierLabel)) continue;
+    const key = [row.priceBookId, row.agentName, row.sourceSheetName, row.channelName, row.businessRouteName, row.realChannelName, row.warehouseCode, row.destinationCountry].join('\u0001');
+    highestMinimumByRoute.set(key, Math.max(highestMinimumByRoute.get(key) ?? Number.NEGATIVE_INFINITY, row.minWeightKg));
+  }
+  return rows.map((row) => {
+    if (Number(row.cbmPrice ?? 0) > 0 || !isOpenEndedKgTier(row.priceTierLabel)) return row;
+    const key = [row.priceBookId, row.agentName, row.sourceSheetName, row.channelName, row.businessRouteName, row.realChannelName, row.warehouseCode, row.destinationCountry].join('\u0001');
+    return highestMinimumByRoute.get(key) === row.minWeightKg && row.maxWeightKg < 99999
+      ? { ...row, maxWeightKg: 99999 }
+      : row;
+  });
 }
 
 function buildPriceRowWarehouseWhere(warehouseProfile: ReturnType<typeof createWarehouseLookupProfile>): Record<string, unknown>[] {
@@ -28957,6 +28588,20 @@ function buildPriceRowWarehouseWhere(warehouseProfile: ReturnType<typeof createW
       { sourceSheetName: { contains: keyword, mode: 'insensitive' } }
     ])
   ];
+}
+
+function matchedTransitDays(item: PriceLookupRecommendation): number {
+  return item.price.transitDays ?? Number.POSITIVE_INFINITY;
+}
+
+function inferBackendPriceCarrierName(row: PriceBookRowSummary): string {
+  const channel = row.channelName.toUpperCase();
+  if (channel.includes('UPS')) return 'UPS';
+  if (channel.includes('FEDEX') || channel.includes('FDX')) return 'FEDEX';
+  if (channel.includes('DHL') || channel.includes('DHK')) return 'DHL';
+  if (channel.includes('海运')) return '海运';
+  if (channel.includes('空运')) return '空运';
+  return '专线';
 }
 
 function slug(value: string): string {
@@ -29035,7 +28680,7 @@ function mapRoleRow(row: PrismaRole & { permissions?: PrismaPermission[] }): Rol
     site: row.site ?? undefined,
     sortOrder: row.sortOrder,
     enabled: row.enabled,
-    systemBuiltin: role === 'ADMIN' || row.systemBuiltin
+    systemBuiltin: row.systemBuiltin
   });
 }
 
@@ -29116,16 +28761,6 @@ function normalizeStaffProfile(input: StaffProfileInput) {
     gender,
     nickname: normalizeOptionalText(input.nickname, 40),
     site: normalizeOptionalText(input.site, 40)
-  };
-}
-
-function normalizeSelfStaffProfile(input: StaffProfileInput) {
-  const gender = staffGenderValues.includes(input.gender as (typeof staffGenderValues)[number]) ? input.gender : 'UNKNOWN';
-  return {
-    name: normalizeOptionalText(input.name, 40),
-    phone: normalizeOptionalText(input.phone, 30),
-    gender,
-    nickname: normalizeOptionalText(input.nickname, 40)
   };
 }
 
@@ -29315,7 +28950,7 @@ function scopeCustomerServiceDataConfirmRow(
   } else {
     [
       'agentId', 'agentName', 'agentWeightKg', 'channelId', 'channelName', 'carrier', 'routeAgentChannelName',
-      'routeChargeWeightKg', 'routeUnitPrice', 'routeOtherFee', 'routeCostTotal', 'routeCurrency'
+      'routeChargeWeightKg', 'routeUnitPrice', 'routeOtherFee', 'routeCostTotal', 'routeCurrency', 'routeCostSummary'
     ].forEach((key) => delete shipment[key]);
   }
   return scoped;
@@ -29339,10 +28974,23 @@ function validCustomerServiceDataCycleStart(value?: string | Date | null) {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
-function oldestCustomerServiceDataCycleStart(shipments: Array<Pick<Shipment, 'outboundAt'>>) {
+function oldestCustomerServiceDataCycleStart(shipments: Array<{ outboundAt?: string | Date | null }>) {
   const starts = shipments.map((shipment) => validCustomerServiceDataCycleStart(shipment.outboundAt));
   if (starts.some((value) => !value)) return undefined;
   return starts.reduce<Date | undefined>((oldest, value) => !oldest || (value && value < oldest) ? value : oldest, undefined);
+}
+
+function calculateFallbackVolumetricWeightKg(volumeCbm?: number) {
+  return Number((((volumeCbm ?? 0) * 1_000_000) / 6000).toFixed(3));
+}
+
+function nextWarehouseSplitSequence(rootCombinedOrderNo: string, combinedOrderNos: string[]) {
+  const prefix = `${rootCombinedOrderNo}-`;
+  return combinedOrderNos.reduce((max, combinedOrderNo) => {
+    if (!combinedOrderNo.startsWith(prefix)) return max;
+    const suffix = Number(combinedOrderNo.slice(prefix.length));
+    return Number.isInteger(suffix) && suffix > max ? suffix : max;
+  }, 0) + 1;
 }
 
 function formatDate(date: Date): string {
@@ -29381,6 +29029,38 @@ function internalFlowStage(action: string, after?: unknown) {
   if (action.includes('order_entry') || action.includes('shipment.create')) return '业务录单';
   return '';
 }
+
+function resolveShipmentDwellStage(
+  shipment: Shipment,
+  rows: CustomerServiceDataAuditRow[]
+): { stageKey?: ShipmentStageHistoryRecord['stageKey']; fallbackEnteredAt?: Date | string } {
+  const statusStage = stageForShipmentStatus(shipment.status);
+  if (shipment.status !== 'OUTBOUNDED') return { stageKey: statusStage };
+
+  const latestFirstRows = [...rows].sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const businessApproved = isCustomerServiceDataApprovedFromRows(latestFirstRows, 'business', shipment.outboundAt);
+  const agentApproved = isCustomerServiceDataApprovedFromRows(latestFirstRows, 'agent', shipment.outboundAt);
+  const stageKey = businessApproved && agentApproved && !shipment.transferNo
+    ? 'TRANSFER_NO'
+    : businessApproved || agentApproved
+      ? 'DATA_CONFIRM'
+      : 'OUTBOUNDED';
+  const currentCycleRows = rows.filter((row) => customerServiceDataAuditIsInCurrentCycle(row, shipment.outboundAt));
+  const stageRows = currentCycleRows.filter((row) => stageKey === 'TRANSFER_NO'
+    ? row.action.endsWith('.approved')
+    : stageKey === 'DATA_CONFIRM'
+      ? row.action.endsWith('.approved') || row.action.endsWith('.updated')
+      : false);
+  return {
+    stageKey,
+    fallbackEnteredAt: stageKey === 'TRANSFER_NO'
+      ? stageRows[stageRows.length - 1]?.createdAt ?? shipment.outboundAt
+      : stageKey === 'DATA_CONFIRM'
+        ? stageRows[0]?.createdAt ?? shipment.outboundAt
+        : shipment.outboundAt
+  };
+}
+
 function internalFlowSummary(action: string, after: unknown) {
   const value = (after && typeof after === 'object' ? after : {}) as Record<string, unknown>;
   const status = typeof value.statusTo === 'string' ? value.statusTo : typeof value.status === 'string' ? value.status : undefined;

@@ -34,6 +34,7 @@ import {
   type FinanceDashboardItem,
   type FinanceDashboardResponse,
   type OrderEntryDetailSummary,
+  type OrderEntryDraftUpdateInput,
   type PendingPaymentListQuery,
   type PayableAuditSummary,
   type ReceivableAuditSummary,
@@ -44,7 +45,8 @@ import {
   type ShipmentReviewEventSummary,
   type ShipmentLogisticsTrackingEventSummary,
   type ShipmentReviewPackageSummary,
-  type ShipmentStatus
+  type ShipmentStatus,
+  type WarehousePackageSummary
 } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
 import { confirmDangerousAction } from '../shared/dangerousAction';
@@ -68,6 +70,7 @@ import { getStaffSectionHref } from '../appShell/config';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { filterServerScopedBusinessShipments, resolveBusinessDraftRows, resolveBusinessPendingReviewRows } from './financeBusinessScope';
 import { ShipmentRiskFlag } from '../shared/ShipmentRiskFlag';
+import { canViewOrderLifecycleBusinessCosts } from '../shared/businessCostAccess';
 
 const { Text } = Typography;
 
@@ -126,7 +129,11 @@ export function FinancePage({
   onPayableRowsChange: (rows: PayableAuditSummary[]) => void;
   shipments: Shipment[];
   onViewShipmentLog: (record: Shipment) => void;
-  renderShipmentFinancePanel: (shipment: Shipment, detail?: ShipmentFinanceDetailSummary) => ReactNode;
+  renderShipmentFinancePanel: (
+    shipment: Shipment,
+    detail?: ShipmentFinanceDetailSummary,
+    options?: { onReload?: () => Promise<void> }
+  ) => ReactNode;
   renderShipmentOrderNoLink: (systemOrderNo?: string, options?: { shipment?: Shipment; subtitle?: string; copyText?: string }) => ReactNode;
   apiClient: ApiClient;
   renderOrderManagement?: () => ReactNode;
@@ -191,6 +198,12 @@ export function FinancePage({
   const [pendingReviewDetailLoading, setPendingReviewDetailLoading] = useState(false);
   const [pendingReviewSubmitting, setPendingReviewSubmitting] = useState(false);
   const [pendingReviewBasicSubmitting, setPendingReviewBasicSubmitting] = useState(false);
+  const [pendingPackagePickerOpen, setPendingPackagePickerOpen] = useState(false);
+  const [pendingPackageRows, setPendingPackageRows] = useState<WarehousePackageSummary[]>([]);
+  const [pendingPackageSelectedIds, setPendingPackageSelectedIds] = useState<string[]>([]);
+  const [pendingPackageLoading, setPendingPackageLoading] = useState(false);
+  const [pendingPackageSaving, setPendingPackageSaving] = useState(false);
+  const [pendingPackageTrackingNo, setPendingPackageTrackingNo] = useState('');
   const [pendingReviewBasicForm] = Form.useForm<ShipmentReviewBasicUpdateInput>();
   const [reviewRestoreTarget, setReviewRestoreTarget] = useState<Shipment | null>(null);
   const [reviewRestoreSubmitting, setReviewRestoreSubmitting] = useState(false);
@@ -200,6 +213,7 @@ export function FinancePage({
     reason?: string;
   }>();
   const hasUiPermission = (permission: PermissionKey) => role === 'ADMIN' || permissions.includes(permission);
+  const canViewBusinessCosts = canViewOrderLifecycleBusinessCosts(role, permissions);
   const canViewOrderEntry = hasUiPermission('business:order-entry:view');
   const canCreateOrderEntry = hasUiPermission('business:order-entry:create');
   const canViewOrderEntryDrafts = hasUiPermission('business:order-entry:draft-view');
@@ -207,6 +221,7 @@ export function FinancePage({
   const canSubmitOrderEntryForReview = hasUiPermission('business:order-entry:submit-review');
   const canUseOrderEntryAgentFields = hasUiPermission('master-data:agents:read');
   const canContinueOrderEntryDraft = canViewOrderEntry && canViewOrderEntryDrafts && canSaveOrderEntryDraft;
+  const canAdjustPendingReviewPackages = canViewOrderEntry && canSaveOrderEntryDraft && hasUiPermission('business:order-entry:warehouse-package-select');
   const canUseFinanceWorkspace = hasUiPermission('finance:dashboard:view') || hasUiPermission('finance:receivable:read') || hasUiPermission('finance:business-cost:read') || hasUiPermission('finance:payable:read') || hasUiPermission('finance:pending-payment:read') || hasUiPermission('finance:paid-payment:read') || hasUiPermission('finance:water-receipt:read') || hasUiPermission('finance:water-match:read') || hasUiPermission('finance:agent-bill:read');
   const isBusinessWaterReceiptUser = permissions.includes('data-scope:sales-own' as PermissionKey);
   const canRestoreReviewShipment = hasUiPermission('business:review:restore');
@@ -356,7 +371,7 @@ export function FinancePage({
     return String(value);
   };
   const formatPendingReviewWeight = (value?: number | null) => (typeof value === 'number' && Number.isFinite(value)
-    ? `${value.toFixed(3)} kg`
+    ? `${value.toFixed(3)} KG`
     : '-');
   const formatPendingReviewMoney = (amount?: number | null, currency = 'RMB') => {
     if (typeof amount !== 'number' || !Number.isFinite(amount)) return '-';
@@ -383,7 +398,7 @@ export function FinancePage({
     && ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(detailShipment.status)
     && hasUiPermission('business:shipment:update-basic')
   );
-  const pendingReviewBusinessCosts = pendingReviewDetail?.finance.businessCosts ?? [];
+  const pendingReviewBusinessCosts = canViewBusinessCosts ? pendingReviewDetail?.finance.businessCosts ?? [] : [];
   const pendingReviewFormulaCost = pendingReviewBusinessCosts.find((item) => item.chargeWeightKg && item.unitPrice);
   const pendingReviewBusinessCostTotal = pendingReviewDetail?.finance.businessCostTotal
     ?? pendingReviewBusinessCosts.reduce((sum, item) => sum + item.amount, 0);
@@ -401,13 +416,13 @@ export function FinancePage({
     { label: '目的地', value: formatPendingReviewValue(detailShipment?.destinationCountry) },
     { label: '件数', value: formatPendingReviewValue(detailShipment?.packageCount) },
     { label: '重量', value: formatPendingReviewWeight(getPendingReviewWeight(detailShipment)) },
-    { label: '体积', value: detailShipment?.volumeCbm ? `${detailShipment.volumeCbm.toFixed(3)} m³` : '-' },
+    { label: '体积 CBM', value: detailShipment?.volumeCbm ? `${detailShipment.volumeCbm.toFixed(3)} CBM` : '-' },
     { label: '计费重', value: formatPendingReviewWeight(getPendingReviewChargeableWeight(detailShipment)) },
     { label: '货物数据来源', value: detailShipment?.cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '自动匹配' },
     { label: '是否报关', value: <ShipmentRiskFlag value={detailShipment?.declarationRequired} /> },
     { label: '是否敏感', value: <ShipmentRiskFlag value={detailShipment?.sensitive} /> },
     { label: '渠道', value: getPendingReviewChannel(detailShipment) },
-    { label: '价格', value: pendingReviewDetail ? pendingReviewPriceText : '-' },
+    ...(canViewBusinessCosts ? [{ label: '价格', value: pendingReviewDetail ? pendingReviewPriceText : '-' }] : []),
     { label: '出货单号', value: getPendingReviewOutboundOrderNo(detailShipment) }
   ];
   const pendingReviewSummaryText = [
@@ -416,20 +431,21 @@ export function FinancePage({
     formatPendingReviewValue(detailShipment?.destinationCountry),
     formatPendingReviewValue(detailShipment?.packageCount),
     formatPendingReviewWeight(getPendingReviewWeight(detailShipment)),
-    detailShipment?.volumeCbm ? `${detailShipment.volumeCbm.toFixed(3)}CBM` : '-',
+    detailShipment?.volumeCbm ? `${detailShipment.volumeCbm.toFixed(3)} CBM` : '-',
     formatPendingReviewWeight(getPendingReviewChargeableWeight(detailShipment)),
     detailShipment?.declarationRequired ? '是' : '否',
     detailShipment?.sensitive ? '是' : '否',
     getPendingReviewChannel(detailShipment),
-    pendingReviewDetail ? pendingReviewPriceText : '-',
+    ...(canViewBusinessCosts ? [pendingReviewDetail ? pendingReviewPriceText : '-'] : []),
     getPendingReviewOutboundOrderNo(detailShipment)
   ].join('——');
   const canViewReviewAgentIdentity = role === 'ADMIN' || permissions.includes('finance:business-cost:view-agent');
   const canViewReviewFinanceFields = role === 'ADMIN' || permissions.includes('business:review:finance-detail-view');
+  const canDirectEditPendingReviewBusinessCost = canViewBusinessCosts && permissions.includes('business:order-entry:business-cost-write');
   const renderShipmentCargoData = (shipment?: Shipment | null) => [
     `件数 ${formatPendingReviewValue(shipment?.packageCount)}`,
     `实重 ${formatPendingReviewWeight(getPendingReviewWeight(shipment))}`,
-    `体积 ${shipment?.volumeCbm ? `${shipment.volumeCbm.toFixed(3)} m³` : '-'}`,
+    `体积 CBM ${shipment?.volumeCbm ? `${shipment.volumeCbm.toFixed(3)} CBM` : '-'}`,
     `计费重 ${formatPendingReviewWeight(getPendingReviewChargeableWeight(shipment))}`,
     `来源 ${shipment?.cargoDataSource === 'MANUAL_ADJUSTED' ? '手动调整' : '自动匹配'}`
   ].join(' / ');
@@ -455,6 +471,140 @@ export function FinancePage({
     } else {
       await loadPendingReviewRows();
     }
+  };
+  const buildPendingPackageUpdateInput = (detail: OrderEntryDetailSummary, packageIds: string[]): OrderEntryDraftUpdateInput => {
+    const shipment = detail.shipment;
+    const mapFee = (
+      row: {
+        name: string;
+        amount: number;
+        currency?: string;
+        settlementMethod?: string;
+        paymentNo?: string;
+        agentId?: string;
+        agentName?: string;
+        chargeWeightKg?: number;
+        unitPrice?: number;
+        amountOverridden?: boolean;
+        remark?: string;
+      },
+      type: 'RECEIVABLE' | 'BUSINESS_COST' | 'PAYABLE'
+    ) => ({
+      type,
+      name: row.name,
+      amount: row.amount,
+      currency: row.currency,
+      settlementMethod: row.settlementMethod,
+      paymentNo: row.paymentNo,
+      agentId: row.agentId,
+      agentName: row.agentName,
+      chargeWeightKg: row.chargeWeightKg,
+      unitPrice: row.unitPrice,
+      amountOverridden: row.amountOverridden,
+      remark: row.remark
+    });
+    return {
+      shipment: {
+        customerId: shipment.customerId,
+        customerCode: shipment.customerCode,
+        customerOrderNo: shipment.customerOrderNo,
+        outboundOrderNo: shipment.outboundOrderNo ?? shipment.systemOrderNo,
+        systemOrderNo: shipment.systemOrderNo,
+        entryAt: shipment.entryAt,
+        subOrderNo: shipment.subOrderNo,
+        inboundNo: shipment.inboundNo,
+        businessType: shipment.businessType,
+        packageType: shipment.packageType,
+        destinationCountry: shipment.destinationCountry,
+        receivingChannel: shipment.channelName ?? shipment.carrier,
+        channelId: shipment.channelId,
+        agentId: shipment.agentId,
+        declarationRequired: Boolean(shipment.declarationRequired),
+        sensitive: shipment.sensitive,
+        cargoType: shipment.cargoType ?? '',
+        productName: shipment.productName ?? '',
+        productNames: shipment.productNames,
+        settlementMethod: shipment.settlementMethod ?? '',
+        tradeTerms: shipment.tradeTerms,
+        fbaInboundNo: shipment.fbaInboundNo,
+        receiverName: shipment.receiverName,
+        receiverCompany: shipment.receiverCompany,
+        receiverPhone: shipment.receiverPhone,
+        receiverAddress: shipment.receiverAddress,
+        receiverCountry: shipment.receiverCountry,
+        receiverState: shipment.receiverState,
+        receiverPostalCode: shipment.receiverPostalCode,
+        fbaWarehouseCode: shipment.fbaWarehouseCode,
+        remark: shipment.remark,
+        cargoDataSource: 'AUTO_MATCHED',
+        chargeWeightOverridden: false
+      },
+      warehousePackageIds: packageIds,
+      receivables: detail.receivables.map((row) => mapFee(row, 'RECEIVABLE')),
+      receivableSnapshotVersion: detail.receivableSnapshotVersion,
+      businessCosts: detail.businessCosts?.map((row) => mapFee(row, 'BUSINESS_COST')) ?? [],
+      businessCostSnapshotVersion: detail.businessCostSnapshotVersion,
+      payables: detail.payables?.map((row) => mapFee(row, 'PAYABLE')) ?? [],
+      submitForReview: false
+    };
+  };
+  const loadPendingPackagePicker = async (trackingNo = '') => {
+    const shipment = detailShipment;
+    const customerCode = getPendingReviewCustomerCode(shipment);
+    if (!shipment || shipment.status !== 'REVIEW_PENDING' || customerCode === '-') return;
+    if (!canAdjustPendingReviewPackages) {
+      modal.warning({ title: '当前账号不能调整包裹', content: '需要查看录单、保存录单和选择仓库包裹权限。' });
+      return;
+    }
+    setPendingPackageLoading(true);
+    try {
+      const rows = await apiClient.orderEntryPackages({ customerCode, shipmentId: shipment.id, domesticTrackingNo: trackingNo.trim() || undefined });
+      setPendingPackageRows(rows);
+      setPendingPackageSelectedIds(pendingReviewDetail?.packages.map((row) => row.warehousePackageId ?? row.id) ?? []);
+      setPendingPackageTrackingNo(trackingNo);
+      setPendingPackagePickerOpen(true);
+    } catch (error) {
+      modal.error({ title: '包裹加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
+    } finally {
+      setPendingPackageLoading(false);
+    }
+  };
+  const savePendingPackageSelection = async (packageIds = pendingPackageSelectedIds) => {
+    const shipment = detailShipment;
+    if (!shipment || shipment.status !== 'REVIEW_PENDING') return;
+    setPendingPackageSaving(true);
+    try {
+      const detail = await apiClient.orderEntryDetail(shipment.id);
+      if (detail.shipment.status !== 'REVIEW_PENDING') {
+        throw new Error('该运单已进入后续流程，不能再调整包裹');
+      }
+      const updated = await apiClient.updateOrderEntryDraft(shipment.id, buildPendingPackageUpdateInput(detail, packageIds));
+      setPendingPackagePickerOpen(false);
+      setPendingPackageSelectedIds([]);
+      await loadPendingReviewDetail(shipment.id);
+      await loadPendingReviewRows();
+      messageApi.success('包裹关联已更新，仓库原始数据未删除');
+      if (updated.shipment.status !== 'REVIEW_PENDING') {
+        messageApi.warning('包裹已更新，但运单状态发生变化，请刷新确认');
+      }
+    } catch (error) {
+      modal.error({ title: '包裹调整失败', content: error instanceof Error ? error.message : '请刷新后重试' });
+    } finally {
+      setPendingPackageSaving(false);
+    }
+  };
+  const removePendingPackages = () => {
+    if (!pendingPackageSelectedIds.length || !detailShipment) return;
+    const currentPackageIds = pendingReviewDetail?.packages.map((row) => row.warehousePackageId ?? row.id) ?? [];
+    const remainingPackageIds = currentPackageIds.filter((id) => !pendingPackageSelectedIds.includes(id));
+    modal.confirm({
+      title: '移除当前运单包裹',
+      content: `将移除 ${pendingPackageSelectedIds.length} 个包裹与当前运单的关联；仓库包裹原始数据不会删除，后续仍可重新补录。`,
+      okText: '确认移除关联',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => savePendingPackageSelection(remainingPackageIds)
+    });
   };
   const getPendingReviewBasicFormValues = (shipment?: Shipment | null): ShipmentReviewBasicUpdateInput | undefined => {
     if (!shipment) return undefined;
@@ -506,14 +656,16 @@ export function FinancePage({
     if (!target) return;
     confirmDangerousAction({
       title: '确认自审通过该订单？',
-      content: '自审通过后，订单进入待排货，并同步进入财务管理的业务成本审核。',
+      content: canViewBusinessCosts
+        ? '自审通过后，订单进入待排货，并同步进入财务管理的业务成本审核。'
+        : '自审通过后，订单进入待排货，并同步进入后续费用审核。',
       okText: '自审通过',
       confirm: modal.confirm,
       onOk: async () => {
         setPendingReviewSubmitting(true);
         try {
           const detail = await apiClient.approveShipmentReview(target.id, { businessReview: true });
-          messageApi.success('自审通过，已进入待排货与业务成本审核');
+          messageApi.success(canViewBusinessCosts ? '自审通过，已进入待排货与业务成本审核' : '自审通过，已进入待排货与后续费用审核');
           setFinanceReviewSelectedShipmentId(null);
           setPendingReviewDetail(null);
           try {
@@ -529,9 +681,14 @@ export function FinancePage({
       }
     });
   };
-  const handleOrderEntryCreated = async (detail?: OrderEntryDetailSummary, submittedForReview?: boolean) => {
-    setEditingOrderEntryDraftId(undefined);
-    setEditingOrderEntryDraftDetail(undefined);
+  const handleOrderEntryCreated = async (detail?: OrderEntryDetailSummary, submittedForReview?: boolean, keepEditing?: boolean) => {
+    if (keepEditing && detail) {
+      setEditingOrderEntryDraftId(detail.shipment.id);
+      setEditingOrderEntryDraftDetail(detail);
+    } else {
+      setEditingOrderEntryDraftId(undefined);
+      setEditingOrderEntryDraftDetail(undefined);
+    }
     try {
       await Promise.all([loadPendingReviewRows(), loadOrderEntryDraftRows()]);
     } catch {
@@ -684,7 +841,7 @@ export function FinancePage({
                   { key: 'outboundAt', label: '出库日期', children: shipment?.outboundAt ? formatBeijingDateTime(shipment.outboundAt) : '-' },
                   ...(canViewReviewAgentIdentity ? [{ key: 'agentName', label: agentFieldLabels.detailedCompanyName, children: shipment?.agentName || '-' }] : []),
                   { key: 'reviewedAt', label: '应收审核日期', children: shipment?.reviewedAt ? formatBeijingDateTime(shipment.reviewedAt) : '-' },
-                  ...(canViewReviewFinanceFields ? [{ key: 'businessReviewedAt', label: '业务成本审核日期', children: shipment?.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-' }] : [])
+                  ...(canViewReviewFinanceFields && canViewBusinessCosts ? [{ key: 'businessReviewedAt', label: '业务成本审核日期', children: shipment?.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-' }] : [])
                 ]}
               />
               <Row gutter={12}>
@@ -731,10 +888,10 @@ export function FinancePage({
         ['结算方式', shipment?.settlementMethod],
         ['备注', shipment?.remark],
         ['应收审核日期', shipment?.reviewedAt ? formatBeijingDateTime(shipment.reviewedAt) : '-'],
-        ...(canViewReviewFinanceFields ? [
-          ['业务成本审核日期', shipment?.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-'] as [string, ReactNode],
-          ['应付审核日期', '-'] as [string, ReactNode]
+        ...(canViewReviewFinanceFields && canViewBusinessCosts ? [
+          ['业务成本审核日期', shipment?.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-'] as [string, ReactNode]
         ] : []),
+        ...(canViewReviewFinanceFields ? [['应付审核日期', '-'] as [string, ReactNode]] : []),
         ['收货人电话', shipment?.receiverPhone],
         ['邮编', shipment?.receiverPostalCode]
       ])}
@@ -747,13 +904,24 @@ export function FinancePage({
     { title: '国内单号', dataIndex: 'domesticTrackingNo', width: 150, render: (value?: string) => value || '-' },
     { title: '箱/包裹号', dataIndex: 'packageNo', width: 140, render: (value?: string) => value || '-' },
     { title: '件数', dataIndex: 'packageCount', width: 80 },
-    { title: '实重', dataIndex: 'weightKg', width: 100, render: (value: number) => `${value.toFixed(2)} kg` },
+    { title: '实重', dataIndex: 'weightKg', width: 100, render: (value: number) => `${value.toFixed(2)} KG` },
     { title: '长宽高', key: 'dims', width: 130, sortValue: (row) => row.lengthCm * row.widthCm * row.heightCm, render: (_, row) => `${row.lengthCm}×${row.widthCm}×${row.heightCm}` },
-    { title: '体积', dataIndex: 'cbm', width: 100, render: (value: number) => `${value.toFixed(3)} m³` },
-    { title: '材积重', dataIndex: 'volumetricWeightKg', width: 100, render: (value: number) => `${value.toFixed(2)} kg` },
-    { title: '计费重', dataIndex: 'chargeableWeightKg', width: 100, render: (value: number) => `${value.toFixed(2)} kg` },
+    { title: '体积 CBM', dataIndex: 'cbm', width: 100, render: (value: number) => `${value.toFixed(3)} CBM` },
+    { title: '材积重', dataIndex: 'volumetricWeightKg', width: 100, render: (value: number) => `${value.toFixed(2)} KG` },
+    { title: '计费重', dataIndex: 'chargeableWeightKg', width: 100, render: (value: number) => `${value.toFixed(2)} KG` },
     { title: '入仓时间', dataIndex: 'inboundAt', width: 160, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
     { title: '异常', dataIndex: 'exceptions', width: 160, render: (items: string[]) => items.length ? items.join('、') : '-' }
+  ];
+  const pendingPackagePickerColumns: ManagedTableColumns<WarehousePackageSummary> = [
+    { title: '包裹ID', dataIndex: 'id', width: 240, ellipsis: true, render: (value?: string) => value ? <span title={value}>{value}</span> : '-' },
+    { title: '客户编号', dataIndex: 'customerCode', width: 120, ellipsis: true },
+    { title: '国内单号', dataIndex: 'domesticTrackingNo', width: 170, ellipsis: true, render: (value?: string) => value ? <span title={value}>{value}</span> : '-' },
+    { title: '箱/包裹号', dataIndex: 'combinedOrderNo', width: 220, ellipsis: true, render: (value?: string) => value ? <span title={value}>{value}</span> : '-' },
+    { title: '件数', dataIndex: 'packageCount', width: 70 },
+    { title: '实重', dataIndex: 'weightKg', width: 100, render: (value: number) => `${value.toFixed(2)} KG` },
+    { title: '体积 CBM', dataIndex: 'cbm', width: 100, render: (value: number) => `${value.toFixed(3)} CBM` },
+    { title: '计费重', dataIndex: 'chargeableWeightKg', width: 100, render: (value: number) => `${value.toFixed(2)} KG` },
+    { title: '入仓时间', dataIndex: 'scanTime', width: 180, ellipsis: true, render: (value?: string) => value ? formatBeijingDateTime(value) : '-' }
   ];
   const reviewEventColumns: ColumnsType<ShipmentReviewEventSummary> = [
     { title: '时间', dataIndex: 'createdAt', width: 170, render: (value: string) => formatBeijingDateTime(value) },
@@ -808,7 +976,7 @@ export function FinancePage({
       key: 'cargoData',
       children: [
         { title: '重量', key: 'weightKg', width: 105, render: (_, record) => formatPendingReviewWeight(getPendingReviewWeight(record)) },
-        { title: '体积', key: 'volumeCbm', dataIndex: 'volumeCbm', width: 105, render: (value?: number) => typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(3)} CBM` : '-' },
+        { title: '体积 CBM', key: 'volumeCbm', dataIndex: 'volumeCbm', width: 105, render: (value?: number) => typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(3)} CBM` : '-' },
         { title: '件数', key: 'packageCount', dataIndex: 'packageCount', width: 80, render: (value?: number) => formatPendingReviewValue(value) },
         { title: '计费重', key: 'chargeableWeightKg', width: 105, render: (_, record) => formatPendingReviewWeight(getPendingReviewChargeableWeight(record)) }
       ]
@@ -870,7 +1038,7 @@ export function FinancePage({
             { key: 'channelName', label: '公司渠道', value: getPendingReviewChannel(record), title: getPendingReviewChannel(record) },
             { key: 'packageCount', label: '件数', value: formatPendingReviewValue(record.packageCount) },
             { key: 'weightKg', label: '重量', value: formatPendingReviewWeight(getPendingReviewWeight(record)) },
-            { key: 'volumeCbm', label: '体积', value: typeof record.volumeCbm === 'number' && Number.isFinite(record.volumeCbm) ? `${record.volumeCbm.toFixed(3)} CBM` : '-' },
+            { key: 'volumeCbm', label: '体积 CBM', value: typeof record.volumeCbm === 'number' && Number.isFinite(record.volumeCbm) ? `${record.volumeCbm.toFixed(3)} CBM` : '-' },
             { key: 'chargeableWeightKg', label: '计费重', value: formatPendingReviewWeight(getPendingReviewChargeableWeight(record)) },
             { key: 'receivableRmbTotal', label: '应收', value: <Text strong>{renderPendingReviewReceivable(record)}</Text> },
             { key: 'productName', label: '产品名称', value: formatPendingReviewValue(record.productName), title: record.productName },
@@ -905,8 +1073,6 @@ export function FinancePage({
       }
       setEditingOrderEntryDraftDetail(detail);
       setEditingOrderEntryDraftId(shipment.id);
-      syncBusinessSectionRoute('finance-entry');
-      setActiveFinanceSection('finance-entry');
     } catch (error) {
       modal.error({ title: '草稿无法继续编辑', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
@@ -951,7 +1117,7 @@ export function FinancePage({
       )
     },
     {
-      title: '应收/业务成本',
+      title: canViewBusinessCosts ? '应收/业务成本' : '应收',
       key: 'feeSummary',
       width: 210,
       sortValue: (record) => record.receivableRmbTotal ?? 0,
@@ -960,7 +1126,7 @@ export function FinancePage({
         return (
           <Space direction="vertical" size={0}>
             <Text>应收 {renderPendingReviewReceivable(record)}</Text>
-            <Text type="secondary">业务成本 {businessCostTotal > 0 ? formatPendingReviewMoney(businessCostTotal) : '-'}</Text>
+            {canViewBusinessCosts ? <Text type="secondary">业务成本 {businessCostTotal > 0 ? formatPendingReviewMoney(businessCostTotal) : '-'}</Text> : null}
           </Space>
         );
       }
@@ -1047,7 +1213,7 @@ export function FinancePage({
             labelWidth={66}
             fields={[
               { key: 'receivable', label: '应收', value: <Text strong>{renderPendingReviewReceivable(record)}</Text> },
-              { key: 'businessCost', label: '业务成本', value: businessCostTotal > 0 ? formatPendingReviewMoney(businessCostTotal) : '-' },
+              canViewBusinessCosts ? { key: 'businessCost', label: '业务成本', value: businessCostTotal > 0 ? formatPendingReviewMoney(businessCostTotal) : '-' } : null,
               { key: 'status', label: '状态', value: <Tag color={needsCompletion ? 'red' : record.status === 'REVIEW_REJECTED' ? 'orange' : 'gold'}>{needsCompletion ? '待完善' : record.status === 'REVIEW_REJECTED' ? '退回修改' : '普通草稿'}</Tag> },
               record.reviewRejectedReason ? { key: 'reviewRejectedReason', label: '待完善原因', value: <Text type="danger">{record.reviewRejectedReason}</Text>, title: record.reviewRejectedReason, wrap: true } : null,
               { key: 'updatedAt', label: '更新时间', value: <ManagedMatrixDateTime value={formatBeijingDateTime(record.createdAt)} /> }
@@ -1058,7 +1224,36 @@ export function FinancePage({
     },
     { ...orderEntryDraftColumns[orderEntryDraftColumns.length - 1], key: 'actions', width: 150, fixed: 'right' }
   ];
-  const renderOrderEntryDraftPage = () => (
+  const renderOrderEntryDraftPage = () => editingOrderEntryDraftId ? (
+    <div className="finance-order-entry-draft-editor">
+      <div className="finance-order-entry-draft-editor-toolbar">
+        <Button onClick={closeEditingOrderEntryDraft}>返回草稿箱</Button>
+        <Text strong>正在编辑草稿：{editingOrderEntryDraftDetail ? resolveShipmentOutboundOrderNo(editingOrderEntryDraftDetail.shipment) : '-'}</Text>
+      </div>
+      <FinanceEntryPage
+        key={editingOrderEntryDraftId}
+        apiClient={apiClient}
+        role={role}
+        permissions={permissions}
+        username={username}
+        financeCatalogItems={financeCatalogItems}
+        customers={customers}
+        customerContacts={customerContacts}
+        onCustomerContactsChange={onCustomerContactsChange}
+        onCatalogChange={financeCatalog.refresh}
+        onCreated={handleOrderEntryCreated}
+        draftId={editingOrderEntryDraftId}
+        initialDraftDetail={editingOrderEntryDraftDetail}
+        canCreateOrderEntry={canCreateOrderEntry}
+        canSaveDraft={canSaveOrderEntryDraft}
+        canSubmitForReview={canSubmitOrderEntryForReview}
+        canUseAgentFields={canUseOrderEntryAgentFields}
+        onDraftClosed={closeEditingOrderEntryDraft}
+        preselectedPackageIds={prefillOrderEntryPackageIds}
+        onPreselectedPackageIdsConsumed={onOrderEntryPrefillConsumed}
+      />
+    </div>
+  ) : (
     <Card
       className="finance-pending-list-card finance-pending-list-page-card"
       title="录单草稿箱"
@@ -1118,11 +1313,23 @@ export function FinancePage({
           )}
         >
             <div className="finance-pending-list-toolbar">
-              <div className="finance-pending-filter-bar">
-                <Input allowClear placeholder="关键字" value={financeReviewFilterDraft.keyword} onChange={(event) => setFinanceReviewFilterDraft((current) => ({ ...current, keyword: event.target.value }))} />
-                <Input allowClear placeholder="客户编号" value={financeReviewFilterDraft.customerCode} onChange={(event) => setFinanceReviewFilterDraft((current) => ({ ...current, customerCode: event.target.value }))} />
-                <Input allowClear placeholder="出货单号" value={financeReviewFilterDraft.systemOrderNo} onChange={(event) => setFinanceReviewFilterDraft((current) => ({ ...current, systemOrderNo: event.target.value }))} />
-                <Select value={financeReviewFilterDraft.overdue} options={[{ value: 'ALL', label: '全部' }, { value: 'true', label: '超时' }, { value: 'false', label: '正常' }]} onChange={(value) => setFinanceReviewFilterDraft((current) => ({ ...current, overdue: value }))} />
+              <div className="finance-pending-filter-bar" role="group" aria-label="待审核筛选条件">
+                <div className="finance-pending-filter-field finance-pending-filter-field-keyword">
+                  <label htmlFor="finance-pending-filter-keyword">关键词</label>
+                  <Input id="finance-pending-filter-keyword" allowClear placeholder="客户、内部单号、快递号、国家或渠道" value={financeReviewFilterDraft.keyword} onChange={(event) => setFinanceReviewFilterDraft((current) => ({ ...current, keyword: event.target.value }))} />
+                </div>
+                <div className="finance-pending-filter-field">
+                  <label htmlFor="finance-pending-filter-customer-code">客户编号</label>
+                  <Input id="finance-pending-filter-customer-code" allowClear placeholder="输入客户编号" value={financeReviewFilterDraft.customerCode} onChange={(event) => setFinanceReviewFilterDraft((current) => ({ ...current, customerCode: event.target.value }))} />
+                </div>
+                <div className="finance-pending-filter-field">
+                  <label htmlFor="finance-pending-filter-system-order-no">出货单号</label>
+                  <Input id="finance-pending-filter-system-order-no" allowClear placeholder="输入出货单号" value={financeReviewFilterDraft.systemOrderNo} onChange={(event) => setFinanceReviewFilterDraft((current) => ({ ...current, systemOrderNo: event.target.value }))} />
+                </div>
+                <div className="finance-pending-filter-field">
+                  <label htmlFor="finance-pending-filter-overdue">超时状态</label>
+                  <Select id="finance-pending-filter-overdue" aria-label="超时状态" value={financeReviewFilterDraft.overdue} options={[{ value: 'ALL', label: '全部' }, { value: 'true', label: '超时' }, { value: 'false', label: '正常' }]} onChange={(value) => setFinanceReviewFilterDraft((current) => ({ ...current, overdue: value }))} />
+                </div>
               </div>
               <Space size={8} className="finance-pending-filter-actions">
                 <Button type="primary" onClick={() => setFinanceReviewFilters(financeReviewFilterDraft)}>筛选</Button>
@@ -1213,7 +1420,7 @@ export function FinancePage({
                   </div>
                 </section>
                 <div className="finance-pending-alert-stack">
-                  {canDirectEditPendingReview ? <Alert type="info" showIcon message="当前订单可直接修改基础资料；保存后仍保留待审核状态，审核、费用和货物计量字段不会被本次保存改动。" /> : null}
+                  {canAdjustPendingReviewPackages || canDirectEditPendingReview || canDirectEditPendingReviewBusinessCost ? <Alert type="info" showIcon message={canAdjustPendingReviewPackages ? '当前订单可在“单件明细”中补录或移除包裹；移除只解除本单关联，不删除仓库原始数据。' : canDirectEditPendingReviewBusinessCost ? '当前订单可修改基础资料和未审核业务成本；确认费用后可直接自审通过。' : '当前订单可直接修改基础资料；保存后仍保留待审核状态，审核、费用和货物计量字段不会被本次保存改动。'} /> : null}
                   {pendingReviewDetail.overdue ? <Alert type="warning" showIcon message="该订单待审核已超过 3 天，请优先处理。" /> : null}
                   {pendingReviewDetail.approvalWarnings.length ? (
                     <Alert type="error" showIcon message={`审核前需补齐：${pendingReviewDetail.approvalWarnings.join('、')}`} />
@@ -1230,7 +1437,73 @@ export function FinancePage({
                     {
                       key: 'packages',
                       label: '单件明细',
-                      children: <ManagedTable className="finance-embedded-table" rowKey="id" size="small" columns={reviewPackageColumns} dataSource={pendingReviewDetail.packages} pagination={false} scroll={{ x: 1500 }} sticky={false} resizableColumns={false} columnSettings={false} recordDetail={false} />
+                      children: (
+                        <>
+                          <Space wrap size={8} className="finance-pending-package-actions">
+                            <Button type="primary" disabled={!canAdjustPendingReviewPackages || detailShipment?.status !== 'REVIEW_PENDING'} loading={pendingPackageLoading} onClick={() => void loadPendingPackagePicker()}>
+                              补录
+                            </Button>
+                            <Button danger disabled={!canAdjustPendingReviewPackages || detailShipment?.status !== 'REVIEW_PENDING' || !pendingPackageSelectedIds.length} loading={pendingPackageSaving} onClick={removePendingPackages}>
+                              移除包裹
+                            </Button>
+                            <Text type="secondary">勾选左侧包裹后可移除；移除只解除当前运单关联，不删除仓库原始数据。</Text>
+                          </Space>
+                          <ManagedTable
+                            className="finance-embedded-table"
+                            rowKey="id"
+                            size="small"
+                            columns={reviewPackageColumns}
+                            dataSource={pendingReviewDetail.packages}
+                            rowSelection={{ selectedRowKeys: pendingPackageSelectedIds, onChange: (keys) => setPendingPackageSelectedIds(keys.map(String)), fixed: true }}
+                            pagination={false}
+                            scroll={{ x: 1500 }}
+                            sticky={false}
+                            resizableColumns={false}
+                            columnSettings={false}
+                            recordDetail={false}
+                          />
+                          <Modal
+                            title={`补录仓库包裹 · 客户 ${getPendingReviewCustomerCode(detailShipment)}`}
+                            open={pendingPackagePickerOpen}
+                            onCancel={() => setPendingPackagePickerOpen(false)}
+                            confirmLoading={pendingPackageSaving}
+                            onOk={() => void savePendingPackageSelection()}
+                            okText="保存包裹关联"
+                            cancelText="取消"
+                            width={1180}
+                            destroyOnHidden
+                          >
+                            <Space direction="vertical" size={12} className="full-width">
+                              <Space wrap>
+                                <Input
+                                  placeholder="按国内单号筛选"
+                                  value={pendingPackageTrackingNo}
+                                  onChange={(event) => setPendingPackageTrackingNo(event.target.value)}
+                                  onPressEnter={() => void loadPendingPackagePicker(pendingPackageTrackingNo)}
+                                  style={{ width: 240 }}
+                                />
+                                <Button loading={pendingPackageLoading} onClick={() => void loadPendingPackagePicker(pendingPackageTrackingNo)}>查询</Button>
+                                <Text type="secondary">列表包含当前运单已关联包裹和客户编号名下可补录的在仓包裹。</Text>
+                              </Space>
+                              <ManagedTable
+                                className="finance-embedded-table"
+                                rowKey="id"
+                                size="small"
+                                columns={pendingPackagePickerColumns}
+                                dataSource={pendingPackageRows}
+                                rowSelection={{ selectedRowKeys: pendingPackageSelectedIds, preserveSelectedRowKeys: true, onChange: (keys) => setPendingPackageSelectedIds(keys.map(String)), fixed: true }}
+                                pagination={{ ...tenRowTablePagination, pageSize: 10, showSizeChanger: false }}
+                                scroll={{ x: 1400, y: 440 }}
+                                tableLayout="fixed"
+                                sticky={false}
+                                resizableColumns
+                                columnSettings={false}
+                                recordDetail={false}
+                              />
+                            </Space>
+                          </Modal>
+                        </>
+                      )
                     },
                     {
                       key: 'problems',
@@ -1248,11 +1521,20 @@ export function FinancePage({
                         <>
                           <Flex gap={10} wrap="wrap" className="finance-pending-finance-metrics">
                             <MetricCard title="应收" value={formatCurrency(pendingReviewDetail.finance.receivableTotal)} icon={<CircleDollarSign size={16} />} extra="待审核" />
-                            <MetricCard title="业务成本" value={formatCurrency(pendingReviewDetail.finance.businessCostTotal ?? 0)} icon={<Banknote size={16} />} extra="成本校验" />
+                            {canViewBusinessCosts ? <MetricCard title="业务成本" value={formatCurrency(pendingReviewDetail.finance.businessCostTotal ?? 0)} icon={<Banknote size={16} />} extra="成本校验" /> : null}
                             {pendingReviewDetail.finance.canViewPayables ? <MetricCard title="应付" value={formatCurrency(pendingReviewDetail.finance.payableTotal ?? 0)} icon={<Landmark size={16} />} extra="代理侧" /> : null}
                           </Flex>
                           <Divider className="finance-pending-section-divider" />
-                          {renderShipmentFinancePanel(pendingReviewDetail.shipment, pendingReviewDetail.finance)}
+                          {canDirectEditPendingReviewBusinessCost ? (
+                            <Alert
+                              type="info"
+                              showIcon
+                              message="待审核期间可修改基础资料和未审核业务成本；业务审核通过后费用编辑入口自动关闭。"
+                            />
+                          ) : null}
+                          {renderShipmentFinancePanel(pendingReviewDetail.shipment, pendingReviewDetail.finance, {
+                            onReload: () => loadPendingReviewDetail(pendingReviewDetail.shipment.id)
+                          })}
                         </>
                       )
                     },

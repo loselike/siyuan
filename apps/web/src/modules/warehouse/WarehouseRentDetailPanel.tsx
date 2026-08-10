@@ -16,8 +16,8 @@ import {
   Select,
   Space,
   Switch,
-  Table,
   Tag,
+  Tooltip,
   Typography
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -142,6 +142,15 @@ export function warehouseRentRateUnit(
   return `RMB / ${billingUnit} / ${warehouseRentPeriodLabel(billingCycleUnit)}`;
 }
 
+export function canDeleteWarehouseRentRule(
+  rule: Pick<WarehouseRentRuleSummary, 'effectiveFrom'>,
+  now = new Date()
+) {
+  const effectiveDay = formatBeijingDateTime(rule.effectiveFrom).slice(0, 10);
+  const today = formatBeijingDateTime(now.toISOString()).slice(0, 10);
+  return effectiveDay > today;
+}
+
 function createRuleDraft(rule?: WarehouseRentRuleSummary): WarehouseRentRuleInput {
   return {
     name: rule?.name ?? '',
@@ -166,7 +175,7 @@ function escapeCsv(value: unknown) {
 
 function downloadCsv(rows: WarehouseRentDetailSummary[]) {
   const headers = [
-    '站点', '业务员', '客户编号', '客户名称', '入仓快递号', '件数', '总重量KG', '总体积CBM', '货物比重（1 CBM : KG）',
+    '站点', '业务员', '客户编号', '客户名称', '入仓快递号', '件数', '总重量 KG', '总体积 CBM', '货物比重（1 CBM : KG）',
     '入库时间', '出库时间', '在仓天数', '免租时长', '免租单位', '计费天数', '计费基数', '计费周期', '计费数量', '仓租单价', '产生仓租RMB', '状态', '匹配规则'
   ];
   const data = rows.map((row) => [
@@ -212,6 +221,7 @@ export function WarehouseRentDetailPanel({
   const [savingRule, setSavingRule] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [updatingRuleId, setUpdatingRuleId] = useState<string>();
+  const [deletingRuleId, setDeletingRuleId] = useState<string>();
   const [selectedCustomerCode, setSelectedCustomerCode] = useState<string>();
 
   const load = async (nextFilters = filters) => {
@@ -261,10 +271,10 @@ export function WarehouseRentDetailPanel({
       key: 'totalWeightKg',
       width: 110,
       align: 'right',
-      render: (value) => `${Number(value).toFixed(3)} kg`
+      render: (value) => `${Number(value).toFixed(3)} KG`
     },
     {
-      title: '总体积',
+      title: '总体积 CBM',
       dataIndex: 'totalCbm',
       key: 'totalCbm',
       width: 110,
@@ -362,8 +372,8 @@ export function WarehouseRentDetailPanel({
       render: (_, row) => `${row.cargoLineCount} 条（在仓 ${row.inStockCargoLineCount} / 已出 ${row.outboundCargoLineCount}）`
     },
     { title: '总件数', dataIndex: 'packageCount', key: 'packageCount', width: 88, align: 'right', render: (value) => `${value} 件` },
-    { title: '总重量', dataIndex: 'totalWeightKg', key: 'totalWeightKg', width: 112, align: 'right', render: (value) => `${Number(value).toFixed(3)} kg` },
-    { title: '总体积', dataIndex: 'totalCbm', key: 'totalCbm', width: 112, align: 'right', render: (value) => `${Number(value).toFixed(3)} CBM` },
+    { title: '总重量', dataIndex: 'totalWeightKg', key: 'totalWeightKg', width: 112, align: 'right', render: (value) => `${Number(value).toFixed(3)} KG` },
+    { title: '总体积 CBM', dataIndex: 'totalCbm', key: 'totalCbm', width: 112, align: 'right', render: (value) => `${Number(value).toFixed(3)} CBM` },
     { title: '在仓仓租', dataIndex: 'currentRentAmountRmb', key: 'currentRentAmountRmb', width: 112, align: 'right', render: (value) => money(value) },
     { title: '已出仓租', dataIndex: 'outboundedRentAmountRmb', key: 'outboundedRentAmountRmb', width: 112, align: 'right', render: (value) => money(value) },
     {
@@ -393,14 +403,15 @@ export function WarehouseRentDetailPanel({
     setSavingRule(true);
     setNotice(undefined);
     try {
-      if (editingRule) {
-        await apiClient.updateWarehouseRentRule(editingRule.id, ruleDraft);
-      } else {
-        await apiClient.createWarehouseRentRule(ruleDraft);
-      }
+      const saved = editingRule
+        ? await apiClient.updateWarehouseRentRule(editingRule.id, ruleDraft)
+        : await apiClient.createWarehouseRentRule(ruleDraft);
       setRuleEditorOpen(false);
       await load(filters);
-      setNotice(editingRule ? '仓租规则新版本已生效' : '仓租规则已新增');
+      const savedEffectiveDay = formatBeijingDateTime(saved.effectiveFrom).slice(0, 10);
+      setNotice(editingRule
+        ? `仓租规则新版本已从 ${savedEffectiveDay} 起重算仓租`
+        : '仓租规则已新增');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : '仓租规则保存失败');
     } finally {
@@ -451,13 +462,16 @@ export function WarehouseRentDetailPanel({
     ...(canManageRules ? [{
       title: '操作',
       key: 'actions',
-      width: 150,
+      width: 224,
       fixed: 'right' as const,
-      render: (_: unknown, row: WarehouseRentRuleSummary) => (
-        <Space size={6}>
-          {row.enabled ? <Button size="small" onClick={() => openRuleEditor(row)}>新版本</Button> : null}
-          <Popconfirm
-            disabled={Boolean(updatingRuleId)}
+      render: (_: unknown, row: WarehouseRentRuleSummary) => {
+        const canDelete = canDeleteWarehouseRentRule(row);
+        const operationBusy = Boolean(updatingRuleId || deletingRuleId);
+        return (
+          <Space size={6}>
+          {row.enabled ? <Button size="small" disabled={operationBusy} onClick={() => openRuleEditor(row)}>修改</Button> : null}
+          {!canDelete ? <Popconfirm
+            disabled={operationBusy}
             title={row.enabled ? '确认停用这条仓租规则？' : `确认从今天 ${todayInBeijing()} 起启用这条仓租规则？`}
             description={row.enabled ? undefined : '系统将以服务器北京时间当天作为生效日期，保留历史版本并新建启用版本。'}
             onConfirm={async () => {
@@ -480,13 +494,49 @@ export function WarehouseRentDetailPanel({
               size="small"
               danger={row.enabled}
               loading={updatingRuleId === row.id}
-              disabled={Boolean(updatingRuleId) && updatingRuleId !== row.id}
+              disabled={operationBusy && updatingRuleId !== row.id}
             >
               {row.enabled ? '停用' : '启用'}
             </Button>
-          </Popconfirm>
+          </Popconfirm> : null}
+          <Tooltip title={canDelete ? '删除尚未生效的规则' : '规则已经生效，只能停用，不能删除'}>
+            <span>
+              <Popconfirm
+                disabled={!canDelete || operationBusy}
+                title="确认删除这条尚未生效的仓租规则？"
+                description="删除后不可恢复；如果它是新版本，上一版本会自动恢复原来的有效期。"
+                onConfirm={async () => {
+                  setDeletingRuleId(row.id);
+                  setNotice(undefined);
+                  try {
+                    await apiClient.deleteWarehouseRentRule(row.id);
+                    if (editingRule?.id === row.id) {
+                      setRuleEditorOpen(false);
+                      setEditingRule(undefined);
+                    }
+                    await load(filters);
+                    setNotice('尚未生效的仓租规则已删除');
+                  } catch (error) {
+                    setNotice(error instanceof Error ? error.message : '仓租规则删除失败');
+                  } finally {
+                    setDeletingRuleId(undefined);
+                  }
+                }}
+              >
+                <Button
+                  size="small"
+                  danger
+                  loading={deletingRuleId === row.id}
+                  disabled={!canDelete || operationBusy}
+                >
+                  删除
+                </Button>
+              </Popconfirm>
+            </span>
+          </Tooltip>
         </Space>
-      )
+        );
+      }
     }] : [])
   ];
 
@@ -697,9 +747,12 @@ export function WarehouseRentDetailPanel({
           {canManageRules ? <Button type="primary" icon={<Plus size={15} />} onClick={() => openRuleEditor()}>新增规则</Button> : null}
         </Flex>
         {ruleEditorOpen ? (
-          <section className="warehouse-rent-rule-editor" aria-label={editingRule ? '创建新版本' : '新增规则'}>
+          <section className="warehouse-rent-rule-editor" aria-label={editingRule ? '修改规则' : '新增规则'}>
             <Flex align="center" justify="space-between" className="warehouse-rent-rule-editor-header">
-              <Text strong>{editingRule ? '创建新版本' : '新增规则'}</Text>
+              <Space direction="vertical" size={0}>
+                <Text strong>{editingRule ? '修改规则（保存为新版本）' : '新增规则'}</Text>
+                {editingRule ? <Text type="secondary">可选择当前规则生效日之后的历史日期；原规则保留，从所选日期起重新计算仓租。</Text> : null}
+              </Space>
             </Flex>
             <Form layout="vertical" size="small">
               <Row gutter={[12, 0]}>
@@ -715,7 +768,13 @@ export function WarehouseRentDetailPanel({
                 </Col>
                 <Col xs={24} md={8}>
                   <Form.Item required label={editingRule ? '新版本生效日期' : '生效日期'}>
-                    <AppDatePicker value={ruleDraft.effectiveFrom} onChange={(value) => setRuleDraft((current) => ({ ...current, effectiveFrom: value ?? '' }))} />
+                    <AppDatePicker
+                      value={ruleDraft.effectiveFrom}
+                      disabledDate={editingRule
+                        ? (date) => date.format('YYYY-MM-DD') <= formatBeijingDateTime(editingRule.effectiveFrom).slice(0, 10)
+                        : undefined}
+                      onChange={(value) => setRuleDraft((current) => ({ ...current, effectiveFrom: value ?? '' }))}
+                    />
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={8}>
@@ -781,11 +840,11 @@ export function WarehouseRentDetailPanel({
                     <InputNumber aria-label="仓租单价" min={0.0001} precision={4} value={ruleDraft.unitRate} onChange={(value) => setRuleDraft((current) => ({ ...current, unitRate: Number(value ?? 0) }))} />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={4}>
+                {!editingRule ? <Col xs={24} md={4}>
                   <Form.Item label="启用">
                     <Switch checked={ruleDraft.enabled !== false} onChange={(checked) => setRuleDraft((current) => ({ ...current, enabled: checked }))} />
                   </Form.Item>
-                </Col>
+                </Col> : null}
                 <Col xs={24}>
                   <Form.Item label="备注">
                     <Input value={ruleDraft.remark} onChange={(event) => setRuleDraft((current) => ({ ...current, remark: event.target.value }))} />
@@ -800,7 +859,7 @@ export function WarehouseRentDetailPanel({
           </section>
         ) : null}
         <Divider className="warehouse-rent-rule-list-divider" />
-        <Table<WarehouseRentRuleSummary>
+        <ManagedTable<WarehouseRentRuleSummary>
           rowKey="id"
           size="small"
           columns={ruleColumns}

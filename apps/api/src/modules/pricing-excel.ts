@@ -54,9 +54,9 @@ const EUROPE_PRICE_GROUP_PROMOTION_PATTERN = /\d+\s*[:：]\s*\d+(?:\.\d+)?\s*(?:
  * and serially rebuilds retained original workbooks without another upload.
  */
 export const PRICING_PARSER_RULE_VERSIONS: Record<PriceBookImportTargetModule, number> = {
-  // v8 replays retained workbooks with the shared tail-paragraph requirement
-  // reader and the normalised transit label contract.
-  amazon: 8,
+  // v9 recognises Topuda's title-less SU7 route sheet and preserves warehouse
+  // codes that are separated only by a line break in parallel rate blocks.
+  amazon: 9,
   // v7 applies the same shared requirement and transit contract to inquiry.
   inquiry: 7,
   // v10 adds the EPS customs/product/zone matrix used by its legacy .xls
@@ -2046,7 +2046,8 @@ function parseTopudaUsWarehouseDetailPriceWorkbook(
         );
         if (!tierGroups.length) return [];
 
-        const baseTitle = findTopudaWarehouseDetailTitle(rows, headerIndex, destinationColumn);
+        const baseTitle = findTopudaWarehouseDetailTitle(rows, headerIndex, destinationColumn)
+          ?? inferTopudaWarehouseDetailTitleFromSheetName(sheet.name);
         if (!baseTitle) return [];
         return tierGroups.flatMap(({ tierColumns, nextGroupColumn }) => {
           const groupBaseTitle = findTopudaWarehouseDetailTitle(rows, headerIndex, tierColumns[0].columnIndex) ?? baseTitle;
@@ -2112,9 +2113,20 @@ function isTopudaWarehouseRateHeader(header: string | number | null | undefined)
 function isTopudaUsWarehouseDetailSheet(sheet: SimpleWorksheet) {
   if (!/美国|美森|以星|海卡|洛杉矶|休斯顿|萨凡纳|芝加哥|美东|纽约/i.test(sheet.name)) return false;
   const rows = worksheetToRows(sheet);
-  const hasTopudaTitle = rows.some((row) => row.some((cell) => /^TPD[-－—]/i.test(cellToText(cell).trim())));
+  const hasTopudaTitle = rows.some((row) => row.some((cell) => {
+    const text = cellToText(cell).trim();
+    return /^TPD[-－—]/i.test(text) || /下单渠道\s*[:：]?[\s\S]*TPD[-－—]/i.test(text);
+  }));
   const hasFbaHeader = rows.some((row) => row.some((cell) => /(?:亚马逊)?FBA(?:代码|仓库)?|亚马逊代码|目的地/i.test(cellToText(cell))));
   return hasTopudaTitle && hasFbaHeader;
+}
+
+function inferTopudaWarehouseDetailTitleFromSheetName(sheetName: string) {
+  const match = sheetName.trim().match(/^([A-Z]{1,4}\d+(?:[-/][A-Z]{1,4}\d+)*)[-－—\s]*(.*)$/i);
+  if (!match) return undefined;
+  const routeCode = match[1].toUpperCase();
+  const description = match[2].trim();
+  return `TPD-${routeCode}${description ? ` ${description}` : ''}`;
 }
 
 function findTopudaWarehouseDetailTitle(rows: Array<Array<string | number | null>>, headerIndex: number, destinationColumn: number) {
@@ -2959,7 +2971,7 @@ function normalizeImportedChannelName(value: string) {
 }
 
 function splitImportedWarehouseCodes(value: string) {
-  return warehouseCodeRulesForImport(value);
+  return warehouseCodeRulesForImport(value.replace(/[\r\n]+/g, '/'));
 }
 
 function findSheetWarehouseCode(rows: Array<Array<string | number | null>>) {

@@ -43,8 +43,6 @@
     "sync:47:file": "bash scripts/cas-sync-47-file.sh",
     "release:47:locked": "bash scripts/with-47-release-lock.sh",
     "release:47:baseline": "bash scripts/capture-47-release-baseline.sh",
-    "release:47:manifest": "bash scripts/capture-47-runtime-manifest.sh",
-    "audit:47:provenance": "bash scripts/audit-47-runtime-provenance.sh",
     "release:47:resolve": "bash scripts/resolve-47-release-recovery.sh",
     "deploy:47:whitelist": "bash scripts/deploy-47-whitelist.sh",
     "deploy:47": "bash scripts/deploy-47.sh"

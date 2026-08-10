@@ -11,7 +11,7 @@ type ChargeWeightChangeTagProps = {
 };
 
 function formatWeight(value: number, showUnit: boolean) {
-  return `${value.toFixed(3)}${showUnit ? ' kg' : ''}`;
+  return `${value.toFixed(3)}${showUnit ? ' KG' : ''}`;
 }
 
 export function ChargeWeightChangeTag({ value, change, showUnit = false }: ChargeWeightChangeTagProps) {
@@ -27,9 +27,9 @@ export function ChargeWeightChangeTag({ value, change, showUnit = false }: Charg
         title="计费重修改记录"
         content={(
           <Space direction="vertical" size={2}>
-            <Text>修改前：{change.originalChargeWeightKg.toFixed(3)} kg</Text>
-            <Text>当前：{change.currentChargeWeightKg.toFixed(3)} kg</Text>
-            <Text type="secondary">变更：{delta > 0 ? '+' : ''}{delta.toFixed(3)} kg</Text>
+            <Text>修改前：{change.originalChargeWeightKg.toFixed(3)} KG</Text>
+            <Text>当前：{change.currentChargeWeightKg.toFixed(3)} KG</Text>
+            <Text type="secondary">变更：{delta > 0 ? '+' : ''}{delta.toFixed(3)} KG</Text>
             <Text type="secondary">时间：{formatBeijingDateTime(change.changedAt)}</Text>
           </Space>
         )}

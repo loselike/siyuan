@@ -205,6 +205,8 @@ export function FinanceCatalogPage({
         <div className="finance-catalog-workbench">
           <div className="finance-catalog-switchbar">
             <Segmented
+              aria-label="财务资料分类切换"
+              className="finance-catalog-category-switch"
               options={visibleCategories.map((category) => ({
                 label: financeCatalogCategoryLabels[category],
                 value: category

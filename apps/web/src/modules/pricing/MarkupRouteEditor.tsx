@@ -93,11 +93,12 @@ function publishMarkupChange() {
   }
 }
 
-export function MarkupRouteEditor({ apiClient, permissions, onNotice, context, embedded = false, onClose }: {
+export function MarkupRouteEditor({ apiClient, permissions, onNotice, context, moduleEditBlocked = false, embedded = false, onClose }: {
   apiClient: ApiClient;
   permissions: PermissionKey[];
   onNotice: (message: string | null) => void;
   context?: MarkupRouteEditorContext;
+  moduleEditBlocked?: boolean;
   embedded?: boolean;
   onClose?: () => void;
 }) {
@@ -141,7 +142,8 @@ export function MarkupRouteEditor({ apiClient, permissions, onNotice, context, e
   const dirty = Boolean(scope) && JSON.stringify(tiers) !== savedTierKey;
   const batchDirty = batchInitialized && JSON.stringify(batchTiers) !== batchSavedTierKey;
   useGlobalUnsavedWork('pricing-markup-route-editor', dirty || batchDirty);
-  const canEdit = permissions.includes('pricing:markup-tier:update') || permissions.includes('pricing:manage');
+  const canEdit = !moduleEditBlocked
+    && (permissions.includes('pricing:markup-tier:update') || permissions.includes('pricing:manage'));
   useEffect(() => {
     let alive = true;
     setLoading(true);

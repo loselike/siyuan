@@ -227,6 +227,7 @@ import type {
   PayableFeeSummary,
   ShipmentFinanceItemUpdateInput,
   ShipmentDispatchInput,
+  WarehouseDispatchDeclarationUpdateInput,
   WarehouseHandoverPrintInput,
   WarehouseHandoverPrintResponse,
   ShipmentRestoreInput,
@@ -235,10 +236,14 @@ import type {
   ShipmentReviewRejectInput,
   ShipmentLabelSummary,
   ShipmentOperationalUpdateInput,
-  CustomerServiceDataConfirmRow,
+  CustomerServiceDataConfirmListQuery,
+  CustomerServiceDataConfirmListResponse,
   CustomerServiceDataReviewInput,
   CustomerServiceDataReverseInput,
   CustomerServiceDataUpdateInput,
+  CustomerServiceFinanceItemUpdateInput,
+  CustomerServiceFinanceUpdatePreview,
+  CustomerServiceFinanceUpdatePreviewRow,
   CustomerServiceTransferBatchInput,
   CustomerServiceTransferBatchResponse,
   ShipmentPaymentUpdateInput,
@@ -263,6 +268,7 @@ import type {
   WarehouseTallyLabelScanInput,
   WarehouseTallyLabelScanResponse,
   WarehouseTallyTaskCompleteInput,
+  WarehouseTallyTaskCompletedCountUpdateInput,
   WarehouseTallyHistoricalAggregateCorrectionPreview,
   WarehouseTallyHistoricalAggregateCorrectionInput,
   WarehouseTallyHistoricalAggregateCorrectionResult,
@@ -306,6 +312,20 @@ import { WarehouseQueryClient } from './api/warehouseQueryClient';
 
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
 export type RoleKey = BuiltinRoleKey | (string & {});
+export const YOYO_ADMIN_ROLE_KEY = 'UG_796F796FE7AEA1E79086E591' as const;
+
+export function isAdministratorRole(role: string | undefined): boolean {
+  return role === 'ADMIN' || role === YOYO_ADMIN_ROLE_KEY;
+}
+
+export type UserTablePreferenceValue = Record<string, unknown>;
+
+export type UserTablePreferenceSummary = {
+  key: string;
+  value: UserTablePreferenceValue;
+  updatedAt: string;
+};
+
 export type PermissionKey =
   | 'data-scope:sales-own'
   | 'data-scope:misc-fee-all'
@@ -320,6 +340,8 @@ export type PermissionKey =
   | 'operations:line-shipment:detail'
   | 'operations:line-shipment:process'
   | 'operations:line-shipment:status-update'
+  | `operations:line-shipment:stage-view-block:${string}`
+  | `operations:line-shipment:stage-edit-block:${string}`
   | 'operations:line-shipment:tracking-add'
   | 'operations:line-shipment:problem-create'
   | 'operations:line-shipment:import'
@@ -354,6 +376,8 @@ export type PermissionKey =
   | 'business:order-entry:label-upload'
   | 'business:order-entry:business-cost-view'
   | 'business:order-entry:business-cost-write'
+  | 'business:order-entry:business-cost-mask'
+  | 'business:order-entry:payable-fee-mask'
   | 'business:order-fee:view'
   | 'business:order-fee:create'
   | 'business:order-fee:update'
@@ -387,6 +411,7 @@ export type PermissionKey =
   | 'business:shipment:receivable-view'
   | 'business:shipment:payable-view'
   | 'business:shipment:profit-view'
+  | 'business:shipment:agent-weight-view'
   | 'business:shipment:export'
   | 'business:shipment:column-setting'
   | 'business:order-ai:view'
@@ -457,6 +482,7 @@ export type PermissionKey =
   | 'warehouse:tally-pending:view'
   | 'warehouse:tally-pending:task-create'
   | 'warehouse:tally-pending:task-update'
+  | 'warehouse:tally-pending:task-cancel'
   | 'warehouse:tally-pending:task-process'
   | 'warehouse:tally-pending:merge-only'
   | 'warehouse:tally-pending:merge-and-ship'
@@ -465,8 +491,13 @@ export type PermissionKey =
   | 'warehouse:tally-pending:history-view'
   | 'warehouse:tally-pending:filter'
   | 'warehouse:tally-completed:view'
+  | 'warehouse:tally-completed:view-block'
+  | 'warehouse:tally-completed:reprint-block'
+  | 'warehouse:tally-completed:download-block'
+  | 'warehouse:tally-completed:reverse-block'
   | 'warehouse:tally-completed:history-view'
   | 'warehouse:tally-completed:detail-view'
+  | 'warehouse:tally-completed:reverse-review'
   | 'warehouse:tally-history:correct'
   | 'warehouse:tally-label:generate'
   | 'warehouse:tally-label:reprint'
@@ -484,6 +515,7 @@ export type PermissionKey =
   | 'warehouse:dispatch-pending:label-generate'
   | 'warehouse:dispatch-pending:label-view'
   | 'warehouse:dispatch-pending:label-void'
+  | 'warehouse:dispatch-pending:declaration-update'
   | 'warehouse:dispatch-pending:column-setting'
   | 'warehouse:outbounded:view'
   | 'warehouse:outbounded:handover-view'
@@ -577,6 +609,7 @@ export interface Principal {
   id: string;
   username: string;
   role: RoleKey;
+  assignedRole?: RoleKey;
   site?: string;
   customerId?: string;
   name?: string;
@@ -617,6 +650,7 @@ export interface RolePermissionRow {
   sortOrder?: number;
   enabled?: boolean;
   systemBuiltin?: boolean;
+  administratorEquivalent?: boolean;
 }
 
 export interface RolePermissionMatrix {
@@ -647,6 +681,7 @@ export interface AiAssistResponse {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3001/api';
+const CUSTOMER_SERVICE_DATA_CONFIRM_TIMEOUT_MS = 15_000;
 
 export function resolveApiAssetUrl(url?: string) {
   if (!url || /^(?:https?:|data:|blob:)/i.test(url)) return url;
@@ -724,6 +759,21 @@ export class ApiClient {
     return this.request('/auth/session');
   }
 
+  async userTablePreferences(): Promise<UserTablePreferenceSummary[]> {
+    return this.request('/user-table-preferences');
+  }
+
+  async updateUserTablePreference(key: string, value: UserTablePreferenceValue): Promise<UserTablePreferenceSummary> {
+    return this.request(`/user-table-preferences/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value })
+    });
+  }
+
+  async deleteUserTablePreference(key: string): Promise<{ ok: true }> {
+    return this.request(`/user-table-preferences/${encodeURIComponent(key)}`, { method: 'DELETE' });
+  }
+
   async downloadProtectedAsset(url: string): Promise<Blob> {
     const headers: Record<string, string> = {};
     const token = this.getToken();
@@ -750,11 +800,15 @@ export class ApiClient {
   }
 
   async shipments(): Promise<Shipment[]> {
-    return this.request('/shipments');
+    return this.request('/shipments?costScope=routed');
   }
 
   async warehouseDispatchShipments(): Promise<Shipment[]> {
     return this.request('/warehouse/dispatch-shipments');
+  }
+
+  async updateWarehouseDispatchDeclaration(id: string, input: WarehouseDispatchDeclarationUpdateInput): Promise<Shipment> {
+    return this.request(`/warehouse/dispatch-shipments/${id}/declaration`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
   async reviewPendingShipments(): Promise<Shipment[]> {
@@ -810,6 +864,9 @@ export class ApiClient {
 
   async orderEntryPackages(query: OrderEntryWarehousePackageQuery): Promise<WarehousePackageSummary[]> {
     const params = new URLSearchParams();
+    if (query.shipmentId?.trim()) {
+      params.set('shipmentId', query.shipmentId.trim());
+    }
     if (query.customerCode?.trim()) {
       params.set('customerCode', query.customerCode.trim());
     }
@@ -878,6 +935,14 @@ export class ApiClient {
     return this.request(`/shipments/${id}/business-data`, { method: 'PATCH', body: JSON.stringify(body) });
   }
 
+  async customerServiceFinanceUpdatePreview(id: string, kind: 'business' | 'agent' = 'business'): Promise<CustomerServiceFinanceUpdatePreview> {
+    return this.request(`/shipments/${id}/customer-service/cost-preview?kind=${encodeURIComponent(kind)}`);
+  }
+
+  async updateCustomerServiceFinanceItem(id: string, feeId: string, kind: 'business' | 'agent', input: CustomerServiceFinanceItemUpdateInput): Promise<CustomerServiceFinanceUpdatePreviewRow> {
+    return this.request(`/shipments/${id}/customer-service/finance-items/${feeId}?kind=${encodeURIComponent(kind)}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
   async updateShipmentAgentData(id: string, body: CustomerServiceDataUpdateInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/agent-data`, { method: 'PATCH', body: JSON.stringify(body) });
   }
@@ -918,8 +983,19 @@ export class ApiClient {
     return this.request('/customer-service/transfer-shipments');
   }
 
-  async customerServiceDataConfirmShipments(): Promise<CustomerServiceDataConfirmRow[]> {
-    return this.request('/customer-service/data-confirm-shipments');
+  async customerServiceDataConfirmShipments(query: CustomerServiceDataConfirmListQuery = {}): Promise<CustomerServiceDataConfirmListResponse> {
+    const controller = new AbortController();
+    const timeoutId = globalThis.setTimeout(() => controller.abort(), CUSTOMER_SERVICE_DATA_CONFIRM_TIMEOUT_MS);
+    try {
+      return await this.request(`/customer-service/data-confirm-shipments${this.queryString(query)}`, { signal: controller.signal });
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('数据确认列表加载超时，请检查网络后重试');
+      }
+      throw error;
+    } finally {
+      globalThis.clearTimeout(timeoutId);
+    }
   }
 
   async fillCustomerServiceTransferShipments(input: CustomerServiceTransferBatchInput): Promise<CustomerServiceTransferBatchResponse> {
@@ -940,6 +1016,10 @@ export class ApiClient {
 
   async shipmentLabels(id: string): Promise<ShipmentLabelSummary[]> {
     return this.request(`/shipments/${id}/labels`);
+  }
+
+  async downloadShipmentLabel(id: string, labelId: string): Promise<{ fileName: string; blob: Blob }> {
+    return this.downloadAuthorizedFile(`/shipments/${encodeURIComponent(id)}/labels/${encodeURIComponent(labelId)}/file`, '面单.pdf', '面单下载失败，请检查网络后重试');
   }
 
   async voidShipmentLabel(id: string, labelId: string): Promise<ShipmentLabelSummary> {
@@ -999,17 +1079,25 @@ export class ApiClient {
   }
 
   async downloadShipmentInvoiceTemplate(id: string, templateId?: string): Promise<{ fileName: string; blob: Blob }> {
+    const query = templateId ? `?templateId=${encodeURIComponent(templateId)}` : '';
+    return this.downloadAuthorizedFile(`/shipments/${encodeURIComponent(id)}/invoice-template/download${query}`, '发票模板.xlsx', '发票模板下载失败，请检查网络后重试');
+  }
+
+  async downloadShipmentBusinessInvoice(id: string): Promise<{ fileName: string; blob: Blob }> {
+    return this.downloadAuthorizedFile(`/shipments/${encodeURIComponent(id)}/invoice/download`, '业务发票.xlsx', '业务发票下载失败，请检查网络后重试');
+  }
+
+  private async downloadAuthorizedFile(path: string, fallbackName: string, networkErrorMessage: string): Promise<{ fileName: string; blob: Blob }> {
     const headers: Record<string, string> = {};
     const token = this.getToken();
     if (token) headers.Authorization = `Bearer ${token}`;
     let response: Response;
     try {
-      const query = templateId ? `?templateId=${encodeURIComponent(templateId)}` : '';
-      response = await fetch(`${API_BASE}/shipments/${encodeURIComponent(id)}/invoice-template/download${query}`, { headers });
+      response = await fetch(`${API_BASE}${path}`, { headers });
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
-        throw new Error('发票模板下载失败，请检查网络后重试');
+        throw new Error(networkErrorMessage);
       }
       throw error;
     }
@@ -1023,7 +1111,7 @@ export class ApiClient {
     const disposition = response.headers.get('content-disposition') ?? '';
     const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
     const plainName = disposition.match(/filename="?([^";]+)"?/i)?.[1];
-    let fileName = '发票模板.xlsx';
+    let fileName = fallbackName;
     try {
       fileName = encodedName ? decodeURIComponent(encodedName) : plainName || fileName;
     } catch {
@@ -1390,6 +1478,10 @@ export class ApiClient {
     return this.request(`/warehouse/rent-rules/${id}`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
+  async deleteWarehouseRentRule(id: string): Promise<WarehouseRentRuleSummary> {
+    return this.request(`/warehouse/rent-rules/${id}`, { method: 'DELETE' });
+  }
+
   async updateWarehouseRentRuleEnabled(
     id: string,
     input: WarehouseRentRuleEnabledInput
@@ -1461,8 +1553,26 @@ export class ApiClient {
     return this.request(`/warehouse/tally-tasks/${id}`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
+  async cancelWarehouseTallyTask(id: string): Promise<WarehouseTallyTaskSummary> {
+    return this.request(`/warehouse/tally-tasks/${id}/cancel`, { method: 'POST' });
+  }
+
   async completeWarehouseTallyTask(id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/complete`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateCompletedWarehouseTallyTaskCount(
+    id: string,
+    input: WarehouseTallyTaskCompletedCountUpdateInput
+  ): Promise<WarehouseTallyTaskSummary> {
+    return this.request(`/warehouse/tally-tasks/${id}/completed-count`, {
+      method: 'PATCH',
+      body: JSON.stringify(input)
+    });
+  }
+
+  async reverseReviewWarehouseTallyTask(id: string): Promise<WarehouseTallyTaskSummary> {
+    return this.request(`/warehouse/tally-tasks/${id}/reverse-review`, { method: 'POST' });
   }
 
   async warehouseTallyHistoricalAggregateCorrectionPreview(id: string): Promise<WarehouseTallyHistoricalAggregateCorrectionPreview> {
@@ -1505,6 +1615,18 @@ export class ApiClient {
 
   async deleteShipmentFinanceItem(id: string, feeId: string): Promise<ReceivableFeeSummary | PayableFeeSummary | BusinessCostFeeSummary> {
     return this.request(`/shipments/${id}/finance-items/${feeId}`, { method: 'DELETE' });
+  }
+
+  async createPendingReviewBusinessCost(id: string, input: ShipmentFinanceItemCreateInput): Promise<BusinessCostFeeSummary> {
+    return this.request(`/shipments/${id}/review-business-costs`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updatePendingReviewBusinessCost(id: string, feeId: string, input: ShipmentFinanceItemUpdateInput): Promise<BusinessCostFeeSummary> {
+    return this.request(`/shipments/${id}/review-business-costs/${feeId}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
+  async deletePendingReviewBusinessCost(id: string, feeId: string): Promise<BusinessCostFeeSummary> {
+    return this.request(`/shipments/${id}/review-business-costs/${feeId}`, { method: 'DELETE' });
   }
 
   async lockShipmentFinanceItem(id: string, feeId: string): Promise<ReceivableFeeSummary | PayableFeeSummary | BusinessCostFeeSummary> {
