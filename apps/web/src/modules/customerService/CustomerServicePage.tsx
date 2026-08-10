@@ -27,6 +27,8 @@ function dataConfirmCacheKey(page: number, pageSize: number, outboundOrderNo: st
 
 type CustomerServiceBusinessCostDraft = CustomerServiceBusinessCostInput & {
   key: string;
+  billingQuantity?: number;
+  billingQuantityTouched?: boolean;
   editable: boolean;
   statusLabel: string;
 };
@@ -38,6 +40,7 @@ function createCustomerServiceBusinessCostDraft(row: CustomerServiceFinanceUpdat
     name: row.name,
     currency: row.currency ?? 'RMB',
     billingUnit: row.billingUnit ?? 'KG',
+    billingQuantity: row.billingQuantity,
     unitPrice: row.unitPrice,
     editable: row.selectable,
     statusLabel: row.locked ? '已锁定' : row.reconciliationStatus === 'CONFIRMED' ? '已审核' : '可修改'
@@ -1572,6 +1575,7 @@ export function CustomerServicePage({
   }
 
   function getPayableCostQuantity(row: CustomerServiceBusinessCostDraft) {
+    if (row.billingQuantity !== undefined && row.billingQuantity !== null) return Number(row.billingQuantity);
     const snapshot = dataEditTarget?.snapshot;
     const source = row.billingUnit === 'CBM'
       ? snapshot?.volumeCbm ?? dataEditTarget?.shipment.volumeCbm
@@ -1581,7 +1585,8 @@ export function CustomerServicePage({
 
   function getPayableCostAmount(row: CustomerServiceBusinessCostDraft) {
     const unitPrice = row.unitPrice === undefined || row.unitPrice === null ? undefined : Number(row.unitPrice);
-    return unitPrice === undefined ? 0 : Number((getPayableCostQuantity(row) * unitPrice).toFixed(2));
+    if (unitPrice === undefined) return Number(dataEditCostPreview?.rows.find((item) => item.id === row.id)?.amount ?? 0);
+    return Number((getPayableCostQuantity(row) * unitPrice).toFixed(2));
   }
 
   function updateBusinessCostDraft(key: string, patch: Partial<CustomerServiceBusinessCostDraft>) {
@@ -1617,6 +1622,7 @@ export function CustomerServicePage({
       return draft.name.trim() !== original.name
         || (draft.currency ?? 'RMB') !== (original.currency ?? 'RMB')
         || draft.billingUnit !== (original.billingUnit ?? 'KG')
+        || draft.billingQuantityTouched === true
         || nextUnitPrice !== originalUnitPrice;
     });
     let nextPreview = dataEditCostPreview;
@@ -2778,7 +2784,7 @@ export function CustomerServicePage({
           <div className="customer-service-business-edit customer-service-agent-edit" aria-label="代理数据与应付成本编辑">
             <section className="customer-service-business-cost-card" aria-label="应付成本">
               <div className="customer-service-data-edit-cost-header">
-                <div><Text strong>应付成本</Text><Text type="secondary">类型固定为应付成本；切换计费方式后，计费数量和金额实时联动</Text></div>
+                <div><Text strong>应付成本</Text><Text type="secondary">类型固定为应付成本；计费数量可独立修改，有单价时金额实时联动</Text></div>
               </div>
               {dataEditCostPreviewLoading ? <div className="customer-service-data-edit-loading"><Spin size="small" /><Text type="secondary">费用加载中...</Text></div> : null}
               {!dataEditCostPreviewLoading ? (
@@ -2788,8 +2794,8 @@ export function CustomerServicePage({
                     <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-payable-cost-row">
                       <Input aria-label={`应付成本费用名称-${row.key}`} value={row.name} disabled={!row.editable} placeholder="费用名称" onChange={(event) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, name: event.target.value } : item))} />
                       <Select aria-label={`应付成本币种-${row.key}`} value={row.currency ?? 'RMB'} disabled={!row.editable} options={[{ value: 'RMB', label: 'RMB' }, { value: 'USD', label: 'USD' }]} onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, currency: value } : item))} />
-                      <Select aria-label={`应付成本计费方式-${row.key}`} value={row.billingUnit} disabled={!row.editable} options={[{ value: 'KG', label: '计费重（KG）' }, { value: 'CBM', label: '计费体积（CBM）' }]} onChange={(value: FinanceBillingUnit) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, billingUnit: value } : item))} />
-                      <InputNumber aria-label={`应付成本计费数量-${row.key}`} value={getPayableCostQuantity(row)} readOnly addonAfter={row.billingUnit === 'CBM' ? 'CBM' : 'KG'} />
+                      <Select aria-label={`应付成本计费方式-${row.key}`} value={row.billingUnit} disabled={!row.editable} options={[{ value: 'KG', label: '计费重（KG）' }, { value: 'CBM', label: '计费体积（CBM）' }]} onChange={(value: FinanceBillingUnit) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, billingUnit: value, billingQuantity: undefined, billingQuantityTouched: true } : item))} />
+                      <InputNumber aria-label={`应付成本计费数量-${row.key}`} min={0} precision={row.billingUnit === 'CBM' ? 6 : 3} value={getPayableCostQuantity(row)} disabled={!row.editable} addonAfter={row.billingUnit === 'CBM' ? 'CBM' : 'KG'} onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, billingQuantity: value === null ? undefined : Number(value), billingQuantityTouched: true } : item))} />
                       <InputNumber aria-label={`应付成本单价-${row.key}`} min={0} precision={8} value={row.unitPrice} disabled={!row.editable} placeholder="单价" onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, unitPrice: value === null ? undefined : Number(value) } : item))} />
                       <Text strong>{formatFeeAmount(getPayableCostAmount(row), row.currency)}</Text>
                       <Tag color={row.editable ? 'green' : 'orange'}>{row.statusLabel}</Tag>
