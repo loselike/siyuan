@@ -28,12 +28,14 @@ scope changed, not because overlapping source drifted.
   contract.
 - A clean build of the captured host source fails. Healthy containers are not
   evidence that the host source is a buildable release candidate.
-- Against clean Git baseline `8be0a0b`, the filtered runtime tree has 88 path
-  differences: 33 remote-only files and 55 changed files. Git object audit
-  found exact remote blobs for 47 paths somewhere in local Git history, while
-  41 exact host-source blobs exist only in dirty/temporary release material.
-  Those 41 paths require semantic reapplication and review; copying the host
-  tree would preserve the provenance defect.
+- Against clean Git baseline `8be0a0b`, 88 remote-side runtime paths require
+  reconciliation: 33 remote-only files and 55 changed files. Two additional
+  build-support files exist only in the clean baseline. Git object audit found
+  47 exact remote blobs in the local object database, but only two are
+  reachable from committed feature history; 45 are loose/index-only objects
+  and 41 are absent from the object database. Therefore 86 remote versions are
+  not durably committed and require semantic reapplication and review; copying
+  the host tree would preserve the provenance defect.
 - The preserved runtime-build directory and standalone candidate are evidence
   only. They must not be copied over a canonical Git source tree or used as a
   future release path.

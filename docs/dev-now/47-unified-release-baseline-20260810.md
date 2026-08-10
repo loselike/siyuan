@@ -43,11 +43,14 @@
 - 已选定 `8be0a0b` 作为新的隔离候选起点：它包含 2026-08-05 的 47 运行源码捕获以及后续已发布的仓库架构切片，并已具备发布锁、CAS 白名单、baseline receipt 和同步临时目录排除能力。
 - 已冻结 47 远端源码、Prisma、容器、镜像和运行产物的不可变 v1/v2 manifest；v2 纳入全部真实构建输入，419 个重叠源码 hash、release state、Prisma、容器、镜像和运行产物均与 v1 一致。远端未发生写入、迁移或重启。
 - 已确认根因：当前运行镜像来自“旧镜像 + 编译后 JavaScript 覆盖”和“恢复的 Web source map + 预构建 Shared dist”，不是由 47 当前宿主机完整源码构建；因此容器健康与源码可构建性互不证明。
-- `8be0a0b` 与 47 过滤后的运行时源码相差 88 个路径（33 个远端独有、55 个内容不同）；47 个远端 blob 可在本地 Git 对象中找到，41 个精确版本只存在于脏工作树或临时发布材料，必须语义重放，不能直接覆盖。
+- `8be0a0b` 有 88 个远端侧运行时路径需要收敛（33 个远端独有、55 个内容不同），另有 2 个干净基线独有的构建支持文件。47 个远端 blob 可在本地 Git 对象库找到，但只有 2 个属于可达 commit；其余 45 个仅为 loose/index 对象，另有 41 个完全不存在，合计 86 个远端版本必须语义重放，不能直接覆盖。
 - 已补充只读 provenance 审计、标准 Git 发布不可变 receipt、实际镜像 ID 绑定，以及 staging/receipt/manifest/临时证据的同步和 Docker context 排除。
 - `8be0a0b` 隔离基线已完成 `npm ci -> prisma generate -> Shared/API/Web build`，三端构建通过；治理检查通过。
 - 当前 47 审计固定返回 `legacy-untraceable` / exit `84`，在来源闭环前阻断标准发布。
 - 专项风险复审确认当前治理代码无 P0/P1；bootstrap cutover 仍未实现，必须等 88 个源码差异完成语义收敛后单独审查。
+- 已完成第一批源码收敛：恢复已提交的仓库库存汇总策略和财务已付款四等分矩阵，定向测试 2/2、1/1 及 Shared/API/Web 构建通过。
+- 已按 v2 manifest 精确恢复 9 个远端 migration 文件，文件 SHA-256 全部一致。生产 `_prisma_migrations` 只读核对显示前 7 个已完成且 checksum 一致；`20260809143000_add_shipment_transport_time` 与 `20260810121500_add_warehouse_tally_completed_mask_permissions` 仍为 pending，禁止在 bootstrap 前隐式执行。
+- 第一批后候选与 v2 仍有 81 个文件差异：23 个远端独有、56 个内容不同、2 个候选独有；该数字是源码差异，不等同于 81 个独立业务功能。
 - 待完成：按真实 Git 源码逐批重放 b983 权限切片和后续本地权限遮罩，统一 Shared/Prisma/API/Web 契约；每批构建、审查并形成唯一 commit 后，才能进入 47 候选发布。
 
 ## 发布状态

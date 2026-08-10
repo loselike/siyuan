@@ -1,6 +1,6 @@
 # Warehouse inventory summary repository slice
 
-- Status: complete
+- 状态：`complete`
 - Branch: `codex/warehouse-inventory-summary-repository-slice`
 - Goal: first move the duplicated pure in-stock totals policy out of the giant Prisma/InMemory repositories without changing API, permission, data scope, query, audit, or persistence behavior.
 - Fixed sample: two received rows for one ticket (2 × 10 kg and 1 × 5 kg) must still return 1 ticket, 3 pieces, 25 kg, 0.08 CBM, 1 exception, and write the same audit action.
