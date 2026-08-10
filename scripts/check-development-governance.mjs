@@ -128,6 +128,28 @@ for (const bootstrapGate of [
 ]) {
   if (!deployScript.includes(bootstrapGate)) failures.push(`bootstrap cutover is missing fail-closed gate: ${bootstrapGate}`);
 }
+for (const sourceBundleGate of [
+  '--source-bundle',
+  'git bundle create',
+  'git bundle verify',
+  'git bundle list-heads',
+  'init --bare',
+  'must be read-only',
+  '.release-bundles/',
+  'SOURCE_PROVENANCE="GIT_BUNDLE"'
+]) {
+  if (!deployScript.includes(sourceBundleGate) && !fingerprintScript.includes(sourceBundleGate)) {
+    failures.push(`GitHub-independent deploy is missing durable source bundle gate: ${sourceBundleGate}`);
+  }
+}
+const provenanceAuditScript = readFileSync('scripts/audit-47-runtime-provenance.sh', 'utf8');
+if (!provenanceAuditScript.includes('release-source-bundle-checksum-mismatch')
+  || !provenanceAuditScript.includes('release-source-bundle-is-writable')
+  || !provenanceAuditScript.includes('init --bare')
+  || !provenanceAuditScript.includes('git bundle list-heads')
+  || !syncScript.includes("--exclude='.release-bundles/'")) {
+  failures.push('durable source bundles must be checksum-audited and excluded from source mirroring');
+}
 if (!deployScript.includes('47-legacy-migration-checksums.tsv')
   || !deployScript.includes('13e4dcb6aabeef0ba3585de72c105f4b7bb48c24d1159b3579e403aea2746a84')
   || bootstrapMigrationExceptionsSha256 !== '13e4dcb6aabeef0ba3585de72c105f4b7bb48c24d1159b3579e403aea2746a84') {

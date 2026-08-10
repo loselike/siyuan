@@ -53,6 +53,7 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='.release-backups/' \
   --exclude='.release-manifests/' \
   --exclude='.release-receipts/' \
+  --exclude='.release-bundles/' \
   --exclude='docs/release-manifests/' \
   --exclude='config/' \
   --exclude='data/quotes.json' \

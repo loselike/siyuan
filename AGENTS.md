@@ -192,7 +192,7 @@
 
 - 47 云服务器按纯 Docker Compose 发布处理；宿主机不要求安装或调用 `node`、`npm`、`npx`。
 - 所有 47 写入与发布必须持有同一把远端全链路发布锁，锁从读取远端基线之前开始，直到源码同步/条件上传、构建、必要迁移、重启、健康检查和状态更新全部结束后释放。锁被占用时自动排队，禁止另一个会话先同步源码或单独重启服务。
-- 标准干净候选只能从发布协调 worktree 执行：任务开始先运行 `npm run release:47:baseline`；该命令只有在 worktree 干净、当前提交的三类运行时 manifest 与 47 实际树完全一致时才生成绑定 worktree/分支/祖先 commit 的 receipt。完成合并/验证后把记录值传给 `deploy:47 -- --expected-release-id ...`；远端 baseline 已变化或 receipt 不匹配时必须重新合并，禁止临时读取新值后覆盖旧分支。
+- 标准干净候选只能从发布协调 worktree 执行：任务开始先运行 `npm run release:47:baseline`；该命令只有在 worktree 干净、当前提交的三类运行时 manifest 与 47 实际树完全一致时才生成绑定 worktree/分支/祖先 commit 的 receipt。完成合并/验证后把记录值传给 `deploy:47 -- --expected-release-id ...`；远端 baseline 已变化或 receipt 不匹配时必须重新合并，禁止临时读取新值后覆盖旧分支。默认要求 HEAD 与同名 origin 分支一致；仅当用户明确不使用 GitHub 时，允许 `--source-bundle` 在同一发布锁内生成并保存只读 Git bundle，release receipt/state 必须绑定 bundle 路径与 SHA-256，线上 audit 必须验证 bundle 含当前 commit。origin 与已验证 bundle 两种耐久来源证据至少具备一种，禁止无证据绕过。
 - 只有发布协调 worktree 在 baseline 匹配、持有全链路锁且发布后远端 manifest 与候选一致时，标准同步才可用 `rsync --delete` 形成精确镜像；功能 worktree 不得直接镜像 47。白名单删除仍须单独声明目标、核对 checksum 并保留回退备份。
 - 本规则视为用户已对目标明确、边界清楚且本地验证通过的常规运行时代码授予 47 发布授权；开发任务默认连续完成“本地验证 -> 精确发布 -> 线上验证 -> 汇报”，不再逐次询问是否发布。破坏性迁移、真实付款、批量生产数据写入或其他不可逆操作仍须单独确认。
 - 同步/发布到 47 时，按 `docs/47-cloud-docker-release.md` 自动判定发布范围：只构建/重启受影响服务；只有 Prisma schema/migrations 变化才运行 `db-migrate`；再做对应健康检查。

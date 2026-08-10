@@ -50,5 +50,6 @@
 
 ## 发布状态
 
-- 候选已达到 bootstrap 前本地门禁，待最终专项复审、提交并推送后执行一次性 cutover。
+- 用户明确不使用 GitHub；候选改用锁内不可变 Git bundle 作为耐久来源证据。bundle 路径和 SHA-256 将写入 release receipt/state，并由线上 provenance audit 校验，不再依赖 origin 分支。
+- 候选已达到 bootstrap 前本地门禁，待 source-bundle 发布门复审、提交后执行一次性 cutover。
 - 截至本记录更新，47 仍未被写入、未迁移、未重启。

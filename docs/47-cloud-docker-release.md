@@ -73,6 +73,8 @@ npm run deploy:47 -- \
 
 bootstrap 仍要求候选 worktree 完全干净、HEAD 与同名 `origin` 分支一致，并持有全链路发布锁。锁内会重新捕获 47 的 release state、源码、Prisma、容器、镜像和运行产物；任一文件或 checksum 相对冻结 manifest 漂移都会停止，不能用新的线上值临时替换旧 manifest。
 
+若明确不使用 GitHub，可在同一命令增加 `--source-bundle`。此模式不降低源码可追溯要求：脚本会在锁内从完全干净的 HEAD 生成 Git bundle，校验 bundle 只包含当前提交后，将只读 bundle 原子保存到 47 的 `.release-bundles/<commit>.bundle`。release state 与不可变 receipt 同时绑定 bundle 路径和 SHA-256；后续 provenance audit 会重新校验文件权限、checksum、bundle 完整性及其 HEAD commit。没有 origin 分支或 bundle 两者之一，发布仍会被拒绝。
+
 bootstrap 不允许隐式数据库迁移。候选 migration 名称必须与生产 `_prisma_migrations` 的已完成集合完全一致，checksum 必须一致；历史遗留的三个 checksum 差异仅允许命中 `config/release/47-legacy-migration-checksums.tsv` 中同时绑定源码 hash 和生产记录 hash 的精确条目。未应用 migration 必须从候选移除并保留在冻结证据中，不能在 bootstrap 中顺带执行。
 
 只有锁内基线复核、精确同步、Web/API 生产构建、容器重启、内外网 health 全部成功后，脚本才写入首个 `GIT_SOURCE_BUILD` receipt 和 release state。同步之后任何失败都会写 recovery-required 标记并关闭发布队列；bootstrap 成功后该入口自动失效，后续只能走标准 baseline/deploy 流程。

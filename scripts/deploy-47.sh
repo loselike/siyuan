@@ -16,6 +16,10 @@ BOOTSTRAP_MANIFEST_DIR=""
 CONFIRM_BOOTSTRAP=false
 BOOTSTRAP_MODE=false
 BOOTSTRAP_RUNTIME_TMP=""
+SOURCE_BUNDLE_MODE=false
+SOURCE_BUNDLE_TMP=""
+SOURCE_BUNDLE_PATH=""
+SOURCE_BUNDLE_SHA256=""
 BOOTSTRAP_MIGRATION_EXCEPTION_FILE="config/release/47-legacy-migration-checksums.tsv"
 APPROVED_BOOTSTRAP_MANIFEST_DIR="docs/release-manifests/47/20260810-042420-runtime-stage-view-20260810020229"
 APPROVED_BOOTSTRAP_BUNDLE_SHA256="fb419d6d56e6ec807ebbb136a7ad8daa7791b9c94e8deb5eee192629cd0da4e4"
@@ -100,7 +104,8 @@ while [[ "$#" -gt 0 ]]; do
       shift
       ;;
     --confirm-bootstrap) CONFIRM_BOOTSTRAP=true ;;
-    *) echo "Usage: npm run deploy:47 -- [--dry-run] [--full] [--lock-status] [--expected-release-id <id>] [--bootstrap-manifest <dir> --confirm-bootstrap]"; exit 2 ;;
+    --source-bundle) SOURCE_BUNDLE_MODE=true ;;
+    *) echo "Usage: npm run deploy:47 -- [--dry-run] [--full] [--lock-status] [--expected-release-id <id>] [--source-bundle] [--bootstrap-manifest <dir> --confirm-bootstrap]"; exit 2 ;;
   esac
   shift
 done
@@ -285,7 +290,7 @@ if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == 
   echo "deploy:47 apply requires an attached Git branch and a full source commit." >&2
   exit 85
 fi
-if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false ]]; then
+if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false && "$SOURCE_BUNDLE_MODE" != true ]]; then
   remote_branch_commit="$(git ls-remote --heads origin "refs/heads/$GIT_BRANCH" | awk 'NR == 1 {print $1}')"
   if [[ "$remote_branch_commit" != "$GIT_COMMIT" ]]; then
     echo "deploy:47 apply requires HEAD to match the durable origin branch exactly." >&2
@@ -304,6 +309,9 @@ cleanup_release_lock() {
   trap - EXIT INT TERM
   if [[ -n "$BOOTSTRAP_RUNTIME_TMP" && -d "$BOOTSTRAP_RUNTIME_TMP" ]]; then
     rm -rf -- "$BOOTSTRAP_RUNTIME_TMP"
+  fi
+  if [[ -n "$SOURCE_BUNDLE_TMP" && -d "$SOURCE_BUNDLE_TMP" ]]; then
+    rm -rf -- "$SOURCE_BUNDLE_TMP"
   fi
   if [[ "$exit_code" -ne 0 && "$REMOTE_MUTATION_STARTED" == true ]]; then
     if ! siyuan_47_mark_release_recovery_required "$FAILURE_PHASE"; then
@@ -327,14 +335,32 @@ if [[ "$MODE" == "apply" ]]; then
   trap cleanup_release_lock EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  if [[ "$BOOTSTRAP_MODE" == true ]]; then
+  if [[ "$BOOTSTRAP_MODE" == true || "$SOURCE_BUNDLE_MODE" == true ]]; then
     if [[ -n "$(git status --porcelain --untracked-files=all)"
       || "$(git rev-parse HEAD)" != "$GIT_COMMIT"
-      || "$(git branch --show-current)" != "$GIT_BRANCH"
-      || "$(git ls-remote --heads origin "refs/heads/$GIT_BRANCH" | awk 'NR == 1 {print $1}')" != "$GIT_COMMIT" ]]; then
-      echo "Bootstrap candidate changed while waiting for the 47 release lock." >&2
+      || "$(git branch --show-current)" != "$GIT_BRANCH" ]]; then
+      echo "Release candidate changed while waiting for the 47 release lock." >&2
       exit 86
     fi
+    if [[ "$SOURCE_BUNDLE_MODE" != true
+      && "$(git ls-remote --heads origin "refs/heads/$GIT_BRANCH" | awk 'NR == 1 {print $1}')" != "$GIT_COMMIT" ]]; then
+      echo "Release candidate no longer matches its durable origin branch." >&2
+      exit 86
+    fi
+  fi
+  if [[ "$SOURCE_BUNDLE_MODE" == true ]]; then
+    SOURCE_BUNDLE_TMP="$(mktemp -d "${TMPDIR:-/tmp}/siyuan-47-source-bundle.XXXXXX")"
+    local_bundle="$SOURCE_BUNDLE_TMP/$GIT_COMMIT.bundle"
+    git bundle create "$local_bundle" HEAD
+    git bundle verify "$local_bundle" >/dev/null
+    if ! git bundle list-heads "$local_bundle" | grep -Fxq "$GIT_COMMIT HEAD"; then
+      echo "Source bundle does not contain the exact release HEAD." >&2
+      exit 87
+    fi
+    SOURCE_BUNDLE_SHA256="$(sha256_file "$local_bundle")"
+    SOURCE_BUNDLE_PATH=".release-bundles/$GIT_COMMIT.bundle"
+  fi
+  if [[ "$BOOTSTRAP_MODE" == true ]]; then
     BOOTSTRAP_RUNTIME_TMP="$(mktemp -d "${TMPDIR:-/tmp}/siyuan-47-bootstrap-verify.XXXXXX")"
     bootstrap_frozen_dir="$BOOTSTRAP_RUNTIME_TMP/frozen"
     mkdir -p "$bootstrap_frozen_dir"
@@ -430,7 +456,7 @@ if [[ "$BOOTSTRAP_MODE" == true ]]; then
   API_CHANGED=true
 fi
 
-if [[ "$MODE" == "apply" && "$BOOTSTRAP_MODE" == true ]]; then
+if [[ "$BOOTSTRAP_MODE" == true ]]; then
   LOCAL_MIGRATION_MANIFEST="$({
     for migration_dir in apps/api/prisma/migrations/*; do
       [[ -d "$migration_dir" && -f "$migration_dir/migration.sql" ]] || continue
@@ -527,6 +553,66 @@ if [[ -n "$DIRTY_RUNTIME_FILES" ]]; then
   exit 3
 fi
 
+if [[ "$SOURCE_BUNDLE_MODE" == true ]]; then
+  REMOTE_MUTATION_STARTED=true
+  FAILURE_PHASE="source-bundle-sync-build-health"
+  local_bundle="$SOURCE_BUNDLE_TMP/$GIT_COMMIT.bundle"
+  remote_bundle_stage="$REMOTE_DIR/$SOURCE_BUNDLE_PATH.tmp.$SIYUAN_47_RELEASE_LOCK_TOKEN"
+  ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
+    "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" <<'REMOTE_SCRIPT'
+set -euo pipefail
+remote_dir="$1"
+lock_dir="$2"
+expected_token="$3"
+actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
+[[ "$actual_token" == "$expected_token" ]] || { echo "47 release lock ownership changed before source bundle upload." >&2; exit 75; }
+bundle_dir="$remote_dir/.release-bundles"
+[[ ! -L "$bundle_dir" ]] || { echo "Release bundle directory must not be a symlink." >&2; exit 87; }
+mkdir -p "$bundle_dir"
+[[ "$(readlink -f "$bundle_dir")" == "$(readlink -f "$remote_dir")/.release-bundles" ]] || {
+  echo "Release bundle directory is not canonical." >&2
+  exit 87
+}
+REMOTE_SCRIPT
+  scp -q "$local_bundle" "$REMOTE:$remote_bundle_stage"
+  ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
+    "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
+    "$SOURCE_BUNDLE_PATH" "$SOURCE_BUNDLE_SHA256" "$GIT_COMMIT" <<'REMOTE_SCRIPT'
+set -euo pipefail
+remote_dir="$1"
+lock_dir="$2"
+expected_token="$3"
+bundle_path="$4"
+expected_hash="$5"
+expected_commit="$6"
+actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
+[[ "$actual_token" == "$expected_token" ]] || { echo "47 release lock ownership changed during source bundle upload." >&2; exit 75; }
+cd "$remote_dir"
+bundle_stage="$bundle_path.tmp.$expected_token"
+trap 'rm -f -- "$bundle_stage"' EXIT
+[[ ! -L "$bundle_stage" && -f "$bundle_stage" ]] || { echo "Staged source bundle is not a regular file." >&2; exit 87; }
+[[ "$(sha256sum "$bundle_stage" | awk '{print $1}')" == "$expected_hash" ]] || { echo "Source bundle checksum mismatch." >&2; exit 87; }
+bundle_absolute="$(readlink -f "$bundle_stage")"
+verify_dir="$(mktemp -d "${TMPDIR:-/tmp}/siyuan-bundle-verify.XXXXXX")"
+(
+  trap 'rm -rf -- "$verify_dir"' EXIT
+  git -C "$verify_dir" init --bare -q
+  git -C "$verify_dir" bundle verify "$bundle_absolute" >/dev/null 2>&1
+  git bundle list-heads "$bundle_stage" | grep -Fxq "$expected_commit HEAD"
+)
+if [[ -e "$bundle_path" ]]; then
+  [[ ! -L "$bundle_path" && -f "$bundle_path" ]] || { echo "Existing source bundle path is invalid." >&2; exit 87; }
+  bundle_mode="$(stat -c '%a' "$bundle_path")"
+  (( (8#$bundle_mode & 0222) == 0 )) || { echo "Existing source bundle must be read-only." >&2; exit 87; }
+  [[ "$(sha256sum "$bundle_path" | awk '{print $1}')" == "$expected_hash" ]] || { echo "Existing source bundle differs from candidate." >&2; exit 87; }
+  rm -f "$bundle_stage"
+else
+  chmod 0444 "$bundle_stage"
+  mv "$bundle_stage" "$bundle_path"
+fi
+REMOTE_SCRIPT
+fi
+
 if [[ -n "$SYNC_CHANGES" ]]; then
   REMOTE_MUTATION_STARTED=true
   FAILURE_PHASE="standard-sync-build-health"
@@ -615,10 +701,13 @@ REMOTE_SCRIPT
 
 curl --retry 10 --retry-delay 1 --retry-connrefused -fsS "$PUBLIC_URL/api/health"
 curl --retry 10 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/"
+SOURCE_PROVENANCE="ORIGIN_BRANCH"
+[[ "$SOURCE_BUNDLE_MODE" == true ]] && SOURCE_PROVENANCE="GIT_BUNDLE"
 ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
   "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
   "$WEB_FINGERPRINT" "$API_FINGERPRINT" "$MIGRATE_FINGERPRINT" "$RELEASE_ID" \
-  "$GIT_COMMIT" "$GIT_BRANCH" "$RELEASED_AT" <<'REMOTE_SCRIPT'
+  "$GIT_COMMIT" "$GIT_BRANCH" "$RELEASED_AT" \
+  "$SOURCE_PROVENANCE" "$SOURCE_BUNDLE_PATH" "$SOURCE_BUNDLE_SHA256" <<'REMOTE_SCRIPT'
 set -eu
 remote_dir="$1"
 lock_dir="$2"
@@ -630,6 +719,9 @@ release_id="$7"
 git_commit="$8"
 git_branch="$9"
 released_at="${10}"
+source_provenance="${11}"
+source_bundle_path="${12}"
+source_bundle_sha256="${13}"
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [ "$actual_token" != "$expected_token" ]; then
   echo "47 release lock ownership changed before success-state update." >&2
@@ -641,6 +733,30 @@ api_container="$(docker compose ps -q api | tail -1)"
 web_image_id="$(docker inspect --format '{{.Image}}' "$web_container")"
 api_image_id="$(docker inspect --format '{{.Image}}' "$api_container")"
 [ -n "$web_image_id" ] && [ -n "$api_image_id" ]
+if [ "$source_provenance" = GIT_BUNDLE ]; then
+  case "$source_bundle_path" in
+    .release-bundles/*.bundle) ;;
+    *) echo "Release source bundle path is invalid." >&2; exit 87 ;;
+  esac
+  bundle_dir="$remote_dir/.release-bundles"
+  [ ! -L "$bundle_dir" ] && [ -d "$bundle_dir" ] && \
+    [ "$(readlink -f "$bundle_dir")" = "$(readlink -f "$remote_dir")/.release-bundles" ] || { echo "Release source bundle directory is not canonical." >&2; exit 87; }
+  [ ! -L "$source_bundle_path" ] && [ -f "$source_bundle_path" ] || { echo "Release source bundle is missing." >&2; exit 87; }
+  bundle_mode="$(stat -c '%a' "$source_bundle_path")"
+  [ $((8#$bundle_mode & 0222)) -eq 0 ] || { echo "Release source bundle must be read-only." >&2; exit 87; }
+  [ "$(sha256sum "$source_bundle_path" | awk '{print $1}')" = "$source_bundle_sha256" ] || { echo "Release source bundle checksum mismatch." >&2; exit 87; }
+  bundle_absolute="$(readlink -f "$source_bundle_path")"
+  verify_dir="$(mktemp -d "${TMPDIR:-/tmp}/siyuan-bundle-verify.XXXXXX")"
+  (
+    trap 'rm -rf -- "$verify_dir"' EXIT
+    git -C "$verify_dir" init --bare -q
+    git -C "$verify_dir" bundle verify "$bundle_absolute" >/dev/null 2>&1
+    git bundle list-heads "$source_bundle_path" | grep -Fxq "$git_commit HEAD"
+  )
+elif [ "$source_provenance" != ORIGIN_BRANCH ] || [ -n "$source_bundle_path" ] || [ -n "$source_bundle_sha256" ]; then
+  echo "Release source provenance metadata is invalid." >&2
+  exit 87
+fi
 
 receipt_dir="$remote_dir/.release-receipts"
 receipt_path="$receipt_dir/$release_id.env"
@@ -656,11 +772,14 @@ if [ "$(readlink -f "$receipt_dir")" != "$(readlink -f "$remote_dir")/.release-r
   exit 83
 fi
 cat > "$receipt_tmp" <<RECEIPT
-RECEIPT_FORMAT_VERSION=1
+RECEIPT_FORMAT_VERSION=2
 SOURCE_MODE=GIT_SOURCE_BUILD
+SOURCE_PROVENANCE=$source_provenance
 RELEASE_ID=$release_id
 GIT_COMMIT=$git_commit
 GIT_BRANCH=$git_branch
+GIT_BUNDLE_PATH=$source_bundle_path
+GIT_BUNDLE_SHA256=$source_bundle_sha256
 WEB_FINGERPRINT=$web_fingerprint
 API_FINGERPRINT=$api_fingerprint
 MIGRATE_FINGERPRINT=$migrate_fingerprint
@@ -695,8 +814,11 @@ MIGRATE_FINGERPRINT=$migrate_fingerprint
 RELEASE_ID=$release_id
 RELEASED_AT=$released_at
 SOURCE_MODE=GIT_SOURCE_BUILD
+SOURCE_PROVENANCE=$source_provenance
 GIT_COMMIT=$git_commit
 GIT_BRANCH=$git_branch
+GIT_BUNDLE_PATH=$source_bundle_path
+GIT_BUNDLE_SHA256=$source_bundle_sha256
 WEB_IMAGE_ID=$web_image_id
 API_IMAGE_ID=$api_image_id
 RELEASE_RECEIPT_PATH=.release-receipts/$release_id.env
