@@ -4,9 +4,10 @@ import type {
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskSummary
 } from '@siyuan/shared';
+import { sortWarehouseTallyTasks } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { PrismaService } from '../../prisma.service.js';
-import { isSalesScopedRole, type PermissionKey, type Principal } from '../../rbac.js';
+import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal } from '../../rbac.js';
 import { WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } from '../../warehouse-tally-aggregate-correction.js';
 import {
   loadWarehouseTallyTaskOutputPackages,
@@ -34,6 +35,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
 
   async getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
     this.ensureWarehouseAccess(principal);
+    await this.ensurePendingViewNotBlocked(principal);
     const items = await (this.prisma as any).warehouseConsolidationItem.findMany({
       where: { consolidationId: id },
       include: { package: true },
@@ -46,13 +48,35 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     query: WarehouseTallyTaskListQuery = {}
   ): Promise<WarehouseTallyTaskSummary[]> {
-    if (!(await this.hasAnyPermission(principal, ['warehouse:tally-pending:view', 'warehouse:tally-completed:view']))) {
+    if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED') {
+      throw new BadRequestException('理货任务状态无效');
+    }
+    const canViewPending = await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view')
+      && !(await this.isPendingViewBlocked(principal));
+    const canViewCompleted = await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view')
+      && !(await this.isCompletedViewBlocked(principal));
+    if (!canViewPending && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看理货任务');
+    }
+    if (query.status === 'PENDING' && !canViewPending) {
+      throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
+    }
+    const requestsCompleted = query.status === 'COMPLETED'
+      || query.completedScope === 'RECENT'
+      || query.completedScope === 'HISTORY'
+      || Boolean(query.completedFrom)
+      || Boolean(query.completedTo);
+    if (requestsCompleted && !canViewCompleted) {
+      throw new ForbiddenException('当前角色不能查看已完成理货');
     }
     const scope = this.operatorCustomerScope(principal);
     const where: any = {};
     if (query.status) {
       where.status = query.status;
+    } else if (!canViewPending) {
+      where.status = 'COMPLETED';
+    } else if (!canViewCompleted) {
+      where.status = 'PENDING';
     }
     if (query.customerCode?.trim()) {
       where.customerCode = { contains: query.customerCode.trim(), mode: 'insensitive' };
@@ -100,16 +124,19 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       if (output.archivedReason === WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON) return;
       outputsByTask.set(output.tallyTaskId, [...(outputsByTask.get(output.tallyTaskId) ?? []), mapWarehousePackage(output)]);
     });
-    return rows.map((row: any) => ({
+    const mappedRows: WarehouseTallyTaskSummary[] = rows.map((row: any) => ({
       ...mapWarehouseTallyTask(row),
       outputPackages: outputsByTask.get(row.id) ?? []
     }));
+    const pendingRows = sortWarehouseTallyTasks<WarehouseTallyTaskSummary>(mappedRows.filter((row) => row.status === 'PENDING'));
+    return query.status === 'PENDING' ? pendingRows : [...pendingRows, ...mappedRows.filter((row) => row.status !== 'PENDING')];
   }
 
   async getWarehouseTallyTaskSourcePackages(
     principal: Principal,
     id: string
   ): Promise<WarehousePackageSummary[]> {
+    await this.ensurePendingViewNotBlocked(principal);
     if (!(await this.hasAnyPermission(principal, ['warehouse:tally-pending:detail-view']))) {
       throw new ForbiddenException('当前角色不能查看理货原始包裹');
     }
@@ -142,6 +169,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     packageId: string
   ): Promise<WarehouseTallyTaskSummary[]> {
+    await this.ensureCompletedViewNotBlocked(principal);
     if (!(await this.hasAnyPermission(principal, ['warehouse:in-stock:tally-record-view']))) {
       throw new ForbiddenException('当前角色不能查看理货历史');
     }
@@ -196,6 +224,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     id: string
   ): Promise<WarehousePackageSummary[]> {
+    await this.ensureCompletedViewNotBlocked(principal);
     if (!(await this.hasAnyPermission(principal, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
@@ -203,7 +232,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
   }
 
   private ensureWarehouseAccess(principal: Principal) {
-    if (!['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)) {
+    if (!isAdministratorRole(principal.role) && !['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)) {
       throw new ForbiddenException('当前角色不能操作仓库管理');
     }
   }
@@ -213,6 +242,28 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       if (await this.permissions.hasPermission(principal.role, permission)) return true;
     }
     return false;
+  }
+
+  private async isPendingViewBlocked(principal: Principal) {
+    return !isAdministratorRole(principal.role)
+      && await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view-block');
+  }
+
+  private async isCompletedViewBlocked(principal: Principal) {
+    return !isAdministratorRole(principal.role)
+      && await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view-block');
+  }
+
+  private async ensurePendingViewNotBlocked(principal: Principal) {
+    if (await this.isPendingViewBlocked(principal)) {
+      throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
+    }
+  }
+
+  private async ensureCompletedViewNotBlocked(principal: Principal) {
+    if (await this.isCompletedViewBlocked(principal)) {
+      throw new ForbiddenException('当前用户组已屏蔽查看已完成理货');
+    }
   }
 
   private operatorCustomerScope(principal: Principal) {

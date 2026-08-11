@@ -77,7 +77,7 @@ import {
   type ShipmentStatus
 } from '@siyuan/shared';
 import type { ProblemTicketCreateInput, ProblemTicketSummary } from '@siyuan/shared/problem-ticket';
-import { ApiClient, type AiAssistResponse, type PermissionKey, type Principal, type ProfileUpdateInput, type Session } from './apiClient';
+import { ApiClient, isAdministratorRole, type AiAssistResponse, type PermissionKey, type Principal, type ProfileUpdateInput, type Session } from './apiClient';
 import { AppUpdateNotice, hasGlobalUnsavedWork, useAppUpdateCoordinator } from './appUpdate';
 import { agentFieldLabels } from './modules/shared/agentFieldLabels';
 import { mergeShipmentListRecord } from './modules/shared/shipmentState';
@@ -666,7 +666,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!session || session.user.role === 'CUSTOMER' || !shouldLoadRoutingFeeNameCatalog(currentMenuKey)) {
+    if (!session || session.user.role === 'CUSTOMER' || (!shouldLoadRoutingFeeNameCatalog(currentMenuKey) && currentMenuKey !== 'customerService')) {
       setFeeNameCatalogItems([]);
       return;
     }
@@ -3303,6 +3303,7 @@ export function App() {
                 problemTickets={problemTickets}
                 businessCostAudits={businessCostAudits}
                 agents={masterData.agents}
+                feeNameCatalogItems={feeNameCatalogItems}
                 apiClient={apiClient}
                 permissions={session.permissions}
                 role={session.user.role}
@@ -3344,6 +3345,7 @@ export function App() {
                 payableAudits={payableAudits}
                 assignmentFinanceDetail={routingAssignmentShipment ? shipmentFinanceDetails[routingAssignmentShipment.id] : undefined}
                 permissions={session.permissions}
+                isAdministrator={isAdministratorRole(session.user.role)}
                 onOpenAssignment={openRoutingAssignmentModal}
                 onApproveRouting={handleApprovePendingRouting}
                 onCancelAssignment={() => {

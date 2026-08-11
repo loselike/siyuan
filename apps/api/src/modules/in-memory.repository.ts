@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
-import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields } from './finance-billing.js';
+import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
 import {
   buildWarehouseMachineImportResponse,
   warehouseMachineImportKey,
@@ -363,6 +363,7 @@ import {
   type WaterReceiptVoucherInput,
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
+import { isEarlyPaymentSettlementMethod, sortWarehouseTallyTasks, warehouseTallyChannels } from '@siyuan/shared';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
 import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
@@ -452,6 +453,11 @@ type ReviewRestoreInputWithManual = ShipmentRestoreInput & {
 };
 
 type WorkspaceFieldMaskState = Record<WorkspaceFieldMaskKey, boolean>;
+
+type WarehouseRentVisibilityScope = {
+  mode: 'ALL' | 'OWN' | 'EXCLUDE_OWN' | 'NONE';
+  site?: string;
+};
 
 const staffGenderValues: StaffGender[] = ['UNKNOWN', 'MALE', 'FEMALE', 'OTHER'];
 const warehouseNavigationViewPermissions: PermissionKey[] = [
@@ -1498,6 +1504,10 @@ export class InMemoryRepository {
     return summarizeStatusCounts(await this.getShipments(principal));
   }
 
+  async getShipmentStatusForPermission(principal: Principal, shipmentId: string): Promise<ShipmentStatus> {
+    return this.visibleShipment(principal, shipmentId).status;
+  }
+
   async getNavigationUnreadBadges(principal: Principal) {
     const shipments = await this.getShipments(principal);
     const auditWatermarks = new Map<string, string>();
@@ -1525,8 +1535,11 @@ export class InMemoryRepository {
       const latestWatermark = rows.map((row) => row.watermark).sort().at(-1);
       return { moduleKey, sectionKey, unreadCount: new Set(unread.map((row) => row.id)).size, displayCount: unread.length > 999 ? '999+' : String(unread.length), latestWatermark };
     };
+    const canViewCustomerServicePendingRouting = principal.role === 'ADMIN'
+      || (await this.hasPermission(principal.role, 'customer-service:pending-routing:view')
+        && !(await this.hasPermission(principal.role, 'customer-service:pending-routing:readonly-block')));
     const items = [
-      read('customerService', 'pending-routing', shipmentRows(['WAITING_SORT'])),
+      read('customerService', 'pending-routing', canViewCustomerServicePendingRouting ? shipmentRows(['WAITING_SORT']) : []),
       read('customerService', 'waitingDeparture', shipmentRows(['WAITING_DEPARTURE'])),
       read('customerService', 'departed', shipmentRows(['DEPARTED'])),
       read('customerService', 'problems', ticketRows),
@@ -1590,6 +1603,13 @@ export class InMemoryRepository {
     ]);
     const shipments = (await this.getShipments(principal)).filter((shipment) => shipment.status === 'OUTBOUNDED');
     const shipmentIds = new Set(shipments.map((shipment) => shipment.id));
+    const primaryAgentBillingByShipmentId = new Map<string, { agentBillingQuantity: number; agentBillingUnit: FinanceBillingUnit }>();
+    shipments.forEach((shipment) => {
+      const billing = resolvePrimaryCustomerServicePayableBilling(this.shipmentFinanceItems.filter((item) => item.shipmentId === shipment.id && item.type === 'PAYABLE' && !item.voided));
+      if (billing?.billingQuantity !== undefined) {
+        primaryAgentBillingByShipmentId.set(shipment.id, { agentBillingQuantity: billing.billingQuantity, agentBillingUnit: billing.billingUnit });
+      }
+    });
     const auditRowsByShipmentId = new Map<string, AuditLogSummary[]>();
     this.auditLogs
       .filter((row) => shipmentIds.has(row.target) && [
@@ -1603,7 +1623,10 @@ export class InMemoryRepository {
       .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
       .forEach((row) => auditRowsByShipmentId.set(row.target, [...(auditRowsByShipmentId.get(row.target) ?? []), row]));
     return shipments
-      .map((shipment) => buildCustomerServiceDataConfirmRow(shipment, auditRowsByShipmentId.get(shipment.id) ?? []))
+      .map((shipment) => attachPrimaryAgentBilling(
+        buildCustomerServiceDataConfirmRow(shipment, auditRowsByShipmentId.get(shipment.id) ?? []),
+        primaryAgentBillingByShipmentId.get(shipment.id)
+      ))
       .filter((row) => !(row.businessDataApproved && row.agentDataApproved))
       .map((row) => scopeCustomerServiceDataConfirmRow(row, { canViewBusiness, canViewAgent }));
   }
@@ -1711,6 +1734,16 @@ export class InMemoryRepository {
 
   async getShipmentInternalFlowLog(principal: Principal, shipmentId: string): Promise<ShipmentInternalFlowLogResponse> {
     const shipment = this.visibleShipment(principal, shipmentId);
+    if (shipment.status === 'WAITING_SORT') {
+      await this.ensurePermission(principal, 'market:pending-routing:operation-log-view', '没有待排货日志查看权限');
+      await this.ensurePendingRoutingMask(principal, 'market:pending-routing:operation-log-block');
+    } else if (['WAITING_DISPATCH', 'OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status)) {
+      await this.ensurePermission(principal, 'market:routed:log-view', '没有已排货日志查看权限');
+      await this.ensurePendingRoutingMask(principal, 'market:routed:log-block');
+    }
+    const canViewAgentChannel = shipment.status === 'WAITING_SORT'
+      ? await this.hasPermission(principal.role, 'market:pending-routing:agent-channel-view')
+      : await this.hasPermission(principal.role, 'market:routed:agent-channel-view');
     const canViewBusinessCosts = this.canViewOrderEntryBusinessCosts(principal);
     const packageIds = new Set([
       ...(shipment.draftWarehousePackageIds ?? []),
@@ -1726,7 +1759,12 @@ export class InMemoryRepository {
     const actions = this.auditLogs
       .filter((row) => traceTargetIds.has(row.target))
       .filter((row) => canViewBusinessCosts || !businessCostItemIds.has(row.target));
-    const items = [{ key: 'created', stage: '业务录单', happenedAt: shipment.createdAt, operator: shipment.entryBy ?? '系统', summary: '运单已创建' }, ...actions.map((row) => ({ key: row.id, stage: internalFlowStage(row.action, row.after), happenedAt: row.createdAt, operator: row.actorUsername, summary: internalFlowSummary(row.action, row.after) }))]
+    const items = [{ key: 'created', stage: '业务录单', happenedAt: shipment.createdAt, operator: shipment.entryBy ?? '系统', summary: '运单已创建' }, ...actions.map((row) => {
+      const summaryAfter = row.action === 'shipment.route' && !canViewAgentChannel && row.after && typeof row.after === 'object'
+        ? { ...(row.after as Record<string, unknown>), agentChannelName: undefined }
+        : row.after;
+      return { key: row.id, stage: internalFlowStage(row.action, row.after), happenedAt: row.createdAt, operator: row.actorUsername, summary: internalFlowSummary(row.action, summaryAfter) };
+    })]
       .filter((item) => item.stage)
       .sort((a, b) => (a.happenedAt ?? '').localeCompare(b.happenedAt ?? ''));
     return { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, items };
@@ -2608,6 +2646,16 @@ export class InMemoryRepository {
   }
 
   async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
+    if (isAdministratorRole(role)) return true;
+    if (this.roleMeta[role]?.enabled === false) return false;
+    return filterWarehousePackageUpdatePermissions(
+      role,
+      this.roleMeta[role]?.label ?? getRoleMetadata(role).label,
+      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
+    ).includes(permission);
+  }
+
+  private hasPermissionSync(role: RoleKey, permission: PermissionKey): boolean {
     if (isAdministratorRole(role)) return true;
     if (this.roleMeta[role]?.enabled === false) return false;
     return filterWarehousePackageUpdatePermissions(
@@ -5256,9 +5304,14 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:rent-rule:view'))) {
       throw new ForbiddenException('当前角色不能查看仓租规则');
     }
-    const siteScope = this.warehouseRentSiteScope(principal);
+    const rentScope = await this.warehouseRentVisibilityScope(principal);
+    if (rentScope.mode === 'NONE') {
+      throw new ForbiddenException('当前角色不能查看仓租数据');
+    }
     return this.warehouseRentRules
-      .filter((rule) => !siteScope || !rule.site || rule.site === siteScope)
+      .filter((rule) => rentScope.mode === 'ALL'
+        || !rule.site
+        || (rentScope.mode === 'OWN' ? rule.site === rentScope.site : rule.site !== rentScope.site))
       .map((rule) => ({ ...rule }))
       .sort((left, right) =>
         (left.site ?? '').localeCompare(right.site ?? '')
@@ -5275,7 +5328,10 @@ export class InMemoryRepository {
       throw new ForbiddenException('当前角色不能查看仓租细分表');
     }
     const salesScope = this.operatorCustomerScope(principal);
-    const siteScope = this.warehouseRentSiteScope(principal);
+    const rentScope = await this.warehouseRentVisibilityScope(principal);
+    if (rentScope.mode === 'NONE') {
+      throw new ForbiddenException('当前角色不能查看仓租数据');
+    }
     const outboundAtByShipmentId = new Map(
       this.shipments
         .filter((shipment) => shipment.outboundAt)
@@ -5283,7 +5339,9 @@ export class InMemoryRepository {
     );
     const response = calculateWarehouseRentDetails(
       this.warehousePackages
-        .filter((pkg) => !siteScope || pkg.site === siteScope)
+        .filter((pkg) => rentScope.mode === 'ALL'
+          || (rentScope.mode === 'OWN' && pkg.site === rentScope.site)
+          || (rentScope.mode === 'EXCLUDE_OWN' && Boolean(pkg.site) && pkg.site !== rentScope.site))
         .filter((pkg) => !salesScope || (pkg.salesperson && salesScope.includes(pkg.salesperson)))
         .map((pkg) => ({
           id: pkg.id,
@@ -5331,9 +5389,7 @@ export class InMemoryRepository {
     principal: Principal,
     input: WarehouseRentRuleInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const normalized = normalizeMemoryWarehouseRentRuleInput(input);
     assertMemoryWarehouseRentRuleDoesNotOverlap(this.warehouseRentRules, normalized);
     const now = new Date().toISOString();
@@ -5355,9 +5411,7 @@ export class InMemoryRepository {
     id: string,
     input: WarehouseRentRuleInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const current = this.warehouseRentRules.find((rule) => rule.id === id);
     if (!current) throw new NotFoundException('仓租规则不存在');
     if (!current.enabled || current.effectiveTo) {
@@ -5397,9 +5451,7 @@ export class InMemoryRepository {
     principal: Principal,
     id: string
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const currentIndex = this.warehouseRentRules.findIndex((rule) => rule.id === id);
     if (currentIndex < 0) throw new NotFoundException('仓租规则不存在');
     const current = this.warehouseRentRules[currentIndex]!;
@@ -5485,9 +5537,7 @@ export class InMemoryRepository {
     id: string,
     input: WarehouseRentRuleEnabledInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const current = this.warehouseRentRules.find((rule) => rule.id === id);
     if (!current) throw new NotFoundException('仓租规则不存在');
     if (current.enabled === (input.enabled === true)) {
@@ -5563,16 +5613,39 @@ export class InMemoryRepository {
     return { ...current };
   }
 
-  private warehouseRentSiteScope(principal: Principal): string | undefined {
+  private async warehouseRentVisibilityScope(principal: Principal): Promise<WarehouseRentVisibilityScope> {
     if (isAdministratorRole(principal.role)) {
-      return undefined;
+      return { mode: 'ALL' };
+    }
+    const [allViewBlocked, ownViewBlocked] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:rent-detail:all-view-block'),
+      this.hasPermission(principal.role, 'warehouse:rent-detail:own-view-block')
+    ]);
+    if (allViewBlocked && ownViewBlocked) {
+      return { mode: 'NONE' };
+    }
+    if (!allViewBlocked && !ownViewBlocked) {
+      return { mode: 'ALL' };
     }
     const site = principal.site?.trim()
       || this.accounts.find((account) => account.id === principal.id)?.site?.trim();
     if (!site) {
       throw new ForbiddenException('仓库账号未配置站点，不能查看仓租数据');
     }
-    return site;
+    return { mode: allViewBlocked ? 'OWN' : 'EXCLUDE_OWN', site };
+  }
+
+  private async ensureWarehouseRentRuleManage(principal: Principal): Promise<void> {
+    if (isAdministratorRole(principal.role)) {
+      return;
+    }
+    const [canManage, manageBlocked] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:rent-rule:manage'),
+      this.hasPermission(principal.role, 'warehouse:rent-rule:manage-block')
+    ]);
+    if (!canManage || manageBlocked) {
+      throw new ForbiddenException('当前角色不能维护仓租规则');
+    }
   }
 
   async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
@@ -5605,7 +5678,7 @@ export class InMemoryRepository {
           tallyTaskId: pendingTask.id,
           tallyTaskNo: pendingTask.taskNo,
           tallyCompleted: false,
-          tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false })
+          tallyStatus: pendingTask.tallyProgressStatus === 'IN_PROGRESS' ? '理货中' : '待理货'
         };
       }
       const task = completedTaskByPackageId.get(pkg.id)
@@ -5628,6 +5701,9 @@ export class InMemoryRepository {
   async getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery): Promise<WarehouseTodayResponse> {
     if (!(await this.hasPermission(principal.role, 'warehouse:today-receipt:view'))) {
       throw new ForbiddenException('当前角色不能查看今日收货');
+    }
+    if (query.site?.trim()) {
+      await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:site-filter-block');
     }
     const { start, end } = resolveWarehouseTodayRange(query);
     const businessCustomerScoped = Boolean(this.operatorCustomerScope(principal)) && query.dataScope !== 'ALL';
@@ -5681,8 +5757,9 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
       throw new ForbiddenException('当前角色不能查看在仓数据');
     }
-    // 在仓包裹是仓库共享事实；获得查看权限后允许跨客户查看，修改权限仍单独受控。
-    const businessCustomerScoped = false;
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
+      || await this.hasPermission(principal.role, 'warehouse:in-stock:update');
+    const businessCustomerScoped = !warehouseWideScope && query.dataScope !== 'ALL';
     const ownedCustomers = businessCustomerScoped
       ? this.customers.filter((customer) => customer.salesperson === principal.username)
       : undefined;
@@ -5740,7 +5817,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
-    const response = await this.getWarehouseInStock(principal, {});
+    const response = await this.getWarehouseInStock(principal, { dataScope: 'ALL' });
     return { totals: response.totals };
   }
 
@@ -5750,6 +5827,7 @@ export class InMemoryRepository {
 
   async getWarehouseManualReceiptCustomers(principal: Principal) {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     return this.customers
       .filter((customer) => customer.enabled)
       .map((customer) => ({ code: customer.code, name: customer.name }))
@@ -5758,6 +5836,7 @@ export class InMemoryRepository {
 
   async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string) {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const normalizedCode = customerCode?.trim() ?? '';
     if (!normalizedCode) {
       throw new BadRequestException('请填写客户编号');
@@ -5785,6 +5864,7 @@ export class InMemoryRepository {
 
   async previewWarehouseMachineImport(principal: Principal, parsed: ParsedWarehouseMachineImport) {
     await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:batch-import-block');
     return buildWarehouseMachineImportResponse(parsed, this.findExistingWarehouseMachineImportKeys(parsed));
   }
 
@@ -5794,6 +5874,7 @@ export class InMemoryRepository {
     meta: { fileHash: string }
   ) {
     await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:batch-import-block');
     const auditTargets = new Set([
       `warehouse-machine-import:${meta.fileHash}`,
       `warehouse-machine-import:${meta.fileHash.slice(0, 16)}`
@@ -5909,6 +5990,7 @@ export class InMemoryRepository {
 
   async createWarehousePackage(principal: Principal, input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     if (input.scanSource !== '墨家设备') {
       await this.assertWarehouseManualReceiptCustomer(principal, input.customerCode);
     }
@@ -5944,6 +6026,7 @@ export class InMemoryRepository {
 
   async createWarehouseManualReceipt(principal: Principal, input: WarehouseManualReceiptCreateInput): Promise<WarehouseManualReceiptCreateResponse> {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const packageInputs = buildWarehouseManualReceiptPackageInputs(input);
     const firstPackageInput = packageInputs[0]!;
     await this.assertWarehouseManualReceiptCustomer(principal, firstPackageInput.customerCode);
@@ -6501,6 +6584,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
     await this.ensurePermission(principal, 'warehouse:tally-pending:detail-view', '没有仓库合并明细权限');
     const consolidation = this.warehouseConsolidations.find((item) => item.id === id);
     if (!consolidation) {
@@ -6513,14 +6597,28 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTasks(principal: Principal, query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-pending:view', 'warehouse:tally-completed:view']))) {
+    if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED') {
+      throw new BadRequestException('理货任务状态无效');
+    }
+    const canViewPending = await this.hasPermission(principal.role, 'warehouse:tally-pending:view')
+      && !(await this.isWarehouseTallyPendingBlocked(principal, 'warehouse:tally-pending:view-block'));
+    const canViewCompleted = await this.hasPermission(principal.role, 'warehouse:tally-completed:view')
+      && !(await this.isWarehouseTallyCompletedBlocked(principal, 'warehouse:tally-completed:view-block'));
+    if (!canViewPending && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看理货任务');
     }
+    if (query.status === 'PENDING' && !canViewPending) {
+      throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
+    }
+    if (query.status === 'COMPLETED' && !canViewCompleted) {
+      throw new ForbiddenException('当前角色不能查看已完成理货');
+    }
+    const effectiveStatus = query.status ?? (!canViewPending ? 'COMPLETED' : !canViewCompleted ? 'PENDING' : undefined);
     const scope = this.operatorCustomerScope(principal);
     const keyword = (value: string | undefined, needle: string | undefined) => !needle || (value ?? '').toLowerCase().includes(needle.toLowerCase());
-    return this.warehouseTallyTasks
+    const rows = this.warehouseTallyTasks
       .filter((task) =>
-        (!query.status || task.status === query.status)
+        (!effectiveStatus || task.status === effectiveStatus)
         && keyword(task.customerCode, query.customerCode)
         && keyword(task.sourceCombinedOrderNo, query.combinedOrderNo)
         && matchesMemoryWarehouseTallyScope(task, query)
@@ -6538,9 +6636,14 @@ export class InMemoryRepository {
           outputPackages: outputs.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }))
         };
       });
+    const pendingRows = sortWarehouseTallyTasks(rows.filter((task) => task.status === 'PENDING'));
+    return effectiveStatus === 'PENDING'
+      ? pendingRows
+      : [...pendingRows, ...rows.filter((task) => task.status !== 'PENDING')];
   }
 
   async getWarehouseTallyTaskSourcePackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
     await this.ensurePermission(principal, 'warehouse:tally-pending:detail-view', '当前角色不能查看理货原始包裹');
     const scope = this.operatorCustomerScope(principal);
     const task = this.warehouseTallyTasks.find((item) =>
@@ -6564,6 +6667,7 @@ export class InMemoryRepository {
     principal: Principal,
     query: WarehouseTallyRepeatStatisticsQuery = {}
   ): Promise<WarehouseTallyRepeatStatisticsResponse> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看重复理货统计');
     }
@@ -6580,6 +6684,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string): Promise<WarehouseTallyTaskSummary[]> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:in-stock:tally-record-view']))) {
       throw new ForbiddenException('当前角色不能查看理货历史');
     }
@@ -6643,6 +6748,9 @@ export class InMemoryRepository {
 
   async createWarehouseTallyTask(principal: Principal, input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-create', '没有创建理货任务权限');
+    if (!warehouseTallyChannels.includes(input.tallyChannel)) {
+      throw new BadRequestException('请选择有效的理货渠道');
+    }
     const packageIds = Array.from(new Set((input.packageIds ?? []).map((id) => id.trim()).filter(Boolean)));
     if (!packageIds.length) {
       throw new BadRequestException('请先选择在仓包裹');
@@ -6677,6 +6785,8 @@ export class InMemoryRepository {
         ? nextWarehouseRetallyTaskNo(previousTask.taskNo, this.warehouseTallyTasks.map((task) => task.taskNo))
         : this.nextWarehouseTallyTaskNo(first.customerCode),
       status: 'PENDING',
+      tallyChannel: input.tallyChannel,
+      tallyProgressStatus: 'WAITING',
       rootTallyTaskId: previousTask?.rootTallyTaskId ?? previousTask?.id ?? taskId,
       previousTallyTaskId: previousTask?.id,
       tallySequence: previousTask ? (previousTask.tallySequence ?? 1) + 1 : 1,
@@ -6716,7 +6826,36 @@ export class InMemoryRepository {
     return cloneWarehouseTallyTask(task);
   }
 
+  async startWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:process-block');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:task-process', '没有开始理货任务权限');
+    const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
+    if (index < 0) throw new NotFoundException('理货任务不存在');
+    const before = this.warehouseTallyTasks[index];
+    const scope = this.operatorCustomerScope(principal);
+    const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
+      (before.packageIds.includes(pkg.id) || pkg.tallyTaskId === before.id)
+      && Boolean(pkg.salesperson)
+      && scope.includes(pkg.salesperson!)
+    );
+    if (!hasScopedPackage) throw new ForbiddenException('当前账号不能处理该理货任务');
+    if (before.status !== 'PENDING') throw new BadRequestException('只有未完成理货任务可以开始');
+    if (before.tallyProgressStatus === 'IN_PROGRESS') throw new BadRequestException('理货任务已处于理货中');
+    const updated: WarehouseTallyTaskSummary = {
+      ...before,
+      tallyProgressStatus: 'IN_PROGRESS',
+      tallyStartedAt: new Date().toISOString(),
+      tallyStartedBy: principal.username
+    };
+    this.warehouseTallyTasks[index] = updated;
+    this.audit('warehouse.tally.start', id, principal, before, updated);
+    return cloneWarehouseTallyTask(updated);
+  }
+
   async updateWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskUpdateInput): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:update-block');
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-update', '没有修改理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
@@ -6785,6 +6924,8 @@ export class InMemoryRepository {
   }
 
   async cancelWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:cancel-block');
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-cancel', '没有取消理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
@@ -6809,6 +6950,7 @@ export class InMemoryRepository {
   }
 
   async reverseReviewWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
     await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有反审核已完成理货权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
@@ -6870,6 +7012,7 @@ export class InMemoryRepository {
     const updated: WarehouseTallyTaskSummary = {
       ...before,
       status: 'PENDING',
+      tallyProgressStatus: 'WAITING',
       completedPackageCount: undefined,
       completedWeightKg: undefined,
       completedLengthCm: undefined,
@@ -6919,6 +7062,8 @@ export class InMemoryRepository {
   }
 
   async completeWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
+    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:process-block');
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-process', '没有完成理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
@@ -7059,6 +7204,7 @@ export class InMemoryRepository {
     const updated: WarehouseTallyTaskSummary = {
       ...task,
       status: 'COMPLETED',
+      tallyProgressStatus: 'COMPLETED',
       completedPackageCount: outputs.reduce((sum, pkg) => sum + pkg.packageCount, 0),
       completedWeightKg: undefined,
       completedLengthCm: undefined,
@@ -7131,6 +7277,7 @@ export class InMemoryRepository {
   }
 
   async generateWarehouseTallyTaskLabel(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     await this.ensurePermission(principal, 'warehouse:tally-label:generate', '没有生成理货标签权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
@@ -7139,6 +7286,9 @@ export class InMemoryRepository {
     const before = this.warehouseTallyTasks[index];
     if (before.status !== 'COMPLETED') {
       throw new BadRequestException('请先完成理货再生成标签');
+    }
+    if (before.labelNo) {
+      await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-label:reprint-block');
     }
     const labelNo = before.taskNo;
     const labelQrContent = buildWarehouseTallyLabelQrContent(before, labelNo);
@@ -7190,6 +7340,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskOutputPackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
@@ -7285,6 +7436,7 @@ export class InMemoryRepository {
   }
 
   async applyWarehouseTallyTaskLabel(principal: Principal, input: WarehouseTallyLabelScanInput): Promise<WarehouseTallyLabelScanResponse> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     await this.ensurePermission(principal, 'warehouse:tally-label:scan-apply', '没有扫描应用理货标签权限');
     const labelNo = input.labelNo?.trim();
     if (!labelNo) {
@@ -7315,6 +7467,8 @@ export class InMemoryRepository {
   }
 
   private async markWarehouseTallyTaskLabelOutput(principal: Principal, id: string, action: 'print' | 'download'): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, action === 'print' ? 'warehouse:tally-label:reprint-block' : 'warehouse:tally-label:download-block');
     await this.ensurePermission(principal, action === 'print' ? 'warehouse:tally-label:print' : 'warehouse:tally-label:download', '没有输出理货标签权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
@@ -9000,6 +9154,7 @@ export class InMemoryRepository {
     const before = { ...item };
     const nextChargeWeight = input.chargeWeightKg ?? item.chargeWeightKg;
     const nextUnitPrice = this.normalizePayableUnitPrice(input.unitPrice ?? item.unitPrice);
+    const settlementMethod = input.settlementMethod ?? item.settlementMethod ?? shipment.settlementMethod;
     const amount = this.calculatePayableAmount(nextChargeWeight, nextUnitPrice, input.amount ?? item.amount);
     const financeAgent = input.agentId !== undefined || input.agentName !== undefined
       ? this.resolveFinanceAgent(input)
@@ -9008,7 +9163,7 @@ export class InMemoryRepository {
       name: input.name ?? item.name,
       amount,
       currency: input.currency ?? item.currency,
-      settlementMethod: input.settlementMethod ?? item.settlementMethod,
+      settlementMethod,
       paymentNo: input.paymentNo ?? item.paymentNo,
       agentId: financeAgent?.id,
       agentName: financeAgent?.name,
@@ -9019,6 +9174,9 @@ export class InMemoryRepository {
       updatedAt: new Date().toISOString()
     });
     this.audit('finance.payable.update', id, principal, before, item);
+    if (isEarlyPaymentSettlementMethod(item.settlementMethod)) {
+      this.upsertPayablePaymentApplication(item);
+    }
     return this.toPayableAuditSummary(item, shipment, { canViewSensitivePayable, canViewProfit });
   }
 
@@ -10377,6 +10535,7 @@ export class InMemoryRepository {
 
   async reverseShipmentReview(principal: Principal, shipmentId: string, input: { reason?: string } = {}): Promise<ShipmentReviewDetailSummary> {
     const shipment = this.shipments.find((item) => item.id === shipmentId && !this.deletedShipmentIds.has(item.id));
+    await this.ensurePendingRoutingMask(principal, 'market:pending-routing:reroute-block');
     const scope = this.operatorCustomerScope(principal);
     const isOwner = Boolean(scope && (scope.includes(shipment?.salesperson ?? '') || scope.includes(this.findCustomerByCode(shipment?.customerCode ?? '')?.salesperson ?? '')));
     const canReverse = await this.hasPermission(principal.role, 'business:review:reverse');
@@ -10385,7 +10544,19 @@ export class InMemoryRepository {
     const financeItems = this.shipmentFinanceItems.filter((item) => item.shipmentId === shipment.id && !item.voided);
     if (financeItems.some((item) => item.reconciliationStatus === 'CONFIRMED' || item.locked || (item.receivedAmount ?? 0) > 0)) throw new BadRequestException('订单已进入财务审核或已匹配收款，不能反审核');
     const before = { ...shipment };
-    const releasedPayables = financeItems.filter((item) => item.type === 'PAYABLE' && item.name === '代理成本' && !item.locked);
+    const latestRouteLog = this.auditLogs
+      .filter((row) => row.target === shipment.id && (row.action === 'shipment.route' || row.action === 'shipment.route.update'))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+    const latestReverseLog = this.auditLogs
+      .filter((row) => row.target === shipment.id && row.action === 'shipment.review.reverse')
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+    const routeAfter = latestRouteLog && (!latestReverseLog || Date.parse(latestRouteLog.createdAt) > Date.parse(latestReverseLog.createdAt))
+      ? latestRouteLog.after as { payableFinanceItemIds?: unknown }
+      : undefined;
+    const routePayableIds = new Set(Array.isArray(routeAfter?.payableFinanceItemIds)
+      ? routeAfter.payableFinanceItemIds.filter((id): id is string => typeof id === 'string')
+      : []);
+    const releasedPayables = financeItems.filter((item) => item.type === 'PAYABLE' && !item.locked && routePayableIds.has(item.id));
     releasedPayables.forEach((item) => { item.voided = true; item.reconciliationStatus = 'VOIDED'; item.voidedAt = new Date().toISOString(); });
     shipment.status = 'REVIEW_PENDING';
     shipment.businessReviewedBy = undefined;
@@ -10394,6 +10565,13 @@ export class InMemoryRepository {
     shipment.agentId = undefined;
     shipment.shippingMarkRequired = false;
     shipment.warehouseOutboundRemark = undefined;
+    shipment.routeAgentChannelName = undefined;
+    shipment.routeChargeWeightKg = undefined;
+    shipment.routeUnitPrice = undefined;
+    shipment.routeOtherFee = undefined;
+    shipment.routeCostTotal = undefined;
+    shipment.routeCurrency = undefined;
+    shipment.routedAt = undefined;
     shipment.latestTracking = '反审核后回到待审核';
     this.audit('shipment.review.reverse', shipment.id, principal, before, { ...shipment, statusFrom: before.status, statusTo: shipment.status, reason: input.reason?.trim(), releasedRoutePayableCount: releasedPayables.length });
     return this.buildShipmentReviewDetail(principal, shipment);
@@ -10734,6 +10912,7 @@ export class InMemoryRepository {
     options: { pendingReviewBusinessCostOnly?: boolean } = {}
   ) {
     const shipment = this.visibleShipment(principal, shipmentId);
+    await this.ensurePendingRoutingCostMutationAccess(principal, input.type, shipment, 'create');
     if (options.pendingReviewBusinessCostOnly) {
       await this.ensurePendingReviewBusinessCostWrite(principal, input.type, shipment);
     }
@@ -10754,7 +10933,7 @@ export class InMemoryRepository {
       name: input.name,
       amount,
       currency: input.currency ?? 'RMB',
-      settlementMethod: input.settlementMethod ?? (input.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(shipment) : undefined),
+      settlementMethod: input.settlementMethod ?? (input.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(shipment) : input.type === 'PAYABLE' ? shipment.settlementMethod : undefined),
       paymentNo: pendingReviewBusinessCostWrite ? undefined : input.paymentNo,
       reconciliationStatus: pendingReviewBusinessCostWrite ? 'PENDING' : input.reconciliationStatus ?? 'PENDING',
       agentId: financeAgent?.id,
@@ -10769,7 +10948,13 @@ export class InMemoryRepository {
       createdAt: now,
       updatedAt: now
     };
+    const latestShipment = this.shipments.find((row) => row.id === shipment.id);
+    if (!latestShipment) throw new NotFoundException('运单不存在');
+    this.ensurePendingRoutingCostMutationAccessSync(principal, input.type, latestShipment, 'create');
     this.shipmentFinanceItems.push(item);
+    if (input.type === 'PAYABLE' && isEarlyPaymentSettlementMethod(item.settlementMethod)) {
+      this.upsertPayablePaymentApplication(item);
+    }
     this.audit('shipment.finance_item.create', item.id, principal, null, item);
     this.auditBusinessCostChangeNotification(principal, input.type, shipment, null, item);
     return this.scopeFinanceItemSummary(principal, input.type, this.toFinanceItemSummary(item, shipment));
@@ -11338,6 +11523,7 @@ export class InMemoryRepository {
     const shipment = this.visibleShipment(principal, shipmentId);
     const item = this.findEditableFinanceItem(shipment.id, feeId);
     if (options.requiredType && item.type !== options.requiredType) throw new NotFoundException('费用项目不存在');
+    await this.ensurePendingRoutingCostMutationAccess(principal, item.type, shipment, 'update');
     if (options.pendingReviewBusinessCostOnly) {
       await this.ensurePendingReviewBusinessCostWrite(principal, item.type, shipment);
     }
@@ -11354,12 +11540,15 @@ export class InMemoryRepository {
         : input.agentId !== undefined || input.agentName !== undefined
         ? this.resolveFinanceAgent(input)
         : this.resolveFinanceAgent({ agentId: item.agentId, agentName: item.agentName }, this.resolveShipmentAgent(shipment))
-      : undefined;
+        : undefined;
+    const latestShipment = this.shipments.find((row) => row.id === shipment.id);
+    if (!latestShipment) throw new NotFoundException('运单不存在');
+    this.ensurePendingRoutingCostMutationAccessSync(principal, item.type, latestShipment, 'update');
     Object.assign(item, {
       name: input.name ?? item.name,
       amount,
       currency: input.currency ?? item.currency,
-      settlementMethod: input.settlementMethod ?? item.settlementMethod ?? (item.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(shipment) : undefined),
+      settlementMethod: input.settlementMethod ?? item.settlementMethod ?? (item.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(shipment) : item.type === 'PAYABLE' ? shipment.settlementMethod : undefined),
       paymentNo: pendingReviewBusinessCostWrite ? item.paymentNo : input.paymentNo ?? item.paymentNo,
       reconciliationStatus: pendingReviewBusinessCostWrite ? item.reconciliationStatus : input.reconciliationStatus ?? item.reconciliationStatus,
       agentId: financeAgent?.id,
@@ -11391,6 +11580,7 @@ export class InMemoryRepository {
     const shipment = this.visibleShipment(principal, shipmentId);
     const item = this.findEditableFinanceItem(shipment.id, feeId);
     if (options.requiredType && item.type !== options.requiredType) throw new NotFoundException('费用项目不存在');
+    await this.ensurePendingRoutingCostMutationAccess(principal, item.type, shipment, 'delete');
     if (options.pendingReviewBusinessCostOnly) {
       await this.ensurePendingReviewBusinessCostWrite(principal, item.type, shipment);
     }
@@ -11411,6 +11601,9 @@ export class InMemoryRepository {
     if (receivableReferenced) {
       throw new BadRequestException('该费用已被水单匹配引用，不能删除');
     }
+    const latestShipment = this.shipments.find((row) => row.id === shipment.id);
+    if (!latestShipment) throw new NotFoundException('运单不存在');
+    this.ensurePendingRoutingCostMutationAccessSync(principal, item.type, latestShipment, 'delete');
     const index = this.shipmentFinanceItems.findIndex((row) => row.id === item.id);
     this.shipmentFinanceItems.splice(index, 1);
     this.audit('shipment.finance_item.delete', item.id, principal, before, { hardDelete: true });
@@ -11862,6 +12055,7 @@ export class InMemoryRepository {
   async routeShipment(principal: Principal, shipmentId: string, body: ShipmentRouteInput): Promise<Shipment> {
     const shipment = this.visibleShipment(principal, shipmentId);
     const shouldApprove = body.approve !== false;
+    await this.ensurePendingRoutingRouteAccess(principal, shipment, body, shouldApprove);
     if (!body.channelId) {
       throw new BadRequestException('缺少渠道');
     }
@@ -12230,6 +12424,7 @@ export class InMemoryRepository {
 
   async rerouteShipment(principal: Principal, shipmentId: string, body: ShipmentRerouteInput): Promise<Shipment> {
     const shipment = this.visibleShipment(principal, shipmentId);
+    await this.ensurePendingRoutingMask(principal, 'market:routed:reroute-block');
     if (!['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status)) {
       throw new BadRequestException('只有已出库或待离港订单可以退回重排');
     }
@@ -12495,7 +12690,7 @@ export class InMemoryRepository {
           amountOverridden: item.amountOverridden,
           reconciliationStatus: item.reconciliationStatus,
           locked: item.locked,
-          selectable: !item.locked && item.reconciliationStatus !== 'CONFIRMED'
+          selectable: !shipment.transferNo || (!item.locked && !['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))
         };
       });
     return { shipmentId: shipment.id, rows };
@@ -12526,7 +12721,7 @@ export class InMemoryRepository {
 
     const item = this.findFinanceItem(shipment.id, feeId);
     if (item.voided || !['BUSINESS_COST', 'PAYABLE'].includes(item.type) || (kind === 'agent' && item.type !== 'PAYABLE')) throw new NotFoundException('费用项目不存在');
-    if (item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING')) throw new BadRequestException('费用已审核或锁定，不能修改');
+    if (shipment.transferNo && (item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))) throw new BadRequestException('费用已审核或锁定，不能修改');
     const before = { ...item };
     if (item.type !== input.type) {
       if (kind !== 'business') throw new BadRequestException('代理数据不能切换费用类型');
@@ -12535,6 +12730,13 @@ export class InMemoryRepository {
         || this.paymentApplicationItems.some((row) => row.payableFinanceItemId === feeId)
         || this.paymentVouchers.some((row) => row.payableFinanceItemId === feeId || pendingPaymentIds.includes(row.pendingPaymentId ?? '') || row.extraFeeFinanceItemId === feeId);
       if (hasReference) throw new BadRequestException('该费用已进入付款申请、付款记录或凭证流程，不能切换类型');
+    }
+    if (item.type === 'PAYABLE' || input.type === 'PAYABLE') {
+      const pendingPaymentIds = this.payablePaymentApplications.filter((row) => row.payableFinanceItemId === feeId).map((row) => row.id);
+      const hasReference = this.payablePaymentApplications.some((row) => row.payableFinanceItemId === feeId && !['PENDING', 'READY'].includes(row.status))
+        || this.paymentApplicationItems.some((row) => row.payableFinanceItemId === feeId)
+        || this.paymentVouchers.some((row) => row.payableFinanceItemId === feeId || pendingPaymentIds.includes(row.pendingPaymentId ?? ''));
+      if (hasReference) throw new BadRequestException('应付成本已进入付款流程，不能修改');
     }
     this.ensureBusinessCostEditableAfterDispatch(principal, item.type, shipment);
     this.ensureBusinessCostEditableAfterDispatch(principal, input.type, shipment);
@@ -12659,6 +12861,16 @@ export class InMemoryRepository {
     options: { allowCustomerServiceTransferAgentWeight?: boolean; enforceOperationsLineShipmentStageEdit?: boolean } = {}
   ): Promise<Shipment> {
     const shipment = this.visibleShipment(principal, shipmentId);
+    if (shipment.status === 'WAITING_SORT'
+      && (input.status === 'WAITING_DISPATCH' || input.channelId !== undefined)) {
+      throw new BadRequestException('待排货的状态和渠道请通过市场排货入口修改');
+    }
+    if (shipment.status === 'WAITING_DISPATCH') {
+      if (input.status === undefined || input.status === 'WAITING_DISPATCH') {
+        await this.ensurePermission(principal, 'market:routed:update', '没有已排货修改权限');
+      }
+      await this.ensurePendingRoutingMask(principal, 'market:routed:update-block');
+    }
     if (options.enforceOperationsLineShipmentStageEdit) await this.ensureOperationLineShipmentStageEditable(principal, shipment);
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal)
       || (options.allowCustomerServiceTransferAgentWeight === true
@@ -12740,6 +12952,24 @@ export class InMemoryRepository {
         : undefined;
     if ((requestedProductNames?.length ?? 0) > MAX_SHIPMENT_PRODUCT_NAMES) {
       throw new BadRequestException(`品名最多填写${MAX_SHIPMENT_PRODUCT_NAMES}个`);
+    }
+    const latestShipmentBeforeMutation = this.shipments.find((row) => row.id === shipment.id);
+    if (!latestShipmentBeforeMutation) throw new NotFoundException('运单不存在');
+    if (latestShipmentBeforeMutation.status !== before.status) {
+      throw new ConflictException('运单状态已变化，请刷新后重试');
+    }
+    if (latestShipmentBeforeMutation.status === 'WAITING_SORT'
+      && (input.status === 'WAITING_DISPATCH' || input.channelId !== undefined)) {
+      throw new ConflictException('运单状态已变化，请通过市场排货入口修改状态和渠道');
+    }
+    if (latestShipmentBeforeMutation.status === 'WAITING_DISPATCH'
+      && (input.status === undefined || input.status === 'WAITING_DISPATCH')) {
+      if (!this.hasPermissionSync(principal.role, 'market:routed:update')) {
+        throw new ForbiddenException('没有已排货修改权限');
+      }
+      if (!isAdministratorRole(principal.role) && this.hasPermissionSync(principal.role, 'market:routed:update-block')) {
+        throw new ForbiddenException('当前角色已屏蔽该操作');
+      }
     }
     if (latestTracking !== undefined) {
       shipment.latestTracking = latestTracking;
@@ -13656,6 +13886,7 @@ export class InMemoryRepository {
 
   private ensureCustomerServiceDataEditable(shipment: Shipment, kind: 'business' | 'agent') {
     if (shipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改数据确认');
+    if (shipment.transferNo) throw new BadRequestException('订单已填写转单号，不能修改数据确认');
     if (this.isCustomerServiceDataApproved(shipment.id, kind)) throw new BadRequestException(`${kind === 'business' ? '业务' : '代理'}数据已审核，请先反审核`);
   }
 
@@ -13692,13 +13923,24 @@ export class InMemoryRepository {
       : new Set(selectedFinanceItemIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0));
     if ([...selectedIds].some((id) => !rows.some((row) => row.id === id))) throw new BadRequestException('选择的费用条目不存在或不属于当前运单');
     const selectedRows = rows.filter((row) => selectedIds.has(row.id));
-    if (selectedRows.some((item) => item.locked || item.reconciliationStatus === 'CONFIRMED')) {
+    const shipment = this.shipments.find((row) => row.id === shipmentId);
+    if (shipment?.transferNo && selectedRows.some((item) => item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))) {
       const label = !canViewBusinessCosts
         ? '关联费用'
         : types.length === 1 && types[0] === 'PAYABLE'
           ? '应付成本'
           : '业务成本或应付成本';
       throw new BadRequestException(`${label}已审核或锁定，不能修改计费重`);
+    }
+    if (types.includes('PAYABLE')) {
+      const payableIds = new Set(selectedRows.filter((item) => item.type === 'PAYABLE').map((item) => item.id));
+      const pendingRows = this.payablePaymentApplications.filter((row) => payableIds.has(row.payableFinanceItemId));
+      if (pendingRows.some((row) => !['PENDING', 'READY'].includes(row.status))) throw new BadRequestException('应付成本已进入付款流程，不能修改计费重');
+      const pendingIds = new Set(pendingRows.map((row) => row.id));
+      if (this.paymentApplicationItems.some((row) => row.payableFinanceItemId !== undefined && payableIds.has(row.payableFinanceItemId))
+        || this.paymentVouchers.some((row) => (row.payableFinanceItemId !== undefined && payableIds.has(row.payableFinanceItemId)) || (row.pendingPaymentId !== undefined && pendingIds.has(row.pendingPaymentId)))) {
+        throw new BadRequestException('应付成本已被付款申请或凭证引用，不能修改计费重');
+      }
     }
     return selectedRows.flatMap((item) => {
       const billing = ['BUSINESS_COST', 'PAYABLE'].includes(item.type) ? resolveFinanceCostBillingFields(item.type as 'BUSINESS_COST' | 'PAYABLE', item) : undefined;
@@ -13742,7 +13984,7 @@ export class InMemoryRepository {
     const byId = new Map(rows.map((row) => [row.id, row]));
     if (requestedIds.some((id) => !byId.has(id))) throw new BadRequestException('选择的业务成本费用不存在或不属于当前运单');
     const deletedRows = rows.filter((row) => !requestedIds.includes(row.id));
-    if (deletedRows.some((row) => row.locked || ['CONFIRMED', 'LOCKED'].includes(row.reconciliationStatus ?? 'PENDING'))) throw new BadRequestException('业务成本已审核或锁定，不能删除');
+    if (shipment.transferNo && deletedRows.some((row) => row.locked || ['CONFIRMED', 'LOCKED'].includes(row.reconciliationStatus ?? 'PENDING'))) throw new BadRequestException('业务成本已审核或锁定，不能删除');
     const changes: Array<Record<string, unknown>> = [];
     for (const requested of requestedCosts) {
       if (!requested.name?.trim()) throw new BadRequestException('费用名称不能为空');
@@ -13755,7 +13997,7 @@ export class InMemoryRepository {
       if (requested.id && !current) throw new BadRequestException('选择的业务成本费用不存在或不属于当前运单');
       const amount = unitPrice === undefined ? 0 : roundMoney(quantity * unitPrice);
       if (current) {
-        if (current.locked || ['CONFIRMED', 'LOCKED'].includes(current.reconciliationStatus ?? 'PENDING')) {
+        if (shipment.transferNo && (current.locked || ['CONFIRMED', 'LOCKED'].includes(current.reconciliationStatus ?? 'PENDING'))) {
           const unchanged = current.name === requested.name.trim()
             && (current.currency || 'RMB') === (requested.currency?.trim() || current.currency || 'RMB')
             && (current.billingUnit || 'KG') === requested.billingUnit
@@ -13834,6 +14076,103 @@ export class InMemoryRepository {
     if (!this.isCustomerServiceDataApproved(shipmentId, kind)) throw new BadRequestException(`${kind === 'business' ? '业务' : '代理'}数据尚未审核`);
     this.audit(`customer_service.${kind}_data.reversed`, shipmentId, principal, null, { status: shipment.status, reason: reason.trim(), reviewedBy: principal.username, reviewedAt: new Date().toISOString(), dataConfirmationCycleStartedAt });
     return this.scopeCustomerServiceShipment(principal, shipment);
+  }
+
+  private async ensurePendingRoutingMask(principal: Principal, mask: PermissionKey) {
+    if (isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, mask))) return;
+    throw new ForbiddenException('当前角色已屏蔽该操作');
+  }
+
+  private async ensureTodayReceiptMask(principal: Principal, mask: PermissionKey) {
+    if (isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, mask))) return;
+    throw new ForbiddenException('当前角色已屏蔽该操作');
+  }
+
+  private async ensurePendingRoutingRouteAccess(principal: Principal, shipment: Shipment, body: ShipmentRouteInput, shouldApprove: boolean) {
+    if (isAdministratorRole(principal.role) || shipment.status !== 'WAITING_SORT') return;
+    const latestRouteEvent = this.auditLogs
+      .filter((row) => row.target === shipment.id && ['shipment.route', 'shipment.route.update', 'shipment.review.reverse'].includes(row.action))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+    const currentRouteLog = latestRouteEvent?.action === 'shipment.route' || latestRouteEvent?.action === 'shipment.route.update'
+      ? latestRouteEvent
+      : undefined;
+    const routeAfter = currentRouteLog?.after as {
+      companyChannelId?: string | null;
+      agentId?: string | null;
+      agentChannelId?: string | null;
+      agentChannelName?: string | null;
+      shippingMarkRequired?: boolean | null;
+      warehouseOutboundRemark?: string | null;
+    } | undefined;
+    const hasExistingRoute = Boolean(currentRouteLog || shipment.routeAgentChannelName || shipment.routeChargeWeightKg !== undefined || shipment.routeUnitPrice !== undefined || shipment.routeOtherFee !== undefined || shipment.routeCostTotal !== undefined || shipment.routedAt);
+    const currentChannelId = routeAfter?.companyChannelId ?? shipment.channelId;
+    const currentAgentId = routeAfter?.agentId ?? shipment.agentId;
+    const currentAgentChannelId = routeAfter?.agentChannelId;
+    const currentAgentChannelName = routeAfter?.agentChannelName ?? shipment.routeAgentChannelName;
+    const currentShippingMarkRequired = routeAfter?.shippingMarkRequired ?? shipment.shippingMarkRequired;
+    const currentWarehouseOutboundRemark = routeAfter?.warehouseOutboundRemark ?? shipment.warehouseOutboundRemark;
+    const routeChanged = (body.channelId !== undefined && body.channelId !== currentChannelId)
+      || (body.agentId !== undefined && body.agentId !== currentAgentId)
+      || (body.agentChannelId !== undefined && body.agentChannelId !== currentAgentChannelId)
+      || body.saveAgentChannelToMasterData === true
+      || (body.agentChannelName !== undefined && body.agentChannelName.trim().replace(/\s+/g, ' ') !== (currentAgentChannelName ?? '').trim().replace(/\s+/g, ' '))
+      || (body.shippingMarkRequired !== undefined && body.shippingMarkRequired !== currentShippingMarkRequired)
+      || (body.currency !== undefined && body.currency !== shipment.routeCurrency)
+      || (body.warehouseOutboundRemark !== undefined && body.warehouseOutboundRemark.trim() !== (currentWarehouseOutboundRemark ?? ''))
+      || body.chargeWeightKg !== undefined
+      || body.unitPrice !== undefined
+      || body.otherFee !== undefined
+      || body.otherFeeRemark !== undefined;
+    if (!hasExistingRoute) {
+      await this.ensurePermission(principal, 'market:pending-routing:assign', '没有待排货排货权限');
+      await this.ensurePendingRoutingMask(principal, 'market:pending-routing:route-block');
+    } else if (!shouldApprove || routeChanged) {
+      await this.ensurePermission(principal, 'market:pending-routing:update', '没有待排货修改权限');
+      await this.ensurePendingRoutingMask(principal, 'market:pending-routing:update-block');
+    }
+    if (shouldApprove) {
+      await this.ensurePendingRoutingMask(principal, 'market:pending-routing:audit-block');
+    }
+  }
+
+  private async ensurePendingRoutingCostMutationAccess(
+    principal: Principal,
+    type: ShipmentFinanceItemType | undefined,
+    shipment: Shipment,
+    operation: 'create' | 'update' | 'delete'
+  ) {
+    if (isAdministratorRole(principal.role) || type !== 'BUSINESS_COST') return;
+    if (!['WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment.status)) return;
+    if (shipment.status === 'WAITING_DISPATCH' && operation !== 'create') {
+      throw new ForbiddenException('审核后业务成本只能新增，不能修改或删除');
+    }
+    const mask = operation === 'create'
+      ? 'market:pending-routing:business-cost-create-block'
+      : operation === 'update'
+        ? 'market:pending-routing:business-cost-update-block'
+        : 'market:pending-routing:business-cost-delete-block';
+    await this.ensurePendingRoutingMask(principal, mask);
+  }
+
+  private ensurePendingRoutingCostMutationAccessSync(
+    principal: Principal,
+    type: ShipmentFinanceItemType | undefined,
+    shipment: Shipment,
+    operation: 'create' | 'update' | 'delete'
+  ) {
+    if (isAdministratorRole(principal.role) || type !== 'BUSINESS_COST') return;
+    if (!['WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment.status)) return;
+    if (shipment.status === 'WAITING_DISPATCH' && operation !== 'create') {
+      throw new ForbiddenException('审核后业务成本只能新增，不能修改或删除');
+    }
+    const mask = operation === 'create'
+      ? 'market:pending-routing:business-cost-create-block'
+      : operation === 'update'
+        ? 'market:pending-routing:business-cost-update-block'
+        : 'market:pending-routing:business-cost-delete-block';
+    if (this.hasPermissionSync(principal.role, mask)) {
+      throw new ForbiddenException('当前角色已屏蔽该操作');
+    }
   }
 
   private async ensureFinanceItemManageAccess(
@@ -15973,21 +16312,31 @@ export class InMemoryRepository {
       && Math.abs(Number(row.unitPrice) - Number(item.unitPrice)) < 0.01;
   }
 
-  private hasBusinessDataApproval(shipmentId: string) {
-    return this.isCustomerServiceDataApproved(shipmentId, 'business');
+  private isPayableWorkflowReady(item: StoredShipmentFinanceItem) {
+    const shipment = this.shipments.find((row) => row.id === item.shipmentId);
+    if (!shipment?.transferNo?.trim()) return false;
+    return this.isCustomerServiceDataApproved(item.shipmentId, 'business')
+      && this.isCustomerServiceDataApproved(item.shipmentId, 'agent');
   }
 
-  private isBusinessEnteredPayable(item: StoredShipmentFinanceItem) {
-    const creator = item.createdBy ? this.accounts.find((account) => account.username === item.createdBy) : undefined;
-    return item.type === 'PAYABLE' && Boolean(creator && effectivePermissionsForRole(creator.role, this.rolePermissionMatrix[creator.role] ?? []).includes('data-scope:sales-own'));
+  private isPayableHangAccount(item: StoredShipmentFinanceItem | undefined) {
+    if (!item) return false;
+    const shipment = this.shipments.find((row) => row.id === item.shipmentId);
+    return isEarlyPaymentSettlementMethod(item.settlementMethod ?? shipment?.settlementMethod);
   }
 
   private canExposePayableToFinance(item: StoredShipmentFinanceItem) {
-    return this.isRouteAgentPayable(item) || !this.isBusinessEnteredPayable(item) || this.hasBusinessDataApproval(item.shipmentId);
+    // 挂账可以提前进入待付款，但仍不能提前审核应付。
+    return this.isPayableHangAccount(item) || this.isPayableWorkflowReady(item);
   }
 
   private ensurePayableReadyForFinance(item: StoredShipmentFinanceItem) {
-    if (!this.canExposePayableToFinance(item)) throw new BadRequestException('客服确认数据后才能审核该应付费用');
+    const missing: string[] = [];
+    if (!this.isCustomerServiceDataApproved(item.shipmentId, 'business')) missing.push('业务数据确认');
+    if (!this.isCustomerServiceDataApproved(item.shipmentId, 'agent')) missing.push('代理数据确认');
+    const shipment = this.shipments.find((row) => row.id === item.shipmentId);
+    if (!shipment?.transferNo?.trim()) missing.push('转单号');
+    if (missing.length) throw new BadRequestException('应付审核前请先完成' + missing.join('、'));
   }
 
   private canExposePendingPaymentToFinance(row: StoredPayablePaymentApplication) {
@@ -15996,7 +16345,9 @@ export class InMemoryRepository {
   }
 
   private ensurePendingPaymentReadyForFinance(row: StoredPayablePaymentApplication) {
-    if (!this.canExposePendingPaymentToFinance(row)) throw new BadRequestException('客服确认数据后才能申请付款');
+    const payable = this.shipmentFinanceItems.find((item) => item.id === row.payableFinanceItemId);
+    if (this.isPayableHangAccount(payable)) return;
+    if (!this.canExposePendingPaymentToFinance(row)) throw new BadRequestException('普通订单需完成数据确认并填写转单号后才能申请付款');
   }
 
   private upsertPayablePaymentApplication(item: StoredShipmentFinanceItem) {
@@ -17027,6 +17378,33 @@ export class InMemoryRepository {
   private async ensurePermission(principal: Principal, permission: PermissionKey, message = '没有访问权限') {
     if (!(await this.hasPermission(principal.role, permission))) {
       throw new ForbiddenException(message);
+    }
+  }
+
+  private async isWarehouseTallyPendingBlocked(principal: Principal, permission: PermissionKey) {
+    return !isAdministratorRole(principal.role) && await this.hasPermission(principal.role, permission);
+  }
+
+  private async isWarehouseTallyCompletedBlocked(principal: Principal, permission: PermissionKey) {
+    return !isAdministratorRole(principal.role) && await this.hasPermission(principal.role, permission);
+  }
+
+  private async ensureWarehouseTallyPendingUnblocked(principal: Principal, permission: PermissionKey) {
+    if (await this.isWarehouseTallyPendingBlocked(principal, permission)) {
+      throw new ForbiddenException('当前用户组已屏蔽该未完成理货操作');
+    }
+  }
+
+  private async ensureWarehouseTallyCompletedUnblocked(
+    principal: Principal,
+    permissions: PermissionKey | PermissionKey[]
+  ) {
+    if (isAdministratorRole(principal.role)) return;
+    const blockedPermissions = Array.isArray(permissions) ? permissions : [permissions];
+    for (const permission of blockedPermissions) {
+      if (await this.hasPermission(principal.role, permission)) {
+        throw new ForbiddenException('当前用户组已屏蔽该已完成理货操作');
+      }
     }
   }
 
@@ -18959,6 +19337,13 @@ function buildCustomerServiceDataConfirmRow(shipment: Shipment, rows: CustomerSe
   };
 }
 
+function attachPrimaryAgentBilling(
+  row: CustomerServiceDataConfirmRow,
+  billing?: { agentBillingQuantity: number; agentBillingUnit: FinanceBillingUnit }
+): CustomerServiceDataConfirmRow {
+  return billing ? { ...row, agentBillingQuantity: billing.agentBillingQuantity, agentBillingUnit: billing.agentBillingUnit } : row;
+}
+
 function scopeCustomerServiceDataConfirmRow(
   row: CustomerServiceDataConfirmRow,
   permissions: { canViewBusiness: boolean; canViewAgent: boolean }
@@ -18977,6 +19362,8 @@ function scopeCustomerServiceDataConfirmRow(
   if (permissions.canViewAgent) {
     scoped.agentDataApproved = row.agentDataApproved;
     scoped.agentDataSnapshot = row.agentDataSnapshot;
+    scoped.agentBillingQuantity = row.agentBillingQuantity;
+    scoped.agentBillingUnit = row.agentBillingUnit;
   } else {
     [
       'agentId', 'agentName', 'agentWeightKg', 'channelId', 'channelName', 'carrier', 'routeAgentChannelName',

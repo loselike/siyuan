@@ -117,6 +117,14 @@ export type PermissionKey =
   | 'market:pending-routing:agent-channel-view'
   | 'market:pending-routing:cost-field-view'
   | 'market:pending-routing:column-setting'
+  | 'market:pending-routing:route-block'
+  | 'market:pending-routing:update-block'
+  | 'market:pending-routing:audit-block'
+  | 'market:pending-routing:operation-log-block'
+  | 'market:pending-routing:business-cost-update-block'
+  | 'market:pending-routing:business-cost-create-block'
+  | 'market:pending-routing:business-cost-delete-block'
+  | 'market:pending-routing:reroute-block'
   | 'market:routed:view'
   | 'market:routed:detail'
   | 'market:routed:update'
@@ -126,6 +134,9 @@ export type PermissionKey =
   | 'market:routed:cost-total-view'
   | 'market:routed:agent-channel-view'
   | 'market:routed:column-setting'
+  | 'market:routed:reroute-block'
+  | 'market:routed:update-block'
+  | 'market:routed:log-block'
   | 'market:weekly-routing:view'
   | 'market:weekly-routing:detail'
   | 'market:weekly-routing:agent-stats-view'
@@ -138,6 +149,10 @@ export type PermissionKey =
   | 'warehouse:today-receipt:view'
   | 'warehouse:today-receipt:filter'
   | 'warehouse:today-receipt:manual-create'
+  | 'warehouse:today-receipt:batch-import-block'
+  | 'warehouse:today-receipt:batch-download-block'
+  | 'warehouse:today-receipt:site-filter-block'
+  | 'warehouse:today-receipt:manual-create-block'
   | 'warehouse:today-receipt:update'
   | 'warehouse:today-receipt:remark-update'
   | 'warehouse:today-receipt:exception-manage'
@@ -157,10 +172,14 @@ export type PermissionKey =
   | 'warehouse:in-stock:tally-record-view'
   | 'warehouse:in-stock:column-setting'
   | 'warehouse:tally-pending:view'
+  | 'warehouse:tally-pending:view-block'
   | 'warehouse:tally-pending:task-create'
   | 'warehouse:tally-pending:task-update'
+  | 'warehouse:tally-pending:update-block'
   | 'warehouse:tally-pending:task-cancel'
+  | 'warehouse:tally-pending:cancel-block'
   | 'warehouse:tally-pending:task-process'
+  | 'warehouse:tally-pending:process-block'
   | 'warehouse:tally-pending:merge-only'
   | 'warehouse:tally-pending:merge-and-ship'
   | 'warehouse:tally-pending:split'
@@ -168,14 +187,18 @@ export type PermissionKey =
   | 'warehouse:tally-pending:history-view'
   | 'warehouse:tally-pending:filter'
   | 'warehouse:tally-completed:view'
+  | 'warehouse:tally-completed:view-block'
   | 'warehouse:tally-completed:history-view'
   | 'warehouse:tally-completed:detail-view'
   | 'warehouse:tally-completed:reverse-review'
+  | 'warehouse:tally-completed:reverse-block'
   | 'warehouse:tally-history:correct'
   | 'warehouse:tally-label:generate'
   | 'warehouse:tally-label:reprint'
+  | 'warehouse:tally-label:reprint-block'
   | 'warehouse:tally-label:print'
   | 'warehouse:tally-label:download'
+  | 'warehouse:tally-label:download-block'
   | 'warehouse:tally-label:scan-apply'
   | 'warehouse:tally-label:overwrite-package'
   | 'warehouse:dispatch-pending:view'
@@ -198,6 +221,9 @@ export type PermissionKey =
   | 'warehouse:rent-detail:export'
   | 'warehouse:rent-rule:view'
   | 'warehouse:rent-rule:manage'
+  | 'warehouse:rent-rule:manage-block'
+  | 'warehouse:rent-detail:all-view-block'
+  | 'warehouse:rent-detail:own-view-block'
   | 'tracking:carrier-task:view'
   | 'tracking:carrier-task:detail'
   | 'tracking:carrier-task:run'
@@ -222,6 +248,7 @@ export type PermissionKey =
   | 'customer-service:transfer:view'
   | 'customer-service:transfer:write'
   | 'customer-service:transfer:batch-write'
+  | 'customer-service:transfer:fill-block'
   | 'customer-service:transfer:view-outbound-time'
   | 'customer-service:transfer:view-agent'
   | 'customer-service:transfer:view-agent-data'
@@ -240,6 +267,10 @@ export type PermissionKey =
   | 'customer-service:data-confirm:agent-update'
   | 'customer-service:data-confirm:business-approve'
   | 'customer-service:data-confirm:agent-approve'
+  | 'customer-service:data-confirm:business-update-block'
+  | 'customer-service:data-confirm:agent-update-block'
+  | 'customer-service:data-confirm:business-approve-block'
+  | 'customer-service:data-confirm:agent-approve-block'
   | 'customer-service:data-confirm:approve-all'
   | 'customer-service:data-confirm:reverse'
   | 'customer-service:data-confirm:column-setting'
@@ -251,6 +282,8 @@ export type PermissionKey =
   | 'customer-service:transfer:column-setting'
   | 'customer-service:pending-routing:view'
   | 'customer-service:pending-routing:fee-detail-view'
+  | 'customer-service:pending-routing:fee-detail-block'
+  | 'customer-service:pending-routing:readonly-block'
   | 'customer-service:pending-routing:agent-view'
   | 'customer-service:pending-routing:problem-create'
   | 'customer-service:pending-routing:column-setting'
@@ -679,6 +712,14 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'market:pending-routing:agent-channel-view', label: '查看代理与代理渠道', group: '市场管理 / 待排货' },
   { code: 'market:pending-routing:cost-field-view', label: '查看计费重与市场成本', group: '市场管理 / 待排货' },
   { code: 'market:pending-routing:column-setting', label: '保存待排货列设置', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:route-block', label: '屏蔽排货', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:update-block', label: '屏蔽修改', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:audit-block', label: '屏蔽审核', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:operation-log-block', label: '屏蔽操作日志', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost-update-block', label: '屏蔽业务成本修改', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost-create-block', label: '屏蔽业务成本新增', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost-delete-block', label: '屏蔽业务成本删除', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:reroute-block', label: '屏蔽退回重审', group: '市场管理 / 待排货' },
   { code: 'market:routed:view', label: '查看已排货列表', group: '市场管理 / 已排货' },
   { code: 'market:routed:detail', label: '查看已排货详情', group: '市场管理 / 已排货' },
   { code: 'market:routed:update', label: '修改已排货资料', group: '市场管理 / 已排货' },
@@ -688,6 +729,9 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'market:routed:cost-total-view', label: '查看市场成本合计', group: '市场管理 / 已排货' },
   { code: 'market:routed:agent-channel-view', label: '查看代理渠道', group: '市场管理 / 已排货' },
   { code: 'market:routed:column-setting', label: '保存已排货列设置', group: '市场管理 / 已排货' },
+  { code: 'market:routed:reroute-block', label: '屏蔽退回重排', group: '市场管理 / 已排货' },
+  { code: 'market:routed:update-block', label: '屏蔽修改', group: '市场管理 / 已排货' },
+  { code: 'market:routed:log-block', label: '屏蔽排货日志', group: '市场管理 / 已排货' },
   { code: 'market:weekly-routing:view', label: '查看本周排货数据', group: '市场管理 / 本周排货数据' },
   { code: 'market:weekly-routing:detail', label: '查看本周排货明细', group: '市场管理 / 本周排货数据' },
   { code: 'market:weekly-routing:agent-stats-view', label: '查看本周代理统计', group: '市场管理 / 本周排货数据' },
@@ -700,6 +744,10 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:today-receipt:view', label: '查看今日收货', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:filter', label: '筛选今日收货', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:manual-create', label: '手动添加收货', group: '仓库管理 / 今日收货' },
+  { code: 'warehouse:today-receipt:batch-import-block', label: '屏蔽批量导入', group: '仓库管理 / 今日收货' },
+  { code: 'warehouse:today-receipt:batch-download-block', label: '屏蔽批量下载', group: '仓库管理 / 今日收货' },
+  { code: 'warehouse:today-receipt:site-filter-block', label: '屏蔽站点筛选', group: '仓库管理 / 今日收货' },
+  { code: 'warehouse:today-receipt:manual-create-block', label: '屏蔽手动添加收货', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:update', label: '修改收货入仓数据', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:remark-update', label: '维护收货备注', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:exception-manage', label: '维护收货异常', group: '仓库管理 / 今日收货' },
@@ -719,10 +767,14 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:in-stock:tally-record-view', label: '查看理货记录', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:column-setting', label: '保存在仓列设置', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:tally-pending:view', label: '查看未完成理货', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:view-block', label: '屏蔽查看', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:task-create', label: '创建理货任务', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:task-update', label: '修改理货任务', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:update-block', label: '屏蔽修改', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:task-cancel', label: '取消理货任务', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:cancel-block', label: '屏蔽取消任务', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:task-process', label: '处理理货', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:process-block', label: '屏蔽处理理货', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:merge-only', label: '合并成一箱', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:merge-and-ship', label: '理货并创建出货单', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:split', label: '拆票理货', group: '仓库管理 / 未完成理货' },
@@ -730,14 +782,18 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:tally-pending:history-view', label: '查看理货记录', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:filter', label: '筛选未完成理货', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-completed:view', label: '查看已完成理货', group: '仓库管理 / 已完成理货' },
+  { code: 'warehouse:tally-completed:view-block', label: '屏蔽查看', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:history-view', label: '查看已完成理货历史', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:detail-view', label: '查看已完成理货详情', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:reverse-review', label: '反审核已完成理货', group: '仓库管理 / 已完成理货' },
+  { code: 'warehouse:tally-completed:reverse-block', label: '屏蔽反审核', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-history:correct', label: '纠正历史聚合理货数据', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:generate', label: '生成理货标签', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:reprint', label: '重打理货标签', group: '仓库管理 / 已完成理货' },
+  { code: 'warehouse:tally-label:reprint-block', label: '屏蔽重新打印', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:print', label: '打印理货标签', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:download', label: '下载理货标签', group: '仓库管理 / 已完成理货' },
+  { code: 'warehouse:tally-label:download-block', label: '屏蔽下载', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:scan-apply', label: '扫描应用理货标签', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-label:overwrite-package', label: '标签覆盖在仓包裹', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:dispatch-pending:view', label: '查看待出库', group: '仓库管理 / 待出库' },
@@ -760,6 +816,9 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:rent-detail:export', label: '导出仓租细分表', group: '仓库管理 / 仓租细分表' },
   { code: 'warehouse:rent-rule:view', label: '查看仓租规则', group: '仓库管理 / 仓租细分表' },
   { code: 'warehouse:rent-rule:manage', label: '维护仓租规则', group: '仓库管理 / 仓租细分表' },
+  { code: 'warehouse:rent-rule:manage-block', label: '屏蔽规则编辑', group: '仓库管理 / 仓租细分表' },
+  { code: 'warehouse:rent-detail:all-view-block', label: '屏蔽查看所有仓租', group: '仓库管理 / 仓租细分表' },
+  { code: 'warehouse:rent-detail:own-view-block', label: '屏蔽查看归属仓租', group: '仓库管理 / 仓租细分表' },
   ...[
     ['carrier-task', 'view', '查看承运商任务', '承运商任务'], ['carrier-task', 'detail', '查看任务详情', '承运商任务'], ['carrier-task', 'run', '手动同步轨迹', '承运商任务'], ['carrier-task', 'retry', '重试失败任务', '承运商任务'], ['carrier-task', 'error-view', '查看失败原因', '承运商任务'], ['carrier-task', 'log-view', '查看同步日志', '承运商任务'], ['carrier-task', 'column-setting', '保存任务列设置', '承运商任务'],
     ['external', 'view', '查看外部物流轨迹', '外部物流轨迹'], ['external', 'latest-view', '查看最新物流轨迹', '外部物流轨迹'], ['external', 'stale-days-view', '查看未更新天数', '外部物流轨迹'], ['external', 'detail', '查看轨迹详情', '外部物流轨迹'], ['external', 'single-add', '单票添加轨迹', '外部物流轨迹'], ['external', 'import-upload', '上传轨迹表', '外部物流轨迹'], ['external', 'import-preview', '查看导入预览', '外部物流轨迹'], ['external', 'import-confirm', '确认导入轨迹', '外部物流轨迹'], ['external', 'import-error-view', '查看失败行', '外部物流轨迹'], ['external', 'unmatched-view', '查看未匹配单号', '外部物流轨迹'], ['external', 'overwrite', '覆盖最新物流轨迹', '外部物流轨迹'], ['external', 'customer-visible-update', '更新客户可见轨迹', '外部物流轨迹'], ['external', 'column-setting', '保存轨迹列设置', '外部物流轨迹'], ['external', 'export', '导出轨迹列表', '外部物流轨迹']
@@ -778,12 +837,17 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'customer-service:data-confirm:agent-update', label: '修改代理数据', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:business-approve', label: '审核业务数据', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:agent-approve', label: '审核代理数据', group: '客服管理 / 数据确认' },
+  { code: 'customer-service:data-confirm:business-approve-block', label: '屏蔽业务审核', group: '客服管理 / 数据确认' },
+  { code: 'customer-service:data-confirm:business-update-block', label: '屏蔽业务修改', group: '客服管理 / 数据确认' },
+  { code: 'customer-service:data-confirm:agent-update-block', label: '屏蔽代理修改', group: '客服管理 / 数据确认' },
+  { code: 'customer-service:data-confirm:agent-approve-block', label: '屏蔽代理审核', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:approve-all', label: '双数据审核通过', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:reverse', label: '反审核数据确认', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:column-setting', label: '保存数据确认列设置', group: '客服管理 / 数据确认' },
   { code: 'customer-service:transfer:view', label: '转单号查看', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:write', label: '填写转单号', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:batch-write', label: '批量填写转单号', group: '客服管理 / 转单号' },
+  { code: 'customer-service:transfer:fill-block', label: '屏蔽填写转单号', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:sub-order-write', label: '填写分单号', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:push-sales', label: '推送业务待办', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:tracking-website-view', label: '查看追踪网站', group: '客服管理 / 转单号' },
@@ -796,7 +860,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'customer-service:transfer:view-sensitive', label: '查看转单号敏感货物属性', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-all', label: '查看全部授权转单号订单', group: '客服管理 / 转单号' },
   ...[
-    ['pending-routing', 'view', '查看待排货'], ['pending-routing', 'fee-detail-view', '查看费用明细'], ['pending-routing', 'agent-view', '查看代理信息'], ['pending-routing', 'problem-create', '创建问题件'], ['pending-routing', 'column-setting', '保存待排货列设置'],
+    ['pending-routing', 'view', '查看待排货'], ['pending-routing', 'fee-detail-view', '查看费用明细'], ['pending-routing', 'fee-detail-block', '屏蔽查看费用'], ['pending-routing', 'readonly-block', '屏蔽只读'], ['pending-routing', 'agent-view', '查看代理信息'], ['pending-routing', 'problem-create', '创建问题件'], ['pending-routing', 'column-setting', '保存待排货列设置'],
     ['waiting-departure', 'view', '查看待离港'], ['waiting-departure', 'update-info', '修改待离港资料'], ['waiting-departure', 'update-transfer-no', '修改转单号'], ['waiting-departure', 'update-etd-eta', '修改 ETD/ETA'], ['waiting-departure', 'update-tracking-website', '修改追踪网站'], ['waiting-departure', 'confirm-departure', '确认离港'], ['waiting-departure', 'problem-create', '创建问题件'], ['waiting-departure', 'label-upload', '上传面单'], ['waiting-departure', 'column-setting', '保存待离港列设置'],
     ['departed', 'view', '查看已离港'], ['departed', 'update-info', '修改已离港资料'], ['departed', 'update-eta', '修改 ETA'], ['departed', 'update-tracking-website', '修改追踪网站'], ['departed', 'confirm-arrived-port', '确认到港'], ['departed', 'problem-create', '创建问题件'], ['departed', 'column-setting', '保存已离港列设置'],
     ['arrived-port', 'view', '查看已到港'], ['arrived-port', 'update-info', '修改已到港资料'], ['arrived-port', 'update-tracking-website', '修改追踪网站'], ['arrived-port', 'confirm-delivering', '确认派送'], ['arrived-port', 'problem-create', '创建问题件'], ['arrived-port', 'column-setting', '保存已到港列设置'],
@@ -990,6 +1054,7 @@ const marketBasePermissions: PermissionKey[] = [
 
 const customerServiceBasePermissions: PermissionKey[] = permissionDefinitions
   .filter((permission) => permission.code.startsWith('customer-service:'))
+  .filter((permission) => !permission.code.endsWith('-block'))
   .map((permission) => permission.code);
 
 const financeFunctionPermissions: PermissionKey[] = permissionDefinitions
@@ -1272,10 +1337,7 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
     return [...new Set(permissions)].filter((permission) => customerPermissions.has(permission));
   }
   const allowed = new Set(permissionDefinitions.filter((permission) => permission.assignable !== false).map((permission) => permission.code));
-  const adminOnlyPermissions = new Set<PermissionKey>(['warehouse:rent-rule:manage']);
-  const normalized = [...new Set(permissions)].filter((permission) =>
-    allowed.has(permission) && !adminOnlyPermissions.has(permission)
-  );
+  const normalized = [...new Set(permissions)].filter((permission) => allowed.has(permission));
   if (normalized.includes('business:order-entry:business-cost-write')
     && !normalized.includes('business:order-entry:business-cost-view')) {
     normalized.push('business:order-entry:business-cost-view');

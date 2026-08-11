@@ -5,6 +5,44 @@ export type WarehouseTallyTaskStatus = 'PENDING' | 'COMPLETED' | 'CANCELLED';
 export type WarehouseTallyLabelStatus = 'NOT_GENERATED' | 'GENERATED';
 export type WarehouseMeasurementStatus = 'MEASURED' | 'PENDING_REMEASURE';
 export type WarehouseTallyLifecycleStatus = '待理货' | '理货中' | '已理货' | '二次理货';
+export type WarehouseTallyChannel = '快递' | '空运' | '卡航' | '铁路' | '海运';
+export type WarehouseTallyProgressStatus = 'WAITING' | 'IN_PROGRESS' | 'COMPLETED';
+export const warehouseTallyChannels: WarehouseTallyChannel[] = ['快递', '空运', '卡航', '铁路', '海运'];
+export const warehouseTallyProgressStatusLabels: Record<WarehouseTallyProgressStatus, string> = {
+  WAITING: '待理货',
+  IN_PROGRESS: '理货中',
+  COMPLETED: '已完成'
+};
+
+function warehouseTallyBeijingHour(now: Date): number {
+  const hour = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    hour: '2-digit',
+    hourCycle: 'h23'
+  }).format(now);
+  return Number(hour);
+}
+
+export function warehouseTallyChannelPriority(channel: string | undefined, now = new Date()): number {
+  const morningOrder = ['快递', '空运', '卡航', '铁路', '海运'];
+  const afternoonOrder = ['空运', '快递', '卡航', '铁路', '海运'];
+  const order = warehouseTallyBeijingHour(now) < 12 ? morningOrder : afternoonOrder;
+  const index = order.indexOf(channel ?? '');
+  return index >= 0 ? index : order.length;
+}
+
+export function sortWarehouseTallyTasks<T extends { tallyChannel?: string; createdAt: string; taskNo?: string; id?: string }>(
+  tasks: T[],
+  now = new Date()
+): T[] {
+  return [...tasks].sort((left, right) => {
+    const channelOrder = warehouseTallyChannelPriority(left.tallyChannel, now) - warehouseTallyChannelPriority(right.tallyChannel, now);
+    if (channelOrder !== 0) return channelOrder;
+    const createdOrder = Date.parse(left.createdAt) - Date.parse(right.createdAt);
+    if (Number.isFinite(createdOrder) && createdOrder !== 0) return createdOrder;
+    return (left.taskNo ?? left.id ?? '').localeCompare(right.taskNo ?? right.id ?? '', 'zh-Hans-CN');
+  });
+}
 
 /**
  * 同一包裹在首次理货任务号后追加 02、03...，均属于二次理货生命周期。
@@ -248,11 +286,24 @@ export interface WarehouseInStockQuery {
   status?: WarehousePackageStatus;
 }
 
+export interface WarehouseInStockPageQuery extends WarehouseInStockQuery {
+  page?: number;
+  pageSize?: number;
+}
+
 export type WarehouseInStockTotals = WarehouseTodayTotals;
 
 export interface WarehouseInStockResponse {
   totals: WarehouseInStockTotals;
   rows: WarehousePackageSummary[];
+}
+
+export interface WarehouseInStockPageResponse extends WarehouseInStockResponse {
+  pagination: {
+    page: number;
+    pageSize: number;
+    totalItems: number;
+  };
 }
 
 export type WarehouseRentBillingUnit = 'CBM' | 'KG';
@@ -302,6 +353,7 @@ export interface WarehouseRentRuleEnabledInput {
 }
 
 export interface WarehouseRentDetailQuery {
+  packageIds?: string[];
   site?: string;
   salesperson?: string;
   customerCode?: string;
@@ -410,6 +462,10 @@ export interface WarehouseTallyTaskSummary {
   id: string;
   taskNo: string;
   status: WarehouseTallyTaskStatus;
+  tallyChannel?: WarehouseTallyChannel;
+  tallyProgressStatus?: WarehouseTallyProgressStatus;
+  tallyStartedAt?: string;
+  tallyStartedBy?: string;
   rootTallyTaskId?: string;
   previousTallyTaskId?: string;
   tallySequence?: number;
@@ -523,6 +579,7 @@ export interface WarehouseTallyRepeatStatisticsResponse {
 export interface WarehouseTallyTaskCreateInput {
   packageIds: string[];
   tallyRequirement: string;
+  tallyChannel: WarehouseTallyChannel;
   remark?: string;
 }
 

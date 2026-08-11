@@ -5,7 +5,7 @@ import { basename, extname, join } from 'node:path';
 import { Prisma, type Permission as PrismaPermission, type Role as PrismaRole, type Shipment as PrismaShipment } from '@prisma/client';
 import * as xlsx from '@e965/xlsx';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
-import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields } from './finance-billing.js';
+import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
 import { PrismaMasterDataReadRepository } from './master-data/master-data-read.repository.js';
 import {
   buildWarehouseMachineImportResponse,
@@ -417,6 +417,7 @@ import {
   type WaterReceiptVoucherInput,
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
+import { isEarlyPaymentSettlementMethod, sortWarehouseTallyTasks, warehouseTallyChannels } from '@siyuan/shared';
 import { generateTemporaryPassword, getPasswordStrengthError, hashPassword, passwordHashNeedsRehash, verifyPassword } from './password.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
@@ -535,6 +536,11 @@ type ReviewRestoreInputWithManual = ShipmentRestoreInput & {
 };
 
 type WorkspaceFieldMaskState = Record<WorkspaceFieldMaskKey, boolean>;
+
+type WarehouseRentVisibilityScope = {
+  mode: 'ALL' | 'OWN' | 'EXCLUDE_OWN' | 'NONE';
+  site?: string;
+};
 
 const staffGenderValues = ['UNKNOWN', 'MALE', 'FEMALE', 'OTHER'] as const;
 const warehouseNavigationViewPermissions: PermissionKey[] = [
@@ -1421,6 +1427,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return summarizeStatusCounts(await this.getShipments(principal));
   }
 
+  async getShipmentStatusForPermission(principal: Principal, shipmentId: string): Promise<ShipmentStatus> {
+    return (await this.getVisibleShipment(principal, shipmentId)).status as ShipmentStatus;
+  }
+
   async getNavigationUnreadBadges(principal: Principal) {
     const shipments = await this.getShipments(principal);
     const shipmentIds = shipments.map((row) => row.id);
@@ -1471,8 +1481,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       id: ticket.id,
       watermark: [ticket.createdAt.toISOString(), ticket.closedAt?.toISOString(), ...ticket.replies.map((reply) => reply.createdAt.toISOString())].filter(Boolean).sort().at(-1) ?? ticket.createdAt.toISOString()
     }));
+    const canViewCustomerServicePendingRouting = principal.role === 'ADMIN'
+      || (await this.hasPermission(principal.role, 'customer-service:pending-routing:view')
+        && !(await this.hasPermission(principal.role, 'customer-service:pending-routing:readonly-block')));
     const items = [
-      read('customerService', 'pending-routing', shipmentRows(['WAITING_SORT'])),
+      read('customerService', 'pending-routing', canViewCustomerServicePendingRouting ? shipmentRows(['WAITING_SORT']) : []),
       read('customerService', 'waitingDeparture', shipmentRows(['WAITING_DEPARTURE'])),
       read('customerService', 'departed', shipmentRows(['DEPARTED'])),
       read('customerService', 'problems', ticketBadges),
@@ -1568,6 +1581,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     ]);
     const shipments = (await this.getShipments(principal, { customerServiceFieldScope: true })).filter((shipment) => shipment.status === 'OUTBOUNDED');
     if (!shipments.length) return [];
+    const primaryAgentBillingByShipmentId = await this.getPrimaryCustomerServicePayableBilling(shipments.map((shipment) => shipment.id));
     const oldestCycleStart = oldestCustomerServiceDataCycleStart(shipments);
     const auditRows = await this.prisma.auditLog.findMany({
       where: {
@@ -1590,7 +1604,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const auditRowsByShipmentId = new Map<string, typeof auditRows>();
     auditRows.forEach((row) => auditRowsByShipmentId.set(row.target, [...(auditRowsByShipmentId.get(row.target) ?? []), row]));
     return shipments
-      .map((shipment) => buildCustomerServiceDataConfirmRow(shipment, auditRowsByShipmentId.get(shipment.id) ?? []))
+      .map((shipment) => attachPrimaryAgentBilling(
+        buildCustomerServiceDataConfirmRow(shipment, auditRowsByShipmentId.get(shipment.id) ?? []),
+        primaryAgentBillingByShipmentId.get(shipment.id)
+      ))
       .filter((row) => !(row.businessDataApproved && row.agentDataApproved))
       .map((row) => scopeCustomerServiceDataConfirmRow(row, { canViewBusiness, canViewAgent }));
   }
@@ -1671,6 +1688,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!pageIds.length) {
       return { rows: [], pagination: { page, pageSize, totalItems } };
     }
+    const primaryAgentBillingByShipmentId = await this.getPrimaryCustomerServicePayableBilling(pageIds);
 
     const pageCandidateRows = candidateRows.filter((row) => pageIds.includes(row.id));
     const pageOldestCycleStart = oldestCustomerServiceDataCycleStart(pageCandidateRows);
@@ -1723,11 +1741,32 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!shipment) return [];
       const mappedShipment = mappedPageShipmentById.get(shipmentId) ?? mapShipment(shipment);
       return [scopeCustomerServiceDataConfirmRow(
-        buildCustomerServiceDataConfirmRow(mappedShipment, auditRowsByShipmentId.get(shipmentId) ?? []),
+        attachPrimaryAgentBilling(
+          buildCustomerServiceDataConfirmRow(mappedShipment, auditRowsByShipmentId.get(shipmentId) ?? []),
+          primaryAgentBillingByShipmentId.get(shipmentId)
+        ),
         { canViewBusiness, canViewAgent }
       )];
     });
     return { rows, pagination: { page, pageSize, totalItems } };
+  }
+
+  private async getPrimaryCustomerServicePayableBilling(shipmentIds: string[]) {
+    const billingByShipmentId = new Map<string, { agentBillingQuantity: number; agentBillingUnit: FinanceBillingUnit }>();
+    if (!shipmentIds.length) return billingByShipmentId;
+    const items = await (this.prisma as any).shipmentFinanceItem.findMany({
+      where: { shipmentId: { in: shipmentIds }, type: 'PAYABLE', voided: false },
+      select: { id: true, shipmentId: true, type: true, name: true, voided: true, createdAt: true, billingUnit: true, billingQuantity: true, chargeWeightKg: true }
+    });
+    const itemsByShipmentId = new Map<string, any[]>();
+    items.forEach((item: any) => itemsByShipmentId.set(item.shipmentId, [...(itemsByShipmentId.get(item.shipmentId) ?? []), item]));
+    itemsByShipmentId.forEach((shipmentItems, shipmentId) => {
+      const billing = resolvePrimaryCustomerServicePayableBilling(shipmentItems);
+      if (billing?.billingQuantity !== undefined) {
+        billingByShipmentId.set(shipmentId, { agentBillingQuantity: billing.billingQuantity, agentBillingUnit: billing.billingUnit });
+      }
+    });
+    return billingByShipmentId;
   }
 
   async customerServiceTransferShipments(principal: Principal): Promise<Shipment[]> {
@@ -1859,6 +1898,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async getShipmentInternalFlowLog(principal: Principal, shipmentId: string): Promise<ShipmentInternalFlowLogResponse> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    if (shipment.status === 'WAITING_SORT') {
+      await this.ensurePermission(principal, 'market:pending-routing:operation-log-view', '没有待排货日志查看权限');
+      await this.ensurePendingRoutingMask(principal, 'market:pending-routing:operation-log-block');
+    } else if (['WAITING_DISPATCH', 'OUTBOUNDED', 'WAITING_DEPARTURE', 'DEPARTED', 'ARRIVED_PORT', 'DELIVERING', 'SIGNED'].includes(shipment.status as string)) {
+      await this.ensurePermission(principal, 'market:routed:log-view', '没有已排货日志查看权限');
+      await this.ensurePendingRoutingMask(principal, 'market:routed:log-block');
+    }
+    const canViewAgentChannel = shipment.status === 'WAITING_SORT'
+      ? await this.hasPermission(principal.role, 'market:pending-routing:agent-channel-view')
+      : await this.hasPermission(principal.role, 'market:routed:agent-channel-view');
     const canViewBusinessCosts = await this.canViewOrderEntryBusinessCosts(principal);
     const [warehousePackages, financeItems, problemTickets] = await Promise.all([
       (this.prisma as any).warehousePackage.findMany({
@@ -1890,7 +1939,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const actorIds = [...new Set(rows.map((row) => row.actorId))];
     const users = actorIds.length ? await this.prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, username: true, name: true, nickname: true } }) : [];
     const actorById = new Map(users.map((user) => [user.id, user.name || user.nickname || user.username]));
-    const items = [{ key: 'created', stage: '业务录单', happenedAt: shipment.createdAt.toISOString(), operator: shipment.entryBy ?? '系统', summary: '运单已创建' }, ...rows.map((row) => ({ key: row.id, stage: internalFlowStage(row.action, row.after), happenedAt: row.createdAt.toISOString(), operator: actorById.get(row.actorId) ?? '系统', summary: internalFlowSummary(row.action, row.after) }))].filter((item) => item.stage);
+    const items = [{ key: 'created', stage: '业务录单', happenedAt: shipment.createdAt.toISOString(), operator: shipment.entryBy ?? '系统', summary: '运单已创建' }, ...rows.map((row) => {
+      const summaryAfter = row.action === 'shipment.route' && !canViewAgentChannel && row.after && typeof row.after === 'object'
+        ? { ...(row.after as Record<string, unknown>), agentChannelName: undefined }
+        : row.after;
+      return { key: row.id, stage: internalFlowStage(row.action, row.after), happenedAt: row.createdAt.toISOString(), operator: actorById.get(row.actorId) ?? '系统', summary: internalFlowSummary(row.action, summaryAfter) };
+    })].filter((item) => item.stage);
     return { shipmentId: shipment.id, systemOrderNo: shipment.systemOrderNo, items };
   }
 
@@ -7556,9 +7610,17 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!(await this.hasPermission(principal.role, 'warehouse:rent-rule:view'))) {
       throw new ForbiddenException('当前角色不能查看仓租规则');
     }
-    const siteScope = await this.warehouseRentSiteScope(principal);
+    const rentScope = await this.warehouseRentVisibilityScope(principal);
+    if (rentScope.mode === 'NONE') {
+      throw new ForbiddenException('当前角色不能查看仓租数据');
+    }
+    const ruleWhere = rentScope.mode === 'OWN'
+      ? { OR: [{ site: rentScope.site }, { site: null }] }
+      : rentScope.mode === 'EXCLUDE_OWN'
+        ? { OR: [{ site: { not: rentScope.site } }, { site: null }] }
+        : undefined;
     const rows = await (this.prisma as any).warehouseRentRule.findMany({
-      where: siteScope ? { OR: [{ site: siteScope }, { site: null }] } : undefined,
+      where: ruleWhere,
       orderBy: [{ site: 'asc' }, { effectiveFrom: 'desc' }, { densityMin: 'asc' }]
     });
     return rows.map(mapWarehouseRentRule);
@@ -7572,15 +7634,41 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException('当前角色不能查看仓租细分表');
     }
     const salesScope = this.operatorCustomerScope(principal);
-    const siteScope = await this.warehouseRentSiteScope(principal);
-    const rows = await (this.prisma as any).warehousePackage.findMany({
+    const rentScope = await this.warehouseRentVisibilityScope(principal);
+    if (rentScope.mode === 'NONE') {
+      throw new ForbiddenException('当前角色不能查看仓租数据');
+    }
+    const rawPackageIds = (query as WarehouseRentDetailQuery & { packageIds?: string | string[] }).packageIds;
+    const packageIds = (Array.isArray(rawPackageIds) ? rawPackageIds : [rawPackageIds])
+      .flatMap((value) => typeof value === 'string' ? value.split(',') : [])
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .slice(0, 100);
+    const rentScopeWhere = {
+      status: { in: ['RECEIVED', 'CONSOLIDATED', 'SHIPPED'] },
+      ...(rentScope.mode === 'OWN' ? { site: rentScope.site } : {}),
+      ...(rentScope.mode === 'EXCLUDE_OWN' ? { site: { not: rentScope.site } } : {}),
+      ...(salesScope ? { salesperson: { in: salesScope } } : {})
+    };
+    const pageGroupKeys = packageIds.length
+      ? await (this.prisma as any).warehousePackage.findMany({
+          where: { ...rentScopeWhere, id: { in: packageIds } },
+          select: { site: true, customerCode: true, domesticTrackingNo: true }
+        })
+      : [];
+    const groupConditions = Array.from(new Map(pageGroupKeys.map((row: any) => [
+      `${row.site ?? ''}\u0000${row.customerCode}\u0000${row.domesticTrackingNo}`,
+      { site: row.site ?? null, customerCode: row.customerCode, domesticTrackingNo: row.domesticTrackingNo }
+    ])).values());
+    const rows = groupConditions.length || !packageIds.length
+      ? await (this.prisma as any).warehousePackage.findMany({
       where: {
-        status: { in: ['RECEIVED', 'CONSOLIDATED', 'SHIPPED'] },
-        ...(siteScope ? { site: siteScope } : {}),
-        ...(salesScope ? { salesperson: { in: salesScope } } : {})
+        ...rentScopeWhere,
+        ...(groupConditions.length ? { OR: groupConditions } : {})
       },
       orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }]
-    });
+    })
+      : [];
     const shipmentIds = Array.from(new Set(rows.map((row: any) => row.shipmentId).filter(Boolean))) as string[];
     const shipments = shipmentIds.length
       ? await this.prisma.shipment.findMany({
@@ -7647,9 +7735,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     principal: Principal,
     input: WarehouseRentRuleInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const normalized = normalizeWarehouseRentRuleInput(input);
     try {
       return await this.prisma.$transaction(async (tx: any) => {
@@ -7683,9 +7769,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     id: string,
     input: WarehouseRentRuleInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const normalized = normalizeWarehouseRentRuleInput(input);
     try {
       return await this.prisma.$transaction(async (tx: any) => {
@@ -7738,9 +7822,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     principal: Principal,
     id: string
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     try {
       return await this.prisma.$transaction(async (tx: any) => {
         const current = await tx.warehouseRentRule.findUnique({ where: { id } });
@@ -7844,9 +7926,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     id: string,
     input: WarehouseRentRuleEnabledInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     try {
       return await this.prisma.$transaction(async (tx: any) => {
         const current = await tx.warehouseRentRule.findUnique({ where: { id } });
@@ -7942,9 +8022,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async warehouseRentSiteScope(principal: Principal): Promise<string | undefined> {
+  private async warehouseRentVisibilityScope(principal: Principal): Promise<WarehouseRentVisibilityScope> {
     if (isAdministratorRole(principal.role)) {
-      return undefined;
+      return { mode: 'ALL' };
+    }
+    const [allViewBlocked, ownViewBlocked] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:rent-detail:all-view-block'),
+      this.hasPermission(principal.role, 'warehouse:rent-detail:own-view-block')
+    ]);
+    if (allViewBlocked && ownViewBlocked) {
+      return { mode: 'NONE' };
+    }
+    if (!allViewBlocked && !ownViewBlocked) {
+      return { mode: 'ALL' };
     }
     const site = principal.site?.trim()
       || (await this.prisma.user.findUnique({
@@ -7954,12 +8044,28 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!site) {
       throw new ForbiddenException('仓库账号未配置站点，不能查看仓租数据');
     }
-    return site;
+    return { mode: allViewBlocked ? 'OWN' : 'EXCLUDE_OWN', site };
+  }
+
+  private async ensureWarehouseRentRuleManage(principal: Principal): Promise<void> {
+    if (isAdministratorRole(principal.role)) {
+      return;
+    }
+    const [canManage, manageBlocked] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:rent-rule:manage'),
+      this.hasPermission(principal.role, 'warehouse:rent-rule:manage-block')
+    ]);
+    if (!canManage || manageBlocked) {
+      throw new ForbiddenException('当前角色不能维护仓租规则');
+    }
   }
 
   async getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery): Promise<WarehouseTodayResponse> {
     if (!(await this.hasPermission(principal.role, 'warehouse:today-receipt:view'))) {
       throw new ForbiddenException('当前角色不能查看今日收货');
+    }
+    if (query.site?.trim()) {
+      await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:site-filter-block');
     }
     const businessCustomerScoped = Boolean(this.operatorCustomerScope(principal)) && query.dataScope !== 'ALL';
     const ownedCustomerCodes = businessCustomerScoped
@@ -8037,7 +8143,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
       || await this.hasPermission(principal.role, 'warehouse:in-stock:update');
-    // 业务员默认只看当前归属给自己的客户；只有主动选择“全部”才放开至全仓数据。
+    // 业务员默认只看当前归属给自己的客户；主动选择“全部”时可读取全仓货物事实数据。
     const businessCustomerScoped = !warehouseWideScope && query.dataScope !== 'ALL';
     const ownedCustomerCodes = businessCustomerScoped
       ? (await this.prisma.customer.findMany({
@@ -8194,6 +8300,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string, db: any = this.prisma) {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const normalizedCode = customerCode?.trim() ?? '';
     if (!normalizedCode) {
       throw new BadRequestException('请填写客户编号');
@@ -8227,6 +8334,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async previewWarehouseMachineImport(principal: Principal, parsed: ParsedWarehouseMachineImport) {
     await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:batch-import-block');
     const existingKeys = await this.findExistingWarehouseMachineImportKeys(this.prisma, parsed);
     return buildWarehouseMachineImportResponse(parsed, existingKeys);
   }
@@ -8237,6 +8345,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     meta: { fileHash: string }
   ) {
     await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:batch-import-block');
     return this.prisma.$transaction(async (tx: any) => {
       await tx.$queryRaw(Prisma.sql`SELECT 1 AS "locked" FROM pg_advisory_xact_lock(hashtext('warehouse.machine-history-import'))`);
       const auditTargets = [
@@ -8345,6 +8454,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async createWarehousePackage(principal: Principal, input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const data = buildWarehousePackageData(input);
     const result = await this.prisma.$transaction(async (tx: any) => {
       await this.lockWarehouseCustomer(tx, data.customerCode);
@@ -8395,6 +8505,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async createWarehouseManualReceipt(principal: Principal, input: WarehouseManualReceiptCreateInput): Promise<WarehouseManualReceiptCreateResponse> {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
+    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const packageInputs = buildWarehouseManualReceiptPackageInputs(input);
     const packageData = packageInputs.map(buildWarehousePackageData).map((data) => ({ ...data, exceptions: [] }));
     const firstPackageData = packageData[0]!;
@@ -9311,6 +9422,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     principal: Principal,
     query: WarehouseTallyRepeatStatisticsQuery = {}
   ): Promise<WarehouseTallyRepeatStatisticsResponse> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block']);
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看重复理货统计');
     }
@@ -9424,6 +9536,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async createWarehouseTallyTask(principal: Principal, input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-create', '没有创建理货任务权限');
+    if (!warehouseTallyChannels.includes(input.tallyChannel)) {
+      throw new BadRequestException('请选择有效的理货渠道');
+    }
     const packageIds = Array.from(new Set((input.packageIds ?? []).map((id) => id.trim()).filter(Boolean)));
     if (!packageIds.length) {
       throw new BadRequestException('请先选择在仓包裹');
@@ -9485,6 +9600,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             data: {
               id: taskId,
               taskNo,
+              tallyChannel: input.tallyChannel,
+              tallyProgressStatus: 'WAITING',
               rootTallyTaskId: previousTask?.rootTallyTaskId ?? previousTask?.id ?? taskId,
               previousTallyTaskId: previousTask?.id ?? null,
               tallySequence: previousTask ? Number(previousTask.tallySequence ?? 1) + 1 : 1,
@@ -9539,7 +9656,38 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return summary;
   }
 
+  async startWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensurePermission(principal, 'warehouse:tally-pending:task-process', '没有开始理货任务权限');
+    await this.ensureWarehouseTallyPendingUnblocked(principal, ['warehouse:tally-pending:view-block', 'warehouse:tally-pending:process-block']);
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehouseTallyTask" WHERE "id" = ${id} FOR UPDATE`);
+      const existing = await tx.warehouseTallyTask.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException('理货任务不存在');
+      if (existing.status !== 'PENDING') throw new BadRequestException('已完成理货不能开始处理');
+      if (existing.tallyProgressStatus === 'IN_PROGRESS') throw new BadRequestException('理货任务已处于理货中');
+      const now = new Date();
+      const claimed = await tx.warehouseTallyTask.updateMany({
+        where: { id, status: 'PENDING', tallyProgressStatus: { not: 'IN_PROGRESS' } },
+        data: { tallyProgressStatus: 'IN_PROGRESS', tallyStartedAt: now, tallyStartedBy: principal.username }
+      });
+      if (claimed.count !== 1) throw new BadRequestException('理货任务已被其他人开始，请刷新后查看');
+      const updated = await tx.warehouseTallyTask.findUnique({ where: { id } });
+      if (!updated) throw new NotFoundException('理货任务不存在');
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally_task.start',
+          target: id,
+          before: toAuditJson(mapWarehouseTallyTask(existing)),
+          after: toAuditJson(mapWarehouseTallyTask(updated))
+        }
+      });
+      return mapWarehouseTallyTask(updated);
+    });
+  }
+
   async updateWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskUpdateInput): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, ['warehouse:tally-pending:view-block', 'warehouse:tally-pending:update-block']);
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-update', '没有修改理货任务权限');
     const scope = this.operatorCustomerScope(principal);
     const requestedPackageIds = input.packageIds === undefined
@@ -9632,6 +9780,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async cancelWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, ['warehouse:tally-pending:view-block', 'warehouse:tally-pending:cancel-block']);
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-cancel', '没有取消理货任务权限');
     const scope = this.operatorCustomerScope(principal);
     return this.prisma.$transaction(async (tx: any) => {
@@ -9672,6 +9821,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async reverseReviewWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
     await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有反审核已完成理货权限');
     const scope = this.operatorCustomerScope(principal);
     return this.prisma.$transaction(async (tx: any) => {
@@ -9743,6 +9893,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         where: { id },
         data: {
           status: 'PENDING',
+          tallyProgressStatus: 'WAITING',
           completedPackageCount: null,
           completedWeightKg: null,
           completedLengthCm: null,
@@ -9797,6 +9948,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async completeWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyPendingUnblocked(principal, ['warehouse:tally-pending:view-block', 'warehouse:tally-pending:process-block']);
     await this.ensurePermission(principal, 'warehouse:tally-pending:task-process', '没有完成理货任务权限');
     const existing = await (this.prisma as any).warehouseTallyTask.findUnique({ where: { id } });
     if (!existing) {
@@ -9992,6 +10144,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         where: { id: task.id },
         data: {
           status: 'COMPLETED',
+          tallyProgressStatus: 'COMPLETED',
           completedPackageCount: createdRows.reduce((sum: number, row: any) => sum + Number(row.packageCount), 0),
           completedWeightKg: null,
           completedLengthCm: null,
@@ -10064,6 +10217,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async generateWarehouseTallyTaskLabel(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block']);
     await this.ensurePermission(principal, 'warehouse:tally-label:generate', '没有生成理货标签权限');
     const existing = await (this.prisma as any).warehouseTallyTask.findUnique({ where: { id } });
     if (!existing) {
@@ -10072,6 +10226,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const before = mapWarehouseTallyTask(existing);
     if (before.status !== 'COMPLETED') {
       throw new BadRequestException('请先完成理货再生成标签');
+    }
+    if (before.labelNo) {
+      await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-label:reprint-block']);
     }
     const labelNo = before.taskNo;
     const labelQrContent = buildWarehouseTallyLabelQrContent(before, labelNo);
@@ -10125,6 +10282,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getWarehouseTallyTaskOutputPackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block']);
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
@@ -10706,6 +10864,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async applyWarehouseTallyTaskLabel(principal: Principal, input: WarehouseTallyLabelScanInput): Promise<WarehouseTallyLabelScanResponse> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block']);
     await this.ensurePermission(principal, 'warehouse:tally-label:scan-apply', '没有扫描应用理货标签权限');
     const labelNo = input.labelNo?.trim();
     if (!labelNo) {
@@ -10731,6 +10890,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async markWarehouseTallyTaskLabelOutput(principal: Principal, id: string, action: 'print' | 'download'): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block']);
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, [action === 'print' ? 'warehouse:tally-label:reprint-block' : 'warehouse:tally-label:download-block']);
     await this.ensurePermission(principal, action === 'print' ? 'warehouse:tally-label:print' : 'warehouse:tally-label:download', '没有输出理货标签权限');
     const existing = await (this.prisma as any).warehouseTallyTask.findUnique({ where: { id } });
     if (!existing) {
@@ -13270,6 +13431,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('应付金额必须大于等于 0');
     }
     const financeAgent = await this.resolveFinanceAgent(this.prisma, input, shipment.agent);
+    const settlementMethod = input.settlementMethod ?? shipment.settlementMethod ?? undefined;
     const item = await (this.prisma as any).shipmentFinanceItem.create({
       data: {
         shipmentId: shipment.id,
@@ -13277,7 +13439,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         name: input.name,
         amount,
         currency: input.currency ?? 'RMB',
-        settlementMethod: input.settlementMethod,
+        settlementMethod,
         paymentNo: input.paymentNo,
         reconciliationStatus: 'PENDING',
         agentId: financeAgent?.id,
@@ -13293,6 +13455,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.prisma.auditLog.create({
       data: { actorId: principal.id, action: 'finance.payable.create', target: item.id, before: undefined, after: item }
     });
+    if (isEarlyPaymentSettlementMethod(settlementMethod)) {
+      await this.upsertPayablePaymentApplication(item);
+    }
     return this.toPayableAuditSummary(item, { canViewSensitivePayable, canViewProfit });
   }
 
@@ -13317,13 +13482,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const financeAgent = input.agentId !== undefined || input.agentName !== undefined
       ? await this.resolveFinanceAgent(this.prisma, input)
       : { id: current.agentId ?? current.shipment?.agent?.id, name: current.agentName ?? current.shipment?.agent?.name };
+    const settlementMethod = input.settlementMethod ?? current.settlementMethod ?? current.shipment?.settlementMethod ?? undefined;
     const updated = await (this.prisma as any).shipmentFinanceItem.update({
       where: { id },
       data: {
         name: input.name ?? current.name,
         amount,
         currency: input.currency ?? current.currency,
-        settlementMethod: input.settlementMethod ?? current.settlementMethod,
+        settlementMethod,
         paymentNo: input.paymentNo ?? current.paymentNo,
         agentId: financeAgent?.id,
         agentName: financeAgent?.name,
@@ -13337,6 +13503,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.prisma.auditLog.create({
       data: { actorId: principal.id, action: 'finance.payable.update', target: id, before: current, after: updated }
     });
+    if (isEarlyPaymentSettlementMethod(settlementMethod)) {
+      await this.upsertPayablePaymentApplication(updated);
+    }
     return this.toPayableAuditSummary(updated, { canViewSensitivePayable, canViewProfit });
   }
 
@@ -13833,7 +14002,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           }
         }
         const lockedFirst = this.toPendingPaymentSummary(lockedRows[0]);
-        const totalAmount = lockedRows.reduce((sum: number, row: any) => sum + Number(row.amount), 0);
+        const totalAmount = Number(lockedRows.reduce((sum: number, row: any) => sum + Number(row.amount), 0).toFixed(2));
         const createdApplication = await tx.paymentApplication.create({
           data: {
             applicationNo: await this.nextPaymentApplicationNo(tx),
@@ -15317,16 +15486,65 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const canReverse = await this.hasPermission(principal.role, 'business:review:reverse');
     if (!shipment || shipment.deletedAt || !canReverse || (scope && !isOwner)) throw new NotFoundException('运单不存在');
     if (shipment.status !== 'WAITING_SORT') throw new BadRequestException(`订单已进入${shipmentStatusLabels[shipment.status as ShipmentStatus]}，不能反审核`);
-    const financeItems = await (this.prisma as any).shipmentFinanceItem.findMany({ where: { shipmentId, voided: false } });
-    if (financeItems.some((item: any) => item.reconciliationStatus === 'CONFIRMED' || item.locked || Number(item.receivedAmount ?? 0) > 0)) throw new BadRequestException('订单已进入财务审核或已匹配收款，不能反审核');
-    const now = new Date();
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await (tx as any).shipmentFinanceItem.updateMany({ where: { shipmentId, type: 'PAYABLE', name: '代理成本', voided: false, locked: false }, data: { voided: true, reconciliationStatus: 'VOIDED', voidedAt: now } });
-      return tx.shipment.update({ where: { id: shipmentId }, data: { status: 'REVIEW_PENDING', businessReviewedBy: null, businessReviewedAt: null, channelId: null, agentId: null, shippingMarkRequired: false, warehouseOutboundRemark: null, latestTracking: '反审核后回到待审核' }, include: shipmentIncludes });
+    await this.ensurePendingRoutingMask(principal, 'market:pending-routing:reroute-block');
+    const reason = input.reason?.trim();
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.lockShipmentRow(tx, shipmentId);
+      const lockedShipment = await (tx as any).shipment.findUnique({ where: { id: shipmentId }, include: shipmentIncludes });
+      const lockedIsOwner = Boolean(scope && [lockedShipment?.entryBy, lockedShipment?.salesperson, lockedShipment?.customer?.salesperson]
+        .some((owner: unknown) => Boolean(owner && scope.includes(owner as string))));
+      if (!lockedShipment || lockedShipment.deletedAt || (scope && !lockedIsOwner)) throw new NotFoundException('运单不存在');
+      if (lockedShipment.status !== 'WAITING_SORT') throw new ConflictException('订单状态已变化，请刷新后重试');
+      const financeItems = await (tx as any).shipmentFinanceItem.findMany({ where: { shipmentId, voided: false } });
+      if (financeItems.some((item: any) => item.reconciliationStatus === 'CONFIRMED' || item.locked || Number(item.receivedAmount ?? 0) > 0)) {
+        throw new BadRequestException('订单已进入财务审核或已匹配收款，不能反审核');
+      }
+      const latestRouteLog = await (tx as any).auditLog.findFirst({
+        where: { target: shipmentId, action: { in: ['shipment.route', 'shipment.route.update'] } },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true, after: true }
+      });
+      const latestReverseLog = await (tx as any).auditLog.findFirst({
+        where: { target: shipmentId, action: 'shipment.review.reverse' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true }
+      });
+      const routeAfter = latestRouteLog && (!latestReverseLog || latestRouteLog.createdAt > latestReverseLog.createdAt)
+        ? latestRouteLog.after as { payableFinanceItemIds?: unknown }
+        : undefined;
+      const routePayableIds = Array.isArray(routeAfter?.payableFinanceItemIds)
+        ? routeAfter.payableFinanceItemIds.filter((id): id is string => typeof id === 'string')
+        : [];
+      const routePayableIdSet = new Set(routePayableIds);
+      const releasableIds = financeItems
+        .filter((item: any) => item.type === 'PAYABLE' && !item.locked && routePayableIdSet.has(item.id))
+        .map((item: any) => item.id);
+      if (releasableIds.length) {
+        await (tx as any).shipmentFinanceItem.updateMany({
+          where: { id: { in: releasableIds }, shipmentId, type: 'PAYABLE', voided: false, locked: false },
+          data: { voided: true, reconciliationStatus: 'VOIDED', voidedAt: new Date() }
+        });
+      }
+      const updateResult = await (tx as any).shipment.updateMany({
+        where: { id: shipmentId, status: 'WAITING_SORT', deletedAt: null },
+        data: { status: 'REVIEW_PENDING', businessReviewedBy: null, businessReviewedAt: null, channelId: null, agentId: null, shippingMarkRequired: false, warehouseOutboundRemark: null, latestTracking: '反审核后回到待审核' }
+      });
+      if (updateResult.count !== 1) throw new ConflictException('订单状态已变化，请刷新后重试');
+      const updated = await (tx as any).shipment.findUnique({ where: { id: shipmentId }, include: shipmentIncludes });
+      if (!updated) throw new NotFoundException('运单不存在');
+      await (tx as any).shipmentEvent.create({ data: { shipmentId, fromStatus: 'WAITING_SORT', toStatus: 'REVIEW_PENDING', note: `反审核${reason ? `：${reason}` : ''}` } });
+      await (tx as any).auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'shipment.review.reverse',
+          target: shipmentId,
+          before: toAuditJson(mapShipment(lockedShipment)),
+          after: toAuditJson({ ...mapShipment(updated), statusFrom: 'WAITING_SORT', statusTo: 'REVIEW_PENDING', reason, releasedRoutePayableCount: releasableIds.length })
+        }
+      });
+      return updated;
     });
-    await this.createEvent(shipmentId, 'WAITING_SORT', 'REVIEW_PENDING', `反审核${input.reason?.trim() ? `：${input.reason.trim()}` : ''}`);
-    await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'shipment.review.reverse', target: shipmentId, before: toAuditJson(mapShipment(shipment)), after: toAuditJson({ ...mapShipment(updated), statusFrom: 'WAITING_SORT', statusTo: 'REVIEW_PENDING', reason: input.reason?.trim(), releasedRoutePayableCount: financeItems.filter((item: any) => item.type === 'PAYABLE' && item.name === '代理成本' && !item.locked).length }) } });
-    return this.buildShipmentReviewDetail(principal, updated);
+    return this.buildShipmentReviewDetail(principal, result);
   }
 
   async deleteShipmentReview(principal: Principal, shipmentId: string, input: ShipmentReviewDeleteInput = {}): Promise<{ id: string; deleted: true }> {
@@ -15604,6 +15822,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   ) {
     this.validateFinanceItemInput(input.type, input);
     const shipment = await this.getVisibleShipment(principal, shipmentId, options.allowDepartmentTeam === true);
+    await this.ensurePendingRoutingCostMutationAccess(principal, input.type, shipment, 'create');
     if (options.pendingReviewBusinessCostOnly) {
       await this.ensurePendingReviewBusinessCostWrite(principal, input.type, shipment);
     }
@@ -15616,6 +15835,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         include: shipmentIncludes
       });
       if (!lockedShipment) throw new NotFoundException('运单不存在');
+      await this.ensurePendingRoutingCostMutationAccess(principal, input.type, lockedShipment, 'create');
       if (options.allowDepartmentTeam) {
         await this.assertPendingReviewBusinessCostAccessAfterLock(tx, principal, lockedShipment);
       }
@@ -15638,7 +15858,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           name: input.name,
           amount,
           currency: input.currency ?? 'RMB',
-          settlementMethod: input.settlementMethod ?? (input.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(lockedShipment) : undefined),
+          settlementMethod: input.settlementMethod ?? (input.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(lockedShipment) : input.type === 'PAYABLE' ? lockedShipment.settlementMethod : undefined),
           paymentNo: pendingReviewBusinessCostWrite ? undefined : input.paymentNo,
           reconciliationStatus: pendingReviewBusinessCostWrite ? 'PENDING' : input.reconciliationStatus ?? 'PENDING',
           agentId: financeAgent?.id,
@@ -15673,6 +15893,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       });
       return { item: created, currentShipment: lockedShipment };
     });
+    if (input.type === 'PAYABLE' && isEarlyPaymentSettlementMethod(item.settlementMethod)) {
+      await this.upsertPayablePaymentApplication(item);
+    }
     await this.createBusinessCostChangeNotificationAudit(principal, input.type, currentShipment, null, item);
     return this.scopeFinanceItemSummary(principal, input.type, this.toFinanceItemSummary(item, currentShipment));
   }
@@ -16557,6 +16780,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const current = await this.findFinanceItem(shipment.id, feeId);
     if (options.requiredType && current.type !== options.requiredType) throw new NotFoundException('费用项目不存在');
+    await this.ensurePendingRoutingCostMutationAccess(principal, current.type, shipment, 'update');
     this.ensureStandaloneShipmentFinanceItem(current);
     await this.ensureFinanceItemManageAccess(principal, current.type, shipment, options.pendingReviewBusinessCostOnly === true);
     if (current.voided) {
@@ -16589,6 +16813,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const lockedCurrent = await tx.shipmentFinanceItem.findFirst({ where: { id: feeId, shipmentId: shipment.id } });
       if (!lockedCurrent) throw new NotFoundException('费用项目不存在');
       if (options.requiredType && lockedCurrent.type !== options.requiredType) throw new NotFoundException('费用项目不存在');
+      await this.ensurePendingRoutingCostMutationAccess(principal, lockedCurrent.type, lockedShipment, 'update');
       this.ensureStandaloneShipmentFinanceItem(lockedCurrent);
       await this.ensureFinanceItemManageAccess(principal, lockedCurrent.type, lockedShipment, options.pendingReviewBusinessCostOnly === true);
       if (lockedCurrent.voided) throw new BadRequestException('已作废费用不能继续操作');
@@ -16619,7 +16844,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           name: input.name ?? lockedCurrent.name,
           amount,
           currency: input.currency ?? lockedCurrent.currency,
-          settlementMethod: input.settlementMethod ?? lockedCurrent.settlementMethod ?? (lockedCurrent.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(lockedShipment) : undefined),
+          settlementMethod: input.settlementMethod ?? lockedCurrent.settlementMethod ?? (lockedCurrent.type === 'RECEIVABLE' ? this.resolveReceivableSettlementMethod(lockedShipment) : lockedCurrent.type === 'PAYABLE' ? lockedShipment.settlementMethod : undefined),
           paymentNo: pendingReviewBusinessCostWrite ? lockedCurrent.paymentNo : input.paymentNo ?? lockedCurrent.paymentNo,
           reconciliationStatus: pendingReviewBusinessCostWrite ? lockedCurrent.reconciliationStatus : input.reconciliationStatus ?? lockedCurrent.reconciliationStatus,
           agentId: financeAgent?.id,
@@ -16658,6 +16883,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       });
       return { before: lockedCurrent, updated, currentShipment: lockedShipment };
     });
+    if (result.updated.type === 'PAYABLE' && isEarlyPaymentSettlementMethod(result.updated.settlementMethod)) {
+      await this.upsertPayablePaymentApplication(result.updated);
+    }
     await this.createBusinessCostChangeNotificationAudit(principal, result.before.type, result.currentShipment, result.before, result.updated);
     return this.scopeFinanceItemSummary(principal, result.before.type, this.toFinanceItemSummary(result.updated, result.currentShipment));
   }
@@ -16682,6 +16910,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const current = await this.findFinanceItem(shipment.id, feeId);
     if (options.requiredType && current.type !== options.requiredType) throw new NotFoundException('费用项目不存在');
+    await this.ensurePendingRoutingCostMutationAccess(principal, current.type, shipment, 'delete');
     this.ensureStandaloneShipmentFinanceItem(current);
     await this.ensureFinanceItemManageAccess(principal, current.type, shipment, options.pendingReviewBusinessCostOnly === true);
     if (current.voided) {
@@ -16713,6 +16942,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const lockedCurrent = await tx.shipmentFinanceItem.findFirst({ where: { id: feeId, shipmentId: shipment.id } });
       if (!lockedCurrent) throw new NotFoundException('费用项目不存在');
       if (options.requiredType && lockedCurrent.type !== options.requiredType) throw new NotFoundException('费用项目不存在');
+      await this.ensurePendingRoutingCostMutationAccess(principal, lockedCurrent.type, lockedShipment, 'delete');
       this.ensureStandaloneShipmentFinanceItem(lockedCurrent);
       await this.ensureFinanceItemManageAccess(principal, lockedCurrent.type, lockedShipment, options.pendingReviewBusinessCostOnly === true);
       if (lockedCurrent.voided) throw new BadRequestException('费用已作废');
@@ -17670,7 +17900,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       await this.lockShipmentRow(tx, shipment.id);
       const lockedShipment = await (tx as any).shipment.findUnique({
         where: { id: shipment.id },
-        select: { status: true, channelId: true, agentId: true, warehouseOutboundRemark: true }
+        include: shipmentIncludes
       });
       if (lockedShipment?.status !== 'WAITING_SORT') {
         throw new BadRequestException(shouldApprove ? '当前状态不允许排货' : '只有待排货运单可以修改排货信息');
@@ -17679,6 +17909,43 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       routeBeforeChannelId = lockedShipment.channelId;
       routeBeforeAgentId = lockedShipment.agentId;
       routeBeforeWarehouseOutboundRemark = lockedShipment.warehouseOutboundRemark ?? undefined;
+      const latestRouteLog = await (tx as any).auditLog.findFirst({
+        where: {
+          target: shipment.id,
+          action: { in: ['shipment.route', 'shipment.route.update'] }
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true, after: true }
+      });
+      const latestReverseLog = await (tx as any).auditLog.findFirst({
+        where: { target: shipment.id, action: 'shipment.review.reverse' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true }
+      });
+      const hasCurrentRoute = Boolean(
+        latestRouteLog
+        && (!latestReverseLog || latestRouteLog.createdAt > latestReverseLog.createdAt)
+      );
+      const routeAfter = hasCurrentRoute
+        ? latestRouteLog?.after as unknown as {
+            companyChannelId?: string | null;
+            agentId?: string | null;
+            agentChannelId?: string | null;
+            agentChannelName?: string | null;
+            shippingMarkRequired?: boolean | null;
+            warehouseOutboundRemark?: string | null;
+          } | undefined
+        : undefined;
+      await this.ensurePendingRoutingRouteAccess(principal, {
+        ...mapShipment(lockedShipment),
+        hasExistingRoute: latestRouteLog ? hasCurrentRoute : false,
+        channelId: routeAfter?.companyChannelId,
+        agentId: routeAfter?.agentId,
+        agentChannelId: routeAfter?.agentChannelId,
+        routeAgentChannelName: routeAfter?.agentChannelName,
+        shippingMarkRequired: routeAfter?.shippingMarkRequired,
+        warehouseOutboundRemark: routeAfter?.warehouseOutboundRemark
+      }, body, shouldApprove);
       if (!agentChannel && body.saveAgentChannelToMasterData === true) {
         await (tx as any).$queryRaw(Prisma.sql`
           SELECT 1 AS "locked"
@@ -17789,6 +18056,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             name: '代理成本',
             amount: legacyPayableTotal,
             currency: body.currency ?? 'RMB',
+            settlementMethod: shipment.settlementMethod ?? undefined,
             reconciliationStatus: 'PENDING',
             agentId: agent.id,
             agentName: agent.name,
@@ -17877,6 +18145,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
       });
     });
+
+    const hangPayable = routePayables.find((item: any) => item.type === 'PAYABLE' && isEarlyPaymentSettlementMethod(item.settlementMethod));
+    if (hangPayable) {
+      await this.upsertPayablePaymentApplication(hangPayable);
+    }
 
     const persisted = await this.mapShipmentResponse(await this.getVisibleShipment(principal, shipment.id));
     const updated = applyShipmentRouteArchiveFields(persisted, {
@@ -18164,6 +18437,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async rerouteShipment(principal: Principal, shipmentId: string, body: ShipmentRerouteInput): Promise<Shipment> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    await this.ensurePendingRoutingMask(principal, 'market:routed:reroute-block');
     if (!['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status)) {
       throw new BadRequestException('只有已出库或待离港订单可以退回重排');
     }
@@ -18179,31 +18453,31 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       agentName: shipment.agent?.name
     };
     const returnedAt = new Date().toISOString();
-    await this.createEvent(shipment.id, shipment.status as ShipmentStatus, 'WAITING_SORT', `代理退回重排：${reason}`);
-    const updatedRow = await this.prisma.shipment.update({
-      where: { id: shipment.id },
-      data: {
-        status: 'WAITING_SORT',
-        latestTracking: '代理退回，等待市场重新排货',
-        trackingStaleDays: 0
-      },
-      include: shipmentIncludes
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'shipment.reroute_return',
-        target: shipment.id,
-        before,
-        after: {
-          status: 'WAITING_SORT',
-          statusFrom: shipment.status,
-          statusTo: 'WAITING_SORT',
-          reason,
-          returnedBy: principal.username,
-          returnedAt
-        }
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.lockShipmentRow(tx, shipment.id);
+      const lockedShipment = await (tx as any).shipment.findUnique({ where: { id: shipment.id }, include: shipmentIncludes });
+      if (!lockedShipment || lockedShipment.deletedAt) throw new NotFoundException('运单不存在');
+      if (!['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(lockedShipment.status)) {
+        throw new ConflictException('订单状态已变化，请刷新后重试');
       }
+      const updateResult = await (tx as any).shipment.updateMany({
+        where: { id: shipment.id, status: { in: ['OUTBOUNDED', 'WAITING_DEPARTURE'] }, deletedAt: null },
+        data: { status: 'WAITING_SORT', latestTracking: '代理退回，等待市场重新排货', trackingStaleDays: 0 }
+      });
+      if (updateResult.count !== 1) throw new ConflictException('订单状态已变化，请刷新后重试');
+      const updatedRow = await (tx as any).shipment.findUnique({ where: { id: shipment.id }, include: shipmentIncludes });
+      if (!updatedRow) throw new NotFoundException('运单不存在');
+      await (tx as any).shipmentEvent.create({ data: { shipmentId: shipment.id, fromStatus: lockedShipment.status, toStatus: 'WAITING_SORT', note: `代理退回重排：${reason}` } });
+      await (tx as any).auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'shipment.reroute_return',
+          target: shipment.id,
+          before,
+          after: { status: 'WAITING_SORT', statusFrom: lockedShipment.status, statusTo: 'WAITING_SORT', reason, returnedBy: principal.username, returnedAt }
+        }
+      });
+      return { updatedRow, statusFrom: lockedShipment.status as ShipmentStatus };
     });
     void this.lineage?.recordEvent('market.routed.reroute', {
       actorUsername: principal.username,
@@ -18211,7 +18485,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       payload: {
         shipmentId: shipment.id,
         systemOrderNo: shipment.systemOrderNo,
-        statusFrom: shipment.status,
+        statusFrom: result.statusFrom,
         statusTo: 'WAITING_SORT',
         reason,
         returnedBy: principal.username,
@@ -18222,10 +18496,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         previousAgentName: before.agentName
       },
       sourceRefs: [{ nodeType: 'shipment', id: shipment.id }],
-      metrics: { statusFrom: shipment.status, statusTo: 'WAITING_SORT' }
+      metrics: { statusFrom: result.statusFrom, statusTo: 'WAITING_SORT' }
     });
     return this.scopeShipmentAgentWeight(
-      { ...await this.mapShipmentResponse(updatedRow), routeReturnedAt: returnedAt },
+      { ...await this.mapShipmentResponse(result.updatedRow), routeReturnedAt: returnedAt },
       await this.canViewShipmentAgentWeight(principal)
     );
   }
@@ -18243,31 +18517,29 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('只有待排货运单可以删除');
     }
     const deletedAt = new Date();
-    await this.createEvent(shipment.id, shipment.status as ShipmentStatus, shipment.status as ShipmentStatus, `删除待排货：${reason}`);
-    const deleted = await this.prisma.shipment.update({
-      where: { id: shipment.id },
-      data: {
-        deletedAt,
-        deletedBy: principal.username,
-        deletedReason: reason,
-        deleteType: 'MANUAL'
-      },
-      include: shipmentIncludes
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'shipment.route.delete',
-        target: shipment.id,
-        before: toAuditJson(mapShipment(shipment)),
-        after: toAuditJson({
-          ...mapShipment(deleted),
-          statusBefore: shipment.status,
-          deleteReason: reason,
-          deletedBy: principal.username,
-          deletedAt: deletedAt.toISOString()
-        })
-      }
+    const result = await this.prisma.$transaction(async (tx) => {
+      await this.lockShipmentRow(tx, shipment.id);
+      const lockedShipment = await (tx as any).shipment.findUnique({ where: { id: shipment.id }, include: shipmentIncludes });
+      if (!lockedShipment || lockedShipment.deletedAt) throw new NotFoundException('运单不存在');
+      if (lockedShipment.status !== 'WAITING_SORT') throw new ConflictException('订单状态已变化，请刷新后重试');
+      const updateResult = await (tx as any).shipment.updateMany({
+        where: { id: shipment.id, status: 'WAITING_SORT', deletedAt: null },
+        data: { deletedAt, deletedBy: principal.username, deletedReason: reason, deleteType: 'MANUAL' }
+      });
+      if (updateResult.count !== 1) throw new ConflictException('订单状态已变化，请刷新后重试');
+      const deleted = await (tx as any).shipment.findUnique({ where: { id: shipment.id }, include: shipmentIncludes });
+      if (!deleted) throw new NotFoundException('运单不存在');
+      await (tx as any).shipmentEvent.create({ data: { shipmentId: shipment.id, fromStatus: lockedShipment.status, toStatus: lockedShipment.status, note: `删除待排货：${reason}` } });
+      await (tx as any).auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'shipment.route.delete',
+          target: shipment.id,
+          before: toAuditJson(mapShipment(lockedShipment)),
+          after: toAuditJson({ ...mapShipment(deleted), statusBefore: lockedShipment.status, deleteReason: reason, deletedBy: principal.username, deletedAt: deletedAt.toISOString() })
+        }
+      });
+      return deleted;
     });
     void this.lineage?.recordEvent('market.pending_routing.delete', {
       actorUsername: principal.username,
@@ -18283,7 +18555,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       sourceRefs: [{ nodeType: 'shipment', id: shipment.id }],
       metrics: { statusBefore: shipment.status, deleteType: 'MANUAL' }
     });
-    return this.scopeShipmentAgentWeight(await this.mapShipmentResponse(deleted), await this.canViewShipmentAgentWeight(principal));
+    return this.scopeShipmentAgentWeight(await this.mapShipmentResponse(result), await this.canViewShipmentAgentWeight(principal));
   }
 
   async approveShipmentBusinessData(principal: Principal, shipmentId: string, body: CustomerServiceDataReviewInput): Promise<Shipment> {
@@ -18473,7 +18745,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         amountOverridden: item.amountOverridden === true,
         reconciliationStatus: (item.reconciliationStatus ?? 'PENDING') as ShipmentFinanceItemStatus,
         locked: item.locked === true,
-        selectable: item.locked !== true && item.reconciliationStatus !== 'CONFIRMED'
+        selectable: !shipment.transferNo || (item.locked !== true && !['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))
       };
     });
     return { shipmentId: shipment.id, rows };
@@ -18492,6 +18764,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       : 'customer-service:data-confirm:agent-update';
     if (!(await this.hasPermission(principal.role, permission))) throw new ForbiddenException('无权修改费用条目');
     this.ensureCustomerServiceDataCycle(shipment, input.expectedOutboundAt);
+    await this.ensureCustomerServiceDataEditable(principal, shipment, kind);
     if (shipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改费用条目');
     if (!input.name?.trim()) throw new BadRequestException('费用名称不能为空');
     if (!['BUSINESS_COST', 'PAYABLE'].includes(input.type)) throw new BadRequestException('费用类型无效');
@@ -18510,13 +18783,23 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (lockedShipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改费用条目');
       const lockedCurrent = await tx.shipmentFinanceItem.findFirst({ where: { id: feeId, shipmentId, voided: false } });
       if (!lockedCurrent || !['BUSINESS_COST', 'PAYABLE'].includes(lockedCurrent.type) || (kind === 'agent' && lockedCurrent.type !== 'PAYABLE')) throw new NotFoundException('费用项目不存在');
-      if (lockedCurrent.locked || ['CONFIRMED', 'LOCKED'].includes(lockedCurrent.reconciliationStatus ?? 'PENDING')) throw new BadRequestException('费用已审核或锁定，不能修改');
+      if (lockedShipment.transferNo && (lockedCurrent.locked || ['CONFIRMED', 'LOCKED'].includes(lockedCurrent.reconciliationStatus ?? 'PENDING'))) throw new BadRequestException('费用已审核或锁定，不能修改');
       if (lockedCurrent.type !== input.type) {
         if (kind !== 'business') throw new BadRequestException('代理数据不能切换费用类型');
         await this.ensureCustomerServiceFinanceTypeSwitchable(tx, feeId);
       }
       this.ensureBusinessCostEditableAfterDispatch(principal, lockedCurrent.type, lockedShipment);
       this.ensureBusinessCostEditableAfterDispatch(principal, input.type, lockedShipment);
+      if (lockedCurrent.type === 'PAYABLE' || input.type === 'PAYABLE') {
+        const pendingRows = await (tx as any).payablePaymentApplication.findMany({ where: { payableFinanceItemId: feeId }, select: { id: true, status: true } });
+        if (pendingRows.some((row: any) => !['PENDING', 'READY'].includes(row.status))) throw new BadRequestException('应付成本已进入付款流程，不能修改');
+        const pendingIds = pendingRows.map((row: any) => row.id);
+        const [applicationItem, voucher] = await Promise.all([
+          (tx as any).paymentApplicationItem.findFirst({ where: { payableFinanceItemId: feeId }, select: { id: true } }),
+          pendingIds.length ? (tx as any).paymentVoucher.findFirst({ where: { OR: [{ payableFinanceItemId: feeId }, { pendingPaymentId: { in: pendingIds } }] }, select: { id: true } }) : null
+        ]);
+        if (applicationItem || voucher) throw new BadRequestException('应付成本已被付款申请或凭证引用，不能修改');
+      }
       const quantity = Number(input.billingQuantity);
       const unitPrice = input.unitPrice === undefined
         ? lockedCurrent.unitPrice === null || lockedCurrent.unitPrice === undefined ? undefined : Number(lockedCurrent.unitPrice)
@@ -18550,7 +18833,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     if (!(await this.hasPermission(principal.role, 'customer-service:data-confirm:business-update'))) throw new ForbiddenException('无权修改业务数据');
     const dataConfirmationCycleStartedAt = this.ensureCustomerServiceDataCycle(shipment, body.expectedOutboundAt);
-    await this.ensureCustomerServiceDataEditable(shipment, 'business');
+    await this.ensureCustomerServiceDataEditable(principal, shipment, 'business', body.remark);
     this.validateCustomerServiceData(body);
     const managedBusinessCostChanges: Array<{ type: ShipmentFinanceItemType; before: any; after: any }> = [];
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -18573,7 +18856,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         if (requestedIds.some((id) => !costById.has(id))) throw new BadRequestException('选择的业务成本费用不存在或不属于当前运单');
         selectedCosts = costs.filter((item: any) => requestedIds.includes(item.id));
         const deletedCosts = costs.filter((item: any) => !requestedIds.includes(item.id));
-        if (deletedCosts.some((item: any) => item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))) throw new BadRequestException('业务成本已审核或锁定，不能删除');
+        if (lockedShipment.transferNo && deletedCosts.some((item: any) => item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))) throw new BadRequestException('业务成本已审核或锁定，不能删除');
         for (const row of requestedCosts) {
           if (!row.name?.trim()) throw new BadRequestException('费用名称不能为空');
           if (!['KG', 'CBM'].includes(row.billingUnit)) throw new BadRequestException('计费依据只能选择 KG 或 CBM');
@@ -18594,7 +18877,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           };
           if (row.id) {
             const current = costById.get(row.id);
-            if (current?.locked || ['CONFIRMED', 'LOCKED'].includes(current?.reconciliationStatus ?? 'PENDING')) {
+            if (lockedShipment.transferNo && (current?.locked || ['CONFIRMED', 'LOCKED'].includes(current?.reconciliationStatus ?? 'PENDING'))) {
               const unchanged = current.name === commonData.name
                 && (current.currency ?? 'RMB') === commonData.currency
                 && (current.billingUnit ?? 'KG') === commonData.billingUnit
@@ -18625,11 +18908,22 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
       } else {
         selectedCosts = this.selectCustomerServiceFinanceItems(costs, body.selectedFinanceItemIds);
-        if (selectedCosts.some((item: any) => item.locked || item.reconciliationStatus === 'CONFIRMED')) {
+        if (lockedShipment.transferNo && selectedCosts.some((item: any) => item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))) {
           const message = await this.canViewOrderEntryBusinessCosts(principal)
             ? '业务成本或应付成本已审核或锁定，不能修改计费重'
             : '关联费用已审核或锁定，不能修改计费重';
           throw new BadRequestException(message);
+        }
+        const payableIds = selectedCosts.filter((item: any) => item.type === 'PAYABLE').map((item: any) => item.id);
+        if (payableIds.length) {
+          const pendingRows = await (tx as any).payablePaymentApplication.findMany({ where: { payableFinanceItemId: { in: payableIds } }, select: { id: true, status: true } });
+          if (pendingRows.some((row: any) => !['PENDING', 'READY'].includes(row.status))) throw new BadRequestException('应付成本已进入付款流程，不能修改计费重');
+          const pendingIds = pendingRows.map((row: any) => row.id);
+          const [applicationItem, voucher] = await Promise.all([
+            (tx as any).paymentApplicationItem.findFirst({ where: { payableFinanceItemId: { in: payableIds } }, select: { id: true } }),
+            pendingIds.length ? (tx as any).paymentVoucher.findFirst({ where: { OR: [{ payableFinanceItemId: { in: payableIds } }, { pendingPaymentId: { in: pendingIds } }] }, select: { id: true } }) : null
+          ]);
+          if (applicationItem || voucher) throw new BadRequestException('应付成本已被付款申请或凭证引用，不能修改计费重');
         }
         const updatedCosts = await Promise.all(selectedCosts.map((item: any) => {
           const billing = ['BUSINESS_COST', 'PAYABLE'].includes(item.type) ? resolveFinanceCostBillingFields(item.type, item) : undefined;
@@ -18682,7 +18976,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     if (!(await this.hasPermission(principal.role, 'customer-service:data-confirm:agent-update'))) throw new ForbiddenException('无权修改代理数据');
     const dataConfirmationCycleStartedAt = this.ensureCustomerServiceDataCycle(shipment, body.expectedOutboundAt);
-    await this.ensureCustomerServiceDataEditable(shipment, 'agent');
+    await this.ensureCustomerServiceDataEditable(principal, shipment, 'agent', body.remark);
     this.validateCustomerServiceData(body);
     const updated = await this.prisma.$transaction(async (tx) => {
       await this.lockShipmentRow(tx, shipmentId);
@@ -18692,7 +18986,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (lockedShipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改数据确认');
       const costs = await (tx as any).shipmentFinanceItem.findMany({ where: { shipmentId, type: 'PAYABLE', voided: false } });
       const selectedCosts = this.selectCustomerServiceFinanceItems(costs, body.selectedFinanceItemIds);
-      if (selectedCosts.some((item: any) => item.locked || item.reconciliationStatus === 'CONFIRMED')) throw new BadRequestException('应付成本已锁定，不能修改计费重');
+      if (lockedShipment.transferNo && selectedCosts.some((item: any) => item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))) throw new BadRequestException('应付成本已锁定，不能修改计费重');
+      const payableIds = selectedCosts.map((item: any) => item.id);
+      const pendingRows = await (tx as any).payablePaymentApplication.findMany({ where: { payableFinanceItemId: { in: payableIds } }, select: { id: true, status: true } });
+      if (pendingRows.some((row: any) => !['PENDING', 'READY'].includes(row.status))) throw new BadRequestException('应付成本已进入付款流程，不能修改计费重');
+      const pendingIds = pendingRows.map((row: any) => row.id);
+      const [applicationItem, voucher] = await Promise.all([
+        (tx as any).paymentApplicationItem.findFirst({ where: { payableFinanceItemId: { in: payableIds } }, select: { id: true } }),
+        pendingIds.length ? (tx as any).paymentVoucher.findFirst({ where: { OR: [{ payableFinanceItemId: { in: payableIds } }, { pendingPaymentId: { in: pendingIds } }] }, select: { id: true } }) : null
+      ]);
+      if (applicationItem || voucher) throw new BadRequestException('应付成本已被付款申请或凭证引用，不能修改计费重');
       const updatedCosts = await Promise.all(selectedCosts.map((item: any) => {
         const billing = resolveFinanceCostBillingFields('PAYABLE', item);
         const quantity = billing.billingUnit === 'CBM' ? Number(lockedShipment.volumeCbm ?? billing.billingQuantity) : Number(body.chargeWeightKg);
@@ -18763,8 +19066,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
     if (!(await this.hasPermission(principal.role, 'customer-service:data-confirm:approve-all'))) throw new ForbiddenException('无权执行双数据审核');
     this.ensureCustomerServiceDataCycle(shipment, body.expectedOutboundAt);
-    await this.ensureCustomerServiceDataEditable(shipment, 'business');
-    await this.ensureCustomerServiceDataEditable(shipment, 'agent');
+    await this.ensureCustomerServiceDataEditable(principal, shipment, 'business');
+    await this.ensureCustomerServiceDataEditable(principal, shipment, 'agent');
     await this.approveShipmentBusinessData(principal, shipmentId, body);
     return this.approveShipmentAgentData(principal, shipmentId, body);
   }
@@ -18816,6 +19119,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     options: { allowCustomerServiceTransferAgentWeight?: boolean; enforceOperationsLineShipmentStageEdit?: boolean } = {}
   ): Promise<Shipment> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    if (shipment.status === 'WAITING_SORT'
+      && (input.status === 'WAITING_DISPATCH' || input.channelId !== undefined)) {
+      throw new BadRequestException('待排货的状态和渠道请通过市场排货入口修改');
+    }
+    if (shipment.status === 'WAITING_DISPATCH') {
+      if (input.status === undefined || input.status === 'WAITING_DISPATCH') {
+        await this.ensurePermission(principal, 'market:routed:update', '没有已排货修改权限');
+      }
+      await this.ensurePendingRoutingMask(principal, 'market:routed:update-block');
+    }
     if (options.enforceOperationsLineShipmentStageEdit) await this.ensureOperationLineShipmentStageEditable(principal, shipment);
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal)
       || (options.allowCustomerServiceTransferAgentWeight === true
@@ -18947,9 +19260,25 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       notes.push(`更新 ETD：${etdAt.toISOString()}`);
     }
 
-    const updated = await this.prisma.shipment.update({
-      where: { id: shipment.id },
-      data: {
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await this.lockShipmentRow(tx, shipment.id);
+      const locked = await (tx as any).shipment.findUnique({
+        where: { id: shipment.id },
+        select: { status: true }
+      });
+      if (!locked) throw new NotFoundException('运单不存在');
+      if (locked.status !== currentStatus) {
+        throw new ConflictException('运单状态已变化，请刷新后重试');
+      }
+      if (locked.status === 'WAITING_DISPATCH') {
+        if (input.status === undefined || input.status === 'WAITING_DISPATCH') {
+          await this.ensurePermission(principal, 'market:routed:update', '没有已排货修改权限');
+        }
+        await this.ensurePendingRoutingMask(principal, 'market:routed:update-block');
+      }
+      return tx.shipment.update({
+        where: { id: shipment.id },
+        data: {
         latestTracking: latestTracking ?? shipment.latestTracking,
         transferNo,
         subOrderNo,
@@ -18985,8 +19314,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
               }
             }
           : {})
-      },
-      include: shipmentIncludes
+        },
+        include: shipmentIncludes
+      });
     });
 
     await this.createEvent(shipment.id, shipment.status as ShipmentStatus, nextStatus, notes.length > 0 ? `人工修改运单：${notes.join('；')}` : '人工修改运单');
@@ -20199,6 +20529,24 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private async ensureWarehouseTallyPendingUnblocked(principal: Principal, permissions: PermissionKey[]) {
+    if (isAdministratorRole(principal.role)) return;
+    for (const permission of permissions) {
+      if (await this.hasPermission(principal.role, permission)) {
+        throw new ForbiddenException('当前用户组已屏蔽该未完成理货操作');
+      }
+    }
+  }
+
+  private async ensureWarehouseTallyCompletedUnblocked(principal: Principal, permissions: PermissionKey[]) {
+    if (isAdministratorRole(principal.role)) return;
+    for (const permission of permissions) {
+      if (await this.hasPermission(principal.role, permission)) {
+        throw new ForbiddenException('当前用户组已屏蔽该已完成理货操作');
+      }
+    }
+  }
+
   private async ensureAnyPermission(principal: Principal, permissions: PermissionKey[], message = '没有访问权限') {
     if (!(await this.hasAnyPermission(principal.role, permissions))) {
       throw new ForbiddenException(message);
@@ -20285,9 +20633,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async ensureCustomerServiceDataEditable(shipment: ShipmentWithRelations, kind: 'business' | 'agent') {
+  private async ensureCustomerServiceDataEditable(principal: Principal, shipment: ShipmentWithRelations, kind: 'business' | 'agent', remark?: string) {
     if (shipment.status !== 'OUTBOUNDED') throw new BadRequestException('订单已进入后续流程，不能修改数据确认');
-    if (await this.isCustomerServiceDataApproved(shipment.id, kind, shipment.outboundAt)) throw new BadRequestException(`${kind === 'business' ? '业务' : '代理'}数据已审核，请先反审核`);
+    if (shipment.transferNo) throw new BadRequestException('订单已填写转单号，不能修改数据确认');
+    if (await this.isCustomerServiceDataApproved(shipment.id, kind, shipment.outboundAt)) {
+      if (!(await this.hasPermission(principal.role, 'customer-service:data-confirm:reverse'))) throw new ForbiddenException('已审核数据修改需要反审核权限');
+      if (!remark?.trim()) throw new BadRequestException('已审核数据直接修改必须填写修改原因');
+    }
   }
 
   private async scopeCustomerServiceShipment(principal: Principal, shipment: Shipment): Promise<Shipment> {
@@ -20364,6 +20716,89 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.prisma.auditLog.create({ data: { actorId: principal.id, action: `customer_service.${kind}_data.reversed`, target: shipmentId, after: toAuditJson({ status: shipment.status, reason: reason.trim(), reviewedBy: principal.username, reviewedAt: new Date().toISOString(), dataConfirmationCycleStartedAt }) } });
     await this.ensureCustomerServiceDataCycleStillCurrent(shipmentId, dataConfirmationCycleStartedAt);
     return this.scopeCustomerServiceShipment(principal, await this.mapShipmentResponse(shipment));
+  }
+
+  private async ensurePendingRoutingMask(principal: Principal, mask: PermissionKey) {
+    if (isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, mask))) return;
+    throw new ForbiddenException('当前角色已屏蔽该操作');
+  }
+
+  private async ensureTodayReceiptMask(principal: Principal, mask: PermissionKey) {
+    if (isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, mask))) return;
+    throw new ForbiddenException('当前角色已屏蔽该操作');
+  }
+
+  private async ensurePendingRoutingRouteAccess(
+    principal: Principal,
+    shipment: {
+      status?: string;
+      hasExistingRoute?: boolean;
+      channelId?: string | null;
+      agentId?: string | null;
+      agentChannelId?: string | null;
+      routeAgentChannelName?: string | null;
+      routeChargeWeightKg?: number | null;
+      routeUnitPrice?: number | null;
+      routeOtherFee?: number | null;
+      routeCostTotal?: number | null;
+      routeCurrency?: string | null;
+      routedAt?: string | Date | null;
+      shippingMarkRequired?: boolean | null;
+      warehouseOutboundRemark?: string | null;
+    },
+    body: ShipmentRouteInput,
+    shouldApprove: boolean
+  ) {
+    if (isAdministratorRole(principal.role) || shipment.status !== 'WAITING_SORT') return;
+    const hasExistingRoute = shipment.hasExistingRoute ?? Boolean(
+      shipment.routeAgentChannelName
+      || shipment.routeChargeWeightKg !== null && shipment.routeChargeWeightKg !== undefined
+      || shipment.routeUnitPrice !== null && shipment.routeUnitPrice !== undefined
+      || shipment.routeOtherFee !== null && shipment.routeOtherFee !== undefined
+      || shipment.routeCostTotal !== null && shipment.routeCostTotal !== undefined
+      || shipment.routedAt
+    );
+    const routeChanged = (body.channelId !== undefined && body.channelId !== shipment.channelId)
+      || (body.agentId !== undefined && body.agentId !== shipment.agentId)
+      || (body.agentChannelId !== undefined && body.agentChannelId !== shipment.agentChannelId)
+      || body.saveAgentChannelToMasterData === true
+      || (body.agentChannelName !== undefined && body.agentChannelName.trim().replace(/\s+/g, ' ') !== (shipment.routeAgentChannelName ?? '').trim().replace(/\s+/g, ' '))
+      || (body.shippingMarkRequired !== undefined && body.shippingMarkRequired !== shipment.shippingMarkRequired)
+      || (body.currency !== undefined && body.currency !== shipment.routeCurrency)
+      || (body.warehouseOutboundRemark !== undefined && body.warehouseOutboundRemark.trim() !== (shipment.warehouseOutboundRemark ?? ''))
+      || body.chargeWeightKg !== undefined
+      || body.unitPrice !== undefined
+      || body.otherFee !== undefined
+      || body.otherFeeRemark !== undefined;
+    if (!hasExistingRoute) {
+      await this.ensurePermission(principal, 'market:pending-routing:assign', '没有待排货排货权限');
+      await this.ensurePendingRoutingMask(principal, 'market:pending-routing:route-block');
+    } else if (!shouldApprove || routeChanged) {
+      await this.ensurePermission(principal, 'market:pending-routing:update', '没有待排货修改权限');
+      await this.ensurePendingRoutingMask(principal, 'market:pending-routing:update-block');
+    }
+    if (shouldApprove) {
+      await this.ensurePendingRoutingMask(principal, 'market:pending-routing:audit-block');
+    }
+  }
+
+  private async ensurePendingRoutingCostMutationAccess(
+    principal: Principal,
+    type: ShipmentFinanceItemType | undefined,
+    shipment: { status?: string },
+    operation: 'create' | 'update' | 'delete'
+  ) {
+    if (isAdministratorRole(principal.role) || type !== 'BUSINESS_COST') return;
+    if (!['WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment.status ?? '')) return;
+    if (shipment.status === 'WAITING_DISPATCH' && operation !== 'create') {
+      throw new ForbiddenException('审核后业务成本只能新增，不能修改或删除');
+    }
+    const mask = operation === 'create'
+      ? 'market:pending-routing:business-cost-create-block'
+      : operation === 'update'
+        ? 'market:pending-routing:business-cost-update-block'
+        : 'market:pending-routing:business-cost-delete-block';
+    await this.ensurePendingRoutingMask(principal, mask);
   }
 
   private async ensureFinanceItemManageAccess(
@@ -22922,51 +23357,29 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return roundFinancialDecimal(Number(unitPrice));
   }
 
-  private async isRouteAgentPayable(item: any) {
-    const hasRouteCostShape = item.type === 'PAYABLE'
-      && item.name === '代理成本'
-      && item.amountOverridden === false
-      && item.chargeWeightKg !== null
-      && item.chargeWeightKg !== undefined
-      && item.unitPrice !== null
-      && item.unitPrice !== undefined;
-    if (!hasRouteCostShape) return false;
-    const routeLogs = await this.prisma.auditLog.findMany({
-      where: { target: item.shipmentId, action: 'shipment.route' },
-      select: { after: true }
-    });
-    return routeLogs.some((row: any) => this.routeLogMatchesPayable(row.after, item));
+  private async isPayableWorkflowReady(item: any) {
+    const shipment = item.shipment;
+    if (!shipment?.transferNo?.trim()) return false;
+    return await this.isCustomerServiceDataApproved(item.shipmentId, 'business', shipment.outboundAt)
+      && await this.isCustomerServiceDataApproved(item.shipmentId, 'agent', shipment.outboundAt);
   }
 
-  private routeLogMatchesPayable(after: unknown, item: any) {
-    const row = after as { payableTotal?: number; chargeWeightKg?: number; unitPrice?: number } | undefined;
-    if (!row) return false;
-    return Math.abs(Number(row.payableTotal) - Number(item.amount)) < 0.01
-      && Math.abs(Number(row.chargeWeightKg) - Number(item.chargeWeightKg)) < 0.01
-      && Math.abs(Number(row.unitPrice) - Number(item.unitPrice)) < 0.01;
-  }
-
-  private async hasBusinessDataApproval(shipmentId: string, outboundAt?: Date | string | null) {
-    const cycleStartedAt = outboundAt === undefined
-      ? (await this.prisma.shipment.findUnique({ where: { id: shipmentId }, select: { outboundAt: true } }))?.outboundAt
-      : outboundAt;
-    return this.isCustomerServiceDataApproved(shipmentId, 'business', cycleStartedAt);
-  }
-
-  private async isBusinessEnteredPayable(item: any) {
-    if (item.type !== 'PAYABLE' || !item.createdBy) return false;
-    const creator = await this.prisma.user.findUnique({ where: { username: item.createdBy }, select: { roleId: true } });
-    return Boolean(creator && (await this.getPermissionsForRole(creator.roleId as RoleKey)).includes('data-scope:sales-own'));
+  private isPayableHangAccount(item: any) {
+    return isEarlyPaymentSettlementMethod(item.settlementMethod ?? item.shipment?.settlementMethod);
   }
 
   private async canExposePayableToFinance(item: any) {
-    return await this.isRouteAgentPayable(item)
-      || !await this.isBusinessEnteredPayable(item)
-      || await this.hasBusinessDataApproval(item.shipmentId, item.shipment?.outboundAt);
+    // 挂账可以提前进入待付款，但仍不能提前审核应付。
+    return this.isPayableHangAccount(item) || await this.isPayableWorkflowReady(item);
   }
 
   private async ensurePayableReadyForFinance(item: any) {
-    if (!await this.canExposePayableToFinance(item)) throw new BadRequestException('客服确认数据后才能审核该应付费用');
+    const missing: string[] = [];
+    const shipment = item.shipment;
+    if (!await this.isCustomerServiceDataApproved(item.shipmentId, 'business', shipment?.outboundAt)) missing.push('业务数据确认');
+    if (!await this.isCustomerServiceDataApproved(item.shipmentId, 'agent', shipment?.outboundAt)) missing.push('代理数据确认');
+    if (!shipment?.transferNo?.trim()) missing.push('转单号');
+    if (missing.length) throw new BadRequestException(`应付审核前请先完成${missing.join('、')}`);
   }
 
   private async canExposePendingPaymentToFinance(row: any) {
@@ -22974,7 +23387,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensurePendingPaymentReadyForFinance(row: any) {
-    if (!await this.canExposePendingPaymentToFinance(row)) throw new BadRequestException('客服确认数据后才能申请付款');
+    if (this.isPayableHangAccount(row.payableFinanceItem)) return;
+    if (!await this.canExposePendingPaymentToFinance(row)) throw new BadRequestException('普通订单需完成数据确认并填写转单号后才能申请付款');
   }
 
   private async upsertPayablePaymentApplication(item: any) {
@@ -31513,6 +31927,13 @@ function buildCustomerServiceDataConfirmRow(shipment: Shipment, rows: CustomerSe
   };
 }
 
+function attachPrimaryAgentBilling(
+  row: CustomerServiceDataConfirmRow,
+  billing?: { agentBillingQuantity: number; agentBillingUnit: FinanceBillingUnit }
+): CustomerServiceDataConfirmRow {
+  return billing ? { ...row, agentBillingQuantity: billing.agentBillingQuantity, agentBillingUnit: billing.agentBillingUnit } : row;
+}
+
 function scopeCustomerServiceDataConfirmRow(
   row: CustomerServiceDataConfirmRow,
   permissions: { canViewBusiness: boolean; canViewAgent: boolean }
@@ -31531,6 +31952,8 @@ function scopeCustomerServiceDataConfirmRow(
   if (permissions.canViewAgent) {
     scoped.agentDataApproved = row.agentDataApproved;
     scoped.agentDataSnapshot = row.agentDataSnapshot;
+    scoped.agentBillingQuantity = row.agentBillingQuantity;
+    scoped.agentBillingUnit = row.agentBillingUnit;
   } else {
     [
       'agentId', 'agentName', 'agentWeightKg', 'channelId', 'channelName', 'carrier', 'routeAgentChannelName',

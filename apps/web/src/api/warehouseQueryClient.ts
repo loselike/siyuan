@@ -1,5 +1,7 @@
 import type {
   WarehouseInStockQuery,
+  WarehouseInStockPageQuery,
+  WarehouseInStockPageResponse,
   WarehouseInStockResponse,
   WarehouseManualReceiptCustomerOption,
   WarehousePackageSummary,
@@ -42,6 +44,17 @@ export class WarehouseQueryClient {
     });
     const search = params.toString();
     return this.request(`/warehouse/in-stock${search ? `?${search}` : ''}`);
+  }
+
+  warehouseInStockPage(query: WarehouseInStockPageQuery = {}): Promise<WarehouseInStockPageResponse> {
+    const params = new globalThis.URLSearchParams();
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && String(value).trim()) {
+        params.set(key, String(value));
+      }
+    });
+    const search = params.toString();
+    return this.request(`/warehouse/in-stock-page${search ? `?${search}` : ''}`);
   }
 
   warehouseInStockSummary(): Promise<Pick<WarehouseInStockResponse, 'totals'>> {

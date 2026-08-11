@@ -1,9 +1,9 @@
-import { useEffect, useRef, useMemo, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Typography, message } from 'antd';
+import { useEffect, useRef, useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Alert, AutoComplete, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Typography, message } from 'antd';
 import { Download } from 'lucide-react';
 import type { ColumnsType } from 'antd/es/table';
-import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
-import type { ApiClient } from '../../apiClient';
+import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type FinanceCatalogItemSummary, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
+import { isAdministratorRole, type ApiClient } from '../../apiClient';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, isBeijingCurrentWeek, isBeijingToday, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
@@ -27,6 +27,8 @@ function dataConfirmCacheKey(page: number, pageSize: number, outboundOrderNo: st
 
 type CustomerServiceBusinessCostDraft = CustomerServiceBusinessCostInput & {
   key: string;
+  billingQuantity?: number;
+  billingQuantityTouched?: boolean;
   editable: boolean;
   statusLabel: string;
 };
@@ -38,10 +40,40 @@ function createCustomerServiceBusinessCostDraft(row: CustomerServiceFinanceUpdat
     name: row.name,
     currency: row.currency ?? 'RMB',
     billingUnit: row.billingUnit ?? 'KG',
+    billingQuantity: row.billingQuantity,
     unitPrice: row.unitPrice,
     editable: row.selectable,
-    statusLabel: row.locked ? '已锁定' : row.reconciliationStatus === 'CONFIRMED' ? '已审核' : '可修改'
+    statusLabel: row.selectable ? '可修改' : row.locked ? '已锁定' : row.reconciliationStatus === 'CONFIRMED' ? '已审核' : '不可修改'
   };
+}
+
+type CustomerServiceFeeColumnKey = 'name' | 'currency' | 'billingUnit' | 'billingQuantity' | 'unitPrice' | 'amount' | 'action';
+
+const customerServiceFeeColumnSpecs: Array<{ key: CustomerServiceFeeColumnKey; label: string; width: number; minWidth: number }> = [
+  { key: 'name', label: '费用名称', width: 250, minWidth: 150 },
+  { key: 'currency', label: '币种', width: 90, minWidth: 72 },
+  { key: 'billingUnit', label: '计费方式', width: 155, minWidth: 110 },
+  { key: 'billingQuantity', label: '计费数量', width: 155, minWidth: 110 },
+  { key: 'unitPrice', label: '单价', width: 135, minWidth: 100 },
+  { key: 'amount', label: '总金额', width: 155, minWidth: 120 },
+  { key: 'action', label: '操作', width: 130, minWidth: 110 }
+];
+
+function defaultCustomerServiceFeeColumnWidths() {
+  return Object.fromEntries(customerServiceFeeColumnSpecs.map((column) => [column.key, column.width])) as Record<CustomerServiceFeeColumnKey, number>;
+}
+
+function createCustomerServiceFeeNameOptions(items: FinanceCatalogItemSummary[]) {
+  const names = new Set<string>();
+  return [...items]
+    .filter((item) => item.category === 'FEE_NAME' && item.enabled)
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN'))
+    .flatMap((item) => {
+      const name = item.name.trim();
+      if (!name || names.has(name)) return [];
+      names.add(name);
+      return [{ label: name, value: name }];
+    });
 }
 
 export const customerServiceOutboundOrderSearchSections = [
@@ -82,6 +114,7 @@ type DepartureFormValues = {
   subOrderNo?: string;
   etdAt?: string;
   etaAt?: string;
+  vesselVoyage?: string;
   trackingWebsite?: string;
   trackingWebsiteVisibleToSales?: boolean;
   pushToSales?: boolean;
@@ -393,6 +426,7 @@ export function CustomerServicePage({
   problemTickets,
   businessCostAudits = [],
   agents = [],
+  feeNameCatalogItems = [],
   apiClient,
   onShipmentUpdated,
   onProblemTicketCreated,
@@ -406,6 +440,7 @@ export function CustomerServicePage({
   problemTickets: ProblemTicketSummary[];
   businessCostAudits?: BusinessCostAuditSummary[];
   agents?: AgentSummary[];
+  feeNameCatalogItems?: FinanceCatalogItemSummary[];
   apiClient?: ApiClient;
   onShipmentUpdated?: (shipment: Shipment) => void;
   onProblemTicketCreated?: (ticket: ProblemTicketSummary) => void;
@@ -444,6 +479,8 @@ export function CustomerServicePage({
   const [dataEditPayableCosts, setDataEditPayableCosts] = useState<CustomerServiceBusinessCostDraft[]>([]);
   const [dataEditCostPreview, setDataEditCostPreview] = useState<CustomerServiceFinanceUpdatePreview | null>(null);
   const [dataEditCostPreviewLoading, setDataEditCostPreviewLoading] = useState(false);
+  const [feeColumnWidths, setFeeColumnWidths] = useState<Record<CustomerServiceFeeColumnKey, number>>(defaultCustomerServiceFeeColumnWidths);
+  const feeColumnResizeRef = useRef<{ key: CustomerServiceFeeColumnKey; startX: number; startWidth: number } | null>(null);
   const [dataReverseTarget, setDataReverseTarget] = useState<{ shipment: Shipment; kind: 'business' | 'agent' | 'all' } | null>(null);
   const [labelShipment, setLabelShipment] = useState<Shipment | null>(null);
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
@@ -463,6 +500,11 @@ export function CustomerServicePage({
   const [departureConfirmError, setDepartureConfirmError] = useState<string | null>(null);
   const [problemColumnOrder, setProblemColumnOrder] = useState<ProblemColumnKey[]>(defaultProblemColumnOrder);
   const [hiddenProblemColumns, setHiddenProblemColumns] = useState<ProblemColumnKey[]>([]);
+  const feeNameOptions = useMemo(() => createCustomerServiceFeeNameOptions(feeNameCatalogItems), [feeNameCatalogItems]);
+  const feeGridTemplate = useMemo(
+    () => customerServiceFeeColumnSpecs.map((column) => `${feeColumnWidths[column.key]}px`).join(' '),
+    [feeColumnWidths]
+  );
   const [problemFilters, setProblemFilters] = useState({
     salesperson: '',
     minDwellDays: '',
@@ -520,6 +562,20 @@ export function CustomerServicePage({
   const canViewDataConfirmBusiness = permissions.includes('customer-service:data-confirm:business-view');
   const canViewDataConfirmAgent = permissions.includes('customer-service:data-confirm:agent-view');
   const can = (permission: string) => permissions.includes(permission);
+  const isMaskEnabled = (permission: string) => !isAdministratorRole(role) && can(permission);
+  const canFillTransferNo = canTransferWrite && !isMaskEnabled('customer-service:transfer:fill-block');
+  const canViewPendingRouting = can('customer-service:pending-routing:view') && !isMaskEnabled('customer-service:pending-routing:readonly-block');
+  const canApproveBusinessData = can('customer-service:data-confirm:business-approve')
+    && !isMaskEnabled('customer-service:data-confirm:business-approve-block');
+  const canUpdateBusinessData = can('customer-service:data-confirm:business-update')
+    && !isMaskEnabled('customer-service:data-confirm:business-update-block');
+  const canUpdateAgentData = can('customer-service:data-confirm:agent-update')
+    && !isMaskEnabled('customer-service:data-confirm:agent-update-block');
+  const canApproveAgentData = can('customer-service:data-confirm:agent-approve')
+    && !isMaskEnabled('customer-service:data-confirm:agent-approve-block');
+  const canApproveAllData = can('customer-service:data-confirm:approve-all')
+    && !isMaskEnabled('customer-service:data-confirm:business-approve-block')
+    && !isMaskEnabled('customer-service:data-confirm:agent-approve-block');
   const canProblemView = can('customer-service:problem:view');
   const canColumnSetting: Record<string, boolean> = {
     dataConfirm: can('customer-service:data-confirm:column-setting'), transferNo: can('customer-service:transfer:column-setting'),
@@ -530,7 +586,7 @@ export function CustomerServicePage({
   };
   const items: ModuleSubNavItem[] = [
     ...(can('customer-service:dashboard:view') ? [{ key: 'service-dashboard', label: '客服看板' }] : []),
-    ...(can('customer-service:pending-routing:view') ? [{ key: 'pending-routing', label: '待排货' }] : []),
+    ...(canViewPendingRouting ? [{ key: 'pending-routing', label: '待排货' }] : []),
     ...(can('customer-service:data-confirm:view') ? [{ key: 'dataConfirm', label: '数据确认' }] : []),
     ...(canTransferView ? [{ key: 'transferNo', label: '转单号' }] : []),
     ...(can('customer-service:waiting-departure:view') ? [{ key: 'waitingDeparture', label: '待离港' }] : []),
@@ -653,7 +709,23 @@ export function CustomerServicePage({
     actualWeight: { title: '业务重量 KG', dataIndex: 'actualWeightKg', width: 110, render: (value: number | undefined, row) => value ?? row.receivableWeightKg ?? '-' },
     volumeCbm: { title: '业务体积 CBM', dataIndex: 'volumeCbm', width: 115, render: (value: number | undefined) => value ?? '-' },
     chargeWeight: { title: '计费重', dataIndex: 'receivableWeightKg', width: 90 },
-    agentWeightKg: { title: '代理计费重', dataIndex: 'agentWeightKg', width: 110 },
+    agentWeightKg: {
+      title: '代理计费数量',
+      key: 'agentWeightKg',
+      width: 110,
+      render: (_: unknown, row: Shipment) => {
+        const review = dataConfirmReviewByShipmentId.get(row.id);
+        const billingQuantity = review?.agentBillingQuantity;
+        const fallbackQuantity = review?.agentDataSnapshot?.chargeWeightKg ?? row.agentWeightKg;
+        return (
+          <span data-testid={`customer-service-agent-billing-quantity-${row.id}`}>
+            {billingQuantity !== undefined
+              ? `${billingQuantity} ${review?.agentBillingUnit ?? ''}`.trim()
+              : fallbackQuantity !== undefined ? `${fallbackQuantity} KG` : '-'}
+          </span>
+        );
+      }
+    },
     agentPackageCount: { title: '代理件数', key: 'agentPackageCount', width: 100, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.packageCount ?? row.packageCount ?? '-' },
     agentActualWeight: { title: '代理重量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
     agentVolumeCbm: { title: '代理体积 CBM', key: 'agentVolumeCbm', width: 115, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.volumeCbm ?? row.volumeCbm ?? '-' },
@@ -812,9 +884,9 @@ export function CustomerServicePage({
               const agentApproved = review?.agentDataApproved === true;
               return (
                 <Space size={4} wrap>
-                  {!businessApproved ? <>{can('customer-service:data-confirm:business-approve') ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'business' })}>业务审核</Button> : null}{can('customer-service:data-confirm:business-update') ? <Button size="small" onClick={() => openDataEdit(row, 'business', dataConfirmReviewByShipmentId.get(row.id)?.businessDataSnapshot)}>业务修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'business')}>业务反审核</Button> : null}
-                  {!agentApproved ? <>{can('customer-service:data-confirm:agent-approve') ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'agent' })}>代理审核</Button> : null}{can('customer-service:data-confirm:agent-update') ? <Button size="small" onClick={() => openDataEdit(row, 'agent', dataConfirmReviewByShipmentId.get(row.id)?.agentDataSnapshot)}>代理修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'agent')}>代理反审核</Button> : null}
-                  {!businessApproved && !agentApproved && can('customer-service:data-confirm:approve-all') ? <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>全部审核</Button> : null}
+                  {!businessApproved ? <>{canApproveBusinessData ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'business' })}>业务审核</Button> : null}{canUpdateBusinessData ? <Button size="small" onClick={() => openDataEdit(row, 'business', dataConfirmReviewByShipmentId.get(row.id)?.businessDataSnapshot)}>业务修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'business')}>业务反审核</Button> : null}
+                  {!agentApproved ? <>{canApproveAgentData ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'agent' })}>代理审核</Button> : null}{canUpdateAgentData ? <Button size="small" onClick={() => openDataEdit(row, 'agent', dataConfirmReviewByShipmentId.get(row.id)?.agentDataSnapshot)}>代理修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'agent')}>代理反审核</Button> : null}
+                  {!businessApproved && !agentApproved && canApproveAllData ? <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>全部审核</Button> : null}
                   {businessApproved && agentApproved && can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'all')}>全部反审核</Button> : null}
                 </Space>
               );
@@ -1058,7 +1130,7 @@ export function CustomerServicePage({
         items: [
           { key: 'dataConfirm', label: '数据确认', value: dataConfirmCount, helper: '待核对出库后业务数据', section: 'dataConfirm', tone: dataConfirmCount ? 'amber' : 'gray' },
           { key: 'transferNo', label: '缺转单号', value: missingTransferCount, helper: '已确认数据但未补转单号', section: 'transferNo', tone: missingTransferCount ? 'amber' : 'gray' },
-          { key: 'pending-routing', label: '待排货', value: pendingRoutingCount, helper: '待市场排货，只读跟进', section: 'pending-routing', tone: pendingRoutingCount ? 'amber' : 'gray' },
+          ...(canViewPendingRouting ? [{ key: 'pending-routing', label: '待排货', value: pendingRoutingCount, helper: '待市场排货，只读跟进', section: 'pending-routing', tone: pendingRoutingCount ? ('amber' as const) : ('gray' as const) }] : []),
           { key: 'waitingDeparture', label: '待离港', value: currentStatusCount('WAITING_DEPARTURE'), helper: '等待离港确认', section: 'waitingDeparture', tone: currentStatusCount('WAITING_DEPARTURE') ? 'blue' : 'gray' }
         ]
       },
@@ -1095,7 +1167,7 @@ export function CustomerServicePage({
     ];
     const maxValue = Math.max(1, ...groups.flatMap((group) => group.items.map((item) => getDashboardTaskNumericValue(item.value))));
     return { groups, maxValue, totalShipmentCount: shipments.length };
-  }, [customerServiceAuditIndex, customerServiceAuditLogs, pendingRoutingShipments.length, problemTickets, rawProblemRows, shipments]);
+  }, [canViewPendingRouting, customerServiceAuditIndex, customerServiceAuditLogs, pendingRoutingShipments.length, problemTickets, rawProblemRows, shipments]);
 
   function exportCustomerServiceDashboardOrders() {
     if (!shipments.length) {
@@ -1306,24 +1378,24 @@ export function CustomerServicePage({
     () => createPendingRoutingColumns({
       businessCostAudits,
       mode: 'customerService',
-      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') && !isMaskEnabled('customer-service:pending-routing:fee-detail-block') ? (shipment) => void openFeeDetail(shipment) : undefined,
       canViewBusinessCost: false,
       canViewPayableCost: false,
       canViewAgentChannel: can('customer-service:pending-routing:agent-view')
     }),
-    [businessCostAudits, permissions]
+    [businessCostAudits, permissions, role]
   );
   const pendingRoutingMatrixColumns = useMemo(
     () => createPendingRoutingColumns({
       businessCostAudits,
       mode: 'customerService',
-      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') && !isMaskEnabled('customer-service:pending-routing:fee-detail-block') ? (shipment) => void openFeeDetail(shipment) : undefined,
       canViewBusinessCost: false,
       canViewPayableCost: false,
       canViewAgentChannel: can('customer-service:pending-routing:agent-view'),
       presentation: 'matrix'
     }),
-    [businessCostAudits, permissions]
+    [businessCostAudits, permissions, role]
   );
   const activeLabel = items.find((item) => item.key === activeSection)?.label ?? '客服管理';
   const outboundOrderSearch = customerServiceOutboundOrderSearchSections.includes(activeSection as typeof customerServiceOutboundOrderSearchSections[number]) ? (
@@ -1441,13 +1513,16 @@ export function CustomerServicePage({
   }, [activeSection, apiClient, canTransferView]);
 
   function openTransferFill(shipmentsToFill: Shipment[]) {
-    if (!shipmentsToFill.length) return;
+    if (!canFillTransferNo || !shipmentsToFill.length) return;
     setTransferFillRows(shipmentsToFill);
     transferForm.setFieldsValue({ rows: shipmentsToFill.map(() => ({ pushToSales: false })) });
   }
 
   async function submitTransferFill() {
-    if (!apiClient) return;
+    if (!apiClient || !canFillTransferNo) {
+      setTransferFillRows([]);
+      return;
+    }
     const values = await transferForm.validateFields();
     const rows = transferFillRows.map((shipment, index) => ({ shipmentId: shipment.id, transferNo: values.rows[index]?.transferNo?.trim() ?? '', subOrderNo: values.rows[index]?.subOrderNo?.trim() || undefined, pushToSales: values.rows[index]?.pushToSales === true }));
     const duplicate = rows.map((row) => row.transferNo).find((value, index, all) => value && all.indexOf(value) !== index);
@@ -1480,10 +1555,10 @@ export function CustomerServicePage({
       ...(canViewTransferAgentData ? [{ title: '代理计费重', dataIndex: 'agentWeightKg', width: 105 }] : []),
       { title: '品名', dataIndex: 'productName', width: 120 },
       ...(canViewTransferSensitive ? [{ title: '报关', dataIndex: 'declarationRequired', width: 70, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> }, { title: '敏感', dataIndex: 'sensitive', width: 70, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> }] : []),
-      { title: '操作', key: 'action', fixed: 'right', width: 115, render: (_, row) => <Button size="small" type="primary" disabled={!canTransferWrite} onClick={() => openTransferFill([row])}>填写转单号</Button> }
+      ...(canFillTransferNo ? [{ title: '操作', key: 'action', fixed: 'right' as const, width: 115, render: (_: unknown, row: Shipment) => <Button size="small" type="primary" onClick={() => openTransferFill([row])}>填写转单号</Button> }] : [])
     ];
     return result;
-  }, [canTransferWrite, canViewTransferAgent, canViewTransferAgentData, canViewTransferOutboundAt, canViewTransferSensitive]);
+  }, [canFillTransferNo, canViewTransferAgent, canViewTransferAgentData, canViewTransferOutboundAt, canViewTransferSensitive]);
 
   function openDepartureModal(shipment: Shipment) {
     setDepartureShipment(shipment);
@@ -1493,6 +1568,7 @@ export function CustomerServicePage({
       subOrderNo: shipment.subOrderNo ?? '',
       etdAt: toDatetimeLocalValue(shipment.etdAt),
       etaAt: toDatetimeLocalValue(shipment.etaAt),
+      vesselVoyage: shipment.vesselVoyage ?? '',
       trackingWebsite: tracking.url ?? agentTrackingWebsiteForShipment(shipment, agents) ?? trackingWebsiteForShipment(shipment),
       trackingWebsiteVisibleToSales: tracking.visibleToSales ?? false,
       pushToSales: false,
@@ -1508,6 +1584,7 @@ export function CustomerServicePage({
       subOrderNo: shipment.subOrderNo ?? '',
       etdAt: toDatetimeLocalValue(shipment.etdAt),
       etaAt: toDatetimeLocalValue(shipment.etaAt),
+      vesselVoyage: shipment.vesselVoyage ?? '',
       trackingWebsite: tracking.url ?? agentTrackingWebsiteForShipment(shipment, agents) ?? trackingWebsiteForShipment(shipment),
       trackingWebsiteVisibleToSales: tracking.visibleToSales ?? false,
       pushToSales: false,
@@ -1572,6 +1649,7 @@ export function CustomerServicePage({
   }
 
   function getPayableCostQuantity(row: CustomerServiceBusinessCostDraft) {
+    if (row.billingQuantity !== undefined && row.billingQuantity !== null) return Number(row.billingQuantity);
     const snapshot = dataEditTarget?.snapshot;
     const source = row.billingUnit === 'CBM'
       ? snapshot?.volumeCbm ?? dataEditTarget?.shipment.volumeCbm
@@ -1581,7 +1659,50 @@ export function CustomerServicePage({
 
   function getPayableCostAmount(row: CustomerServiceBusinessCostDraft) {
     const unitPrice = row.unitPrice === undefined || row.unitPrice === null ? undefined : Number(row.unitPrice);
-    return unitPrice === undefined ? 0 : Number((getPayableCostQuantity(row) * unitPrice).toFixed(2));
+    if (unitPrice === undefined) return Number(dataEditCostPreview?.rows.find((item) => item.id === row.id)?.amount ?? 0);
+    return Number((getPayableCostQuantity(row) * unitPrice).toFixed(2));
+  }
+
+  function startFeeColumnResize(key: CustomerServiceFeeColumnKey, event: ReactPointerEvent<HTMLSpanElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const width = feeColumnWidths[key];
+    feeColumnResizeRef.current = { key, startX: event.clientX, startWidth: width };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveFeeColumnResize(key: CustomerServiceFeeColumnKey, event: ReactPointerEvent<HTMLSpanElement>) {
+    const resize = feeColumnResizeRef.current;
+    if (!resize || resize.key !== key) return;
+    const minWidth = customerServiceFeeColumnSpecs.find((column) => column.key === key)?.minWidth ?? 80;
+    setFeeColumnWidths((current) => ({
+      ...current,
+      [key]: Math.max(minWidth, resize.startWidth + event.clientX - resize.startX)
+    }));
+  }
+
+  function endFeeColumnResize(event: ReactPointerEvent<HTMLSpanElement>) {
+    feeColumnResizeRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function renderFeeColumnHeader() {
+    return customerServiceFeeColumnSpecs.map((column) => (
+      <span className="customer-service-fee-column-head" key={column.key}>
+        <span>{column.label}</span>
+        <span
+          className="customer-service-fee-resize-handle"
+          role="separator"
+          aria-label={`调整${column.label}列宽`}
+          onPointerDown={(event) => startFeeColumnResize(column.key, event)}
+          onPointerMove={(event) => moveFeeColumnResize(column.key, event)}
+          onPointerUp={endFeeColumnResize}
+          onPointerCancel={endFeeColumnResize}
+        />
+      </span>
+    ));
   }
 
   function updateBusinessCostDraft(key: string, patch: Partial<CustomerServiceBusinessCostDraft>) {
@@ -1617,6 +1738,7 @@ export function CustomerServicePage({
       return draft.name.trim() !== original.name
         || (draft.currency ?? 'RMB') !== (original.currency ?? 'RMB')
         || draft.billingUnit !== (original.billingUnit ?? 'KG')
+        || draft.billingQuantityTouched === true
         || nextUnitPrice !== originalUnitPrice;
     });
     let nextPreview = dataEditCostPreview;
@@ -1673,6 +1795,7 @@ export function CustomerServicePage({
         latestTracking: departureShipment.latestTracking,
         etdAt: values.etdAt ? parseBeijingDateTimeInputToIso(values.etdAt) : undefined,
         etaAt: values.etaAt ? parseBeijingDateTimeInputToIso(values.etaAt) : undefined,
+        vesselVoyage: values.vesselVoyage?.trim() || undefined,
         trackingWebsite: values.trackingWebsite,
         trackingWebsiteVisibleToSales: values.trackingWebsiteVisibleToSales ?? false,
         ...(statusRemark ? { statusRemark } : {})
@@ -2329,7 +2452,7 @@ export function CustomerServicePage({
             </Space>
           </Card>
         ) : null}
-        {activeSection === 'pending-routing' ? (
+        {activeSection === 'pending-routing' && canViewPendingRouting ? (
           <Card title="待排货">
             <ManagedDualViewTable
               viewStorageKey="sunny.customer-service.pending-routing.table-view-v1"
@@ -2384,7 +2507,7 @@ export function CustomerServicePage({
                   action={<Button size="small" onClick={() => void refreshCustomerServiceDataConfirmRows()}>重试</Button>}
                 />
               ) : null}
-              {activeSection === 'transferNo' && canTransferWrite ? <Button type="primary" disabled={!selectedTransferIds.length || (selectedTransferIds.length > 1 && !canTransferBatchWrite)} onClick={() => openTransferFill(transferRows.filter((row) => selectedTransferIds.includes(row.id)))}>填写转单号</Button> : null}
+              {activeSection === 'transferNo' && canFillTransferNo ? <Button type="primary" disabled={!selectedTransferIds.length || (selectedTransferIds.length > 1 && !canTransferBatchWrite)} onClick={() => openTransferFill(transferRows.filter((row) => selectedTransferIds.includes(row.id)))}>填写转单号</Button> : null}
               {activeSection === 'waitingDeparture' ? (
                 <ManagedDualViewTable
                   viewStorageKey="sunny.customer-service.waiting-departure.table-view"
@@ -2441,7 +2564,7 @@ export function CustomerServicePage({
                         ? '数据加载失败，请重试'
                         : '暂无待确认数据'
                   } : undefined}
-                  rowSelection={activeSection === 'transferNo' && canTransferWrite ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
+                  rowSelection={activeSection === 'transferNo' && canFillTransferNo ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
                   pagination={activeSection === 'dataConfirm' ? {
                     ...tenRowTablePagination,
                     current: dataConfirmPagination.page,
@@ -2587,6 +2710,9 @@ export function CustomerServicePage({
                 </Form.Item>
                 <Form.Item name="etaAt" label="ETA/ATA">
                   <AppDateTimePicker size="small" />
+                </Form.Item>
+                <Form.Item name="vesselVoyage" label="船名航次">
+                  <Input size="small" placeholder="选填，例如：MSC MAYA / 123E" />
                 </Form.Item>
                 <Form.Item name="trackingWebsite" label="查询网站" className="customer-service-operational-edit-wide-field">
                   <Input size="small" placeholder="默认按转单号生成，可手动填写" />
@@ -2756,10 +2882,10 @@ export function CustomerServicePage({
               </div>
               {dataEditCostPreviewLoading ? <div className="customer-service-data-edit-loading"><Spin size="small" /><Text type="secondary">费用加载中...</Text></div> : (
                 <div className="customer-service-business-cost-table" role="table" aria-label="业务成本费用表">
-                  <div className="customer-service-business-cost-head" role="row"><span>费用名称</span><span>币种</span><span>计费方式</span><span>计费数量</span><span>单价</span><span>总金额</span><span>操作</span></div>
+                  <div className="customer-service-business-cost-head" role="row" style={{ gridTemplateColumns: feeGridTemplate }}>{renderFeeColumnHeader()}</div>
                   {dataEditBusinessCosts.map((row) => (
-                    <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-business-cost-row">
-                      <Input aria-label={`业务成本费用名称-${row.key}`} value={row.name} disabled={!row.editable} placeholder="费用名称" onChange={(event) => updateBusinessCostDraft(row.key, { name: event.target.value })} />
+                    <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-business-cost-row" style={{ gridTemplateColumns: feeGridTemplate }}>
+                      <AutoComplete aria-label={`业务成本费用名称-${row.key}`} value={row.name} options={feeNameOptions} filterOption={(inputValue, option) => String(option?.value ?? '').toLocaleLowerCase().includes(inputValue.toLocaleLowerCase())} disabled={!row.editable} placeholder="输入或匹配费用名称" onChange={(value) => updateBusinessCostDraft(row.key, { name: value })} />
                       <Select aria-label={`业务成本币种-${row.key}`} value={row.currency ?? 'RMB'} disabled={!row.editable} options={[{ value: 'RMB', label: 'RMB' }, { value: 'USD', label: 'USD' }]} onChange={(value) => updateBusinessCostDraft(row.key, { currency: value })} />
                       <Select aria-label={`业务成本计费方式-${row.key}`} value={row.billingUnit} disabled={!row.editable} options={[{ value: 'KG', label: '计费重（KG）' }, { value: 'CBM', label: '计费体积（CBM）' }]} onChange={(value: FinanceBillingUnit) => updateBusinessCostDraft(row.key, { billingUnit: value })} />
                       <InputNumber aria-label={`业务成本计费数量-${row.key}`} value={getBusinessCostQuantity(row)} readOnly addonAfter={row.billingUnit === 'CBM' ? 'CBM' : 'KG'} />
@@ -2778,18 +2904,18 @@ export function CustomerServicePage({
           <div className="customer-service-business-edit customer-service-agent-edit" aria-label="代理数据与应付成本编辑">
             <section className="customer-service-business-cost-card" aria-label="应付成本">
               <div className="customer-service-data-edit-cost-header">
-                <div><Text strong>应付成本</Text><Text type="secondary">类型固定为应付成本；切换计费方式后，计费数量和金额实时联动</Text></div>
+                <div><Text strong>应付成本</Text><Text type="secondary">类型固定为应付成本；计费数量可独立修改，有单价时金额实时联动</Text></div>
               </div>
               {dataEditCostPreviewLoading ? <div className="customer-service-data-edit-loading"><Spin size="small" /><Text type="secondary">费用加载中...</Text></div> : null}
               {!dataEditCostPreviewLoading ? (
                 <div className="customer-service-business-cost-table" role="table" aria-label="应付成本费用表">
-                  <div className="customer-service-business-cost-head" role="row"><span>费用名称</span><span>币种</span><span>计费方式</span><span>计费数量</span><span>单价</span><span>总金额</span><span>操作</span></div>
+                  <div className="customer-service-business-cost-head" role="row" style={{ gridTemplateColumns: feeGridTemplate }}>{renderFeeColumnHeader()}</div>
                   {dataEditPayableCosts.map((row) => (
-                    <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-payable-cost-row">
-                      <Input aria-label={`应付成本费用名称-${row.key}`} value={row.name} disabled={!row.editable} placeholder="费用名称" onChange={(event) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, name: event.target.value } : item))} />
+                    <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-payable-cost-row" style={{ gridTemplateColumns: feeGridTemplate }}>
+                      <AutoComplete aria-label={`应付成本费用名称-${row.key}`} value={row.name} options={feeNameOptions} filterOption={(inputValue, option) => String(option?.value ?? '').toLocaleLowerCase().includes(inputValue.toLocaleLowerCase())} disabled={!row.editable} placeholder="输入或匹配费用名称" onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, name: value } : item))} />
                       <Select aria-label={`应付成本币种-${row.key}`} value={row.currency ?? 'RMB'} disabled={!row.editable} options={[{ value: 'RMB', label: 'RMB' }, { value: 'USD', label: 'USD' }]} onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, currency: value } : item))} />
-                      <Select aria-label={`应付成本计费方式-${row.key}`} value={row.billingUnit} disabled={!row.editable} options={[{ value: 'KG', label: '计费重（KG）' }, { value: 'CBM', label: '计费体积（CBM）' }]} onChange={(value: FinanceBillingUnit) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, billingUnit: value } : item))} />
-                      <InputNumber aria-label={`应付成本计费数量-${row.key}`} value={getPayableCostQuantity(row)} readOnly addonAfter={row.billingUnit === 'CBM' ? 'CBM' : 'KG'} />
+                      <Select aria-label={`应付成本计费方式-${row.key}`} value={row.billingUnit} disabled={!row.editable} options={[{ value: 'KG', label: '计费重（KG）' }, { value: 'CBM', label: '计费体积（CBM）' }]} onChange={(value: FinanceBillingUnit) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, billingUnit: value, billingQuantity: undefined, billingQuantityTouched: true } : item))} />
+                      <InputNumber aria-label={`应付成本计费数量-${row.key}`} min={0} precision={row.billingUnit === 'CBM' ? 6 : 3} value={getPayableCostQuantity(row)} disabled={!row.editable} addonAfter={row.billingUnit === 'CBM' ? 'CBM' : 'KG'} onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, billingQuantity: value === null ? undefined : Number(value), billingQuantityTouched: true } : item))} />
                       <InputNumber aria-label={`应付成本单价-${row.key}`} min={0} precision={8} value={row.unitPrice} disabled={!row.editable} placeholder="单价" onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, unitPrice: value === null ? undefined : Number(value) } : item))} />
                       <Text strong>{formatFeeAmount(getPayableCostAmount(row), row.currency)}</Text>
                       <Tag color={row.editable ? 'green' : 'orange'}>{row.statusLabel}</Tag>

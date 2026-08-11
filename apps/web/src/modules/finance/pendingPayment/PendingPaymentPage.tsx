@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
-import { Download, RefreshCw, Search, SlidersHorizontal, Trash2 } from 'lucide-react';
+import { Download, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 import type {
   PayeeBankAccountInput,
   PayeeBankAccountSummary,
@@ -9,13 +9,11 @@ import type {
   PendingPaymentListResponse,
   PendingPaymentSummary,
   PaymentApplicationCreateInput,
-  PaymentVoucherInput,
-  PaymentVoucherSummary
+  PaymentVoucherInput
 } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { downloadCsv } from '../exportCsv';
 import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput';
-import { ProtectedVoucherImage } from '../ProtectedVoucherImage';
 import { formatBeijingDateTime } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, type ManagedTableColumns } from '../../shared/ui';
@@ -28,10 +26,6 @@ type PendingPaymentFormValues = PendingPaymentListQuery;
 
 type PaymentApplicationFormValues = PaymentApplicationCreateInput & PayeeBankAccountInput & PaymentVoucherInput & {
   saveBank?: boolean;
-  voucherImage?: VoucherImageValue;
-};
-
-type PaymentVoucherFormValues = PaymentVoucherInput & {
   voucherImage?: VoucherImageValue;
 };
 
@@ -109,17 +103,14 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
   const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PendingPaymentFormValues>();
   const [applicationForm] = Form.useForm<PaymentApplicationFormValues>();
-  const [voucherForm] = Form.useForm<PaymentVoucherFormValues>();
   const [response, setResponse] = useState<PendingPaymentListResponse>({ rows: [], totals: { count: 0, amountByCurrency: [] }, pagination: { page: 1, pageSize: 10, totalItems: 0 } });
   const [query, setQuery] = useState<PendingPaymentListQuery>(defaultPendingPaymentQuery);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [applicationOpen, setApplicationOpen] = useState(false);
+  const [applicationVoucherFile, setApplicationVoucherFile] = useState<File>();
   const [applicationSubmitting, setApplicationSubmitting] = useState(false);
   const applicationSubmittingRef = useRef(false);
-  const [voucherTarget, setVoucherTarget] = useState<PendingPaymentSummary | null>(null);
-  const [previewTarget, setPreviewTarget] = useState<PendingPaymentSummary | null>(null);
-  const [deletingVoucherId, setDeletingVoucherId] = useState<string | null>(null);
   const [bankOptions, setBankOptions] = useState<PayeeBankAccountSummary[]>([]);
   const [bankOptionsLoading, setBankOptionsLoading] = useState(false);
   const [manualBankMode, setManualBankMode] = useState(false);
@@ -206,6 +197,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     const rowIds = rows.map((row) => row.id);
     const first = rows[0];
     setSelectedIds(rowIds);
+    setApplicationVoucherFile(undefined);
     setBankOptions([]);
     setManualBankMode(false);
     applicationForm.setFieldsValue({
@@ -216,7 +208,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
       accountName: first.bankAccount?.accountName,
       bankName: first.bankAccount?.bankName,
       bankAccountNo: first.bankAccount?.bankAccountNo,
-      voucherImage: first.vouchers[0],
+      voucherImage: undefined,
       saveBank: true
     });
     setApplicationOpen(true);
@@ -291,6 +283,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     setBankOptions([]);
     setManualBankMode(false);
     applicationForm.resetFields();
+    setApplicationVoucherFile(undefined);
   };
 
   const submitApplication = async () => {
@@ -311,7 +304,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
         message.warning('请补齐收款银行信息');
         return;
       }
-      if (!values.voucherImage?.fileName && selectedRows.some((row) => !row.vouchers.length)) {
+      if (!applicationVoucherFile || !values.voucherImage?.fileName) {
         message.warning('请上传供应商账单截图');
         return;
       }
@@ -329,10 +322,11 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
         } : undefined,
         saveManualBankAccount: useManual ? values.saveBank !== false : undefined,
         voucher: values.voucherImage?.fileName ? values.voucherImage : undefined
-      });
+      }, applicationVoucherFile);
       message.success('付款申请已提交');
       setApplicationOpen(false);
       applicationForm.resetFields();
+      setApplicationVoucherFile(undefined);
       setSelectedIds([]);
       await loadRows();
     } catch (error) {
@@ -340,35 +334,6 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     } finally {
       applicationSubmittingRef.current = false;
       setApplicationSubmitting(false);
-    }
-  };
-
-  const submitVoucher = async () => {
-    if (!voucherTarget) return;
-    const values = await voucherForm.validateFields();
-    if (!values.voucherImage) {
-      message.warning('请先粘贴或选择图片');
-      return;
-    }
-    message.success('对账单凭证已记录');
-    setVoucherTarget(null);
-    voucherForm.resetFields();
-    await loadRows();
-  };
-
-  const deleteBillVoucher = async (voucher: PaymentVoucherSummary) => {
-    if (!previewTarget || deletingVoucherId) return;
-    setDeletingVoucherId(voucher.id);
-    try {
-      await apiClient.deletePendingPaymentBillVoucher(voucher.id);
-      const remainingVouchers = previewTarget.vouchers.filter((item) => item.id !== voucher.id);
-      setPreviewTarget(remainingVouchers.length ? { ...previewTarget, vouchers: remainingVouchers } : null);
-      message.success('凭证已删除，操作已记录');
-      await loadRows();
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '凭证删除失败');
-    } finally {
-      setDeletingVoucherId(null);
     }
   };
 
@@ -415,14 +380,6 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
     { title: '币种', dataIndex: 'currency', width: 90 },
     { title: '合计金额', dataIndex: 'amount', width: 130, align: 'right', sorter: true, render: (value: number) => <Text strong className="finance-payment-amount">{formatMoney(value)}</Text> },
     { title: '备注', dataIndex: 'remark', width: 160, ellipsis: true, render: (value?: string) => value ?? '-' },
-    {
-      title: '对账单凭证',
-      dataIndex: 'vouchers',
-      width: 150,
-      render: (value: PendingPaymentSummary['vouchers'], row) => value.length
-        ? <Button className="finance-payment-voucher-button" size="small" onDoubleClick={() => setPreviewTarget(row)} onClick={() => setPreviewTarget(row)}>{value.length} 张凭证</Button>
-        : <Button size="small" disabled={!canUploadAttachment} onClick={() => setVoucherTarget(row)}>记录凭证</Button>
-    },
     { title: '收款方银行信息', dataIndex: 'bankAccount', width: 260, render: (value?: PayeeBankAccountSummary) => value ? `${value.accountName} / ${value.bankName} / ${value.bankAccountNo}` : '待选择' },
     { title: '状态', dataIndex: 'status', width: 120, render: renderPaymentStatus },
     {
@@ -465,7 +422,6 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
             { key: 'feeName', label: '应付费用', value: row.feeName || '-', title: row.feeName, wrap: true },
             row.remark ? { key: 'remark', label: '备注', value: row.remark, title: row.remark, wrap: true } : null,
             { key: 'amount', label: '合计金额', value: <Text strong className="finance-payment-amount">{row.currency} {formatMoney(row.amount)}</Text> },
-            { key: 'vouchers', label: '对账凭证', value: row.vouchers.length ? <Button className="finance-payment-voucher-button" size="small" onClick={() => setPreviewTarget(row)}>{row.vouchers.length} 张凭证</Button> : <Button size="small" disabled={!canUploadAttachment} onClick={() => setVoucherTarget(row)}>记录凭证</Button> },
             { key: 'bankAccount', label: '收款银行', value: row.bankAccount ? `${row.bankAccount.accountName} / ${row.bankAccount.bankName} / ${row.bankAccount.bankAccountNo}` : '待选择', title: row.bankAccount?.bankAccountNo, wrap: true },
             { key: 'status', label: '状态', value: renderPaymentStatus(row.status) }
           ]}
@@ -700,7 +656,7 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
                     <VoucherImageInput
                       apiClient={apiClient}
                       disabled={!canUploadAttachment}
-                      uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: selectedRows[0]?.id }) as Promise<VoucherImageValue>}
+                      onFileChange={setApplicationVoucherFile}
                     />
                   </Form.Item>
                 </section>
@@ -713,62 +669,6 @@ export function PendingPaymentPage({ apiClient, permissions, renderShipmentOrder
               </Col>
             </Row>
           </Form>
-        </Space>
-      </Modal>
-
-      <Modal title="记录对账单凭证" className="finance-modal" width={720} open={Boolean(voucherTarget)} onCancel={() => { setVoucherTarget(null); voucherForm.resetFields(); }} onOk={submitVoucher} okText="保存凭证" cancelText="取消" destroyOnHidden>
-        <Form form={voucherForm} layout="vertical" className="finance-payment-voucher-form">
-          <section className="finance-payment-modal-section">
-            <div className="finance-payment-section-title">供应商账单截图</div>
-            <Text type="secondary">支持选择、粘贴或拖入图片，保存后会回到当前待付款列表。</Text>
-            <Form.Item name="voucherImage" label="供应商账单截图">
-              <VoucherImageInput
-                apiClient={apiClient}
-                disabled={!canUploadAttachment || !voucherTarget}
-                uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PENDING_PAYMENT_BILL', pendingPaymentId: voucherTarget?.id }) as Promise<VoucherImageValue>}
-              />
-            </Form.Item>
-          </section>
-        </Form>
-      </Modal>
-
-      <Modal title="对账单凭证预览" className="finance-modal finance-preview-modal finance-payment-preview-modal" open={Boolean(previewTarget)} footer={null} onCancel={() => setPreviewTarget(null)} width={780}>
-        <Space direction="vertical" className="full-width" size={12}>
-          {previewTarget?.vouchers.map((voucher) => (
-            <Card
-              key={voucher.id}
-              size="small"
-              title={voucher.fileName}
-              className="finance-payment-preview-card"
-              extra={canUploadAttachment
-                && previewTarget.status !== 'PAID'
-                && previewTarget.status !== 'INVALIDATED'
-                && !(previewTarget.status === 'APPLIED' && previewTarget.vouchers.length <= 1) ? (
-                <Popconfirm
-                  title="确认删除这张凭证？"
-                  description="删除后无法恢复，操作会记录到审计日志。"
-                  okText="删除"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true, loading: deletingVoucherId === voucher.id }}
-                  disabled={Boolean(deletingVoucherId)}
-                  onConfirm={() => void deleteBillVoucher(voucher)}
-                >
-                  <Button
-                    aria-label={`删除凭证 ${voucher.fileName}`}
-                    danger
-                    type="text"
-                    size="small"
-                    icon={<Trash2 size={14} />}
-                    disabled={Boolean(deletingVoucherId)}
-                  >
-                    删除
-                  </Button>
-                </Popconfirm>
-              ) : null}
-            >
-              {voucher.url ? <ProtectedVoucherImage apiClient={apiClient} url={voucher.url} alt={voucher.fileName} fallback="" /> : <Text type="secondary">{voucher.mimeType ?? '图片凭证'} / {voucher.sizeBytes ?? 0} Bytes</Text>}
-            </Card>
-          ))}
         </Space>
       </Modal>
     </Card>
