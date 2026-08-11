@@ -1448,12 +1448,12 @@
       "AuthController.login"
     ],
     [
-      "POST /business/shipments/:id/problem-tickets @ DataController.createBusinessProblemTicket",
+      "POST /business/shipments/:id/problem-tickets @ ProblemTicketCommandController.createBusinessProblemTicket",
       "permission",
       [
         "business:shipment:problem-create"
       ],
-      "DataController.createBusinessProblemTicket"
+      "ProblemTicketCommandController.createBusinessProblemTicket"
     ],
     [
       "POST /carrier-tasks/:id/retry @ CarrierTaskCommandController.retryCarrierTask",
@@ -2196,12 +2196,12 @@
       "NotificationController.markAllRead"
     ],
     [
-      "POST /operations/line-shipments/:id/problem-tickets @ DataController.createOperationProblemTicket",
+      "POST /operations/line-shipments/:id/problem-tickets @ ProblemTicketCommandController.createOperationProblemTicket",
       "permission",
       [
         "operations:line-shipment:problem-create"
       ],
-      "DataController.createOperationProblemTicket"
+      "ProblemTicketCommandController.createOperationProblemTicket"
     ],
     [
       "POST /operations/line-shipments/:id/tracking-events @ TrackingManualEventCommandController.addOperationTrackingEvent",
@@ -2476,28 +2476,28 @@
       "DataController.createSouthAfricaRateRule"
     ],
     [
-      "POST /problem-tickets/:id/assist @ DataController.assistProblemTicket",
+      "POST /problem-tickets/:id/assist @ ProblemTicketCommandController.assistProblemTicket",
       "permission",
       [
         "customer-service:problem:assist"
       ],
-      "DataController.assistProblemTicket"
+      "ProblemTicketCommandController.assistProblemTicket"
     ],
     [
-      "POST /problem-tickets/:id/close @ DataController.closeProblemTicket",
+      "POST /problem-tickets/:id/close @ ProblemTicketCommandController.closeProblemTicket",
       "permission",
       [
         "customer-service:problem:close"
       ],
-      "DataController.closeProblemTicket"
+      "ProblemTicketCommandController.closeProblemTicket"
     ],
     [
-      "POST /problem-tickets/:id/replies @ DataController.replyProblemTicket",
+      "POST /problem-tickets/:id/replies @ ProblemTicketCommandController.replyProblemTicket",
       "permission",
       [
         "customer-service:problem:reply"
       ],
-      "DataController.replyProblemTicket"
+      "ProblemTicketCommandController.replyProblemTicket"
     ],
     [
       "POST /shipments @ DataController.createShipment",
@@ -2635,10 +2635,10 @@
       "DataController.registerShipmentPayment"
     ],
     [
-      "POST /shipments/:id/problem-tickets @ DataController.createProblemTicket",
+      "POST /shipments/:id/problem-tickets @ ProblemTicketCommandController.createProblemTicket",
       "auth",
       [],
-      "DataController.createProblemTicket"
+      "ProblemTicketCommandController.createProblemTicket"
     ],
     [
       "POST /shipments/:id/receivable-adjustments @ DataController.addReceivableAdjustment",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 210,
+    "dataControllerRoutesMax": 204,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 31839,
       "apps/api/src/modules/in-memory.repository.ts": 19305,
-      "apps/api/src/modules/data.controller.ts": 2411,
+      "apps/api/src/modules/data.controller.ts": 2372,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,

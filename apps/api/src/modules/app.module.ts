@@ -12,6 +12,9 @@ import { CustomerServiceDataConfirmService } from './customer-service/data-confi
 import { ProblemTicketTagController } from './customer-service/problem-tag/problem-ticket-tag.controller.js';
 import { PROBLEM_TICKET_TAG_REPOSITORY } from './customer-service/problem-tag/problem-ticket-tag.repository.js';
 import { ProblemTicketTagService } from './customer-service/problem-tag/problem-ticket-tag.service.js';
+import { ProblemTicketCommandController } from './customer-service/problem-ticket/problem-ticket-command.controller.js';
+import { PROBLEM_TICKET_COMMAND_REPOSITORY } from './customer-service/problem-ticket/problem-ticket-command.repository.js';
+import { ProblemTicketCommandService } from './customer-service/problem-ticket/problem-ticket-command.service.js';
 import { LegacyProblemTicketQueryRepository } from './customer-service/problem-ticket/problem-ticket-query.legacy-repository.js';
 import { PrismaProblemTicketQueryRepository } from './customer-service/problem-ticket/problem-ticket-query.prisma-repository.js';
 import { PROBLEM_TICKET_QUERY_REPOSITORY } from './customer-service/problem-ticket/problem-ticket-query.repository.js';
@@ -256,6 +259,11 @@ const problemTicketTagRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const problemTicketCommandRepositoryProvider = {
+  provide: PROBLEM_TICKET_COMMAND_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const customerServiceDataConfirmRepositoryProvider = {
   provide: CUSTOMER_SERVICE_DATA_CONFIRM_REPOSITORY,
   useExisting: PrismaRepository
@@ -326,6 +334,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     AiController,
     CustomerServiceQueryController,
     CustomerServiceDataConfirmController,
+    ProblemTicketCommandController,
     ProblemTicketTagController,
     FinanceCatalogController,
     PayerBankAccountController,
@@ -371,6 +380,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     ProblemTicketQueryService,
     CustomerServiceDataConfirmService,
     customerServiceDataConfirmRepositoryProvider,
+    ProblemTicketCommandService,
+    problemTicketCommandRepositoryProvider,
     ProblemTicketTagService,
     problemTicketTagRepositoryProvider,
     PayerBankAccountService,

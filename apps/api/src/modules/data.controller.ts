@@ -93,7 +93,6 @@ import type {
   PricingQuoteRequest,
   PricingRuleCreateInput,
   PricingRuleQuoteRequest,
-  ProblemTicketCreateInput,
   ReceivableAdjustmentInput,
   SurchargeCreateInput,
   RoleGroupInput,
@@ -926,44 +925,6 @@ export class DataController {
   @RequirePermission('business:order-fee:unlock')
   async unlockShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
     return this.repository.unlockShipmentFinanceItem(request.user, id, feeId);
-  }
-
-  @Post('shipments/:id/problem-tickets')
-  @RequireAuth()
-  async createProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    await this.ensureAnyPermission(request.user, ['customer-service:problem:create', 'customer-service:pending-routing:problem-create', 'customer-service:waiting-departure:problem-create', 'customer-service:departed:problem-create', 'customer-service:arrived-port:problem-create', 'customer-service:delivering:problem-create', 'customer-service:delivering:after-sale-create', 'customer-service:signed:after-sale-create']);
-    await this.repository.assertCustomerServiceProblemCreationAllowed(request.user, id);
-    return this.repository.createProblemTicket(request.user, id, body);
-  }
-
-  @Post('business/shipments/:id/problem-tickets')
-  @RequirePermission('business:shipment:problem-create')
-  async createBusinessProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    return this.repository.createProblemTicket(request.user, id, { ...body, customerVisible: true, pushToSales: undefined });
-  }
-
-  @Post('operations/line-shipments/:id/problem-tickets')
-  @RequirePermission('operations:line-shipment:problem-create')
-  async createOperationProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    return this.repository.createProblemTicket(request.user, id, { ...body, customerVisible: false, pushToSales: undefined });
-  }
-
-  @Post('problem-tickets/:id/replies')
-  @RequirePermission('customer-service:problem:reply')
-  async replyProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { message?: string }) {
-    return this.repository.replyProblemTicket(request.user, id, body.message ?? '');
-  }
-
-  @Post('problem-tickets/:id/close')
-  @RequirePermission('customer-service:problem:close')
-  async closeProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
-    return this.repository.closeProblemTicket(request.user, id, body.reason);
-  }
-
-  @Post('problem-tickets/:id/assist')
-  @RequirePermission('customer-service:problem:assist')
-  async assistProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
-    return this.repository.assistProblemTicket(request.user, id, body.reason ?? '需要协助处理');
   }
 
   @Get('master-data')
