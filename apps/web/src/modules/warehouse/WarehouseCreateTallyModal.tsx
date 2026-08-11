@@ -1,11 +1,14 @@
-import { Alert, Input, Modal, Space, Typography } from 'antd';
+import { Alert, Input, Modal, Select, Space, Typography } from 'antd';
+import { warehouseTallyChannels } from '@siyuan/shared';
 
 const { Text } = Typography;
 
 interface WarehouseCreateTallyModalProps {
   open: boolean;
   selectedCount: number;
+  channel: string;
   requirement: string;
+  onChannelChange: (value: string) => void;
   onRequirementChange: (value: string) => void;
   onCancel: () => void;
   onConfirm: () => void;
@@ -14,7 +17,9 @@ interface WarehouseCreateTallyModalProps {
 export function WarehouseCreateTallyModal({
   open,
   selectedCount,
+  channel,
   requirement,
+  onChannelChange,
   onRequirementChange,
   onCancel,
   onConfirm
@@ -30,6 +35,17 @@ export function WarehouseCreateTallyModal({
     >
       <Space direction="vertical" size={12} style={{ width: '100%' }}>
         <Alert type="info" showIcon message={`已选择 ${selectedCount} 个在仓包裹，提交后进入未完成理货。`} />
+        <div>
+          <Text strong>理货渠道</Text>
+          <Select
+            aria-label="理货渠道"
+            placeholder="请选择理货渠道"
+            value={channel || undefined}
+            onChange={onChannelChange}
+            options={warehouseTallyChannels.map((value) => ({ value, label: value }))}
+            style={{ width: '100%' }}
+          />
+        </div>
         <div>
           <Text strong>理货需求</Text>
           <Input.TextArea

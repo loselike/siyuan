@@ -282,6 +282,16 @@ export class DataController {
     throw new ForbiddenException('没有访问权限');
   }
 
+  private async ensurePermissionUnblocked(principal: Principal, mask: PermissionKey) {
+    if (isAdministratorRole(principal.role) || !(await this.repository.hasPermission(principal.role, mask))) return;
+    await (this.repository as any).recordPermissionDenied?.(principal, {
+      permissions: [mask],
+      method: 'SERVER',
+      path: `customer-service masked action: ${mask}`
+    }).catch(() => undefined);
+    throw new ForbiddenException('当前角色已屏蔽该操作');
+  }
+
   private async ensureAnyPermission(principal: Principal, permissions: PermissionKey[]) {
     if (await this.hasAnyPermission(principal.role, permissions)) return;
     await (this.repository as any).recordPermissionDenied?.(principal, { permissions, method: 'SERVER', path: 'customer-service granular action' }).catch(() => undefined);
@@ -771,18 +781,21 @@ export class DataController {
   @Post('shipments/:id/business-data/approve')
   @RequirePermission('customer-service:data-confirm:business-approve')
   async approveShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
+    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-approve-block');
     return this.repository.approveShipmentBusinessData(request.user, id, body);
   }
 
   @Post('shipments/:id/agent-data/approve')
   @RequirePermission('customer-service:data-confirm:agent-approve')
   async approveShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
+    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-approve-block');
     return this.repository.approveShipmentAgentData(request.user, id, body);
   }
 
   @Patch('shipments/:id/business-data')
   @RequirePermission('customer-service:data-confirm:business-update')
   async updateShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
+    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-update-block');
     return this.repository.updateShipmentBusinessData(request.user, id, body);
   }
 
@@ -794,7 +807,20 @@ export class DataController {
     @Query('kind') kind?: string
   ): Promise<CustomerServiceFinanceUpdatePreview> {
     if (kind !== undefined && kind !== 'business' && kind !== 'agent') throw new BadRequestException('费用预览类型无效');
-    return this.repository.getCustomerServiceFinanceUpdatePreview(request.user, id, kind === 'agent' ? 'agent' : 'business');
+    const normalizedKind = kind === 'agent' ? 'agent' : 'business';
+    await this.ensurePermission(
+      request.user,
+      normalizedKind === 'agent'
+        ? 'customer-service:data-confirm:agent-update'
+        : 'customer-service:data-confirm:business-update'
+    );
+    await this.ensurePermissionUnblocked(
+      request.user,
+      normalizedKind === 'agent'
+        ? 'customer-service:data-confirm:agent-update-block'
+        : 'customer-service:data-confirm:business-update-block'
+    );
+    return this.repository.getCustomerServiceFinanceUpdatePreview(request.user, id, normalizedKind);
   }
 
   @Put('shipments/:id/customer-service/finance-items/:feeId')
@@ -807,12 +833,25 @@ export class DataController {
     @Body() body: CustomerServiceFinanceItemUpdateInput
   ): Promise<CustomerServiceFinanceUpdatePreviewRow> {
     if (kind !== 'business' && kind !== 'agent') throw new BadRequestException('费用修改类型无效');
+    await this.ensurePermission(
+      request.user,
+      kind === 'agent'
+        ? 'customer-service:data-confirm:agent-update'
+        : 'customer-service:data-confirm:business-update'
+    );
+    await this.ensurePermissionUnblocked(
+      request.user,
+      kind === 'agent'
+        ? 'customer-service:data-confirm:agent-update-block'
+        : 'customer-service:data-confirm:business-update-block'
+    );
     return this.repository.updateCustomerServiceFinanceItem(request.user, id, feeId, kind, body);
   }
 
   @Patch('shipments/:id/agent-data')
   @RequirePermission('customer-service:data-confirm:agent-update')
   async updateShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
+    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-update-block');
     return this.repository.updateShipmentAgentData(request.user, id, body);
   }
 
@@ -831,6 +870,8 @@ export class DataController {
   @Post('shipments/:id/data-confirmation/approve-all')
   @RequirePermission('customer-service:data-confirm:approve-all')
   async approveShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
+    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-approve-block');
+    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-approve-block');
     return this.repository.approveShipmentAllData(request.user, id, body);
   }
 
@@ -846,7 +887,7 @@ export class DataController {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能人工修改运单');
     }
-    const actionPermissions: PermissionKey[] = body.status === 'DEPARTED'
+    const baseActionPermissions: PermissionKey[] = body.status === 'DEPARTED'
       ? ['customer-service:waiting-departure:confirm-departure']
       : body.status === 'ARRIVED_PORT'
         ? ['customer-service:departed:confirm-arrived-port']
@@ -858,10 +899,23 @@ export class DataController {
               ? ['customer-service:waiting-departure:update-transfer-no', 'customer-service:transfer:write']
               : body.etdAt !== undefined || body.etaAt !== undefined
                 ? ['customer-service:waiting-departure:update-etd-eta', 'customer-service:departed:update-eta']
+                : body.vesselVoyage !== undefined
+                  ? ['customer-service:waiting-departure:update-info', 'customer-service:departed:update-info', 'customer-service:arrived-port:update-info', 'customer-service:delivering:update-info']
                 : body.trackingWebsite !== undefined
                   ? ['customer-service:waiting-departure:update-tracking-website', 'customer-service:departed:update-tracking-website', 'customer-service:arrived-port:update-tracking-website']
                   : ['customer-service:waiting-departure:update-info', 'customer-service:departed:update-info', 'customer-service:arrived-port:update-info', 'customer-service:delivering:update-info'];
-    await this.ensureAnyPermission(request.user, actionPermissions);
+    const currentStatus = await this.repository.getShipmentStatusForPermission(request.user, id);
+    const isRoutedSameStatus = currentStatus === 'WAITING_DISPATCH'
+      && (body.status === undefined || body.status === 'WAITING_DISPATCH');
+    if (currentStatus === 'WAITING_SORT'
+      && (body.status === 'WAITING_DISPATCH' || body.channelId !== undefined)) {
+      throw new BadRequestException('待排货的状态和渠道请通过市场排货入口修改');
+    }
+    if (isRoutedSameStatus) {
+      await this.ensurePermission(request.user, 'market:routed:update');
+    } else {
+      await this.ensureAnyPermission(request.user, baseActionPermissions);
+    }
     return this.repository.updateShipmentOperational(request.user, id, body);
   }
 
@@ -869,6 +923,9 @@ export class DataController {
   @RequirePermission('operations:line-shipment:status-update')
   async updateOperationShipmentOperational(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentOperationalUpdateInput) {
     if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能人工修改运单');
+    if (body.status === 'WAITING_DISPATCH' || body.channelId !== undefined) {
+      throw new BadRequestException('排货状态和渠道请通过市场排货入口修改');
+    }
     return this.repository.updateShipmentOperational(request.user, id, body, { enforceOperationsLineShipmentStageEdit: true });
   }
 
@@ -885,7 +942,11 @@ export class DataController {
       'customer-service:delivering:view',
       'customer-service:signed:view'
     ]);
-    return this.repository.customerServiceShipments(request.user);
+    const rows = await this.repository.customerServiceShipments(request.user);
+    if (request.user.role !== 'ADMIN' && await this.repository.hasPermission(request.user.role, 'customer-service:pending-routing:readonly-block')) {
+      return rows.filter((shipment) => shipment.status !== 'WAITING_SORT');
+    }
+    return rows;
   }
 
   @Get('customer-service/data-confirm-shipments')
@@ -898,6 +959,7 @@ export class DataController {
   @RequireAuth()
   async fillCustomerServiceTransferShipments(@Req() request: { user: Principal }, @Body() body: CustomerServiceTransferBatchInput) {
     await this.ensurePermission(request.user, 'customer-service:transfer:write');
+    await this.ensurePermissionUnblocked(request.user, 'customer-service:transfer:fill-block');
     if (body.rows.length > 1) await this.ensurePermission(request.user, 'customer-service:transfer:batch-write');
     if (body.rows.some((row) => Boolean(row.subOrderNo?.trim()))) await this.ensurePermission(request.user, 'customer-service:transfer:sub-order-write');
     if (body.rows.some((row) => Boolean(row.pushToSales))) await this.ensurePermission(request.user, 'customer-service:transfer:push-sales');
@@ -1097,8 +1159,12 @@ export class DataController {
   @RequirePermission([
     'customer-service:data-confirm:business-update',
     'business:shipment:finance-detail-view',
+    'business:order-entry:view',
     'business:order-entry:business-cost-view',
     'business:order-entry:business-cost-write',
+    'market:pending-routing:detail',
+    'market:pending-routing:business-cost-view',
+    'market:pending-routing:payable-cost-view',
     'business:shipment:payable-view',
     'business:shipment:profit-view',
     'business:order-fee:profit-view',
@@ -1113,6 +1179,12 @@ export class DataController {
     'finance:payable:view-profit'
   ])
   async getShipmentFinanceDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
+    if (request.user.role !== 'ADMIN' && await this.repository.hasPermission(request.user.role, 'customer-service:pending-routing:fee-detail-block')) {
+      const shipment = (await this.repository.getShipments(request.user)).find((item) => item.id === id);
+      if (shipment?.status === 'WAITING_SORT') {
+        await this.ensurePermissionUnblocked(request.user, 'customer-service:pending-routing:fee-detail-block');
+      }
+    }
     return this.repository.getShipmentFinanceDetail(request.user, id);
   }
 
@@ -1123,13 +1195,13 @@ export class DataController {
   }
 
   @Post('shipments/:id/finance-items')
-  @RequirePermission('business:order-fee:create')
+  @RequirePermission(['business:order-entry:view', 'business:order-entry:business-cost-write', 'business:order-fee:create', 'market:pending-routing:update'])
   async createShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentFinanceItemCreateInput) {
     return this.repository.createShipmentFinanceItem(request.user, id, body);
   }
 
   @Put('shipments/:id/finance-items/:feeId')
-  @RequirePermission('business:order-fee:update')
+  @RequirePermission(['business:order-entry:view', 'business:order-entry:business-cost-write', 'business:order-fee:update', 'market:pending-routing:update'])
   async updateShipmentFinanceItem(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -1140,7 +1212,7 @@ export class DataController {
   }
 
   @Delete('shipments/:id/finance-items/:feeId')
-  @RequirePermission('business:order-fee:delete')
+  @RequirePermission(['business:order-entry:view', 'business:order-entry:business-cost-write', 'business:order-fee:delete', 'market:pending-routing:update'])
   async deleteShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
     return this.repository.deleteShipmentFinanceItem(request.user, id, feeId);
   }
@@ -2272,6 +2344,12 @@ export class DataController {
     return this.repository.updateWarehouseTallyTask(request.user, id, body);
   }
 
+  @Post('warehouse/tally-tasks/:id/start')
+  @RequirePermission('warehouse:tally-pending:task-process')
+  async startWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.repository.startWarehouseTallyTask(request.user, id);
+  }
+
   @Post('warehouse/tally-tasks/:id/cancel')
   @RequirePermission('warehouse:tally-pending:task-cancel')
   async cancelWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
@@ -2480,8 +2558,55 @@ export class DataController {
 
   @Post('finance/payment-applications')
   @RequirePermission('finance:pending-payment:create')
-  async createPaymentApplications(@Req() request: { user: Principal }, @Body() body: PaymentApplicationCreateInput) {
-    return this.repository.createPaymentApplications(request.user, body);
+  @UseInterceptors(FileInterceptor('voucherFile', { limits: { fileSize: 10 * 1024 * 1024 } }))
+  async createPaymentApplications(
+    @Req() request: { user: Principal },
+    @Body() body: PaymentApplicationCreateInput & { payload?: string },
+    @UploadedFile() voucherFile: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined
+  ) {
+    let input: PaymentApplicationCreateInput;
+    try {
+      input = typeof body.payload === 'string' ? JSON.parse(body.payload) as PaymentApplicationCreateInput : body;
+    } catch {
+      throw new BadRequestException('付款申请参数无效');
+    }
+    if (!input || !Array.isArray(input.pendingPaymentIds)) {
+      throw new BadRequestException('付款申请参数无效');
+    }
+    if (!voucherFile) {
+      throw new BadRequestException('请在发起付款申请时上传供应商账单截图');
+    }
+
+    let persistedVoucherPath: string | undefined;
+    if (voucherFile) {
+      const normalizedFile = { ...voucherFile, originalname: normalizeUploadedFileName(voucherFile.originalname) };
+      this.assertVoucherImage(normalizedFile);
+      const uploadDir = resolveUploadDirectory('vouchers');
+      await mkdir(uploadDir.dir, { recursive: true });
+      const extension = this.imageMimeExtensions[normalizedFile.mimetype];
+      const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
+      persistedVoucherPath = join(uploadDir.dir, fileName);
+      await writeFile(persistedVoucherPath, normalizedFile.buffer);
+      input = {
+        ...input,
+        voucher: {
+          voucherType: input.voucher?.voucherType ?? 'BILL',
+          fileName: normalizedFile.originalname,
+          mimeType: normalizedFile.mimetype,
+          sizeBytes: normalizedFile.size,
+          url: `${uploadDir.publicPath}/${fileName}`
+        }
+      };
+    }
+
+    try {
+      return await this.repository.createPaymentApplications(request.user, input);
+    } catch (error) {
+      if (persistedVoucherPath) {
+        await unlink(persistedVoucherPath).catch(() => undefined);
+      }
+      throw error;
+    }
   }
 
   @Put('finance/payment-applications/:id')
@@ -2579,47 +2704,29 @@ export class DataController {
   ) {
     if (!file) throw new BadRequestException('请上传图片');
     const normalizedFile = { ...file, originalname: normalizeUploadedFileName(file.originalname) };
-    const context = body.context;
+    const context = body.context as VoucherImageUploadContext | 'PENDING_PAYMENT_BILL' | undefined;
     if (!context) throw new BadRequestException('缺少凭证类型');
+    if (context === 'PENDING_PAYMENT_BILL') {
+      throw new BadRequestException('请在发起付款申请时上传供应商账单截图');
+    }
     this.assertVoucherImage(normalizedFile);
-    const requiredPermission: PermissionKey = context === 'WATER_RECEIPT'
-      ? 'finance:water-receipt:voucher-upload'
+    const requiredPermission: PermissionKey = context === 'PAYMENT_APPLICATION_BILL'
+      ? 'finance:pending-payment:payment-voucher-upload'
       : context === 'PAID_PAYMENT_RECEIPT'
         ? 'finance:paid-payment:voucher-upload'
-        : context === 'PENDING_PAYMENT_BILL'
-          ? 'finance:pending-payment:bill-voucher-upload'
-          : 'finance:pending-payment:payment-voucher-upload';
+        : 'finance:water-receipt:voucher-upload';
     await this.ensurePermission(request.user, requiredPermission);
-    if (context === 'PENDING_PAYMENT_BILL' && !body.pendingPaymentId) throw new BadRequestException('缺少待付款记录');
     if (context === 'PAYMENT_APPLICATION_BILL' && !body.paymentApplicationId) throw new BadRequestException('缺少付款申请');
     if (context === 'PAID_PAYMENT_RECEIPT' && !body.paymentApplicationId) throw new BadRequestException('缺少付款申请');
     if (context === 'WATER_RECEIPT' && !body.waterReceiptId) throw new BadRequestException('缺少水单');
-    if (context === 'WATER_RECEIPT' && body.waterReceiptId) {
-      await this.repository.assertWaterReceiptVoucherUploadAccess(request.user, body.waterReceiptId);
-    }
-    if (context === 'PENDING_PAYMENT_BILL' && body.pendingPaymentId) {
-      await this.repository.assertPendingPaymentVoucherUploadAccess(
-        request.user,
-        body.pendingPaymentId,
-        'finance:pending-payment:bill-voucher-upload'
-      );
-    }
-    if (context === 'PAYMENT_APPLICATION_BILL' && body.paymentApplicationId) {
-      await this.repository.assertPaymentApplicationVoucherUploadAccess(
-        request.user,
-        body.paymentApplicationId,
-        'finance:pending-payment:payment-voucher-upload'
-      );
-    }
 
     const uploadDir = resolveUploadDirectory('vouchers');
     await mkdir(uploadDir.dir, { recursive: true });
     const extension = this.imageMimeExtensions[normalizedFile.mimetype];
-    const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
+    const fileName = new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + randomUUID() + extension;
     const filePath = join(uploadDir.dir, fileName);
     await writeFile(filePath, normalizedFile.buffer);
-
-    const url = `${uploadDir.publicPath}/${fileName}`;
+    const url = uploadDir.publicPath + '/' + fileName;
     const input: PaymentVoucherInput = {
       fileName: normalizedFile.originalname,
       mimeType: normalizedFile.mimetype,
@@ -2627,50 +2734,27 @@ export class DataController {
       url
     };
 
-    if (context === 'PENDING_PAYMENT_BILL') {
-      const pendingPaymentId = body.pendingPaymentId;
-      if (!pendingPaymentId) throw new BadRequestException('缺少待付款记录');
-      try {
-        return await this.repository.addPaymentVoucher(
-          request.user,
-          { ...input, pendingPaymentId, voucherType: 'BILL' },
-          'finance:pending-payment:bill-voucher-upload'
-        );
-      } catch (error) {
-        await unlink(filePath).catch(() => undefined);
-        throw error;
+    try {
+      if (context === 'PAYMENT_APPLICATION_BILL') {
+        const paymentApplicationId = body.paymentApplicationId;
+        if (!paymentApplicationId) throw new BadRequestException('缺少付款申请');
+        return this.repository.addPaymentVoucher(request.user, { ...input, paymentApplicationId, voucherType: 'BILL' }, 'finance:pending-payment:payment-voucher-upload');
       }
-    }
-    if (context === 'PAYMENT_APPLICATION_BILL') {
-      const paymentApplicationId = body.paymentApplicationId;
-      if (!paymentApplicationId) throw new BadRequestException('缺少付款申请');
-      try {
-        return await this.repository.addPaymentVoucher(
-          request.user,
-          { ...input, paymentApplicationId, voucherType: 'BILL' },
-          'finance:pending-payment:payment-voucher-upload'
-        );
-      } catch (error) {
-        await unlink(filePath).catch(() => undefined);
-        throw error;
+      if (context === 'PAID_PAYMENT_RECEIPT') {
+        const paymentApplicationId = body.paymentApplicationId;
+        if (!paymentApplicationId) throw new BadRequestException('缺少付款申请');
+        return this.repository.addPaymentWaterReceipt(request.user, { ...input, paymentApplicationId, voucherType: 'PAYMENT_RECEIPT' });
       }
-    }
-    if (context === 'PAID_PAYMENT_RECEIPT') {
-      const paymentApplicationId = body.paymentApplicationId;
-      if (!paymentApplicationId) throw new BadRequestException('缺少付款申请');
-      return this.repository.addPaymentWaterReceipt(request.user, { ...input, paymentApplicationId, voucherType: 'PAYMENT_RECEIPT' });
-    }
-    if (context === 'WATER_RECEIPT') {
-      const waterReceiptId = body.waterReceiptId;
-      if (!waterReceiptId) throw new BadRequestException('缺少水单');
-      try {
-        return await this.repository.uploadWaterReceiptVoucher(request.user, waterReceiptId, input);
-      } catch (error) {
-        await unlink(filePath).catch(() => undefined);
-        throw error;
+      if (context === 'WATER_RECEIPT') {
+        const waterReceiptId = body.waterReceiptId;
+        if (!waterReceiptId) throw new BadRequestException('缺少水单');
+        return this.repository.uploadWaterReceiptVoucher(request.user, waterReceiptId, input);
       }
+      throw new BadRequestException('不支持的凭证类型');
+    } catch (error) {
+      await unlink(filePath).catch(() => undefined);
+      throw error;
     }
-    throw new BadRequestException('不支持的凭证类型');
   }
 
   private assertVoucherImage(file: { mimetype: string; originalname: string; buffer: Buffer }) {

@@ -35,7 +35,10 @@ function packageRow(overrides: Record<string, unknown> = {}) {
 }
 
 function createRepository(prisma: Record<string, unknown>) {
-  return new PrismaWarehouseInventoryQueryRepository(prisma as unknown as PrismaService);
+  return new PrismaWarehouseInventoryQueryRepository(
+    prisma as unknown as PrismaService,
+    { hasPermission: vi.fn().mockResolvedValue(false) }
+  );
 }
 
 describe('PrismaWarehouseInventoryQueryRepository', () => {
@@ -46,8 +49,8 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
       packageRow({ id: 'pkg-3', customerOrderNo: 'ORDER-2', domesticTrackingNo: 'SF002', combinedOrderNo: 'ORDER-2-SF002' })
     ]);
     const tallyFindMany = vi.fn().mockResolvedValue([
-      { id: 'task-pending', taskNo: 'TL-001', status: 'PENDING', packageIds: ['pkg-1'], appliedPackageId: null },
-      { id: 'task-completed', taskNo: 'TL-002', status: 'COMPLETED', packageIds: ['pkg-source'], appliedPackageId: 'pkg-2' }
+      { id: 'task-pending', taskNo: 'TL-001', status: 'PENDING', tallyProgressStatus: 'IN_PROGRESS', packageIds: ['pkg-1'], appliedPackageId: null },
+      { id: 'task-completed', taskNo: 'TL-002', status: 'COMPLETED', tallyProgressStatus: 'COMPLETED', packageIds: ['pkg-source'], appliedPackageId: 'pkg-2' }
     ]);
     const repository = createRepository({
       warehousePackage: { findMany: packageFindMany },
@@ -67,7 +70,16 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
           { id: { in: ['task-completed'] } }
         ]
       },
-      select: { id: true, taskNo: true, status: true, packageIds: true, appliedPackageId: true }
+      select: {
+        id: true,
+        taskNo: true,
+        status: true,
+        packageIds: true,
+        appliedPackageId: true,
+        createdAt: true,
+        tallyProgressStatus: true
+      },
+      orderBy: { createdAt: 'asc' }
     });
     expect(result).toEqual([
       expect.objectContaining({ id: 'pkg-1', tallyTaskId: 'task-pending', tallyTaskNo: 'TL-001', tallyCompleted: false, tallyStatus: '理货中' }),
@@ -167,20 +179,40 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
     });
   });
 
-  it('keeps the warehouse-role rejection text unchanged', async () => {
-    const packageFindMany = vi.fn();
-    const customerFindMany = vi.fn();
+  it('enforces the owned-customer scope and strips site for a business role', async () => {
+    const scopedRow = packageRow({ site: '深圳仓' });
+    const packageFindMany = vi.fn().mockImplementation((args: { select?: unknown }) =>
+      Promise.resolve(args.select
+        ? [{
+            customerCode: 'C001',
+            combinedOrderNo: scopedRow.combinedOrderNo,
+            customerOrderNo: scopedRow.customerOrderNo,
+            domesticTrackingNo: scopedRow.domesticTrackingNo,
+            packageCount: 1,
+            weightKg: 10,
+            cbm: 0.06,
+            status: 'RECEIVED',
+            manualException: null,
+            exceptions: []
+          }]
+        : [scopedRow])
+    );
+    const customerFindMany = vi.fn()
+      .mockResolvedValueOnce([{ code: 'C001' }])
+      .mockResolvedValueOnce([{ code: 'C001', salesperson: 'operator' }]);
     const repository = createRepository({
       warehousePackage: { findMany: packageFindMany },
-      warehouseTallyTask: { findMany: vi.fn() },
-      customer: { findMany: customerFindMany }
+      warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
+      customer: { findMany: customerFindMany },
+      shipment: { count: vi.fn().mockResolvedValue(0) },
+      auditLog: { create: vi.fn().mockResolvedValue({}), findMany: vi.fn() }
     });
 
-    await expect(repository.getWarehousePackages(operator)).rejects.toThrow('当前角色不能操作仓库管理');
-    await expect(repository.getWarehouseManualReceiptCustomers(operator)).rejects.toThrow('当前角色不能操作仓库管理');
-    await expect(repository.findDuplicateMojiaPackage(operator, { combinedOrderNo: 'ORDER-1-SF001' }))
-      .rejects.toThrow('当前角色不能操作仓库管理');
-    expect(packageFindMany).not.toHaveBeenCalled();
-    expect(customerFindMany).not.toHaveBeenCalled();
+    const response = await repository.getWarehouseInStockPage(operator, { dataScope: 'OWN' });
+
+    expect(response.rows).toEqual([expect.not.objectContaining({ site: expect.anything() })]);
+    expect(packageFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { status: 'RECEIVED', customerCode: { in: ['C001'] } }
+    }));
   });
 });

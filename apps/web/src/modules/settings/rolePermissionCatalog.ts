@@ -73,6 +73,129 @@ export function isOrderEntryFinanceMaskPermission(code: string): boolean {
   return orderEntryFinanceMaskControls.some((control) => control.code === code);
 }
 
+export const customerServiceTransferFillMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽填写转单号', code: 'customer-service:transfer:fill-block' }
+];
+
+export function isCustomerServiceTransferFillMaskPermission(code: string): boolean {
+  return customerServiceTransferFillMaskControls.some((control) => control.code === code);
+}
+
+export const customerServicePendingRoutingMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽查看费用', code: 'customer-service:pending-routing:fee-detail-block' },
+  { label: '屏蔽只读', code: 'customer-service:pending-routing:readonly-block' }
+];
+
+export function isCustomerServicePendingRoutingMaskPermission(code: string): boolean {
+  return customerServicePendingRoutingMaskControls.some((control) => control.code === code);
+}
+
+export const customerServiceDataConfirmMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽业务审核', code: 'customer-service:data-confirm:business-approve-block' },
+  { label: '屏蔽业务修改', code: 'customer-service:data-confirm:business-update-block' },
+  { label: '屏蔽代理修改', code: 'customer-service:data-confirm:agent-update-block' },
+  { label: '屏蔽代理审核', code: 'customer-service:data-confirm:agent-approve-block' }
+];
+
+export function isCustomerServiceDataConfirmMaskPermission(code: string): boolean {
+  return customerServiceDataConfirmMaskControls.some((control) => control.code === code);
+}
+
+export const warehouseTodayReceiptMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽批量导入', code: 'warehouse:today-receipt:batch-import-block' },
+  { label: '屏蔽批量下载', code: 'warehouse:today-receipt:batch-download-block' },
+  { label: '屏蔽站点筛选', code: 'warehouse:today-receipt:site-filter-block' },
+  { label: '屏蔽手动添加收货', code: 'warehouse:today-receipt:manual-create-block' }
+];
+
+export function isWarehouseTodayReceiptMaskPermission(code: string): boolean {
+  return warehouseTodayReceiptMaskControls.some((control) => control.code === code);
+}
+
+export const warehouseTallyPendingMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽查看', code: 'warehouse:tally-pending:view-block' },
+  { label: '屏蔽修改', code: 'warehouse:tally-pending:update-block' },
+  { label: '屏蔽取消任务', code: 'warehouse:tally-pending:cancel-block' },
+  { label: '屏蔽处理理货', code: 'warehouse:tally-pending:process-block' }
+];
+
+export function isWarehouseTallyPendingMaskPermission(code: string): boolean {
+  return warehouseTallyPendingMaskControls.some((control) => control.code === code);
+}
+
+export const warehouseTallyCompletedMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽查看', code: 'warehouse:tally-completed:view-block' },
+  { label: '屏蔽重新打印', code: 'warehouse:tally-label:reprint-block' },
+  { label: '屏蔽下载', code: 'warehouse:tally-label:download-block' },
+  { label: '屏蔽反审核', code: 'warehouse:tally-completed:reverse-block' }
+];
+
+export function isWarehouseTallyCompletedMaskPermission(code: string): boolean {
+  return warehouseTallyCompletedMaskControls.some((control) => control.code === code);
+}
+
+export const warehouseRentDetailMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽规则编辑', code: 'warehouse:rent-rule:manage-block' },
+  { label: '屏蔽查看所有仓租', code: 'warehouse:rent-detail:all-view-block' },
+  { label: '屏蔽查看归属仓租', code: 'warehouse:rent-detail:own-view-block' }
+];
+
+export function isWarehouseRentDetailMaskPermission(code: string): boolean {
+  return warehouseRentDetailMaskControls.some((control) => control.code === code);
+}
+
+export const marketPendingRoutingMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽排货', code: 'market:pending-routing:route-block' },
+  { label: '屏蔽修改', code: 'market:pending-routing:update-block' },
+  { label: '屏蔽审核', code: 'market:pending-routing:audit-block' },
+  { label: '屏蔽操作日志', code: 'market:pending-routing:operation-log-block' },
+  { label: '屏蔽业务成本修改', code: 'market:pending-routing:business-cost-update-block' },
+  { label: '屏蔽业务成本新增', code: 'market:pending-routing:business-cost-create-block' },
+  { label: '屏蔽业务成本删除', code: 'market:pending-routing:business-cost-delete-block' },
+  { label: '屏蔽退回重审', code: 'market:pending-routing:reroute-block' }
+];
+
+export function isMarketPendingRoutingMaskPermission(code: string): boolean {
+  return marketPendingRoutingMaskControls.some((control) => control.code === code);
+}
+
+export const marketRoutedMaskControls: Array<{
+  label: string;
+  code: PermissionKey;
+}> = [
+  { label: '屏蔽退回重排', code: 'market:routed:reroute-block' },
+  { label: '屏蔽修改', code: 'market:routed:update-block' },
+  { label: '屏蔽排货日志', code: 'market:routed:log-block' }
+];
+
+export function isMarketRoutedMaskPermission(code: string): boolean {
+  return marketRoutedMaskControls.some((control) => control.code === code);
+}
+
 /** 历史录单财务权限仍由 API 兼容，但不再作为录单二级入口的可配置项展示。 */
 export function isLegacyOrderEntryFinancePermission(code: string): boolean {
   return code === 'business:order-entry:business-cost-view'
@@ -321,6 +444,16 @@ export function getWorkspacePermissionGroups(
       .filter((permission) => !isWorkspaceFieldMaskPermission(permission.code))
       .filter((permission) => !isOrderEntryFinanceMaskPermission(permission.code))
       .filter((permission) => !isLegacyOrderEntryFinancePermission(permission.code))
+      // 屏蔽项只在对应三级面板单独配置，不能随二级入口默认授予。
+      .filter((permission) => !isWarehouseTodayReceiptMaskPermission(permission.code))
+      .filter((permission) => !isWarehouseTallyPendingMaskPermission(permission.code))
+      .filter((permission) => !isWarehouseTallyCompletedMaskPermission(permission.code))
+      .filter((permission) => !isWarehouseRentDetailMaskPermission(permission.code))
+      .filter((permission) => !isMarketPendingRoutingMaskPermission(permission.code))
+      .filter((permission) => !isMarketRoutedMaskPermission(permission.code))
+      .filter((permission) => !isCustomerServicePendingRoutingMaskPermission(permission.code))
+      .filter((permission) => !isCustomerServiceDataConfirmMaskPermission(permission.code))
+      .filter((permission) => !isCustomerServiceTransferFillMaskPermission(permission.code))
       .filter((permission, index, all) => all.findIndex((item) => item.code === permission.code) === index);
     return permissions.length ? [[canonicalGroup, permissions] as [string, PermissionDefinition[]]] : [];
   });

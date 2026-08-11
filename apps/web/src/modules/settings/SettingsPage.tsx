@@ -36,6 +36,21 @@ import {
   pricingMarkupViewBlockControls,
   pricingModuleBlockPermissionCode,
   orderEntryFinanceMaskControls,
+  customerServiceDataConfirmMaskControls,
+  customerServicePendingRoutingMaskControls,
+  customerServiceTransferFillMaskControls,
+  warehouseTodayReceiptMaskControls,
+  warehouseTallyPendingMaskControls,
+  warehouseTallyCompletedMaskControls,
+  warehouseRentDetailMaskControls,
+  marketPendingRoutingMaskControls,
+  marketRoutedMaskControls,
+  isWarehouseTodayReceiptMaskPermission,
+  isWarehouseTallyPendingMaskPermission,
+  isWarehouseTallyCompletedMaskPermission,
+  isMarketPendingRoutingMaskPermission,
+  isMarketRoutedMaskPermission,
+  isCustomerServiceDataConfirmMaskPermission,
   isPricingPriceBookBlockPermission,
   isPricingMarkupModuleBlockPermission,
   workspaceFieldMaskPermissionCode,
@@ -746,9 +761,54 @@ export function SettingsPage({
   const selectedTotalRules = selectedPermissionWorkspaceView === 'rules';
   const selectedLineShipmentPool = selectedWorkspacePermissions?.[0] === '运营工作台 / 专线运单池';
   const selectedOrderEntry = selectedWorkspacePermissions?.[0] === '业务管理 / 录单';
+  const selectedWarehouseTodayReceipt = selectedWorkspacePermissions?.[0] === '仓库管理 / 今日收货';
+  const selectedWarehouseTallyPending = selectedWorkspacePermissions?.[0] === '仓库管理 / 未完成理货';
+  const selectedWarehouseTallyCompleted = selectedWorkspacePermissions?.[0] === '仓库管理 / 已完成理货';
+  const selectedWarehouseRentDetail = selectedWorkspacePermissions?.[0] === '仓库管理 / 仓租细分表';
+  const selectedMarketPendingRouting = selectedWorkspacePermissions?.[0] === '市场管理 / 待排货';
+  const selectedMarketRouted = selectedWorkspacePermissions?.[0] === '市场管理 / 已排货';
+  const selectedCustomerServicePendingRouting = selectedWorkspacePermissions?.[0] === '客服管理 / 待排货';
+  const selectedCustomerServiceDataConfirm = selectedWorkspacePermissions?.[0] === '客服管理 / 数据确认';
+  const selectedCustomerServiceTransfer = selectedWorkspacePermissions?.[0] === '客服管理 / 转单号';
   const selectedOrderEntryFinanceMaskStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
     return orderEntryFinanceMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedWarehouseTodayReceiptMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return warehouseTodayReceiptMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedWarehouseTallyPendingMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return warehouseTallyPendingMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedWarehouseTallyCompletedMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return warehouseTallyCompletedMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedWarehouseRentDetailMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return warehouseRentDetailMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedMarketPendingRoutingMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return marketPendingRoutingMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedMarketRoutedMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return marketRoutedMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedCustomerServicePendingRoutingMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return customerServicePendingRoutingMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedCustomerServiceDataConfirmMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return customerServiceDataConfirmMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedCustomerServiceTransferFillMaskStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return customerServiceTransferFillMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
   }, [selectedRoleGrantedPermissions]);
   const selectedLineShipmentStageBlockStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
@@ -923,6 +983,48 @@ export function SettingsPage({
           [roleKey]: next.filter((code) => !orderEntryFinanceMaskControls.some((control) => control.code === code)
             && code !== 'business:order-entry:business-cost-view'
             && code !== 'business:order-entry:business-cost-write')
+        };
+      }
+      if (group === '仓库管理 / 今日收货' && !checked) {
+        return {
+          ...current,
+          [roleKey]: next.filter((code) => !isWarehouseTodayReceiptMaskPermission(code))
+        };
+      }
+      if (group === '仓库管理 / 未完成理货' && !checked) {
+        return {
+          ...current,
+          [roleKey]: next.filter((code) => !isWarehouseTallyPendingMaskPermission(code))
+        };
+      }
+      if (group === '仓库管理 / 已完成理货' && !checked) {
+        return {
+          ...current,
+          [roleKey]: next.filter((code) => !isWarehouseTallyCompletedMaskPermission(code))
+        };
+      }
+      if (group === '仓库管理 / 仓租细分表' && !checked) {
+        return {
+          ...current,
+          [roleKey]: next.filter((code) => !warehouseRentDetailMaskControls.some((control) => control.code === code))
+        };
+      }
+      if (group === '市场管理 / 待排货' && !checked) {
+        return {
+          ...current,
+          [roleKey]: next.filter((code) => !isMarketPendingRoutingMaskPermission(code))
+        };
+      }
+      if (group === '市场管理 / 已排货' && !checked) {
+        return {
+          ...current,
+          [roleKey]: next.filter((code) => !isMarketRoutedMaskPermission(code))
+        };
+      }
+      if (group === '客服管理 / 数据确认' && !checked) {
+        return {
+          ...current,
+          [roleKey]: next.filter((code) => !isCustomerServiceDataConfirmMaskPermission(code))
         };
       }
       if (group === '业务管理 / 录单') {
@@ -1924,7 +2026,11 @@ export function SettingsPage({
                         : { checked: false, indeterminate: false, grantedCount: 0 };
                       const administrator = isAdministratorRoleRow(selectedPermissionRole);
                       return (
-                        <div className={`role-permission-module-card${selected ? ' is-active' : ''}${administrator || accessState.checked ? ' is-open' : ''}`} key={group}>
+                        <div
+                          className={`role-permission-module-card${selected ? ' is-active is-current' : ''}${administrator || accessState.checked ? ' is-open' : ''}`}
+                          data-current={selected ? 'true' : 'false'}
+                          key={group}
+                        >
                           <button
                             type="button"
                             className="role-permission-module-select"
@@ -1934,7 +2040,10 @@ export function SettingsPage({
                             }}
                           >
                             <span>
-                              <Text strong>{group.replace(`${permissionWorkspace.label} / `, '')}</Text>
+                              <span className="role-permission-module-title">
+                                <Text strong>{group.replace(`${permissionWorkspace.label} / `, '')}</Text>
+                                {selected ? <span className="role-permission-module-current">当前</span> : null}
+                              </span>
                               <Text type="secondary">{administrator || accessState.checked ? '全部操作权限随入口生效' : '未开放入口'}</Text>
                             </span>
                             <Tag color={administrator || accessState.checked ? 'blue' : undefined}>{administrator || accessState.checked ? '已开放' : '未开放'}</Tag>
@@ -2021,6 +2130,213 @@ export function SettingsPage({
                         </div>
                         <div className="role-permission-option-grid role-permission-stage-block-grid">
                           {selectedOrderEntryFinanceMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedWarehouseTodayReceipt ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>今日收货屏蔽</Text>
+                          <Tag color={selectedWarehouseTodayReceiptMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedWarehouseTodayReceiptMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedWarehouseTodayReceiptMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedWarehouseTallyPending ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>未完成理货屏蔽</Text>
+                          <Tag color={selectedWarehouseTallyPendingMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedWarehouseTallyPendingMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedWarehouseTallyPendingMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedWarehouseTallyCompleted ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>已完成理货屏蔽</Text>
+                          <Tag color={selectedWarehouseTallyCompletedMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedWarehouseTallyCompletedMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedWarehouseTallyCompletedMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedWarehouseRentDetail ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>仓租细分表屏蔽</Text>
+                          <Tag color={selectedWarehouseRentDetailMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedWarehouseRentDetailMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedWarehouseRentDetailMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedMarketPendingRouting ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>待排货屏蔽</Text>
+                          <Tag color={selectedMarketPendingRoutingMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedMarketPendingRoutingMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedMarketPendingRoutingMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedMarketRouted ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>已排货屏蔽</Text>
+                          <Tag color={selectedMarketRoutedMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedMarketRoutedMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedMarketRoutedMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedCustomerServiceDataConfirm ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>数据确认屏蔽</Text>
+                          <Tag color={selectedCustomerServiceDataConfirmMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedCustomerServiceDataConfirmMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedCustomerServiceDataConfirmMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedCustomerServicePendingRouting ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>待排货屏蔽</Text>
+                          <Tag color={selectedCustomerServicePendingRoutingMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedCustomerServicePendingRoutingMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部开放'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedCustomerServicePendingRoutingMaskStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={control.label}
+                                checked={control.checked}
+                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedCustomerServiceTransfer ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>转单号屏蔽</Text>
+                          <Tag color={selectedCustomerServiceTransferFillMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
+                            {selectedCustomerServiceTransferFillMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认允许填写'}
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedCustomerServiceTransferFillMaskStates.map((control) => (
                             <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-stage-blocked' : ''}`} key={control.code}>
                               <span className="role-permission-option-copy role-permission-compact-copy">
                                 <Text strong>{control.label}</Text>

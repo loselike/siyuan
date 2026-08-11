@@ -335,6 +335,7 @@ model Shipment {
   outboundAt          DateTime?
   etaAt               DateTime?
   etdAt               DateTime?
+  vesselVoyage        String?
   remark              String?
   draftWarehousePackageIds String[]          @default([])
   createdAt           DateTime          @default(now())
@@ -949,6 +950,10 @@ model WarehouseTallyTask {
   id                            String    @id @default(cuid())
   taskNo                        String    @unique
   status                        String    @default("PENDING")
+  tallyChannel                  String?
+  tallyProgressStatus           String    @default("WAITING")
+  tallyStartedAt                DateTime?
+  tallyStartedBy                String?
   rootTallyTaskId               String
   previousTallyTaskId           String?
   tallySequence                 Int       @default(1)
@@ -993,6 +998,7 @@ model WarehouseTallyTask {
   labelAppliedBy                String?
 
   @@index([status, createdAt])
+  @@index([tallyChannel, tallyProgressStatus, createdAt])
   @@index([rootTallyTaskId, status, completedAt])
   @@index([salesperson, completedAt])
   @@index([customerCode, createdAt])

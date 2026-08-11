@@ -17,7 +17,7 @@ import {
 } from '@siyuan/shared';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
-import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
+import { createPendingRoutingColumns, getPendingRoutingApprovalReadiness } from '../shared/pendingRoutingColumns';
 import { getRoutingAgentChannelName, getRoutingAgentShortName } from './routingAgentDisplay';
 import { createRoutingFeeNameOptions } from './routingFeeCatalog';
 import { selectRecentRoutedShipmentHistory, selectRoutedShipmentHistory } from './routingHistory';
@@ -163,6 +163,7 @@ export function RoutingPage({
   payableAudits,
   assignmentFinanceDetail,
   permissions,
+  isAdministrator,
   onOpenAssignment,
   onApproveRouting,
   onCancelAssignment,
@@ -187,6 +188,7 @@ export function RoutingPage({
   payableAudits?: PayableAuditSummary[];
   assignmentFinanceDetail?: ShipmentFinanceDetailSummary;
   permissions: PermissionKey[];
+  isAdministrator: boolean;
   onOpenAssignment: (shipment: Shipment) => void;
   onApproveRouting: (shipment: Shipment) => Promise<void>;
   onCancelAssignment: () => void;
@@ -203,18 +205,19 @@ export function RoutingPage({
   const { message: messageApi } = AntdApp.useApp();
   const permissionSet = useMemo(() => new Set(permissions), [permissions]);
   const can = (permission: PermissionKey) => permissionSet.has(permission);
+  const isMaskEnabled = (permission: PermissionKey) => !isAdministrator && can(permission);
   const canViewDashboard = can('market:dashboard:view');
   const canViewPending = can('market:pending-routing:view');
   const canViewRouted = can('market:routed:view');
   const canViewWeekly = can('market:weekly-routing:view');
-  const canAssign = can('market:pending-routing:assign');
+  const canAssign = can('market:pending-routing:assign') && !isMaskEnabled('market:pending-routing:route-block');
   const canSaveDraft = can('market:pending-routing:save-draft');
-  const canConfirm = can('market:pending-routing:confirm') && can('market:pending-routing:audit');
-  const canUpdatePending = can('market:pending-routing:update');
-  const canUpdateRouted = can('market:routed:update');
-  const canReroute = can('market:routed:reroute');
-  const canViewPendingLog = can('market:pending-routing:operation-log-view');
-  const canViewRoutedLog = can('market:routed:log-view');
+  const canConfirm = can('market:pending-routing:confirm') && can('market:pending-routing:audit') && !isMaskEnabled('market:pending-routing:audit-block');
+  const canUpdatePending = can('market:pending-routing:update') && !isMaskEnabled('market:pending-routing:update-block');
+  const canUpdateRouted = can('market:routed:update') && !isMaskEnabled('market:routed:update-block');
+  const canReroute = can('market:routed:reroute') && !isMaskEnabled('market:routed:reroute-block');
+  const canViewPendingLog = can('market:pending-routing:operation-log-view') && !isMaskEnabled('market:pending-routing:operation-log-block');
+  const canViewRoutedLog = can('market:routed:log-view') && !isMaskEnabled('market:routed:log-block');
   const canViewBusinessCost = can('market:pending-routing:business-cost-view')
     && canViewOrderLifecycleBusinessCosts(undefined, permissions);
   const canViewPayableCost = can('market:pending-routing:payable-cost-view');
@@ -248,6 +251,7 @@ export function RoutingPage({
   const [routedView, setRoutedView] = useState<'recent' | 'history'>('recent');
   const watchedAgentId = Form.useWatch('agentId', assignmentForm);
   const watchedAgentChannelName = Form.useWatch('agentChannelName', assignmentForm);
+  const watchedDestinationCountry = Form.useWatch('destinationCountry', assignmentForm);
   const feeNameOptions = useMemo(() => createRoutingFeeNameOptions(feeNameCatalogItems), [feeNameCatalogItems]);
 
   useEffect(() => {
@@ -574,6 +578,12 @@ export function RoutingPage({
     && !matchedAgentChannel
   );
   const isDisabledAgentChannel = matchedAgentChannel?.enabled === false;
+  const assignmentReadiness = assignmentShipment ? getPendingRoutingApprovalReadiness({
+    destinationCountry: watchedDestinationCountry ?? assignmentShipment.destinationCountry,
+    channelId: assignmentShipment.channelId,
+    agentId: watchedAgentId ?? assignmentShipment.agentId,
+    routeAgentChannelName: watchedAgentChannelName ?? assignmentShipment.routeAgentChannelName
+  }) : undefined;
 
   const marketColumns: ColumnsType<Shipment> = useMemo(
     () => [
@@ -784,7 +794,11 @@ export function RoutingPage({
 
   function renderCostTab(type: 'BUSINESS_COST' | 'PAYABLE', rows: PendingRoutingCostRow[]) {
     const total = rows.reduce((sum, row) => sum + Number(row.rmbAmount ?? row.amount ?? 0), 0);
-    const canEditCost = canUpdatePending && (type === 'BUSINESS_COST' ? canViewBusinessCost : canViewPayableCost);
+    const canManageCost = canUpdatePending && (type === 'BUSINESS_COST' ? canViewBusinessCost : canViewPayableCost);
+    const canCreateCost = canManageCost && (type !== 'BUSINESS_COST' || !isMaskEnabled('market:pending-routing:business-cost-create-block'));
+    const canUpdateCost = canManageCost && (type !== 'BUSINESS_COST' || !isMaskEnabled('market:pending-routing:business-cost-update-block'));
+    const canDeleteCost = canManageCost && (type !== 'BUSINESS_COST' || !isMaskEnabled('market:pending-routing:business-cost-delete-block'));
+    const canOperateCost = canUpdateCost || canDeleteCost;
     const editingThisType = costEditor?.type === type;
     const editableRows: PendingRoutingCostRow[] = editingThisType && !costEditor.id && assignmentShipment
       ? [...rows, {
@@ -803,7 +817,7 @@ export function RoutingPage({
       <Space direction="vertical" size={12} className="full-width">
         <Flex justify="space-between" align="center">
           <Text type="secondary">按运单归并；业务成本按“计费数量 × 单价”计算，可直接选择 KG 或 CBM，合计按 RMB 口径展示。</Text>
-          {canEditCost ? <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type)}>新增费用</Button> : null}
+          {canCreateCost ? <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type)}>新增费用</Button> : null}
         </Flex>
         <ManagedTable
           className="routing-assignment-cost-table"
@@ -855,7 +869,7 @@ export function RoutingPage({
                   </Space.Compact>
                 ) : <InputNumber aria-label="计费重" min={0} precision={3} value={costEditor?.chargeWeightKg} onChange={(chargeWeightKg) => updateCostEditor({ chargeWeightKg: chargeWeightKg ?? undefined }, true)} />
               ) : type === 'BUSINESS_COST' ? (
-                canEditCost ? (
+                canUpdateCost ? (
                   <Space size={4}>
                     <Select aria-label="计费方式" size="small" value={row.billingUnit ?? 'KG'} options={[{ label: '计费重（KG）', value: 'KG' }, { label: '体积（CBM）', value: 'CBM' }]} disabled={Boolean(costEditor)} onChange={(billingUnit: FinanceBillingUnit) => openCostEditor(type, row, billingUnit)} style={{ width: 112 }} />
                     <Text type="secondary">{row.billingQuantity === undefined && row.chargeWeightKg === undefined ? '-' : `${(row.billingQuantity ?? row.chargeWeightKg ?? 0).toFixed(row.billingUnit === 'CBM' ? 6 : 2)} ${row.billingUnit === 'CBM' ? 'CBM' : 'KG'}`}</Text>
@@ -875,7 +889,7 @@ export function RoutingPage({
                 <InputNumber aria-label="总金额" min={0} precision={2} value={costEditor?.amount} onChange={(amount) => updateCostEditor({ amount: amount ?? undefined })} />
               ) : `${value.toFixed(2)} ${row.currency ?? 'RMB'}`
             },
-            canEditCost ? {
+            canOperateCost ? {
               title: '操作', width: 120, fixed: 'right' as const, render: (_: unknown, row: PendingRoutingCostRow) => isEditingRow(row) ? (
                 <Space size={4}>
                   <Button size="small" type="primary" loading={costSaving} onClick={() => void saveCostEditor()}>保存</Button>
@@ -883,8 +897,8 @@ export function RoutingPage({
                 </Space>
               ) : (
                 <Space size={4}>
-                  <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type, row)}>修改</Button>
-                  <Button size="small" danger disabled={Boolean(costEditor)} onClick={() => assignmentShipment && void onDeletePendingRoutingCost(assignmentShipment, row.id)}>删除</Button>
+                  {canUpdateCost ? <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type, row)}>修改</Button> : null}
+                  {canDeleteCost ? <Button size="small" danger disabled={Boolean(costEditor)} onClick={() => assignmentShipment && void onDeletePendingRoutingCost(assignmentShipment, row.id)}>删除</Button> : null}
                 </Space>
               )
             } : null
@@ -1495,6 +1509,17 @@ export function RoutingPage({
                     <Col xs={12} md={6}>出货单号：{resolveShipmentOutboundOrderNo(assignmentShipment)}</Col>
                     <Col xs={12} md={6}>公司渠道：{assignmentShipment.channelName || '-'}</Col>
                     <Col xs={24} md={12}>货物数据：{assignmentShipment.packageCount} 件 / {assignmentShipment.receivableWeightKg.toFixed(2)} KG / {assignmentShipment.volumeCbm?.toFixed(3) ?? '0.000'} CBM</Col>
+                  </Row>
+                </Card>
+              ) : null}
+              {assignmentShipment ? (
+                <Card size="small" className="routing-assignment-context routing-assignment-route-context">
+                  <Row gutter={[16, 6]}>
+                    <Col xs={12} md={5}>国家：{watchedDestinationCountry?.trim() || assignmentShipment.destinationCountry || '-'}</Col>
+                    <Col xs={12} md={7}>公司渠道：{assignmentShipment.channelName || '-'}</Col>
+                    <Col xs={12} md={4}>邮编：{assignmentShipment.receiverPostalCode?.trim() || '-'}</Col>
+                    <Col xs={12} md={4}>亚马逊代码：{assignmentShipment.fbaWarehouseCode?.trim() || '-'}</Col>
+                    <Col xs={24} md={4}>资料状态：<Tag color={assignmentReadiness?.ready ? 'green' : 'gold'}>{assignmentReadiness?.ready ? '资料完整' : '待补资料'}</Tag></Col>
                   </Row>
                 </Card>
               ) : null}

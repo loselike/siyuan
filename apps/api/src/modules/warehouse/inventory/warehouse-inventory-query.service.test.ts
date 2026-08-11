@@ -11,6 +11,19 @@ function repositoryStub(
 ): WarehouseInventoryQueryRepository {
   return {
     getWarehousePackages: vi.fn().mockResolvedValue([]),
+    getWarehouseInStockPage: vi.fn().mockResolvedValue({
+      totals: {
+        receiptTickets: 0,
+        totalPackages: 0,
+        totalWeightKg: 0,
+        totalCbm: 0,
+        waitingDispatchTickets: 0,
+        pendingTallyTickets: 0,
+        exceptionTickets: 0
+      },
+      rows: [],
+      pagination: { page: 1, pageSize: 10, totalItems: 0 }
+    }),
     getWarehousePackageGroups: vi.fn().mockResolvedValue([]),
     getWarehouseManualReceiptCustomers: vi.fn().mockResolvedValue([]),
     findDuplicateMojiaPackage: vi.fn().mockResolvedValue(undefined),

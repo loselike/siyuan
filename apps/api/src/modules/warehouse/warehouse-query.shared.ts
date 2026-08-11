@@ -3,9 +3,10 @@ import type {
   WarehousePackageGroupSummary,
   WarehousePackageStatus,
   WarehousePackageSummary,
-  WarehouseTallyTaskSummary
+  WarehouseTallyTaskSummary,
+  WarehouseTallyProgressStatus
 } from '@siyuan/shared';
-import { resolveWarehouseTallyLifecycleStatus } from '@siyuan/shared';
+import { resolveWarehouseTallyLifecycleStatus, warehouseTallyChannels } from '@siyuan/shared';
 import type { PrismaService } from '../prisma.service.js';
 import { WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } from '../warehouse-tally-aggregate-correction.js';
 
@@ -99,20 +100,20 @@ export async function mapWarehousePackagesWithConfirmedTally(
           { id: { in: rows.map((row) => row.tallyTaskId).filter(Boolean) } }
         ]
       },
-      select: { id: true, taskNo: true, status: true, packageIds: true, appliedPackageId: true, createdAt: true },
+      select: { id: true, taskNo: true, status: true, tallyProgressStatus: true, packageIds: true, appliedPackageId: true, createdAt: true },
       orderBy: { createdAt: 'asc' }
     })
     : [];
   const completedTaskByPackageId = new Map<string, { id: string; taskNo: string }>();
-  const pendingTaskByPackageId = new Map<string, { id: string; taskNo: string }>();
-  const taskById = new Map<string, { id: string; taskNo: string; status: string }>(
-    tallyTasks.map((task: any) => [task.id, { id: task.id, taskNo: task.taskNo, status: task.status }])
+  const pendingTaskByPackageId = new Map<string, { id: string; taskNo: string; tallyProgressStatus?: WarehouseTallyProgressStatus }>();
+  const taskById = new Map<string, { id: string; taskNo: string; status: string; tallyProgressStatus?: WarehouseTallyProgressStatus }>(
+    tallyTasks.map((task: any) => [task.id, { id: task.id, taskNo: task.taskNo, status: task.status, tallyProgressStatus: task.tallyProgressStatus }])
   );
   tallyTasks.forEach((task: any) => {
     const packageIds = task.status === 'PENDING' ? task.packageIds : [...task.packageIds, task.appliedPackageId].filter(Boolean);
     packageIds.forEach((packageId: string) => {
       const target = task.status === 'PENDING' ? pendingTaskByPackageId : completedTaskByPackageId;
-      target.set(packageId, { id: task.id, taskNo: task.taskNo });
+      target.set(packageId, { id: task.id, taskNo: task.taskNo, ...(task.status === 'PENDING' ? { tallyProgressStatus: task.tallyProgressStatus } : {}) });
     });
   });
   return rows.map((row) => {
@@ -126,7 +127,7 @@ export async function mapWarehousePackagesWithConfirmedTally(
         tallyTaskId: pendingTask.id,
         tallyTaskNo: pendingTask.taskNo,
         tallyCompleted: false,
-        tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: pendingTask.id, tallyTaskNo: pendingTask.taskNo, tallyCompleted: false })
+        tallyStatus: pendingTask.tallyProgressStatus === 'IN_PROGRESS' ? '理货中' : '待理货'
       };
     }
     const task = completedTaskByPackageId.get(row.id)
@@ -179,6 +180,12 @@ export function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
     id: row.id,
     taskNo: row.taskNo,
     status: row.status,
+    tallyChannel: warehouseTallyChannels.includes(row.tallyChannel) ? row.tallyChannel : undefined,
+    tallyProgressStatus: row.status === 'COMPLETED'
+      ? 'COMPLETED'
+      : row.tallyProgressStatus === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'WAITING',
+    tallyStartedAt: row.tallyStartedAt?.toISOString?.() ?? undefined,
+    tallyStartedBy: row.tallyStartedBy ?? undefined,
     rootTallyTaskId: row.rootTallyTaskId ?? row.id,
     previousTallyTaskId: row.previousTallyTaskId ?? undefined,
     tallySequence: row.tallySequence ?? 1,

@@ -439,6 +439,14 @@ export type PermissionKey =
   | 'market:pending-routing:agent-channel-view'
   | 'market:pending-routing:cost-field-view'
   | 'market:pending-routing:column-setting'
+  | 'market:pending-routing:route-block'
+  | 'market:pending-routing:update-block'
+  | 'market:pending-routing:audit-block'
+  | 'market:pending-routing:operation-log-block'
+  | 'market:pending-routing:business-cost-update-block'
+  | 'market:pending-routing:business-cost-create-block'
+  | 'market:pending-routing:business-cost-delete-block'
+  | 'market:pending-routing:reroute-block'
   | 'market:routed:view'
   | 'market:routed:detail'
   | 'market:routed:update'
@@ -448,6 +456,9 @@ export type PermissionKey =
   | 'market:routed:cost-total-view'
   | 'market:routed:agent-channel-view'
   | 'market:routed:column-setting'
+  | 'market:routed:reroute-block'
+  | 'market:routed:update-block'
+  | 'market:routed:log-block'
   | 'market:weekly-routing:view'
   | 'market:weekly-routing:detail'
   | 'market:weekly-routing:agent-stats-view'
@@ -460,6 +471,10 @@ export type PermissionKey =
   | 'warehouse:today-receipt:view'
   | 'warehouse:today-receipt:filter'
   | 'warehouse:today-receipt:manual-create'
+  | 'warehouse:today-receipt:batch-import-block'
+  | 'warehouse:today-receipt:batch-download-block'
+  | 'warehouse:today-receipt:site-filter-block'
+  | 'warehouse:today-receipt:manual-create-block'
   | 'warehouse:today-receipt:update'
   | 'warehouse:today-receipt:remark-update'
   | 'warehouse:today-receipt:exception-manage'
@@ -479,10 +494,14 @@ export type PermissionKey =
   | 'warehouse:in-stock:tally-record-view'
   | 'warehouse:in-stock:column-setting'
   | 'warehouse:tally-pending:view'
+  | 'warehouse:tally-pending:view-block'
   | 'warehouse:tally-pending:task-create'
   | 'warehouse:tally-pending:task-update'
+  | 'warehouse:tally-pending:update-block'
   | 'warehouse:tally-pending:task-cancel'
+  | 'warehouse:tally-pending:cancel-block'
   | 'warehouse:tally-pending:task-process'
+  | 'warehouse:tally-pending:process-block'
   | 'warehouse:tally-pending:merge-only'
   | 'warehouse:tally-pending:merge-and-ship'
   | 'warehouse:tally-pending:split'
@@ -490,14 +509,18 @@ export type PermissionKey =
   | 'warehouse:tally-pending:history-view'
   | 'warehouse:tally-pending:filter'
   | 'warehouse:tally-completed:view'
+  | 'warehouse:tally-completed:view-block'
   | 'warehouse:tally-completed:history-view'
   | 'warehouse:tally-completed:detail-view'
   | 'warehouse:tally-completed:reverse-review'
+  | 'warehouse:tally-completed:reverse-block'
   | 'warehouse:tally-history:correct'
   | 'warehouse:tally-label:generate'
   | 'warehouse:tally-label:reprint'
+  | 'warehouse:tally-label:reprint-block'
   | 'warehouse:tally-label:print'
   | 'warehouse:tally-label:download'
+  | 'warehouse:tally-label:download-block'
   | 'warehouse:tally-label:scan-apply'
   | 'warehouse:tally-label:overwrite-package'
   | 'warehouse:dispatch-pending:view'
@@ -520,6 +543,9 @@ export type PermissionKey =
   | 'warehouse:rent-detail:export'
   | 'warehouse:rent-rule:view'
   | 'warehouse:rent-rule:manage'
+  | 'warehouse:rent-rule:manage-block'
+  | 'warehouse:rent-detail:all-view-block'
+  | 'warehouse:rent-detail:own-view-block'
   | `pricing:${string}`
   | 'finance:business-cost:read'
   | 'finance:business-cost:manage'
@@ -1442,6 +1468,10 @@ export class ApiClient {
   async warehouseRentDetails(query: WarehouseRentDetailQuery = {}): Promise<WarehouseRentDetailResponse> {
     const params = new globalThis.URLSearchParams();
     Object.entries(query).forEach(([key, value]) => {
+      if (Array.isArray(value)) {
+        value.filter(Boolean).forEach((item) => params.append(key, String(item)));
+        return;
+      }
       if (value !== undefined && value !== null && value !== '') {
         params.set(key, String(value));
       }
@@ -1546,6 +1576,10 @@ export class ApiClient {
 
   async updateWarehouseTallyTask(id: string, input: WarehouseTallyTaskUpdateInput): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}`, { method: 'PATCH', body: JSON.stringify(input) });
+  }
+
+  async startWarehouseTallyTask(id: string): Promise<WarehouseTallyTaskSummary> {
+    return this.request(`/warehouse/tally-tasks/${id}/start`, { method: 'POST' });
   }
 
   async cancelWarehouseTallyTask(id: string): Promise<WarehouseTallyTaskSummary> {
@@ -2014,8 +2048,14 @@ export class ApiClient {
     return this.request(`/misc-fee-profit-settlements/${id}/release`, { method: 'POST', body: JSON.stringify(input) });
   }
 
-  async createPaymentApplications(input: PaymentApplicationCreateInput): Promise<PaymentApplicationSummary[]> {
-    return this.request('/finance/payment-applications', { method: 'POST', body: JSON.stringify(input) });
+  async createPaymentApplications(input: PaymentApplicationCreateInput, voucherFile?: File): Promise<PaymentApplicationSummary[]> {
+    if (!voucherFile) {
+      return this.request('/finance/payment-applications', { method: 'POST', body: JSON.stringify(input) });
+    }
+    const body = new FormData();
+    body.append('payload', JSON.stringify(input));
+    body.append('voucherFile', voucherFile, voucherFile.name);
+    return this.request('/finance/payment-applications', { method: 'POST', body });
   }
 
   async updatePaymentApplication(id: string, input: PaymentApplicationUpdateInput): Promise<PaymentApplicationSummary> {

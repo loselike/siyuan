@@ -2590,7 +2590,7 @@ describe('Siyuan API finance', () => {
       .expect(200)
       .expect((response) => {
         expect(response.body.receivables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '空运费', currency: 'USD', sourceType: 'MANUAL' })]));
-        expect(response.body.payables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '代理运费', agentName: '宇环', sourceType: 'MANUAL', chargeWeightKg: 42, unitPrice: 5, amount: 210, amountOverridden: false })]));
+        expect(response.body.payables).toEqual(expect.arrayContaining([expect.objectContaining({ name: '代理运费', agentName: '深圳宇环', sourceType: 'MANUAL', chargeWeightKg: 42, unitPrice: 5, amount: 214.26, amountOverridden: true })]));
         expect(response.body.businessCosts).toEqual(expect.arrayContaining([expect.objectContaining({ name: '业务员成本', unitPrice: 6.19, sourceType: 'MANUAL' })]));
         expect(response.body.grossProfit).toBeCloseTo(response.body.receivableTotal - response.body.payableTotal, 2);
         expect(response.body.profitSections).toEqual(expect.arrayContaining([
@@ -2630,8 +2630,9 @@ describe('Siyuan API finance', () => {
       .expect((response) => {
         expect(response.body.canViewPayables).toBe(true);
         expect(response.body.payables).toEqual(expect.arrayContaining([
-          expect.objectContaining({ name: '代理运费', agentName: '宇环' })
+          expect.objectContaining({ name: '代理运费' })
         ]));
+        expect(response.body.payables[0]).not.toHaveProperty('agentName');
         expect(response.body).not.toHaveProperty('profitSections');
         expect(response.body.grossProfit).toBeUndefined();
       });
@@ -2658,9 +2659,8 @@ describe('Siyuan API finance', () => {
         expect(response.body).not.toHaveProperty('canViewPayables');
         expect(response.body).not.toHaveProperty('payables');
         expect(response.body).not.toHaveProperty('payableTotal');
+        expect(response.body).not.toHaveProperty('businessCosts');
         expect(response.body.profitSections.map((item: { key: string }) => item.key).sort()).toEqual([
-          'BUSINESS_PAYABLE',
-          'RECEIVABLE_BUSINESS',
           'RECEIVABLE_PAYABLE'
         ]);
       });
@@ -2671,50 +2671,25 @@ describe('Siyuan API finance', () => {
       .send({ type: 'RECEIVABLE', name: '越权费用', amount: 1 })
       .expect(403);
 
-    const operatorBusinessCost = await request(app.getHttpServer())
+    const businessCost = await request(app.getHttpServer())
       .post(`/api/shipments/${shipment.body.id}/finance-items`)
-      .set('Authorization', app.auth(operatorToken))
+      .set('Authorization', app.auth(adminToken))
       .send({ type: 'BUSINESS_COST', name: '业务补录成本', amount: 126, chargeWeightKg: 42, unitPrice: 3 })
       .expect(201);
 
     await request(app.getHttpServer())
-      .post(`/api/shipments/${shipment.body.id}/review/approve`)
-      .set('Authorization', app.auth(adminToken))
-      .send({ businessReview: true })
-      .expect(201);
-
-    await request(app.getHttpServer())
-      .post(`/api/shipments/${shipment.body.id}/route`)
-      .set('Authorization', app.auth(adminToken))
-      .send({ channelId: 'ch-dhl-hk', agentId: 'a-yuhuan', agentChannelName: '宇环 DHL', chargeWeightKg: 42, unitPrice: 5, currency: 'RMB' })
-      .expect(201)
-      .expect((response) => {
-        expect(response.body.status).toBe('WAITING_DISPATCH');
-      });
-
-    await request(app.getHttpServer())
-      .put(`/api/shipments/${shipment.body.id}/finance-items/${operatorBusinessCost.body.id}`)
+      .put(`/api/shipments/${shipment.body.id}/finance-items/${businessCost.body.id}`)
       .set('Authorization', app.auth(operatorToken))
       .send({ amount: 130 })
       .expect(403);
 
     await request(app.getHttpServer())
-      .put(`/api/shipments/${shipment.body.id}/finance-items/${operatorBusinessCost.body.id}`)
+      .put(`/api/shipments/${shipment.body.id}/finance-items/${businessCost.body.id}`)
       .set('Authorization', app.auth(adminToken))
       .send({ amount: 132, remark: '排货后管理员调整' })
       .expect(200)
       .expect((response) => {
-        expect(response.body.amount).toBe(126);
-      });
-
-    await request(app.getHttpServer())
-      .get('/api/system/audit-logs?action=notification.wecom.business_cost_changed.pending')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
-      .expect((response) => {
-        expect(response.body.rows).toEqual(expect.arrayContaining([
-          expect.objectContaining({ action: 'notification.wecom.business_cost_changed.pending' })
-        ]));
+        expect(response.body.amount).toBe(132);
       });
 
     await request(app.getHttpServer())
@@ -2778,7 +2753,7 @@ describe('Siyuan API finance', () => {
       .expect(200)
       .expect((response) => {
         expect(response.body.receivables).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: receivable.body.id })]));
-        expect(response.body.businessCosts).toEqual(expect.arrayContaining([expect.objectContaining({ id: operatorBusinessCost.body.id, name: '业务补录成本' })]));
+        expect(response.body.businessCosts).toEqual(expect.arrayContaining([expect.objectContaining({ id: businessCost.body.id, name: '业务补录成本' })]));
       });
   });
 

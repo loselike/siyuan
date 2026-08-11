@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Principal } from '../../rbac.js';
+import type { WarehouseInStockPageQuery } from '@siyuan/shared';
 import {
   WAREHOUSE_INVENTORY_QUERY_REPOSITORY,
   type MojiaWarehouseDuplicateQuery,
@@ -15,6 +16,10 @@ export class WarehouseInventoryQueryService {
 
   listPackages(principal: Principal) {
     return this.repository.getWarehousePackages(principal);
+  }
+
+  listInStockPage(principal: Principal, query: WarehouseInStockPageQuery) {
+    return this.repository.getWarehouseInStockPage(principal, query);
   }
 
   listPackageGroups(principal: Principal) {

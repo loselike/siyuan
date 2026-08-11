@@ -1,9 +1,80 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { employeeShipments, renderAndLogin } from '../testSupport/appTestHarness';
+import { CustomerServicePage } from './CustomerServicePage';
 
 describe('Customer service waiting departure module', () => {
+  it('客服账号可独立修改代理应付成本计费数量并提交新值', async () => {
+    const user = userEvent.setup();
+    const shipment = employeeShipments.find((row) => row.id === 's-confirm')!;
+    const dataConfirmResponse = {
+      rows: [{
+        shipment,
+        businessDataApproved: false,
+        agentDataApproved: false,
+        businessDataSnapshot: { packageCount: 2, weightKg: 12.5, volumeCbm: 0.08, chargeWeightKg: 12.5 },
+        agentDataSnapshot: { packageCount: 2, weightKg: 21, volumeCbm: 0.08, chargeWeightKg: 21 }
+      }],
+      pagination: { page: 1, pageSize: 10, totalItems: 1 }
+    };
+    const payablePreview = {
+      shipmentId: 's-confirm',
+      rows: [{
+        id: 'pf-confirm', type: 'PAYABLE' as const, name: '运费', amount: 672, currency: 'RMB', billingUnit: 'KG' as const,
+        billingQuantity: 21, chargeWeightKg: 21, unitPrice: 32, reconciliationStatus: 'PENDING' as const, locked: false, selectable: true
+      }, {
+        id: 'pf-locked', type: 'PAYABLE' as const, name: '已锁定附加费', amount: 50, currency: 'RMB', billingUnit: 'KG' as const,
+        billingQuantity: 1, chargeWeightKg: 1, unitPrice: 50, reconciliationStatus: 'CONFIRMED' as const, locked: true, selectable: false
+      }, {
+        id: 'pf-legacy', type: 'PAYABLE' as const, name: '历史应付费', amount: 99, currency: 'RMB', billingUnit: 'KG' as const,
+        chargeWeightKg: undefined, unitPrice: undefined, reconciliationStatus: 'PENDING' as const, locked: false, selectable: true
+      }]
+    };
+    let submittedBillingQuantity: number | undefined;
+    const updateCustomerServiceFinanceItem = vi.fn(async (_shipmentId: string, _feeId: string, _kind: 'business' | 'agent', input: { billingQuantity: number }) => {
+      submittedBillingQuantity = input.billingQuantity;
+      return { ...payablePreview.rows[0], amount: input.billingQuantity * 32, billingQuantity: input.billingQuantity, chargeWeightKg: input.billingQuantity };
+    });
+    const apiClient = {
+      customerServiceDataConfirmShipments: vi.fn(async () => dataConfirmResponse),
+      customerServiceFinanceUpdatePreview: vi.fn(async () => payablePreview),
+      updateCustomerServiceFinanceItem
+    };
+
+    render(<CustomerServicePage
+      shipments={[]}
+      problemTickets={[]}
+      apiClient={apiClient as never}
+      initialSection="dataConfirm"
+      role="UG_CUSTOMER_SERVICE"
+      permissions={[
+        'customer-service:data-confirm:view',
+        'customer-service:data-confirm:business-view',
+        'customer-service:data-confirm:agent-view',
+        'customer-service:data-confirm:agent-update'
+      ]}
+    />);
+
+    const confirmRow = await screen.findByRole('row', { name: /OUT-CONFIRM/ });
+    await user.click(within(confirmRow).getByRole('button', { name: '代理修改' }));
+
+    const dialog = await screen.findByRole('dialog', { name: /代理数据修改/ });
+    const quantityInput = await within(dialog).findByLabelText('应付成本计费数量-pf-confirm');
+    expect(quantityInput).toBeEnabled();
+    expect(within(dialog).getByLabelText('应付成本计费数量-pf-locked')).toBeDisabled();
+    expect(within(dialog).getByText('99.00 RMB')).toBeInTheDocument();
+    expect(quantityInput).toHaveValue('21.000');
+    await user.clear(quantityInput);
+    await user.type(quantityInput, '25');
+    await user.click(within(dialog).getByRole('button', { name: '保存修改' }));
+
+    await waitFor(() => expect(submittedBillingQuantity).toBe(25));
+    expect(updateCustomerServiceFinanceItem).toHaveBeenCalledTimes(1);
+    expect(updateCustomerServiceFinanceItem).toHaveBeenCalledWith('s-confirm', 'pf-confirm', 'agent', expect.objectContaining({ billingQuantity: 25 }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /代理数据修改/ })).not.toBeInTheDocument());
+  });
+
   it('shows 待排货 between transfer and departure with read-only fee detail', async () => {
     const user = userEvent.setup();
     Object.assign(employeeShipments[0], {

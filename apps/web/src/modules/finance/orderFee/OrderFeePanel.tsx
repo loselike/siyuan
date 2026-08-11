@@ -596,6 +596,14 @@ export function OrderFeePanel({
       render: (_, row) => <Tag>{row.currency ?? 'RMB'}</Tag>
     },
     {
+      title: '原币金额',
+      key: 'amount',
+      width: isReceivable ? '16%' : '18%',
+      align: 'right',
+      render: (_, row) => formatFinanceAmount(row.amount, row.currency),
+      sorter: (left, right) => left.amount - right.amount
+    },
+    {
       title: '人民币合计',
       key: 'rmbAmount',
       width: isReceivable ? '16%' : '18%',
