@@ -248,4 +248,150 @@ describe('warehouse tally lifecycle contract', () => {
         ]));
       });
   });
+
+  it('preserves pending task creation, update and cancellation contracts', async () => {
+    const adminToken = await app.loginAs('admin');
+    const warehouseToken = await app.loginAs('warehouse');
+    const operatorToken = await app.loginAs('operator');
+    const trackingNo = 'KY-PHASE10-TALLY-PENDING';
+
+    const receipt = await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: trackingNo,
+        combinedOrderNo: `9409-${trackingNo}`,
+        cartonSpecs: [{ weightKg: 8, lengthCm: 35, widthCm: 25, heightCm: 15, packageCount: 2 }]
+      })
+      .expect(201);
+    const sourceId = receipt.body.packages[0].id as string;
+    const createInput = {
+      packageIds: [sourceId],
+      tallyChannel: '空运',
+      tallyRequirement: ' 重新核对两件包裹 ',
+      remark: ' 创建备注 '
+    };
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .send(createInput)
+      .expect(401);
+    await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(operatorToken))
+      .send(createInput)
+      .expect(403);
+    await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ ...createInput, tallyChannel: '陆运' })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('请选择有效的理货渠道'));
+    await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ ...createInput, tallyRequirement: '   ' })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('请填写理货需求'));
+
+    const task = await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(warehouseToken))
+      .send(createInput)
+      .expect(201);
+    expect(task.body).toEqual(expect.objectContaining({
+      status: 'PENDING',
+      tallyProgressStatus: 'WAITING',
+      tallyChannel: '空运',
+      packageIds: [sourceId],
+      packageCount: 2,
+      tallyRequirement: '重新核对两件包裹',
+      remark: '创建备注',
+      createdBy: 'warehouse'
+    }));
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/tally-tasks')
+      .set('Authorization', app.auth(warehouseToken))
+      .send(createInput)
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('包裹正在理货中，请完成当前任务后再发起二次理货'));
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/tally-tasks/${task.body.id}`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({ tallyRequirement: '越权修改' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/tally-tasks/${task.body.id}`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ packageIds: [] })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('理货任务至少保留一个在仓包裹'));
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/tally-tasks/${task.body.id}`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ tallyRequirement: '   ' })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('请填写理货需求'));
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/tally-tasks/${task.body.id}`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({
+        packageIds: [sourceId],
+        tallyRequirement: ' 更新后的理货需求 ',
+        remark: ' 更新后的备注 '
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          id: task.body.id,
+          status: 'PENDING',
+          packageIds: [sourceId],
+          tallyRequirement: '更新后的理货需求',
+          remark: '更新后的备注'
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/cancel`)
+      .set('Authorization', app.auth(operatorToken))
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/cancel`)
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(201)
+      .expect((response) => expect(response.body).toEqual(expect.objectContaining({
+        id: task.body.id,
+        status: 'CANCELLED'
+      })));
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/cancel`)
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(201)
+      .expect((response) => expect(response.body).toEqual(expect.objectContaining({
+        id: task.body.id,
+        status: 'CANCELLED'
+      })));
+
+    for (const action of ['warehouse.tally.create', 'warehouse.tally.update', 'warehouse.tally.cancel']) {
+      await request(app.getHttpServer())
+        .get(`/api/system/audit-logs?action=${action}`)
+        .set('Authorization', app.auth(adminToken))
+        .expect(200)
+        .expect((response) => {
+          const matching = response.body.rows.filter((row: { action: string; target: string }) =>
+            row.action === action && row.target === task.body.id
+          );
+          expect(matching).toHaveLength(1);
+          expect(matching[0].after).toEqual(expect.objectContaining({
+            id: task.body.id,
+            status: action === 'warehouse.tally.cancel' ? 'CANCELLED' : 'PENDING'
+          }));
+        });
+    }
+  });
 });

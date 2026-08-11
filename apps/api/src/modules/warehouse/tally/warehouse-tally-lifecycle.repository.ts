@@ -11,5 +11,10 @@ export const WAREHOUSE_TALLY_LIFECYCLE_REPOSITORY = Symbol('WAREHOUSE_TALLY_LIFE
  */
 export type WarehouseTallyLifecycleRepository = Pick<
   PrismaRepository,
-  'startWarehouseTallyTask' | 'completeWarehouseTallyTask' | 'cancelCompletedWarehouseTallyTask'
+  | 'createWarehouseTallyTask'
+  | 'updateWarehouseTallyTask'
+  | 'startWarehouseTallyTask'
+  | 'cancelWarehouseTallyTask'
+  | 'completeWarehouseTallyTask'
+  | 'cancelCompletedWarehouseTallyTask'
 >;

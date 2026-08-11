@@ -5,6 +5,12 @@ import {
   type WarehouseTallyLifecycleRepository
 } from './warehouse-tally-lifecycle.repository.js';
 
+type WarehouseTallyTaskCreateInput = Parameters<
+  WarehouseTallyLifecycleRepository['createWarehouseTallyTask']
+>[1];
+type WarehouseTallyTaskUpdateInput = Parameters<
+  WarehouseTallyLifecycleRepository['updateWarehouseTallyTask']
+>[2];
 type WarehouseTallyTaskCancelInput = Parameters<
   WarehouseTallyLifecycleRepository['cancelCompletedWarehouseTallyTask']
 >[2];
@@ -19,12 +25,24 @@ export class WarehouseTallyLifecycleService {
     private readonly repository: WarehouseTallyLifecycleRepository
   ) {}
 
+  create(principal: Principal, input: WarehouseTallyTaskCreateInput) {
+    return this.repository.createWarehouseTallyTask(principal, input);
+  }
+
+  update(principal: Principal, id: string, input: WarehouseTallyTaskUpdateInput) {
+    return this.repository.updateWarehouseTallyTask(principal, id, input);
+  }
+
   start(principal: Principal, id: string) {
     return this.repository.startWarehouseTallyTask(principal, id);
   }
 
   complete(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput) {
     return this.repository.completeWarehouseTallyTask(principal, id, input);
+  }
+
+  cancel(principal: Principal, id: string) {
+    return this.repository.cancelWarehouseTallyTask(principal, id);
   }
 
   cancelCompleted(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput) {

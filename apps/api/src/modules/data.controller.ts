@@ -2336,13 +2336,13 @@ export class DataController {
   @Post('warehouse/tally-tasks')
   @RequirePermission('warehouse:tally-pending:task-create')
   async createWarehouseTallyTask(@Req() request: { user: Principal }, @Body() body: WarehouseTallyTaskCreateInput) {
-    return this.repository.createWarehouseTallyTask(request.user, body);
+    return this.warehouseTallyLifecycle.create(request.user, body);
   }
 
   @Patch('warehouse/tally-tasks/:id')
   @RequirePermission('warehouse:tally-pending:task-update')
   async updateWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseTallyTaskUpdateInput) {
-    return this.repository.updateWarehouseTallyTask(request.user, id, body);
+    return this.warehouseTallyLifecycle.update(request.user, id, body);
   }
 
   @Post('warehouse/tally-tasks/:id/start')
@@ -2354,7 +2354,7 @@ export class DataController {
   @Post('warehouse/tally-tasks/:id/cancel')
   @RequirePermission('warehouse:tally-pending:task-cancel')
   async cancelWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.cancelWarehouseTallyTask(request.user, id);
+    return this.warehouseTallyLifecycle.cancel(request.user, id);
   }
 
   @Post('warehouse/tally-tasks/:id/complete')
