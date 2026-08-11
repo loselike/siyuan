@@ -6,12 +6,13 @@ export type WarehouseTallyLabelStatus = 'NOT_GENERATED' | 'GENERATED';
 export type WarehouseMeasurementStatus = 'MEASURED' | 'PENDING_REMEASURE';
 export type WarehouseTallyLifecycleStatus = '待理货' | '理货中' | '已理货' | '二次理货';
 export type WarehouseTallyChannel = '快递' | '空运' | '卡航' | '铁路' | '海运';
-export type WarehouseTallyProgressStatus = 'WAITING' | 'IN_PROGRESS' | 'COMPLETED';
+export type WarehouseTallyProgressStatus = 'WAITING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 export const warehouseTallyChannels: WarehouseTallyChannel[] = ['快递', '空运', '卡航', '铁路', '海运'];
 export const warehouseTallyProgressStatusLabels: Record<WarehouseTallyProgressStatus, string> = {
   WAITING: '待理货',
   IN_PROGRESS: '理货中',
-  COMPLETED: '已完成'
+  COMPLETED: '已完成',
+  CANCELLED: '已取消'
 };
 
 function warehouseTallyBeijingHour(now: Date): number {
@@ -508,6 +509,9 @@ export interface WarehouseTallyTaskSummary {
   appliedPackageNo?: string;
   labelAppliedAt?: string;
   labelAppliedBy?: string;
+  cancelReason?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
   outputPackages?: WarehousePackageSummary[];
 }
 
@@ -587,6 +591,10 @@ export interface WarehouseTallyTaskUpdateInput {
   packageIds?: string[];
   tallyRequirement?: string;
   remark?: string;
+}
+
+export interface WarehouseTallyTaskCancelInput {
+  reason: string;
 }
 
 export interface WarehouseTallyTaskCompletedCountUpdateInput {

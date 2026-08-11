@@ -464,6 +464,7 @@ export function WarehousePage({
   const [completingTallyTask, setCompletingTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
   const [editingCompletedTallyTask, setEditingCompletedTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
   const [editingCompletedTallyCount, setEditingCompletedTallyCount] = useState(1);
+  const [completedTallyCancelReason, setCompletedTallyCancelReason] = useState('');
   const [editingCompletedTallySubmitting, setEditingCompletedTallySubmitting] = useState(false);
   const [tallyCompleteError, setTallyCompleteError] = useState<string | null>(null);
   const [tallyCompleteSubmitting, setTallyCompleteSubmitting] = useState(false);
@@ -3022,20 +3023,26 @@ export function WarehousePage({
   function openEditCompletedTallyCount(task: WarehouseTallyTaskSummary) {
     setEditingCompletedTallyTask(task);
     setEditingCompletedTallyCount(task.completedPackageCount ?? 1);
+    setCompletedTallyCancelReason('');
   }
 
   async function updateCompletedTallyCount() {
     if (!editingCompletedTallyTask || editingCompletedTallySubmitting) return;
     setEditingCompletedTallySubmitting(true);
     try {
-      const updated = await apiClient.reverseReviewWarehouseTallyTask(editingCompletedTallyTask.id);
+      const reason = completedTallyCancelReason.trim();
+      if (!reason) {
+        message.error('请填写取消理货原因');
+        return;
+      }
+      const updated = await apiClient.cancelCompletedWarehouseTallyTask(editingCompletedTallyTask.id, { reason });
       replaceTallyTask(updated);
       setSelectedTallyTaskDetails((current) => current.map((task) => task.id === updated.id ? updated : task));
       setEditingCompletedTallyTask(null);
       setInStockRefreshVersion((current) => current + 1);
-      setActiveReceiveSection('consolidation');
-      setWarehouseNotice(`理货任务 \${updated.taskNo} 已反审核，原包裹已回到未完成理货，可重新勾选后完成`);
-      message.success('反审核成功，已回到未完成理货');
+      setActiveReceiveSection('packages');
+      setWarehouseNotice(`理货任务 \${updated.taskNo} 已取消，原包裹已回到在仓数据，可重新发起理货`);
+      message.success('取消理货成功，原包裹已回到在仓数据');
     } catch (error) {
       message.error(error instanceof Error ? error.message : '理货反审核失败');
     } finally {
@@ -4433,13 +4440,13 @@ export function WarehousePage({
       </Modal>
 
       <Modal
-        title={editingCompletedTallyTask ? `反审核理货任务 · ${editingCompletedTallyTask.taskNo}` : '反审核理货任务'}
+        title={editingCompletedTallyTask ? `取消理货 · ${editingCompletedTallyTask.taskNo}` : '取消理货'}
         open={Boolean(editingCompletedTallyTask)}
         onCancel={() => {
           if (!editingCompletedTallySubmitting) setEditingCompletedTallyTask(null);
         }}
         onOk={() => void updateCompletedTallyCount()}
-        okText="确认反审核"
+        okText="确认取消理货"
         cancelText="取消"
         confirmLoading={editingCompletedTallySubmitting}
         cancelButtonProps={{ disabled: editingCompletedTallySubmitting }}
@@ -4451,12 +4458,20 @@ export function WarehousePage({
           <Alert
             type="warning"
             showIcon
-            message="已完成理货不允许直接修改件数"
+            message="取消后原包裹会回到在仓数据，理货结果包裹会作废归档"
           />
           <Descriptions size="small" column={2} bordered>
             <Descriptions.Item label="理货任务号">{editingCompletedTallyTask?.taskNo || '-'}</Descriptions.Item>
             <Descriptions.Item label="理货后件数">{editingCompletedTallyTask?.completedPackageCount ?? '-'} 件</Descriptions.Item>
           </Descriptions>
+          <Input.TextArea
+            value={completedTallyCancelReason}
+            onChange={(event) => setCompletedTallyCancelReason(event.target.value)}
+            placeholder="请填写取消理货原因"
+            maxLength={300}
+            showCount
+            rows={3}
+          />
         </Space>
       </Modal>
 

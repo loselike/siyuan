@@ -16,11 +16,6 @@ import {
 import { buildMarketProfitLedgerRows, type MarketProfitLedgerCandidate } from './finance/misc-fee/market-profit-ledger.js';
 import { buildWarehouseProfitLedgerRows, warehouseProfitSettlementSourceWhere, type WarehouseProfitLedgerCandidate } from './finance/misc-fee/warehouse-profit-ledger.js';
 import {
-  normalizeWaterReceiptCurrency,
-  normalizeWaterReceiptMatchAmountCurrency,
-  planWaterReceiptMatchAmount
-} from './finance/water-receipt/water-receipt-match.policy.js';
-import {
   buildFinanceProfitLedgerRows,
   summarizeFinanceProfitLedgerRows,
   type FinanceProfitLedgerCandidate
@@ -397,6 +392,7 @@ import {
   type WarehouseTallyHistoricalAggregateCorrectionPreview,
   type WarehouseTallyHistoricalAggregateCorrectionResult,
   type WarehouseTallyTaskCompleteInput,
+  type WarehouseTallyTaskCancelInput,
   type WarehouseTallyTaskCompletedCountUpdateInput,
   type WarehouseTallyTaskPackageResultInput,
   type WarehouseTallyTaskCreateInput,
@@ -9825,6 +9821,80 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  async cancelCompletedWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
+    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有取消已完成理货权限');
+    const rawReason = input?.reason;
+    if (typeof rawReason !== 'string') throw new BadRequestException('取消理货必须填写原因');
+    const reason = rawReason.trim();
+    if (!reason || reason.length > 300) throw new BadRequestException('取消理货原因须填写且不超过300字');
+    const scope = this.operatorCustomerScope(principal);
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehouseTallyTask" WHERE "id" = ${id} FOR UPDATE`);
+      const existing = await tx.warehouseTallyTask.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException('理货任务不存在');
+      const scopedPackageCount = !scope ? 1 : await tx.warehousePackage.count({
+        where: { id: { in: existing.packageIds }, salesperson: { in: scope } }
+      });
+      if (!scopedPackageCount) throw new ForbiddenException('当前账号不能处理该理货任务');
+      if (existing.status !== 'COMPLETED' || existing.tallyProgressStatus === 'CANCELLED') {
+        throw new BadRequestException('只有未取消的已完成理货任务可以取消');
+      }
+      if (existing.packageIds.length) {
+        await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "id" IN (${Prisma.join(existing.packageIds)}) FOR UPDATE`);
+      }
+      const sourceRows = await tx.warehousePackage.findMany({
+        where: { id: { in: existing.packageIds } },
+        include: { consolidationItems: { select: { id: true } } }
+      });
+      const outputRows = await tx.warehousePackage.findMany({
+        where: { tallyTaskId: id, id: { notIn: existing.packageIds } },
+        include: { consolidationItems: { select: { id: true } } }
+      });
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "tallyTaskId" = ${id} FOR UPDATE`);
+      if (sourceRows.length !== existing.packageIds.length) throw new BadRequestException('理货原始包裹不存在，无法取消');
+      if (sourceRows.some((row: any) => row.tallyTaskId !== id || row.status !== 'TALLIED_ARCHIVED')) {
+        throw new BadRequestException('理货原始包裹状态已变化，请刷新后重试');
+      }
+      const blocked = [...sourceRows, ...outputRows].find((row: any) =>
+        row.status === 'CONSOLIDATED'
+        || row.status === 'SHIPPED'
+        || row.shipmentId
+        || row.systemOrderNo
+        || (row.consolidationItems?.length ?? 0) > 0
+        || (outputRows.includes(row) && row.measurementStatus !== 'PENDING_REMEASURE')
+      );
+      if (blocked) throw new BadRequestException('理货结果已复测、合票或出库，不能取消理货');
+      const now = new Date();
+      const updated = await tx.warehouseTallyTask.update({
+        where: { id },
+        data: { tallyProgressStatus: 'CANCELLED', cancelReason: reason, cancelledAt: now, cancelledBy: principal.username }
+      });
+      if (outputRows.length) {
+        const archived = await tx.warehousePackage.updateMany({
+          where: { id: { in: outputRows.map((row: any) => row.id) }, tallyTaskId: id, status: 'RECEIVED', measurementStatus: 'PENDING_REMEASURE', shipmentId: null, systemOrderNo: null },
+          data: { status: 'TALLIED_ARCHIVED', archivedReason: '理货取消', archivedAt: now }
+        });
+        if (archived.count !== outputRows.length) throw new BadRequestException('理货结果已被其他流程处理，请刷新后重试');
+      }
+      const restored = await tx.warehousePackage.updateMany({
+        where: { id: { in: existing.packageIds }, tallyTaskId: id, status: 'TALLIED_ARCHIVED', shipmentId: null, systemOrderNo: null },
+        data: { status: 'RECEIVED', tallyTaskId: null, tallyTaskNo: null, archivedByPackageId: null, archivedByPackageNo: null, archivedReason: null, archivedAt: null }
+      });
+      if (restored.count !== existing.packageIds.length) throw new BadRequestException('理货原始包裹已被其他流程处理，请刷新后重试');
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally.cancel_completed',
+          target: id,
+          before: toAuditJson(mapWarehouseTallyTask(existing)),
+          after: toAuditJson({ task: mapWarehouseTallyTask(updated), reason, restoredPackageIds: existing.packageIds, archivedResultPackageIds: outputRows.map((row: any) => row.id) })
+        }
+      });
+      return mapWarehouseTallyTask(updated);
+    });
+  }
+
   async reverseReviewWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
     await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
     await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有反审核已完成理货权限');
@@ -10231,6 +10301,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const before = mapWarehouseTallyTask(existing);
     if (before.status !== 'COMPLETED') {
       throw new BadRequestException('请先完成理货再生成标签');
+    }
+    if (before.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，不能生成标签');
     }
     if (before.labelNo) {
       await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-label:reprint-block']);
@@ -10888,6 +10961,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (beforeTask.status !== 'COMPLETED' || beforeTask.labelStatus !== 'GENERATED') {
       throw new BadRequestException('请先完成理货并生成标签');
     }
+    if (beforeTask.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，标签已失效');
+    }
     if (packageRow.measurementStatus === 'PENDING_REMEASURE') {
       throw new BadRequestException('该理货标签待重新过机，请通过设备回传或人工录入测量数据');
     }
@@ -10903,6 +10979,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('理货任务不存在');
     }
     const before = mapWarehouseTallyTask(existing);
+    if (before.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，标签已失效');
+    }
     if (!before.labelNo || before.labelStatus !== 'GENERATED') {
       throw new BadRequestException('请先生成理货标签');
     }
@@ -11375,7 +11454,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!submittedItems.length || new Set(submittedItems.map((item) => item.id)).size !== submittedItems.length) {
       throw new BadRequestException('匹配申请明细不能为空或重复');
     }
-    const amountCurrency = normalizeWaterReceiptMatchAmountCurrency(input.amountCurrency);
+    const amountCurrency = input.amountCurrency ?? 'SOURCE';
+    if (!['SOURCE', 'RMB'].includes(amountCurrency)) throw new BadRequestException('匹配金额币种无效');
     const receipt = await this.findWaterReceiptById(initialRequest.waterReceiptId);
     const lockedRequestRate = Number(
       initialRequest.receiptExchangeRate && Number(initialRequest.receiptExchangeRate) !== 1
@@ -12326,7 +12406,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!receipt.customerId) throw new BadRequestException('水单缺少客户编号');
     const rawMatches = input.matches ?? [];
     if (!rawMatches.length) throw new BadRequestException('请选择要匹配的应收费用');
-    const amountCurrency = normalizeWaterReceiptMatchAmountCurrency(input.amountCurrency);
+    const amountCurrency = input.amountCurrency ?? 'SOURCE';
+    if (!['SOURCE', 'RMB'].includes(amountCurrency)) throw new BadRequestException('匹配金额币种无效');
     const receiptCurrency = this.normalizeWaterReceiptCurrency(receipt.currency);
     const receiptExchangeRate = amountCurrency === 'RMB'
       ? await this.resolveWaterReceiptRmbExchangeRate(receiptCurrency)
@@ -12345,29 +12426,38 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     ]);
     const manualMap = new Map<string, any>(manualItems.map((item: any) => [item.id, item]));
     const systemMap = new Map<string, any>(systemFees.map((item: any) => [item.id, item]));
+    const submittedRate = amountCurrency === 'RMB' ? Number(input.exchangeRate ?? 1) : undefined;
     const matches = await Promise.all(rawMatches.map(async (row) => {
       const receivableId = row.receivableId ?? row.receivableFinanceItemId!;
       const sourceType = row.receivableSourceType ?? (systemMap.has(receivableId) ? 'SYSTEM' : 'MANUAL');
       const receivable = sourceType === 'SYSTEM' ? systemMap.get(receivableId) : manualMap.get(receivableId);
       if (!receivable) throw new BadRequestException('应收费用不存在');
+      const submittedAmount = Number(row.amount);
+      if (!Number.isFinite(submittedAmount) || submittedAmount <= 0) throw new BadRequestException('匹配金额必须大于 0');
       const receivableCurrency = this.normalizeWaterReceiptCurrency(receivable.currency);
       const receivableExchangeRate = amountCurrency === 'RMB'
         ? await this.resolveWaterReceiptRmbExchangeRate(receivableCurrency)
         : 1;
-      const amountPlan = planWaterReceiptMatchAmount({
-        amountCurrency,
-        submittedAmount: row.amount,
-        submittedExchangeRate: input.exchangeRate,
-        receiptCurrency,
-        receivableCurrency,
-        receiptExchangeRate,
-        receivableExchangeRate
-      });
+      if (receivableCurrency !== receiptCurrency) throw new BadRequestException('水单币种与应收币种不一致');
+      const expectedRate = receiptCurrency !== 'RMB'
+        ? receiptExchangeRate
+        : receivableCurrency !== 'RMB'
+          ? receivableExchangeRate
+          : 1;
+      if (amountCurrency === 'RMB' && (!Number.isFinite(submittedRate) || submittedRate! <= 0 || Math.abs(submittedRate! - expectedRate) > 0.000001)) {
+        throw new ConflictException('汇率已更新，请刷新后重新匹配');
+      }
+      const rmbAmount = amountCurrency === 'RMB' ? roundMoney(submittedAmount) : undefined;
       return {
         receivableId,
         sourceType,
         receivable,
-        ...amountPlan
+        amount: amountCurrency === 'RMB' ? roundMoney(submittedAmount / receiptExchangeRate) : submittedAmount,
+        receivableAmount: amountCurrency === 'RMB' ? roundMoney(submittedAmount / receivableExchangeRate) : submittedAmount,
+        rmbAmount,
+        receiptExchangeRate,
+        receivableExchangeRate,
+        receivableCurrency
       };
     }));
     if (amountCurrency === 'RMB' && new Set(matches.map((match) => receiptCurrency !== 'RMB' ? match.receiptExchangeRate : match.receivableExchangeRate)).size > 1) {
@@ -22457,11 +22547,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private normalizeWaterReceiptCurrency(currencyValue?: string): string {
-    return normalizeWaterReceiptCurrency(currencyValue);
+    const currency = (currencyValue ?? 'RMB').toUpperCase();
+    return currency === 'CNY' ? 'RMB' : currency;
   }
 
   private async resolveWaterReceiptRmbExchangeRate(currencyValue?: string): Promise<number> {
-    const currency = normalizeWaterReceiptCurrency(currencyValue);
+    const currency = (currencyValue ?? 'RMB').toUpperCase() === 'CNY'
+      ? 'RMB'
+      : (currencyValue ?? 'RMB').toUpperCase();
     if (currency === 'RMB') return 1;
     if (currency !== 'USD') {
       throw new BadRequestException(`暂不支持 ${currencyValue} 水单折算 RMB`);

@@ -996,6 +996,9 @@ model WarehouseTallyTask {
   appliedPackageNo              String?
   labelAppliedAt                DateTime?
   labelAppliedBy                String?
+  cancelReason                  String?
+  cancelledAt                   DateTime?
+  cancelledBy                   String?
 
   @@index([status, createdAt])
   @@index([tallyChannel, tallyProgressStatus, createdAt])

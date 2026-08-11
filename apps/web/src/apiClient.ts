@@ -269,6 +269,7 @@ import type {
   WarehouseTallyLabelScanResponse,
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCompletedCountUpdateInput,
+  WarehouseTallyTaskCancelInput,
   WarehouseTallyHistoricalAggregateCorrectionPreview,
   WarehouseTallyHistoricalAggregateCorrectionInput,
   WarehouseTallyHistoricalAggregateCorrectionResult,
@@ -1603,6 +1604,13 @@ export class ApiClient {
 
   async reverseReviewWarehouseTallyTask(id: string): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/reverse-review`, { method: 'POST' });
+  }
+
+  async cancelCompletedWarehouseTallyTask(id: string, input: WarehouseTallyTaskCancelInput): Promise<WarehouseTallyTaskSummary> {
+    return this.request(`/warehouse/tally-tasks/${id}/cancel-completed`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
   }
 
   async warehouseTallyHistoricalAggregateCorrectionPreview(id: string): Promise<WarehouseTallyHistoricalAggregateCorrectionPreview> {

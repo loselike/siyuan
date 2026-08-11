@@ -184,6 +184,7 @@ export function WarehouseCompletedTallyPanel({
               width: 180,
               render: (_, task) => (
                 <Space size={4} wrap>
+                  {task.tallyProgressStatus === 'CANCELLED' ? <Tag color="red">已取消理货</Tag> : null}
                   <Tag color={task.labelStatus === 'GENERATED' ? 'green' : 'default'}>{task.labelStatus === 'GENERATED' ? '已生成' : '待生成'}</Tag>
                   {task.labelPrintedAt ? <Tag color="blue">已打印</Tag> : null}
                   {task.labelDownloadedAt ? <Tag color="purple">已下载</Tag> : null}
@@ -199,8 +200,8 @@ export function WarehouseCompletedTallyPanel({
               render: (_, task) => (
                 <Space size={6}>
                   {canViewDetail ? <Button size="small" onClick={() => onViewTask(task)}>查看</Button> : null}
-                  {canUpdateCount ? <Button size="small" danger onClick={() => onUpdateCount(task)}>反审核</Button> : null}
-                  {canGenerateLabel || canPrintLabel || canDownloadLabel ? (
+                  {canUpdateCount && task.tallyProgressStatus !== 'CANCELLED' ? <Button size="small" danger onClick={() => onUpdateCount(task)}>取消理货</Button> : null}
+                  {task.tallyProgressStatus !== 'CANCELLED' && (canGenerateLabel || canPrintLabel || canDownloadLabel) ? (
                     <>
                       {!task.labelNo && canGenerateLabel ? <Button size="small" onClick={() => onGenerateLabel(task)}>生成标签</Button> : null}
                       {task.labelNo && canPrintLabel ? <Button size="small" onClick={() => onPrintLabel(task)}>重新打印</Button> : null}

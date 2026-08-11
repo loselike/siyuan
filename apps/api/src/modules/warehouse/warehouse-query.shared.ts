@@ -181,9 +181,11 @@ export function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
     taskNo: row.taskNo,
     status: row.status,
     tallyChannel: warehouseTallyChannels.includes(row.tallyChannel) ? row.tallyChannel : undefined,
-    tallyProgressStatus: row.status === 'COMPLETED'
-      ? 'COMPLETED'
-      : row.tallyProgressStatus === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'WAITING',
+    tallyProgressStatus: row.tallyProgressStatus === 'CANCELLED'
+      ? 'CANCELLED'
+      : row.status === 'COMPLETED'
+        ? 'COMPLETED'
+        : row.tallyProgressStatus === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'WAITING',
     tallyStartedAt: row.tallyStartedAt?.toISOString?.() ?? undefined,
     tallyStartedBy: row.tallyStartedBy ?? undefined,
     rootTallyTaskId: row.rootTallyTaskId ?? row.id,
@@ -227,7 +229,10 @@ export function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
     appliedPackageId: row.appliedPackageId ?? undefined,
     appliedPackageNo: row.appliedPackageNo ?? undefined,
     labelAppliedAt: row.labelAppliedAt?.toISOString?.() ?? undefined,
-    labelAppliedBy: row.labelAppliedBy ?? undefined
+    labelAppliedBy: row.labelAppliedBy ?? undefined,
+    cancelReason: row.cancelReason ?? undefined,
+    cancelledAt: row.cancelledAt?.toISOString?.() ?? undefined,
+    cancelledBy: row.cancelledBy ?? undefined
   };
 }
 

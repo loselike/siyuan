@@ -5,11 +5,6 @@ import { basename, extname, join } from 'node:path';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
 import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
 import {
-  normalizeWaterReceiptCurrency,
-  normalizeWaterReceiptMatchAmountCurrency,
-  planWaterReceiptMatchAmount
-} from './finance/water-receipt/water-receipt-match.policy.js';
-import {
   buildWarehouseMachineImportResponse,
   warehouseMachineImportKey,
   type ParsedWarehouseMachineImport
@@ -344,6 +339,7 @@ import {
   type WarehouseTallyLabelScanResponse,
   type WarehouseTallyTaskCompleteInput,
   type WarehouseTallyTaskCompletedCountUpdateInput,
+  type WarehouseTallyTaskCancelInput,
   type WarehouseTallyTaskPackageResultInput,
   type WarehouseTallyTaskCreateInput,
   type WarehouseTallyTaskListQuery,
@@ -6954,6 +6950,67 @@ export class InMemoryRepository {
     return cloneWarehouseTallyTask(updated);
   }
 
+  async cancelCompletedWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput): Promise<WarehouseTallyTaskSummary> {
+    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
+    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有取消已完成理货权限');
+    const rawReason = input?.reason;
+    if (typeof rawReason !== 'string') throw new BadRequestException('取消理货必须填写原因');
+    const reason = rawReason.trim();
+    if (!reason || reason.length > 300) throw new BadRequestException('取消理货原因须填写且不超过300字');
+    const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
+    if (index < 0) throw new NotFoundException('理货任务不存在');
+    const before = this.warehouseTallyTasks[index];
+    const scope = this.operatorCustomerScope(principal);
+    const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
+      before.packageIds.includes(pkg.id) && Boolean(pkg.salesperson) && scope.includes(pkg.salesperson!)
+    );
+    if (!hasScopedPackage) throw new ForbiddenException('当前账号不能处理该理货任务');
+    if (before.status !== 'COMPLETED' || before.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('只有未取消的已完成理货任务可以取消');
+    }
+    const sourceIds = new Set(before.packageIds);
+    const sourcePackages = this.warehousePackages.filter((pkg) => sourceIds.has(pkg.id));
+    const outputPackages = this.warehousePackages
+      .filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id))
+      .sort((left, right) => (left.packageIndex ?? 0) - (right.packageIndex ?? 0));
+    if (sourcePackages.length !== before.packageIds.length || !outputPackages.length) {
+      throw new ConflictException('理货结果或原始包裹不完整，不能取消理货');
+    }
+    if (sourcePackages.some((pkg) => pkg.status !== 'TALLIED_ARCHIVED' || pkg.tallyTaskId !== id)) {
+      throw new ConflictException('原始包裹状态已变化，请刷新后重试');
+    }
+    if (sourcePackages.some((pkg) => pkg.systemOrderNo || pkg.shipmentId)
+      || outputPackages.some((pkg) => pkg.status !== 'RECEIVED' || pkg.systemOrderNo || pkg.shipmentId || pkg.measurementStatus !== 'PENDING_REMEASURE')
+      || this.warehouseConsolidations.some((consolidation) => consolidation.packageIds.some((packageId) => outputPackages.some((pkg) => pkg.id === packageId)))) {
+      throw new BadRequestException('理货结果已复测、合票或出库，不能取消理货');
+    }
+    const now = new Date().toISOString();
+    const outputIds = new Set(outputPackages.map((pkg) => pkg.id));
+    this.warehousePackages.forEach((pkg, packageIndex) => {
+      let updatedPackage = pkg;
+      if (outputIds.has(pkg.id)) {
+        updatedPackage = { ...pkg, status: 'TALLIED_ARCHIVED', archivedReason: '理货取消', archivedAt: now };
+      } else if (sourceIds.has(pkg.id)) {
+        updatedPackage = { ...pkg, status: 'RECEIVED', tallyTaskId: undefined, tallyTaskNo: undefined, archivedByPackageId: undefined, archivedByPackageNo: undefined, archivedReason: undefined, archivedAt: undefined };
+      }
+      if (updatedPackage !== pkg) this.warehousePackages[packageIndex] = updatedPackage;
+    });
+    const updated: WarehouseTallyTaskSummary = {
+      ...before,
+      tallyProgressStatus: 'CANCELLED',
+      cancelReason: reason,
+      cancelledAt: now,
+      cancelledBy: principal.username
+    };
+    this.warehouseTallyTasks[index] = updated;
+    this.audit('warehouse.tally.cancel_completed', id, principal, before, {
+      ...updated,
+      restoredPackageIds: before.packageIds,
+      archivedResultPackageIds: outputPackages.map((pkg) => pkg.id)
+    });
+    return cloneWarehouseTallyTask(updated);
+  }
+
   async reverseReviewWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
     await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
     await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有反审核已完成理货权限');
@@ -7292,6 +7349,9 @@ export class InMemoryRepository {
     if (before.status !== 'COMPLETED') {
       throw new BadRequestException('请先完成理货再生成标签');
     }
+    if (before.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，不能生成标签');
+    }
     if (before.labelNo) {
       await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-label:reprint-block');
     }
@@ -7461,6 +7521,9 @@ export class InMemoryRepository {
     if (beforeTask.status !== 'COMPLETED' || beforeTask.labelStatus !== 'GENERATED') {
       throw new BadRequestException('请先完成理货并生成标签');
     }
+    if (beforeTask.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，标签已失效');
+    }
     if (matchedPackage.measurementStatus === 'PENDING_REMEASURE') {
       throw new BadRequestException('该理货标签待重新过机，请通过设备回传或人工录入测量数据');
     }
@@ -7480,6 +7543,9 @@ export class InMemoryRepository {
       throw new NotFoundException('理货任务不存在');
     }
     const before = this.warehouseTallyTasks[index];
+    if (before.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，标签已失效');
+    }
     if (!before.labelNo || before.labelStatus !== 'GENERATED') {
       throw new BadRequestException('请先生成理货标签');
     }
@@ -8142,7 +8208,8 @@ export class InMemoryRepository {
     const receipt = this.findWaterReceiptById(id);
     await this.ensureWaterReceiptMatchAccess(principal, receipt);
     if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(receipt.status)) throw new BadRequestException('水单未到账，不能匹配订单');
-    const amountCurrency = normalizeWaterReceiptMatchAmountCurrency(input.amountCurrency);
+    const amountCurrency = input.amountCurrency ?? 'SOURCE';
+    if (!['SOURCE', 'RMB'].includes(amountCurrency)) throw new BadRequestException('匹配金额币种无效');
     const receiptCurrency = this.normalizeWaterReceiptCurrency(receipt.currency);
     const receiptExchangeRate = amountCurrency === 'RMB'
       ? this.resolveWaterReceiptRmbExchangeRate(receiptCurrency)
@@ -8158,26 +8225,37 @@ export class InMemoryRepository {
       const item = sourceType === 'MANUAL' ? this.findReceivableFinanceItemById(receivableId) : undefined;
       const shipment = this.shipments.find((row) => row.id === (systemFee?.shipmentId ?? item?.shipmentId));
       const receivable = systemFee ?? item;
+      const submittedAmount = Number(match.amount);
+      if (!Number.isFinite(submittedAmount) || submittedAmount <= 0) throw new BadRequestException('匹配金额必须大于 0');
       const receivableCurrency = this.normalizeWaterReceiptCurrency(receivable?.currency);
       const receivableExchangeRate = amountCurrency === 'RMB'
         ? this.resolveWaterReceiptRmbExchangeRate(receivableCurrency)
         : 1;
-      const amountPlan = planWaterReceiptMatchAmount({
-        amountCurrency,
-        submittedAmount: match.amount,
-        submittedExchangeRate: input.exchangeRate,
-        receiptCurrency,
-        receivableCurrency,
-        receiptExchangeRate,
-        receivableExchangeRate
-      });
-      const { amount, receivableAmount, rmbAmount } = amountPlan;
+      if (receivableCurrency !== receiptCurrency) throw new BadRequestException('水单币种与应收币种不一致');
+      const expectedRate = receiptCurrency !== 'RMB'
+        ? receiptExchangeRate
+        : receivableCurrency !== 'RMB'
+          ? receivableExchangeRate
+          : 1;
+      if (amountCurrency === 'RMB') {
+        const submittedRate = Number(input.exchangeRate);
+        if (!Number.isFinite(submittedRate) || submittedRate <= 0 || Math.abs(submittedRate - expectedRate) > 0.000001) {
+          throw new ConflictException('汇率已更新，请刷新后重新匹配');
+        }
+      }
+      const rmbAmount = amountCurrency === 'RMB' ? roundMoney(submittedAmount) : undefined;
+      const amount = amountCurrency === 'RMB'
+        ? roundMoney(submittedAmount / receiptExchangeRate)
+        : submittedAmount;
+      const receivableAmount = amountCurrency === 'RMB'
+        ? roundMoney(submittedAmount / receivableExchangeRate)
+        : submittedAmount;
       if (!shipment || (systemFee?.customerId ?? shipment.customerId) !== receipt.customerId) throw new BadRequestException('只能匹配同客户编号下的应收');
       if (!receivable) throw new BadRequestException('应收费用不存在');
       if (receivable.voided) throw new BadRequestException('不能匹配已作废的应收');
       if ((receivable.receiptStatus ?? 'UNPAID') === 'RECEIVED' || (receivable.receivedAmount ?? 0) >= receivable.amount) throw new BadRequestException('应收已收满，不能继续匹配');
       const unpaid = roundMoney(receivable.amount - (receivable.receivedAmount ?? 0));
-      if (amountCurrency === 'RMB' && Number(rmbAmount) > roundMoney(unpaid * receivableExchangeRate)) {
+      if (amountCurrency === 'RMB' && roundMoney(submittedAmount) > roundMoney(unpaid * receivableExchangeRate)) {
         throw new BadRequestException('匹配金额不能超过订单未收金额');
       }
       if (!Number.isFinite(receivableAmount) || receivableAmount <= 0 || receivableAmount > unpaid) throw new BadRequestException('匹配金额不能超过订单未收金额');
@@ -8188,7 +8266,12 @@ export class InMemoryRepository {
         item,
         shipment,
         receivable,
-        ...amountPlan
+        amount,
+        receivableAmount,
+        rmbAmount,
+        receivableCurrency,
+        receiptExchangeRate,
+        receivableExchangeRate
       };
     });
     if (amountCurrency === 'RMB' && new Set(resolvedMatches.map((match) => receiptCurrency !== 'RMB' ? match.receiptExchangeRate : match.receivableExchangeRate)).size > 1) {
@@ -15569,11 +15652,14 @@ export class InMemoryRepository {
   }
 
   private normalizeWaterReceiptCurrency(currencyValue?: string): string {
-    return normalizeWaterReceiptCurrency(currencyValue);
+    const currency = (currencyValue ?? 'RMB').toUpperCase();
+    return currency === 'CNY' ? 'RMB' : currency;
   }
 
   private resolveWaterReceiptRmbExchangeRate(currencyValue?: string): number {
-    const currency = normalizeWaterReceiptCurrency(currencyValue);
+    const currency = (currencyValue ?? 'RMB').toUpperCase() === 'CNY'
+      ? 'RMB'
+      : (currencyValue ?? 'RMB').toUpperCase();
     if (currency === 'RMB') return 1;
     if (currency !== 'USD') {
       throw new BadRequestException(`暂不支持 ${currencyValue} 水单折算 RMB`);

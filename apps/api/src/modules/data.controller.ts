@@ -140,6 +140,7 @@ import type {
   WarehousePackageUpdateInput,
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCompletedCountUpdateInput,
+  WarehouseTallyTaskCancelInput,
   WarehouseTallyTaskCreateInput,
   WarehouseTallyLabelScanInput,
   WarehouseTallyHistoricalAggregateCorrectionInput,
@@ -2376,6 +2377,16 @@ export class DataController {
   @RequirePermission('warehouse:tally-completed:reverse-review')
   async reverseReviewWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.reverseReviewWarehouseTallyTask(request.user, id);
+  }
+
+  @Post('warehouse/tally-tasks/:id/cancel-completed')
+  @RequirePermission('warehouse:tally-completed:reverse-review')
+  async cancelCompletedWarehouseTallyTask(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: WarehouseTallyTaskCancelInput
+  ) {
+    return this.repository.cancelCompletedWarehouseTallyTask(request.user, id, body);
   }
 
   @Get('warehouse/tally-tasks/:id/historical-aggregate-correction')
