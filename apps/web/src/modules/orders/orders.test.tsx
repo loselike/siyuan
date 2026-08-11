@@ -1,7 +1,8 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { renderAndLogin } from '../testSupport/appTestHarness';
+import { renderAndLogin, shipment } from '../testSupport/appTestHarness';
+import { matchesOrderManagementFilters } from './OrdersPage';
 
 async function openOrderManagement(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
@@ -11,6 +12,37 @@ async function openOrderManagement(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('Orders flows', () => {
+  it('filters visible lifecycle shipments by site and salesperson together', () => {
+    const target = shipment('filter-target', 'SYS-FILTER-1', 'CUSTOMER-FILTER-1', 'DECLARED', '筛选客户', {
+      site: '深圳思远',
+      salesperson: 'Rachel'
+    });
+    const anotherSite = shipment('filter-site', 'SYS-FILTER-2', 'CUSTOMER-FILTER-2', 'DECLARED', '筛选客户', {
+      site: '广州思远',
+      salesperson: 'Rachel'
+    });
+    const anotherSalesperson = shipment('filter-sales', 'SYS-FILTER-3', 'CUSTOMER-FILTER-3', 'DECLARED', '筛选客户', {
+      site: '深圳思远',
+      salesperson: 'Marina'
+    });
+
+    expect([target, anotherSite, anotherSalesperson].filter((row) => matchesOrderManagementFilters(row, {
+      customerKeyword: '',
+      outboundOrderKeyword: '',
+      site: '深圳思远',
+      salesperson: 'Rachel'
+    }))).toEqual([target]);
+  });
+
+  it('shows site and salesperson filters in the lifecycle toolbar', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await openOrderManagement(user);
+    expect(screen.getByRole('combobox', { name: '站点' })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: '业务员' })).toBeInTheDocument();
+  });
+
   it('shows the orders workspace and creates an outbound order without changing create logic', async () => {
     const user = userEvent.setup();
     await renderAndLogin('admin', 'admin123');
