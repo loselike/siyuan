@@ -20,7 +20,7 @@ describe('Mojia device route auth contract', () => {
       applyWarehouseTallyMeasurementByBarcode: vi.fn(),
       createWarehousePackage: vi.fn()
     };
-    const controller = new DataController(repository as never, {} as never, {} as never, {} as never);
+    const controller = new DataController(repository as never, {} as never, {} as never);
     const body: Parameters<DataController['receiveMojiaMeasurement']>[2] = {
       barcode: 'TEST-001',
       weightKg: 1,

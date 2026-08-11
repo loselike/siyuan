@@ -1416,18 +1416,18 @@
       "DataController.updateWarehousePackageException"
     ],
     [
-      "PATCH /warehouse/tally-tasks/:id @ DataController.updateWarehouseTallyTask",
+      "PATCH /warehouse/tally-tasks/:id @ WarehouseTallyLifecycleController.updateWarehouseTallyTask",
       "permission",
       [
         "warehouse:tally-pending:task-update"
       ],
-      "DataController.updateWarehouseTallyTask"
+      "WarehouseTallyLifecycleController.updateWarehouseTallyTask"
     ],
     [
-      "PATCH /warehouse/tally-tasks/:id/completed-count @ DataController.updateCompletedWarehouseTallyTaskCount",
+      "PATCH /warehouse/tally-tasks/:id/completed-count @ WarehouseTallyLifecycleController.updateCompletedWarehouseTallyTaskCount",
       "auth",
       [],
-      "DataController.updateCompletedWarehouseTallyTaskCount"
+      "WarehouseTallyLifecycleController.updateCompletedWarehouseTallyTaskCount"
     ],
     [
       "POST /ai/assist @ AiController.assist",
@@ -2874,36 +2874,36 @@
       "DataController.createWarehouseRentRule"
     ],
     [
-      "POST /warehouse/tally-tasks @ DataController.createWarehouseTallyTask",
+      "POST /warehouse/tally-tasks @ WarehouseTallyLifecycleController.createWarehouseTallyTask",
       "permission",
       [
         "warehouse:tally-pending:task-create"
       ],
-      "DataController.createWarehouseTallyTask"
+      "WarehouseTallyLifecycleController.createWarehouseTallyTask"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/cancel @ DataController.cancelWarehouseTallyTask",
+      "POST /warehouse/tally-tasks/:id/cancel @ WarehouseTallyLifecycleController.cancelWarehouseTallyTask",
       "permission",
       [
         "warehouse:tally-pending:task-cancel"
       ],
-      "DataController.cancelWarehouseTallyTask"
+      "WarehouseTallyLifecycleController.cancelWarehouseTallyTask"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/cancel-completed @ DataController.cancelCompletedWarehouseTallyTask",
+      "POST /warehouse/tally-tasks/:id/cancel-completed @ WarehouseTallyLifecycleController.cancelCompletedWarehouseTallyTask",
       "permission",
       [
         "warehouse:tally-completed:reverse-review"
       ],
-      "DataController.cancelCompletedWarehouseTallyTask"
+      "WarehouseTallyLifecycleController.cancelCompletedWarehouseTallyTask"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/complete @ DataController.completeWarehouseTallyTask",
+      "POST /warehouse/tally-tasks/:id/complete @ WarehouseTallyLifecycleController.completeWarehouseTallyTask",
       "permission",
       [
         "warehouse:tally-pending:task-process"
       ],
-      "DataController.completeWarehouseTallyTask"
+      "WarehouseTallyLifecycleController.completeWarehouseTallyTask"
     ],
     [
       "POST /warehouse/tally-tasks/:id/historical-aggregate-correction @ WarehouseTallyCorrectionController.correctWarehouseTallyHistoricalAggregate",
@@ -2939,20 +2939,20 @@
       "WarehouseTallyLabelController.print"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/reverse-review @ DataController.reverseReviewWarehouseTallyTask",
+      "POST /warehouse/tally-tasks/:id/reverse-review @ WarehouseTallyLifecycleController.reverseReviewWarehouseTallyTask",
       "permission",
       [
         "warehouse:tally-completed:reverse-review"
       ],
-      "DataController.reverseReviewWarehouseTallyTask"
+      "WarehouseTallyLifecycleController.reverseReviewWarehouseTallyTask"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/start @ DataController.startWarehouseTallyTask",
+      "POST /warehouse/tally-tasks/:id/start @ WarehouseTallyLifecycleController.startWarehouseTallyTask",
       "permission",
       [
         "warehouse:tally-pending:task-process"
       ],
-      "DataController.startWarehouseTallyTask"
+      "WarehouseTallyLifecycleController.startWarehouseTallyTask"
     ],
     [
       "POST /warehouse/tally-tasks/label-scan @ WarehouseTallyLabelController.apply",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 265,
+    "dataControllerRoutesMax": 257,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 32122,
       "apps/api/src/modules/in-memory.repository.ts": 19588,
-      "apps/api/src/modules/data.controller.ts": 2979,
+      "apps/api/src/modules/data.controller.ts": 2916,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,

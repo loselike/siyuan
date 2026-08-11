@@ -138,12 +138,7 @@ import type {
   WarehousePackageCreateInput,
   WarehousePackageSplitInput,
   WarehousePackageUpdateInput,
-  WarehouseTallyTaskCompleteInput,
-  WarehouseTallyTaskCompletedCountUpdateInput,
-  WarehouseTallyTaskCancelInput,
-  WarehouseTallyTaskCreateInput,
   WarehouseTallyRepeatStatisticsQuery,
-  WarehouseTallyTaskUpdateInput,
   MasterDataSnapshot,
   NavigationReadStateInput
 } from '@siyuan/shared';
@@ -154,7 +149,6 @@ import { parseWarehouseMachineWorkbook } from './warehouse-machine-import.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
-import { WarehouseTallyLifecycleService } from './warehouse/tally/warehouse-tally-lifecycle.service.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -168,8 +162,7 @@ export class DataController {
   constructor(
     @Inject(PrismaRepository) private readonly repository: PrismaRepository,
     @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService,
-    @Inject(WarehouseInventoryQueryService) private readonly warehouseInventoryQueries: WarehouseInventoryQueryService,
-    @Inject(WarehouseTallyLifecycleService) private readonly warehouseTallyLifecycle: WarehouseTallyLifecycleService
+    @Inject(WarehouseInventoryQueryService) private readonly warehouseInventoryQueries: WarehouseInventoryQueryService
   ) {}
   private readonly imageMimeExtensions: Record<string, string> = {
     'image/png': '.png',
@@ -2329,62 +2322,6 @@ export class DataController {
     @Query() query: WarehouseTallyRepeatStatisticsQuery
   ) {
     return this.repository.getWarehouseTallyRepeatStatistics(request.user, query);
-  }
-
-  @Post('warehouse/tally-tasks')
-  @RequirePermission('warehouse:tally-pending:task-create')
-  async createWarehouseTallyTask(@Req() request: { user: Principal }, @Body() body: WarehouseTallyTaskCreateInput) {
-    return this.warehouseTallyLifecycle.create(request.user, body);
-  }
-
-  @Patch('warehouse/tally-tasks/:id')
-  @RequirePermission('warehouse:tally-pending:task-update')
-  async updateWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseTallyTaskUpdateInput) {
-    return this.warehouseTallyLifecycle.update(request.user, id, body);
-  }
-
-  @Post('warehouse/tally-tasks/:id/start')
-  @RequirePermission('warehouse:tally-pending:task-process')
-  async startWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.warehouseTallyLifecycle.start(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/cancel')
-  @RequirePermission('warehouse:tally-pending:task-cancel')
-  async cancelWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.warehouseTallyLifecycle.cancel(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/complete')
-  @RequirePermission('warehouse:tally-pending:task-process')
-  async completeWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseTallyTaskCompleteInput) {
-    return this.warehouseTallyLifecycle.complete(request.user, id, body);
-  }
-
-  @Patch('warehouse/tally-tasks/:id/completed-count')
-  @RequireAuth()
-  async updateCompletedWarehouseTallyTaskCount(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseTallyTaskCompletedCountUpdateInput
-  ) {
-    return this.warehouseTallyLifecycle.updateCompletedCount(request.user, id, body);
-  }
-
-  @Post('warehouse/tally-tasks/:id/reverse-review')
-  @RequirePermission('warehouse:tally-completed:reverse-review')
-  async reverseReviewWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.warehouseTallyLifecycle.reverseReview(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/cancel-completed')
-  @RequirePermission('warehouse:tally-completed:reverse-review')
-  async cancelCompletedWarehouseTallyTask(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseTallyTaskCancelInput
-  ) {
-    return this.warehouseTallyLifecycle.cancelCompleted(request.user, id, body);
   }
 
   @Get('finance/business-cost-audits')

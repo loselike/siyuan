@@ -98,6 +98,7 @@ import { WarehouseTallyLabelService } from './warehouse/tally/warehouse-tally-la
 import { WarehouseTallyCorrectionController } from './warehouse/tally/warehouse-tally-correction.controller.js';
 import { WAREHOUSE_TALLY_CORRECTION_REPOSITORY } from './warehouse/tally/warehouse-tally-correction.repository.js';
 import { WarehouseTallyCorrectionService } from './warehouse/tally/warehouse-tally-correction.service.js';
+import { WarehouseTallyLifecycleController } from './warehouse/tally/warehouse-tally-lifecycle.controller.js';
 import { WAREHOUSE_TALLY_LIFECYCLE_REPOSITORY } from './warehouse/tally/warehouse-tally-lifecycle.repository.js';
 import { WarehouseTallyLifecycleService } from './warehouse/tally/warehouse-tally-lifecycle.service.js';
 import { UserTablePreferenceController } from './user-table-preference.controller.js';
@@ -231,6 +232,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     WarehouseInventoryQueryController,
     WarehouseTallyCorrectionController,
     WarehouseTallyLabelController,
+    WarehouseTallyLifecycleController,
     WarehouseTallyQueryController,
     UserTablePreferenceController
   ],
