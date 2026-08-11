@@ -129,11 +129,7 @@ import type {
   StaffAccountQuery,
   StaffAccountUpdateInput,
   TrackingEventInput,
-  WarehouseManualReceiptCreateInput,
-  WarehouseSameSpecReplenishInput,
   WarehousePackageCreateInput,
-  WarehousePackageSplitInput,
-  WarehousePackageUpdateInput,
   MasterDataSnapshot,
   NavigationReadStateInput
 } from '@siyuan/shared';
@@ -2198,50 +2194,6 @@ export class DataController {
       });
     }
     return this.repository.previewWarehouseMachineImport(request.user, parsed);
-  }
-
-  @Post('warehouse/packages')
-  @RequirePermission('warehouse:today-receipt:manual-create')
-  async createWarehousePackage(@Req() request: { user: Principal }, @Body() body: WarehousePackageCreateInput) {
-    await this.repository.assertWarehouseManualReceiptCustomer(request.user, body.customerCode);
-    return this.repository.createWarehousePackage(request.user, body);
-  }
-
-  @Post('warehouse/packages/manual-receipt')
-  @RequirePermission('warehouse:today-receipt:manual-create')
-  async createWarehouseManualReceipt(@Req() request: { user: Principal }, @Body() body: WarehouseManualReceiptCreateInput) {
-    await this.repository.assertWarehouseManualReceiptCustomer(request.user, body.customerCode);
-    return this.repository.createWarehouseManualReceipt(request.user, body);
-  }
-
-  @Post('warehouse/packages/:id/same-spec-replenish')
-  @RequirePermission('warehouse:in-stock:same-spec-replenish')
-  async replenishWarehouseSameSpec(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseSameSpecReplenishInput) {
-    return this.repository.replenishWarehouseSameSpec(request.user, id, body);
-  }
-
-  @Post('warehouse/packages/:id/split')
-  @RequirePermission('warehouse:in-stock:split')
-  async splitWarehousePackage(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehousePackageSplitInput) {
-    return this.repository.splitWarehousePackage(request.user, id, body);
-  }
-
-  @Patch('warehouse/packages/:id')
-  @RequirePermission('warehouse:in-stock:update')
-  async updateWarehousePackage(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehousePackageUpdateInput) {
-    return this.repository.updateWarehousePackage(request.user, id, body);
-  }
-
-  @Put('warehouse/packages/:id/remark')
-  @RequirePermission('warehouse:in-stock:update')
-  async updateWarehousePackageRemark(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { remark?: string }) {
-    return this.repository.updateWarehousePackageRemark(request.user, id, body);
-  }
-
-  @Patch('warehouse/packages/:id/exception')
-  @RequirePermission('warehouse:in-stock:update')
-  async updateWarehousePackageException(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { manualException?: string }) {
-    return this.repository.updateWarehousePackageException(request.user, id, body);
   }
 
   @Get('finance/business-cost-audits')

@@ -85,6 +85,9 @@ import {
   WAREHOUSE_INVENTORY_QUERY_REPOSITORY
 } from './warehouse/inventory/warehouse-inventory-query.repository.js';
 import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
+import { WarehousePackageLifecycleController } from './warehouse/package/warehouse-package-lifecycle.controller.js';
+import { WAREHOUSE_PACKAGE_LIFECYCLE_REPOSITORY } from './warehouse/package/warehouse-package-lifecycle.repository.js';
+import { WarehousePackageLifecycleService } from './warehouse/package/warehouse-package-lifecycle.service.js';
 import { WarehouseRentController } from './warehouse/rent/warehouse-rent.controller.js';
 import { WAREHOUSE_RENT_REPOSITORY } from './warehouse/rent/warehouse-rent.repository.js';
 import { WarehouseRentService } from './warehouse/rent/warehouse-rent.service.js';
@@ -176,6 +179,11 @@ const warehouseRentRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const warehousePackageLifecycleRepositoryProvider = {
+  provide: WAREHOUSE_PACKAGE_LIFECYCLE_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -246,6 +254,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     TrackingQueryController,
     WarehouseDispatchQueryController,
     WarehouseInventoryQueryController,
+    WarehousePackageLifecycleController,
     WarehouseRentController,
     WarehouseTallyCorrectionController,
     WarehouseTallyLabelController,
@@ -272,6 +281,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     WaterReceiptLifecycleService,
     waterReceiptLifecycleRepositoryProvider,
     WarehouseInventoryQueryService,
+    WarehousePackageLifecycleService,
+    warehousePackageLifecycleRepositoryProvider,
     WarehouseRentService,
     warehouseRentRepositoryProvider,
     WarehouseTallyQueryService,

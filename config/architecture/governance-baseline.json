@@ -1400,20 +1400,20 @@
       "WarehouseDispatchQueryController.updateWarehouseDispatchDeclaration"
     ],
     [
-      "PATCH /warehouse/packages/:id @ DataController.updateWarehousePackage",
+      "PATCH /warehouse/packages/:id @ WarehousePackageLifecycleController.updateWarehousePackage",
       "permission",
       [
         "warehouse:in-stock:update"
       ],
-      "DataController.updateWarehousePackage"
+      "WarehousePackageLifecycleController.updateWarehousePackage"
     ],
     [
-      "PATCH /warehouse/packages/:id/exception @ DataController.updateWarehousePackageException",
+      "PATCH /warehouse/packages/:id/exception @ WarehousePackageLifecycleController.updateWarehousePackageException",
       "permission",
       [
         "warehouse:in-stock:update"
       ],
-      "DataController.updateWarehousePackageException"
+      "WarehousePackageLifecycleController.updateWarehousePackageException"
     ],
     [
       "PATCH /warehouse/tally-tasks/:id @ WarehouseTallyLifecycleController.updateWarehouseTallyTask",
@@ -2826,28 +2826,28 @@
       "DataController.printWarehouseHandover"
     ],
     [
-      "POST /warehouse/packages @ DataController.createWarehousePackage",
+      "POST /warehouse/packages @ WarehousePackageLifecycleController.createWarehousePackage",
       "permission",
       [
         "warehouse:today-receipt:manual-create"
       ],
-      "DataController.createWarehousePackage"
+      "WarehousePackageLifecycleController.createWarehousePackage"
     ],
     [
-      "POST /warehouse/packages/:id/same-spec-replenish @ DataController.replenishWarehouseSameSpec",
+      "POST /warehouse/packages/:id/same-spec-replenish @ WarehousePackageLifecycleController.replenishWarehouseSameSpec",
       "permission",
       [
         "warehouse:in-stock:same-spec-replenish"
       ],
-      "DataController.replenishWarehouseSameSpec"
+      "WarehousePackageLifecycleController.replenishWarehouseSameSpec"
     ],
     [
-      "POST /warehouse/packages/:id/split @ DataController.splitWarehousePackage",
+      "POST /warehouse/packages/:id/split @ WarehousePackageLifecycleController.splitWarehousePackage",
       "permission",
       [
         "warehouse:in-stock:split"
       ],
-      "DataController.splitWarehousePackage"
+      "WarehousePackageLifecycleController.splitWarehousePackage"
     ],
     [
       "POST /warehouse/packages/machine-import @ DataController.warehouseMachineImport",
@@ -2858,12 +2858,12 @@
       "DataController.warehouseMachineImport"
     ],
     [
-      "POST /warehouse/packages/manual-receipt @ DataController.createWarehouseManualReceipt",
+      "POST /warehouse/packages/manual-receipt @ WarehousePackageLifecycleController.createWarehouseManualReceipt",
       "permission",
       [
         "warehouse:today-receipt:manual-create"
       ],
-      "DataController.createWarehouseManualReceipt"
+      "WarehousePackageLifecycleController.createWarehouseManualReceipt"
     ],
     [
       "POST /warehouse/rent-rules @ WarehouseRentController.createWarehouseRentRule",
@@ -3342,12 +3342,12 @@
       "UserTablePreferenceController.upsert"
     ],
     [
-      "PUT /warehouse/packages/:id/remark @ DataController.updateWarehousePackageRemark",
+      "PUT /warehouse/packages/:id/remark @ WarehousePackageLifecycleController.updateWarehousePackageRemark",
       "permission",
       [
         "warehouse:in-stock:update"
       ],
-      "DataController.updateWarehousePackageRemark"
+      "WarehousePackageLifecycleController.updateWarehousePackageRemark"
     ],
     [
       "PUT /warehouse/rent-rules/:id @ WarehouseRentController.updateWarehouseRentRule",
