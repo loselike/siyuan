@@ -123,4 +123,37 @@ describe('Problem ticket tag API', () => {
         ]));
       });
   });
+
+  it('preserves tag name and problem ticket snapshot validation', async () => {
+    const adminToken = await app.loginAs('admin');
+    const serviceToken = await app.loginAs('service');
+
+    for (const sample of [
+      { name: '   ', message: '请填写标签名称' },
+      { name: '二十一字符标签名称校验样本一二三四五六七八九十', message: '标签名称最多 20 个字符' },
+      { name: '标签,名称', message: '标签名称不能包含逗号' },
+      { name: '标签，名称', message: '标签名称不能包含逗号' }
+    ]) {
+      await request(app.getHttpServer())
+        .post('/api/customer-service/problem-tags')
+        .set('Authorization', app.auth(serviceToken))
+        .send({ name: sample.name })
+        .expect(400)
+        .expect({ message: sample.message, error: 'Bad Request', statusCode: 400 });
+    }
+
+    for (const sample of [
+      { tags: '不是数组', message: '常用标签格式不正确' },
+      { tags: Array.from({ length: 11 }, (_, index) => `标签${index + 1}`), message: '单个问题件最多选择 10 个常用标签' },
+      { tags: ['标签,名称'], message: '标签名称不能包含逗号' },
+      { tags: ['不存在的有效标签'], message: '常用标签已变更，请刷新后重试' }
+    ]) {
+      await request(app.getHttpServer())
+        .post('/api/shipments/s-seed-2/problem-tickets')
+        .set('Authorization', app.auth(adminToken))
+        .send({ reason: '标签快照校验样本', tags: sample.tags })
+        .expect(400)
+        .expect({ message: sample.message, error: 'Bad Request', statusCode: 400 });
+    }
+  });
 });

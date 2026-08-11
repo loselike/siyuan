@@ -5,6 +5,7 @@ import { basename, extname, join } from 'node:path';
 import { Prisma, type Permission as PrismaPermission, type Role as PrismaRole, type Shipment as PrismaShipment } from '@prisma/client';
 import * as xlsx from '@e965/xlsx';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
+import { normalizeProblemTicketTagName, normalizeProblemTicketTagSnapshot } from './customer-service/problem-tag/problem-ticket-tag.policy.js';
 import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
 import { PrismaMasterDataReadRepository } from './master-data/master-data-read.repository.js';
 import {
@@ -20331,7 +20332,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async createProblemTicketCommonTag(principal: Principal, input: CommonTagCreateInput): Promise<CommonTagSummary> {
     await this.ensurePermission(principal, 'customer-service:problem:tag-manage', '无权维护常用标签');
-    const name = normalizeProblemTicketCommonTagName(input.name);
+    const name = normalizeProblemTicketTagName(input.name);
     try {
       const row = await this.prisma.$transaction(async (tx) => {
         const count = await tx.commonTag.count({ where: { scene: 'PROBLEM_TICKET', enabled: true } });
@@ -20361,7 +20362,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async updateProblemTicketCommonTag(principal: Principal, id: string, input: CommonTagUpdateInput): Promise<CommonTagSummary> {
     await this.ensurePermission(principal, 'customer-service:problem:tag-manage', '无权维护常用标签');
-    const name = normalizeProblemTicketCommonTagName(input.name);
+    const name = normalizeProblemTicketTagName(input.name);
     try {
       const row = await this.prisma.$transaction(async (tx) => {
         const before = await tx.commonTag.findFirst({ where: { id, scene: 'PROBLEM_TICKET' } });
@@ -30173,22 +30174,6 @@ function mapProblemTicketCommonTag(row: { id: string; name: string; scene: strin
 
 function assertProblemTicketCommonTagAdmin(principal: Principal) {
   if (!isAdministratorRole(principal.role)) throw new ForbiddenException('仅管理员可以维护常用标签');
-}
-
-function normalizeProblemTicketCommonTagName(value: unknown): string {
-  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  if (!name) throw new BadRequestException('请填写标签名称');
-  if (name.length > 20) throw new BadRequestException('标签名称最多 20 个字符');
-  if (/[，,]/.test(name)) throw new BadRequestException('标签名称不能包含逗号');
-  return name;
-}
-
-function normalizeProblemTicketTagSnapshot(value: unknown): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new BadRequestException('常用标签格式不正确');
-  if (value.length > 10) throw new BadRequestException('单个问题件最多选择 10 个常用标签');
-  const tags = [...new Set(value.map((item) => normalizeProblemTicketCommonTagName(item)))];
-  return tags.length ? tags : undefined;
 }
 
 function translateProblemTicketCommonTagWriteError(error: unknown): never {

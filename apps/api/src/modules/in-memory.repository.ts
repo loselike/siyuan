@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
+import { normalizeProblemTicketTagName, normalizeProblemTicketTagSnapshot } from './customer-service/problem-tag/problem-ticket-tag.policy.js';
 import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
 import {
   buildWarehouseMachineImportResponse,
@@ -13775,7 +13776,7 @@ export class InMemoryRepository {
 
   async createProblemTicketCommonTag(principal: Principal, input: CommonTagCreateInput): Promise<CommonTagSummary> {
     await this.ensurePermission(principal, 'customer-service:problem:tag-manage', '无权维护常用标签');
-    const name = normalizeMemoryProblemTicketCommonTagName(input.name);
+    const name = normalizeProblemTicketTagName(input.name);
     if (this.problemTicketCommonTags.filter((tag) => tag.enabled).length >= 10) {
       throw new BadRequestException('常用标签最多维护 10 个');
     }
@@ -13797,7 +13798,7 @@ export class InMemoryRepository {
 
   async updateProblemTicketCommonTag(principal: Principal, id: string, input: CommonTagUpdateInput): Promise<CommonTagSummary> {
     await this.ensurePermission(principal, 'customer-service:problem:tag-manage', '无权维护常用标签');
-    const name = normalizeMemoryProblemTicketCommonTagName(input.name);
+    const name = normalizeProblemTicketTagName(input.name);
     const tag = this.problemTicketCommonTags.find((item) => item.id === id);
     if (!tag) throw new NotFoundException('常用标签不存在');
     if (this.problemTicketCommonTags.some((item) => item.id !== id && item.name === name)) {
@@ -13828,7 +13829,7 @@ export class InMemoryRepository {
 
   async createProblemTicket(principal: Principal, shipmentId: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
     const shipment = this.visibleShipment(principal, shipmentId);
-    const tagSnapshot = normalizeMemoryProblemTicketTagSnapshot(input.tags);
+    const tagSnapshot = normalizeProblemTicketTagSnapshot(input.tags);
     if (tagSnapshot?.some((name) => !this.problemTicketCommonTags.some((tag) => tag.enabled && tag.name === name))) {
       throw new BadRequestException('常用标签已变更，请刷新后重试');
     }
@@ -19191,14 +19192,6 @@ function assertMemoryProblemTicketCommonTagAdmin(principal: Principal) {
   if (!isAdministratorRole(principal.role)) throw new ForbiddenException('仅管理员可以维护常用标签');
 }
 
-function normalizeMemoryProblemTicketCommonTagName(value: unknown): string {
-  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  if (!name) throw new BadRequestException('请填写标签名称');
-  if (name.length > 20) throw new BadRequestException('标签名称最多 20 个字符');
-  if (/[，,]/.test(name)) throw new BadRequestException('标签名称不能包含逗号');
-  return name;
-}
-
 function normalizeMemoryCustomerSourceKey(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLocaleLowerCase('zh-CN') : '';
 }
@@ -19208,14 +19201,6 @@ function requireMemoryCustomerSourceName(value: unknown): string {
   if (!name) throw new BadRequestException('客户来源名称不能为空');
   if (name.length > 80) throw new BadRequestException('客户来源名称不能超过 80 个字符');
   return name;
-}
-
-function normalizeMemoryProblemTicketTagSnapshot(value: unknown): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new BadRequestException('常用标签格式不正确');
-  if (value.length > 10) throw new BadRequestException('单个问题件最多选择 10 个常用标签');
-  const tags = [...new Set(value.map((item) => normalizeMemoryProblemTicketCommonTagName(item)))];
-  return tags.length ? tags : undefined;
 }
 
 function isFinalReviewRole(role: string): boolean {
