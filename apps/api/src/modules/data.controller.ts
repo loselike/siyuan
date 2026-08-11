@@ -142,7 +142,6 @@ import type {
   WarehouseTallyTaskCompletedCountUpdateInput,
   WarehouseTallyTaskCancelInput,
   WarehouseTallyTaskCreateInput,
-  WarehouseTallyLabelScanInput,
   WarehouseTallyHistoricalAggregateCorrectionInput,
   WarehouseTallyRepeatStatisticsQuery,
   WarehouseTallyTaskUpdateInput,
@@ -2403,30 +2402,6 @@ export class DataController {
     @Body() body: WarehouseTallyHistoricalAggregateCorrectionInput
   ) {
     return this.repository.correctWarehouseTallyHistoricalAggregate(request.user, id, body);
-  }
-
-  @Post('warehouse/tally-tasks/:id/label')
-  @RequirePermission('warehouse:tally-label:generate')
-  async generateWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.generateWarehouseTallyTaskLabel(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/label/print')
-  @RequirePermission(['warehouse:tally-label:print', 'warehouse:tally-label:reprint'])
-  async printWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.printWarehouseTallyTaskLabel(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/label/download')
-  @RequirePermission('warehouse:tally-label:download')
-  async downloadWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.downloadWarehouseTallyTaskLabel(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/label-scan')
-  @RequirePermission('warehouse:tally-label:scan-apply')
-  async applyWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Body() body: WarehouseTallyLabelScanInput) {
-    return this.repository.applyWarehouseTallyTaskLabel(request.user, body);
   }
 
   @Get('finance/business-cost-audits')

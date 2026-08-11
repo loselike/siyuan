@@ -2914,29 +2914,29 @@
       "DataController.correctWarehouseTallyHistoricalAggregate"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/label @ DataController.generateWarehouseTallyTaskLabel",
+      "POST /warehouse/tally-tasks/:id/label @ WarehouseTallyLabelController.generate",
       "permission",
       [
         "warehouse:tally-label:generate"
       ],
-      "DataController.generateWarehouseTallyTaskLabel"
+      "WarehouseTallyLabelController.generate"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/label/download @ DataController.downloadWarehouseTallyTaskLabel",
+      "POST /warehouse/tally-tasks/:id/label/download @ WarehouseTallyLabelController.download",
       "permission",
       [
         "warehouse:tally-label:download"
       ],
-      "DataController.downloadWarehouseTallyTaskLabel"
+      "WarehouseTallyLabelController.download"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/label/print @ DataController.printWarehouseTallyTaskLabel",
+      "POST /warehouse/tally-tasks/:id/label/print @ WarehouseTallyLabelController.print",
       "permission",
       [
         "warehouse:tally-label:print",
         "warehouse:tally-label:reprint"
       ],
-      "DataController.printWarehouseTallyTaskLabel"
+      "WarehouseTallyLabelController.print"
     ],
     [
       "POST /warehouse/tally-tasks/:id/reverse-review @ DataController.reverseReviewWarehouseTallyTask",
@@ -2955,12 +2955,12 @@
       "DataController.startWarehouseTallyTask"
     ],
     [
-      "POST /warehouse/tally-tasks/label-scan @ DataController.applyWarehouseTallyTaskLabel",
+      "POST /warehouse/tally-tasks/label-scan @ WarehouseTallyLabelController.apply",
       "permission",
       [
         "warehouse:tally-label:scan-apply"
       ],
-      "DataController.applyWarehouseTallyTaskLabel"
+      "WarehouseTallyLabelController.apply"
     ],
     [
       "PUT /auth/profile @ AuthController.updateProfile",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 271,
+    "dataControllerRoutesMax": 267,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3385,12 +3385,12 @@
       "apps/api/src/modules/notifications/notification.types.ts = apps/web/src/modules/notifications/notificationTypes.ts"
     ],
     "knownDuplicateRouteGroups": [],
-    "prismaRepositoryMethodsMax": 713,
-    "inMemoryRepositoryMethodsMax": 599,
+    "prismaRepositoryMethodsMax": 712,
+    "inMemoryRepositoryMethodsMax": 598,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 32134,
-      "apps/api/src/modules/in-memory.repository.ts": 19600,
-      "apps/api/src/modules/data.controller.ts": 3021,
+      "apps/api/src/modules/prisma.repository.ts": 32122,
+      "apps/api/src/modules/in-memory.repository.ts": 19588,
+      "apps/api/src/modules/data.controller.ts": 2996,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,
