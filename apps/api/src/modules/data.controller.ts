@@ -2370,13 +2370,13 @@ export class DataController {
     @Param('id') id: string,
     @Body() body: WarehouseTallyTaskCompletedCountUpdateInput
   ) {
-    return this.repository.updateCompletedWarehouseTallyTaskCount(request.user, id, body);
+    return this.warehouseTallyLifecycle.updateCompletedCount(request.user, id, body);
   }
 
   @Post('warehouse/tally-tasks/:id/reverse-review')
   @RequirePermission('warehouse:tally-completed:reverse-review')
   async reverseReviewWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.reverseReviewWarehouseTallyTask(request.user, id);
+    return this.warehouseTallyLifecycle.reverseReview(request.user, id);
   }
 
   @Post('warehouse/tally-tasks/:id/cancel-completed')

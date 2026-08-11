@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import type { Principal } from '../../rbac.js';
 import {
   WAREHOUSE_TALLY_LIFECYCLE_REPOSITORY,
@@ -47,5 +47,20 @@ export class WarehouseTallyLifecycleService {
 
   cancelCompleted(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput) {
     return this.repository.cancelCompletedWarehouseTallyTask(principal, id, input);
+  }
+
+  updateCompletedCount(
+    principal: Principal,
+    id: string,
+    input: unknown
+  ): never {
+    void principal;
+    void id;
+    void input;
+    throw new BadRequestException('已完成理货不允许直接修改件数，请先反审核');
+  }
+
+  reverseReview(principal: Principal, id: string) {
+    return this.repository.reverseReviewWarehouseTallyTask(principal, id);
   }
 }

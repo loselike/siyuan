@@ -338,7 +338,6 @@ import {
   type WarehouseTallyLabelScanInput,
   type WarehouseTallyLabelScanResponse,
   type WarehouseTallyTaskCompleteInput,
-  type WarehouseTallyTaskCompletedCountUpdateInput,
   type WarehouseTallyTaskCancelInput,
   type WarehouseTallyTaskPackageResultInput,
   type WarehouseTallyTaskCreateInput,
@@ -7116,17 +7115,6 @@ export class InMemoryRepository {
       archiveReason: WAREHOUSE_TALLY_REVERSE_REVIEW_ARCHIVE_REASON
     });
     return cloneWarehouseTallyTask(updated);
-  }
-
-  async updateCompletedWarehouseTallyTaskCount(
-    principal: Principal,
-    id: string,
-    input: WarehouseTallyTaskCompletedCountUpdateInput
-  ): Promise<WarehouseTallyTaskSummary> {
-    void principal;
-    void id;
-    void input;
-    throw new BadRequestException('已完成理货不允许直接修改件数，请先反审核');
   }
 
   async completeWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {

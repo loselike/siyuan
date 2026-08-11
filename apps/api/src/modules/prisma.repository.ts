@@ -393,7 +393,6 @@ import {
   type WarehouseTallyHistoricalAggregateCorrectionResult,
   type WarehouseTallyTaskCompleteInput,
   type WarehouseTallyTaskCancelInput,
-  type WarehouseTallyTaskCompletedCountUpdateInput,
   type WarehouseTallyTaskPackageResultInput,
   type WarehouseTallyTaskCreateInput,
   type WarehouseTallyRepeatStatisticsQuery,
@@ -10015,17 +10014,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       });
       return mapWarehouseTallyTask(updated);
     });
-  }
-
-  async updateCompletedWarehouseTallyTaskCount(
-    principal: Principal,
-    id: string,
-    input: WarehouseTallyTaskCompletedCountUpdateInput
-  ): Promise<WarehouseTallyTaskSummary> {
-    void principal;
-    void id;
-    void input;
-    throw new BadRequestException('已完成理货不允许直接修改件数，请先反审核');
   }
 
   async completeWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {

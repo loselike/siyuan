@@ -15,6 +15,7 @@ function repositoryStub(
     startWarehouseTallyTask: vi.fn(),
     cancelWarehouseTallyTask: vi.fn(),
     completeWarehouseTallyTask: vi.fn(),
+    reverseReviewWarehouseTallyTask: vi.fn(),
     cancelCompletedWarehouseTallyTask: vi.fn(),
     ...overrides
   };
@@ -29,6 +30,7 @@ describe('WarehouseTallyLifecycleService', () => {
       startWarehouseTallyTask: vi.fn().mockResolvedValue(task),
       cancelWarehouseTallyTask: vi.fn().mockResolvedValue(task),
       completeWarehouseTallyTask: vi.fn().mockResolvedValue(task),
+      reverseReviewWarehouseTallyTask: vi.fn().mockResolvedValue(task),
       cancelCompletedWarehouseTallyTask: vi.fn().mockResolvedValue(task)
     });
     const service = new WarehouseTallyLifecycleService(repository);
@@ -49,13 +51,23 @@ describe('WarehouseTallyLifecycleService', () => {
     await expect(service.start(principal, 'tally-1')).resolves.toBe(task);
     await expect(service.cancel(principal, 'tally-1')).resolves.toBe(task);
     await expect(service.complete(principal, 'tally-1', completeInput)).resolves.toBe(task);
+    await expect(service.reverseReview(principal, 'tally-1')).resolves.toBe(task);
     await expect(service.cancelCompleted(principal, 'tally-1', input)).resolves.toBe(task);
     expect(repository.createWarehouseTallyTask).toHaveBeenCalledWith(principal, createInput);
     expect(repository.updateWarehouseTallyTask).toHaveBeenCalledWith(principal, 'tally-1', updateInput);
     expect(repository.startWarehouseTallyTask).toHaveBeenCalledWith(principal, 'tally-1');
     expect(repository.cancelWarehouseTallyTask).toHaveBeenCalledWith(principal, 'tally-1');
     expect(repository.completeWarehouseTallyTask).toHaveBeenCalledWith(principal, 'tally-1', completeInput);
+    expect(repository.reverseReviewWarehouseTallyTask).toHaveBeenCalledWith(principal, 'tally-1');
     expect(repository.cancelCompletedWarehouseTallyTask).toHaveBeenCalledWith(principal, 'tally-1', input);
+  });
+
+  it('keeps completed-count updates rejected before repository access', () => {
+    const repository = repositoryStub();
+    const service = new WarehouseTallyLifecycleService(repository);
+
+    expect(() => service.updateCompletedCount(principal, 'tally-1', { packageCount: 2 }))
+      .toThrow('已完成理货不允许直接修改件数，请先反审核');
   });
 
   it('does not translate repository errors', async () => {
