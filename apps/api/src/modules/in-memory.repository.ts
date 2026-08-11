@@ -5,6 +5,11 @@ import { basename, extname, join } from 'node:path';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
 import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
 import {
+  normalizeWaterReceiptCurrency,
+  normalizeWaterReceiptMatchAmountCurrency,
+  planWaterReceiptMatchAmount
+} from './finance/water-receipt/water-receipt-match.policy.js';
+import {
   buildWarehouseMachineImportResponse,
   warehouseMachineImportKey,
   type ParsedWarehouseMachineImport
@@ -8137,8 +8142,7 @@ export class InMemoryRepository {
     const receipt = this.findWaterReceiptById(id);
     await this.ensureWaterReceiptMatchAccess(principal, receipt);
     if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(receipt.status)) throw new BadRequestException('水单未到账，不能匹配订单');
-    const amountCurrency = input.amountCurrency ?? 'SOURCE';
-    if (!['SOURCE', 'RMB'].includes(amountCurrency)) throw new BadRequestException('匹配金额币种无效');
+    const amountCurrency = normalizeWaterReceiptMatchAmountCurrency(input.amountCurrency);
     const receiptCurrency = this.normalizeWaterReceiptCurrency(receipt.currency);
     const receiptExchangeRate = amountCurrency === 'RMB'
       ? this.resolveWaterReceiptRmbExchangeRate(receiptCurrency)
@@ -8154,37 +8158,26 @@ export class InMemoryRepository {
       const item = sourceType === 'MANUAL' ? this.findReceivableFinanceItemById(receivableId) : undefined;
       const shipment = this.shipments.find((row) => row.id === (systemFee?.shipmentId ?? item?.shipmentId));
       const receivable = systemFee ?? item;
-      const submittedAmount = Number(match.amount);
-      if (!Number.isFinite(submittedAmount) || submittedAmount <= 0) throw new BadRequestException('匹配金额必须大于 0');
       const receivableCurrency = this.normalizeWaterReceiptCurrency(receivable?.currency);
       const receivableExchangeRate = amountCurrency === 'RMB'
         ? this.resolveWaterReceiptRmbExchangeRate(receivableCurrency)
         : 1;
-      if (receivableCurrency !== receiptCurrency) throw new BadRequestException('水单币种与应收币种不一致');
-      const expectedRate = receiptCurrency !== 'RMB'
-        ? receiptExchangeRate
-        : receivableCurrency !== 'RMB'
-          ? receivableExchangeRate
-          : 1;
-      if (amountCurrency === 'RMB') {
-        const submittedRate = Number(input.exchangeRate);
-        if (!Number.isFinite(submittedRate) || submittedRate <= 0 || Math.abs(submittedRate - expectedRate) > 0.000001) {
-          throw new ConflictException('汇率已更新，请刷新后重新匹配');
-        }
-      }
-      const rmbAmount = amountCurrency === 'RMB' ? roundMoney(submittedAmount) : undefined;
-      const amount = amountCurrency === 'RMB'
-        ? roundMoney(submittedAmount / receiptExchangeRate)
-        : submittedAmount;
-      const receivableAmount = amountCurrency === 'RMB'
-        ? roundMoney(submittedAmount / receivableExchangeRate)
-        : submittedAmount;
+      const amountPlan = planWaterReceiptMatchAmount({
+        amountCurrency,
+        submittedAmount: match.amount,
+        submittedExchangeRate: input.exchangeRate,
+        receiptCurrency,
+        receivableCurrency,
+        receiptExchangeRate,
+        receivableExchangeRate
+      });
+      const { amount, receivableAmount, rmbAmount } = amountPlan;
       if (!shipment || (systemFee?.customerId ?? shipment.customerId) !== receipt.customerId) throw new BadRequestException('只能匹配同客户编号下的应收');
       if (!receivable) throw new BadRequestException('应收费用不存在');
       if (receivable.voided) throw new BadRequestException('不能匹配已作废的应收');
       if ((receivable.receiptStatus ?? 'UNPAID') === 'RECEIVED' || (receivable.receivedAmount ?? 0) >= receivable.amount) throw new BadRequestException('应收已收满，不能继续匹配');
       const unpaid = roundMoney(receivable.amount - (receivable.receivedAmount ?? 0));
-      if (amountCurrency === 'RMB' && roundMoney(submittedAmount) > roundMoney(unpaid * receivableExchangeRate)) {
+      if (amountCurrency === 'RMB' && Number(rmbAmount) > roundMoney(unpaid * receivableExchangeRate)) {
         throw new BadRequestException('匹配金额不能超过订单未收金额');
       }
       if (!Number.isFinite(receivableAmount) || receivableAmount <= 0 || receivableAmount > unpaid) throw new BadRequestException('匹配金额不能超过订单未收金额');
@@ -8195,12 +8188,7 @@ export class InMemoryRepository {
         item,
         shipment,
         receivable,
-        amount,
-        receivableAmount,
-        rmbAmount,
-        receivableCurrency,
-        receiptExchangeRate,
-        receivableExchangeRate
+        ...amountPlan
       };
     });
     if (amountCurrency === 'RMB' && new Set(resolvedMatches.map((match) => receiptCurrency !== 'RMB' ? match.receiptExchangeRate : match.receivableExchangeRate)).size > 1) {
@@ -15581,14 +15569,11 @@ export class InMemoryRepository {
   }
 
   private normalizeWaterReceiptCurrency(currencyValue?: string): string {
-    const currency = (currencyValue ?? 'RMB').toUpperCase();
-    return currency === 'CNY' ? 'RMB' : currency;
+    return normalizeWaterReceiptCurrency(currencyValue);
   }
 
   private resolveWaterReceiptRmbExchangeRate(currencyValue?: string): number {
-    const currency = (currencyValue ?? 'RMB').toUpperCase() === 'CNY'
-      ? 'RMB'
-      : (currencyValue ?? 'RMB').toUpperCase();
+    const currency = normalizeWaterReceiptCurrency(currencyValue);
     if (currency === 'RMB') return 1;
     if (currency !== 'USD') {
       throw new BadRequestException(`暂不支持 ${currencyValue} 水单折算 RMB`);

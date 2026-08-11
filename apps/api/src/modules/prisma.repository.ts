@@ -16,6 +16,11 @@ import {
 import { buildMarketProfitLedgerRows, type MarketProfitLedgerCandidate } from './finance/misc-fee/market-profit-ledger.js';
 import { buildWarehouseProfitLedgerRows, warehouseProfitSettlementSourceWhere, type WarehouseProfitLedgerCandidate } from './finance/misc-fee/warehouse-profit-ledger.js';
 import {
+  normalizeWaterReceiptCurrency,
+  normalizeWaterReceiptMatchAmountCurrency,
+  planWaterReceiptMatchAmount
+} from './finance/water-receipt/water-receipt-match.policy.js';
+import {
   buildFinanceProfitLedgerRows,
   summarizeFinanceProfitLedgerRows,
   type FinanceProfitLedgerCandidate
@@ -11370,8 +11375,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!submittedItems.length || new Set(submittedItems.map((item) => item.id)).size !== submittedItems.length) {
       throw new BadRequestException('匹配申请明细不能为空或重复');
     }
-    const amountCurrency = input.amountCurrency ?? 'SOURCE';
-    if (!['SOURCE', 'RMB'].includes(amountCurrency)) throw new BadRequestException('匹配金额币种无效');
+    const amountCurrency = normalizeWaterReceiptMatchAmountCurrency(input.amountCurrency);
     const receipt = await this.findWaterReceiptById(initialRequest.waterReceiptId);
     const lockedRequestRate = Number(
       initialRequest.receiptExchangeRate && Number(initialRequest.receiptExchangeRate) !== 1
@@ -12322,8 +12326,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!receipt.customerId) throw new BadRequestException('水单缺少客户编号');
     const rawMatches = input.matches ?? [];
     if (!rawMatches.length) throw new BadRequestException('请选择要匹配的应收费用');
-    const amountCurrency = input.amountCurrency ?? 'SOURCE';
-    if (!['SOURCE', 'RMB'].includes(amountCurrency)) throw new BadRequestException('匹配金额币种无效');
+    const amountCurrency = normalizeWaterReceiptMatchAmountCurrency(input.amountCurrency);
     const receiptCurrency = this.normalizeWaterReceiptCurrency(receipt.currency);
     const receiptExchangeRate = amountCurrency === 'RMB'
       ? await this.resolveWaterReceiptRmbExchangeRate(receiptCurrency)
@@ -12342,38 +12345,29 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     ]);
     const manualMap = new Map<string, any>(manualItems.map((item: any) => [item.id, item]));
     const systemMap = new Map<string, any>(systemFees.map((item: any) => [item.id, item]));
-    const submittedRate = amountCurrency === 'RMB' ? Number(input.exchangeRate ?? 1) : undefined;
     const matches = await Promise.all(rawMatches.map(async (row) => {
       const receivableId = row.receivableId ?? row.receivableFinanceItemId!;
       const sourceType = row.receivableSourceType ?? (systemMap.has(receivableId) ? 'SYSTEM' : 'MANUAL');
       const receivable = sourceType === 'SYSTEM' ? systemMap.get(receivableId) : manualMap.get(receivableId);
       if (!receivable) throw new BadRequestException('应收费用不存在');
-      const submittedAmount = Number(row.amount);
-      if (!Number.isFinite(submittedAmount) || submittedAmount <= 0) throw new BadRequestException('匹配金额必须大于 0');
       const receivableCurrency = this.normalizeWaterReceiptCurrency(receivable.currency);
       const receivableExchangeRate = amountCurrency === 'RMB'
         ? await this.resolveWaterReceiptRmbExchangeRate(receivableCurrency)
         : 1;
-      if (receivableCurrency !== receiptCurrency) throw new BadRequestException('水单币种与应收币种不一致');
-      const expectedRate = receiptCurrency !== 'RMB'
-        ? receiptExchangeRate
-        : receivableCurrency !== 'RMB'
-          ? receivableExchangeRate
-          : 1;
-      if (amountCurrency === 'RMB' && (!Number.isFinite(submittedRate) || submittedRate! <= 0 || Math.abs(submittedRate! - expectedRate) > 0.000001)) {
-        throw new ConflictException('汇率已更新，请刷新后重新匹配');
-      }
-      const rmbAmount = amountCurrency === 'RMB' ? roundMoney(submittedAmount) : undefined;
+      const amountPlan = planWaterReceiptMatchAmount({
+        amountCurrency,
+        submittedAmount: row.amount,
+        submittedExchangeRate: input.exchangeRate,
+        receiptCurrency,
+        receivableCurrency,
+        receiptExchangeRate,
+        receivableExchangeRate
+      });
       return {
         receivableId,
         sourceType,
         receivable,
-        amount: amountCurrency === 'RMB' ? roundMoney(submittedAmount / receiptExchangeRate) : submittedAmount,
-        receivableAmount: amountCurrency === 'RMB' ? roundMoney(submittedAmount / receivableExchangeRate) : submittedAmount,
-        rmbAmount,
-        receiptExchangeRate,
-        receivableExchangeRate,
-        receivableCurrency
+        ...amountPlan
       };
     }));
     if (amountCurrency === 'RMB' && new Set(matches.map((match) => receiptCurrency !== 'RMB' ? match.receiptExchangeRate : match.receivableExchangeRate)).size > 1) {
@@ -22463,14 +22457,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private normalizeWaterReceiptCurrency(currencyValue?: string): string {
-    const currency = (currencyValue ?? 'RMB').toUpperCase();
-    return currency === 'CNY' ? 'RMB' : currency;
+    return normalizeWaterReceiptCurrency(currencyValue);
   }
 
   private async resolveWaterReceiptRmbExchangeRate(currencyValue?: string): Promise<number> {
-    const currency = (currencyValue ?? 'RMB').toUpperCase() === 'CNY'
-      ? 'RMB'
-      : (currencyValue ?? 'RMB').toUpperCase();
+    const currency = normalizeWaterReceiptCurrency(currencyValue);
     if (currency === 'RMB') return 1;
     if (currency !== 'USD') {
       throw new BadRequestException(`暂不支持 ${currencyValue} 水单折算 RMB`);
