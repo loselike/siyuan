@@ -188,7 +188,13 @@
         {
           "path": "apps/web/src/App.tsx",
           "requiredImports": [
-            "./modules/problemTickets/problemTicketClient"
+            "./modules/appShell/workspaceRefresh"
+          ]
+        },
+        {
+          "path": "apps/web/src/modules/appShell/workspaceRefresh.ts",
+          "requiredImports": [
+            "../problemTickets/problemTicketClient"
           ]
         },
         {

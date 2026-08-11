@@ -146,7 +146,6 @@ import {
 import { MasterDataPage } from './modules/masterData/MasterDataPage';
 import { PricingPage } from './modules/pricing/PricingPage';
 import { ProblemTicketsPage } from './modules/problemTickets/ProblemTicketsPage';
-import { loadProblemTickets } from './modules/problemTickets/problemTicketClient';
 import { ReportsPage } from './modules/reports/ReportsPage';
 import { SettingsPage } from './modules/settings/SettingsPage';
 import { TrackingPage } from './modules/tracking/TrackingPage';
@@ -162,6 +161,7 @@ import { ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, Managed
 import { configureAccountTablePreferences } from './modules/shared/tablePreferences';
 
 import { CustomerServicePage, FinancePage, MiscFeesPage, WarehousePage, loadCustomerServicePage, loadFinancePage, loadMiscFeesPage, loadWarehousePage } from './modules/appShell/pageLoaders';
+import { refreshWorkspaceData } from './modules/appShell/workspaceRefresh';
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -900,62 +900,25 @@ export function App() {
     const currentPathRoute = parseStaffAppRoute(window.location.pathname);
     const skipIrrelevantWorkspaceData = isCustomerServiceDataConfirm
       || (currentPathRoute?.menuKey === 'customerService' && (currentPathRoute.sectionKey === 'data-confirm' || currentPathRoute.sectionKey === 'dataConfirm'));
-    const permissionSet = new Set(permissions);
-    const canReadFinance = !skipIrrelevantWorkspaceData && permissions.some((permission) => permission.startsWith('finance:'));
-    const canReadBusinessCosts = !skipIrrelevantWorkspaceData && permissionSet.has('finance:business-cost:read');
-    const canReadInternalFinance = !skipIrrelevantWorkspaceData && permissionSet.has('finance:payable:read');
-    const canReadCarrierTasks = !skipIrrelevantWorkspaceData && permissionSet.has('tracking:carrier-task:view') && user?.role !== 'CUSTOMER';
-    const canReadMasterData = !skipIrrelevantWorkspaceData && permissions.some((permission) => permission.startsWith('master-data:') && permission.endsWith(':read'));
-    const canReadProblems = !skipIrrelevantWorkspaceData && permissionSet.has('customer-service:problem:view');
-    const canReadBusinessShipments = !skipIrrelevantWorkspaceData && permissionSet.has('business:shipment:list');
-    const canReadWarehouseDispatch = !skipIrrelevantWorkspaceData && (permissionSet.has('warehouse:dispatch-pending:view') || permissionSet.has('warehouse:outbounded:view'));
-    const [nextShipments, nextTickets] = await Promise.all([
-      canReadBusinessShipments
-        ? client.shipments()
-        : canReadWarehouseDispatch
-          ? client.warehouseDispatchShipments()
-          : Promise.resolve([]),
-      canReadProblems ? loadProblemTickets(client) : Promise.resolve([])
-    ]);
-    setLocalShipments(nextShipments);
-    setProblemTickets(nextTickets);
-    if (canReadFinance || canReadBusinessCosts) {
-      const [nextReceivables, nextBusinessCosts, nextPayables, nextStatements, nextAccounts, nextLedger] = await Promise.all([
-        canReadFinance ? client.receivableAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-        canReadBusinessCosts ? client.businessCostAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-        canReadInternalFinance ? client.payableAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-        canReadFinance ? client.customerStatements().catch(() => []) : Promise.resolve([]),
-        canReadFinance ? client.customerAccounts().catch(() => []) : Promise.resolve([]),
-        canReadFinance ? client.accountLedger().catch(() => []) : Promise.resolve([])
-      ]);
-      setReceivables(nextReceivables.rows);
-      setBusinessCostAudits(nextBusinessCosts.rows);
-      setPayableAudits(nextPayables.rows);
-      setCustomerStatements(nextStatements);
-      setCustomerAccounts(nextAccounts);
-      setAccountLedger(nextLedger);
-    } else {
-      setReceivables([]);
-      setBusinessCostAudits([]);
-      setPayableAudits([]);
-      setCustomerStatements([]);
-      setCustomerAccounts([]);
-      setAccountLedger([]);
-    }
-    if (canReadCarrierTasks) {
-      try {
-        setCarrierTasks(await client.carrierTaskQuery.carrierTasks());
-      } catch {
-        setCarrierTasks([]);
+    await refreshWorkspaceData({
+      client,
+      user,
+      permissions,
+      skipIrrelevantWorkspaceData,
+      emptyMasterData,
+      writers: {
+        setShipments: setLocalShipments,
+        setProblemTickets,
+        setReceivables,
+        setBusinessCostAudits,
+        setPayableAudits,
+        setCustomerStatements,
+        setCustomerAccounts,
+        setAccountLedger,
+        setCarrierTasks,
+        setMasterData
       }
-    } else {
-      setCarrierTasks([]);
-    }
-    if (canReadMasterData) {
-      setMasterData(await client.masterData());
-    } else {
-      setMasterData(emptyMasterData);
-    }
+    });
   }
 
   async function handleLogin(username: string, password: string, captchaId: string, captchaCode: string) {
