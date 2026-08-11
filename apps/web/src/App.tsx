@@ -8,7 +8,6 @@ import {
   Col,
   ConfigProvider,
   App as AntdApp,
-  Flex,
   Form,
   Input,
   InputNumber,
@@ -27,9 +26,6 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  Bot,
-  ChevronDown,
-  ChevronRight,
   CircleDollarSign,
   ClipboardCheck,
   FileDown,
@@ -84,6 +80,7 @@ import { mergeShipmentListRecord } from './modules/shared/shipmentState';
 import { canViewOrderLifecycleBusinessCosts } from './modules/shared/businessCostAccess';
 import { LoginPage } from './modules/auth/LoginPage';
 import { AppPageBoundary, type PageRenderErrorReport } from './modules/appShell/AppPageBoundary';
+import { StaffSidebar } from './modules/appShell/StaffSidebar';
 import {
   appTheme,
   businessWorkspaceConfigs,
@@ -93,8 +90,6 @@ import {
   editableShipmentStatuses,
   emptyMasterData,
   getShipmentLifecycleStageCount,
-  getStaffModuleHref,
-  getStaffSectionHref,
   importCheckRows,
   isShipmentColumnOrderMode,
   menuItems,
@@ -170,7 +165,7 @@ import { useCurrentSessionRefresh } from './modules/appShell/useCurrentSessionRe
 import { useNotificationNavigation } from './modules/appShell/useNotificationNavigation';
 import { refreshWorkspaceData } from './modules/appShell/workspaceRefresh';
 
-const { Header, Sider, Content } = Layout;
+const { Header, Content } = Layout;
 const { Text } = Typography;
 
 function normalizeRoutingAgentChannelName(value: string | undefined) {
@@ -191,9 +186,6 @@ interface ShipmentOperationLog {
 
 type ShipmentLogViewMode = 'operation' | 'routing';
 type ShipmentEditSource = 'operation' | 'operationsPool' | 'routing';
-function formatNavigationUnreadCount(count: number) {
-  return count > 999 ? '999+' : String(count);
-}
 
 export function App() {
   const [outboundOrderForm] = Form.useForm<OutboundOrderFormValues>();
@@ -349,10 +341,6 @@ export function App() {
   const visibleMenuItems = useMemo(
     () => menuItems.filter((item) => visibleMenuKeys.includes(item.key)),
     [visibleMenuKeys]
-  );
-  const navigationUnreadByKey = useMemo(
-    () => new Map(navigationUnreadBadges.map((item) => [`${item.moduleKey}:${item.sectionKey ?? ''}`, item.unreadCount])),
-    [navigationUnreadBadges]
   );
   const currentMenuKey = useMemo<MenuKey>(
     () =>
@@ -2563,86 +2551,17 @@ export function App() {
         <a className="skip-link" href="#main-content">
           跳到主内容
         </a>
-        <Sider className="sidebar" width={196}>
-          <button type="button" className="brand" aria-label="返回运营工作台" onClick={handleBrandClick}>
-            <div className="brand-mark brand-logo-mark">
-              <img src="/green-cargo-logo.png" alt="Green Cargo 思远物流标识" width={66} height={36} />
-            </div>
-            <div>
-              <Text className="brand-title">思远物流</Text>
-              <Text className="brand-subtitle">AI TMS / OMS</Text>
-            </div>
-          </button>
-          <nav className="side-nav" role="menu" aria-label="员工端主导航">
-            {visibleMenuItems.map((item) => {
-              const isActive = currentMenuKey === item.key;
-              const subNav = sidebarSubNav?.parentKey === item.key ? sidebarSubNav : null;
-              const hasSubNav = Boolean(subNav?.items.length);
-              const isExpanded = isActive && expandedMenuKey === item.key && hasSubNav;
-              const moduleUnreadCount = navigationUnreadByKey.get(`${item.key}:`) ?? 0;
-
-              return (
-                <div className="side-nav-group" key={item.key}>
-                  <a
-                    href={getStaffModuleHref(item.key)}
-                    role="menuitem"
-                    className={`side-nav-item${isActive ? ' is-active' : ''}`}
-                    aria-label={item.label}
-                    aria-expanded={hasSubNav ? isExpanded : undefined}
-                    onClick={(event) => handlePrimaryMenuClick(event, item.key)}
-                  >
-                    <span className="side-nav-icon">{item.icon}</span>
-                    <span className="side-nav-label">{item.label}</span>
-                    <span className="side-nav-meta" aria-hidden="true">
-                      {moduleUnreadCount > 0 && !isExpanded ? (
-                        <span className="side-nav-unread-dot" title={`${formatNavigationUnreadCount(moduleUnreadCount)} 条未读变化`} />
-                      ) : null}
-                      {hasSubNav ? (
-                        <span className="side-nav-chevron">
-                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                        </span>
-                      ) : null}
-                    </span>
-                  </a>
-                  {isExpanded && subNav ? (
-                    <div className="side-sub-nav" role="group" aria-label={`${item.label}二级功能`}>
-                      {subNav.items.map((subItem) => (
-                        (() => {
-                          const unreadCount = navigationUnreadByKey.get(`${item.key}:${subItem.key}`) ?? 0;
-                          return (
-                            <a
-                              href={getStaffSectionHref(item.key, subItem.key)}
-                              key={subItem.key}
-                              role="button"
-                              className={`side-sub-nav-item${subItem.key === activeSectionKey ? ' is-active' : ''}`}
-                              aria-current={subItem.key === activeSectionKey ? 'page' : undefined}
-                              onClick={(event) => handleSecondaryMenuClick(event, item.key, subItem.key)}
-                            >
-                              <span className="side-sub-nav-label">{subItem.label}</span>
-                              {unreadCount > 0 ? (
-                                <span className="side-sub-nav-unread-count" aria-hidden="true" title={`${formatNavigationUnreadCount(unreadCount)} 条未读变化`}>
-                                  {formatNavigationUnreadCount(unreadCount)}
-                                </span>
-                              ) : null}
-                            </a>
-                          );
-                        })()
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </nav>
-          <Card className="sidebar-card" size="small">
-            <Space direction="vertical" size={8}>
-              <Flex align="center" gap={8}>
-                <Bot size={16} />
-                <Text strong>AI 助手在线</Text>
-              </Flex>
-            </Space>
-          </Card>
-        </Sider>
+        <StaffSidebar
+          activeSectionKey={activeSectionKey}
+          currentMenuKey={currentMenuKey}
+          expandedMenuKey={expandedMenuKey}
+          items={visibleMenuItems}
+          navigationUnreadBadges={navigationUnreadBadges}
+          sidebarSubNav={sidebarSubNav}
+          onBrandClick={handleBrandClick}
+          onPrimaryMenuClick={handlePrimaryMenuClick}
+          onSecondaryMenuClick={handleSecondaryMenuClick}
+        />
         <Layout>
           <Header className="topbar">
             <Space className="business-switch" role="group" aria-label="业务类型">

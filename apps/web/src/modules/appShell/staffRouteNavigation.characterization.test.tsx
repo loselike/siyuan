@@ -69,4 +69,28 @@ describe('staff route navigation characterization', () => {
     await waitFor(() => expect(globalThis.location.pathname).toBe('/app/workspace/shipment-pool'));
     expect(screen.getByRole('menuitem', { name: '运营工作台' })).toHaveClass('is-active');
   });
+
+  it('preserves the sidebar brand, information hierarchy, and unread presentation', async () => {
+    globalThis.history.replaceState(null, '', '/app/workspace/shipment-pool');
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    const brandButton = screen.getByRole('button', { name: '返回运营工作台' });
+    expect(within(brandButton).getByAltText('Green Cargo 思远物流标识')).toHaveAttribute('src', '/green-cargo-logo.png');
+    expect(within(brandButton).getByText('思远物流')).toBeInTheDocument();
+    expect(within(brandButton).getByText('AI TMS / OMS')).toBeInTheDocument();
+    expect(screen.getByText('AI 助手在线')).toBeInTheDocument();
+
+    const customerServiceMenu = screen.getByRole('menuitem', { name: '客服管理' });
+    const collapsedUnreadDot = customerServiceMenu.querySelector('.side-nav-unread-dot');
+    expect(collapsedUnreadDot).toHaveAttribute('title', '3 条未读变化');
+    expect(customerServiceMenu).not.toHaveAttribute('aria-expanded');
+
+    await user.click(customerServiceMenu);
+    const customerServiceSubNav = await screen.findByRole('group', { name: '客服管理二级功能' });
+    expect(customerServiceMenu).toHaveAttribute('aria-expanded', 'true');
+    expect(customerServiceMenu.querySelector('.side-nav-unread-dot')).toBeNull();
+    const pendingRoutingLink = within(customerServiceSubNav).getByRole('button', { name: '待排货' });
+    expect(within(pendingRoutingLink).getByText('1')).toHaveAttribute('title', '1 条未读变化');
+  });
 });
