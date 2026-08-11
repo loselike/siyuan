@@ -3496,7 +3496,7 @@ describe('Siyuan API pricing', () => {
           expect.objectContaining({
             agentName: '混合加价代理',
             markupDisplayMode: 'MIXED',
-            markupRange: '+¥0.10-0.50/kg',
+            markupRange: '+¥0.10-0.50/KG',
             markupBuckets: expect.arrayContaining([
               expect.objectContaining({ markupPerKg: 0.1, lineCount: 1 }),
               expect.objectContaining({ markupPerKg: 0.5, lineCount: 1 })

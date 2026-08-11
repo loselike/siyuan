@@ -428,7 +428,7 @@ import {
 import { generateTemporaryPassword, getPasswordStrengthError, hashPassword, passwordHashNeedsRehash, verifyPassword } from './password.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildAgentMarkupListResponse, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, shouldIncludeAgentMarkupHits, textMatch, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { mapPriceBook, mapPriceBookImportJob } from './pricing/price-book/price-book-query.mapper.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { isShipmentReceivableFullySettled } from './finance/misc-fee/delivery-settlement.js';
@@ -29797,142 +29797,10 @@ function buildDubaiSeaImageMarkupRule(input: {
   };
 }
 
-function buildAgentMarkupListResponse(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[], query: AgentMarkupListQuery): AgentMarkupListResponse {
-  const includeHits = shouldIncludeAgentMarkupHits(query);
-  const activeRows = rules.filter((rule) => !rule.deletedAt);
-  const enriched = includeHits ? activeRows.map((rule) => {
-    const matches = matchingPriceRowsForRule(rule, priceRows);
-    return { ...rule, hitCount: matches.length, routeHitCount: countDistinctMarkupRoutes(matches) };
-  }) : activeRows;
-  const scoped = enriched
-    .filter((rule) => textMatch(rule.priceBookId ?? '', query.priceBookId))
-    .filter((rule) => textMatch(rule.agentName, query.agentName))
-    .sort((left, right) => compareAgentMarkupRules(left, right, query));
-  const page = Math.max(1, Number(query.page ?? 1));
-  const pageSize = Number(query.pageSize ?? 20);
-  const grouped = query.detail
-    ? scoped
-      .filter((rule) => textMatch(rule.channelName ?? '', query.channelName))
-      .filter((rule) => textMatch(rule.realChannelName ?? '', query.realChannelName))
-      .filter((rule) => textMatch(rule.destinationCountry ?? '', query.destinationCountry))
-      .filter((rule) => query.status === 'ENABLED' ? rule.enabled : query.status === 'DISABLED' ? !rule.enabled : true)
-    : groupAgentMarkupRows(scoped, priceRows)
-      .filter((rule) => query.status === 'ENABLED' ? rule.enabled : query.status === 'DISABLED' ? !rule.enabled : true)
-      .filter((rule) => agentMarkupGroupMatchesRouteFilters(rule, priceRows, query));
-  const rows = pageSize < 0 ? grouped : grouped.slice((page - 1) * pageSize, page * pageSize);
-  const matchedRows = includeHits ? new Set(enriched.flatMap((rule) => matchingPriceRowsForRule(rule, priceRows).map((row) => row.id))) : new Set<string>();
-  return {
-    metrics: {
-      totalRules: activeRows.length,
-      enabledRules: activeRows.filter((rule) => rule.enabled).length,
-      disabledRules: activeRows.filter((rule) => !rule.enabled).length,
-      unmatchedQuotes: includeHits ? priceRows.filter((row) => !matchedRows.has(row.id)).length : 0,
-      systemDefaultScopes: new Set(activeRows.filter((rule) => rule.defaultRuleSource === 'SYSTEM_DEFAULT').map(agentMarkupScopeKey)).size,
-      latestUpdatedAt: activeRows.map((rule) => rule.updatedAt).filter(Boolean).sort().at(-1)
-    },
-    rows,
-    filterOptions: {
-      agentNames: uniqueTextValues(priceRows.map((row) => row.agentName)),
-      channelNames: uniqueTextValues(priceRows.map((row) => row.channelName)),
-      realChannelNames: uniqueTextValues(priceRows.map((row) => row.realChannelName?.trim() || row.channelName)),
-      destinationCountries: uniqueTextValues(priceRows.map((row) => row.destinationCountry))
-    },
-    pagination: { page, pageSize: pageSize < 0 ? grouped.length : pageSize, totalItems: grouped.length }
-  };
-}
 
-function agentMarkupGroupMatchesRouteFilters(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[], query: AgentMarkupListQuery) {
-  if (!query.channelName && !query.realChannelName && !query.destinationCountry) return true;
-  return priceRows
-    .filter((row) => rule.priceBookId ? row.priceBookId === rule.priceBookId : row.agentName === rule.agentName)
-    .some((row) => textMatch(row.channelName, query.channelName)
-      && textMatch(row.realChannelName?.trim() || row.channelName, query.realChannelName)
-      && textMatch(row.destinationCountry, query.destinationCountry));
-}
 
-function uniqueTextValues(values: Array<string | undefined>) {
-  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))).sort((left, right) => left.localeCompare(right, 'zh-CN'));
-}
 
-function groupAgentMarkupRows(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[]) {
-  const groups = new Map<string, AgentMarkupSummary[]>();
-  for (const rule of rules) {
-    const key = agentMarkupScopeKey(rule);
-    const list = groups.get(key) ?? [];
-    list.push(rule);
-    groups.set(key, list);
-  }
-  return [...groups.entries()].map(([, rows]) => {
-    const enabledRows = rows.filter((rule) => rule.enabled);
-    const effectiveRows = enabledRows.length ? enabledRows : rows;
-    const sorted = [...effectiveRows].sort((left, right) => markupScopeRank(left) - markupScopeRank(right) || (left.priority ?? 100) - (right.priority ?? 100) || safeTime(right.updatedAt) - safeTime(left.updatedAt));
-    const primary = sorted[0];
-    const hitIds = new Set(enabledRows.flatMap((rule) => matchingPriceRowsForRule(rule, priceRows).map((row) => row.id)));
-    const latestUpdatedAt = rows.map((rule) => rule.updatedAt).filter(Boolean).sort().at(-1);
-    const display = buildAgentMarkupDisplay(primary, rules, priceRows);
-    return {
-      ...primary,
-      id: primary.priceBookId ? `agent:${primary.priceBookId}:${primary.agentName}` : `agent:${primary.agentName}`,
-      agentName: primary.agentName,
-      channelName: undefined,
-      realChannelName: undefined,
-      destinationCountry: undefined,
-      enabled: rows.some((rule) => rule.enabled),
-      ruleCount: enabledRows.length,
-      hitCount: hitIds.size,
-      ruleBreakdown: buildAgentMarkupRuleBreakdown(enabledRows),
-      ...display,
-      updatedAt: latestUpdatedAt ?? primary.updatedAt
-    };
-  });
-}
 
-function buildAgentMarkupDisplay(primary: AgentMarkupSummary, rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[]) {
-  if (primary.rulePurpose === 'DUBAI_SEA_IMAGE') {
-    const amount = Number(primary.markupValue ?? primary.markupPerKg);
-    return {
-      markupDisplayMode: 'UNIFORM' as const,
-      defaultMarkupDisplay: `+¥${formatMarkupNumber(amount)}/CBM（空运不变）`,
-      markupRange: `+¥${formatMarkupNumber(amount)}/CBM`,
-      markupBuckets: []
-    };
-  }
-  const scopeRows = priceRows.filter((row) => primary.priceBookId ? row.priceBookId === primary.priceBookId : row.agentName === primary.agentName);
-  if (scopeRows.length === 0) {
-    return {
-      markupDisplayMode: 'RETAINED_ONLY' as const,
-      defaultMarkupDisplay: '仅保留规则',
-      markupRange: undefined,
-      markupBuckets: []
-    };
-  }
-  const buckets = new Map<number, number>();
-  for (const row of scopeRows) {
-    const resolved = resolvePriceBookRowMarkup(row, rules, primary.agentName);
-    const value = roundMoney(Number(resolved.lineMarkupPerKg ?? 0.5));
-    buckets.set(value, (buckets.get(value) ?? 0) + 1);
-  }
-  const markupBuckets = [...buckets.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([markupPerKg, lineCount]) => ({ markupPerKg, lineCount }));
-  if (markupBuckets.length <= 1) {
-    const value = markupBuckets[0]?.markupPerKg ?? primary.markupPerKg;
-    return {
-      markupDisplayMode: 'UNIFORM' as const,
-      defaultMarkupDisplay: formatMarkupPerKg(value),
-      markupRange: formatMarkupPerKg(value),
-      markupBuckets
-    };
-  }
-  const min = markupBuckets[0].markupPerKg;
-  const max = markupBuckets[markupBuckets.length - 1].markupPerKg;
-  return {
-    markupDisplayMode: 'MIXED' as const,
-    defaultMarkupDisplay: '混合加价',
-    markupRange: `+¥${formatMarkupNumber(min)}-${formatMarkupNumber(max)}/KG`,
-    markupBuckets
-  };
-}
 
 function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[], logs: Array<{ action: string; createdAt?: Date | string }>): AgentMarkupPreviewResponse {
   const rows = matchingPriceRowsForRule(rule, priceRows);
@@ -29962,55 +29830,9 @@ function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookR
   };
 }
 
-function countDistinctMarkupRoutes(rows: PriceBookRowSummary[]) {
-  return new Set(rows.map((row) => [
-    row.priceBookId,
-    row.channelName,
-    row.realChannelName?.trim() || row.channelName,
-    row.destinationCountry,
-    markupUnitForRow(row)
-  ].join('\u0001'))).size;
-}
 
-function buildAgentMarkupRuleBreakdown(rules: AgentMarkupSummary[]) {
-  const breakdown = { defaultRules: 0, countryRules: 0, routeRules: 0, routeTierRules: 0, otherRules: 0 };
-  for (const rule of rules) {
-    const hasRoute = Boolean(rule.channelName || rule.realChannelName);
-    const hasTier = Boolean(rule.markupUnit && rule.minChargeableValue !== undefined);
-    if (hasRoute && hasTier) breakdown.routeTierRules += 1;
-    else if (hasRoute) breakdown.routeRules += 1;
-    else if (rule.destinationCountry) breakdown.countryRules += 1;
-    else if (!hasTier) breakdown.defaultRules += 1;
-    else breakdown.otherRules += 1;
-  }
-  return breakdown;
-}
 
-function compareAgentMarkupRules(left: AgentMarkupSummary, right: AgentMarkupSummary, query: AgentMarkupListQuery) {
-  const direction = query.sortOrder === 'desc' ? -1 : 1;
-  const sortBy = query.sortBy;
-  if (!sortBy) return markupScopeRank(left) - markupScopeRank(right) || (left.priority ?? 100) - (right.priority ?? 100) || safeTime(right.updatedAt) - safeTime(left.updatedAt);
-  const stringValue = (rule: AgentMarkupSummary) => String(rule[sortBy as keyof AgentMarkupSummary] ?? '');
-  const numericValue = (rule: AgentMarkupSummary) => sortBy === 'markupValue'
-    ? Number(rule.markupValue ?? rule.markupPerKg ?? 0)
-    : sortBy === 'priority'
-      ? Number(rule.priority ?? 100)
-      : sortBy === 'enabled'
-        ? Number(rule.enabled)
-        : sortBy === 'updatedAt'
-          ? safeTime(rule.updatedAt)
-          : Number.NaN;
-  const leftNumeric = numericValue(left);
-  const rightNumeric = numericValue(right);
-  const compared = Number.isFinite(leftNumeric) && Number.isFinite(rightNumeric)
-    ? leftNumeric - rightNumeric
-    : stringValue(left).localeCompare(stringValue(right), 'zh-CN');
-  return direction * compared || (left.priority ?? 100) - (right.priority ?? 100) || safeTime(right.updatedAt) - safeTime(left.updatedAt);
-}
 
-function textMatch(value: string, keyword?: string) {
-  return !keyword?.trim() || value.toLowerCase().includes(keyword.trim().toLowerCase());
-}
 
 function logPricingLookupTiming(stage: string, startedAt: number, details: Record<string, unknown> = {}) {
   const durationMs = Date.now() - startedAt;
