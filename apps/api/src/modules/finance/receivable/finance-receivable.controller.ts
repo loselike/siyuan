@@ -19,11 +19,15 @@ import type {
 } from '@siyuan/shared';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
+import { WaterReceiptAllocationService } from '../water-receipt/water-receipt-allocation.service.js';
 import { FinanceReceivableService } from './finance-receivable.service.js';
 
 @Controller()
 export class FinanceReceivableController {
-  constructor(@Inject(FinanceReceivableService) private readonly service: FinanceReceivableService) {}
+  constructor(
+    @Inject(FinanceReceivableService) private readonly service: FinanceReceivableService,
+    @Inject(WaterReceiptAllocationService) private readonly waterReceiptAllocationService: WaterReceiptAllocationService
+  ) {}
 
   @Get('finance/receivables')
   @RequirePermission(['finance:receivable:read', 'finance:customer-account:read'])
@@ -147,13 +151,13 @@ export class FinanceReceivableController {
   @Post('finance/receivable-audits/:id/match-receipt')
   @RequirePermission('finance:water-match:create')
   async matchReceivableReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ReceivableReceiptMatchInput) {
-    return this.service.matchReceivableReceipt(request.user, id, body);
+    return this.waterReceiptAllocationService.matchReceivableReceipt(request.user, id, body);
   }
 
   @Get('finance/receivable-audits/:id/water-receipt-candidates')
   @RequirePermission(['finance:receivable:match-water', 'finance:water-match:receivable-view', 'finance:water-match:create'])
   async receivableWaterReceiptCandidates(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.service.receivableWaterReceiptCandidates(request.user, id);
+    return this.waterReceiptAllocationService.listReceivableWaterReceiptCandidates(request.user, id);
   }
 
   @Post('finance/receivable-audits/export')
@@ -195,19 +199,19 @@ export class FinanceReceivableController {
   @Get('finance/water-receipts/:id/matchable-receivables')
   @RequirePermission('finance:water-match:receivable-view')
   async waterReceiptMatchableReceivables(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.service.waterReceiptMatchableReceivables(request.user, id);
+    return this.waterReceiptAllocationService.listWaterReceiptMatchableReceivables(request.user, id);
   }
 
   @Post('finance/water-receipts/:id/match-orders')
   @RequirePermission('finance:water-receipt:match')
   async matchWaterReceiptOrders(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptMatchOrdersInput) {
-    return this.service.matchWaterReceiptOrders(request.user, id, body);
+    return this.waterReceiptAllocationService.matchWaterReceiptOrders(request.user, id, body);
   }
 
   @Post('finance/water-receipts/:id/unmatch')
   @RequirePermission('finance:water-match:cancel')
   async unmatchWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptUnmatchInput) {
-    return this.service.unmatchWaterReceipt(request.user, id, body);
+    return this.waterReceiptAllocationService.unmatchWaterReceipt(request.user, id, body);
   }
 
   @Post('finance/water-receipts/:id/archive')

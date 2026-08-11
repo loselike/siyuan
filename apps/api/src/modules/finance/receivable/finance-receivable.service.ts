@@ -8,13 +8,10 @@ import type {
   ReceivableMatchRequestBatchInput,
   ReceivableMatchRequestUpdateInput,
   ReceivableMatchReviewInput,
-  ReceivableReceiptMatchInput,
   WaterReceiptCreateInput,
   WaterReceiptExportRequest,
   WaterReceiptListQuery,
   WaterReceiptMarkArrivedInput,
-  WaterReceiptMatchOrdersInput,
-  WaterReceiptUnmatchInput,
   WaterReceiptUpdateInput
 } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
@@ -105,14 +102,6 @@ export class FinanceReceivableService {
     return this.repository.batchVoidReceivableAudits(principal, input);
   }
 
-  matchReceivableReceipt(principal: Principal, id: string, input: ReceivableReceiptMatchInput) {
-    return this.repository.matchReceivableReceipt(principal, id, input);
-  }
-
-  receivableWaterReceiptCandidates(principal: Principal, id: string) {
-    return this.repository.getReceivableWaterReceiptCandidates(principal, id);
-  }
-
   exportReceivableAudits(principal: Principal, input: ReceivableAuditExportRequest) {
     return this.repository.exportReceivableAudits(principal, input);
   }
@@ -137,18 +126,6 @@ export class FinanceReceivableService {
 
   markWaterReceiptArrived(principal: Principal, id: string, input: WaterReceiptMarkArrivedInput) {
     return this.repository.markWaterReceiptArrived(principal, id, input);
-  }
-
-  waterReceiptMatchableReceivables(principal: Principal, id: string) {
-    return this.repository.getWaterReceiptMatchableReceivables(principal, id);
-  }
-
-  matchWaterReceiptOrders(principal: Principal, id: string, input: WaterReceiptMatchOrdersInput) {
-    return this.repository.matchWaterReceiptOrders(principal, id, input);
-  }
-
-  unmatchWaterReceipt(principal: Principal, id: string, input: WaterReceiptUnmatchInput) {
-    return this.repository.unmatchWaterReceipt(principal, id, input);
   }
 
   archiveWaterReceipt(principal: Principal, id: string) {

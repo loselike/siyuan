@@ -32,6 +32,8 @@ import {
 import { PayerBankAccountService } from './finance/payer-bank/payer-bank-account.service.js';
 import { FinanceReceivableController } from './finance/receivable/finance-receivable.controller.js';
 import { FinanceReceivableService } from './finance/receivable/finance-receivable.service.js';
+import { WATER_RECEIPT_ALLOCATION_REPOSITORY } from './finance/water-receipt/water-receipt-allocation.repository.js';
+import { WaterReceiptAllocationService } from './finance/water-receipt/water-receipt-allocation.service.js';
 import { MiscFeeController } from './finance/misc-fee/misc-fee.controller.js';
 import { MiscFeeService } from './finance/misc-fee/misc-fee.service.js';
 import { InMemoryRepository } from './in-memory.repository.js';
@@ -122,6 +124,11 @@ const financeCatalogAuthorizerProvider = {
   inject: [PrismaRepository]
 };
 
+const waterReceiptAllocationRepositoryProvider = {
+  provide: WATER_RECEIPT_ALLOCATION_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -208,6 +215,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     ProblemTicketQueryService,
     PayerBankAccountService,
     FinanceReceivableService,
+    WaterReceiptAllocationService,
+    waterReceiptAllocationRepositoryProvider,
     WarehouseInventoryQueryService,
     WarehouseTallyQueryService,
     notificationServiceProvider,
