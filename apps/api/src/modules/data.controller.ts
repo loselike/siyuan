@@ -93,8 +93,6 @@ import type {
   PricingQuoteRequest,
   PricingRuleCreateInput,
   PricingRuleQuoteRequest,
-  CommonTagCreateInput,
-  CommonTagUpdateInput,
   ProblemTicketCreateInput,
   ReceivableAdjustmentInput,
   SurchargeCreateInput,
@@ -1044,31 +1042,6 @@ export class DataController {
   @RequirePermission('business:order-fee:unlock')
   async unlockShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
     return this.repository.unlockShipmentFinanceItem(request.user, id, feeId);
-  }
-
-  @Get('customer-service/problem-tags')
-  @RequireAuth()
-  async problemTicketCommonTags(@Req() request: { user: Principal }) {
-    await this.ensureAnyPermission(request.user, ['customer-service:problem:view', 'customer-service:problem:create', 'customer-service:pending-routing:problem-create', 'customer-service:waiting-departure:problem-create', 'customer-service:departed:problem-create', 'customer-service:arrived-port:problem-create', 'customer-service:delivering:problem-create', 'customer-service:delivering:after-sale-create', 'customer-service:signed:after-sale-create', 'operations:line-shipment:problem-create', 'business:shipment:problem-create']);
-    return this.repository.getProblemTicketCommonTags(request.user);
-  }
-
-  @Post('customer-service/problem-tags')
-  @RequirePermission('customer-service:problem:tag-manage')
-  async createProblemTicketCommonTag(@Req() request: { user: Principal }, @Body() body: CommonTagCreateInput) {
-    return this.repository.createProblemTicketCommonTag(request.user, body);
-  }
-
-  @Put('customer-service/problem-tags/:id')
-  @RequirePermission('customer-service:problem:tag-manage')
-  async updateProblemTicketCommonTag(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CommonTagUpdateInput) {
-    return this.repository.updateProblemTicketCommonTag(request.user, id, body);
-  }
-
-  @Delete('customer-service/problem-tags/:id')
-  @RequirePermission('customer-service:problem:tag-manage')
-  async deleteProblemTicketCommonTag(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteProblemTicketCommonTag(request.user, id);
   }
 
   @Post('shipments/:id/problem-tickets')

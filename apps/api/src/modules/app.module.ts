@@ -6,6 +6,9 @@ import { AuditInterceptor } from './audit.interceptor.js';
 import { AuthController } from './auth.controller.js';
 import { HealthController } from './health.controller.js';
 import { CustomerServiceQueryController } from './customer-service/query/customer-service-query.controller.js';
+import { ProblemTicketTagController } from './customer-service/problem-tag/problem-ticket-tag.controller.js';
+import { PROBLEM_TICKET_TAG_REPOSITORY } from './customer-service/problem-tag/problem-ticket-tag.repository.js';
+import { ProblemTicketTagService } from './customer-service/problem-tag/problem-ticket-tag.service.js';
 import { LegacyProblemTicketQueryRepository } from './customer-service/problem-ticket/problem-ticket-query.legacy-repository.js';
 import { PrismaProblemTicketQueryRepository } from './customer-service/problem-ticket/problem-ticket-query.prisma-repository.js';
 import { PROBLEM_TICKET_QUERY_REPOSITORY } from './customer-service/problem-ticket/problem-ticket-query.repository.js';
@@ -245,6 +248,11 @@ const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
 
+const problemTicketTagRepositoryProvider = {
+  provide: PROBLEM_TICKET_TAG_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const payerBankAccountRepositoryProvider = usePrismaRepository
   ? { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: PrismaPayerBankAccountRepository }
   : { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: InMemoryPayerBankAccountRepository };
@@ -309,6 +317,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     MasterDataReferenceQueryController,
     AiController,
     CustomerServiceQueryController,
+    ProblemTicketTagController,
     FinanceCatalogController,
     PayerBankAccountController,
     FinanceReceivableController,
@@ -351,6 +360,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     payerBankAccountRepositoryProvider,
     FinanceCatalogService,
     ProblemTicketQueryService,
+    ProblemTicketTagService,
+    problemTicketTagRepositoryProvider,
     PayerBankAccountService,
     FinanceReceivableService,
     WaterReceiptAllocationService,

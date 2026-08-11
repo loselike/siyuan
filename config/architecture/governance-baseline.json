@@ -8,12 +8,12 @@
   },
   "routes": [
     [
-      "DELETE /customer-service/problem-tags/:id @ DataController.deleteProblemTicketCommonTag",
+      "DELETE /customer-service/problem-tags/:id @ ProblemTicketTagController.deleteProblemTicketCommonTag",
       "permission",
       [
         "customer-service:problem:tag-manage"
       ],
-      "DataController.deleteProblemTicketCommonTag"
+      "ProblemTicketTagController.deleteProblemTicketCommonTag"
     ],
     [
       "DELETE /finance/business-cost-audits/:id @ DataController.deleteBusinessCostAudit",
@@ -304,10 +304,10 @@
       "DataController.customerServiceDataConfirmShipments"
     ],
     [
-      "GET /customer-service/problem-tags @ DataController.problemTicketCommonTags",
+      "GET /customer-service/problem-tags @ ProblemTicketTagController.problemTicketCommonTags",
       "auth",
       [],
-      "DataController.problemTicketCommonTags"
+      "ProblemTicketTagController.problemTicketCommonTags"
     ],
     [
       "GET /customer-service/shipments @ DataController.customerServiceShipments",
@@ -1472,12 +1472,12 @@
       "CarrierTaskCommandController.runCarrierTask"
     ],
     [
-      "POST /customer-service/problem-tags @ DataController.createProblemTicketCommonTag",
+      "POST /customer-service/problem-tags @ ProblemTicketTagController.createProblemTicketCommonTag",
       "permission",
       [
         "customer-service:problem:tag-manage"
       ],
-      "DataController.createProblemTicketCommonTag"
+      "ProblemTicketTagController.createProblemTicketCommonTag"
     ],
     [
       "POST /customer-service/transfer-shipments/fill @ DataController.fillCustomerServiceTransferShipments",
@@ -2969,12 +2969,12 @@
       "AuthController.updateProfile"
     ],
     [
-      "PUT /customer-service/problem-tags/:id @ DataController.updateProblemTicketCommonTag",
+      "PUT /customer-service/problem-tags/:id @ ProblemTicketTagController.updateProblemTicketCommonTag",
       "permission",
       [
         "customer-service:problem:tag-manage"
       ],
-      "DataController.updateProblemTicketCommonTag"
+      "ProblemTicketTagController.updateProblemTicketCommonTag"
     ],
     [
       "PUT /finance/business-cost-audits/:id @ DataController.updateBusinessCostAudit",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 225,
+    "dataControllerRoutesMax": 221,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 32122,
       "apps/api/src/modules/in-memory.repository.ts": 19588,
-      "apps/api/src/modules/data.controller.ts": 2554,
+      "apps/api/src/modules/data.controller.ts": 2527,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,
