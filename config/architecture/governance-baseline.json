@@ -1161,21 +1161,21 @@
       "WarehouseTallyQueryController.warehouseConsolidationItems"
     ],
     [
-      "GET /warehouse/dispatch-shipments @ WarehouseDispatchQueryController.warehouseDispatchShipments",
+      "GET /warehouse/dispatch-shipments @ WarehouseDispatchController.warehouseDispatchShipments",
       "permission",
       [
         "warehouse:dispatch-pending:view",
         "warehouse:outbounded:view"
       ],
-      "WarehouseDispatchQueryController.warehouseDispatchShipments"
+      "WarehouseDispatchController.warehouseDispatchShipments"
     ],
     [
-      "GET /warehouse/handover/:shipmentId @ WarehouseDispatchQueryController.warehouseHandover",
+      "GET /warehouse/handover/:shipmentId @ WarehouseDispatchController.warehouseHandover",
       "permission",
       [
         "warehouse:dispatch-pending:handover-preview"
       ],
-      "WarehouseDispatchQueryController.warehouseHandover"
+      "WarehouseDispatchController.warehouseHandover"
     ],
     [
       "GET /warehouse/in-stock @ WarehouseInventoryQueryController.warehouseInStock",
@@ -1392,12 +1392,12 @@
       "DataController.updateShipmentOperational"
     ],
     [
-      "PATCH /warehouse/dispatch-shipments/:id/declaration @ WarehouseDispatchQueryController.updateWarehouseDispatchDeclaration",
+      "PATCH /warehouse/dispatch-shipments/:id/declaration @ WarehouseDispatchController.updateWarehouseDispatchDeclaration",
       "permission",
       [
         "warehouse:dispatch-pending:declaration-update"
       ],
-      "WarehouseDispatchQueryController.updateWarehouseDispatchDeclaration"
+      "WarehouseDispatchController.updateWarehouseDispatchDeclaration"
     ],
     [
       "PATCH /warehouse/packages/:id @ WarehousePackageLifecycleController.updateWarehousePackage",
@@ -2818,12 +2818,12 @@
       "WarehouseTallyOperationsController.createWarehouseConsolidationShipment"
     ],
     [
-      "POST /warehouse/handover/print @ DataController.printWarehouseHandover",
+      "POST /warehouse/handover/print @ WarehouseDispatchController.printWarehouseHandover",
       "permission",
       [
         "warehouse:dispatch-pending:handover-print"
       ],
-      "DataController.printWarehouseHandover"
+      "WarehouseDispatchController.printWarehouseHandover"
     ],
     [
       "POST /warehouse/packages @ WarehousePackageLifecycleController.createWarehousePackage",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 239,
+    "dataControllerRoutesMax": 238,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 32122,
       "apps/api/src/modules/in-memory.repository.ts": 19588,
-      "apps/api/src/modules/data.controller.ts": 2767,
+      "apps/api/src/modules/data.controller.ts": 2760,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,

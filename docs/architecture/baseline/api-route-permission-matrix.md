@@ -16,7 +16,8 @@
 | platform | POST | `/system/client-errors` | `DataController.reportClientError` | auth | — | `apps/api/src/modules/data.controller.ts:372` |
 | warehouse | POST | `/integrations/mojia/measurements` | `DataController.receiveMojiaMeasurement` | none | — | `apps/api/src/modules/data.controller.ts:404` |
 | shipment-flow | GET | `/shipments` | `DataController.shipments` | permission | `business:shipment:list` | `apps/api/src/modules/data.controller.ts:570` |
-| warehouse | GET | `/warehouse/dispatch-shipments` | `DataController.warehouseDispatchShipments` | permission | `warehouse:dispatch-pending:view`<br>`warehouse:outbounded:view` | `apps/api/src/modules/data.controller.ts:576` |
+| warehouse | GET | `/warehouse/dispatch-shipments` | `WarehouseDispatchController.warehouseDispatchShipments` | permission | `warehouse:dispatch-pending:view`<br>`warehouse:outbounded:view` | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:16` |
+| warehouse | PATCH | `/warehouse/dispatch-shipments/:id/declaration` | `WarehouseDispatchController.updateWarehouseDispatchDeclaration` | permission | `warehouse:dispatch-pending:declaration-update` | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:22` |
 | shipment-flow | GET | `/operations/line-shipments` | `DataController.lineShipments` | permission | `operations:line-shipment:view` | `apps/api/src/modules/data.controller.ts:582` |
 | shipment-flow | GET | `/operations/line-shipments/:id/internal-flow-log` | `DataController.lineShipmentInternalFlowLog` | permission | `operations:line-shipment:internal-log-view` | `apps/api/src/modules/data.controller.ts:588` |
 | shipment-flow | GET | `/shipments/status-counts` | `DataController.shipmentStatusCounts` | permission | `business:shipment:list` | `apps/api/src/modules/data.controller.ts:595` |
@@ -45,8 +46,8 @@
 | shipment-flow | POST | `/shipments/:id/reroute` | `DataController.rerouteShipment` | permission | `market:routed:reroute` | `apps/api/src/modules/data.controller.ts:789` |
 | shipment-flow | DELETE | `/shipments/:id/pending-routing` | `DataController.deletePendingRoutingShipment` | permission | `market:pending-routing:delete` | `apps/api/src/modules/data.controller.ts:795` |
 | shipment-flow | POST | `/shipments/:id/dispatch` | `DataController.dispatchShipment` | auth | — | `apps/api/src/modules/data.controller.ts:801` |
-| warehouse | POST | `/warehouse/handover/print` | `DataController.printWarehouseHandover` | permission | `warehouse:dispatch-pending:handover-print` | `apps/api/src/modules/data.controller.ts:814` |
-| warehouse | GET | `/warehouse/handover/:shipmentId` | `DataController.warehouseHandover` | permission | `warehouse:dispatch-pending:handover-preview` | `apps/api/src/modules/data.controller.ts:820` |
+| warehouse | POST | `/warehouse/handover/print` | `WarehouseDispatchController.printWarehouseHandover` | permission | `warehouse:dispatch-pending:handover-print` | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:41` |
+| warehouse | GET | `/warehouse/handover/:shipmentId` | `WarehouseDispatchController.warehouseHandover` | permission | `warehouse:dispatch-pending:handover-preview` | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:32` |
 | master-data | POST | `/master-data/agent-invoice-template/upload` | `DataController.uploadAgentInvoiceTemplate` | permission | `master-data:agents:invoice-template-manage` | `apps/api/src/modules/data.controller.ts:826` |
 | shipment-flow | POST | `/shipments/:id/business-data/approve` | `DataController.approveShipmentBusinessData` | permission | `customer-service:data-confirm:business-approve` | `apps/api/src/modules/data.controller.ts:850` |
 | shipment-flow | POST | `/shipments/:id/agent-data/approve` | `DataController.approveShipmentAgentData` | permission | `customer-service:data-confirm:agent-approve` | `apps/api/src/modules/data.controller.ts:856` |

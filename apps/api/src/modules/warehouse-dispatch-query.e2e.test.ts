@@ -49,6 +49,35 @@ describe('Warehouse dispatch query API', () => {
     const customerToken = await app.loginAs('customer');
 
     await request(app.getHttpServer())
+      .post('/api/warehouse/handover/print')
+      .send({ shipmentIds: ['s-seed-1'] })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/handover/print')
+      .set('Authorization', app.auth(customerToken))
+      .send({ shipmentIds: ['s-seed-1'] })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/handover/print')
+      .set('Authorization', app.auth(adminToken))
+      .send({ shipmentIds: [] })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('请先选择待出库订单'));
+
+    await request(app.getHttpServer())
+      .patch('/api/warehouse/dispatch-shipments/s-seed-1/declaration')
+      .send({ declarationRequired: true })
+      .expect(401);
+
+    await request(app.getHttpServer())
+      .patch('/api/warehouse/dispatch-shipments/s-seed-1/declaration')
+      .set('Authorization', app.auth(customerToken))
+      .send({ declarationRequired: true })
+      .expect(403);
+
+    await request(app.getHttpServer())
       .get('/api/warehouse/handover/s-seed-1')
       .set('Authorization', app.auth(warehouseToken))
       .expect(404)
@@ -69,11 +98,46 @@ describe('Warehouse dispatch query API', () => {
       })
       .expect(201);
 
+    await request(app.getHttpServer())
+      .patch('/api/warehouse/dispatch-shipments/s-seed-1/declaration')
+      .set('Authorization', app.auth(adminToken))
+      .send({})
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('请选择是否报关'));
+
+    await request(app.getHttpServer())
+      .patch('/api/warehouse/dispatch-shipments/s-seed-1/declaration')
+      .set('Authorization', app.auth(adminToken))
+      .send({ declarationRequired: true })
+      .expect(200)
+      .expect((response) => expect(response.body.declarationRequired).toBe(true));
+
+    await request(app.getHttpServer())
+      .patch('/api/warehouse/dispatch-shipments/s-seed-1/declaration')
+      .set('Authorization', app.auth(adminToken))
+      .send({ declarationRequired: true })
+      .expect(200)
+      .expect((response) => expect(response.body.declarationRequired).toBe(true));
+
     const printed = await request(app.getHttpServer())
       .post('/api/warehouse/handover/print')
       .set('Authorization', app.auth(adminToken))
       .send({ shipmentIds: ['s-seed-1'] })
       .expect(201);
+
+    const reprinted = await request(app.getHttpServer())
+      .post('/api/warehouse/handover/print')
+      .set('Authorization', app.auth(adminToken))
+      .send({ shipmentIds: ['s-seed-1', 's-seed-1'] })
+      .expect(201);
+    expect(reprinted.body.rows).toHaveLength(1);
+    expect(reprinted.body.rows[0]).toEqual(expect.objectContaining({
+      shipmentId: 's-seed-1',
+      handoverNo: printed.body.rows[0].handoverNo,
+      printedBy: printed.body.rows[0].printedBy,
+      firstPrintedAt: printed.body.rows[0].firstPrintedAt,
+      printCount: 2
+    }));
 
     await request(app.getHttpServer())
       .get('/api/warehouse/handover/s-seed-1')
@@ -95,6 +159,24 @@ describe('Warehouse dispatch query API', () => {
       .expect(403)
       .expect((response) => {
         expect(response.body.message).toBe('没有访问权限');
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs')
+      .query({ action: 'warehouse.dispatch.declaration.update' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows.filter((row: { target: string }) => row.target === 's-seed-1')).toHaveLength(1);
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs')
+      .query({ action: 'warehouse.handover.print' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows.filter((row: { target: string }) => row.target === 's-seed-1')).toHaveLength(2);
       });
   });
 });

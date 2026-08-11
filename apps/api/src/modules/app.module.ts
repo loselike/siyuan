@@ -76,7 +76,9 @@ import {
   PrismaTrackingQueryRepository,
   TRACKING_QUERY_REPOSITORY
 } from './tracking/query/tracking-query.repository.js';
-import { WarehouseDispatchQueryController } from './warehouse/dispatch/warehouse-dispatch-query.controller.js';
+import { WarehouseDispatchController } from './warehouse/dispatch/warehouse-dispatch-query.controller.js';
+import { WAREHOUSE_DISPATCH_REPOSITORY } from './warehouse/dispatch/warehouse-dispatch.repository.js';
+import { WarehouseDispatchService } from './warehouse/dispatch/warehouse-dispatch.service.js';
 import { WarehouseInventoryQueryController } from './warehouse/inventory/warehouse-inventory-query.controller.js';
 import { LegacyWarehouseInventoryQueryRepository } from './warehouse/inventory/legacy-warehouse-inventory-query.repository.js';
 import {
@@ -192,6 +194,11 @@ const warehouseMachineImportRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const warehouseDispatchRepositoryProvider = {
+  provide: WAREHOUSE_DISPATCH_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -260,7 +267,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     ShipmentOverviewQueryController,
     SystemDirectoryController,
     TrackingQueryController,
-    WarehouseDispatchQueryController,
+    WarehouseDispatchController,
     WarehouseInventoryQueryController,
     WarehouseMachineImportController,
     WarehousePackageLifecycleController,
@@ -290,6 +297,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     WaterReceiptLifecycleService,
     waterReceiptLifecycleRepositoryProvider,
     WarehouseInventoryQueryService,
+    WarehouseDispatchService,
+    warehouseDispatchRepositoryProvider,
     WarehouseMachineImportService,
     warehouseMachineImportRepositoryProvider,
     WarehousePackageLifecycleService,

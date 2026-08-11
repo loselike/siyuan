@@ -58,7 +58,6 @@ import type {
   PaymentConfirmPaidInput,
   PaymentWaterReceiptInput,
   ShipmentDispatchInput,
-  WarehouseHandoverPrintInput,
   VoucherImageUploadContext,
   PayableAuditBatchInput,
   PayableAuditListQuery,
@@ -727,12 +726,6 @@ export class DataController {
       await this.ensurePermission(request.user, 'warehouse:dispatch-pending:shipping-mark-confirm');
     }
     return this.repository.dispatchShipment(request.user, id, body);
-  }
-
-  @Post('warehouse/handover/print')
-  @RequirePermission('warehouse:dispatch-pending:handover-print')
-  async printWarehouseHandover(@Req() request: { user: Principal }, @Body() body: WarehouseHandoverPrintInput) {
-    return this.repository.printWarehouseHandover(request.user, body);
   }
 
   @Post('master-data/agent-invoice-template/upload')
