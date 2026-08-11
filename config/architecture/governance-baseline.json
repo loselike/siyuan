@@ -180,7 +180,10 @@
       "DELETE /shipments/:id/finance-items/:feeId @ DataController.deleteShipmentFinanceItem",
       "permission",
       [
-        "business:order-fee:delete"
+        "business:order-entry:business-cost-write",
+        "business:order-entry:view",
+        "business:order-fee:delete",
+        "market:pending-routing:update"
       ],
       "DataController.deleteShipmentFinanceItem"
     ],
@@ -924,6 +927,7 @@
       [
         "business:order-entry:business-cost-view",
         "business:order-entry:business-cost-write",
+        "business:order-entry:view",
         "business:order-fee:profit-view",
         "business:shipment:finance-detail-view",
         "business:shipment:payable-view",
@@ -937,7 +941,10 @@
         "finance:order-fee:profit:receivable-payable",
         "finance:payable:view-profit",
         "finance:payable:view-sensitive",
-        "finance:receivable:detail"
+        "finance:receivable:detail",
+        "market:pending-routing:business-cost-view",
+        "market:pending-routing:detail",
+        "market:pending-routing:payable-cost-view"
       ],
       "DataController.getShipmentFinanceDetail"
     ],
@@ -1177,6 +1184,14 @@
         "warehouse:in-stock:view"
       ],
       "WarehouseInventoryQueryController.warehouseInStock"
+    ],
+    [
+      "GET /warehouse/in-stock-page @ WarehouseInventoryQueryController.warehouseInStockPage",
+      "permission",
+      [
+        "warehouse:in-stock:view"
+      ],
+      "WarehouseInventoryQueryController.warehouseInStockPage"
     ],
     [
       "GET /warehouse/in-stock-summary @ WarehouseInventoryQueryController.warehouseInStockSummary",
@@ -2558,7 +2573,10 @@
       "POST /shipments/:id/finance-items @ DataController.createShipmentFinanceItem",
       "permission",
       [
-        "business:order-fee:create"
+        "business:order-entry:business-cost-write",
+        "business:order-entry:view",
+        "business:order-fee:create",
+        "market:pending-routing:update"
       ],
       "DataController.createShipmentFinanceItem"
     ],
@@ -2872,6 +2890,14 @@
       "DataController.cancelWarehouseTallyTask"
     ],
     [
+      "POST /warehouse/tally-tasks/:id/cancel-completed @ DataController.cancelCompletedWarehouseTallyTask",
+      "permission",
+      [
+        "warehouse:tally-completed:reverse-review"
+      ],
+      "DataController.cancelCompletedWarehouseTallyTask"
+    ],
+    [
       "POST /warehouse/tally-tasks/:id/complete @ DataController.completeWarehouseTallyTask",
       "permission",
       [
@@ -2919,6 +2945,14 @@
         "warehouse:tally-completed:reverse-review"
       ],
       "DataController.reverseReviewWarehouseTallyTask"
+    ],
+    [
+      "POST /warehouse/tally-tasks/:id/start @ DataController.startWarehouseTallyTask",
+      "permission",
+      [
+        "warehouse:tally-pending:task-process"
+      ],
+      "DataController.startWarehouseTallyTask"
     ],
     [
       "POST /warehouse/tally-tasks/label-scan @ DataController.applyWarehouseTallyTaskLabel",
@@ -3012,6 +3046,7 @@
       "PUT /finance/water-receipts/:id @ FinanceReceivableController.updateWaterReceipt",
       "permission",
       [
+        "finance:water-receipt:arrived-update",
         "finance:water-receipt:update"
       ],
       "FinanceReceivableController.updateWaterReceipt"
@@ -3197,7 +3232,10 @@
       "PUT /shipments/:id/finance-items/:feeId @ DataController.updateShipmentFinanceItem",
       "permission",
       [
-        "business:order-fee:update"
+        "business:order-entry:business-cost-write",
+        "business:order-entry:view",
+        "business:order-fee:update",
+        "market:pending-routing:update"
       ],
       "DataController.updateShipmentFinanceItem"
     ],
@@ -3329,14 +3367,15 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 269,
-    "apiClientMethodsMax": 363,
-    "apiClientDirectRequestsMax": 347,
-    "sharedRootImportFilesMax": 128,
-    "asAnyMax": 891,
+    "dataControllerRoutesMax": 271,
+    "apiClientMethodsMax": 365,
+    "apiClientDirectRequestsMax": 350,
+    "sharedRootImportFilesMax": 138,
+    "asAnyMax": 924,
     "directProcessEnvMax": 36,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
+      "apps/api/src/modules/finance/water-receipt/water-receipt-match.policy.ts",
       "apps/api/src/modules/order-entry-charge-weight.ts",
       "apps/web/src/data.ts",
       "apps/web/src/modules/customerService/businessCostPreview.ts",
@@ -3346,28 +3385,28 @@
       "apps/api/src/modules/notifications/notification.types.ts = apps/web/src/modules/notifications/notificationTypes.ts"
     ],
     "knownDuplicateRouteGroups": [],
-    "prismaRepositoryMethodsMax": 706,
-    "inMemoryRepositoryMethodsMax": 587,
+    "prismaRepositoryMethodsMax": 713,
+    "inMemoryRepositoryMethodsMax": 599,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 31627,
-      "apps/api/src/modules/in-memory.repository.ts": 19147,
-      "apps/api/src/modules/data.controller.ts": 2926,
-      "packages/shared/src/index.ts": 6316,
-      "apps/web/src/apiClient.ts": 2565,
-      "apps/web/src/styles.css": 13061,
+      "apps/api/src/modules/prisma.repository.ts": 32134,
+      "apps/api/src/modules/in-memory.repository.ts": 19600,
+      "apps/api/src/modules/data.controller.ts": 3021,
+      "packages/shared/src/index.ts": 6328,
+      "apps/web/src/apiClient.ts": 2614,
+      "apps/web/src/styles.css": 13162,
       "apps/web/src/modules/testSupport/appTestHarness.tsx": 6457,
-      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4827,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4938,
       "apps/web/src/modules/pricing/PricingPage.tsx": 3720,
       "apps/web/src/modules/masterData/MasterDataPage.tsx": 3281
     }
   },
   "lint": {
     "api": {
-      "errors": 101,
+      "errors": 100,
       "warnings": 0,
       "rules": {
         "error:@typescript-eslint/no-unused-vars": 51,
-        "error:no-control-regex": 3,
+        "error:no-control-regex": 2,
         "error:no-extra-boolean-cast": 2,
         "error:no-undef": 39,
         "error:no-unreachable": 3,
@@ -3396,6 +3435,9 @@
         },
         "src/modules/database-seed.service.ts": {
           "error:no-undef": 1
+        },
+        "src/modules/finance/water-receipt/water-receipt-view.policy.ts": {
+          "error:no-control-regex": 1
         },
         "src/modules/in-memory.repository.ts": {
           "error:@typescript-eslint/no-unused-vars": 15,
@@ -3434,12 +3476,12 @@
       }
     },
     "web": {
-      "errors": 146,
+      "errors": 150,
       "warnings": 0,
       "rules": {
         "error:@typescript-eslint/no-unused-vars": 32,
         "error:no-control-regex": 2,
-        "error:no-undef": 105,
+        "error:no-undef": 109,
         "error:react-hooks/exhaustive-deps": 7
       },
       "files": {
@@ -3452,7 +3494,7 @@
         },
         "src/apiClient.ts": {
           "error:@typescript-eslint/no-unused-vars": 2,
-          "error:no-undef": 26
+          "error:no-undef": 27
         },
         "src/appUpdate.tsx": {
           "error:no-undef": 8
@@ -3467,7 +3509,8 @@
           "error:@typescript-eslint/no-unused-vars": 1
         },
         "src/modules/customerService/CustomerServicePage.tsx": {
-          "error:@typescript-eslint/no-unused-vars": 1
+          "error:@typescript-eslint/no-unused-vars": 1,
+          "error:no-undef": 3
         },
         "src/modules/customerService/TrackingWebsiteLink.tsx": {
           "error:no-undef": 3
