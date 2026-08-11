@@ -67,6 +67,10 @@ import {
   SHIPMENT_LABEL_LIFECYCLE_REPOSITORY
 } from './shipment/fulfillment/shipment-label-lifecycle.repository.js';
 import { ShipmentLabelLifecycleService } from './shipment/fulfillment/shipment-label-lifecycle.service.js';
+import { ShipmentBusinessInvoiceController } from './shipment/invoice/shipment-business-invoice.controller.js';
+import { ShipmentBusinessInvoiceFileStorage } from './shipment/invoice/shipment-business-invoice-file.storage.js';
+import { SHIPMENT_BUSINESS_INVOICE_REPOSITORY } from './shipment/invoice/shipment-business-invoice.repository.js';
+import { ShipmentBusinessInvoiceService } from './shipment/invoice/shipment-business-invoice.service.js';
 import { OrderEntryQueryController } from './shipment/order-entry/order-entry-query.controller.js';
 import { ShipmentOverviewQueryController } from './shipment/overview/shipment-overview-query.controller.js';
 import { SystemDirectoryController } from './system/directory/system-directory.controller.js';
@@ -223,6 +227,11 @@ const shipmentLabelLifecycleAuthorizerProvider = {
   useExisting: PrismaRepository
 };
 
+const shipmentBusinessInvoiceRepositoryProvider = {
+  provide: SHIPMENT_BUSINESS_INVOICE_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -287,6 +296,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     OperationsLineShipmentQueryController,
     OrderEntryQueryController,
     PriceBookQueryController,
+    ShipmentBusinessInvoiceController,
     ShipmentLabelLifecycleController,
     ShipmentOverviewQueryController,
     SystemDirectoryController,
@@ -328,6 +338,9 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     ShipmentLabelFileStorage,
     shipmentLabelLifecycleRepositoryProvider,
     shipmentLabelLifecycleAuthorizerProvider,
+    ShipmentBusinessInvoiceService,
+    ShipmentBusinessInvoiceFileStorage,
+    shipmentBusinessInvoiceRepositoryProvider,
     WarehouseMachineImportService,
     warehouseMachineImportRepositoryProvider,
     WarehousePackageLifecycleService,

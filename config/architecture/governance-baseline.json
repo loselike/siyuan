@@ -949,20 +949,20 @@
       "DataController.getShipmentFinanceDetail"
     ],
     [
-      "GET /shipments/:id/invoice-template/download @ DataController.downloadShipmentInvoiceTemplate",
+      "GET /shipments/:id/invoice-template/download @ ShipmentBusinessInvoiceController.downloadShipmentInvoiceTemplate",
       "permission",
       [
         "business:order-entry:invoice-upload"
       ],
-      "DataController.downloadShipmentInvoiceTemplate"
+      "ShipmentBusinessInvoiceController.downloadShipmentInvoiceTemplate"
     ],
     [
-      "GET /shipments/:id/invoice/download @ DataController.downloadShipmentBusinessInvoice",
+      "GET /shipments/:id/invoice/download @ ShipmentBusinessInvoiceController.downloadShipmentBusinessInvoice",
       "permission",
       [
         "business:order-entry:invoice-upload"
       ],
-      "DataController.downloadShipmentBusinessInvoice"
+      "ShipmentBusinessInvoiceController.downloadShipmentBusinessInvoice"
     ],
     [
       "GET /shipments/:id/labels @ ShipmentLabelLifecycleController.shipmentLabels",
@@ -2597,12 +2597,12 @@
       "DataController.unlockShipmentFinanceItem"
     ],
     [
-      "POST /shipments/:id/invoice/upload @ DataController.uploadShipmentBusinessInvoice",
+      "POST /shipments/:id/invoice/upload @ ShipmentBusinessInvoiceController.uploadShipmentBusinessInvoice",
       "permission",
       [
         "business:order-entry:invoice-upload"
       ],
-      "DataController.uploadShipmentBusinessInvoice"
+      "ShipmentBusinessInvoiceController.uploadShipmentBusinessInvoice"
     ],
     [
       "POST /shipments/:id/labels @ ShipmentLabelLifecycleController.createShipmentLabel",
@@ -3367,11 +3367,11 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 233,
+    "dataControllerRoutesMax": 230,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
-    "asAnyMax": 924,
+    "asAnyMax": 923,
     "directProcessEnvMax": 36,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 32122,
       "apps/api/src/modules/in-memory.repository.ts": 19588,
-      "apps/api/src/modules/data.controller.ts": 2668,
+      "apps/api/src/modules/data.controller.ts": 2598,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,
