@@ -181,7 +181,7 @@ export class FinanceReceivableController {
   }
 
   @Put('finance/water-receipts/:id')
-  @RequirePermission('finance:water-receipt:update')
+  @RequirePermission(['finance:water-receipt:update', 'finance:water-receipt:arrived-update'])
   async updateWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptUpdateInput) {
     return this.service.updateWaterReceipt(request.user, id, body);
   }

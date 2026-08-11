@@ -583,6 +583,7 @@ export type PermissionKey =
   | 'finance:water-receipt:arrive'
   | 'finance:water-receipt:match'
   | 'finance:water-receipt:adjust'
+  | 'finance:water-receipt:arrived-update'
   | 'finance:water-receipt:void'
   | 'finance:water-receipt:archive'
   | 'finance:water-receipt:export'

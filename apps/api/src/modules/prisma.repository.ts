@@ -11953,9 +11953,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateWaterReceipt(principal: Principal, id: string, input: WaterReceiptUpdateInput): Promise<WaterReceiptSummary> {
-    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:manage');
     const current = await this.findWaterReceiptById(id);
+    await this.ensureWaterReceiptPermission(principal, current.status === 'PENDING' ? 'finance:water-receipt:manage' : 'finance:water-receipt:arrived-update');
     const canViewAll = await this.ensureWaterReceiptRecordAccess(principal, current);
+    const receiptDate = input.receiptDate ? new Date(input.receiptDate) : undefined;
+    if (receiptDate && Number.isNaN(receiptDate.getTime())) throw new BadRequestException('水单日期无效');
     const customer = input.customerId || input.customerCode ? await this.findCustomerForWaterReceipt(input.customerId, input.customerCode) : undefined;
     if (customer && !canViewAll) {
       const scope = this.operatorCustomerScope(principal);
@@ -11974,15 +11976,22 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
         if (locked.status === 'VOIDED') throw new BadRequestException('已作废水单不能修改');
         const isArrived = locked.status !== 'PENDING';
-        if (isArrived && input.amount !== undefined) {
-          if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(locked.status)) {
-            throw new BadRequestException('已归档水单不能再调整金额');
+        if (isArrived) {
+          await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:arrived-update');
+          if (!input.adjustReason?.trim()) throw new BadRequestException('修改已到账水单必须填写原因');
+          const activeMatches = (locked.matches ?? []).filter((match: any) => !match.voided);
+          if (activeMatches.length || Number(locked.matchedAmount ?? 0) > 0) {
+            throw new BadRequestException('该水单已匹配应收，请先撤销全部匹配后再修改');
           }
-          await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:adjust');
-          if (!input.adjustReason?.trim()) throw new BadRequestException('修改已到账金额必须填写原因');
-        }
-        if (isArrived && (input.customerId || input.customerCode || input.receiptMethod || input.receiptDate || input.currency)) {
-          throw new BadRequestException('已到账水单只能调整金额、付款编号或备注');
+          const pendingAllocation = await (tx as any).waterReceiptMatchRequest.aggregate({
+            where: { waterReceiptId: locked.id, status: 'PENDING' },
+            _sum: { amount: true }
+          });
+          if (Number(pendingAllocation._sum.amount ?? 0) > 0) {
+            throw new BadRequestException('该水单存在待审核匹配，请先处理或取消后再修改');
+          }
+        } else {
+          await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:manage');
         }
         const nextAmount = input.amount === undefined ? Number(locked.amount) : Number(input.amount);
         if (!Number.isFinite(nextAmount) || nextAmount <= 0) throw new BadRequestException('水单金额必须大于 0');
@@ -11996,39 +12005,94 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           throw new BadRequestException('水单金额不能小于已落账与待审核分配合计金额');
         }
         const nextReceiptBalance = roundMoney(nextAmount - matchedAmount);
-        if (isArrived && input.amount !== undefined && nextAmount !== Number(locked.amount)) {
+        const nextCustomerId = customer?.id ?? locked.customerId;
+        const oldCurrency = this.normalizeWaterReceiptCurrency(locked.currency);
+        const nextCurrency = this.normalizeWaterReceiptCurrency(input.currency ?? locked.currency);
+        if (!['RMB', 'USD'].includes(nextCurrency)) throw new BadRequestException('水单币种只能选择 RMB 或 USD');
+        if (isArrived && !nextCustomerId) throw new BadRequestException('已到账水单必须保留客户编号');
+        const accountChanged = isArrived && (
+          nextAmount !== Number(locked.amount)
+          || nextCustomerId !== locked.customerId
+          || nextCurrency !== oldCurrency
+        );
+        const ledgerChanged = isArrived && (
+          accountChanged
+          || input.paymentNo !== locked.paymentNo
+          || input.receiptMethod !== locked.receiptMethod
+        );
+        let accountSyncAudit: Record<string, unknown> | undefined;
+        if (accountChanged) {
           if (!locked.customerId || !locked.accountLedgerId) {
-            throw new ConflictException('已到账水单缺少客户账户或账本，不能调整金额');
+            throw new ConflictException('已到账水单缺少客户账户或账本，不能同步修改');
           }
-          const account = await this.lockCustomerAccountForUpdate(tx, locked.customerId, locked.currency ?? 'RMB');
-          if (!account) throw new ConflictException('客户账户不存在，不能调整已到账金额');
+          const currentReceiptBalance = Number(locked.balance);
+          const oldAccount = await this.lockCustomerAccountForUpdate(tx, locked.customerId, oldCurrency);
+          if (!oldAccount) throw new ConflictException('原客户账户不存在，不能同步修改');
+          const sourceAccountBalanceBefore = Number(oldAccount.balance);
+          let targetAccountBalanceBefore: number | undefined;
+          let targetAccountBalanceAfter: number;
+          const sameAccount = nextCustomerId === locked.customerId && nextCurrency === oldCurrency;
+          if (sameAccount) {
+            const nextAccountBalance = roundMoney(Number(oldAccount.balance) + nextReceiptBalance - currentReceiptBalance);
+            if (nextAccountBalance < 0) throw new ConflictException('调整后客户账户余额不能小于 0');
+            await tx.customerAccount.update({ where: { id: oldAccount.id }, data: { balance: nextAccountBalance } });
+            targetAccountBalanceAfter = nextAccountBalance;
+          } else {
+            const oldAccountBalance = roundMoney(Number(oldAccount.balance) - currentReceiptBalance);
+            if (oldAccountBalance < 0) throw new ConflictException('原客户账户余额不足，不能变更水单归属');
+            await tx.customerAccount.update({ where: { id: oldAccount.id }, data: { balance: oldAccountBalance } });
+            const nextAccount = await this.lockCustomerAccountForUpdate(tx, nextCustomerId as string, nextCurrency);
+            if (nextAccount) {
+              targetAccountBalanceBefore = Number(nextAccount.balance);
+              targetAccountBalanceAfter = roundMoney(Number(nextAccount.balance) + nextReceiptBalance);
+              await tx.customerAccount.update({ where: { id: nextAccount.id }, data: { balance: targetAccountBalanceAfter } });
+            } else {
+              targetAccountBalanceAfter = nextReceiptBalance;
+              await tx.customerAccount.create({ data: { customerId: nextCustomerId as string, currency: nextCurrency, balance: targetAccountBalanceAfter } });
+            }
+          }
+          accountSyncAudit = {
+            sourceAccount: { customerId: locked.customerId, currency: oldCurrency, balanceBefore: sourceAccountBalanceBefore, balanceAfter: sameAccount ? targetAccountBalanceAfter : roundMoney(sourceAccountBalanceBefore - currentReceiptBalance) },
+            targetAccount: { customerId: nextCustomerId, currency: nextCurrency, balanceBefore: targetAccountBalanceBefore ?? (sameAccount ? sourceAccountBalanceBefore : 0), balanceAfter: targetAccountBalanceAfter },
+            receiptBalanceBefore: currentReceiptBalance,
+            receiptBalanceAfter: nextReceiptBalance
+          };
           await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "AccountLedger" WHERE "id" = ${locked.accountLedgerId} FOR UPDATE`);
-          const amountDelta = roundMoney(nextAmount - Number(locked.amount));
-          const nextAccountBalance = roundMoney(Number(account.balance) + amountDelta);
-          if (nextAccountBalance < 0) throw new ConflictException('调整后客户账户余额不能小于 0');
-          await tx.customerAccount.update({ where: { id: account.id }, data: { balance: nextAccountBalance } });
-          const ledgerUpdated = await tx.accountLedger.updateMany({
-            where: { id: locked.accountLedgerId },
-            data: { amount: nextAmount, balance: nextReceiptBalance }
-          });
-          if (ledgerUpdated.count !== 1) throw new ConflictException('水单账本不存在，不能调整金额');
         }
+        if (ledgerChanged && locked.accountLedgerId) {
+          await tx.accountLedger.update({
+            where: { id: locked.accountLedgerId },
+            data: {
+              ...(nextCustomerId ? { partyId: nextCustomerId } : {}),
+              amount: nextAmount,
+              balance: nextReceiptBalance,
+              note: input.paymentNo ?? locked.paymentNo ?? input.receiptMethod ?? locked.receiptMethod
+            }
+          });
+        }
+        const nextStatus = isArrived
+          ? nextReceiptBalance <= 0
+            ? 'ARCHIVED'
+            : matchedAmount > 0
+              ? 'PARTIAL_MATCHED'
+              : 'ARRIVED'
+          : locked.status;
         const row = await (tx as any).waterReceipt.update({
           where: { id },
           data: {
             ...(customer ? { customerId: customer.id, customerCode: customer.code, customerName: `${customer.code}-${customer.name}`, salesperson: customer.salesperson } : {}),
             ...(input.site !== undefined ? { site: input.site?.trim() || '思远收款' } : {}),
             ...(input.receiptMethod !== undefined ? { receiptMethod: input.receiptMethod } : {}),
-            ...(input.currency !== undefined ? { currency: input.currency } : {}),
-            ...(input.receiptDate ? { receiptDate: new Date(input.receiptDate) } : {}),
+            ...(input.currency !== undefined ? { currency: nextCurrency } : {}),
+            ...(receiptDate ? { receiptDate } : {}),
             ...(input.amount !== undefined ? {
               amount: nextAmount,
-              balance: nextReceiptBalance,
-              adjustReason: input.adjustReason,
-              ...(isArrived ? {
-                status: nextReceiptBalance <= 0 ? 'ARCHIVED' : matchedAmount > 0 ? 'PARTIAL_MATCHED' : 'ARRIVED',
-                archivedAt: nextReceiptBalance <= 0 ? new Date() : null
-              } : {})
+              balance: nextReceiptBalance
+            } : {}),
+            ...(isArrived ? {
+              status: nextStatus,
+              archivedAt: nextStatus === 'ARCHIVED' ? (locked.archivedAt ?? new Date()) : null,
+              adjustReason: input.adjustReason?.trim()
             } : {}),
             paymentNo,
             paymentNoKey: paymentNo,
@@ -12036,7 +12100,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           },
           include: this.waterReceiptInclude()
         });
-        await tx.auditLog.create({ data: { actorId: principal.id, action: 'finance.water_receipt.update', target: id, before: locked, after: row } });
+        await tx.auditLog.create({ data: { actorId: principal.id, action: 'finance.water_receipt.update', target: id, before: locked, after: { ...row, arrivedAdjustmentReason: isArrived ? input.adjustReason?.trim() : undefined, accountSync: accountSyncAudit } } });
         return row;
       });
     } catch (error) {
@@ -12186,14 +12250,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       (new Date(left.createdAt ?? 0).getTime() - new Date(right.createdAt ?? 0).getTime())
       || left.id.localeCompare(right.id)
     );
-    return this.decorateReceivableRows(receivables);
+    const receiptCurrency = this.normalizeWaterReceiptCurrency(receipt.currency);
+    return this.decorateReceivableRows(receivables.filter((row) => this.normalizeWaterReceiptCurrency(row.currency) === receiptCurrency));
   }
 
   async getReceivableWaterReceiptCandidates(principal: Principal, id: string): Promise<ReceivableWaterReceiptCandidatesResponse> {
     const receivable = (await this.getReceivableAudits(principal, { page: 1, pageSize: -1 })).rows.find((row) => row.id === id);
     if (!receivable?.customerId) throw new NotFoundException('当前权限范围内未找到应收记录');
     await this.ensureWaterReceiptCurrentCustomerAccess(principal, { customerId: receivable.customerId });
-    const receivableExchangeRate = await this.resolveWaterReceiptRmbExchangeRate(receivable.currency);
+    const receivableCurrency = this.normalizeWaterReceiptCurrency(receivable.currency);
     const receipts = await (this.prisma as any).waterReceipt.findMany({
       where: {
         customerId: receivable.customerId,
@@ -12220,7 +12285,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return {
       receivableId: receivable.id,
       customerCode: receivable.customerCode,
-      rows: (await Promise.all(receipts.map(async (row: any) => {
+      rows: (await Promise.all(receipts
+        .filter((row: any) => this.normalizeWaterReceiptCurrency(row.currency) === receivableCurrency)
+        .map(async (row: any) => {
           const balance = Number(row.balance);
           const receiptExchangeRate = await this.resolveWaterReceiptRmbExchangeRate(row.currency);
           const pendingAllocatedAmount = roundMoney((row.matchRequests ?? [])
@@ -12239,7 +12306,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             balance,
             rmbBalance: roundMoney(balance * receiptExchangeRate),
             rmbAvailableAllocationAmount: roundMoney(availableAllocationAmount * receiptExchangeRate),
-            exchangeRate: this.normalizeWaterReceiptCurrency(row.currency) !== 'RMB' ? receiptExchangeRate : receivableExchangeRate,
+            exchangeRate: receiptExchangeRate,
             status: row.status
           };
         })))
@@ -12287,6 +12354,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const receivableExchangeRate = amountCurrency === 'RMB'
         ? await this.resolveWaterReceiptRmbExchangeRate(receivableCurrency)
         : 1;
+      if (receivableCurrency !== receiptCurrency) throw new BadRequestException('水单币种与应收币种不一致');
       const expectedRate = receiptCurrency !== 'RMB'
         ? receiptExchangeRate
         : receivableCurrency !== 'RMB'
@@ -21578,6 +21646,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const input = inputs[index];
       const item = createdItems[index];
       if (input.type !== 'RECEIVABLE' || !input.receiptId || !item?.id) continue;
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WaterReceipt" WHERE "id" = ${input.receiptId} FOR UPDATE`);
       const receipt = await tx.waterReceipt.findUnique({ where: { id: input.receiptId } });
       if (!receipt) throw new BadRequestException('选择的水单不存在');
       if (receipt.customerId !== customerId) throw new BadRequestException('只能匹配同客户编号下的水单');

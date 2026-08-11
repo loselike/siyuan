@@ -431,6 +431,7 @@ export type PermissionKey =
   | 'finance:water-receipt:arrive'
   | 'finance:water-receipt:match'
   | 'finance:water-receipt:adjust'
+  | 'finance:water-receipt:arrived-update'
   | 'finance:water-receipt:void'
   | 'finance:water-receipt:archive'
   | 'finance:water-receipt:export'
@@ -938,6 +939,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'finance:water-receipt:arrive', label: '水单到账确认', group: '财务管理 / 水单到账查询' },
   { code: 'finance:water-receipt:match', label: '水单匹配应收', group: '财务管理 / 水单匹配' },
   { code: 'finance:water-receipt:adjust', label: '已到账金额调整', group: '财务管理 / 水单到账查询' },
+  { code: 'finance:water-receipt:arrived-update', label: '已到账水单修改', group: '财务管理 / 水单到账查询' },
   { code: 'finance:water-receipt:void', label: '水单作废', group: '财务管理 / 水单到账查询' },
   { code: 'finance:water-receipt:archive', label: '水单归档', group: '财务管理 / 水单到账查询' },
   { code: 'finance:water-receipt:export', label: '水单导出', group: '财务管理 / 水单到账查询' },

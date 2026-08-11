@@ -7780,12 +7780,15 @@ export class InMemoryRepository {
     const receivable = (await this.getReceivableAudits(principal, { page: 1, pageSize: -1 })).rows.find((row) => row.id === id);
     if (!receivable?.customerId) throw new NotFoundException('当前权限范围内未找到应收记录');
     await this.ensureWaterReceiptCurrentCustomerAccess(principal, { customerId: receivable.customerId });
-    const receivableExchangeRate = this.resolveWaterReceiptRmbExchangeRate(receivable.currency);
+    const receivableCurrency = this.normalizeWaterReceiptCurrency(receivable.currency);
     return {
       receivableId: receivable.id,
       customerCode: receivable.customerCode,
       rows: this.waterReceipts
-        .filter((row) => row.customerId === receivable.customerId && ['ARRIVED', 'PARTIAL_MATCHED'].includes(row.status) && row.balance > 0)
+        .filter((row) => row.customerId === receivable.customerId
+          && this.normalizeWaterReceiptCurrency(row.currency) === receivableCurrency
+          && ['ARRIVED', 'PARTIAL_MATCHED'].includes(row.status)
+          && row.balance > 0)
         .map((row) => {
           const receiptExchangeRate = this.resolveWaterReceiptRmbExchangeRate(row.currency);
           const pendingAllocatedAmount = roundMoney(this.waterReceiptMatchRequests
@@ -7805,11 +7808,11 @@ export class InMemoryRepository {
             balance: row.balance,
             rmbBalance: roundMoney(row.balance * receiptExchangeRate),
             rmbAvailableAllocationAmount: roundMoney(availableAllocationAmount * receiptExchangeRate),
-            exchangeRate: this.normalizeWaterReceiptCurrency(row.currency) !== 'RMB' ? receiptExchangeRate : receivableExchangeRate,
+            exchangeRate: receiptExchangeRate,
             status: row.status
           };
         })
-        .filter((row) => Number(row.rmbAvailableAllocationAmount ?? 0) > 0)
+        .filter((row) => Number(row.availableAllocationAmount ?? 0) > 0)
     };
   }
 
@@ -7897,23 +7900,24 @@ export class InMemoryRepository {
   }
 
   async updateWaterReceipt(principal: Principal, id: string, input: WaterReceiptUpdateInput): Promise<WaterReceiptSummary> {
-    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:manage');
     const row = this.findWaterReceiptById(id);
+    await this.ensureWaterReceiptPermission(principal, row.status === 'PENDING' ? 'finance:water-receipt:manage' : 'finance:water-receipt:arrived-update');
     const canViewAll = await this.ensureWaterReceiptRecordAccess(principal, row);
     if (!canViewAll && row.status !== 'PENDING') {
       throw new ForbiddenException('业务员只能修改本人录入的未到账水单');
     }
     if (row.status === 'VOIDED') throw new BadRequestException('已作废水单不能修改');
     const before = { ...row };
-    if (row.status !== 'PENDING' && input.amount !== undefined) {
-      if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(row.status)) {
-        throw new BadRequestException('已归档水单不能再调整金额');
+    const isArrived = row.status !== 'PENDING';
+    if (isArrived) {
+      if (!input.adjustReason?.trim()) throw new BadRequestException('修改已到账水单必须填写原因');
+      if (row.matches.some((match) => !match.voided) || Number(row.matchedAmount ?? 0) > 0) {
+        throw new BadRequestException('该水单已匹配应收，请先撤销全部匹配后再修改');
       }
-      await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:adjust');
-      if (!input.adjustReason?.trim()) throw new BadRequestException('修改已到账金额必须填写原因');
-    }
-    if (row.status !== 'PENDING' && (input.customerId || input.customerCode || input.receiptMethod || input.receiptDate || input.currency)) {
-      throw new BadRequestException('已到账水单只能调整金额、付款编号或备注');
+      const pendingAllocation = this.waterReceiptMatchRequests
+        .filter((request) => request.waterReceiptId === row.id && request.status === 'PENDING')
+        .reduce((sum, request) => sum + Number(request.amount), 0);
+      if (pendingAllocation > 0) throw new BadRequestException('该水单存在待审核匹配，请先处理或取消后再修改');
     }
     const customer = input.customerId || input.customerCode ? this.findCustomerForWaterReceipt(input.customerId, input.customerCode) : undefined;
     if (customer && !canViewAll) {
@@ -7922,45 +7926,101 @@ export class InMemoryRepository {
         throw new ForbiddenException('只能为本人客户维护水单');
       }
     }
+    const previousCustomerId = row.customerId;
+    const previousCurrency = row.currency;
+    const previousBalance = Number(row.balance);
+    const receiptDate = input.receiptDate ? new Date(input.receiptDate) : undefined;
+    if (receiptDate && Number.isNaN(receiptDate.getTime())) throw new BadRequestException('水单日期无效');
+    const paymentNo = this.requireUniqueWaterReceiptPaymentNo(input.paymentNo, row.id);
+    const nextAmount = input.amount === undefined ? Number(row.amount) : Number(input.amount);
+    if (!Number.isFinite(nextAmount) || nextAmount <= 0) throw new BadRequestException('水单金额必须大于 0');
+    const pendingAmount = this.waterReceiptMatchRequests
+      .filter((request) => request.waterReceiptId === row.id && request.status === 'PENDING')
+      .reduce((sum, request) => sum + Number(request.amount), 0);
+    if (nextAmount < roundMoney(Number(row.matchedAmount) + pendingAmount)) {
+      throw new BadRequestException('水单金额不能小于已落账与待审核分配合计金额');
+    }
+    const nextCustomerId = customer?.id ?? previousCustomerId;
+    const oldCurrency = this.normalizeWaterReceiptCurrency(previousCurrency);
+    const nextCurrency = this.normalizeWaterReceiptCurrency(input.currency ?? row.currency);
+    if (!['RMB', 'USD'].includes(nextCurrency)) throw new BadRequestException('水单币种只能选择 RMB 或 USD');
+    if (isArrived && !nextCustomerId) throw new BadRequestException('已到账水单必须保留客户编号');
+    const nextReceiptBalance = roundMoney(nextAmount - Number(row.matchedAmount));
+    const accountChanged = isArrived && (
+      nextAmount !== Number(row.amount)
+      || nextCustomerId !== previousCustomerId
+      || nextCurrency !== oldCurrency
+    );
+    const ledgerChanged = isArrived && (
+      accountChanged
+      || input.paymentNo !== row.paymentNo
+      || input.receiptMethod !== row.receiptMethod
+    );
+    let accountSyncAudit: Record<string, unknown> | undefined;
+    if (accountChanged) {
+      if (!previousCustomerId || !row.accountLedgerId) throw new ConflictException('已到账水单缺少客户账户或账本，不能同步修改');
+      const oldAccount = this.customerAccounts.find((item) => item.customerId === previousCustomerId && item.currency === oldCurrency);
+      const ledger = this.accountLedger.find((item) => item.id === row.accountLedgerId);
+      if (!oldAccount || !ledger) throw new ConflictException('原客户账户或水单账本不存在，不能同步修改');
+      const currentReceiptBalance = previousBalance;
+      const sameAccount = nextCustomerId === previousCustomerId && nextCurrency === oldCurrency;
+      const sourceAccountBalanceBefore = oldAccount.balance;
+      let targetAccountBalanceBefore: number | undefined;
+      let targetAccountBalanceAfter: number;
+      if (sameAccount) {
+        const nextAccountBalance = roundMoney(oldAccount.balance + nextReceiptBalance - currentReceiptBalance);
+        if (nextAccountBalance < 0) throw new ConflictException('调整后客户账户余额不能小于 0');
+        oldAccount.balance = nextAccountBalance;
+        targetAccountBalanceAfter = nextAccountBalance;
+      } else {
+        const oldAccountBalance = roundMoney(oldAccount.balance - currentReceiptBalance);
+        if (oldAccountBalance < 0) throw new ConflictException('原客户账户余额不足，不能变更水单归属');
+        oldAccount.balance = oldAccountBalance;
+        const nextAccount = this.customerAccounts.find((item) => item.customerId === nextCustomerId && item.currency === nextCurrency);
+        if (nextAccount) {
+          targetAccountBalanceBefore = nextAccount.balance;
+          targetAccountBalanceAfter = roundMoney(nextAccount.balance + nextReceiptBalance);
+          nextAccount.balance = targetAccountBalanceAfter;
+        } else {
+          targetAccountBalanceAfter = nextReceiptBalance;
+          this.customerAccounts.push({ customerId: nextCustomerId as string, customerName: customer ? `${customer.code}-${customer.name}` : nextCustomerId as string, balance: targetAccountBalanceAfter, currency: nextCurrency });
+        }
+      }
+      accountSyncAudit = {
+        sourceAccount: { customerId: previousCustomerId, currency: oldCurrency, balanceBefore: sourceAccountBalanceBefore, balanceAfter: sameAccount ? targetAccountBalanceAfter : roundMoney(sourceAccountBalanceBefore - currentReceiptBalance) },
+        targetAccount: { customerId: nextCustomerId, currency: nextCurrency, balanceBefore: targetAccountBalanceBefore ?? (sameAccount ? sourceAccountBalanceBefore : 0), balanceAfter: targetAccountBalanceAfter },
+        receiptBalanceBefore: currentReceiptBalance,
+        receiptBalanceAfter: nextReceiptBalance
+      };
+      ledger.amount = nextAmount;
+      ledger.balance = nextReceiptBalance;
+      ledger.customerId = nextCustomerId as string;
+      ledger.customerName = customer ? `${customer.code}-${customer.name}` : ledger.customerName;
+    }
     if (customer) {
       row.customerId = customer.id;
       row.customerCode = customer.code;
       row.customerName = `${customer.code}-${customer.name}`;
       row.salesperson = customer.salesperson;
     }
-    if (input.amount !== undefined) {
-      const amount = Number(input.amount);
-      const pendingAmount = this.waterReceiptMatchRequests
-        .filter((request) => request.waterReceiptId === row.id && request.status === 'PENDING')
-        .reduce((sum, request) => sum + request.amount, 0);
-      if (amount < roundMoney(row.matchedAmount + pendingAmount)) {
-        throw new BadRequestException('水单金额不能小于已落账与待审核分配合计金额');
-      }
-      if (row.status !== 'PENDING' && amount !== row.amount) {
-        const account = this.customerAccounts.find((item) => item.customerId === row.customerId && item.currency === row.currency);
-        const ledger = this.accountLedger.find((item) => item.id === row.accountLedgerId);
-        if (!account || !ledger) throw new ConflictException('已到账水单缺少客户账户或账本，不能调整金额');
-        const nextAccountBalance = roundMoney(account.balance + amount - row.amount);
-        if (nextAccountBalance < 0) throw new ConflictException('调整后客户账户余额不能小于 0');
-        account.balance = nextAccountBalance;
-        ledger.amount = amount;
-        ledger.balance = roundMoney(amount - row.matchedAmount);
-      }
-      row.amount = amount;
-      row.balance = roundMoney(amount - row.matchedAmount);
-      if (row.status !== 'PENDING') {
-        row.status = row.balance <= 0 ? 'ARCHIVED' : row.matchedAmount > 0 ? 'PARTIAL_MATCHED' : 'ARRIVED';
-        row.archivedAt = row.balance <= 0 ? new Date().toISOString() : undefined;
-      }
-    }
     if (input.site !== undefined) row.site = input.site || '思远收款';
     if (input.receiptMethod !== undefined) row.receiptMethod = input.receiptMethod;
-    if (input.currency !== undefined) row.currency = input.currency;
-    if (input.receiptDate) row.receiptDate = new Date(input.receiptDate).toISOString();
-    row.paymentNo = this.requireUniqueWaterReceiptPaymentNo(input.paymentNo, row.id);
+    if (input.currency !== undefined) row.currency = nextCurrency;
+    if (receiptDate) row.receiptDate = receiptDate.toISOString();
+    row.amount = nextAmount;
+    row.balance = nextReceiptBalance;
+    if (isArrived) {
+      row.status = row.balance <= 0 ? 'ARCHIVED' : row.matchedAmount > 0 ? 'PARTIAL_MATCHED' : 'ARRIVED';
+      row.archivedAt = row.balance <= 0 ? (row.archivedAt ?? new Date().toISOString()) : undefined;
+      if (ledgerChanged && row.accountLedgerId) {
+        const ledger = this.accountLedger.find((item) => item.id === row.accountLedgerId);
+        if (ledger) ledger.note = input.paymentNo ?? row.paymentNo ?? input.receiptMethod ?? row.receiptMethod;
+      }
+    }
+    row.paymentNo = paymentNo;
     if (input.remark !== undefined) row.remark = input.remark;
     row.updatedAt = new Date().toISOString();
-    this.audit('finance.water_receipt.update', row.id, principal, before, row);
+    this.audit('finance.water_receipt.update', row.id, principal, before, isArrived ? { ...row, adjustReason: input.adjustReason?.trim(), accountSync: accountSyncAudit } : row);
     return row;
   }
 
@@ -8063,7 +8123,10 @@ export class InMemoryRepository {
         ),
         currentMatchRequest: this.findCurrentWaterReceiptMatchRequest(id, 'SYSTEM', fee.id)
       }));
-    return this.decorateReceivableRows([...systemRows, ...rows].sort((left, right) =>
+    const receiptCurrency = this.normalizeWaterReceiptCurrency(receipt.currency);
+    return this.decorateReceivableRows([...systemRows, ...rows]
+      .filter((row) => this.normalizeWaterReceiptCurrency(row.currency) === receiptCurrency)
+      .sort((left, right) =>
       (new Date(left.createdAt ?? 0).getTime() - new Date(right.createdAt ?? 0).getTime())
       || left.id.localeCompare(right.id)
     ));
@@ -8097,6 +8160,7 @@ export class InMemoryRepository {
       const receivableExchangeRate = amountCurrency === 'RMB'
         ? this.resolveWaterReceiptRmbExchangeRate(receivableCurrency)
         : 1;
+      if (receivableCurrency !== receiptCurrency) throw new BadRequestException('水单币种与应收币种不一致');
       const expectedRate = receiptCurrency !== 'RMB'
         ? receiptExchangeRate
         : receivableCurrency !== 'RMB'
