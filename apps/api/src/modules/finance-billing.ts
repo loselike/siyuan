@@ -8,6 +8,14 @@ type BillingFields = {
   unitPrice?: unknown;
 };
 
+type PayableBillingCandidate = BillingFields & {
+  id?: string;
+  type?: ShipmentFinanceItemType | string;
+  name?: string | null;
+  voided?: boolean;
+  createdAt?: string | Date;
+};
+
 export type ResolvedBusinessCostBilling = {
   billingUnit: FinanceBillingUnit;
   billingQuantity?: number;
@@ -46,6 +54,31 @@ export function resolveFinanceCostBillingFields(_type: 'BUSINESS_COST' | 'PAYABL
     billingQuantity: normalizedQuantity,
     chargeWeightKg: billingUnit === 'KG' ? normalizedQuantity : undefined
   };
+}
+
+export function resolvePrimaryCustomerServicePayableBilling(items: readonly PayableBillingCandidate[]): ResolvedFinanceCostBilling | undefined {
+  const candidates = items.filter((item) => item.type === 'PAYABLE' && item.voided !== true);
+  if (!candidates.length) return undefined;
+  const priority = (item: PayableBillingCandidate) => {
+    const name = item.name?.trim() ?? '';
+    if (name === '运费') return 0;
+    if (name === '基础运费') return 1;
+    if (name === '代理成本') return 2;
+    if (name.includes('运费')) return 3;
+    return 4;
+  };
+  const createdAt = (item: PayableBillingCandidate) => {
+    const value = item.createdAt instanceof Date ? item.createdAt.getTime() : Date.parse(item.createdAt ?? '');
+    return Number.isFinite(value) ? value : 0;
+  };
+  const sortedCandidates = [...candidates].sort((left, right) => priority(left) - priority(right)
+    || createdAt(right) - createdAt(left)
+    || (left.id ?? '').localeCompare(right.id ?? ''));
+  for (const candidate of sortedCandidates) {
+    const billing = resolveFinanceCostBillingFields('PAYABLE', candidate);
+    if (billing.billingQuantity !== undefined) return billing;
+  }
+  return undefined;
 }
 
 export function resolveFinanceItemQuantity(type: ShipmentFinanceItemType, input: BillingFields = {}, current?: BillingFields) {

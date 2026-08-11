@@ -62,7 +62,7 @@ npm run deploy:47 -- --expected-release-id <上一步记录的值>
 
 ## 一次性 legacy bootstrap
 
-仅当 47 审计结果为 `legacy-untraceable`，且已经提交一份完整的 v2 冻结 manifest 时，允许主发布协调会话执行一次 bootstrap：
+仅当 47 审计结果为 `legacy-untraceable` 或明确冻结的 `non-git-source`，且已经提交一份完整的 v2 manifest 时，允许主发布协调会话执行一次 bootstrap。`non-git-source` 只用于把现有 `WHITELIST_CAS` 运行态重新收敛为 Git 来源，不是日常发布入口：
 
 ```bash
 npm run deploy:47 -- \
@@ -71,7 +71,7 @@ npm run deploy:47 -- \
   --confirm-bootstrap
 ```
 
-bootstrap 仍要求候选 worktree 完全干净、HEAD 与同名 `origin` 分支一致，并持有全链路发布锁。锁内会重新捕获 47 的 release state、源码、Prisma、容器、镜像和运行产物；任一文件或 checksum 相对冻结 manifest 漂移都会停止，不能用新的线上值临时替换旧 manifest。
+bootstrap 仍要求候选 worktree 完全干净、HEAD 与同名 `origin` 分支一致，并持有全链路发布锁。manifest 路径与 bundle hash 必须固定在发布脚本和治理检查中；锁内会重新捕获 47 的 release state、源码、Prisma、容器、镜像和运行产物，任一文件或 checksum 相对冻结 manifest 漂移都会停止，不能用新的线上值临时替换旧 manifest。
 
 若明确不使用 GitHub，可在同一命令增加 `--source-bundle`。此模式不降低源码可追溯要求：脚本会在锁内从完全干净的 HEAD 生成 Git bundle，校验 bundle 只包含当前提交后，将只读 bundle 原子保存到 47 的 `.release-bundles/<commit>.bundle`。release state 与不可变 receipt 同时绑定 bundle 路径和 SHA-256；后续 provenance audit 会重新校验文件权限、checksum、bundle 完整性及其 HEAD commit。没有 origin 分支或 bundle 两者之一，发布仍会被拒绝。
 

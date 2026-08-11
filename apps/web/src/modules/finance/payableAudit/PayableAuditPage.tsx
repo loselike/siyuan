@@ -13,7 +13,7 @@ import type {
   PayableAuditUpdateInput,
   PendingPaymentListQuery
 } from '@siyuan/shared';
-import { FINANCIAL_DECIMAL_SCALE, calculateMonetaryTotal, formatFinancialDecimal, formatMonetaryTotal } from '@siyuan/shared';
+import { EARLY_PAYMENT_SETTLEMENT_METHOD, FINANCIAL_DECIMAL_SCALE, calculateMonetaryTotal, formatFinancialDecimal, formatMonetaryTotal } from '@siyuan/shared';
 import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { createFinanceFeeNameOptions, financeCatalogCurrencyOptions } from '../catalog';
 import { downloadCsv } from '../exportCsv';
@@ -340,7 +340,9 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
               <Button size="small" disabled={!canReverse}>反审核</Button>
             </Popconfirm>
           ) : (
-            <Popconfirm title="确认审核该市场应付并进入待付款？" onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
+            <Popconfirm title={row.settlementMethod?.trim() === EARLY_PAYMENT_SETTLEMENT_METHOD
+              ? '确认审核该市场应付并进入待付款？挂账仅允许提前付款，应付审核仍需数据确认和转单号。'
+              : '确认审核该市场应付并进入待付款？请确认业务数据、代理数据均已审核且已填写转单号。'} onConfirm={() => void auditOne(row)} okText="审核" cancelText="取消">
               <Button size="small" type="primary" disabled={!canAudit || row.voided}>审核</Button>
             </Popconfirm>
           )}

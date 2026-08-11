@@ -1,0 +1,4 @@
+sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229	2026-05-14T19:03:47.733148088Z	["docker.m.daocloud.io/library/postgres:16-alpine"]	["docker.m.daocloud.io/library/postgres@sha256:16bc17c64a573ef34162af9298258d1aec548232985b33ed7b1eac33ba35c229"]
+sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99	2026-05-07T17:34:49.043581139Z	["docker.m.daocloud.io/library/redis:7-alpine"]	["docker.m.daocloud.io/library/redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"]
+sha256:7850ca7157e3efec8e53dbf921b78a083e71a0719f1eef4d8490e6e6b64a6cec	2026-08-11T13:20:22.975982126+08:00	["siyuan-api:latest"]	["siyuan-api@sha256:7850ca7157e3efec8e53dbf921b78a083e71a0719f1eef4d8490e6e6b64a6cec"]
+sha256:fccbe2c7f3062c2b51ccf459b821be8cb7fb79f7f6bc68374c304e56a8c70d09	2026-08-11T13:21:57.860203365+08:00	["siyuan-web:latest"]	["siyuan-web@sha256:fccbe2c7f3062c2b51ccf459b821be8cb7fb79f7f6bc68374c304e56a8c70d09"]

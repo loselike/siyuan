@@ -180,7 +180,10 @@
       "DELETE /shipments/:id/finance-items/:feeId @ DataController.deleteShipmentFinanceItem",
       "permission",
       [
-        "business:order-fee:delete"
+        "business:order-entry:business-cost-write",
+        "business:order-entry:view",
+        "business:order-fee:delete",
+        "market:pending-routing:update"
       ],
       "DataController.deleteShipmentFinanceItem"
     ],
@@ -924,6 +927,7 @@
       [
         "business:order-entry:business-cost-view",
         "business:order-entry:business-cost-write",
+        "business:order-entry:view",
         "business:order-fee:profit-view",
         "business:shipment:finance-detail-view",
         "business:shipment:payable-view",
@@ -937,7 +941,10 @@
         "finance:order-fee:profit:receivable-payable",
         "finance:payable:view-profit",
         "finance:payable:view-sensitive",
-        "finance:receivable:detail"
+        "finance:receivable:detail",
+        "market:pending-routing:business-cost-view",
+        "market:pending-routing:detail",
+        "market:pending-routing:payable-cost-view"
       ],
       "DataController.getShipmentFinanceDetail"
     ],
@@ -1177,6 +1184,14 @@
         "warehouse:in-stock:view"
       ],
       "WarehouseInventoryQueryController.warehouseInStock"
+    ],
+    [
+      "GET /warehouse/in-stock-page @ WarehouseInventoryQueryController.warehouseInStockPage",
+      "permission",
+      [
+        "warehouse:in-stock:view"
+      ],
+      "WarehouseInventoryQueryController.warehouseInStockPage"
     ],
     [
       "GET /warehouse/in-stock-summary @ WarehouseInventoryQueryController.warehouseInStockSummary",
@@ -2558,7 +2573,10 @@
       "POST /shipments/:id/finance-items @ DataController.createShipmentFinanceItem",
       "permission",
       [
-        "business:order-fee:create"
+        "business:order-entry:business-cost-write",
+        "business:order-entry:view",
+        "business:order-fee:create",
+        "market:pending-routing:update"
       ],
       "DataController.createShipmentFinanceItem"
     ],
@@ -2921,6 +2939,14 @@
       "DataController.reverseReviewWarehouseTallyTask"
     ],
     [
+      "POST /warehouse/tally-tasks/:id/start @ DataController.startWarehouseTallyTask",
+      "permission",
+      [
+        "warehouse:tally-pending:task-process"
+      ],
+      "DataController.startWarehouseTallyTask"
+    ],
+    [
       "POST /warehouse/tally-tasks/label-scan @ DataController.applyWarehouseTallyTaskLabel",
       "permission",
       [
@@ -3197,7 +3223,10 @@
       "PUT /shipments/:id/finance-items/:feeId @ DataController.updateShipmentFinanceItem",
       "permission",
       [
-        "business:order-fee:update"
+        "business:order-entry:business-cost-write",
+        "business:order-entry:view",
+        "business:order-fee:update",
+        "market:pending-routing:update"
       ],
       "DataController.updateShipmentFinanceItem"
     ],
@@ -3329,11 +3358,11 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 269,
-    "apiClientMethodsMax": 363,
-    "apiClientDirectRequestsMax": 347,
-    "sharedRootImportFilesMax": 128,
-    "asAnyMax": 891,
+    "dataControllerRoutesMax": 270,
+    "apiClientMethodsMax": 364,
+    "apiClientDirectRequestsMax": 349,
+    "sharedRootImportFilesMax": 131,
+    "asAnyMax": 923,
     "directProcessEnvMax": 36,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
@@ -3346,17 +3375,17 @@
       "apps/api/src/modules/notifications/notification.types.ts = apps/web/src/modules/notifications/notificationTypes.ts"
     ],
     "knownDuplicateRouteGroups": [],
-    "prismaRepositoryMethodsMax": 706,
-    "inMemoryRepositoryMethodsMax": 587,
+    "prismaRepositoryMethodsMax": 713,
+    "inMemoryRepositoryMethodsMax": 599,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 31627,
-      "apps/api/src/modules/in-memory.repository.ts": 19147,
-      "apps/api/src/modules/data.controller.ts": 2926,
-      "packages/shared/src/index.ts": 6316,
-      "apps/web/src/apiClient.ts": 2565,
+      "apps/api/src/modules/prisma.repository.ts": 32018,
+      "apps/api/src/modules/in-memory.repository.ts": 19504,
+      "apps/api/src/modules/data.controller.ts": 3010,
+      "packages/shared/src/index.ts": 6328,
+      "apps/web/src/apiClient.ts": 2602,
       "apps/web/src/styles.css": 13061,
       "apps/web/src/modules/testSupport/appTestHarness.tsx": 6457,
-      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4827,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4919,
       "apps/web/src/modules/pricing/PricingPage.tsx": 3720,
       "apps/web/src/modules/masterData/MasterDataPage.tsx": 3281
     }
@@ -3434,12 +3463,12 @@
       }
     },
     "web": {
-      "errors": 146,
+      "errors": 147,
       "warnings": 0,
       "rules": {
         "error:@typescript-eslint/no-unused-vars": 32,
         "error:no-control-regex": 2,
-        "error:no-undef": 105,
+        "error:no-undef": 106,
         "error:react-hooks/exhaustive-deps": 7
       },
       "files": {
@@ -3452,7 +3481,7 @@
         },
         "src/apiClient.ts": {
           "error:@typescript-eslint/no-unused-vars": 2,
-          "error:no-undef": 26
+          "error:no-undef": 27
         },
         "src/appUpdate.tsx": {
           "error:no-undef": 8

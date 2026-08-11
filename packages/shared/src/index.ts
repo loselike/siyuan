@@ -74,6 +74,13 @@ export function formatMonetaryTotal(value: number): string {
 import type { ProblemTicketSummary } from './problem-ticket.js';
 
 export type BusinessType = 'EXPRESS' | 'SMALL_PACKET' | 'DEDICATED_LINE';
+
+/** 挂账仅允许提前进入付款申请；普通应付仍需数据确认与转单号。 */
+export const EARLY_PAYMENT_SETTLEMENT_METHOD = '挂账';
+
+export function isEarlyPaymentSettlementMethod(value?: string | null): boolean {
+  return value?.trim() === EARLY_PAYMENT_SETTLEMENT_METHOD;
+}
 export const companyChannelBusinessTypes = ['EXPRESS', 'AIRPORT_AIR', 'SEA_PORT', 'DEDICATED_LINE'] as const;
 export type CompanyChannelBusinessType = (typeof companyChannelBusinessTypes)[number];
 export const companyChannelVolumeDivisors = [5000, 6000] as const;
@@ -517,6 +524,7 @@ export interface Shipment {
   restoreMode?: 'KEEP_ORIGINAL_TIME' | 'RESET_CREATED_TIME' | 'MANUAL_TIME';
   etaAt?: string;
   etdAt?: string;
+  vesselVoyage?: string;
   remark?: string;
   businessType: BusinessType;
   packageType: 'DOC' | 'WPX' | 'PAK';
@@ -604,6 +612,9 @@ export interface CustomerServiceDataConfirmRow {
   agentDataApproved?: boolean;
   businessDataSnapshot?: CustomerServiceDataSnapshot;
   agentDataSnapshot?: CustomerServiceDataSnapshot;
+  /** Main payable billing basis shown in the customer-service agent data columns. */
+  agentBillingQuantity?: number;
+  agentBillingUnit?: FinanceBillingUnit;
 }
 
 export interface CustomerServiceDataConfirmListQuery {
@@ -1056,6 +1067,7 @@ export interface ShipmentOperationalUpdateInput {
   status?: ShipmentStatus;
   etaAt?: string;
   etdAt?: string;
+  vesselVoyage?: string;
   statusRemark?: string;
 }
 

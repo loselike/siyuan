@@ -237,6 +237,10 @@ export function isPricingModuleBlockPermission(permission: Pick<PermissionDefini
     || permission.code.startsWith('pricing:price-books:remark-block:');
 }
 
+export function isWarehouseTallyPendingMaskPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
+  return permission.code.startsWith('warehouse:tally-pending:') && permission.code.endsWith('-block');
+}
+
 export function inferPermissionRisk(permission: Pick<PermissionDefinition, 'code' | 'label'>): PermissionControlRisk {
   const value = `${permission.code} ${permission.label}`;
   if (/^system:role-permissions:(update|save|copy-role|batch-grant|batch-revoke|clear|admin-update)$/i.test(permission.code)) return 'critical';
@@ -261,7 +265,10 @@ function inferPermissionCategory(permission: PermissionDefinition, risk: Permiss
 export function getPermissionControls(group: string, permissions: PermissionDefinition[]): PermissionControl[] {
   const configured = marketPermissionControls[group];
   const configurablePermissions = permissions.filter(
-    (permission) => !isUiPreferencePermission(permission) && !isLineShipmentStageEditBlockPermission(permission) && !isPricingModuleBlockPermission(permission)
+    (permission) => !isUiPreferencePermission(permission)
+      && !isLineShipmentStageEditBlockPermission(permission)
+      && !isPricingModuleBlockPermission(permission)
+      && !isWarehouseTallyPendingMaskPermission(permission)
   );
   if (!configured) {
     return configurablePermissions.map((permission) => {

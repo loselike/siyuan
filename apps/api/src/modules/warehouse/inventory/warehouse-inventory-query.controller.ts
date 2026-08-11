@@ -1,5 +1,5 @@
 import { Controller, Get, Inject, Query, Req } from '@nestjs/common';
-import type { WarehouseInStockQuery, WarehouseTodayQuery } from '@siyuan/shared';
+import type { WarehouseInStockPageQuery, WarehouseInStockQuery, WarehouseTodayQuery } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
@@ -30,6 +30,12 @@ export class WarehouseInventoryQueryController {
   @RequirePermission('warehouse:in-stock:view')
   warehouseInStock(@Req() request: { user: Principal }, @Query() query: WarehouseInStockQuery) {
     return this.auditedRepository.getWarehouseInStock(request.user, query);
+  }
+
+  @Get('warehouse/in-stock-page')
+  @RequirePermission('warehouse:in-stock:view')
+  warehouseInStockPage(@Req() request: { user: Principal }, @Query() query: WarehouseInStockPageQuery) {
+    return this.service.listInStockPage(request.user, query);
   }
 
   @Get('warehouse/in-stock-summary')

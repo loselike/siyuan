@@ -3,7 +3,7 @@ import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconf
 import { Download } from 'lucide-react';
 import type { ColumnsType } from 'antd/es/table';
 import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
-import type { ApiClient } from '../../apiClient';
+import { isAdministratorRole, type ApiClient } from '../../apiClient';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, isBeijingCurrentWeek, isBeijingToday, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
@@ -43,7 +43,7 @@ function createCustomerServiceBusinessCostDraft(row: CustomerServiceFinanceUpdat
     billingQuantity: row.billingQuantity,
     unitPrice: row.unitPrice,
     editable: row.selectable,
-    statusLabel: row.locked ? '已锁定' : row.reconciliationStatus === 'CONFIRMED' ? '已审核' : '可修改'
+    statusLabel: row.selectable ? '可修改' : row.locked ? '已锁定' : row.reconciliationStatus === 'CONFIRMED' ? '已审核' : '不可修改'
   };
 }
 
@@ -85,6 +85,7 @@ type DepartureFormValues = {
   subOrderNo?: string;
   etdAt?: string;
   etaAt?: string;
+  vesselVoyage?: string;
   trackingWebsite?: string;
   trackingWebsiteVisibleToSales?: boolean;
   pushToSales?: boolean;
@@ -523,6 +524,20 @@ export function CustomerServicePage({
   const canViewDataConfirmBusiness = permissions.includes('customer-service:data-confirm:business-view');
   const canViewDataConfirmAgent = permissions.includes('customer-service:data-confirm:agent-view');
   const can = (permission: string) => permissions.includes(permission);
+  const isMaskEnabled = (permission: string) => !isAdministratorRole(role) && can(permission);
+  const canFillTransferNo = canTransferWrite && !isMaskEnabled('customer-service:transfer:fill-block');
+  const canViewPendingRouting = can('customer-service:pending-routing:view') && !isMaskEnabled('customer-service:pending-routing:readonly-block');
+  const canApproveBusinessData = can('customer-service:data-confirm:business-approve')
+    && !isMaskEnabled('customer-service:data-confirm:business-approve-block');
+  const canUpdateBusinessData = can('customer-service:data-confirm:business-update')
+    && !isMaskEnabled('customer-service:data-confirm:business-update-block');
+  const canUpdateAgentData = can('customer-service:data-confirm:agent-update')
+    && !isMaskEnabled('customer-service:data-confirm:agent-update-block');
+  const canApproveAgentData = can('customer-service:data-confirm:agent-approve')
+    && !isMaskEnabled('customer-service:data-confirm:agent-approve-block');
+  const canApproveAllData = can('customer-service:data-confirm:approve-all')
+    && !isMaskEnabled('customer-service:data-confirm:business-approve-block')
+    && !isMaskEnabled('customer-service:data-confirm:agent-approve-block');
   const canProblemView = can('customer-service:problem:view');
   const canColumnSetting: Record<string, boolean> = {
     dataConfirm: can('customer-service:data-confirm:column-setting'), transferNo: can('customer-service:transfer:column-setting'),
@@ -533,7 +548,7 @@ export function CustomerServicePage({
   };
   const items: ModuleSubNavItem[] = [
     ...(can('customer-service:dashboard:view') ? [{ key: 'service-dashboard', label: '客服看板' }] : []),
-    ...(can('customer-service:pending-routing:view') ? [{ key: 'pending-routing', label: '待排货' }] : []),
+    ...(canViewPendingRouting ? [{ key: 'pending-routing', label: '待排货' }] : []),
     ...(can('customer-service:data-confirm:view') ? [{ key: 'dataConfirm', label: '数据确认' }] : []),
     ...(canTransferView ? [{ key: 'transferNo', label: '转单号' }] : []),
     ...(can('customer-service:waiting-departure:view') ? [{ key: 'waitingDeparture', label: '待离港' }] : []),
@@ -656,7 +671,23 @@ export function CustomerServicePage({
     actualWeight: { title: '业务重量 KG', dataIndex: 'actualWeightKg', width: 110, render: (value: number | undefined, row) => value ?? row.receivableWeightKg ?? '-' },
     volumeCbm: { title: '业务体积 CBM', dataIndex: 'volumeCbm', width: 115, render: (value: number | undefined) => value ?? '-' },
     chargeWeight: { title: '计费重', dataIndex: 'receivableWeightKg', width: 90 },
-    agentWeightKg: { title: '代理计费重', dataIndex: 'agentWeightKg', width: 110 },
+    agentWeightKg: {
+      title: '代理计费数量',
+      key: 'agentWeightKg',
+      width: 110,
+      render: (_: unknown, row: Shipment) => {
+        const review = dataConfirmReviewByShipmentId.get(row.id);
+        const billingQuantity = review?.agentBillingQuantity;
+        const fallbackQuantity = review?.agentDataSnapshot?.chargeWeightKg ?? row.agentWeightKg;
+        return (
+          <span data-testid={`customer-service-agent-billing-quantity-${row.id}`}>
+            {billingQuantity !== undefined
+              ? `${billingQuantity} ${review?.agentBillingUnit ?? ''}`.trim()
+              : fallbackQuantity !== undefined ? `${fallbackQuantity} KG` : '-'}
+          </span>
+        );
+      }
+    },
     agentPackageCount: { title: '代理件数', key: 'agentPackageCount', width: 100, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.packageCount ?? row.packageCount ?? '-' },
     agentActualWeight: { title: '代理重量 KG', key: 'agentActualWeight', width: 110, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.weightKg ?? row.actualWeightKg ?? row.receivableWeightKg ?? '-' },
     agentVolumeCbm: { title: '代理体积 CBM', key: 'agentVolumeCbm', width: 115, render: (_, row) => getLatestDataSnapshot(row.id, customerServiceAuditIndex, 'agent')?.volumeCbm ?? row.volumeCbm ?? '-' },
@@ -815,9 +846,9 @@ export function CustomerServicePage({
               const agentApproved = review?.agentDataApproved === true;
               return (
                 <Space size={4} wrap>
-                  {!businessApproved ? <>{can('customer-service:data-confirm:business-approve') ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'business' })}>业务审核</Button> : null}{can('customer-service:data-confirm:business-update') ? <Button size="small" onClick={() => openDataEdit(row, 'business', dataConfirmReviewByShipmentId.get(row.id)?.businessDataSnapshot)}>业务修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'business')}>业务反审核</Button> : null}
-                  {!agentApproved ? <>{can('customer-service:data-confirm:agent-approve') ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'agent' })}>代理审核</Button> : null}{can('customer-service:data-confirm:agent-update') ? <Button size="small" onClick={() => openDataEdit(row, 'agent', dataConfirmReviewByShipmentId.get(row.id)?.agentDataSnapshot)}>代理修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'agent')}>代理反审核</Button> : null}
-                  {!businessApproved && !agentApproved && can('customer-service:data-confirm:approve-all') ? <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>全部审核</Button> : null}
+                  {!businessApproved ? <>{canApproveBusinessData ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'business' })}>业务审核</Button> : null}{canUpdateBusinessData ? <Button size="small" onClick={() => openDataEdit(row, 'business', dataConfirmReviewByShipmentId.get(row.id)?.businessDataSnapshot)}>业务修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'business')}>业务反审核</Button> : null}
+                  {!agentApproved ? <>{canApproveAgentData ? <Button size="small" onClick={() => setDataConfirmApproveTarget({ shipment: row, kind: 'agent' })}>代理审核</Button> : null}{canUpdateAgentData ? <Button size="small" onClick={() => openDataEdit(row, 'agent', dataConfirmReviewByShipmentId.get(row.id)?.agentDataSnapshot)}>代理修改</Button> : null}</> : can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'agent')}>代理反审核</Button> : null}
+                  {!businessApproved && !agentApproved && canApproveAllData ? <Button size="small" type="primary" onClick={() => openDataConfirmModal(row)}>全部审核</Button> : null}
                   {businessApproved && agentApproved && can('customer-service:data-confirm:reverse') ? <Button size="small" danger onClick={() => openDataReverse(row, 'all')}>全部反审核</Button> : null}
                 </Space>
               );
@@ -1061,7 +1092,7 @@ export function CustomerServicePage({
         items: [
           { key: 'dataConfirm', label: '数据确认', value: dataConfirmCount, helper: '待核对出库后业务数据', section: 'dataConfirm', tone: dataConfirmCount ? 'amber' : 'gray' },
           { key: 'transferNo', label: '缺转单号', value: missingTransferCount, helper: '已确认数据但未补转单号', section: 'transferNo', tone: missingTransferCount ? 'amber' : 'gray' },
-          { key: 'pending-routing', label: '待排货', value: pendingRoutingCount, helper: '待市场排货，只读跟进', section: 'pending-routing', tone: pendingRoutingCount ? 'amber' : 'gray' },
+          ...(canViewPendingRouting ? [{ key: 'pending-routing', label: '待排货', value: pendingRoutingCount, helper: '待市场排货，只读跟进', section: 'pending-routing', tone: pendingRoutingCount ? ('amber' as const) : ('gray' as const) }] : []),
           { key: 'waitingDeparture', label: '待离港', value: currentStatusCount('WAITING_DEPARTURE'), helper: '等待离港确认', section: 'waitingDeparture', tone: currentStatusCount('WAITING_DEPARTURE') ? 'blue' : 'gray' }
         ]
       },
@@ -1098,7 +1129,7 @@ export function CustomerServicePage({
     ];
     const maxValue = Math.max(1, ...groups.flatMap((group) => group.items.map((item) => getDashboardTaskNumericValue(item.value))));
     return { groups, maxValue, totalShipmentCount: shipments.length };
-  }, [customerServiceAuditIndex, customerServiceAuditLogs, pendingRoutingShipments.length, problemTickets, rawProblemRows, shipments]);
+  }, [canViewPendingRouting, customerServiceAuditIndex, customerServiceAuditLogs, pendingRoutingShipments.length, problemTickets, rawProblemRows, shipments]);
 
   function exportCustomerServiceDashboardOrders() {
     if (!shipments.length) {
@@ -1309,24 +1340,24 @@ export function CustomerServicePage({
     () => createPendingRoutingColumns({
       businessCostAudits,
       mode: 'customerService',
-      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') && !isMaskEnabled('customer-service:pending-routing:fee-detail-block') ? (shipment) => void openFeeDetail(shipment) : undefined,
       canViewBusinessCost: false,
       canViewPayableCost: false,
       canViewAgentChannel: can('customer-service:pending-routing:agent-view')
     }),
-    [businessCostAudits, permissions]
+    [businessCostAudits, permissions, role]
   );
   const pendingRoutingMatrixColumns = useMemo(
     () => createPendingRoutingColumns({
       businessCostAudits,
       mode: 'customerService',
-      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') && !isMaskEnabled('customer-service:pending-routing:fee-detail-block') ? (shipment) => void openFeeDetail(shipment) : undefined,
       canViewBusinessCost: false,
       canViewPayableCost: false,
       canViewAgentChannel: can('customer-service:pending-routing:agent-view'),
       presentation: 'matrix'
     }),
-    [businessCostAudits, permissions]
+    [businessCostAudits, permissions, role]
   );
   const activeLabel = items.find((item) => item.key === activeSection)?.label ?? '客服管理';
   const outboundOrderSearch = customerServiceOutboundOrderSearchSections.includes(activeSection as typeof customerServiceOutboundOrderSearchSections[number]) ? (
@@ -1444,13 +1475,16 @@ export function CustomerServicePage({
   }, [activeSection, apiClient, canTransferView]);
 
   function openTransferFill(shipmentsToFill: Shipment[]) {
-    if (!shipmentsToFill.length) return;
+    if (!canFillTransferNo || !shipmentsToFill.length) return;
     setTransferFillRows(shipmentsToFill);
     transferForm.setFieldsValue({ rows: shipmentsToFill.map(() => ({ pushToSales: false })) });
   }
 
   async function submitTransferFill() {
-    if (!apiClient) return;
+    if (!apiClient || !canFillTransferNo) {
+      setTransferFillRows([]);
+      return;
+    }
     const values = await transferForm.validateFields();
     const rows = transferFillRows.map((shipment, index) => ({ shipmentId: shipment.id, transferNo: values.rows[index]?.transferNo?.trim() ?? '', subOrderNo: values.rows[index]?.subOrderNo?.trim() || undefined, pushToSales: values.rows[index]?.pushToSales === true }));
     const duplicate = rows.map((row) => row.transferNo).find((value, index, all) => value && all.indexOf(value) !== index);
@@ -1483,10 +1517,10 @@ export function CustomerServicePage({
       ...(canViewTransferAgentData ? [{ title: '代理计费重', dataIndex: 'agentWeightKg', width: 105 }] : []),
       { title: '品名', dataIndex: 'productName', width: 120 },
       ...(canViewTransferSensitive ? [{ title: '报关', dataIndex: 'declarationRequired', width: 70, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> }, { title: '敏感', dataIndex: 'sensitive', width: 70, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> }] : []),
-      { title: '操作', key: 'action', fixed: 'right', width: 115, render: (_, row) => <Button size="small" type="primary" disabled={!canTransferWrite} onClick={() => openTransferFill([row])}>填写转单号</Button> }
+      ...(canFillTransferNo ? [{ title: '操作', key: 'action', fixed: 'right' as const, width: 115, render: (_: unknown, row: Shipment) => <Button size="small" type="primary" onClick={() => openTransferFill([row])}>填写转单号</Button> }] : [])
     ];
     return result;
-  }, [canTransferWrite, canViewTransferAgent, canViewTransferAgentData, canViewTransferOutboundAt, canViewTransferSensitive]);
+  }, [canFillTransferNo, canViewTransferAgent, canViewTransferAgentData, canViewTransferOutboundAt, canViewTransferSensitive]);
 
   function openDepartureModal(shipment: Shipment) {
     setDepartureShipment(shipment);
@@ -1496,6 +1530,7 @@ export function CustomerServicePage({
       subOrderNo: shipment.subOrderNo ?? '',
       etdAt: toDatetimeLocalValue(shipment.etdAt),
       etaAt: toDatetimeLocalValue(shipment.etaAt),
+      vesselVoyage: shipment.vesselVoyage ?? '',
       trackingWebsite: tracking.url ?? agentTrackingWebsiteForShipment(shipment, agents) ?? trackingWebsiteForShipment(shipment),
       trackingWebsiteVisibleToSales: tracking.visibleToSales ?? false,
       pushToSales: false,
@@ -1511,6 +1546,7 @@ export function CustomerServicePage({
       subOrderNo: shipment.subOrderNo ?? '',
       etdAt: toDatetimeLocalValue(shipment.etdAt),
       etaAt: toDatetimeLocalValue(shipment.etaAt),
+      vesselVoyage: shipment.vesselVoyage ?? '',
       trackingWebsite: tracking.url ?? agentTrackingWebsiteForShipment(shipment, agents) ?? trackingWebsiteForShipment(shipment),
       trackingWebsiteVisibleToSales: tracking.visibleToSales ?? false,
       pushToSales: false,
@@ -1679,6 +1715,7 @@ export function CustomerServicePage({
         latestTracking: departureShipment.latestTracking,
         etdAt: values.etdAt ? parseBeijingDateTimeInputToIso(values.etdAt) : undefined,
         etaAt: values.etaAt ? parseBeijingDateTimeInputToIso(values.etaAt) : undefined,
+        vesselVoyage: values.vesselVoyage?.trim() || undefined,
         trackingWebsite: values.trackingWebsite,
         trackingWebsiteVisibleToSales: values.trackingWebsiteVisibleToSales ?? false,
         ...(statusRemark ? { statusRemark } : {})
@@ -2335,7 +2372,7 @@ export function CustomerServicePage({
             </Space>
           </Card>
         ) : null}
-        {activeSection === 'pending-routing' ? (
+        {activeSection === 'pending-routing' && canViewPendingRouting ? (
           <Card title="待排货">
             <ManagedDualViewTable
               viewStorageKey="sunny.customer-service.pending-routing.table-view-v1"
@@ -2390,7 +2427,7 @@ export function CustomerServicePage({
                   action={<Button size="small" onClick={() => void refreshCustomerServiceDataConfirmRows()}>重试</Button>}
                 />
               ) : null}
-              {activeSection === 'transferNo' && canTransferWrite ? <Button type="primary" disabled={!selectedTransferIds.length || (selectedTransferIds.length > 1 && !canTransferBatchWrite)} onClick={() => openTransferFill(transferRows.filter((row) => selectedTransferIds.includes(row.id)))}>填写转单号</Button> : null}
+              {activeSection === 'transferNo' && canFillTransferNo ? <Button type="primary" disabled={!selectedTransferIds.length || (selectedTransferIds.length > 1 && !canTransferBatchWrite)} onClick={() => openTransferFill(transferRows.filter((row) => selectedTransferIds.includes(row.id)))}>填写转单号</Button> : null}
               {activeSection === 'waitingDeparture' ? (
                 <ManagedDualViewTable
                   viewStorageKey="sunny.customer-service.waiting-departure.table-view"
@@ -2447,7 +2484,7 @@ export function CustomerServicePage({
                         ? '数据加载失败，请重试'
                         : '暂无待确认数据'
                   } : undefined}
-                  rowSelection={activeSection === 'transferNo' && canTransferWrite ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
+                  rowSelection={activeSection === 'transferNo' && canFillTransferNo ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
                   pagination={activeSection === 'dataConfirm' ? {
                     ...tenRowTablePagination,
                     current: dataConfirmPagination.page,
@@ -2593,6 +2630,9 @@ export function CustomerServicePage({
                 </Form.Item>
                 <Form.Item name="etaAt" label="ETA/ATA">
                   <AppDateTimePicker size="small" />
+                </Form.Item>
+                <Form.Item name="vesselVoyage" label="船名航次">
+                  <Input size="small" placeholder="选填，例如：MSC MAYA / 123E" />
                 </Form.Item>
                 <Form.Item name="trackingWebsite" label="查询网站" className="customer-service-operational-edit-wide-field">
                   <Input size="small" placeholder="默认按转单号生成，可手动填写" />

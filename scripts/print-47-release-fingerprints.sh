@@ -49,7 +49,9 @@ scope_hash() {
   local scope="$1"
   while IFS= read -r path; do
     [[ -f "$path" ]] || continue
-    case "$path" in */node_modules/*|*/dist/*|apps/api/uploads/*|*/.DS_Store|*.tsbuildinfo|*.log) continue ;; esac
+    case "$path" in
+      */node_modules/*|*/dist/*|*/coverage/*|*/.vite/*|apps/api/uploads/*|*/.DS_Store|*.tsbuildinfo|*.log|*.orig|*/._*) continue ;;
+    esac
     if matches_scope "$scope" "$path"; then
       printf '%s  %s\n' "$(sha256_file "$path")" "$path"
     fi

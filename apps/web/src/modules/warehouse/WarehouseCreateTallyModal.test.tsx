@@ -13,7 +13,9 @@ describe('WarehouseCreateTallyModal', () => {
       <WarehouseCreateTallyModal
         open
         selectedCount={2}
+        channel="WAREHOUSE"
         requirement="保留原箱唛头"
+        onChannelChange={vi.fn()}
         onRequirementChange={onRequirementChange}
         onCancel={vi.fn()}
         onConfirm={onConfirm}
@@ -36,7 +38,9 @@ describe('WarehouseCreateTallyModal', () => {
       <WarehouseCreateTallyModal
         open
         selectedCount={1}
+        channel="WAREHOUSE"
         requirement=""
+        onChannelChange={vi.fn()}
         onRequirementChange={vi.fn()}
         onCancel={onCancel}
         onConfirm={vi.fn()}

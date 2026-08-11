@@ -124,7 +124,9 @@ for (const bootstrapGate of [
   '--confirm-bootstrap',
   'BOOTSTRAP_REMOTE_BASELINE_DRIFT',
   'BOOTSTRAP_APPLIED_MIGRATION_SET_MISMATCH',
-  'Bootstrap is only allowed for the explicitly frozen legacy-untraceable runtime.'
+  'Bootstrap is only allowed for the explicitly frozen non-Git runtime.',
+  'docs/release-manifests/47/20260811-053014-customer-service-data-confirm-editable-20260811-1335',
+  'e1f03995d9299d8a7ac903dbbfea1dbf51bd7d803fb1db0cae357186584ba6b8'
 ]) {
   if (!deployScript.includes(bootstrapGate)) failures.push(`bootstrap cutover is missing fail-closed gate: ${bootstrapGate}`);
 }

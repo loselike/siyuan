@@ -21,8 +21,8 @@ SOURCE_BUNDLE_TMP=""
 SOURCE_BUNDLE_PATH=""
 SOURCE_BUNDLE_SHA256=""
 BOOTSTRAP_MIGRATION_EXCEPTION_FILE="config/release/47-legacy-migration-checksums.tsv"
-APPROVED_BOOTSTRAP_MANIFEST_DIR="docs/release-manifests/47/20260810-042420-runtime-stage-view-20260810020229"
-APPROVED_BOOTSTRAP_BUNDLE_SHA256="fb419d6d56e6ec807ebbb136a7ad8daa7791b9c94e8deb5eee192629cd0da4e4"
+APPROVED_BOOTSTRAP_MANIFEST_DIR="docs/release-manifests/47/20260811-053014-customer-service-data-confirm-editable-20260811-1335"
+APPROVED_BOOTSTRAP_BUNDLE_SHA256="e1f03995d9299d8a7ac903dbbfea1dbf51bd7d803fb1db0cae357186584ba6b8"
 APPROVED_BOOTSTRAP_MIGRATION_EXCEPTIONS_SHA256="13e4dcb6aabeef0ba3585de72c105f4b7bb48c24d1159b3579e403aea2746a84"
 REMOTE_MUTATION_STARTED=false
 FAILURE_PHASE="standard-deploy"
@@ -406,8 +406,8 @@ if [[ "$MODE" == "apply" ]]; then
     bootstrap_audit="$(bash "$SCRIPT_DIR/audit-47-runtime-provenance.sh")"
     printf '%s\n' "$bootstrap_audit"
     bootstrap_status="$(printf '%s\n' "$bootstrap_audit" | sed -n 's/^RUNTIME_PROVENANCE_STATUS=//p')"
-    if [[ "$bootstrap_status" != "legacy-untraceable" ]]; then
-      echo "Bootstrap is only allowed for the explicitly frozen legacy-untraceable runtime." >&2
+    if [[ "$bootstrap_status" != "legacy-untraceable" && "$bootstrap_status" != "non-git-source" ]]; then
+      echo "Bootstrap is only allowed for the explicitly frozen non-Git runtime." >&2
       exit 84
     fi
 
