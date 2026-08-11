@@ -162,6 +162,12 @@ import { configureAccountTablePreferences } from './modules/shared/tablePreferen
 
 import { CustomerServicePage, FinancePage, MiscFeesPage, WarehousePage, loadCustomerServicePage, loadFinancePage, loadMiscFeesPage, loadWarehousePage } from './modules/appShell/pageLoaders';
 import { clearPersistedSession, loadPersistedSession, persistSession } from './modules/appShell/sessionStore';
+import {
+  useNavigateToStaffRoute,
+  useRequestedStaffRoute,
+  useStaffRouteAccessFallback,
+  useStaffRoutePopState
+} from './modules/appShell/staffRouteNavigation';
 import { useCurrentSessionRefresh } from './modules/appShell/useCurrentSessionRefresh';
 import { useNotificationNavigation } from './modules/appShell/useNotificationNavigation';
 import { refreshWorkspaceData } from './modules/appShell/workspaceRefresh';
@@ -197,7 +203,7 @@ export function App() {
   const [editShipmentForm] = Form.useForm<EditShipmentOperationalFormValues>();
   const [routingAssignmentForm] = Form.useForm<RoutingAssignmentFormValues>();
   const [session, setSession] = useState<Session | null>(loadPersistedSession);
-  const [requestedAppRoute, setRequestedAppRoute] = useState(() => parseStaffAppRoute(window.location.pathname));
+  const [requestedAppRoute, setRequestedAppRoute] = useRequestedStaffRoute();
   const [expandedMenuKey, setExpandedMenuKey] = useState<MenuKey | null>('workspace');
   const [sidebarSubNav, setSidebarSubNav] = useState<SidebarSubNavState | null>(null);
   const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['appShell']['navigationUnreadBadges']>>['items']>([]);
@@ -385,26 +391,16 @@ export function App() {
   }, [currentMenuKey, isCustomerServiceDataConfirm, session, visibleMenuKeys]);
   const orderManagementOwnsShipmentOverlays = currentMenuKey === 'orders'
     || (currentMenuKey === 'business' && activeSectionKey === 'order-management');
-  const navigateToAppRoute = useCallback((menuKey: MenuKey, sectionKey?: string, mode: 'push' | 'replace' = 'push', reloadHref?: string) => {
-    const href = getStaffSectionHref(menuKey, sectionKey);
-    navigateWithVersionCheck(reloadHref ?? href, () => {
-      const route = parseStaffAppRoute(href) ?? { menuKey, sectionKey };
-      if (window.location.pathname !== href) {
-        window.history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', href);
-      }
-      setRequestedAppRoute(route);
-      if (Date.now() - lastDataRefreshRequestAtRef.current >= 15_000) {
-        lastDataRefreshRequestAtRef.current = Date.now();
-        setDataRefreshVersion((current) => current + 1);
-      }
-      setNotice(null);
-      if (menuKey === 'customerService' && !sectionKey) {
-        setCustomerServiceInitialSection('service-dashboard');
-      }
-      setExpandedMenuKey(menuKey);
-      void refreshCurrentSession().catch(() => undefined);
-    });
-  }, [navigateWithVersionCheck, refreshCurrentSession, setNotice]);
+  const navigateToAppRoute = useNavigateToStaffRoute({
+    navigateWithVersionCheck,
+    lastDataRefreshRequestAtRef,
+    setRequestedAppRoute,
+    setDataRefreshVersion,
+    setNotice,
+    setCustomerServiceInitialSection,
+    setExpandedMenuKey,
+    refreshCurrentSession
+  });
   const {
     consumePendingNotificationTarget,
     handleNotificationNavigate,
@@ -569,32 +565,14 @@ export function App() {
     }).catch(() => undefined);
   }, [activeSectionKey, apiClient, currentMenuKey, session]);
 
-  useEffect(() => {
-    if (!session || session.user.role === 'CUSTOMER') {
-      return;
-    }
-    const requestedMenuKey = requestedAppRoute?.menuKey;
-    const nextMenuKey = requestedMenuKey && visibleMenuKeys.includes(requestedMenuKey)
-      ? requestedMenuKey
-      : visibleMenuKeys[0] ?? 'workspace';
-    if (requestedMenuKey && !visibleMenuKeys.includes(requestedMenuKey)) {
-      const fallbackHref = getStaffModuleHref(nextMenuKey);
-      if (window.location.pathname !== fallbackHref) {
-        window.history.replaceState(null, '', fallbackHref);
-      }
-      setRequestedAppRoute({ menuKey: nextMenuKey });
-      setNotice('当前账号无权限访问该模块，已跳转至可访问模块。');
-    }
-  }, [requestedAppRoute, session, setNotice, visibleMenuKeys]);
-
-  useEffect(() => {
-    const handlePopState = () => {
-      const route = parseStaffAppRoute(window.location.pathname);
-      setRequestedAppRoute(route);
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
+  useStaffRouteAccessFallback({
+    enabled: Boolean(session && session.user.role !== 'CUSTOMER'),
+    requestedAppRoute,
+    visibleMenuKeys,
+    setRequestedAppRoute,
+    setNotice
+  });
+  useStaffRoutePopState(setRequestedAppRoute);
 
   useEffect(() => {
     if (!session || session.user.role === 'CUSTOMER' || (!shouldLoadRoutingFeeNameCatalog(currentMenuKey) && currentMenuKey !== 'customerService')) {
