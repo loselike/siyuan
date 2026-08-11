@@ -125,7 +125,6 @@ import type {
   StaffAccountPasswordResetInput,
   StaffAccountQuery,
   StaffAccountUpdateInput,
-  TrackingEventInput,
   WarehousePackageCreateInput,
   MasterDataSnapshot,
   NavigationReadStateInput
@@ -1045,18 +1044,6 @@ export class DataController {
   @RequirePermission('business:order-fee:unlock')
   async unlockShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
     return this.repository.unlockShipmentFinanceItem(request.user, id, feeId);
-  }
-
-  @Post('shipments/:id/tracking-events')
-  @RequirePermission('tracking:external:single-add')
-  async addTrackingEvent(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: TrackingEventInput) {
-    return this.repository.addTrackingEvent(request.user, id, body);
-  }
-
-  @Post('operations/line-shipments/:id/tracking-events')
-  @RequirePermission('operations:line-shipment:tracking-add')
-  async addOperationTrackingEvent(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: TrackingEventInput) {
-    return this.repository.addTrackingEvent(request.user, id, body);
   }
 
   @Get('customer-service/problem-tags')

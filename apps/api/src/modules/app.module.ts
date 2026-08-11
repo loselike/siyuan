@@ -89,6 +89,9 @@ import {
 import { TrackingImportCommandController } from './tracking/import/tracking-import-command.controller.js';
 import { TRACKING_IMPORT_COMMAND_REPOSITORY } from './tracking/import/tracking-import-command.repository.js';
 import { TrackingImportCommandService } from './tracking/import/tracking-import-command.service.js';
+import { TrackingManualEventCommandController } from './tracking/event/tracking-manual-event-command.controller.js';
+import { TRACKING_MANUAL_EVENT_COMMAND_REPOSITORY } from './tracking/event/tracking-manual-event-command.repository.js';
+import { TrackingManualEventCommandService } from './tracking/event/tracking-manual-event-command.service.js';
 import { CarrierTaskCommandController } from './tracking/task/carrier-task-command.controller.js';
 import { CARRIER_TASK_COMMAND_REPOSITORY } from './tracking/task/carrier-task-command.repository.js';
 import { CarrierTaskCommandService } from './tracking/task/carrier-task-command.service.js';
@@ -283,6 +286,11 @@ const trackingImportCommandRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const trackingManualEventCommandRepositoryProvider = {
+  provide: TRACKING_MANUAL_EVENT_COMMAND_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const carrierTaskCommandRepositoryProvider = {
   provide: CARRIER_TASK_COMMAND_REPOSITORY,
   useExisting: PrismaRepository
@@ -318,6 +326,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     SystemDirectoryController,
     TrackingQueryController,
     TrackingImportCommandController,
+    TrackingManualEventCommandController,
     CarrierTaskCommandController,
     WarehouseDispatchController,
     WarehouseInventoryQueryController,
@@ -382,6 +391,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     trackingQueryRepositoryProvider,
     TrackingImportCommandService,
     trackingImportCommandRepositoryProvider,
+    TrackingManualEventCommandService,
+    trackingManualEventCommandRepositoryProvider,
     CarrierTaskCommandService,
     carrierTaskCommandRepositoryProvider,
     priceBookQueryRepositoryProvider,

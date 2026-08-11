@@ -84,8 +84,8 @@
 | shipment-flow | DELETE | `/shipments/:id/finance-items/:feeId` | `DataController.deleteShipmentFinanceItem` | permission | `business:order-fee:delete` | `apps/api/src/modules/data.controller.ts:1167` |
 | shipment-flow | POST | `/shipments/:id/finance-items/:feeId/lock` | `DataController.lockShipmentFinanceItem` | permission | `business:order-fee:lock` | `apps/api/src/modules/data.controller.ts:1173` |
 | shipment-flow | POST | `/shipments/:id/finance-items/:feeId/unlock` | `DataController.unlockShipmentFinanceItem` | permission | `business:order-fee:unlock` | `apps/api/src/modules/data.controller.ts:1179` |
-| shipment-flow | POST | `/shipments/:id/tracking-events` | `DataController.addTrackingEvent` | permission | `tracking:external:single-add` | `apps/api/src/modules/data.controller.ts:1185` |
-| shipment-flow | POST | `/operations/line-shipments/:id/tracking-events` | `DataController.addOperationTrackingEvent` | permission | `operations:line-shipment:tracking-add` | `apps/api/src/modules/data.controller.ts:1191` |
+| tracking | POST | `/shipments/:id/tracking-events` | `TrackingManualEventCommandController.addTrackingEvent` | permission | `tracking:external:single-add` | `apps/api/src/modules/tracking/event/tracking-manual-event-command.controller.ts:14` |
+| tracking | POST | `/operations/line-shipments/:id/tracking-events` | `TrackingManualEventCommandController.addOperationTrackingEvent` | permission | `operations:line-shipment:tracking-add` | `apps/api/src/modules/tracking/event/tracking-manual-event-command.controller.ts:24` |
 | customer-service | GET | `/problem-tickets` | `DataController.problemTickets` | permission | `customer-service:problem:view` | `apps/api/src/modules/data.controller.ts:1197` |
 | shipment-flow | GET | `/customer-service/problem-tags` | `DataController.problemTicketCommonTags` | auth | — | `apps/api/src/modules/data.controller.ts:1203` |
 | shipment-flow | POST | `/customer-service/problem-tags` | `DataController.createProblemTicketCommonTag` | auth | — | `apps/api/src/modules/data.controller.ts:1210` |
