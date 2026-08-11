@@ -952,24 +952,6 @@ export class DataController {
     return this.repository.deleteShipment(request.user, id);
   }
 
-  @Post('carrier-tasks/:id/run')
-  @RequirePermission('tracking:carrier-task:run')
-  async runCarrierTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { fail?: boolean }) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能执行承运商任务');
-    }
-    return this.repository.runCarrierTask(request.user, id, body);
-  }
-
-  @Post('carrier-tasks/:id/retry')
-  @RequirePermission('tracking:carrier-task:retry')
-  async retryCarrierTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { fail?: boolean }) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能重试承运商任务');
-    }
-    return this.repository.retryCarrierTask(request.user, id, body);
-  }
-
   @Post('shipments/:id/fees/generate')
   @RequirePermission('finance:receivable:create')
   async generateShipmentFees(

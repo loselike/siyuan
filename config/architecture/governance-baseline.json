@@ -1456,20 +1456,20 @@
       "DataController.createBusinessProblemTicket"
     ],
     [
-      "POST /carrier-tasks/:id/retry @ DataController.retryCarrierTask",
+      "POST /carrier-tasks/:id/retry @ CarrierTaskCommandController.retryCarrierTask",
       "permission",
       [
         "tracking:carrier-task:retry"
       ],
-      "DataController.retryCarrierTask"
+      "CarrierTaskCommandController.retryCarrierTask"
     ],
     [
-      "POST /carrier-tasks/:id/run @ DataController.runCarrierTask",
+      "POST /carrier-tasks/:id/run @ CarrierTaskCommandController.runCarrierTask",
       "permission",
       [
         "tracking:carrier-task:run"
       ],
-      "DataController.runCarrierTask"
+      "CarrierTaskCommandController.runCarrierTask"
     ],
     [
       "POST /customer-service/problem-tags @ DataController.createProblemTicketCommonTag",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 230,
+    "dataControllerRoutesMax": 228,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 32122,
       "apps/api/src/modules/in-memory.repository.ts": 19588,
-      "apps/api/src/modules/data.controller.ts": 2598,
+      "apps/api/src/modules/data.controller.ts": 2579,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,

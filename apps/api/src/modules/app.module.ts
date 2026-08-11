@@ -86,6 +86,9 @@ import {
   PrismaTrackingQueryRepository,
   TRACKING_QUERY_REPOSITORY
 } from './tracking/query/tracking-query.repository.js';
+import { CarrierTaskCommandController } from './tracking/task/carrier-task-command.controller.js';
+import { CARRIER_TASK_COMMAND_REPOSITORY } from './tracking/task/carrier-task-command.repository.js';
+import { CarrierTaskCommandService } from './tracking/task/carrier-task-command.service.js';
 import { WarehouseDispatchController } from './warehouse/dispatch/warehouse-dispatch-query.controller.js';
 import {
   WAREHOUSE_DISPATCH_AUTHORIZER,
@@ -272,6 +275,11 @@ const trackingQueryRepositoryProvider = usePrismaRepository
   ? { provide: TRACKING_QUERY_REPOSITORY, useClass: PrismaTrackingQueryRepository }
   : { provide: TRACKING_QUERY_REPOSITORY, useClass: LegacyTrackingQueryRepository };
 
+const carrierTaskCommandRepositoryProvider = {
+  provide: CARRIER_TASK_COMMAND_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const priceBookQueryRepositoryProvider = usePrismaRepository
   ? { provide: PRICE_BOOK_QUERY_REPOSITORY, useClass: PrismaPriceBookQueryRepository }
   : { provide: PRICE_BOOK_QUERY_REPOSITORY, useClass: LegacyPriceBookQueryRepository };
@@ -301,6 +309,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     ShipmentOverviewQueryController,
     SystemDirectoryController,
     TrackingQueryController,
+    CarrierTaskCommandController,
     WarehouseDispatchController,
     WarehouseInventoryQueryController,
     WarehouseMachineImportController,
@@ -362,6 +371,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     MiscFeeService,
     systemDirectoryRepositoryProvider,
     trackingQueryRepositoryProvider,
+    CarrierTaskCommandService,
+    carrierTaskCommandRepositoryProvider,
     priceBookQueryRepositoryProvider,
     SystemDirectoryService,
     warehouseInventoryQueryRepositoryProvider,
