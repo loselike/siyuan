@@ -2360,7 +2360,7 @@ export class DataController {
   @Post('warehouse/tally-tasks/:id/complete')
   @RequirePermission('warehouse:tally-pending:task-process')
   async completeWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseTallyTaskCompleteInput) {
-    return this.repository.completeWarehouseTallyTask(request.user, id, body);
+    return this.warehouseTallyLifecycle.complete(request.user, id, body);
   }
 
   @Patch('warehouse/tally-tasks/:id/completed-count')

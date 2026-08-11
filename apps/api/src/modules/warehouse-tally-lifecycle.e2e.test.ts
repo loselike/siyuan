@@ -59,12 +59,82 @@ describe('warehouse tally lifecycle contract', () => {
 
     await request(app.getHttpServer())
       .post(`/api/warehouse/tally-tasks/${task.body.id}/complete`)
+      .send({
+        packageCount: 1,
+        results: [{ sourcePackageIds: [sourceId], packageCount: 1 }]
+      })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/complete`)
+      .set('Authorization', app.auth(operatorToken))
+      .send({
+        packageCount: 1,
+        results: [{ sourcePackageIds: [sourceId], packageCount: 1 }]
+      })
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/complete`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ packageCount: 1 })
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('必须提交理货后的实体件结果'));
+
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/complete`)
       .set('Authorization', app.auth(warehouseToken))
       .send({
         packageCount: 1,
         results: [{ sourcePackageIds: [sourceId], packageCount: 1 }]
       })
-      .expect(201);
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          id: task.body.id,
+          status: 'COMPLETED',
+          tallyProgressStatus: 'COMPLETED',
+          completedPackageCount: 1,
+          completedBy: 'warehouse',
+          labelStatus: 'GENERATED',
+          labelNo: task.body.taskNo
+        }));
+        expect(response.body.completedAt).toBeTruthy();
+      });
+
+    await request(app.getHttpServer())
+      .post(`/api/warehouse/tally-tasks/${task.body.id}/complete`)
+      .set('Authorization', app.auth(warehouseToken))
+      .send({ packageCount: 999 })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          id: task.body.id,
+          status: 'COMPLETED',
+          completedPackageCount: 1
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .get('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        const source = response.body.find((row: { id: string }) => row.id === sourceId);
+        const outputs = response.body.filter((row: { sourcePackageId?: string; tallyTaskId?: string }) =>
+          row.sourcePackageId === sourceId && row.tallyTaskId === task.body.id
+        );
+        expect(source).toEqual(expect.objectContaining({
+          status: 'TALLIED_ARCHIVED',
+          archivedReason: '理货完成',
+          tallyTaskId: task.body.id
+        }));
+        expect(outputs).toHaveLength(1);
+        expect(outputs[0]).toEqual(expect.objectContaining({
+          status: 'RECEIVED',
+          measurementStatus: 'PENDING_REMEASURE',
+          packageCount: 1,
+          weightKg: 0
+        }));
+      });
 
     await request(app.getHttpServer())
       .post(`/api/warehouse/tally-tasks/${task.body.id}/cancel-completed`)
@@ -140,6 +210,22 @@ describe('warehouse tally lifecycle contract', () => {
             action: 'warehouse.tally.start',
             target: task.body.id,
             after: expect.objectContaining({ tallyProgressStatus: 'IN_PROGRESS', tallyStartedBy: 'warehouse' })
+          })
+        ]));
+      });
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs?action=warehouse.tally.complete')
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows).toEqual(expect.arrayContaining([
+          expect.objectContaining({
+            action: 'warehouse.tally.complete',
+            target: task.body.id,
+            after: expect.objectContaining({
+              task: expect.objectContaining({ status: 'COMPLETED', completedPackageCount: 1 }),
+              resultMappings: [expect.objectContaining({ sourcePackageIds: [sourceId] })]
+            })
           })
         ]));
       });

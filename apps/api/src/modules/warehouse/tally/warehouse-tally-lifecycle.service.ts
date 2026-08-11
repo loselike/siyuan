@@ -8,6 +8,9 @@ import {
 type WarehouseTallyTaskCancelInput = Parameters<
   WarehouseTallyLifecycleRepository['cancelCompletedWarehouseTallyTask']
 >[2];
+type WarehouseTallyTaskCompleteInput = Parameters<
+  WarehouseTallyLifecycleRepository['completeWarehouseTallyTask']
+>[2];
 
 @Injectable()
 export class WarehouseTallyLifecycleService {
@@ -18,6 +21,10 @@ export class WarehouseTallyLifecycleService {
 
   start(principal: Principal, id: string) {
     return this.repository.startWarehouseTallyTask(principal, id);
+  }
+
+  complete(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput) {
+    return this.repository.completeWarehouseTallyTask(principal, id, input);
   }
 
   cancelCompleted(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput) {
