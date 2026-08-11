@@ -45,7 +45,7 @@
 | shipment-flow | POST | `/shipments/:id/route` | `DataController.routeShipment` | auth | — | `apps/api/src/modules/data.controller.ts:776` |
 | shipment-flow | POST | `/shipments/:id/reroute` | `DataController.rerouteShipment` | permission | `market:routed:reroute` | `apps/api/src/modules/data.controller.ts:789` |
 | shipment-flow | DELETE | `/shipments/:id/pending-routing` | `DataController.deletePendingRoutingShipment` | permission | `market:pending-routing:delete` | `apps/api/src/modules/data.controller.ts:795` |
-| shipment-flow | POST | `/shipments/:id/dispatch` | `DataController.dispatchShipment` | auth | — | `apps/api/src/modules/data.controller.ts:801` |
+| shipment-flow | POST | `/shipments/:id/dispatch` | `WarehouseDispatchController.dispatchShipment` | auth | — | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:51` |
 | warehouse | POST | `/warehouse/handover/print` | `WarehouseDispatchController.printWarehouseHandover` | permission | `warehouse:dispatch-pending:handover-print` | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:41` |
 | warehouse | GET | `/warehouse/handover/:shipmentId` | `WarehouseDispatchController.warehouseHandover` | permission | `warehouse:dispatch-pending:handover-preview` | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:32` |
 | master-data | POST | `/master-data/agent-invoice-template/upload` | `DataController.uploadAgentInvoiceTemplate` | permission | `master-data:agents:invoice-template-manage` | `apps/api/src/modules/data.controller.ts:826` |

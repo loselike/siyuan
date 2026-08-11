@@ -178,5 +178,61 @@ describe('Warehouse dispatch query API', () => {
       .expect((response) => {
         expect(response.body.rows.filter((row: { target: string }) => row.target === 's-seed-1')).toHaveLength(2);
       });
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/s-seed-1/dispatch')
+      .send({})
+      .expect(401)
+      .expect((response) => expect(response.body.message).toBe('缺少登录凭证'));
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/s-seed-1/dispatch')
+      .set('Authorization', app.auth(customerToken))
+      .send({})
+      .expect(403)
+      .expect((response) => expect(response.body.message).toBe('没有访问权限'));
+
+    const dispatched = await request(app.getHttpServer())
+      .post('/api/shipments/s-seed-1/dispatch')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({
+        batchDispatchSource: 'warehouse.batch_dispatch_handover',
+        shippingMarkConfirmed: true
+      })
+      .expect(201);
+    expect(dispatched.body).toEqual(expect.objectContaining({
+      id: 's-seed-1',
+      status: 'OUTBOUNDED',
+      handoverNo: printed.body.rows[0].handoverNo,
+      outboundBy: 'warehouse',
+      batchDispatchSource: 'warehouse.batch_dispatch_handover'
+    }));
+
+    await request(app.getHttpServer())
+      .post('/api/shipments/s-seed-1/dispatch')
+      .set('Authorization', app.auth(warehouseToken))
+      .send({})
+      .expect(400)
+      .expect((response) => expect(response.body.message).toBe('当前状态不允许出库'));
+
+    await request(app.getHttpServer())
+      .get('/api/system/audit-logs')
+      .query({ action: 'shipment.dispatch' })
+      .set('Authorization', app.auth(adminToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.rows.filter((row: { target: string }) => row.target === 's-seed-1')).toEqual([
+          expect.objectContaining({
+            after: expect.objectContaining({
+              handoverNo: printed.body.rows[0].handoverNo,
+              statusFrom: 'WAITING_DISPATCH',
+              statusTo: 'OUTBOUNDED',
+              outboundBy: 'warehouse',
+              batchDispatchSource: 'warehouse.batch_dispatch_handover',
+              shippingMarkConfirmed: true
+            })
+          })
+        ]);
+      });
   });
 });

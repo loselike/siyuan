@@ -57,7 +57,6 @@ import type {
   PaidPaymentUpdateInput,
   PaymentConfirmPaidInput,
   PaymentWaterReceiptInput,
-  ShipmentDispatchInput,
   VoucherImageUploadContext,
   PayableAuditBatchInput,
   PayableAuditListQuery,
@@ -713,19 +712,6 @@ export class DataController {
   @RequirePermission('market:pending-routing:delete')
   async deletePendingRoutingShipment(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentReviewDeleteInput) {
     return this.repository.deletePendingRoutingShipment(request.user, id, body);
-  }
-
-  @Post('shipments/:id/dispatch')
-  @RequireAuth()
-  async dispatchShipment(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentDispatchInput) {
-    await this.ensurePermission(request.user, 'warehouse:dispatch-pending:dispatch-confirm');
-    if (body.batchDispatchSource) {
-      await this.ensurePermission(request.user, 'warehouse:dispatch-pending:batch-dispatch-confirm');
-    }
-    if (body.shippingMarkConfirmed) {
-      await this.ensurePermission(request.user, 'warehouse:dispatch-pending:shipping-mark-confirm');
-    }
-    return this.repository.dispatchShipment(request.user, id, body);
   }
 
   @Post('master-data/agent-invoice-template/upload')

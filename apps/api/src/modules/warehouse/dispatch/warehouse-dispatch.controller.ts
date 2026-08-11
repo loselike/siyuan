@@ -1,10 +1,11 @@
 import { Body, Controller, Get, Inject, Param, Patch, Post, Req } from '@nestjs/common';
-import { RequirePermission } from '../../require-permission.decorator.js';
+import { RequireAuth, RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 import { WarehouseDispatchService } from './warehouse-dispatch.service.js';
 
 type WarehouseDispatchDeclarationInput = Parameters<WarehouseDispatchService['updateDeclaration']>[2];
 type WarehouseHandoverPrintInput = Parameters<WarehouseDispatchService['printHandover']>[1];
+type ShipmentDispatchInput = Parameters<WarehouseDispatchService['dispatch']>[2];
 
 @Controller()
 export class WarehouseDispatchController {
@@ -45,5 +46,15 @@ export class WarehouseDispatchController {
     @Body() body: WarehouseHandoverPrintInput
   ) {
     return this.warehouseDispatch.printHandover(request.user, body);
+  }
+
+  @Post('shipments/:id/dispatch')
+  @RequireAuth()
+  dispatchShipment(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: ShipmentDispatchInput
+  ) {
+    return this.warehouseDispatch.dispatch(request.user, id, body);
   }
 }

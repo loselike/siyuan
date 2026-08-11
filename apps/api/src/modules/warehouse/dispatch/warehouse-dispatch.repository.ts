@@ -1,6 +1,8 @@
 import type { PrismaRepository } from '../../prisma.repository.js';
+import type { PermissionKey, Principal } from '../../rbac.js';
 
 export const WAREHOUSE_DISPATCH_REPOSITORY = Symbol('WAREHOUSE_DISPATCH_REPOSITORY');
+export const WAREHOUSE_DISPATCH_AUTHORIZER = Symbol('WAREHOUSE_DISPATCH_AUTHORIZER');
 
 /**
  * Stable application port for warehouse dispatch and agent handover behavior.
@@ -13,4 +15,13 @@ export type WarehouseDispatchRepository = Pick<
   | 'updateWarehouseDispatchDeclaration'
   | 'getWarehouseHandover'
   | 'printWarehouseHandover'
+  | 'dispatchShipment'
 >;
+
+export interface WarehouseDispatchAuthorizer {
+  hasPermission(role: Principal['role'], permission: PermissionKey): Promise<boolean>;
+  recordPermissionDenied(
+    principal: Principal,
+    input: { permissions: string[]; method?: string; path?: string }
+  ): Promise<unknown>;
+}

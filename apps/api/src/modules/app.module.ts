@@ -77,7 +77,10 @@ import {
   TRACKING_QUERY_REPOSITORY
 } from './tracking/query/tracking-query.repository.js';
 import { WarehouseDispatchController } from './warehouse/dispatch/warehouse-dispatch-query.controller.js';
-import { WAREHOUSE_DISPATCH_REPOSITORY } from './warehouse/dispatch/warehouse-dispatch.repository.js';
+import {
+  WAREHOUSE_DISPATCH_AUTHORIZER,
+  WAREHOUSE_DISPATCH_REPOSITORY
+} from './warehouse/dispatch/warehouse-dispatch.repository.js';
 import { WarehouseDispatchService } from './warehouse/dispatch/warehouse-dispatch.service.js';
 import { WarehouseInventoryQueryController } from './warehouse/inventory/warehouse-inventory-query.controller.js';
 import { LegacyWarehouseInventoryQueryRepository } from './warehouse/inventory/legacy-warehouse-inventory-query.repository.js';
@@ -199,6 +202,11 @@ const warehouseDispatchRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const warehouseDispatchAuthorizerProvider = {
+  provide: WAREHOUSE_DISPATCH_AUTHORIZER,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -299,6 +307,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     WarehouseInventoryQueryService,
     WarehouseDispatchService,
     warehouseDispatchRepositoryProvider,
+    warehouseDispatchAuthorizerProvider,
     WarehouseMachineImportService,
     warehouseMachineImportRepositoryProvider,
     WarehousePackageLifecycleService,
