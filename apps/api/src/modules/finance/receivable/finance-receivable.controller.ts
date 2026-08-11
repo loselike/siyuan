@@ -20,8 +20,17 @@ import type {
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 import { RuntimeInputPipe } from '../../runtime-input.pipe.js';
-import { parseWaterReceiptMatchOrdersInput } from '../water-receipt/water-receipt-allocation.input.js';
+import {
+  parseWaterReceiptMatchOrdersInput,
+  parseWaterReceiptUnmatchInput
+} from '../water-receipt/water-receipt-allocation.input.js';
 import { WaterReceiptAllocationService } from '../water-receipt/water-receipt-allocation.service.js';
+import {
+  parseWaterReceiptCreateInput,
+  parseWaterReceiptMarkArrivedInput,
+  parseWaterReceiptUpdateInput,
+  parseWaterReceiptVoidInput
+} from '../water-receipt/water-receipt-lifecycle.input.js';
 import { WaterReceiptLifecycleService } from '../water-receipt/water-receipt-lifecycle.service.js';
 import { FinanceReceivableService } from './finance-receivable.service.js';
 
@@ -184,19 +193,30 @@ export class FinanceReceivableController {
 
   @Post('finance/water-receipts')
   @RequirePermission('finance:water-receipt:create')
-  async createWaterReceipt(@Req() request: { user: Principal }, @Body() body: WaterReceiptCreateInput) {
+  async createWaterReceipt(
+    @Req() request: { user: Principal },
+    @Body(new RuntimeInputPipe(parseWaterReceiptCreateInput)) body: WaterReceiptCreateInput
+  ) {
     return this.waterReceiptLifecycleService.create(request.user, body);
   }
 
   @Put('finance/water-receipts/:id')
   @RequirePermission(['finance:water-receipt:update', 'finance:water-receipt:arrived-update'])
-  async updateWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptUpdateInput) {
+  async updateWaterReceipt(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body(new RuntimeInputPipe(parseWaterReceiptUpdateInput)) body: WaterReceiptUpdateInput
+  ) {
     return this.waterReceiptLifecycleService.update(request.user, id, body);
   }
 
   @Post('finance/water-receipts/:id/mark-arrived')
   @RequirePermission('finance:water-receipt:arrive')
-  async markWaterReceiptArrived(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptMarkArrivedInput) {
+  async markWaterReceiptArrived(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body(new RuntimeInputPipe(parseWaterReceiptMarkArrivedInput)) body: WaterReceiptMarkArrivedInput
+  ) {
     return this.waterReceiptLifecycleService.markArrived(request.user, id, body);
   }
 
@@ -218,7 +238,11 @@ export class FinanceReceivableController {
 
   @Post('finance/water-receipts/:id/unmatch')
   @RequirePermission('finance:water-match:cancel')
-  async unmatchWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptUnmatchInput) {
+  async unmatchWaterReceipt(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body(new RuntimeInputPipe(parseWaterReceiptUnmatchInput)) body: WaterReceiptUnmatchInput
+  ) {
     return this.waterReceiptAllocationService.unmatchWaterReceipt(request.user, id, body);
   }
 
@@ -230,7 +254,11 @@ export class FinanceReceivableController {
 
   @Post('finance/water-receipts/:id/void')
   @RequirePermission('finance:water-receipt:void')
-  async voidWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
+  async voidWaterReceipt(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body(new RuntimeInputPipe(parseWaterReceiptVoidInput)) body: { reason?: string }
+  ) {
     return this.waterReceiptLifecycleService.void(request.user, id, body);
   }
 

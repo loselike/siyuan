@@ -1,5 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
-import type { ShipmentFinanceItemSourceType, WaterReceiptMatchOrdersInput } from '@siyuan/shared';
+import type {
+  ShipmentFinanceItemSourceType,
+  WaterReceiptMatchOrdersInput,
+  WaterReceiptUnmatchInput
+} from '@siyuan/shared';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -37,6 +41,24 @@ export function parseWaterReceiptMatchOrdersInput(value: unknown): WaterReceiptM
   };
 }
 
+export function parseWaterReceiptUnmatchInput(value: unknown): WaterReceiptUnmatchInput {
+  const input = asRecord(value);
+  if (!Array.isArray(input.matchIds) || input.matchIds.length === 0) {
+    throw new BadRequestException('没有可撤销的匹配记录');
+  }
+  const matchIds = input.matchIds.map((matchId) => {
+    if (typeof matchId !== 'string' || !matchId.trim()) {
+      throw new BadRequestException('没有可撤销的匹配记录');
+    }
+    return matchId;
+  });
+  const reason = parseOptionalString(input.reason);
+  return {
+    matchIds,
+    ...(reason !== undefined ? { reason } : {})
+  };
+}
+
 function asRecord(value: unknown, message = '请求数据格式错误'): UnknownRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new BadRequestException(message);
@@ -59,6 +81,12 @@ function parseReceivableSourceType(value: unknown): ShipmentFinanceItemSourceTyp
 function parseOptionalIdentifier(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.length === 0) return undefined;
+  return value;
+}
+
+function parseOptionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'string') throw new BadRequestException('请求数据格式错误');
   return value;
 }
 
