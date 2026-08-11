@@ -95,6 +95,9 @@ import { WarehouseTallyQueryService } from './warehouse/tally/warehouse-tally-qu
 import { WarehouseTallyLabelController } from './warehouse/tally/warehouse-tally-label.controller.js';
 import { WAREHOUSE_TALLY_LABEL_REPOSITORY } from './warehouse/tally/warehouse-tally-label.repository.js';
 import { WarehouseTallyLabelService } from './warehouse/tally/warehouse-tally-label.service.js';
+import { WarehouseTallyCorrectionController } from './warehouse/tally/warehouse-tally-correction.controller.js';
+import { WAREHOUSE_TALLY_CORRECTION_REPOSITORY } from './warehouse/tally/warehouse-tally-correction.repository.js';
+import { WarehouseTallyCorrectionService } from './warehouse/tally/warehouse-tally-correction.service.js';
 import { WAREHOUSE_TALLY_LIFECYCLE_REPOSITORY } from './warehouse/tally/warehouse-tally-lifecycle.repository.js';
 import { WarehouseTallyLifecycleService } from './warehouse/tally/warehouse-tally-lifecycle.service.js';
 import { UserTablePreferenceController } from './user-table-preference.controller.js';
@@ -148,6 +151,11 @@ const warehouseTallyLifecycleRepositoryProvider = {
 
 const warehouseTallyLabelRepositoryProvider = {
   provide: WAREHOUSE_TALLY_LABEL_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
+const warehouseTallyCorrectionRepositoryProvider = {
+  provide: WAREHOUSE_TALLY_CORRECTION_REPOSITORY,
   useExisting: PrismaRepository
 };
 
@@ -221,6 +229,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     TrackingQueryController,
     WarehouseDispatchQueryController,
     WarehouseInventoryQueryController,
+    WarehouseTallyCorrectionController,
     WarehouseTallyLabelController,
     WarehouseTallyQueryController,
     UserTablePreferenceController
@@ -244,6 +253,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     waterReceiptLifecycleRepositoryProvider,
     WarehouseInventoryQueryService,
     WarehouseTallyQueryService,
+    WarehouseTallyCorrectionService,
+    warehouseTallyCorrectionRepositoryProvider,
     WarehouseTallyLabelService,
     warehouseTallyLabelRepositoryProvider,
     WarehouseTallyLifecycleService,

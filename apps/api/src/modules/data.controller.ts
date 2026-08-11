@@ -142,7 +142,6 @@ import type {
   WarehouseTallyTaskCompletedCountUpdateInput,
   WarehouseTallyTaskCancelInput,
   WarehouseTallyTaskCreateInput,
-  WarehouseTallyHistoricalAggregateCorrectionInput,
   WarehouseTallyRepeatStatisticsQuery,
   WarehouseTallyTaskUpdateInput,
   MasterDataSnapshot,
@@ -2386,22 +2385,6 @@ export class DataController {
     @Body() body: WarehouseTallyTaskCancelInput
   ) {
     return this.warehouseTallyLifecycle.cancelCompleted(request.user, id, body);
-  }
-
-  @Get('warehouse/tally-tasks/:id/historical-aggregate-correction')
-  @RequirePermission('warehouse:tally-history:correct')
-  async warehouseTallyHistoricalAggregateCorrectionPreview(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.getWarehouseTallyHistoricalAggregateCorrectionPreview(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/historical-aggregate-correction')
-  @RequirePermission('warehouse:tally-history:correct')
-  async correctWarehouseTallyHistoricalAggregate(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseTallyHistoricalAggregateCorrectionInput
-  ) {
-    return this.repository.correctWarehouseTallyHistoricalAggregate(request.user, id, body);
   }
 
   @Get('finance/business-cost-audits')
