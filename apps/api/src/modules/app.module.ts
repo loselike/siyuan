@@ -34,6 +34,8 @@ import { FinanceReceivableController } from './finance/receivable/finance-receiv
 import { FinanceReceivableService } from './finance/receivable/finance-receivable.service.js';
 import { WATER_RECEIPT_ALLOCATION_REPOSITORY } from './finance/water-receipt/water-receipt-allocation.repository.js';
 import { WaterReceiptAllocationService } from './finance/water-receipt/water-receipt-allocation.service.js';
+import { WATER_RECEIPT_LIFECYCLE_REPOSITORY } from './finance/water-receipt/water-receipt-lifecycle.repository.js';
+import { WaterReceiptLifecycleService } from './finance/water-receipt/water-receipt-lifecycle.service.js';
 import { MiscFeeController } from './finance/misc-fee/misc-fee.controller.js';
 import { MiscFeeService } from './finance/misc-fee/misc-fee.service.js';
 import { InMemoryRepository } from './in-memory.repository.js';
@@ -129,6 +131,11 @@ const waterReceiptAllocationRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const waterReceiptLifecycleRepositoryProvider = {
+  provide: WATER_RECEIPT_LIFECYCLE_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -217,6 +224,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     FinanceReceivableService,
     WaterReceiptAllocationService,
     waterReceiptAllocationRepositoryProvider,
+    WaterReceiptLifecycleService,
+    waterReceiptLifecycleRepositoryProvider,
     WarehouseInventoryQueryService,
     WarehouseTallyQueryService,
     notificationServiceProvider,

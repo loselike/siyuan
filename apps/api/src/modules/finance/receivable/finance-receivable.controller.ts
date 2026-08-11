@@ -22,13 +22,15 @@ import type { Principal } from '../../rbac.js';
 import { RuntimeInputPipe } from '../../runtime-input.pipe.js';
 import { parseWaterReceiptMatchOrdersInput } from '../water-receipt/water-receipt-allocation.input.js';
 import { WaterReceiptAllocationService } from '../water-receipt/water-receipt-allocation.service.js';
+import { WaterReceiptLifecycleService } from '../water-receipt/water-receipt-lifecycle.service.js';
 import { FinanceReceivableService } from './finance-receivable.service.js';
 
 @Controller()
 export class FinanceReceivableController {
   constructor(
     @Inject(FinanceReceivableService) private readonly service: FinanceReceivableService,
-    @Inject(WaterReceiptAllocationService) private readonly waterReceiptAllocationService: WaterReceiptAllocationService
+    @Inject(WaterReceiptAllocationService) private readonly waterReceiptAllocationService: WaterReceiptAllocationService,
+    @Inject(WaterReceiptLifecycleService) private readonly waterReceiptLifecycleService: WaterReceiptLifecycleService
   ) {}
 
   @Get('finance/receivables')
@@ -171,31 +173,31 @@ export class FinanceReceivableController {
   @Get('finance/water-receipts')
   @RequirePermission(['finance:water-receipt:read', 'finance:water-match:read'])
   async waterReceipts(@Req() request: { user: Principal }, @Query() query: WaterReceiptListQuery) {
-    return this.service.waterReceipts(request.user, query);
+    return this.waterReceiptLifecycleService.list(request.user, query);
   }
 
   @Get('finance/water-receipts/site-options')
   @RequirePermission(['finance:water-receipt:create', 'finance:water-receipt:update'])
   async waterReceiptSiteOptions() {
-    return this.service.waterReceiptSiteOptions();
+    return this.waterReceiptLifecycleService.listSiteOptions();
   }
 
   @Post('finance/water-receipts')
   @RequirePermission('finance:water-receipt:create')
   async createWaterReceipt(@Req() request: { user: Principal }, @Body() body: WaterReceiptCreateInput) {
-    return this.service.createWaterReceipt(request.user, body);
+    return this.waterReceiptLifecycleService.create(request.user, body);
   }
 
   @Put('finance/water-receipts/:id')
   @RequirePermission(['finance:water-receipt:update', 'finance:water-receipt:arrived-update'])
   async updateWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptUpdateInput) {
-    return this.service.updateWaterReceipt(request.user, id, body);
+    return this.waterReceiptLifecycleService.update(request.user, id, body);
   }
 
   @Post('finance/water-receipts/:id/mark-arrived')
   @RequirePermission('finance:water-receipt:arrive')
   async markWaterReceiptArrived(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptMarkArrivedInput) {
-    return this.service.markWaterReceiptArrived(request.user, id, body);
+    return this.waterReceiptLifecycleService.markArrived(request.user, id, body);
   }
 
   @Get('finance/water-receipts/:id/matchable-receivables')
@@ -223,24 +225,24 @@ export class FinanceReceivableController {
   @Post('finance/water-receipts/:id/archive')
   @RequirePermission('finance:water-receipt:archive')
   async archiveWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.service.archiveWaterReceipt(request.user, id);
+    return this.waterReceiptLifecycleService.archive(request.user, id);
   }
 
   @Post('finance/water-receipts/:id/void')
   @RequirePermission('finance:water-receipt:void')
   async voidWaterReceipt(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
-    return this.service.voidWaterReceipt(request.user, id, body);
+    return this.waterReceiptLifecycleService.void(request.user, id, body);
   }
 
   @Delete('finance/water-receipts/:id/voucher')
   @RequirePermission('finance:water-receipt:voucher-delete')
   async deleteWaterReceiptVoucher(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.service.deleteWaterReceiptVoucher(request.user, id);
+    return this.waterReceiptLifecycleService.deleteVoucher(request.user, id);
   }
 
   @Post('finance/water-receipts/export')
   @RequirePermission('finance:water-receipt:export')
   async exportWaterReceipts(@Req() request: { user: Principal }, @Body() body: WaterReceiptExportRequest) {
-    return this.service.exportWaterReceipts(request.user, body);
+    return this.waterReceiptLifecycleService.export(request.user, body);
   }
 }
