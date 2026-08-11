@@ -136,7 +136,6 @@ import type {
 import { PrismaRepository } from './prisma.repository.js';
 import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
-import { parseWarehouseMachineWorkbook } from './warehouse-machine-import.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
@@ -2174,26 +2173,6 @@ export class DataController {
   @RequirePermission('pricing:lookup:view')
   async quotePricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleQuoteRequest) {
     return this.repository.quotePricingRule(request.user, body);
-  }
-
-  @Post('warehouse/packages/machine-import')
-  @RequirePermission('warehouse:in-stock:machine-import')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
-  async warehouseMachineImport(
-    @Req() request: { user: Principal },
-    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
-    @Body('commit') commit?: string
-  ) {
-    if (!file?.buffer?.length) throw new BadRequestException('请上传机器过机 Excel 文件');
-    const normalizedFile = { ...file, originalname: normalizeUploadedFileName(file.originalname) };
-    this.assertExcelFile(normalizedFile);
-    const parsed = parseWarehouseMachineWorkbook(normalizedFile.buffer, normalizedFile.originalname);
-    if (String(commit).toLowerCase() === 'true') {
-      return this.repository.importWarehouseMachineImport(request.user, parsed, {
-        fileHash: createHash('sha256').update(normalizedFile.buffer).digest('hex')
-      });
-    }
-    return this.repository.previewWarehouseMachineImport(request.user, parsed);
   }
 
   @Get('finance/business-cost-audits')

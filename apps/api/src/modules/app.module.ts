@@ -88,6 +88,9 @@ import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-
 import { WarehousePackageLifecycleController } from './warehouse/package/warehouse-package-lifecycle.controller.js';
 import { WAREHOUSE_PACKAGE_LIFECYCLE_REPOSITORY } from './warehouse/package/warehouse-package-lifecycle.repository.js';
 import { WarehousePackageLifecycleService } from './warehouse/package/warehouse-package-lifecycle.service.js';
+import { WarehouseMachineImportController } from './warehouse/package/warehouse-machine-import.controller.js';
+import { WAREHOUSE_MACHINE_IMPORT_REPOSITORY } from './warehouse/package/warehouse-machine-import.repository.js';
+import { WarehouseMachineImportService } from './warehouse/package/warehouse-machine-import.service.js';
 import { WarehouseRentController } from './warehouse/rent/warehouse-rent.controller.js';
 import { WAREHOUSE_RENT_REPOSITORY } from './warehouse/rent/warehouse-rent.repository.js';
 import { WarehouseRentService } from './warehouse/rent/warehouse-rent.service.js';
@@ -184,6 +187,11 @@ const warehousePackageLifecycleRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const warehouseMachineImportRepositoryProvider = {
+  provide: WAREHOUSE_MACHINE_IMPORT_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -254,6 +262,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     TrackingQueryController,
     WarehouseDispatchQueryController,
     WarehouseInventoryQueryController,
+    WarehouseMachineImportController,
     WarehousePackageLifecycleController,
     WarehouseRentController,
     WarehouseTallyCorrectionController,
@@ -281,6 +290,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     WaterReceiptLifecycleService,
     waterReceiptLifecycleRepositoryProvider,
     WarehouseInventoryQueryService,
+    WarehouseMachineImportService,
+    warehouseMachineImportRepositoryProvider,
     WarehousePackageLifecycleService,
     warehousePackageLifecycleRepositoryProvider,
     WarehouseRentService,
