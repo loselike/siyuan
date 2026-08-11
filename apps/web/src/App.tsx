@@ -161,6 +161,8 @@ import { ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, Managed
 import { configureAccountTablePreferences } from './modules/shared/tablePreferences';
 
 import { CustomerServicePage, FinancePage, MiscFeesPage, WarehousePage, loadCustomerServicePage, loadFinancePage, loadMiscFeesPage, loadWarehousePage } from './modules/appShell/pageLoaders';
+import { clearPersistedSession, loadPersistedSession, persistSession } from './modules/appShell/sessionStore';
+import { useCurrentSessionRefresh } from './modules/appShell/useCurrentSessionRefresh';
 import { refreshWorkspaceData } from './modules/appShell/workspaceRefresh';
 
 const { Header, Sider, Content } = Layout;
@@ -193,10 +195,7 @@ export function App() {
   const selectedReceivingChannel = Form.useWatch('carrier', outboundOrderForm);
   const [editShipmentForm] = Form.useForm<EditShipmentOperationalFormValues>();
   const [routingAssignmentForm] = Form.useForm<RoutingAssignmentFormValues>();
-  const [session, setSession] = useState<Session | null>(() => {
-    const raw = localStorage.getItem('siyuan-session');
-    return raw ? (JSON.parse(raw) as Session) : null;
-  });
+  const [session, setSession] = useState<Session | null>(loadPersistedSession);
   const [requestedAppRoute, setRequestedAppRoute] = useState(() => parseStaffAppRoute(window.location.pathname));
   const [pendingNotificationTarget, setPendingNotificationTarget] = useState<{ type: string; id: string } | null>(() => {
     const params = new URLSearchParams(window.location.search);
@@ -305,52 +304,11 @@ export function App() {
   useEffect(() => {
     configureAccountTablePreferences(session?.user.id, session?.accessToken ? apiClient : undefined);
   }, [apiClient, session?.accessToken, session?.user.id]);
-  const sessionRefreshInFlightRef = useRef<Promise<void> | null>(null);
-  const lastSessionRefreshAtRef = useRef(0);
-  const refreshCurrentSession = useCallback((force = false) => {
-    const accessToken = session?.accessToken;
-    if (!accessToken) return Promise.resolve();
-    if (sessionRefreshInFlightRef.current) return sessionRefreshInFlightRef.current;
-    if (!force && Date.now() - lastSessionRefreshAtRef.current < 60_000) return Promise.resolve();
-    lastSessionRefreshAtRef.current = Date.now();
-    const request = apiClient.currentSession().then((currentSession) => {
-      setSession((current) => {
-        if (!current || current.accessToken !== accessToken) return current;
-        const permissionsUnchanged = current.permissions.length === currentSession.permissions.length
-          && current.permissions.every((permission, index) => permission === currentSession.permissions[index]);
-        const userUnchanged = JSON.stringify(current.user) === JSON.stringify(currentSession.user);
-        if (permissionsUnchanged && userUnchanged) return current;
-        const nextSession: Session = {
-          ...current,
-          user: currentSession.user,
-          permissions: currentSession.permissions
-        };
-        localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
-        return nextSession;
-      });
-    }).finally(() => {
-      sessionRefreshInFlightRef.current = null;
-    });
-    sessionRefreshInFlightRef.current = request;
-    return request;
-  }, [apiClient, session?.accessToken]);
-  useEffect(() => {
-    if (!session?.accessToken) return;
-    void refreshCurrentSession(true).catch(() => undefined);
-    const refreshIfVisible = () => {
-      if (document.visibilityState === 'visible') void refreshCurrentSession().catch(() => undefined);
-    };
-    const intervalId = window.setInterval(refreshIfVisible, 5 * 60 * 1000);
-    window.addEventListener('focus', refreshIfVisible);
-    window.addEventListener('online', refreshIfVisible);
-    document.addEventListener('visibilitychange', refreshIfVisible);
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', refreshIfVisible);
-      window.removeEventListener('online', refreshIfVisible);
-      document.removeEventListener('visibilitychange', refreshIfVisible);
-    };
-  }, [refreshCurrentSession, session?.accessToken]);
+  const refreshCurrentSession = useCurrentSessionRefresh({
+    client: apiClient,
+    accessToken: session?.accessToken,
+    setSession
+  });
   const hasBlockingWork = useCallback(() => Boolean(
     document.querySelector('.ant-modal-wrap form, .ant-drawer-open form')
     || outboundOrderOpen
@@ -871,13 +829,13 @@ export function App() {
         return current;
       }
       const nextSession = { ...current, user: { ...current.user, ...user } };
-      localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
+      persistSession(nextSession);
       return nextSession;
     });
   }
 
   function handleUnauthorized() {
-    localStorage.removeItem('siyuan-session');
+    clearPersistedSession();
     setSession(null);
     setLocalShipments([]);
     setProblemTickets([]);
@@ -923,7 +881,7 @@ export function App() {
 
   async function handleLogin(username: string, password: string, captchaId: string, captchaCode: string) {
     const nextSession = await apiClient.login(username, password, captchaId, captchaCode);
-    localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
+    persistSession(nextSession);
     setSession(nextSession);
     setPersonalCenterOpen(false);
     const requiresPasswordChange = Boolean(nextSession.user.mustChangePassword);
