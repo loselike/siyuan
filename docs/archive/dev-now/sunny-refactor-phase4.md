@@ -1,6 +1,6 @@
 # Sunny 深度重构第四阶段
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 会话标题：`Sunny｜深度重构第四阶段｜04`
 - 续接自：`docs/archive/dev-now/sunny-refactor-phase3.md`
 - 上下文状态：`green`
@@ -36,10 +36,11 @@
 - API typecheck 与 `git diff --check` 通过。
 - 架构 fast check 成功执行；输出的权限基线、巨型文件计数漂移均为当前分支既有债务，本阶段没有修改所列 DataController、Repository、Shared、Web 文件或权限装饰器。
 - 行为等价审查：Controller 路由、HTTP 方法、权限装饰器和输入/返回类型未变；Prisma/InMemory Repository、金额、状态机、事务、审计和错误文案未修改；原 settlement-method 代码按原顺序原样迁入 lifecycle service。
-- 待执行：47 精确发布和线上验证。
+- 47 白名单发布 `whitelist-62fb932c54798be6f35a933f` 成功；五个运行目标文件校验和与候选完全一致，API 生产构建和重启成功，编译产物包含 lifecycle service 与 port token。
+- 47 九条水单生命周期路由均只映射一次；公网 `/api/health` 200，未登录水单列表返回 401；API/Postgres/Redis 正常，发布锁 free、recovery clear。
 
 ## 交接
 
 - 阻塞：无。
 - 风险：新 port 当前仍由两套巨型 Repository 直接适配；本阶段只建立边界，尚未迁移底层事务实现。
-- 发布状态：未发布。
+- 发布状态：已发布并完成非浏览器线上验证。
