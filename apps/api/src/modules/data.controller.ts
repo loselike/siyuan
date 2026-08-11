@@ -132,13 +132,11 @@ import type {
   StaffAccountQuery,
   StaffAccountUpdateInput,
   TrackingEventInput,
-  WarehouseConsolidationCreateInput,
   WarehouseManualReceiptCreateInput,
   WarehouseSameSpecReplenishInput,
   WarehousePackageCreateInput,
   WarehousePackageSplitInput,
   WarehousePackageUpdateInput,
-  WarehouseTallyRepeatStatisticsQuery,
   MasterDataSnapshot,
   NavigationReadStateInput
 } from '@siyuan/shared';
@@ -2300,28 +2298,6 @@ export class DataController {
   @RequirePermission('warehouse:in-stock:update')
   async updateWarehousePackageException(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { manualException?: string }) {
     return this.repository.updateWarehousePackageException(request.user, id, body);
-  }
-
-  @Post('warehouse/consolidations')
-  @RequireAuth()
-  async createWarehouseConsolidation(@Req() request: { user: Principal }, @Body() body: WarehouseConsolidationCreateInput) {
-    await this.ensurePermission(request.user, body.mode === 'MERGE_AND_SHIP' ? 'warehouse:tally-pending:merge-and-ship' : 'warehouse:tally-pending:merge-only');
-    return this.repository.createWarehouseConsolidation(request.user, body);
-  }
-
-  @Post('warehouse/consolidations/:id/create-shipment')
-  @RequirePermission('warehouse:tally-pending:merge-and-ship')
-  async createWarehouseConsolidationShipment(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.createShipmentFromWarehouseConsolidation(request.user, id);
-  }
-
-  @Get('warehouse/tally-repeat-statistics')
-  @RequirePermission('warehouse:tally-completed:view')
-  async warehouseTallyRepeatStatistics(
-    @Req() request: { user: Principal },
-    @Query() query: WarehouseTallyRepeatStatisticsQuery
-  ) {
-    return this.repository.getWarehouseTallyRepeatStatistics(request.user, query);
   }
 
   @Get('finance/business-cost-audits')

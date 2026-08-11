@@ -1251,12 +1251,12 @@
       "DataController.warehouseRentRules"
     ],
     [
-      "GET /warehouse/tally-repeat-statistics @ DataController.warehouseTallyRepeatStatistics",
+      "GET /warehouse/tally-repeat-statistics @ WarehouseTallyOperationsController.warehouseTallyRepeatStatistics",
       "permission",
       [
         "warehouse:tally-completed:view"
       ],
-      "DataController.warehouseTallyRepeatStatistics"
+      "WarehouseTallyOperationsController.warehouseTallyRepeatStatistics"
     ],
     [
       "GET /warehouse/tally-task-history-chain @ WarehouseTallyQueryController.warehouseTallyTaskHistoryChain",
@@ -2804,18 +2804,18 @@
       "DataController.resetSystemStaffAccountPasswords"
     ],
     [
-      "POST /warehouse/consolidations @ DataController.createWarehouseConsolidation",
+      "POST /warehouse/consolidations @ WarehouseTallyOperationsController.createWarehouseConsolidation",
       "auth",
       [],
-      "DataController.createWarehouseConsolidation"
+      "WarehouseTallyOperationsController.createWarehouseConsolidation"
     ],
     [
-      "POST /warehouse/consolidations/:id/create-shipment @ DataController.createWarehouseConsolidationShipment",
+      "POST /warehouse/consolidations/:id/create-shipment @ WarehouseTallyOperationsController.createWarehouseConsolidationShipment",
       "permission",
       [
         "warehouse:tally-pending:merge-and-ship"
       ],
-      "DataController.createWarehouseConsolidationShipment"
+      "WarehouseTallyOperationsController.createWarehouseConsolidationShipment"
     ],
     [
       "POST /warehouse/handover/print @ DataController.printWarehouseHandover",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 257,
+    "dataControllerRoutesMax": 254,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 32122,
       "apps/api/src/modules/in-memory.repository.ts": 19588,
-      "apps/api/src/modules/data.controller.ts": 2916,
+      "apps/api/src/modules/data.controller.ts": 2892,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,
