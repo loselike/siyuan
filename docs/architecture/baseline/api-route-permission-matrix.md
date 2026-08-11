@@ -65,12 +65,13 @@
 | shipment-flow | POST | `/shipments/:id/payment` | `DataController.registerShipmentPayment` | permission | `business:shipment:payment-record` | `apps/api/src/modules/data.controller.ts:952` |
 | shipment-flow | POST | `/shipments/tracking-events/import` | `DataController.importTrackingEvents` | auth | — | `apps/api/src/modules/data.controller.ts:961` |
 | shipment-flow | DELETE | `/shipments/:id` | `DataController.deleteShipment` | permission | `business:shipment:delete` | `apps/api/src/modules/data.controller.ts:972` |
-| shipment-flow | POST | `/shipments/:id/labels` | `DataController.createShipmentLabel` | permission | `warehouse:dispatch-pending:label-generate` | `apps/api/src/modules/data.controller.ts:981` |
-| shipment-flow | POST | `/shipments/:id/labels/upload` | `DataController.uploadShipmentLabel` | auth | — | `apps/api/src/modules/data.controller.ts:990` |
+| shipment-flow | POST | `/shipments/:id/labels` | `ShipmentLabelLifecycleController.createShipmentLabel` | permission | `warehouse:dispatch-pending:label-generate` | `apps/api/src/modules/shipment/fulfillment/shipment-label-lifecycle.controller.ts:35` |
+| shipment-flow | POST | `/shipments/:id/labels/upload` | `ShipmentLabelLifecycleController.uploadShipmentLabel` | auth | — | `apps/api/src/modules/shipment/fulfillment/shipment-label-lifecycle.controller.ts:41` |
 | shipment-flow | POST | `/shipments/:id/invoice/upload` | `DataController.uploadShipmentBusinessInvoice` | permission | `business:order-entry:invoice-upload` | `apps/api/src/modules/data.controller.ts:1020` |
 | shipment-flow | GET | `/shipments/:id/invoice-template/download` | `DataController.downloadShipmentInvoiceTemplate` | permission | `business:order-entry:invoice-upload` | `apps/api/src/modules/data.controller.ts:1047` |
-| shipment-flow | GET | `/shipments/:id/labels` | `DataController.shipmentLabels` | auth | — | `apps/api/src/modules/data.controller.ts:1068` |
-| shipment-flow | POST | `/shipments/:id/labels/:labelId/void` | `DataController.voidShipmentLabel` | permission | `warehouse:dispatch-pending:label-void` | `apps/api/src/modules/data.controller.ts:1078` |
+| shipment-flow | GET | `/shipments/:id/labels` | `ShipmentLabelLifecycleController.shipmentLabels` | auth | — | `apps/api/src/modules/shipment/fulfillment/shipment-label-lifecycle.controller.ts:29` |
+| shipment-flow | GET | `/shipments/:id/labels/:labelId/file` | `ShipmentLabelLifecycleController.downloadShipmentLabel` | auth | — | `apps/api/src/modules/shipment/fulfillment/shipment-label-lifecycle.controller.ts:53` |
+| shipment-flow | POST | `/shipments/:id/labels/:labelId/void` | `ShipmentLabelLifecycleController.voidShipmentLabel` | permission | `warehouse:dispatch-pending:label-void` | `apps/api/src/modules/shipment/fulfillment/shipment-label-lifecycle.controller.ts:69` |
 | tracking | GET | `/carrier-tasks` | `DataController.carrierTasks` | permission | `tracking:carrier-task:view` | `apps/api/src/modules/data.controller.ts:1087` |
 | tracking | POST | `/carrier-tasks/:id/run` | `DataController.runCarrierTask` | permission | `tracking:carrier-task:run` | `apps/api/src/modules/data.controller.ts:1096` |
 | tracking | POST | `/carrier-tasks/:id/retry` | `DataController.retryCarrierTask` | permission | `tracking:carrier-task:retry` | `apps/api/src/modules/data.controller.ts:1105` |

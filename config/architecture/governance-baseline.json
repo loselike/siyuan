@@ -965,16 +965,16 @@
       "DataController.downloadShipmentBusinessInvoice"
     ],
     [
-      "GET /shipments/:id/labels @ ShipmentFulfillmentQueryController.shipmentLabels",
+      "GET /shipments/:id/labels @ ShipmentLabelLifecycleController.shipmentLabels",
       "auth",
       [],
-      "ShipmentFulfillmentQueryController.shipmentLabels"
+      "ShipmentLabelLifecycleController.shipmentLabels"
     ],
     [
-      "GET /shipments/:id/labels/:labelId/file @ DataController.downloadShipmentLabel",
+      "GET /shipments/:id/labels/:labelId/file @ ShipmentLabelLifecycleController.downloadShipmentLabel",
       "auth",
       [],
-      "DataController.downloadShipmentLabel"
+      "ShipmentLabelLifecycleController.downloadShipmentLabel"
     ],
     [
       "GET /shipments/:id/order-entry @ OrderEntryQueryController.orderEntryDetail",
@@ -2605,26 +2605,26 @@
       "DataController.uploadShipmentBusinessInvoice"
     ],
     [
-      "POST /shipments/:id/labels @ DataController.createShipmentLabel",
+      "POST /shipments/:id/labels @ ShipmentLabelLifecycleController.createShipmentLabel",
       "permission",
       [
         "warehouse:dispatch-pending:label-generate"
       ],
-      "DataController.createShipmentLabel"
+      "ShipmentLabelLifecycleController.createShipmentLabel"
     ],
     [
-      "POST /shipments/:id/labels/:labelId/void @ DataController.voidShipmentLabel",
+      "POST /shipments/:id/labels/:labelId/void @ ShipmentLabelLifecycleController.voidShipmentLabel",
       "permission",
       [
         "warehouse:dispatch-pending:label-void"
       ],
-      "DataController.voidShipmentLabel"
+      "ShipmentLabelLifecycleController.voidShipmentLabel"
     ],
     [
-      "POST /shipments/:id/labels/upload @ DataController.uploadShipmentLabel",
+      "POST /shipments/:id/labels/upload @ ShipmentLabelLifecycleController.uploadShipmentLabel",
       "auth",
       [],
-      "DataController.uploadShipmentLabel"
+      "ShipmentLabelLifecycleController.uploadShipmentLabel"
     ],
     [
       "POST /shipments/:id/payment @ DataController.registerShipmentPayment",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 237,
+    "dataControllerRoutesMax": 233,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 32122,
       "apps/api/src/modules/in-memory.repository.ts": 19588,
-      "apps/api/src/modules/data.controller.ts": 2746,
+      "apps/api/src/modules/data.controller.ts": 2668,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,

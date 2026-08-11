@@ -60,7 +60,13 @@ import {
 import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
-import { ShipmentFulfillmentQueryController } from './shipment/fulfillment/shipment-fulfillment-query.controller.js';
+import { ShipmentLabelLifecycleController } from './shipment/fulfillment/shipment-fulfillment-query.controller.js';
+import { ShipmentLabelFileStorage } from './shipment/fulfillment/shipment-label-file.storage.js';
+import {
+  SHIPMENT_LABEL_LIFECYCLE_AUTHORIZER,
+  SHIPMENT_LABEL_LIFECYCLE_REPOSITORY
+} from './shipment/fulfillment/shipment-label-lifecycle.repository.js';
+import { ShipmentLabelLifecycleService } from './shipment/fulfillment/shipment-label-lifecycle.service.js';
 import { OrderEntryQueryController } from './shipment/order-entry/order-entry-query.controller.js';
 import { ShipmentOverviewQueryController } from './shipment/overview/shipment-overview-query.controller.js';
 import { SystemDirectoryController } from './system/directory/system-directory.controller.js';
@@ -207,6 +213,16 @@ const warehouseDispatchAuthorizerProvider = {
   useExisting: PrismaRepository
 };
 
+const shipmentLabelLifecycleRepositoryProvider = {
+  provide: SHIPMENT_LABEL_LIFECYCLE_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
+const shipmentLabelLifecycleAuthorizerProvider = {
+  provide: SHIPMENT_LABEL_LIFECYCLE_AUTHORIZER,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -271,7 +287,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     OperationsLineShipmentQueryController,
     OrderEntryQueryController,
     PriceBookQueryController,
-    ShipmentFulfillmentQueryController,
+    ShipmentLabelLifecycleController,
     ShipmentOverviewQueryController,
     SystemDirectoryController,
     TrackingQueryController,
@@ -308,6 +324,10 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     WarehouseDispatchService,
     warehouseDispatchRepositoryProvider,
     warehouseDispatchAuthorizerProvider,
+    ShipmentLabelLifecycleService,
+    ShipmentLabelFileStorage,
+    shipmentLabelLifecycleRepositoryProvider,
+    shipmentLabelLifecycleAuthorizerProvider,
     WarehouseMachineImportService,
     warehouseMachineImportRepositoryProvider,
     WarehousePackageLifecycleService,

@@ -165,10 +165,6 @@ export class DataController {
     priority: boolean;
   }> = [];
   private mojiaRequestSampleActiveWrites = 0;
-  private readonly labelFileMimeExtensions: Record<string, string> = {
-    ...this.imageMimeExtensions,
-    'application/pdf': '.pdf'
-  };
   private readonly excelMimeExtensions: Record<string, string> = {
     'application/vnd.ms-excel': '.xls',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
@@ -956,45 +952,6 @@ export class DataController {
     return this.repository.deleteShipment(request.user, id);
   }
 
-  @Post('shipments/:id/labels')
-  @RequirePermission('warehouse:dispatch-pending:label-generate')
-  async createShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能申请面单');
-    }
-    return this.repository.createShipmentLabel(request.user, id);
-  }
-
-  @Post('shipments/:id/labels/upload')
-  @RequireAuth()
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
-  async uploadShipmentLabel(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
-    @Body() body: { transferNo?: string }
-  ) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能上传面单');
-    }
-    await this.ensureAnyPermission(request.user, ['business:order-entry:label-upload', 'customer-service:transfer:label-upload', 'customer-service:waiting-departure:label-upload']);
-    if (!file) throw new BadRequestException('请上传面单');
-    this.assertShipmentLabelFile(file);
-    const uploadRoot = resolveUploadRoot();
-    const uploadDir = process.env.LABEL_UPLOAD_DIR ?? join(uploadRoot, 'labels');
-    await mkdir(uploadDir, { recursive: true });
-    const extension = this.labelFileMimeExtensions[file.mimetype];
-    const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
-    await writeFile(join(uploadDir, fileName), file.buffer);
-    return this.repository.uploadShipmentLabel(request.user, id, {
-      fileName: file.originalname,
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
-      url: `/api/uploads/${basename(uploadDir)}/${fileName}`,
-      transferNo: body.transferNo
-    });
-  }
-
   @Post('shipments/:id/invoice/upload')
   @RequirePermission('business:order-entry:invoice-upload')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
@@ -1064,28 +1021,6 @@ export class DataController {
     response.setHeader('Content-Disposition', `attachment; filename="business-invoice${extname(file.fileName)}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
     response.setHeader('Cache-Control', 'private, no-store');
     return new StreamableFile(file.buffer);
-  }
-
-  @Get('shipments/:id/labels/:labelId/file')
-  @RequireAuth()
-  async downloadShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string, @Param('labelId') labelId: string, @Res({ passthrough: true }) response: Response) {
-    if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能下载内部面单');
-    await this.ensureAnyPermission(request.user, ['warehouse:dispatch-pending:label-view', 'customer-service:transfer:label-view']);
-    const file = await this.repository.downloadShipmentLabel(request.user, id, labelId);
-    response.setHeader('Content-Type', file.mimeType);
-    response.setHeader('Content-Length', String(file.buffer.length));
-    response.setHeader('Content-Disposition', `attachment; filename="shipment-label${extname(file.fileName)}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
-    response.setHeader('Cache-Control', 'private, no-store');
-    return new StreamableFile(file.buffer);
-  }
-
-  @Post('shipments/:id/labels/:labelId/void')
-  @RequirePermission('warehouse:dispatch-pending:label-void')
-  async voidShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string, @Param('labelId') labelId: string) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能作废面单');
-    }
-    return this.repository.voidShipmentLabel(request.user, id, labelId);
   }
 
   @Post('carrier-tasks/:id/run')
@@ -2509,19 +2444,6 @@ export class DataController {
     if (!isPng && !isJpeg && !isGif && !isWebp) {
       throw new BadRequestException('图片内容格式无效');
     }
-  }
-
-  private assertShipmentLabelFile(file: { mimetype: string; originalname: string; buffer: Buffer }) {
-    if (!this.labelFileMimeExtensions[file.mimetype]) {
-      throw new BadRequestException('仅支持图片或 PDF 面单');
-    }
-    if (file.mimetype === 'application/pdf') {
-      if (extname(file.originalname).toLowerCase() !== '.pdf' || file.buffer.subarray(0, 4).toString('ascii') !== '%PDF') {
-        throw new BadRequestException('PDF 面单内容格式无效');
-      }
-      return;
-    }
-    this.assertVoucherImage(file);
   }
 
   private assertExcelFile(file: { mimetype: string; originalname: string; buffer: Buffer }) {
