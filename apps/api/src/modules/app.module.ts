@@ -92,6 +92,8 @@ import {
 } from './warehouse/tally/warehouse-tally-query.repository.js';
 import { WarehouseTallyQueryController } from './warehouse/tally/warehouse-tally-query.controller.js';
 import { WarehouseTallyQueryService } from './warehouse/tally/warehouse-tally-query.service.js';
+import { WAREHOUSE_TALLY_LIFECYCLE_REPOSITORY } from './warehouse/tally/warehouse-tally-lifecycle.repository.js';
+import { WarehouseTallyLifecycleService } from './warehouse/tally/warehouse-tally-lifecycle.service.js';
 import { UserTablePreferenceController } from './user-table-preference.controller.js';
 import {
   InMemoryUserTablePreferenceService,
@@ -133,6 +135,11 @@ const waterReceiptAllocationRepositoryProvider = {
 
 const waterReceiptLifecycleRepositoryProvider = {
   provide: WATER_RECEIPT_LIFECYCLE_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
+const warehouseTallyLifecycleRepositoryProvider = {
+  provide: WAREHOUSE_TALLY_LIFECYCLE_REPOSITORY,
   useExisting: PrismaRepository
 };
 
@@ -228,6 +235,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     waterReceiptLifecycleRepositoryProvider,
     WarehouseInventoryQueryService,
     WarehouseTallyQueryService,
+    WarehouseTallyLifecycleService,
+    warehouseTallyLifecycleRepositoryProvider,
     notificationServiceProvider,
     userTablePreferenceServiceProvider,
     ...(usePrismaRepository ? [NotificationAuditWorker] : []),

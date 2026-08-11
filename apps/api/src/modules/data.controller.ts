@@ -156,6 +156,7 @@ import { parseWarehouseMachineWorkbook } from './warehouse-machine-import.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
+import { WarehouseTallyLifecycleService } from './warehouse/tally/warehouse-tally-lifecycle.service.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -169,10 +170,9 @@ export class DataController {
   constructor(
     @Inject(PrismaRepository) private readonly repository: PrismaRepository,
     @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService,
-    @Inject(WarehouseInventoryQueryService)
-    private readonly warehouseInventoryQueries: WarehouseInventoryQueryService
+    @Inject(WarehouseInventoryQueryService) private readonly warehouseInventoryQueries: WarehouseInventoryQueryService,
+    @Inject(WarehouseTallyLifecycleService) private readonly warehouseTallyLifecycle: WarehouseTallyLifecycleService
   ) {}
-
   private readonly imageMimeExtensions: Record<string, string> = {
     'image/png': '.png',
     'image/jpeg': '.jpg',
@@ -2348,7 +2348,7 @@ export class DataController {
   @Post('warehouse/tally-tasks/:id/start')
   @RequirePermission('warehouse:tally-pending:task-process')
   async startWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.startWarehouseTallyTask(request.user, id);
+    return this.warehouseTallyLifecycle.start(request.user, id);
   }
 
   @Post('warehouse/tally-tasks/:id/cancel')
@@ -2386,7 +2386,7 @@ export class DataController {
     @Param('id') id: string,
     @Body() body: WarehouseTallyTaskCancelInput
   ) {
-    return this.repository.cancelCompletedWarehouseTallyTask(request.user, id, body);
+    return this.warehouseTallyLifecycle.cancelCompleted(request.user, id, body);
   }
 
   @Get('warehouse/tally-tasks/:id/historical-aggregate-correction')
