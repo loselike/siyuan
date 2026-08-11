@@ -5142,6 +5142,10 @@ body.is-resizing-table-column {
   width: 220px;
 }
 
+.fulfillment-board-filter-select {
+  width: 140px;
+}
+
 .fulfillment-board-card-columns .fulfillment-table .ant-table-thead > tr > th {
   padding: 9px 7px;
   font-size: 12px;
@@ -10068,6 +10072,10 @@ body.is-resizing-table-column {
   .fulfillment-board-filters .ant-space-item:nth-child(-n + 2) .ant-input,
   .fulfillment-board-filters .ant-space-item:nth-child(3) .ant-input-affix-wrapper {
     width: 100%;
+  }
+
+  .fulfillment-board-filter-select {
+    min-width: 140px;
   }
 
   .page-heading {
