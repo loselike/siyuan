@@ -59,9 +59,6 @@ import type {
   PaymentWaterReceiptInput,
   ShipmentDispatchInput,
   WarehouseHandoverPrintInput,
-  WarehouseRentDetailQuery,
-  WarehouseRentRuleEnabledInput,
-  WarehouseRentRuleInput,
   VoucherImageUploadContext,
   PayableAuditBatchInput,
   PayableAuditListQuery,
@@ -2181,59 +2178,6 @@ export class DataController {
   @RequirePermission('pricing:lookup:view')
   async quotePricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleQuoteRequest) {
     return this.repository.quotePricingRule(request.user, body);
-  }
-
-  @Get('warehouse/rent-details')
-  @RequirePermission('warehouse:rent-detail:view')
-  async warehouseRentDetails(@Req() request: { user: Principal }, @Query() query: WarehouseRentDetailQuery) {
-    return this.repository.getWarehouseRentDetails(request.user, query);
-  }
-
-  @Get('warehouse/rent-details/export')
-  @RequirePermission('warehouse:rent-detail:export')
-  async exportWarehouseRentDetails(@Req() request: { user: Principal }, @Query() query: WarehouseRentDetailQuery) {
-    return this.repository.exportWarehouseRentDetails(request.user, query);
-  }
-
-  @Get('warehouse/rent-rules')
-  @RequirePermission('warehouse:rent-rule:view')
-  async warehouseRentRules(@Req() request: { user: Principal }) {
-    return this.repository.getWarehouseRentRules(request.user);
-  }
-
-  @Post('warehouse/rent-rules')
-  @RequirePermission('warehouse:rent-rule:manage')
-  async createWarehouseRentRule(@Req() request: { user: Principal }, @Body() body: WarehouseRentRuleInput) {
-    return this.repository.createWarehouseRentRule(request.user, body);
-  }
-
-  @Put('warehouse/rent-rules/:id')
-  @RequirePermission('warehouse:rent-rule:manage')
-  async updateWarehouseRentRule(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseRentRuleInput
-  ) {
-    return this.repository.updateWarehouseRentRule(request.user, id, body);
-  }
-
-  @Delete('warehouse/rent-rules/:id')
-  @RequirePermission('warehouse:rent-rule:manage')
-  async deleteWarehouseRentRule(
-    @Req() request: { user: Principal },
-    @Param('id') id: string
-  ) {
-    return this.repository.deleteWarehouseRentRule(request.user, id);
-  }
-
-  @Put('warehouse/rent-rules/:id/enabled')
-  @RequirePermission('warehouse:rent-rule:manage')
-  async updateWarehouseRentRuleEnabled(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseRentRuleEnabledInput
-  ) {
-    return this.repository.updateWarehouseRentRuleEnabled(request.user, id, body);
   }
 
   @Post('warehouse/packages/machine-import')

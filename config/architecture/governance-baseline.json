@@ -250,12 +250,12 @@
       "UserTablePreferenceController.remove"
     ],
     [
-      "DELETE /warehouse/rent-rules/:id @ DataController.deleteWarehouseRentRule",
+      "DELETE /warehouse/rent-rules/:id @ WarehouseRentController.deleteWarehouseRentRule",
       "permission",
       [
         "warehouse:rent-rule:manage"
       ],
-      "DataController.deleteWarehouseRentRule"
+      "WarehouseRentController.deleteWarehouseRentRule"
     ],
     [
       "GET /auth/account-events @ AuthController.accountEvents",
@@ -1227,28 +1227,28 @@
       "WarehouseInventoryQueryController.warehousePackages"
     ],
     [
-      "GET /warehouse/rent-details @ DataController.warehouseRentDetails",
+      "GET /warehouse/rent-details @ WarehouseRentController.warehouseRentDetails",
       "permission",
       [
         "warehouse:rent-detail:view"
       ],
-      "DataController.warehouseRentDetails"
+      "WarehouseRentController.warehouseRentDetails"
     ],
     [
-      "GET /warehouse/rent-details/export @ DataController.exportWarehouseRentDetails",
+      "GET /warehouse/rent-details/export @ WarehouseRentController.exportWarehouseRentDetails",
       "permission",
       [
         "warehouse:rent-detail:export"
       ],
-      "DataController.exportWarehouseRentDetails"
+      "WarehouseRentController.exportWarehouseRentDetails"
     ],
     [
-      "GET /warehouse/rent-rules @ DataController.warehouseRentRules",
+      "GET /warehouse/rent-rules @ WarehouseRentController.warehouseRentRules",
       "permission",
       [
         "warehouse:rent-rule:view"
       ],
-      "DataController.warehouseRentRules"
+      "WarehouseRentController.warehouseRentRules"
     ],
     [
       "GET /warehouse/tally-repeat-statistics @ WarehouseTallyOperationsController.warehouseTallyRepeatStatistics",
@@ -2866,12 +2866,12 @@
       "DataController.createWarehouseManualReceipt"
     ],
     [
-      "POST /warehouse/rent-rules @ DataController.createWarehouseRentRule",
+      "POST /warehouse/rent-rules @ WarehouseRentController.createWarehouseRentRule",
       "permission",
       [
         "warehouse:rent-rule:manage"
       ],
-      "DataController.createWarehouseRentRule"
+      "WarehouseRentController.createWarehouseRentRule"
     ],
     [
       "POST /warehouse/tally-tasks @ WarehouseTallyLifecycleController.createWarehouseTallyTask",
@@ -3350,24 +3350,24 @@
       "DataController.updateWarehousePackageRemark"
     ],
     [
-      "PUT /warehouse/rent-rules/:id @ DataController.updateWarehouseRentRule",
+      "PUT /warehouse/rent-rules/:id @ WarehouseRentController.updateWarehouseRentRule",
       "permission",
       [
         "warehouse:rent-rule:manage"
       ],
-      "DataController.updateWarehouseRentRule"
+      "WarehouseRentController.updateWarehouseRentRule"
     ],
     [
-      "PUT /warehouse/rent-rules/:id/enabled @ DataController.updateWarehouseRentRuleEnabled",
+      "PUT /warehouse/rent-rules/:id/enabled @ WarehouseRentController.updateWarehouseRentRuleEnabled",
       "permission",
       [
         "warehouse:rent-rule:manage"
       ],
-      "DataController.updateWarehouseRentRuleEnabled"
+      "WarehouseRentController.updateWarehouseRentRuleEnabled"
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 254,
+    "dataControllerRoutesMax": 247,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 32122,
       "apps/api/src/modules/in-memory.repository.ts": 19588,
-      "apps/api/src/modules/data.controller.ts": 2892,
+      "apps/api/src/modules/data.controller.ts": 2836,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,

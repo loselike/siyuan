@@ -85,6 +85,9 @@ import {
   WAREHOUSE_INVENTORY_QUERY_REPOSITORY
 } from './warehouse/inventory/warehouse-inventory-query.repository.js';
 import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
+import { WarehouseRentController } from './warehouse/rent/warehouse-rent.controller.js';
+import { WAREHOUSE_RENT_REPOSITORY } from './warehouse/rent/warehouse-rent.repository.js';
+import { WarehouseRentService } from './warehouse/rent/warehouse-rent.service.js';
 import { LegacyWarehouseTallyQueryRepository } from './warehouse/tally/legacy-warehouse-tally-query.repository.js';
 import {
   PrismaWarehouseTallyQueryRepository,
@@ -168,6 +171,11 @@ const warehouseTallyOperationsRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const warehouseRentRepositoryProvider = {
+  provide: WAREHOUSE_RENT_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -238,6 +246,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     TrackingQueryController,
     WarehouseDispatchQueryController,
     WarehouseInventoryQueryController,
+    WarehouseRentController,
     WarehouseTallyCorrectionController,
     WarehouseTallyLabelController,
     WarehouseTallyLifecycleController,
@@ -263,6 +272,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     WaterReceiptLifecycleService,
     waterReceiptLifecycleRepositoryProvider,
     WarehouseInventoryQueryService,
+    WarehouseRentService,
+    warehouseRentRepositoryProvider,
     WarehouseTallyQueryService,
     WarehouseTallyCorrectionService,
     warehouseTallyCorrectionRepositoryProvider,
