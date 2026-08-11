@@ -99,7 +99,6 @@ import type {
   ReceivableAdjustmentInput,
   SurchargeCreateInput,
   RoleGroupInput,
-  BulkTrackingApplyRequest,
   ShipmentCreateInput,
   ShipmentFinanceItemCreateInput,
   ShipmentFinanceItemUpdateInput,
@@ -930,17 +929,6 @@ export class DataController {
       throw new ForbiddenException('客户不能登记收款');
     }
     return this.repository.registerShipmentPayment(request.user, id, body);
-  }
-
-  @Post('shipments/tracking-events/import')
-  @RequireAuth()
-  async importTrackingEvents(@Req() request: { user: Principal }, @Body() body: BulkTrackingApplyRequest) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能批量导入轨迹');
-    }
-    await this.ensurePermission(request.user, 'tracking:external:import-confirm');
-    await this.ensurePermission(request.user, 'tracking:external:overwrite');
-    return this.repository.importTrackingEvents(request.user, body);
   }
 
   @Delete('shipments/:id')

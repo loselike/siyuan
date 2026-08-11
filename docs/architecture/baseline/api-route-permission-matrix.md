@@ -63,7 +63,7 @@
 | shipment-flow | GET | `/customer-service/data-confirm-shipments` | `DataController.customerServiceDataConfirmShipments` | permission | `customer-service:data-confirm:view` | `apps/api/src/modules/data.controller.ts:936` |
 | shipment-flow | POST | `/customer-service/transfer-shipments/fill` | `DataController.fillCustomerServiceTransferShipments` | auth | — | `apps/api/src/modules/data.controller.ts:942` |
 | shipment-flow | POST | `/shipments/:id/payment` | `DataController.registerShipmentPayment` | permission | `business:shipment:payment-record` | `apps/api/src/modules/data.controller.ts:952` |
-| shipment-flow | POST | `/shipments/tracking-events/import` | `DataController.importTrackingEvents` | auth | — | `apps/api/src/modules/data.controller.ts:961` |
+| shipment-flow | POST | `/shipments/tracking-events/import` | `TrackingImportCommandController.importTrackingEvents` | auth | — | `apps/api/src/modules/tracking/import/tracking-import-command.controller.ts:14` |
 | shipment-flow | DELETE | `/shipments/:id` | `DataController.deleteShipment` | permission | `business:shipment:delete` | `apps/api/src/modules/data.controller.ts:972` |
 | shipment-flow | POST | `/shipments/:id/labels` | `ShipmentLabelLifecycleController.createShipmentLabel` | permission | `warehouse:dispatch-pending:label-generate` | `apps/api/src/modules/shipment/fulfillment/shipment-label-lifecycle.controller.ts:35` |
 | shipment-flow | POST | `/shipments/:id/labels/upload` | `ShipmentLabelLifecycleController.uploadShipmentLabel` | auth | — | `apps/api/src/modules/shipment/fulfillment/shipment-label-lifecycle.controller.ts:41` |
