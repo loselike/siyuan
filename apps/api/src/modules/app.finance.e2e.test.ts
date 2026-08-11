@@ -880,6 +880,15 @@ describe('Siyuan API finance', () => {
       .set('Authorization', app.auth(adminToken))
       .expect(201);
 
+    await request(app.getHttpServer())
+      .post('/api/finance/water-receipts/wr-al-seed-9409/match-orders')
+      .set('Authorization', app.auth(adminToken))
+      .send({ amountCurrency: 'USD', matches: [{ receivableId: systemReceivable.id, receivableSourceType: 'SYSTEM', amount: 100 }] })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('匹配金额币种无效');
+      });
+
     const submittedMatch = await request(app.getHttpServer())
       .post('/api/finance/water-receipts/wr-al-seed-9409/match-orders')
       .set('Authorization', app.auth(adminToken))

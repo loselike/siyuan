@@ -19,6 +19,8 @@ import type {
 } from '@siyuan/shared';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
+import { RuntimeInputPipe } from '../../runtime-input.pipe.js';
+import { parseWaterReceiptMatchOrdersInput } from '../water-receipt/water-receipt-allocation.input.js';
 import { WaterReceiptAllocationService } from '../water-receipt/water-receipt-allocation.service.js';
 import { FinanceReceivableService } from './finance-receivable.service.js';
 
@@ -204,7 +206,11 @@ export class FinanceReceivableController {
 
   @Post('finance/water-receipts/:id/match-orders')
   @RequirePermission('finance:water-receipt:match')
-  async matchWaterReceiptOrders(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WaterReceiptMatchOrdersInput) {
+  async matchWaterReceiptOrders(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body(new RuntimeInputPipe(parseWaterReceiptMatchOrdersInput)) body: WaterReceiptMatchOrdersInput
+  ) {
     return this.waterReceiptAllocationService.matchWaterReceiptOrders(request.user, id, body);
   }
 
