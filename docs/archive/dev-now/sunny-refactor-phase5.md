@@ -1,6 +1,6 @@
 # Sunny 深度重构第五阶段
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 会话标题：`Sunny｜深度重构第五阶段｜05`
 - 续接自：`docs/archive/dev-now/sunny-refactor-phase4.md`
 - 上下文状态：`green`
@@ -35,10 +35,11 @@
 - 三条既有财务 E2E 3/3 通过：严格编号与作废、付款编号创建/修改与审计、到账/匹配/撤销/归档/导出链路保持现状。
 - API typecheck 与 `git diff --check` 通过。
 - 行为与安全审查：Controller 路由、HTTP 方法、权限装饰器、application service 和 Repository 均未修改；合法字段、数字字符串、空到账/作废 body 和现有错误文案兼容保留；只对类型契约之外的畸形输入提前返回 400。
-- 待执行：47 精确发布和线上验证。
+- 47 白名单发布 `whitelist-af4e5b917580d563818c3c60` 成功；三个运行目标文件校验和与候选完全一致，API 生产构建和重启成功，编译产物包含 lifecycle/allocation parser 标记。
+- 47 五条目标写路由均只映射一次；公网 `/api/health` 200，未登录畸形创建请求仍先返回 401，证明鉴权顺序未被 Pipe 绕过；API/Postgres/Redis 正常，发布锁 free、recovery clear。
 
 ## 交接
 
 - 阻塞：无。
 - 风险：parser 会改变畸形请求的拒绝位置；只能提前拒绝类型契约之外的输入，合法请求字段、默认值、顺序和持久化副作用必须保持一致。
-- 发布状态：未发布。
+- 发布状态：已发布并完成非浏览器线上验证。
