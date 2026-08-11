@@ -163,6 +163,7 @@ import { configureAccountTablePreferences } from './modules/shared/tablePreferen
 import { CustomerServicePage, FinancePage, MiscFeesPage, WarehousePage, loadCustomerServicePage, loadFinancePage, loadMiscFeesPage, loadWarehousePage } from './modules/appShell/pageLoaders';
 import { clearPersistedSession, loadPersistedSession, persistSession } from './modules/appShell/sessionStore';
 import { useCurrentSessionRefresh } from './modules/appShell/useCurrentSessionRefresh';
+import { useNotificationNavigation } from './modules/appShell/useNotificationNavigation';
 import { refreshWorkspaceData } from './modules/appShell/workspaceRefresh';
 
 const { Header, Sider, Content } = Layout;
@@ -197,12 +198,6 @@ export function App() {
   const [routingAssignmentForm] = Form.useForm<RoutingAssignmentFormValues>();
   const [session, setSession] = useState<Session | null>(loadPersistedSession);
   const [requestedAppRoute, setRequestedAppRoute] = useState(() => parseStaffAppRoute(window.location.pathname));
-  const [pendingNotificationTarget, setPendingNotificationTarget] = useState<{ type: string; id: string } | null>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const type = params.get('notificationEntityType');
-    const id = params.get('notificationEntityId');
-    return type && id ? { type, id } : null;
-  });
   const [expandedMenuKey, setExpandedMenuKey] = useState<MenuKey | null>('workspace');
   const [sidebarSubNav, setSidebarSubNav] = useState<SidebarSubNavState | null>(null);
   const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['appShell']['navigationUnreadBadges']>>['items']>([]);
@@ -410,37 +405,15 @@ export function App() {
       void refreshCurrentSession().catch(() => undefined);
     });
   }, [navigateWithVersionCheck, refreshCurrentSession, setNotice]);
-  const handleNotificationNavigate = useCallback((targetPath: string) => {
-    const targetUrl = new URL(targetPath, window.location.origin);
-    if (targetUrl.origin !== window.location.origin) {
-      message.warning('通知跳转地址无效');
-      return;
-    }
-    const targetRoute = parseStaffAppRoute(targetUrl.pathname);
-    if (!targetRoute || !visibleMenuKeys.includes(targetRoute.menuKey)) {
-      message.warning('当前账号没有该业务页面的访问权限');
-      return;
-    }
-    navigateToAppRoute(targetRoute.menuKey, targetRoute.sectionKey, 'push', `${targetUrl.pathname}${targetUrl.search}`);
-    if (targetUrl.search) {
-      window.history.replaceState(null, '', `${targetUrl.pathname}${targetUrl.search}`);
-    }
-    const targetType = targetUrl.searchParams.get('notificationEntityType');
-    const targetId = targetUrl.searchParams.get('notificationEntityId');
-    setPendingNotificationTarget(targetType && targetId ? { type: targetType, id: targetId } : null);
-  }, [navigateToAppRoute, visibleMenuKeys]);
-  const consumePendingNotificationTarget = useCallback((target: { type: string; id: string }) => {
-    setPendingNotificationTarget((current) => current?.type === target.type && current.id === target.id ? null : current);
-    const currentUrl = new URL(window.location.href);
-    if (
-      currentUrl.searchParams.get('notificationEntityType') === target.type
-      && currentUrl.searchParams.get('notificationEntityId') === target.id
-    ) {
-      currentUrl.searchParams.delete('notificationEntityType');
-      currentUrl.searchParams.delete('notificationEntityId');
-      window.history.replaceState(null, '', `${currentUrl.pathname}${currentUrl.search}`);
-    }
-  }, []);
+  const {
+    consumePendingNotificationTarget,
+    handleNotificationNavigate,
+    pendingNotificationTarget
+  } = useNotificationNavigation({
+    navigateToAppRoute,
+    visibleMenuKeys,
+    warn: message.warning
+  });
   const registerSidebarSubNav = useCallback(
     (state: Omit<SidebarSubNavState, 'parentKey' | 'signature'>) => {
       const signature = getModuleSubNavSignature(state.items);
