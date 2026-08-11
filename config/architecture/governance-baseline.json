@@ -3388,8 +3388,8 @@
     "prismaRepositoryMethodsMax": 712,
     "inMemoryRepositoryMethodsMax": 598,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 31929,
-      "apps/api/src/modules/in-memory.repository.ts": 19395,
+      "apps/api/src/modules/prisma.repository.ts": 31839,
+      "apps/api/src/modules/in-memory.repository.ts": 19305,
       "apps/api/src/modules/data.controller.ts": 2527,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
