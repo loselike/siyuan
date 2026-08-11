@@ -2993,7 +2993,7 @@ describe('Siyuan API finance', () => {
       });
   });
 
-  it('water receipt voucher upload returns accessible preview url and redacts unauthorized list response', async () => {
+  it('water receipt voucher upload requires authentication and hides inaccessible rows', async () => {
     const adminToken = await app.loginAs('admin');
     const operatorToken = await app.loginAs('operator');
     const created = await request(app.getHttpServer())
@@ -3026,6 +3026,10 @@ describe('Siyuan API finance', () => {
     expect(uploaded.body.url).not.toContain('/api/uploads/uploads/');
     await request(app.getHttpServer())
       .get(uploaded.body.url)
+      .expect(401);
+    await request(app.getHttpServer())
+      .get(uploaded.body.url)
+      .set('Authorization', app.auth(adminToken))
       .expect(200)
       .expect('Content-Type', /image\/png/);
 
@@ -3051,9 +3055,7 @@ describe('Siyuan API finance', () => {
       .expect(200)
       .expect((response) => {
         const row = response.body.rows.find((item: { id: string }) => item.id === created.body.id);
-        expect(row).toEqual(expect.objectContaining({
-          voucher: expect.objectContaining({ fileName: 'receipt-initial.png', url: uploaded.body.url })
-        }));
+        expect(row).toBeUndefined();
       });
 
     const replaced = await request(app.getHttpServer())
@@ -3088,11 +3090,16 @@ describe('Siyuan API finance', () => {
       });
     await request(app.getHttpServer())
       .get(replaced.body.url)
+      .set('Authorization', app.auth(adminToken))
       .expect(200);
 
     await request(app.getHttpServer())
       .delete(`/api/finance/water-receipts/${created.body.id}/voucher`)
       .set('Authorization', app.auth(operatorToken))
+      .expect(404);
+    await request(app.getHttpServer())
+      .delete(`/api/finance/water-receipts/${created.body.id}/voucher`)
+      .set('Authorization', app.auth(adminToken))
       .expect(200)
       .expect({ deleted: true });
     await request(app.getHttpServer())

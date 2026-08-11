@@ -365,6 +365,12 @@ import {
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
 import { isEarlyPaymentSettlementMethod, sortWarehouseTallyTasks, warehouseTallyChannels } from '@siyuan/shared';
+import {
+  buildWaterReceiptListTotals,
+  buildWaterReceiptVoucherAuditSnapshot,
+  redactWaterReceiptVoucher,
+  sanitizeWaterReceiptPaymentNo
+} from './finance/water-receipt/water-receipt-view.policy.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
 import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
@@ -7907,7 +7913,7 @@ export class InMemoryRepository {
           : row.status === query.status;
       }
       return query.includeArchived || !['ARCHIVED', 'VOIDED'].includes(row.status);
-    }).map((row) => this.redactWaterReceiptVoucher(row, canViewVoucher));
+    }).map((row) => redactWaterReceiptVoucher(row, canViewVoucher));
     return this.buildWaterReceiptListResponse(this.decorateWaterReceiptRows(rows), query);
   }
 
@@ -8845,7 +8851,7 @@ export class InMemoryRepository {
     const before = row.voucher ? { ...row.voucher } : undefined;
     const voucher: WaterReceiptVoucherSummary = { id: before?.id ?? `wrv-${this.waterReceipts.length + 1}`, waterReceiptId: row.id, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, url: input.url, uploadedBy: principal.username, createdAt: new Date().toISOString() };
     row.voucher = voucher;
-    this.audit('finance.water_receipt.voucher', row.id, principal, before ? this.toWaterReceiptVoucherAuditSnapshot(row, before) : null, this.toWaterReceiptVoucherAuditSnapshot(row, voucher, before));
+    this.audit('finance.water_receipt.voucher', row.id, principal, before ? buildWaterReceiptVoucherAuditSnapshot(row, before) : null, buildWaterReceiptVoucherAuditSnapshot(row, voucher, before));
     return voucher;
   }
 
@@ -8856,7 +8862,7 @@ export class InMemoryRepository {
     if (!row.voucher) throw new NotFoundException('水单凭证不存在');
     const before = { ...row.voucher };
     row.voucher = undefined;
-    this.audit('finance.water_receipt.voucher.delete', row.id, principal, this.toWaterReceiptVoucherAuditSnapshot(row, before), null);
+    this.audit('finance.water_receipt.voucher.delete', row.id, principal, buildWaterReceiptVoucherAuditSnapshot(row, before), null);
     return { deleted: true };
   }
 
@@ -15624,31 +15630,11 @@ export class InMemoryRepository {
   }
 
   private requireUniqueWaterReceiptPaymentNo(value: string | undefined, currentId?: string) {
-    const paymentNo = sanitizeManualPaymentNo(value);
+    const paymentNo = sanitizeWaterReceiptPaymentNo(value);
     if (!paymentNo) throw new BadRequestException('付款编号不能为空');
-    const duplicate = this.waterReceipts.find((row) => row.id !== currentId && sanitizeManualPaymentNo(row.paymentNo) === paymentNo);
+    const duplicate = this.waterReceipts.find((row) => row.id !== currentId && sanitizeWaterReceiptPaymentNo(row.paymentNo) === paymentNo);
     if (duplicate) throw new BadRequestException('付款编号已存在，不能重复录入');
     return paymentNo;
-  }
-
-  private redactWaterReceiptVoucher(row: WaterReceiptSummary, canViewVoucher: boolean): WaterReceiptSummary {
-    if (canViewVoucher || !row.voucher) return row;
-    return { ...row, voucher: undefined };
-  }
-
-  private toWaterReceiptVoucherAuditSnapshot(row: WaterReceiptSummary, voucher: WaterReceiptVoucherSummary, before?: WaterReceiptVoucherSummary) {
-    return {
-      waterReceiptId: row.id,
-      receiptNo: row.receiptNo,
-      voucherId: voucher.id,
-      fileName: voucher.fileName,
-      sizeBytes: voucher.sizeBytes,
-      mimeType: voucher.mimeType,
-      uploadedBy: voucher.uploadedBy,
-      uploadedAt: voucher.createdAt,
-      previousVoucherId: before?.id,
-      previousFileName: before?.fileName
-    };
   }
 
   private normalizeWaterReceiptCurrency(currencyValue?: string): string {
@@ -15784,54 +15770,7 @@ export class InMemoryRepository {
         && (query.minAmount === undefined || row.amount >= Number(query.minAmount))
         && (query.maxAmount === undefined || row.amount <= Number(query.maxAmount));
     });
-    const totals = filtered.reduce((acc, row) => {
-      acc.amount = roundMoney(acc.amount + row.amount);
-      acc.matchedAmount = roundMoney(acc.matchedAmount + row.matchedAmount);
-      acc.pendingAllocatedAmount = roundMoney(acc.pendingAllocatedAmount + Number(row.pendingAllocatedAmount ?? 0));
-      acc.availableAllocationAmount = roundMoney(acc.availableAllocationAmount + Number(row.availableAllocationAmount ?? row.balance));
-      acc.balance = roundMoney(acc.balance + row.balance);
-      acc.rmbAmount = roundMoney(acc.rmbAmount + Number(row.rmbAmount ?? 0));
-      acc.rmbMatchedAmount = roundMoney(acc.rmbMatchedAmount + Number(row.rmbMatchedAmount ?? 0));
-      acc.rmbPendingAllocatedAmount = roundMoney(acc.rmbPendingAllocatedAmount + Number(row.rmbPendingAllocatedAmount ?? 0));
-      acc.rmbAvailableAllocationAmount = roundMoney(acc.rmbAvailableAllocationAmount + Number(row.rmbAvailableAllocationAmount ?? row.rmbBalance ?? 0));
-      acc.rmbBalance = roundMoney(acc.rmbBalance + Number(row.rmbBalance ?? 0));
-      const currency = row.currency ?? 'RMB';
-      const currencyTotal = acc.amountByCurrency.find((item) => item.currency === currency);
-      if (currencyTotal) {
-        currencyTotal.amount = roundMoney(currencyTotal.amount + row.amount);
-        currencyTotal.matchedAmount = roundMoney(currencyTotal.matchedAmount + row.matchedAmount);
-        currencyTotal.balance = roundMoney(currencyTotal.balance + row.balance);
-      } else {
-        acc.amountByCurrency.push({
-          currency,
-          amount: roundMoney(row.amount),
-          matchedAmount: roundMoney(row.matchedAmount),
-          balance: roundMoney(row.balance)
-        });
-      }
-      if (row.status === 'PENDING') acc.pendingCount += 1;
-      if (row.status === 'ARRIVED' || row.status === 'PARTIAL_MATCHED') acc.arrivedCount += 1;
-      if (row.status === 'MATCHED') acc.matchedCount += 1;
-      if (row.status === 'ARCHIVED') acc.archivedCount += 1;
-      return acc;
-    }, {
-      count: filtered.length,
-      pendingCount: 0,
-      arrivedCount: 0,
-      matchedCount: 0,
-      archivedCount: 0,
-      amount: 0,
-      matchedAmount: 0,
-      pendingAllocatedAmount: 0,
-      availableAllocationAmount: 0,
-      balance: 0,
-      amountByCurrency: [] as Array<{ currency: string; amount: number; matchedAmount: number; balance: number }>,
-      rmbAmount: 0,
-      rmbMatchedAmount: 0,
-      rmbPendingAllocatedAmount: 0,
-      rmbAvailableAllocationAmount: 0,
-      rmbBalance: 0
-    });
+    const totals = buildWaterReceiptListTotals(filtered);
     const { page, pageSize, rows: pagedRows } = this.paginateRows(filtered, query);
     return { rows: pagedRows, totals, pagination: { page, pageSize, totalItems: filtered.length } };
   }
@@ -17755,14 +17694,6 @@ function isLegacyAutoRoutePayable(item: {
     && item.chargeWeightKg !== undefined
     && item.unitPrice !== undefined
     && item.remark?.startsWith('市场排货渠道：') === true;
-}
-
-function sanitizeManualPaymentNo(value?: string): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  const cleaned = String(value).replace(/[\u0000-\u001f\u007f\u200b-\u200d\ufeff<>]/g, '').trim();
-  if (!cleaned) return undefined;
-  if (cleaned.length > 80) throw new BadRequestException('付款编号不能超过 80 个字符');
-  return cleaned;
 }
 
 function buildWarehousePackageSummary(id: string, input: WarehousePackageCreateInput): WarehousePackageSummary {

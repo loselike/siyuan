@@ -419,6 +419,12 @@ import {
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
 import { isEarlyPaymentSettlementMethod, sortWarehouseTallyTasks, warehouseTallyChannels } from '@siyuan/shared';
+import {
+  buildWaterReceiptListTotals,
+  buildWaterReceiptVoucherAuditSnapshot,
+  redactWaterReceiptVoucher,
+  sanitizeWaterReceiptPaymentNo
+} from './finance/water-receipt/water-receipt-view.policy.js';
 import { generateTemporaryPassword, getPasswordStrengthError, hashPassword, passwordHashNeedsRehash, verifyPassword } from './password.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, cbmTierMatches, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, isOpenEndedKgTier, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, normalizeWarehouseCode, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
@@ -11964,7 +11970,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       include: this.waterReceiptInclude(),
       orderBy: { receiptDate: 'desc' }
     });
-    const summaries = rows.map((row: any) => this.redactWaterReceiptVoucher(this.toWaterReceiptSummary(row), canViewVoucher));
+    const summaries = rows.map((row: any) => redactWaterReceiptVoucher(this.toWaterReceiptSummary(row), canViewVoucher));
     return this.buildWaterReceiptListResponse(await this.decorateWaterReceiptRows(summaries), query);
   }
 
@@ -13066,8 +13072,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           actorId: principal.id,
           action: 'finance.water_receipt.voucher',
           target: id,
-          before: beforeVoucher ? toAuditJson(this.toWaterReceiptVoucherAuditSnapshot(receiptSummary, beforeVoucher)) : undefined,
-          after: toAuditJson(this.toWaterReceiptVoucherAuditSnapshot(receiptSummary, summary, beforeVoucher))
+          before: beforeVoucher ? toAuditJson(buildWaterReceiptVoucherAuditSnapshot(receiptSummary, beforeVoucher)) : undefined,
+          after: toAuditJson(buildWaterReceiptVoucherAuditSnapshot(receiptSummary, summary, beforeVoucher))
         }
       });
       return { summary, previousUrl: beforeVoucher?.url };
@@ -13093,7 +13099,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           actorId: principal.id,
           action: 'finance.water_receipt.voucher.delete',
           target: id,
-          before: toAuditJson(this.toWaterReceiptVoucherAuditSnapshot(this.toWaterReceiptSummary(locked), beforeVoucher))
+          before: toAuditJson(buildWaterReceiptVoucherAuditSnapshot(this.toWaterReceiptSummary(locked), beforeVoucher))
         }
       });
       return beforeVoucher.url;
@@ -22391,13 +22397,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async requireUniqueWaterReceiptPaymentNo(value: string | undefined, currentId?: string) {
-    const paymentNo = sanitizeManualPaymentNo(value);
+    const paymentNo = sanitizeWaterReceiptPaymentNo(value);
     if (!paymentNo) throw new BadRequestException('付款编号不能为空');
     const rows = await (this.prisma as any).waterReceipt.findMany({
       where: { paymentNo: { not: null } },
       select: { id: true, paymentNo: true }
     }) as Array<{ id: string; paymentNo?: string | null }>;
-    if (rows.some((row) => row.id !== currentId && sanitizeManualPaymentNo(row.paymentNo ?? undefined) === paymentNo)) {
+    if (rows.some((row) => row.id !== currentId && sanitizeWaterReceiptPaymentNo(row.paymentNo ?? undefined) === paymentNo)) {
       throw new BadRequestException('付款编号已存在，不能重复录入');
     }
     return paymentNo;
@@ -22413,26 +22419,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       url: row.url ?? undefined,
       uploadedBy: row.uploadedBy ?? undefined,
       createdAt: row.createdAt?.toISOString?.() ?? row.createdAt ?? undefined
-    };
-  }
-
-  private redactWaterReceiptVoucher(row: WaterReceiptSummary, canViewVoucher: boolean): WaterReceiptSummary {
-    if (canViewVoucher || !row.voucher) return row;
-    return { ...row, voucher: undefined };
-  }
-
-  private toWaterReceiptVoucherAuditSnapshot(row: WaterReceiptSummary, voucher: WaterReceiptVoucherSummary, before?: WaterReceiptVoucherSummary) {
-    return {
-      waterReceiptId: row.id,
-      receiptNo: row.receiptNo,
-      voucherId: voucher.id,
-      fileName: voucher.fileName,
-      sizeBytes: voucher.sizeBytes,
-      mimeType: voucher.mimeType,
-      uploadedBy: voucher.uploadedBy,
-      uploadedAt: voucher.createdAt,
-      previousVoucherId: before?.id,
-      previousFileName: before?.fileName
     };
   }
 
@@ -22640,54 +22626,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       const result = valueOf(left) > valueOf(right) ? 1 : valueOf(left) < valueOf(right) ? -1 : 0;
       return sortOrder === 'asc' ? result : -result;
     });
-    const totals = filtered.reduce((acc, row) => {
-      acc.amount = roundMoney(acc.amount + row.amount);
-      acc.matchedAmount = roundMoney(acc.matchedAmount + row.matchedAmount);
-      acc.pendingAllocatedAmount = roundMoney(acc.pendingAllocatedAmount + Number(row.pendingAllocatedAmount ?? 0));
-      acc.availableAllocationAmount = roundMoney(acc.availableAllocationAmount + Number(row.availableAllocationAmount ?? row.balance));
-      acc.balance = roundMoney(acc.balance + row.balance);
-      acc.rmbAmount = roundMoney(acc.rmbAmount + Number(row.rmbAmount ?? 0));
-      acc.rmbMatchedAmount = roundMoney(acc.rmbMatchedAmount + Number(row.rmbMatchedAmount ?? 0));
-      acc.rmbPendingAllocatedAmount = roundMoney(acc.rmbPendingAllocatedAmount + Number(row.rmbPendingAllocatedAmount ?? 0));
-      acc.rmbAvailableAllocationAmount = roundMoney(acc.rmbAvailableAllocationAmount + Number(row.rmbAvailableAllocationAmount ?? row.rmbBalance ?? 0));
-      acc.rmbBalance = roundMoney(acc.rmbBalance + Number(row.rmbBalance ?? 0));
-      const currency = row.currency ?? 'RMB';
-      const currencyTotal = acc.amountByCurrency.find((item) => item.currency === currency);
-      if (currencyTotal) {
-        currencyTotal.amount = roundMoney(currencyTotal.amount + row.amount);
-        currencyTotal.matchedAmount = roundMoney(currencyTotal.matchedAmount + row.matchedAmount);
-        currencyTotal.balance = roundMoney(currencyTotal.balance + row.balance);
-      } else {
-        acc.amountByCurrency.push({
-          currency,
-          amount: roundMoney(row.amount),
-          matchedAmount: roundMoney(row.matchedAmount),
-          balance: roundMoney(row.balance)
-        });
-      }
-      if (row.status === 'PENDING') acc.pendingCount += 1;
-      if (row.status === 'ARRIVED' || row.status === 'PARTIAL_MATCHED') acc.arrivedCount += 1;
-      if (row.status === 'MATCHED') acc.matchedCount += 1;
-      if (row.status === 'ARCHIVED') acc.archivedCount += 1;
-      return acc;
-    }, {
-      count: filtered.length,
-      pendingCount: 0,
-      arrivedCount: 0,
-      matchedCount: 0,
-      archivedCount: 0,
-      amount: 0,
-      matchedAmount: 0,
-      pendingAllocatedAmount: 0,
-      availableAllocationAmount: 0,
-      balance: 0,
-      amountByCurrency: [] as Array<{ currency: string; amount: number; matchedAmount: number; balance: number }>,
-      rmbAmount: 0,
-      rmbMatchedAmount: 0,
-      rmbPendingAllocatedAmount: 0,
-      rmbAvailableAllocationAmount: 0,
-      rmbBalance: 0
-    });
+    const totals = buildWaterReceiptListTotals(filtered);
     const { page, pageSize, rows: pagedRows } = this.paginateRows(filtered, query);
     return { rows: pagedRows, totals, pagination: { page, pageSize, totalItems: filtered.length } };
   }
@@ -30425,14 +30364,6 @@ function sanitizeDepartmentTeamBusinessCosts(rows: OrderEntryFinanceItemInput[] 
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-function sanitizeManualPaymentNo(value?: string): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  const cleaned = String(value).replace(/[\u0000-\u001f\u007f\u200b-\u200d\ufeff<>]/g, '').trim();
-  if (!cleaned) return undefined;
-  if (cleaned.length > 80) throw new BadRequestException('付款编号不能超过 80 个字符');
-  return cleaned;
 }
 
 type LegacyPricingRowInternal = {
