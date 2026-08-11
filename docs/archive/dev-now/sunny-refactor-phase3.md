@@ -1,6 +1,6 @@
 # Sunny 深度重构第三阶段
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 会话标题：`Sunny｜深度重构第三阶段｜03`
 - 续接自：`docs/archive/dev-now/sunny-refactor-phase2.md`
 - 上下文状态：`green`
@@ -34,10 +34,12 @@
 - 两条既有水单匹配 E2E 2/2 通过；新增非法币种 400 后，固定样本仍按原流程生成 PENDING allocation、审核落账、反审核撤销。
 - API typecheck 与 `git diff --check` 通过。
 - 行为等价审查：原权限装饰器、Service、Repository、事务、金额策略、审核队列和审计实现均未修改；合法输入默认值与旧 `receivableFinanceItemId` 兼容保留。
-- 待执行：47 精确发布和线上验证。
+- 47 白名单发布 `whitelist-706ae8c36f39b20cd997d314` 成功；三个目标源码校验和与候选完全一致，API 生产构建和重启成功，编译产物包含 parser/pipe 标记。
+- 47 公网 `/api/health` 返回 200；目标路由未登录请求返回 401，证明原鉴权前置顺序未被输入 Pipe 绕过；API/Postgres/Redis 正常，发布锁 free、recovery clear。
+- 47 当前为多会话累积的 `WHITELIST_CAS` 源码树，本 worktree 与远端全树审计为 409 个相同、9 个不同、1 个远端独有；这些差异不属于本阶段目标，三份白名单目标文件已逐一校验一致。
 
 ## 交接
 
 - 阻塞：无。
-- 风险：运行时校验会改变畸形请求的拒绝位置；只能影响类型契约之外的非法输入，合法业务路径必须由原 E2E 证明等价。
-- 发布状态：未发布。
+- 风险：运行时校验目前只覆盖水单匹配一个写入口；推广到其他接口时仍需逐路由建立当前/旧版合法输入 characterization，并避免把历史兼容输入误判为非法。
+- 发布状态：已发布并完成非浏览器线上验证。
