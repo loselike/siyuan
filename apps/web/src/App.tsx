@@ -1,4 +1,4 @@
-import type { ChangeEvent, MouseEvent, ReactNode } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -101,7 +101,6 @@ import {
   modulePageConfigs,
   passwordStrengthRule,
   parseStaffAppRoute,
-  resolveStaffSectionKey,
   sanitizeShipmentColumnOrder,
   sanitizeHiddenShipmentColumns,
   shipmentHiddenColumnsStorageKey,
@@ -115,7 +114,6 @@ import {
   type ShipmentColumnOrderMode
 } from './modules/appShell/config';
 import { resolveModuleInitialSection } from './modules/appShell/moduleInitialSection';
-import { resolveExpandedMenuAfterPrimaryClick } from './modules/appShell/sidebarMenuState';
 import { formatPaymentSummary, fulfillmentActionLabels, getRoleDisplayName, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
 import { CustomerPortal } from './modules/customer/CustomerPortal';
 import { resolveCustomerServiceInitialSection } from './modules/customerService/customerServiceNavigation';
@@ -137,12 +135,7 @@ import {
 import { downloadShipmentPackageDetailWorkbook, resolveShipmentPackageExportRows } from './modules/orders/shipmentPackageExport';
 import { RoutingPage, type RoutingAssignmentFormValues } from './modules/routing/RoutingPage';
 import { shouldLoadRoutingFeeNameCatalog } from './modules/routing/routingFeeCatalog';
-import {
-  getModuleSubNavSignature,
-  ModuleSubNavContext,
-  type ModuleSubNavContextValue,
-  type SidebarSubNavState
-} from './modules/shared/ModuleSubWorkspace';
+import { ModuleSubNavContext } from './modules/shared/ModuleSubWorkspace';
 import { MasterDataPage } from './modules/masterData/MasterDataPage';
 import { PricingPage } from './modules/pricing/PricingPage';
 import { ProblemTicketsPage } from './modules/problemTickets/ProblemTicketsPage';
@@ -168,6 +161,11 @@ import {
   useStaffRouteAccessFallback,
   useStaffRoutePopState
 } from './modules/appShell/staffRouteNavigation';
+import {
+  resolveStaffSidebarActiveSection,
+  useStaffSidebarNavigation,
+  useStaffSidebarNavigationState
+} from './modules/appShell/staffSidebarNavigation';
 import { useCurrentSessionRefresh } from './modules/appShell/useCurrentSessionRefresh';
 import { useNotificationNavigation } from './modules/appShell/useNotificationNavigation';
 import { refreshWorkspaceData } from './modules/appShell/workspaceRefresh';
@@ -204,8 +202,12 @@ export function App() {
   const [routingAssignmentForm] = Form.useForm<RoutingAssignmentFormValues>();
   const [session, setSession] = useState<Session | null>(loadPersistedSession);
   const [requestedAppRoute, setRequestedAppRoute] = useRequestedStaffRoute();
-  const [expandedMenuKey, setExpandedMenuKey] = useState<MenuKey | null>('workspace');
-  const [sidebarSubNav, setSidebarSubNav] = useState<SidebarSubNavState | null>(null);
+  const {
+    expandedMenuKey,
+    setExpandedMenuKey,
+    sidebarSubNav,
+    setSidebarSubNav
+  } = useStaffSidebarNavigationState();
   const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['appShell']['navigationUnreadBadges']>>['items']>([]);
   const businessType: BusinessType = 'DEDICATED_LINE';
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState(() => resolveModuleInitialSection(
@@ -360,11 +362,11 @@ export function App() {
     [requestedAppRoute, session, visibleMenuKeys]
   );
   const requestedSectionKey = requestedAppRoute?.menuKey === currentMenuKey ? requestedAppRoute.sectionKey : undefined;
-  const resolvedRouteSectionKey = sidebarSubNav?.parentKey === currentMenuKey
-    ? resolveStaffSectionKey(currentMenuKey, requestedSectionKey, sidebarSubNav.items.map((item) => item.key))
-    : undefined;
-  const activeSectionKey = resolvedRouteSectionKey
-    ?? (sidebarSubNav?.parentKey === currentMenuKey ? sidebarSubNav.activeKey : undefined);
+  const activeSectionKey = resolveStaffSidebarActiveSection({
+    currentMenuKey,
+    requestedSectionKey,
+    sidebarSubNav
+  });
   const isCustomerServiceDataConfirm = currentMenuKey === 'customerService'
     && (
       activeSectionKey === 'data-confirm'
@@ -410,66 +412,20 @@ export function App() {
     visibleMenuKeys,
     warn: message.warning
   });
-  const registerSidebarSubNav = useCallback(
-    (state: Omit<SidebarSubNavState, 'parentKey' | 'signature'>) => {
-      const signature = getModuleSubNavSignature(state.items);
-      setSidebarSubNav((current) => {
-        if (
-          current?.parentKey === currentMenuKey &&
-          current.activeKey === state.activeKey &&
-          current.signature === signature &&
-          current.onChange === state.onChange
-        ) {
-          return current;
-        }
-
-        return {
-          parentKey: currentMenuKey,
-          items: state.items,
-          activeKey: state.activeKey,
-          onChange: state.onChange,
-          signature
-        };
-      });
-    },
-    [currentMenuKey]
-  );
-  const clearSidebarSubNav = useCallback((parentKey: string) => {
-    setSidebarSubNav((current) => (current?.parentKey === parentKey ? null : current));
-  }, []);
-  const sidebarSubNavContextValue = useMemo<ModuleSubNavContextValue>(
-    () => ({
-      parentKey: currentMenuKey,
-      routeKey: `${currentMenuKey}:${requestedSectionKey ?? ''}`,
-      requestedSectionKey,
-      resolveSectionKey: (sectionKeys) => resolveStaffSectionKey(currentMenuKey, requestedSectionKey, sectionKeys),
-      navigateToSection: (sectionKey, mode) => navigateToAppRoute(currentMenuKey, sectionKey, mode),
-      register: registerSidebarSubNav,
-      clear: clearSidebarSubNav
-    }),
-    [clearSidebarSubNav, currentMenuKey, navigateToAppRoute, registerSidebarSubNav, requestedSectionKey]
-  );
-  const handlePrimaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, key: MenuKey) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    const clickResult = resolveExpandedMenuAfterPrimaryClick({
-      clickedKey: key,
-      currentKey: currentMenuKey,
-      expandedKey: expandedMenuKey,
-      hasSubNav: sidebarSubNav?.parentKey === key && sidebarSubNav.items.length > 0
-    });
-    setExpandedMenuKey(clickResult.expandedKey);
-    if (!clickResult.shouldNavigate) return;
-    navigateToAppRoute(key);
-  }, [currentMenuKey, expandedMenuKey, navigateToAppRoute, sidebarSubNav]);
-  const handleSecondaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, menuKey: MenuKey, sectionKey: string) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    navigateToAppRoute(menuKey, sectionKey);
-  }, [navigateToAppRoute]);
-  const handleBrandClick = () => {
-    navigateToAppRoute('workspace', 'shipmentPool');
-  };
+  const {
+    handleBrandClick,
+    handlePrimaryMenuClick,
+    handleSecondaryMenuClick,
+    sidebarSubNavContextValue
+  } = useStaffSidebarNavigation({
+    currentMenuKey,
+    requestedSectionKey,
+    navigateToAppRoute,
+    expandedMenuKey,
+    setExpandedMenuKey,
+    sidebarSubNav,
+    setSidebarSubNav
+  });
   const canViewShipmentFinanceDetail = [
     'business:shipment:finance-detail-view',
     'business:order-entry:business-cost-view',
@@ -2660,10 +2616,7 @@ export function App() {
                               role="button"
                               className={`side-sub-nav-item${subItem.key === activeSectionKey ? ' is-active' : ''}`}
                               aria-current={subItem.key === activeSectionKey ? 'page' : undefined}
-                              onClick={(event) => {
-                                handleSecondaryMenuClick(event, item.key, subItem.key);
-                                setExpandedMenuKey(item.key);
-                              }}
+                              onClick={(event) => handleSecondaryMenuClick(event, item.key, subItem.key)}
                             >
                               <span className="side-sub-nav-label">{subItem.label}</span>
                               {unreadCount > 0 ? (
