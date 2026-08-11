@@ -102,13 +102,6 @@ import type {
   ShipmentFinanceItemUpdateInput,
   ShipmentImportRequest,
   ShipmentOperationalUpdateInput,
-  CustomerServiceDataConfirmListQuery,
-  CustomerServiceDataReviewInput,
-  CustomerServiceDataReverseInput,
-  CustomerServiceDataUpdateInput,
-  CustomerServiceFinanceItemUpdateInput,
-  CustomerServiceFinanceUpdatePreview,
-  CustomerServiceFinanceUpdatePreviewRow,
   CustomerServiceTransferBatchInput,
   ShipmentPaymentUpdateInput,
   ShipmentRerouteInput,
@@ -731,109 +724,6 @@ export class DataController {
     };
   }
 
-  @Post('shipments/:id/business-data/approve')
-  @RequirePermission('customer-service:data-confirm:business-approve')
-  async approveShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-approve-block');
-    return this.repository.approveShipmentBusinessData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/agent-data/approve')
-  @RequirePermission('customer-service:data-confirm:agent-approve')
-  async approveShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-approve-block');
-    return this.repository.approveShipmentAgentData(request.user, id, body);
-  }
-
-  @Patch('shipments/:id/business-data')
-  @RequirePermission('customer-service:data-confirm:business-update')
-  async updateShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-update-block');
-    return this.repository.updateShipmentBusinessData(request.user, id, body);
-  }
-
-  @Get('shipments/:id/customer-service/cost-preview')
-  @RequirePermission(['customer-service:data-confirm:business-update', 'customer-service:data-confirm:agent-update'])
-  async customerServiceCostPreview(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Query('kind') kind?: string
-  ): Promise<CustomerServiceFinanceUpdatePreview> {
-    if (kind !== undefined && kind !== 'business' && kind !== 'agent') throw new BadRequestException('费用预览类型无效');
-    const normalizedKind = kind === 'agent' ? 'agent' : 'business';
-    await this.ensurePermission(
-      request.user,
-      normalizedKind === 'agent'
-        ? 'customer-service:data-confirm:agent-update'
-        : 'customer-service:data-confirm:business-update'
-    );
-    await this.ensurePermissionUnblocked(
-      request.user,
-      normalizedKind === 'agent'
-        ? 'customer-service:data-confirm:agent-update-block'
-        : 'customer-service:data-confirm:business-update-block'
-    );
-    return this.repository.getCustomerServiceFinanceUpdatePreview(request.user, id, normalizedKind);
-  }
-
-  @Put('shipments/:id/customer-service/finance-items/:feeId')
-  @RequirePermission(['customer-service:data-confirm:business-update', 'customer-service:data-confirm:agent-update'])
-  async updateCustomerServiceFinanceItem(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Param('feeId') feeId: string,
-    @Query('kind') kind: string,
-    @Body() body: CustomerServiceFinanceItemUpdateInput
-  ): Promise<CustomerServiceFinanceUpdatePreviewRow> {
-    if (kind !== 'business' && kind !== 'agent') throw new BadRequestException('费用修改类型无效');
-    await this.ensurePermission(
-      request.user,
-      kind === 'agent'
-        ? 'customer-service:data-confirm:agent-update'
-        : 'customer-service:data-confirm:business-update'
-    );
-    await this.ensurePermissionUnblocked(
-      request.user,
-      kind === 'agent'
-        ? 'customer-service:data-confirm:agent-update-block'
-        : 'customer-service:data-confirm:business-update-block'
-    );
-    return this.repository.updateCustomerServiceFinanceItem(request.user, id, feeId, kind, body);
-  }
-
-  @Patch('shipments/:id/agent-data')
-  @RequirePermission('customer-service:data-confirm:agent-update')
-  async updateShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-update-block');
-    return this.repository.updateShipmentAgentData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/business-data/reverse')
-  @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
-    return this.repository.reverseShipmentBusinessData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/agent-data/reverse')
-  @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
-    return this.repository.reverseShipmentAgentData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/data-confirmation/approve-all')
-  @RequirePermission('customer-service:data-confirm:approve-all')
-  async approveShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-approve-block');
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-approve-block');
-    return this.repository.approveShipmentAllData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/data-confirmation/reverse-all')
-  @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
-    return this.repository.reverseShipmentAllData(request.user, id, body);
-  }
-
   @Patch('shipments/:id/operational')
   @RequireAuth()
   async updateShipmentOperational(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentOperationalUpdateInput) {
@@ -900,12 +790,6 @@ export class DataController {
       return rows.filter((shipment) => shipment.status !== 'WAITING_SORT');
     }
     return rows;
-  }
-
-  @Get('customer-service/data-confirm-shipments')
-  @RequirePermission('customer-service:data-confirm:view')
-  async customerServiceDataConfirmShipments(@Req() request: { user: Principal }, @Query() query: CustomerServiceDataConfirmListQuery) {
-    return this.repository.customerServiceDataConfirmShipmentsPage(request.user, query);
   }
 
   @Post('customer-service/transfer-shipments/fill')

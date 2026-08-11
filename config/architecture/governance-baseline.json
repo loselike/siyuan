@@ -296,12 +296,12 @@
       "TrackingQueryController.carrierTasks"
     ],
     [
-      "GET /customer-service/data-confirm-shipments @ DataController.customerServiceDataConfirmShipments",
+      "GET /customer-service/data-confirm-shipments @ CustomerServiceDataConfirmController.customerServiceDataConfirmShipments",
       "permission",
       [
         "customer-service:data-confirm:view"
       ],
-      "DataController.customerServiceDataConfirmShipments"
+      "CustomerServiceDataConfirmController.customerServiceDataConfirmShipments"
     ],
     [
       "GET /customer-service/problem-tags @ ProblemTicketTagController.problemTicketCommonTags",
@@ -913,13 +913,13 @@
       "ShipmentOverviewQueryController.shipments"
     ],
     [
-      "GET /shipments/:id/customer-service/cost-preview @ DataController.customerServiceCostPreview",
+      "GET /shipments/:id/customer-service/cost-preview @ CustomerServiceDataConfirmController.customerServiceCostPreview",
       "permission",
       [
         "customer-service:data-confirm:agent-update",
         "customer-service:data-confirm:business-update"
       ],
-      "DataController.customerServiceCostPreview"
+      "CustomerServiceDataConfirmController.customerServiceCostPreview"
     ],
     [
       "GET /shipments/:id/finance-detail @ DataController.getShipmentFinanceDetail",
@@ -1370,20 +1370,20 @@
       "DataController.updateSouthAfricaRateRuleEnabled"
     ],
     [
-      "PATCH /shipments/:id/agent-data @ DataController.updateShipmentAgentData",
+      "PATCH /shipments/:id/agent-data @ CustomerServiceDataConfirmController.updateShipmentAgentData",
       "permission",
       [
         "customer-service:data-confirm:agent-update"
       ],
-      "DataController.updateShipmentAgentData"
+      "CustomerServiceDataConfirmController.updateShipmentAgentData"
     ],
     [
-      "PATCH /shipments/:id/business-data @ DataController.updateShipmentBusinessData",
+      "PATCH /shipments/:id/business-data @ CustomerServiceDataConfirmController.updateShipmentBusinessData",
       "permission",
       [
         "customer-service:data-confirm:business-update"
       ],
-      "DataController.updateShipmentBusinessData"
+      "CustomerServiceDataConfirmController.updateShipmentBusinessData"
     ],
     [
       "PATCH /shipments/:id/operational @ DataController.updateShipmentOperational",
@@ -2508,52 +2508,52 @@
       "DataController.createShipment"
     ],
     [
-      "POST /shipments/:id/agent-data/approve @ DataController.approveShipmentAgentData",
+      "POST /shipments/:id/agent-data/approve @ CustomerServiceDataConfirmController.approveShipmentAgentData",
       "permission",
       [
         "customer-service:data-confirm:agent-approve"
       ],
-      "DataController.approveShipmentAgentData"
+      "CustomerServiceDataConfirmController.approveShipmentAgentData"
     ],
     [
-      "POST /shipments/:id/agent-data/reverse @ DataController.reverseShipmentAgentData",
+      "POST /shipments/:id/agent-data/reverse @ CustomerServiceDataConfirmController.reverseShipmentAgentData",
       "permission",
       [
         "customer-service:data-confirm:reverse"
       ],
-      "DataController.reverseShipmentAgentData"
+      "CustomerServiceDataConfirmController.reverseShipmentAgentData"
     ],
     [
-      "POST /shipments/:id/business-data/approve @ DataController.approveShipmentBusinessData",
+      "POST /shipments/:id/business-data/approve @ CustomerServiceDataConfirmController.approveShipmentBusinessData",
       "permission",
       [
         "customer-service:data-confirm:business-approve"
       ],
-      "DataController.approveShipmentBusinessData"
+      "CustomerServiceDataConfirmController.approveShipmentBusinessData"
     ],
     [
-      "POST /shipments/:id/business-data/reverse @ DataController.reverseShipmentBusinessData",
+      "POST /shipments/:id/business-data/reverse @ CustomerServiceDataConfirmController.reverseShipmentBusinessData",
       "permission",
       [
         "customer-service:data-confirm:reverse"
       ],
-      "DataController.reverseShipmentBusinessData"
+      "CustomerServiceDataConfirmController.reverseShipmentBusinessData"
     ],
     [
-      "POST /shipments/:id/data-confirmation/approve-all @ DataController.approveShipmentAllData",
+      "POST /shipments/:id/data-confirmation/approve-all @ CustomerServiceDataConfirmController.approveShipmentAllData",
       "permission",
       [
         "customer-service:data-confirm:approve-all"
       ],
-      "DataController.approveShipmentAllData"
+      "CustomerServiceDataConfirmController.approveShipmentAllData"
     ],
     [
-      "POST /shipments/:id/data-confirmation/reverse-all @ DataController.reverseShipmentAllData",
+      "POST /shipments/:id/data-confirmation/reverse-all @ CustomerServiceDataConfirmController.reverseShipmentAllData",
       "permission",
       [
         "customer-service:data-confirm:reverse"
       ],
-      "DataController.reverseShipmentAllData"
+      "CustomerServiceDataConfirmController.reverseShipmentAllData"
     ],
     [
       "POST /shipments/:id/dispatch @ WarehouseDispatchController.dispatchShipment",
@@ -3220,13 +3220,13 @@
       "DataController.updateSouthAfricaRateRule"
     ],
     [
-      "PUT /shipments/:id/customer-service/finance-items/:feeId @ DataController.updateCustomerServiceFinanceItem",
+      "PUT /shipments/:id/customer-service/finance-items/:feeId @ CustomerServiceDataConfirmController.updateCustomerServiceFinanceItem",
       "permission",
       [
         "customer-service:data-confirm:agent-update",
         "customer-service:data-confirm:business-update"
       ],
-      "DataController.updateCustomerServiceFinanceItem"
+      "CustomerServiceDataConfirmController.updateCustomerServiceFinanceItem"
     ],
     [
       "PUT /shipments/:id/finance-items/:feeId @ DataController.updateShipmentFinanceItem",
@@ -3367,7 +3367,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 221,
+    "dataControllerRoutesMax": 210,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
@@ -3390,7 +3390,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 31839,
       "apps/api/src/modules/in-memory.repository.ts": 19305,
-      "apps/api/src/modules/data.controller.ts": 2527,
+      "apps/api/src/modules/data.controller.ts": 2411,
       "packages/shared/src/index.ts": 6328,
       "apps/web/src/apiClient.ts": 2614,
       "apps/web/src/styles.css": 13162,

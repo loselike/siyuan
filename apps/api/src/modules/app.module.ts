@@ -6,6 +6,9 @@ import { AuditInterceptor } from './audit.interceptor.js';
 import { AuthController } from './auth.controller.js';
 import { HealthController } from './health.controller.js';
 import { CustomerServiceQueryController } from './customer-service/query/customer-service-query.controller.js';
+import { CustomerServiceDataConfirmController } from './customer-service/data-confirm/customer-service-data-confirm.controller.js';
+import { CUSTOMER_SERVICE_DATA_CONFIRM_REPOSITORY } from './customer-service/data-confirm/customer-service-data-confirm.repository.js';
+import { CustomerServiceDataConfirmService } from './customer-service/data-confirm/customer-service-data-confirm.service.js';
 import { ProblemTicketTagController } from './customer-service/problem-tag/problem-ticket-tag.controller.js';
 import { PROBLEM_TICKET_TAG_REPOSITORY } from './customer-service/problem-tag/problem-ticket-tag.repository.js';
 import { ProblemTicketTagService } from './customer-service/problem-tag/problem-ticket-tag.service.js';
@@ -253,6 +256,11 @@ const problemTicketTagRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const customerServiceDataConfirmRepositoryProvider = {
+  provide: CUSTOMER_SERVICE_DATA_CONFIRM_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const payerBankAccountRepositoryProvider = usePrismaRepository
   ? { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: PrismaPayerBankAccountRepository }
   : { provide: PAYER_BANK_ACCOUNT_REPOSITORY, useClass: InMemoryPayerBankAccountRepository };
@@ -317,6 +325,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     MasterDataReferenceQueryController,
     AiController,
     CustomerServiceQueryController,
+    CustomerServiceDataConfirmController,
     ProblemTicketTagController,
     FinanceCatalogController,
     PayerBankAccountController,
@@ -360,6 +369,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     payerBankAccountRepositoryProvider,
     FinanceCatalogService,
     ProblemTicketQueryService,
+    CustomerServiceDataConfirmService,
+    customerServiceDataConfirmRepositoryProvider,
     ProblemTicketTagService,
     problemTicketTagRepositoryProvider,
     PayerBankAccountService,
