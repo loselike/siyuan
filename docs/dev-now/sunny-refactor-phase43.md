@@ -32,16 +32,18 @@
 
 - 已通过：`bash -n`（5 个相关 shell 脚本）。
 - 已通过：`bash scripts/release-fingerprint-artifact-filter.test.sh`。
-- 待执行：`npm run governance:check`、`git diff --check`、对抗式人工复审。
+- 已通过：`npm run governance:check`（432 路由、no-new-debt、安全契约 3/3）、`git diff --check`、Docker 运行镜像身份 helper 测试。
+- 对抗式复审一：在 state 与运行镜像不一致时，未带 adoption 的白名单发布在任何源码替换前以 exit 83 拒绝，远端 checksum 不变、锁释放、recovery clear。
+- 对抗式复审二：首次 adoption 发布后发现 API 容器内 release ID 因零重启仍为旧值；已避免把这一既有白名单限制变成永久发布阻断，只以 Web/API 运行镜像身份作为前置一致性门，release ID 仍独立报告。
 
 ## 交接
 
-- 阻塞：47 在 2026-08-12 13:03 被其他来源重建 Web/API，但 `.siyuan-release-state` 仍停留在 09:29 的 Phase 42。发布本轮脚本会通过旧白名单流程重写状态，从而把未知组合源码默认为新基线；在来源确认前不得这样做。
-- 剩余风险：历史 `._*` 仍留在 47，由 source-drift 审计继续显式报告；本轮只让它们不再污染发布指纹，不执行删除。
+- 阻塞：无。已只读核对 10:00–12:56 的独立发布备份、13:03 运行镜像、容器健康和无 recovery 标记后，用显式 zero-build governance adoption 吸收当前运行镜像；未重建或覆盖任何业务源码。
+- 剩余风险：历史 10 个 `._*` 仍留在 47，由 source-drift 审计继续显式报告；本轮只让它们不再污染发布指纹，不执行删除。47 仍是 `WHITELIST_CAS` 非 Git 同源，API 容器 `releaseId=unknown`，不能冒充标准可追溯发布。
 - 用户验收目标：发布指纹只随真实运行时代码变化，运行镜像与状态漂移必须被清楚阻断。
 - 效果证据：固定样本测试证明元数据不改变三类指纹，真实 Web 文件仍只改变 Web 指纹。
-- 安全证据：待完成治理检查；全程未改业务代码或线上数据。
-- 未验证项：新脚本尚未发布 47，因现有生产发布状态与运行镜像不一致。
-- 发布状态：`未发布（生产基线来源冲突，失败关闭）`
+- 安全证据：治理、架构、安全契约、shell 语法与在线 fail-closed 探针通过；全程未改业务代码、镜像、容器或线上数据。
+- 未验证项：历史 AppleDouble 文件未删除；Git 同源恢复未完成。
+- 发布状态：已发布 47，最终批次 `whitelist-f79893be417ad4571504b903`；Web/API image match 均为 true，公网 API/Web 200，锁 free、recovery clear。
 - 稳定附件：无
-- 准确下一步：完成治理检查与复审；确认 13:03 发布来源后，以当前实际源码建立明确基线，再通过全局锁发布本轮脚本并在线复验。
+- 准确下一步：从当前 47 真实组合源码恢复 Git 同源候选；基线稳定后重新比较运行时 DTO 校验试点、DataController 切片和前端路由自持数据，当前优先考虑一个高风险写接口的运行时校验 characterization 切片。
