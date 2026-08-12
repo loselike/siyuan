@@ -1,7 +1,8 @@
-import { CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor } from '@nestjs/common';
+import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
 import { catchError, tap } from 'rxjs/operators';
 import { throwError } from 'rxjs';
-import { PrismaRepository } from './prisma.repository.js';
+import { randomUUID } from 'node:crypto';
+import { HttpAuditDispatcher } from './audit/http-audit.dispatcher.js';
 import type { Principal } from './rbac.js';
 
 type AuditRequest = {
@@ -16,7 +17,7 @@ type AuditRequest = {
 
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
-  constructor(@Inject(PrismaRepository) private readonly repository: PrismaRepository) {}
+  constructor(private readonly dispatcher: HttpAuditDispatcher) {}
 
   intercept(context: ExecutionContext, next: CallHandler) {
     const request = context.switchToHttp().getRequest<AuditRequest>();
@@ -27,16 +28,16 @@ export class AuditInterceptor implements NestInterceptor {
     const startedAt = Date.now();
     return next.handle().pipe(
       tap(() => {
-        void this.record(request, 'SUCCESS', startedAt);
+        this.dispatch(request, 'SUCCESS', startedAt);
       }),
       catchError((error) => {
-        void this.record(request, 'FAILED', startedAt, '请求失败');
+        this.dispatch(request, 'FAILED', startedAt, '请求失败');
         return throwError(() => error);
       })
     );
   }
 
-  private async record(
+  private dispatch(
     request: AuditRequest,
     result: 'SUCCESS' | 'FAILED',
     startedAt: number,
@@ -44,7 +45,8 @@ export class AuditInterceptor implements NestInterceptor {
   ) {
     const principal = request.user;
     if (!principal) return;
-    await (this.repository as any).recordHttpAudit?.(principal, {
+    this.dispatcher.enqueue(principal, {
+      id: randomUUID(),
       method: request.method ?? 'UNKNOWN',
       path: request.url ?? '',
       result,
@@ -52,7 +54,7 @@ export class AuditInterceptor implements NestInterceptor {
       errorMessage,
       ipAddress: extractClientIp(request),
       userAgent: readFirstHeader(request.headers?.['user-agent'])
-    }).catch(() => undefined);
+    });
   }
 }
 

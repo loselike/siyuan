@@ -4343,10 +4343,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async recordHttpAudit(
     principal: Principal,
-    input: { method: string; path: string; result: 'SUCCESS' | 'FAILED'; durationMs: number; errorMessage?: string; ipAddress?: string; userAgent?: string }
+    input: { id?: string; method: string; path: string; result: 'SUCCESS' | 'FAILED'; durationMs: number; errorMessage?: string; ipAddress?: string; userAgent?: string }
   ) {
-    await this.prisma.auditLog.create({
-      data: {
+    const data = {
+        ...(input.id ? { id: input.id } : {}),
         actorId: principal.id,
         action: `${auditModuleFromPath(input.path)}.request.${auditKindFromRequest(input.method, input.path)}${input.result === 'FAILED' ? '.failed' : ''}`,
         target: `${input.method.toUpperCase()} ${input.path}`.trim(),
@@ -4357,8 +4357,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           ...(input.ipAddress ? { ipAddress: input.ipAddress } : {}),
           ...(input.userAgent ? { userAgent: input.userAgent.slice(0, 300) } : {})
         }
-      }
-    });
+      };
+    if (input.id) {
+      await this.prisma.auditLog.upsert({ where: { id: input.id }, create: data, update: {} });
+      return;
+    }
+    await this.prisma.auditLog.create({ data });
   }
 
   quote(input: PricingQuoteRequest) {

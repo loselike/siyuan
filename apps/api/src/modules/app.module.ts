@@ -3,6 +3,8 @@ import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AiController } from './ai.controller.js';
 import { AiService } from './ai.service.js';
 import { AuditInterceptor } from './audit.interceptor.js';
+import { HttpAuditDispatcher } from './audit/http-audit.dispatcher.js';
+import { HTTP_AUDIT_WRITER } from './audit/http-audit.writer.js';
 import { AuthController } from './auth.controller.js';
 import { HealthController } from './health.controller.js';
 import { CustomerServiceQueryController } from './customer-service/query/customer-service-query.controller.js';
@@ -162,6 +164,11 @@ const repositoryProviders =
   usePrismaRepository
     ? [PrismaService, PrismaRepository, DatabaseSeedService]
     : [{ provide: PrismaRepository, useClass: InMemoryRepository }];
+
+const httpAuditWriterProvider = {
+  provide: HTTP_AUDIT_WRITER,
+  useExisting: PrismaRepository
+};
 
 const financeCatalogRepositoryProvider = usePrismaRepository
   ? { provide: FINANCE_CATALOG_REPOSITORY, useClass: PrismaFinanceCatalogRepository }
@@ -433,6 +440,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     warehouseInventoryQueryRepositoryProvider,
     warehouseInventoryQueryAuthorizerProvider,
     warehouseTallyQueryRepositoryProvider,
+    HttpAuditDispatcher,
+    httpAuditWriterProvider,
     {
       provide: APP_GUARD,
       useClass: RbacGuard

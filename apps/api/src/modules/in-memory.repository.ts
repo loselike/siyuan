@@ -3396,8 +3396,9 @@ export class InMemoryRepository {
 
   async recordHttpAudit(
     principal: Principal,
-    input: { method: string; path: string; result: 'SUCCESS' | 'FAILED'; durationMs: number; errorMessage?: string; ipAddress?: string; userAgent?: string }
+    input: { id?: string; method: string; path: string; result: 'SUCCESS' | 'FAILED'; durationMs: number; errorMessage?: string; ipAddress?: string; userAgent?: string }
   ) {
+    if (input.id && this.auditLogs.some((item) => item.id === input.id)) return;
     this.audit(
       `${auditModuleFromMemoryPath(input.path)}.request.${auditKindFromMemoryRequest(input.method, input.path)}${input.result === 'FAILED' ? '.failed' : ''}`,
       `${input.method.toUpperCase()} ${input.path}`.trim(),
@@ -3409,10 +3410,10 @@ export class InMemoryRepository {
         ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
         ...(input.ipAddress ? { ipAddress: input.ipAddress } : {}),
         ...(input.userAgent ? { userAgent: input.userAgent.slice(0, 300) } : {})
-      }
+      },
+      input.id
     );
   }
-
   quote(input: PricingQuoteRequest) {
     return calculateQuote(input);
   }
@@ -16709,11 +16710,11 @@ export class InMemoryRepository {
     };
   }
 
-  private audit(action: string, target: string, principal: Principal, before: unknown, after: unknown) {
+  private audit(action: string, target: string, principal: Principal, before: unknown, after: unknown, id?: string) {
     const auditModule = inferInMemoryAuditModule(action);
     const result = inferInMemoryAuditResult(action);
     this.auditLogs.unshift({
-      id: `audit-${Date.now()}-${this.auditLogs.length + 1}`,
+      id: id ?? `audit-${Date.now()}-${this.auditLogs.length + 1}`,
       actorId: principal.id,
       actorUsername: principal.username,
       action,
@@ -16729,7 +16730,6 @@ export class InMemoryRepository {
       createdAt: new Date().toISOString()
     });
   }
-
   private cloneAuditValue(value: unknown) {
     return value == null ? undefined : JSON.parse(JSON.stringify(value));
   }
