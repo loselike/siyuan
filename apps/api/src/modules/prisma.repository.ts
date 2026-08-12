@@ -23,6 +23,7 @@ import {
 } from './warehouse-machine-import.js';
 import { buildMarketProfitLedgerRows, type MarketProfitLedgerCandidate } from './finance/misc-fee/market-profit-ledger.js';
 import { buildWarehouseProfitLedgerRows, warehouseProfitSettlementSourceWhere, type WarehouseProfitLedgerCandidate } from './finance/misc-fee/warehouse-profit-ledger.js';
+import { buildBusinessCostAuditCandidateWhere } from './finance/business-cost/business-cost-audit-query.js';
 import {
   buildFinanceProfitLedgerRows,
   summarizeFinanceProfitLedgerRows,
@@ -13129,17 +13130,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const canViewAgent = await this.hasPermission(principal.role, 'finance:business-cost:view-agent');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:business-cost:view-profit');
     const rows = await (this.prisma as any).shipmentFinanceItem.findMany({
-      where: { type: 'BUSINESS_COST', miscFeeRecordId: null },
-      include: {
-        shipment: {
-          include: {
-            customer: true,
-            agent: true,
-            receivableFees: true,
-            financeItems: { where: { voided: false } }
-          }
-        }
-      },
+      where: buildBusinessCostAuditCandidateWhere(query, canViewAll ? undefined : this.operatorCustomerScope(principal)),
+      include: this.businessCostAuditInclude(),
       orderBy: { createdAt: 'desc' }
     });
     const visibleRows = rows
