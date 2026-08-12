@@ -36,6 +36,7 @@ if [[ "${MODE}" == "--apply" ]]; then
   RSYNC_MODE=()
 fi
 
+COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 \
 rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${RSYNC_DELETE[@]}"} \
   --exclude='.git' \
   --exclude='.git/' \
@@ -74,6 +75,7 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='.worktrees/' \
   --exclude='*.log' \
   --exclude='*.tsbuildinfo' \
+  --exclude='._*' \
   --exclude='.DS_Store' \
   --include='.env.example' \
   --exclude='.env' \

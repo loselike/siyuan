@@ -30,7 +30,8 @@ const requiredGovernanceFiles = [
   'scripts/select-validation.mjs',
   'config/validation/path-test-map.json',
   'scripts/lib/docker-container-image-id.sh',
-  'scripts/docker-container-image-id.test.sh'
+  'scripts/docker-container-image-id.test.sh',
+  'scripts/release-fingerprint-artifact-filter.test.sh'
 ];
 
 const failures = [];
@@ -147,6 +148,11 @@ for (const sourceBundleGate of [
   }
 }
 const provenanceAuditScript = readFileSync('scripts/audit-47-runtime-provenance.sh', 'utf8');
+const imageMismatchGateIndex = provenanceAuditScript.indexOf('if [[ -z "$web_image_expected"');
+const whitelistSourceGateIndex = provenanceAuditScript.indexOf('elif [[ "$source_mode" == WHITELIST_CAS ]]');
+if (imageMismatchGateIndex < 0 || whitelistSourceGateIndex < 0 || imageMismatchGateIndex > whitelistSourceGateIndex) {
+  failures.push('runtime provenance must report running-image mismatch before classifying whitelist source provenance');
+}
 if (!provenanceAuditScript.includes('release-source-bundle-checksum-mismatch')
   || !provenanceAuditScript.includes('release-source-bundle-is-writable')
   || !provenanceAuditScript.includes('init --bare')
@@ -257,6 +263,13 @@ if (!whitelistDeployScript.includes('--preflight-only') || !whitelistDeployScrip
 if (!whitelistDeployScript.includes('Whitelist scope mismatch') || !whitelistDeployScript.includes('WHITELIST_RELEASE_ID')) {
   failures.push('whitelist deploy must derive scope from targets and advance the remote release baseline');
 }
+if (!whitelistDeployScript.includes('RUNTIME_RELEASE_STATE_MISMATCH')
+  || !whitelistDeployScript.includes('RUNTIME_IMAGE_UNAVAILABLE')
+  || !whitelistDeployScript.includes('--adopt-current-runtime')
+  || !whitelistDeployScript.includes('Runtime adoption may only publish release-governance scripts')
+  || !whitelistDeployScript.includes('reviewed-zero-build-governance-release')) {
+  failures.push('whitelist deploy must fail closed on release-state image drift and tightly scope explicit runtime adoption');
+}
 if (!whitelistDeployScript.includes('WEB_FINGERPRINT=$web_fingerprint') || !whitelistDeployScript.includes('MIGRATE_FINGERPRINT=$migrate_fingerprint')) {
   failures.push('whitelist success state must use fingerprints recomputed from the actual remote tree');
 }
@@ -272,6 +285,12 @@ if (!containerImageIdScript.includes('ImageManifestDescriptor')
 }
 if (!fingerprintScript.includes('scope_hash web') || !fingerprintScript.includes('scope_hash migrate')) {
   failures.push('portable release fingerprint helper must cover web, api and migration manifests');
+}
+if (!fingerprintScript.includes('*/._*') || !deployScript.includes('*/._*')) {
+  failures.push('release fingerprints must ignore AppleDouble metadata in portable and standard deploy implementations');
+}
+if (!syncScript.includes("--exclude='._*'") || !syncScript.includes('COPYFILE_DISABLE=1') || !syncScript.includes('COPY_EXTENDED_ATTRIBUTES_DISABLE=1')) {
+  failures.push('source synchronization must neither transfer nor synthesize AppleDouble metadata');
 }
 if (fingerprintScript.includes('*/test-support/*') || fingerprintScript.includes('*/testSupport/*') || deployScript.includes('*/test-support/*') || deployScript.includes('*/testSupport/*')) {
   failures.push('release fingerprints must include non-test files under test-support because API TypeScript compiles all src/**/*.ts');

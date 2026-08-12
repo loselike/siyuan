@@ -47,15 +47,15 @@ api_release_id_actual="$(docker inspect --format '{{range .Config.Env}}{{println
 
 status=traceable
 reason=ok
-if [[ "$source_mode" == WHITELIST_CAS ]]; then
+if [[ -z "$web_image_expected" || -z "$api_image_expected" || "$web_image_expected" != "$web_image_actual" || "$api_image_expected" != "$api_image_actual" ]]; then
+  status=mismatch
+  reason=running-image-does-not-match-release-state
+elif [[ "$source_mode" == WHITELIST_CAS ]]; then
   status=non-git-source
   reason=whitelist-cas-is-not-a-git-source-build
 elif [[ ! "$git_commit" =~ ^[0-9a-f]{40}$ || -z "$git_branch" || "$source_mode" != GIT_SOURCE_BUILD ]]; then
   status=legacy-untraceable
   reason=missing-git-source-provenance
-elif [[ -z "$web_image_expected" || -z "$api_image_expected" || "$web_image_expected" != "$web_image_actual" || "$api_image_expected" != "$api_image_actual" ]]; then
-  status=mismatch
-  reason=running-image-does-not-match-release-state
 elif [[ "$api_release_id_actual" != "$release_id" ]]; then
   status=mismatch
   reason=api-runtime-release-id-does-not-match-release-state

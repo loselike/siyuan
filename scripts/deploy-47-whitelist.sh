@@ -19,6 +19,7 @@ FAILURE_PHASE="whitelist-cas"
 APPROVED_MIGRATIONS=()
 APPROVED_MIGRATION_SPECS=()
 NO_CACHE=false
+ADOPT_CURRENT_RUNTIME=false
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -40,8 +41,12 @@ while [[ "$#" -gt 0 ]]; do
       NO_CACHE=true
       shift
       ;;
+    --adopt-current-runtime)
+      ADOPT_CURRENT_RUNTIME=true
+      shift
+      ;;
     *)
-      echo "Usage: npm run deploy:47:whitelist -- [--no-cache] --scope <none|web|api|web+api|api+migrate|web+api+migrate> --file <candidate> <target> <expected-sha|MISSING> [--file ...]" >&2
+      echo "Usage: npm run deploy:47:whitelist -- [--no-cache] [--adopt-current-runtime] --scope <none|web|api|web+api|api+migrate|web+api+migrate> --file <candidate> <target> <expected-sha|MISSING> [--file ...]" >&2
       exit 2
       ;;
   esac
@@ -139,6 +144,18 @@ if [[ "$SCOPE" != "$REQUIRED_SCOPE" ]]; then
   echo "Whitelist scope mismatch: requested=$SCOPE required=$REQUIRED_SCOPE for the declared targets." >&2
   exit 2
 fi
+if [[ "$ADOPT_CURRENT_RUNTIME" == true ]]; then
+  if [[ "$SCOPE" != none ]]; then
+    echo "Runtime adoption is only allowed for a zero-build scope none governance release." >&2
+    exit 2
+  fi
+  for target_file in "${TARGET_FILES[@]}"; do
+    case "$target_file" in
+      scripts/*) ;;
+      *) echo "Runtime adoption may only publish release-governance scripts: $target_file" >&2; exit 2 ;;
+    esac
+  done
+fi
 APPROVED_MIGRATIONS_CSV=""
 APPROVED_MIGRATION_SPECS_CSV=""
 if [[ "${#APPROVED_MIGRATIONS[@]}" -gt 0 ]]; then
@@ -217,6 +234,51 @@ CAS_PHASE=true
 PREVIOUS_RELEASE_ID="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" \
   "sed -n 's/^RELEASE_ID=//p' '$SIYUAN_47_DIR/.siyuan-release-state' 2>/dev/null | tail -1")"
 [[ -n "$PREVIOUS_RELEASE_ID" ]] || PREVIOUS_RELEASE_ID="MISSING"
+read -r runtime_image_state_match runtime_api_release_match < <(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- "$SIYUAN_47_DIR" <<'REMOTE_SCRIPT'
+set -euo pipefail
+remote_dir="$1"
+cd "$remote_dir"
+# shellcheck source=lib/docker-container-image-id.sh
+source scripts/lib/docker-container-image-id.sh
+state_value() {
+  sed -n "s/^$1=//p" .siyuan-release-state 2>/dev/null | tail -1
+}
+web_expected="$(state_value WEB_IMAGE_ID)"
+api_expected="$(state_value API_IMAGE_ID)"
+web_container="$(docker compose ps -q web 2>/dev/null | tail -1)"
+api_container="$(docker compose ps -q api 2>/dev/null | tail -1)"
+web_actual="$(siyuan_docker_container_image_id "$web_container")"
+api_actual="$(siyuan_docker_container_image_id "$api_container")"
+release_expected="$(state_value RELEASE_ID)"
+api_release_actual="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$api_container" 2>/dev/null | sed -n 's/^RELEASE_ID=//p' | tail -1)"
+if [[ -z "$web_actual" || -z "$api_actual" ]]; then
+  image_match=unavailable
+elif [[ -n "$web_expected" && -n "$api_expected" && "$web_expected" == "$web_actual" && "$api_expected" == "$api_actual" ]]; then
+  image_match=true
+else
+  image_match=false
+fi
+if [[ -n "$release_expected" && "$release_expected" == "$api_release_actual" ]]; then
+  api_release_match=true
+else
+  api_release_match=false
+fi
+printf '%s %s\n' "$image_match" "$api_release_match"
+REMOTE_SCRIPT
+)
+if [[ "$runtime_image_state_match" == unavailable ]]; then
+  echo "RUNTIME_IMAGE_UNAVAILABLE: Web/API running image identity could not be resolved." >&2
+  exit 83
+elif [[ "$runtime_image_state_match" != true || "$runtime_api_release_match" != true ]]; then
+  if [[ "$ADOPT_CURRENT_RUNTIME" != true ]]; then
+    echo "RUNTIME_RELEASE_STATE_MISMATCH: whitelist release refused before source mutation." >&2
+    echo "Inspect the running release and use --adopt-current-runtime only for a reviewed, zero-build governance release." >&2
+    exit 83
+  fi
+  echo "RUNTIME_IMAGE_STATE_ADOPTION=reviewed-zero-build-governance-release"
+  curl --retry 3 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/api/health"
+  curl --retry 3 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/"
+fi
 WHITELIST_RELEASE_ID="whitelist-$(
   {
     printf '%s\n' "$PREVIOUS_RELEASE_ID"
