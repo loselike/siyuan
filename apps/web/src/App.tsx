@@ -163,7 +163,10 @@ import {
 } from './modules/appShell/staffSidebarNavigation';
 import { useCurrentSessionRefresh } from './modules/appShell/useCurrentSessionRefresh';
 import { useNotificationNavigation } from './modules/appShell/useNotificationNavigation';
-import { refreshWorkspaceData } from './modules/appShell/workspaceRefresh';
+import {
+  createWorkspaceRefreshCoordinator,
+  refreshWorkspaceData
+} from './modules/appShell/workspaceRefresh';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
@@ -291,6 +294,7 @@ export function App() {
   const [feeNameCatalogItems, setFeeNameCatalogItems] = useState<FinanceCatalogItemSummary[]>([]);
   const [dataRefreshVersion, setDataRefreshVersion] = useState(0);
   const lastDataRefreshRequestAtRef = useRef(Date.now());
+  const workspaceRefreshCoordinator = useMemo(() => createWorkspaceRefreshCoordinator(), []);
   const businessWorkspaceConfig = businessWorkspaceConfigs.DEDICATED_LINE;
   const apiClient = useMemo(
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
@@ -447,12 +451,35 @@ export function App() {
     localStorage.setItem(shipmentHiddenColumnsStorageKey, JSON.stringify(hiddenShipmentColumns));
   }, [hiddenShipmentColumns]);
 
+  const workspaceRefreshUserId = session?.user.id;
+  const workspaceRefreshUserRole = session?.user.role;
+  const workspaceRefreshMustChangePassword = Boolean(session?.user.mustChangePassword);
+  const workspaceRefreshPermissionSignature = [...(session?.permissions ?? [])].sort().join('|');
+  const workspaceRefreshUser = useMemo<Principal | undefined>(
+    () => workspaceRefreshUserId && workspaceRefreshUserRole
+      ? { id: workspaceRefreshUserId, role: workspaceRefreshUserRole } as Principal
+      : undefined,
+    [workspaceRefreshUserId, workspaceRefreshUserRole]
+  );
+  const workspaceRefreshPermissions = useMemo<PermissionKey[]>(
+    () => workspaceRefreshPermissionSignature
+      ? workspaceRefreshPermissionSignature.split('|') as PermissionKey[]
+      : [],
+    [workspaceRefreshPermissionSignature]
+  );
   useEffect(() => {
-    if (!session || session.user.mustChangePassword) {
+    if (!workspaceRefreshUser || workspaceRefreshMustChangePassword) {
       return;
     }
-    void refreshWorkspace(apiClient, session.user, session.permissions ?? []);
-  }, [apiClient, dataRefreshVersion, isCustomerServiceDataConfirm, session]);
+    void refreshWorkspace(apiClient, workspaceRefreshUser, workspaceRefreshPermissions);
+  }, [
+    apiClient,
+    dataRefreshVersion,
+    isCustomerServiceDataConfirm,
+    workspaceRefreshMustChangePassword,
+    workspaceRefreshPermissions,
+    workspaceRefreshUser
+  ]);
 
   useEffect(() => {
     if (!session || session.user.mustChangePassword) return;
@@ -753,7 +780,13 @@ export function App() {
     const currentPathRoute = parseStaffAppRoute(window.location.pathname);
     const skipIrrelevantWorkspaceData = isCustomerServiceDataConfirm
       || (currentPathRoute?.menuKey === 'customerService' && (currentPathRoute.sectionKey === 'data-confirm' || currentPathRoute.sectionKey === 'dataConfirm'));
-    await refreshWorkspaceData({
+    const scopeKey = [
+      user?.id ?? 'anonymous',
+      user?.role ?? 'unknown',
+      skipIrrelevantWorkspaceData ? 'data-confirm' : 'full',
+      [...permissions].sort().join(',')
+    ].join('|');
+    await workspaceRefreshCoordinator.run(scopeKey, () => refreshWorkspaceData({
       client,
       user,
       permissions,
@@ -771,7 +804,7 @@ export function App() {
         setCarrierTasks,
         setMasterData
       }
-    });
+    }));
   }
 
   async function handleLogin(username: string, password: string, captchaId: string, captchaCode: string) {
@@ -787,8 +820,6 @@ export function App() {
     if (requiresPasswordChange) {
       return;
     }
-    const loginClient = new ApiClient(() => nextSession.accessToken, handleUnauthorized);
-    await refreshWorkspace(loginClient, nextSession.user, nextSession.permissions ?? []);
   }
 
   async function openPersonalCenter() {
@@ -840,7 +871,6 @@ export function App() {
       if (session) {
         const nextUser = { ...session.user, mustChangePassword: false };
         mergeSessionUser(nextUser);
-        await refreshWorkspace(apiClient, nextUser, session.permissions ?? []);
       }
       setNotice('密码已修改，可以继续使用系统');
     } catch (error) {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PermissionKey } from '../../apiClient';
 import {
+  createWorkspaceRefreshCoordinator,
   refreshWorkspaceData,
   type WorkspaceRefreshClient,
   type WorkspaceRefreshWriters
@@ -192,5 +193,54 @@ describe('refreshWorkspaceData', () => {
       masterData: harness.values.masterData
     });
     expect(harness.client.masterData).toHaveBeenCalledOnce();
+  });
+});
+
+describe('createWorkspaceRefreshCoordinator', () => {
+  it('shares one equivalent in-flight refresh without caching the completed result', async () => {
+    const coordinator = createWorkspaceRefreshCoordinator();
+    let releaseFirstRefresh: (() => void) | undefined;
+    const refresh = vi.fn(() => new Promise<void>((resolve) => {
+      releaseFirstRefresh = resolve;
+    }));
+
+    const first = coordinator.run('admin:full-workspace', refresh);
+    const duplicate = coordinator.run('admin:full-workspace', refresh);
+
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(duplicate).toBe(first);
+
+    releaseFirstRefresh?.();
+    await Promise.all([first, duplicate]);
+
+    const next = coordinator.run('admin:full-workspace', async () => undefined);
+    expect(next).not.toBe(first);
+    await next;
+  });
+
+  it('does not merge different permission or route scopes', async () => {
+    const coordinator = createWorkspaceRefreshCoordinator();
+    const financeRefresh = vi.fn(async () => undefined);
+    const warehouseRefresh = vi.fn(async () => undefined);
+
+    await Promise.all([
+      coordinator.run('admin:finance', financeRefresh),
+      coordinator.run('admin:warehouse', warehouseRefresh)
+    ]);
+
+    expect(financeRefresh).toHaveBeenCalledOnce();
+    expect(warehouseRefresh).toHaveBeenCalledOnce();
+  });
+
+  it('clears a rejected in-flight refresh so the next call can retry', async () => {
+    const coordinator = createWorkspaceRefreshCoordinator();
+    const refresh = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(coordinator.run('admin:full-workspace', refresh)).rejects.toThrow('temporary failure');
+    await expect(coordinator.run('admin:full-workspace', refresh)).resolves.toBeUndefined();
+
+    expect(refresh).toHaveBeenCalledTimes(2);
   });
 });

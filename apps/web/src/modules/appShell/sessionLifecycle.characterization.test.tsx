@@ -8,6 +8,10 @@ function requestedSessionRefreshes() {
   return vi.mocked(fetch).mock.calls.filter(([input]) => String(input).endsWith('/api/auth/session'));
 }
 
+function requestedPath(pathname: string) {
+  return vi.mocked(fetch).mock.calls.filter(([input]) => new URL(String(input), 'http://test.local').pathname === pathname);
+}
+
 describe('app session lifecycle characterization', () => {
   it('persists the login session and immediately reconciles it with the current session endpoint', async () => {
     await renderAndLogin('admin', 'admin123');
@@ -23,6 +27,17 @@ describe('app session lifecycle characterization', () => {
       }
     });
     expect(stored?.permissions.length).toBeGreaterThan(0);
+  });
+
+  it('loads each workspace request group once through the session-owned refresh', async () => {
+    globalThis.history.replaceState(null, '', '/app/workspace');
+
+    await renderAndLogin('admin', 'admin123');
+
+    await waitFor(() => expect(requestedPath('/api/master-data')).toHaveLength(1));
+    expect(requestedPath('/api/shipments')).toHaveLength(1);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(1);
+    expect(requestedPath('/api/master-data')).toHaveLength(1);
   });
 
   it('keeps the confirmation step and removes the persisted session only after confirmed logout', async () => {

@@ -49,6 +49,36 @@ export interface WorkspaceRefreshOptions {
   writers: WorkspaceRefreshWriters;
 }
 
+export interface WorkspaceRefreshCoordinator {
+  run(scopeKey: string, refresh: () => Promise<void>): Promise<void>;
+}
+
+export function createWorkspaceRefreshCoordinator(): WorkspaceRefreshCoordinator {
+  const inFlightByScope = new Map<string, Promise<void>>();
+
+  return {
+    run(scopeKey, refresh) {
+      const inFlight = inFlightByScope.get(scopeKey);
+      if (inFlight) return inFlight;
+
+      let current: Promise<void>;
+      try {
+        current = refresh();
+      } catch (error) {
+        current = Promise.reject(error);
+      }
+      inFlightByScope.set(scopeKey, current);
+      const clear = () => {
+        if (inFlightByScope.get(scopeKey) === current) {
+          inFlightByScope.delete(scopeKey);
+        }
+      };
+      void current.then(clear, clear);
+      return current;
+    }
+  };
+}
+
 export async function refreshWorkspaceData(options: WorkspaceRefreshOptions) {
   const {
     client,
