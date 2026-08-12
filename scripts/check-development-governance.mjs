@@ -28,7 +28,9 @@ const requiredGovernanceFiles = [
   'config/architecture/governance-baseline.json',
   'config/architecture/module-boundaries.json',
   'scripts/select-validation.mjs',
-  'config/validation/path-test-map.json'
+  'config/validation/path-test-map.json',
+  'scripts/lib/docker-container-image-id.sh',
+  'scripts/docker-container-image-id.test.sh'
 ];
 
 const failures = [];
@@ -112,6 +114,8 @@ const bootstrapMigrationExceptions = readFileSync('config/release/47-legacy-migr
 const bootstrapMigrationExceptionsSha256 = createHash('sha256').update(bootstrapMigrationExceptions).digest('hex');
 const fingerprintScript = readFileSync('scripts/print-47-release-fingerprints.sh', 'utf8');
 const resolveRecoveryScript = readFileSync('scripts/resolve-47-release-recovery.sh', 'utf8');
+const containerImageIdScript = readFileSync('scripts/lib/docker-container-image-id.sh', 'utf8');
+const runtimeManifestScript = readFileSync('scripts/capture-47-runtime-manifest.sh', 'utf8');
 const forceFullBlock = deployScript.match(/if \[\[ "\$FORCE_FULL" == true \]\]; then([\s\S]*?)\nfi/)?.[1] ?? '';
 if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
   failures.push('--full must not force Prisma migration execution');
@@ -255,6 +259,15 @@ if (!whitelistDeployScript.includes('Whitelist scope mismatch') || !whitelistDep
 }
 if (!whitelistDeployScript.includes('WEB_FINGERPRINT=$web_fingerprint') || !whitelistDeployScript.includes('MIGRATE_FINGERPRINT=$migrate_fingerprint')) {
   failures.push('whitelist success state must use fingerprints recomputed from the actual remote tree');
+}
+if (!containerImageIdScript.includes('ImageManifestDescriptor')
+  || !containerImageIdScript.includes('{{else}}{{.Image}}')
+  || !whitelistDeployScript.includes('siyuan_docker_container_image_id')
+  || !deployScript.includes('siyuan_docker_container_image_id')
+  || !provenanceAuditScript.includes('siyuan_docker_container_image_id')
+  || !runtimeManifestScript.includes('siyuan_docker_container_image_id')
+  || runtimeManifestScript.includes('docker image inspect')) {
+  failures.push('release state, provenance audit and runtime capture must share the runnable Docker manifest identity without relying on a prunable image object');
 }
 if (!fingerprintScript.includes('scope_hash web') || !fingerprintScript.includes('scope_hash migrate')) {
   failures.push('portable release fingerprint helper must cover web, api and migration manifests');

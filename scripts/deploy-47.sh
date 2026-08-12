@@ -730,8 +730,10 @@ fi
 cd "$remote_dir"
 web_container="$(docker compose ps -q web | tail -1)"
 api_container="$(docker compose ps -q api | tail -1)"
-web_image_id="$(docker inspect --format '{{.Image}}' "$web_container")"
-api_image_id="$(docker inspect --format '{{.Image}}' "$api_container")"
+# shellcheck source=lib/docker-container-image-id.sh
+source "$remote_dir/scripts/lib/docker-container-image-id.sh"
+web_image_id="$(siyuan_docker_container_image_id "$web_container")"
+api_image_id="$(siyuan_docker_container_image_id "$api_container")"
 [ -n "$web_image_id" ] && [ -n "$api_image_id" ]
 if [ "$source_provenance" = GIT_BUNDLE ]; then
   case "$source_bundle_path" in

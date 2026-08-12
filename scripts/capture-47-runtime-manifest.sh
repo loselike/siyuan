@@ -18,6 +18,8 @@ set -euo pipefail
 
 remote_dir="$1"
 cd "$remote_dir"
+# shellcheck source=lib/docker-container-image-id.sh
+source scripts/lib/docker-container-image-id.sh
 
 capture_tmp="$(mktemp -d /tmp/siyuan-47-runtime-manifest.XXXXXX)"
 cleanup_remote() {
@@ -45,7 +47,7 @@ case "$release_id" in
 esac
 
 {
-  printf 'CAPTURE_FORMAT_VERSION=2\n'
+  printf 'CAPTURE_FORMAT_VERSION=3\n'
   printf 'CAPTURED_AT=%s\n' "$captured_at"
   printf 'REMOTE_DIR=%s\n' "$remote_dir"
   printf 'REMOTE_RELEASE_ID=%s\n' "$release_id"
@@ -107,15 +109,26 @@ container_ids="$(docker compose ps -aq 2>/dev/null || true)"
 if [[ -n "$container_ids" ]]; then
   while IFS= read -r container_id; do
     [[ -n "$container_id" ]] || continue
-    docker inspect --format '{{.Name}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{.Config.Image}}{{"\t"}}{{.Image}}{{"\t"}}{{.Created}}{{"\t"}}{{.State.Status}}{{"\t"}}{{.State.StartedAt}}' "$container_id"
+    runtime_image_id="$(siyuan_docker_container_image_id "$container_id")"
+    [[ -n "$runtime_image_id" ]] || {
+      echo "Could not resolve runtime image identity for container $container_id." >&2
+      exit 81
+    }
+    docker inspect --format '{{.Name}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{.Config.Image}}{{"\t"}}' "$container_id" \
+      | tr -d '\n'
+    printf '%s\t' "$runtime_image_id"
+    docker inspect --format '{{.Created}}{{"\t"}}{{.State.Status}}{{"\t"}}{{.State.StartedAt}}' "$container_id"
   done <<< "$container_ids" | LC_ALL=C sort
 fi > "$capture_tmp/containers.tsv"
 
-if [[ -s "$capture_tmp/containers.tsv" ]]; then
-  cut -f4 "$capture_tmp/containers.tsv" | LC_ALL=C sort -u | while IFS= read -r image_id; do
-    [[ -n "$image_id" ]] || continue
-    docker image inspect --format '{{.Id}}{{"\t"}}{{.Created}}{{"\t"}}{{json .RepoTags}}{{"\t"}}{{json .RepoDigests}}' "$image_id"
-  done | LC_ALL=C sort > "$capture_tmp/images.tsv"
+if [[ -n "$container_ids" ]]; then
+  while IFS= read -r container_id; do
+    [[ -n "$container_id" ]] || continue
+    runtime_image_id="$(siyuan_docker_container_image_id "$container_id")"
+    [[ -n "$runtime_image_id" ]] || continue
+    printf '%s\t' "$runtime_image_id"
+    docker inspect --format '{{.Image}}{{"\t"}}{{.Created}}{{"\t"}}{{.Config.Image}}{{"\t"}}{{json .ImageManifestDescriptor}}' "$container_id"
+  done <<< "$container_ids" | LC_ALL=C sort -u > "$capture_tmp/images.tsv"
 else
   : > "$capture_tmp/images.tsv"
 fi

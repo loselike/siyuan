@@ -16,6 +16,8 @@ result="$(ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- "$REMOTE_DIR" <<'REMOTE_
 set -euo pipefail
 remote_dir="$1"
 cd "$remote_dir"
+# shellcheck source=lib/docker-container-image-id.sh
+source scripts/lib/docker-container-image-id.sh
 
 state_file=.siyuan-release-state
 state_value() {
@@ -39,8 +41,8 @@ receipt_sha_expected="$(state_value RELEASE_RECEIPT_SHA256)"
 
 web_container="$(docker compose ps -q web 2>/dev/null | tail -1)"
 api_container="$(docker compose ps -q api 2>/dev/null | tail -1)"
-web_image_actual="$(docker inspect --format '{{.Image}}' "$web_container" 2>/dev/null || true)"
-api_image_actual="$(docker inspect --format '{{.Image}}' "$api_container" 2>/dev/null || true)"
+web_image_actual="$(siyuan_docker_container_image_id "$web_container")"
+api_image_actual="$(siyuan_docker_container_image_id "$api_container")"
 api_release_id_actual="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$api_container" 2>/dev/null | sed -n 's/^RELEASE_ID=//p' | tail -1)"
 
 status=traceable

@@ -374,6 +374,8 @@ if [ "$actual_token" != "$expected_token" ]; then
 fi
 state_file="$remote_dir/.siyuan-release-state"
 state_tmp="$state_file.tmp.$expected_token"
+# shellcheck source=lib/docker-container-image-id.sh
+source "$remote_dir/scripts/lib/docker-container-image-id.sh"
 fingerprints="$(bash "$remote_dir/scripts/print-47-release-fingerprints.sh")"
 web_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^WEB_FINGERPRINT=//p')"
 api_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^API_FINGERPRINT=//p')"
@@ -381,8 +383,8 @@ migrate_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^MIGRATE_FINGER
 [[ -n "$web_fingerprint" && -n "$api_fingerprint" && -n "$migrate_fingerprint" ]]
 web_container="$(cd "$remote_dir" && docker compose ps -q web 2>/dev/null | tail -1)"
 api_container="$(cd "$remote_dir" && docker compose ps -q api 2>/dev/null | tail -1)"
-web_image_id="$(docker inspect --format '{{.Image}}' "$web_container" 2>/dev/null || true)"
-api_image_id="$(docker inspect --format '{{.Image}}' "$api_container" 2>/dev/null || true)"
+web_image_id="$(siyuan_docker_container_image_id "$web_container")"
+api_image_id="$(siyuan_docker_container_image_id "$api_container")"
 cat > "$state_tmp" <<STATE
 WEB_FINGERPRINT=$web_fingerprint
 API_FINGERPRINT=$api_fingerprint
