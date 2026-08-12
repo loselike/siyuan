@@ -32,6 +32,7 @@
 - 对抗式审查：current cutover 必须同时提供 committed manifest、显式确认和 Git bundle；traceable 状态拒绝重复 cutover；锁内比较 6 份运行证据；migration 集合/checksum 仍走旧严格门和三条固定例外；任何同步后失败进入 recovery-required。
 - 发布前 dry-run 发现全树同步会删除 47 上 `.release-current` 与 `.release-staging` 恢复证据；已转向先修复同步排除规则并加入治理断言，未在该风险下执行 apply。
 - cutover 主体已成功：线上 state/receipt/bundle 绑定提交 `67ed4db`，provenance 为 traceable，Web/API image 与 release ID 全部匹配。收尾因本地冻结清单只读导致临时目录删除失败，命令退出 1 并留下本次锁；已核对 owner、停止的 heartbeat、traceable state 与两容器健康后精确释放该锁，recovery clear。当前修复清理函数，避免临时清理失败遮蔽发布结果或阻断解锁。
+- 清理修复的标准 state/docs-only 跟进发布又暴露既有协议缺陷：SSH 会丢失末尾空 bundle 参数，远端 state writer 因位置参数缺失失败。同步已完成但 runtime state/镜像未改，provenance 仍 traceable，脚本按设计写 recovery marker 并释放锁。修复同时规定 state/docs-only 只同步并验证健康/provenance，不生成一个未由镜像运行的新 release ID；实际运行时发布则用显式 sentinel 安全传输空字段。
 
 ## 交接
 

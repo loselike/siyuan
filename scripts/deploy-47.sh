@@ -653,6 +653,14 @@ if [[ -n "$SYNC_CHANGES" ]]; then
   SIYUAN_47_EXPECTED_RELEASE_ID="$EXPECTED_RELEASE_ID" npm run sync:47 -- --apply
 fi
 
+if [[ "$WEB_CHANGED" != true && "$API_CHANGED" != true && "$DB_MIGRATION_REQUIRED" != true ]]; then
+  curl --retry 10 --retry-delay 1 --retry-connrefused -fsS "$PUBLIC_URL/api/health"
+  curl --retry 10 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/"
+  bash "$SCRIPT_DIR/audit-47-runtime-provenance.sh" --require-traceable
+  echo "47 state/docs-only synchronization completed successfully; runtime release state was preserved."
+  exit 0
+fi
+
 if [[ "$WEB_CHANGED" == true || "$API_CHANGED" == true ]]; then
   REMOTE_MUTATION_STARTED=true
   FAILURE_PHASE="standard-build-restart-health"
@@ -737,11 +745,13 @@ curl --retry 10 --retry-delay 1 --retry-connrefused -fsS "$PUBLIC_URL/api/health
 curl --retry 10 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/"
 SOURCE_PROVENANCE="ORIGIN_BRANCH"
 [[ "$SOURCE_BUNDLE_MODE" == true ]] && SOURCE_PROVENANCE="GIT_BUNDLE"
+SOURCE_BUNDLE_PATH_ARG="${SOURCE_BUNDLE_PATH:-__SIYUAN_NONE__}"
+SOURCE_BUNDLE_SHA256_ARG="${SOURCE_BUNDLE_SHA256:-__SIYUAN_NONE__}"
 ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
   "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
   "$WEB_FINGERPRINT" "$API_FINGERPRINT" "$MIGRATE_FINGERPRINT" "$RELEASE_ID" \
   "$GIT_COMMIT" "$GIT_BRANCH" "$RELEASED_AT" \
-  "$SOURCE_PROVENANCE" "$SOURCE_BUNDLE_PATH" "$SOURCE_BUNDLE_SHA256" <<'REMOTE_SCRIPT'
+  "$SOURCE_PROVENANCE" "$SOURCE_BUNDLE_PATH_ARG" "$SOURCE_BUNDLE_SHA256_ARG" <<'REMOTE_SCRIPT'
 set -eu
 remote_dir="$1"
 lock_dir="$2"
@@ -756,6 +766,8 @@ released_at="${10}"
 source_provenance="${11}"
 source_bundle_path="${12}"
 source_bundle_sha256="${13}"
+[ "$source_bundle_path" != __SIYUAN_NONE__ ] || source_bundle_path=""
+[ "$source_bundle_sha256" != __SIYUAN_NONE__ ] || source_bundle_sha256=""
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [ "$actual_token" != "$expected_token" ]; then
   echo "47 release lock ownership changed before success-state update." >&2

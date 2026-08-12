@@ -124,6 +124,11 @@ if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
 if (!deployScript.includes('MIGRATION_REQUIRED=$DB_MIGRATION_REQUIRED')) {
   failures.push('deploy dry-run must print MIGRATION_REQUIRED');
 }
+if (!deployScript.includes('state/docs-only synchronization completed successfully; runtime release state was preserved.')
+  || !deployScript.includes('SOURCE_BUNDLE_PATH_ARG="${SOURCE_BUNDLE_PATH:-__SIYUAN_NONE__}"')
+  || !deployScript.includes('[ "$source_bundle_path" != __SIYUAN_NONE__ ] || source_bundle_path=""')) {
+  failures.push('standard deploy must preserve runtime state for docs-only sync and transport empty source-bundle fields safely');
+}
 for (const bootstrapGate of [
   '--bootstrap-manifest',
   '--confirm-bootstrap',
