@@ -411,7 +411,7 @@ if [[ "$MODE" == "apply" ]]; then
       exit 84
     fi
 
-    bootstrap_capture_output="$(SIYUAN_47_MANIFEST_DIR="$BOOTSTRAP_RUNTIME_TMP/current" bash "$SCRIPT_DIR/capture-47-runtime-manifest.sh")"
+    bootstrap_capture_output="$(SIYUAN_47_CAPTURE_FORMAT=2 SIYUAN_47_MANIFEST_DIR="$BOOTSTRAP_RUNTIME_TMP/current" bash "$SCRIPT_DIR/capture-47-runtime-manifest.sh")"
     bootstrap_current_manifest="$(printf '%s\n' "$bootstrap_capture_output" | sed -n 's/^CAPTURED_47_MANIFEST=//p')"
     [[ -n "$bootstrap_current_manifest" && -d "$bootstrap_current_manifest" ]] || { echo "Bootstrap verification capture failed." >&2; exit 80; }
     for manifest_file in release-state.env source-files.tsv prisma-files.tsv containers.tsv images.tsv runtime-artifacts.tsv; do

@@ -266,8 +266,9 @@ if (!containerImageIdScript.includes('ImageManifestDescriptor')
   || !deployScript.includes('siyuan_docker_container_image_id')
   || !provenanceAuditScript.includes('siyuan_docker_container_image_id')
   || !runtimeManifestScript.includes('siyuan_docker_container_image_id')
-  || runtimeManifestScript.includes('docker image inspect')) {
-  failures.push('release state, provenance audit and runtime capture must share the runnable Docker manifest identity without relying on a prunable image object');
+  || !runtimeManifestScript.includes('SIYUAN_47_CAPTURE_FORMAT:-3')
+  || !deployScript.includes('SIYUAN_47_CAPTURE_FORMAT=2')) {
+  failures.push('release state, provenance audit and default runtime capture must share runnable Docker manifest identity while preserving the frozen v2 bootstrap verifier');
 }
 if (!fingerprintScript.includes('scope_hash web') || !fingerprintScript.includes('scope_hash migrate')) {
   failures.push('portable release fingerprint helper must cover web, api and migration manifests');
