@@ -24,4 +24,3 @@
 - 固定样本：管理员停留在 `/app/settings` 超过 5 分钟并触发 focus/visibility 检查。系统管理页面自身请求和会话刷新保持，App 全局 shipments/finance/master-data 请求不增加。
 - 反向样本：随后进入业务管理时仍立即执行一次 legacy 全局刷新；1 分钟内再次 focus 不重复刷新，5 分钟后 focus 仍刷新一次。
 - 禁止：不改 API、权限、页面字段、操作、表单、5 分钟阈值、阻塞工作/未保存工作保护或任何业务数据内容。
-
