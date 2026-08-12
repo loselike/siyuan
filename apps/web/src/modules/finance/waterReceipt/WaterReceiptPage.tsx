@@ -533,7 +533,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
   }, [apiClient, notificationTargetId, onNotificationTargetHandled]);
 
   useEffect(() => {
-    if (!formOpen) return undefined;
+    if (!formOpen && mode !== 'arrival') return undefined;
     let active = true;
     setSiteOptionsLoading(true);
     void apiClient.waterReceiptSiteOptions()
@@ -549,7 +549,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
     return () => {
       active = false;
     };
-  }, [apiClient, formOpen]);
+  }, [apiClient, formOpen, mode]);
 
   const openCreate = () => {
     setEditing(null);
@@ -1289,6 +1289,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
         >
           <Row gutter={12}>
             <Col xs={24} md={6}><Form.Item name="receiptNo" label="水单编号"><Input allowClear /></Form.Item></Col>
+            {mode === 'arrival' ? <Col xs={24} md={6}><Form.Item name="site" label="站点"><Select allowClear showSearch optionFilterProp="label" loading={siteOptionsLoading} options={siteOptions} /></Form.Item></Col> : null}
             <Col xs={24} md={6}><Form.Item name="customerCode" label="客户编号"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="salesperson" label="业务员归属"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="receiptMethod" label="结算方式"><Select allowClear options={settlementOptions} /></Form.Item></Col>

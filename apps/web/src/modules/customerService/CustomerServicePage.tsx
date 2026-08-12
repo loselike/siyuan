@@ -3,7 +3,7 @@ import { Alert, AutoComplete, Button, Card, Checkbox, Form, Input, InputNumber, 
 import { Download } from 'lucide-react';
 import type { ColumnsType } from 'antd/es/table';
 import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type FinanceCatalogItemSummary, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
-import { isAdministratorRole, type ApiClient } from '../../apiClient';
+import { type ApiClient } from '../../apiClient';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, isBeijingCurrentWeek, isBeijingToday, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
@@ -562,20 +562,13 @@ export function CustomerServicePage({
   const canViewDataConfirmBusiness = permissions.includes('customer-service:data-confirm:business-view');
   const canViewDataConfirmAgent = permissions.includes('customer-service:data-confirm:agent-view');
   const can = (permission: string) => permissions.includes(permission);
-  const isMaskEnabled = (permission: string) => !isAdministratorRole(role) && can(permission);
-  const canFillTransferNo = canTransferWrite && !isMaskEnabled('customer-service:transfer:fill-block');
-  const canViewPendingRouting = can('customer-service:pending-routing:view') && !isMaskEnabled('customer-service:pending-routing:readonly-block');
-  const canApproveBusinessData = can('customer-service:data-confirm:business-approve')
-    && !isMaskEnabled('customer-service:data-confirm:business-approve-block');
-  const canUpdateBusinessData = can('customer-service:data-confirm:business-update')
-    && !isMaskEnabled('customer-service:data-confirm:business-update-block');
-  const canUpdateAgentData = can('customer-service:data-confirm:agent-update')
-    && !isMaskEnabled('customer-service:data-confirm:agent-update-block');
-  const canApproveAgentData = can('customer-service:data-confirm:agent-approve')
-    && !isMaskEnabled('customer-service:data-confirm:agent-approve-block');
-  const canApproveAllData = can('customer-service:data-confirm:approve-all')
-    && !isMaskEnabled('customer-service:data-confirm:business-approve-block')
-    && !isMaskEnabled('customer-service:data-confirm:agent-approve-block');
+  const canFillTransferNo = canTransferWrite;
+  const canViewPendingRouting = can('customer-service:pending-routing:view');
+  const canApproveBusinessData = can('customer-service:data-confirm:business-approve');
+  const canUpdateBusinessData = can('customer-service:data-confirm:business-update');
+  const canUpdateAgentData = can('customer-service:data-confirm:agent-update');
+  const canApproveAgentData = can('customer-service:data-confirm:agent-approve');
+  const canApproveAllData = can('customer-service:data-confirm:approve-all');
   const canProblemView = can('customer-service:problem:view');
   const canColumnSetting: Record<string, boolean> = {
     dataConfirm: can('customer-service:data-confirm:column-setting'), transferNo: can('customer-service:transfer:column-setting'),
@@ -1378,7 +1371,7 @@ export function CustomerServicePage({
     () => createPendingRoutingColumns({
       businessCostAudits,
       mode: 'customerService',
-      onViewFees: can('customer-service:pending-routing:fee-detail-view') && !isMaskEnabled('customer-service:pending-routing:fee-detail-block') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
       canViewBusinessCost: false,
       canViewPayableCost: false,
       canViewAgentChannel: can('customer-service:pending-routing:agent-view')
@@ -1389,7 +1382,7 @@ export function CustomerServicePage({
     () => createPendingRoutingColumns({
       businessCostAudits,
       mode: 'customerService',
-      onViewFees: can('customer-service:pending-routing:fee-detail-view') && !isMaskEnabled('customer-service:pending-routing:fee-detail-block') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
       canViewBusinessCost: false,
       canViewPayableCost: false,
       canViewAgentChannel: can('customer-service:pending-routing:agent-view'),

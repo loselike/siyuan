@@ -1420,7 +1420,6 @@ export function FinancePage({
                   </div>
                 </section>
                 <div className="finance-pending-alert-stack">
-                  {canAdjustPendingReviewPackages || canDirectEditPendingReview || canDirectEditPendingReviewBusinessCost ? <Alert type="info" showIcon message={canAdjustPendingReviewPackages ? '当前订单可在“单件明细”中补录或移除包裹；移除只解除本单关联，不删除仓库原始数据。' : canDirectEditPendingReviewBusinessCost ? '当前订单可修改基础资料和未审核业务成本；确认费用后可直接自审通过。' : '当前订单可直接修改基础资料；保存后仍保留待审核状态，审核、费用和货物计量字段不会被本次保存改动。'} /> : null}
                   {pendingReviewDetail.overdue ? <Alert type="warning" showIcon message="该订单待审核已超过 3 天，请优先处理。" /> : null}
                   {pendingReviewDetail.approvalWarnings.length ? (
                     <Alert type="error" showIcon message={`审核前需补齐：${pendingReviewDetail.approvalWarnings.join('、')}`} />
@@ -1525,13 +1524,6 @@ export function FinancePage({
                             {pendingReviewDetail.finance.canViewPayables ? <MetricCard title="应付" value={formatCurrency(pendingReviewDetail.finance.payableTotal ?? 0)} icon={<Landmark size={16} />} extra="代理侧" /> : null}
                           </Flex>
                           <Divider className="finance-pending-section-divider" />
-                          {canDirectEditPendingReviewBusinessCost ? (
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="待审核期间可修改基础资料和未审核业务成本；业务审核通过后费用编辑入口自动关闭。"
-                            />
-                          ) : null}
                           {renderShipmentFinancePanel(pendingReviewDetail.shipment, pendingReviewDetail.finance, {
                             onReload: () => loadPendingReviewDetail(pendingReviewDetail.shipment.id)
                           })}

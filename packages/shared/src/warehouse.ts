@@ -249,6 +249,16 @@ export interface WarehousePackageUpdateInput {
   manualException?: string;
 }
 
+export interface WarehousePackageDeleteInput {
+  ids: string[];
+  reason: string;
+}
+
+export interface WarehousePackageDeleteResponse {
+  deletedIds: string[];
+  deletedCount: number;
+}
+
 export type WarehouseTodayDatePreset = 'TODAY' | 'WEEK' | 'LAST_7_DAYS' | 'MONTH' | 'CUSTOM';
 
 export interface WarehouseTodayQuery {

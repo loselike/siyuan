@@ -41,6 +41,7 @@ import {
   summarizeLineShipmentFinance,
   summarizeLineShipmentPool,
   getLineShipmentEditStages,
+  lineShipmentStageEditPermissionCode,
   summarizeStatusCounts,
   matchUsPostalRule,
   matchesEuropeanPostalRule,
@@ -332,6 +333,8 @@ import {
   type WarehouseSameSpecReplenishInput,
   type WarehouseSameSpecReplenishResponse,
   type WarehousePackageCreateInput,
+  type WarehousePackageDeleteInput,
+  type WarehousePackageDeleteResponse,
   type WarehousePackageGroupSummary,
   type WarehousePackageSplitInput,
   type WarehousePackageSplitResponse,
@@ -1550,7 +1553,7 @@ export class InMemoryRepository {
     };
     const canViewCustomerServicePendingRouting = principal.role === 'ADMIN'
       || (await this.hasPermission(principal.role, 'customer-service:pending-routing:view')
-        && !(await this.hasPermission(principal.role, 'customer-service:pending-routing:readonly-block')));
+);
     const items = [
       read('customerService', 'pending-routing', canViewCustomerServicePendingRouting ? shipmentRows(['WAITING_SORT']) : []),
       read('customerService', 'waitingDeparture', shipmentRows(['WAITING_DEPARTURE'])),
@@ -3420,7 +3423,7 @@ export class InMemoryRepository {
 
   async lookupPrice(principal: Principal, input: PriceLookupRequest): Promise<PriceLookupResponse> {
     this.ensureStaffPricingAccess(principal);
-    const priceRows = this.activePriceBookRows();
+    const priceRows = this.activePriceBookRows().filter((row) => !input.module || this.priceBooks.find((book) => book.id === row.priceBookId)?.targetModule === input.module);
     const response = createBackendPriceLookup(principal, input, priceRows, this.priceBooks, this.agentMarkupRules);
     const selectedRecommendation = response.cheapestRecommendations[0] ?? response.recommendations[0];
     const businessId = selectedRecommendation?.price.id ?? `price-lookup:${Date.now()}`;
@@ -3453,8 +3456,22 @@ export class InMemoryRepository {
         { key: 'canadaAirSea', label: '加拿大空海查询', rowCount: rowsByModule('canadaAirSea').length, sourceCount: booksByModule('canadaAirSea').length },
         { key: 'dubaiAirSea', label: '迪拜空海运查询', rowCount: rowsByModule('dubaiAirSea').length, sourceCount: booksByModule('dubaiAirSea').length }
     ] as const;
+    const lookupPermissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+      amazon: 'pricing:lookup:amazon',
+      inquiry: 'pricing:lookup:europe-oversize',
+      europeExpress: 'pricing:lookup:europe-express',
+      southAfrica: 'pricing:lookup:south-africa',
+      usaAirSea: 'pricing:lookup:usa-air-sea',
+      canadaAirSea: 'pricing:lookup:canada-air-sea',
+      dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+    };
     return {
-      modules: (await Promise.all(modules.map(async (module) => (await this.isPricingModuleBlocked(principal, 'lookup', module.key) ? null : module)))).filter((module): module is typeof modules[number] => Boolean(module)),
+      modules: (await Promise.all(modules.map(async (module) => (
+        await this.isPricingModuleBlocked(principal, 'lookup', module.key)
+          || !(await this.hasPermission(principal.role, lookupPermissionByModule[module.key]))
+          ? null
+          : module
+      )))).filter((module): module is typeof modules[number] => Boolean(module)),
       agents: canViewInternalSource ? uniqueStrings(rows.map((row) => row.agentName)) : [],
       origins: uniqueAmazonOriginWarehouseNames(amazonRows.map((row) => row.sourceSheetName)),
       warehouseCodes: uniqueStrings(rows.map((row) => row.warehouseCode)),
@@ -3521,6 +3538,7 @@ export class InMemoryRepository {
   }
 
   async getDubaiPriceDisplayVersions(principal: Principal): Promise<DubaiPriceDisplayVersionListResponse> {
+    await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
     await this.ensurePermission(principal, 'pricing:dubai-display:versions-view', '无权查看迪拜价格表展示版本');
     const canViewMarkup = await this.hasPermission(principal.role, 'pricing:dubai-display:markup-view');
     return {
@@ -5835,6 +5853,30 @@ export class InMemoryRepository {
     return { totals: response.totals };
   }
 
+  async deleteWarehousePackages(principal: Principal, input: WarehousePackageDeleteInput): Promise<WarehousePackageDeleteResponse> {
+    const ids = Array.from(new Set((input.ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
+    if (!ids.length) throw new BadRequestException('请至少选择一个包裹');
+    const reason = input.reason?.trim() ?? '';
+    if (!reason) throw new BadRequestException('请填写删除原因');
+    if (reason.length > 200) throw new BadRequestException('删除原因不能超过 200 个字符');
+    const canToday = isAdministratorRole(principal.role) || await this.hasPermission(principal.role, 'warehouse:today-receipt:delete');
+    const canInStock = isAdministratorRole(principal.role) || await this.hasPermission(principal.role, 'warehouse:in-stock:delete');
+    if (!canToday && !canInStock) throw new ForbiddenException('当前角色没有删除仓库包裹权限');
+    const packages = ids.map((id) => this.warehousePackages.find((pkg) => pkg.id === id));
+    if (packages.some((pkg) => !pkg)) throw new NotFoundException('部分包裹不存在或已删除');
+    const rows = packages as WarehousePackageSummary[];
+    const scope = this.operatorCustomerScope(principal);
+    if (scope && rows.some((pkg) => !pkg.salesperson || !scope.includes(pkg.salesperson))) throw new ForbiddenException('业务员只能删除自己名下包裹');
+    const draftIds = new Set(this.shipments.filter((shipment) => !shipment.deletedAt).flatMap((shipment) => shipment.draftWarehousePackageIds ?? []));
+    const consolidationIds = new Set(this.warehouseConsolidations.flatMap((record) => record.packageIds));
+    const tallyIds = new Set(this.warehouseTallyTasks.filter((task) => task.tallyProgressStatus !== 'CANCELLED').flatMap((task) => [...task.packageIds, task.appliedPackageId].filter(Boolean) as string[]));
+    const unsafe = rows.filter((pkg) => !['PENDING', 'RECEIVED'].includes(pkg.status) || pkg.shipmentId || pkg.systemOrderNo || pkg.tallyTaskId || pkg.tallyTaskNo || pkg.sourcePackageId || pkg.archivedByPackageId || draftIds.has(pkg.id) || consolidationIds.has(pkg.id) || tallyIds.has(pkg.id));
+    if (unsafe.length) throw new BadRequestException(`包裹 ${unsafe.map((pkg) => pkg.combinedOrderNo || pkg.id).join('、')} 已进入理货、合票、录单或出库流程，不能删除`);
+    for (let index = this.warehousePackages.length - 1; index >= 0; index -= 1) if (ids.includes(this.warehousePackages[index]!.id)) this.warehousePackages.splice(index, 1);
+    this.audit('warehouse.package.batch_delete', ids.join(','), principal, rows.map((pkg) => ({ id: pkg.id, combinedOrderNo: pkg.combinedOrderNo, status: pkg.status })), { ids, hardDelete: true, reason });
+    return { deletedIds: ids, deletedCount: ids.length };
+  }
+
   async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {
     return summarizeWarehousePackageGroups(await this.getWarehousePackages(principal));
   }
@@ -6642,7 +6684,7 @@ export class InMemoryRepository {
         const sourceIds = new Set(task.packageIds);
         const outputs = task.status === 'COMPLETED'
           ? this.warehousePackages
-            .filter((pkg) => pkg.tallyTaskId === task.id && !sourceIds.has(pkg.id))
+            .filter((pkg) => pkg.tallyTaskId === task.id && !sourceIds.has(pkg.id) && pkg.status !== 'TALLIED_ARCHIVED')
             .sort((left, right) => (left.packageIndex ?? 0) - (right.packageIndex ?? 0))
           : [];
         return {
@@ -6984,7 +7026,7 @@ export class InMemoryRepository {
     const sourceIds = new Set(before.packageIds);
     const sourcePackages = this.warehousePackages.filter((pkg) => sourceIds.has(pkg.id));
     const outputPackages = this.warehousePackages
-      .filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id))
+      .filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id) && pkg.status !== 'TALLIED_ARCHIVED')
       .sort((left, right) => (left.packageIndex ?? 0) - (right.packageIndex ?? 0));
     if (sourcePackages.length !== before.packageIds.length || !outputPackages.length) {
       throw new ConflictException('理货结果或原始包裹不完整，不能取消理货');
@@ -7004,7 +7046,16 @@ export class InMemoryRepository {
       if (outputIds.has(pkg.id)) {
         updatedPackage = { ...pkg, status: 'TALLIED_ARCHIVED', archivedReason: '理货取消', archivedAt: now };
       } else if (sourceIds.has(pkg.id)) {
-        updatedPackage = { ...pkg, status: 'RECEIVED', tallyTaskId: undefined, tallyTaskNo: undefined, archivedByPackageId: undefined, archivedByPackageNo: undefined, archivedReason: undefined, archivedAt: undefined };
+        updatedPackage = {
+          ...pkg,
+          status: 'RECEIVED',
+          tallyTaskId: undefined,
+          tallyTaskNo: undefined,
+          archivedByPackageId: undefined,
+          archivedByPackageNo: undefined,
+          archivedReason: undefined,
+          archivedAt: undefined
+        };
       }
       if (updatedPackage !== pkg) this.warehousePackages[packageIndex] = updatedPackage;
     });
@@ -7016,12 +7067,44 @@ export class InMemoryRepository {
       cancelledBy: principal.username
     };
     this.warehouseTallyTasks[index] = updated;
+    const taskNoPrefix = before.taskNo.match(/^(.*LH)\d{2}$/)?.[1] ?? (before.taskNo.endsWith('LH') ? before.taskNo : `${before.taskNo}LH`);
+    const reopenedTask: WarehouseTallyTaskSummary = {
+      id: randomUUID(),
+      taskNo: nextWarehouseRetallyTaskNo(before.taskNo, this.warehouseTallyTasks.map((task) => task.taskNo).filter((taskNo) => taskNo.startsWith(taskNoPrefix))),
+      status: 'PENDING',
+      tallyChannel: before.tallyChannel,
+      tallyProgressStatus: 'WAITING',
+      rootTallyTaskId: before.rootTallyTaskId ?? before.id,
+      previousTallyTaskId: before.id,
+      tallySequence: (before.tallySequence ?? 1) + 1,
+      packageIds: [...before.packageIds],
+      sourcePackageId: before.sourcePackageId,
+      sourceCombinedOrderNo: before.sourceCombinedOrderNo,
+      customerCode: before.customerCode,
+      customerName: before.customerName,
+      salesperson: before.salesperson,
+      packageCount: before.packageCount,
+      originalWeightKg: before.originalWeightKg,
+      originalLengthCm: before.originalLengthCm,
+      originalWidthCm: before.originalWidthCm,
+      originalHeightCm: before.originalHeightCm,
+      originalVolumetricWeightKg: before.originalVolumetricWeightKg,
+      originalVolumetricWeightKg5000: before.originalVolumetricWeightKg5000,
+      tallyRequirement: before.tallyRequirement,
+      remark: before.remark,
+      createdBy: principal.username,
+      createdAt: now,
+      labelStatus: 'NOT_GENERATED'
+    };
+    this.warehouseTallyTasks.unshift(reopenedTask);
     this.audit('warehouse.tally.cancel_completed', id, principal, before, {
       ...updated,
       restoredPackageIds: before.packageIds,
-      archivedResultPackageIds: outputPackages.map((pkg) => pkg.id)
+      archivedResultPackageIds: outputPackages.map((pkg) => pkg.id),
+      reopenedTask
     });
-    return cloneWarehouseTallyTask(updated);
+    this.audit('warehouse.tally.reopen', reopenedTask.id, principal, updated, reopenedTask);
+    return cloneWarehouseTallyTask(reopenedTask);
   }
 
   async reverseReviewWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
@@ -7424,7 +7507,7 @@ export class InMemoryRepository {
     }
     const sourceIds = new Set(task.packageIds);
     const outputs = this.warehousePackages
-      .filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id))
+      .filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id) && pkg.status !== 'TALLIED_ARCHIVED')
       .sort((left, right) => (left.packageIndex ?? 0) - (right.packageIndex ?? 0));
     const rows = outputs.length ? outputs : this.warehousePackages.filter((pkg) => sourceIds.has(pkg.id));
     return rows.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }));
@@ -12978,16 +13061,20 @@ export class InMemoryRepository {
         return after?.shipmentId === shipment.id && after?.originalStatusPool === 'SIGNED';
       })
     });
-    const blockedPermissions = stages.map((stage) => ('operations:line-shipment:stage-edit-block:' + stage.toLowerCase().replaceAll('_', '-')) as PermissionKey);
-    for (const permission of blockedPermissions) {
-      if (await this.hasPermission(principal.role, permission)) {
-        await this.recordPermissionDenied(principal, {
-          permissions: [permission],
-          method: 'PATCH',
-          path: '/api/operations/line-shipments/' + shipment.id + '/operational'
-        });
-        throw new ForbiddenException('当前运单阶段已屏蔽编辑');
-      }
+    const requiredPermissions = stages.map((stage) => lineShipmentStageEditPermissionCode(stage) as PermissionKey);
+    const legacyBlockedPermissions = stages.map((stage) => (`operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}`) as PermissionKey);
+    const [granted, blocked] = await Promise.all([
+      Promise.all(requiredPermissions.map((permission) => this.hasPermission(principal.role, permission))),
+      Promise.all(legacyBlockedPermissions.map((permission) => this.hasPermission(principal.role, permission)))
+    ]);
+    const missing = requiredPermissions.filter((_, index) => !granted[index] || blocked[index]);
+    if (missing.length > 0) {
+      await this.recordPermissionDenied(principal, {
+        permissions: missing,
+        method: 'PATCH',
+        path: '/api/operations/line-shipments/' + shipment.id + '/operational'
+      });
+      throw new ForbiddenException('当前用户组未分配当前运单阶段编辑权限');
     }
   }
 
@@ -17433,6 +17520,13 @@ export class InMemoryRepository {
   }
 
   private async ensurePricingModuleNotBlocked(principal: Principal, scope: 'lookup' | 'markup', module: LegacyPricingModule | undefined, label: string, mode: 'view' | 'edit' = 'view') {
+    if (scope === 'lookup' && module && !isAdministratorRole(principal.role)) {
+      const permissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+        amazon: 'pricing:lookup:amazon', inquiry: 'pricing:lookup:europe-oversize', europeExpress: 'pricing:lookup:europe-express',
+        southAfrica: 'pricing:lookup:south-africa', usaAirSea: 'pricing:lookup:usa-air-sea', canadaAirSea: 'pricing:lookup:canada-air-sea', dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+      };
+      if (!(await this.hasPermission(principal.role, permissionByModule[module]))) throw new ForbiddenException(`${label}模块未分配查价权限`);
+    }
     if (await this.isPricingModuleBlocked(principal, scope, module, mode)) {
       throw new ForbiddenException(`${label}模块已被当前用户组屏蔽`);
     }

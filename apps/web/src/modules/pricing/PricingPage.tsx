@@ -104,7 +104,8 @@ export function filterPricingModulesByPermissions(
   const granted = new Set(permissions);
   return modules.filter((module) => scope === 'markup'
     ? !isPricingMarkupModuleBlocked(permissions, module.key, 'view', role)
-    : !granted.has(pricingModuleBlockPermissionCode(scope, module.key)));
+    : granted.has(lookupPermissionByModule[module.key])
+      && !granted.has(pricingModuleBlockPermissionCode(scope, module.key)));
 }
 
 interface AgentMarkupFormValues {
@@ -479,15 +480,8 @@ export function PricingPage({
   const permissionSet = useMemo(() => new Set(permissions), [permissions]);
   const can = useCallback((permission: PermissionKey) => isAdministratorRole(role) || permissionSet.has(permission), [permissionSet, role]);
   const availableLookupModules = useMemo(
-    () => filterPricingModulesByPermissions(
-      can('pricing:lookup:view')
-        ? legacyPricingModules
-        : legacyPricingModules.filter((item) => can(lookupPermissionByModule[item.key])),
-      permissions,
-      'lookup',
-      role
-    ),
-    [can, permissions, role]
+    () => filterPricingModulesByPermissions(legacyPricingModules, permissions, 'lookup', role),
+    [permissions, role]
   );
   const availableMarkupModules = useMemo(
     () => filterPricingModulesByPermissions(legacyPricingModules, permissions, 'markup', role),

@@ -254,6 +254,7 @@ export interface WarehouseHandoverRow {
   waybillNo: string;
   warehouseEntryNo: string;
   cargoName: string;
+  cargoAttributes: string;
   customerName: string;
   customerOrderNo: string;
   destinationCountry: string;
@@ -283,6 +284,8 @@ export type WarehouseQueueColumnKey =
   | 'volume'
   | 'chargeableWeight'
   | 'shippingMark'
+  | 'cargoType'
+  | 'fba'
   | 'warehouseOutboundRemark'
   | 'productName'
   | 'declaration'
@@ -305,6 +308,8 @@ export const warehouseQueueDefaultColumnKeys: WarehouseQueueColumnKey[] = [
   'volume',
   'chargeableWeight',
   'shippingMark',
+  'cargoType',
+  'fba',
   'warehouseOutboundRemark',
   'productName',
   'declaration',
@@ -326,6 +331,8 @@ export const warehouseQueueColumnLabels: Record<WarehouseQueueColumnKey, string>
   volume: '业务数据：体积',
   chargeableWeight: '业务数据：计费重',
   shippingMark: '唛头',
+  cargoType: '货物类型',
+  fba: 'FBA',
   warehouseOutboundRemark: '出库备注',
   productName: '品名',
   declaration: '报关',

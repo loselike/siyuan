@@ -186,7 +186,7 @@ export class FinanceReceivableController {
   }
 
   @Get('finance/water-receipts/site-options')
-  @RequirePermission(['finance:water-receipt:create', 'finance:water-receipt:update'])
+  @RequirePermission(['finance:water-receipt:read', 'finance:water-receipt:create', 'finance:water-receipt:update'])
   async waterReceiptSiteOptions() {
     return this.waterReceiptLifecycleService.listSiteOptions();
   }

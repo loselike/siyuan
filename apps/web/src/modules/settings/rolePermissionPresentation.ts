@@ -226,6 +226,10 @@ export function isUiPreferencePermission(permission: Pick<PermissionDefinition, 
 export function isLineShipmentStageEditBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
   return permission.code.startsWith('operations:line-shipment:stage-edit-block:');
 }
+export function isLineShipmentStageEditPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
+  return permission.code.startsWith('operations:line-shipment:stage-edit:');
+}
+
 
 export function isPricingModuleBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
   return permission.code.startsWith('pricing:lookup:module-block:')
@@ -267,6 +271,7 @@ export function getPermissionControls(group: string, permissions: PermissionDefi
   const configurablePermissions = permissions.filter(
     (permission) => !isUiPreferencePermission(permission)
       && !isLineShipmentStageEditBlockPermission(permission)
+      && !isLineShipmentStageEditPermission(permission)
       && !isPricingModuleBlockPermission(permission)
       && !isWarehouseTallyPendingMaskPermission(permission)
   );

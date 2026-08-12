@@ -4,6 +4,8 @@ import type {
   WarehouseInStockPageResponse,
   WarehouseInStockResponse,
   WarehouseManualReceiptCustomerOption,
+  WarehousePackageDeleteInput,
+  WarehousePackageDeleteResponse,
   WarehousePackageSummary,
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskSummary,
@@ -59,6 +61,13 @@ export class WarehouseQueryClient {
 
   warehouseInStockSummary(): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
     return this.request('/warehouse/in-stock-summary');
+  }
+
+  deleteWarehousePackages(scope: 'today-receipt' | 'in-stock', input: WarehousePackageDeleteInput): Promise<WarehousePackageDeleteResponse> {
+    return this.request(`/warehouse/${scope === 'today-receipt' ? 'today-receipts' : 'in-stock'}/batch-delete`, {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
   }
 
   warehouseTallyTasks(query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {

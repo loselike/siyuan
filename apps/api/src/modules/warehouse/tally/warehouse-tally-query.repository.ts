@@ -107,7 +107,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       where,
       orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
     });
-    const completedRows = rows.filter((row: any) => row.status === 'COMPLETED');
+    const completedRows = rows.filter((row: any) => row.status === 'COMPLETED' && row.tallyProgressStatus !== 'CANCELLED');
     const outputRows = completedRows.length
       ? await (this.prisma as any).warehousePackage.findMany({
         where: {

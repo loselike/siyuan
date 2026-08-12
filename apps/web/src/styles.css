@@ -5617,10 +5617,14 @@ body.is-resizing-table-column {
   color: #fff;
 }
 
+.role-permission-module-card .role-permission-module-select .ant-typography-secondary {
+  color: #111827 !important;
+}
+
 .role-permission-module-card.is-active .role-permission-module-select .ant-typography-secondary,
 .role-permission-module-card.is-current .role-permission-module-select .ant-typography-secondary,
 .role-permission-module-card[data-current='true'] .role-permission-module-select .ant-typography-secondary {
-  color: rgb(255 255 255 / 82%);
+  color: #fff !important;
 }
 
 .role-permission-module-card.is-active .ant-tag,
@@ -5809,6 +5813,10 @@ body.is-resizing-table-column {
 .role-permission-option.role-permission-stage-blocked {
   border-color: #f0b4a8;
   background: #fff7f5;
+}
+.role-permission-option.role-permission-granted {
+  border-color: #9bbcff;
+  background: #f3f7ff;
 }
 
 .role-permission-section:last-child {
@@ -6509,6 +6517,12 @@ body.is-resizing-table-column {
 .warehouse-agent-handover-table td {
   font-size: 15px;
   font-weight: 650;
+}
+
+.warehouse-agent-handover-attributes {
+  font-size: 13px !important;
+  line-height: 1.35;
+  text-align: left !important;
 }
 
 .warehouse-agent-handover-table th:last-child,

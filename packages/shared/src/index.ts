@@ -822,7 +822,7 @@ export interface LineShipmentPoolRow {
   financeSummary?: LineShipmentFinanceSummary;
 }
 
-/** 专线运单池可单独屏蔽编辑的阶段。未配置屏蔽时默认允许编辑。 */
+/** 专线运单池可单独授权编辑的阶段。只有明确授权当前阶段时才允许编辑。 */
 export const lineShipmentEditStageKeys = [
   'REVIEW_PENDING',
   'WAITING_SORT',
@@ -840,6 +840,11 @@ export const lineShipmentEditStageKeys = [
 ] as const;
 
 export type LineShipmentEditStageKey = typeof lineShipmentEditStageKeys[number];
+
+/** 将阶段枚举映射为统一的正向授权码，供前后端共同派生。 */
+export function lineShipmentStageEditPermissionCode(stage: LineShipmentEditStageKey): string {
+  return `operations:line-shipment:stage-edit:${stage.toLowerCase().replaceAll('_', '-')}`;
+}
 
 export const lineShipmentEditStageLabels: Record<LineShipmentEditStageKey, string> = {
   REVIEW_PENDING: '待审核',
@@ -1850,6 +1855,8 @@ export interface AgentMarkupImportResponse {
 }
 
 export interface PriceLookupRequest {
+  /** Explicit module scope for the generic lookup endpoint. */
+  module?: LegacyPricingModule;
   amazonCode?: string;
   productName?: string;
   destinationCountry: string;

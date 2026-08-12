@@ -51,6 +51,7 @@ import {
   summarizeLineShipmentFinance,
   summarizeLineShipmentPool,
   getLineShipmentEditStages,
+  lineShipmentStageEditPermissionCode,
   summarizeStatusCounts,
   matchUsPostalRule,
   matchesEuropeanPostalRule,
@@ -384,6 +385,8 @@ import {
   type WarehouseSameSpecReplenishInput,
   type WarehouseSameSpecReplenishResponse,
   type WarehousePackageCreateInput,
+  type WarehousePackageDeleteInput,
+  type WarehousePackageDeleteResponse,
   type WarehousePackageSplitInput,
   type WarehousePackageSplitResponse,
   type WarehousePackageStatus,
@@ -1497,7 +1500,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }));
     const canViewCustomerServicePendingRouting = principal.role === 'ADMIN'
       || (await this.hasPermission(principal.role, 'customer-service:pending-routing:view')
-        && !(await this.hasPermission(principal.role, 'customer-service:pending-routing:readonly-block')));
+);
     const items = [
       read('customerService', 'pending-routing', canViewCustomerServicePendingRouting ? shipmentRows(['WAITING_SORT']) : []),
       read('customerService', 'waitingDeparture', shipmentRows(['WAITING_DEPARTURE'])),
@@ -4373,7 +4376,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     this.ensureStaffPricingAccess(principal);
     const startedAt = Date.now();
     const [priceScope, markupRules] = await Promise.all([
-      this.loadPriceRowsForLookup(input),
+      this.loadPriceRowsForLookup(input, input.module),
       this.loadAgentMarkupRules()
     ]);
     const response = createBackendPriceLookup(principal, input, priceScope.rows, priceScope.books, markupRules);
@@ -4402,7 +4405,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const response = buildLegacyPricingMeta(rows, canViewInternalSource);
     return {
       ...response,
-      modules: (await Promise.all(response.modules.map(async (module) => (await this.isPricingModuleBlocked(principal, 'lookup', module.key) ? null : module)))).filter((module): module is typeof response.modules[number] => Boolean(module))
+      modules: (await Promise.all(response.modules.map(async (module) => (await this.isPricingModuleBlocked(principal, 'lookup', module.key) || !(await this.hasLookupModulePermission(principal, module.key)) ? null : module)))).filter((module): module is typeof response.modules[number] => Boolean(module))
     };
   }
 
@@ -4496,6 +4499,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getDubaiPriceDisplayVersions(principal: Principal): Promise<DubaiPriceDisplayVersionListResponse> {
+    await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
     await this.ensurePermission(principal, 'pricing:dubai-display:versions-view', '无权查看迪拜价格表展示版本');
     const canViewMarkup = await this.hasPermission(principal.role, 'pricing:dubai-display:markup-view');
     const versions = await (this.prisma as any).dubaiPriceDisplayVersion.findMany({
@@ -8256,6 +8260,38 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return response;
   }
 
+  async deleteWarehousePackages(principal: Principal, input: WarehousePackageDeleteInput): Promise<WarehousePackageDeleteResponse> {
+    const ids = Array.from(new Set((input.ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
+    if (!ids.length) throw new BadRequestException('请至少选择一个包裹');
+    const reason = input.reason?.trim() ?? '';
+    if (!reason) throw new BadRequestException('请填写删除原因');
+    if (reason.length > 200) throw new BadRequestException('删除原因不能超过 200 个字符');
+    const canToday = isAdministratorRole(principal.role) || await this.hasPermission(principal.role, 'warehouse:today-receipt:delete');
+    const canInStock = isAdministratorRole(principal.role) || await this.hasPermission(principal.role, 'warehouse:in-stock:delete');
+    if (!canToday && !canInStock) throw new ForbiddenException('当前角色没有删除仓库包裹权限');
+    let packages: any[] = [];
+    await (this.prisma as any).$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "id" IN (${Prisma.join(ids)}) FOR UPDATE`);
+      packages = await tx.warehousePackage.findMany({ where: { id: { in: ids } } });
+      if (packages.length !== ids.length) throw new NotFoundException('部分包裹不存在或已删除');
+      const scope = this.operatorCustomerScope(principal);
+      if (scope && packages.some((pkg: any) => !pkg.salesperson || !scope.includes(pkg.salesperson))) throw new ForbiddenException('业务员只能删除自己名下包裹');
+      const draftShipments = await tx.shipment.findMany({ where: { deletedAt: null, draftWarehousePackageIds: { hasSome: ids } }, select: { draftWarehousePackageIds: true } });
+      const consolidationItems = await tx.warehouseConsolidationItem.findMany({ where: { packageId: { in: ids } }, select: { packageId: true } });
+      const tallyTasks = await tx.warehouseTallyTask.findMany({ where: { OR: [{ packageIds: { hasSome: ids } }, { appliedPackageId: { in: ids } }], tallyProgressStatus: { not: 'CANCELLED' } }, select: { packageIds: true, appliedPackageId: true } });
+      const draftIds = new Set(draftShipments.flatMap((row: any) => row.draftWarehousePackageIds ?? []));
+      const consolidatedIds = new Set(consolidationItems.map((row: any) => row.packageId));
+      const talliedIds = new Set(tallyTasks.flatMap((row: any) => [...(row.packageIds ?? []), row.appliedPackageId].filter(Boolean)));
+      const unsafe = packages.filter((pkg: any) => !['PENDING', 'RECEIVED'].includes(pkg.status) || pkg.shipmentId || pkg.systemOrderNo || pkg.measurementStatus === 'PENDING_REMEASURE' || pkg.tallyTaskId || pkg.tallyTaskNo || pkg.sourcePackageId || pkg.archivedByPackageId || draftIds.has(pkg.id) || consolidatedIds.has(pkg.id) || talliedIds.has(pkg.id));
+      if (unsafe.length) throw new BadRequestException(`包裹 ${unsafe.map((pkg: any) => pkg.combinedOrderNo || pkg.id).join('、')} 已进入理货、合票、录单或出库流程，不能删除`);
+      const result = await tx.warehousePackage.deleteMany({ where: { id: { in: ids }, status: { in: ['PENDING', 'RECEIVED'] }, shipmentId: null, systemOrderNo: null, tallyTaskId: null, tallyTaskNo: null } });
+      if (result.count !== ids.length) throw new BadRequestException('包裹状态在操作期间发生变化，请刷新后重试');
+      await tx.auditLog.create({ data: { actorId: principal.id, action: 'warehouse.package.batch_delete', target: ids.join(','), before: toAuditJson(packages.map((pkg: any) => ({ id: pkg.id, combinedOrderNo: pkg.combinedOrderNo, status: pkg.status }))), after: toAuditJson({ ids, hardDelete: true, reason }) } });
+    });
+    void this.lineage?.recordEvent('warehouse.packages.delete', { actorUsername: principal.username, businessId: ids[0], payload: { packageIds: ids, reason, hardDelete: true }, sourceRefs: ids.map((id) => ({ nodeType: 'warehouse_package', id })), metrics: { deletedCount: ids.length } });
+    return { deletedIds: ids, deletedCount: ids.length };
+  }
+
   async getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
     if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
       throw new ForbiddenException('当前角色不能查看在仓数据');
@@ -9865,7 +9901,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         include: { consolidationItems: { select: { id: true } } }
       });
       const outputRows = await tx.warehousePackage.findMany({
-        where: { tallyTaskId: id, id: { notIn: existing.packageIds } },
+        where: { tallyTaskId: id, id: { notIn: existing.packageIds }, status: { not: 'TALLIED_ARCHIVED' } },
         include: { consolidationItems: { select: { id: true } } }
       });
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "tallyTaskId" = ${id} FOR UPDATE`);
@@ -9883,10 +9919,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       );
       if (blocked) throw new BadRequestException('理货结果已复测、合票或出库，不能取消理货');
       const now = new Date();
-      const updated = await tx.warehouseTallyTask.update({
-        where: { id },
-        data: { tallyProgressStatus: 'CANCELLED', cancelReason: reason, cancelledAt: now, cancelledBy: principal.username }
-      });
       if (outputRows.length) {
         const archived = await tx.warehousePackage.updateMany({
           where: { id: { in: outputRows.map((row: any) => row.id) }, tallyTaskId: id, status: 'RECEIVED', measurementStatus: 'PENDING_REMEASURE', shipmentId: null, systemOrderNo: null },
@@ -9896,19 +9928,72 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
       const restored = await tx.warehousePackage.updateMany({
         where: { id: { in: existing.packageIds }, tallyTaskId: id, status: 'TALLIED_ARCHIVED', shipmentId: null, systemOrderNo: null },
-        data: { status: 'RECEIVED', tallyTaskId: null, tallyTaskNo: null, archivedByPackageId: null, archivedByPackageNo: null, archivedReason: null, archivedAt: null }
+        data: {
+          status: 'RECEIVED',
+          tallyTaskId: null,
+          tallyTaskNo: null,
+          archivedByPackageId: null,
+          archivedByPackageNo: null,
+          archivedReason: null,
+          archivedAt: null
+        }
       });
       if (restored.count !== existing.packageIds.length) throw new BadRequestException('理货原始包裹已被其他流程处理，请刷新后重试');
+      const taskNoPrefix = existing.taskNo.match(/^(.*LH)\d{2}$/)?.[1] ?? (existing.taskNo.endsWith('LH') ? existing.taskNo : `${existing.taskNo}LH`);
+      const existingTaskNos = await tx.warehouseTallyTask.findMany({
+        where: { taskNo: { startsWith: taskNoPrefix } },
+        select: { taskNo: true }
+      });
+      const reopenedTask = await tx.warehouseTallyTask.create({
+        data: {
+          id: randomUUID(),
+          taskNo: nextWarehouseRetallyTaskNo(existing.taskNo, existingTaskNos.map((task: { taskNo: string }) => task.taskNo)),
+          tallyChannel: existing.tallyChannel,
+          tallyProgressStatus: 'WAITING',
+          rootTallyTaskId: existing.rootTallyTaskId ?? existing.id,
+          previousTallyTaskId: existing.id,
+          tallySequence: Number(existing.tallySequence ?? 1) + 1,
+          packageIds: existing.packageIds,
+          sourcePackageId: existing.sourcePackageId,
+          sourceCombinedOrderNo: existing.sourceCombinedOrderNo,
+          customerCode: existing.customerCode,
+          customerName: existing.customerName,
+          salesperson: existing.salesperson,
+          packageCount: existing.packageCount,
+          originalWeightKg: existing.originalWeightKg,
+          originalLengthCm: existing.originalLengthCm,
+          originalWidthCm: existing.originalWidthCm,
+          originalHeightCm: existing.originalHeightCm,
+          originalVolumetricWeightKg: existing.originalVolumetricWeightKg,
+          originalVolumetricWeightKg5000: existing.originalVolumetricWeightKg5000,
+          tallyRequirement: existing.tallyRequirement,
+          remark: existing.remark,
+          createdBy: principal.username
+        }
+      });
+      const updated = await tx.warehouseTallyTask.update({
+        where: { id },
+        data: { tallyProgressStatus: 'CANCELLED', cancelReason: reason, cancelledAt: now, cancelledBy: principal.username }
+      });
       await tx.auditLog.create({
         data: {
           actorId: principal.id,
           action: 'warehouse.tally.cancel_completed',
           target: id,
           before: toAuditJson(mapWarehouseTallyTask(existing)),
-          after: toAuditJson({ task: mapWarehouseTallyTask(updated), reason, restoredPackageIds: existing.packageIds, archivedResultPackageIds: outputRows.map((row: any) => row.id) })
+          after: toAuditJson({ task: mapWarehouseTallyTask(updated), reason, restoredPackageIds: existing.packageIds, archivedResultPackageIds: outputRows.map((row: any) => row.id), reopenedTask: mapWarehouseTallyTask(reopenedTask) })
         }
       });
-      return mapWarehouseTallyTask(updated);
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally.reopen',
+          target: reopenedTask.id,
+          before: toAuditJson(mapWarehouseTallyTask(updated)),
+          after: toAuditJson(mapWarehouseTallyTask(reopenedTask))
+        }
+      });
+      return mapWarehouseTallyTask(reopenedTask);
     });
   }
 
@@ -10316,8 +10401,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const labelNo = before.taskNo;
     const labelQrContent = buildWarehouseTallyLabelQrContent(before, labelNo);
-    const outputRows = await (this.prisma as any).warehousePackage.findMany({
-      where: { tallyTaskId: id, id: { notIn: before.packageIds }, packageCount: 1 },
+      const outputRows = await (this.prisma as any).warehousePackage.findMany({
+      where: { tallyTaskId: id, id: { notIn: before.packageIds }, status: { not: 'TALLIED_ARCHIVED' }, packageCount: 1 },
       orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
     });
     await Promise.all(outputRows
@@ -10381,6 +10466,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       where: {
         tallyTaskId: id,
         id: { notIn: task.packageIds },
+        status: { not: 'TALLIED_ARCHIVED' },
         OR: [
           { archivedReason: null },
           { archivedReason: { not: WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } }
@@ -19248,16 +19334,20 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       return after?.shipmentId === shipment.id && after?.originalStatusPool === 'SIGNED';
     });
     const stages = getLineShipmentEditStages(shipment, { businessDataApproved, agentDataApproved, afterSale });
-    const blockedPermissions = stages.map((stage) => ('operations:line-shipment:stage-edit-block:' + stage.toLowerCase().replaceAll('_', '-')) as PermissionKey);
-    for (const permission of blockedPermissions) {
-      if (await this.hasPermission(principal.role, permission)) {
-        await this.recordPermissionDenied(principal, {
-          permissions: [permission],
-          method: 'PATCH',
-          path: '/api/operations/line-shipments/' + shipment.id + '/operational'
-        });
-        throw new ForbiddenException('当前运单阶段已屏蔽编辑');
-      }
+    const requiredPermissions = stages.map((stage) => lineShipmentStageEditPermissionCode(stage) as PermissionKey);
+    const legacyBlockedPermissions = stages.map((stage) => (`operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}`) as PermissionKey);
+    const [granted, blocked] = await Promise.all([
+      Promise.all(requiredPermissions.map((permission) => this.hasPermission(principal.role, permission))),
+      Promise.all(legacyBlockedPermissions.map((permission) => this.hasPermission(principal.role, permission)))
+    ]);
+    const missing = requiredPermissions.filter((_, index) => !granted[index] || blocked[index]);
+    if (missing.length > 0) {
+      await this.recordPermissionDenied(principal, {
+        permissions: missing,
+        method: 'PATCH',
+        path: '/api/operations/line-shipments/' + shipment.id + '/operational'
+      });
+      throw new ForbiddenException('当前用户组未分配当前运单阶段编辑权限');
     }
   }
 
@@ -20652,6 +20742,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return scope === 'markup' && this.hasPermission(principal.role, `pricing:markup:${mode}-block:${module}` as PermissionKey);
   }
 
+  private async hasLookupModulePermission(principal: Principal, module: LegacyPricingModule) {
+    if (isAdministratorRole(principal.role)) return true;
+    const permissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+      amazon: 'pricing:lookup:amazon', inquiry: 'pricing:lookup:europe-oversize', europeExpress: 'pricing:lookup:europe-express',
+      southAfrica: 'pricing:lookup:south-africa', usaAirSea: 'pricing:lookup:usa-air-sea', canadaAirSea: 'pricing:lookup:canada-air-sea', dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+    };
+    return this.hasPermission(principal.role, permissionByModule[module]);
+  }
+
   private async ensurePriceBookOperationNotBlocked(principal: Principal, mode: 'create' | 'delete' | 'remark', module?: PriceBookImportTargetModule, label = '价格表操作') {
     if (!module || isAdministratorRole(principal.role)) return;
     const blocked = await this.hasPermission(principal.role, `pricing:price-books:${mode}-block:${module}` as PermissionKey);
@@ -20661,6 +20760,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensurePricingModuleNotBlocked(principal: Principal, scope: 'lookup' | 'markup', module: LegacyPricingModule | undefined, label: string, mode: 'view' | 'edit' = 'view') {
+    if (scope === 'lookup' && module && !(await this.hasLookupModulePermission(principal, module))) {
+      throw new ForbiddenException(`${label}模块未分配查价权限`);
+    }
     if (await this.isPricingModuleBlocked(principal, scope, module, mode)) {
       throw new ForbiddenException(`${label}模块已被当前用户组屏蔽`);
     }

@@ -73,6 +73,44 @@ export function isOrderEntryFinanceMaskPermission(code: string): boolean {
   return orderEntryFinanceMaskControls.some((control) => control.code === code);
 }
 
+export const customerServiceTransferPermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看转单号', code: 'customer-service:transfer:view' },
+  { label: '填写转单号', code: 'customer-service:transfer:write' },
+  { label: '批量填写转单号', code: 'customer-service:transfer:batch-write' },
+  { label: '填写分单号', code: 'customer-service:transfer:sub-order-write' },
+  { label: '推送业务待办', code: 'customer-service:transfer:push-sales' },
+  { label: '查看追踪网站', code: 'customer-service:transfer:tracking-website-view' },
+  { label: '上传面单', code: 'customer-service:transfer:label-upload' },
+  { label: '查看面单', code: 'customer-service:transfer:label-view' },
+  { label: '查看出库时间', code: 'customer-service:transfer:view-outbound-time' },
+  { label: '查看代理信息', code: 'customer-service:transfer:view-agent' },
+  { label: '查看代理数据', code: 'customer-service:transfer:view-agent-data' },
+  { label: '查看敏感货物属性', code: 'customer-service:transfer:view-sensitive' },
+  { label: '查看全部授权订单', code: 'customer-service:transfer:view-all' },
+  { label: '保存列设置', code: 'customer-service:transfer:column-setting' }
+];
+
+export const customerServicePendingRoutingPermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看待排货', code: 'customer-service:pending-routing:view' },
+  { label: '查看费用明细', code: 'customer-service:pending-routing:fee-detail-view' },
+  { label: '查看代理信息', code: 'customer-service:pending-routing:agent-view' },
+  { label: '创建问题件', code: 'customer-service:pending-routing:problem-create' },
+  { label: '保存列设置', code: 'customer-service:pending-routing:column-setting' }
+];
+
+export const customerServiceDataConfirmPermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看数据确认', code: 'customer-service:data-confirm:view' },
+  { label: '查看业务数据', code: 'customer-service:data-confirm:business-view' },
+  { label: '修改业务数据', code: 'customer-service:data-confirm:business-update' },
+  { label: '审核业务数据', code: 'customer-service:data-confirm:business-approve' },
+  { label: '查看代理数据', code: 'customer-service:data-confirm:agent-view' },
+  { label: '修改代理数据', code: 'customer-service:data-confirm:agent-update' },
+  { label: '审核代理数据', code: 'customer-service:data-confirm:agent-approve' },
+  { label: '全部审核', code: 'customer-service:data-confirm:approve-all' },
+  { label: '反审核', code: 'customer-service:data-confirm:reverse' },
+  { label: '保存列设置', code: 'customer-service:data-confirm:column-setting' }
+];
+
 export const customerServiceTransferFillMaskControls: Array<{
   label: string;
   code: PermissionKey;
@@ -206,6 +244,21 @@ export function lineShipmentStageEditBlockPermissionCode(stage: LineShipmentEdit
   return `operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey;
 }
 
+export function lineShipmentStageEditPermissionCode(stage: LineShipmentEditStageKey): PermissionKey {
+  return `operations:line-shipment:stage-edit:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey;
+}
+
+export const lineShipmentStageEditControls = lineShipmentEditStageKeys.map((stage) => ({
+  stage,
+  label: `授权${lineShipmentEditStageLabels[stage]}编辑`,
+  description: `勾选后，拥有“专线运单池”基础权限的用户组可处理该阶段运单。`,
+  code: lineShipmentStageEditPermissionCode(stage)
+}));
+
+export function isLineShipmentStageEditPermission(code: string): boolean {
+  return code.startsWith('operations:line-shipment:stage-edit:');
+}
+
 export const lineShipmentStageEditBlockControls = lineShipmentEditStageKeys.map((stage) => ({
   stage,
   label: `屏蔽${lineShipmentEditStageLabels[stage]}编辑`,
@@ -229,6 +282,25 @@ export const pricingModuleControls: Array<{ module: LegacyPricingModule; label: 
   { module: 'canadaAirSea', label: '加拿大空海查询' },
   { module: 'dubaiAirSea', label: '迪拜空海运查询' }
 ];
+
+const pricingLookupPermissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+  amazon: 'pricing:lookup:amazon',
+  inquiry: 'pricing:lookup:europe-oversize',
+  europeExpress: 'pricing:lookup:europe-express',
+  southAfrica: 'pricing:lookup:south-africa',
+  usaAirSea: 'pricing:lookup:usa-air-sea',
+  canadaAirSea: 'pricing:lookup:canada-air-sea',
+  dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+};
+
+export function pricingLookupPermissionCode(module: LegacyPricingModule): PermissionKey {
+  return pricingLookupPermissionByModule[module];
+}
+
+export const pricingLookupModuleControls = pricingModuleControls.map((control) => ({
+  ...control,
+  code: pricingLookupPermissionCode(control.module)
+}));
 
 export function pricingModuleBlockPermissionCode(scope: PricingModuleBlockScope, module: LegacyPricingModule): PermissionKey {
   return `pricing:${scope}:module-block:${module}` as PermissionKey;

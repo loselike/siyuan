@@ -470,6 +470,7 @@
       "permission",
       [
         "finance:water-receipt:create",
+        "finance:water-receipt:read",
         "finance:water-receipt:update"
       ],
       "FinanceReceivableController.waterReceiptSiteOptions"
@@ -2826,6 +2827,14 @@
       "WarehouseDispatchController.printWarehouseHandover"
     ],
     [
+      "POST /warehouse/in-stock/batch-delete @ WarehouseInventoryQueryController.deleteInStockPackages",
+      "permission",
+      [
+        "warehouse:in-stock:delete"
+      ],
+      "WarehouseInventoryQueryController.deleteInStockPackages"
+    ],
+    [
       "POST /warehouse/packages @ WarehousePackageLifecycleController.createWarehousePackage",
       "permission",
       [
@@ -2961,6 +2970,14 @@
         "warehouse:tally-label:scan-apply"
       ],
       "WarehouseTallyLabelController.apply"
+    ],
+    [
+      "POST /warehouse/today-receipts/batch-delete @ WarehouseInventoryQueryController.deleteTodayReceiptPackages",
+      "permission",
+      [
+        "warehouse:today-receipt:delete"
+      ],
+      "WarehouseInventoryQueryController.deleteTodayReceiptPackages"
     ],
     [
       "PUT /auth/profile @ AuthController.updateProfile",
@@ -3371,7 +3388,7 @@
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 138,
-    "asAnyMax": 923,
+    "asAnyMax": 922,
     "directProcessEnvMax": 36,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
@@ -3385,27 +3402,27 @@
       "apps/api/src/modules/notifications/notification.types.ts = apps/web/src/modules/notifications/notificationTypes.ts"
     ],
     "knownDuplicateRouteGroups": [],
-    "prismaRepositoryMethodsMax": 712,
-    "inMemoryRepositoryMethodsMax": 598,
+    "prismaRepositoryMethodsMax": 714,
+    "inMemoryRepositoryMethodsMax": 599,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 31839,
-      "apps/api/src/modules/in-memory.repository.ts": 19305,
-      "apps/api/src/modules/data.controller.ts": 2372,
-      "packages/shared/src/index.ts": 6328,
-      "apps/web/src/apiClient.ts": 2614,
-      "apps/web/src/styles.css": 13162,
+      "apps/api/src/modules/prisma.repository.ts": 31937,
+      "apps/api/src/modules/in-memory.repository.ts": 19399,
+      "apps/api/src/modules/data.controller.ts": 2377,
+      "packages/shared/src/index.ts": 6335,
+      "apps/web/src/apiClient.ts": 2616,
+      "apps/web/src/styles.css": 13176,
       "apps/web/src/modules/testSupport/appTestHarness.tsx": 6457,
-      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4938,
-      "apps/web/src/modules/pricing/PricingPage.tsx": 3720,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 5066,
+      "apps/web/src/modules/pricing/PricingPage.tsx": 3714,
       "apps/web/src/modules/masterData/MasterDataPage.tsx": 3281
     }
   },
   "lint": {
     "api": {
-      "errors": 100,
+      "errors": 101,
       "warnings": 0,
       "rules": {
-        "error:@typescript-eslint/no-unused-vars": 51,
+        "error:@typescript-eslint/no-unused-vars": 52,
         "error:no-control-regex": 2,
         "error:no-extra-boolean-cast": 2,
         "error:no-undef": 39,
@@ -3431,7 +3448,7 @@
           "error:@typescript-eslint/no-unused-vars": 1
         },
         "src/modules/data.controller.ts": {
-          "error:@typescript-eslint/no-unused-vars": 7
+          "error:@typescript-eslint/no-unused-vars": 8
         },
         "src/modules/database-seed.service.ts": {
           "error:no-undef": 1
@@ -3441,7 +3458,6 @@
         },
         "src/modules/in-memory.repository.ts": {
           "error:@typescript-eslint/no-unused-vars": 15,
-          "error:no-control-regex": 1,
           "error:no-undef": 4
         },
         "src/modules/lineage-event-coverage.test.ts": {
@@ -3462,7 +3478,6 @@
         },
         "src/modules/prisma.repository.ts": {
           "error:@typescript-eslint/no-unused-vars": 22,
-          "error:no-control-regex": 1,
           "error:no-undef": 10,
           "error:no-unreachable": 3
         },
@@ -3479,9 +3494,9 @@
       "errors": 150,
       "warnings": 0,
       "rules": {
-        "error:@typescript-eslint/no-unused-vars": 32,
+        "error:@typescript-eslint/no-unused-vars": 33,
         "error:no-control-regex": 2,
-        "error:no-undef": 109,
+        "error:no-undef": 108,
         "error:react-hooks/exhaustive-deps": 7
       },
       "files": {
@@ -3489,8 +3504,7 @@
           "error:no-undef": 2
         },
         "src/App.tsx": {
-          "error:@typescript-eslint/no-unused-vars": 3,
-          "error:no-undef": 1
+          "error:@typescript-eslint/no-unused-vars": 3
         },
         "src/apiClient.ts": {
           "error:@typescript-eslint/no-unused-vars": 2,
@@ -3519,7 +3533,7 @@
           "error:no-undef": 2
         },
         "src/modules/finance/FinancePage.tsx": {
-          "error:@typescript-eslint/no-unused-vars": 1,
+          "error:@typescript-eslint/no-unused-vars": 2,
           "error:no-undef": 1
         },
         "src/modules/finance/agentBill/AgentBillPage.tsx": {

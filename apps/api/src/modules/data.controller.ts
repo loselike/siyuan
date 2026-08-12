@@ -132,6 +132,15 @@ const MOJIA_REQUEST_SAMPLE_RETENTION_MS = 72 * 60 * 60 * 1000;
 const MOJIA_REQUEST_SAMPLE_MAX_BYTES = 16 * 1024;
 const MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES = 100;
 const MOJIA_REQUEST_SAMPLE_WRITE_CONCURRENCY = 2;
+const pricingLookupPermissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+  amazon: 'pricing:lookup:amazon',
+  inquiry: 'pricing:lookup:europe-oversize',
+  europeExpress: 'pricing:lookup:europe-express',
+  southAfrica: 'pricing:lookup:south-africa',
+  usaAirSea: 'pricing:lookup:usa-air-sea',
+  canadaAirSea: 'pricing:lookup:canada-air-sea',
+  dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+};
 
 @Controller()
 export class DataController {
@@ -244,16 +253,6 @@ export class DataController {
       path: 'warehouse granular action'
     }).catch(() => undefined);
     throw new ForbiddenException('没有访问权限');
-  }
-
-  private async ensurePermissionUnblocked(principal: Principal, mask: PermissionKey) {
-    if (isAdministratorRole(principal.role) || !(await this.repository.hasPermission(principal.role, mask))) return;
-    await (this.repository as any).recordPermissionDenied?.(principal, {
-      permissions: [mask],
-      method: 'SERVER',
-      path: `customer-service masked action: ${mask}`
-    }).catch(() => undefined);
-    throw new ForbiddenException('当前角色已屏蔽该操作');
   }
 
   private async ensureAnyPermission(principal: Principal, permissions: PermissionKey[]) {
@@ -765,6 +764,7 @@ export class DataController {
   @RequirePermission('operations:line-shipment:status-update')
   async updateOperationShipmentOperational(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentOperationalUpdateInput) {
     if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能人工修改运单');
+    await this.ensurePermission(request.user, 'operations:line-shipment:process');
     if (body.status === 'WAITING_DISPATCH' || body.channelId !== undefined) {
       throw new BadRequestException('排货状态和渠道请通过市场排货入口修改');
     }
@@ -785,17 +785,12 @@ export class DataController {
       'customer-service:signed:view'
     ]);
     const rows = await this.repository.customerServiceShipments(request.user);
-    if (request.user.role !== 'ADMIN' && await this.repository.hasPermission(request.user.role, 'customer-service:pending-routing:readonly-block')) {
-      return rows.filter((shipment) => shipment.status !== 'WAITING_SORT');
-    }
-    return rows;
   }
 
   @Post('customer-service/transfer-shipments/fill')
   @RequireAuth()
   async fillCustomerServiceTransferShipments(@Req() request: { user: Principal }, @Body() body: CustomerServiceTransferBatchInput) {
     await this.ensurePermission(request.user, 'customer-service:transfer:write');
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:transfer:fill-block');
     if (body.rows.length > 1) await this.ensurePermission(request.user, 'customer-service:transfer:batch-write');
     if (body.rows.some((row) => Boolean(row.subOrderNo?.trim()))) await this.ensurePermission(request.user, 'customer-service:transfer:sub-order-write');
     if (body.rows.some((row) => Boolean(row.pushToSales))) await this.ensurePermission(request.user, 'customer-service:transfer:push-sales');
@@ -854,10 +849,11 @@ export class DataController {
     'finance:payable:view-profit'
   ])
   async getShipmentFinanceDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role !== 'ADMIN' && await this.repository.hasPermission(request.user.role, 'customer-service:pending-routing:fee-detail-block')) {
+    const customerServicePendingView = await this.repository.hasPermission(request.user.role, 'customer-service:pending-routing:view');
+    if (customerServicePendingView) {
       const shipment = (await this.repository.getShipments(request.user)).find((item) => item.id === id);
       if (shipment?.status === 'WAITING_SORT') {
-        await this.ensurePermissionUnblocked(request.user, 'customer-service:pending-routing:fee-detail-block');
+        await this.ensurePermission(request.user, 'customer-service:pending-routing:fee-detail-view');
       }
     }
     return this.repository.getShipmentFinanceDetail(request.user, id);
@@ -1407,6 +1403,15 @@ export class DataController {
   async priceLookup(@Req() request: { user: Principal }, @Body() body: PriceLookupRequest) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能访问内部查价');
+    }
+    if (!isAdministratorRole(request.user.role)) {
+      const requiredPermissions = body.module
+        ? [pricingLookupPermissionByModule[body.module]]
+        : Object.values(pricingLookupPermissionByModule);
+      const granted = await Promise.all(requiredPermissions.map((permission) => this.repository.hasPermission(request.user.role, permission)));
+      if (!granted.every(Boolean)) {
+        throw new ForbiddenException('当前用户组未分配该查价模块');
+      }
     }
     const [response, agentNames] = await Promise.all([
       this.repository.lookupPrice(request.user, body),

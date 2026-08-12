@@ -18,6 +18,7 @@ export type PermissionKey =
   | 'operations:line-shipment:detail'
   | 'operations:line-shipment:process'
   | 'operations:line-shipment:status-update'
+  | `operations:line-shipment:stage-edit:${string}`
   | `operations:line-shipment:stage-edit-block:${string}`
   | 'operations:line-shipment:tracking-add'
   | 'operations:line-shipment:problem-create'
@@ -154,6 +155,7 @@ export type PermissionKey =
   | 'warehouse:today-receipt:site-filter-block'
   | 'warehouse:today-receipt:manual-create-block'
   | 'warehouse:today-receipt:update'
+  | 'warehouse:today-receipt:delete'
   | 'warehouse:today-receipt:remark-update'
   | 'warehouse:today-receipt:exception-manage'
   | 'warehouse:today-receipt:device-import'
@@ -162,6 +164,7 @@ export type PermissionKey =
   | 'warehouse:in-stock:view'
   | 'warehouse:in-stock:machine-import'
   | 'warehouse:in-stock:update'
+  | 'warehouse:in-stock:delete'
   | 'warehouse:in-stock:same-spec-replenish'
   | 'warehouse:in-stock:split'
   | 'warehouse:in-stock:batch-select'
@@ -620,6 +623,19 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'operations:line-shipment:stage-edit-block:signed', label: '屏蔽已签收编辑', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:stage-edit-block:problem', label: '屏蔽问题件编辑', group: '运营工作台 / 专线运单池' },
   { code: 'operations:line-shipment:stage-edit-block:after-sale', label: '屏蔽售后编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:review-pending', label: '授权待审核编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:waiting-sort', label: '授权待排货编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:waiting-dispatch', label: '授权待出库编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:outbounded', label: '授权已出库编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:data-confirm', label: '授权数据确认编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:transfer-no', label: '授权转单号编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:waiting-departure', label: '授权待离港编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:departed', label: '授权已离港编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:arrived-port', label: '授权已到港编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:delivering', label: '授权已派送编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:signed', label: '授权已签收编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:problem', label: '授权问题件编辑', group: '运营工作台 / 专线运单池' },
+  { code: 'operations:line-shipment:stage-edit:after-sale', label: '授权售后编辑', group: '运营工作台 / 专线运单池' },
   { code: 'operations:ai-queue:view', label: '查看 AI 优先队列', group: '运营工作台 / AI 优先队列' },
   { code: 'operations:ai-queue:assist', label: '调用运营 AI 助手', group: '运营工作台 / AI 优先队列' },
   { code: 'operations:ai-queue:mark-read', label: '标记 AI 队列已读', group: '运营工作台 / AI 优先队列' },
@@ -750,6 +766,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:today-receipt:site-filter-block', label: '屏蔽站点筛选', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:manual-create-block', label: '屏蔽手动添加收货', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:update', label: '修改收货入仓数据', group: '仓库管理 / 今日收货' },
+  { code: 'warehouse:today-receipt:delete', label: '删除今日收货包裹', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:remark-update', label: '维护收货备注', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:exception-manage', label: '维护收货异常', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:device-import', label: '接收设备推送', group: '仓库管理 / 今日收货' },
@@ -758,6 +775,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:in-stock:view', label: '查看在仓数据', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:machine-import', label: '批量导入机器过机数据', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:update', label: '修改在仓包裹', group: '仓库管理 / 在仓数据' },
+  { code: 'warehouse:in-stock:delete', label: '删除在仓包裹', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:same-spec-replenish', label: '同箱规补录', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:split', label: '拆分在仓包裹', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:batch-select', label: '批量勾选在仓包裹', group: '仓库管理 / 在仓数据' },
@@ -838,17 +856,17 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'customer-service:data-confirm:agent-update', label: '修改代理数据', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:business-approve', label: '审核业务数据', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:agent-approve', label: '审核代理数据', group: '客服管理 / 数据确认' },
-  { code: 'customer-service:data-confirm:business-approve-block', label: '屏蔽业务审核', group: '客服管理 / 数据确认' },
-  { code: 'customer-service:data-confirm:business-update-block', label: '屏蔽业务修改', group: '客服管理 / 数据确认' },
-  { code: 'customer-service:data-confirm:agent-update-block', label: '屏蔽代理修改', group: '客服管理 / 数据确认' },
-  { code: 'customer-service:data-confirm:agent-approve-block', label: '屏蔽代理审核', group: '客服管理 / 数据确认' },
+  { code: 'customer-service:data-confirm:business-approve-block', label: '兼容：屏蔽业务审核', group: '客服管理 / 数据确认', assignable: false },
+  { code: 'customer-service:data-confirm:business-update-block', label: '兼容：屏蔽业务修改', group: '客服管理 / 数据确认', assignable: false },
+  { code: 'customer-service:data-confirm:agent-update-block', label: '兼容：屏蔽代理修改', group: '客服管理 / 数据确认', assignable: false },
+  { code: 'customer-service:data-confirm:agent-approve-block', label: '兼容：屏蔽代理审核', group: '客服管理 / 数据确认', assignable: false },
   { code: 'customer-service:data-confirm:approve-all', label: '双数据审核通过', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:reverse', label: '反审核数据确认', group: '客服管理 / 数据确认' },
   { code: 'customer-service:data-confirm:column-setting', label: '保存数据确认列设置', group: '客服管理 / 数据确认' },
   { code: 'customer-service:transfer:view', label: '转单号查看', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:write', label: '填写转单号', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:batch-write', label: '批量填写转单号', group: '客服管理 / 转单号' },
-  { code: 'customer-service:transfer:fill-block', label: '屏蔽填写转单号', group: '客服管理 / 转单号' },
+  { code: 'customer-service:transfer:fill-block', label: '兼容：屏蔽填写转单号', group: '客服管理 / 转单号', assignable: false },
   { code: 'customer-service:transfer:sub-order-write', label: '填写分单号', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:push-sales', label: '推送业务待办', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:tracking-website-view', label: '查看追踪网站', group: '客服管理 / 转单号' },
@@ -861,14 +879,14 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'customer-service:transfer:view-sensitive', label: '查看转单号敏感货物属性', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-all', label: '查看全部授权转单号订单', group: '客服管理 / 转单号' },
   ...[
-    ['pending-routing', 'view', '查看待排货'], ['pending-routing', 'fee-detail-view', '查看费用明细'], ['pending-routing', 'fee-detail-block', '屏蔽查看费用'], ['pending-routing', 'readonly-block', '屏蔽只读'], ['pending-routing', 'agent-view', '查看代理信息'], ['pending-routing', 'problem-create', '创建问题件'], ['pending-routing', 'column-setting', '保存待排货列设置'],
+    ['pending-routing', 'view', '查看待排货'], ['pending-routing', 'fee-detail-view', '查看费用明细'], ['pending-routing', 'fee-detail-block', '兼容：屏蔽查看费用'], ['pending-routing', 'readonly-block', '兼容：屏蔽只读'], ['pending-routing', 'agent-view', '查看代理信息'], ['pending-routing', 'problem-create', '创建问题件'], ['pending-routing', 'column-setting', '保存待排货列设置'],
     ['waiting-departure', 'view', '查看待离港'], ['waiting-departure', 'update-info', '修改待离港资料'], ['waiting-departure', 'update-transfer-no', '修改转单号'], ['waiting-departure', 'update-etd-eta', '修改 ETD/ETA'], ['waiting-departure', 'update-tracking-website', '修改追踪网站'], ['waiting-departure', 'confirm-departure', '确认离港'], ['waiting-departure', 'problem-create', '创建问题件'], ['waiting-departure', 'label-upload', '上传面单'], ['waiting-departure', 'column-setting', '保存待离港列设置'],
     ['departed', 'view', '查看已离港'], ['departed', 'update-info', '修改已离港资料'], ['departed', 'update-eta', '修改 ETA'], ['departed', 'update-tracking-website', '修改追踪网站'], ['departed', 'confirm-arrived-port', '确认到港'], ['departed', 'problem-create', '创建问题件'], ['departed', 'column-setting', '保存已离港列设置'],
     ['arrived-port', 'view', '查看已到港'], ['arrived-port', 'update-info', '修改已到港资料'], ['arrived-port', 'update-tracking-website', '修改追踪网站'], ['arrived-port', 'confirm-delivering', '确认派送'], ['arrived-port', 'problem-create', '创建问题件'], ['arrived-port', 'column-setting', '保存已到港列设置'],
     ['delivering', 'view', '查看已派送'], ['delivering', 'update-info', '修改已派送资料'], ['delivering', 'confirm-signed', '确认签收'], ['delivering', 'after-sale-create', '创建售后'], ['delivering', 'problem-create', '创建问题件'], ['delivering', 'column-setting', '保存已派送列设置'],
     ['signed', 'view', '查看已签收'], ['signed', 'confirm', '确认签收'], ['signed', 'remark', '维护签收备注'], ['signed', 'after-sale-create', '创建售后'], ['signed', 'after-sale-view', '查看售后'], ['signed', 'after-sale-assist', '标记售后需协助'], ['signed', 'after-sale-close', '关闭售后'], ['signed', 'column-setting', '保存已签收列设置'],
     ['problem', 'view', '查看问题件'], ['problem', 'create', '创建问题件'], ['problem', 'reply', '回复问题件'], ['problem', 'close', '关闭问题件'], ['problem', 'assist', '标记需协助'], ['problem', 'after-sale-view', '查看需协助问题件'], ['problem', 'customer-visible-view', '查看客户可见信息'], ['problem', 'customer-visible-update', '维护客户可见信息'], ['problem', 'filter', '筛选问题件'], ['problem', 'column-setting', '保存问题件列设置'], ['problem', 'export', '导出问题件']
-  ].map(([section, action, label]) => ({ code: `customer-service:${section}:${action}` as PermissionKey, label, group: `客服管理 / ${({ 'pending-routing': '待排货', 'waiting-departure': '待离港', departed: '已离港', 'arrived-port': '已到港', delivering: '已派送', signed: '已签收 / 售后', problem: '问题件' } as Record<string, string>)[section]}` })),
+  ].map(([section, action, label]) => ({ code: `customer-service:${section}:${action}` as PermissionKey, label, group: `客服管理 / ${({ 'pending-routing': '待排货', 'waiting-departure': '待离港', departed: '已离港', 'arrived-port': '已到港', delivering: '已派送', signed: '已签收 / 售后', problem: '问题件' } as Record<string, string>)[section]}`, ...(action.endsWith('-block') ? { assignable: false } : {}) })),
   ...[
     ['lookup:view', '进入报价查价页面', '查价'], ['lookup:meta-view', '加载查价基础数据', '查价'],
     ['lookup:amazon', '亚马逊查询', '查价'], ['lookup:europe-oversize', '欧洲海运超大件查询', '查价'], ['lookup:europe-express', '欧洲空海运铁路快递查询', '查价'], ['lookup:south-africa', '南非专线查询', '查价'], ['lookup:usa-air-sea', '美国空海运查询', '查价'], ['lookup:canada-air-sea', '加拿大空海查询', '查价'], ['lookup:dubai-air-sea', '迪拜空海运查询', '查价'],
@@ -1037,8 +1055,8 @@ export const defaultRoleGroups: Array<{
 ];
 
 const warehouseBasePermissions: PermissionKey[] = [
-  'warehouse:today-receipt:view', 'warehouse:today-receipt:filter', 'warehouse:today-receipt:manual-create', 'warehouse:today-receipt:update', 'warehouse:today-receipt:remark-update', 'warehouse:today-receipt:exception-manage', 'warehouse:today-receipt:column-setting',
-  'warehouse:in-stock:view', 'warehouse:in-stock:machine-import', 'warehouse:in-stock:update', 'warehouse:in-stock:same-spec-replenish', 'warehouse:in-stock:split', 'warehouse:in-stock:batch-select', 'warehouse:in-stock:tally-start', 'warehouse:in-stock:batch-tally-start', 'warehouse:in-stock:tally-record-view', 'warehouse:in-stock:column-setting',
+  'warehouse:today-receipt:view', 'warehouse:today-receipt:filter', 'warehouse:today-receipt:manual-create', 'warehouse:today-receipt:update', 'warehouse:today-receipt:delete', 'warehouse:today-receipt:remark-update', 'warehouse:today-receipt:exception-manage', 'warehouse:today-receipt:column-setting',
+  'warehouse:in-stock:view', 'warehouse:in-stock:machine-import', 'warehouse:in-stock:update', 'warehouse:in-stock:delete', 'warehouse:in-stock:same-spec-replenish', 'warehouse:in-stock:split', 'warehouse:in-stock:batch-select', 'warehouse:in-stock:tally-start', 'warehouse:in-stock:batch-tally-start', 'warehouse:in-stock:tally-record-view', 'warehouse:in-stock:column-setting',
   'warehouse:tally-pending:view', 'warehouse:tally-pending:task-create', 'warehouse:tally-pending:task-update', 'warehouse:tally-pending:task-cancel', 'warehouse:tally-pending:task-process', 'warehouse:tally-pending:merge-only', 'warehouse:tally-pending:merge-and-ship', 'warehouse:tally-pending:split', 'warehouse:tally-pending:detail-view', 'warehouse:tally-pending:history-view', 'warehouse:tally-pending:filter',
   'warehouse:tally-completed:view', 'warehouse:tally-completed:history-view', 'warehouse:tally-completed:detail-view', 'warehouse:tally-completed:reverse-review', 'warehouse:tally-label:generate', 'warehouse:tally-label:print', 'warehouse:tally-label:download', 'warehouse:tally-label:scan-apply',
   'warehouse:dispatch-pending:view', 'warehouse:dispatch-pending:batch-select', 'warehouse:dispatch-pending:handover-preview', 'warehouse:dispatch-pending:handover-print', 'warehouse:dispatch-pending:dispatch-confirm', 'warehouse:dispatch-pending:batch-dispatch-confirm', 'warehouse:dispatch-pending:shipping-mark-confirm', 'warehouse:dispatch-pending:label-generate', 'warehouse:dispatch-pending:label-view', 'warehouse:dispatch-pending:declaration-update', 'warehouse:dispatch-pending:column-setting',
@@ -1149,11 +1167,16 @@ const businessMasterDataReferencePermissions: PermissionKey[] = [
   'master-data:exchange-rates:read'
 ];
 
+const lineShipmentStageEditPermissions: PermissionKey[] = [
+  'review-pending', 'waiting-sort', 'waiting-dispatch', 'outbounded', 'data-confirm', 'transfer-no',
+  'waiting-departure', 'departed', 'arrived-port', 'delivering', 'signed', 'problem', 'after-sale'
+].map((stage) => `operations:line-shipment:stage-edit:${stage}` as PermissionKey);
+
 export const rolePermissions: Record<BuiltinRoleKey, PermissionKey[]> = {
   ADMIN: allPermissions(),
   CUSTOMER_SERVICE: [...pricingLookupBusinessPermissions, ...masterDataReferencePermissions, 'tracking:external:view', 'tracking:external:latest-view', 'tracking:external:stale-days-view', 'tracking:external:detail', ...customerServiceBasePermissions],
-  OPERATOR: [...pricingLookupBusinessPermissions, ...pricingSouthAfricaBusinessReadPermissions, 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'finance:water-receipt:detail', 'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-view', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete', 'finance:water-match:read', 'finance:water-match:receivable-view', ...businessMasterDataReferencePermissions, 'operations:line-shipment:view', 'operations:line-shipment:detail', 'operations:line-shipment:process', 'operations:line-shipment:status-update', 'operations:line-shipment:tracking-add', 'operations:line-shipment:problem-create', 'operations:line-shipment:import', 'operations:line-shipment:internal-log-view', 'operations:ai-queue:view', 'operations:ai-queue:assist', 'operations:ai-queue:mark-read', 'operations:ai-queue:handle', 'operations:product-map:view', 'operations:product-map:route-view', 'operations:import-quality:view', 'operations:import-quality:upload', 'operations:import-quality:retry', 'operations:import-quality:error-detail-view', 'operations:import-quality:confirm', 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-save', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:order-fee:view', 'business:order-fee:create', 'business:order-fee:update', 'business:order-fee:delete', 'business:review:list', 'business:review:detail', 'business:review:approve', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:shipment:column-setting', 'business:order-ai:view', 'business:order-ai:assist', 'warehouse:in-stock:view'],
-  WAREHOUSE: ['operations:line-shipment:view', 'operations:line-shipment:detail', ...warehouseBasePermissions],
+  OPERATOR: [...pricingLookupBusinessPermissions, ...pricingSouthAfricaBusinessReadPermissions, ...lineShipmentStageEditPermissions, 'finance:business-cost:read', 'finance:business-cost:manage', 'finance:water-receipt:read', 'finance:water-receipt:detail', 'finance:water-receipt:create', 'finance:water-receipt:update', 'finance:water-receipt:voucher-view', 'finance:water-receipt:voucher-upload', 'finance:water-receipt:voucher-delete', 'finance:water-match:read', 'finance:water-match:receivable-view', ...businessMasterDataReferencePermissions, 'operations:line-shipment:view', 'operations:line-shipment:detail', 'operations:line-shipment:process', 'operations:line-shipment:status-update', 'operations:line-shipment:tracking-add', 'operations:line-shipment:problem-create', 'operations:line-shipment:import', 'operations:line-shipment:internal-log-view', 'operations:ai-queue:view', 'operations:ai-queue:assist', 'operations:ai-queue:mark-read', 'operations:ai-queue:handle', 'operations:product-map:view', 'operations:product-map:route-view', 'operations:import-quality:view', 'operations:import-quality:upload', 'operations:import-quality:retry', 'operations:import-quality:error-detail-view', 'operations:import-quality:confirm', 'business:dashboard:view', 'business:dashboard:trend-view', 'business:dashboard:pending-review-summary', 'business:order-entry:view', 'business:order-entry:warehouse-package-select', 'business:order-entry:create', 'business:order-entry:draft-view', 'business:order-entry:draft-save', 'business:order-entry:draft-delete', 'business:order-entry:submit-review', 'business:order-entry:invoice-upload', 'business:order-entry:label-upload', 'business:order-fee:view', 'business:order-fee:create', 'business:order-fee:update', 'business:order-fee:delete', 'business:review:list', 'business:review:detail', 'business:review:approve', 'business:shipment:list', 'business:shipment:detail', 'business:shipment:self-view', 'business:shipment:update-basic', 'business:shipment:tracking-add', 'business:shipment:problem-create', 'business:shipment:column-setting', 'business:order-ai:view', 'business:order-ai:assist', 'warehouse:in-stock:view'],
+  WAREHOUSE: ['operations:line-shipment:view', 'operations:line-shipment:detail', ...lineShipmentStageEditPermissions, ...warehouseBasePermissions],
   FINANCE: ['business:shipment:list', 'business:shipment:agent-weight-view', 'business:review:restore', ...pricingLookupBusinessPermissions, ...financeFunctionPermissions, 'master-data:finance:read', 'master-data:payer-banks:read', 'master-data:payer-banks:manage', 'master-data:agents:read', 'master-data:agents:bank-view', 'master-data:exchange-rates:read'],
   CUSTOMER: [
     'business:order-entry:create',

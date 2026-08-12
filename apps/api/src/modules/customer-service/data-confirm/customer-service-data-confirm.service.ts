@@ -1,5 +1,5 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
-import { isAdministratorRole, type PermissionKey, type Principal } from '../../rbac.js';
+import { type PermissionKey, type Principal } from '../../rbac.js';
 import {
   CUSTOMER_SERVICE_DATA_CONFIRM_REPOSITORY,
   type CustomerServiceDataConfirmListQuery,
@@ -18,17 +18,14 @@ export class CustomerServiceDataConfirmService {
   ) {}
 
   async approveBusiness(principal: Principal, id: string, body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(principal, 'customer-service:data-confirm:business-approve-block');
     return this.repository.approveShipmentBusinessData(principal, id, body);
   }
 
   async approveAgent(principal: Principal, id: string, body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(principal, 'customer-service:data-confirm:agent-approve-block');
     return this.repository.approveShipmentAgentData(principal, id, body);
   }
 
   async updateBusiness(principal: Principal, id: string, body: CustomerServiceDataUpdateInput) {
-    await this.ensurePermissionUnblocked(principal, 'customer-service:data-confirm:business-update-block');
     return this.repository.updateShipmentBusinessData(principal, id, body);
   }
 
@@ -40,12 +37,6 @@ export class CustomerServiceDataConfirmService {
       normalizedKind === 'agent'
         ? 'customer-service:data-confirm:agent-update'
         : 'customer-service:data-confirm:business-update'
-    );
-    await this.ensurePermissionUnblocked(
-      principal,
-      normalizedKind === 'agent'
-        ? 'customer-service:data-confirm:agent-update-block'
-        : 'customer-service:data-confirm:business-update-block'
     );
     return this.repository.getCustomerServiceFinanceUpdatePreview(principal, id, normalizedKind);
   }
@@ -64,17 +55,10 @@ export class CustomerServiceDataConfirmService {
         ? 'customer-service:data-confirm:agent-update'
         : 'customer-service:data-confirm:business-update'
     );
-    await this.ensurePermissionUnblocked(
-      principal,
-      kind === 'agent'
-        ? 'customer-service:data-confirm:agent-update-block'
-        : 'customer-service:data-confirm:business-update-block'
-    );
     return this.repository.updateCustomerServiceFinanceItem(principal, id, feeId, kind, body);
   }
 
   async updateAgent(principal: Principal, id: string, body: CustomerServiceDataUpdateInput) {
-    await this.ensurePermissionUnblocked(principal, 'customer-service:data-confirm:agent-update-block');
     return this.repository.updateShipmentAgentData(principal, id, body);
   }
 
@@ -87,8 +71,6 @@ export class CustomerServiceDataConfirmService {
   }
 
   async approveAll(principal: Principal, id: string, body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(principal, 'customer-service:data-confirm:business-approve-block');
-    await this.ensurePermissionUnblocked(principal, 'customer-service:data-confirm:agent-approve-block');
     return this.repository.approveShipmentAllData(principal, id, body);
   }
 
@@ -110,13 +92,4 @@ export class CustomerServiceDataConfirmService {
     throw new ForbiddenException('没有访问权限');
   }
 
-  private async ensurePermissionUnblocked(principal: Principal, mask: PermissionKey) {
-    if (isAdministratorRole(principal.role) || !(await this.repository.hasPermission(principal.role, mask))) return;
-    await this.repository.recordPermissionDenied(principal, {
-      permissions: [mask],
-      method: 'SERVER',
-      path: `customer-service masked action: ${mask}`
-    }).catch(() => undefined);
-    throw new ForbiddenException('当前角色已屏蔽该操作');
-  }
 }
