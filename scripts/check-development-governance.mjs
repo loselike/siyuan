@@ -138,7 +138,8 @@ for (const currentCutoverGate of [
   'Current baseline cutover requires --bootstrap-manifest, --confirm-bootstrap and --source-bundle.',
   'manifest_format_version" != "3"',
   'bootstrap_capture_format=3',
-  'bootstrap_status" == traceable'
+  'bootstrap_status" == traceable',
+  'chmod -R u+w "$BOOTSTRAP_RUNTIME_TMP"'
 ]) {
   if (!deployScript.includes(currentCutoverGate)) failures.push(`current baseline cutover is missing fail-closed gate: ${currentCutoverGate}`);
 }

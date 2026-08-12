@@ -322,12 +322,15 @@ fi
 cleanup_release_lock() {
   local exit_code=$?
   trap - EXIT INT TERM
+  set +e
   if [[ -n "$BOOTSTRAP_RUNTIME_TMP" && -d "$BOOTSTRAP_RUNTIME_TMP" ]]; then
+    chmod -R u+w "$BOOTSTRAP_RUNTIME_TMP" 2>/dev/null
     rm -rf -- "$BOOTSTRAP_RUNTIME_TMP"
   fi
   if [[ -n "$SOURCE_BUNDLE_TMP" && -d "$SOURCE_BUNDLE_TMP" ]]; then
     rm -rf -- "$SOURCE_BUNDLE_TMP"
   fi
+  set -e
   if [[ "$exit_code" -ne 0 && "$REMOTE_MUTATION_STARTED" == true ]]; then
     if ! siyuan_47_mark_release_recovery_required "$FAILURE_PHASE"; then
       echo "Failed to write recovery marker; preserving the release lock to fail closed." >&2

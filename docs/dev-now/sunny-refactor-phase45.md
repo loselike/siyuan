@@ -31,11 +31,12 @@
 - 已通过：冻结清单 `bundle.sha256` 内 8 个成员 checksum 自校验；格式 v3、source 507 文件、远端 source tree checksum 均已记录。
 - 对抗式审查：current cutover 必须同时提供 committed manifest、显式确认和 Git bundle；traceable 状态拒绝重复 cutover；锁内比较 6 份运行证据；migration 集合/checksum 仍走旧严格门和三条固定例外；任何同步后失败进入 recovery-required。
 - 发布前 dry-run 发现全树同步会删除 47 上 `.release-current` 与 `.release-staging` 恢复证据；已转向先修复同步排除规则并加入治理断言，未在该风险下执行 apply。
+- cutover 主体已成功：线上 state/receipt/bundle 绑定提交 `67ed4db`，provenance 为 traceable，Web/API image 与 release ID 全部匹配。收尾因本地冻结清单只读导致临时目录删除失败，命令退出 1 并留下本次锁；已核对 owner、停止的 heartbeat、traceable state 与两容器健康后精确释放该锁，recovery clear。当前修复清理函数，避免临时清理失败遮蔽发布结果或阻断解锁。
 
 ## 交接
 
 - 阻塞：无。
-- 剩余风险：47 仍有其他发布会话；锁内 manifest 漂移门是发布前最后保护。
+- 剩余风险：首次 cutover 的远端同步清理了已不被当前发布工具使用的 `.codex-whitelist-staging` 历史暂存目录；未触及 `.release-current`、`.release-staging`、备份、receipt、bundle、上传文件或业务数据。10 个 AppleDouble 元数据文件仍保留并告警。
 - 用户验收目标：47 从不可追溯白名单组合恢复为可由 Git commit/bundle 完整还原的标准发布。
-- 发布状态：未发布。
-- 准确下一步：完成本地审查并推送；再在全局锁内执行 cutover 和线上 provenance 验证。
+- 发布状态：已发布 `git-67ed4db97995_web-09d4fa0bebb1_api-2faf02ea46af`；provenance traceable、公网 health、容器、锁和 recovery 均通过。清理缺陷修复将用一次标准 state/docs-only 发布跟进。
+- 准确下一步：提交清理缺陷和状态记录，走标准 baseline/deploy 零业务构建发布；随后按安全/数据正确性、业务数据流、后端架构、UI 四类重新排序下一切片。
