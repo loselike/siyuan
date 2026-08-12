@@ -52,6 +52,8 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='apps/api/uploads/' \
   --exclude='backups/' \
   --exclude='.release-backups/' \
+  --exclude='/.release-current' \
+  --exclude='/.release-staging/' \
   --exclude='.release-manifests/' \
   --exclude='.release-receipts/' \
   --exclude='.release-bundles/' \

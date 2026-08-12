@@ -30,6 +30,7 @@
 - 已通过：`bash -n scripts/deploy-47.sh`、`git diff --check`、完整 `npm run governance:check`（434 路由、no-new-debt、安全契约 3/3）。
 - 已通过：冻结清单 `bundle.sha256` 内 8 个成员 checksum 自校验；格式 v3、source 507 文件、远端 source tree checksum 均已记录。
 - 对抗式审查：current cutover 必须同时提供 committed manifest、显式确认和 Git bundle；traceable 状态拒绝重复 cutover；锁内比较 6 份运行证据；migration 集合/checksum 仍走旧严格门和三条固定例外；任何同步后失败进入 recovery-required。
+- 发布前 dry-run 发现全树同步会删除 47 上 `.release-current` 与 `.release-staging` 恢复证据；已转向先修复同步排除规则并加入治理断言，未在该风险下执行 apply。
 
 ## 交接
 

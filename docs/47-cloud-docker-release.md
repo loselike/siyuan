@@ -54,7 +54,7 @@ npm run deploy:47 -- --expected-release-id <上一步记录的值>
 
 `sync:47 --apply` 同时校验远端锁 token 和任务开始时的 `EXPECTED_RELEASE_ID`；缺失、锁属于其他发布或 baseline 已变化时直接拒绝。dry-run 不写远端。
 
-同步脚本会排除 `node_modules`、构建产物、`.git`、`.release-backups`、`.codex-release-staging`、`tmp`、`scraped_docs`、`outputs`、`.env` 等目录、远端发布备份和敏感文件。标准发布只允许发布协调 worktree 在 captured baseline 匹配时用 `rsync --delete` 形成精确候选镜像，并在构建前核对远端实际 manifest；功能 worktree 与白名单流程不得使用全树删除。
+同步脚本会排除 `node_modules`、构建产物、`.git`、`.release-backups`、`.release-current`、`.release-staging`、`.codex-release-staging`、`tmp`、`scraped_docs`、`outputs`、`.env` 等目录、远端发布备份、当前恢复指针和敏感文件。标准发布只允许发布协调 worktree 在 captured baseline 匹配时用 `rsync --delete` 形成精确候选镜像，并在构建前核对远端实际 manifest；功能 worktree 与白名单流程不得使用全树删除。
 
 同步与 Docker context 同时排除 `.release-manifests`、`.release-receipts`、staging、临时目录和配置取证目录，避免删除审计证据或把历史候选带入构建缓存。发布后用 `npm run audit:47:provenance -- --require-traceable` 校验 Git commit、运行镜像 ID、API 容器实际 release ID 与不可变 receipt；缺一项即视为不可追溯。
 
