@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { renderAndLogin } from '../testSupport/appTestHarness';
@@ -73,6 +73,50 @@ describe('staff route navigation characterization', () => {
     await waitFor(() => expect(requestedPath('/api/master-data')).toHaveLength(initialCounts.masterData + 1));
     expect(requestedPath('/api/shipments')).toHaveLength(initialCounts.shipments + 1);
     expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(initialCounts.businessCosts + 1);
+    now.mockRestore();
+  });
+
+  it('keeps stale refresh route-owned and shares one global refresh clock after returning to business', async () => {
+    globalThis.history.replaceState(null, '', '/app/workspace/shipment-pool');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(300_000);
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+    await waitFor(() => expect(requestedPath('/api/master-data')).toHaveLength(1));
+
+    now.mockReturnValue(316_000);
+    await user.click(screen.getByRole('menuitem', { name: '系统管理' }));
+    await waitFor(() => expect(globalThis.location.pathname).toBe('/app/settings'));
+    const routeOwnedCounts = {
+      session: requestedPath('/api/auth/session').length,
+      shipments: requestedPath('/api/shipments').length,
+      businessCosts: requestedPath('/api/finance/business-cost-audits').length,
+      masterData: requestedPath('/api/master-data').length
+    };
+
+    now.mockReturnValue(616_001);
+    await act(async () => fireEvent.focus(globalThis.window));
+    await waitFor(() => expect(requestedPath('/api/auth/session')).toHaveLength(routeOwnedCounts.session + 1));
+    expect(requestedPath('/api/shipments')).toHaveLength(routeOwnedCounts.shipments);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(routeOwnedCounts.businessCosts);
+    expect(requestedPath('/api/master-data')).toHaveLength(routeOwnedCounts.masterData);
+
+    now.mockReturnValue(617_000);
+    await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
+    await waitFor(() => expect(requestedPath('/api/master-data')).toHaveLength(routeOwnedCounts.masterData + 1));
+    expect(requestedPath('/api/shipments')).toHaveLength(routeOwnedCounts.shipments + 1);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(routeOwnedCounts.businessCosts + 1);
+
+    now.mockReturnValue(677_000);
+    await act(async () => fireEvent.focus(globalThis.window));
+    expect(requestedPath('/api/shipments')).toHaveLength(routeOwnedCounts.shipments + 1);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(routeOwnedCounts.businessCosts + 1);
+    expect(requestedPath('/api/master-data')).toHaveLength(routeOwnedCounts.masterData + 1);
+
+    now.mockReturnValue(917_001);
+    await act(async () => fireEvent.focus(globalThis.window));
+    await waitFor(() => expect(requestedPath('/api/master-data')).toHaveLength(routeOwnedCounts.masterData + 2));
+    expect(requestedPath('/api/shipments')).toHaveLength(routeOwnedCounts.shipments + 2);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(routeOwnedCounts.businessCosts + 2);
     now.mockRestore();
   });
 

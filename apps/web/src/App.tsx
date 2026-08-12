@@ -167,6 +167,7 @@ import {
   createWorkspaceRefreshCoordinator,
   refreshWorkspaceData
 } from './modules/appShell/workspaceRefresh';
+import { shouldRequestGlobalWorkspaceRefresh } from './modules/appShell/workspaceRefreshPolicy';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
@@ -483,16 +484,15 @@ export function App() {
 
   useEffect(() => {
     if (!session || session.user.mustChangePassword) return;
-    let lastRefreshAt = Date.now();
     const refreshStaleData = () => {
       if (
         document.visibilityState !== 'visible'
-        || Date.now() - lastRefreshAt < 5 * 60 * 1000
+        || !shouldRequestGlobalWorkspaceRefresh({ menuKey: currentMenuKey })
+        || Date.now() - lastGlobalWorkspaceRefreshAtRef.current < 5 * 60 * 1000
         || hasBlockingWork()
         || hasGlobalUnsavedWork()
       ) return;
-      lastRefreshAt = Date.now();
-      lastGlobalWorkspaceRefreshAtRef.current = lastRefreshAt;
+      lastGlobalWorkspaceRefreshAtRef.current = Date.now();
       setDataRefreshVersion((current) => current + 1);
     };
     const intervalId = window.setInterval(refreshStaleData, 60_000);
@@ -503,7 +503,7 @@ export function App() {
       window.removeEventListener('focus', refreshStaleData);
       document.removeEventListener('visibilitychange', refreshStaleData);
     };
-  }, [hasBlockingWork, session]);
+  }, [currentMenuKey, hasBlockingWork, session]);
 
   useEffect(() => {
     if (!session || session.user.role === 'CUSTOMER') {
