@@ -43,6 +43,39 @@ describe('staff route navigation characterization', () => {
     now.mockRestore();
   });
 
+  it('keeps route-owned system-management navigation separate from the legacy global refresh clock', async () => {
+    globalThis.history.replaceState(null, '', '/app/workspace/shipment-pool');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(200_000);
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+    await waitFor(() => expect(requestedPath('/api/master-data')).toHaveLength(1));
+    const initialCounts = {
+      shipments: requestedPath('/api/shipments').length,
+      businessCosts: requestedPath('/api/finance/business-cost-audits').length,
+      masterData: requestedPath('/api/master-data').length,
+      roles: requestedPath('/api/system/roles').length,
+      staffAccounts: requestedPath('/api/system/staff-accounts').length
+    };
+
+    now.mockReturnValue(216_000);
+    await user.click(screen.getByRole('menuitem', { name: '系统管理' }));
+    await waitFor(() => {
+      expect(globalThis.location.pathname).toBe('/app/settings');
+      expect(screen.getByText('员工账号管理')).toBeInTheDocument();
+      expect(requestedPath('/api/system/roles').length).toBeGreaterThan(initialCounts.roles);
+      expect(requestedPath('/api/system/staff-accounts').length).toBeGreaterThan(initialCounts.staffAccounts);
+      expect(requestedPath('/api/master-data')).toHaveLength(initialCounts.masterData);
+    });
+    expect(requestedPath('/api/shipments')).toHaveLength(initialCounts.shipments);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(initialCounts.businessCosts);
+
+    await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
+    await waitFor(() => expect(requestedPath('/api/master-data')).toHaveLength(initialCounts.masterData + 1));
+    expect(requestedPath('/api/shipments')).toHaveLength(initialCounts.shipments + 1);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(initialCounts.businessCosts + 1);
+    now.mockRestore();
+  });
+
   it('keeps primary navigation and popstate synchronized with the active menu and URL', async () => {
     globalThis.history.replaceState(null, '', '/app/workspace/shipment-pool');
     const user = userEvent.setup();
