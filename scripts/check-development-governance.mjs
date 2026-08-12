@@ -263,7 +263,7 @@ if (!whitelistDeployScript.includes('--preflight-only') || !whitelistDeployScrip
 if (!whitelistDeployScript.includes('Whitelist scope mismatch') || !whitelistDeployScript.includes('WHITELIST_RELEASE_ID')) {
   failures.push('whitelist deploy must derive scope from targets and advance the remote release baseline');
 }
-if (!whitelistDeployScript.includes('RUNTIME_RELEASE_STATE_MISMATCH')
+if (!whitelistDeployScript.includes('RUNTIME_IMAGE_STATE_MISMATCH')
   || !whitelistDeployScript.includes('RUNTIME_IMAGE_UNAVAILABLE')
   || !whitelistDeployScript.includes('--adopt-current-runtime')
   || !whitelistDeployScript.includes('Runtime adoption may only publish release-governance scripts')

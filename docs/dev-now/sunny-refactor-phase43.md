@@ -25,6 +25,7 @@
 - 已修改 exact-tree rsync，禁止传输或合成 AppleDouble 元数据。
 - 已修改 provenance 判断优先级，镜像漂移优先于白名单来源分类。
 - 已修改白名单发布入口：默认在任何源码替换前校验 state 与运行镜像一致；不一致即失败关闭。仅允许用显式 `--adopt-current-runtime` 对 `scope none` 且全部为 `scripts/*` 的治理发布吸收已复核的当前运行镜像，禁止借此发布或重建业务代码。
+- 发布后复审发现白名单 `scope none` 本就不会重建 API，若把 API 容器内旧 release ID 也设为所有后续发布的前置门，会永久阻断正常 Web-only/治理发布；已将前置门收窄回“运行镜像身份必须匹配 state”。API release ID 仍独立输出，不被误当成镜像基线一致性的替代证据。
 - 已新增确定性 shell 回归测试与治理静态门禁。
 
 ## 验证

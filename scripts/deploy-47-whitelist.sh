@@ -234,7 +234,7 @@ CAS_PHASE=true
 PREVIOUS_RELEASE_ID="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" \
   "sed -n 's/^RELEASE_ID=//p' '$SIYUAN_47_DIR/.siyuan-release-state' 2>/dev/null | tail -1")"
 [[ -n "$PREVIOUS_RELEASE_ID" ]] || PREVIOUS_RELEASE_ID="MISSING"
-read -r runtime_image_state_match runtime_api_release_match < <(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- "$SIYUAN_47_DIR" <<'REMOTE_SCRIPT'
+runtime_image_state_match="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- "$SIYUAN_47_DIR" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"
 cd "$remote_dir"
@@ -249,29 +249,21 @@ web_container="$(docker compose ps -q web 2>/dev/null | tail -1)"
 api_container="$(docker compose ps -q api 2>/dev/null | tail -1)"
 web_actual="$(siyuan_docker_container_image_id "$web_container")"
 api_actual="$(siyuan_docker_container_image_id "$api_container")"
-release_expected="$(state_value RELEASE_ID)"
-api_release_actual="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$api_container" 2>/dev/null | sed -n 's/^RELEASE_ID=//p' | tail -1)"
 if [[ -z "$web_actual" || -z "$api_actual" ]]; then
-  image_match=unavailable
+  printf 'unavailable\n'
 elif [[ -n "$web_expected" && -n "$api_expected" && "$web_expected" == "$web_actual" && "$api_expected" == "$api_actual" ]]; then
-  image_match=true
+  printf 'true\n'
 else
-  image_match=false
+  printf 'false\n'
 fi
-if [[ -n "$release_expected" && "$release_expected" == "$api_release_actual" ]]; then
-  api_release_match=true
-else
-  api_release_match=false
-fi
-printf '%s %s\n' "$image_match" "$api_release_match"
 REMOTE_SCRIPT
-)
+)"
 if [[ "$runtime_image_state_match" == unavailable ]]; then
   echo "RUNTIME_IMAGE_UNAVAILABLE: Web/API running image identity could not be resolved." >&2
   exit 83
-elif [[ "$runtime_image_state_match" != true || "$runtime_api_release_match" != true ]]; then
+elif [[ "$runtime_image_state_match" != true ]]; then
   if [[ "$ADOPT_CURRENT_RUNTIME" != true ]]; then
-    echo "RUNTIME_RELEASE_STATE_MISMATCH: whitelist release refused before source mutation." >&2
+    echo "RUNTIME_IMAGE_STATE_MISMATCH: whitelist release refused before source mutation." >&2
     echo "Inspect the running release and use --adopt-current-runtime only for a reviewed, zero-build governance release." >&2
     exit 83
   fi
