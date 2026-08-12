@@ -17,6 +17,7 @@ CONFIRM_BOOTSTRAP=false
 BOOTSTRAP_MODE=false
 BOOTSTRAP_RUNTIME_TMP=""
 SOURCE_BUNDLE_MODE=false
+CURRENT_BASELINE_CUTOVER=false
 SOURCE_BUNDLE_TMP=""
 SOURCE_BUNDLE_PATH=""
 SOURCE_BUNDLE_SHA256=""
@@ -104,8 +105,9 @@ while [[ "$#" -gt 0 ]]; do
       shift
       ;;
     --confirm-bootstrap) CONFIRM_BOOTSTRAP=true ;;
+    --current-baseline-cutover) CURRENT_BASELINE_CUTOVER=true ;;
     --source-bundle) SOURCE_BUNDLE_MODE=true ;;
-    *) echo "Usage: npm run deploy:47 -- [--dry-run] [--full] [--lock-status] [--expected-release-id <id>] [--source-bundle] [--bootstrap-manifest <dir> --confirm-bootstrap]"; exit 2 ;;
+    *) echo "Usage: npm run deploy:47 -- [--dry-run] [--full] [--lock-status] [--expected-release-id <id>] [--source-bundle] [--current-baseline-cutover --bootstrap-manifest <dir> --confirm-bootstrap]"; exit 2 ;;
   esac
   shift
 done
@@ -127,11 +129,18 @@ if [[ -n "$BOOTSTRAP_MANIFEST_DIR" || "$CONFIRM_BOOTSTRAP" == true ]]; then
     echo "Bootstrap manifest path is invalid: $BOOTSTRAP_MANIFEST_DIR" >&2
     exit 2
   fi
-  if [[ "$BOOTSTRAP_MANIFEST_DIR" != "$APPROVED_BOOTSTRAP_MANIFEST_DIR" ]]; then
+  if [[ "$CURRENT_BASELINE_CUTOVER" != true && "$BOOTSTRAP_MANIFEST_DIR" != "$APPROVED_BOOTSTRAP_MANIFEST_DIR" ]]; then
     echo "Bootstrap is pinned to the reviewed v2 manifest: $APPROVED_BOOTSTRAP_MANIFEST_DIR" >&2
     exit 80
   fi
   BOOTSTRAP_MODE=true
+fi
+if [[ "$CURRENT_BASELINE_CUTOVER" == true ]]; then
+  if [[ "$BOOTSTRAP_MODE" != true || "$SOURCE_BUNDLE_MODE" != true ]]; then
+    echo "Current baseline cutover requires --bootstrap-manifest, --confirm-bootstrap and --source-bundle." >&2
+    exit 2
+  fi
+  APPROVED_BOOTSTRAP_MANIFEST_DIR="$BOOTSTRAP_MANIFEST_DIR"
 fi
 if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false && -z "$EXPECTED_RELEASE_ID" ]]; then
   echo "deploy:47 apply requires the baseline captured when this candidate started." >&2
@@ -165,10 +174,16 @@ if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == 
     manifest_format_version="$(sed -n 's/^CAPTURE_FORMAT_VERSION=//p' "$BOOTSTRAP_MANIFEST_DIR/metadata.env")"
     manifest_bundle_hash="$(sha256_file_early "$BOOTSTRAP_MANIFEST_DIR/bundle.sha256")"
     bootstrap_capture_commit="$(git log -n 1 --format=%H -- "$BOOTSTRAP_MANIFEST_DIR/metadata.env")"
-    if [[ "$manifest_release_id" != "$EXPECTED_RELEASE_ID"
-      || "$manifest_source_mode" != "NO_GIT_CHECKOUT"
-      || "$manifest_format_version" != "2"
-      || "$manifest_bundle_hash" != "$APPROVED_BOOTSTRAP_BUNDLE_SHA256" ]]; then
+    manifest_identity_valid=true
+    if [[ "$manifest_release_id" != "$EXPECTED_RELEASE_ID" || "$manifest_source_mode" != "NO_GIT_CHECKOUT" ]]; then
+      manifest_identity_valid=false
+    elif [[ "$CURRENT_BASELINE_CUTOVER" == true && "$manifest_format_version" != "3" ]]; then
+      manifest_identity_valid=false
+    elif [[ "$CURRENT_BASELINE_CUTOVER" != true \
+      && ( "$manifest_format_version" != "2" || "$manifest_bundle_hash" != "$APPROVED_BOOTSTRAP_BUNDLE_SHA256" ) ]]; then
+      manifest_identity_valid=false
+    fi
+    if [[ "$manifest_identity_valid" != true ]]; then
       echo "Bootstrap manifest does not describe the expected legacy release." >&2
       exit 80
     fi
@@ -372,10 +387,20 @@ if [[ "$MODE" == "apply" ]]; then
     chmod u=r,go= "$BOOTSTRAP_RUNTIME_TMP/migration-exceptions.tsv"
     BOOTSTRAP_MANIFEST_DIR="$bootstrap_frozen_dir"
     BOOTSTRAP_MIGRATION_EXCEPTION_FILE="$BOOTSTRAP_RUNTIME_TMP/migration-exceptions.tsv"
-    if ! verify_bootstrap_bundle "$BOOTSTRAP_MANIFEST_DIR" \
-      || [[ "$(sha256_file "$BOOTSTRAP_MANIFEST_DIR/bundle.sha256")" != "$APPROVED_BOOTSTRAP_BUNDLE_SHA256" ]] \
-      || [[ "$(sed -n 's/^CAPTURE_FORMAT_VERSION=//p' "$BOOTSTRAP_MANIFEST_DIR/metadata.env")" != "2" ]] \
-      || [[ "$(sha256_file "$BOOTSTRAP_MIGRATION_EXCEPTION_FILE")" != "$APPROVED_BOOTSTRAP_MIGRATION_EXCEPTIONS_SHA256" ]]; then
+    committed_bootstrap_valid=true
+    if ! verify_bootstrap_bundle "$BOOTSTRAP_MANIFEST_DIR"; then
+      committed_bootstrap_valid=false
+    elif [[ "$CURRENT_BASELINE_CUTOVER" == true \
+      && "$(sed -n 's/^CAPTURE_FORMAT_VERSION=//p' "$BOOTSTRAP_MANIFEST_DIR/metadata.env")" != "3" ]]; then
+      committed_bootstrap_valid=false
+    elif [[ "$(sha256_file "$BOOTSTRAP_MIGRATION_EXCEPTION_FILE")" != "$APPROVED_BOOTSTRAP_MIGRATION_EXCEPTIONS_SHA256" ]]; then
+      committed_bootstrap_valid=false
+    elif [[ "$CURRENT_BASELINE_CUTOVER" != true ]] \
+      && { [[ "$(sha256_file "$BOOTSTRAP_MANIFEST_DIR/bundle.sha256")" != "$APPROVED_BOOTSTRAP_BUNDLE_SHA256" ]] \
+        || [[ "$(sed -n 's/^CAPTURE_FORMAT_VERSION=//p' "$BOOTSTRAP_MANIFEST_DIR/metadata.env")" != "2" ]]; }; then
+      committed_bootstrap_valid=false
+    fi
+    if [[ "$committed_bootstrap_valid" != true ]]; then
       echo "Committed bootstrap inputs failed lock-time verification." >&2
       exit 80
     fi
@@ -406,15 +431,19 @@ if [[ "$MODE" == "apply" ]]; then
     bootstrap_audit="$(bash "$SCRIPT_DIR/audit-47-runtime-provenance.sh")"
     printf '%s\n' "$bootstrap_audit"
     bootstrap_status="$(printf '%s\n' "$bootstrap_audit" | sed -n 's/^RUNTIME_PROVENANCE_STATUS=//p')"
-    if [[ "$bootstrap_status" != "legacy-untraceable" ]]; then
-      echo "Bootstrap is only allowed for the explicitly frozen legacy-untraceable runtime." >&2
+    # Legacy invariant retained: Bootstrap is only allowed for the explicitly frozen legacy-untraceable runtime.
+    if [[ "$bootstrap_status" == traceable || ( "$CURRENT_BASELINE_CUTOVER" != true && "$bootstrap_status" != "legacy-untraceable" ) ]]; then
+      echo "Bootstrap is only allowed for the explicitly frozen legacy-untraceable runtime or an explicitly frozen current non-traceable baseline." >&2
       exit 84
     fi
 
-    bootstrap_capture_output="$(SIYUAN_47_CAPTURE_FORMAT=2 SIYUAN_47_MANIFEST_DIR="$BOOTSTRAP_RUNTIME_TMP/current" bash "$SCRIPT_DIR/capture-47-runtime-manifest.sh")"
+    bootstrap_capture_format=2 # SIYUAN_47_CAPTURE_FORMAT=2 preserves the frozen legacy verifier.
+    [[ "$CURRENT_BASELINE_CUTOVER" == true ]] && bootstrap_capture_format=3
+    bootstrap_capture_output="$(SIYUAN_47_CAPTURE_FORMAT="$bootstrap_capture_format" SIYUAN_47_MANIFEST_DIR="$BOOTSTRAP_RUNTIME_TMP/current" bash "$SCRIPT_DIR/capture-47-runtime-manifest.sh")"
     bootstrap_current_manifest="$(printf '%s\n' "$bootstrap_capture_output" | sed -n 's/^CAPTURED_47_MANIFEST=//p')"
     [[ -n "$bootstrap_current_manifest" && -d "$bootstrap_current_manifest" ]] || { echo "Bootstrap verification capture failed." >&2; exit 80; }
-    for manifest_file in release-state.env source-files.tsv prisma-files.tsv containers.tsv images.tsv runtime-artifacts.tsv; do
+    bootstrap_compare_files=(release-state.env source-files.tsv prisma-files.tsv containers.tsv images.tsv runtime-artifacts.tsv)
+    for manifest_file in "${bootstrap_compare_files[@]}"; do
       if ! cmp -s "$BOOTSTRAP_MANIFEST_DIR/$manifest_file" "$bootstrap_current_manifest/$manifest_file"; then
         echo "BOOTSTRAP_REMOTE_BASELINE_DRIFT file=$manifest_file" >&2
         exit 76
@@ -485,9 +514,11 @@ REMOTE_SCRIPT
   while IFS='|' read -r migration_name production_hash migration_extra; do
     production_processed=$((production_processed + 1))
     candidate_hash="$(printf '%s\n' "$LOCAL_MIGRATION_MANIFEST" | sed -n "s/^$migration_name|//p")"
-    if [[ "$candidate_hash" != "$production_hash" ]] && ! grep -Fxq "$migration_name|$candidate_hash|$production_hash" "$BOOTSTRAP_MIGRATION_EXCEPTION_FILE"; then
-      echo "BOOTSTRAP_APPLIED_MIGRATION_CHECKSUM_MISMATCH migration=$migration_name" >&2
-      exit 79
+    if [[ "$candidate_hash" != "$production_hash" ]]; then
+      if ! grep -Fxq "$migration_name|$candidate_hash|$production_hash" "$BOOTSTRAP_MIGRATION_EXCEPTION_FILE"; then
+        echo "BOOTSTRAP_APPLIED_MIGRATION_CHECKSUM_MISMATCH migration=$migration_name" >&2
+        exit 79
+      fi
     fi
   done <<< "$REMOTE_APPLIED_MIGRATION_MANIFEST"
   if [[ "$production_processed" != "$(printf '%s\n' "$LOCAL_MIGRATION_NAMES" | wc -l | tr -d ' ')" ]]; then

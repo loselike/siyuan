@@ -127,11 +127,20 @@ if (!deployScript.includes('MIGRATION_REQUIRED=$DB_MIGRATION_REQUIRED')) {
 for (const bootstrapGate of [
   '--bootstrap-manifest',
   '--confirm-bootstrap',
+  '--current-baseline-cutover',
   'BOOTSTRAP_REMOTE_BASELINE_DRIFT',
   'BOOTSTRAP_APPLIED_MIGRATION_SET_MISMATCH',
   'Bootstrap is only allowed for the explicitly frozen legacy-untraceable runtime.'
 ]) {
   if (!deployScript.includes(bootstrapGate)) failures.push(`bootstrap cutover is missing fail-closed gate: ${bootstrapGate}`);
+}
+for (const currentCutoverGate of [
+  'Current baseline cutover requires --bootstrap-manifest, --confirm-bootstrap and --source-bundle.',
+  'manifest_format_version" != "3"',
+  'bootstrap_capture_format=3',
+  'bootstrap_status" == traceable'
+]) {
+  if (!deployScript.includes(currentCutoverGate)) failures.push(`current baseline cutover is missing fail-closed gate: ${currentCutoverGate}`);
 }
 for (const sourceBundleGate of [
   '--source-bundle',

@@ -79,6 +79,19 @@ bootstrap 不允许隐式数据库迁移。候选 migration 名称必须与生�
 
 只有锁内基线复核、精确同步、Web/API 生产构建、容器重启、内外网 health 全部成功后，脚本才写入首个 `GIT_SOURCE_BUILD` receipt 和 release state。同步之后任何失败都会写 recovery-required 标记并关闭发布队列；bootstrap 成功后该入口自动失效，后续只能走标准 baseline/deploy 流程。
 
+当线上已被白名单发布推进、旧 v2 bootstrap 清单不再描述当前运行时，可为已经逐文件吸收并提交的当前 47 基线采集一份 v3 清单，再执行一次受限 cutover：
+
+```bash
+npm run deploy:47 -- \
+  --expected-release-id <v3 清单中的 REMOTE_RELEASE_ID> \
+  --current-baseline-cutover \
+  --bootstrap-manifest docs/release-manifests/47/<v3 冻结目录> \
+  --confirm-bootstrap \
+  --source-bundle
+```
+
+该入口不接受 traceable 线上状态，强制使用已提交的 v3 清单和 Git bundle；锁内重新逐字节比较 release state、完整源码清单、Prisma 清单、容器、镜像和运行产物，并继续执行严格的已应用 migration 集合/checksum 核对。任一并发发布、源码或镜像变化都会在同步前停止；不能用它覆盖新的线上改动，也不能跳过历史迁移 checksum 例外白名单。
+
 ## 一键智能发布
 
 日常发布固定执行：
