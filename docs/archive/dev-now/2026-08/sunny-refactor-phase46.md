@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 46
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase46`
 - 基线提交：`fce8067`
 - 47 基线：`git-67ed4db97995_web-09d4fa0bebb1_api-2faf02ea46af`
@@ -29,3 +29,9 @@
 - Web 定向测试 6/6、Web typecheck、434 路由治理与 API 安全契约 3/3 通过。
 - 对抗式审查：策略只影响用户导航触发的 15 秒全局刷新时钟；登录/session 初始化与既有 5 分钟 focus/visibility 刷新未改。系统管理无 App 业务数据 props，账号、角色、站点、部门、审计均由页面 API 自持；其他页面继续 legacy-global。
 - 既有测试 runner 已自动追加单 worker/超时参数；首次人工重复传参被 Vitest 拒绝，改用安全 runner 唯一参数后通过，未修改测试脚本。
+
+## 发布
+
+- 标准 baseline 门拒绝了“实现后才捕获 receipt”的功能 worktree；未绕过。另建干净发布协调 worktree，从 `fce8067` 捕获线上 receipt，再 fast-forward 到 `28c0fcc` 后发布。
+- 47 发布 `git-28c0fccbd19a_web-79d1db7936c1_api-2faf02ea46af`：Web 指纹 `79d1db7936c1...`，API/migration 指纹未变；provenance traceable、image/API release ID 全匹配、源码 488/488、API/Web 公网 200、锁 free、recovery clear。
+- 既有 10 个 AppleDouble 元数据文件仍作为非运行时 stale artifact 告警保留；本轮未删除。
