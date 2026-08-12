@@ -1,9 +1,48 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { renderAndLogin } from '../testSupport/appTestHarness';
 
+function requestedPath(pathname: string) {
+  return vi.mocked(fetch).mock.calls.filter(([input]) => new URL(String(input), 'http://test.local').pathname === pathname);
+}
+
 describe('staff route navigation characterization', () => {
+  it('keeps route-owned pricing navigation separate from the legacy global refresh clock', async () => {
+    globalThis.history.replaceState(null, '', '/app/workspace/shipment-pool');
+    const now = vi.spyOn(Date, 'now').mockReturnValue(100_000);
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+    await waitFor(() => expect(requestedPath('/api/master-data')).toHaveLength(1));
+    const initialCounts = {
+      shipments: requestedPath('/api/shipments').length,
+      businessCosts: requestedPath('/api/finance/business-cost-audits').length,
+      masterData: requestedPath('/api/master-data').length,
+      pricingMeta: requestedPath('/api/pricing/legacy/quote-meta').length
+    };
+
+    now.mockReturnValue(116_000);
+    await user.click(screen.getByRole('menuitem', { name: '报价查价' }));
+    await waitFor(() => {
+      expect(globalThis.location.pathname).toBe('/app/pricing');
+      expect(screen.getByRole('menuitem', { name: '报价查价' })).toHaveClass('is-active');
+      expect(requestedPath('/api/pricing/legacy/quote-meta')).toHaveLength(initialCounts.pricingMeta + 1);
+    });
+    expect(requestedPath('/api/shipments')).toHaveLength(initialCounts.shipments);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(initialCounts.businessCosts);
+    expect(requestedPath('/api/master-data')).toHaveLength(initialCounts.masterData);
+
+    await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
+    await waitFor(() => {
+      expect(globalThis.location.pathname).toBe('/app/business');
+      expect(screen.getByRole('menuitem', { name: '业务管理' })).toHaveClass('is-active');
+      expect(requestedPath('/api/master-data')).toHaveLength(initialCounts.masterData + 1);
+    });
+    expect(requestedPath('/api/shipments')).toHaveLength(initialCounts.shipments + 1);
+    expect(requestedPath('/api/finance/business-cost-audits')).toHaveLength(initialCounts.businessCosts + 1);
+    now.mockRestore();
+  });
+
   it('keeps primary navigation and popstate synchronized with the active menu and URL', async () => {
     globalThis.history.replaceState(null, '', '/app/workspace/shipment-pool');
     const user = userEvent.setup();

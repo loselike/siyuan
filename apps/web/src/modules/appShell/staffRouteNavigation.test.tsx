@@ -24,10 +24,10 @@ describe('staffRouteNavigation', () => {
       const [notice, setNotice] = useState<string | null>('existing');
       const [customerSection, setCustomerServiceInitialSection] = useState('other');
       const [expandedMenuKey, setExpandedMenuKey] = useState<MenuKey | null>('workspace');
-      const lastDataRefreshRequestAtRef = useRef(0);
+      const lastGlobalWorkspaceRefreshAtRef = useRef(0);
       const navigateToAppRoute = useNavigateToStaffRoute({
         navigateWithVersionCheck,
-        lastDataRefreshRequestAtRef,
+        lastGlobalWorkspaceRefreshAtRef,
         setRequestedAppRoute,
         setDataRefreshVersion,
         setNotice,
@@ -55,6 +55,36 @@ describe('staffRouteNavigation', () => {
     expect(result.current.customerSection).toBe('service-dashboard');
     expect(result.current.expandedMenuKey).toBe('customerService');
     expect(refreshCurrentSession).toHaveBeenCalledOnce();
+    now.mockRestore();
+  });
+
+  it('does not advance the global refresh clock for route-owned pricing data', () => {
+    const navigateWithVersionCheck = vi.fn((_href: string, navigate: () => void) => navigate());
+    const now = vi.spyOn(Date, 'now').mockReturnValue(20_000);
+    const { result } = renderHook(() => {
+      const [, setRequestedAppRoute] = useRequestedStaffRoute();
+      const [dataRefreshVersion, setDataRefreshVersion] = useState(0);
+      const lastGlobalWorkspaceRefreshAtRef = useRef(0);
+      const navigateToAppRoute = useNavigateToStaffRoute({
+        navigateWithVersionCheck,
+        lastGlobalWorkspaceRefreshAtRef,
+        setRequestedAppRoute,
+        setDataRefreshVersion,
+        setNotice: vi.fn(),
+        setCustomerServiceInitialSection: vi.fn(),
+        setExpandedMenuKey: vi.fn(),
+        refreshCurrentSession: vi.fn().mockResolvedValue(undefined)
+      });
+      return { dataRefreshVersion, lastGlobalWorkspaceRefreshAtRef, navigateToAppRoute };
+    });
+
+    act(() => result.current.navigateToAppRoute('pricing'));
+    expect(result.current.dataRefreshVersion).toBe(0);
+    expect(result.current.lastGlobalWorkspaceRefreshAtRef.current).toBe(0);
+
+    act(() => result.current.navigateToAppRoute('business'));
+    expect(result.current.dataRefreshVersion).toBe(1);
+    expect(result.current.lastGlobalWorkspaceRefreshAtRef.current).toBe(20_000);
     now.mockRestore();
   });
 

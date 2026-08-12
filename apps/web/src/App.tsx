@@ -293,7 +293,7 @@ export function App() {
   const [forcePasswordChangeError, setForcePasswordChangeError] = useState<string | null>(null);
   const [feeNameCatalogItems, setFeeNameCatalogItems] = useState<FinanceCatalogItemSummary[]>([]);
   const [dataRefreshVersion, setDataRefreshVersion] = useState(0);
-  const lastDataRefreshRequestAtRef = useRef(Date.now());
+  const lastGlobalWorkspaceRefreshAtRef = useRef(Date.now());
   const workspaceRefreshCoordinator = useMemo(() => createWorkspaceRefreshCoordinator(), []);
   const businessWorkspaceConfig = businessWorkspaceConfigs.DEDICATED_LINE;
   const apiClient = useMemo(
@@ -387,7 +387,7 @@ export function App() {
     || (currentMenuKey === 'business' && activeSectionKey === 'order-management');
   const navigateToAppRoute = useNavigateToStaffRoute({
     navigateWithVersionCheck,
-    lastDataRefreshRequestAtRef,
+    lastGlobalWorkspaceRefreshAtRef,
     setRequestedAppRoute,
     setDataRefreshVersion,
     setNotice,
@@ -492,7 +492,7 @@ export function App() {
         || hasGlobalUnsavedWork()
       ) return;
       lastRefreshAt = Date.now();
-      lastDataRefreshRequestAtRef.current = lastRefreshAt;
+      lastGlobalWorkspaceRefreshAtRef.current = lastRefreshAt;
       setDataRefreshVersion((current) => current + 1);
     };
     const intervalId = window.setInterval(refreshStaleData, 60_000);

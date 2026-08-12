@@ -13,6 +13,7 @@ import {
   type MenuKey,
   type StaffAppRoute
 } from './config';
+import { shouldRequestGlobalWorkspaceRefresh } from './workspaceRefreshPolicy';
 
 export type NavigateToStaffRoute = (
   menuKey: MenuKey,
@@ -27,7 +28,7 @@ export function useRequestedStaffRoute() {
 
 export interface StaffRouteNavigationOptions {
   navigateWithVersionCheck(href: string, navigate: () => void): void;
-  lastDataRefreshRequestAtRef: MutableRefObject<number>;
+  lastGlobalWorkspaceRefreshAtRef: MutableRefObject<number>;
   setRequestedAppRoute: Dispatch<SetStateAction<StaffAppRoute | null>>;
   setDataRefreshVersion: Dispatch<SetStateAction<number>>;
   setNotice(message: string | null): void;
@@ -38,7 +39,7 @@ export interface StaffRouteNavigationOptions {
 
 export function useNavigateToStaffRoute(options: StaffRouteNavigationOptions): NavigateToStaffRoute {
   const {
-    lastDataRefreshRequestAtRef,
+    lastGlobalWorkspaceRefreshAtRef,
     navigateWithVersionCheck,
     refreshCurrentSession,
     setCustomerServiceInitialSection,
@@ -56,8 +57,12 @@ export function useNavigateToStaffRoute(options: StaffRouteNavigationOptions): N
         globalThis.history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', href);
       }
       setRequestedAppRoute(route);
-      if (Date.now() - lastDataRefreshRequestAtRef.current >= 15_000) {
-        lastDataRefreshRequestAtRef.current = Date.now();
+      const now = Date.now();
+      if (
+        shouldRequestGlobalWorkspaceRefresh(route)
+        && now - lastGlobalWorkspaceRefreshAtRef.current >= 15_000
+      ) {
+        lastGlobalWorkspaceRefreshAtRef.current = now;
         setDataRefreshVersion((current) => current + 1);
       }
       setNotice(null);
@@ -68,7 +73,7 @@ export function useNavigateToStaffRoute(options: StaffRouteNavigationOptions): N
       void refreshCurrentSession().catch(() => undefined);
     });
   }, [
-    lastDataRefreshRequestAtRef,
+    lastGlobalWorkspaceRefreshAtRef,
     navigateWithVersionCheck,
     refreshCurrentSession,
     setCustomerServiceInitialSection,
