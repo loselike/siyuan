@@ -2,7 +2,7 @@ import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Download, PackagePlus, Plus, Trash2 } from 'lucide-react';
+import { Download, Plus, Trash2 } from 'lucide-react';
 import { sortWarehouseTallyTasks, warehouseTallyChannels, warehouseTallyProgressStatusLabels } from '@siyuan/shared';
 import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockPageResponse, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
@@ -12,9 +12,8 @@ import { formatBeijingDateTime, formatBeijingDateTimeInputValue, parseBeijingDat
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
-import { PlaceholderPanel } from '../shared/PlaceholderPanel';
 import { ShipmentRiskFlag, isShipmentRiskFlagActive } from '../shared/ShipmentRiskFlag';
-import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, MetricCard, paginationWhenNeeded, renderFilterActions, renderFilterField, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
+import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, paginationWhenNeeded, renderFilterActions, renderFilterField, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
 import { addRowsWorksheet, createWorkbook, downloadWorkbook } from '../shared/excel';
 import {
   calculateWarehousePackageMetrics,
@@ -40,6 +39,7 @@ import { WarehouseRentDetailPanel } from './WarehouseRentDetailPanel';
 import { WarehouseMachineImportModal } from './WarehouseMachineImportModal';
 import { WarehouseCreateTallyModal } from './WarehouseCreateTallyModal';
 import { WarehouseCompleteTallyModal, type WarehouseTallySourceItem } from './WarehouseCompleteTallyModal';
+import { WarehouseDashboardPanel } from './WarehouseDashboardPanel';
 import { downloadWarehouseMachineExport, isWarehouseMachineExportReady, resolveWarehouseMachineExportRecords } from './warehouseMachineExport';
 import {
   calculateCartonSpecTotals,
@@ -1219,12 +1219,6 @@ export function WarehousePage({
   const selectedWarehouseQueueHandoverGroups = groupWarehouseHandoverRowsByAgent(selectedWarehouseQueueHandoverRows);
   const selectedWarehouseQueueRequiresShippingMark = selectedWarehouseQueueRows.some((row) => row.kind === 'shipment' && row.shipment.shippingMarkRequired);
   const selectedWarehouseQueuePackageCount = selectedWarehouseQueueRows.reduce((sum, row) => sum + getWarehouseQueuePackageCount(row), 0);
-  // 看板与待出库队列共用同一行集，避免示例数与实际作业数据分叉。
-  const dashboardStats = [
-    { label: '待出库', value: inStockTotals.waitingDispatchTickets, helper: '渠道确认后等待仓库处理' },
-    { label: '待理货', value: inStockTotals.pendingTallyTickets, helper: '分批到仓待合并' },
-    { label: '收货异常', value: inStockTotals.exceptionTickets, helper: '件重尺或资料待复核' }
-  ];
   const warehouseOutboundedRows: WarehouseHandoverRow[] = shipments
     .filter((shipment) => Boolean(shipment.outboundAt || shipment.dispatchedAt))
     .map(createWarehouseOutboundedRowFromShipment)
@@ -3454,18 +3448,14 @@ export function WarehousePage({
       {renderNoticeBar(notice)}
       {renderNoticeBar(warehouseNotice)}
 
-      {activeReceiveSection === 'dashboard' ? (
-        <Row gutter={[16, 16]}>
-          {dashboardStats.map((stat) => (
-            <Col xs={24} md={8} key={stat.label}>
-              <MetricCard icon={<PackagePlus />} title={stat.label} value={stat.value} extra={stat.helper} />
-            </Col>
-          ))}
-        </Row>
-      ) : null}
-
       <ModuleSubWorkspace items={receiveSubItems} activeKey={activeReceiveSection} onChange={setActiveReceiveSection}>
-      {activeReceiveSection === 'dashboard' ? <PlaceholderPanel title="仓库看板" /> : null}
+      {activeReceiveSection === 'dashboard' ? (
+        <WarehouseDashboardPanel
+          totals={inStockTotals}
+          visibleSections={new Set(receiveSubItems.map((item) => item.key))}
+          onOpenSection={setActiveReceiveSection}
+        />
+      ) : null}
       {activeReceiveSection === 'rent-details' ? (
         <WarehouseRentDetailPanel
           apiClient={apiClient}
