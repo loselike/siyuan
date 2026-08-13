@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 57
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase56`
 - 基线提交：`23f19cc`
 - 47 基线：`git-f38c6af956f4_web-7fd6e14600c5_api-40e35302377a`
@@ -32,3 +32,18 @@
 - 修复既有在仓分页测试夹具，使保护网与当前 `warehouseInStockPage` 调用一致；没有改变运行时代码的查询方法。
 - 自审调用链：`WarehousePage` 原汇总查询 -> `inStockTotals` -> `WarehouseDashboardPanel` -> 原 `setActiveReceiveSection` -> `ModuleSubWorkspace`。未发现新增 API、权限、状态、写操作、审计或业务字段变化。
 - 本地证据：Dashboard/Page 定向测试 6/6、Web typecheck、`git diff --check`、governance/context/architecture、安全契约 3/3 均通过。
+
+## 47 发布与发布后复审
+
+- 提交：`3964a91a2636a1b53cb2d69e3a1d64c9e0884258`，已推送功能分支及发布协调分支。
+- 47 发布：`git-3964a91a2636_web-3c24fed0279c_api-40e35302377a`，标准 Web scope、Git bundle provenance；未运行 migration、未写业务数据。
+- 发布命令在新容器已经运行后因 SSH 连接未退出而悬停，人工中断按规则生成 recovery marker。已逐项核对源码三类 fingerprint、新 Web 静态标记、Web/API 运行镜像、API release ID、bundle SHA/只读权限、容器内 health 后补全不可变 receipt/state，并清除 recovery marker。
+- 最终证据：provenance `traceable/ok`、Web/API image 与 API release ID 匹配、Web 静态产物含“当前作业队列”、容器内 Web/API 200、近期无关键错误、锁 free、recovery clear。公网 `47.120.33.111:18899` 从本机和服务器均超时，未把公网连通性误报为通过。
+- 副作用审查：UI 只新增既有二级入口，数据汇总、权限过滤、请求时序、API、状态及提交结果不变；CSS 已组件化，未增加全局样式热点。
+
+## 完成后重新排序
+
+- 安全/正确性：改密和主动退出的 token 撤销仍需改变认证语义，保持待确认，不在行为保持重构中自动实施。
+- 高频业务/UI：仓库看板空入口已解决；`FinancePage` 的基础资料占位来自外层未传 render 实现的组合方式，直接替换可能改变导航所有权，先不猜测。
+- 架构/发布效率：本次标准发布暴露“远端 Docker build 已完成但 SSH 无输出悬停，最终 state 未落盘”的确定性高成本故障；该缺陷会使每个后续切片需要人工恢复并阻断发布队列，价值高于继续拆 `WarehousePage`。
+- 下一选择：转向发布可靠性，先参考 OpenSSH keepalive 与 Moby/BuildKit 的可诊断长任务模式，为标准发布增加有界保活/超时和可恢复阶段证据；不得修改业务代码、容器业务配置或业务数据。
