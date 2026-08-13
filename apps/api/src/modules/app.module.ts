@@ -6,6 +6,7 @@ import { AuditInterceptor } from './audit.interceptor.js';
 import { HttpAuditDispatcher } from './audit/http-audit.dispatcher.js';
 import { HTTP_AUDIT_WRITER } from './audit/http-audit.writer.js';
 import { AuthController } from './auth.controller.js';
+import { AuthSessionService } from './auth/auth-session.service.js';
 import { HealthController } from './health.controller.js';
 import { CustomerServiceQueryController } from './customer-service/query/customer-service-query.controller.js';
 import { CustomerServiceDataConfirmController } from './customer-service/data-confirm/customer-service-data-confirm.controller.js';
@@ -375,6 +376,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     UserTablePreferenceController
   ],
   providers: [
+    AuthSessionService,
     AiService,
     LineageWatcher,
     ...repositoryProviders,

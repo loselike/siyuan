@@ -1,16 +1,16 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException, ForbiddenException, Inject } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
-import { PrismaRepository } from './prisma.repository.js';
 import { REQUIRED_AUTH, REQUIRED_PERMISSION, REQUIRED_PERMISSION_MODE } from './require-permission.decorator.js';
 import { hasEffectivePricingCapability } from '@siyuan/shared';
 import { type PermissionKey, type Principal } from './rbac.js';
+import { AuthSessionService } from './auth/auth-session.service.js';
 
 @Injectable()
 export class RbacGuard implements CanActivate {
   constructor(
     @Inject(Reflector) private readonly reflector: Reflector,
-    @Inject(PrismaRepository) private readonly repository: PrismaRepository
+    @Inject(AuthSessionService) private readonly sessions: AuthSessionService
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -39,7 +39,7 @@ export class RbacGuard implements CanActivate {
 
     try {
       const principal = jwt.verify(authorization.slice(7), jwtSecret()) as Principal;
-      const effectivePermissions = await this.repository.hydratePrincipalDepartmentScope(principal);
+      const effectivePermissions = await this.sessions.hydrateCurrentSession(principal);
       request.user = principal;
 
       if (principal.mustChangePassword && !isPasswordBootstrapRequest(request.method, request.url)) {
@@ -55,7 +55,7 @@ export class RbacGuard implements CanActivate {
         ? permissions.every((item) => hasEffectivePricingCapability(effectivePermissions, item) || effectivePermissions.includes(item))
         : permissions.some((item) => hasEffectivePricingCapability(effectivePermissions, item) || effectivePermissions.includes(item));
       if (!granted) {
-        await (this.repository as any).recordPermissionDenied?.(principal, {
+        await this.sessions.recordPermissionDenied(principal, {
           permissions,
           method: request.method,
           path: request.url
