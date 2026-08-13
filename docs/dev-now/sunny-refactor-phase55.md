@@ -32,3 +32,13 @@
 - `governance:check`：通过；434 条路由架构门与 API 安全契约 3/3。
 - `git diff --check`：通过。
 - 结果：`apiClient.ts` 从 2,567 行降至 2,566 行；新增 47 行领域客户端，9 个既有 facade 方法保留签名与调用位置不变。
+
+## 发布后复审
+
+- 状态：`completed`
+- 提交：`96a01be61dfbec06d07e1293648a4a3e262f98e9`，已推送 `origin/codex/sunny-refactor-phase55`。
+- 47 发布：`git-96a01be61dfb_web-7fd6e14600c5_api-e2a4d26250b5`；标准 Git bundle provenance 为 `traceable/ok`。
+- 线上证据：源码 503/503 一致；Web/API image 与 API release ID 匹配；公网 Web/API health 200；锁 free、recovery clear；最近日志无新增 fatal/exception/panic（路由名中的 `exception` 为正常映射日志）。
+- 副作用审查：路由、调用方、请求时序、鉴权头、匿名标志、401 回调和错误文案均保持；无 schema、权限、业务状态或数据写入变化。
+- 发布观察：标准发布 scope 正确识别为 Web；Compose 因新 release ID 对 API 使用不可变同指纹镜像，先尝试拉取失败后由本地缓存重标并重建，最终 API 指纹保持 `e2a4d26250b5` 且验证通过。
+- 新的最高优先级：转向后端 `DataController` 残留 204 路由或 Prisma/InMemory 巨型仓储，优先选择一组已有 characterization 的低风险查询/命令边界；不继续机械拆 `apiClient`。全局 ValidationPipe 继续作为独立产品行为变更候选，不纳入行为保持重构。
