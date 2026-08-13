@@ -266,7 +266,9 @@ if (!captureBaselineScript.includes('siyuan_47_acquire_release_lock') || !captur
 if (!captureBaselineScript.includes('RELEASE_BASELINE_TREE_MISMATCH') || !captureBaselineScript.includes('BASELINE_RECEIPT=') || !deployScript.includes('git merge-base --is-ancestor')) {
   failures.push('standard release baseline must bind an exact remote tree to the same worktree branch and ancestor commit');
 }
-if (!captureBaselineScript.includes('siyuan_47_ssh_bounded_remote')) {
+if ((captureBaselineScript.match(/siyuan_47_ssh_bounded_remote/g) ?? []).length !== 2
+  || !captureBaselineScript.includes('bash -s -- "$SIYUAN_47_DIR/.siyuan-release-state"')
+  || !captureBaselineScript.includes('env "SIYUAN_RELEASE_REPO_ROOT=$SIYUAN_47_DIR" bash -s')) {
   failures.push('47 baseline capture must bound remote reads and SSH channel EOF waits');
 }
 if (!syncScript.includes('siyuan_47_verify_release_lock')) {
