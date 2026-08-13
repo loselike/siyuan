@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 52
 
-- 状态：`in_progress`
+- 状态：`complete`
 - 分支：`codex/sunny-refactor-phase52`
 - 基线提交：`3998e1a`
 - 用户验收目标：每个切片后重新审查和排序；系统业务逻辑不得改变。
@@ -28,3 +28,17 @@
 - 根因一：SSH 远端命令不会可靠保留空位置参数，空迁移列表使白名单 release ID 被错位解析为 `unknown`；改为显式 `__SIYUAN_EMPTY__` 哨兵并在远端解码，同时拒绝不符合 `whitelist-<24 hex>` 的 release ID。
 - 根因二：Docker Compose recreate 偶发留下同项目、同服务、同目标镜像的 `Created` 容器并与规范名称冲突。参考 Docker Compose issue #11151（Apache-2.0 项目，https://github.com/docker/compose/issues/11151），只在首次 `compose up` 失败后删除满足“Created + 本次精确镜像 + `/opt/siyuan` working_dir + 同 service label”的残留，最多重试一次；不删除运行中、旧镜像或其他项目容器。
 - 并发保护：47 上另一会话把 Prisma/InMemory 仓库权限语义推进后，本分支吸收其当前语义并新增今日收货历史日期权限 characterization；保留 Phase49 `MasterDataSnapshotSelection` 下推，不恢复旧实现。
+
+## 完成证据
+
+- 输入边界：`UserTablePreferenceController` 与 Service 共用同一 key/value parser；8 条测试覆盖合法对象、缺失、null、数组、字符串、key/体积上限及循环对象，原错误文案和状态语义不变。
+- 行为保护：吸收并发上线的仓库权限语义，新增 2 条“有/无在仓权限时历史日期是否生效”characterization；master-data 选择下推保护 5 条继续通过。
+- 本地安全门：相关定向测试 15/15、API typecheck、shell syntax、release fence contract、434 路由治理、安全契约 3/3、`git diff --check` 通过。
+- 47：最终发布 `whitelist-ff8f39ebd83622d37b176689`；API 容器引用、health releaseId、state releaseId 三者一致，公网 API/Web 200，最近 API 日志无关键错误，锁 free、recovery clear。
+
+## 完成后重评
+
+- 安全/正确性：输入 parser 仅落地一个低风险代表路由，继续横向推广的边际收益暂低。
+- 高频业务/前端数据流：App 全局数据流仍大，但当前没有新的生产错误证据，不抢占 P0。
+- 架构/改造效率：巨型 Repository 仍是长期 P1；本轮并发源码覆盖说明“白名单发布对锁外写入只能 CAS 单点检测，无法保证 build 期间完整源码快照不变”，且失败后会留下部分更新源码，成为新的最高优先级。
+- 结论：下一轮转向发布原子性，不继续沿输入 parser 扩面。代表样本为“build 期间目标或依赖源码漂移时，候选不得启动且已替换文件全部恢复”；参考 Kubernetes optimistic concurrency/resourceVersion 与 Git worktree/atomic ref 思路，只改发布治理，不改业务代码。
