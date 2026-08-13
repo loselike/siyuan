@@ -8083,7 +8083,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!(await this.hasPermission(principal.role, 'warehouse:today-receipt:view'))) {
       throw new ForbiddenException('当前角色不能查看今日收货');
     }
-    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
     const businessCustomerScoped = !warehouseWideScope;
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
@@ -8094,7 +8094,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           select: { code: true }
         })).map((customer) => customer.code)
       : undefined;
-    const { start, end } = resolveWarehouseTodayRange(query);
+    const { start, end } = resolveWarehouseTodayRange(await this.hasPermission(principal.role, 'warehouse:in-stock:view') ? query : { datePreset: 'TODAY' });
     const where: any = {
       scanTime: { gte: start, lt: end }
     };
@@ -8161,7 +8161,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
       throw new ForbiddenException('当前角色不能查看在仓数据');
     }
-    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
     // 业务员默认只看当前归属给自己的客户；主动选择“全部”时可读取全仓货物事实数据。
     const businessCustomerScoped = !warehouseWideScope;
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
@@ -8300,7 +8300,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:dashboard:view', 'warehouse:in-stock:view']))) {
       throw new ForbiddenException('当前角色不能查看仓库看板或在仓汇总');
     }
-    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
     const businessCustomerScoped = !warehouseWideScope;
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
