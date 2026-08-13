@@ -14,7 +14,7 @@ import {
 } from './customer-service/data-confirm/customer-service-data-confirm.policy.js';
 import { normalizeProblemTicketTagName, normalizeProblemTicketTagSnapshot } from './customer-service/problem-tag/problem-ticket-tag.policy.js';
 import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
-import { PrismaMasterDataReadRepository } from './master-data/master-data-read.repository.js';
+import { PrismaMasterDataReadRepository, type MasterDataSnapshotSelection } from './master-data/master-data-read.repository.js';
 import {
   buildWarehouseMachineImportResponse,
   warehouseMachineImportKey,
@@ -2003,8 +2003,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return buildLineShipmentPackageSummaries(shipments, Array.from(packagesById.values()));
   }
 
-  async getMasterData(): Promise<MasterDataSnapshot> {
-    return this.masterDataReadRepository.getSnapshot();
+  async getMasterData(selection?: MasterDataSnapshotSelection): Promise<MasterDataSnapshot> {
+    return this.masterDataReadRepository.getSnapshot(selection);
   }
 
   async getPricingAgentNames(): Promise<string[]> {

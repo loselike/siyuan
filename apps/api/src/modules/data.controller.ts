@@ -121,9 +121,10 @@ import type {
 } from '@siyuan/shared';
 import { PrismaRepository } from './prisma.repository.js';
 import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
+import { buildMasterDataSnapshotSelection, hasSalesOwnDataScope } from './master-data/master-data-snapshot.selection.js';
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
 import { RequireAllPermissions, RequireAuth, RequirePermission } from './require-permission.decorator.js';
-import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
+import { isAdministratorRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
@@ -301,7 +302,6 @@ export class DataController {
       throw new ForbiddenException('没有应付费用权限');
     }
   }
-
   private scopeMasterDataCustomers(principal: Principal, snapshot: MasterDataSnapshot): MasterDataSnapshot {
     if (!hasSalesOwnDataScope(principal)) return snapshot;
     const scope = new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value)));
@@ -941,7 +941,6 @@ export class DataController {
     'master-data:assistant:read'
   ])
   async masterData(@Req() request: { user: Principal }) {
-    const snapshot = await this.repository.getMasterData();
     const canReadCustomers = await this.hasAnyPermission(request.user.role, ['master-data:customers:read']);
     const canReadFinanceCatalog = await this.hasAnyPermission(request.user.role, ['master-data:finance:read']);
     const canReadAgents = await this.repository.hasPermission(request.user.role, 'master-data:agents:read');
@@ -949,6 +948,12 @@ export class DataController {
     const canReadChannels = await this.repository.hasPermission(request.user.role, 'master-data:channels:read');
     const canReadChannelCategories = await this.hasAnyPermission(request.user.role, ['master-data:channel-categories:read']);
     const canReadExchangeRates = await this.hasAnyPermission(request.user.role, ['master-data:exchange-rates:read']);
+    const snapshot = await this.repository.getMasterData(buildMasterDataSnapshotSelection(request.user, {
+      customers: canReadCustomers, financeCatalog: canReadFinanceCatalog,
+      agents: canReadAgents, agentChannels: canReadAgentChannels,
+      channels: canReadChannels, channelCategories: canReadChannelCategories,
+      exchangeRates: canReadExchangeRates
+    }));
     let result = snapshot;
     if (!canReadCustomers) {
       result = { ...result, customers: [], contacts: [], customerUsers: [] };
@@ -2275,11 +2280,6 @@ function normalizeUploadedFileName(fileName: string) {
   }
   const normalized = candidates.find((candidate) => /[\u4e00-\u9fff]/.test(candidate) && !candidate.includes('�')) ?? raw;
   return normalized.replace(/[\\/:\0]/g, '_').trim() || '未命名文件';
-}
-
-function hasSalesOwnDataScope(principal: Principal): boolean {
-  return principal.dataScope === 'SALES_OWN'
-    || (isSalesScopedRole(principal.role) && principal.role !== 'UG_MARKET');
 }
 
 function sanitizeMojiaRequestSamplePayload(value: Record<string, unknown>): Record<string, unknown> {
