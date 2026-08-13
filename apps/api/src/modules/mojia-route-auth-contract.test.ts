@@ -1,6 +1,6 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { DataController } from './data.controller.js';
+import { MojiaMeasurementController } from './warehouse/integration/mojia-measurement.controller.js';
 
 const originalDeviceToken = process.env.MOJIA_DEVICE_TOKEN;
 
@@ -16,12 +16,9 @@ describe('Mojia device route auth contract', () => {
     ['wrong query token', {}, 'wrong-token']
   ])('rejects %s before any repository write', async (_label, headers, queryToken) => {
     process.env.MOJIA_DEVICE_TOKEN = 'contract-test-token';
-    const repository = {
-      applyWarehouseTallyMeasurementByBarcode: vi.fn(),
-      createWarehousePackage: vi.fn()
-    };
-    const controller = new DataController(repository as never, {} as never, {} as never);
-    const body: Parameters<DataController['receiveMojiaMeasurement']>[2] = {
+    const measurements = { receive: vi.fn() };
+    const controller = new MojiaMeasurementController(measurements as never);
+    const body: Parameters<MojiaMeasurementController['receiveMojiaMeasurement']>[2] = {
       barcode: 'TEST-001',
       weightKg: 1,
       lengthCm: 1,
@@ -29,8 +26,7 @@ describe('Mojia device route auth contract', () => {
       heightCm: 1
     };
 
-    await expect(controller.receiveMojiaMeasurement(headers, queryToken, body)).rejects.toBeInstanceOf(UnauthorizedException);
-    expect(repository.applyWarehouseTallyMeasurementByBarcode).not.toHaveBeenCalled();
-    expect(repository.createWarehousePackage).not.toHaveBeenCalled();
+    expect(() => controller.receiveMojiaMeasurement(headers, queryToken, body)).toThrow(UnauthorizedException);
+    expect(measurements.receive).not.toHaveBeenCalled();
   });
 });

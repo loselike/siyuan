@@ -57,7 +57,7 @@ AST 扫描得到 357 个 API 路由：
 - `GET /health`
 - `POST /integrations/mojia/measurements`
 
-前三个从用途上属于预认证/公开探针候选；Mojia 路由在方法内部调用设备 token 校验（`apps/api/src/modules/data.controller.ts:404`）。这些事实不构成“安全”或“存在漏洞”的结论。
+前三个从用途上属于预认证/公开探针候选；Mojia 路由在模块专用 Controller 内调用设备 token 校验（`apps/api/src/modules/warehouse/integration/mojia-measurement.controller.ts:14`）。这些事实不构成“安全”或“存在漏洞”的结论。
 
 `RbacGuard` 在 Controller/handler 都没有 `RequireAuth` 或 `RequirePermission` 元数据时直接返回 `true`（`apps/api/src/modules/rbac.guard.ts:24-31`）。阶段 1 应先增加路由元数据契约测试，再决定是否改为默认拒绝；不能直接全局切换行为。
 
@@ -244,7 +244,7 @@ Prisma schema 共 1,610 行、82 个 model、2 个 enum，migration 目录 114 �
 
 配置使用分散在启动文件、Controller、Service、Guard 与 watcher 中，未发现统一的运行时配置 schema。阶段 1 可先增加 fail-fast 配置读取层，不能在阶段 0 改变现有环境变量语义。
 
-上传、Mojia 设备接入、lineage watcher 与业务路由目前部分共存于 `DataController`/总 Repository。它们应作为候选 infrastructure/platform 边界，但具体归属未确认。
+上传、lineage watcher 与业务路由目前仍部分共存于 `DataController`/总 Repository；Mojia 设备接入已进入 `warehouse/integration` 模块边界，但持久化仍由现有总 Repository adapter 承担。其余能力仍应作为候选 infrastructure/platform 边界，具体归属未确认。
 
 ## 9. 测试和质量门基线
 

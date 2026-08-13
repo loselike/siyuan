@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WarehousePackageEditModal } from './WarehousePackageEditModal';
 import type { WarehouseInboundPackage, WarehousePackageEditDraft } from './warehousePageModel';
@@ -28,8 +29,8 @@ const draft: WarehousePackageEditDraft = {
   manualException: '原异常'
 };
 
-function renderModal(overrides: Partial<React.ComponentProps<typeof WarehousePackageEditModal>> = {}) {
-  const props: React.ComponentProps<typeof WarehousePackageEditModal> = {
+function renderModal(overrides: Partial<ComponentProps<typeof WarehousePackageEditModal>> = {}) {
+  const props: ComponentProps<typeof WarehousePackageEditModal> = {
     record,
     draft,
     saving: false,

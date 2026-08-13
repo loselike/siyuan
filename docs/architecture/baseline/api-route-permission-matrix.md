@@ -14,7 +14,7 @@
 | identity-access | POST | `/auth/change-password` | `AuthController.changePassword` | auth | — | `apps/api/src/modules/auth.controller.ts:101` |
 | platform | GET | `/health` | `DataController.health` | none | — | `apps/api/src/modules/data.controller.ts:363` |
 | platform | POST | `/system/client-errors` | `DataController.reportClientError` | auth | — | `apps/api/src/modules/data.controller.ts:372` |
-| warehouse | POST | `/integrations/mojia/measurements` | `DataController.receiveMojiaMeasurement` | none | — | `apps/api/src/modules/data.controller.ts:404` |
+| warehouse | POST | `/integrations/mojia/measurements` | `MojiaMeasurementController.receiveMojiaMeasurement` | none | — | `apps/api/src/modules/warehouse/integration/mojia-measurement.controller.ts:14` |
 | shipment-flow | GET | `/shipments` | `DataController.shipments` | permission | `business:shipment:list` | `apps/api/src/modules/data.controller.ts:570` |
 | warehouse | GET | `/warehouse/dispatch-shipments` | `WarehouseDispatchController.warehouseDispatchShipments` | permission | `warehouse:dispatch-pending:view`<br>`warehouse:outbounded:view` | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:16` |
 | warehouse | PATCH | `/warehouse/dispatch-shipments/:id/declaration` | `WarehouseDispatchController.updateWarehouseDispatchDeclaration` | permission | `warehouse:dispatch-pending:declaration-update` | `apps/api/src/modules/warehouse/dispatch/warehouse-dispatch.controller.ts:22` |
