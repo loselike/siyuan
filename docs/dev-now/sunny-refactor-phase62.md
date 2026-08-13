@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 62
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase56`
 - 基线提交：`b771790`
 - 47 基线：`git-9f337207fa3b_web-29da972cdbb7_api-5e1c513e1d3d`
@@ -26,3 +26,18 @@
 - 必须保留 Drawer `width=760`、`destroyOnHidden=false`、关闭行为、底部四项实时合计、确认按钮、客户 AutoComplete、组合号、箱规新增/删除及至少一条限制、数值精度、扫描时间、备注和异常。
 - 不移动 `addTodayManualPackage`、草稿联动、客户加载、校验、API 或列表刷新；不改权限、路由、请求 payload、文案、样式类或业务数据。
 - 迁移前现有固定样本测试覆盖手动添加多箱规 payload 与保存结果；先运行记录基线，再新增 Drawer 独立契约测试。
+
+## 实施、验证与审查
+
+- 新增受控 `WarehouseManualReceiptDrawer`，原样承接 760px Drawer、`destroyOnHidden=false`、客户匹配、多箱规编辑、四项实时合计、备注异常和确认/关闭事件；`WarehousePage` 继续唯一拥有客户加载、草稿联动、校验、API、刷新和提示。
+- `WarehousePage.tsx` 从 5,000 行降至 4,856 行；没有新增 API、状态、权限、依赖、样式或数据请求。
+- 新组件定向测试 2/2 通过，覆盖两箱规的 5 件、0.228 CBM、31.00 KG 合计，客户名称、快递号、件数、新增/删除箱规、确认、单箱规不可删除与关闭回调；Web typecheck 和 `git diff --check` 通过。
+- 迁移前宽页面固定样本在进入 Drawer 前即因既有矩阵视图不再存在 `单件方数` columnheader 而失败（`warehouse.test.tsx:54`）；该失败发生在本轮代码边界之外，未把旧断言改成通过证据。Drawer 的完整可观察契约由独立组件测试保护。
+- 手工逐项对照原 JSX 与新组件未发现宽度、销毁策略、字段、文案、精度、事件、禁用条件或样式类漂移；草稿和提交函数未移动，未发现 P0/P1/P2 副作用。
+
+## 发布与复审
+
+- 功能分支提交 `d9b685f`、发布协调提交 `0be4c7b`，均已推送；47 标准 Git 发布范围为 `web`，未运行 migration，发布 ID 为 `git-0be4c7b3faf7_web-8d5e542235da_api-5e1c513e1d3d`。
+- 线上 `WarehousePage.tsx` 与新 Drawer 源码 checksum 均与候选一致，Web 构建产物包含箱规说明；provenance `traceable/ok`，Web/API image 与 API release ID 匹配，公网 health 200，锁 free、recovery clear，最近关键日志为空。没有写业务数据。
+- 副作用：用户可见字段、布局、操作和保存逻辑未改；按项目规则未做浏览器视觉验收。
+- 新一轮比较：安全类 token/DTO 仍需产品决策；Repository 长期债务不变；`WarehousePage` 已降至 4,856 行，但继续拆零散 overlay 的边际收益下降。下一步最高价值候选转为今日收货的筛选/统计/表格工作区“数据 owner 与展示边界”，但必须先解决现有宽测试与矩阵视图契约漂移并把 props 分组，否则应转向 `MiscFeesPage.tsx` 4,042 行或 `App.tsx` 3,362 行，不沿当前方向硬拆。
