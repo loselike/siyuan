@@ -1943,10 +1943,10 @@
       "FinanceReceivableController.exportWaterReceipts"
     ],
     [
-      "POST /integrations/mojia/measurements @ DataController.receiveMojiaMeasurement",
+      "POST /integrations/mojia/measurements @ MojiaMeasurementController.receiveMojiaMeasurement",
       "none",
       [],
-      "DataController.receiveMojiaMeasurement"
+      "MojiaMeasurementController.receiveMojiaMeasurement"
     ],
     [
       "POST /master-data/agent-channels @ DataController.createMasterDataAgentChannel",
@@ -3550,11 +3550,11 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 187,
+    "dataControllerRoutesMax": 186,
     "apiClientMethodsMax": 365,
-    "apiClientDirectRequestsMax": 350,
-    "sharedRootImportFilesMax": 141,
-    "asAnyMax": 923,
+    "apiClientDirectRequestsMax": 341,
+    "sharedRootImportFilesMax": 143,
+    "asAnyMax": 921,
     "directProcessEnvMax": 36,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
@@ -3572,14 +3572,14 @@
     "prismaRepositoryMethodsMax": 715,
     "inMemoryRepositoryMethodsMax": 598,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 31997,
+      "apps/api/src/modules/prisma.repository.ts": 31983,
       "apps/api/src/modules/in-memory.repository.ts": 19416,
-      "apps/api/src/modules/data.controller.ts": 2256,
+      "apps/api/src/modules/data.controller.ts": 1945,
       "packages/shared/src/index.ts": 6339,
-      "apps/web/src/apiClient.ts": 2567,
+      "apps/web/src/apiClient.ts": 2566,
       "apps/web/src/styles.css": 13220,
-      "apps/web/src/modules/testSupport/appTestHarness.tsx": 6457,
-      "apps/web/src/modules/warehouse/WarehousePage.tsx": 5131,
+      "apps/web/src/modules/testSupport/appTestHarness.tsx": 6473,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4856,
       "apps/web/src/modules/pricing/PricingPage.tsx": 3699,
       "apps/web/src/modules/masterData/MasterDataPage.tsx": 3281
     }

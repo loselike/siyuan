@@ -1,6 +1,6 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { Download } from 'lucide-react';
 import { sortWarehouseTallyTasks, warehouseTallyChannels, warehouseTallyProgressStatusLabels } from '@siyuan/shared';
@@ -13,7 +13,7 @@ import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
 import { ShipmentRiskFlag, isShipmentRiskFlagActive } from '../shared/ShipmentRiskFlag';
-import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, paginationWhenNeeded, renderFilterActions, renderFilterField, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
+import { AppDatePicker, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, paginationWhenNeeded, renderFilterActions, renderFilterField, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
 import { addRowsWorksheet, createWorkbook, downloadWorkbook } from '../shared/excel';
 import {
   calculateWarehouseVolumetricWeight,
@@ -491,7 +491,6 @@ export function WarehousePage({
   const [cancellingTallySubmitting, setCancellingTallySubmitting] = useState(false);
   const [completingTallyTask, setCompletingTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
   const [editingCompletedTallyTask, setEditingCompletedTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
-  const [editingCompletedTallyCount, setEditingCompletedTallyCount] = useState(1);
   const [completedTallyCancelReason, setCompletedTallyCancelReason] = useState('');
   const [editingCompletedTallySubmitting, setEditingCompletedTallySubmitting] = useState(false);
   const [tallyCompleteError, setTallyCompleteError] = useState<string | null>(null);
@@ -3001,7 +3000,7 @@ export function WarehousePage({
       return;
     }
     setTallyCompleteError(null);
-    let printWindow: Window | null = null;
+    let printWindow: ReturnType<typeof window.open> = null;
     let completedTask: WarehouseTallyTaskSummary | undefined;
     try {
       const sourcePackages = completingTallyTask.packageIds
@@ -3119,7 +3118,6 @@ export function WarehousePage({
 
   function openEditCompletedTallyCount(task: WarehouseTallyTaskSummary) {
     setEditingCompletedTallyTask(task);
-    setEditingCompletedTallyCount(task.completedPackageCount ?? 1);
     setCompletedTallyCancelReason('');
   }
 

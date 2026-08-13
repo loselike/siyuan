@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { WarehouseManualReceiptDrawer } from './WarehouseManualReceiptDrawer';
 import type { WarehousePackageDraft } from './warehousePageModel';
@@ -25,8 +26,8 @@ const draft: WarehousePackageDraft = {
   ]
 };
 
-function renderDrawer(overrides: Partial<React.ComponentProps<typeof WarehouseManualReceiptDrawer>> = {}) {
-  const props: React.ComponentProps<typeof WarehouseManualReceiptDrawer> = {
+function renderDrawer(overrides: Partial<ComponentProps<typeof WarehouseManualReceiptDrawer>> = {}) {
+  const props: ComponentProps<typeof WarehouseManualReceiptDrawer> = {
     open: true,
     draft,
     customerOptions: [{ value: '9409', label: '9409 - Daloday' }],

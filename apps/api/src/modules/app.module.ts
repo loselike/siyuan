@@ -130,6 +130,9 @@ import { WarehousePackageLifecycleService } from './warehouse/package/warehouse-
 import { WarehouseMachineImportController } from './warehouse/package/warehouse-machine-import.controller.js';
 import { WAREHOUSE_MACHINE_IMPORT_REPOSITORY } from './warehouse/package/warehouse-machine-import.repository.js';
 import { WarehouseMachineImportService } from './warehouse/package/warehouse-machine-import.service.js';
+import { MojiaMeasurementController } from './warehouse/integration/mojia-measurement.controller.js';
+import { MOJIA_MEASUREMENT_REPOSITORY } from './warehouse/integration/mojia-measurement.repository.js';
+import { MojiaMeasurementService } from './warehouse/integration/mojia-measurement.service.js';
 import { WarehouseRentController } from './warehouse/rent/warehouse-rent.controller.js';
 import { WAREHOUSE_RENT_REPOSITORY } from './warehouse/rent/warehouse-rent.repository.js';
 import { WarehouseRentService } from './warehouse/rent/warehouse-rent.service.js';
@@ -233,6 +236,11 @@ const warehousePackageLifecycleRepositoryProvider = {
 
 const warehouseMachineImportRepositoryProvider = {
   provide: WAREHOUSE_MACHINE_IMPORT_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
+const mojiaMeasurementRepositoryProvider = {
+  provide: MOJIA_MEASUREMENT_REPOSITORY,
   useExisting: PrismaRepository
 };
 
@@ -373,6 +381,7 @@ const systemIdentityAdminRepositoryProvider = {
     TrackingManualEventCommandController,
     CarrierTaskCommandController,
     WarehouseDispatchController,
+    MojiaMeasurementController,
     WarehouseInventoryQueryController,
     WarehouseMachineImportController,
     WarehousePackageLifecycleController,
@@ -421,6 +430,8 @@ const systemIdentityAdminRepositoryProvider = {
     shipmentBusinessInvoiceRepositoryProvider,
     WarehouseMachineImportService,
     warehouseMachineImportRepositoryProvider,
+    MojiaMeasurementService,
+    mojiaMeasurementRepositoryProvider,
     WarehousePackageLifecycleService,
     warehousePackageLifecycleRepositoryProvider,
     WarehouseRentService,

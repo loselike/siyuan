@@ -36,8 +36,8 @@ const publicRoutePolicies = {
 
 const routePolicyEvidence = {
   'POST /integrations/mojia/measurements': {
-    file: 'apps/api/src/modules/data.controller.ts',
-    controller: 'DataController',
+    file: 'apps/api/src/modules/warehouse/integration/mojia-measurement.controller.ts',
+    controller: 'MojiaMeasurementController',
     handler: 'receiveMojiaMeasurement',
     validator: 'ensureMojiaDeviceToken'
   }
