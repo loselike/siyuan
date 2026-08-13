@@ -3541,10 +3541,10 @@ export function WarehousePage({
                     onChange={(event) => updateTodayFilterDraft({ datePreset: event.target.value as WarehouseTodayQuery['datePreset'] })}
                   >
                     <option value="TODAY">今日</option>
-                    <option value="WEEK">本周</option>
-                    <option value="LAST_7_DAYS">最近 7 天</option>
-                    <option value="MONTH">本月</option>
-                    <option value="CUSTOM">自定义</option>
+                    {canInStockView ? <option value="WEEK">本周</option> : null}
+                    {canInStockView ? <option value="LAST_7_DAYS">最近 7 天</option> : null}
+                    {canInStockView ? <option value="MONTH">本月</option> : null}
+                    {canInStockView ? <option value="CUSTOM">自定义</option> : null}
                   </select>
                 ))}
               </Col>

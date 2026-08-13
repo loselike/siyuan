@@ -6,7 +6,7 @@ import type {
   WarehousePackageSummary
 } from '@siyuan/shared';
 import { PrismaService } from '../../prisma.service.js';
-import type { PermissionKey, Principal } from '../../rbac.js';
+import { isAdministratorRole, type PermissionKey, type Principal } from '../../rbac.js';
 import { summarizeWarehouseInStockTotals } from './warehouse-inventory-query.logic.js';
 import {
   mapWarehousePackagesWithConfirmedTally,
@@ -53,7 +53,8 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
       this.authorizer.hasPermission(principal.role, 'warehouse:in-stock:view')
     ]);
     if (!canToday && !canInStock) throw new ForbiddenException('没有仓库包裹查看权限');
-    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isAdministratorRole(principal.role)
+      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
@@ -78,7 +79,8 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   ): Promise<WarehouseInStockPageResponse> {
     const page = Math.max(1, Math.trunc(Number(query.page) || 1));
     const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(query.pageSize) || 10)));
-    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isAdministratorRole(principal.role)
+      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
     // 数据范围由服务端岗位/权限派生；客户端 dataScope 只用于展示偏好，不能扩权。
     const businessCustomerScoped = !warehouseWideScope;
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length

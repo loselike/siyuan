@@ -37,7 +37,7 @@ function packageRow(overrides: Record<string, unknown> = {}) {
 function createRepository(prisma: Record<string, unknown>) {
   return new PrismaWarehouseInventoryQueryRepository(
     prisma as unknown as PrismaService,
-    { hasPermission: vi.fn().mockResolvedValue(false) }
+    { hasPermission: vi.fn().mockImplementation(async (role: Principal['role']) => role === 'ADMIN') }
   );
 }
 
@@ -60,6 +60,7 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
     const result = await repository.getWarehousePackages(admin);
 
     expect(packageFindMany).toHaveBeenCalledWith({
+      where: {},
       orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
     });
     expect(tallyFindMany).toHaveBeenCalledWith({
