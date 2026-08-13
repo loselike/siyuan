@@ -188,6 +188,7 @@ curl -I http://127.0.0.1:${APP_PORT:-8899}/
 - 服务未启动：查看 `docker compose logs api web postgres redis`，按容器日志处理。
 - 数据问题：不要执行 reset/seed；需要人工确认备份和修复 SQL 后再处理。
 - `RELEASE_RECOVERY_STATUS=required`：停止所有新发布。主推进会话根据 marker 的 phase、`.release-backups`、迁移记录、容器和公网 health 完成恢复；确认后执行 `npm run release:47:resolve -- --expected-marker-sha <lock-status 输出> --confirm-recovered`。checksum 已变化或仍持锁时命令拒绝清除。
+- `RECOVERY_REMOTE_PHASE=migrate-start` 或出现 `RELEASE_MIGRATION_TIMEOUT`：禁止自动重跑发布或迁移。先只读核对生产 `_prisma_migrations`、目标 migration 的 checksum/完成状态及相关数据库对象，再决定补全、回滚或清除 recovery；不能仅凭容器退出码假定数据库已回滚。
 
 ## 后续优化方向
 
