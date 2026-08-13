@@ -8,6 +8,17 @@ import type {
 } from '@siyuan/shared';
 import { PrismaService } from '../prisma.service.js';
 
+export interface MasterDataSnapshotSelection {
+  customers?: boolean;
+  customerSalespeople?: readonly string[];
+  financeCatalog?: boolean;
+  agents?: boolean;
+  agentChannels?: boolean;
+  channels?: boolean;
+  channelCategories?: boolean;
+  exchangeRates?: boolean;
+}
+
 /**
  * Read-only master-data slice extracted from the application repository.
  *
@@ -18,21 +29,31 @@ import { PrismaService } from '../prisma.service.js';
 export class PrismaMasterDataReadRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getSnapshot(): Promise<MasterDataSnapshot> {
+  async getSnapshot(selection: MasterDataSnapshotSelection = {}): Promise<MasterDataSnapshot> {
+    const includeCustomers = selection.customers !== false;
+    const includeFinanceCatalog = selection.financeCatalog !== false;
+    const includeAgents = selection.agents !== false;
+    const includeAgentChannels = selection.agentChannels !== false;
+    const includeChannels = selection.channels !== false;
+    const includeChannelCategories = selection.channelCategories !== false;
+    const includeExchangeRates = selection.exchangeRates !== false;
+    const customerWhere = selection.customerSalespeople
+      ? { salesperson: { in: [...selection.customerSalespeople] } }
+      : undefined;
     const [customers, contacts, customerUsers, salespersonAccounts, carriers, channels, channelCategories, roles, agents, agentChannels, surcharges, fuelRates, exchangeRates] = await Promise.all([
-      this.prisma.customer.findMany({ orderBy: { code: 'asc' } }),
-      this.prisma.customerContact.findMany({ include: { customer: true }, orderBy: { name: 'asc' } }),
-      this.prisma.user.findMany({ where: { customerId: { not: null }, role: { name: 'CUSTOMER' } }, include: { customer: true }, orderBy: { username: 'asc' } }),
-      this.prisma.user.findMany({ where: { site: { not: null } }, select: { username: true, site: true } }),
+      includeCustomers ? this.prisma.customer.findMany({ where: customerWhere, orderBy: { code: 'asc' } }) : [],
+      includeCustomers ? this.prisma.customerContact.findMany({ where: customerWhere ? { customer: customerWhere } : undefined, include: { customer: true }, orderBy: { name: 'asc' } }) : [],
+      includeCustomers ? this.prisma.user.findMany({ where: { customerId: { not: null }, role: { name: 'CUSTOMER' }, ...(customerWhere ? { customer: customerWhere } : {}) }, include: { customer: true }, orderBy: { username: 'asc' } }) : [],
+      includeCustomers ? this.prisma.user.findMany({ where: { site: { not: null } }, select: { username: true, site: true } }) : [],
       this.prisma.carrier.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.channel.findMany({ where: { deletedAt: null }, include: { carrier: true }, orderBy: { name: 'asc' } }),
-      this.prisma.channelCategory.findMany({ orderBy: { name: 'asc' } }),
+      includeChannels || includeFinanceCatalog ? this.prisma.channel.findMany({ where: { deletedAt: null }, include: { carrier: true }, orderBy: { name: 'asc' } }) : [],
+      includeChannelCategories ? this.prisma.channelCategory.findMany({ orderBy: { name: 'asc' } }) : [],
       this.prisma.role.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.agent.findMany({ orderBy: [{ createdAt: 'desc' } as any, { name: 'asc' }] }),
-      this.prisma.agentChannel.findMany({ include: { agent: true }, orderBy: [{ agent: { name: 'asc' } }, { channelName: 'asc' }] }),
-      this.prisma.surcharge.findMany({ orderBy: { name: 'asc' } }),
-      this.prisma.fuelRate.findMany({ orderBy: { activeAt: 'desc' } }),
-      (this.prisma as any).exchangeRate.findMany({ orderBy: { activeAt: 'desc' } })
+      includeAgents ? this.prisma.agent.findMany({ orderBy: [{ createdAt: 'desc' } as any, { name: 'asc' }] }) : [],
+      includeAgentChannels ? this.prisma.agentChannel.findMany({ include: { agent: true }, orderBy: [{ agent: { name: 'asc' } }, { channelName: 'asc' }] }) : [],
+      includeFinanceCatalog ? this.prisma.surcharge.findMany({ orderBy: { name: 'asc' } }) : [],
+      includeFinanceCatalog ? this.prisma.fuelRate.findMany({ orderBy: { activeAt: 'desc' } }) : [],
+      includeExchangeRates ? (this.prisma as any).exchangeRate.findMany({ orderBy: { activeAt: 'desc' } }) : []
     ]);
     const channelMap = new Map(channels.map((channel) => [channel.id, channel.name]));
     const salespersonSiteByUsername = new Map(salespersonAccounts.map((account) => [account.username, account.site]));
@@ -79,7 +100,7 @@ export class PrismaMasterDataReadRepository {
         enabled: carrier.enabled
       })),
       channelCategories: channelCategories.map((category) => mapChannelCategory(category)),
-      channels: channels.map((channel) => ({
+      channels: includeChannels ? channels.map((channel) => ({
         id: channel.id,
         name: channel.name,
         carrierId: channel.carrierId ?? undefined,
@@ -101,7 +122,7 @@ export class PrismaMasterDataReadRepository {
         densityRatio: channel.densityRatio === null ? undefined : Number(channel.densityRatio),
         remoteAreaRule: channel.remoteAreaRule ?? 'NONE',
         enabled: channel.enabled
-      })),
+      })) : [],
       agents: agents.map((agent) => ({
         id: agent.id,
         code: agent.code ?? agent.name.toUpperCase().slice(0, 6),
