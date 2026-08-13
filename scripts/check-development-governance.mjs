@@ -33,7 +33,9 @@ const requiredGovernanceFiles = [
   'scripts/lib/47-release-images.sh',
   'scripts/release-image-fence.test.sh',
   'scripts/docker-container-image-id.test.sh',
-  'scripts/release-fingerprint-artifact-filter.test.sh'
+  'scripts/release-fingerprint-artifact-filter.test.sh',
+  'scripts/lib/47-release-ssh.sh',
+  'scripts/release-ssh-policy.test.sh'
 ];
 
 const failures = [];
@@ -110,6 +112,7 @@ for (const forbiddenText of [
 const deployScript = readFileSync('scripts/deploy-47.sh', 'utf8');
 const syncScript = readFileSync('scripts/sync-47.sh', 'utf8');
 const releaseLockScript = readFileSync('scripts/lib/47-release-lock.sh', 'utf8');
+const releaseSshScript = readFileSync('scripts/lib/47-release-ssh.sh', 'utf8');
 const releaseImageScript = readFileSync('scripts/lib/47-release-images.sh', 'utf8');
 const whitelistDeployScript = readFileSync('scripts/deploy-47-whitelist.sh', 'utf8');
 const casSyncScript = readFileSync('scripts/cas-sync-47-file.sh', 'utf8');
@@ -271,6 +274,40 @@ if (!releaseLockScript.includes('.siyuan-release-lock') || !releaseLockScript.in
 }
 if (!releaseLockScript.includes('heartbeat_at') || !releaseLockScript.includes('siyuan_47_start_release_lock_heartbeat')) {
   failures.push('47 release lock must expose a heartbeat for audited stale-lock recovery');
+}
+if (!releaseLockScript.includes('47-release-ssh.sh')
+  || !releaseSshScript.includes('ServerAliveInterval')
+  || !releaseSshScript.includes('ServerAliveCountMax')
+  || !releaseSshScript.includes('siyuan_47_scp')) {
+  failures.push('47 release SSH/SCP must share bounded connect and keepalive policy');
+}
+for (const releaseScript of [deployScript, whitelistDeployScript]) {
+  if (!releaseScript.includes('siyuan_47_run_bounded_build docker compose build')
+    || !releaseScript.includes('SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800')
+    || !releaseScript.includes('siyuan_47_record_release_phase build-start')
+    || !releaseScript.includes('siyuan_47_record_release_phase health-complete')) {
+    failures.push('47 runtime build paths must emit phases and enforce a bounded plain-progress build');
+  }
+}
+if (!releaseSshScript.includes('timeout --signal=TERM --kill-after=60')
+  || !releaseSshScript.includes('RELEASE_BUILD_TIMEOUT')
+  || !releaseSshScript.includes('RELEASE_MIGRATION_TIMEOUT')
+  || !releaseSshScript.includes('manual_database_verification=required')
+  || !releaseSshScript.includes('ChannelTimeout=session=')
+  || !releaseSshScript.includes('ssh -G')
+  || !releaseLockScript.includes('remote_phase=$remote_phase')) {
+  failures.push('47 failed releases must retain the bounded-build and last-remote-phase recovery evidence');
+}
+for (const releaseScript of [deployScript, whitelistDeployScript]) {
+  if (!releaseScript.includes('siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS"')) {
+    failures.push('47 release paths must bound the complete remote runtime command');
+  }
+  if (!releaseScript.includes('SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS')) {
+    failures.push('47 release paths must bound the remote success-state command');
+  }
+  if (!releaseScript.includes('siyuan_47_run_bounded_migration docker compose')) {
+    failures.push('47 migration paths must have an independent timeout and manual-verification failure mode');
+  }
 }
 if (!releaseLockScript.includes('RELEASE_RECOVERY_REQUIRED') || !releaseLockScript.includes('exit 81')) {
   failures.push('47 release queue must block after an unresolved post-mutation failure');

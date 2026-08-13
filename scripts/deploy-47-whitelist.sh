@@ -21,6 +21,8 @@ APPROVED_MIGRATIONS=()
 APPROVED_MIGRATION_SPECS=()
 NO_CACHE=false
 ADOPT_CURRENT_RUNTIME=false
+SIYUAN_47_BUILD_TIMEOUT_SECONDS="${SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800}"
+SIYUAN_47_MIGRATION_TIMEOUT_SECONDS="${SIYUAN_47_MIGRATION_TIMEOUT_SECONDS:-900}"
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -57,6 +59,14 @@ case "$SCOPE" in
   none|web|api|web+api|api+migrate|web+api+migrate) ;;
   *) echo "Unsupported whitelist release scope: $SCOPE" >&2; exit 2 ;;
 esac
+if ! [[ "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_SSH_CHANNEL_IDLE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "47 build, migration, remote, state, and channel timeouts must be positive integers." >&2
+  exit 2
+fi
 if [[ "${#SOURCE_FILES[@]}" -eq 0 ]]; then
   echo "At least one --file candidate is required." >&2
   exit 2
@@ -177,7 +187,7 @@ cleanup_release_lock() {
     for index in "${!APPLIED_TARGETS[@]}"; do
       rollback_args+=("${APPLIED_TARGETS[$index]}" "${APPLIED_EXPECTED_SHAS[$index]}" "${APPLIED_BACKUP_DIRS[$index]}")
     done
-    if ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+    if siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- \
       "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SIYUAN_47_DIR" "${rollback_args[@]}" <<'REMOTE_SCRIPT'
 set -eu
 lock_dir="$1"; expected_token="$2"; remote_dir="$3"; shift 3
@@ -233,10 +243,10 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 CAS_PHASE=true
 
-PREVIOUS_RELEASE_ID="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" \
+PREVIOUS_RELEASE_ID="$(siyuan_47_ssh "$SIYUAN_47_REMOTE" \
   "sed -n 's/^RELEASE_ID=//p' '$SIYUAN_47_DIR/.siyuan-release-state' 2>/dev/null | tail -1")"
 [[ -n "$PREVIOUS_RELEASE_ID" ]] || PREVIOUS_RELEASE_ID="MISSING"
-runtime_image_state_match="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- "$SIYUAN_47_DIR" <<'REMOTE_SCRIPT'
+runtime_image_state_match="$(siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- "$SIYUAN_47_DIR" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"
 cd "$remote_dir"
@@ -309,7 +319,7 @@ for index in "${!SOURCE_FILES[@]}"; do
 done
 
 if [[ "$NEEDS_MIGRATE" == true ]]; then
-  ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+  siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" bash -s -- \
     "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$APPROVED_MIGRATIONS_CSV" "$APPROVED_MIGRATION_SPECS_CSV" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"; lock_dir="$2"; expected_token="$3"; approved_migrations_csv="$4"; approved_migration_specs_csv="$5"
@@ -347,7 +357,7 @@ fi
 CAS_PHASE=false
 FAILURE_PHASE="whitelist-build-migrate-restart-health"
 
-EXPECTED_SOURCE_FINGERPRINTS="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" \
+EXPECTED_SOURCE_FINGERPRINTS="$(siyuan_47_ssh "$SIYUAN_47_REMOTE" \
   "cd '$SIYUAN_47_DIR' && bash scripts/print-47-release-fingerprints.sh")"
 EXPECTED_SOURCE_WEB="$(printf '%s\n' "$EXPECTED_SOURCE_FINGERPRINTS" | sed -n 's/^WEB_FINGERPRINT=//p')"
 EXPECTED_SOURCE_API="$(printf '%s\n' "$EXPECTED_SOURCE_FINGERPRINTS" | sed -n 's/^API_FINGERPRINT=//p')"
@@ -358,8 +368,8 @@ EXPECTED_SOURCE_MIGRATE="$(printf '%s\n' "$EXPECTED_SOURCE_FINGERPRINTS" | sed -
 }
 
 if [[ "$SCOPE" != "none" ]]; then
-  ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
-  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_ARG" "$NO_CACHE" "$WHITELIST_RELEASE_ID" "$EXPECTED_SOURCE_WEB" "$EXPECTED_SOURCE_API" "$EXPECTED_SOURCE_MIGRATE" <<'REMOTE_SCRIPT'
+  siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" bash -s -- \
+  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_ARG" "$NO_CACHE" "$WHITELIST_RELEASE_ID" "$EXPECTED_SOURCE_WEB" "$EXPECTED_SOURCE_API" "$EXPECTED_SOURCE_MIGRATE" "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"
 lock_dir="$2"
@@ -371,6 +381,8 @@ whitelist_release_id="${7:-unknown}"
 expected_source_web="$8"
 expected_source_api="$9"
 expected_source_migrate="${10}"
+build_timeout_seconds="${11}"
+migration_timeout_seconds="${12}"
 [[ "$approved_migrations_csv" == __SIYUAN_EMPTY__ ]] && approved_migrations_csv=""
 if [[ ! "$whitelist_release_id" =~ ^whitelist-[0-9a-f]{24}$ ]]; then
   echo "RELEASE_ID_ARGUMENT_INVALID actual=$whitelist_release_id" >&2
@@ -384,6 +396,8 @@ fi
 cd "$remote_dir"
 # shellcheck source=lib/47-release-images.sh
 source scripts/lib/47-release-images.sh
+# shellcheck source=lib/47-release-ssh.sh
+source scripts/lib/47-release-ssh.sh
 
 verify_whitelist_source_snapshot() {
   SIYUAN_RELEASE_REPO_ROOT="$remote_dir" bash scripts/verify-release-source-snapshot.sh \
@@ -427,18 +441,25 @@ migrate_changed=false
 [[ "$scope" == *api* ]] && api_changed=true
 [[ "$scope" == *web* ]] && web_changed=true
 [[ "$scope" == *migrate* ]] && migrate_changed=true
-docker compose build "${build_args[@]}" "${build_services[@]}"
+siyuan_47_record_release_phase build-start "$lock_dir" "$expected_token"
+SIYUAN_47_BUILD_TIMEOUT_SECONDS="$build_timeout_seconds" BUILDKIT_PROGRESS=plain \
+  siyuan_47_run_bounded_build docker compose build "${build_args[@]}" "${build_services[@]}"
+siyuan_47_record_release_phase build-complete "$lock_dir" "$expected_token"
 verify_whitelist_source_snapshot
 siyuan_47_capture_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 if [[ "$scope" == *"+migrate" ]]; then
+  siyuan_47_record_release_phase migrate-start "$lock_dir" "$expected_token"
   siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
-  docker compose --profile tools run --rm db-migrate </dev/null
+  SIYUAN_47_MIGRATION_TIMEOUT_SECONDS="$migration_timeout_seconds" \
+    siyuan_47_run_bounded_migration docker compose --profile tools run --rm db-migrate </dev/null
+  siyuan_47_record_release_phase migrate-complete "$lock_dir" "$expected_token"
 fi
 if [[ "$scope" == *api* || "$scope" == *web* ]]; then
   siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 fi
 verify_whitelist_source_snapshot
+siyuan_47_record_release_phase restart-start "$lock_dir" "$expected_token"
 if ! docker compose up -d --no-deps "${restart_services[@]}"; then
   cleaned_created_replacement=false
   for service in "${restart_services[@]}"; do
@@ -466,6 +487,7 @@ if ! docker compose up -d --no-deps "${restart_services[@]}"; then
   echo "COMPOSE_RECREATE_RETRY=once"
   docker compose up -d --no-deps "${restart_services[@]}"
 fi
+siyuan_47_record_release_phase restart-complete "$lock_dir" "$expected_token"
 
 for service in "${restart_services[@]}"; do
   expected_image=""
@@ -481,6 +503,7 @@ for service in "${restart_services[@]}"; do
   fi
 done
 
+siyuan_47_record_release_phase health-start "$lock_dir" "$expected_token"
 for _ in $(seq 1 45); do
   if docker compose exec -T api node -e "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))" </dev/null >/dev/null 2>&1; then
     break
@@ -496,6 +519,7 @@ if [[ "$scope" == *"web"* ]]; then
   [[ "$container_index" == "$served_index" ]]
 fi
 docker compose ps
+siyuan_47_record_release_phase health-complete "$lock_dir" "$expected_token"
 trap - ERR
 REMOTE_SCRIPT
 
@@ -506,13 +530,17 @@ REMOTE_SCRIPT
 else
   echo "Whitelist files synchronized under the 47 release lock; no service rebuild requested."
 fi
-ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+siyuan_47_release_phase state-write-start
+siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" bash -s -- \
   "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SIYUAN_47_DIR" "$WHITELIST_RELEASE_ID" <<'REMOTE_SCRIPT'
 set -eu
 lock_dir="$1"
 expected_token="$2"
 remote_dir="$3"
 release_id="$4"
+# shellcheck source=lib/47-release-ssh.sh
+source "$remote_dir/scripts/lib/47-release-ssh.sh"
+siyuan_47_record_release_phase state-write-start "$lock_dir" "$expected_token"
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [ "$actual_token" != "$expected_token" ]; then
   echo "47 release lock ownership changed before whitelist state update." >&2
@@ -542,6 +570,7 @@ WEB_IMAGE_ID=$web_image_id
 API_IMAGE_ID=$api_image_id
 STATE
 mv "$state_tmp" "$state_file"
+siyuan_47_record_release_phase state-write-complete "$lock_dir" "$expected_token"
 REMOTE_SCRIPT
 SOURCE_ROLLBACK_REQUIRED=false
 echo

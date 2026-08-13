@@ -1,0 +1,38 @@
+# Sunny 深度重构 Phase 58
+
+- 状态：`in_progress`
+- 分支：`codex/sunny-refactor-phase56`
+- 基线提交：`09fdb158d897d18146987dbe511fc4b774d20740`
+- 47 基线：`git-3964a91a2636_web-3c24fed0279c_api-40e35302377a`
+- 用户验收目标：每个切片后重新审查和排序；整个系统业务逻辑不得改变。
+
+## 本轮重评
+
+- P0 发布稳定性：Phase57 标准 Web 发布在新容器已运行、静态标记和 health 均正常后，SSH 仍无输出悬停约 45 分钟，成功 state/receipt 未落盘；人工中断后进入 recovery-required。相同 SSH 结束悬停此前也在 CAS 发布出现。
+- P0 安全/数据：token 撤销和全局 DTO 校验会改变外部行为，继续保持待确认。
+- P1 前端/UI：仓库看板空入口已解决；继续拆 5,121 行 WarehousePage 的即时收益低于恢复可重复发布能力。
+- P1 后端维护性：Prisma/InMemory 仍为 31,997/19,416 行，但不影响当前系统每次交付的闭环。
+- 选择：转向发布可靠性。固定样本为“远端命令持续 30 分钟没有业务输出，但 SSH 链路健康”和“远端阶段无进展达到上限”两条路径；前者必须保活，后者必须有界失败并留下可诊断阶段。
+
+## 成熟参考与取舍
+
+- OpenSSH Portable：https://github.com/openssh/openssh-portable （BSD）。采用客户端 `ServerAliveInterval` / `ServerAliveCountMax` 检测失联，而不修改服务器 sshd 全局配置。
+- Moby BuildKit：https://github.com/moby/buildkit （Apache-2.0）。采用 plain progress 作为长构建可诊断输出；不引入独立 buildkitd/buildctl 或更换 Docker Compose 构建体系。
+- Compose Specification：https://github.com/compose-spec/compose-spec （Apache-2.0）。继续以显式 health probe 和超时判断 readiness；不把“容器已启动”当作发布成功。
+
+## 风险与行为保护
+
+- 风险：过短超时误杀正常构建、超时后远端子进程继续运行、诊断输出泄露敏感信息。
+- 保护：构建上限 30 分钟、迁移独立上限 15 分钟、整段远端运行上限 60 分钟、state 写入上限 5 分钟，均在 47 服务端终止客户端进程组；另以 OpenSSH `ChannelTimeout=session=300s` 限制通道连续无流量，覆盖远端 shell 已退出但后代进程仍占有 stdout/stderr 的 EOF 悬停，并在任何 mutation 前用 `ssh -G` 探测能力、缺失则 fail closed。迁移超时进入 recovery-required，禁止自动重跑，必须先核对生产迁移状态。只输出并持久化阶段名和时间，不输出 env/token；保留全局锁、镜像 fencing、health、receipt/state 原有顺序；不改业务源码、镜像内容、数据库或业务配置。Docker daemon 侧任务取消速度仍需在后续受控构建中观察，不宣称仅凭 shell 测试即可证明。
+
+## 本地与 47 证据
+
+- `release-ssh-policy.test.sh` 覆盖 SSH/SCP keepalive 参数、非法设置拒绝、锁 token 阶段写入、构建/迁移超时退出码、recovery `remote_phase` 和两条发布入口接线。
+- Shell 语法、`git diff --check`、release image fence、完整治理、434 路由契约及安全契约 3/3 通过。
+- 47 只读探针确认 uutils `timeout 0.8.0` 支持所用参数，真实超时退出 124；本机 OpenSSH 10.2 的 `ssh -G` 明确解析 `ChannelTimeout session=300s`；当前锁 free、recovery clear。
+- 独立风险审查发现并修复“40 分钟累计预算可能在 migration 中途耗尽”的 P1；当前为 30 分钟 build + 15 分钟 migration + 15 分钟 restart/health 缓冲。
+
+## 独立复核
+
+- 风险审查第二轮发现“远端 shell 已退出、后代仍占 SSH channel”不会被服务端 timeout 或 keepalive 终止；已增加客户端 `ChannelTimeout` 与 `ssh -G` fail-closed 探测，并把全部 timeout 参数提前到任何 mutation 前校验。
+- 最新复核未发现 P0/P1 发布阻断。残余 P2 仅为 Docker daemon 侧 BuildKit 取消速度需在首次受控运行时构建继续观察，本轮 governance-only 同步不触发构建。

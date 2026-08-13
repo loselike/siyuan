@@ -27,6 +27,8 @@ APPROVED_BOOTSTRAP_BUNDLE_SHA256="fb419d6d56e6ec807ebbb136a7ad8daa7791b9c94e8deb
 APPROVED_BOOTSTRAP_MIGRATION_EXCEPTIONS_SHA256="13e4dcb6aabeef0ba3585de72c105f4b7bb48c24d1159b3579e403aea2746a84"
 REMOTE_MUTATION_STARTED=false
 FAILURE_PHASE="standard-deploy"
+SIYUAN_47_BUILD_TIMEOUT_SECONDS="${SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800}"
+SIYUAN_47_MIGRATION_TIMEOUT_SECONDS="${SIYUAN_47_MIGRATION_TIMEOUT_SECONDS:-900}"
 
 sha256_file_early() {
   if command -v shasum >/dev/null 2>&1; then
@@ -114,6 +116,14 @@ done
 
 if [[ -n "$EXPECTED_RELEASE_ID" && ! "$EXPECTED_RELEASE_ID" =~ ^[A-Za-z0-9._:-]+$ ]]; then
   echo "Expected release ID contains unsupported characters." >&2
+  exit 2
+fi
+if ! [[ "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_SSH_CHANNEL_IDLE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "47 build, migration, remote, state, and channel timeouts must be positive integers." >&2
   exit 2
 fi
 if [[ -n "$BOOTSTRAP_MANIFEST_DIR" || "$CONFIRM_BOOTSTRAP" == true ]]; then
@@ -417,7 +427,7 @@ if [[ "$MODE" == "apply" ]]; then
   fi
 fi
 
-REMOTE_STATE="$(ssh -o ConnectTimeout=20 "$REMOTE" "cat '$REMOTE_DIR/.siyuan-release-state' 2>/dev/null || true")"
+REMOTE_STATE="$(siyuan_47_ssh "$REMOTE" "cat '$REMOTE_DIR/.siyuan-release-state' 2>/dev/null || true")"
 
 state_value() {
   printf '%s\n' "$REMOTE_STATE" | sed -n "s/^$1=//p" | tail -1
@@ -495,7 +505,7 @@ if [[ "$BOOTSTRAP_MODE" == true ]]; then
       printf '%s|%s\n' "${migration_dir##*/}" "$(sha256_file "$migration_dir/migration.sql")"
     done
   } | LC_ALL=C sort)"
-  REMOTE_APPLIED_MIGRATION_MANIFEST="$(ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- "$REMOTE_DIR" <<'REMOTE_SCRIPT'
+  REMOTE_APPLIED_MIGRATION_MANIFEST="$(siyuan_47_ssh "$REMOTE" bash -s -- "$REMOTE_DIR" <<'REMOTE_SCRIPT'
 set -euo pipefail
 cd "$1"
 docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -A -t -F "|" -c "SELECT migration_name, checksum FROM \"_prisma_migrations\" WHERE finished_at IS NOT NULL AND rolled_back_at IS NULL ORDER BY migration_name"'
@@ -592,7 +602,7 @@ if [[ "$SOURCE_BUNDLE_MODE" == true ]]; then
   FAILURE_PHASE="source-bundle-sync-build-health"
   local_bundle="$SOURCE_BUNDLE_TMP/$GIT_COMMIT.bundle"
   remote_bundle_stage="$REMOTE_DIR/$SOURCE_BUNDLE_PATH.tmp.$SIYUAN_47_RELEASE_LOCK_TOKEN"
-  ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
+  siyuan_47_ssh "$REMOTE" bash -s -- \
     "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"
@@ -608,8 +618,8 @@ mkdir -p "$bundle_dir"
   exit 87
 }
 REMOTE_SCRIPT
-  scp -q "$local_bundle" "$REMOTE:$remote_bundle_stage"
-  ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
+  siyuan_47_scp -q "$local_bundle" "$REMOTE:$remote_bundle_stage"
+  siyuan_47_ssh "$REMOTE" bash -s -- \
     "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
     "$SOURCE_BUNDLE_PATH" "$SOURCE_BUNDLE_SHA256" "$GIT_COMMIT" <<'REMOTE_SCRIPT'
 set -euo pipefail
@@ -666,10 +676,11 @@ if [[ "$WEB_CHANGED" == true || "$API_CHANGED" == true ]]; then
   FAILURE_PHASE="standard-build-restart-health"
 fi
 
-ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
+siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" "$REMOTE" bash -s -- \
   "$REMOTE_DIR" "$WEB_CHANGED" "$API_CHANGED" "$DB_MIGRATION_REQUIRED" \
   "$WEB_FINGERPRINT" "$API_FINGERPRINT" "$MIGRATE_FINGERPRINT" "$RELEASE_ID" \
-  "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" <<'REMOTE_SCRIPT'
+  "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
+  "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" <<'REMOTE_SCRIPT'
 set -euo pipefail
 REMOTE_DIR="$1"
 WEB_CHANGED="$2"
@@ -681,9 +692,13 @@ MIGRATE_FINGERPRINT="$7"
 RELEASE_ID="$8"
 RELEASE_LOCK_DIR="$9"
 RELEASE_LOCK_TOKEN="${10}"
+BUILD_TIMEOUT_SECONDS="${11}"
+MIGRATION_TIMEOUT_SECONDS="${12}"
 cd "$REMOTE_DIR"
 # shellcheck source=lib/47-release-images.sh
 source scripts/lib/47-release-images.sh
+# shellcheck source=lib/47-release-ssh.sh
+source scripts/lib/47-release-ssh.sh
 actual_lock_token="$(sed -n '1p' "$RELEASE_LOCK_DIR/token" 2>/dev/null || true)"
 if [[ "$actual_lock_token" != "$RELEASE_LOCK_TOKEN" ]]; then
   echo "47 release lock ownership changed before build." >&2
@@ -713,24 +728,33 @@ build_services=()
 [[ "$API_CHANGED" == true ]] && build_services+=(api)
 [[ "$WEB_CHANGED" == true ]] && build_services+=(web)
 if ((${#build_services[@]})); then
-  docker compose build "${build_services[@]}"
+  siyuan_47_record_release_phase build-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
+  SIYUAN_47_BUILD_TIMEOUT_SECONDS="$BUILD_TIMEOUT_SECONDS" BUILDKIT_PROGRESS=plain \
+    siyuan_47_run_bounded_build docker compose build "${build_services[@]}"
+  siyuan_47_record_release_phase build-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
   siyuan_47_capture_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
   siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
 fi
 
 if [[ "$MIGRATE_CHANGED" == true ]]; then
+  siyuan_47_record_release_phase migrate-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
   siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
-  docker compose --profile tools run --rm db-migrate </dev/null
+  SIYUAN_47_MIGRATION_TIMEOUT_SECONDS="$MIGRATION_TIMEOUT_SECONDS" \
+    siyuan_47_run_bounded_migration docker compose --profile tools run --rm db-migrate </dev/null
+  siyuan_47_record_release_phase migrate-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
 fi
 
 restart_services=()
 [[ "$API_CHANGED" == true ]] && restart_services+=(api)
 [[ "$WEB_CHANGED" == true ]] && restart_services+=(web)
 if ((${#restart_services[@]})); then
+  siyuan_47_record_release_phase restart-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
   siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
   docker compose up -d --remove-orphans "${restart_services[@]}"
+  siyuan_47_record_release_phase restart-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
 fi
 
+siyuan_47_record_release_phase health-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
 for _ in $(seq 1 45); do
   if docker compose exec -T api node -e "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))" </dev/null >/dev/null 2>&1; then
     break
@@ -745,16 +769,20 @@ served_index="$(curl --retry 10 --retry-delay 1 --retry-connrefused -fsS "http:/
 [[ "$container_index" == "$served_index" ]]
 
 docker compose ps
+siyuan_47_record_release_phase health-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
 trap - ERR
 REMOTE_SCRIPT
 
+siyuan_47_release_phase public-health-start
 curl --retry 10 --retry-delay 1 --retry-connrefused -fsS "$PUBLIC_URL/api/health"
 curl --retry 10 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/"
+siyuan_47_release_phase public-health-complete
 SOURCE_PROVENANCE="ORIGIN_BRANCH"
 [[ "$SOURCE_BUNDLE_MODE" == true ]] && SOURCE_PROVENANCE="GIT_BUNDLE"
 SOURCE_BUNDLE_PATH_ARG="${SOURCE_BUNDLE_PATH:-__SIYUAN_NONE__}"
 SOURCE_BUNDLE_SHA256_ARG="${SOURCE_BUNDLE_SHA256:-__SIYUAN_NONE__}"
-ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- \
+siyuan_47_release_phase state-write-start
+siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" "$REMOTE" bash -s -- \
   "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
   "$WEB_FINGERPRINT" "$API_FINGERPRINT" "$MIGRATE_FINGERPRINT" "$RELEASE_ID" \
   "$GIT_COMMIT" "$GIT_BRANCH" "$RELEASED_AT" \
@@ -775,6 +803,9 @@ source_bundle_path="${12}"
 source_bundle_sha256="${13}"
 [ "$source_bundle_path" != __SIYUAN_NONE__ ] || source_bundle_path=""
 [ "$source_bundle_sha256" != __SIYUAN_NONE__ ] || source_bundle_sha256=""
+# shellcheck source=lib/47-release-ssh.sh
+source "$remote_dir/scripts/lib/47-release-ssh.sh"
+siyuan_47_record_release_phase state-write-start "$lock_dir" "$expected_token"
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [ "$actual_token" != "$expected_token" ]; then
   echo "47 release lock ownership changed before success-state update." >&2
@@ -880,6 +911,7 @@ RELEASE_RECEIPT_PATH=.release-receipts/$release_id.env
 RELEASE_RECEIPT_SHA256=$receipt_sha256
 STATE
 mv "$state_tmp" "$state_file"
+siyuan_47_record_release_phase state-write-complete "$lock_dir" "$expected_token"
 REMOTE_SCRIPT
 echo
 echo "47 deployment completed successfully."
