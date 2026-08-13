@@ -266,6 +266,9 @@ if (!captureBaselineScript.includes('siyuan_47_acquire_release_lock') || !captur
 if (!captureBaselineScript.includes('RELEASE_BASELINE_TREE_MISMATCH') || !captureBaselineScript.includes('BASELINE_RECEIPT=') || !deployScript.includes('git merge-base --is-ancestor')) {
   failures.push('standard release baseline must bind an exact remote tree to the same worktree branch and ancestor commit');
 }
+if (!captureBaselineScript.includes('siyuan_47_ssh_bounded_remote')) {
+  failures.push('47 baseline capture must bound remote reads and SSH channel EOF waits');
+}
 if (!syncScript.includes('siyuan_47_verify_release_lock')) {
   failures.push('sync:47 apply must verify the global release lock');
 }

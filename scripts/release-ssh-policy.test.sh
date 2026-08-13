@@ -138,5 +138,6 @@ for release_script in deploy-47.sh deploy-47-whitelist.sh; do
   grep -q 'siyuan_47_record_release_phase restart-start' "$SCRIPT_DIR/$release_script"
   grep -q 'siyuan_47_record_release_phase health-complete' "$SCRIPT_DIR/$release_script"
 done
+grep -q 'siyuan_47_ssh_bounded_remote' "$SCRIPT_DIR/capture-47-release-baseline.sh"
 
 echo '[release-ssh-policy] PASS'
