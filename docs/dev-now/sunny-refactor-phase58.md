@@ -44,3 +44,4 @@
 - 线上三份关键脚本 checksum 与发布协调 worktree 一致；真实 uutils timeout 返回 124；provenance traceable、Web/API image match、API release ID match、容器 running、锁 free、recovery clear。
 - 新一轮排序：安全/数据正确性方面 token 主动撤销与全局 DTO 校验仍会改变外部行为，继续待单独产品决定；高频数据流方面 `App.tsx` 仍有跨模块状态，但上一轮已验证的路由数据所有权策略可继续小步扩展；后端效率方面 Prisma Repository 仍约 32k 行，但已存在模块级 query/command port，继续结构切片的边际价值低于修复明确性能浪费。
 - 当前最高价值候选转为仓库库存查询：`warehouse-inventory-query.repository.ts` 的分页请求仍对全部命中包裹执行一次 `findMany({ select: totalsSelect })` 再在进程内汇总，数据增长时每次列表刷新成本随全量匹配线性增长。下一步先固定响应总计/分页等价样本，再参考 Prisma 聚合与成熟后台查询实现，把合计下推数据库；不改筛选、权限、金额或响应字段。
+- 下一候选参考：[Vendure OrderService](https://github.com/vendurehq/vendure/blob/master/packages/core/src/service/services/order.service.ts) 用同一查询边界返回分页 `items/totalItems`，[Medusa v2.14.2](https://github.com/medusajs/medusa/releases/tag/v2.14.2) 把大型目录筛选从应用层后处理下推索引引擎。Sunny 只借鉴“筛选/聚合尽量在数据源执行、响应契约保持稳定”，不引入 TypeORM、Medusa index engine 或其业务模型；许可证分别为 GPL-3.0 与 MIT，仅记录设计依据，不复制代码。
