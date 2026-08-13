@@ -41,7 +41,7 @@ grep -q 'COMPOSE_RECREATE_RETRY=once' "$SCRIPT_DIR/deploy-47-whitelist.sh"
 grep -q 'candidate_status.*created.*candidate_image.*expected_image.*candidate_workdir.*remote_dir' "$SCRIPT_DIR/deploy-47-whitelist.sh"
 grep -q 'SOURCE_ROLLBACK_REQUIRED=true' "$SCRIPT_DIR/deploy-47-whitelist.sh"
 grep -q 'WHITELIST_SOURCE_SNAPSHOT_CAPTURE_FAILED' "$SCRIPT_DIR/deploy-47-whitelist.sh"
-grep -q 'WHITELIST_SOURCE_SNAPSHOT_DRIFT' "$SCRIPT_DIR/deploy-47-whitelist.sh"
+grep -q 'verify-release-source-snapshot.sh' "$SCRIPT_DIR/deploy-47-whitelist.sh"
 [[ "$(grep -c '^verify_whitelist_source_snapshot$' "$SCRIPT_DIR/deploy-47-whitelist.sh")" -eq 2 ]]
 
 printf '%s\t%s\n%s\t%s\n%s\t%s\n' \

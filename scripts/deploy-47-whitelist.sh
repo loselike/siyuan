@@ -386,15 +386,8 @@ cd "$remote_dir"
 source scripts/lib/47-release-images.sh
 
 verify_whitelist_source_snapshot() {
-  local fingerprints actual_web actual_api actual_migrate
-  fingerprints="$(bash scripts/print-47-release-fingerprints.sh)"
-  actual_web="$(printf '%s\n' "$fingerprints" | sed -n 's/^WEB_FINGERPRINT=//p')"
-  actual_api="$(printf '%s\n' "$fingerprints" | sed -n 's/^API_FINGERPRINT=//p')"
-  actual_migrate="$(printf '%s\n' "$fingerprints" | sed -n 's/^MIGRATE_FINGERPRINT=//p')"
-  if [[ "$actual_web" != "$expected_source_web" || "$actual_api" != "$expected_source_api" || "$actual_migrate" != "$expected_source_migrate" ]]; then
-    echo "WHITELIST_SOURCE_SNAPSHOT_DRIFT expected_web=$expected_source_web actual_web=$actual_web expected_api=$expected_source_api actual_api=$actual_api expected_migrate=$expected_source_migrate actual_migrate=$actual_migrate" >&2
-    exit 83
-  fi
+  SIYUAN_RELEASE_REPO_ROOT="$remote_dir" bash scripts/verify-release-source-snapshot.sh \
+    "$expected_source_web" "$expected_source_api" "$expected_source_migrate"
 }
 
 siyuan_47_export_release_images "$whitelist_release_id"

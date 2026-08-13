@@ -290,7 +290,7 @@ if (!releaseImageScript.includes('RELEASE_IMAGE_FENCE_MISMATCH')
   || !whitelistDeployScript.includes('COMPOSE_RECREATE_RETRY=once')
   || !whitelistDeployScript.includes('SOURCE_ROLLBACK_REQUIRED=true')
   || !whitelistDeployScript.includes('WHITELIST_SOURCE_SNAPSHOT_CAPTURE_FAILED')
-  || !whitelistDeployScript.includes('WHITELIST_SOURCE_SNAPSHOT_DRIFT')
+  || !whitelistDeployScript.includes('verify-release-source-snapshot.sh')
   || !whitelistDeployScript.includes("docker inspect --format '{{.Config.Image}}'")) {
   failures.push('47 runtime releases must use release-scoped images and verify build IDs plus running container references');
 }
