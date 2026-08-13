@@ -260,7 +260,7 @@
       "DELETE /warehouse/rent-rules/:id @ WarehouseRentController.deleteWarehouseRentRule",
       "permission",
       [
-        "warehouse:rent-rule:manage"
+        "warehouse:rent-detail:edit"
       ],
       "WarehouseRentController.deleteWarehouseRentRule"
     ],
@@ -1052,7 +1052,7 @@
       [
         "business:shipment:detail",
         "operations:line-shipment:detail",
-        "warehouse:outbounded:detail-view"
+        "warehouse:outbounded:view"
       ],
       "DataController.shipmentPackageDetail"
     ],
@@ -1218,7 +1218,7 @@
       "GET /warehouse/consolidations/:id/items @ WarehouseTallyQueryController.warehouseConsolidationItems",
       "permission",
       [
-        "warehouse:tally-pending:detail-view"
+        "warehouse:tally-pending:view"
       ],
       "WarehouseTallyQueryController.warehouseConsolidationItems"
     ],
@@ -1235,7 +1235,7 @@
       "GET /warehouse/handover/:shipmentId @ WarehouseDispatchController.warehouseHandover",
       "permission",
       [
-        "warehouse:dispatch-pending:handover-preview"
+        "warehouse:dispatch-pending:handover-print"
       ],
       "WarehouseDispatchController.warehouseHandover"
     ],
@@ -1259,6 +1259,7 @@
       "GET /warehouse/in-stock-summary @ WarehouseInventoryQueryController.warehouseInStockSummary",
       "permission",
       [
+        "warehouse:dashboard:view",
         "warehouse:in-stock:view"
       ],
       "WarehouseInventoryQueryController.warehouseInStockSummary"
@@ -1308,7 +1309,7 @@
       "GET /warehouse/rent-rules @ WarehouseRentController.warehouseRentRules",
       "permission",
       [
-        "warehouse:rent-rule:view"
+        "warehouse:rent-detail:view"
       ],
       "WarehouseRentController.warehouseRentRules"
     ],
@@ -1321,18 +1322,10 @@
       "WarehouseTallyOperationsController.warehouseTallyRepeatStatistics"
     ],
     [
-      "GET /warehouse/tally-sort-rules @ WarehouseTallyQueryController.warehouseTallySortRules",
-      "permission",
-      [
-        "warehouse:tally-pending:view"
-      ],
-      "WarehouseTallyQueryController.warehouseTallySortRules"
-    ],
-    [
       "GET /warehouse/tally-task-history-chain @ WarehouseTallyQueryController.warehouseTallyTaskHistoryChain",
       "permission",
       [
-        "warehouse:in-stock:tally-record-view"
+        "warehouse:tally-completed:view"
       ],
       "WarehouseTallyQueryController.warehouseTallyTaskHistoryChain"
     ],
@@ -1349,7 +1342,7 @@
       "GET /warehouse/tally-tasks/:id/historical-aggregate-correction @ WarehouseTallyCorrectionController.warehouseTallyHistoricalAggregateCorrectionPreview",
       "permission",
       [
-        "warehouse:tally-history:correct"
+        "warehouse:tally-completed:correct"
       ],
       "WarehouseTallyCorrectionController.warehouseTallyHistoricalAggregateCorrectionPreview"
     ],
@@ -1365,7 +1358,7 @@
       "GET /warehouse/tally-tasks/:id/source-packages @ WarehouseTallyQueryController.warehouseTallyTaskSourcePackages",
       "permission",
       [
-        "warehouse:tally-pending:detail-view"
+        "warehouse:tally-pending:view"
       ],
       "WarehouseTallyQueryController.warehouseTallyTaskSourcePackages"
     ],
@@ -1465,7 +1458,7 @@
       "PATCH /warehouse/dispatch-shipments/:id/declaration @ WarehouseDispatchController.updateWarehouseDispatchDeclaration",
       "permission",
       [
-        "warehouse:dispatch-pending:declaration-update"
+        "warehouse:dispatch-pending:edit"
       ],
       "WarehouseDispatchController.updateWarehouseDispatchDeclaration"
     ],
@@ -1473,7 +1466,8 @@
       "PATCH /warehouse/packages/:id @ WarehousePackageLifecycleController.updateWarehousePackage",
       "permission",
       [
-        "warehouse:in-stock:update"
+        "warehouse:in-stock:edit",
+        "warehouse:today-receipt:edit"
       ],
       "WarehousePackageLifecycleController.updateWarehousePackage"
     ],
@@ -1481,7 +1475,8 @@
       "PATCH /warehouse/packages/:id/exception @ WarehousePackageLifecycleController.updateWarehousePackageException",
       "permission",
       [
-        "warehouse:in-stock:update"
+        "warehouse:in-stock:edit",
+        "warehouse:today-receipt:edit"
       ],
       "WarehousePackageLifecycleController.updateWarehousePackageException"
     ],
@@ -1489,7 +1484,7 @@
       "PATCH /warehouse/tally-tasks/:id @ WarehouseTallyLifecycleController.updateWarehouseTallyTask",
       "permission",
       [
-        "warehouse:tally-pending:task-update"
+        "warehouse:tally-pending:edit"
       ],
       "WarehouseTallyLifecycleController.updateWarehouseTallyTask"
     ],
@@ -2763,7 +2758,7 @@
       "POST /shipments/:id/labels @ ShipmentLabelLifecycleController.createShipmentLabel",
       "permission",
       [
-        "warehouse:dispatch-pending:label-generate"
+        "warehouse:dispatch-pending:label-manage"
       ],
       "ShipmentLabelLifecycleController.createShipmentLabel"
     ],
@@ -2771,7 +2766,7 @@
       "POST /shipments/:id/labels/:labelId/void @ ShipmentLabelLifecycleController.voidShipmentLabel",
       "permission",
       [
-        "warehouse:dispatch-pending:label-void"
+        "warehouse:dispatch-pending:label-manage"
       ],
       "ShipmentLabelLifecycleController.voidShipmentLabel"
     ],
@@ -2807,7 +2802,7 @@
       "POST /shipments/:id/receive @ DataController.receiveShipment",
       "permission",
       [
-        "warehouse:today-receipt:update"
+        "warehouse:today-receipt:edit"
       ],
       "DataController.receiveShipment"
     ],
@@ -2969,7 +2964,7 @@
       "POST /warehouse/consolidations/:id/create-shipment @ WarehouseTallyOperationsController.createWarehouseConsolidationShipment",
       "permission",
       [
-        "warehouse:tally-pending:merge-and-ship"
+        "warehouse:tally-pending:complete-and-ship"
       ],
       "WarehouseTallyOperationsController.createWarehouseConsolidationShipment"
     ],
@@ -3001,7 +2996,7 @@
       "POST /warehouse/packages/:id/same-spec-replenish @ WarehousePackageLifecycleController.replenishWarehouseSameSpec",
       "permission",
       [
-        "warehouse:in-stock:same-spec-replenish"
+        "warehouse:in-stock:edit"
       ],
       "WarehousePackageLifecycleController.replenishWarehouseSameSpec"
     ],
@@ -3017,7 +3012,8 @@
       "POST /warehouse/packages/machine-import @ WarehouseMachineImportController.execute",
       "permission",
       [
-        "warehouse:in-stock:machine-import"
+        "warehouse:in-stock:import",
+        "warehouse:today-receipt:import"
       ],
       "WarehouseMachineImportController.execute"
     ],
@@ -3033,7 +3029,7 @@
       "POST /warehouse/rent-rules @ WarehouseRentController.createWarehouseRentRule",
       "permission",
       [
-        "warehouse:rent-rule:manage"
+        "warehouse:rent-detail:edit"
       ],
       "WarehouseRentController.createWarehouseRentRule"
     ],
@@ -3041,7 +3037,7 @@
       "POST /warehouse/tally-tasks @ WarehouseTallyLifecycleController.createWarehouseTallyTask",
       "permission",
       [
-        "warehouse:tally-pending:task-create"
+        "warehouse:in-stock:tally"
       ],
       "WarehouseTallyLifecycleController.createWarehouseTallyTask"
     ],
@@ -3049,7 +3045,7 @@
       "POST /warehouse/tally-tasks/:id/cancel @ WarehouseTallyLifecycleController.cancelWarehouseTallyTask",
       "permission",
       [
-        "warehouse:tally-pending:task-cancel"
+        "warehouse:tally-pending:cancel"
       ],
       "WarehouseTallyLifecycleController.cancelWarehouseTallyTask"
     ],
@@ -3057,7 +3053,7 @@
       "POST /warehouse/tally-tasks/:id/cancel-completed @ WarehouseTallyLifecycleController.cancelCompletedWarehouseTallyTask",
       "permission",
       [
-        "warehouse:tally-completed:reverse-review"
+        "warehouse:tally-completed:reverse"
       ],
       "WarehouseTallyLifecycleController.cancelCompletedWarehouseTallyTask"
     ],
@@ -3065,7 +3061,7 @@
       "POST /warehouse/tally-tasks/:id/complete @ WarehouseTallyLifecycleController.completeWarehouseTallyTask",
       "permission",
       [
-        "warehouse:tally-pending:task-process"
+        "warehouse:tally-pending:process"
       ],
       "WarehouseTallyLifecycleController.completeWarehouseTallyTask"
     ],
@@ -3073,7 +3069,7 @@
       "POST /warehouse/tally-tasks/:id/historical-aggregate-correction @ WarehouseTallyCorrectionController.correctWarehouseTallyHistoricalAggregate",
       "permission",
       [
-        "warehouse:tally-history:correct"
+        "warehouse:tally-completed:correct"
       ],
       "WarehouseTallyCorrectionController.correctWarehouseTallyHistoricalAggregate"
     ],
@@ -3081,7 +3077,7 @@
       "POST /warehouse/tally-tasks/:id/label @ WarehouseTallyLabelController.generate",
       "permission",
       [
-        "warehouse:tally-label:generate"
+        "warehouse:tally-completed:print"
       ],
       "WarehouseTallyLabelController.generate"
     ],
@@ -3089,7 +3085,7 @@
       "POST /warehouse/tally-tasks/:id/label/download @ WarehouseTallyLabelController.download",
       "permission",
       [
-        "warehouse:tally-label:download"
+        "warehouse:tally-completed:download"
       ],
       "WarehouseTallyLabelController.download"
     ],
@@ -3097,8 +3093,7 @@
       "POST /warehouse/tally-tasks/:id/label/print @ WarehouseTallyLabelController.print",
       "permission",
       [
-        "warehouse:tally-label:print",
-        "warehouse:tally-label:reprint"
+        "warehouse:tally-completed:print"
       ],
       "WarehouseTallyLabelController.print"
     ],
@@ -3106,7 +3101,7 @@
       "POST /warehouse/tally-tasks/:id/reverse-review @ WarehouseTallyLifecycleController.reverseReviewWarehouseTallyTask",
       "permission",
       [
-        "warehouse:tally-completed:reverse-review"
+        "warehouse:tally-completed:reverse"
       ],
       "WarehouseTallyLifecycleController.reverseReviewWarehouseTallyTask"
     ],
@@ -3114,7 +3109,7 @@
       "POST /warehouse/tally-tasks/:id/start @ WarehouseTallyLifecycleController.startWarehouseTallyTask",
       "permission",
       [
-        "warehouse:tally-pending:task-process"
+        "warehouse:tally-pending:process"
       ],
       "WarehouseTallyLifecycleController.startWarehouseTallyTask"
     ],
@@ -3122,7 +3117,7 @@
       "POST /warehouse/tally-tasks/label-scan @ WarehouseTallyLabelController.apply",
       "permission",
       [
-        "warehouse:tally-label:scan-apply"
+        "warehouse:tally-completed:scan"
       ],
       "WarehouseTallyLabelController.apply"
     ],
@@ -3532,7 +3527,8 @@
       "PUT /warehouse/packages/:id/remark @ WarehousePackageLifecycleController.updateWarehousePackageRemark",
       "permission",
       [
-        "warehouse:in-stock:update"
+        "warehouse:in-stock:edit",
+        "warehouse:today-receipt:edit"
       ],
       "WarehousePackageLifecycleController.updateWarehousePackageRemark"
     ],
@@ -3540,7 +3536,7 @@
       "PUT /warehouse/rent-rules/:id @ WarehouseRentController.updateWarehouseRentRule",
       "permission",
       [
-        "warehouse:rent-rule:manage"
+        "warehouse:rent-detail:edit"
       ],
       "WarehouseRentController.updateWarehouseRentRule"
     ],
@@ -3548,25 +3544,17 @@
       "PUT /warehouse/rent-rules/:id/enabled @ WarehouseRentController.updateWarehouseRentRuleEnabled",
       "permission",
       [
-        "warehouse:rent-rule:manage"
+        "warehouse:rent-detail:edit"
       ],
       "WarehouseRentController.updateWarehouseRentRuleEnabled"
-    ],
-    [
-      "PUT /warehouse/tally-sort-rules @ WarehouseTallyQueryController.updateWarehouseTallySortRules",
-      "permission",
-      [
-        "warehouse:tally-pending:task-update"
-      ],
-      "WarehouseTallyQueryController.updateWarehouseTallySortRules"
     ]
   ],
   "debt": {
     "dataControllerRoutesMax": 204,
-    "apiClientMethodsMax": 367,
-    "apiClientDirectRequestsMax": 352,
+    "apiClientMethodsMax": 365,
+    "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 141,
-    "asAnyMax": 924,
+    "asAnyMax": 923,
     "directProcessEnvMax": 36,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
@@ -3574,34 +3562,36 @@
       "apps/api/src/modules/order-entry-charge-weight.ts",
       "apps/web/src/data.ts",
       "apps/web/src/modules/customerService/businessCostPreview.ts",
-      "apps/web/src/modules/finance/useFinanceColumnSettings.tsx"
+      "apps/web/src/modules/finance/useFinanceColumnSettings.tsx",
+      "apps/web/src/modules/warehouse/warehouseSameSpecPermission.ts"
     ],
     "knownExactDuplicateGroups": [
       "apps/api/src/modules/notifications/notification.types.ts = apps/web/src/modules/notifications/notificationTypes.ts"
     ],
     "knownDuplicateRouteGroups": [],
     "prismaRepositoryMethodsMax": 715,
-    "inMemoryRepositoryMethodsMax": 600,
+    "inMemoryRepositoryMethodsMax": 598,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 32006,
-      "apps/api/src/modules/in-memory.repository.ts": 19420,
+      "apps/api/src/modules/prisma.repository.ts": 31997,
+      "apps/api/src/modules/in-memory.repository.ts": 19416,
       "apps/api/src/modules/data.controller.ts": 2382,
       "packages/shared/src/index.ts": 6339,
-      "apps/web/src/apiClient.ts": 2632,
+      "apps/web/src/apiClient.ts": 2567,
       "apps/web/src/styles.css": 13220,
       "apps/web/src/modules/testSupport/appTestHarness.tsx": 6457,
-      "apps/web/src/modules/warehouse/WarehousePage.tsx": 5214,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 5131,
       "apps/web/src/modules/pricing/PricingPage.tsx": 3699,
       "apps/web/src/modules/masterData/MasterDataPage.tsx": 3281
     }
   },
   "lint": {
     "api": {
-      "errors": 101,
+      "errors": 105,
       "warnings": 0,
       "rules": {
-        "error:@typescript-eslint/no-unused-vars": 52,
+        "error:@typescript-eslint/no-unused-vars": 54,
         "error:no-control-regex": 2,
+        "error:no-empty": 2,
         "error:no-extra-boolean-cast": 2,
         "error:no-undef": 39,
         "error:no-unreachable": 3,
@@ -3626,7 +3616,7 @@
           "error:@typescript-eslint/no-unused-vars": 1
         },
         "src/modules/data.controller.ts": {
-          "error:@typescript-eslint/no-unused-vars": 8
+          "error:@typescript-eslint/no-unused-vars": 7
         },
         "src/modules/database-seed.service.ts": {
           "error:no-undef": 1
@@ -3635,7 +3625,8 @@
           "error:no-control-regex": 1
         },
         "src/modules/in-memory.repository.ts": {
-          "error:@typescript-eslint/no-unused-vars": 15,
+          "error:@typescript-eslint/no-unused-vars": 17,
+          "error:no-empty": 1,
           "error:no-undef": 4
         },
         "src/modules/lineage-event-coverage.test.ts": {
@@ -3655,16 +3646,14 @@
           "error:no-extra-boolean-cast": 2
         },
         "src/modules/prisma.repository.ts": {
-          "error:@typescript-eslint/no-unused-vars": 22,
+          "error:@typescript-eslint/no-unused-vars": 24,
+          "error:no-empty": 1,
           "error:no-undef": 10,
           "error:no-unreachable": 3
         },
         "src/modules/warehouse-machine-import.ts": {
           "error:no-control-regex": 1,
           "error:no-useless-escape": 3
-        },
-        "src/modules/warehouse/inventory/warehouse-inventory-query.repository.ts": {
-          "error:@typescript-eslint/no-unused-vars": 1
         }
       }
     },
@@ -3711,7 +3700,7 @@
           "error:no-undef": 2
         },
         "src/modules/finance/FinancePage.tsx": {
-          "error:@typescript-eslint/no-unused-vars": 2,
+          "error:@typescript-eslint/no-unused-vars": 1,
           "error:no-undef": 1
         },
         "src/modules/finance/agentBill/AgentBillPage.tsx": {
@@ -3814,7 +3803,7 @@
           "error:@typescript-eslint/no-unused-vars": 1
         },
         "src/modules/warehouse/WarehousePage.tsx": {
-          "error:@typescript-eslint/no-unused-vars": 1,
+          "error:@typescript-eslint/no-unused-vars": 2,
           "error:no-undef": 1
         },
         "src/modules/warehouse/WarehouseRentDetailPanel.tsx": {
