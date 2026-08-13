@@ -3,7 +3,6 @@ import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
-  Card,
   Checkbox,
   Col,
   ConfigProvider,
@@ -109,12 +108,13 @@ import {
   type ShipmentColumnOrderMode
 } from './modules/appShell/config';
 import { resolveModuleInitialSection } from './modules/appShell/moduleInitialSection';
-import { formatPaymentSummary, fulfillmentActionLabels, getRoleDisplayName, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
+import { formatPaymentSummary, fulfillmentActionLabels, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
 import { CustomerPortal } from './modules/customer/CustomerPortal';
 import { resolveCustomerServiceInitialSection } from './modules/customerService/customerServiceNavigation';
 import { ProblemTicketCreateModal } from './modules/customerService/ProblemTicketCreateModal';
 import { OrderFeePanel } from './modules/finance/orderFee/OrderFeePanel';
 import { NotificationCenter } from './modules/notifications/NotificationCenter';
+import { PersonalCenterModal } from './modules/appShell/PersonalCenterModal';
 import { OperationsPage } from './modules/operations/OperationsPage';
 import { canViewOrderManagementAgentDetails } from './modules/orders/orderAgentPermissions';
 import {
@@ -2652,101 +2652,17 @@ export function App() {
           >
             <p>退出后需要重新登录才能继续使用系统。</p>
           </Modal>
-          <Modal
-            title="个人中心"
+          <PersonalCenterModal
             open={personalCenterOpen}
-            width={980}
-            destroyOnHidden
-            footer={(
-              <Button onClick={() => setPersonalCenterOpen(false)}>关闭</Button>
-            )}
-            onCancel={() => setPersonalCenterOpen(false)}
-          >
-            <Space direction="vertical" size={16} className="personal-center-shell">
-              <Card size="small" title="账号资料" className="personal-center-profile">
-                <div className="personal-center-readonly-grid" aria-label="只读账号信息">
-                  <div>
-                    <span>员工账号</span>
-                    <strong>{session.user.username}</strong>
-                  </div>
-                  <div>
-                    <span>当前角色</span>
-                    <Tag color={session.user.role === 'ADMIN' ? 'red' : 'blue'}>{getRoleDisplayName(session.user.role)}</Tag>
-                  </div>
-                </div>
-                <Form
-                  form={profileForm}
-                  layout="vertical"
-                  className="personal-center-profile-form"
-                  initialValues={{
-                    name: session.user.name,
-                    phone: session.user.phone,
-                    gender: (session.user.gender ?? 'UNKNOWN') as StaffGender,
-                    nickname: session.user.nickname
-                  }}
-                >
-                  <Form.Item name="name" label="姓名" rules={[{ max: 40, message: '姓名最多 40 个字符' }]}>
-                    <Input placeholder="请输入姓名" />
-                  </Form.Item>
-                  <Form.Item name="phone" label="手机号" rules={[{ max: 30, message: '手机号最多 30 个字符' }]}>
-                    <Input placeholder="请输入手机号" />
-                  </Form.Item>
-                  <Form.Item name="gender" label="性别">
-                    <Select options={staffGenderOptions} />
-                  </Form.Item>
-                  <Form.Item name="nickname" label="昵称" rules={[{ max: 40, message: '昵称最多 40 个字符' }]}>
-                    <Input placeholder="请输入昵称" />
-                  </Form.Item>
-                  <Button type="primary" onClick={() => void submitProfileUpdate()}>
-                    保存个人资料
-                  </Button>
-                </Form>
-              </Card>
-              <Row gutter={[16, 16]}>
-                <Col xs={24}>
-                  <Card size="small" title="修改密码" className="personal-center-card">
-                    <Form form={passwordForm} layout="vertical">
-                      <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        name="newPassword"
-                        label="新密码"
-                        rules={[
-                          { required: true, message: '请输入新密码' },
-                          passwordStrengthRule()
-                        ]}
-                        extra="密码长度需大于或等于 8 位，且至少包含大写字母、小写字母、数字、特殊字符中的 3 类。"
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        name="confirmPassword"
-                        label="确认新密码"
-                        dependencies={['newPassword']}
-                        rules={[
-                          { required: true, message: '请再次输入新密码' },
-                          ({ getFieldValue }) => ({
-                            validator(_, value) {
-                              if (!value || getFieldValue('newPassword') === value) {
-                                return Promise.resolve();
-                              }
-                              return Promise.reject(new Error('两次输入的新密码不一致'));
-                            }
-                          })
-                        ]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Button type="primary" block onClick={() => void submitPasswordChange()}>
-                        保存新密码
-                      </Button>
-                    </Form>
-                  </Card>
-                </Col>
-              </Row>
-            </Space>
-          </Modal>
+            user={session.user}
+            profileForm={profileForm}
+            passwordForm={passwordForm}
+            passwordStrengthRule={passwordStrengthRule}
+            genderOptions={staffGenderOptions}
+            onClose={() => setPersonalCenterOpen(false)}
+            onSaveProfile={submitProfileUpdate}
+            onSavePassword={submitPasswordChange}
+          />
           <Modal
             title="首次登录需要修改密码"
             open={forcePasswordChangeOpen}
