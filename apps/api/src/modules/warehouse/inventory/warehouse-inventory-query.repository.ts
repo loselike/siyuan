@@ -5,9 +5,9 @@ import type {
   WarehousePackageGroupSummary,
   WarehousePackageSummary
 } from '@siyuan/shared';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma.service.js';
 import { isAdministratorRole, type PermissionKey, type Principal } from '../../rbac.js';
-import { summarizeWarehouseInStockTotals } from './warehouse-inventory-query.logic.js';
 import {
   mapWarehousePackagesWithConfirmedTally,
   resolveWarehouseTallyRecentCutoff,
@@ -20,6 +20,16 @@ export const WAREHOUSE_INVENTORY_QUERY_AUTHORIZER = 'WAREHOUSE_INVENTORY_QUERY_A
 
 export interface WarehouseInventoryQueryAuthorizer {
   hasPermission(role: Principal['role'], permission: PermissionKey): Promise<boolean>;
+}
+
+interface WarehouseInStockAggregateRow {
+  totalItems: bigint;
+  receiptTickets: bigint;
+  totalPackages: bigint;
+  totalWeightKg: Prisma.Decimal | number;
+  totalCbm: Prisma.Decimal | number;
+  pendingTallyTickets: bigint;
+  exceptionTickets: bigint;
 }
 
 export interface MojiaWarehouseDuplicateQuery {
@@ -120,20 +130,41 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
       where.id = ids.length ? { in: ids } : { in: ['__none__'] };
     }
 
-    const totalsSelect = {
-      customerCode: true,
-      combinedOrderNo: true,
-      customerOrderNo: true,
-      domesticTrackingNo: true,
-      packageCount: true,
-      weightKg: true,
-      cbm: true,
-      status: true,
-      manualException: true,
-      exceptions: true
-    } as const;
-    const [totalsRows, pageRows, waitingDispatchTickets] = await Promise.all([
-      this.prisma.warehousePackage.findMany({ where, select: totalsSelect }),
+    const aggregateWhere = buildWarehouseInStockAggregateWhere(where);
+    const [aggregateRows, pageRows, waitingDispatchTickets] = await Promise.all([
+      this.prisma.$queryRaw<WarehouseInStockAggregateRow[]>(Prisma.sql`
+        WITH "filtered" AS (
+          SELECT
+            "combinedOrderNo",
+            "customerOrderNo",
+            "domesticTrackingNo",
+            "packageCount",
+            "weightKg",
+            "cbm",
+            "status",
+            "manualException",
+            "exceptions"
+          FROM "WarehousePackage"
+          WHERE ${aggregateWhere}
+        ),
+        "tickets" AS (
+          SELECT
+            COALESCE(NULLIF("combinedOrderNo", ''), "customerOrderNo" || '-' || "domesticTrackingNo") AS "ticketKey",
+            BOOL_OR("status" = 'RECEIVED') AS "pendingTally",
+            BOOL_OR(("manualException" IS NOT NULL AND "manualException" <> '') OR cardinality("exceptions") > 0) AS "hasException"
+          FROM "filtered"
+          GROUP BY 1
+        )
+        SELECT
+          COUNT(*)::bigint AS "totalItems",
+          (SELECT COUNT(*)::bigint FROM "tickets") AS "receiptTickets",
+          COALESCE(SUM("packageCount"), 0)::bigint AS "totalPackages",
+          COALESCE(SUM("weightKg"::double precision * "packageCount"), 0::double precision) AS "totalWeightKg",
+          COALESCE(SUM("cbm"::double precision), 0::double precision) AS "totalCbm",
+          (SELECT COUNT(*)::bigint FROM "tickets" WHERE "pendingTally") AS "pendingTallyTickets",
+          (SELECT COUNT(*)::bigint FROM "tickets" WHERE "hasException") AS "exceptionTickets"
+        FROM "filtered"
+      `),
       this.prisma.warehousePackage.findMany({
         where,
         orderBy: [{ scanTime: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
@@ -167,21 +198,27 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     const visibleRows = businessCustomerScoped
       ? scopedRows.map(({ site: _site, ...row }) => row)
       : scopedRows;
+    const aggregate = aggregateRows[0] ?? emptyWarehouseInStockAggregate();
+    const totalItems = Number(aggregate.totalItems);
     const response: WarehouseInStockPageResponse = {
-      totals: summarizeWarehouseInStockTotals(totalsRows.map((row) => ({
-        ...row,
-        weightKg: Number(row.weightKg),
-        cbm: Number(row.cbm)
-      })), waitingDispatchTickets),
+      totals: {
+        receiptTickets: Number(aggregate.receiptTickets),
+        totalPackages: Number(aggregate.totalPackages),
+        totalWeightKg: roundWarehouseAggregate(aggregate.totalWeightKg),
+        totalCbm: roundWarehouseAggregate(aggregate.totalCbm),
+        waitingDispatchTickets,
+        pendingTallyTickets: Number(aggregate.pendingTallyTickets),
+        exceptionTickets: Number(aggregate.exceptionTickets)
+      },
       rows: visibleRows,
-      pagination: { page, pageSize, totalItems: totalsRows.length }
+      pagination: { page, pageSize, totalItems }
     };
     await this.prisma.auditLog.create({
       data: {
         actorId: principal.id,
         action: 'warehouse.in_stock.view',
         target: 'warehouse:in-stock',
-        after: JSON.parse(JSON.stringify({ query, rowCount: visibleRows.length, totalItems: totalsRows.length }))
+        after: JSON.parse(JSON.stringify({ query, rowCount: visibleRows.length, totalItems }))
       }
     });
     return response;
@@ -232,4 +269,64 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     return row ? { combinedOrderNo: query.combinedOrderNo } : undefined;
   }
 
+}
+
+function buildWarehouseInStockAggregateWhere(where: Record<string, unknown>): Prisma.Sql {
+  const filters: Prisma.Sql[] = [];
+  const status = typeof where.status === 'string' ? where.status : undefined;
+  if (status) filters.push(Prisma.sql`"status" = ${status}`);
+  const archivedAt = where.archivedAt as { gte?: Date } | undefined;
+  if (archivedAt?.gte) filters.push(Prisma.sql`"archivedAt" >= ${archivedAt.gte}`);
+  if (typeof where.site === 'string') filters.push(Prisma.sql`"site" = ${where.site}`);
+  appendInsensitiveContainsFilter(filters, 'customerOrderNo', where.customerOrderNo);
+  appendInsensitiveContainsFilter(filters, 'domesticTrackingNo', where.domesticTrackingNo);
+  appendInsensitiveContainsFilter(filters, 'combinedOrderNo', where.combinedOrderNo);
+  appendStringInFilter(filters, 'customerCode', where.customerCode);
+  appendStringInFilter(filters, 'id', where.id);
+  if (!filters.length) throw new Error('仓库在库汇总缺少查询范围');
+  return Prisma.join(filters, ' AND ');
+}
+
+function appendInsensitiveContainsFilter(
+  filters: Prisma.Sql[],
+  column: 'customerOrderNo' | 'domesticTrackingNo' | 'combinedOrderNo',
+  value: unknown
+) {
+  const contains = (value as { contains?: unknown } | undefined)?.contains;
+  if (typeof contains !== 'string') return;
+  const pattern = `%${contains}%`;
+  if (column === 'customerOrderNo') filters.push(Prisma.sql`"customerOrderNo" ILIKE ${pattern}`);
+  if (column === 'domesticTrackingNo') filters.push(Prisma.sql`"domesticTrackingNo" ILIKE ${pattern}`);
+  if (column === 'combinedOrderNo') filters.push(Prisma.sql`"combinedOrderNo" ILIKE ${pattern}`);
+}
+
+function appendStringInFilter(
+  filters: Prisma.Sql[],
+  column: 'customerCode' | 'id',
+  value: unknown
+) {
+  const values = (value as { in?: unknown } | undefined)?.in;
+  if (!Array.isArray(values) || values.some((item) => typeof item !== 'string')) return;
+  if (!values.length) {
+    filters.push(Prisma.sql`FALSE`);
+    return;
+  }
+  if (column === 'customerCode') filters.push(Prisma.sql`"customerCode" IN (${Prisma.join(values)})`);
+  if (column === 'id') filters.push(Prisma.sql`"id" IN (${Prisma.join(values)})`);
+}
+
+function emptyWarehouseInStockAggregate(): WarehouseInStockAggregateRow {
+  return {
+    totalItems: 0n,
+    receiptTickets: 0n,
+    totalPackages: 0n,
+    totalWeightKg: 0,
+    totalCbm: 0,
+    pendingTallyTickets: 0n,
+    exceptionTickets: 0n
+  };
+}
+
+function roundWarehouseAggregate(value: Prisma.Decimal | number): number {
+  return Math.round(Number(value) * 100) / 100;
 }

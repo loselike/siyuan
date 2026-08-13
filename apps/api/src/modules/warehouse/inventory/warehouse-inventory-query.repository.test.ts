@@ -182,27 +182,22 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
 
   it('enforces the owned-customer scope and strips site for a business role', async () => {
     const scopedRow = packageRow({ site: '深圳仓' });
-    const packageFindMany = vi.fn().mockImplementation((args: { select?: unknown }) =>
-      Promise.resolve(args.select
-        ? [{
-            customerCode: 'C001',
-            combinedOrderNo: scopedRow.combinedOrderNo,
-            customerOrderNo: scopedRow.customerOrderNo,
-            domesticTrackingNo: scopedRow.domesticTrackingNo,
-            packageCount: 1,
-            weightKg: 10,
-            cbm: 0.06,
-            status: 'RECEIVED',
-            manualException: null,
-            exceptions: []
-          }]
-        : [scopedRow])
-    );
+    const packageFindMany = vi.fn().mockResolvedValue([scopedRow]);
+    const queryRaw = vi.fn().mockResolvedValue([{
+      totalItems: 1n,
+      receiptTickets: 1n,
+      totalPackages: 1n,
+      totalWeightKg: 10,
+      totalCbm: 0.06,
+      pendingTallyTickets: 1n,
+      exceptionTickets: 0n
+    }]);
     const customerFindMany = vi.fn()
       .mockResolvedValueOnce([{ code: 'C001' }])
       .mockResolvedValueOnce([{ code: 'C001', salesperson: 'operator' }]);
     const repository = createRepository({
       warehousePackage: { findMany: packageFindMany },
+      $queryRaw: queryRaw,
       warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
       customer: { findMany: customerFindMany },
       shipment: { count: vi.fn().mockResolvedValue(0) },
@@ -215,5 +210,109 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
     expect(packageFindMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { status: 'RECEIVED', customerCode: { in: ['C001'] } }
     }));
+    const aggregateSql = queryRaw.mock.calls[0]?.[0] as { sql: string; values: unknown[] };
+    expect(aggregateSql.sql).toContain('"customerCode" IN (?)');
+    expect(aggregateSql.values).toEqual(['RECEIVED', 'C001']);
+  });
+
+  it('keeps page totals and audit semantics while avoiding an unbounded package read', async () => {
+    const pageRows = [packageRow({ id: 'pkg-page-2', packageCount: 2, weightKg: 4, cbm: 0.03 })];
+    const packageFindMany = vi.fn().mockResolvedValue(pageRows);
+    const queryRaw = vi.fn().mockResolvedValue([{
+      totalItems: 3n,
+      receiptTickets: 2n,
+      totalPackages: 6n,
+      totalWeightKg: 29,
+      totalCbm: 0.12,
+      pendingTallyTickets: 2n,
+      exceptionTickets: 1n
+    }]);
+    const auditCreate = vi.fn().mockResolvedValue({});
+    const repository = createRepository({
+      warehousePackage: {
+        findMany: packageFindMany
+      },
+      warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
+      customer: { findMany: vi.fn().mockResolvedValue([{ code: 'C001', salesperson: 'operator' }]) },
+      shipment: { count: vi.fn().mockResolvedValue(4) },
+      auditLog: { create: auditCreate, findMany: vi.fn() },
+      $queryRaw: queryRaw
+    });
+
+    await expect(repository.getWarehouseInStockPage(admin, { page: 2, pageSize: 1 })).resolves.toEqual({
+      totals: {
+        receiptTickets: 2,
+        totalPackages: 6,
+        totalWeightKg: 29,
+        totalCbm: 0.12,
+        waitingDispatchTickets: 4,
+        pendingTallyTickets: 2,
+        exceptionTickets: 1
+      },
+      rows: [expect.objectContaining({ id: 'pkg-page-2', packageCount: 2 })],
+      pagination: { page: 2, pageSize: 1, totalItems: 3 }
+    });
+
+    expect(packageFindMany).toHaveBeenCalledTimes(1);
+    expect(packageFindMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 1, take: 1 }));
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+    expect(auditCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'warehouse.in_stock.view',
+        target: 'warehouse:in-stock',
+        after: { query: { page: 2, pageSize: 1 }, rowCount: 1, totalItems: 3 }
+      })
+    });
+  });
+
+  it('keeps every supported page filter parameterized in the aggregate query', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([{
+      totalItems: 0n,
+      receiptTickets: 0n,
+      totalPackages: 0n,
+      totalWeightKg: 0,
+      totalCbm: 0,
+      pendingTallyTickets: 0n,
+      exceptionTickets: 0n
+    }]);
+    const auditFindMany = vi.fn().mockResolvedValue([{
+      target: 'pkg-filtered',
+      action: 'warehouse.receipt.create',
+      before: null,
+      after: { operator: '张三' }
+    }]);
+    const repository = createRepository({
+      warehousePackage: { findMany: vi.fn().mockResolvedValue([]) },
+      warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
+      shipment: { count: vi.fn().mockResolvedValue(0) },
+      auditLog: { create: vi.fn().mockResolvedValue({}), findMany: auditFindMany },
+      $queryRaw: queryRaw
+    });
+
+    await repository.getWarehouseInStockPage(admin, {
+      status: 'TALLIED_ARCHIVED',
+      site: '深圳仓',
+      customerOrderNo: '订单',
+      domesticTrackingNo: 'SF',
+      combinedOrderNo: '合单',
+      operationKeyword: '张三'
+    });
+
+    const aggregateSql = queryRaw.mock.calls[0]?.[0] as { sql: string; values: unknown[] };
+    expect(aggregateSql.sql).toContain('"archivedAt" >= ?');
+    expect(aggregateSql.sql).toContain('"site" = ?');
+    expect(aggregateSql.sql).toContain('"customerOrderNo" ILIKE ?');
+    expect(aggregateSql.sql).toContain('"domesticTrackingNo" ILIKE ?');
+    expect(aggregateSql.sql).toContain('"combinedOrderNo" ILIKE ?');
+    expect(aggregateSql.sql).toContain('"id" IN (?)');
+    expect(aggregateSql.values).toEqual([
+      'TALLIED_ARCHIVED',
+      expect.any(Date),
+      '深圳仓',
+      '%订单%',
+      '%SF%',
+      '%合单%',
+      'pkg-filtered'
+    ]);
   });
 });
