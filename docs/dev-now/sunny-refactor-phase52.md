@@ -22,3 +22,9 @@
 - 本轮 API 白名单构建虽已调用 release image helper，但容器实际运行 `siyuan-api:unknown` 且 `/api/health.releaseId=unknown`；state 仍写入 whitelist release ID。说明 Phase50 只验证了 build 后 tag identity，没有验证 Compose 启动后的容器引用，发布证据存在失败开放。
 - 已立即暂停继续推广输入 parser，转为 P0 发布安全修复：白名单远端脚本在 build 前断言三个 release image env，在重启后逐服务比较容器 `.Config.Image` 与本 release 精确 tag，不一致即进入既有 recovery 机制；治理和离线 contract 固定该门禁。
 - 参考仍为 Moby immutable deployment 与 Kubernetes fencing：真正的 fence 必须验证最终被消费的对象，不只验证准备阶段生成的对象。
+
+## 发布故障复盘与二次重评
+
+- 根因一：SSH 远端命令不会可靠保留空位置参数，空迁移列表使白名单 release ID 被错位解析为 `unknown`；改为显式 `__SIYUAN_EMPTY__` 哨兵并在远端解码，同时拒绝不符合 `whitelist-<24 hex>` 的 release ID。
+- 根因二：Docker Compose recreate 偶发留下同项目、同服务、同目标镜像的 `Created` 容器并与规范名称冲突。参考 Docker Compose issue #11151（Apache-2.0 项目，https://github.com/docker/compose/issues/11151），只在首次 `compose up` 失败后删除满足“Created + 本次精确镜像 + `/opt/siyuan` working_dir + 同 service label”的残留，最多重试一次；不删除运行中、旧镜像或其他项目容器。
+- 并发保护：47 上另一会话把 Prisma/InMemory 仓库权限语义推进后，本分支吸收其当前语义并新增今日收货历史日期权限 characterization；保留 Phase49 `MasterDataSnapshotSelection` 下推，不恢复旧实现。

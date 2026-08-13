@@ -285,6 +285,9 @@ if (!releaseImageScript.includes('RELEASE_IMAGE_FENCE_MISMATCH')
   || !whitelistDeployScript.includes('RELEASE_CONTAINER_IMAGE_FENCE_MISMATCH')
   || !whitelistDeployScript.includes('APPROVED_MIGRATIONS_ARG="${APPROVED_MIGRATIONS_CSV:-__SIYUAN_EMPTY__}"')
   || !whitelistDeployScript.includes('RELEASE_ID_ARGUMENT_INVALID')
+  || !whitelistDeployScript.includes('COMPOSE_CREATED_REPLACEMENT_REMOVED')
+  || !whitelistDeployScript.includes('COMPOSE_RECREATE_RETRY_REFUSED')
+  || !whitelistDeployScript.includes('COMPOSE_RECREATE_RETRY=once')
   || !whitelistDeployScript.includes("docker inspect --format '{{.Config.Image}}'")) {
   failures.push('47 runtime releases must use release-scoped images and verify build IDs plus running container references');
 }

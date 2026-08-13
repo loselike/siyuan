@@ -416,7 +416,33 @@ fi
 if [[ "$scope" == *api* || "$scope" == *web* ]]; then
   siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 fi
-docker compose up -d --no-deps "${restart_services[@]}"
+if ! docker compose up -d --no-deps "${restart_services[@]}"; then
+  cleaned_created_replacement=false
+  for service in "${restart_services[@]}"; do
+    expected_image=""
+    case "$service" in
+      api) expected_image="$SIYUAN_API_IMAGE" ;;
+      web) expected_image="$SIYUAN_WEB_IMAGE" ;;
+    esac
+    while IFS= read -r candidate_id; do
+      [[ -n "$candidate_id" ]] || continue
+      candidate_status="$(docker inspect --format '{{.State.Status}}' "$candidate_id" 2>/dev/null || true)"
+      candidate_image="$(docker inspect --format '{{.Config.Image}}' "$candidate_id" 2>/dev/null || true)"
+      candidate_workdir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$candidate_id" 2>/dev/null || true)"
+      if [[ "$candidate_status" == created && "$candidate_image" == "$expected_image" && "$candidate_workdir" == "$remote_dir" ]]; then
+        docker rm "$candidate_id"
+        cleaned_created_replacement=true
+        echo "COMPOSE_CREATED_REPLACEMENT_REMOVED service=$service container=$candidate_id"
+      fi
+    done < <(docker ps -aq --filter "label=com.docker.compose.service=$service" --filter status=created)
+  done
+  if [[ "$cleaned_created_replacement" != true ]]; then
+    echo "COMPOSE_RECREATE_RETRY_REFUSED: no release-scoped Created replacement was found." >&2
+    exit 83
+  fi
+  echo "COMPOSE_RECREATE_RETRY=once"
+  docker compose up -d --no-deps "${restart_services[@]}"
+fi
 
 for service in "${restart_services[@]}"; do
   expected_image=""
