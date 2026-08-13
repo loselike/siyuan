@@ -1,0 +1,4 @@
+/siyuan-api-1	api	siyuan-api:git-62ed598b7dbe_web-fa6197b29198_api-d3d4313a1e04	sha256:0572afee66a97253fc67bc284a6b695991e5aaaaaaacbbd7845557eb284e85cc	2026-08-13T16:16:58.341364946Z	running	2026-08-13T16:17:09.181480754Z
+/siyuan-postgres-1	postgres	docker.m.daocloud.io/library/postgres:16-alpine	sha256:79950da386bda7fcc9d57aa9aa9be6c6d7407596a9b8f68014b09a778a9ab316	2026-06-06T04:13:58.896094381Z	running	2026-08-03T07:57:13.269543737Z
+/siyuan-redis-1	redis	docker.m.daocloud.io/library/redis:7-alpine	sha256:b1addbe72465a718643cff9e60a58e6df1841e29d6d7d60c9a85d8d72f08d1a7	2026-06-06T04:13:58.891968324Z	running	2026-08-03T07:57:13.267127916Z
+/siyuan-web-1	web	siyuan-web:git-62ed598b7dbe_web-fa6197b29198_api-d3d4313a1e04	sha256:4013dc8f2f1da5b5744abbd8ea4921f512fd7e8fabed95e9e98c817d3d55d1fa	2026-08-13T16:17:08.826895323Z	running	2026-08-13T16:17:09.385372204Z
