@@ -15,7 +15,7 @@ export class WarehouseMachineImportController {
   ) {}
 
   @Post('warehouse/packages/machine-import')
-  @RequirePermission('warehouse:in-stock:machine-import')
+  @RequirePermission(['warehouse:today-receipt:import', 'warehouse:in-stock:import'])
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
   execute(
     @Req() request: { user: Principal },

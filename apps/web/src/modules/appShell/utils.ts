@@ -44,12 +44,14 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
       'business:order-ai:view'
     )],
     ['receive', canAny(
+      'warehouse:dashboard:view',
       'warehouse:today-receipt:view',
       'warehouse:in-stock:view',
       'warehouse:tally-pending:view',
       'warehouse:tally-completed:view',
       'warehouse:dispatch-pending:view',
-      'warehouse:outbounded:view'
+      'warehouse:outbounded:view',
+      'warehouse:rent-detail:view'
     )],
     ['market', canAny(
       'market:dashboard:view',

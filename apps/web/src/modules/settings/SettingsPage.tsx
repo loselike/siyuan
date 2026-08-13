@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dayjs from 'dayjs';
 import { Activity, AlertTriangle, Building2, ChevronDown, ClipboardCheck, Copy, Edit, Ellipsis, FileInput, FileText, LockKeyhole, PlusCircle, Power, RefreshCw, Search, ShieldCheck, Sparkles, Trash2, Users } from 'lucide-react';
-import { Alert, Button, Card, Checkbox, Col, DatePicker, Dropdown, Flex, Form, Input, Modal, Popconfirm, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Col, DatePicker, Dropdown, Flex, Form, Input, Modal, Popconfirm, Radio, Row, Select, Space, Statistic, Tag, Typography } from 'antd';
 import type { DatePickerProps } from 'antd/es/date-picker';
 import zhCNDatePickerLocale from 'antd/es/date-picker/locale/zh_CN';
 import type { AuditLogDashboardSummary, AuditLogListResponse, AuditLogQuery, AuditLogSummary, DepartmentSummary, SiteSummary, StaffAccountCreateInput, StaffAccountQuery, StaffAccountRoleKey, StaffAccountSummary, StaffGender } from '@siyuan/shared';
@@ -37,15 +37,8 @@ import {
   customerServiceDataConfirmPermissionControls,
   customerServicePendingRoutingPermissionControls,
   customerServiceTransferPermissionControls,
-  warehouseTodayReceiptMaskControls,
-  warehouseTallyPendingMaskControls,
-  warehouseTallyCompletedMaskControls,
-  warehouseRentDetailMaskControls,
   marketPendingRoutingMaskControls,
   marketRoutedMaskControls,
-  isWarehouseTodayReceiptMaskPermission,
-  isWarehouseTallyPendingMaskPermission,
-  isWarehouseTallyCompletedMaskPermission,
   isMarketPendingRoutingMaskPermission,
   isMarketRoutedMaskPermission,
   workspaceFieldMaskPermissionCode,
@@ -756,10 +749,8 @@ export function SettingsPage({
   const selectedOrderEntry = selectedWorkspacePermissions?.[0] === '业务管理 / 录单';
   const selectedOrderEntryDrafts = selectedWorkspacePermissions?.[0] === '业务管理 / 草稿箱';
   const selectedPendingReview = selectedWorkspacePermissions?.[0] === '业务管理 / 待审核运单';
-  const selectedWarehouseTodayReceipt = selectedWorkspacePermissions?.[0] === '仓库管理 / 今日收货';
-  const selectedWarehouseTallyPending = selectedWorkspacePermissions?.[0] === '仓库管理 / 未完成理货';
-  const selectedWarehouseTallyCompleted = selectedWorkspacePermissions?.[0] === '仓库管理 / 已完成理货';
-  const selectedWarehouseRentDetail = selectedWorkspacePermissions?.[0] === '仓库管理 / 仓租细分表';
+  const selectedWarehouseEntry = selectedWorkspacePermissions?.[0].startsWith('仓库管理 / ') ?? false;
+  const selectedWarehouseRentScope = selectedWorkspacePermissions?.[0] === '仓库管理 / 仓租数据范围';
   const selectedMarketPendingRouting = selectedWorkspacePermissions?.[0] === '市场管理 / 待排货';
   const selectedMarketRouted = selectedWorkspacePermissions?.[0] === '市场管理 / 已排货';
   const selectedCustomerServicePendingRouting = selectedWorkspacePermissions?.[0] === '客服管理 / 待排货';
@@ -776,22 +767,6 @@ export function SettingsPage({
   const selectedPendingReviewPermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
     return pendingReviewPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
-  const selectedWarehouseTodayReceiptMaskStates = useMemo(() => {
-    const granted = new Set(selectedRoleGrantedPermissions);
-    return warehouseTodayReceiptMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
-  const selectedWarehouseTallyPendingMaskStates = useMemo(() => {
-    const granted = new Set(selectedRoleGrantedPermissions);
-    return warehouseTallyPendingMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
-  const selectedWarehouseTallyCompletedMaskStates = useMemo(() => {
-    const granted = new Set(selectedRoleGrantedPermissions);
-    return warehouseTallyCompletedMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedRoleGrantedPermissions]);
-  const selectedWarehouseRentDetailMaskStates = useMemo(() => {
-    const granted = new Set(selectedRoleGrantedPermissions);
-    return warehouseRentDetailMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
   }, [selectedRoleGrantedPermissions]);
   const selectedMarketPendingRoutingMaskStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
@@ -826,7 +801,7 @@ export function SettingsPage({
   const selectedPricingBusinessEntry = selectedPricingLookupEntry
     || selectedPricingMarkupEntry
     || selectedWorkspacePermissions?.[0] === '报价查价 / 价格表管理';
-  const selectedDirectBusinessGrantEntry = selectedPricingBusinessEntry || selectedOrderEntry || selectedOrderEntryDrafts || selectedPendingReview;
+  const selectedDirectBusinessGrantEntry = selectedPricingBusinessEntry || selectedOrderEntry || selectedOrderEntryDrafts || selectedPendingReview || selectedWarehouseEntry;
   const selectedPricingMarkupStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
     return pricingMarkupPermissionControls.map((control) => ({
@@ -1001,30 +976,6 @@ export function SettingsPage({
           [roleKey]: next.filter((code) => !orderEntryPermissionControls.some((control) => control.code === code))
         };
       }
-      if (group === '仓库管理 / 今日收货' && !checked) {
-        return {
-          ...current,
-          [roleKey]: next.filter((code) => !isWarehouseTodayReceiptMaskPermission(code))
-        };
-      }
-      if (group === '仓库管理 / 未完成理货' && !checked) {
-        return {
-          ...current,
-          [roleKey]: next.filter((code) => !isWarehouseTallyPendingMaskPermission(code))
-        };
-      }
-      if (group === '仓库管理 / 已完成理货' && !checked) {
-        return {
-          ...current,
-          [roleKey]: next.filter((code) => !isWarehouseTallyCompletedMaskPermission(code))
-        };
-      }
-      if (group === '仓库管理 / 仓租细分表' && !checked) {
-        return {
-          ...current,
-          [roleKey]: next.filter((code) => !warehouseRentDetailMaskControls.some((control) => control.code === code))
-        };
-      }
       if (group === '市场管理 / 待排货' && !checked) {
         return {
           ...current,
@@ -1125,6 +1076,39 @@ export function SettingsPage({
         next.delete(code);
         if (code === 'business:review:view') next.delete('business:review:edit');
       }
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function toggleWarehousePermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      const groupPrefix = code.slice(0, code.lastIndexOf(':') + 1);
+      if (checked) {
+        next.add(code);
+        if (code === 'warehouse:rent-detail:view'
+          && !Array.from(next).some((permission) => permission.startsWith('warehouse:rent-detail:scope-'))) {
+          next.add('warehouse:rent-detail:scope-self');
+        }
+        if (!code.endsWith(':view') && !code.includes(':scope-')) {
+          next.add(`${groupPrefix}view` as PermissionKey);
+        }
+      } else {
+        next.delete(code);
+        if (code.endsWith(':view')) {
+          Array.from(next).filter((permission) => permission.startsWith(groupPrefix)).forEach((permission) => next.delete(permission));
+        }
+      }
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function setWarehouseRentScope(roleKey: RoleKey, code: PermissionKey) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      Array.from(next).filter((permission) => permission.startsWith('warehouse:rent-detail:scope-')).forEach((permission) => next.delete(permission));
+      next.add(code);
+      next.add('warehouse:rent-detail:view');
       return { ...current, [roleKey]: [...next] };
     });
   }
@@ -2153,7 +2137,8 @@ export function SettingsPage({
                       const directBusinessGrantGroup = group === '报价查价 / 查价'
                         || group === '报价查价 / 代理加价规则'
                         || group === '报价查价 / 价格表管理'
-                        || group === '业务管理 / 草稿箱';
+                        || group === '业务管理 / 草稿箱'
+                        || group.startsWith('仓库管理 / ');
                       return (
                         <div
                           className={`role-permission-module-card${selected ? ' is-active is-current' : ''}${administrator || accessState.checked ? ' is-open' : ''}`}
@@ -2368,97 +2353,41 @@ export function SettingsPage({
                           ))}
                         </div>
                       </div>
-                    ) : selectedWarehouseTodayReceipt ? (
+                    ) : selectedWarehouseEntry ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
-                          <Text strong>今日收货屏蔽</Text>
-                          <Tag color={selectedWarehouseTodayReceiptMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedWarehouseTodayReceiptMaskStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
+                          <Text strong>{selectedWarehouseRentScope ? '仓租数据范围' : '功能授权'}</Text>
+                          <Tag color="blue">
+                            {selectedWorkspacePermissions[1].filter((permission) => selectedRoleGrantedPermissions.includes(permission.code)).length}/{selectedWorkspacePermissions[1].length} 已授权
                           </Tag>
                         </div>
-                        <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedWarehouseTodayReceiptMaskStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
-                              <span className="role-permission-option-copy role-permission-compact-copy">
-                                <Text strong>{control.label}</Text>
-                              </span>
-                              <Checkbox
-                                aria-label={control.label}
-                                checked={control.checked}
-                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
-                              />
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ) : selectedWarehouseTallyPending ? (
-                      <div className="role-permission-stage-block-panel">
-                        <div className="role-permission-section-heading">
-                          <Text strong>未完成理货屏蔽</Text>
-                          <Tag color={selectedWarehouseTallyPendingMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedWarehouseTallyPendingMaskStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
-                          </Tag>
-                        </div>
-                        <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedWarehouseTallyPendingMaskStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
-                              <span className="role-permission-option-copy role-permission-compact-copy">
-                                <Text strong>{control.label}</Text>
-                              </span>
-                              <Checkbox
-                                aria-label={control.label}
-                                checked={control.checked}
-                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
-                              />
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ) : selectedWarehouseTallyCompleted ? (
-                      <div className="role-permission-stage-block-panel">
-                        <div className="role-permission-section-heading">
-                          <Text strong>已完成理货屏蔽</Text>
-                          <Tag color={selectedWarehouseTallyCompletedMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedWarehouseTallyCompletedMaskStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
-                          </Tag>
-                        </div>
-                        <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedWarehouseTallyCompletedMaskStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
-                              <span className="role-permission-option-copy role-permission-compact-copy">
-                                <Text strong>{control.label}</Text>
-                              </span>
-                              <Checkbox
-                                aria-label={control.label}
-                                checked={control.checked}
-                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
-                              />
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ) : selectedWarehouseRentDetail ? (
-                      <div className="role-permission-stage-block-panel">
-                        <div className="role-permission-section-heading">
-                          <Text strong>仓租细分表屏蔽</Text>
-                          <Tag color={selectedWarehouseRentDetailMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedWarehouseRentDetailMaskStates.some((control) => control.checked) ? '已分配权限' : '未分配权限'}
-                          </Tag>
-                        </div>
-                        <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedWarehouseRentDetailMaskStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
-                              <span className="role-permission-option-copy role-permission-compact-copy">
-                                <Text strong>{control.label}</Text>
-                              </span>
-                              <Checkbox
-                                aria-label={control.label}
-                                checked={control.checked}
-                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
-                              />
-                            </label>
-                          ))}
-                        </div>
+                        {selectedWarehouseRentScope ? (
+                          <Radio.Group
+                            aria-label="仓租数据范围"
+                            value={selectedWorkspacePermissions[1].find((permission) => selectedRoleGrantedPermissions.includes(permission.code))?.code}
+                            onChange={(event) => setWarehouseRentScope(selectedPermissionRole.key, event.target.value as PermissionKey)}
+                          >
+                            <Space direction="vertical" size={10}>
+                              {selectedWorkspacePermissions[1].map((permission) => <Radio key={permission.code} value={permission.code}>{permission.label}</Radio>)}
+                            </Space>
+                          </Radio.Group>
+                        ) : (
+                          <div className="role-permission-option-grid role-permission-stage-block-grid">
+                            {selectedWorkspacePermissions[1].map((permission) => {
+                              const checked = selectedRoleGrantedPermissions.includes(permission.code);
+                              return (
+                                <label className={`role-permission-option role-permission-compact-option${checked ? ' role-permission-granted' : ''}`} key={permission.code}>
+                                  <span className="role-permission-option-copy role-permission-compact-copy"><Text strong>{permission.label}</Text></span>
+                                  <Checkbox
+                                    aria-label={`分配${selectedWorkspacePermissions[0].replace('仓库管理 / ', '')}${permission.label}`}
+                                    checked={checked}
+                                    onChange={(event) => toggleWarehousePermission(selectedPermissionRole.key, permission.code, event.target.checked)}
+                                  />
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     ) : selectedMarketPendingRouting ? (
                       <div className="role-permission-stage-block-panel">

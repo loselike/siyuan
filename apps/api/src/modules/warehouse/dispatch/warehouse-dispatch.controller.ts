@@ -21,7 +21,7 @@ export class WarehouseDispatchController {
   }
 
   @Patch('warehouse/dispatch-shipments/:id/declaration')
-  @RequirePermission('warehouse:dispatch-pending:declaration-update')
+  @RequirePermission('warehouse:dispatch-pending:edit')
   updateWarehouseDispatchDeclaration(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -31,7 +31,7 @@ export class WarehouseDispatchController {
   }
 
   @Get('warehouse/handover/:shipmentId')
-  @RequirePermission('warehouse:dispatch-pending:handover-preview')
+  @RequirePermission('warehouse:dispatch-pending:handover-print')
   warehouseHandover(
     @Req() request: { user: Principal },
     @Param('shipmentId') shipmentId: string

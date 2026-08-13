@@ -6,19 +6,20 @@ import type {
   WarehousePackageSummary
 } from '@siyuan/shared';
 import { PrismaService } from '../../prisma.service.js';
-import type { Principal } from '../../rbac.js';
+import type { PermissionKey, Principal } from '../../rbac.js';
 import { summarizeWarehouseInStockTotals } from './warehouse-inventory-query.logic.js';
 import {
   mapWarehousePackagesWithConfirmedTally,
   resolveWarehouseTallyRecentCutoff,
   summarizeWarehousePackageGroups
 } from '../warehouse-query.shared.js';
+import { resolveWarehouseTodayRange } from '../warehouse-domain.shared.js';
 
 export const WAREHOUSE_INVENTORY_QUERY_REPOSITORY = 'WAREHOUSE_INVENTORY_QUERY_REPOSITORY';
 export const WAREHOUSE_INVENTORY_QUERY_AUTHORIZER = 'WAREHOUSE_INVENTORY_QUERY_AUTHORIZER';
 
 export interface WarehouseInventoryQueryAuthorizer {
-  hasPermission(role: Principal['role'], permission: 'warehouse:in-stock:update'): Promise<boolean>;
+  hasPermission(role: Principal['role'], permission: PermissionKey): Promise<boolean>;
 }
 
 export interface MojiaWarehouseDuplicateQuery {
@@ -47,7 +48,25 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   ) {}
 
   async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
+    const [canToday, canInStock] = await Promise.all([
+      this.authorizer.hasPermission(principal.role, 'warehouse:today-receipt:view'),
+      this.authorizer.hasPermission(principal.role, 'warehouse:in-stock:view')
+    ]);
+    if (!canToday && !canInStock) throw new ForbiddenException('没有仓库包裹查看权限');
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
+      ? principal.departmentTeamScope!.filter(Boolean)
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
+    const ownedCustomerCodes = warehouseWideScope ? undefined : (await this.prisma.customer.findMany({
+      where: { salesperson: { in: salespeople } },
+      select: { code: true }
+    })).map((customer) => customer.code);
+    const today = resolveWarehouseTodayRange({});
     const rows = await (this.prisma as any).warehousePackage.findMany({
+      where: {
+        ...(!canInStock ? { scanTime: { gte: today.start, lt: today.end } } : {}),
+        ...(ownedCustomerCodes ? { customerCode: { in: ownedCustomerCodes } } : {})
+      },
       orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
     });
     return mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
@@ -59,13 +78,15 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   ): Promise<WarehouseInStockPageResponse> {
     const page = Math.max(1, Math.trunc(Number(query.page) || 1));
     const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(query.pageSize) || 10)));
-    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
-      || await this.authorizer.hasPermission(principal.role, 'warehouse:in-stock:update');
-    // 业务岗位具备仓库货物事实数据的共享读取权；OWN/ALL 只切换读取范围，不授予写权限。
-    const businessCustomerScoped = !warehouseWideScope && query.dataScope !== 'ALL';
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    // 数据范围由服务端岗位/权限派生；客户端 dataScope 只用于展示偏好，不能扩权。
+    const businessCustomerScoped = !warehouseWideScope;
+    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
+      ? principal.departmentTeamScope!.filter(Boolean)
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
     const ownedCustomerCodes = businessCustomerScoped
       ? (await this.prisma.customer.findMany({
-          where: { salesperson: principal.username },
+          where: { salesperson: { in: salespeople } },
           select: { code: true }
         })).map((customer) => customer.code)
       : undefined;

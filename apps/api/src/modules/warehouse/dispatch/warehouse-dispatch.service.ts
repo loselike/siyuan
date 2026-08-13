@@ -37,9 +37,9 @@ export class WarehouseDispatchService {
   }
 
   async dispatch(principal: Principal, shipmentId: string, input: ShipmentDispatchInput) {
-    await this.ensurePermission(principal, 'warehouse:dispatch-pending:dispatch-confirm');
+    await this.ensurePermission(principal, 'warehouse:dispatch-pending:confirm');
     if (input.batchDispatchSource) {
-      await this.ensurePermission(principal, 'warehouse:dispatch-pending:batch-dispatch-confirm');
+      await this.ensurePermission(principal, 'warehouse:dispatch-pending:confirm');
     }
     if (input.shippingMarkConfirmed) {
       await this.ensurePermission(principal, 'warehouse:dispatch-pending:shipping-mark-confirm');

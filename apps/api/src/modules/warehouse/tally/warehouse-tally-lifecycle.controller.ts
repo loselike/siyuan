@@ -16,7 +16,7 @@ export class WarehouseTallyLifecycleController {
   ) {}
 
   @Post('warehouse/tally-tasks')
-  @RequirePermission('warehouse:tally-pending:task-create')
+  @RequirePermission('warehouse:in-stock:tally')
   createWarehouseTallyTask(
     @Req() request: { user: Principal },
     @Body() body: WarehouseTallyTaskCreateInput
@@ -25,7 +25,7 @@ export class WarehouseTallyLifecycleController {
   }
 
   @Patch('warehouse/tally-tasks/:id')
-  @RequirePermission('warehouse:tally-pending:task-update')
+  @RequirePermission('warehouse:tally-pending:edit')
   updateWarehouseTallyTask(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -35,19 +35,19 @@ export class WarehouseTallyLifecycleController {
   }
 
   @Post('warehouse/tally-tasks/:id/start')
-  @RequirePermission('warehouse:tally-pending:task-process')
+  @RequirePermission('warehouse:tally-pending:process')
   startWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.lifecycle.start(request.user, id);
   }
 
   @Post('warehouse/tally-tasks/:id/cancel')
-  @RequirePermission('warehouse:tally-pending:task-cancel')
+  @RequirePermission('warehouse:tally-pending:cancel')
   cancelWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.lifecycle.cancel(request.user, id);
   }
 
   @Post('warehouse/tally-tasks/:id/complete')
-  @RequirePermission('warehouse:tally-pending:task-process')
+  @RequirePermission('warehouse:tally-pending:process')
   completeWarehouseTallyTask(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -67,13 +67,13 @@ export class WarehouseTallyLifecycleController {
   }
 
   @Post('warehouse/tally-tasks/:id/reverse-review')
-  @RequirePermission('warehouse:tally-completed:reverse-review')
+  @RequirePermission('warehouse:tally-completed:reverse')
   reverseReviewWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.lifecycle.reverseReview(request.user, id);
   }
 
   @Post('warehouse/tally-tasks/:id/cancel-completed')
-  @RequirePermission('warehouse:tally-completed:reverse-review')
+  @RequirePermission('warehouse:tally-completed:reverse')
   cancelCompletedWarehouseTallyTask(
     @Req() request: { user: Principal },
     @Param('id') id: string,

@@ -39,7 +39,7 @@ export class WarehouseInventoryQueryController {
   }
 
   @Get('warehouse/in-stock-summary')
-  @RequirePermission('warehouse:in-stock:view')
+  @RequirePermission(['warehouse:dashboard:view', 'warehouse:in-stock:view'])
   warehouseInStockSummary(@Req() request: { user: Principal }) {
     return this.auditedRepository.getWarehouseInStockSummary(request.user);
   }

@@ -15,7 +15,7 @@ export class WarehouseTallyCorrectionController {
   ) {}
 
   @Get('warehouse/tally-tasks/:id/historical-aggregate-correction')
-  @RequirePermission('warehouse:tally-history:correct')
+  @RequirePermission('warehouse:tally-completed:correct')
   warehouseTallyHistoricalAggregateCorrectionPreview(
     @Req() request: { user: Principal },
     @Param('id') id: string
@@ -24,7 +24,7 @@ export class WarehouseTallyCorrectionController {
   }
 
   @Post('warehouse/tally-tasks/:id/historical-aggregate-correction')
-  @RequirePermission('warehouse:tally-history:correct')
+  @RequirePermission('warehouse:tally-completed:correct')
   correctWarehouseTallyHistoricalAggregate(
     @Req() request: { user: Principal },
     @Param('id') id: string,

@@ -1,12 +1,10 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type {
   WarehousePackageSummary,
-  WarehouseTallySortRule,
-  WarehouseTallySortRulesUpdateInput,
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskSummary
 } from '@siyuan/shared';
-import { createDefaultWarehouseTallySortRules, sortWarehouseTallyTasks, warehouseTallyChannels } from '@siyuan/shared';
+import { sortWarehouseTallyTasks } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { PrismaService } from '../../prisma.service.js';
 import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal } from '../../rbac.js';
@@ -22,8 +20,6 @@ export const WAREHOUSE_TALLY_QUERY_REPOSITORY = 'WAREHOUSE_TALLY_QUERY_REPOSITOR
 
 export interface WarehouseTallyQueryRepository {
   getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]>;
-  getWarehouseTallySortRules(principal: Principal): Promise<WarehouseTallySortRule[]>;
-  updateWarehouseTallySortRules(principal: Principal, input: WarehouseTallySortRulesUpdateInput): Promise<WarehouseTallySortRule[]>;
   getWarehouseTallyTasks(principal: Principal, query?: WarehouseTallyTaskListQuery): Promise<WarehouseTallyTaskSummary[]>;
   getWarehouseTallyTaskSourcePackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]>;
   getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string): Promise<WarehouseTallyTaskSummary[]>;
@@ -39,52 +35,13 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
 
   async getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
     this.ensureWarehouseAccess(principal);
-    await this.ensurePendingViewNotBlocked(principal);
+    await this.ensurePendingView(principal);
     const items = await (this.prisma as any).warehouseConsolidationItem.findMany({
       where: { consolidationId: id },
       include: { package: true },
       orderBy: { id: 'asc' }
     });
     return items.map((item: any) => mapWarehousePackage(item.package));
-  }
-
-  async getWarehouseTallySortRules(principal: Principal): Promise<WarehouseTallySortRule[]> {
-    this.ensureWarehouseAccess(principal);
-    await this.ensurePendingViewNotBlocked(principal);
-    return this.readWarehouseTallySortRules();
-  }
-
-  async updateWarehouseTallySortRules(
-    principal: Principal,
-    input: WarehouseTallySortRulesUpdateInput
-  ): Promise<WarehouseTallySortRule[]> {
-    this.ensureWarehouseAccess(principal);
-    await this.ensurePendingUpdateAllowed(principal);
-    const rules = normalizeWarehouseTallySortRuleInput(input);
-    return this.prisma.$transaction(async (tx: any) => {
-      await tx.$queryRawUnsafe("SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended('warehouse-tally-sort-rules', 0))");
-      const beforeRows = await tx.warehouseTallySortRule.findMany({ orderBy: [{ sortOrder: 'asc' }, { channel: 'asc' }] });
-      for (const rule of rules) {
-        await tx.warehouseTallySortRule.upsert({
-          where: { channel: rule.channel },
-          create: { ...rule, updatedBy: principal.username },
-          update: { sortOrder: rule.sortOrder, preferredTimeSlot: rule.preferredTimeSlot, enabled: rule.enabled, updatedBy: principal.username }
-        });
-      }
-      const updatedRows = await tx.warehouseTallySortRule.findMany({ orderBy: [{ sortOrder: 'asc' }, { channel: 'asc' }] });
-      const before = mapWarehouseTallySortRules(beforeRows);
-      const updated = mapWarehouseTallySortRules(updatedRows);
-      await tx.auditLog.create({
-        data: {
-          actorId: principal.id,
-          action: 'warehouse.tally.sort_rules.update',
-          target: 'warehouse:tally-sort-rules',
-          before: JSON.parse(JSON.stringify(before)),
-          after: JSON.parse(JSON.stringify(updated))
-        }
-      });
-      return updated;
-    });
   }
 
   async getWarehouseTallyTasks(
@@ -94,10 +51,8 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED') {
       throw new BadRequestException('理货任务状态无效');
     }
-    const canViewPending = await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view')
-      && !(await this.isPendingViewBlocked(principal));
-    const canViewCompleted = await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view')
-      && !(await this.isCompletedViewBlocked(principal));
+    const canViewPending = await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view');
+    const canViewCompleted = await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view');
     if (!canViewPending && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看理货任务');
     }
@@ -171,17 +126,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       ...mapWarehouseTallyTask(row),
       outputPackages: outputsByTask.get(row.id) ?? []
     }));
-    const activeRows = mappedRows.filter((row) => row.status === 'PENDING');
-    const sortRules = await this.readWarehouseTallySortRules();
-    const inProgressRows = activeRows
-      .filter((row) => row.tallyProgressStatus === 'IN_PROGRESS')
-      .sort(compareWarehouseTallyTaskCreation);
-    const waitingRows = sortWarehouseTallyTasks(
-      activeRows.filter((row) => row.tallyProgressStatus !== 'IN_PROGRESS'),
-      new Date(),
-      sortRules
-    );
-    const pendingRows = [...inProgressRows, ...waitingRows];
+    const pendingRows = sortWarehouseTallyTasks<WarehouseTallyTaskSummary>(mappedRows.filter((row) => row.status === 'PENDING'));
     return query.status === 'PENDING' ? pendingRows : [...pendingRows, ...mappedRows.filter((row) => row.status !== 'PENDING')];
   }
 
@@ -189,8 +134,8 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     id: string
   ): Promise<WarehousePackageSummary[]> {
-    await this.ensurePendingViewNotBlocked(principal);
-    if (!(await this.hasAnyPermission(principal, ['warehouse:tally-pending:detail-view']))) {
+    await this.ensurePendingView(principal);
+    if (!(await this.hasAnyPermission(principal, ['warehouse:tally-pending:view']))) {
       throw new ForbiddenException('当前角色不能查看理货原始包裹');
     }
     const scope = this.operatorCustomerScope(principal);
@@ -222,8 +167,8 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     packageId: string
   ): Promise<WarehouseTallyTaskSummary[]> {
-    await this.ensureCompletedViewNotBlocked(principal);
-    if (!(await this.hasAnyPermission(principal, ['warehouse:in-stock:tally-record-view']))) {
+    await this.ensureCompletedView(principal);
+    if (!(await this.hasAnyPermission(principal, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货历史');
     }
     const normalizedPackageId = packageId.trim();
@@ -277,7 +222,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     id: string
   ): Promise<WarehousePackageSummary[]> {
-    await this.ensureCompletedViewNotBlocked(principal);
+    await this.ensureCompletedView(principal);
     if (!(await this.hasAnyPermission(principal, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
@@ -297,35 +242,15 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     return false;
   }
 
-  private async isPendingViewBlocked(principal: Principal) {
-    return !isAdministratorRole(principal.role)
-      && await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view-block');
-  }
-
-  private async isCompletedViewBlocked(principal: Principal) {
-    return !isAdministratorRole(principal.role)
-      && await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view-block');
-  }
-
-  private async ensurePendingViewNotBlocked(principal: Principal) {
-    if (await this.isPendingViewBlocked(principal)) {
-      throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
+  private async ensurePendingView(principal: Principal) {
+    if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view'))) {
+      throw new ForbiddenException('当前角色不能查看未完成理货');
     }
   }
 
-  private async ensurePendingUpdateAllowed(principal: Principal) {
-    if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:task-update'))) {
-      throw new ForbiddenException('当前角色不能修改理货排序规则');
-    }
-    if (!isAdministratorRole(principal.role)
-      && await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:update-block')) {
-      throw new ForbiddenException('当前用户组已屏蔽修改未完成理货');
-    }
-  }
-
-  private async ensureCompletedViewNotBlocked(principal: Principal) {
-    if (await this.isCompletedViewBlocked(principal)) {
-      throw new ForbiddenException('当前用户组已屏蔽查看已完成理货');
+  private async ensureCompletedView(principal: Principal) {
+    if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view'))) {
+      throw new ForbiddenException('当前角色不能查看已完成理货');
     }
   }
 
@@ -336,62 +261,4 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     }
     return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
   }
-
-  private async readWarehouseTallySortRules(): Promise<WarehouseTallySortRule[]> {
-    const rows = await (this.prisma as any).warehouseTallySortRule.findMany({ orderBy: [{ sortOrder: 'asc' }, { channel: 'asc' }] });
-    return mapWarehouseTallySortRules(rows);
-  }
-}
-
-function mapWarehouseTallySortRules(rows: any[]): WarehouseTallySortRule[] {
-  const byChannel = new Map(rows.map((row) => [row.channel, row]));
-  return createDefaultWarehouseTallySortRules().map((fallback) => {
-    const row = byChannel.get(fallback.channel);
-    if (!row) return fallback;
-    const sortOrder = Number(row.sortOrder);
-    return {
-      channel: fallback.channel,
-      sortOrder: Number.isInteger(sortOrder) && sortOrder >= 1 && sortOrder <= 999 ? sortOrder : fallback.sortOrder,
-      preferredTimeSlot: row.preferredTimeSlot === 'MORNING' || row.preferredTimeSlot === 'AFTERNOON' || row.preferredTimeSlot === 'ALL_DAY'
-        ? row.preferredTimeSlot
-        : fallback.preferredTimeSlot,
-      enabled: typeof row.enabled === 'boolean' ? row.enabled : fallback.enabled,
-      updatedAt: row.updatedAt?.toISOString?.(),
-      updatedBy: row.updatedBy ?? undefined
-    };
-  }).sort((left, right) => left.sortOrder - right.sortOrder || left.channel.localeCompare(right.channel));
-}
-
-function normalizeWarehouseTallySortRuleInput(input: WarehouseTallySortRulesUpdateInput) {
-  const inputRules = input?.rules;
-  if (!Array.isArray(inputRules) || inputRules.length !== warehouseTallyChannels.length) {
-    throw new BadRequestException('请完整维护全部理货渠道排序规则');
-  }
-  const byChannel = new Map(inputRules.map((rule) => [rule?.channel, rule]));
-  if (byChannel.size !== warehouseTallyChannels.length || warehouseTallyChannels.some((channel) => !byChannel.has(channel))) {
-    throw new BadRequestException('理货排序规则必须包含且仅包含快递、空运、卡航、铁路、海运');
-  }
-  return warehouseTallyChannels.map((channel) => {
-    const rule = byChannel.get(channel)!;
-    const sortOrder = Number(rule.sortOrder);
-    if (!Number.isInteger(sortOrder) || sortOrder < 1 || sortOrder > 999) {
-      throw new BadRequestException('理货排序号须为 1 到 999 的整数');
-    }
-    if (!['MORNING', 'AFTERNOON', 'ALL_DAY'].includes(rule.preferredTimeSlot)) {
-      throw new BadRequestException('理货优先时段无效');
-    }
-    if (typeof rule.enabled !== 'boolean') {
-      throw new BadRequestException('理货渠道启用状态无效');
-    }
-    return { channel, sortOrder, preferredTimeSlot: rule.preferredTimeSlot, enabled: rule.enabled };
-  });
-}
-
-function compareWarehouseTallyTaskCreation(
-  left: Pick<WarehouseTallyTaskSummary, 'createdAt' | 'taskNo' | 'id'>,
-  right: Pick<WarehouseTallyTaskSummary, 'createdAt' | 'taskNo' | 'id'>
-) {
-  const createdDifference = Date.parse(left.createdAt) - Date.parse(right.createdAt);
-  return (Number.isFinite(createdDifference) && createdDifference !== 0 ? createdDifference : 0)
-    || String(left.taskNo ?? left.id).localeCompare(String(right.taskNo ?? right.id), 'zh-Hans-CN');
 }

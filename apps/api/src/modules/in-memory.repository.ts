@@ -421,6 +421,7 @@ import {
 import { resolveWarehouseTallyRecentCutoff } from './warehouse/warehouse-query.shared.js';
 import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
 import {
+  allPermissions,
   allRuntimePermissions,
   buildRolePermissionRow,
   defaultPermissionsForRole,
@@ -439,6 +440,7 @@ import {
   roleMetadata,
   rolePermissions,
   toSessionRole,
+  withImpliedUiPreferencePermissions,
   workspaceFieldMaskKeys,
   workspaceFieldMaskKeysForWorkspace,
   workspaceFieldMaskPermissionCode,
@@ -472,12 +474,14 @@ type ReviewRestoreInputWithManual = ShipmentRestoreInput & {
 type WorkspaceFieldMaskState = Record<WorkspaceFieldMaskKey, boolean>;
 
 type WarehouseRentVisibilityScope = {
-  mode: 'ALL' | 'OWN' | 'EXCLUDE_OWN' | 'NONE';
+  mode: 'ALL' | 'SELF' | 'TEAM' | 'SITE' | 'NONE';
   site?: string;
+  salespeople?: string[];
 };
 
 const staffGenderValues: StaffGender[] = ['UNKNOWN', 'MALE', 'FEMALE', 'OTHER'];
 const warehouseNavigationViewPermissions: PermissionKey[] = [
+  'warehouse:dashboard:view',
   'warehouse:today-receipt:view',
   'warehouse:in-stock:view',
   'warehouse:tally-pending:view',
@@ -5323,7 +5327,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseRentRules(principal: Principal): Promise<WarehouseRentRuleSummary[]> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:rent-rule:view'))) {
+    if (!(await this.hasPermission(principal.role, 'warehouse:rent-detail:view'))) {
       throw new ForbiddenException('当前角色不能查看仓租规则');
     }
     const rentScope = await this.warehouseRentVisibilityScope(principal);
@@ -5333,7 +5337,7 @@ export class InMemoryRepository {
     return this.warehouseRentRules
       .filter((rule) => rentScope.mode === 'ALL'
         || !rule.site
-        || (rentScope.mode === 'OWN' ? rule.site === rentScope.site : rule.site !== rentScope.site))
+        || (rentScope.mode === 'SITE' && rule.site === rentScope.site))
       .map((rule) => ({ ...rule }))
       .sort((left, right) =>
         (left.site ?? '').localeCompare(right.site ?? '')
@@ -5349,7 +5353,6 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:rent-detail:view'))) {
       throw new ForbiddenException('当前角色不能查看仓租细分表');
     }
-    const salesScope = this.operatorCustomerScope(principal);
     const rentScope = await this.warehouseRentVisibilityScope(principal);
     if (rentScope.mode === 'NONE') {
       throw new ForbiddenException('当前角色不能查看仓租数据');
@@ -5362,9 +5365,8 @@ export class InMemoryRepository {
     const response = calculateWarehouseRentDetails(
       this.warehousePackages
         .filter((pkg) => rentScope.mode === 'ALL'
-          || (rentScope.mode === 'OWN' && pkg.site === rentScope.site)
-          || (rentScope.mode === 'EXCLUDE_OWN' && Boolean(pkg.site) && pkg.site !== rentScope.site))
-        .filter((pkg) => !salesScope || (pkg.salesperson && salesScope.includes(pkg.salesperson)))
+          || (rentScope.mode === 'SITE' && pkg.site === rentScope.site)
+          || ((rentScope.mode === 'SELF' || rentScope.mode === 'TEAM') && Boolean(pkg.salesperson) && (rentScope.salespeople ?? []).includes(pkg.salesperson!)))
         .map((pkg) => ({
           id: pkg.id,
           sourcePackageId: pkg.sourcePackageId,
@@ -5639,40 +5641,46 @@ export class InMemoryRepository {
     if (isAdministratorRole(principal.role)) {
       return { mode: 'ALL' };
     }
-    const [allViewBlocked, ownViewBlocked] = await Promise.all([
-      this.hasPermission(principal.role, 'warehouse:rent-detail:all-view-block'),
-      this.hasPermission(principal.role, 'warehouse:rent-detail:own-view-block')
+    const [all, siteScope, team, self] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:rent-detail:scope-all'),
+      this.hasPermission(principal.role, 'warehouse:rent-detail:scope-site'),
+      this.hasPermission(principal.role, 'warehouse:rent-detail:scope-team'),
+      this.hasPermission(principal.role, 'warehouse:rent-detail:scope-self')
     ]);
-    if (allViewBlocked && ownViewBlocked) {
-      return { mode: 'NONE' };
-    }
-    if (!allViewBlocked && !ownViewBlocked) {
-      return { mode: 'ALL' };
-    }
+    if (all) return { mode: 'ALL' };
     const site = principal.site?.trim()
       || this.accounts.find((account) => account.id === principal.id)?.site?.trim();
-    if (!site) {
-      throw new ForbiddenException('仓库账号未配置站点，不能查看仓租数据');
+    if (siteScope && site) return { mode: 'SITE', site };
+    if (team) {
+      const salespeople = principal.departmentTeamScope?.filter(Boolean) ?? [];
+      if (salespeople.length) return { mode: 'TEAM', salespeople };
     }
-    return { mode: allViewBlocked ? 'OWN' : 'EXCLUDE_OWN', site };
+    if (self) {
+      const salespeople = [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
+      if (salespeople.length) return { mode: 'SELF', salespeople };
+    }
+    return { mode: 'NONE' };
   }
 
   private async ensureWarehouseRentRuleManage(principal: Principal): Promise<void> {
     if (isAdministratorRole(principal.role)) {
       return;
     }
-    const [canManage, manageBlocked] = await Promise.all([
-      this.hasPermission(principal.role, 'warehouse:rent-rule:manage'),
-      this.hasPermission(principal.role, 'warehouse:rent-rule:manage-block')
-    ]);
-    if (!canManage || manageBlocked) {
+    if (!(await this.hasPermission(principal.role, 'warehouse:rent-detail:edit'))) {
       throw new ForbiddenException('当前角色不能维护仓租规则');
     }
   }
 
   async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
-    await this.ensureAnyPermission(principal, ['warehouse:today-receipt:view', 'warehouse:in-stock:view'], '没有仓库包裹查看权限');
-    return this.withConfirmedWarehouseTally(this.warehousePackages);
+    const [canToday, canInStock] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:today-receipt:view'),
+      this.hasPermission(principal.role, 'warehouse:in-stock:view')
+    ]);
+    if (!canToday && !canInStock) throw new ForbiddenException('没有仓库包裹查看权限');
+    const rows = canInStock
+      ? this.warehousePackages
+      : this.warehousePackages.filter((pkg) => this.isWarehousePackageToday(pkg));
+    return this.withConfirmedWarehouseTally(rows);
   }
 
   private withConfirmedWarehouseTally(packages: WarehousePackageSummary[]): WarehousePackageSummary[] {
@@ -5724,13 +5732,14 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:today-receipt:view'))) {
       throw new ForbiddenException('当前角色不能查看今日收货');
     }
-    if (query.site?.trim()) {
-      await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:site-filter-block');
-    }
     const { start, end } = resolveWarehouseTodayRange(query);
-    const businessCustomerScoped = Boolean(this.operatorCustomerScope(principal)) && query.dataScope !== 'ALL';
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const businessCustomerScoped = !warehouseWideScope;
+    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
+      ? principal.departmentTeamScope!.filter(Boolean)
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
     const ownedCustomers = businessCustomerScoped
-      ? this.customers.filter((customer) => customer.salesperson === principal.username)
+      ? this.customers.filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson))
       : undefined;
     const ownedCustomerCodes = ownedCustomers
       ? new Set(ownedCustomers.map((customer) => customer.code))
@@ -5779,11 +5788,13 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
       throw new ForbiddenException('当前角色不能查看在仓数据');
     }
-    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
-      || await this.hasPermission(principal.role, 'warehouse:in-stock:update');
-    const businessCustomerScoped = !warehouseWideScope && query.dataScope !== 'ALL';
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const businessCustomerScoped = !warehouseWideScope;
+    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
+      ? principal.departmentTeamScope!.filter(Boolean)
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
     const ownedCustomers = businessCustomerScoped
-      ? this.customers.filter((customer) => customer.salesperson === principal.username)
+      ? this.customers.filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson))
       : undefined;
     const ownedCustomerCodes = ownedCustomers
       ? new Set(ownedCustomers.map((customer) => customer.code))
@@ -5839,8 +5850,27 @@ export class InMemoryRepository {
   }
 
   async getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
-    const response = await this.getWarehouseInStock(principal, { dataScope: 'ALL' });
-    return { totals: response.totals };
+    if (!(await this.hasAnyPermission(principal.role, ['warehouse:dashboard:view', 'warehouse:in-stock:view']))) {
+      throw new ForbiddenException('当前角色不能查看仓库看板或在仓汇总');
+    }
+    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
+      ? principal.departmentTeamScope!.filter(Boolean)
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
+    const ownedCustomers = warehouseWideScope
+      ? undefined
+      : this.customers.filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson));
+    const ownedCustomerCodes = ownedCustomers ? new Set(ownedCustomers.map((customer) => customer.code)) : undefined;
+    const ownedCustomerIds = ownedCustomers ? new Set(ownedCustomers.map((customer) => customer.id)) : undefined;
+    const grouped = new Map<string, WarehousePackageSummary[]>();
+    this.withConfirmedWarehouseTally(this.warehousePackages.filter((pkg) => pkg.status === 'RECEIVED' && (!ownedCustomerCodes || ownedCustomerCodes.has(pkg.customerCode))))
+      .forEach((row) => grouped.set(row.combinedOrderNo, [...(grouped.get(row.combinedOrderNo) ?? []), row]));
+    return {
+      totals: summarizeWarehouseInStockTotals(
+        [...grouped.values()].flat(),
+        this.shipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH' && (!ownedCustomerIds || ownedCustomerIds.has(shipment.customerId))).length
+      )
+    };
   }
 
   async deleteWarehousePackages(principal: Principal, input: WarehousePackageDeleteInput): Promise<WarehousePackageDeleteResponse> {
@@ -5855,6 +5885,10 @@ export class InMemoryRepository {
     const packages = ids.map((id) => this.warehousePackages.find((pkg) => pkg.id === id));
     if (packages.some((pkg) => !pkg)) throw new NotFoundException('部分包裹不存在或已删除');
     const rows = packages as WarehousePackageSummary[];
+    if (rows.some((pkg) => this.isWarehousePackageToday(pkg) && !canToday)
+      || rows.some((pkg) => !this.isWarehousePackageToday(pkg) && !canInStock)) {
+      throw new ForbiddenException('当前角色不能删除所选日期范围内的仓库包裹');
+    }
     const scope = this.operatorCustomerScope(principal);
     if (scope && rows.some((pkg) => !pkg.salesperson || !scope.includes(pkg.salesperson))) throw new ForbiddenException('业务员只能删除自己名下包裹');
     const draftIds = new Set(this.shipments.filter((shipment) => !shipment.deletedAt).flatMap((shipment) => shipment.draftWarehousePackageIds ?? []));
@@ -5873,7 +5907,6 @@ export class InMemoryRepository {
 
   async getWarehouseManualReceiptCustomers(principal: Principal) {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     return this.customers
       .filter((customer) => customer.enabled)
       .map((customer) => ({ code: customer.code, name: customer.name }))
@@ -5882,7 +5915,6 @@ export class InMemoryRepository {
 
   async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string) {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const normalizedCode = customerCode?.trim() ?? '';
     if (!normalizedCode) {
       throw new BadRequestException('请填写客户编号');
@@ -5909,8 +5941,7 @@ export class InMemoryRepository {
   }
 
   async previewWarehouseMachineImport(principal: Principal, parsed: ParsedWarehouseMachineImport) {
-    await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:batch-import-block');
+    await this.ensureWarehouseMachineImportPermission(principal, parsed);
     return buildWarehouseMachineImportResponse(parsed, this.findExistingWarehouseMachineImportKeys(parsed));
   }
 
@@ -5919,8 +5950,7 @@ export class InMemoryRepository {
     parsed: ParsedWarehouseMachineImport,
     meta: { fileHash: string }
   ) {
-    await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:batch-import-block');
+    await this.ensureWarehouseMachineImportPermission(principal, parsed);
     const auditTargets = new Set([
       `warehouse-machine-import:${meta.fileHash}`,
       `warehouse-machine-import:${meta.fileHash.slice(0, 16)}`
@@ -6036,7 +6066,6 @@ export class InMemoryRepository {
 
   async createWarehousePackage(principal: Principal, input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     if (input.scanSource !== '墨家设备') {
       await this.assertWarehouseManualReceiptCustomer(principal, input.customerCode);
     }
@@ -6072,7 +6101,6 @@ export class InMemoryRepository {
 
   async createWarehouseManualReceipt(principal: Principal, input: WarehouseManualReceiptCreateInput): Promise<WarehouseManualReceiptCreateResponse> {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const packageInputs = buildWarehouseManualReceiptPackageInputs(input);
     const firstPackageInput = packageInputs[0]!;
     await this.assertWarehouseManualReceiptCustomer(principal, firstPackageInput.customerCode);
@@ -6120,7 +6148,6 @@ export class InMemoryRepository {
   }
 
   async replenishWarehouseSameSpec(principal: Principal, id: string, input: WarehouseSameSpecReplenishInput): Promise<WarehouseSameSpecReplenishResponse> {
-    await this.ensurePermission(principal, 'warehouse:in-stock:same-spec-replenish', '没有同箱规补录权限');
     const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
     const supplementCount = Math.floor(Number(input.supplementCount));
     if (!Number.isInteger(supplementCount) || supplementCount < 1 || supplementCount > 500) {
@@ -6128,6 +6155,7 @@ export class InMemoryRepository {
     }
     const source = this.warehousePackages.find((pkg) => pkg.id === id);
     if (!source) throw new NotFoundException('仓库包裹不存在');
+    await this.ensureWarehousePackageEditPermission(principal, source, '没有同箱规补录权限');
     if (!isAdministratorRole(principal.role) && !principal.shipmentAllView) {
       if (permissions.includes('data-scope:sales-own')) {
         const customer = this.customers.find((item) => item.code === source.customerCode);
@@ -6290,15 +6318,13 @@ export class InMemoryRepository {
   }
 
   async updateWarehousePackageRemark(principal: Principal, id: string, input: { remark?: string }): Promise<WarehousePackageSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:update'))) {
-      throw new ForbiddenException('当前角色不能修改在仓包裹备注');
-    }
     const index = this.warehousePackages.findIndex((pkg) => pkg.id === id);
     if (index < 0) {
       throw new NotFoundException('仓库包裹不存在');
     }
     this.ensureWarehousePackagesNotInPendingTally([id]);
     const before = this.warehousePackages[index];
+    await this.ensureWarehousePackageEditPermission(principal, before, '当前角色不能修改该日期范围内的仓库包裹备注');
     if (!canUpdateUnenteredWarehousePackage(before.status, before.shipmentId)) {
       throw new BadRequestException('只有有效在仓包裹可以修改备注');
     }
@@ -6319,15 +6345,13 @@ export class InMemoryRepository {
   }
 
   async updateWarehousePackage(principal: Principal, id: string, input: WarehousePackageUpdateInput): Promise<WarehousePackageSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:update'))) {
-      throw new ForbiddenException('当前角色不能修改在仓包裹');
-    }
     const index = this.warehousePackages.findIndex((pkg) => pkg.id === id);
     if (index < 0) {
       throw new NotFoundException('仓库包裹不存在');
     }
     this.ensureWarehousePackagesNotInPendingTally([id]);
     const before = this.warehousePackages[index];
+    await this.ensureWarehousePackageEditPermission(principal, before, '当前角色不能修改该日期范围内的仓库包裹');
     if (!canUpdateUnenteredWarehousePackage(before.status, before.shipmentId)) {
       if (before.shipmentId) {
         throw new BadRequestException('包裹已绑定正式运单，不能直接修改');
@@ -6505,15 +6529,13 @@ export class InMemoryRepository {
   }
 
   async updateWarehousePackageException(principal: Principal, id: string, input: { manualException?: string }): Promise<WarehousePackageSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:update'))) {
-      throw new ForbiddenException('当前角色不能修改在仓包裹异常');
-    }
     const index = this.warehousePackages.findIndex((pkg) => pkg.id === id);
     if (index < 0) {
       throw new NotFoundException('仓库包裹不存在');
     }
     this.ensureWarehousePackagesNotInPendingTally([id]);
     const before = this.warehousePackages[index];
+    await this.ensureWarehousePackageEditPermission(principal, before, '当前角色不能修改该日期范围内的仓库包裹异常');
     if (!canUpdateUnenteredWarehousePackage(before.status, before.shipmentId)) {
       throw new BadRequestException('只有有效在仓包裹可以修改异常');
     }
@@ -6534,7 +6556,7 @@ export class InMemoryRepository {
   }
 
   async createWarehouseConsolidation(principal: Principal, input: WarehouseConsolidationCreateInput): Promise<WarehouseConsolidationSummary> {
-    await this.ensurePermission(principal, input.mode === 'MERGE_AND_SHIP' ? 'warehouse:tally-pending:merge-and-ship' : 'warehouse:tally-pending:merge-only', '没有仓库合并权限');
+    await this.ensurePermission(principal, input.mode === 'MERGE_AND_SHIP' ? 'warehouse:tally-pending:complete-and-ship' : 'warehouse:tally-pending:process', '没有仓库合并权限');
     if (!Array.isArray(input.packageIds) || input.packageIds.length === 0) {
       throw new BadRequestException('请先选择要合并的包裹');
     }
@@ -6592,7 +6614,7 @@ export class InMemoryRepository {
   }
 
   async createShipmentFromWarehouseConsolidation(principal: Principal, id: string): Promise<WarehouseConsolidationSummary> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:merge-and-ship', '没有仓库合并出货权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:complete-and-ship', '没有仓库合并出货权限');
     const consolidation = this.warehouseConsolidations.find((item) => item.id === id);
     if (!consolidation) {
       throw new NotFoundException('合并批次不存在');
@@ -6630,8 +6652,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:detail-view', '没有仓库合并明细权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:view', '没有仓库合并明细权限');
     const consolidation = this.warehouseConsolidations.find((item) => item.id === id);
     if (!consolidation) {
       throw new NotFoundException('合并批次不存在');
@@ -6646,10 +6667,8 @@ export class InMemoryRepository {
     if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED') {
       throw new BadRequestException('理货任务状态无效');
     }
-    const canViewPending = await this.hasPermission(principal.role, 'warehouse:tally-pending:view')
-      && !(await this.isWarehouseTallyPendingBlocked(principal, 'warehouse:tally-pending:view-block'));
-    const canViewCompleted = await this.hasPermission(principal.role, 'warehouse:tally-completed:view')
-      && !(await this.isWarehouseTallyCompletedBlocked(principal, 'warehouse:tally-completed:view-block'));
+    const canViewPending = await this.hasPermission(principal.role, 'warehouse:tally-pending:view');
+    const canViewCompleted = await this.hasPermission(principal.role, 'warehouse:tally-completed:view');
     if (!canViewPending && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看理货任务');
     }
@@ -6689,8 +6708,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskSourcePackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:detail-view', '当前角色不能查看理货原始包裹');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:view', '当前角色不能查看理货原始包裹');
     const scope = this.operatorCustomerScope(principal);
     const task = this.warehouseTallyTasks.find((item) =>
       item.id === id
@@ -6713,7 +6731,6 @@ export class InMemoryRepository {
     principal: Principal,
     query: WarehouseTallyRepeatStatisticsQuery = {}
   ): Promise<WarehouseTallyRepeatStatisticsResponse> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看重复理货统计');
     }
@@ -6730,8 +6747,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string): Promise<WarehouseTallyTaskSummary[]> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:in-stock:tally-record-view']))) {
+    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货历史');
     }
     const normalizedPackageId = packageId.trim();
@@ -6793,7 +6809,7 @@ export class InMemoryRepository {
   }
 
   async createWarehouseTallyTask(principal: Principal, input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-create', '没有创建理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:in-stock:tally', '没有创建理货任务权限');
     if (!warehouseTallyChannels.includes(input.tallyChannel)) {
       throw new BadRequestException('请选择有效的理货渠道');
     }
@@ -6873,9 +6889,7 @@ export class InMemoryRepository {
   }
 
   async startWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:process-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-process', '没有开始理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:process', '没有开始理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
     const before = this.warehouseTallyTasks[index];
@@ -6900,9 +6914,7 @@ export class InMemoryRepository {
   }
 
   async updateWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskUpdateInput): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:update-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-update', '没有修改理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:edit', '没有修改理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -6970,9 +6982,7 @@ export class InMemoryRepository {
   }
 
   async cancelWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:cancel-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-cancel', '没有取消理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:cancel', '没有取消理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -6996,8 +7006,7 @@ export class InMemoryRepository {
   }
 
   async cancelCompletedWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
-    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有取消已完成理货权限');
+    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse', '没有取消已完成理货权限');
     const rawReason = input?.reason;
     if (typeof rawReason !== 'string') throw new BadRequestException('取消理货必须填写原因');
     const reason = rawReason.trim();
@@ -7098,8 +7107,7 @@ export class InMemoryRepository {
   }
 
   async reverseReviewWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
-    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有反审核已完成理货权限');
+    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse', '没有反审核已完成理货权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
     const before = this.warehouseTallyTasks[index];
@@ -7199,9 +7207,7 @@ export class InMemoryRepository {
   }
 
   async completeWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:process-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-process', '没有完成理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:process', '没有完成理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -7414,8 +7420,7 @@ export class InMemoryRepository {
   }
 
   async generateWarehouseTallyTaskLabel(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
-    await this.ensurePermission(principal, 'warehouse:tally-label:generate', '没有生成理货标签权限');
+    await this.ensurePermission(principal, 'warehouse:tally-completed:print', '没有生成理货标签权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -7428,7 +7433,6 @@ export class InMemoryRepository {
       throw new BadRequestException('理货任务已取消，不能生成标签');
     }
     if (before.labelNo) {
-      await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-label:reprint-block');
     }
     const labelNo = before.taskNo;
     const labelQrContent = buildWarehouseTallyLabelQrContent(before, labelNo);
@@ -7480,7 +7484,6 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskOutputPackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
@@ -7576,8 +7579,7 @@ export class InMemoryRepository {
   }
 
   async applyWarehouseTallyTaskLabel(principal: Principal, input: WarehouseTallyLabelScanInput): Promise<WarehouseTallyLabelScanResponse> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
-    await this.ensurePermission(principal, 'warehouse:tally-label:scan-apply', '没有扫描应用理货标签权限');
+    await this.ensurePermission(principal, 'warehouse:tally-completed:scan', '没有扫描应用理货标签权限');
     const labelNo = input.labelNo?.trim();
     if (!labelNo) {
       throw new BadRequestException('请扫描或填写理货标签号');
@@ -7610,9 +7612,7 @@ export class InMemoryRepository {
   }
 
   private async markWarehouseTallyTaskLabelOutput(principal: Principal, id: string, action: 'print' | 'download'): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, action === 'print' ? 'warehouse:tally-label:reprint-block' : 'warehouse:tally-label:download-block');
-    await this.ensurePermission(principal, action === 'print' ? 'warehouse:tally-label:print' : 'warehouse:tally-label:download', '没有输出理货标签权限');
+    await this.ensurePermission(principal, action === 'print' ? 'warehouse:tally-completed:print' : 'warehouse:tally-completed:download', '没有输出理货标签权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -13792,7 +13792,7 @@ export class InMemoryRepository {
 
   private async ensureShipmentLabelAccess(principal: Principal, shipment: Shipment) {
     const [canViewWarehouseLabel, canViewTransferLabel] = await Promise.all([
-      this.hasPermission(principal.role, 'warehouse:dispatch-pending:label-view'),
+      this.hasPermission(principal.role, 'warehouse:dispatch-pending:label-manage'),
       this.hasPermission(principal.role, 'customer-service:transfer:label-view')
     ]);
     const warehouseAllowed = canViewWarehouseLabel && shipment.status === 'WAITING_DISPATCH';
@@ -14301,10 +14301,6 @@ export class InMemoryRepository {
     throw new ForbiddenException('当前角色已屏蔽该操作');
   }
 
-  private async ensureTodayReceiptMask(principal: Principal, mask: PermissionKey) {
-    if (isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, mask))) return;
-    throw new ForbiddenException('当前角色已屏蔽该操作');
-  }
 
   private async ensurePendingRoutingRouteAccess(principal: Principal, shipment: Shipment, body: ShipmentRouteInput, shouldApprove: boolean) {
     if (isAdministratorRole(principal.role) || shipment.status !== 'WAITING_SORT') return;
@@ -17557,36 +17553,38 @@ export class InMemoryRepository {
     }
   }
 
+  private isWarehousePackageToday(pkg: { scanTime?: string | Date | null; createdAt?: string | Date | null }): boolean {
+    const { start, end } = resolveWarehouseTodayRange({});
+    const occurredAt = new Date(pkg.scanTime ?? pkg.createdAt ?? 0);
+    return Number.isFinite(occurredAt.getTime()) && occurredAt >= start && occurredAt < end;
+  }
+
+  private async ensureWarehousePackageEditPermission(
+    principal: Principal,
+    pkg: { scanTime?: string | Date | null; createdAt?: string | Date | null },
+    message: string
+  ): Promise<void> {
+    if (this.isWarehousePackageToday(pkg)) {
+      await this.ensureAnyPermission(principal, ['warehouse:today-receipt:edit', 'warehouse:in-stock:edit'], message);
+      return;
+    }
+    await this.ensurePermission(principal, 'warehouse:in-stock:edit', message);
+  }
+
+  private async ensureWarehouseMachineImportPermission(principal: Principal, parsed: ParsedWarehouseMachineImport): Promise<void> {
+    const [canToday, canInStock] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:today-receipt:import'),
+      this.hasPermission(principal.role, 'warehouse:in-stock:import')
+    ]);
+    if (!canToday && !canInStock) throw new ForbiddenException('没有仓库批量导入权限');
+    if (!canInStock && parsed.candidates.some((candidate) => !this.isWarehousePackageToday(candidate))) {
+      throw new ForbiddenException('今日收货导入仅允许导入当日过机记录');
+    }
+  }
+
   private async ensurePermission(principal: Principal, permission: PermissionKey, message = '没有访问权限') {
     if (!(await this.hasPermission(principal.role, permission))) {
       throw new ForbiddenException(message);
-    }
-  }
-
-  private async isWarehouseTallyPendingBlocked(principal: Principal, permission: PermissionKey) {
-    return !isAdministratorRole(principal.role) && await this.hasPermission(principal.role, permission);
-  }
-
-  private async isWarehouseTallyCompletedBlocked(principal: Principal, permission: PermissionKey) {
-    return !isAdministratorRole(principal.role) && await this.hasPermission(principal.role, permission);
-  }
-
-  private async ensureWarehouseTallyPendingUnblocked(principal: Principal, permission: PermissionKey) {
-    if (await this.isWarehouseTallyPendingBlocked(principal, permission)) {
-      throw new ForbiddenException('当前用户组已屏蔽该未完成理货操作');
-    }
-  }
-
-  private async ensureWarehouseTallyCompletedUnblocked(
-    principal: Principal,
-    permissions: PermissionKey | PermissionKey[]
-  ) {
-    if (isAdministratorRole(principal.role)) return;
-    const blockedPermissions = Array.isArray(permissions) ? permissions : [permissions];
-    for (const permission of blockedPermissions) {
-      if (await this.hasPermission(principal.role, permission)) {
-        throw new ForbiddenException('当前用户组已屏蔽该已完成理货操作');
-      }
     }
   }
 

@@ -590,7 +590,7 @@ export class DataController {
   @RequirePermission([
     'business:shipment:detail',
     'operations:line-shipment:detail',
-    'warehouse:outbounded:detail-view'
+    'warehouse:outbounded:view'
   ])
   async shipmentPackageDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
     if (request.user.role === 'CUSTOMER') {
@@ -671,7 +671,7 @@ export class DataController {
   }
 
   @Post('shipments/:id/receive')
-  @RequirePermission('warehouse:today-receipt:update')
+  @RequirePermission('warehouse:today-receipt:edit')
   async receiveShipment(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.receiveShipment(request.user, id);
   }

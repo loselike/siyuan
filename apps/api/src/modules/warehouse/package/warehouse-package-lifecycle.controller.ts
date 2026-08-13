@@ -37,7 +37,7 @@ export class WarehousePackageLifecycleController {
   }
 
   @Post('warehouse/packages/:id/same-spec-replenish')
-  @RequirePermission('warehouse:in-stock:same-spec-replenish')
+  @RequirePermission('warehouse:in-stock:edit')
   replenishWarehouseSameSpec(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -57,7 +57,7 @@ export class WarehousePackageLifecycleController {
   }
 
   @Patch('warehouse/packages/:id')
-  @RequirePermission('warehouse:in-stock:update')
+  @RequirePermission(['warehouse:today-receipt:edit', 'warehouse:in-stock:edit'])
   updateWarehousePackage(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -67,7 +67,7 @@ export class WarehousePackageLifecycleController {
   }
 
   @Put('warehouse/packages/:id/remark')
-  @RequirePermission('warehouse:in-stock:update')
+  @RequirePermission(['warehouse:today-receipt:edit', 'warehouse:in-stock:edit'])
   updateWarehousePackageRemark(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -77,7 +77,7 @@ export class WarehousePackageLifecycleController {
   }
 
   @Patch('warehouse/packages/:id/exception')
-  @RequirePermission('warehouse:in-stock:update')
+  @RequirePermission(['warehouse:today-receipt:edit', 'warehouse:in-stock:edit'])
   updateWarehousePackageException(
     @Req() request: { user: Principal },
     @Param('id') id: string,

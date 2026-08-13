@@ -27,13 +27,13 @@ export class WarehouseRentController {
   }
 
   @Get('warehouse/rent-rules')
-  @RequirePermission('warehouse:rent-rule:view')
+  @RequirePermission('warehouse:rent-detail:view')
   warehouseRentRules(@Req() request: { user: Principal }) {
     return this.warehouseRent.rules(request.user);
   }
 
   @Post('warehouse/rent-rules')
-  @RequirePermission('warehouse:rent-rule:manage')
+  @RequirePermission('warehouse:rent-detail:edit')
   createWarehouseRentRule(
     @Req() request: { user: Principal },
     @Body() body: WarehouseRentRuleInput
@@ -42,7 +42,7 @@ export class WarehouseRentController {
   }
 
   @Put('warehouse/rent-rules/:id')
-  @RequirePermission('warehouse:rent-rule:manage')
+  @RequirePermission('warehouse:rent-detail:edit')
   updateWarehouseRentRule(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -52,13 +52,13 @@ export class WarehouseRentController {
   }
 
   @Delete('warehouse/rent-rules/:id')
-  @RequirePermission('warehouse:rent-rule:manage')
+  @RequirePermission('warehouse:rent-detail:edit')
   deleteWarehouseRentRule(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.warehouseRent.deleteRule(request.user, id);
   }
 
   @Put('warehouse/rent-rules/:id/enabled')
-  @RequirePermission('warehouse:rent-rule:manage')
+  @RequirePermission('warehouse:rent-detail:edit')
   updateWarehouseRentRuleEnabled(
     @Req() request: { user: Principal },
     @Param('id') id: string,

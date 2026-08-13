@@ -33,7 +33,7 @@ export class ShipmentLabelLifecycleController {
   }
 
   @Post('shipments/:id/labels')
-  @RequirePermission('warehouse:dispatch-pending:label-generate')
+  @RequirePermission('warehouse:dispatch-pending:label-manage')
   createShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.labels.create(request.user, id);
   }
@@ -67,7 +67,7 @@ export class ShipmentLabelLifecycleController {
   }
 
   @Post('shipments/:id/labels/:labelId/void')
-  @RequirePermission('warehouse:dispatch-pending:label-void')
+  @RequirePermission('warehouse:dispatch-pending:label-manage')
   voidShipmentLabel(
     @Req() request: { user: Principal },
     @Param('id') id: string,

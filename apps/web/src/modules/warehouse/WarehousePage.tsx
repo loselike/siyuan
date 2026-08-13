@@ -1,10 +1,10 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Select, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Download, FileText, PackageCheck, PackagePlus, Plus, RotateCcw, Settings2, Trash2 } from 'lucide-react';
-import { createDefaultWarehouseTallySortRules, sortWarehouseTallyTasks, warehouseTallyChannels, warehouseTallyProgressStatusLabels } from '@siyuan/shared';
-import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockPageResponse, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallySortRule, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
+import { Download, PackagePlus, Plus, Trash2 } from 'lucide-react';
+import { sortWarehouseTallyTasks, warehouseTallyChannels, warehouseTallyProgressStatusLabels } from '@siyuan/shared';
+import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockPageResponse, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from '../shared/shipmentStageDwell';
 import { ApiClient, isAdministratorRole, type PermissionKey } from '../../apiClient';
@@ -15,6 +15,7 @@ import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
 import { PlaceholderPanel } from '../shared/PlaceholderPanel';
 import { ShipmentRiskFlag, isShipmentRiskFlagActive } from '../shared/ShipmentRiskFlag';
 import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, MetricCard, paginationWhenNeeded, renderFilterActions, renderFilterField, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
+import { addRowsWorksheet, createWorkbook, downloadWorkbook } from '../shared/excel';
 import {
   calculateWarehousePackageMetrics,
   calculateWarehouseVolumetricWeight,
@@ -70,7 +71,6 @@ import {
   type WarehousePackageDraft,
   type WarehousePackageEditDraft
 } from './warehousePageModel';
-import { canUseWarehouseSameSpecReplenish } from './warehouseSameSpecPermission';
 
 export { canEditUnenteredWarehousePackage } from './warehousePageModel';
 
@@ -287,13 +287,8 @@ function downloadHtmlFile(html: string, fileName: string, mimeType: string) {
  * 未完成理货是仓库待办队列，按业务实际提交理货需求的时间先进先出。
  * 时间异常的历史记录置后，并以任务号稳定兜底，避免刷新时任务跳位。
  */
-export function sortPendingTallyTasksByRequestTime(tasks: WarehouseTallyTaskSummary[], rules: WarehouseTallySortRule[]) {
-  const inProgress = tasks.filter((task) => task.tallyProgressStatus === 'IN_PROGRESS');
-  const waiting = tasks.filter((task) => task.tallyProgressStatus !== 'IN_PROGRESS');
-  return [
-    ...inProgress.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.taskNo.localeCompare(right.taskNo)),
-    ...sortWarehouseTallyTasks(waiting, new Date(), rules)
-  ];
+export function sortPendingTallyTasksByRequestTime(tasks: WarehouseTallyTaskSummary[]) {
+  return sortWarehouseTallyTasks(tasks);
 }
 
 export function formatWarehouseHandoverEntryNo(shipment: Pick<Shipment, 'inboundNo'>) {
@@ -351,71 +346,54 @@ export function WarehousePage({
     description: '覆盖包裹件重尺、理货合并拆分、面单队列&待仓库出货和交接资料，作为仓库作业主入口。'
   };
   const hasWarehousePermission = (permission: PermissionKey) => isAdministratorRole(role) || permissions.includes(permission);
-  const hasWarehouseMask = (permission: PermissionKey) => !isAdministratorRole(role) && permissions.includes(permission);
+  const canWarehouseDashboardView = hasWarehousePermission('warehouse:dashboard:view');
   const canTodayReceiptView = hasWarehousePermission('warehouse:today-receipt:view');
-  const canWarehouseMachineImport = hasWarehousePermission('warehouse:in-stock:machine-import');
-  const canTodayReceiptCreate = hasWarehousePermission('warehouse:today-receipt:manual-create')
-    && !hasWarehouseMask('warehouse:today-receipt:manual-create-block');
-  const canTodayReceiptBatchImport = canWarehouseMachineImport
-    && !hasWarehouseMask('warehouse:today-receipt:batch-import-block');
-  const canTodayReceiptBatchDownload = !hasWarehouseMask('warehouse:today-receipt:batch-download-block');
-  const canTodayReceiptSiteFilter = !hasWarehouseMask('warehouse:today-receipt:site-filter-block');
+  const canTodayReceiptEdit = hasWarehousePermission('warehouse:today-receipt:edit');
+  const canTodayReceiptCreate = hasWarehousePermission('warehouse:today-receipt:manual-create');
+  const canTodayReceiptBatchImport = hasWarehousePermission('warehouse:today-receipt:import');
+  const canTodayReceiptBatchDownload = hasWarehousePermission('warehouse:today-receipt:export');
+  const canTodayReceiptSiteFilter = canTodayReceiptView;
   const canTodayReceiptDelete = hasWarehousePermission('warehouse:today-receipt:delete');
   const canInStockView = hasWarehousePermission('warehouse:in-stock:view');
-  const canInStockUpdate = hasWarehousePermission('warehouse:in-stock:update');
+  const canInStockUpdate = hasWarehousePermission('warehouse:in-stock:edit');
   const canInStockDelete = hasWarehousePermission('warehouse:in-stock:delete');
-  const canInStockSameSpecReplenish = canUseWarehouseSameSpecReplenish(role, permissions);
+  const canInStockSameSpecReplenish = canInStockUpdate;
   const canReplenishWarehouseSameSpec = (record: WarehouseInboundPackage) => canInStockSameSpecReplenish
     && isEligibleWarehouseSameSpecSource(record);
-  const canToggleTodayDataScope = canTodayReceiptView && permissions.includes('data-scope:sales-own');
-  const canTodayReceiptRemark = canInStockUpdate;
-  const canTodayReceiptException = canInStockUpdate;
-  const canInStockSelect = hasWarehousePermission('warehouse:in-stock:batch-select');
-  const canTallyStart = hasWarehousePermission('warehouse:in-stock:tally-start') || hasWarehousePermission('warehouse:in-stock:batch-tally-start');
+  const canToggleTodayDataScope = false;
+  const canTodayReceiptRemark = canTodayReceiptEdit;
+  const canTodayReceiptException = canTodayReceiptEdit;
+  const canInStockImport = hasWarehousePermission('warehouse:in-stock:import');
+  const canInStockExport = hasWarehousePermission('warehouse:in-stock:export');
+  const canTallyStart = hasWarehousePermission('warehouse:in-stock:tally');
   const canInStockSplit = hasWarehousePermission('warehouse:in-stock:split');
-  const canInStockTallyRecordView = canInStockView || hasWarehousePermission('warehouse:in-stock:tally-record-view');
-  const canTallyPendingView = hasWarehousePermission('warehouse:tally-pending:view')
-    && !hasWarehouseMask('warehouse:tally-pending:view-block');
-  const canTallyUpdate = canTallyPendingView
-    && hasWarehousePermission('warehouse:tally-pending:task-update')
-    && !hasWarehouseMask('warehouse:tally-pending:update-block');
-  const canTallyCancel = canTallyPendingView
-    && hasWarehousePermission('warehouse:tally-pending:task-cancel')
-    && !hasWarehouseMask('warehouse:tally-pending:cancel-block');
-  const canTallyProcess = canTallyPendingView
-    && hasWarehousePermission('warehouse:tally-pending:task-process')
-    && !hasWarehouseMask('warehouse:tally-pending:process-block');
-  const canTallyDetail = canTallyPendingView && hasWarehousePermission('warehouse:tally-pending:detail-view');
-  const canTallyCompletedView = hasWarehousePermission('warehouse:tally-completed:view')
-    && !hasWarehouseMask('warehouse:tally-completed:view-block');
-  const canTallyCompletedDetail = canTallyCompletedView && hasWarehousePermission('warehouse:tally-completed:detail-view');
-  const canTallyCompletedReverseReview = canTallyCompletedView
-    && hasWarehousePermission('warehouse:tally-completed:reverse-review')
-    && !hasWarehouseMask('warehouse:tally-completed:reverse-block');
-  const canTallyHistoryCorrect = canTallyCompletedView && hasWarehousePermission('warehouse:tally-history:correct');
-  const canTallyLabelGenerate = canTallyCompletedView && hasWarehousePermission('warehouse:tally-label:generate');
-  const canTallyLabelPrint = canTallyCompletedView
-    && (hasWarehousePermission('warehouse:tally-label:print') || hasWarehousePermission('warehouse:tally-label:reprint'))
-    && !hasWarehouseMask('warehouse:tally-label:reprint-block');
-  const canTallyLabelDownload = canTallyCompletedView
-    && hasWarehousePermission('warehouse:tally-label:download')
-    && !hasWarehouseMask('warehouse:tally-label:download-block');
+  const canInStockTallyRecordView = canInStockView;
+  const canTallyPendingView = hasWarehousePermission('warehouse:tally-pending:view');
+  const canTallyUpdate = hasWarehousePermission('warehouse:tally-pending:edit');
+  const canTallyCancel = hasWarehousePermission('warehouse:tally-pending:cancel');
+  const canTallyProcess = hasWarehousePermission('warehouse:tally-pending:process');
+  const canTallyCompleteAndShip = hasWarehousePermission('warehouse:tally-pending:complete-and-ship');
+  const canTallyDetail = canTallyPendingView;
+  const canTallyCompletedView = hasWarehousePermission('warehouse:tally-completed:view');
+  const canTallyCompletedDetail = canTallyCompletedView;
+  const canTallyCompletedReverseReview = hasWarehousePermission('warehouse:tally-completed:reverse');
+  const canTallyHistoryCorrect = hasWarehousePermission('warehouse:tally-completed:correct');
+  const canTallyLabelGenerate = hasWarehousePermission('warehouse:tally-completed:print');
+  const canTallyLabelPrint = hasWarehousePermission('warehouse:tally-completed:print');
+  const canTallyLabelDownload = hasWarehousePermission('warehouse:tally-completed:download');
   const canDispatchView = hasWarehousePermission('warehouse:dispatch-pending:view');
-  const canDispatchSelect = hasWarehousePermission('warehouse:dispatch-pending:batch-select');
+  const canDispatchSelect = canDispatchView;
   const canHandoverPrint = hasWarehousePermission('warehouse:dispatch-pending:handover-print');
-  const canDispatchConfirm = hasWarehousePermission('warehouse:dispatch-pending:dispatch-confirm');
-  const canBatchDispatchConfirm = hasWarehousePermission('warehouse:dispatch-pending:batch-dispatch-confirm');
+  const canDispatchConfirm = hasWarehousePermission('warehouse:dispatch-pending:confirm');
+  const canBatchDispatchConfirm = canDispatchConfirm;
   const canShippingMarkConfirm = hasWarehousePermission('warehouse:dispatch-pending:shipping-mark-confirm');
-  const canEditDispatchDeclaration = hasWarehousePermission('warehouse:dispatch-pending:declaration-update');
+  const canEditDispatchDeclaration = hasWarehousePermission('warehouse:dispatch-pending:edit');
   const canOutboundedView = hasWarehousePermission('warehouse:outbounded:view');
-  const rentAllViewBlocked = hasWarehouseMask('warehouse:rent-detail:all-view-block');
-  const rentOwnViewBlocked = hasWarehouseMask('warehouse:rent-detail:own-view-block');
-  const rentDetailFullyBlocked = rentAllViewBlocked && rentOwnViewBlocked;
-  const canRentDetailView = hasWarehousePermission('warehouse:rent-detail:view') && !rentDetailFullyBlocked;
-  const canRentDetailExport = hasWarehousePermission('warehouse:rent-detail:export') && !rentDetailFullyBlocked;
-  const canRentRuleView = hasWarehousePermission('warehouse:rent-rule:view');
-  const canRentRuleManage = hasWarehousePermission('warehouse:rent-rule:manage')
-    && !hasWarehouseMask('warehouse:rent-rule:manage-block');
+  const canOutboundedExport = hasWarehousePermission('warehouse:outbounded:export');
+  const canRentDetailView = hasWarehousePermission('warehouse:rent-detail:view');
+  const canRentDetailExport = hasWarehousePermission('warehouse:rent-detail:export');
+  const canRentRuleView = canRentDetailView;
+  const canRentRuleManage = hasWarehousePermission('warehouse:rent-detail:edit');
   const workQueue = shipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH');
   const pendingRoutingShipments = shipments.filter((shipment) => shipment.status === 'WAITING_SORT');
   const initialCache = getWarehousePageCache(apiClient);
@@ -503,11 +481,6 @@ export function WarehousePage({
   const [tallyTasks, setTallyTasks] = useState<WarehouseTallyTaskSummary[]>(cachedTallyTasks);
   const [tallyChannelDraft, setTallyChannelDraft] = useState('');
   const [, setTallySortTick] = useState(0);
-  const [tallySortRules, setTallySortRules] = useState<WarehouseTallySortRule[]>(createDefaultWarehouseTallySortRules);
-  const [tallySortRuleDraft, setTallySortRuleDraft] = useState<WarehouseTallySortRule[]>(createDefaultWarehouseTallySortRules);
-  const [tallySortRulesOpen, setTallySortRulesOpen] = useState(false);
-  const [tallySortRulesLoading, setTallySortRulesLoading] = useState(false);
-  const [savingTallySortRules, setSavingTallySortRules] = useState(false);
   const [tallyRequirementDraft, setTallyRequirementDraft] = useState('');
   const [editingTallyTask, setEditingTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
   const [editingTallyPackageIds, setEditingTallyPackageIds] = useState<string[]>([]);
@@ -882,13 +855,14 @@ export function WarehousePage({
     };
   }, [activeReceiveSection, apiClient, canInStockUpdate, canInStockView, canRentDetailView, inStockFilters, inStockPagination.current, inStockPagination.pageSize, inStockRefreshVersion, loadWarehousePackagesFallback, mergeWarehousePackages, message, needsInStock, refreshVersion, role, workQueue.length]);
   useEffect(() => {
-    if (!canInStockView || !needsInStockSummary) return;
+    if ((!canWarehouseDashboardView && !canInStockView) || !needsInStockSummary) return;
     let alive = true;
     apiClient.warehouseQuery.warehouseInStockSummary()
       .then((response) => {
         if (alive) setInStockTotals(response.totals);
       })
       .catch(async () => {
+        if (!canInStockView) return;
         const warehousePackageFallback = await loadWarehousePackagesFallback();
         if (!alive) return;
         const fallbackRows = filterInStockRows(warehousePackageFallback, {}, role);
@@ -898,7 +872,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canInStockView, loadWarehousePackagesFallback, mergeWarehousePackages, needsInStockSummary, refreshVersion, role, workQueue.length]);
+  }, [apiClient, canInStockView, canWarehouseDashboardView, loadWarehousePackagesFallback, mergeWarehousePackages, needsInStockSummary, refreshVersion, role, workQueue.length]);
   useEffect(() => {
     if (!canTallyCompletedView) {
       setCompletedTallyArchiveRows([]);
@@ -953,21 +927,6 @@ export function WarehousePage({
     };
   }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, refreshVersion]);
   useEffect(() => {
-    if (!canTallyPendingView) {
-      setTallySortRules(createDefaultWarehouseTallySortRules());
-      return;
-    }
-    let alive = true;
-    const loadTallySortRules = () => {
-      void apiClient.warehouseTallySortRules()
-        .then((rules) => { if (alive) setTallySortRules(rules); })
-        .catch(() => undefined);
-    };
-    loadTallySortRules();
-    const timer = window.setInterval(loadTallySortRules, 30_000);
-    return () => { alive = false; window.clearInterval(timer); };
-  }, [apiClient, canTallyPendingView, refreshVersion]);
-  useEffect(() => {
     const refreshTimer = window.setInterval(() => setTallySortTick((current) => current + 1), 30_000);
     return () => window.clearInterval(refreshTimer);
   }, []);
@@ -1017,9 +976,9 @@ export function WarehousePage({
     !keyword.trim() || (value ?? '').toLowerCase().includes(keyword.trim().toLowerCase());
   const isOperatorView = !['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(role)
     && !canInStockUpdate;
-  const canToggleInStockDataScope = isOperatorView;
-  const viewingAllTodayData = canToggleTodayDataScope && todayFilters.dataScope === 'ALL';
-  const viewingAllInStockData = canToggleInStockDataScope && inStockFilters.dataScope === 'ALL';
+  const canToggleInStockDataScope = false;
+  const viewingAllTodayData = false;
+  const viewingAllInStockData = false;
   const orderEntryActionLabel = '录单';
   function filterTodayRows(rows: WarehouseInboundPackage[], filters: WarehouseTodayQuery, currentRole: StaffRoleKey) {
     const keyword = (value: string | undefined, needle: string | undefined) =>
@@ -1152,8 +1111,8 @@ export function WarehousePage({
     ? warehousePackages.filter((pkg) => selectedConsolidation.packageIds.includes(pkg.id))
     : [];
   const pendingTallyTasks = useMemo(
-    () => sortPendingTallyTasksByRequestTime(tallyTasks.filter((task) => task.status === 'PENDING'), tallySortRules),
-    [tallySortRules, tallyTasks]
+    () => sortPendingTallyTasksByRequestTime(tallyTasks.filter((task) => task.status === 'PENDING')),
+    [tallyTasks]
   );
   const editingTallyPackageOptions = useMemo(() => {
     if (!editingTallyTask) return [];
@@ -1262,7 +1221,7 @@ export function WarehousePage({
   const selectedWarehouseQueuePackageCount = selectedWarehouseQueueRows.reduce((sum, row) => sum + getWarehouseQueuePackageCount(row), 0);
   // 看板与待出库队列共用同一行集，避免示例数与实际作业数据分叉。
   const dashboardStats = [
-    { label: '待出库', value: warehouseLabelQueueRows.length, helper: '渠道确认后等待仓库处理' },
+    { label: '待出库', value: inStockTotals.waitingDispatchTickets, helper: '渠道确认后等待仓库处理' },
     { label: '待理货', value: inStockTotals.pendingTallyTickets, helper: '分批到仓待合并' },
     { label: '收货异常', value: inStockTotals.exceptionTickets, helper: '件重尺或资料待复核' }
   ];
@@ -1866,7 +1825,7 @@ export function WarehousePage({
     { key: 'outbounded', label: '已出库', description: '仓库出库历史' },
     { key: 'rent-details', label: '仓租细分表', description: '逐票仓租计算与规则' }
   ].filter((item) => ({
-    dashboard: canTodayReceiptView || canInStockView || canTallyPendingView || canTallyCompletedView || canDispatchView || canOutboundedView || canRentDetailView,
+    dashboard: canWarehouseDashboardView,
     today: canTodayReceiptView,
     packages: canInStockView,
     consolidation: canTallyPendingView,
@@ -2636,7 +2595,7 @@ export function WarehousePage({
     }
   };
   const inStockColumnKeys = Object.keys(inStockColumnDefinitions)
-    .filter((key) => (key !== 'site' || !isOperatorView) && ((canInStockSelect || canInStockUpdate || canTallyStart || canInStockSplit || canCreateOrderEntry || canInStockDelete) || (key !== 'select' && key !== 'actions')));
+    .filter((key) => (key !== 'site' || !isOperatorView) && ((canInStockUpdate || canTallyStart || canInStockSplit || canCreateOrderEntry || canInStockDelete) || (key !== 'select' && key !== 'actions')));
   const inStockColumns = inStockColumnKeys
     .map((key) => inStockColumnDefinitions[key])
     .filter(Boolean) as ManagedTableColumns<WarehouseInboundPackage>;
@@ -3442,7 +3401,7 @@ export function WarehousePage({
 
   async function handleTodayWarehouseMachineExport() {
     if (!canTodayReceiptBatchDownload) {
-      setWarehouseNotice('当前角色已屏蔽批量下载');
+      setWarehouseNotice('当前角色没有今日收货批量下载权限');
       return;
     }
     if (!isWarehouseMachineExportReady(todayReceiptRowsQueryKey, warehouseQueryKey(todayFilters))) {
@@ -3467,6 +3426,15 @@ export function WarehousePage({
     }
   }
 
+  async function handleOutboundedExport() {
+    const workbook = createWorkbook();
+    addRowsWorksheet(workbook, '已出库', [
+      ['交接单号', '出货单号', '客户', '目的地', '出货件数', '计费重 KG', '公司渠道', agentFieldLabels.detailedCompanyName, '出库时间', '操作人', '状态'],
+      ...warehouseOutboundedRows.map((row) => [row.handoverNo, row.outboundOrderNo, row.customerName, row.destinationCountry, row.packageCount, row.chargeableWeightKg, row.channelName, row.agentName, row.outboundAt ? formatBeijingDateTime(row.outboundAt) : '', row.outboundBy, row.status])
+    ], { headerRow: true });
+    await downloadWorkbook(workbook, `已出库-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
   const pendingRoutingColumns = createPendingRoutingColumns({ businessCostAudits, mode: 'warehouse' });
   const tallySourceItems: WarehouseTallySourceItem[] = (completingTallyTask?.packageIds ?? []).map((packageId) => {
     const pkg = [...inStockRows, ...warehousePackages, ...todayReceiptRows].find((item) => item.id === packageId);
@@ -3481,12 +3449,6 @@ export function WarehousePage({
       <AppPageHeader
         title={config.title}
         description={activeReceiveSection === 'dashboard' ? config.description : undefined}
-        actions={
-          <AppActionGroup>
-            <Button icon={<PackageCheck size={16} />}>收货扫描</Button>
-            <Button type="primary" icon={<FileText size={16} />}>模拟面单</Button>
-          </AppActionGroup>
-        }
       />
 
       {renderNoticeBar(notice)}
@@ -4034,7 +3996,7 @@ export function WarehousePage({
               {selectedUnmaintainedCustomerPackages.length ? <Tag color="error" aria-live="polite">含 {selectedUnmaintainedCustomerPackages.length} 件客户未建档</Tag> : null}
             </Space>
             <Space wrap>
-              <Button
+              {canInStockExport ? <Button
                 icon={<Download size={15} />}
                 loading={machineExporting}
                 disabled={!inStockRows.length || !isWarehouseMachineExportReady(inStockRowsQueryKey, warehouseQueryKey(inStockFilters))}
@@ -4044,8 +4006,8 @@ export function WarehousePage({
                   ? `下载已选 ${selectedInStockPackageCount} 条记录`
                   : '未勾选时下载当前筛选结果全部数据'}
                 onClick={() => void handleWarehouseMachineExport()}
-              >{selectedInStockPackageCount ? `下载已选（${selectedInStockPackageCount}）` : '批量下载'}</Button>
-              {canWarehouseMachineImport ? <Button onClick={() => setMachineImportOpen(true)}>批量导入</Button> : null}
+              >{selectedInStockPackageCount ? `下载已选（${selectedInStockPackageCount}）` : '批量下载'}</Button> : null}
+              {canInStockImport ? <Button onClick={() => setMachineImportOpen(true)}>批量导入</Button> : null}
               {canTallyStart ? <Button onClick={() => openWarehouseTallyTask(selectedInStockPackageIds)}>批量理货</Button> : null}
               {canInStockDelete ? <Button danger disabled={!selectedInStockPackageIds.length} onClick={() => openWarehousePackageDelete('in-stock', selectedInStockPackageIds)}>批量删除</Button> : null}
               {canCreateOrderEntry ? <Button
@@ -4080,7 +4042,7 @@ export function WarehousePage({
                     columns: inStockColumns,
                     ariaLabel: (record) => `查看在仓货物 ${formatWarehousePackageNo(record)} 详情`
                   } : false,
-                  columnSettings: hasWarehousePermission('warehouse:in-stock:column-setting') ? {
+                  columnSettings: canInStockView ? {
                     storageKey: 'sunny.warehouse.inStock.matrix-columns-v1',
                     title: '在仓矩阵列设置',
                     lockedKeys: ['actions']
@@ -4100,7 +4062,7 @@ export function WarehousePage({
                     title: '在仓货物详情',
                     ariaLabel: (record) => `查看在仓货物 ${formatWarehousePackageNo(record)} 详情`
                   } : false,
-                  columnSettings: hasWarehousePermission('warehouse:in-stock:column-setting') ? {
+                  columnSettings: canInStockView ? {
                     storageKey: 'sunny.warehouse.inStock.columns',
                     title: '在仓数据列设置',
                     lockedKeys: ['actions'],
@@ -4114,7 +4076,7 @@ export function WarehousePage({
             loading={inStockLoading}
             recordDetailTarget={notificationPackageDetailTarget ? { key: `notification-warehouse-package:${notificationPackageDetailTarget.id}`, record: notificationPackageDetailTarget } : null}
             size="small"
-            rowSelection={(canInStockSelect || canInStockUpdate || canTallyStart || canInStockSplit || canCreateOrderEntry || canInStockDelete) ? {
+            rowSelection={(canInStockUpdate || canTallyStart || canInStockSplit || canCreateOrderEntry || canInStockDelete) ? {
               selectedRowKeys: selectedInStockPackageIds,
               onChange: (selectedRowKeys) => setSelectedInStockPackageIds(selectedRowKeys.map(String)),
               getTitleCheckboxProps: () => ({ 'aria-label': '全选在仓包裹' }),
@@ -4141,16 +4103,6 @@ export function WarehousePage({
                 <Text type="secondary">共 {pendingTallyTasks.length} 条</Text>
               </Space>
             )}
-            extra={canTallyUpdate ? (
-              <Button size="small" icon={<Settings2 size={14} />} onClick={() => {
-                setTallySortRulesOpen(true);
-                setTallySortRulesLoading(true);
-                void apiClient.warehouseTallySortRules()
-                  .then((rules) => { setTallySortRules(rules); setTallySortRuleDraft(rules); })
-                  .catch(() => setWarehouseNotice('理货排序规则加载失败'))
-                  .finally(() => setTallySortRulesLoading(false));
-              }}>排序规则</Button>
-            ) : undefined}
           >
             <ManagedTable<WarehouseTallyTaskSummary>
               recordDetail={{ title: '未完成理货任务详情' }}
@@ -4371,10 +4323,10 @@ export function WarehousePage({
                   <Text strong>{selectedWarehouseTotals.chargeableWeightKg.toFixed(2)} KG</Text>
                 </div>
               </div>
-              {hasWarehousePermission('warehouse:tally-pending:merge-only') || hasWarehousePermission('warehouse:tally-pending:merge-and-ship') ? (
+              {canTallyProcess || canTallyCompleteAndShip ? (
                 <div className="warehouse-tally-action-buttons">
-                  {hasWarehousePermission('warehouse:tally-pending:merge-only') ? <Button block onClick={() => void consolidateSelectedPackages('MERGE_ONLY')}>合并成一箱</Button> : null}
-                  {hasWarehousePermission('warehouse:tally-pending:merge-and-ship') ? <Button type="primary" block onClick={() => void consolidateSelectedPackages('MERGE_AND_SHIP')}>理货并创建出货单</Button> : null}
+                  {canTallyProcess ? <Button block onClick={() => void consolidateSelectedPackages('MERGE_ONLY')}>合并成一箱</Button> : null}
+                  {canTallyCompleteAndShip ? <Button type="primary" block onClick={() => void consolidateSelectedPackages('MERGE_AND_SHIP')}>理货并创建出货单</Button> : null}
                 </div>
               ) : null}
               <Alert
@@ -4475,7 +4427,7 @@ export function WarehousePage({
             columnSettingsPlacement="toolbar"
             className="warehouse-label-queue-table"
             columns={warehouseQueueColumns}
-            columnSettings={hasWarehousePermission('warehouse:dispatch-pending:column-setting') ? {
+            columnSettings={canDispatchView ? {
               storageKey: warehouseQueueColumnSettingsKey,
               title: '待出库列设置',
               labels: warehouseQueueColumnLabels,
@@ -4490,6 +4442,7 @@ export function WarehousePage({
       {activeReceiveSection === 'outbounded' ? (
       <Card
         title="已出库"
+        extra={canOutboundedExport ? <Button icon={<Download size={15} />} onClick={() => void handleOutboundedExport()}>导出</Button> : null}
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Alert
@@ -4556,36 +4509,6 @@ export function WarehousePage({
           onCorrectHistoricalAggregate={(task) => void openHistoricalAggregateCorrection(task)}
         />
       </Drawer>
-
-      <Modal
-        title="未完成理货排序规则"
-        open={tallySortRulesOpen}
-        width={720}
-        confirmLoading={savingTallySortRules}
-        okText="保存"
-        cancelText="取消"
-        onCancel={() => setTallySortRulesOpen(false)}
-        onOk={() => {
-          setSavingTallySortRules(true);
-          void apiClient.updateWarehouseTallySortRules(tallySortRuleDraft)
-            .then((rules) => { setTallySortRules(rules); setTallySortRuleDraft(rules); setTallySortRulesOpen(false); setWarehouseNotice('理货排序规则已保存'); })
-            .catch(() => setWarehouseNotice('理货排序规则保存失败'))
-            .finally(() => setSavingTallySortRules(false));
-        }}
-      >
-        <Alert type="info" showIcon message="当前北京时间命中优先时段的渠道会优先处理，理货中任务始终置顶。" />
-        <Space direction="vertical" size={10} style={{ width: '100%', marginTop: 16 }}>
-          {tallySortRuleDraft.map((rule) => (
-            <Flex key={rule.channel} gap={10} align="center">
-              <Text style={{ width: 80 }}>{rule.channel}</Text>
-              <InputNumber min={1} max={999} precision={0} value={rule.sortOrder} onChange={(value) => setTallySortRuleDraft((current) => current.map((item) => item.channel === rule.channel ? { ...item, sortOrder: Number(value ?? 1) } : item))} />
-              <Select style={{ width: 130 }} value={rule.preferredTimeSlot} options={[{ value: 'MORNING', label: '上午优先' }, { value: 'AFTERNOON', label: '下午优先' }, { value: 'ALL_DAY', label: '全天' }]} onChange={(value) => setTallySortRuleDraft((current) => current.map((item) => item.channel === rule.channel ? { ...item, preferredTimeSlot: value } : item))} />
-              <Checkbox checked={rule.enabled} onChange={(event) => setTallySortRuleDraft((current) => current.map((item) => item.channel === rule.channel ? { ...item, enabled: event.target.checked } : item))}>启用</Checkbox>
-            </Flex>
-          ))}
-          <Button icon={<RotateCcw size={14} />} loading={tallySortRulesLoading} onClick={() => setTallySortRuleDraft(createDefaultWarehouseTallySortRules())}>恢复默认</Button>
-        </Space>
-      </Modal>
 
       <Modal
         title="纠正历史聚合理货数据"

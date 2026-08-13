@@ -231,10 +231,6 @@ export function isLineShipmentStageEditPermission(permission: Pick<PermissionDef
 }
 
 
-export function isWarehouseTallyPendingMaskPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
-  return permission.code.startsWith('warehouse:tally-pending:') && permission.code.endsWith('-block');
-}
-
 export function inferPermissionRisk(permission: Pick<PermissionDefinition, 'code' | 'label'>): PermissionControlRisk {
   const value = `${permission.code} ${permission.label}`;
   if (/^system:role-permissions:(update|save|copy-role|batch-grant|batch-revoke|clear|admin-update)$/i.test(permission.code)) return 'critical';
@@ -262,7 +258,7 @@ export function getPermissionControls(group: string, permissions: PermissionDefi
     (permission) => !isUiPreferencePermission(permission)
       && !isLineShipmentStageEditBlockPermission(permission)
       && !isLineShipmentStageEditPermission(permission)
-      && !isWarehouseTallyPendingMaskPermission(permission)
+      && !permission.code.includes('-block')
   );
   if (!configured) {
     return configurablePermissions.map((permission) => {

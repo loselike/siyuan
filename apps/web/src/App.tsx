@@ -3061,11 +3061,7 @@ export function App() {
                 notice={notice}
                 onDispatch={handleWarehouseDispatchShipment}
                 onShipmentUpdated={upsertLocalShipment}
-                canCreateOrderEntry={session.user.role === 'ADMIN' || (
-                  session.permissions.includes('business:order-entry:view')
-                  && session.permissions.includes('business:order-entry:create')
-                  && session.permissions.includes('warehouse:in-stock:order-entry-select')
-                )}
+                canCreateOrderEntry={session.user.role === 'ADMIN' || session.permissions.includes('warehouse:in-stock:order-entry')}
                 onCreateOrderEntryFromWarehouse={openOrderEntryFromWarehouse}
                 findShipmentBySystemOrderNo={findShipmentBySystemOrderNo}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}

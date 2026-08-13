@@ -150,61 +150,6 @@ export function isCustomerServiceDataConfirmMaskPermission(code: string): boolea
   return customerServiceDataConfirmMaskControls.some((control) => control.code === code);
 }
 
-export const warehouseTodayReceiptMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽批量导入', code: 'warehouse:today-receipt:batch-import-block' },
-  { label: '屏蔽批量下载', code: 'warehouse:today-receipt:batch-download-block' },
-  { label: '屏蔽站点筛选', code: 'warehouse:today-receipt:site-filter-block' },
-  { label: '屏蔽手动添加收货', code: 'warehouse:today-receipt:manual-create-block' }
-];
-
-export function isWarehouseTodayReceiptMaskPermission(code: string): boolean {
-  return warehouseTodayReceiptMaskControls.some((control) => control.code === code);
-}
-
-export const warehouseTallyPendingMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽查看', code: 'warehouse:tally-pending:view-block' },
-  { label: '屏蔽修改', code: 'warehouse:tally-pending:update-block' },
-  { label: '屏蔽取消任务', code: 'warehouse:tally-pending:cancel-block' },
-  { label: '屏蔽处理理货', code: 'warehouse:tally-pending:process-block' }
-];
-
-export function isWarehouseTallyPendingMaskPermission(code: string): boolean {
-  return warehouseTallyPendingMaskControls.some((control) => control.code === code);
-}
-
-export const warehouseTallyCompletedMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽查看', code: 'warehouse:tally-completed:view-block' },
-  { label: '屏蔽重新打印', code: 'warehouse:tally-label:reprint-block' },
-  { label: '屏蔽下载', code: 'warehouse:tally-label:download-block' },
-  { label: '屏蔽反审核', code: 'warehouse:tally-completed:reverse-block' }
-];
-
-export function isWarehouseTallyCompletedMaskPermission(code: string): boolean {
-  return warehouseTallyCompletedMaskControls.some((control) => control.code === code);
-}
-
-export const warehouseRentDetailMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽规则编辑', code: 'warehouse:rent-rule:manage-block' },
-  { label: '屏蔽查看所有仓租', code: 'warehouse:rent-detail:all-view-block' },
-  { label: '屏蔽查看归属仓租', code: 'warehouse:rent-detail:own-view-block' }
-];
-
-export function isWarehouseRentDetailMaskPermission(code: string): boolean {
-  return warehouseRentDetailMaskControls.some((control) => control.code === code);
-}
-
 export const marketPendingRoutingMaskControls: Array<{
   label: string;
   code: PermissionKey;
@@ -355,8 +300,7 @@ export const permissionWorkspaceCatalog: PermissionWorkspaceDefinition[] = [
   {
     key: 'warehouse',
     label: '仓库管理',
-    // 仓库看板是所有仓库读权限的聚合页，没有独立 RBAC 入口，故不制造重复勾选项。
-    groups: ['今日收货', '在仓数据', '未完成理货', '已完成理货', '待出库', '已出库', '仓租细分表'].map((label) => ({ label }))
+    groups: ['仓库看板', '今日收货', '在仓数据', '未完成理货', '已完成理货', '待出库', '已出库', '仓租细分表', '仓租数据范围'].map((label) => ({ label }))
   },
   {
     key: 'market',
@@ -441,11 +385,7 @@ export function getWorkspacePermissionGroups(
       .flatMap(([, groupPermissions]) => groupPermissions)
       .filter((permission) => !isWorkspaceFieldMaskPermission(permission.code))
       .filter((permission) => !isOrderEntryPermission(permission.code))
-      // 屏蔽项只在对应三级面板单独配置，不能随二级入口默认授予。
-      .filter((permission) => !isWarehouseTodayReceiptMaskPermission(permission.code))
-      .filter((permission) => !isWarehouseTallyPendingMaskPermission(permission.code))
-      .filter((permission) => !isWarehouseTallyCompletedMaskPermission(permission.code))
-      .filter((permission) => !isWarehouseRentDetailMaskPermission(permission.code))
+      .filter((permission) => !permission.code.includes('-block'))
       .filter((permission) => !isMarketPendingRoutingMaskPermission(permission.code))
       .filter((permission) => !isMarketRoutedMaskPermission(permission.code))
       .filter((permission) => !isCustomerServicePendingRoutingMaskPermission(permission.code))
