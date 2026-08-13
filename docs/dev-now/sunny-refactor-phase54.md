@@ -29,3 +29,12 @@
 - 说明：仓库不存在 `security:contract` npm script；对应安全契约已由 `governance:check -> architecture:check:security` 实际执行并通过。
 - 47 只读源码审计：502/502 完全一致。
 - v3 冻结清单：`docs/release-manifests/47/20260813-190021-whitelist-fb432e227bb8e14a64e02d68`。
+
+## 发布与复审
+
+- 状态：`completed`
+- 提交：`729a72a65dc2c0051fe581ef6efa6a4bd562fae5`，已推送 `origin/codex/sunny-refactor-phase54`。
+- 47 发布：`git-729a72a65dc2_web-1739a7265128_api-e2a4d26250b5`；`SOURCE_MODE=GIT_SOURCE_BUILD`、`SOURCE_PROVENANCE=GIT_BUNDLE`。
+- 发布后：provenance `traceable/ok`，Web/API image 与 API release ID 全部匹配；源码 502/502 一致；容器运行，内网与公网 Web/API health 均 200；锁 free，recovery clear。
+- 副作用审查：本次重建 Web/API，但三类运行时 fingerprint 均保持不变；未运行 migration、未写业务数据，用户可观察逻辑不变。
+- 新的最高优先级：转向前端数据层。`App.tsx`、`apiClient.ts` 与页面级请求所有权仍耦合，下一阶段应先量化 API client 的模块扇入和重复刷新，再选一个高频页面做行为保持切片；巨型 Repository 继续作为并列候选，不预设持续走前端路线。
