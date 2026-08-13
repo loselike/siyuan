@@ -485,6 +485,7 @@ import {
   resolveWarehouseTallyRecentCutoff
 } from './warehouse/warehouse-query.shared.js';
 import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
+import { queryWarehouseInStockAggregate } from './warehouse/inventory/warehouse-in-stock-aggregate.query.js';
 import {
   allPermissions,
   allRuntimePermissions,
@@ -8311,50 +8312,35 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           select: { code: true }
         })).map((customer) => customer.code)
       : undefined;
-    const rows = await (this.prisma as any).warehousePackage.findMany({
-      where: {
+    const [aggregate, waitingDispatchTickets] = await Promise.all([
+      queryWarehouseInStockAggregate(this.prisma, {
         status: 'RECEIVED',
         ...(ownedCustomerCodes ? { customerCode: { in: ownedCustomerCodes } } : {})
-      },
-      select: {
-        customerCode: true,
-        combinedOrderNo: true,
-        customerOrderNo: true,
-        domesticTrackingNo: true,
-        packageCount: true,
-        weightKg: true,
-        cbm: true,
-        status: true,
-        manualException: true,
-        exceptions: true
-      }
-    });
-    const currentlyOwnedCustomerCodes = businessCustomerScoped && rows.length
-      ? new Set((await this.prisma.customer.findMany({
-          where: { code: { in: Array.from(new Set(rows.map((row: any) => row.customerCode).filter(Boolean))) } },
-          select: { code: true, salesperson: true }
-        }))
-          .filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson))
-          .map((customer) => customer.code))
-      : undefined;
-    const scopedRows = currentlyOwnedCustomerCodes
-      ? rows.filter((row: any) => currentlyOwnedCustomerCodes.has(row.customerCode))
-      : rows;
-    const waitingDispatchTickets = await this.prisma.shipment.count({
-      where: {
-        status: 'WAITING_DISPATCH',
-        ...(businessCustomerScoped ? { customer: { salesperson: { in: salespeople } } } : {})
-      }
-    });
+      }, businessCustomerScoped ? salespeople : undefined),
+      this.prisma.shipment.count({
+        where: {
+          status: 'WAITING_DISPATCH',
+          ...(businessCustomerScoped ? { customer: { salesperson: { in: salespeople } } } : {})
+        }
+      })
+    ]);
     const response = {
-      totals: summarizeWarehouseInStockTotals(scopedRows, waitingDispatchTickets)
+      totals: {
+        receiptTickets: aggregate.receiptTickets,
+        totalPackages: aggregate.totalPackages,
+        totalWeightKg: aggregate.totalWeightKg,
+        totalCbm: aggregate.totalCbm,
+        waitingDispatchTickets,
+        pendingTallyTickets: aggregate.pendingTallyTickets,
+        exceptionTickets: aggregate.exceptionTickets
+      }
     };
     await this.prisma.auditLog.create({
       data: {
         actorId: principal.id,
         action: 'warehouse.in_stock.view',
         target: 'warehouse:in-stock',
-        after: toAuditJson({ query: {}, rowCount: scopedRows.length })
+        after: toAuditJson({ query: {}, rowCount: aggregate.totalItems })
       }
     });
     return response;
