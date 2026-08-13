@@ -283,6 +283,7 @@ if (!releaseImageScript.includes('RELEASE_IMAGE_FENCE_MISMATCH')
   || !whitelistDeployScript.includes('siyuan_47_export_release_images "$whitelist_release_id"')
   || !whitelistDeployScript.includes('RELEASE_IMAGE_EXPORT_MISMATCH')
   || !whitelistDeployScript.includes('RELEASE_CONTAINER_IMAGE_FENCE_MISMATCH')
+  || !whitelistDeployScript.includes('"$NO_CACHE" "$WHITELIST_RELEASE_ID" \'\'')
   || !whitelistDeployScript.includes("docker inspect --format '{{.Config.Image}}'")) {
   failures.push('47 runtime releases must use release-scoped images and verify build IDs plus running container references');
 }

@@ -346,7 +346,7 @@ FAILURE_PHASE="whitelist-build-migrate-restart-health"
 
 if [[ "$SCOPE" != "none" ]]; then
   ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
-  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_CSV" "$NO_CACHE" "$WHITELIST_RELEASE_ID" <<'REMOTE_SCRIPT'
+  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_CSV" "$NO_CACHE" "$WHITELIST_RELEASE_ID" '' <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"
 lock_dir="$2"
