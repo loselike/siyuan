@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 58
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase56`
 - 基线提交：`09fdb158d897d18146987dbe511fc4b774d20740`
 - 47 基线：`git-3964a91a2636_web-3c24fed0279c_api-40e35302377a`
@@ -36,3 +36,11 @@
 
 - 风险审查第二轮发现“远端 shell 已退出、后代仍占 SSH channel”不会被服务端 timeout 或 keepalive 终止；已增加客户端 `ChannelTimeout` 与 `ssh -G` fail-closed 探测，并把全部 timeout 参数提前到任何 mutation 前校验。
 - 最新复核未发现 P0/P1 发布阻断。残余 P2 仅为 Docker daemon 侧 BuildKit 取消速度需在首次受控运行时构建继续观察，本轮 governance-only 同步不触发构建。
+
+## 发布结果与重评
+
+- 提交：功能分支 `08c5c01`，发布协调分支 `25e83d7`，均已推送。
+- 47 以 `state/docs-only` 精确同步 9 个治理/文档文件，未构建、未重启、未迁移，运行 release ID 保持 `git-3964a91a2636_web-3c24fed0279c_api-40e35302377a`。
+- 线上三份关键脚本 checksum 与发布协调 worktree 一致；真实 uutils timeout 返回 124；provenance traceable、Web/API image match、API release ID match、容器 running、锁 free、recovery clear。
+- 新一轮排序：安全/数据正确性方面 token 主动撤销与全局 DTO 校验仍会改变外部行为，继续待单独产品决定；高频数据流方面 `App.tsx` 仍有跨模块状态，但上一轮已验证的路由数据所有权策略可继续小步扩展；后端效率方面 Prisma Repository 仍约 32k 行，但已存在模块级 query/command port，继续结构切片的边际价值低于修复明确性能浪费。
+- 当前最高价值候选转为仓库库存查询：`warehouse-inventory-query.repository.ts` 的分页请求仍对全部命中包裹执行一次 `findMany({ select: totalsSelect })` 再在进程内汇总，数据增长时每次列表刷新成本随全量匹配线性增长。下一步先固定响应总计/分页等价样本，再参考 Prisma 聚合与成熟后台查询实现，把合计下推数据库；不改筛选、权限、金额或响应字段。
