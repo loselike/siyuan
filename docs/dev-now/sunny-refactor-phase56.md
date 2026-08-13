@@ -36,4 +36,15 @@
 
 ## 47 发布
 
-- 状态：待标准 Git 源码发布与线上允许/拒绝路径验证。
+- 状态：`completed`。
+- 提交：`f38c6af956f44793399cb127ef5ec1f188643989`，已推送 `origin/codex/sunny-refactor-phase56`，并由发布协调分支 `codex/sunny-refactor-phase54` 使用同一提交发布。
+- 47 发布：`git-f38c6af956f4_web-7fd6e14600c5_api-40e35302377a`；scope 仅 API、无 migration，Git bundle provenance 为 `traceable/ok`。
+- 线上效果：`GET /system/roles` 与 `GET /system/staff-accounts` 均为匿名 401、管理员 200、普通操作员 403；身份 Controller 产物存在且包含 roles/staff/sites 路由标记。
+- 线上安全：源码 506/506 一致；Web/API image 与 API release ID 匹配；容器内 Web 与 API health 200；近期 API 日志无 fatal/unhandled/uncaught/exception/panic；锁 free、recovery clear。
+
+## 发布后重新评估
+
+- 安全/正确性：改密与主动退出不撤销既有 token 是剩余安全问题，但会改变认证行为，必须退出“行为保持重构”并单独确认；全局 ValidationPipe 同理。
+- 高频业务与前端：`WarehousePage.tsx` 5,131 行、`styles.css` 13,220 行，UI/前端数据流仍有明显用户收益，但下一切片必须先选一个高频固定场景并完成字段/操作链保护。
+- 后端效率：Prisma/InMemory 仍为 31,997/19,416 行；`DataController` 已降到 187 条路由/2,256 行，继续无差别搬路由的边际收益下降。
+- 决策：下一阶段转向高频仓库界面的一个代表性页面切片，而不是继续沿 Controller 拆分；先只读梳理真实数据所有权、完整字段和所有弹窗/操作，再按 Sunny UI 规则及成熟后台表格模式实施，不改 API、权限、状态或数据库。
