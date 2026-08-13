@@ -16,3 +16,9 @@
 - NestJS validation：https://github.com/nestjs/nest/tree/master/packages/common/pipes （MIT）。借鉴 Controller 边界显式 pipe/parser；不全局启用转换或白名单，避免历史请求契约变化。
 - Medusa core-flows / validators：https://github.com/medusajs/medusa （MIT）。借鉴运行时 schema 与应用服务类型保持同源、逐模块接入；不引入其工作流和 schema 依赖。
 - Sunny 当前已有稳定 Service 校验，采用“导出单一 parser，Controller 与 Service 共用”的最小方案，不形成第二套规则。
+
+## 发布中发现的更高优先级问题
+
+- 本轮 API 白名单构建虽已调用 release image helper，但容器实际运行 `siyuan-api:unknown` 且 `/api/health.releaseId=unknown`；state 仍写入 whitelist release ID。说明 Phase50 只验证了 build 后 tag identity，没有验证 Compose 启动后的容器引用，发布证据存在失败开放。
+- 已立即暂停继续推广输入 parser，转为 P0 发布安全修复：白名单远端脚本在 build 前断言三个 release image env，在重启后逐服务比较容器 `.Config.Image` 与本 release 精确 tag，不一致即进入既有 recovery 机制；治理和离线 contract 固定该门禁。
+- 参考仍为 Moby immutable deployment 与 Kubernetes fencing：真正的 fence 必须验证最终被消费的对象，不只验证准备阶段生成的对象。

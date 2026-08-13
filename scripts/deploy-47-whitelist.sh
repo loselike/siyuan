@@ -366,6 +366,12 @@ source scripts/lib/47-release-images.sh
 siyuan_47_export_release_images "$whitelist_release_id"
 export VITE_RELEASE_ID="$whitelist_release_id"
 export RELEASE_ID="$whitelist_release_id"
+if [[ "${SIYUAN_API_IMAGE:-}" != "siyuan-api:${whitelist_release_id}" \
+  || "${SIYUAN_WEB_IMAGE:-}" != "siyuan-web:${whitelist_release_id}" \
+  || "${SIYUAN_MIGRATE_IMAGE:-}" != "siyuan-db-migrate:${whitelist_release_id}" ]]; then
+  echo "RELEASE_IMAGE_EXPORT_MISMATCH release=$whitelist_release_id" >&2
+  exit 83
+fi
 
 build_services=()
 restart_services=()
@@ -405,6 +411,20 @@ if [[ "$scope" == *api* || "$scope" == *web* ]]; then
   siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 fi
 docker compose up -d --no-deps "${restart_services[@]}"
+
+for service in "${restart_services[@]}"; do
+  expected_image=""
+  case "$service" in
+    api) expected_image="$SIYUAN_API_IMAGE" ;;
+    web) expected_image="$SIYUAN_WEB_IMAGE" ;;
+  esac
+  container_id="$(docker compose ps -q "$service" | tail -1)"
+  running_image_ref="$(docker inspect --format '{{.Config.Image}}' "$container_id" 2>/dev/null | tail -1)"
+  if [[ -z "$container_id" || "$running_image_ref" != "$expected_image" ]]; then
+    echo "RELEASE_CONTAINER_IMAGE_FENCE_MISMATCH service=$service expected=$expected_image actual=${running_image_ref:-MISSING}" >&2
+    exit 83
+  fi
+done
 
 for _ in $(seq 1 45); do
   if docker compose exec -T api node -e "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))" </dev/null >/dev/null 2>&1; then
