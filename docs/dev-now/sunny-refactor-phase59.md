@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 59
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase56`
 - 基线提交：`7a1208d6cced48c87137e4fcb5545963b948043a`
 - 47 基线：`git-3964a91a2636_web-3c24fed0279c_api-40e35302377a`
@@ -35,3 +35,12 @@
 
 - 第一轮指出 mock 测试未真实执行 SQL 及浮点半分边界风险；补充 47 当前 API 容器真实 Prisma/生产数据与纯 `VALUES` 对照后，未发现 P0/P1 业务等价性或发布阻断。
 - 残余 P2：Repository 单测仍通过 mock 验证 raw SQL 结构；真实 PostgreSQL 等价证据保存在本任务记录而非可离线重复的集成测试。后续若建立隔离测试数据库，应把该探针固化，但不为本轮引入容器测试框架或 schema 变化。
+
+## 发布与复审
+
+- 功能分支提交 `17cea3f`、发布协调提交 `647de50`，均已推送；47 标准 Git 发布范围为 `api`，未运行 migration，发布 ID 为 `git-647de5094fd7_web-3c24fed0279c_api-11d551f45e42`。
+- 发布后源码 checksum 与候选一致，容器构建产物含聚合查询；API 容器内与公网 health 均 200，provenance `traceable/ok`，Web/API image 与 API release ID 匹配，锁 free、recovery clear，最近 API 日志无关键错误。
+- 发布后再次对 2,498 条 `RECEIVED` 生产记录执行旧 Node 汇总与候选 SQL，只读结果仍为七字段 `0 mismatch`。
+- 副作用：未改路由、请求/响应字段、权限、客户范围、分页、业务状态、数据库结构或业务数据。数据库聚合本身约 7.8ms，高于旧单纯读行约 1.4ms，但消除了 2,498 行网络传输与 Node 对象/聚合；目前无性能退化证据。
+- 新一轮比较：安全类 token 撤销与全局 DTO 校验会改变外部行为，继续待独立产品决策；前端 `WarehousePage.tsx` 仍为 5,121 行，但结构拆分的即时效果不如确定的查询浪费；后端 `getWarehouseInStockSummary` 仍读取全部在库汇总字段，且正被仓库看板直接调用。
+- 下一步选择“继续但换独立接口”：为看板汇总建立单独 characterization，再把其当前筛选、权限、待排货、票号和审计语义下推数据库。不能直接复用分页 SQL假定口径一致，也不在同一切片改 UI。
