@@ -13,14 +13,6 @@ export class LegacyWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     return this.repository.getWarehouseConsolidationItems(principal, id);
   }
 
-  getWarehouseTallySortRules(principal: Principal) {
-    return this.repository.getWarehouseTallySortRules(principal);
-  }
-
-  updateWarehouseTallySortRules(principal: Principal, input: Parameters<WarehouseTallyQueryRepository['updateWarehouseTallySortRules']>[1]) {
-    return this.repository.updateWarehouseTallySortRules(principal, input);
-  }
-
   getWarehouseTallyTasks(principal: Principal, query?: Parameters<WarehouseTallyQueryRepository['getWarehouseTallyTasks']>[1]) {
     return this.repository.getWarehouseTallyTasks(principal, query);
   }

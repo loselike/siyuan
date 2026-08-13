@@ -25,7 +25,7 @@ export class ShipmentLabelLifecycleService {
   async labels(principal: Principal, shipmentId: string) {
     this.assertStaff(principal, '客户不能查看内部面单');
     await this.ensureAnyPermission(principal, [
-      'warehouse:dispatch-pending:label-view',
+      'warehouse:dispatch-pending:label-manage',
       'customer-service:transfer:label-view'
     ]);
     return this.repository.getShipmentLabels(principal, shipmentId);
@@ -55,7 +55,7 @@ export class ShipmentLabelLifecycleService {
   async download(principal: Principal, shipmentId: string, labelId: string) {
     this.assertStaff(principal, '客户不能下载内部面单');
     await this.ensureAnyPermission(principal, [
-      'warehouse:dispatch-pending:label-view',
+      'warehouse:dispatch-pending:label-manage',
       'customer-service:transfer:label-view'
     ]);
     return this.repository.downloadShipmentLabel(principal, shipmentId, labelId);
