@@ -16,7 +16,6 @@ import { ShipmentRiskFlag, isShipmentRiskFlagActive } from '../shared/ShipmentRi
 import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, paginationWhenNeeded, renderFilterActions, renderFilterField, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
 import { addRowsWorksheet, createWorkbook, downloadWorkbook } from '../shared/excel';
 import {
-  calculateWarehousePackageMetrics,
   calculateWarehouseVolumetricWeight,
   escapeHtml,
   formatWarehousePackageNo,
@@ -40,6 +39,7 @@ import { WarehouseMachineImportModal } from './WarehouseMachineImportModal';
 import { WarehouseCreateTallyModal } from './WarehouseCreateTallyModal';
 import { WarehouseCompleteTallyModal, type WarehouseTallySourceItem } from './WarehouseCompleteTallyModal';
 import { WarehouseDashboardPanel } from './WarehouseDashboardPanel';
+import { WarehousePackageEditModal } from './WarehousePackageEditModal';
 import { downloadWarehouseMachineExport, isWarehouseMachineExportReady, resolveWarehouseMachineExportRecords } from './warehouseMachineExport';
 import {
   calculateCartonSpecTotals,
@@ -1223,15 +1223,6 @@ export function WarehousePage({
     .filter((shipment) => Boolean(shipment.outboundAt || shipment.dispatchedAt))
     .map(createWarehouseOutboundedRowFromShipment)
     .sort((a, b) => new Date(b.outboundAt ?? 0).getTime() - new Date(a.outboundAt ?? 0).getTime());
-  const packageEditMetrics = packageEditDraft ? calculateWarehousePackageMetrics({
-    weightKg: packageEditDraft.weightKg,
-    lengthCm: packageEditDraft.lengthCm,
-    widthCm: packageEditDraft.widthCm,
-    heightCm: packageEditDraft.heightCm,
-    packageCount: packageEditDraft.packageCount,
-    divisor: 5000
-  }) : null;
-
   function getConsolidationPackages(record: WarehouseConsolidationRecord) {
     return warehousePackages.filter((pkg) => record.packageIds.includes(pkg.id));
   }
@@ -4797,135 +4788,23 @@ export function WarehousePage({
           />
         </Space>
       </Modal>
-      <Modal
-        title="修改入仓包裹"
-        open={Boolean(editingPackage && packageEditDraft)}
-        onCancel={() => {
-          if (!savingPackageEdit) closeWarehousePackageEdit();
-        }}
-        onOk={() => void saveWarehousePackageEdit()}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={savingPackageEdit}
-        closable={!savingPackageEdit}
-        keyboard={!savingPackageEdit}
-        maskClosable={!savingPackageEdit}
-        cancelButtonProps={{ disabled: savingPackageEdit }}
-        width={760}
-        destroyOnHidden
-      >
-        {editingPackage && packageEditDraft ? (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Alert
-              type="info"
-              showIcon
-              message={`正在修改 ${editingPackage.combinedOrderNo}`}
-              description="可同时修改入仓基础数据和补录同箱规记录；不改变理货、录单、出库或财务流程。"
-            />
-            {sameSpecRequestAttempted ? (
-              <Alert
-                type="warning"
-                showIcon
-                message="上次补录结果待确认"
-                description="输入已锁定，请直接点击保存，系统将使用同一请求号安全重试。"
-              />
-            ) : null}
-            <div>
-              <Text strong>基础信息</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={24} md={8}>
-                  <Text strong>客户编号</Text>
-                  <Input aria-label="修改客户编号" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} value={packageEditDraft.customerCode} onChange={(event) => patchPackageEditCustomerCode(event.target.value)} />
-                </Col>
-                <Col xs={24} md={8}>
-                  <Text strong>快递单号</Text>
-                  <Input aria-label="修改快递单号" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} value={packageEditDraft.domesticTrackingNo} onChange={(event) => patchPackageEditTrackingNo(event.target.value)} />
-                </Col>
-                <Col xs={24} md={8}>
-                  <Text strong>客户编号-快递单号</Text>
-                  <Input aria-label="修改客户编号-快递单号" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} value={packageEditDraft.combinedOrderNo} onChange={(event) => patchPackageEditCombinedOrderNo(event.target.value)} />
-                </Col>
-                {canInStockSameSpecReplenish ? (
-                  <Col xs={12} md={8}>
-                    <Text strong>同箱规补录</Text>
-                    <InputNumber
-                      aria-label="同箱规补录箱数"
-                      min={0}
-                      max={500}
-                      precision={0}
-                      value={sameSpecSupplementCount}
-                      disabled={!canReplenishWarehouseSameSpec(editingPackage) || savingPackageEdit || sameSpecRequestAttempted}
-                      onChange={(value) => updateSameSpecSupplementCount(Number(value ?? 0))}
-                      placeholder="填写新增箱数"
-                      style={{ width: '100%' }}
-                    />
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {canReplenishWarehouseSameSpec(editingPackage)
-                        ? `将新增 ${sameSpecSupplementCount || 0} 条、每条 1 件；原记录不变`
-                        : '仅支持未理货、未录单的原始过机记录'}
-                    </Text>
-                  </Col>
-                ) : null}
-                <Col xs={12} md={8}>
-                  <Text strong>件序号</Text>
-                  <InputNumber aria-label="修改件序号" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={1} precision={0} value={packageEditDraft.packageIndex} onChange={(value) => patchPackageEditDraft({ packageIndex: Number(value) || 1 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={24} md={8}>
-                  <Text strong>扫描时间</Text>
-                  <Input aria-label="修改扫描时间" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} type="datetime-local" value={packageEditDraft.scanTime} onChange={(event) => patchPackageEditDraft({ scanTime: event.target.value })} />
-                </Col>
-              </Row>
-            </div>
-
-            <div>
-              <Text strong>件重尺</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={12} md={6}>
-                  <Text strong>单件实重</Text>
-                  <InputNumber aria-label="修改单件实重" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={0} precision={2} value={packageEditDraft.weightKg} onChange={(value) => patchPackageEditDraft({ weightKg: Number(value) || 0 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={12} md={4}>
-                  <Text strong>长 cm</Text>
-                  <InputNumber aria-label="修改长 cm" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={0} precision={1} value={packageEditDraft.lengthCm} onChange={(value) => patchPackageEditDraft({ lengthCm: Number(value) || 0 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={12} md={4}>
-                  <Text strong>宽 cm</Text>
-                  <InputNumber aria-label="修改宽 cm" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={0} precision={1} value={packageEditDraft.widthCm} onChange={(value) => patchPackageEditDraft({ widthCm: Number(value) || 0 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={12} md={4}>
-                  <Text strong>高 cm</Text>
-                  <InputNumber aria-label="修改高 cm" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={0} precision={1} value={packageEditDraft.heightCm} onChange={(value) => patchPackageEditDraft({ heightCm: Number(value) || 0 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={12} md={6}>
-                  <Text strong>件数</Text>
-                  <InputNumber aria-label="修改件数" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={1} precision={0} value={packageEditDraft.packageCount} onChange={(value) => patchPackageEditDraft({ packageCount: Number(value) || 1 })} style={{ width: '100%' }} />
-                </Col>
-              </Row>
-              {packageEditMetrics ? (
-                <Space wrap style={{ marginTop: 12 }}>
-                  <Tag color="cyan">体积 {packageEditMetrics.cbm.toFixed(3)} CBM</Tag>
-                  <Tag color="blue">5000材积 {calculateWarehouseVolumetricWeight(packageEditDraft, 5000).toFixed(2)} KG</Tag>
-                  <Tag color="purple">6000材积 {calculateWarehouseVolumetricWeight(packageEditDraft, 6000).toFixed(2)} KG</Tag>
-                </Space>
-              ) : null}
-            </div>
-
-            <div>
-              <Text strong>备注异常</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={24} md={12}>
-                  <Text strong>备注</Text>
-                  <Input.TextArea aria-label="修改备注" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} rows={3} value={packageEditDraft.remark} onChange={(event) => patchPackageEditDraft({ remark: event.target.value })} />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>人工异常</Text>
-                  <Input.TextArea aria-label="修改人工异常" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} rows={3} value={packageEditDraft.manualException} onChange={(event) => patchPackageEditDraft({ manualException: event.target.value })} />
-                </Col>
-              </Row>
-            </div>
-          </Space>
-        ) : null}
-      </Modal>
+      <WarehousePackageEditModal
+        record={editingPackage}
+        draft={packageEditDraft}
+        saving={savingPackageEdit}
+        canEdit={canInStockUpdate}
+        canShowSameSpecReplenish={canInStockSameSpecReplenish}
+        canReplenishSameSpec={Boolean(editingPackage && canReplenishWarehouseSameSpec(editingPackage))}
+        sameSpecSupplementCount={sameSpecSupplementCount}
+        sameSpecRequestAttempted={sameSpecRequestAttempted}
+        onCancel={closeWarehousePackageEdit}
+        onConfirm={() => void saveWarehousePackageEdit()}
+        onDraftChange={patchPackageEditDraft}
+        onCustomerCodeChange={patchPackageEditCustomerCode}
+        onTrackingNoChange={patchPackageEditTrackingNo}
+        onCombinedOrderNoChange={patchPackageEditCombinedOrderNo}
+        onSameSpecSupplementCountChange={updateSameSpecSupplementCount}
+      />
       <Modal
         title="理货明细"
         open={Boolean(selectedConsolidation)}
