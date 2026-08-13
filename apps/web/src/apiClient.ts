@@ -304,6 +304,7 @@ import type {
   NotificationUnreadSummary
 } from './modules/notifications/notificationTypes';
 import { AppShellClient } from './api/appShellClient';
+import { AuthAccountClient } from './api/authAccountClient';
 import { AuditQueryClient } from './api/auditQueryClient';
 import { CarrierTaskQueryClient } from './api/carrierTaskQueryClient';
 import { MarkupQueryClient } from './api/markupQueryClient';
@@ -697,6 +698,7 @@ function formatApiErrorMessage(body: string, status: number): string {
 
 export class ApiClient {
   readonly appShell = new AppShellClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
+  readonly authAccount = new AuthAccountClient(<T>(path: string, init?: RequestInit, authenticated?: boolean) => this.request<T>(path, init, authenticated));
   readonly auditQuery = new AuditQueryClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly carrierTaskQuery = new CarrierTaskQueryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
@@ -720,34 +722,31 @@ export class ApiClient {
   ) {}
 
   async captcha(): Promise<CaptchaChallenge> {
-    return this.request('/auth/captcha', { method: 'GET' }, false);
+    return this.authAccount.captcha<CaptchaChallenge>();
   }
 
   async login(username: string, password: string, captchaId?: string, captchaCode?: string): Promise<Session> {
-    return this.request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password, captchaId, captchaCode }) }, false);
+    return this.authAccount.login<Session>(username, password, captchaId, captchaCode);
   }
 
   async me(): Promise<Principal> {
-    return this.request('/auth/me');
+    return this.authAccount.me<Principal>();
   }
 
   async currentSession(): Promise<Pick<Session, 'user' | 'permissions'>> {
-    return this.request('/auth/session');
+    return this.authAccount.currentSession<Pick<Session, 'user' | 'permissions'>>();
   }
 
   async userTablePreferences(): Promise<UserTablePreferenceSummary[]> {
-    return this.request('/user-table-preferences');
+    return this.authAccount.userTablePreferences<UserTablePreferenceSummary[]>();
   }
 
   async updateUserTablePreference(key: string, value: UserTablePreferenceValue): Promise<UserTablePreferenceSummary> {
-    return this.request(`/user-table-preferences/${encodeURIComponent(key)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ value })
-    });
+    return this.authAccount.updateUserTablePreference<UserTablePreferenceSummary>(key, value);
   }
 
   async deleteUserTablePreference(key: string): Promise<{ ok: true }> {
-    return this.request(`/user-table-preferences/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    return this.authAccount.deleteUserTablePreference<{ ok: true }>(key);
   }
 
   async downloadProtectedAsset(url: string): Promise<Blob> {
@@ -768,11 +767,11 @@ export class ApiClient {
   }
 
   async updateProfile(input: ProfileUpdateInput): Promise<Principal> {
-    return this.request('/auth/profile', { method: 'PUT', body: JSON.stringify(input) });
+    return this.authAccount.updateProfile<Principal>(input);
   }
 
   async changePassword(input: { currentPassword: string; newPassword: string }): Promise<{ ok: true }> {
-    return this.request('/auth/change-password', { method: 'POST', body: JSON.stringify(input) });
+    return this.authAccount.changePassword<{ ok: true }>(input);
   }
 
   async shipments(): Promise<Shipment[]> {
