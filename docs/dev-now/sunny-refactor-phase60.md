@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 60
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase56`
 - 基线提交：`fb9a2f2599bb29cba1ff09c99b56fc91a414d7f8`
 - 47 基线：`git-647de5094fd7_web-3c24fed0279c_api-11d551f45e42`
@@ -34,3 +34,11 @@
 - 本地 focused tests `10/10`、API typecheck、focused ESLint、434 路由快速治理与 `git diff --check` 通过。
 - 47 发布前只读真实 PostgreSQL 探针：管理员 2,498 行、当前业务归属 129 行、空业务范围 0 行，旧 Node 汇总与候选 SQL 七个字段均 `0 mismatch`；新增 EXISTS 真实执行 129 行亦 `0 mismatch`，未写业务数据。
 - 最终独立审查未发现 P0/P1/P2。残余仅发布后继续观察业务员 EXISTS 路径和 owned-code IN 参数量；当前规模不构成阻断。
+
+## 发布与复审
+
+- 功能分支提交 `fac2642`、发布协调提交 `32fa6a2`，均已推送；47 标准 Git 发布范围为 `api`，未运行 migration，发布 ID 为 `git-32fa6a2c0309_web-3c24fed0279c_api-5e1c513e1d3d`。
+- 发布后共享查询源码 checksum 与候选一致，容器构建产物包含当前归属 EXISTS；API 容器内与公网 health 均 200，provenance `traceable/ok`，Web/API image 与 API release ID 匹配，锁 free、recovery clear，最近 API 日志无关键错误。
+- 业务员当前归属 EXISTS 在 15 个客户 code 样本上的真实 PostgreSQL `EXPLAIN` 为 planning 3.11ms、execution 1.274ms；发布前同一真实路径 129 行与旧汇总七字段 `0 mismatch`。
+- 副作用：未改路由、权限、响应、前端、状态、schema 或业务数据；看板等待排货仍按完整团队范围，审计结构和行数语义保持。
+- 新一轮比较：安全类主动撤销/全局 DTO 仍是行为变化，不能作为重构偷改；分页与看板两条已量化的仓库全量聚合浪费均已关闭；前端 `WarehousePage.tsx` 5,121 行已重新成为最高价值但风险更高的候选。下一步应转向前端，只读确定一个高频子区域的数据所有权、弹窗和操作完整性，再做单一代表切片，不继续沿 SQL 聚合方向扩张。
