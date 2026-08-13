@@ -361,6 +361,11 @@ if [[ "$actual_token" != "$expected_token" ]]; then
   exit 75
 fi
 cd "$remote_dir"
+# shellcheck source=lib/47-release-images.sh
+source scripts/lib/47-release-images.sh
+siyuan_47_export_release_images "$whitelist_release_id"
+export VITE_RELEASE_ID="$whitelist_release_id"
+export RELEASE_ID="$whitelist_release_id"
 
 build_services=()
 restart_services=()
@@ -383,9 +388,21 @@ if [[ "$no_cache" == true ]]; then
   build_args+=(--no-cache)
 fi
 build_args+=(--build-arg "VITE_RELEASE_ID=$whitelist_release_id")
+api_changed=false
+web_changed=false
+migrate_changed=false
+[[ "$scope" == *api* ]] && api_changed=true
+[[ "$scope" == *web* ]] && web_changed=true
+[[ "$scope" == *migrate* ]] && migrate_changed=true
 docker compose build "${build_args[@]}" "${build_services[@]}"
+siyuan_47_capture_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
+siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 if [[ "$scope" == *"+migrate" ]]; then
+  siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
   docker compose --profile tools run --rm db-migrate </dev/null
+fi
+if [[ "$scope" == *api* || "$scope" == *web* ]]; then
+  siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 fi
 docker compose up -d --no-deps "${restart_services[@]}"
 

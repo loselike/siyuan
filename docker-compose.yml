@@ -1,5 +1,6 @@
 services:
   web:
+    image: ${SIYUAN_WEB_IMAGE:-siyuan-web}
     build:
       context: .
       dockerfile: Dockerfile.web
@@ -13,6 +14,7 @@ services:
     restart: unless-stopped
 
   api:
+    image: ${SIYUAN_API_IMAGE:-siyuan-api}
     build:
       context: .
       dockerfile: Dockerfile.api
@@ -37,6 +39,7 @@ services:
     restart: unless-stopped
 
   db-migrate:
+    image: ${SIYUAN_MIGRATE_IMAGE:-siyuan-db-migrate}
     build:
       context: .
       dockerfile: Dockerfile.api

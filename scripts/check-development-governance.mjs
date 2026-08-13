@@ -30,6 +30,8 @@ const requiredGovernanceFiles = [
   'scripts/select-validation.mjs',
   'config/validation/path-test-map.json',
   'scripts/lib/docker-container-image-id.sh',
+  'scripts/lib/47-release-images.sh',
+  'scripts/release-image-fence.test.sh',
   'scripts/docker-container-image-id.test.sh',
   'scripts/release-fingerprint-artifact-filter.test.sh'
 ];
@@ -108,6 +110,7 @@ for (const forbiddenText of [
 const deployScript = readFileSync('scripts/deploy-47.sh', 'utf8');
 const syncScript = readFileSync('scripts/sync-47.sh', 'utf8');
 const releaseLockScript = readFileSync('scripts/lib/47-release-lock.sh', 'utf8');
+const releaseImageScript = readFileSync('scripts/lib/47-release-images.sh', 'utf8');
 const whitelistDeployScript = readFileSync('scripts/deploy-47-whitelist.sh', 'utf8');
 const casSyncScript = readFileSync('scripts/cas-sync-47-file.sh', 'utf8');
 const captureBaselineScript = readFileSync('scripts/capture-47-release-baseline.sh', 'utf8');
@@ -271,6 +274,14 @@ if (!releaseLockScript.includes('heartbeat_at') || !releaseLockScript.includes('
 }
 if (!releaseLockScript.includes('RELEASE_RECOVERY_REQUIRED') || !releaseLockScript.includes('exit 81')) {
   failures.push('47 release queue must block after an unresolved post-mutation failure');
+}
+if (!releaseImageScript.includes('RELEASE_IMAGE_FENCE_MISMATCH')
+  || !releaseImageScript.includes('.Descriptor.digest')
+  || !releaseImageScript.includes('siyuan_47_capture_release_image_ids')
+  || !releaseImageScript.includes('siyuan_47_verify_release_image_ids')
+  || !deployScript.includes('siyuan_47_export_release_images "$RELEASE_ID"')
+  || !whitelistDeployScript.includes('siyuan_47_export_release_images "$whitelist_release_id"')) {
+  failures.push('47 runtime releases must use release-scoped images and image-ID fencing before migration/restart');
 }
 if (!resolveRecoveryScript.includes('--expected-marker-sha') || !resolveRecoveryScript.includes('--confirm-recovered')) {
   failures.push('release recovery marker must only clear through an explicit checksum-bound resolution command');

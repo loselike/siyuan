@@ -682,6 +682,8 @@ RELEASE_ID="$8"
 RELEASE_LOCK_DIR="$9"
 RELEASE_LOCK_TOKEN="${10}"
 cd "$REMOTE_DIR"
+# shellcheck source=lib/47-release-images.sh
+source scripts/lib/47-release-images.sh
 actual_lock_token="$(sed -n '1p' "$RELEASE_LOCK_DIR/token" 2>/dev/null || true)"
 if [[ "$actual_lock_token" != "$RELEASE_LOCK_TOKEN" ]]; then
   echo "47 release lock ownership changed before build." >&2
@@ -689,6 +691,7 @@ if [[ "$actual_lock_token" != "$RELEASE_LOCK_TOKEN" ]]; then
 fi
 export VITE_RELEASE_ID="$RELEASE_ID"
 export RELEASE_ID="$RELEASE_ID"
+siyuan_47_export_release_images "$RELEASE_ID"
 
 remote_fingerprints="$(bash scripts/print-47-release-fingerprints.sh)"
 remote_web="$(printf '%s\n' "$remote_fingerprints" | sed -n 's/^WEB_FINGERPRINT=//p')"
@@ -711,9 +714,12 @@ build_services=()
 [[ "$WEB_CHANGED" == true ]] && build_services+=(web)
 if ((${#build_services[@]})); then
   docker compose build "${build_services[@]}"
+  siyuan_47_capture_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
+  siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
 fi
 
 if [[ "$MIGRATE_CHANGED" == true ]]; then
+  siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
   docker compose --profile tools run --rm db-migrate </dev/null
 fi
 
@@ -721,6 +727,7 @@ restart_services=()
 [[ "$API_CHANGED" == true ]] && restart_services+=(api)
 [[ "$WEB_CHANGED" == true ]] && restart_services+=(web)
 if ((${#restart_services[@]})); then
+  siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
   docker compose up -d --remove-orphans "${restart_services[@]}"
 fi
 

@@ -5,6 +5,7 @@
 ## 发布原则
 
 - 47 是全局串行发布资源。Web、API、Shared、迁移和纯源码白名单共用同一把远端发布锁，不按服务拆锁；多个会话可以并行开发，但不得并行同步、构建、迁移、重启或写发布状态。
+- 运行时发布还必须为每个 release ID 使用唯一的 API/Web/db-migrate 镜像标签，并在构建后、迁移前、重启前按镜像 ID 做 fencing 校验；远端队列锁是协调机制，不单独充当 fencing。禁止用共享 `latest` 标签作为已验证候选的最终启动引用。
 - 标准发布只允许从完整 Git 源码构建。禁止把既有镜像作为基底覆盖编译后 JavaScript、从 source map 反向恢复源码、复用未由当前源码生成的 Shared `dist`/声明文件，或复用旧 Prisma Client 来绕过类型检查。此类产物只能作为故障取证，不能成为新基线。
 - 标准发布开始前先把候选分支推送到 `origin`，再用 `npm run release:47:baseline`：它要求发布协调 worktree 干净、HEAD 与同名远端分支精确一致，并核对当前提交的 Web/API/Prisma manifest 与 47 实际树完全一致，随后生成绑定 worktree、分支和祖先 commit 的 receipt。完成候选合并与验证后再次推送，并执行 `npm run deploy:47 -- --expected-release-id <记录值>`；远端 ID、receipt、远端分支 HEAD 或祖先关系任一不一致都会阻断。
 - baseline 捕获与标准 deploy 都会先执行 `audit:47:provenance -- --require-traceable`。当前这类 `legacy-untraceable` 线上状态不能进入标准同步；首次切换到统一 Git 基线必须走单独审查的 bootstrap cutover，不能用普通 deploy 参数绕过。
