@@ -164,6 +164,7 @@ fi
 if [[ "${#APPROVED_MIGRATION_SPECS[@]}" -gt 0 ]]; then
   APPROVED_MIGRATION_SPECS_CSV="$(IFS=,; printf '%s' "${APPROVED_MIGRATION_SPECS[*]}")"
 fi
+APPROVED_MIGRATIONS_ARG="${APPROVED_MIGRATIONS_CSV:-__SIYUAN_EMPTY__}"
 
 cleanup_release_lock() {
   local exit_code=$?
@@ -346,7 +347,7 @@ FAILURE_PHASE="whitelist-build-migrate-restart-health"
 
 if [[ "$SCOPE" != "none" ]]; then
   ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
-  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_CSV" "$NO_CACHE" "$WHITELIST_RELEASE_ID" '' <<'REMOTE_SCRIPT'
+  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_ARG" "$NO_CACHE" "$WHITELIST_RELEASE_ID" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"
 lock_dir="$2"
@@ -355,6 +356,11 @@ scope="$4"
 approved_migrations_csv="${5:-}"
 no_cache="${6:-false}"
 whitelist_release_id="${7:-unknown}"
+[[ "$approved_migrations_csv" == __SIYUAN_EMPTY__ ]] && approved_migrations_csv=""
+if [[ ! "$whitelist_release_id" =~ ^whitelist-[0-9a-f]{24}$ ]]; then
+  echo "RELEASE_ID_ARGUMENT_INVALID actual=$whitelist_release_id" >&2
+  exit 83
+fi
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [[ "$actual_token" != "$expected_token" ]]; then
   echo "47 release lock ownership changed before whitelist build." >&2

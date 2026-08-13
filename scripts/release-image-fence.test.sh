@@ -33,7 +33,8 @@ siyuan_47_export_release_images 'whitelist-ABC:123'
 grep -q 'RELEASE_IMAGE_EXPORT_MISMATCH' "$SCRIPT_DIR/deploy-47-whitelist.sh"
 grep -q 'RELEASE_CONTAINER_IMAGE_FENCE_MISMATCH' "$SCRIPT_DIR/deploy-47-whitelist.sh"
 grep -q "docker inspect --format '{{.Config.Image}}'" "$SCRIPT_DIR/deploy-47-whitelist.sh"
-grep -q 'WHITELIST_RELEASE_ID.*<<' "$SCRIPT_DIR/deploy-47-whitelist.sh"
+grep -q 'APPROVED_MIGRATIONS_ARG=.*__SIYUAN_EMPTY__' "$SCRIPT_DIR/deploy-47-whitelist.sh"
+grep -q 'RELEASE_ID_ARGUMENT_INVALID' "$SCRIPT_DIR/deploy-47-whitelist.sh"
 
 printf '%s\t%s\n%s\t%s\n%s\t%s\n' \
   "$SIYUAN_API_IMAGE" sha256:api-a \
