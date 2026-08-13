@@ -235,20 +235,20 @@
       "DataController.permanentlyDeleteShipmentReview"
     ],
     [
-      "DELETE /system/roles/:role @ DataController.deleteSystemRole",
+      "DELETE /system/roles/:role @ SystemIdentityAdminController.deleteRole",
       "permission",
       [
         "system:user-groups:delete"
       ],
-      "DataController.deleteSystemRole"
+      "SystemIdentityAdminController.deleteRole"
     ],
     [
-      "DELETE /system/staff-accounts/:id @ DataController.deleteSystemStaffAccount",
+      "DELETE /system/staff-accounts/:id @ SystemIdentityAdminController.deleteStaffAccount",
       "permission",
       [
         "system:accounts:delete"
       ],
-      "DataController.deleteSystemStaffAccount"
+      "SystemIdentityAdminController.deleteStaffAccount"
     ],
     [
       "DELETE /user-table-preferences/:key @ UserTablePreferenceController.remove",
@@ -1178,13 +1178,13 @@
       "NotificationOperationsController.list"
     ],
     [
-      "GET /system/roles @ DataController.systemRoles",
+      "GET /system/roles @ SystemIdentityAdminController.getRoles",
       "permission",
       [
         "system:role-permissions:read",
         "system:user-groups:read"
       ],
-      "DataController.systemRoles"
+      "SystemIdentityAdminController.getRoles"
     ],
     [
       "GET /system/sites @ SystemDirectoryController.getSites",
@@ -1195,12 +1195,12 @@
       "SystemDirectoryController.getSites"
     ],
     [
-      "GET /system/staff-accounts @ DataController.systemStaffAccounts",
+      "GET /system/staff-accounts @ SystemIdentityAdminController.getStaffAccounts",
       "permission",
       [
         "system:accounts:read"
       ],
-      "DataController.systemStaffAccounts"
+      "SystemIdentityAdminController.getStaffAccounts"
     ],
     [
       "GET /uploads/vouchers/:fileName @ DataController.downloadVoucherImage",
@@ -2923,36 +2923,36 @@
       "NotificationOperationsController.retry"
     ],
     [
-      "POST /system/roles @ DataController.createSystemRole",
+      "POST /system/roles @ SystemIdentityAdminController.createRole",
       "permission",
       [
         "system:user-groups:create"
       ],
-      "DataController.createSystemRole"
+      "SystemIdentityAdminController.createRole"
     ],
     [
-      "POST /system/sites @ DataController.createSystemSite",
+      "POST /system/sites @ SystemIdentityAdminController.createSite",
       "permission",
       [
         "system:sites:create"
       ],
-      "DataController.createSystemSite"
+      "SystemIdentityAdminController.createSite"
     ],
     [
-      "POST /system/staff-accounts @ DataController.createSystemStaffAccount",
+      "POST /system/staff-accounts @ SystemIdentityAdminController.createStaffAccount",
       "permission",
       [
         "system:accounts:create"
       ],
-      "DataController.createSystemStaffAccount"
+      "SystemIdentityAdminController.createStaffAccount"
     ],
     [
-      "POST /system/staff-accounts/reset-passwords @ DataController.resetSystemStaffAccountPasswords",
+      "POST /system/staff-accounts/reset-passwords @ SystemIdentityAdminController.resetStaffAccountPasswords",
       "permission",
       [
         "system:accounts:reset-password"
       ],
-      "DataController.resetSystemStaffAccountPasswords"
+      "SystemIdentityAdminController.resetStaffAccountPasswords"
     ],
     [
       "POST /warehouse/consolidations @ WarehouseTallyOperationsController.createWarehouseConsolidation",
@@ -3446,76 +3446,76 @@
       "DataController.updatePendingReviewBusinessCost"
     ],
     [
-      "PUT /system/roles/:role @ DataController.updateSystemRole",
+      "PUT /system/roles/:role @ SystemIdentityAdminController.updateRole",
       "permission",
       [
         "system:user-groups:update"
       ],
-      "DataController.updateSystemRole"
+      "SystemIdentityAdminController.updateRole"
     ],
     [
-      "PUT /system/roles/:role/enabled @ DataController.updateSystemRoleEnabled",
+      "PUT /system/roles/:role/enabled @ SystemIdentityAdminController.updateRoleEnabled",
       "permission",
       [
         "system:user-groups:enable"
       ],
-      "DataController.updateSystemRoleEnabled"
+      "SystemIdentityAdminController.updateRoleEnabled"
     ],
     [
-      "PUT /system/roles/:role/permissions @ DataController.updateRolePermissions",
+      "PUT /system/roles/:role/permissions @ SystemIdentityAdminController.updateRolePermissions",
       "permission",
       [
         "system:role-permissions:save"
       ],
-      "DataController.updateRolePermissions"
+      "SystemIdentityAdminController.updateRolePermissions"
     ],
     [
-      "PUT /system/roles/:role/permissions/copy @ DataController.copyRolePermissions",
+      "PUT /system/roles/:role/permissions/copy @ SystemIdentityAdminController.copyRolePermissions",
       "permission",
       [
         "system:role-permissions:copy-role"
       ],
-      "DataController.copyRolePermissions"
+      "SystemIdentityAdminController.copyRolePermissions"
     ],
     [
-      "PUT /system/sites/:id @ DataController.updateSystemSite",
+      "PUT /system/sites/:id @ SystemIdentityAdminController.updateSite",
       "permission",
       [
         "system:sites:update"
       ],
-      "DataController.updateSystemSite"
+      "SystemIdentityAdminController.updateSite"
     ],
     [
-      "PUT /system/sites/:id/enabled @ DataController.updateSystemSiteEnabled",
+      "PUT /system/sites/:id/enabled @ SystemIdentityAdminController.updateSiteEnabled",
       "permission",
       [
         "system:sites:enable"
       ],
-      "DataController.updateSystemSiteEnabled"
+      "SystemIdentityAdminController.updateSiteEnabled"
     ],
     [
-      "PUT /system/staff-accounts/:id @ DataController.updateSystemStaffAccount",
+      "PUT /system/staff-accounts/:id @ SystemIdentityAdminController.updateStaffAccount",
       "permission",
       [
         "system:accounts:update-profile"
       ],
-      "DataController.updateSystemStaffAccount"
+      "SystemIdentityAdminController.updateStaffAccount"
     ],
     [
-      "PUT /system/staff-accounts/:id/enabled @ DataController.updateSystemStaffAccountEnabled",
+      "PUT /system/staff-accounts/:id/enabled @ SystemIdentityAdminController.updateStaffAccountEnabled",
       "permission",
       [
         "system:accounts:enable"
       ],
-      "DataController.updateSystemStaffAccountEnabled"
+      "SystemIdentityAdminController.updateStaffAccountEnabled"
     ],
     [
-      "PUT /system/staff-accounts/:id/site @ DataController.updateSystemStaffAccountSite",
+      "PUT /system/staff-accounts/:id/site @ SystemIdentityAdminController.updateStaffAccountSite",
       "permission",
       [
         "system:accounts:update-site"
       ],
-      "DataController.updateSystemStaffAccountSite"
+      "SystemIdentityAdminController.updateStaffAccountSite"
     ],
     [
       "PUT /user-table-preferences/:key @ UserTablePreferenceController.upsert",
@@ -3550,7 +3550,7 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 204,
+    "dataControllerRoutesMax": 187,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 350,
     "sharedRootImportFilesMax": 141,
@@ -3574,7 +3574,7 @@
     "hotspotLinesMax": {
       "apps/api/src/modules/prisma.repository.ts": 31997,
       "apps/api/src/modules/in-memory.repository.ts": 19416,
-      "apps/api/src/modules/data.controller.ts": 2382,
+      "apps/api/src/modules/data.controller.ts": 2256,
       "packages/shared/src/index.ts": 6339,
       "apps/web/src/apiClient.ts": 2567,
       "apps/web/src/styles.css": 13220,

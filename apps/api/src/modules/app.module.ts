@@ -92,6 +92,9 @@ import {
   SYSTEM_DIRECTORY_REPOSITORY
 } from './system/directory/system-directory.repository.js';
 import { SystemDirectoryService } from './system/directory/system-directory.service.js';
+import { SystemIdentityAdminController } from './system/identity/system-identity-admin.controller.js';
+import { SYSTEM_IDENTITY_ADMIN_REPOSITORY } from './system/identity/system-identity-admin.repository.js';
+import { SystemIdentityAdminService } from './system/identity/system-identity-admin.service.js';
 import { TrackingQueryController } from './tracking/query/tracking-query.controller.js';
 import { LegacyTrackingQueryRepository } from './tracking/query/legacy-tracking-query.repository.js';
 import {
@@ -332,6 +335,11 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
   ? { provide: PRICE_BOOK_QUERY_REPOSITORY, useClass: PrismaPriceBookQueryRepository }
   : { provide: PRICE_BOOK_QUERY_REPOSITORY, useClass: LegacyPriceBookQueryRepository };
 
+const systemIdentityAdminRepositoryProvider = {
+  provide: SYSTEM_IDENTITY_ADMIN_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 @Module({
   controllers: [
     AuthController,
@@ -359,6 +367,7 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     ShipmentLabelLifecycleController,
     ShipmentOverviewQueryController,
     SystemDirectoryController,
+    SystemIdentityAdminController,
     TrackingQueryController,
     TrackingImportCommandController,
     TrackingManualEventCommandController,
@@ -439,6 +448,8 @@ const priceBookQueryRepositoryProvider = usePrismaRepository
     carrierTaskCommandRepositoryProvider,
     priceBookQueryRepositoryProvider,
     SystemDirectoryService,
+    SystemIdentityAdminService,
+    systemIdentityAdminRepositoryProvider,
     warehouseInventoryQueryRepositoryProvider,
     warehouseInventoryQueryAuthorizerProvider,
     warehouseTallyQueryRepositoryProvider,

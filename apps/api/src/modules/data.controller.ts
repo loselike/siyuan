@@ -95,7 +95,6 @@ import type {
   PricingRuleQuoteRequest,
   ReceivableAdjustmentInput,
   SurchargeCreateInput,
-  RoleGroupInput,
   ShipmentCreateInput,
   ShipmentFinanceItemCreateInput,
   ShipmentFinanceItemUpdateInput,
@@ -109,12 +108,6 @@ import type {
   ShipmentReviewBasicUpdateInput,
   ShipmentReviewDeleteInput,
   ShipmentReviewRejectInput,
-  SiteCreateInput,
-  SiteUpdateInput,
-  StaffAccountCreateInput,
-  StaffAccountPasswordResetInput,
-  StaffAccountQuery,
-  StaffAccountUpdateInput,
   WarehousePackageCreateInput,
   MasterDataSnapshot,
   NavigationReadStateInput
@@ -1228,125 +1221,6 @@ export class DataController {
   @RequirePermission('master-data:exchange-rates:disable')
   async deleteMasterDataExchangeRate(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.updateExchangeRate(request.user, id, { enabled: false });
-  }
-
-  @Get('system/roles')
-  @RequirePermission(['system:user-groups:read', 'system:role-permissions:read'])
-  async systemRoles() {
-    return this.repository.getRolePermissionMatrix();
-  }
-
-  @Post('system/roles')
-  @RequirePermission('system:user-groups:create')
-  async createSystemRole(@Req() request: { user: Principal }, @Body() body: RoleGroupInput) {
-    return this.repository.createRoleGroup(request.user, body);
-  }
-
-  @Put('system/roles/:role')
-  @RequirePermission('system:user-groups:update')
-  async updateSystemRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body() body: RoleGroupInput) {
-    return this.repository.updateRoleGroup(request.user, role, body);
-  }
-
-  @Put('system/roles/:role/enabled')
-  @RequirePermission('system:user-groups:enable')
-  async updateSystemRoleEnabled(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateRoleGroupEnabled(request.user, role, body);
-  }
-
-  @Delete('system/roles/:role')
-  @RequirePermission('system:user-groups:delete')
-  async deleteSystemRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey) {
-    return this.repository.deleteRoleGroup(request.user, role);
-  }
-
-  @Get('system/staff-accounts')
-  @RequirePermission('system:accounts:read')
-  async systemStaffAccounts(@Req() request: { user: Principal }, @Query() query: StaffAccountQuery) {
-    return this.repository.getStaffAccounts(request.user, query);
-  }
-
-  @Post('system/sites')
-  @RequirePermission('system:sites:create')
-  async createSystemSite(@Req() request: { user: Principal }, @Body() body: SiteCreateInput) {
-    return this.repository.createSite(request.user, body);
-  }
-
-  @Put('system/sites/:id')
-  @RequirePermission('system:sites:update')
-  async updateSystemSite(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: SiteUpdateInput) {
-    return this.repository.updateSite(request.user, id, body);
-  }
-
-  @Put('system/sites/:id/enabled')
-  @RequirePermission('system:sites:enable')
-  async updateSystemSiteEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateSiteEnabled(request.user, id, body);
-  }
-
-  @Post('system/staff-accounts')
-  @RequirePermission('system:accounts:create')
-  async createSystemStaffAccount(@Req() request: { user: Principal }, @Body() body: StaffAccountCreateInput) {
-    return this.repository.createStaffAccount(request.user, body);
-  }
-
-  @Put('system/staff-accounts/:id/enabled')
-  @RequirePermission('system:accounts:enable')
-  async updateSystemStaffAccountEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateStaffAccountEnabled(request.user, id, body);
-  }
-
-  @Put('system/staff-accounts/:id')
-  @RequirePermission('system:accounts:update-profile')
-  async updateSystemStaffAccount(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: StaffAccountUpdateInput) {
-    if (body.role) await this.ensurePermission(request.user, 'system:accounts:update-role');
-    if (body.site !== undefined) await this.ensurePermission(request.user, 'system:accounts:update-site');
-    if (body.enabled !== undefined) await this.ensurePermission(request.user, 'system:accounts:enable');
-    if (body.password !== undefined) await this.ensurePermission(request.user, 'system:accounts:reset-password');
-    // 部门调整当前复用账号资料维护权限；部门不联动用户组或站点。
-    return this.repository.updateStaffAccount(request.user, id, body);
-  }
-
-  @Delete('system/staff-accounts/:id')
-  @RequirePermission('system:accounts:delete')
-  async deleteSystemStaffAccount(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteStaffAccount(request.user, id);
-  }
-
-  @Post('system/staff-accounts/reset-passwords')
-  @RequirePermission('system:accounts:reset-password')
-  async resetSystemStaffAccountPasswords(@Req() request: { user: Principal }, @Body() body: StaffAccountPasswordResetInput) {
-    return this.repository.resetStaffAccountPasswords(request.user, body);
-  }
-
-  @Put('system/staff-accounts/:id/site')
-  @RequirePermission('system:accounts:update-site')
-  async updateSystemStaffAccountSite(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: { site?: string }
-  ) {
-    return this.repository.updateStaffAccountSite(request.user, id, body);
-  }
-
-  @Put('system/roles/:role/permissions')
-  @RequirePermission('system:role-permissions:save')
-  async updateRolePermissions(
-    @Req() request: { user: Principal },
-    @Param('role') role: RoleKey,
-    @Body() body: { permissions?: PermissionKey[] }
-  ) {
-    return this.repository.updateRolePermissions(request.user, role, body.permissions ?? []);
-  }
-
-  @Put('system/roles/:role/permissions/copy')
-  @RequirePermission('system:role-permissions:copy-role')
-  async copyRolePermissions(
-    @Req() request: { user: Principal },
-    @Param('role') role: RoleKey,
-    @Body() body: { sourceRoleKey?: RoleKey }
-  ) {
-    return this.repository.copyRolePermissions(request.user, role, body.sourceRoleKey);
   }
 
   @Get('system/audit-logs')
