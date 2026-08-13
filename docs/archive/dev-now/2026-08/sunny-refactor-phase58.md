@@ -52,4 +52,4 @@
 - 已确认本机仅有本轮 baseline/deploy 两个进程组，47 无 build/migration/deploy 进程、phase 为 `lock-acquired`、recovery clear；向两个本轮进程组发送 TERM 后原 cleanup trap 按 token 正常释放，当前锁 free。
 - 修复把 baseline 的 release ID 与 fingerprint 两次远端读取也接入 bounded remote + ChannelTimeout，并加入治理与定向接线测试；未删除或手工覆盖远端锁。
 - 第一次有界读取重试发现远端 `timeout` 不能直接执行带管道的整段 shell 字符串；命令在 mutation 前失败、锁正常释放、旧 receipt 未更新。现改为 `bash -s -- <state path>` 与 `env SIYUAN_RELEASE_REPO_ROOT=... bash -s` 两种 argv 安全形态，治理精确要求两处且禁止退回字符串命令。
-- 修复后真实 baseline 在约 26 秒内完整退出并写入绑定 `ef66b2a` 的 receipt，进程不存在、锁 free；随后 `state/docs-only` 再同步成功，运行 release ID/镜像/业务数据仍未改变。
+- 修复后真实 baseline 在约 26 秒内完整退出并写入绑定 `ef66b2a` 的 receipt，进程不存在、锁 free；随后 `state/docs-only` 再同步成功，运行 release ID/镜像/业务数据仍未改变。最终状态文档同步后再次完整执行 baseline/deploy，锁与 recovery 均正常释放。
