@@ -1,8 +1,8 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Download, Plus, Trash2 } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { sortWarehouseTallyTasks, warehouseTallyChannels, warehouseTallyProgressStatusLabels } from '@siyuan/shared';
 import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockPageResponse, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
@@ -40,9 +40,9 @@ import { WarehouseCreateTallyModal } from './WarehouseCreateTallyModal';
 import { WarehouseCompleteTallyModal, type WarehouseTallySourceItem } from './WarehouseCompleteTallyModal';
 import { WarehouseDashboardPanel } from './WarehouseDashboardPanel';
 import { WarehousePackageEditModal } from './WarehousePackageEditModal';
+import { WarehouseManualReceiptDrawer } from './WarehouseManualReceiptDrawer';
 import { downloadWarehouseMachineExport, isWarehouseMachineExportReady, resolveWarehouseMachineExportRecords } from './warehouseMachineExport';
 import {
-  calculateCartonSpecTotals,
   attachWarehouseRentDetails,
   canEditUnenteredWarehousePackage,
   createEmptyCartonSpec,
@@ -966,7 +966,6 @@ export function WarehousePage({
     tallyRepeatFilters,
     tallyRepeatRefreshVersion
   ]);
-  const draftMetrics = calculateCartonSpecTotals(packageDraft.cartonSpecs);
   const selectedManualReceiptCustomer = manualReceiptCustomers.find((customer) => customer.code === packageDraft.customerCode.trim());
   const manualReceiptCustomerOptions = manualReceiptCustomers.map((customer) => ({
     value: customer.code,
@@ -3713,164 +3712,21 @@ export function WarehousePage({
           />
         </Card>
 
-        <Drawer
-          title="手动添加收货"
-          width={760}
+        <WarehouseManualReceiptDrawer
           open={manualReceiptDrawerOpen}
+          draft={packageDraft}
+          customerOptions={manualReceiptCustomerOptions}
+          customersLoading={manualReceiptCustomersLoading}
+          selectedCustomerName={selectedManualReceiptCustomer?.name}
           onClose={() => setManualReceiptDrawerOpen(false)}
-          destroyOnHidden={false}
-          footer={(
-            <Flex justify="space-between" align="center" gap={12} className="warehouse-today-drawer-footer">
-              <Space wrap>
-                <Tag color="cyan">箱规 {packageDraft.cartonSpecs.length} 条</Tag>
-                <Tag color="blue">总件数 {draftMetrics.totalPackages} 件</Tag>
-                <Tag color="purple">总体积 {draftMetrics.totalCbm.toFixed(3)} CBM</Tag>
-                <Tag color="geekblue">总实重 {draftMetrics.totalActualWeightKg.toFixed(2)} KG</Tag>
-              </Space>
-              <Button type="primary" onClick={() => void addTodayManualPackage()}>确认添加收货</Button>
-            </Flex>
-          )}
-        >
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <div>
-              <Text strong>基础信息</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={24} md={12}>
-                  <Text strong>客户编号</Text>
-                  <AutoComplete
-                    aria-label="手动添加客户编号"
-                    className="warehouse-manual-receipt-customer-select"
-                    style={{ width: '100%' }}
-                    value={packageDraft.customerCode}
-                    options={manualReceiptCustomerOptions}
-                    placeholder={manualReceiptCustomersLoading ? '正在加载客户资料' : '输入客户编号或名称搜索'}
-                    filterOption={(inputValue, option) => String(option?.label ?? '').toLowerCase().includes(inputValue.toLowerCase())}
-                    onChange={patchTodayManualCustomerCode}
-                    onSelect={patchTodayManualCustomerCode}
-                  />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>客户名称 / 匹配状态</Text>
-                  <Input
-                    aria-label="手动添加客户名称"
-                    value={selectedManualReceiptCustomer?.name ?? (packageDraft.customerCode.trim() ? '待客户建档匹配' : '')}
-                    placeholder="已建档客户自动带出；未建档编号可先收货"
-                    readOnly
-                  />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>快递单号</Text>
-                  <Input aria-label="手动添加快递单号" value={packageDraft.domesticTrackingNo} onChange={(event) => patchTodayManualTrackingNo(event.target.value)} />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>客户编号-快递单号</Text>
-                  <Input
-                    aria-label="手动添加客户编号-快递单号"
-                    value={packageDraft.combinedOrderNo}
-                    onChange={(event) => patchPackageDraft({ combinedOrderNo: event.target.value })}
-                  />
-                </Col>
-              </Row>
-            </div>
-
-            <div>
-              <Flex justify="space-between" align="center" className="warehouse-carton-spec-header">
-                <Text strong>箱规</Text>
-                <Text type="secondary">一条箱规保存为一行在仓记录</Text>
-              </Flex>
-              <div className="warehouse-carton-specs" role="group" aria-label="手动添加箱规">
-                {packageDraft.cartonSpecs.map((spec, index) => (
-                  <div className="warehouse-carton-spec-row" key={`carton-${index}`}>
-                    <div className="warehouse-carton-spec-index">#{index + 1}</div>
-                    <div className="warehouse-carton-spec-field">
-                      <Text strong>重量 KG</Text>
-                      <InputNumber
-                        aria-label={`第 ${index + 1} 条箱规重量 KG`}
-                        min={0}
-                        precision={2}
-                        value={spec.weightKg}
-                        onChange={(value) => patchCartonSpec(index, { weightKg: Number(value) || 0 })}
-                      />
-                    </div>
-                    <div className="warehouse-carton-dimensions">
-                      <div className="warehouse-carton-spec-field">
-                        <Text strong>长 cm</Text>
-                        <InputNumber
-                          aria-label={`第 ${index + 1} 条箱规长 cm`}
-                          min={0}
-                          precision={2}
-                          value={spec.lengthCm}
-                          onChange={(value) => patchCartonSpec(index, { lengthCm: Number(value) || 0 })}
-                        />
-                      </div>
-                      <div className="warehouse-carton-spec-field">
-                        <Text strong>宽 cm</Text>
-                        <InputNumber
-                          aria-label={`第 ${index + 1} 条箱规宽 cm`}
-                          min={0}
-                          precision={2}
-                          value={spec.widthCm}
-                          onChange={(value) => patchCartonSpec(index, { widthCm: Number(value) || 0 })}
-                        />
-                      </div>
-                      <div className="warehouse-carton-spec-field">
-                        <Text strong>高 cm</Text>
-                        <InputNumber
-                          aria-label={`第 ${index + 1} 条箱规高 cm`}
-                          min={0}
-                          precision={2}
-                          value={spec.heightCm}
-                          onChange={(value) => patchCartonSpec(index, { heightCm: Number(value) || 0 })}
-                        />
-                      </div>
-                    </div>
-                    <div className="warehouse-carton-spec-field warehouse-carton-count">
-                      <Text strong>件数</Text>
-                      <InputNumber
-                        aria-label={`第 ${index + 1} 条箱规件数`}
-                        min={1}
-                        precision={0}
-                        value={spec.packageCount}
-                        onChange={(value) => patchCartonSpec(index, { packageCount: Math.max(1, Math.floor(Number(value) || 1)) })}
-                      />
-                    </div>
-                    <div className="warehouse-carton-actions">
-                      <Tooltip title="新增箱规">
-                        <Button aria-label={`在第 ${index + 1} 条后新增箱规`} icon={<Plus size={16} />} onClick={addCartonSpec} />
-                      </Tooltip>
-                      <Tooltip title={packageDraft.cartonSpecs.length <= 1 ? '至少保留一条箱规' : '删除箱规'}>
-                        <Button
-                          aria-label={`删除第 ${index + 1} 条箱规`}
-                          icon={<Trash2 size={16} />}
-                          disabled={packageDraft.cartonSpecs.length <= 1}
-                          onClick={() => removeCartonSpec(index)}
-                        />
-                      </Tooltip>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <Text strong>备注异常</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={24}>
-                  <Text strong>扫描时间</Text>
-                  <Input aria-label="手动添加扫描时间" type="datetime-local" value={packageDraft.scanTime} onChange={(event) => patchPackageDraft({ scanTime: event.target.value })} />
-                </Col>
-                <Col xs={24}>
-                  <Text strong>备注</Text>
-                  <Input aria-label="手动添加备注" value={packageDraft.remark} onChange={(event) => patchPackageDraft({ remark: event.target.value })} />
-                </Col>
-                <Col xs={24}>
-                  <Text strong>异常</Text>
-                  <Input aria-label="手动添加异常" value={packageDraft.manualException} onChange={(event) => patchPackageDraft({ manualException: event.target.value })} />
-                </Col>
-              </Row>
-            </div>
-          </Space>
-        </Drawer>
+          onConfirm={() => void addTodayManualPackage()}
+          onDraftChange={patchPackageDraft}
+          onCustomerCodeChange={patchTodayManualCustomerCode}
+          onTrackingNoChange={patchTodayManualTrackingNo}
+          onCartonSpecChange={patchCartonSpec}
+          onAddCartonSpec={addCartonSpec}
+          onRemoveCartonSpec={removeCartonSpec}
+        />
       </Space>
       ) : null}
       {activeReceiveSection === 'packages' ? (
