@@ -421,7 +421,6 @@ import {
 import { resolveWarehouseTallyRecentCutoff } from './warehouse/warehouse-query.shared.js';
 import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
 import {
-  allPermissions,
   allRuntimePermissions,
   buildRolePermissionRow,
   defaultPermissionsForRole,
@@ -440,7 +439,6 @@ import {
   roleMetadata,
   rolePermissions,
   toSessionRole,
-  withImpliedUiPreferencePermissions,
   workspaceFieldMaskKeys,
   workspaceFieldMaskKeysForWorkspace,
   workspaceFieldMaskPermissionCode,

@@ -24,3 +24,18 @@
 - 并发保护：捕获前后必须校验 release ID 与完整远端 manifest 未变化；若变化，丢弃旧捕获并重来。
 - 效果证据：`audit-47-source-drift.sh --summary --fail-on-drift` 返回 `CHANGED=0`、`LOCAL_ONLY=0`、`REMOTE_ONLY=0`。
 - 安全证据：Shared/API/Web 类型检查、架构与安全契约、迁移清单只读核对、公网 health；不以 GitHub 项目替代 Sunny 本地与 47 证据。
+
+## 完成结果
+
+- 捕获时 release state 前后 checksum 均为 `3c73b13be6cab6b4a7e4591c0ab913f9ec075746cb42620cc3a774c0034f7249`；496 个运行时文件达到 `SAME=496`、`CHANGED=0`、`LOCAL_ONLY=0`、`REMOTE_ONLY=0`。远端 22 个 AppleDouble 文件仅告警并继续排除。
+- 精确运行时快照提交为 `632de17`。之后只删除四处未使用的 import/参数/常量，不改变运行时分支；定向保护新增当前 pricing 27 项 capability、`RequireAllPermissions` 架构扫描和仓库理货规则 port stub。
+- 当前保护网：pricing 允许/拒绝与 RBAC/理货定向测试 17/17，通过 Shared/API/Web 类型检查，436 路由治理、lint no-new-debt、安全契约 3/3 和 scanner self-test。
+- 47 只读证据：六条本轮吸收 migration 均为 `APPLIED`，公网 health 200；未执行服务构建、重启、迁移或生产数据写入。
+- 宽旧 pricing E2E 仍有 17 条失败，旧 `rbac.test.ts` 也曾与 47 已完成的正向权限迁移冲突。本轮只在正式任务记录与当前运行源码均能证明的权限契约上修保护网，不猜测其余定价业务预期。
+
+## 切片后重评
+
+- 安全/数据正确性：权限运行逻辑已有当前定向允许/拒绝保护，但旧宽 pricing E2E 与生产语义漂移，继续扩大修改会混入未经证实的定价规则，暂不沿这条路盲改。
+- 高频业务/前端数据流：`master-data` 权限感知下推仍有价值，但会触及刚吸收的权限改造；在恢复发布来源证据前继续改运行时，会再次扩大不可追溯组合。
+- 架构/改造效率：当前 47 又是 `WHITELIST_CAS` 且 API `releaseId=unknown`，任何后续切片都缺少稳定 Git 回滚锚点。最高优先级转为先用 v3 冻结清单和 current-baseline cutover 恢复 Git/bundle provenance；固定样本是锁内六份运行证据逐字节相等且迁移集合/checksum 一致。
+- 新的 v3 清单：`docs/release-manifests/47/20260813-151824-whitelist-e33ce3cc5bb91e2674c7beef`，源树 manifest `8a9c26661d8cdf7527d765e79091e3489376797091c945e815b58ee8f1d70e47`。下一切片必须先提交并推送完整干净候选，再执行受限 cutover；远端有任何漂移立即停止。

@@ -296,12 +296,6 @@ export function sortPendingTallyTasksByRequestTime(tasks: WarehouseTallyTaskSumm
   ];
 }
 
-const warehouseTallyTimeSlotLabels: Record<WarehouseTallySortRule['preferredTimeSlot'], string> = {
-  MORNING: '上午优先',
-  AFTERNOON: '下午优先',
-  ALL_DAY: '全天'
-};
-
 export function formatWarehouseHandoverEntryNo(shipment: Pick<Shipment, 'inboundNo'>) {
   return shipment.inboundNo?.trim() || '-';
 }

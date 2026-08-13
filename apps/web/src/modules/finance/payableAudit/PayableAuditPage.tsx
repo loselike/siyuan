@@ -104,7 +104,7 @@ function statusTag(value?: string) {
   return <Tag color={status === 'CONFIRMED' ? 'success' : status === 'VOIDED' ? 'default' : 'warning'}>{status === 'CONFIRMED' ? '已审核' : status === 'VOIDED' ? '已删除' : '待审核'}</Tag>;
 }
 
-export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange, onGoPendingPayment }: PayableAuditPageProps) {
+export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange }: PayableAuditPageProps) {
   const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PayableAuditListQuery>();
   const [form] = Form.useForm<PayableAuditCreateInput & PayableAuditUpdateInput>();

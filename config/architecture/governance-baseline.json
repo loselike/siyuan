@@ -148,7 +148,7 @@
       "DELETE /pricing/legacy/sources/:id @ DataController.deleteLegacyPricingSource",
       "permission",
       [
-        "pricing:price-books:legacy-source-delete"
+        "pricing:price-books:delete"
       ],
       "DataController.deleteLegacyPricingSource"
     ],
@@ -156,7 +156,13 @@
       "DELETE /pricing/markup-rules/:id @ DataController.deleteAgentMarkupRule",
       "permission",
       [
-        "pricing:markup:delete"
+        "pricing:markup:amazon:delete",
+        "pricing:markup:canadaAirSea:delete",
+        "pricing:markup:dubaiAirSea:delete",
+        "pricing:markup:europeExpress:delete",
+        "pricing:markup:inquiry:delete",
+        "pricing:markup:southAfrica:delete",
+        "pricing:markup:usaAirSea:delete"
       ],
       "DataController.deleteAgentMarkupRule"
     ],
@@ -164,7 +170,7 @@
       "DELETE /pricing/south-africa/rules/:id @ DataController.deleteSouthAfricaRateRule",
       "permission",
       [
-        "pricing:south-africa:rules-delete"
+        "pricing:markup:southAfrica:delete"
       ],
       "DataController.deleteSouthAfricaRateRule"
     ],
@@ -180,8 +186,9 @@
       "DELETE /shipments/:id/finance-items/:feeId @ DataController.deleteShipmentFinanceItem",
       "permission",
       [
-        "business:order-entry:business-cost-write",
-        "business:order-entry:view",
+        "business:order-entry:business-cost",
+        "business:order-entry:edit",
+        "business:order-entry:payable-fee",
         "business:order-fee:delete",
         "market:pending-routing:update"
       ],
@@ -207,7 +214,7 @@
       "DELETE /shipments/:id/review @ DataController.deleteShipmentReview",
       "permission",
       [
-        "business:review:delete"
+        "business:review:edit"
       ],
       "DataController.deleteShipmentReview"
     ],
@@ -215,7 +222,7 @@
       "DELETE /shipments/:id/review-business-costs/:feeId @ DataController.deletePendingReviewBusinessCost",
       "permission",
       [
-        "business:order-entry:business-cost-write"
+        "business:order-entry:business-cost"
       ],
       "DataController.deletePendingReviewBusinessCost"
     ],
@@ -223,7 +230,7 @@
       "DELETE /shipments/:id/review/permanent @ DataController.permanentlyDeleteShipmentReview",
       "permission",
       [
-        "business:review:purge"
+        "business:review:edit"
       ],
       "DataController.permanentlyDeleteShipmentReview"
     ],
@@ -715,7 +722,7 @@
       "GET /pricing/book-rows @ DataController.priceBookRows",
       "permission",
       [
-        "pricing:price-books:rows-view"
+        "pricing:price-books:view"
       ],
       "DataController.priceBookRows"
     ],
@@ -723,7 +730,12 @@
       "GET /pricing/books @ PriceBookQueryController.priceBooks",
       "permission",
       [
-        "pricing:price-books:list-view"
+        "pricing:price-books:delete",
+        "pricing:price-books:export",
+        "pricing:price-books:health",
+        "pricing:price-books:import",
+        "pricing:price-books:update",
+        "pricing:price-books:view"
       ],
       "PriceBookQueryController.priceBooks"
     ],
@@ -731,7 +743,7 @@
       "GET /pricing/books/:id/download @ DataController.downloadPriceBook",
       "permission",
       [
-        "pricing:price-books:rows-view"
+        "pricing:price-books:export"
       ],
       "DataController.downloadPriceBook"
     ],
@@ -739,7 +751,13 @@
       "GET /pricing/books/:id/markup-routes @ DataController.markupRoutesByBook",
       "permission",
       [
-        "pricing:markup-tier:read"
+        "pricing:markup:amazon:view",
+        "pricing:markup:canadaAirSea:view",
+        "pricing:markup:dubaiAirSea:view",
+        "pricing:markup:europeExpress:view",
+        "pricing:markup:inquiry:view",
+        "pricing:markup:southAfrica:view",
+        "pricing:markup:usaAirSea:view"
       ],
       "DataController.markupRoutesByBook"
     ],
@@ -747,7 +765,17 @@
       "GET /pricing/books/:id/rows @ DataController.priceBookRowsByBook",
       "permission",
       [
-        "pricing:price-books:rows-view"
+        "pricing:markup:amazon:view",
+        "pricing:markup:canadaAirSea:view",
+        "pricing:markup:dubaiAirSea:view",
+        "pricing:markup:europeExpress:view",
+        "pricing:markup:inquiry:view",
+        "pricing:markup:southAfrica:view",
+        "pricing:markup:usaAirSea:view",
+        "pricing:price-books:delete",
+        "pricing:price-books:export",
+        "pricing:price-books:update",
+        "pricing:price-books:view"
       ],
       "DataController.priceBookRowsByBook"
     ],
@@ -755,7 +783,7 @@
       "GET /pricing/books/import-jobs @ PriceBookQueryController.priceBookImportJobs",
       "permission",
       [
-        "pricing:price-books:import-job-view"
+        "pricing:price-books:import"
       ],
       "PriceBookQueryController.priceBookImportJobs"
     ],
@@ -763,7 +791,7 @@
       "GET /pricing/books/import-jobs/:id @ PriceBookQueryController.priceBookImportJob",
       "permission",
       [
-        "pricing:price-books:import-job-view"
+        "pricing:price-books:import"
       ],
       "PriceBookQueryController.priceBookImportJob"
     ],
@@ -771,7 +799,7 @@
       "GET /pricing/books/rule-refresh-progress @ DataController.priceBookRuleRefreshProgress",
       "permission",
       [
-        "pricing:price-books:sync-health-view"
+        "pricing:price-books:health"
       ],
       "DataController.priceBookRuleRefreshProgress"
     ],
@@ -779,8 +807,7 @@
       "GET /pricing/legacy/dubai-air-sea/display @ PriceBookQueryController.legacyDubaiAirSeaDisplay",
       "permission",
       [
-        "pricing:dubai-display:active-view",
-        "pricing:lookup:dubai-image-view"
+        "pricing:lookup:dubai-air-sea"
       ],
       "PriceBookQueryController.legacyDubaiAirSeaDisplay"
     ],
@@ -788,8 +815,7 @@
       "GET /pricing/legacy/dubai-air-sea/display-pages/:id/image @ DataController.legacyDubaiAirSeaDisplayPageImage",
       "permission",
       [
-        "pricing:dubai-display:active-view",
-        "pricing:lookup:dubai-image-view"
+        "pricing:lookup:dubai-air-sea"
       ],
       "DataController.legacyDubaiAirSeaDisplayPageImage"
     ],
@@ -797,7 +823,7 @@
       "GET /pricing/legacy/dubai-air-sea/display-versions @ PriceBookQueryController.legacyDubaiAirSeaDisplayVersions",
       "permission",
       [
-        "pricing:dubai-display:versions-view"
+        "pricing:price-books:view"
       ],
       "PriceBookQueryController.legacyDubaiAirSeaDisplayVersions"
     ],
@@ -805,7 +831,7 @@
       "GET /pricing/legacy/dubai-air-sea/display-versions/:versionId/pages/:pageId/image @ DataController.legacyDubaiAirSeaDisplayVersionPageImage",
       "permission",
       [
-        "pricing:dubai-display:versions-view"
+        "pricing:price-books:view"
       ],
       "DataController.legacyDubaiAirSeaDisplayVersionPageImage"
     ],
@@ -813,7 +839,7 @@
       "GET /pricing/legacy/dubai-air-sea/table @ DataController.legacyDubaiAirSeaTable",
       "permission",
       [
-        "pricing:dubai-display:markup-view"
+        "pricing:lookup:dubai-air-sea"
       ],
       "DataController.legacyDubaiAirSeaTable"
     ],
@@ -821,7 +847,7 @@
       "GET /pricing/legacy/health-report @ PriceBookQueryController.legacyPricingHealth",
       "permission",
       [
-        "pricing:price-books:health-report-view"
+        "pricing:price-books:health"
       ],
       "PriceBookQueryController.legacyPricingHealth"
     ],
@@ -829,7 +855,13 @@
       "GET /pricing/legacy/quote-meta @ PriceBookQueryController.legacyPricingMeta",
       "permission",
       [
-        "pricing:lookup:meta-view"
+        "pricing:lookup:amazon",
+        "pricing:lookup:canada-air-sea",
+        "pricing:lookup:dubai-air-sea",
+        "pricing:lookup:europe-express",
+        "pricing:lookup:europe-oversize",
+        "pricing:lookup:south-africa",
+        "pricing:lookup:usa-air-sea"
       ],
       "PriceBookQueryController.legacyPricingMeta"
     ],
@@ -837,7 +869,7 @@
       "GET /pricing/legacy/sources @ PriceBookQueryController.legacyPricingSources",
       "permission",
       [
-        "pricing:price-books:legacy-source-view"
+        "pricing:price-books:view"
       ],
       "PriceBookQueryController.legacyPricingSources"
     ],
@@ -845,7 +877,13 @@
       "GET /pricing/markup-rules @ DataController.agentMarkupRules",
       "permission",
       [
-        "pricing:markup:read"
+        "pricing:markup:amazon:view",
+        "pricing:markup:canadaAirSea:view",
+        "pricing:markup:dubaiAirSea:view",
+        "pricing:markup:europeExpress:view",
+        "pricing:markup:inquiry:view",
+        "pricing:markup:southAfrica:view",
+        "pricing:markup:usaAirSea:view"
       ],
       "DataController.agentMarkupRules"
     ],
@@ -853,7 +891,13 @@
       "GET /pricing/markup-rules/:id/preview @ DataController.previewAgentMarkupRule",
       "permission",
       [
-        "pricing:markup:preview"
+        "pricing:markup:amazon:view",
+        "pricing:markup:canadaAirSea:view",
+        "pricing:markup:dubaiAirSea:view",
+        "pricing:markup:europeExpress:view",
+        "pricing:markup:inquiry:view",
+        "pricing:markup:southAfrica:view",
+        "pricing:markup:usaAirSea:view"
       ],
       "DataController.previewAgentMarkupRule"
     ],
@@ -861,7 +905,13 @@
       "GET /pricing/markup-rules/export @ DataController.exportAgentMarkupRules",
       "permission",
       [
-        "pricing:markup:export"
+        "pricing:markup:amazon:export",
+        "pricing:markup:canadaAirSea:export",
+        "pricing:markup:dubaiAirSea:export",
+        "pricing:markup:europeExpress:export",
+        "pricing:markup:inquiry:export",
+        "pricing:markup:southAfrica:export",
+        "pricing:markup:usaAirSea:export"
       ],
       "DataController.exportAgentMarkupRules"
     ],
@@ -869,7 +919,13 @@
       "GET /pricing/rules @ DataController.pricingRules",
       "permission",
       [
-        "pricing:markup-tier:read"
+        "pricing:markup:amazon:tier",
+        "pricing:markup:canadaAirSea:tier",
+        "pricing:markup:dubaiAirSea:tier",
+        "pricing:markup:europeExpress:tier",
+        "pricing:markup:inquiry:tier",
+        "pricing:markup:southAfrica:tier",
+        "pricing:markup:usaAirSea:tier"
       ],
       "DataController.pricingRules"
     ],
@@ -877,7 +933,7 @@
       "GET /pricing/south-africa/images @ PriceBookQueryController.southAfricaRateImages",
       "permission",
       [
-        "pricing:south-africa:image-view"
+        "pricing:lookup:south-africa"
       ],
       "PriceBookQueryController.southAfricaRateImages"
     ],
@@ -885,7 +941,7 @@
       "GET /pricing/south-africa/rules @ DataController.southAfricaRateRules",
       "permission",
       [
-        "pricing:south-africa:rules-read"
+        "pricing:lookup:south-africa"
       ],
       "DataController.southAfricaRateRules"
     ],
@@ -893,7 +949,7 @@
       "GET /pricing/sync-health @ PriceBookQueryController.pricingSyncHealth",
       "permission",
       [
-        "pricing:price-books:sync-health-view"
+        "pricing:price-books:health"
       ],
       "PriceBookQueryController.pricingSyncHealth"
     ],
@@ -926,8 +982,8 @@
       "GET /shipments/:id/finance-detail @ DataController.getShipmentFinanceDetail",
       "permission",
       [
-        "business:order-entry:business-cost-view",
-        "business:order-entry:business-cost-write",
+        "business:order-entry:business-cost",
+        "business:order-entry:payable-fee",
         "business:order-entry:view",
         "business:order-fee:profit-view",
         "business:shipment:finance-detail-view",
@@ -981,7 +1037,12 @@
       "GET /shipments/:id/order-entry @ OrderEntryQueryController.orderEntryDetail",
       "permission",
       [
-        "business:order-entry:view"
+        "business:order-entry:business-cost",
+        "business:order-entry:draft-edit",
+        "business:order-entry:edit",
+        "business:order-entry:payable-fee",
+        "business:order-entry:view",
+        "business:review:edit"
       ],
       "OrderEntryQueryController.orderEntryDetail"
     ],
@@ -989,7 +1050,6 @@
       "GET /shipments/:id/package-detail @ DataController.shipmentPackageDetail",
       "permission",
       [
-        "business:review:detail",
         "business:shipment:detail",
         "operations:line-shipment:detail",
         "warehouse:outbounded:detail-view"
@@ -1000,7 +1060,7 @@
       "GET /shipments/:id/review-detail @ DataController.shipmentReviewDetail",
       "permission",
       [
-        "business:review:detail"
+        "business:review:view"
       ],
       "DataController.shipmentReviewDetail"
     ],
@@ -1016,7 +1076,8 @@
       "GET /shipments/order-entry/packages @ OrderEntryQueryController.orderEntryPackages",
       "permission",
       [
-        "business:order-entry:warehouse-package-select"
+        "business:order-entry:warehouse-package-select",
+        "business:review:edit"
       ],
       "OrderEntryQueryController.orderEntryPackages"
     ],
@@ -1024,7 +1085,7 @@
       "GET /shipments/review-deleted @ DataController.reviewDeletedShipments",
       "permission",
       [
-        "business:review:deleted-list"
+        "business:review:view"
       ],
       "DataController.reviewDeletedShipments"
     ],
@@ -1032,7 +1093,7 @@
       "GET /shipments/review-pending @ DataController.reviewPendingShipments",
       "permission",
       [
-        "business:review:list"
+        "business:review:view"
       ],
       "DataController.reviewPendingShipments"
     ],
@@ -1260,6 +1321,14 @@
       "WarehouseTallyOperationsController.warehouseTallyRepeatStatistics"
     ],
     [
+      "GET /warehouse/tally-sort-rules @ WarehouseTallyQueryController.warehouseTallySortRules",
+      "permission",
+      [
+        "warehouse:tally-pending:view"
+      ],
+      "WarehouseTallyQueryController.warehouseTallySortRules"
+    ],
+    [
       "GET /warehouse/tally-task-history-chain @ WarehouseTallyQueryController.warehouseTallyTaskHistoryChain",
       "permission",
       [
@@ -1366,7 +1435,7 @@
       "PATCH /pricing/south-africa/rules/:id/enabled @ DataController.updateSouthAfricaRateRuleEnabled",
       "permission",
       [
-        "pricing:south-africa:rules-enable"
+        "pricing:markup:southAfrica:status"
       ],
       "DataController.updateSouthAfricaRateRuleEnabled"
     ],
@@ -2232,7 +2301,7 @@
       "POST /pricing/books/import-jobs @ DataController.createPriceBookImportJob",
       "permission",
       [
-        "pricing:price-books:upload"
+        "pricing:price-books:import"
       ],
       "DataController.createPriceBookImportJob"
     ],
@@ -2240,7 +2309,7 @@
       "POST /pricing/books/import-jobs/:id/retry @ DataController.retryPriceBookImportJob",
       "permission",
       [
-        "pricing:price-books:upload"
+        "pricing:price-books:import"
       ],
       "DataController.retryPriceBookImportJob"
     ],
@@ -2248,7 +2317,7 @@
       "POST /pricing/cleanup-old-original-agents @ DataController.cleanupOldOriginalAgents",
       "permission",
       [
-        "pricing:price-books:cleanup-original-agents"
+        "pricing:price-books:update"
       ],
       "DataController.cleanupOldOriginalAgents"
     ],
@@ -2272,7 +2341,7 @@
       "POST /pricing/legacy/dubai-air-sea/display-versions/:id/retry @ DataController.retryLegacyDubaiAirSeaDisplayVersion",
       "permission",
       [
-        "pricing:dubai-display:retry"
+        "pricing:price-books:update"
       ],
       "DataController.retryLegacyDubaiAirSeaDisplayVersion"
     ],
@@ -2280,7 +2349,7 @@
       "POST /pricing/legacy/dubai-air-sea/display-versions/:id/sea-markup @ DataController.updateLegacyDubaiSeaMarkup",
       "permission",
       [
-        "pricing:dubai-display:markup-update"
+        "pricing:markup:dubaiAirSea:update"
       ],
       "DataController.updateLegacyDubaiSeaMarkup"
     ],
@@ -2312,7 +2381,7 @@
       "POST /pricing/legacy/rebuild @ DataController.rebuildLegacyPricing",
       "permission",
       [
-        "pricing:price-books:legacy-rebuild"
+        "pricing:price-books:update"
       ],
       "DataController.rebuildLegacyPricing"
     ],
@@ -2320,7 +2389,7 @@
       "POST /pricing/legacy/sources/import @ DataController.importLegacyPricingSource",
       "permission",
       [
-        "pricing:price-books:legacy-source-import"
+        "pricing:price-books:import"
       ],
       "DataController.importLegacyPricingSource"
     ],
@@ -2344,7 +2413,13 @@
       "POST /pricing/lookup @ DataController.priceLookup",
       "permission",
       [
-        "pricing:lookup:view"
+        "pricing:lookup:amazon",
+        "pricing:lookup:canada-air-sea",
+        "pricing:lookup:dubai-air-sea",
+        "pricing:lookup:europe-express",
+        "pricing:lookup:europe-oversize",
+        "pricing:lookup:south-africa",
+        "pricing:lookup:usa-air-sea"
       ],
       "DataController.priceLookup"
     ],
@@ -2352,7 +2427,13 @@
       "POST /pricing/markup-rules @ DataController.createAgentMarkupRule",
       "permission",
       [
-        "pricing:markup:default-create"
+        "pricing:markup:amazon:create",
+        "pricing:markup:canadaAirSea:create",
+        "pricing:markup:dubaiAirSea:create",
+        "pricing:markup:europeExpress:create",
+        "pricing:markup:inquiry:create",
+        "pricing:markup:southAfrica:create",
+        "pricing:markup:usaAirSea:create"
       ],
       "DataController.createAgentMarkupRule"
     ],
@@ -2360,7 +2441,13 @@
       "POST /pricing/markup-rules/batch-delete @ DataController.batchDeleteAgentMarkupRules",
       "permission",
       [
-        "pricing:markup:batch-delete"
+        "pricing:markup:amazon:delete",
+        "pricing:markup:canadaAirSea:delete",
+        "pricing:markup:dubaiAirSea:delete",
+        "pricing:markup:europeExpress:delete",
+        "pricing:markup:inquiry:delete",
+        "pricing:markup:southAfrica:delete",
+        "pricing:markup:usaAirSea:delete"
       ],
       "DataController.batchDeleteAgentMarkupRules"
     ],
@@ -2368,7 +2455,13 @@
       "POST /pricing/markup-rules/batch-status @ DataController.batchUpdateAgentMarkupRules",
       "permission",
       [
-        "pricing:markup:batch-enable"
+        "pricing:markup:amazon:status",
+        "pricing:markup:canadaAirSea:status",
+        "pricing:markup:dubaiAirSea:status",
+        "pricing:markup:europeExpress:status",
+        "pricing:markup:inquiry:status",
+        "pricing:markup:southAfrica:status",
+        "pricing:markup:usaAirSea:status"
       ],
       "DataController.batchUpdateAgentMarkupRules"
     ],
@@ -2376,7 +2469,13 @@
       "POST /pricing/markup-rules/batch-upsert @ DataController.batchUpsertAgentMarkupRules",
       "permission",
       [
-        "pricing:markup:batch-upsert"
+        "pricing:markup:amazon:import",
+        "pricing:markup:canadaAirSea:import",
+        "pricing:markup:dubaiAirSea:import",
+        "pricing:markup:europeExpress:import",
+        "pricing:markup:inquiry:import",
+        "pricing:markup:southAfrica:import",
+        "pricing:markup:usaAirSea:import"
       ],
       "DataController.batchUpsertAgentMarkupRules"
     ],
@@ -2384,7 +2483,13 @@
       "POST /pricing/markup-rules/import @ DataController.importAgentMarkupRules",
       "permission",
       [
-        "pricing:markup:import"
+        "pricing:markup:amazon:import",
+        "pricing:markup:canadaAirSea:import",
+        "pricing:markup:dubaiAirSea:import",
+        "pricing:markup:europeExpress:import",
+        "pricing:markup:inquiry:import",
+        "pricing:markup:southAfrica:import",
+        "pricing:markup:usaAirSea:import"
       ],
       "DataController.importAgentMarkupRules"
     ],
@@ -2392,7 +2497,13 @@
       "POST /pricing/markup-rules/migrate-pricebook-scopes @ DataController.migrateLegacyMarkupRouteScopes",
       "permission",
       [
-        "pricing:markup:update"
+        "pricing:markup:amazon:tier",
+        "pricing:markup:canadaAirSea:tier",
+        "pricing:markup:dubaiAirSea:tier",
+        "pricing:markup:europeExpress:tier",
+        "pricing:markup:inquiry:tier",
+        "pricing:markup:southAfrica:tier",
+        "pricing:markup:usaAirSea:tier"
       ],
       "DataController.migrateLegacyMarkupRouteScopes"
     ],
@@ -2400,7 +2511,13 @@
       "POST /pricing/markup-rules/route-preview @ DataController.previewMarkupRoute",
       "permission",
       [
-        "pricing:markup-tier:read"
+        "pricing:markup:amazon:view",
+        "pricing:markup:canadaAirSea:view",
+        "pricing:markup:dubaiAirSea:view",
+        "pricing:markup:europeExpress:view",
+        "pricing:markup:inquiry:view",
+        "pricing:markup:southAfrica:view",
+        "pricing:markup:usaAirSea:view"
       ],
       "DataController.previewMarkupRoute"
     ],
@@ -2408,7 +2525,13 @@
       "POST /pricing/markup-rules/route-preview/batch @ DataController.previewMarkupRoutesBatch",
       "permission",
       [
-        "pricing:markup-tier:read"
+        "pricing:markup:amazon:view",
+        "pricing:markup:canadaAirSea:view",
+        "pricing:markup:dubaiAirSea:view",
+        "pricing:markup:europeExpress:view",
+        "pricing:markup:inquiry:view",
+        "pricing:markup:southAfrica:view",
+        "pricing:markup:usaAirSea:view"
       ],
       "DataController.previewMarkupRoutesBatch"
     ],
@@ -2416,7 +2539,13 @@
       "POST /pricing/markup-rules/route-tiers @ DataController.replaceMarkupRouteTiers",
       "permission",
       [
-        "pricing:markup-tier:update"
+        "pricing:markup:amazon:tier",
+        "pricing:markup:canadaAirSea:tier",
+        "pricing:markup:dubaiAirSea:tier",
+        "pricing:markup:europeExpress:tier",
+        "pricing:markup:inquiry:tier",
+        "pricing:markup:southAfrica:tier",
+        "pricing:markup:usaAirSea:tier"
       ],
       "DataController.replaceMarkupRouteTiers"
     ],
@@ -2424,7 +2553,13 @@
       "POST /pricing/markup-rules/route-tiers/batch @ DataController.replaceMarkupRouteTiersBatch",
       "permission",
       [
-        "pricing:markup-tier:update"
+        "pricing:markup:amazon:tier",
+        "pricing:markup:canadaAirSea:tier",
+        "pricing:markup:dubaiAirSea:tier",
+        "pricing:markup:europeExpress:tier",
+        "pricing:markup:inquiry:tier",
+        "pricing:markup:southAfrica:tier",
+        "pricing:markup:usaAirSea:tier"
       ],
       "DataController.replaceMarkupRouteTiersBatch"
     ],
@@ -2432,7 +2567,13 @@
       "POST /pricing/quote @ DataController.quote",
       "permission",
       [
-        "pricing:lookup:view"
+        "pricing:lookup:amazon",
+        "pricing:lookup:canada-air-sea",
+        "pricing:lookup:dubai-air-sea",
+        "pricing:lookup:europe-express",
+        "pricing:lookup:europe-oversize",
+        "pricing:lookup:south-africa",
+        "pricing:lookup:usa-air-sea"
       ],
       "DataController.quote"
     ],
@@ -2440,7 +2581,13 @@
       "POST /pricing/rules @ DataController.createPricingRule",
       "permission",
       [
-        "pricing:markup-tier:create"
+        "pricing:markup:amazon:tier",
+        "pricing:markup:canadaAirSea:tier",
+        "pricing:markup:dubaiAirSea:tier",
+        "pricing:markup:europeExpress:tier",
+        "pricing:markup:inquiry:tier",
+        "pricing:markup:southAfrica:tier",
+        "pricing:markup:usaAirSea:tier"
       ],
       "DataController.createPricingRule"
     ],
@@ -2448,7 +2595,13 @@
       "POST /pricing/rules/quote @ DataController.quotePricingRule",
       "permission",
       [
-        "pricing:lookup:view"
+        "pricing:lookup:amazon",
+        "pricing:lookup:canada-air-sea",
+        "pricing:lookup:dubai-air-sea",
+        "pricing:lookup:europe-express",
+        "pricing:lookup:europe-oversize",
+        "pricing:lookup:south-africa",
+        "pricing:lookup:usa-air-sea"
       ],
       "DataController.quotePricingRule"
     ],
@@ -2456,7 +2609,7 @@
       "POST /pricing/south-africa/images @ DataController.uploadSouthAfricaRateImage",
       "permission",
       [
-        "pricing:south-africa:image-upload"
+        "pricing:price-books:import"
       ],
       "DataController.uploadSouthAfricaRateImage"
     ],
@@ -2472,7 +2625,7 @@
       "POST /pricing/south-africa/rules @ DataController.createSouthAfricaRateRule",
       "permission",
       [
-        "pricing:south-africa:rules-create"
+        "pricing:markup:southAfrica:create"
       ],
       "DataController.createSouthAfricaRateRule"
     ],
@@ -2574,8 +2727,9 @@
       "POST /shipments/:id/finance-items @ DataController.createShipmentFinanceItem",
       "permission",
       [
-        "business:order-entry:business-cost-write",
-        "business:order-entry:view",
+        "business:order-entry:business-cost",
+        "business:order-entry:edit",
+        "business:order-entry:payable-fee",
         "business:order-fee:create",
         "market:pending-routing:update"
       ],
@@ -2669,7 +2823,7 @@
       "POST /shipments/:id/restore @ DataController.restoreShipment",
       "permission",
       [
-        "business:review:restore"
+        "business:review:edit"
       ],
       "DataController.restoreShipment"
     ],
@@ -2677,7 +2831,7 @@
       "POST /shipments/:id/review-business-costs @ DataController.createPendingReviewBusinessCost",
       "permission",
       [
-        "business:order-entry:business-cost-write"
+        "business:order-entry:business-cost"
       ],
       "DataController.createPendingReviewBusinessCost"
     ],
@@ -2685,7 +2839,7 @@
       "POST /shipments/:id/review/approve @ DataController.approveShipmentReview",
       "permission",
       [
-        "business:review:approve"
+        "business:review:edit"
       ],
       "DataController.approveShipmentReview"
     ],
@@ -2693,7 +2847,7 @@
       "POST /shipments/:id/review/reject @ DataController.rejectShipmentReview",
       "permission",
       [
-        "business:review:reject"
+        "business:review:edit"
       ],
       "DataController.rejectShipmentReview"
     ],
@@ -2701,7 +2855,7 @@
       "POST /shipments/:id/review/reverse @ DataController.reverseShipmentReview",
       "permission",
       [
-        "business:review:reverse"
+        "business:review:edit"
       ],
       "DataController.reverseShipmentReview"
     ],
@@ -2732,7 +2886,8 @@
       "POST /shipments/order-entry @ DataController.createOrderEntry",
       "permission",
       [
-        "business:order-entry:create"
+        "business:order-entry:create",
+        "business:order-entry:edit"
       ],
       "DataController.createOrderEntry"
     ],
@@ -3200,7 +3355,7 @@
       "PUT /pricing/books/:id/remark @ DataController.updatePriceBookRemark",
       "permission",
       [
-        "pricing:price-books:remark-update"
+        "pricing:price-books:update"
       ],
       "DataController.updatePriceBookRemark"
     ],
@@ -3208,7 +3363,7 @@
       "PUT /pricing/legacy/dubai-air-sea/display-versions/:id/activate @ DataController.activateLegacyDubaiAirSeaDisplayVersion",
       "permission",
       [
-        "pricing:dubai-display:activate"
+        "pricing:price-books:update"
       ],
       "DataController.activateLegacyDubaiAirSeaDisplayVersion"
     ],
@@ -3216,7 +3371,13 @@
       "PUT /pricing/markup-rules/:id @ DataController.updateAgentMarkupRule",
       "permission",
       [
-        "pricing:markup:update"
+        "pricing:markup:amazon:update",
+        "pricing:markup:canadaAirSea:update",
+        "pricing:markup:dubaiAirSea:update",
+        "pricing:markup:europeExpress:update",
+        "pricing:markup:inquiry:update",
+        "pricing:markup:southAfrica:update",
+        "pricing:markup:usaAirSea:update"
       ],
       "DataController.updateAgentMarkupRule"
     ],
@@ -3224,7 +3385,13 @@
       "PUT /pricing/rules/:id/enabled @ DataController.updatePricingRuleEnabled",
       "permission",
       [
-        "pricing:markup-tier:enable"
+        "pricing:markup:amazon:tier",
+        "pricing:markup:canadaAirSea:tier",
+        "pricing:markup:dubaiAirSea:tier",
+        "pricing:markup:europeExpress:tier",
+        "pricing:markup:inquiry:tier",
+        "pricing:markup:southAfrica:tier",
+        "pricing:markup:usaAirSea:tier"
       ],
       "DataController.updatePricingRuleEnabled"
     ],
@@ -3232,7 +3399,7 @@
       "PUT /pricing/south-africa/rules/:id @ DataController.updateSouthAfricaRateRule",
       "permission",
       [
-        "pricing:south-africa:rules-update"
+        "pricing:markup:southAfrica:update"
       ],
       "DataController.updateSouthAfricaRateRule"
     ],
@@ -3249,8 +3416,9 @@
       "PUT /shipments/:id/finance-items/:feeId @ DataController.updateShipmentFinanceItem",
       "permission",
       [
-        "business:order-entry:business-cost-write",
-        "business:order-entry:view",
+        "business:order-entry:business-cost",
+        "business:order-entry:edit",
+        "business:order-entry:payable-fee",
         "business:order-fee:update",
         "market:pending-routing:update"
       ],
@@ -3260,7 +3428,9 @@
       "PUT /shipments/:id/order-entry-draft @ DataController.updateOrderEntryDraft",
       "permission",
       [
-        "business:order-entry:draft-save"
+        "business:order-entry:draft-edit",
+        "business:order-entry:edit",
+        "business:review:edit"
       ],
       "DataController.updateOrderEntryDraft"
     ],
@@ -3268,7 +3438,7 @@
       "PUT /shipments/:id/review-basic @ DataController.updateShipmentReviewBasic",
       "permission",
       [
-        "business:shipment:update-basic"
+        "business:review:edit"
       ],
       "DataController.updateShipmentReviewBasic"
     ],
@@ -3276,7 +3446,7 @@
       "PUT /shipments/:id/review-business-costs/:feeId @ DataController.updatePendingReviewBusinessCost",
       "permission",
       [
-        "business:order-entry:business-cost-write"
+        "business:order-entry:business-cost"
       ],
       "DataController.updatePendingReviewBusinessCost"
     ],
@@ -3381,14 +3551,22 @@
         "warehouse:rent-rule:manage"
       ],
       "WarehouseRentController.updateWarehouseRentRuleEnabled"
+    ],
+    [
+      "PUT /warehouse/tally-sort-rules @ WarehouseTallyQueryController.updateWarehouseTallySortRules",
+      "permission",
+      [
+        "warehouse:tally-pending:task-update"
+      ],
+      "WarehouseTallyQueryController.updateWarehouseTallySortRules"
     ]
   ],
   "debt": {
     "dataControllerRoutesMax": 204,
-    "apiClientMethodsMax": 365,
-    "apiClientDirectRequestsMax": 350,
-    "sharedRootImportFilesMax": 138,
-    "asAnyMax": 922,
+    "apiClientMethodsMax": 367,
+    "apiClientDirectRequestsMax": 352,
+    "sharedRootImportFilesMax": 141,
+    "asAnyMax": 924,
     "directProcessEnvMax": 36,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
@@ -3402,18 +3580,18 @@
       "apps/api/src/modules/notifications/notification.types.ts = apps/web/src/modules/notifications/notificationTypes.ts"
     ],
     "knownDuplicateRouteGroups": [],
-    "prismaRepositoryMethodsMax": 714,
-    "inMemoryRepositoryMethodsMax": 599,
+    "prismaRepositoryMethodsMax": 715,
+    "inMemoryRepositoryMethodsMax": 600,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 31937,
-      "apps/api/src/modules/in-memory.repository.ts": 19399,
-      "apps/api/src/modules/data.controller.ts": 2377,
-      "packages/shared/src/index.ts": 6335,
-      "apps/web/src/apiClient.ts": 2616,
-      "apps/web/src/styles.css": 13176,
+      "apps/api/src/modules/prisma.repository.ts": 32006,
+      "apps/api/src/modules/in-memory.repository.ts": 19420,
+      "apps/api/src/modules/data.controller.ts": 2382,
+      "packages/shared/src/index.ts": 6339,
+      "apps/web/src/apiClient.ts": 2632,
+      "apps/web/src/styles.css": 13220,
       "apps/web/src/modules/testSupport/appTestHarness.tsx": 6457,
-      "apps/web/src/modules/warehouse/WarehousePage.tsx": 5066,
-      "apps/web/src/modules/pricing/PricingPage.tsx": 3714,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 5214,
+      "apps/web/src/modules/pricing/PricingPage.tsx": 3699,
       "apps/web/src/modules/masterData/MasterDataPage.tsx": 3281
     }
   },
