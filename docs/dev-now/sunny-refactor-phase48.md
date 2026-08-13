@@ -39,3 +39,4 @@
 - 高频业务/前端数据流：`master-data` 权限感知下推仍有价值，但会触及刚吸收的权限改造；在恢复发布来源证据前继续改运行时，会再次扩大不可追溯组合。
 - 架构/改造效率：当前 47 又是 `WHITELIST_CAS` 且 API `releaseId=unknown`，任何后续切片都缺少稳定 Git 回滚锚点。最高优先级转为先用 v3 冻结清单和 current-baseline cutover 恢复 Git/bundle provenance；固定样本是锁内六份运行证据逐字节相等且迁移集合/checksum 一致。
 - 新的 v3 清单：`docs/release-manifests/47/20260813-151824-whitelist-e33ce3cc5bb91e2674c7beef`，源树 manifest `8a9c26661d8cdf7527d765e79091e3489376797091c945e815b58ee8f1d70e47`。下一切片必须先提交并推送完整干净候选，再执行受限 cutover；远端有任何漂移立即停止。
+- cutover dry-run 发现根 `node_modules` 是符号链接时，原 rsync 仅排除 `node_modules/`，会把本机绝对路径符号链接同步到 47。已在任何远端写入前停止，并同时排除 `node_modules` 与 `node_modules/`、增加治理断言；修复后 dry-run 不再出现该链接。

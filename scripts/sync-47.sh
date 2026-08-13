@@ -45,6 +45,7 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='.release-whitelist.lock' \
   --exclude='/9' \
   --exclude='.siyuan-release-state' \
+  --exclude='node_modules' \
   --exclude='node_modules/' \
   --exclude='dist/' \
   --exclude='apps/*/dist/' \

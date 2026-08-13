@@ -117,6 +117,9 @@ const fingerprintScript = readFileSync('scripts/print-47-release-fingerprints.sh
 const resolveRecoveryScript = readFileSync('scripts/resolve-47-release-recovery.sh', 'utf8');
 const containerImageIdScript = readFileSync('scripts/lib/docker-container-image-id.sh', 'utf8');
 const runtimeManifestScript = readFileSync('scripts/capture-47-runtime-manifest.sh', 'utf8');
+if (!syncScript.includes("--exclude='node_modules'") || !syncScript.includes("--exclude='node_modules/'")) {
+  failures.push('47 sync must exclude node_modules directories and root symlinks');
+}
 const forceFullBlock = deployScript.match(/if \[\[ "\$FORCE_FULL" == true \]\]; then([\s\S]*?)\nfi/)?.[1] ?? '';
 if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
   failures.push('--full must not force Prisma migration execution');
