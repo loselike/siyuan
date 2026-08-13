@@ -51,12 +51,18 @@ describe('Warehouse flows', () => {
     }
     expect(within(receiptRow).getAllByText('1399').length).toBeGreaterThanOrEqual(1);
     expect(within(receiptRow).getByText(/128×46×51/)).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: '单件方数' })).toBeInTheDocument();
-    expect(within(receiptRow).getByText('0.300288')).toBeInTheDocument();
-    expect(within(receiptRow).getByText('60.06')).toBeInTheDocument();
-    expect(within(receiptRow).getByText('50.05')).toBeInTheDocument();
+    expect(within(receiptRow).getByText('单件体积 CBM')).toBeInTheDocument();
+    await user.click(screen.getByRole('radio', { name: '精密台账模式' }));
+    expect(screen.getByRole('columnheader', { name: '单件体积 CBM' })).toBeInTheDocument();
+    const ledgerReceiptRow = screen.getAllByRole('row', { name: /1399-KY4001036478949/ }).find((row) => within(row).queryByText(/128×46×51/));
+    if (!ledgerReceiptRow) {
+      throw new Error('missing expected 1399 ledger receipt row');
+    }
+    expect(within(ledgerReceiptRow).getByText('0.300288 CBM')).toBeInTheDocument();
+    expect(within(ledgerReceiptRow).getByText('60.06')).toBeInTheDocument();
+    expect(within(ledgerReceiptRow).getByText('50.05')).toBeInTheDocument();
 
-    await user.click(within(receiptRow).getByRole('checkbox'));
+    await user.click(within(ledgerReceiptRow).getByRole('checkbox'));
     await user.click(screen.getByRole('button', { name: '添加异常' }));
     expect(await screen.findByRole('dialog', { name: '添加异常' })).toBeInTheDocument();
     await user.type(screen.getByLabelText('异常内容'), '包装破损');
@@ -80,10 +86,12 @@ describe('Warehouse flows', () => {
     await user.click(screen.getByRole('button', { name: '手动添加收货' }));
     expect(await screen.findByText('基础信息')).toBeInTheDocument();
     expect(screen.getByText('箱规')).toBeInTheDocument();
-    await user.type(screen.getByLabelText('手动添加客户编号'), '9409');
+    const manualCustomerCodeInput = screen.getByRole('combobox', { name: '手动添加客户编号' });
+    await user.type(manualCustomerCodeInput, '9409');
     await user.click(await screen.findByText('9409 - Daloday'));
-    expect(screen.getByLabelText('手动添加客户编号')).toHaveValue('9409');
-    expect(screen.getByLabelText('手动添加客户编号').closest('.warehouse-manual-receipt-customer-select')).toHaveStyle({ width: '100%' });
+    expect(manualCustomerCodeInput).toHaveValue('9409');
+    const manualCustomerCodeSelect = manualCustomerCodeInput.closest('.warehouse-manual-receipt-customer-select');
+    expect(manualCustomerCodeSelect).not.toBeNull();
     expect(screen.getByLabelText('手动添加客户名称')).toHaveValue('Daloday');
     await user.type(screen.getByLabelText('手动添加快递单号'), 'SF-TODAY-001');
     await user.clear(screen.getByLabelText('手动添加客户编号-快递单号'));
@@ -91,8 +99,8 @@ describe('Warehouse flows', () => {
     fireEvent.change(screen.getByLabelText('手动添加扫描时间'), { target: { value: '2026-06-26T14:24' } });
     await user.clear(screen.getByLabelText('第 1 条箱规件数'));
     await user.type(screen.getByLabelText('第 1 条箱规件数'), '2');
-    await user.clear(screen.getByLabelText('第 1 条箱规重量 kg'));
-    await user.type(screen.getByLabelText('第 1 条箱规重量 kg'), '5');
+    await user.clear(screen.getByLabelText('第 1 条箱规重量 KG'));
+    await user.type(screen.getByLabelText('第 1 条箱规重量 KG'), '5');
     await user.clear(screen.getByLabelText('第 1 条箱规长 cm'));
     await user.type(screen.getByLabelText('第 1 条箱规长 cm'), '40');
     await user.clear(screen.getByLabelText('第 1 条箱规宽 cm'));
@@ -100,8 +108,8 @@ describe('Warehouse flows', () => {
     await user.clear(screen.getByLabelText('第 1 条箱规高 cm'));
     await user.type(screen.getByLabelText('第 1 条箱规高 cm'), '20');
     await user.click(screen.getByRole('button', { name: '在第 1 条后新增箱规' }));
-    await user.clear(screen.getByLabelText('第 2 条箱规重量 kg'));
-    await user.type(screen.getByLabelText('第 2 条箱规重量 kg'), '7');
+    await user.clear(screen.getByLabelText('第 2 条箱规重量 KG'));
+    await user.type(screen.getByLabelText('第 2 条箱规重量 KG'), '7');
     await user.clear(screen.getByLabelText('第 2 条箱规长 cm'));
     await user.type(screen.getByLabelText('第 2 条箱规长 cm'), '50');
     await user.clear(screen.getByLabelText('第 2 条箱规宽 cm'));
@@ -114,8 +122,8 @@ describe('Warehouse flows', () => {
     await user.click(screen.getByRole('button', { name: '确认添加收货' }));
     const createdNotices = await screen.findAllByText(/已手动添加收货/);
     expect(createdNotices.some((element) => element.textContent?.includes('9409-SF-TODAY-EDITED'))).toBe(true);
-    expect(await screen.findByText('外箱潮湿')).toBeInTheDocument();
-    expect(await screen.findByText('2026-06-26 14:24:00')).toBeInTheDocument();
+    expect(await screen.findAllByText('外箱潮湿')).toHaveLength(2);
+    expect(await screen.findAllByText('2026-06-26 14:24:00')).toHaveLength(2);
     const createPackageCall = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.find(
       ([url, init]) => String(url).endsWith('/api/warehouse/packages/manual-receipt') && init?.method === 'POST'
     );
@@ -135,7 +143,7 @@ describe('Warehouse flows', () => {
     await user.click(screen.getByRole('menuitem', { name: '仓库管理' }));
     await user.click(await screen.findByRole('button', { name: '手动添加收货' }));
     await screen.findByText('9409 - Daloday');
-    await user.type(screen.getByLabelText('手动添加客户编号'), 'UNKNOWN');
+    await user.type(screen.getByRole('combobox', { name: '手动添加客户编号' }), 'UNKNOWN');
     await user.type(screen.getByLabelText('手动添加快递单号'), 'SF-UNKNOWN-001');
     await user.click(screen.getByRole('button', { name: '确认添加收货' }));
 

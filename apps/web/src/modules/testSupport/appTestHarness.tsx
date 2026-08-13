@@ -829,6 +829,17 @@ const staffAccounts: StaffAccountSummary[] = [
   { id: 'u-warehouse', username: 'warehouse', name: '仓库操作员', nickname: '刘七', departmentId: 'department-warehouse', department: '仓储部', site: '深圳思远', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T13:26:00.000Z' },
   { id: 'u-finance', username: 'finance', name: '财务专员', nickname: '李四', departmentId: 'department-finance', department: '财务部', site: '深圳思远', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z', lastLoginAt: '2026-07-02T18:23:00.000Z' }
 ];
+const firstLoginAccount: StaffAccountSummary = {
+  id: 'u-firstlogin',
+  username: 'firstlogin',
+  departmentId: 'department-system',
+  department: '系统管理部',
+  role: 'ADMIN',
+  roleLabel: '管理员组',
+  enabled: true,
+  mustChangePassword: true,
+  createdAt: '2026-06-01T00:00:00.000Z'
+};
 const auditLogs: AuditLogSummary[] = [
   {
     id: 'audit-auth-profile-admin',
@@ -1370,6 +1381,7 @@ beforeEach(() => {
     { id: 'u-warehouse', username: 'warehouse', departmentId: 'department-warehouse', department: '仓储部', role: 'UG_WAREHOUSE_RECEIVE', roleLabel: '仓库收货', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' },
     { id: 'u-finance', username: 'finance', departmentId: 'department-finance', department: '财务部', role: 'UG_FINANCE', roleLabel: '财务', enabled: true, createdAt: '2026-06-01T00:00:00.000Z' }
   );
+  firstLoginAccount.mustChangePassword = true;
   sites.splice(
     0,
     sites.length,
@@ -1663,6 +1675,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   const actorRole = () => String((init?.headers as Record<string, string> | undefined)?.Authorization ?? '').replace('Bearer ', '').replace('-token', '');
   const actorUsername = () => {
     const token = actorRole();
+    if (token.includes('FIRSTLOGIN')) return 'firstlogin';
     if (token.includes('CUSTOMER_SERVICE')) return 'service';
     if (token.includes('OPERATOR')) return 'operator';
     if (token.includes('WAREHOUSE')) return 'warehouse';
@@ -1670,7 +1683,9 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     if (token.includes('UG_MARKET')) return 'market';
     return 'admin';
   };
-  const actorAccount = () => staffAccounts.find((account) => account.username === actorUsername()) ?? staffAccounts[0];
+  const actorAccount = () => actorUsername() === 'firstlogin'
+    ? firstLoginAccount
+    : staffAccounts.find((account) => account.username === actorUsername()) ?? staffAccounts[0];
 
   if (url.endsWith('/api/navigation/unread-badges')) {
     const read = (moduleKey: string, sectionKey?: string) => navigationReadStates.has(`${actorUsername()}:${moduleKey}:${sectionKey ?? ''}`);
@@ -1725,7 +1740,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     const role = roleByUsername[body.username] ?? 'ADMIN';
     const permissions = systemRoleMatrix.roles.find((item) => item.key === role)?.permissions ?? [];
     return jsonResponse({
-      accessToken: `${role}-token`,
+      accessToken: body.username === 'firstlogin' ? 'FIRSTLOGIN-ADMIN-token' : `${role}-token`,
       user: { id: `u-${body.username}`, username: body.username, role, customerId: role === 'CUSTOMER' ? 'c-9409' : undefined, mustChangePassword: body.username === 'firstlogin' },
       permissions
     });
@@ -1824,6 +1839,7 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
   }
 
   if (url.endsWith('/api/auth/change-password')) {
+    actorAccount().mustChangePassword = false;
     return jsonResponse({ ok: true });
   }
 
