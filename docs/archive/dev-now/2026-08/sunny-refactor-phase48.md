@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 48
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase48`
 - 基线提交：`77044ee`
 - 用户验收目标：每个切片完成后重新扫描、重新排序；所有业务逻辑保持不变。
@@ -40,3 +40,5 @@
 - 架构/改造效率：当前 47 又是 `WHITELIST_CAS` 且 API `releaseId=unknown`，任何后续切片都缺少稳定 Git 回滚锚点。最高优先级转为先用 v3 冻结清单和 current-baseline cutover 恢复 Git/bundle provenance；固定样本是锁内六份运行证据逐字节相等且迁移集合/checksum 一致。
 - 新的 v3 清单：`docs/release-manifests/47/20260813-151824-whitelist-e33ce3cc5bb91e2674c7beef`，源树 manifest `8a9c26661d8cdf7527d765e79091e3489376797091c945e815b58ee8f1d70e47`。下一切片必须先提交并推送完整干净候选，再执行受限 cutover；远端有任何漂移立即停止。
 - cutover dry-run 发现根 `node_modules` 是符号链接时，原 rsync 仅排除 `node_modules/`，会把本机绝对路径符号链接同步到 47。已在任何远端写入前停止，并同时排除 `node_modules` 与 `node_modules/`、增加治理断言；修复后 dry-run 不再出现该链接。
+- 最终发布：`git-3fe515dc49d0_web-0e8727478b26_api-0f0109745a3f`。`SOURCE_MODE=GIT_SOURCE_BUILD`、`SOURCE_PROVENANCE=GIT_BUNDLE`，commit `3fe515d`，Web/API image 与 API release ID 均匹配；公网 health 200、容器正常、发布锁 free、recovery clear。
+- 本切片结论：停止继续处理 pricing 测试漂移；转向高频 `master-data` 查询的权限感知数据库下推，但必须在新分支重新做 characterization，且不得改变任何返回字段、排序、权限或数据范围。
