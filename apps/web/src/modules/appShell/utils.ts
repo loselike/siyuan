@@ -1,6 +1,7 @@
 import {
   canTransitionShipment,
   getAvailableFulfillmentActions,
+  hasPricingWorkspaceCapability,
   type FulfillmentAction,
   type Shipment,
   type StaffMenuKey
@@ -34,11 +35,11 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
       'operations:product-map:view',
       'operations:import-quality:view'
     )],
-    ['pricing', canAny('pricing:lookup:view', 'pricing:markup:read', 'pricing:price-books:read')],
+    ['pricing', hasPricingWorkspaceCapability(permissions)],
     ['business', role !== 'CUSTOMER' && canAny(
       'business:dashboard:view',
       'business:order-entry:view',
-      'business:review:list',
+      'business:review:view',
       'business:shipment:list',
       'business:order-ai:view'
     )],

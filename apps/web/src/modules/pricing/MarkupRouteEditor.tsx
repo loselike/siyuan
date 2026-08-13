@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type Key } from 'react';
 import { Alert, Button, Card, Col, Input, InputNumber, Row, Select, Space, Tabs, Tag, Typography } from 'antd';
 import { ArrowLeft, Plus, Save, Trash2 } from 'lucide-react';
-import type { AgentMarkupUnit, MarkupRouteListQuery, MarkupRouteListResponse, MarkupRoutePreviewInput, MarkupRoutePreviewResponse, MarkupRouteSummary, MarkupRouteTierInput, PriceBookRowSummary } from '@siyuan/shared';
+import { pricingMarkupCapability, type AgentMarkupUnit, type LegacyPricingModule, type MarkupRouteListQuery, type MarkupRouteListResponse, type MarkupRoutePreviewInput, type MarkupRoutePreviewResponse, type MarkupRouteSummary, type MarkupRouteTierInput, type PriceBookRowSummary } from '@siyuan/shared';
 import { ApiClient, type PermissionKey } from '../../apiClient';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedTable } from '../shared/ui';
@@ -14,6 +14,7 @@ const { Text } = Typography;
 export interface MarkupRouteEditorContext {
   priceBookId?: string;
   agentName?: string;
+  legacyModule?: LegacyPricingModule;
 }
 
 interface RouteScope extends MarkupRoutePreviewInput {
@@ -129,6 +130,7 @@ export function MarkupRouteEditor({ apiClient, permissions, onNotice, context, m
   const [selectedRouteKeys, setSelectedRouteKeys] = useState<Key[]>([]);
   const [selectedRoutes, setSelectedRoutes] = useState<RouteScope[]>([]);
   const [routeResponse, setRouteResponse] = useState<MarkupRouteListResponse>({
+    legacyModule: context?.legacyModule ?? 'amazon',
     rows: [],
     filterOptions: { destinationCountries: [], markupUnits: [] },
     pagination: { page: 1, pageSize: 10, totalItems: 0 }
@@ -139,11 +141,12 @@ export function MarkupRouteEditor({ apiClient, permissions, onNotice, context, m
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [moduleResolved, setModuleResolved] = useState(Boolean(context?.legacyModule));
   const dirty = Boolean(scope) && JSON.stringify(tiers) !== savedTierKey;
   const batchDirty = batchInitialized && JSON.stringify(batchTiers) !== batchSavedTierKey;
   useGlobalUnsavedWork('pricing-markup-route-editor', dirty || batchDirty);
-  const canEdit = !moduleEditBlocked
-    && (permissions.includes('pricing:markup-tier:update') || permissions.includes('pricing:manage'));
+  const authoritativeModule = routeResponse.legacyModule;
+  const canEdit = moduleResolved && !moduleEditBlocked && permissions.includes(pricingMarkupCapability(authoritativeModule, 'edit') as PermissionKey);
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -169,6 +172,7 @@ export function MarkupRouteEditor({ apiClient, permissions, onNotice, context, m
         });
         if (!alive) return;
         setRouteResponse(page);
+        setModuleResolved(true);
       } else if (!batchScopes.length) {
         throw new Error('缺少价格表参数，请从代理加价规则打开线路工作台');
       }

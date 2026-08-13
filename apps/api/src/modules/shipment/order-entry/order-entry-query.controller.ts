@@ -9,14 +9,14 @@ export class OrderEntryQueryController {
   constructor(@Inject(PrismaRepository) private readonly repository: PrismaRepository) {}
 
   @Get('shipments/order-entry/packages')
-  @RequirePermission('business:order-entry:warehouse-package-select')
+  @RequirePermission(['business:order-entry:warehouse-package-select', 'business:review:edit'])
   async orderEntryPackages(@Req() request: { user: Principal }, @Query() query: OrderEntryWarehousePackageQuery) {
     this.ensureOrderEntryScope(request.user);
     return this.repository.getOrderEntryWarehousePackages(request.user, query);
   }
 
   @Get('shipments/:id/order-entry')
-  @RequirePermission('business:order-entry:view')
+  @RequirePermission(['business:order-entry:view', 'business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-entry:draft-edit', 'business:review:edit'])
   async orderEntryDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
     this.ensureOrderEntryScope(request.user);
     return this.repository.getOrderEntryDetail(request.user, id);

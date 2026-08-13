@@ -2,7 +2,7 @@ import type { ChangeEvent, Key } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, AutoComplete, Button, Card, Col, Collapse, Dropdown, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Spin, Tag, Tooltip, Typography } from 'antd';
 import { AlertTriangle, CheckCircle2, Copy, Download, Eye, FileInput, MoreHorizontal, PackageCheck, Power, RefreshCw, Search, Settings, SlidersHorizontal, Trash2 } from 'lucide-react';
-import { normalizeCanadaAmazonWarehouseCode, normalizeUsPostalCode, type AgentMarkupListQuery, type AgentMarkupListResponse, type AgentMarkupMetrics, type AgentMarkupSummary, type AgentMarkupType, type AgentMarkupUnit, type AgentSummary, type DubaiPriceDisplayPageSummary, type DubaiPriceDisplayResponse, type DubaiPriceDisplayVersionSummary, type LegacyPricingMetaResponse, type LegacyPricingModule, type LegacyPricingQuoteResponse, type LegacyPricingRecommendation, type MasterDataSnapshot, type PriceBookImportJobSummary, type PriceBookImportTargetModule, type PriceBookSummary, type PriceLookupRecommendation, type PriceLookupResponse, type PricingRuleRefreshProgressResponse, type PricingSyncHealthResponse, type PricingSyncHealthRow, type SouthAfricaLookupResponse, type SouthAfricaRateRuleInput, type SouthAfricaRateRuleSummary, type StaffRoleKey } from '@siyuan/shared';
+import { hasEffectivePricingCapability, normalizeCanadaAmazonWarehouseCode, normalizeUsPostalCode, pricingMarkupCapability, type AgentMarkupListQuery, type AgentMarkupListResponse, type AgentMarkupMetrics, type AgentMarkupSummary, type AgentMarkupType, type AgentMarkupUnit, type AgentSummary, type DubaiPriceDisplayPageSummary, type DubaiPriceDisplayResponse, type DubaiPriceDisplayVersionSummary, type LegacyPricingMetaResponse, type LegacyPricingModule, type LegacyPricingQuoteResponse, type LegacyPricingRecommendation, type MasterDataSnapshot, type PriceBookImportJobSummary, type PriceBookImportTargetModule, type PriceBookSummary, type PriceLookupRecommendation, type PriceLookupResponse, type PricingRuleRefreshProgressResponse, type PricingSyncHealthResponse, type PricingSyncHealthRow, type SouthAfricaLookupResponse, type SouthAfricaRateRuleInput, type SouthAfricaRateRuleSummary, type StaffRoleKey } from '@siyuan/shared';
 import { ApiClient, isAdministratorRole, type PermissionKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
 import { formatBeijingDate, formatBeijingDateTime, formatCurrency } from '../shared/format';
@@ -70,28 +70,18 @@ export {
 
 const { Title, Text } = Typography;
 
-export function pricingModuleBlockPermissionCode(scope: 'lookup' | 'markup', module: LegacyPricingModule): PermissionKey {
-  return `pricing:${scope}:module-block:${module}` as PermissionKey;
-}
-
-export function pricingMarkupModuleBlockPermissionCode(mode: 'view' | 'edit', module: LegacyPricingModule): PermissionKey {
-  return `pricing:markup:${mode}-block:${module}` as PermissionKey;
-}
-
-export function pricingPriceBookBlockPermissionCode(mode: 'create' | 'delete' | 'remark', module: LegacyPricingModule): PermissionKey {
-  return `pricing:price-books:${mode}-block:${module}` as PermissionKey;
+export function pricingMarkupPermissionCode(module: LegacyPricingModule, action: import('@siyuan/shared').PricingMarkupAction): PermissionKey {
+  return pricingMarkupCapability(module, action) as PermissionKey;
 }
 
 export function isPricingPriceBookOperationBlocked(permissions: PermissionKey[], module: LegacyPricingModule, mode: 'create' | 'delete' | 'remark', role: StaffRoleKey): boolean {
-  if (isAdministratorRole(role)) return false;
-  return new Set(permissions).has(pricingPriceBookBlockPermissionCode(mode, module));
+  void permissions; void module; void mode; void role;
+  return false;
 }
 
-export function isPricingMarkupModuleBlocked(permissions: PermissionKey[], module: LegacyPricingModule, mode: 'view' | 'edit', role: StaffRoleKey): boolean {
+export function isPricingMarkupModuleBlocked(permissions: PermissionKey[], module: LegacyPricingModule, action: import('@siyuan/shared').PricingMarkupAction, role: StaffRoleKey): boolean {
   if (isAdministratorRole(role)) return false;
-  const granted = new Set(permissions);
-  return granted.has(pricingModuleBlockPermissionCode('markup', module))
-    || granted.has(pricingMarkupModuleBlockPermissionCode(mode, module));
+  return !hasEffectivePricingCapability(permissions, pricingMarkupPermissionCode(module, action));
 }
 
 export function filterPricingModulesByPermissions(
@@ -104,8 +94,7 @@ export function filterPricingModulesByPermissions(
   const granted = new Set(permissions);
   return modules.filter((module) => scope === 'markup'
     ? !isPricingMarkupModuleBlocked(permissions, module.key, 'view', role)
-    : granted.has(lookupPermissionByModule[module.key])
-      && !granted.has(pricingModuleBlockPermissionCode(scope, module.key)));
+    : granted.has(lookupPermissionByModule[module.key]));
 }
 
 interface AgentMarkupFormValues {
@@ -478,7 +467,7 @@ export function PricingPage({
   );
   const getMarkupRowSheetName = (row: ImportedPriceRow) => row.sourceSheetName?.trim() || row.channelName?.trim() || '未标记工作表';
   const permissionSet = useMemo(() => new Set(permissions), [permissions]);
-  const can = useCallback((permission: PermissionKey) => isAdministratorRole(role) || permissionSet.has(permission), [permissionSet, role]);
+  const can = useCallback((permission: PermissionKey) => isAdministratorRole(role) || hasEffectivePricingCapability(permissions, permission) || permissionSet.has(permission), [permissionSet, permissions, role]);
   const availableLookupModules = useMemo(
     () => filterPricingModulesByPermissions(legacyPricingModules, permissions, 'lookup', role),
     [permissions, role]
@@ -487,20 +476,21 @@ export function PricingPage({
     () => filterPricingModulesByPermissions(legacyPricingModules, permissions, 'markup', role),
     [permissions, role]
   );
-  const canViewMarkupDetails = can('pricing:markup:read');
-  const canViewTierMarkup = can('pricing:markup-tier:read');
-  const markupEditBlocked = isPricingMarkupModuleBlocked(permissions, markupModule, 'edit', role);
-  const canViewMarkupWorkspace = canViewMarkupDetails || canViewTierMarkup;
-  const canViewPriceBooks = can('pricing:price-books:read') && can('pricing:price-books:list-view');
-  const canViewPriceBookRows = can('pricing:price-books:rows-view');
-  const priceBookCreateBlocked = priceBookManagementModule !== 'unclassified'
-    && isPricingPriceBookOperationBlocked(permissions, priceBookManagementModule, 'create', role);
-  const priceBookDeleteBlocked = priceBookManagementModule !== 'unclassified'
-    && isPricingPriceBookOperationBlocked(permissions, priceBookManagementModule, 'delete', role);
-  const priceBookRemarkBlocked = priceBookManagementModule !== 'unclassified'
-    && isPricingPriceBookOperationBlocked(permissions, priceBookManagementModule, 'remark', role);
+  const canViewMarkupDetails = legacyPricingModules.some((item) => can(pricingMarkupPermissionCode(item.key, 'view')));
+  const canViewTierMarkup = can(pricingMarkupPermissionCode(markupModule, 'view'));
+  const canViewMarkupWorkspace = canViewMarkupDetails && availableMarkupModules.length > 0;
+  const canEditMarkup = can(pricingMarkupPermissionCode(markupModule, 'edit'));
+  const canCreateMarkup = canEditMarkup;
+  const canUpdateMarkup = canEditMarkup;
+  const canImportMarkup = canEditMarkup;
+  const canExportMarkup = canEditMarkup;
+  const canChangeMarkupStatus = canEditMarkup;
+  const canDeleteMarkup = canEditMarkup;
+  const canMaintainMarkupTier = canEditMarkup;
+  const canViewPriceBooks = can('pricing:price-books:view');
+  const canViewPriceBookRows = canViewPriceBooks;
   const priceBookManagementRowSelection = useMemo(() => {
-    if (!canViewPriceBookRows && !can('pricing:price-books:remark-update') && !can('pricing:price-books:delete')) {
+    if (!canViewPriceBookRows && !can('pricing:price-books:update') && !can('pricing:price-books:delete')) {
       return undefined;
     }
     return {
@@ -508,16 +498,17 @@ export function PricingPage({
       onChange: (keys: Key[]) => setSelectedPriceBookIds(keys.map(String))
     };
   }, [can, canViewPriceBookRows, selectedPriceBookIds]);
-  const canViewCost = can('pricing:lookup:cost-view');
-  const canViewGrossProfit = can('pricing:lookup:gross-profit-view');
-  const canViewMarkupBreakdown = can('pricing:lookup:markup-breakdown-view');
-  const canViewPostalRule = can('pricing:lookup:postal-rule-view');
-  const canViewRequirements = can('pricing:lookup:requirement-detail-view');
-  const canCopyQuote = can('pricing:lookup:copy-quote');
-  const canViewDubaiImages = can('pricing:lookup:dubai-image-view') || can('pricing:dubai-display:active-view');
-  const canReadSouthAfricaRules = can('pricing:south-africa:rules-read');
-  const canViewSouthAfricaQuoteTable = can('pricing:lookup:south-africa-table-view') && canReadSouthAfricaRules;
-  const canViewSouthAfricaCostMarkup = can('pricing:south-africa:cost-markup-view');
+  const canViewCurrentLookupModule = can(lookupPermissionByModule[legacyModule]);
+  const canViewCost = canViewCurrentLookupModule;
+  const canViewGrossProfit = canViewCurrentLookupModule;
+  const canViewMarkupBreakdown = canViewCurrentLookupModule;
+  const canViewPostalRule = canViewCurrentLookupModule;
+  const canViewRequirements = canViewCurrentLookupModule;
+  const canCopyQuote = canViewCurrentLookupModule;
+  const canViewDubaiImages = can('pricing:lookup:dubai-air-sea');
+  const canReadSouthAfricaRules = can('pricing:lookup:south-africa');
+  const canViewSouthAfricaQuoteTable = canReadSouthAfricaRules;
+  const canViewSouthAfricaCostMarkup = can('pricing:markup:southAfrica:view');
   const southAfricaQuoteTableRows = useMemo(() => buildSouthAfricaQuoteTableRows(southAfricaRules), [southAfricaRules]);
   const amazonTierLabels = useMemo(() => buildAmazonTierLabels(), []);
   const pricingSubItems = useMemo(
@@ -673,7 +664,7 @@ export function PricingPage({
 
   useEffect(() => {
     let alive = true;
-    if (activePricingSection === 'lookup' && can('pricing:lookup:meta-view')) {
+    if (activePricingSection === 'lookup' && availableLookupModules.length > 0) {
       apiClient.priceBookQuery.legacyPricingMeta()
         .then((meta) => {
           if (!alive) return;
@@ -695,7 +686,7 @@ export function PricingPage({
     return () => {
       alive = false;
     };
-  }, [activePricingSection, apiClient, can, canReadSouthAfricaRules, priceBookManagementModule]);
+  }, [activePricingSection, apiClient, availableLookupModules.length, canReadSouthAfricaRules, priceBookManagementModule]);
 
   useEffect(() => {
     try {
@@ -792,7 +783,7 @@ export function PricingPage({
   }, [apiClient, selectedDubaiDisplayVersion]);
 
   useEffect(() => {
-    if (!can('pricing:dubai-display:versions-view') || activePricingSection !== 'priceBooks' || priceBookManagementModule !== 'dubaiAirSea') return;
+    if (!can('pricing:price-books:view') || activePricingSection !== 'priceBooks' || priceBookManagementModule !== 'dubaiAirSea') return;
     let alive = true;
     apiClient.priceBookQuery.dubaiPriceDisplayVersions()
       .then((response) => { if (alive) setDubaiDisplayVersions(response.versions); })
@@ -883,7 +874,7 @@ export function PricingPage({
   }, [activePricingSection, apiClient, canViewPriceBooks, priceBookManagementModule, priceBookManagementReloadVersion]);
 
   useEffect(() => {
-    if (!can('pricing:price-books:sync-health-view') || activePricingSection !== 'priceBooks') return;
+    if (!can('pricing:price-books:health') || activePricingSection !== 'priceBooks') return;
     let alive = true;
     let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
     const load = () => apiClient.priceBookQuery.priceBookRuleRefreshProgress()
@@ -1130,20 +1121,20 @@ export function PricingPage({
             },
             { title: '备注', dataIndex: 'remark', width: 280, render: (value?: string) => <Text className="pricing-south-africa-quote-remark">{value || '-'}</Text> },
             { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> },
-            ...(can('pricing:south-africa:rules-update') || can('pricing:south-africa:rules-enable') || can('pricing:south-africa:rules-delete') ? [{
+            ...(can('pricing:markup:southAfrica:edit') ? [{
               title: '操作',
               key: 'action',
               width: 210,
               fixed: 'right' as const,
               render: (_: unknown, rule: SouthAfricaRateRuleSummary) => (
                 <Space size={4}>
-                  {can('pricing:south-africa:rules-update') ? <Button htmlType="button" size="small" onClick={() => openEditSouthAfricaRateRule(rule)}>修改</Button> : null}
-                  {can('pricing:south-africa:rules-enable') ? (
+                  {can('pricing:markup:southAfrica:edit') ? <Button htmlType="button" size="small" onClick={() => openEditSouthAfricaRateRule(rule)}>修改</Button> : null}
+                  {can('pricing:markup:southAfrica:edit') ? (
                     rule.enabled ? <Popconfirm title="确认停用该南非物料规则？" description="停用后该规则不会参与自动查价。" okText="确认停用" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void setSouthAfricaRateRuleEnabled(rule, false)}>
                       <Button htmlType="button" size="small">停用</Button>
                     </Popconfirm> : <Button htmlType="button" size="small" onClick={() => void setSouthAfricaRateRuleEnabled(rule, true)}>启用</Button>
                   ) : null}
-                  {can('pricing:south-africa:rules-delete') ? <Popconfirm title="确认删除该南非物料规则？" description="删除后无法恢复，且后续查价将不再匹配该规则。" okText="确认删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void deleteSouthAfricaRateRule(rule)}>
+                  {can('pricing:markup:southAfrica:edit') ? <Popconfirm title="确认删除该南非物料规则？" description="删除后无法恢复，且后续查价将不再匹配该规则。" okText="确认删除" cancelText="取消" okButtonProps={{ danger: true }} onConfirm={() => void deleteSouthAfricaRateRule(rule)}>
                     <Button htmlType="button" size="small" danger>删除</Button>
                   </Popconfirm> : null}
                 </Space>
@@ -1252,7 +1243,7 @@ export function PricingPage({
       onNotice('当前规则未关联有效价格表，无法打开线路阶梯工作台');
       return;
     }
-    setMarkupRouteEditorContext({ priceBookId: rule.priceBookId, agentName: rule.agentName });
+    setMarkupRouteEditorContext({ priceBookId: rule.priceBookId, agentName: rule.agentName, legacyModule: markupModule });
     setMarkupRouteEditorOpen(true);
   }
 
@@ -1309,7 +1300,7 @@ export function PricingPage({
           { key: 'markupValue', title: '加价', dataIndex: 'markupValue', width: 125, sorter: true, sortOrder: expandedMarkupRulesSort.sortBy === 'markupValue' ? (expandedMarkupRulesSort.sortOrder === 'asc' ? 'ascend' : 'descend') : null, render: (_, rule) => <Text className="pricing-markup-rule-value">+{formatCurrency(Number(rule.markupValue ?? rule.markupPerKg ?? 0))}{rule.markupType === 'WEIGHT' || !rule.markupType ? `/${rule.markupUnit ?? 'KG'}` : ''}</Text> },
           { key: 'hits', title: '覆盖线路 / 成本行', width: 155, render: (_, rule) => isSystemDefaultMarkupRule(rule) ? <Text type="secondary">动态兜底</Text> : <span><Text strong className="pricing-markup-hit-count">{rule.routeHitCount ?? 0} 条</Text> / {rule.hitCount ?? 0} 行</span> },
           { key: 'enabled', title: '状态', dataIndex: 'enabled', width: 82, sorter: true, sortOrder: expandedMarkupRulesSort.sortBy === 'enabled' ? (expandedMarkupRulesSort.sortOrder === 'asc' ? 'ascend' : 'descend') : null, render: (enabled: boolean, rule) => <Tag color={enabled ? 'green' : 'default'}>{isGeneratedDefaultMarkupRule(rule) ? '生效' : enabled ? '启用' : '停用'}</Tag> },
-          { key: 'action', title: '操作', width: 96, fixed: 'right', render: (_, rule) => !markupEditBlocked && can('pricing:markup:update') ? <Button type="link" size="small" onClick={() => { if (isGeneratedDefaultMarkupRule(rule)) void resolveConcreteMarkupRule(group).then(openEditSpecificMarkupRule).catch((error) => onNotice(error instanceof Error ? error.message : '加价规则加载失败')); else openEditSpecificMarkupRule(rule); }}>{isSystemDefaultMarkupRule(rule) ? '设置默认' : isGeneratedDefaultMarkupRule(rule) ? '调整默认' : '编辑'}</Button> : <Text type="secondary">只读</Text> }
+          { key: 'action', title: '操作', width: 96, fixed: 'right', render: (_, rule) => canUpdateMarkup ? <Button type="link" size="small" onClick={() => { if (isGeneratedDefaultMarkupRule(rule)) void resolveConcreteMarkupRule(group).then(openEditSpecificMarkupRule).catch((error) => onNotice(error instanceof Error ? error.message : '加价规则加载失败')); else openEditSpecificMarkupRule(rule); }}>{isSystemDefaultMarkupRule(rule) ? '设置默认' : isGeneratedDefaultMarkupRule(rule) ? '调整默认' : '编辑'}</Button> : <Text type="secondary">只读</Text> }
         ]}
       />
     </div>;
@@ -2823,8 +2814,7 @@ export function PricingPage({
                 title: '操作',
                 width: 90,
                 fixed: 'right',
-                render: (_value: unknown, record) => ['FAILED', 'PARTIAL_FAILED'].includes(record.status) && can('pricing:price-books:upload')
-                  && (!record.targetModule || !isPricingPriceBookOperationBlocked(permissions, record.targetModule, 'create', role))
+                render: (_value: unknown, record) => ['FAILED', 'PARTIAL_FAILED'].includes(record.status) && can('pricing:price-books:import')
                   ? <Button htmlType="button" type="link" size="small" onClick={() => void retryPriceBookImport(record)}>重试</Button>
                   : <Text type="secondary">—</Text>
               }
@@ -2884,11 +2874,11 @@ export function PricingPage({
                 extra={
                   <Space wrap>
                     <Button htmlType="button" size="small" type="primary" icon={<Search size={14} />} onClick={() => setActivePricingSection('lookup')}>查询报价</Button>
-                    {markupModule !== 'dubaiAirSea' && !markupEditBlocked && can('pricing:markup:import') ? <Button htmlType="button" size="small" icon={<FileInput size={14} />} onClick={() => onNotice('请使用规则模板上传入口导入')}>导入规则</Button> : null}
-                    {markupModule !== 'dubaiAirSea' && can('pricing:markup:export') ? <Button htmlType="button" size="small" icon={<Download size={14} />} onClick={exportMarkupRules}>导出规则</Button> : null}
-                    {markupModule !== 'dubaiAirSea' && !markupEditBlocked && can('pricing:markup:default-create') ? <Button htmlType="button" size="small" onClick={openCreateMarkupRule}>新增默认加价</Button> : null}
-                    {(markupModule === 'dubaiAirSea' ? !markupEditBlocked && can('pricing:dubai-display:markup-update') : !markupEditBlocked && can('pricing:markup:update')) ? <Button htmlType="button" size="small" disabled={selectedVisibleMarkupRuleIds.length !== 1 || selectedMarkupRuleIsPriceBookGroup || markupBatchLoading} onClick={openEditMarkupRule}>修改</Button> : null}
-                    {markupModule !== 'dubaiAirSea' && can('pricing:markup:line-detail-view') && canViewPriceBookRows ? <Button
+                    {markupModule !== 'dubaiAirSea' && canImportMarkup ? <Button htmlType="button" size="small" icon={<FileInput size={14} />} onClick={() => onNotice('请使用规则模板上传入口导入')}>导入规则</Button> : null}
+                    {markupModule !== 'dubaiAirSea' && canExportMarkup ? <Button htmlType="button" size="small" icon={<Download size={14} />} onClick={exportMarkupRules}>导出规则</Button> : null}
+                    {markupModule !== 'dubaiAirSea' && canCreateMarkup ? <Button htmlType="button" size="small" onClick={openCreateMarkupRule}>新增默认加价</Button> : null}
+                    {canUpdateMarkup ? <Button htmlType="button" size="small" disabled={selectedVisibleMarkupRuleIds.length !== 1 || selectedMarkupRuleIsPriceBookGroup || markupBatchLoading} onClick={openEditMarkupRule}>修改</Button> : null}
+                    {markupModule !== 'dubaiAirSea' && canViewPriceBookRows ? <Button
                       htmlType="button"
                       size="small"
                       disabled={selectedVisibleMarkupRuleIds.length !== 1}
@@ -2897,7 +2887,7 @@ export function PricingPage({
                     >
                       查看线路
                     </Button> : null}
-                    {markupModule !== 'dubaiAirSea' && !markupEditBlocked && can('pricing:markup:enable') ? <Popconfirm
+                    {markupModule !== 'dubaiAirSea' && canChangeMarkupStatus ? <Popconfirm
                       title="确认停用该加价规则？"
                       description="停用后业务员报价不会再使用该规则，历史记录仍保留。"
                       okText="确认停用"
@@ -2908,7 +2898,7 @@ export function PricingPage({
                     >
                       <Button htmlType="button" size="small" icon={<Power size={14} />} loading={markupBatchLoading} disabled={selectedVisibleMarkupRuleIds.length !== 1 || selectedMarkupRuleIsPriceBookGroup || selectedMarkupRule?.enabled === false}>停用</Button>
                     </Popconfirm> : null}
-                    {markupModule !== 'dubaiAirSea' && !markupEditBlocked && can('pricing:markup:delete') ? <Popconfirm
+                    {markupModule !== 'dubaiAirSea' && canDeleteMarkup ? <Popconfirm
                       title={`确认删除 ${selectedVisibleMarkupRuleIds.length} 条加价规则？`}
                       description="删除后不可恢复；历史报价保留当时的金额快照。"
                       okText="确认删除"
@@ -2975,7 +2965,7 @@ export function PricingPage({
                     title: '操作',
                     width: 120,
                     fixed: 'right',
-                    render: (_, rule) => !markupEditBlocked && can('pricing:dubai-display:markup-update') ? (
+                    render: (_, rule) => canUpdateMarkup ? (
                       <Button htmlType="button" size="small" onClick={(event) => { event.stopPropagation(); openDubaiSeaMarkupRuleEditor(rule); }}>调整加价</Button>
                     ) : <Text type="secondary">只读</Text>
                   }
@@ -3005,14 +2995,13 @@ export function PricingPage({
                         >
                           查看线路
                         </Button>
-                        <Dropdown
+                        {canUpdateMarkup || canChangeMarkupStatus || canDeleteMarkup ? <Dropdown
                           trigger={['click']}
                           menu={{
                             items: [
-                              { key: 'edit', label: '编辑', disabled: markupEditBlocked || rule.isPriceBookGroup || markupBatchLoading },
-                              { key: 'toggle', label: rule.enabled ? '停用' : '启用', disabled: markupEditBlocked || rule.isPriceBookGroup || markupBatchLoading },
-                              { type: 'divider' },
-                              { key: 'delete', label: '删除', danger: true, disabled: markupEditBlocked || rule.isPriceBookGroup || markupBatchLoading }
+                              ...(canUpdateMarkup ? [{ key: 'edit', label: '编辑', disabled: rule.isPriceBookGroup || markupBatchLoading }] : []),
+                              ...(canChangeMarkupStatus ? [{ key: 'toggle', label: rule.enabled ? '停用' : '启用', disabled: rule.isPriceBookGroup || markupBatchLoading }] : []),
+                              ...(canDeleteMarkup ? [{ type: 'divider' as const }, { key: 'delete', label: '删除', danger: true, disabled: rule.isPriceBookGroup || markupBatchLoading }] : [])
                             ],
                             onClick: ({ key, domEvent }) => {
                               domEvent.stopPropagation();
@@ -3028,7 +3017,7 @@ export function PricingPage({
                           >
                             更多 <MoreHorizontal size={14} aria-hidden />
                           </Button>
-                        </Dropdown>
+                        </Dropdown> : null}
                       </Space>
                     )
                   }
@@ -3049,15 +3038,11 @@ export function PricingPage({
               priceBookManagementModule === 'southAfrica' ? (
                 <Space>
                   <Tag color="blue">南非专线查询</Tag>
-                  {canViewSouthAfricaCostMarkup && can('pricing:south-africa:rules-create') ? <Button htmlType="button" type="primary" size="small" onClick={openCreateSouthAfricaRateRule}>新增物料规则</Button> : null}
+                  {canViewSouthAfricaCostMarkup && can('pricing:markup:southAfrica:edit') ? <Button htmlType="button" type="primary" size="small" onClick={openCreateSouthAfricaRateRule}>新增物料规则</Button> : null}
                 </Space>
               ) : <PriceBookManagementToolbar
                 module={priceBookManagementModule}
                 can={can}
-                canViewRows={canViewPriceBookRows}
-                createBlocked={priceBookCreateBlocked}
-                deleteBlocked={priceBookDeleteBlocked}
-                remarkBlocked={priceBookRemarkBlocked}
                 importAgentId={priceBookImportAgentId}
                 importAgentOptions={enabledAgentOptions}
                 importing={priceBookImporting}
@@ -3137,7 +3122,7 @@ export function PricingPage({
               scroll={{ x: 1640 }}
               columns={priceBookManagementColumns}
             />
-            {priceBookManagementModule === 'dubaiAirSea' && can('pricing:dubai-display:versions-view') ? (
+            {priceBookManagementModule === 'dubaiAirSea' && can('pricing:price-books:view') ? (
               <div className="pricing-dubai-display-admin">
                 <div className="pricing-section-title-row">
                   <div>
@@ -3164,7 +3149,7 @@ export function PricingPage({
                     { title: '原文件', dataIndex: 'originalName', width: 260 },
                     { title: '转换状态', dataIndex: 'status', width: 120, render: (value: string) => <Tag color={value === 'READY' ? 'green' : value === 'FAILED' ? 'red' : 'blue'}>{value === 'READY' ? '已完成' : value === 'FAILED' ? '失败' : '转换中'}</Tag> },
                     { title: '页面', width: 160, render: (_value, record) => `空运 ${record.pages.filter((page) => page.mode === 'AIR').length} 页 / 海运 ${record.pages.filter((page) => page.mode === 'SEA').length} 页` },
-                    ...(can('pricing:dubai-display:markup-view') ? [{
+                    ...(can('pricing:markup:dubaiAirSea:view') ? [{
                       title: '海运价格规则',
                       width: 190,
                       render: (_value: unknown, record: DubaiPriceDisplayVersionSummary) => record.pages.some((page) => page.mode === 'SEA') ? (
@@ -3190,17 +3175,17 @@ export function PricingPage({
                       title: '操作', width: 220, fixed: 'right',
                       render: (_value, record) => (
                         <Space size={4} wrap>
-                          {record.status === 'READY' && record.isActiveSea && can('pricing:dubai-display:markup-update') ? (
+                          {record.status === 'READY' && record.isActiveSea && can('pricing:markup:dubaiAirSea:edit') ? (
                             <Button htmlType="button" size="small" onClick={() => openDubaiSeaMarkupEditor(record)}>调整海运价格</Button>
                           ) : null}
-                          {record.status === 'FAILED' && can('pricing:dubai-display:retry') ? (
+                          {record.status === 'FAILED' && can('pricing:price-books:update') ? (
                             <Button htmlType="button" size="small" onClick={() => {
                           void apiClient.retryDubaiPriceDisplayVersion(record.id)
                             .then((response) => { setDubaiDisplayVersions(response.versions); onNotice('迪拜价格表图片已重新生成'); })
                             .catch((error) => onNotice(error instanceof Error ? error.message : '重新生成图片失败'));
                             }}>重新生成图片</Button>
                           ) : null}
-                          {record.status === 'READY' && !record.isActiveAir && !record.isActiveSea && can('pricing:dubai-display:activate') ? (
+                          {record.status === 'READY' && !record.isActiveAir && !record.isActiveSea && can('pricing:price-books:update') ? (
                             <Popconfirm
                           title="设为当前展示版本"
                           description="将用此版本替换它包含的空运或海运图片展示。"
@@ -3213,7 +3198,7 @@ export function PricingPage({
                               <Button htmlType="button" size="small">设为当前展示</Button>
                             </Popconfirm>
                           ) : null}
-                          {record.status === 'READY' && (record.isActiveAir || record.isActiveSea) && !(record.isActiveSea && can('pricing:dubai-display:markup-update')) ? <Text type="secondary">当前版本</Text> : null}
+                          {record.status === 'READY' && (record.isActiveAir || record.isActiveSea) && !(record.isActiveSea && can('pricing:markup:dubaiAirSea:edit')) ? <Text type="secondary">当前版本</Text> : null}
                         </Space>
                       )
                     }
@@ -3565,7 +3550,7 @@ export function PricingPage({
           permissions={permissions}
           onNotice={onNotice}
           context={markupRouteEditorContext}
-          moduleEditBlocked={markupEditBlocked}
+          moduleEditBlocked={!canMaintainMarkupTier}
           embedded
           onClose={() => {
             setMarkupRouteEditorOpen(false);

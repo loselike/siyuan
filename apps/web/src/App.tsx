@@ -167,7 +167,6 @@ import {
   createWorkspaceRefreshCoordinator,
   refreshWorkspaceData
 } from './modules/appShell/workspaceRefresh';
-import { shouldRequestGlobalWorkspaceRefresh } from './modules/appShell/workspaceRefreshPolicy';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
@@ -420,9 +419,10 @@ export function App() {
     setSidebarSubNav
   });
   const canViewShipmentFinanceDetail = [
+    'business:review:view',
     'business:shipment:finance-detail-view',
-    'business:order-entry:business-cost-view',
-    'business:order-entry:business-cost-write',
+    'business:order-entry:business-cost',
+    'business:order-entry:payable-fee',
     'business:shipment:payable-view',
     'business:shipment:profit-view',
     'business:order-fee:profit-view',
@@ -484,15 +484,16 @@ export function App() {
 
   useEffect(() => {
     if (!session || session.user.mustChangePassword) return;
+    let lastRefreshAt = Date.now();
     const refreshStaleData = () => {
       if (
         document.visibilityState !== 'visible'
-        || !shouldRequestGlobalWorkspaceRefresh({ menuKey: currentMenuKey })
-        || Date.now() - lastGlobalWorkspaceRefreshAtRef.current < 5 * 60 * 1000
+        || Date.now() - lastRefreshAt < 5 * 60 * 1000
         || hasBlockingWork()
         || hasGlobalUnsavedWork()
       ) return;
-      lastGlobalWorkspaceRefreshAtRef.current = Date.now();
+      lastRefreshAt = Date.now();
+      lastGlobalWorkspaceRefreshAtRef.current = lastRefreshAt;
       setDataRefreshVersion((current) => current + 1);
     };
     const intervalId = window.setInterval(refreshStaleData, 60_000);
@@ -503,7 +504,7 @@ export function App() {
       window.removeEventListener('focus', refreshStaleData);
       document.removeEventListener('visibilitychange', refreshStaleData);
     };
-  }, [currentMenuKey, hasBlockingWork, session]);
+  }, [hasBlockingWork, session]);
 
   useEffect(() => {
     if (!session || session.user.role === 'CUSTOMER') {
@@ -1393,7 +1394,7 @@ export function App() {
                     </Button>
                   )
                 )}
-                {record.status === 'WAITING_SORT' && (session?.user.role === 'ADMIN' || session?.permissions.includes('business:review:reverse') || session?.permissions.includes('market:pending-routing:update')) ? (
+                {record.status === 'WAITING_SORT' && (session?.user.role === 'ADMIN' || session?.permissions.includes('business:review:edit') || session?.permissions.includes('market:pending-routing:update')) ? (
                   <Popconfirm title="确认反审核该运单？" description="订单将回到待审核运单，待排货草稿会一并解除。" okText="反审核" cancelText="取消" onConfirm={() => void handleReverseShipmentReview(record)}>
                     <Button size="small" danger>反审核</Button>
                   </Popconfirm>
@@ -2148,9 +2149,7 @@ export function App() {
 
   const renderShipmentDetailContent = (shipment: Shipment) => {
     const transferNo = getDetailText(shipment.transferNo, '待获取快递号');
-    const canViewShipmentSensitiveFields = showFulfillmentAgentDetails
-      || canViewShipmentFinanceDetail
-      || Boolean(session?.permissions.includes('business:review:finance-detail-view'));
+    const canViewShipmentSensitiveFields = showFulfillmentAgentDetails || canViewShipmentFinanceDetail;
     const agentName = getDetailText(shipment.agentName, '未指定代理');
     const receivableCurrency = getShipmentReceivableCurrencyLabel(shipment);
     const receivableAmount = getShipmentReceivableAmountLabel(shipment);

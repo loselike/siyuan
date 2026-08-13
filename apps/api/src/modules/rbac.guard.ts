@@ -2,7 +2,8 @@ import { CanActivate, ExecutionContext, Injectable, UnauthorizedException, Forbi
 import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
 import { PrismaRepository } from './prisma.repository.js';
-import { REQUIRED_AUTH, REQUIRED_PERMISSION } from './require-permission.decorator.js';
+import { REQUIRED_AUTH, REQUIRED_PERMISSION, REQUIRED_PERMISSION_MODE } from './require-permission.decorator.js';
+import { hasEffectivePricingCapability } from '@siyuan/shared';
 import { type PermissionKey, type Principal } from './rbac.js';
 
 @Injectable()
@@ -21,6 +22,9 @@ export class RbacGuard implements CanActivate {
       context.getHandler(),
       context.getClass()
     ]);
+    const permissionMode = this.reflector.getAllAndOverride<'any' | 'all' | undefined>(REQUIRED_PERMISSION_MODE, [
+      context.getHandler(), context.getClass()
+    ]) ?? 'any';
 
     if (!permission && !authRequired) {
       return true;
@@ -47,7 +51,10 @@ export class RbacGuard implements CanActivate {
       }
 
       const permissions = Array.isArray(permission) ? permission : [permission];
-      if (!permissions.some((item) => effectivePermissions.includes(item))) {
+      const granted = permissionMode === 'all'
+        ? permissions.every((item) => hasEffectivePricingCapability(effectivePermissions, item) || effectivePermissions.includes(item))
+        : permissions.some((item) => hasEffectivePricingCapability(effectivePermissions, item) || effectivePermissions.includes(item));
+      if (!granted) {
         await (this.repository as any).recordPermissionDenied?.(principal, {
           permissions,
           method: request.method,

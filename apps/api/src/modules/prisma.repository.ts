@@ -412,6 +412,7 @@ import {
   type WarehouseTallyTaskUpdateInput,
   type WarehouseTodayQuery,
   type WarehouseTodayResponse,
+  hasEffectivePricingCapability,
   type WaterReceiptCreateInput,
   type ReceivableWaterReceiptCandidatesResponse,
   type WaterReceiptExportRequest,
@@ -486,6 +487,7 @@ import {
 import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
 import {
   allPermissions,
+  allRuntimePermissions,
   buildRolePermissionRow,
   defaultPermissionsForRole,
   effectivePermissionsForRole,
@@ -512,6 +514,7 @@ import {
   type PermissionWorkspaceKey,
   type WorkspaceFieldMaskKey
 } from './rbac.js';
+import { pricingMarkupActionPermission, pricingMarkupModules, pricingMarkupViewPermission } from './pricing-markup-permissions.js';
 import { customerServiceProblemPermissionsForStatus } from './problem-ticket-permissions.js';
 import {
   buildShipmentStageDwell,
@@ -1534,7 +1537,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const visible = new Set<string>();
     if (await this.hasPermission(principal.role, 'operations:line-shipment:view')) visible.add('workspace');
     if (await this.hasAnyPermission(principal.role, warehouseNavigationViewPermissions)) visible.add('receive');
-    if (await this.hasAnyPermission(principal.role, ['business:dashboard:view', 'business:order-entry:view', 'business:review:list', 'business:shipment:list', 'business:order-ai:view'])) visible.add('business');
+    if (await this.hasAnyPermission(principal.role, ['business:dashboard:view', 'business:order-entry:view', 'business:review:view', 'business:shipment:list', 'business:order-ai:view'])) visible.add('business');
     if (await this.hasAnyPermission(principal.role, ['market:dashboard:view', 'market:pending-routing:view', 'market:routed:view', 'market:weekly-routing:view'])) visible.add('market');
     if (await this.hasAnyPermission(principal.role, ['customer-service:dashboard:view', 'customer-service:data-confirm:view', 'customer-service:transfer:view', 'customer-service:pending-routing:view', 'customer-service:waiting-departure:view', 'customer-service:departed:view', 'customer-service:arrived-port:view', 'customer-service:delivering:view', 'customer-service:signed:view', 'customer-service:problem:view'])) visible.add('customerService');
     if (canReadFinance) visible.add('finance');
@@ -3323,13 +3326,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       row?.label ?? getRoleMetadata(role).label,
       resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey))
     );
-    return permissions.includes(permission);
+    return permissions.includes(permission) || hasEffectivePricingCapability(permissions, permission);
   }
 
   async getPermissionsForRole(role: RoleKey): Promise<PermissionKey[]> {
-    if (isAdministratorRole(role)) {
-      return allPermissions();
-    }
+    if (isAdministratorRole(role)) return allRuntimePermissions();
     const row = await this.prisma.role.findUnique({
       where: { name: role },
       include: { permissions: true }
@@ -4059,7 +4060,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (isAdministratorRole(role)) {
       throw new BadRequestException('管理员组是受保护的内置角色，不能修改权限');
     }
-    const normalized = normalizeRolePermissions(role, permissions);
     return this.prisma.$transaction(async (transaction) => {
     await this.lockRolePermissionGraphMutation(transaction);
     const existing = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
@@ -4067,6 +4067,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new NotFoundException('用户组不存在');
     }
     const before = resolveStoredRolePermissions(role, existing?.permissions.map((item) => item.code as PermissionKey));
+    const normalized = normalizeRolePermissions(role, permissions);
     normalized.push(...protectedDataScopePermissions.filter((permission) => before.includes(permission)));
     const roleLabel = existing?.label ?? getRoleMetadata(role).label;
     if (getForbiddenWarehousePackageUpdatePermissions(role, roleLabel, normalized).length > 0) {
@@ -4400,12 +4401,15 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async getLegacyPricingMeta(principal: Principal): Promise<LegacyPricingMetaResponse> {
     this.ensureStaffPricingAccess(principal);
-    const canViewInternalSource = await this.hasPermission(principal.role, 'pricing:lookup:internal-source-view');
-    const rows = await this.loadQuoteEligibleLegacyPricingRows();
+    const authorizedModules = (await Promise.all(pricingMarkupModules.map(async (module) => (
+      await this.hasLookupModulePermission(principal, module) ? module : null
+    )))).filter((module): module is LegacyPricingModule => Boolean(module));
+    const rows = (await Promise.all(authorizedModules.map((module) => this.loadQuoteEligibleLegacyPricingRows(module)))).flat();
+    const canViewInternalSource = isAdministratorRole(principal.role);
     const response = buildLegacyPricingMeta(rows, canViewInternalSource);
     return {
       ...response,
-      modules: (await Promise.all(response.modules.map(async (module) => (await this.isPricingModuleBlocked(principal, 'lookup', module.key) || !(await this.hasLookupModulePermission(principal, module.key)) ? null : module)))).filter((module): module is typeof response.modules[number] => Boolean(module))
+      modules: response.modules.filter((module) => authorizedModules.includes(module.key))
     };
   }
 
@@ -4484,7 +4488,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async getDubaiPriceDisplayVersionPageImage(principal: Principal, versionId: string, pageId: string) {
     await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
-    await this.ensurePermission(principal, 'pricing:dubai-display:versions-view', '无权查看迪拜价格表完整图片');
+    await this.ensurePermission(principal, 'pricing:price-books:view', '无权查看迪拜价格表完整图片');
     const page = await (this.prisma as any).dubaiPriceDisplayPage.findFirst({
       where: { id: pageId, versionId },
       include: { version: true }
@@ -4500,8 +4504,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async getDubaiPriceDisplayVersions(principal: Principal): Promise<DubaiPriceDisplayVersionListResponse> {
     await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
-    await this.ensurePermission(principal, 'pricing:dubai-display:versions-view', '无权查看迪拜价格表展示版本');
-    const canViewMarkup = await this.hasPermission(principal.role, 'pricing:dubai-display:markup-view');
+    await this.ensurePermission(principal, 'pricing:price-books:view', '无权查看迪拜价格表展示版本');
+    const canViewMarkup = await this.hasPermission(principal.role, 'pricing:markup:dubaiAirSea:view');
     const versions = await (this.prisma as any).dubaiPriceDisplayVersion.findMany({
       include: { pages: { orderBy: [{ mode: 'asc' }, { sheetName: 'asc' }, { pageNo: 'asc' }] } },
       orderBy: { createdAt: 'desc' }
@@ -4510,7 +4514,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async activateDubaiPriceDisplayVersion(principal: Principal, id: string, input: DubaiPriceDisplayActivateInput) {
-    await this.ensurePermission(principal, 'pricing:dubai-display:activate', '无权发布迪拜价格表');
+    await this.ensurePermission(principal, 'pricing:price-books:update', '无权发布迪拜价格表');
     const version = await (this.prisma as any).dubaiPriceDisplayVersion.findFirst({ where: { id }, include: { pages: true } });
     if (!version) throw new NotFoundException('迪拜价格表展示版本不存在');
     if (version.status !== 'READY' || !version.pages.some((page: any) => page.mode === 'AIR' || page.mode === 'SEA')) {
@@ -4528,7 +4532,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async retryDubaiPriceDisplayVersion(principal: Principal, id: string) {
-    await this.ensurePermission(principal, 'pricing:dubai-display:retry', '无权重新生成迪拜价格表图片');
+    await this.ensurePermission(principal, 'pricing:price-books:update', '无权重新生成迪拜价格表图片');
     const failedVersion = await (this.prisma as any).dubaiPriceDisplayVersion.findFirst({ where: { id } });
     if (!failedVersion) throw new NotFoundException('迪拜价格表展示版本不存在');
     if (failedVersion.status !== 'FAILED') throw new BadRequestException('只有生成失败的版本可以重新生成');
@@ -4590,8 +4594,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateDubaiSeaMarkup(principal: Principal, id: string, input: DubaiSeaMarkupUpdateInput) {
-    await this.ensurePermission(principal, 'pricing:dubai-display:markup-update', '无权调整迪拜海运图片加价');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', 'dubaiAirSea', '代理加价规则', 'edit');
+    await this.ensurePermission(principal, 'pricing:markup:dubaiAirSea:update', '无权调整迪拜海运图片加价');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', 'dubaiAirSea', '代理加价规则', 'update');
     const source = await (this.prisma as any).dubaiPriceDisplayVersion.findFirst({ where: { id }, include: { pages: true } });
     if (!source) throw new NotFoundException('迪拜价格表展示版本不存在');
     if (source.status !== 'READY' || !source.salesSafe || !source.seaMarkupApplied || !source.isActiveSea) {
@@ -4693,13 +4697,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getSouthAfricaRateImages(principal: Principal): Promise<SouthAfricaRateImageListResponse> {
-    await this.ensurePermission(principal, 'pricing:south-africa:image-view', '无权查看南非图片价格表');
+    await this.ensurePermission(principal, 'pricing:lookup:south-africa', '无权查看南非图片价格表');
     const rows = await (this.prisma as any).southAfricaRateImage.findMany({ where: { deletedAt: null }, orderBy: { createdAt: 'desc' } });
     return { images: rows.map(mapSouthAfricaRateImage) };
   }
 
   async createSouthAfricaRateImage(principal: Principal, input: Omit<SouthAfricaRateImageSummary, 'id' | 'createdAt' | 'uploadedBy'>): Promise<SouthAfricaRateImageSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:image-upload', '无权上传南非图片价格表');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权上传南非图片价格表');
     const row = await (this.prisma as any).southAfricaRateImage.create({
       data: {
         fileName: input.fileName,
@@ -4722,7 +4726,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async createSouthAfricaRateRule(principal: Principal, input: SouthAfricaRateRuleInput): Promise<SouthAfricaRateRuleSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:rules-create', '无权新增南非价格规则');
+    await this.ensurePermission(principal, 'pricing:markup:southAfrica:create', '无权新增南非价格规则');
     const normalized = normalizeSouthAfricaRateRule(input);
     const row = await (this.prisma as any).southAfricaRateRule.create({
       data: {
@@ -4752,7 +4756,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateSouthAfricaRateRule(principal: Principal, id: string, input: SouthAfricaRateRuleInput): Promise<SouthAfricaRateRuleSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:rules-update', '无权修改南非价格规则');
+    await this.ensurePermission(principal, 'pricing:markup:southAfrica:update', '无权修改南非价格规则');
     const before = await (this.prisma as any).southAfricaRateRule.findFirst({ where: { id, deletedAt: null } });
     if (!before) throw new NotFoundException('南非价格规则不存在');
     const preserveExistingCostMarkup = input.costPerCbm === undefined && input.markupPerCbm === undefined;
@@ -4793,7 +4797,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateSouthAfricaRateRuleEnabled(principal: Principal, id: string, input: { enabled?: boolean }): Promise<SouthAfricaRateRuleSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:rules-enable', '无权启停南非价格规则');
+    await this.ensurePermission(principal, 'pricing:markup:southAfrica:status', '无权启停南非价格规则');
     const before = await (this.prisma as any).southAfricaRateRule.findFirst({ where: { id, deletedAt: null } });
     if (!before) throw new NotFoundException('南非价格规则不存在');
     const row = await (this.prisma as any).southAfricaRateRule.update({ where: { id }, data: { enabled: input.enabled !== false, updatedBy: principal.username } });
@@ -4810,7 +4814,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async deleteSouthAfricaRateRule(principal: Principal, id: string): Promise<SouthAfricaRateRuleSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:rules-delete', '无权删除南非价格规则');
+    await this.ensurePermission(principal, 'pricing:markup:southAfrica:delete', '无权删除南非价格规则');
     const before = await (this.prisma as any).southAfricaRateRule.findFirst({ where: { id, deletedAt: null } });
     if (!before) throw new NotFoundException('南非价格规则不存在');
     await (this.prisma as any).southAfricaRateRule.delete({ where: { id } });
@@ -4994,26 +4998,23 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async getPricingFieldVisibility(principal: Principal): Promise<PricingFieldVisibility> {
-    const can = (permission: PermissionKey) => this.hasPermission(principal.role, permission);
-    const [internalSource, cost, grossProfit, markupBreakdown, postalRule] = await Promise.all([
-      can('pricing:lookup:internal-source-view'),
-      can('pricing:lookup:cost-view'),
-      can('pricing:lookup:gross-profit-view'),
-      can('pricing:lookup:markup-breakdown-view'),
-      can('pricing:lookup:postal-rule-view')
-    ]);
+    const lookupGranted = (await Promise.all([
+      'pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express',
+      'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea',
+      'pricing:lookup:dubai-air-sea'
+    ].map((permission) => this.hasPermission(principal.role, permission as PermissionKey)))).some(Boolean);
     const canViewInternal = canViewPricingInternalRoute(principal.role);
     return {
-      internalSource: canViewInternal && internalSource,
-      cost: canViewInternal && cost,
-      grossProfit: canViewInternal && grossProfit,
-      markupBreakdown: canViewInternal && markupBreakdown,
-      postalRule
+      internalSource: canViewInternal && lookupGranted,
+      cost: canViewInternal && lookupGranted,
+      grossProfit: canViewInternal && lookupGranted,
+      markupBreakdown: canViewInternal && lookupGranted,
+      postalRule: lookupGranted
     };
   }
 
   async getLegacyPricingSources(principal: Principal, module?: LegacyPricingModule) {
-    await this.ensurePermission(principal, 'pricing:price-books:legacy-source-view', '无权查看亮崽报价源');
+    await this.ensurePermission(principal, 'pricing:price-books:view', '无权查看亮崽报价源');
     const sources = await (this.prisma as any).legacyPricingSource.findMany({
       where: { deletedAt: null, ...(module ? { module } : {}) },
       orderBy: { importedAt: 'desc' }
@@ -5022,7 +5023,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async importLegacyPricingSource(principal: Principal, input: LegacyPricingImportInput) {
-    await this.ensurePermission(principal, 'pricing:price-books:legacy-source-import', '无权导入亮崽报价副本');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权导入亮崽报价副本');
     if (!input.module || !input.fileName?.trim() || !Array.isArray(input.rows) || input.rows.length === 0) {
       throw new BadRequestException('亮崽报价源、文件名和报价行不能为空');
     }
@@ -5047,7 +5048,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async deleteLegacyPricingSource(principal: Principal, id: string) {
-    await this.ensurePermission(principal, 'pricing:price-books:legacy-source-delete', '无权删除亮崽报价副本');
+    await this.ensurePermission(principal, 'pricing:price-books:delete', '无权删除亮崽报价副本');
     const current = await (this.prisma as any).legacyPricingSource.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('亮崽报价源不存在');
@@ -5060,7 +5061,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async rebuildLegacyPricing(principal: Principal, module?: LegacyPricingModule) {
-    await this.ensurePermission(principal, 'pricing:price-books:legacy-rebuild', '无权重建亮崽报价副本');
+    await this.ensurePermission(principal, 'pricing:price-books:update', '无权重建亮崽报价副本');
     const rows = await this.loadLegacyPricingRows(module);
     await this.prisma.auditLog.create({
       data: { actorId: principal.id, action: 'pricing.legacy.rebuild', target: module ?? 'all', after: { rowCount: rows.length } }
@@ -5069,7 +5070,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getLegacyPricingHealth(principal: Principal, module?: LegacyPricingModule) {
-    await this.ensurePermission(principal, 'pricing:price-books:health-report-view', '无权查看亮崽报价体检');
+    await this.ensurePermission(principal, 'pricing:price-books:health', '无权查看亮崽报价体检');
     const sources = await (this.prisma as any).legacyPricingSource.findMany({
       where: { deletedAt: null, ...(module ? { module } : {}) },
       include: {
@@ -5265,14 +5266,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return scopedSources.map((source: { id: string }) => source.id);
   }
 
-  async getAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:read', '无权查看代理加价规则');
-    const legacyModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
+  async getAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}, authorizationAction: import('@siyuan/shared').PricingMarkupAction = 'view'): Promise<AgentMarkupListResponse> {
+    const requestedModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
+    if (query.legacyModule && !requestedModule) throw new BadRequestException('查价模块参数无效');
+    const legacyModule = query.priceBookId
+      ? await this.resolveMarkupBookModule(query.priceBookId, requestedModule === 'unclassified' ? undefined : requestedModule)
+      : requestedModule;
+    if (legacyModule === 'unclassified') await this.ensureAllPricingMarkupModules(principal, authorizationAction);
     if (legacyModule && legacyModule !== 'unclassified') {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则');
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则', authorizationAction);
     }
     if (legacyModule === 'dubaiAirSea') {
-      if (!await this.hasPermission(principal.role, 'pricing:dubai-display:markup-view')) {
+      if (!await this.hasPermission(principal.role, 'pricing:markup:dubaiAirSea:view')) {
         throw new ForbiddenException('无权查看迪拜海运图片加价');
       }
       const activeBooks = await (this.prisma as any).priceBook.findMany({
@@ -5298,18 +5303,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const blockedModules = new Set<LegacyPricingModule>();
     if (!legacyModule) {
-      for (const module of ['amazon', 'inquiry', 'europeExpress', 'southAfrica', 'usaAirSea', 'canadaAirSea', 'dubaiAirSea'] as LegacyPricingModule[]) {
-        if (await this.isPricingModuleBlocked(principal, 'markup', module)) blockedModules.add(module);
+      for (const module of pricingMarkupModules) {
+        await this.ensurePricingModuleNotBlocked(principal, 'markup', module, '代理加价规则', authorizationAction).catch(() => blockedModules.add(module));
       }
     }
     const [rules, agentSources] = await Promise.all([
       this.loadAgentMarkupRules(true),
       this.loadActivePriceBookAgentSources(legacyModule)
     ]);
-    const visibleSources = agentSources.filter((source) => !source.legacyModule || !blockedModules.has(source.legacyModule));
+    const canViewUnclassified = isAdministratorRole(principal.role) || blockedModules.size === 0;
+    const visibleSources = agentSources.filter((source) => (Boolean(source.legacyModule) || canViewUnclassified) && (!source.legacyModule || !blockedModules.has(source.legacyModule)));
     const visibleRules = rules.filter((rule) => {
       const module = normalizeAgentMarkupLegacyModule(rule.legacyModule);
-      return !module || !blockedModules.has(module);
+      return (Boolean(module) || Boolean(legacyModule) || canViewUnclassified) && (!module || !blockedModules.has(module));
     });
     const shouldLoadPriceRows = shouldIncludeAgentMarkupHits(query) || !query.detail;
     const scopedPriceRows = shouldLoadPriceRows
@@ -5325,7 +5331,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async previewAgentMarkupRule(principal: Principal, id: string): Promise<AgentMarkupPreviewResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:preview', '无权查看规则命中线路');
     const [current, books, logs] = await Promise.all([
       (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } }),
       this.loadPriceBookRowsForMarkupValidation(),
@@ -5334,18 +5339,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
     }
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(current.legacyModule), '代理加价规则');
+    await this.ensureAgentMarkupInputModule(principal, current, 'view');
     return buildAgentMarkupPreview(mapAgentMarkupRule(current), books, logs);
   }
 
   async getMarkupRoutes(principal: Principal, priceBookId: string, query: MarkupRouteListQuery = {}): Promise<MarkupRouteListResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:read', '无权查看线路阶梯加价');
     const book = await (this.prisma as any).priceBook.findFirst({
       where: { id: priceBookId, deletedAt: null },
       select: { id: true, agentShortName: true, targetModule: true }
     });
     if (!book) throw new NotFoundException('价格表不存在或已删除');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则');
+    const authoritativeModule = normalizeAgentMarkupLegacyModule(book.targetModule);
+    if (!authoritativeModule) throw new BadRequestException('价格表未归类到查价模块');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', authoritativeModule, '代理加价规则');
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 50)));
     const keyword = query.keyword?.trim();
@@ -5438,6 +5444,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     ]);
     const totalItems = Number(countRows[0]?.totalItems ?? 0);
     const response: MarkupRouteListResponse = {
+      legacyModule: authoritativeModule,
       rows: routeRows.map((row) => ({
         priceBookId,
         agentName: book.agentShortName?.trim() || row.agentName,
@@ -5458,22 +5465,22 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async previewMarkupRoute(principal: Principal, input: MarkupRoutePreviewInput): Promise<MarkupRoutePreviewResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:read', '无权查看线路阶梯加价');
     const route = normalizeMarkupRoutePreviewInput(input);
     const book = await (this.prisma as any).priceBook.findFirst({ where: { id: route.priceBookId, deletedAt: null }, select: { id: true, targetModule: true, agentShortName: true } });
     if (!book) throw new NotFoundException('价格表不存在或已删除');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则');
+    const authoritativeModule = normalizeAgentMarkupLegacyModule(book.targetModule);
+    if (!authoritativeModule) throw new BadRequestException('价格表未归类到查价模块');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', authoritativeModule, '代理加价规则');
     if (book.agentShortName?.trim() && book.agentShortName.trim() !== route.agentName) throw new BadRequestException('代理与价格表绑定不一致');
     const [routeRows, scopedRules] = await Promise.all([
       this.loadMarkupRouteRows(route),
-      this.loadMarkupRouteRules(route, normalizeAgentMarkupLegacyModule(book.targetModule))
+      this.loadMarkupRouteRules(route, authoritativeModule)
     ]);
     if (!routeRows.length) throw new NotFoundException('当前价格表未找到该真实线路');
     return buildMarkupRoutePreview(route, routeRows, scopedRules);
   }
 
   async previewMarkupRoutesBatch(principal: Principal, input: MarkupRoutePreviewBatchInput): Promise<MarkupRoutePreviewBatchResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:read', '无权查看线路阶梯加价');
     if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > 100) {
       throw new BadRequestException('请选择 1 至 100 条线路预览报价');
     }
@@ -5578,12 +5585,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async replaceMarkupRouteTiers(principal: Principal, input: MarkupRouteTierReplaceInput): Promise<MarkupRoutePreviewResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:update', '无权维护线路阶梯加价');
     const route = normalizeMarkupRoutePreviewInput(input);
     const tiers = normalizeMarkupRouteTiers(input.tiers, route.markupUnit);
     const book = await (this.prisma as any).priceBook.findFirst({ where: { id: route.priceBookId, deletedAt: null }, select: { id: true, targetModule: true, agentShortName: true } });
     if (!book) throw new NotFoundException('价格表不存在或已删除');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则', 'edit');
+    const authoritativeModule = normalizeAgentMarkupLegacyModule(book.targetModule);
+    if (!authoritativeModule) throw new BadRequestException('价格表未归类到查价模块');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', authoritativeModule, '代理加价规则', 'tier');
     if (!book.agentShortName?.trim()) throw new BadRequestException('价格表未绑定代理，不能维护线路阶梯加价');
     if (book.agentShortName.trim() !== route.agentName) throw new BadRequestException('代理与价格表绑定不一致');
     const routeRows = await this.loadMarkupRouteRows(route);
@@ -5629,7 +5637,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async replaceMarkupRouteTiersBatch(principal: Principal, input: MarkupRouteTierBatchReplaceInput): Promise<MarkupRouteTierBatchReplaceResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:update', '无权批量维护线路阶梯加价');
     if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > 100) {
       throw new BadRequestException('请选择 1 至 100 条线路批量设置阶梯加价');
     }
@@ -5647,7 +5654,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     if (!book) throw new NotFoundException('价格表不存在或已删除');
     if (!book.agentShortName?.trim()) throw new BadRequestException('价格表未绑定代理，不能批量维护线路阶梯加价');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则', 'edit');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(book.targetModule), '代理加价规则', 'tier');
     prepared.forEach(({ route }) => {
       if (book.agentShortName.trim() !== route.agentName) throw new BadRequestException('代理与价格表绑定不一致');
     });
@@ -5741,7 +5748,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async migrateLegacyMarkupRouteScopes(principal: Principal): Promise<{ migratedCount: number; archivedCount: number; skippedCount: number }> {
-    await this.ensurePermission(principal, 'pricing:markup:update', '无权迁移线路阶梯加价');
     const [rules, rows, books] = await Promise.all([
       this.loadAgentMarkupRules(true),
       this.loadPriceBookRowsForMarkupValidation(),
@@ -5751,7 +5757,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const agentByBookId = new Map<string, string | undefined>(books.map((book: any) => [book.id, book.agentShortName?.trim() || rows.find((row) => row.priceBookId === book.id)?.agentName]));
     const legacyTiers = rules.filter((rule) => !rule.deletedAt && rule.enabled && rule.markupUnit && !rule.priceBookId);
     for (const rule of legacyTiers) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'tier');
     }
     let migratedCount = 0;
     let archivedCount = 0;
@@ -5816,8 +5822,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async exportAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:export', '无权导出代理加价规则');
-    const response = await this.getAgentMarkupRules(principal, { ...query, page: 1, pageSize: AGENT_MARKUP_EXPORT_ROW_LIMIT });
+    const requestedModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
+    const module = query.priceBookId
+      ? await this.resolveMarkupBookModule(query.priceBookId, requestedModule === 'unclassified' ? undefined : requestedModule)
+      : requestedModule;
+    if (module && module !== 'unclassified') await this.ensurePricingModuleNotBlocked(principal, 'markup', module, '代理加价规则', 'export');
+    else await this.ensureAllPricingMarkupModules(principal, 'export');
+    const response = await this.getAgentMarkupRules(principal, { ...query, page: 1, pageSize: AGENT_MARKUP_EXPORT_ROW_LIMIT }, 'export');
     if (response.pagination.totalItems > AGENT_MARKUP_EXPORT_ROW_LIMIT) {
       throw new BadRequestException(`导出规则超过 ${AGENT_MARKUP_EXPORT_ROW_LIMIT} 条，请先筛选后再导出`);
     }
@@ -5828,13 +5839,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async importAgentMarkupRules(principal: Principal, input: { rows?: AgentMarkupCreateInput[] }): Promise<AgentMarkupImportResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:import', '无权导入代理加价规则');
     const rows = Array.isArray(input.rows) ? input.rows : [];
     const created: AgentMarkupSummary[] = [];
     const errorRows: AgentMarkupImportResponse['errorRows'] = [];
     for (const [index, row] of rows.entries()) {
       try {
-        created.push(await this.createAgentMarkupRule(principal, row));
+        created.push(await this.createAgentMarkupRule(principal, row, 'import'));
       } catch (error) {
         errorRows.push({ index: index + 1, reason: error instanceof Error ? error.message : '规则格式错误' });
       }
@@ -5846,12 +5856,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async batchUpsertAgentMarkupRules(principal: Principal, input: { rows?: AgentMarkupCreateInput[] }): Promise<AgentMarkupImportResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:batch-upsert', '无权批量维护代理加价规则');
     const rows = Array.isArray(input.rows) ? input.rows : [];
-    const [priceRows, workingRules, agentSources] = await Promise.all([
+    const [priceRows, workingRules] = await Promise.all([
       this.loadPriceBookRowsForMarkupValidation(),
-      this.loadAgentMarkupRules(true),
-      this.loadActivePriceBookAgentSources()
+      this.loadAgentMarkupRules(true)
     ]);
     const upserted: AgentMarkupSummary[] = [];
     const errorRows: AgentMarkupImportResponse['errorRows'] = [];
@@ -5859,10 +5867,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     for (const [index, row] of rows.entries()) {
       try {
         const normalized = normalizeAgentMarkupInput(row);
-        if (!normalized.legacyModule && normalized.priceBookId) {
-          normalized.legacyModule = agentSources.find((source) => source.priceBookId === normalized.priceBookId)?.legacyModule;
-        }
-        await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(normalized.legacyModule), '代理加价规则', 'edit');
+        normalized.legacyModule = await this.ensureAgentMarkupInputModule(principal, normalized, 'import');
         const existingRules = findAgentMarkupRulesByScope(workingRules, normalized);
         const existingRuleIds = new Set(existingRules.map((rule) => rule.id));
         validateAgentMarkupRule(normalized, priceRows, workingRules.filter((rule) => !existingRuleIds.has(rule.id)));
@@ -5923,24 +5928,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async batchUpdateAgentMarkupRules(principal: Principal, input: { ids?: string[]; agentNames?: string[]; scopes?: AgentMarkupBatchScopeInput[]; enabled?: boolean }): Promise<{ successCount: number; rows: AgentMarkupSummary[] }> {
-    await this.ensurePermission(principal, 'pricing:markup:batch-enable', '无权批量修改代理加价规则');
     if (typeof input.enabled !== 'boolean') {
       throw new BadRequestException('启停状态不能为空');
     }
-    for (const scope of normalizeAgentMarkupBatchScopes(input)) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(scope.legacyModule), '代理加价规则', 'edit');
-    }
-    const where = buildAgentMarkupBatchWhere(input);
+    const scopes = await Promise.all(normalizeAgentMarkupBatchScopes(input).map(async (scope) => ({ ...scope, legacyModule: await this.ensureAgentMarkupInputModule(principal, scope, 'status') })));
+    const where = buildAgentMarkupBatchWhere({ ...input, scopes });
     const before = await (this.prisma as any).agentMarkupRule.findMany({ where });
     for (const rule of before) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+      await this.ensureAgentMarkupInputModule(principal, rule, 'status');
     }
     const ids = before.map((row: any) => row.id);
     if (ids.length) {
       await (this.prisma as any).agentMarkupRule.updateMany({ where: { id: { in: ids } }, data: { enabled: input.enabled } });
     }
     const createdIds: string[] = [];
-    for (const scope of normalizeAgentMarkupBatchScopes(input)) {
+    for (const scope of scopes) {
       const agentName = scope.agentName;
       const hasAnyRuleForAgent = before.some((row: any) => row.agentName === agentName && (row.priceBookId ?? null) === (scope.priceBookId ?? null) && (row.legacyModule ?? null) === (scope.legacyModule ?? null))
         || await (this.prisma as any).agentMarkupRule.findFirst({ where: { agentName, priceBookId: scope.priceBookId ?? null, legacyModule: scope.legacyModule ?? null, channelName: null, realChannelName: null, destinationCountry: null } });
@@ -5981,11 +5983,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async batchDeleteAgentMarkupRules(principal: Principal, input: { ids?: string[]; agentNames?: string[]; scopes?: AgentMarkupBatchScopeInput[] }): Promise<{ successCount: number; rows: AgentMarkupSummary[] }> {
-    await this.ensurePermission(principal, 'pricing:markup:batch-delete', '无权批量删除代理加价规则');
-    const where = buildAgentMarkupBatchWhere(input);
+    const scopes = await Promise.all(normalizeAgentMarkupBatchScopes(input).map(async (scope) => ({ ...scope, legacyModule: await this.ensureAgentMarkupInputModule(principal, scope, 'delete') })));
+    const where = buildAgentMarkupBatchWhere({ ...input, scopes });
     const before = await (this.prisma as any).agentMarkupRule.findMany({ where });
     for (const rule of before) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+      await this.ensureAgentMarkupInputModule(principal, rule, 'delete');
     }
     const ids = before.map((row: any) => row.id);
     if (ids.length) {
@@ -6008,18 +6010,13 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return { successCount: rows.length, rows: summaries };
   }
 
-  async createAgentMarkupRule(principal: Principal, input: AgentMarkupCreateInput): Promise<AgentMarkupSummary> {
-    await this.ensurePermission(principal, 'pricing:markup:default-create', '无权新增代理加价规则');
+  async createAgentMarkupRule(principal: Principal, input: AgentMarkupCreateInput, authorizationAction: 'create' | 'import' = 'create'): Promise<AgentMarkupSummary> {
     const normalized = normalizeAgentMarkupInput(input);
-    const [priceRows, currentRules, agentSources] = await Promise.all([
+    const [priceRows, currentRules] = await Promise.all([
       this.loadPriceBookRowsForMarkupValidation(),
-      this.loadAgentMarkupRules(true),
-      this.loadActivePriceBookAgentSources()
+      this.loadAgentMarkupRules(true)
     ]);
-    if (!normalized.legacyModule && normalized.priceBookId) {
-      normalized.legacyModule = agentSources.find((source) => source.priceBookId === normalized.priceBookId)?.legacyModule;
-    }
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(normalized.legacyModule), '代理加价规则', 'edit');
+    normalized.legacyModule = await this.ensureAgentMarkupInputModule(principal, normalized, authorizationAction);
     validateAgentMarkupRule(normalized, priceRows, currentRules);
     const markupValue = normalized.markupValue ?? normalized.markupPerKg;
     if (!input.agentName?.trim() || !Number.isFinite(markupValue) || markupValue < 0) {
@@ -6058,37 +6055,23 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateAgentMarkupRule(principal: Principal, id: string, input: AgentMarkupUpdateInput): Promise<AgentMarkupSummary> {
-    await this.ensurePermission(principal, 'pricing:markup:update', '无权修改代理加价规则');
     const current = await (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
     }
-    const [priceRows, currentRules, agentSources] = await Promise.all([
+    await this.ensureAgentMarkupInputModule(principal, current, 'update');
+    const [priceRows, currentRules] = await Promise.all([
       this.loadPriceBookRowsForMarkupValidation(),
-      this.loadAgentMarkupRules(true),
-      this.loadActivePriceBookAgentSources()
+      this.loadAgentMarkupRules(true)
     ]);
-    const currentModule = normalizeAgentMarkupLegacyModule(current.legacyModule)
-      ?? agentSources.find((source) => source.priceBookId === current.priceBookId)?.legacyModule;
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', currentModule, '代理加价规则', 'edit');
     const normalized = normalizeAgentMarkupInput({ ...mapAgentMarkupRule(current), ...input });
-    const priceBookModule = normalized.priceBookId
-      ? agentSources.find((source) => source.priceBookId === normalized.priceBookId)?.legacyModule
-      : undefined;
-    const explicitModule = input.legacyModule === undefined ? undefined : normalizeAgentMarkupLegacyModule(input.legacyModule);
-    if (priceBookModule && explicitModule && priceBookModule !== explicitModule) {
-      throw new BadRequestException('价格表与代理加价模块不一致');
-    }
-    normalized.legacyModule = priceBookModule ?? explicitModule ?? normalizeAgentMarkupLegacyModule(normalized.legacyModule) ?? currentModule;
-    if (input.priceBookId !== undefined || input.legacyModule !== undefined) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalized.legacyModule, '代理加价规则', 'edit');
-    }
+    normalized.legacyModule = await this.ensureAgentMarkupInputModule(principal, normalized, 'update');
     validateAgentMarkupRule(normalized, priceRows, currentRules, id);
     const row = await (this.prisma as any).agentMarkupRule.update({
       where: { id },
       data: {
         ...(input.priceBookId !== undefined ? { priceBookId: normalized.priceBookId ?? null } : {}),
-        ...(input.legacyModule !== undefined ? { legacyModule: normalized.legacyModule ?? null } : {}),
+        ...(input.priceBookId !== undefined || input.legacyModule !== undefined ? { legacyModule: normalized.legacyModule ?? null } : {}),
         ...(input.agentName !== undefined ? { agentName: normalized.agentName } : {}),
         ...(input.channelName !== undefined ? { channelName: normalized.channelName ?? null } : {}),
         ...(input.realChannelName !== undefined ? { realChannelName: normalized.realChannelName ?? null } : {}),
@@ -6117,12 +6100,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async deleteAgentMarkupRule(principal: Principal, id: string): Promise<AgentMarkupSummary> {
-    await this.ensurePermission(principal, 'pricing:markup:delete', '无权删除代理加价规则');
     const current = await (this.prisma as any).agentMarkupRule.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('代理加价规则不存在');
     }
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(current.legacyModule), '代理加价规则', 'edit');
+    await this.ensureAgentMarkupInputModule(principal, current, 'delete');
     await (this.prisma as any).agentMarkupRule.delete({ where: { id } });
     await this.prisma.auditLog.create({
       data: { actorId: principal.id, action: 'pricing.markup_rule.delete', target: id, before: JSON.parse(JSON.stringify(mapAgentMarkupRule(current))), after: { hardDelete: true } }
@@ -6140,7 +6122,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getAgentChannelCustomRemarks(principal: Principal, legacyModule: LegacyPricingModule): Promise<AgentChannelCustomRemarkSummary[]> {
-    await this.ensurePermission(principal, 'pricing:channel-remark:read', '无权查看代理渠道自定义备注');
     await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则');
     const rows = await (this.prisma as any).agentChannelCustomRemark.findMany({
       where: { legacyModule },
@@ -6150,15 +6131,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async upsertAgentChannelCustomRemark(principal: Principal, input: AgentChannelCustomRemarkInput): Promise<AgentChannelCustomRemarkSummary> {
-    if (!(await this.hasAnyPermission(principal.role, ['pricing:channel-remark:create', 'pricing:channel-remark:update']))) {
-      throw new ForbiddenException('无权维护代理渠道自定义备注');
-    }
     const normalized = normalizeAgentChannelCustomRemarkInput(input);
     const [priceRows, books] = await Promise.all([
       this.loadPriceBookRowsForMarkupValidation(),
       (this.prisma as any).priceBook.findMany({ where: { deletedAt: null }, select: { id: true, targetModule: true, agentShortName: true } })
     ]);
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalized.legacyModule, '代理加价规则');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalized.legacyModule, '代理加价规则', 'update');
     const scopedBookIds = new Set(books.filter((book: any) => book.targetModule === normalized.legacyModule).map((book: any) => book.id));
     validateAgentChannelCustomRemarkScope(
       normalized,
@@ -6180,16 +6158,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateAgentChannelCustomRemarkEnabled(principal: Principal, id: string, enabled: boolean): Promise<AgentChannelCustomRemarkSummary> {
-    await this.ensurePermission(principal, 'pricing:channel-remark:enable', '无权启停代理渠道自定义备注');
     const before = await (this.prisma as any).agentChannelCustomRemark.findUnique({ where: { id } });
     if (!before) throw new NotFoundException('代理渠道自定义备注不存在');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(before.legacyModule), '代理加价规则', 'status');
     const row = await (this.prisma as any).agentChannelCustomRemark.update({ where: { id }, data: { enabled } });
     await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'pricing.channel_remark.enabled', target: id, before: JSON.parse(JSON.stringify(mapAgentChannelCustomRemark(before))), after: JSON.parse(JSON.stringify(mapAgentChannelCustomRemark(row))) } });
     return mapAgentChannelCustomRemark(row);
   }
 
   async getPriceBooks(principal: Principal, includeRows = false, targetModule?: PriceBookImportTargetModule | 'unclassified'): Promise<PriceBooksResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:list-view', '无权查看价格表');
+    const hasContextPermission = await Promise.all((['view', 'import', 'export', 'update', 'delete', 'health'] as const)
+      .map((action) => this.hasPermission(principal.role, `pricing:price-books:${action}` as PermissionKey)));
+    if (!hasContextPermission.some(Boolean)) throw new ForbiddenException('无权查看价格表');
     // Covers hot-reload/dev and a worker that was paused during startup. It is
     // only a cheap queue scan; workbook parsing still happens in the worker.
     this.schedulePriceBookRuleRefresh();
@@ -6250,7 +6230,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async downloadPriceBook(principal: Principal, id: string): Promise<{ fileName: string; buffer: Buffer }> {
-    await this.ensurePermission(principal, 'pricing:price-books:rows-view', '无权下载价格表');
+    await this.ensurePermission(principal, 'pricing:price-books:export', '无权下载价格表');
     const book = await (this.prisma as any).priceBook.findFirst({
       where: { id, deletedAt: null },
       select: { id: true, fileName: true }
@@ -6280,7 +6260,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getPriceBookRuleRefreshProgress(principal: Principal): Promise<PricingRuleRefreshProgressResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:sync-health-view', '无权查看价格表规则同步进度');
+    await this.ensurePermission(principal, 'pricing:price-books:health', '无权查看价格表规则同步进度');
     this.schedulePriceBookRuleRefresh();
     const books = await (this.prisma as any).priceBook.findMany({
       where: { deletedAt: null, targetModule: { not: null } },
@@ -6323,15 +6303,30 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getPriceBookRows(principal: Principal, priceBookId?: string, query: PriceBookRowsQuery = {}): Promise<PriceBookRowsResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:rows-view', '无权查看价格表线路');
+    await this.ensurePermission(principal, 'pricing:price-books:view', '无权查看价格表线路');
     const pricingVisibility = await this.getPricingFieldVisibility(principal);
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize ?? 100)));
     const agentName = query.agentName?.trim();
-    const targetModule = query.targetModule && isLegacyPricingModule(query.targetModule) ? query.targetModule : undefined;
-    if (query.targetModule && !targetModule) {
+    const requestedTargetModule = query.targetModule && isLegacyPricingModule(query.targetModule) ? query.targetModule : undefined;
+    if (query.targetModule && !requestedTargetModule) {
       throw new BadRequestException('查价模块无效');
     }
+    const needsMarkupPostFilter = hasPriceBookRowMarkupControls(query);
+    const markupAccessRequested = query.markupContext === true || Boolean(query.markupModule) || needsMarkupPostFilter;
+    let authoritativeMarkupModule: LegacyPricingModule | undefined;
+    if (markupAccessRequested) {
+      const requestedMarkupModule = normalizeAgentMarkupLegacyModule(query.markupModule);
+      if (query.markupModule && !requestedMarkupModule) throw new BadRequestException('加价规则模块无效');
+      if (priceBookId) authoritativeMarkupModule = await this.resolveMarkupBookModule(priceBookId, requestedMarkupModule);
+      else {
+        if (!requestedMarkupModule) throw new BadRequestException('按代理查看加价线路时必须指定查价模块');
+        authoritativeMarkupModule = requestedMarkupModule;
+      }
+      if (requestedTargetModule && requestedTargetModule !== authoritativeMarkupModule) throw new BadRequestException('查价模块与价格表所属模块不一致');
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', authoritativeMarkupModule, '代理加价规则');
+    }
+    const targetModule = authoritativeMarkupModule ?? requestedTargetModule;
     if (!priceBookId && !agentName) {
       throw new BadRequestException('查看线路必须选择价格表或代理，避免全量扫描价格行');
     }
@@ -6353,7 +6348,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       ...(query.destinationCountry?.trim() ? { destinationCountry: { contains: query.destinationCountry.trim(), mode: 'insensitive' } } : {})
     };
     const orderBy = [{ agentName: 'asc' }, { sourceSheetName: 'asc' }, { channelName: 'asc' }, { destinationCountry: 'asc' }, { minWeightKg: 'asc' }];
-    const needsMarkupPostFilter = hasPriceBookRowMarkupControls(query);
     const [totalItems, rows] = needsMarkupPostFilter
       ? await Promise.all([
           (this.prisma as any).priceBookRow.count({ where }),
@@ -6374,6 +6368,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         ]);
     if (totalItems > 0) {
       const mappedRows: PriceBookRowSummary[] = rows.map(mapPriceBookRow);
+      if (!markupAccessRequested) {
+        return {
+          rows: redactPriceBookRows(mappedRows, pricingVisibility),
+          pagination: { page, pageSize, totalItems }
+        };
+      }
       const [books, rules, agentSources] = await Promise.all([
         (this.prisma as any).priceBook.findMany({
           where: { id: { in: Array.from(new Set(mappedRows.map((row) => row.priceBookId))) } },
@@ -6519,7 +6519,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getPricingSyncHealth(principal: Principal, query: { page?: number; pageSize?: number; legacyModule?: LegacyPricingModule | 'unclassified' } = {}): Promise<PricingSyncHealthResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:sync-health-view', '无权查看价格表同步体检');
+    await this.ensurePermission(principal, 'pricing:price-books:health', '无权查看价格表同步体检');
     const legacyModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize ?? 50)));
@@ -6641,7 +6641,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async cleanupOldOriginalAgentData(principal: Principal, input: { dryRun?: boolean } = {}): Promise<PricingOldOriginalAgentCleanupResponse> {
     const dryRun = input.dryRun !== false;
     if (dryRun) {
-      await this.ensurePermission(principal, 'pricing:price-books:cleanup-original-agents', '无权预览旧原始代理清理');
+      await this.ensurePermission(principal, 'pricing:price-books:update', '无权预览旧原始代理清理');
     } else {
       this.ensureAdmin(principal, '只有管理员可以执行旧原始代理清理');
     }
@@ -6747,7 +6747,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async createPriceBookImportJob(principal: Principal, input: { fileName: string; targetModule?: PriceBookImportTargetModule; agentId?: string; agentShortName?: string; buffer: Buffer; filePath?: string }): Promise<PriceBookImportJobResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:upload', '无权上传价格表');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权上传价格表');
     const targetModule = normalizePriceBookImportTargetModule(input.targetModule);
     await this.ensurePriceBookOperationNotBlocked(principal, 'create', targetModule, '新增价格表');
     // 迪拜模块只发布原表图片，不参与代理成本和加价，允许不绑定代理。
@@ -6808,7 +6808,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async retryPriceBookImportJob(principal: Principal, id: string): Promise<PriceBookImportJobResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:upload', '无权重试价格表导入任务');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权重试价格表导入任务');
     const job = await (this.prisma as any).priceBookImportJob.findFirst({ where: { id } });
     if (!job) throw new NotFoundException('价格表导入任务不存在');
     if (!['FAILED', 'PARTIAL_FAILED'].includes(String(job.status))) throw new BadRequestException('只有失败或部分失败的导入任务可以重试');
@@ -7456,7 +7456,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updatePriceBookRemark(principal: Principal, id: string, input: PriceBookRemarkUpdateInput): Promise<PriceBookSummary> {
-    await this.ensurePermission(principal, 'pricing:price-books:remark-update', '无权维护价格表备注');
+    await this.ensurePermission(principal, 'pricing:price-books:update', '无权维护价格表备注');
     const current = await (this.prisma as any).priceBook.findFirst({ where: { id, deletedAt: null } });
     if (!current) {
       throw new NotFoundException('价格表不存在');
@@ -8673,7 +8673,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (Number(source.packageCount) !== 1) {
         throw new BadRequestException('同箱规补录的来源记录件数必须为 1');
       }
-      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${source.combinedOrderNo}))`);
+      await tx.$queryRaw(Prisma.sql`SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtext(${source.combinedOrderNo}))`);
       const priorAudit = await tx.auditLog.findFirst({
         where: {
           action: 'warehouse.package.same_spec_replenish',
@@ -8864,7 +8864,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
       await this.ensureWarehousePackagesNotInPendingTally([id], tx);
       const rootCombinedOrderNo = source.sourcePackageNo || source.combinedOrderNo;
-      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${rootCombinedOrderNo}))`);
+      await tx.$queryRaw(Prisma.sql`SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtext(${rootCombinedOrderNo}))`);
       const owner = await this.resolveWarehousePackageOwner(source.customerCode, tx);
       const existingSplitRows = await tx.warehousePackage.findMany({
         where: {
@@ -15286,6 +15286,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getReviewPendingShipments(principal: Principal): Promise<Shipment[]> {
+    await this.ensurePermission(principal, 'business:review:view', '没有待审核运单查看权限');
     await this.cleanupOverdueReviewShipments(principal);
     const shipmentOwnerWhere = this.shipmentOwnerWhere(principal);
     const rows = await this.prisma.shipment.findMany({
@@ -15412,6 +15413,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getReviewDeletedShipments(principal: Principal): Promise<Shipment[]> {
+    await this.ensurePermission(principal, 'business:review:view', '没有待审核运单查看权限');
     await this.cleanupOverdueReviewShipments(principal);
     const shipmentOwnerWhere = this.shipmentOwnerWhere(principal);
     const rows = await this.prisma.shipment.findMany({
@@ -15429,8 +15431,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getShipmentReviewDetail(principal: Principal, shipmentId: string): Promise<ShipmentReviewDetailSummary> {
+    await this.ensurePermission(principal, 'business:review:view', '没有待审核运单查看权限');
     const shipment = await this.getReviewVisibleShipment(principal, shipmentId, true, true);
-    if (shipment.deletedAt && !(await this.hasPermission(principal.role, 'business:review:restore'))) {
+    if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status as ShipmentStatus)) {
       throw new NotFoundException('运单不存在');
     }
     return this.buildShipmentReviewDetail(principal, shipment);
@@ -15446,6 +15449,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateShipmentReviewBasic(principal: Principal, shipmentId: string, input: ShipmentReviewBasicUpdateInput): Promise<ShipmentReviewDetailSummary> {
+    await this.ensurePermission(principal, 'business:review:edit', '没有待审核运单编辑权限');
     const shipment = await this.getReviewVisibleShipment(principal, shipmentId, false, true);
     if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status as ShipmentStatus)) {
       throw new BadRequestException('订单已进入后续流程，不能再直接修改待审核资料');
@@ -15481,7 +15485,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (lockedCurrent.updatedAt.getTime() !== shipment.updatedAt.getTime()) {
         throw new BadRequestException('订单资料已被更新，请刷新后重试');
       }
-      await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:shipment:update-basic');
+      await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:review:edit');
       const next = await tx.shipment.update({
         where: { id: shipment.id },
         data: {
@@ -15537,15 +15541,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (shipment.status !== 'REVIEW_PENDING') {
       throw new BadRequestException('只有待审核运单可以审核通过');
     }
-    const canBusinessReview = await this.hasPermission(principal.role, 'business:review:approve')
-      && (!isAdministratorRole(principal.role) || options.businessReview === true);
+    const canBusinessReview = await this.hasPermission(principal.role, 'business:review:edit');
     if (canBusinessReview) {
       const result = await this.prisma.$transaction(async (tx: any) => {
         await this.lockShipmentRow(tx, shipment.id);
         const lockedShipment = await tx.shipment.findUnique({ where: { id: shipment.id }, include: shipmentIncludes });
         if (!lockedShipment || lockedShipment.deletedAt) throw new NotFoundException('运单不存在');
-        await this.assertDepartmentTeamShipmentAccessAfterLock(tx, principal, lockedShipment, 'business:review:approve');
-        if (!await this.hasPermission(principal.role, 'business:review:approve')) {
+        await this.assertDepartmentTeamShipmentAccessAfterLock(tx, principal, lockedShipment, 'business:review:edit');
+        if (!await this.hasPermission(principal.role, 'business:review:edit')) {
           throw new ForbiddenException('当前角色不能终审运单');
         }
         if (lockedShipment.status !== 'REVIEW_PENDING') {
@@ -15641,7 +15644,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (principal.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能驳回运单');
     }
-    if (!await this.hasPermission(principal.role, 'business:review:reject')) {
+    if (!await this.hasPermission(principal.role, 'business:review:edit')) {
       throw new ForbiddenException('当前角色不能终审运单');
     }
     const reason = input.reason?.trim();
@@ -15718,7 +15721,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const shipment = await this.prisma.shipment.findUnique({ where: { id: shipmentId }, include: shipmentIncludes });
     const scope = this.operatorCustomerScope(principal);
     const isOwner = Boolean(scope && [(shipment as any)?.entryBy, (shipment as any)?.salesperson, shipment?.customer?.salesperson].some((owner) => Boolean(owner && scope.includes(owner))));
-    const canReverse = await this.hasPermission(principal.role, 'business:review:reverse');
+    const canReverse = await this.hasPermission(principal.role, 'business:review:edit');
     if (!shipment || shipment.deletedAt || !canReverse || (scope && !isOwner)) throw new NotFoundException('运单不存在');
     if (shipment.status !== 'WAITING_SORT') throw new BadRequestException(`订单已进入${shipmentStatusLabels[shipment.status as ShipmentStatus]}，不能反审核`);
     await this.ensurePendingRoutingMask(principal, 'market:pending-routing:reroute-block');
@@ -15786,7 +15789,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (principal.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能删除运单');
     }
-    if (!(await this.hasPermission(principal.role, 'business:review:delete'))) {
+    if (!(await this.hasPermission(principal.role, 'business:review:edit'))) {
       throw new ForbiddenException('当前角色不能删除待审核订单');
     }
     const shipment = await this.getReviewVisibleShipment(principal, shipmentId, false);
@@ -15794,12 +15797,38 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('已进入后续流转的订单不能从待审核模块永久删除');
     }
     const reason = input.reason?.trim();
-    if (!reason) throw new BadRequestException('永久删除必须填写原因');
-    return this.hardDeleteShipmentReviewRecord(principal, shipment, 'shipment.review.delete', 'hard_delete', reason);
+    if (!reason) throw new BadRequestException('删除必须填写原因');
+    const updated = await this.prisma.shipment.update({
+      where: { id: shipment.id },
+      data: {
+        deletedAt: new Date(),
+        deletedBy: principal.username,
+        deletedReason: reason,
+        deleteType: 'MANUAL'
+      },
+      include: shipmentIncludes
+    });
+    await this.prisma.auditLog.create({
+      data: {
+        actorId: principal.id,
+        action: 'shipment.review.delete',
+        target: shipment.id,
+        before: toAuditJson(mapShipment(shipment)),
+        after: toAuditJson({
+          ...mapShipment(updated),
+          reviewStatus: 'DELETED',
+          statusFrom: shipment.status,
+          statusTo: updated.status,
+          reviewer: principal.username,
+          deleteReason: reason
+        })
+      }
+    });
+    return { id: shipment.id, deleted: true };
   }
 
   async restoreShipment(principal: Principal, shipmentId: string, input: ReviewRestoreInputWithManual = {}): Promise<ShipmentReviewDetailSummary> {
-    if (!(await this.hasPermission(principal.role, 'business:review:restore'))) {
+    if (!(await this.hasPermission(principal.role, 'business:review:edit'))) {
       throw new ForbiddenException('当前角色不能恢复运单');
     }
     const shipment = await this.getReviewVisibleShipment(principal, shipmentId, true);
@@ -15865,7 +15894,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async permanentlyDeleteShipmentReview(principal: Principal, shipmentId: string): Promise<{ id: string; deleted: true }> {
-    if (!(await this.hasPermission(principal.role, 'business:review:purge'))) {
+    if (!(await this.hasPermission(principal.role, 'business:review:edit'))) {
       throw new ForbiddenException('当前角色不能彻底删除待审核订单');
     }
     const shipment = await this.getReviewVisibleShipment(principal, shipmentId, true);
@@ -16136,7 +16165,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getOrderEntryWarehousePackages(principal: Principal, query: OrderEntryWarehousePackageQuery): Promise<WarehousePackageSummary[]> {
-    await this.ensurePermission(principal, 'business:order-entry:warehouse-package-select', '没有录单仓库包裹选择权限');
+    const canSelectForOrderEntry = await this.hasPermission(principal.role, 'business:order-entry:warehouse-package-select');
+    const canEditPendingReview = await this.hasPermission(principal.role, 'business:review:edit');
+    if (!canSelectForOrderEntry && !canEditPendingReview) {
+      throw new ForbiddenException('没有录单仓库包裹选择权限');
+    }
     const packageIds = normalizeOrderEntryPackageIds(query.packageIds);
     const customerCode = query.customerCode?.trim();
     const editingShipmentId = query.shipmentId?.trim();
@@ -16156,6 +16189,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       : undefined;
     if (editingShipmentId && (!editingShipment || !['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(editingShipment.status))) {
       throw new BadRequestException('只有待审核或录单编辑状态的运单才能查看当前包裹');
+    }
+    if (!canSelectForOrderEntry && editingShipment?.status !== 'REVIEW_PENDING') {
+      throw new ForbiddenException('待审核运单编辑权限只能调整待审核订单包裹');
     }
     if (editingShipment?.customer.code && customerCode && editingShipment.customer.code !== customerCode) {
       throw new BadRequestException('当前运单客户与筛选客户不一致');
@@ -16453,7 +16489,17 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getOrderEntryDetail(principal: Principal, shipmentId: string): Promise<OrderEntryDetailSummary> {
-    await this.ensurePermission(principal, 'business:order-entry:view', '没有录单详情查看权限');
+    const canViewOrderEntry = await this.hasPermission(principal.role, 'business:order-entry:view');
+    const canEditDraft = await this.hasPermission(principal.role, 'business:order-entry:draft-edit');
+    const canEditPendingReview = await this.hasPermission(principal.role, 'business:review:edit');
+    if (!canViewOrderEntry && !canEditDraft && !canEditPendingReview) {
+      await this.recordPermissionDenied(principal, {
+        permissions: ['business:order-entry:view', 'business:order-entry:draft-edit'],
+        method: 'GET',
+        path: `/api/shipments/${shipmentId}/order-entry`
+      });
+      throw new ForbiddenException('没有录单详情查看权限');
+    }
     const shipmentOwnerWhere = this.shipmentOwnerWhere(principal);
     const shipment = await this.prisma.shipment.findFirst({
       where: {
@@ -16465,6 +16511,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       include: { ...shipmentIncludes, financeItems: { where: { voided: false }, orderBy: { createdAt: 'asc' } } }
     });
     if (!shipment) {
+      throw new NotFoundException('录单不存在');
+    }
+    if (!canViewOrderEntry && !canEditDraft && shipment.status !== 'REVIEW_PENDING') {
       throw new NotFoundException('录单不存在');
     }
     const mappedShipment = await this.mapShipmentResponse(shipment);
@@ -16481,15 +16530,21 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const financeItems = ((shipment as any).financeItems ?? []) as any[];
     const canViewPayables = await this.canViewOrderEntryPayables(principal);
     const canViewBusinessCosts = await this.canViewOrderEntryBusinessCosts(principal);
+    const canViewReceivables = isAdministratorRole(principal.role)
+      || await this.hasAnyPermission(principal.role, ['business:order-entry:edit', 'business:order-entry:draft-edit', 'business:review:edit']);
     const canViewSensitivePayables = await this.canUseSensitiveOrderEntryPayables(principal);
     const visibleShipment = await this.redactOrderEntrySensitiveShipment(principal, mappedShipment);
     return {
       shipment: visibleShipment,
       packages: packages.map(mapWarehousePackage),
-      receivables: financeItems
-        .filter((item) => item.type === 'RECEIVABLE')
-        .map((item) => this.toReceivableFinanceSummary(item, shipment, mappedShipment.customerName)),
-      receivableSnapshotVersion: buildBusinessCostSnapshotVersion(financeItems.filter((item) => item.type === 'RECEIVABLE')),
+      receivables: canViewReceivables
+        ? financeItems
+            .filter((item) => item.type === 'RECEIVABLE')
+            .map((item) => this.toReceivableFinanceSummary(item, shipment, mappedShipment.customerName))
+        : [],
+      receivableSnapshotVersion: canViewReceivables
+        ? buildBusinessCostSnapshotVersion(financeItems.filter((item) => item.type === 'RECEIVABLE'))
+        : undefined,
       ...(canViewBusinessCosts
         ? {
             businessCosts: financeItems
@@ -16499,12 +16554,14 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
             businessCostSnapshotVersion: buildBusinessCostSnapshotVersion(financeItems.filter((item) => item.type === 'BUSINESS_COST'))
           }
         : {}),
-      payables: canViewPayables
-        ? financeItems.filter((item) => item.type === 'PAYABLE').map((item) => {
-          const row = this.toPayableFinanceSummary(item, shipment);
-          return canViewSensitivePayables ? row : { ...row, agentId: undefined, agentName: undefined, paymentNo: undefined };
-        })
-        : [],
+      ...(canViewPayables
+        ? {
+            payables: financeItems.filter((item) => item.type === 'PAYABLE').map((item) => {
+              const row = this.toPayableFinanceSummary(item, shipment);
+              return canViewSensitivePayables ? row : { ...row, agentId: undefined, agentName: undefined, paymentNo: undefined };
+            })
+          }
+        : {}),
       canViewPayables
     };
   }
@@ -16518,7 +16575,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       ...input,
       shipment: { ...input.shipment, reviewValidationError: serverReviewValidationError }
     };
-    await this.ensurePermission(principal, 'business:order-entry:draft-save', '没有保存录单草稿权限');
+    const canEditOrderEntryDraft = await this.hasAnyPermission(principal.role, ['business:order-entry:edit', 'business:order-entry:draft-edit']);
+    const canEditPendingReview = await this.hasPermission(principal.role, 'business:review:edit');
+    if (!canEditOrderEntryDraft && !canEditPendingReview) {
+      throw new ForbiddenException('没有编辑录单草稿权限');
+    }
     if (input.submitForReview) {
       await this.ensurePermission(principal, 'business:order-entry:submit-review', '没有提交审核权限');
     }
@@ -16535,6 +16596,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       include: { ...shipmentIncludes, financeItems: { where: { voided: false } } }
     });
     if (!current) {
+      throw new NotFoundException('录单草稿不存在');
+    }
+    if (!canEditOrderEntryDraft && current.status !== 'REVIEW_PENDING') {
       throw new NotFoundException('录单草稿不存在');
     }
     if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(current.status)) {
@@ -16625,12 +16689,17 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (lockedCurrent.updatedAt.getTime() !== current.updatedAt.getTime()) {
         throw new BadRequestException('录单草稿已被更新，请刷新后重试');
       }
-      await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:order-entry:draft-save');
+      await this.assertDepartmentTeamEditAfterLock(
+        tx,
+        principal,
+        lockedCurrent,
+        canEditOrderEntryDraft ? 'business:order-entry:draft-edit' : 'business:review:edit'
+      );
       if (isDepartmentTeamEdit && input.submitForReview) {
         await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:order-entry:submit-review');
       }
       if (isDepartmentTeamEdit && canWriteBusinessCosts) {
-        await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:order-entry:business-cost-write');
+        await this.assertDepartmentTeamEditAfterLock(tx, principal, lockedCurrent, 'business:order-entry:business-cost');
       }
       if (isDepartmentTeamEdit && input.submitForReview) {
         const due = await this.getDepartmentTeamOrderEntryTallyMiscFeeDueAfterLock(
@@ -17579,7 +17648,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
     const legacyReviewedAt = new Date();
     const result = await this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`finance-payment:${input.customerId}`}))`);
+      await tx.$queryRaw(Prisma.sql`SELECT 1::int AS "locked" FROM pg_advisory_xact_lock(hashtext(${`finance-payment:${input.customerId}`}))`);
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "CustomerAccount" WHERE "id" = ${account.id} FOR UPDATE`);
       if (systemFeeIds.size > 0) {
         await tx.$queryRaw(Prisma.sql`
@@ -20737,9 +20806,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async isPricingModuleBlocked(principal: Principal, scope: 'lookup' | 'markup', module?: LegacyPricingModule, mode: 'view' | 'edit' = 'view') {
-    if (!module || isAdministratorRole(principal.role)) return false;
-    if (await this.hasPermission(principal.role, `pricing:${scope}:module-block:${module}` as PermissionKey)) return true;
-    return scope === 'markup' && this.hasPermission(principal.role, `pricing:markup:${mode}-block:${module}` as PermissionKey);
+    void principal; void scope; void module; void mode;
+    return false;
   }
 
   private async hasLookupModulePermission(principal: Principal, module: LegacyPricingModule) {
@@ -20752,20 +20820,50 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensurePriceBookOperationNotBlocked(principal: Principal, mode: 'create' | 'delete' | 'remark', module?: PriceBookImportTargetModule, label = '价格表操作') {
-    if (!module || isAdministratorRole(principal.role)) return;
-    const blocked = await this.hasPermission(principal.role, `pricing:price-books:${mode}-block:${module}` as PermissionKey);
-    if (blocked) {
-      throw new ForbiddenException(`${label}已被当前用户组屏蔽`);
-    }
+    void principal; void mode; void module; void label;
   }
 
-  private async ensurePricingModuleNotBlocked(principal: Principal, scope: 'lookup' | 'markup', module: LegacyPricingModule | undefined, label: string, mode: 'view' | 'edit' = 'view') {
+  private async ensurePricingModuleNotBlocked(principal: Principal, scope: 'lookup' | 'markup', module: LegacyPricingModule | undefined, label: string, action: import('@siyuan/shared').PricingMarkupAction = 'view') {
+    if (scope === 'markup') {
+      if (isAdministratorRole(principal.role)) return;
+      if (!module) throw new ForbiddenException('必须指定已授权的加价规则模块');
+      const permission = action === 'view' ? pricingMarkupViewPermission(module) : pricingMarkupActionPermission(module, action);
+      if (!(await this.hasPermission(principal.role, permission))) {
+        throw new ForbiddenException(action === 'view' ? '当前角色没有该模块的加价规则查看权限' : '当前角色没有该功能权限');
+      }
+      return;
+    }
     if (scope === 'lookup' && module && !(await this.hasLookupModulePermission(principal, module))) {
       throw new ForbiddenException(`${label}模块未分配查价权限`);
     }
-    if (await this.isPricingModuleBlocked(principal, scope, module, mode)) {
+    if (await this.isPricingModuleBlocked(principal, scope, module, action === 'view' ? 'view' : 'edit')) {
       throw new ForbiddenException(`${label}模块已被当前用户组屏蔽`);
     }
+  }
+
+  private async ensureAllPricingMarkupModules(principal: Principal, action: import('@siyuan/shared').PricingMarkupAction) {
+    for (const module of pricingMarkupModules) {
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', module, '代理加价规则', action);
+    }
+  }
+
+  private async resolveMarkupBookModule(priceBookId: string | undefined, requestedModule?: LegacyPricingModule) {
+    if (!priceBookId) return requestedModule;
+    const book = await (this.prisma as any).priceBook.findFirst({ where: { id: priceBookId, deletedAt: null }, select: { targetModule: true } });
+    if (!book) throw new NotFoundException('价格表不存在或已删除');
+    const actual = normalizeAgentMarkupLegacyModule(book.targetModule);
+    if (requestedModule && actual !== requestedModule) throw new BadRequestException('价格表与查价模块不一致');
+    return actual;
+  }
+
+  private async ensureAgentMarkupInputModule(principal: Principal, input: { priceBookId?: string; legacyModule?: LegacyPricingModule | 'unclassified' }, action: import('@siyuan/shared').PricingMarkupAction) {
+    const module = await this.resolveMarkupBookModule(input.priceBookId, normalizeAgentMarkupLegacyModule(input.legacyModule));
+    if (!module) {
+      await this.ensureAllPricingMarkupModules(principal, action);
+      return undefined;
+    }
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', module, '代理加价规则', action);
+    return module;
   }
 
   private ensureAdmin(principal: Principal, message = '只有管理员可以执行该操作') {
@@ -21059,6 +21157,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     allowPendingReviewBusinessCostWrite = false
   ) {
     if (isAdministratorRole(principal.role)) return;
+    const orderEntryEditable = ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment?.status ?? '');
+    if (orderEntryEditable && type === 'BUSINESS_COST' && await this.hasPermission(principal.role, 'business:order-entry:business-cost')) return;
+    if (orderEntryEditable && type === 'PAYABLE' && await this.hasPermission(principal.role, 'business:order-entry:payable-fee')) return;
+    if (orderEntryEditable && type === 'RECEIVABLE' && await this.hasPermission(principal.role, 'business:order-entry:edit')) return;
     if (allowPendingReviewBusinessCostWrite && await this.canWritePendingReviewBusinessCost(principal, type, shipment)) return;
     if (type === 'BUSINESS_COST' && await this.isRestrictedBusinessCostActor(principal)) {
       throw new ForbiddenException('业务成本只能在待审核状态修改');
@@ -21097,8 +21199,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   ) {
     return type === 'BUSINESS_COST'
       && shipment?.status === 'REVIEW_PENDING'
-      && !(await this.canMaskOrderEntryBusinessCosts(principal))
-      && await this.hasPermission(principal.role, 'business:order-entry:business-cost-write');
+      && await this.hasPermission(principal.role, 'business:order-entry:business-cost');
   }
 
   private async ensurePendingReviewBusinessCostWrite(
@@ -21110,8 +21211,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException('业务成本只能在待审核状态修改');
     }
     if (type !== 'BUSINESS_COST'
-      || await this.canMaskOrderEntryBusinessCosts(principal)
-      || !await this.hasPermission(principal.role, 'business:order-entry:business-cost-write')) {
+      || !await this.hasPermission(principal.role, 'business:order-entry:business-cost')) {
       throw new ForbiddenException('没有填写业务成本权限');
     }
   }
@@ -21266,49 +21366,28 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async canViewOrderEntryPayables(principal: Principal) {
-    return !(await this.canMaskOrderEntryPayables(principal))
-      && await this.hasAnyPermission(principal.role, [
-        'business:order-entry:view',
-        'finance:order-fee:payable:view',
-        'finance:order-fee:payable:manage'
-      ]);
+    return this.hasPermission(principal.role, 'business:order-entry:payable-fee');
   }
 
   private async canManageOrderEntryPayables(principal: Principal) {
-    return !(await this.canMaskOrderEntryPayables(principal))
-      && await this.hasAnyPermission(principal.role, ['business:order-entry:view', 'finance:order-fee:payable:manage']);
+    return this.hasPermission(principal.role, 'business:order-entry:payable-fee');
   }
 
   private async canWriteOrderEntryBusinessCosts(principal: Principal) {
-    return !(await this.canMaskOrderEntryBusinessCosts(principal))
-      && await this.hasPermission(principal.role, 'business:order-entry:business-cost-write');
+    return this.hasPermission(principal.role, 'business:order-entry:business-cost');
   }
 
   private async canViewOrderEntryBusinessCosts(principal: Principal) {
-    return !(await this.canMaskOrderEntryBusinessCosts(principal))
-      && await this.hasAnyPermission(principal.role, [
-        'business:order-entry:view',
-        'business:order-entry:business-cost-view',
-        'business:order-entry:business-cost-write'
-      ]);
-  }
-
-  private async canMaskOrderEntryBusinessCosts(principal: Principal) {
-    if (isAdministratorRole(principal.role)) return false;
-    return this.hasPermission(principal.role, 'business:order-entry:business-cost-mask');
-  }
-
-  private async canMaskOrderEntryPayables(principal: Principal) {
-    if (isAdministratorRole(principal.role)) return false;
-    return this.hasPermission(principal.role, 'business:order-entry:payable-fee-mask');
+    return this.hasPermission(principal.role, 'business:order-entry:business-cost');
   }
 
   private canViewShipmentFinanceDetail(principal: Principal) {
     return this.hasAnyPermission(principal.role, [
       'customer-service:data-confirm:business-update',
+      'business:review:view',
       'business:shipment:finance-detail-view',
-      'business:order-entry:business-cost-view',
-      'business:order-entry:business-cost-write',
+      'business:order-entry:business-cost',
+      'business:order-entry:payable-fee',
       'business:shipment:payable-view',
       'business:shipment:profit-view',
       'business:order-fee:profit-view',
@@ -21368,7 +21447,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   private canViewShipmentReceivables(principal: Principal) {
     return this.hasAnyPermission(principal.role, [
       'business:shipment:finance-detail-view',
-      'business:review:finance-detail-view',
+      'business:review:view',
       'finance:receivable:read',
       'finance:receivable:detail',
       'finance:receivable:update'
@@ -21376,7 +21455,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private async canUseSensitiveOrderEntryPayables(principal: Principal) {
-    return this.hasPermission(principal.role, 'finance:payable:view-sensitive');
+    return this.hasAnyPermission(principal.role, ['business:order-entry:business-cost', 'business:order-entry:payable-fee', 'finance:payable:view-sensitive']);
   }
 
   private async canEditOrderEntryEntryAt(principal: Principal) {
@@ -21392,13 +21471,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async ensureOrderEntryInputAccess(principal: Principal, input: OrderEntryCreateInput, currentShipmentId?: string) {
-    await this.ensurePermission(principal, currentShipmentId ? 'business:order-entry:draft-save' : 'business:order-entry:create', '没有录单维护权限');
-    const businessCosts = this.normalizeOrderEntryFinanceItems('BUSINESS_COST', input.businessCosts);
-    const businessCostMasked = await this.canMaskOrderEntryBusinessCosts(principal);
-    const canWriteBusinessCosts = await this.canWriteOrderEntryBusinessCosts(principal);
-    if (businessCosts.length && businessCostMasked) {
-      throw new ForbiddenException('已屏蔽业务成本，不能录入业务成本');
+    let canEditOrderEntryDraft = false;
+    if (currentShipmentId) {
+      canEditOrderEntryDraft = await this.hasAnyPermission(principal.role, ['business:order-entry:edit', 'business:order-entry:draft-edit']);
+      const canEditPendingReview = await this.hasPermission(principal.role, 'business:review:edit');
+      if (!canEditOrderEntryDraft && !canEditPendingReview) {
+        throw new ForbiddenException('没有录单编辑权限');
+      }
+    } else {
+      await this.ensurePermission(principal, 'business:order-entry:edit', '没有录单编辑权限');
     }
+    const businessCosts = this.normalizeOrderEntryFinanceItems('BUSINESS_COST', input.businessCosts);
+    const canWriteBusinessCosts = await this.canWriteOrderEntryBusinessCosts(principal);
     if (businessCosts.length && !canWriteBusinessCosts) {
       throw new ForbiddenException('当前岗位不能录入业务成本');
     }
@@ -21413,6 +21497,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         select: { id: true, status: true }
       });
       if (!current) {
+        throw new NotFoundException('录单草稿不存在');
+      }
+      if (!canEditOrderEntryDraft && current.status !== 'REVIEW_PENDING') {
         throw new NotFoundException('录单草稿不存在');
       }
       if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(current.status)) {
@@ -21439,11 +21526,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException('当前角色不能录入代理或付款敏感信息');
     }
     const payables = this.normalizeOrderEntryFinanceItems('PAYABLE', rawPayables);
-    const payableMasked = await this.canMaskOrderEntryPayables(principal);
     const canManagePayables = await this.canManageOrderEntryPayables(principal);
-    if (payables.length && payableMasked) {
-      throw new ForbiddenException('已屏蔽应付费用，不能录入应付费用');
-    }
     if (!canManagePayables && payables.length) {
       throw new ForbiddenException('当前角色不能录入应付费用');
     }
@@ -21513,11 +21596,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
     const receivables = this.normalizeOrderEntryFinanceItems('RECEIVABLE', input.receivables);
     const businessCosts = this.normalizeOrderEntryFinanceItems('BUSINESS_COST', input.businessCosts);
-    const businessCostMasked = await this.canMaskOrderEntryBusinessCosts(principal);
     const canWriteBusinessCosts = await this.canWriteOrderEntryBusinessCosts(principal);
-    if (businessCosts.length && businessCostMasked) {
-      throw new ForbiddenException('已屏蔽业务成本，不能录入业务成本');
-    }
     if (businessCosts.length && !canWriteBusinessCosts) {
       throw new ForbiddenException('当前岗位不能录入业务成本');
     }
@@ -21530,11 +21609,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException('当前角色不能录入代理或付款敏感信息');
     }
     const payables = this.normalizeOrderEntryFinanceItems('PAYABLE', rawPayables);
-    const payableMasked = await this.canMaskOrderEntryPayables(principal);
     const canManagePayables = await this.canManageOrderEntryPayables(principal);
-    if (payables.length && payableMasked) {
-      throw new ForbiddenException('已屏蔽应付费用，不能录入应付费用');
-    }
     if (!canManagePayables && payables.length) {
       throw new ForbiddenException('当前角色不能录入应付费用');
     }
@@ -21964,9 +22039,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       actor.role.name as RoleKey,
       actor.role.permissions.map((item: { code: string }) => item.code as PermissionKey)
     );
-    const hasRequiredPermission = permissions.includes(requiredPermission)
-      && (requiredPermission !== 'business:order-entry:business-cost-write'
-        || !permissions.includes('business:order-entry:business-cost-mask'));
+    const hasRequiredPermission = permissions.includes(requiredPermission);
     if (
       !permissions.includes('business:shipment:team-view')
       || !hasRequiredPermission
@@ -22003,8 +22076,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     );
     if (
       !permissions.includes('business:shipment:team-view')
-      || !permissions.includes('business:order-entry:business-cost-write')
-      || permissions.includes('business:order-entry:business-cost-mask')
+      || !permissions.includes('business:order-entry:business-cost')
       || !owner
       || owner.enabled !== true
       || (actor.site ?? null) !== (owner.site ?? null)
@@ -22036,10 +22108,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       actor.role.name as RoleKey,
       actor.role.permissions.map((item: { code: string }) => item.code as PermissionKey)
     );
-    const hasRequiredPermission = requiredPermission === 'business:order-entry:business-cost-write'
-      ? (permissions.includes('business:order-entry:view') || permissions.includes(requiredPermission))
-        && !permissions.includes('business:order-entry:business-cost-mask')
-      : permissions.includes(requiredPermission);
+    const hasRequiredPermission = permissions.includes(requiredPermission);
     if (
       !permissions.includes('business:shipment:team-view')
       || !hasRequiredPermission
@@ -28159,7 +28228,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       || customer.enabled !== true
       || customer.code !== customerCode.trim()
       || !permissions.includes('business:shipment:team-view')
-      || !permissions.includes('business:order-entry:draft-save')
+      || !permissions.includes('business:order-entry:draft-edit')
       || !permissions.includes('business:order-entry:submit-review')
       || !actor.site
       || !owner

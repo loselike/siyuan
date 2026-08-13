@@ -233,7 +233,7 @@ export function OrderFeePanel({
     ));
   const visibleReceivables = [
     'business:shipment:finance-detail-view',
-    'business:review:finance-detail-view',
+    'business:review:view',
     'finance:receivable:read',
     'finance:receivable:detail',
     'finance:receivable:update'
@@ -269,7 +269,7 @@ export function OrderFeePanel({
     hasUiPermission(role, permissions, 'finance:business-cost:manage')
     && hasUiPermission(role, permissions, 'finance:business-cost:view-agent')
   );
-  const hasOrderEntryBusinessCostWrite = hasUiPermission(role, permissions, 'business:order-entry:business-cost-write');
+  const hasOrderEntryBusinessCostWrite = hasUiPermission(role, permissions, 'business:order-entry:business-cost');
   const canWritePendingReviewBusinessCost = shipment.status === 'REVIEW_PENDING' && hasOrderEntryBusinessCostWrite;
   const usesPendingReviewBusinessCostOnly = !canManageBusinessCostSensitiveFields && (
     hasOrderEntryBusinessCostWrite

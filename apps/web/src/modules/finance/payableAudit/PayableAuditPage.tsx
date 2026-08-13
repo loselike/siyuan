@@ -105,7 +105,7 @@ function statusTag(value?: string) {
 }
 
 export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange, onGoPendingPayment }: PayableAuditPageProps) {
-  const { message, modal } = AntdApp.useApp();
+  const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PayableAuditListQuery>();
   const [form] = Form.useForm<PayableAuditCreateInput & PayableAuditUpdateInput>();
   const [query, setQuery] = useState<PayableAuditListQuery>(defaultQuery);
@@ -175,36 +175,10 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
     setEditorOpen(true);
   };
 
-  const pendingPaymentQueryFor = (row?: PayableAuditSummary): PendingPaymentListQuery => ({
-    page: 1,
-    pageSize: 10,
-    status: 'PENDING',
-    currency: 'ALL',
-    sortBy: 'date',
-    sortOrder: 'desc',
-    systemOrderNo: row?.auditSource === 'MISC_FEE_HANG' ? undefined : row?.systemOrderNo,
-    customerCode: row?.customerCode,
-    agent: row?.agentName
-  });
-
-  const showPendingPaymentPrompt = (row?: PayableAuditSummary) => {
-    modal.success({
-      title: '已完成市场应付审核',
-      content: row?.systemOrderNo
-        ? `市场应付已审核，已生成待付款记录：${row.systemOrderNo}。请补充供应商账单截图和代理收款银行信息。`
-        : '市场应付已审核，已生成待付款记录。请到待付款补充供应商账单截图和代理收款银行信息。',
-      okText: '去待付款',
-      cancelText: '留在当前页',
-      onOk: () => {
-        onGoPendingPayment?.(pendingPaymentQueryFor(row));
-      }
-    });
-  };
-
   const auditOne = async (row: PayableAuditSummary) => {
     await apiClient.auditPayable(row.id);
     await loadRows();
-    showPendingPaymentPrompt(row);
+    message.success('应付已审核并生成待付款记录，可继续审核下一张');
   };
 
   const reverseAuditOne = async (row: PayableAuditSummary) => {
@@ -291,9 +265,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
       message.success(`处理完成：成功 ${result.successCount} 条`);
     }
     await loadRows();
-    if (action === 'audit' && result.successCount > 0) {
-      showPendingPaymentPrompt();
-    }
+    if (action === 'audit' && result.successCount > 0) message.success('应付已审核并生成待付款记录，可继续审核下一张');
   };
 
   const baseColumns: Record<ColumnKey, ColumnsType<PayableAuditSummary>[number]> = {

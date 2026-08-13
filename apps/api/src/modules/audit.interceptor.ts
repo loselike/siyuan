@@ -1,4 +1,4 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { CallHandler, ExecutionContext, Inject, Injectable, NestInterceptor } from '@nestjs/common';
 import { catchError, tap } from 'rxjs/operators';
 import { throwError } from 'rxjs';
 import { randomUUID } from 'node:crypto';
@@ -17,7 +17,7 @@ type AuditRequest = {
 
 @Injectable()
 export class AuditInterceptor implements NestInterceptor {
-  constructor(private readonly dispatcher: HttpAuditDispatcher) {}
+  constructor(@Inject(HttpAuditDispatcher) private readonly dispatcher: HttpAuditDispatcher) {}
 
   intercept(context: ExecutionContext, next: CallHandler) {
     const request = context.switchToHttp().getRequest<AuditRequest>();

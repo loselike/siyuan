@@ -214,18 +214,23 @@ export function FinancePage({
   }>();
   const hasUiPermission = (permission: PermissionKey) => role === 'ADMIN' || permissions.includes(permission);
   const canViewBusinessCosts = canViewOrderLifecycleBusinessCosts(role, permissions);
-  const canViewOrderEntry = hasUiPermission('business:order-entry:view');
-  const canCreateOrderEntry = hasUiPermission('business:order-entry:create');
+  const canEditOrderEntry = hasUiPermission('business:order-entry:edit');
+  const canMaintainOrderEntryBusinessCost = hasUiPermission('business:order-entry:business-cost');
+  const canMaintainOrderEntryPayable = hasUiPermission('business:order-entry:payable-fee');
+  const canViewOrderEntry = canEditOrderEntry || canMaintainOrderEntryBusinessCost || canMaintainOrderEntryPayable;
+  const canCreateOrderEntry = canEditOrderEntry;
   const canViewOrderEntryDrafts = hasUiPermission('business:order-entry:draft-view');
-  const canSaveOrderEntryDraft = hasUiPermission('business:order-entry:draft-save');
+  const canSaveOrderEntryDraft = canEditOrderEntry || hasUiPermission('business:order-entry:draft-edit');
   const canSubmitOrderEntryForReview = hasUiPermission('business:order-entry:submit-review');
   const canUseOrderEntryAgentFields = hasUiPermission('master-data:agents:read');
-  const canContinueOrderEntryDraft = canViewOrderEntry && canViewOrderEntryDrafts && canSaveOrderEntryDraft;
-  const canAdjustPendingReviewPackages = canViewOrderEntry && canSaveOrderEntryDraft && hasUiPermission('business:order-entry:warehouse-package-select');
+  const canContinueOrderEntryDraft = canEditOrderEntry || canMaintainOrderEntryBusinessCost || canMaintainOrderEntryPayable;
+  const canViewPendingReview = hasUiPermission('business:review:view');
+  const canEditPendingReview = hasUiPermission('business:review:edit');
+  const canAdjustPendingReviewPackages = canEditPendingReview;
   const canUseFinanceWorkspace = hasUiPermission('finance:dashboard:view') || hasUiPermission('finance:receivable:read') || hasUiPermission('finance:business-cost:read') || hasUiPermission('finance:payable:read') || hasUiPermission('finance:pending-payment:read') || hasUiPermission('finance:paid-payment:read') || hasUiPermission('finance:water-receipt:read') || hasUiPermission('finance:water-match:read') || hasUiPermission('finance:agent-bill:read');
   const isBusinessWaterReceiptUser = permissions.includes('data-scope:sales-own' as PermissionKey);
-  const canRestoreReviewShipment = hasUiPermission('business:review:restore');
-  const canPurgeReviewShipment = hasUiPermission('business:review:purge');
+  const canRestoreReviewShipment = canEditPendingReview;
+  const canPurgeReviewShipment = canEditPendingReview;
   const [financeDashboard, setFinanceDashboard] = useState<FinanceDashboardResponse | null>(null);
   const [financeDashboardLoading, setFinanceDashboardLoading] = useState(false);
   const [financeDashboardError, setFinanceDashboardError] = useState<string | null>(null);
@@ -245,7 +250,7 @@ export function FinancePage({
     }
   }, [apiClient, modal]);
   const loadDeletedReviewRows = useCallback(async () => {
-    if (!canRestoreReviewShipment) return;
+    if (!canViewPendingReview) return;
     setDeletedReviewLoading(true);
     try {
       const rows = await apiClient.reviewDeletedShipments();
@@ -259,7 +264,7 @@ export function FinancePage({
     } finally {
       setDeletedReviewLoading(false);
     }
-  }, [apiClient, canRestoreReviewShipment, modal]);
+  }, [apiClient, canViewPendingReview, modal]);
   const loadOrderEntryDraftRows = useCallback(async () => {
     setOrderEntryDraftLoading(true);
     try {
@@ -323,7 +328,7 @@ export function FinancePage({
     ? [...pendingReviewShipments, ...deletedReviewShipments].find((shipment) => shipment.id === financeReviewSelectedShipmentId)
       ?? (pendingReviewDetail?.shipment.id === financeReviewSelectedShipmentId ? pendingReviewDetail.shipment : null)
     : null;
-  const canBusinessReviewShipment = pendingReviewView === 'ACTIVE' && hasUiPermission('business:review:approve');
+  const canBusinessReviewShipment = pendingReviewView === 'ACTIVE' && canEditPendingReview;
   const loadPendingReviewDetail = useCallback(async (shipmentId: string) => {
     setPendingReviewDetailLoading(true);
     try {
@@ -396,7 +401,7 @@ export function FinancePage({
     pendingReviewView === 'ACTIVE'
     && detailShipment
     && ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(detailShipment.status)
-    && hasUiPermission('business:shipment:update-basic')
+    && canEditPendingReview
   );
   const pendingReviewBusinessCosts = canViewBusinessCosts ? pendingReviewDetail?.finance.businessCosts ?? [] : [];
   const pendingReviewFormulaCost = pendingReviewBusinessCosts.find((item) => item.chargeWeightKg && item.unitPrice);
@@ -440,8 +445,8 @@ export function FinancePage({
     getPendingReviewOutboundOrderNo(detailShipment)
   ].join('——');
   const canViewReviewAgentIdentity = role === 'ADMIN' || permissions.includes('finance:business-cost:view-agent');
-  const canViewReviewFinanceFields = role === 'ADMIN' || permissions.includes('business:review:finance-detail-view');
-  const canDirectEditPendingReviewBusinessCost = canViewBusinessCosts && permissions.includes('business:order-entry:business-cost-write');
+  const canViewReviewFinanceFields = canViewPendingReview;
+  const canDirectEditPendingReviewBusinessCost = canViewBusinessCosts && hasUiPermission('business:order-entry:business-cost');
   const renderShipmentCargoData = (shipment?: Shipment | null) => [
     `件数 ${formatPendingReviewValue(shipment?.packageCount)}`,
     `实重 ${formatPendingReviewWeight(getPendingReviewWeight(shipment))}`,
@@ -553,7 +558,7 @@ export function FinancePage({
     const customerCode = getPendingReviewCustomerCode(shipment);
     if (!shipment || shipment.status !== 'REVIEW_PENDING' || customerCode === '-') return;
     if (!canAdjustPendingReviewPackages) {
-      modal.warning({ title: '当前账号不能调整包裹', content: '需要查看录单、保存录单和选择仓库包裹权限。' });
+      modal.warning({ title: '当前账号不能调整包裹', content: '需要待审核运单编辑权限。' });
       return;
     }
     setPendingPackageLoading(true);
@@ -704,25 +709,25 @@ export function FinancePage({
     if (!target) return;
     let reason = '';
     modal.confirm({
-      title: '永久删除待审核订单？',
+      title: '删除待审核订单？',
       content: (
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <Typography.Text>订单 {target.systemOrderNo || target.customerOrderNo} 删除后不可恢复，相关待审核费用和包裹关联将同步清理，审计日志仍会保留。</Typography.Text>
-          <Input.TextArea rows={3} placeholder="请填写永久删除原因" onChange={(event) => { reason = event.target.value; }} />
+          <Typography.Text>订单 {target.systemOrderNo || target.customerOrderNo} 将移入“已删除订单”，仍可恢复；彻底删除需在已删除列表单独执行。</Typography.Text>
+          <Input.TextArea rows={3} placeholder="请填写删除原因" onChange={(event) => { reason = event.target.value; }} />
         </Space>
       ),
-      okText: '永久删除',
+      okText: '删除',
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
         const trimmedReason = reason.trim();
         if (!trimmedReason) {
-          messageApi.warning('永久删除必须填写原因');
-          throw new Error('永久删除必须填写原因');
+          messageApi.warning('删除必须填写原因');
+          throw new Error('删除必须填写原因');
         }
         await apiClient.deleteShipmentReview(target.id, { reason: trimmedReason });
         setPendingReviewRows((current) => current.filter((row) => row.id !== target.id));
-        messageApi.success('订单已永久删除');
+        messageApi.success('订单已移入已删除列表');
         setFinanceReviewSelectedShipmentId(null);
         setPendingReviewDetail(null);
         await refreshPendingReviewWorkbench();
@@ -758,7 +763,7 @@ export function FinancePage({
   const purgeReviewShipment = (shipment: Shipment) => {
     confirmDangerousAction({
       title: '确认彻底删除该订单？',
-      content: '彻底删除后不可恢复，仅管理员可执行。请确认该订单没有后续财务、仓库或付款流转。',
+      content: '彻底删除后不可恢复。请确认该订单没有后续财务、仓库或付款流转。',
       okText: '彻底删除',
       confirm: modal.confirm,
       onOk: async () => {
@@ -1013,7 +1018,7 @@ export function FinancePage({
         <Space size={4} wrap>
           <Button size="small" onClick={(event) => { event.stopPropagation(); setFinanceReviewSelectedShipmentId(record.id); }}>详情</Button>
           {canBusinessReviewShipment && !record.businessReviewedAt ? <Button size="small" type="primary" onClick={(event) => { event.stopPropagation(); approvePendingReview(record); }}>自审通过</Button> : null}
-          {hasUiPermission('business:review:delete') ? <Button size="small" danger onClick={(event) => { event.stopPropagation(); deletePendingReview(record); }}>删除</Button> : null}
+          {canEditPendingReview ? <Button size="small" danger onClick={(event) => { event.stopPropagation(); deletePendingReview(record); }}>删除</Button> : null}
         </Space>
       )
     }
@@ -1056,13 +1061,7 @@ export function FinancePage({
     .filter((fee) => fee.shipmentId === shipment.id && !fee.voided)
     .reduce((sum, fee) => sum + fee.amount, 0);
   const continueOrderEntryDraft = async (shipment: Shipment) => {
-    if (!canContinueOrderEntryDraft) {
-      modal.warning({
-        title: '当前账号不能编辑草稿',
-        content: '继续编辑需要“进入录单页面、查看录单草稿、保存录单草稿”三项权限。'
-      });
-      return;
-    }
+    if (!canContinueOrderEntryDraft) return;
     setOpeningOrderEntryDraftId(shipment.id);
     try {
       const detail = await apiClient.orderEntryDetail(shipment.id);
@@ -1073,6 +1072,8 @@ export function FinancePage({
       }
       setEditingOrderEntryDraftDetail(detail);
       setEditingOrderEntryDraftId(shipment.id);
+      setActiveFinanceSection('finance-entry');
+      syncBusinessSectionRoute('finance-entry');
     } catch (error) {
       modal.error({ title: '草稿无法继续编辑', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
@@ -1152,16 +1153,14 @@ export function FinancePage({
       sortable: false,
       render: (_, record) => (
         <Space size={6}>
-          <Button
+          {canContinueOrderEntryDraft ? <Button
             size="small"
             type="primary"
             loading={openingOrderEntryDraftId === record.id}
-            disabled={!canContinueOrderEntryDraft}
-            title={canContinueOrderEntryDraft ? '继续编辑草稿' : '需要“进入录单页面、查看录单草稿、保存录单草稿”权限'}
             onClick={() => void continueOrderEntryDraft(record)}
           >
-            继续编辑
-          </Button>
+            {canEditOrderEntry ? '继续编辑' : '维护费用'}
+          </Button> : null}
           {hasUiPermission('business:order-entry:draft-delete') ? <Button size="small" danger onClick={() => deleteOrderEntryDraft(record)}>删除</Button> : null}
         </Space>
       )
@@ -1305,9 +1304,7 @@ export function FinancePage({
           extra={(
             <Space size={8}>
               <Button size="small" type={pendingReviewView === 'ACTIVE' ? 'primary' : 'default'} onClick={() => setPendingReviewView('ACTIVE')}>待审核订单</Button>
-              {hasUiPermission('business:review:deleted-list') ? (
-                <Button size="small" type={pendingReviewView === 'DELETED' ? 'primary' : 'default'} onClick={() => setPendingReviewView('DELETED')}>已删除订单</Button>
-              ) : null}
+              <Button size="small" type={pendingReviewView === 'DELETED' ? 'primary' : 'default'} onClick={() => setPendingReviewView('DELETED')}>已删除订单</Button>
               <Text type="secondary">共 {currentReviewRows.length} 单</Text>
             </Space>
           )}
@@ -1395,9 +1392,9 @@ export function FinancePage({
                 ) : (
                   <>
                     {canDirectEditPendingReview ? <Button size="small" type="primary" form="pending-review-basic-edit" htmlType="submit" loading={pendingReviewBasicSubmitting}>保存修改</Button> : null}
-                    {hasUiPermission('business:review:operation-log-view') ? <Button size="small" onClick={() => onViewShipmentLog(selectedPendingReviewShipment)}>操作日志</Button> : null}
+                    <Button size="small" onClick={() => onViewShipmentLog(selectedPendingReviewShipment)}>操作日志</Button>
                     {canBusinessReviewShipment && !selectedPendingReviewShipment.businessReviewedAt ? <Button size="small" type="primary" loading={pendingReviewSubmitting} onClick={() => approvePendingReview()}>自审通过</Button> : null}
-                    {hasUiPermission('business:review:delete') ? <Button size="small" danger onClick={() => deletePendingReview()}>删除</Button> : null}
+                    {canEditPendingReview ? <Button size="small" danger onClick={() => deletePendingReview()}>删除</Button> : null}
                   </>
                 )}
               </Space>
@@ -1607,7 +1604,7 @@ export function FinancePage({
           'business-dashboard': hasUiPermission('business:dashboard:view'),
           'finance-entry': canViewOrderEntry,
           'order-entry-drafts': canViewOrderEntryDrafts,
-          'pending-review': hasUiPermission('business:review:list'),
+          'pending-review': canViewPendingReview,
           'order-management': hasUiPermission('business:shipment:list'),
           'order-ai': hasUiPermission('business:order-ai:view')
         })[item.key])
@@ -1752,7 +1749,7 @@ export function FinancePage({
       icon: <CalendarDays size={18} />,
       sectionKey: 'finance-entry'
     },
-    {
+    ...(canViewOrderEntryDrafts ? [{
       key: 'drafts',
       title: '草稿箱',
       value: businessDraftRows.filter((shipment) => shipment.status === 'DRAFT').length,
@@ -1760,7 +1757,7 @@ export function FinancePage({
       tone: businessDraftRows.length > 0 ? 'orange' : 'gray',
       icon: <FilePenLine size={18} />,
       sectionKey: 'order-entry-drafts'
-    },
+    }] : []),
     {
       key: 'pending-review',
       title: '待审核运单',
@@ -1857,9 +1854,9 @@ export function FinancePage({
       </Row>
       <Card className="business-dashboard-actions-card" title="快捷入口">
         <Space wrap>
-          {hasUiPermission('business:order-entry:view') ? <Button type="primary" icon={<FileText size={16} />} onClick={() => setActiveFinanceSection('finance-entry')}>去录单</Button> : null}
+          {canViewOrderEntry ? <Button type="primary" icon={<FileText size={16} />} onClick={() => setActiveFinanceSection('finance-entry')}>去录单</Button> : null}
           {hasUiPermission('business:order-entry:draft-view') ? <Button icon={<FilePenLine size={16} />} onClick={() => setActiveFinanceSection('order-entry-drafts')}>查看草稿箱</Button> : null}
-          {hasUiPermission('business:review:list') ? <Button icon={<ListChecks size={16} />} onClick={() => setActiveFinanceSection('pending-review')}>处理待审核运单</Button> : null}
+          {canViewPendingReview ? <Button icon={<ListChecks size={16} />} onClick={() => setActiveFinanceSection('pending-review')}>处理待审核运单</Button> : null}
         </Space>
       </Card>
       <Row gutter={[12, 12]} className="business-dashboard-bottom-row">
@@ -2050,13 +2047,13 @@ export function FinancePage({
               draftId={editingOrderEntryDraftId}
               initialDraftDetail={editingOrderEntryDraftDetail}
               canCreateOrderEntry={canCreateOrderEntry}
-              canSaveDraft={canSaveOrderEntryDraft}
+              canSaveDraft={editingOrderEntryDraftId ? canSaveOrderEntryDraft : canCreateOrderEntry}
               canSubmitForReview={canSubmitOrderEntryForReview}
               canUseAgentFields={canUseOrderEntryAgentFields}
               onDraftClosed={closeEditingOrderEntryDraft}
               preselectedPackageIds={prefillOrderEntryPackageIds}
               onPreselectedPackageIdsConsumed={onOrderEntryPrefillConsumed}
-            /> : <Alert type="warning" showIcon message="当前角色没有新建录单权限；如需编辑已有草稿，请同时授予进入录单、查看草稿和保存草稿权限。" />
+            /> : <Alert type="warning" showIcon message="当前角色没有新建录单或编辑草稿权限。" />
           ) : null}
         </Col>
         <Col xs={24}>

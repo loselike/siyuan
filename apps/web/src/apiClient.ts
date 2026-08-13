@@ -273,6 +273,8 @@ import type {
   WarehouseTallyHistoricalAggregateCorrectionPreview,
   WarehouseTallyHistoricalAggregateCorrectionInput,
   WarehouseTallyHistoricalAggregateCorrectionResult,
+  WarehouseTallySortRule,
+  WarehouseTallySortRuleInput,
   WarehouseTallyTaskCreateInput,
   WarehouseTallyRepeatStatisticsQuery,
   WarehouseTallyRepeatStatisticsResponse,
@@ -366,18 +368,22 @@ export type PermissionKey =
   | 'business:dashboard:trend-view'
   | 'business:dashboard:pending-review-summary'
   | 'business:order-entry:view'
-  | 'business:order-entry:warehouse-package-select'
-  | 'business:order-entry:create'
-  | 'business:order-entry:draft-view'
-  | 'business:order-entry:draft-save'
-  | 'business:order-entry:draft-delete'
-  | 'business:order-entry:submit-review'
-  | 'business:order-entry:invoice-upload'
-  | 'business:order-entry:label-upload'
+  | 'business:order-entry:edit'
+  | 'business:order-entry:business-cost'
+  | 'business:order-entry:payable-fee'
   | 'business:order-entry:business-cost-view'
   | 'business:order-entry:business-cost-write'
   | 'business:order-entry:business-cost-mask'
   | 'business:order-entry:payable-fee-mask'
+  | 'business:order-entry:warehouse-package-select'
+  | 'business:order-entry:create'
+  | 'business:order-entry:draft-view'
+  | 'business:order-entry:draft-save'
+  | 'business:order-entry:draft-edit'
+  | 'business:order-entry:draft-delete'
+  | 'business:order-entry:submit-review'
+  | 'business:order-entry:invoice-upload'
+  | 'business:order-entry:label-upload'
   | 'business:order-fee:view'
   | 'business:order-fee:create'
   | 'business:order-fee:update'
@@ -385,6 +391,8 @@ export type PermissionKey =
   | 'business:order-fee:lock'
   | 'business:order-fee:unlock'
   | 'business:order-fee:profit-view'
+  | 'business:review:view'
+  | 'business:review:edit'
   | 'business:review:list'
   | 'business:review:detail'
   | 'business:review:deleted-list'
@@ -1572,6 +1580,14 @@ export class ApiClient {
     });
     const search = params.toString();
     return this.request(`/warehouse/tally-repeat-statistics${search ? `?${search}` : ''}`);
+  }
+
+  async warehouseTallySortRules(): Promise<WarehouseTallySortRule[]> {
+    return this.request('/warehouse/tally-sort-rules');
+  }
+
+  async updateWarehouseTallySortRules(rules: WarehouseTallySortRuleInput[]): Promise<WarehouseTallySortRule[]> {
+    return this.request('/warehouse/tally-sort-rules', { method: 'PUT', body: JSON.stringify({ rules }) });
   }
 
   async createWarehouseTallyTask(input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {

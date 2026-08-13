@@ -231,16 +231,6 @@ export function isLineShipmentStageEditPermission(permission: Pick<PermissionDef
 }
 
 
-export function isPricingModuleBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
-  return permission.code.startsWith('pricing:lookup:module-block:')
-    || permission.code.startsWith('pricing:markup:module-block:')
-    || permission.code.startsWith('pricing:markup:view-block:')
-    || permission.code.startsWith('pricing:markup:edit-block:')
-    || permission.code.startsWith('pricing:price-books:create-block:')
-    || permission.code.startsWith('pricing:price-books:delete-block:')
-    || permission.code.startsWith('pricing:price-books:remark-block:');
-}
-
 export function isWarehouseTallyPendingMaskPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
   return permission.code.startsWith('warehouse:tally-pending:') && permission.code.endsWith('-block');
 }
@@ -272,7 +262,6 @@ export function getPermissionControls(group: string, permissions: PermissionDefi
     (permission) => !isUiPreferencePermission(permission)
       && !isLineShipmentStageEditBlockPermission(permission)
       && !isLineShipmentStageEditPermission(permission)
-      && !isPricingModuleBlockPermission(permission)
       && !isWarehouseTallyPendingMaskPermission(permission)
   );
   if (!configured) {
@@ -372,12 +361,6 @@ export function updatePermissionControl(
 ): PermissionKey[] {
   const next = new Set(grantedPermissions);
   control.codes.forEach((code) => checked ? next.add(code) : next.delete(code));
-  if (checked && control.codes.includes('business:order-entry:business-cost-write')) {
-    next.add('business:order-entry:business-cost-view');
-  }
-  if (!checked && control.codes.includes('business:order-entry:business-cost-view')) {
-    next.delete('business:order-entry:business-cost-write');
-  }
   return [...next];
 }
 

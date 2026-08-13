@@ -1,10 +1,10 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Select, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Download, FileText, PackageCheck, PackagePlus, Plus, Trash2 } from 'lucide-react';
-import { sortWarehouseTallyTasks, warehouseTallyChannels, warehouseTallyProgressStatusLabels } from '@siyuan/shared';
-import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockPageResponse, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
+import { Download, FileText, PackageCheck, PackagePlus, Plus, RotateCcw, Settings2, Trash2 } from 'lucide-react';
+import { createDefaultWarehouseTallySortRules, sortWarehouseTallyTasks, warehouseTallyChannels, warehouseTallyProgressStatusLabels } from '@siyuan/shared';
+import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockPageResponse, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallySortRule, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { getShipmentStageDwellSeconds, getShipmentStageDwellText } from '../shared/shipmentStageDwell';
 import { ApiClient, isAdministratorRole, type PermissionKey } from '../../apiClient';
@@ -73,6 +73,43 @@ import {
 import { canUseWarehouseSameSpecReplenish } from './warehouseSameSpecPermission';
 
 export { canEditUnenteredWarehousePackage } from './warehousePageModel';
+
+export type WarehousePendingDispatchFilter = {
+  outboundNo: string;
+  agentShortName: string;
+  sensitive: 'ALL' | 'YES' | 'NO';
+  declaration: 'ALL' | 'YES' | 'NO';
+};
+
+export const emptyWarehousePendingDispatchFilter: WarehousePendingDispatchFilter = {
+  outboundNo: '',
+  agentShortName: '',
+  sensitive: 'ALL',
+  declaration: 'ALL'
+};
+
+export function filterWarehouseLabelQueueRows(
+  rows: WarehouseLabelQueueRow[],
+  filters: WarehousePendingDispatchFilter
+) {
+  const outboundNoKeyword = filters.outboundNo.trim().toLowerCase();
+  const agentKeyword = filters.agentShortName.trim().toLowerCase();
+  const matchesKeyword = (value: string | undefined, keyword: string) => !keyword || (value ?? '').toLowerCase().includes(keyword);
+  return rows.filter((row) => {
+    const outboundNo = row.kind === 'shipment'
+      ? resolveShipmentOutboundOrderNo(row.shipment)
+      : row.consolidation.outboundOrderNo;
+    const agentShortName = row.kind === 'shipment'
+      ? (row.shipment as Shipment & { agentShortName?: string }).agentShortName || row.shipment.agentName || '-'
+      : '待确认代理';
+    const sensitive = row.kind === 'shipment' && Boolean(row.shipment.sensitive);
+    const declaration = row.kind === 'shipment' && Boolean(row.shipment.declarationRequired);
+    return matchesKeyword(outboundNo, outboundNoKeyword)
+      && matchesKeyword(agentShortName, agentKeyword)
+      && (filters.sensitive === 'ALL' || sensitive === (filters.sensitive === 'YES'))
+      && (filters.declaration === 'ALL' || declaration === (filters.declaration === 'YES'));
+  });
+}
 
 export function getWarehouseOutboundRemark(shipment?: Shipment) {
   return shipment?.warehouseOutboundRemark?.trim() || undefined;
@@ -250,9 +287,20 @@ function downloadHtmlFile(html: string, fileName: string, mimeType: string) {
  * 未完成理货是仓库待办队列，按业务实际提交理货需求的时间先进先出。
  * 时间异常的历史记录置后，并以任务号稳定兜底，避免刷新时任务跳位。
  */
-export function sortPendingTallyTasksByRequestTime(tasks: WarehouseTallyTaskSummary[]) {
-  return sortWarehouseTallyTasks(tasks);
+export function sortPendingTallyTasksByRequestTime(tasks: WarehouseTallyTaskSummary[], rules: WarehouseTallySortRule[]) {
+  const inProgress = tasks.filter((task) => task.tallyProgressStatus === 'IN_PROGRESS');
+  const waiting = tasks.filter((task) => task.tallyProgressStatus !== 'IN_PROGRESS');
+  return [
+    ...inProgress.sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.taskNo.localeCompare(right.taskNo)),
+    ...sortWarehouseTallyTasks(waiting, new Date(), rules)
+  ];
 }
+
+const warehouseTallyTimeSlotLabels: Record<WarehouseTallySortRule['preferredTimeSlot'], string> = {
+  MORNING: '上午优先',
+  AFTERNOON: '下午优先',
+  ALL_DAY: '全天'
+};
 
 export function formatWarehouseHandoverEntryNo(shipment: Pick<Shipment, 'inboundNo'>) {
   return shipment.inboundNo?.trim() || '-';
@@ -422,6 +470,8 @@ export function WarehousePage({
   const [deletingWarehousePackages, setDeletingWarehousePackages] = useState(false);
   const [todayReceiptPagination, setTodayReceiptPagination] = useState({ current: 1, pageSize: warehouseTablePageSize });
   const [selectedWarehouseQueueRowIds, setSelectedWarehouseQueueRowIds] = useState<string[]>([]);
+  const [pendingDispatchFilterDraft, setPendingDispatchFilterDraft] = useState<WarehousePendingDispatchFilter>(emptyWarehousePendingDispatchFilter);
+  const [pendingDispatchFilters, setPendingDispatchFilters] = useState<WarehousePendingDispatchFilter>(emptyWarehousePendingDispatchFilter);
   const [batchHandoverOpen, setBatchHandoverOpen] = useState(false);
   const [batchHandoverRemark, setBatchHandoverRemark] = useState('');
   const [batchHandoverPrintOrientation, setBatchHandoverPrintOrientation] = useState<WarehouseHandoverPrintOrientation>('landscape');
@@ -459,6 +509,11 @@ export function WarehousePage({
   const [tallyTasks, setTallyTasks] = useState<WarehouseTallyTaskSummary[]>(cachedTallyTasks);
   const [tallyChannelDraft, setTallyChannelDraft] = useState('');
   const [, setTallySortTick] = useState(0);
+  const [tallySortRules, setTallySortRules] = useState<WarehouseTallySortRule[]>(createDefaultWarehouseTallySortRules);
+  const [tallySortRuleDraft, setTallySortRuleDraft] = useState<WarehouseTallySortRule[]>(createDefaultWarehouseTallySortRules);
+  const [tallySortRulesOpen, setTallySortRulesOpen] = useState(false);
+  const [tallySortRulesLoading, setTallySortRulesLoading] = useState(false);
+  const [savingTallySortRules, setSavingTallySortRules] = useState(false);
   const [tallyRequirementDraft, setTallyRequirementDraft] = useState('');
   const [editingTallyTask, setEditingTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
   const [editingTallyPackageIds, setEditingTallyPackageIds] = useState<string[]>([]);
@@ -904,6 +959,21 @@ export function WarehousePage({
     };
   }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, refreshVersion]);
   useEffect(() => {
+    if (!canTallyPendingView) {
+      setTallySortRules(createDefaultWarehouseTallySortRules());
+      return;
+    }
+    let alive = true;
+    const loadTallySortRules = () => {
+      void apiClient.warehouseTallySortRules()
+        .then((rules) => { if (alive) setTallySortRules(rules); })
+        .catch(() => undefined);
+    };
+    loadTallySortRules();
+    const timer = window.setInterval(loadTallySortRules, 30_000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [apiClient, canTallyPendingView, refreshVersion]);
+  useEffect(() => {
     const refreshTimer = window.setInterval(() => setTallySortTick((current) => current + 1), 30_000);
     return () => window.clearInterval(refreshTimer);
   }, []);
@@ -1088,8 +1158,8 @@ export function WarehousePage({
     ? warehousePackages.filter((pkg) => selectedConsolidation.packageIds.includes(pkg.id))
     : [];
   const pendingTallyTasks = useMemo(
-    () => sortPendingTallyTasksByRequestTime(tallyTasks.filter((task) => task.status === 'PENDING')),
-    [tallyTasks]
+    () => sortPendingTallyTasksByRequestTime(tallyTasks.filter((task) => task.status === 'PENDING'), tallySortRules),
+    [tallySortRules, tallyTasks]
   );
   const editingTallyPackageOptions = useMemo(() => {
     if (!editingTallyTask) return [];
@@ -1168,9 +1238,10 @@ export function WarehousePage({
     ...warehouseShipmentQueue.map((shipment) => ({ id: `shipment-${shipment.id}`, kind: 'shipment' as const, shipment })),
     ...warehouseOutboundQueue.map((record) => ({ id: `consolidation-${record.id}`, kind: 'consolidation' as const, consolidation: record }))
   ];
-  const warehouseLabelQueueRowIdsKey = warehouseLabelQueueRows.map((row) => row.id).join('\u0000');
+  const filteredWarehouseLabelQueueRows = filterWarehouseLabelQueueRows(warehouseLabelQueueRows, pendingDispatchFilters);
+  const warehouseLabelQueueRowIdsKey = filteredWarehouseLabelQueueRows.map((row) => row.id).join('\u0000');
   useEffect(() => {
-    const visibleIds = new Set(warehouseLabelQueueRows.map((row) => row.id));
+    const visibleIds = new Set(filteredWarehouseLabelQueueRows.map((row) => row.id));
     setSelectedWarehouseQueueRowIds((current) => {
       const next = current.filter((id) => visibleIds.has(id));
       return next.length === current.length ? current : next;
@@ -1178,7 +1249,7 @@ export function WarehousePage({
   }, [warehouseLabelQueueRowIdsKey]);
   const warehouseQueueRowSelection = useMemo(() => {
     if (!canDispatchSelect) return undefined;
-    const visibleRowIds = new Set(warehouseLabelQueueRows.map((row) => row.id));
+    const visibleRowIds = new Set(filteredWarehouseLabelQueueRows.map((row) => row.id));
     return {
       selectedRowKeys: selectedWarehouseQueueRowIds,
       onChange: (keys: Key[]) => setSelectedWarehouseQueueRowIds(keys.map(String).filter((key) => visibleRowIds.has(key))),
@@ -1189,7 +1260,7 @@ export function WarehousePage({
       })
     };
   }, [canDispatchSelect, selectedWarehouseQueueRowIds, warehouseLabelQueueRowIdsKey]);
-  const selectedWarehouseQueueRows = warehouseLabelQueueRows.filter((row) => selectedWarehouseQueueRowIds.includes(row.id));
+  const selectedWarehouseQueueRows = filteredWarehouseLabelQueueRows.filter((row) => selectedWarehouseQueueRowIds.includes(row.id));
   const selectedWarehouseQueueTicketCount = selectedWarehouseQueueRows.length;
   const selectedWarehouseQueueHandoverRows = selectedWarehouseQueueRows.map(createWarehouseHandoverRowFromQueue);
   const selectedWarehouseQueueHandoverGroups = groupWarehouseHandoverRowsByAgent(selectedWarehouseQueueHandoverRows);
@@ -4076,6 +4147,16 @@ export function WarehousePage({
                 <Text type="secondary">共 {pendingTallyTasks.length} 条</Text>
               </Space>
             )}
+            extra={canTallyUpdate ? (
+              <Button size="small" icon={<Settings2 size={14} />} onClick={() => {
+                setTallySortRulesOpen(true);
+                setTallySortRulesLoading(true);
+                void apiClient.warehouseTallySortRules()
+                  .then((rules) => { setTallySortRules(rules); setTallySortRuleDraft(rules); })
+                  .catch(() => setWarehouseNotice('理货排序规则加载失败'))
+                  .finally(() => setTallySortRulesLoading(false));
+              }}>排序规则</Button>
+            ) : undefined}
           >
             <ManagedTable<WarehouseTallyTaskSummary>
               recordDetail={{ title: '未完成理货任务详情' }}
@@ -4353,25 +4434,62 @@ export function WarehousePage({
           </Space>
         )}
       >
-        <ManagedTable<WarehouseLabelQueueRow>
-          recordDetail={{ title: '待出库详情' }}
-          rowKey="id"
-          dataSource={warehouseLabelQueueRows}
-          size="small"
-          pagination={tenRowTablePagination}
-          rowSelection={warehouseQueueRowSelection}
-          minimumScrollX={1720}
-          columnSettingsPlacement="toolbar"
-          className="warehouse-label-queue-table"
-          columns={warehouseQueueColumns}
-          columnSettings={hasWarehousePermission('warehouse:dispatch-pending:column-setting') ? {
-            storageKey: warehouseQueueColumnSettingsKey,
-            title: '待出库列设置',
-            labels: warehouseQueueColumnLabels,
-            defaultColumnOrder: warehouseQueueDefaultColumnKeys
-          } : undefined}
-          locale={{ emptyText: '暂无待打单出货单，请先在渠道排货中分配渠道，或在理货管理中选择“理货并创建出货单”。' }}
-        />
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={8} xl={5}>
+              {renderFilterField('出货单号', <Input allowClear aria-label="待出库出货单号筛选" value={pendingDispatchFilterDraft.outboundNo} onChange={(event) => setPendingDispatchFilterDraft((current) => ({ ...current, outboundNo: event.target.value }))} />)}
+            </Col>
+            <Col xs={24} md={8} xl={5}>
+              {renderFilterField('代理简称', <Input allowClear aria-label="待出库代理简称筛选" value={pendingDispatchFilterDraft.agentShortName} onChange={(event) => setPendingDispatchFilterDraft((current) => ({ ...current, agentShortName: event.target.value }))} />)}
+            </Col>
+            <Col xs={24} md={8} xl={4}>
+              {renderFilterField('敏感', <select aria-label="待出库敏感筛选" className="native-select" value={pendingDispatchFilterDraft.sensitive} onChange={(event) => setPendingDispatchFilterDraft((current) => ({ ...current, sensitive: event.target.value as WarehousePendingDispatchFilter['sensitive'] }))}>
+                <option value="ALL">全部</option>
+                <option value="YES">是</option>
+                <option value="NO">否</option>
+              </select>)}
+            </Col>
+            <Col xs={24} md={8} xl={4}>
+              {renderFilterField('报关', <select aria-label="待出库报关筛选" className="native-select" value={pendingDispatchFilterDraft.declaration} onChange={(event) => setPendingDispatchFilterDraft((current) => ({ ...current, declaration: event.target.value as WarehousePendingDispatchFilter['declaration'] }))}>
+                <option value="ALL">全部</option>
+                <option value="YES">是</option>
+                <option value="NO">否</option>
+              </select>)}
+            </Col>
+            <Col xs={24} md={8} xl={6}>
+              {renderFilterActions(
+                () => {
+                  setPendingDispatchFilters({ ...pendingDispatchFilterDraft });
+                  setSelectedWarehouseQueueRowIds([]);
+                },
+                () => {
+                  setPendingDispatchFilterDraft({ ...emptyWarehousePendingDispatchFilter });
+                  setPendingDispatchFilters({ ...emptyWarehousePendingDispatchFilter });
+                  setSelectedWarehouseQueueRowIds([]);
+                }
+              )}
+            </Col>
+          </Row>
+          <ManagedTable<WarehouseLabelQueueRow>
+            recordDetail={{ title: '待出库详情' }}
+            rowKey="id"
+            dataSource={filteredWarehouseLabelQueueRows}
+            size="small"
+            pagination={tenRowTablePagination}
+            rowSelection={warehouseQueueRowSelection}
+            minimumScrollX={1720}
+            columnSettingsPlacement="toolbar"
+            className="warehouse-label-queue-table"
+            columns={warehouseQueueColumns}
+            columnSettings={hasWarehousePermission('warehouse:dispatch-pending:column-setting') ? {
+              storageKey: warehouseQueueColumnSettingsKey,
+              title: '待出库列设置',
+              labels: warehouseQueueColumnLabels,
+              defaultColumnOrder: warehouseQueueDefaultColumnKeys
+            } : undefined}
+            locale={{ emptyText: '暂无待打单出货单，请先在渠道排货中分配渠道，或在理货管理中选择“理货并创建出货单”。' }}
+          />
+        </Space>
       </Card>
       ) : null}
 
@@ -4444,6 +4562,36 @@ export function WarehousePage({
           onCorrectHistoricalAggregate={(task) => void openHistoricalAggregateCorrection(task)}
         />
       </Drawer>
+
+      <Modal
+        title="未完成理货排序规则"
+        open={tallySortRulesOpen}
+        width={720}
+        confirmLoading={savingTallySortRules}
+        okText="保存"
+        cancelText="取消"
+        onCancel={() => setTallySortRulesOpen(false)}
+        onOk={() => {
+          setSavingTallySortRules(true);
+          void apiClient.updateWarehouseTallySortRules(tallySortRuleDraft)
+            .then((rules) => { setTallySortRules(rules); setTallySortRuleDraft(rules); setTallySortRulesOpen(false); setWarehouseNotice('理货排序规则已保存'); })
+            .catch(() => setWarehouseNotice('理货排序规则保存失败'))
+            .finally(() => setSavingTallySortRules(false));
+        }}
+      >
+        <Alert type="info" showIcon message="当前北京时间命中优先时段的渠道会优先处理，理货中任务始终置顶。" />
+        <Space direction="vertical" size={10} style={{ width: '100%', marginTop: 16 }}>
+          {tallySortRuleDraft.map((rule) => (
+            <Flex key={rule.channel} gap={10} align="center">
+              <Text style={{ width: 80 }}>{rule.channel}</Text>
+              <InputNumber min={1} max={999} precision={0} value={rule.sortOrder} onChange={(value) => setTallySortRuleDraft((current) => current.map((item) => item.channel === rule.channel ? { ...item, sortOrder: Number(value ?? 1) } : item))} />
+              <Select style={{ width: 130 }} value={rule.preferredTimeSlot} options={[{ value: 'MORNING', label: '上午优先' }, { value: 'AFTERNOON', label: '下午优先' }, { value: 'ALL_DAY', label: '全天' }]} onChange={(value) => setTallySortRuleDraft((current) => current.map((item) => item.channel === rule.channel ? { ...item, preferredTimeSlot: value } : item))} />
+              <Checkbox checked={rule.enabled} onChange={(event) => setTallySortRuleDraft((current) => current.map((item) => item.channel === rule.channel ? { ...item, enabled: event.target.checked } : item))}>启用</Checkbox>
+            </Flex>
+          ))}
+          <Button icon={<RotateCcw size={14} />} loading={tallySortRulesLoading} onClick={() => setTallySortRuleDraft(createDefaultWarehouseTallySortRules())}>恢复默认</Button>
+        </Space>
+      </Modal>
 
       <Modal
         title="纠正历史聚合理货数据"

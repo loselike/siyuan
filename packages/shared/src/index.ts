@@ -1405,6 +1405,8 @@ export interface PriceBookRowsQuery {
   markupAmount?: string;
   markupSource?: PriceBookRowMarkupSource | 'ALL';
   markupSort?: 'ASC' | 'DESC' | 'NONE';
+  markupModule?: LegacyPricingModule;
+  markupContext?: boolean;
 }
 
 export interface PriceBookRowsResponse {
@@ -1673,6 +1675,7 @@ export interface MarkupRouteSummary {
 }
 
 export interface MarkupRouteListResponse {
+  legacyModule: LegacyPricingModule;
   rows: MarkupRouteSummary[];
   filterOptions: { destinationCountries: string[]; markupUnits: AgentMarkupUnit[] };
   pagination: { page: number; pageSize: number; totalItems: number };
@@ -4593,7 +4596,7 @@ export interface OrderEntryDetailSummary {
   receivableSnapshotVersion?: string;
   businessCosts?: BusinessCostFeeSummary[];
   businessCostSnapshotVersion?: string;
-  payables: PayableFeeSummary[];
+  payables?: PayableFeeSummary[];
   canViewPayables: boolean;
 }
 
@@ -6333,3 +6336,4 @@ function nextActionFromStatus(status: ShipmentStatus): string {
 
   return labels[status] ?? '处理异常';
 }
+export * from './pricing-capabilities.js';

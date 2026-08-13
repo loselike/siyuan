@@ -1010,6 +1010,16 @@ model WarehouseTallyTask {
   @@index([appliedPackageId])
 }
 
+model WarehouseTallySortRule {
+  id                String   @id @default(cuid())
+  channel           String   @unique
+  sortOrder         Int
+  preferredTimeSlot String
+  enabled           Boolean  @default(true)
+  updatedAt         DateTime @updatedAt
+  updatedBy         String?
+}
+
 model Surcharge {
   id      String  @id @default(cuid())
   name    String

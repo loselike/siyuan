@@ -28,15 +28,12 @@ import {
   lineShipmentStageEditPermissionCode,
   pricingLookupModuleControls,
   pricingLookupPermissionCode,
-  pricingPriceBookCreateBlockControls,
-  pricingPriceBookDeleteBlockControls,
-  pricingPriceBookRemarkBlockControls,
-  pricingPriceBookBlockPermissionCode,
-  pricingMarkupEditBlockControls,
-  pricingMarkupModuleBlockPermissionCode,
-  pricingMarkupViewBlockControls,
-  pricingModuleBlockPermissionCode,
-  orderEntryFinanceMaskControls,
+  pricingPriceBookPermissionControls,
+  pricingMarkupPermissionControls,
+  pricingMarkupPermissionCode,
+  orderEntryPermissionControls,
+  orderEntryDraftPermissionControls,
+  pendingReviewPermissionControls,
   customerServiceDataConfirmPermissionControls,
   customerServicePendingRoutingPermissionControls,
   customerServiceTransferPermissionControls,
@@ -51,11 +48,7 @@ import {
   isWarehouseTallyCompletedMaskPermission,
   isMarketPendingRoutingMaskPermission,
   isMarketRoutedMaskPermission,
-  isPricingPriceBookBlockPermission,
-  isPricingMarkupModuleBlockPermission,
   workspaceFieldMaskPermissionCode,
-  type PricingMarkupBlockMode,
-  type PricingModuleBlockScope,
   type PermissionWorkspaceKey
 } from './rolePermissionCatalog';
 
@@ -761,6 +754,8 @@ export function SettingsPage({
   const selectedTotalRules = selectedPermissionWorkspaceView === 'rules';
   const selectedLineShipmentPool = selectedWorkspacePermissions?.[0] === '运营工作台 / 专线运单池';
   const selectedOrderEntry = selectedWorkspacePermissions?.[0] === '业务管理 / 录单';
+  const selectedOrderEntryDrafts = selectedWorkspacePermissions?.[0] === '业务管理 / 草稿箱';
+  const selectedPendingReview = selectedWorkspacePermissions?.[0] === '业务管理 / 待审核运单';
   const selectedWarehouseTodayReceipt = selectedWorkspacePermissions?.[0] === '仓库管理 / 今日收货';
   const selectedWarehouseTallyPending = selectedWorkspacePermissions?.[0] === '仓库管理 / 未完成理货';
   const selectedWarehouseTallyCompleted = selectedWorkspacePermissions?.[0] === '仓库管理 / 已完成理货';
@@ -770,9 +765,17 @@ export function SettingsPage({
   const selectedCustomerServicePendingRouting = selectedWorkspacePermissions?.[0] === '客服管理 / 待排货';
   const selectedCustomerServiceDataConfirm = selectedWorkspacePermissions?.[0] === '客服管理 / 数据确认';
   const selectedCustomerServiceTransfer = selectedWorkspacePermissions?.[0] === '客服管理 / 转单号';
-  const selectedOrderEntryFinanceMaskStates = useMemo(() => {
+  const selectedOrderEntryPermissionStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
-    return orderEntryFinanceMaskControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+    return orderEntryPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedOrderEntryDraftPermissionStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return orderEntryDraftPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
+  const selectedPendingReviewPermissionStates = useMemo(() => {
+    const granted = new Set(selectedRoleGrantedPermissions);
+    return pendingReviewPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
   }, [selectedRoleGrantedPermissions]);
   const selectedWarehouseTodayReceiptMaskStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
@@ -819,28 +822,23 @@ export function SettingsPage({
     const granted = new Set(selectedRoleGrantedPermissions);
     return pricingLookupModuleControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
   }, [selectedRoleGrantedPermissions]);
-  const selectedPricingModuleBlockScope: PricingModuleBlockScope | null = selectedWorkspacePermissions?.[0] === '报价查价 / 代理加价规则'
-    ? 'markup'
-    : null;
-  const selectedPricingModuleBlockControls = selectedPricingModuleBlockScope === 'markup'
-    ? [...pricingMarkupViewBlockControls, ...pricingMarkupEditBlockControls]
-    : [];
-  const selectedPricingModuleBlockStates = useMemo(() => {
+  const selectedPricingMarkupEntry = selectedWorkspacePermissions?.[0] === '报价查价 / 代理加价规则';
+  const selectedPricingBusinessEntry = selectedPricingLookupEntry
+    || selectedPricingMarkupEntry
+    || selectedWorkspacePermissions?.[0] === '报价查价 / 价格表管理';
+  const selectedDirectBusinessGrantEntry = selectedPricingBusinessEntry || selectedOrderEntry || selectedOrderEntryDrafts || selectedPendingReview;
+  const selectedPricingMarkupStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
-    return selectedPricingModuleBlockControls.map((control) => ({
+    return pricingMarkupPermissionControls.map((control) => ({
       ...control,
-      checked: granted.has(control.code)
-        || (selectedPricingModuleBlockScope === 'markup' && granted.has(pricingModuleBlockPermissionCode('markup', control.module)))
+      actions: control.actions.map((action) => ({ ...action, checked: granted.has(action.code) }))
     }));
-  }, [selectedPricingModuleBlockControls, selectedRoleGrantedPermissions]);
+  }, [selectedRoleGrantedPermissions]);
   const selectedPriceBookManagementEntry = selectedWorkspacePermissions?.[0] === '报价查价 / 价格表管理';
-  const selectedPricingPriceBookBlockControls = selectedPriceBookManagementEntry
-    ? [...pricingPriceBookCreateBlockControls, ...pricingPriceBookDeleteBlockControls, ...pricingPriceBookRemarkBlockControls]
-    : [];
-  const selectedPricingPriceBookBlockStates = useMemo(() => {
+  const selectedPricingPriceBookStates = useMemo(() => {
     const granted = new Set(selectedRoleGrantedPermissions);
-    return selectedPricingPriceBookBlockControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
-  }, [selectedPricingPriceBookBlockControls, selectedRoleGrantedPermissions]);
+    return pricingPriceBookPermissionControls.map((control) => ({ ...control, checked: granted.has(control.code) }));
+  }, [selectedRoleGrantedPermissions]);
   const selectedPermissionRoleIsAdministrator = isAdministratorRoleRow(selectedPermissionRole);
   const filteredSites = sites.filter((site) => {
     const keyword = siteAppliedFilters.name.trim().toLowerCase();
@@ -975,12 +973,18 @@ export function SettingsPage({
       const currentPermissions = current[roleKey] ?? selectedPermissionRole?.permissions ?? [];
       if (group === '报价查价 / 查价') {
         const next = new Set(currentPermissions);
-        if (checked) {
-          next.add('pricing:lookup:view');
-          next.add('pricing:lookup:meta-view');
-        } else {
+        if (!checked) {
           Array.from(next)
             .filter((code) => code.startsWith('pricing:lookup:'))
+            .forEach((code) => next.delete(code));
+        }
+        return { ...current, [roleKey]: Array.from(next) };
+      }
+      if (group === '报价查价 / 代理加价规则') {
+        const next = new Set(currentPermissions);
+        if (!checked) {
+          Array.from(next)
+            .filter((code) => code.startsWith('pricing:markup:'))
             .forEach((code) => next.delete(code));
         }
         return { ...current, [roleKey]: Array.from(next) };
@@ -994,9 +998,7 @@ export function SettingsPage({
       if (group === '业务管理 / 录单' && !checked) {
         return {
           ...current,
-          [roleKey]: next.filter((code) => !orderEntryFinanceMaskControls.some((control) => control.code === code)
-            && code !== 'business:order-entry:business-cost-view'
-            && code !== 'business:order-entry:business-cost-write')
+          [roleKey]: next.filter((code) => !orderEntryPermissionControls.some((control) => control.code === code))
         };
       }
       if (group === '仓库管理 / 今日收货' && !checked) {
@@ -1035,25 +1037,54 @@ export function SettingsPage({
           [roleKey]: next.filter((code) => !isMarketRoutedMaskPermission(code))
         };
       }
-      if (group === '业务管理 / 录单') {
-        const legacyFinancePermissions = [
-          'business:order-entry:business-cost-view' as PermissionKey,
-          'business:order-entry:business-cost-write' as PermissionKey
-        ];
-        const normalized = new Set(next);
-        legacyFinancePermissions.forEach((code) => normalized.add(code));
-        return { ...current, [roleKey]: Array.from(normalized) };
-      }
       return {
         ...current,
         [roleKey]: !checked && group === '运营工作台 / 专线运单池'
           ? next.filter((code) => !code.startsWith('operations:line-shipment:stage-edit:') && !code.startsWith('operations:line-shipment:stage-edit-block:'))
-          : !checked && group === '报价查价 / 代理加价规则'
-              ? next.filter((code) => !isPricingMarkupModuleBlockPermission(code))
-              : !checked && group === '报价查价 / 价格表管理'
-                ? next.filter((code) => !isPricingPriceBookBlockPermission(code))
-              : next
+          : next
       };
+    });
+  }
+
+  function toggleOrderEntryPermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      if (checked) next.add(code);
+      else {
+        next.delete(code);
+        if (code === 'business:order-entry:edit') {
+          [
+            'business:order-entry:create',
+            'business:order-entry:warehouse-package-select',
+            'business:order-entry:submit-review',
+            'business:order-entry:invoice-upload',
+            'business:order-entry:label-upload'
+          ].forEach((permission) => next.delete(permission as PermissionKey));
+        }
+      }
+      const hasCapability = orderEntryPermissionControls.some((control) => next.has(control.code));
+      if (hasCapability) {
+        next.add('business:order-entry:view');
+        next.add('business:order-entry:draft-view');
+      } else {
+        next.delete('business:order-entry:view');
+        if (!next.has('business:order-entry:draft-edit') && !next.has('business:order-entry:draft-delete')) {
+          next.delete('business:order-entry:draft-view');
+        }
+      }
+      if (checked && code === 'business:order-entry:edit') {
+        [
+          'business:order-entry:create',
+          'business:order-entry:warehouse-package-select',
+          'business:order-entry:submit-review',
+          'business:order-entry:invoice-upload',
+          'business:order-entry:label-upload'
+        ].forEach((permission) => next.add(permission as PermissionKey));
+      }
+      if (checked && (code === 'business:order-entry:business-cost' || code === 'business:order-entry:payable-fee')) {
+        next.add('master-data:agents:read');
+      }
+      return { ...current, [roleKey]: [...next] };
     });
   }
 
@@ -1062,6 +1093,38 @@ export function SettingsPage({
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
       if (checked) next.add(code);
       else next.delete(code);
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function toggleOrderEntryDraftPermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      if (checked) {
+        next.add(code);
+        next.add('business:order-entry:draft-view');
+        if (code === 'business:order-entry:draft-edit') next.add('business:order-entry:view');
+      } else {
+        next.delete(code);
+        if (code === 'business:order-entry:draft-view') {
+          next.delete('business:order-entry:draft-edit');
+          next.delete('business:order-entry:draft-delete');
+        }
+      }
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function togglePendingReviewPermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      if (checked) {
+        next.add(code);
+        if (code === 'business:review:edit') next.add('business:review:view');
+      } else {
+        next.delete(code);
+        if (code === 'business:review:view') next.delete('business:review:edit');
+      }
       return { ...current, [roleKey]: [...next] };
     });
   }
@@ -1130,52 +1193,47 @@ export function SettingsPage({
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
       const code = pricingLookupPermissionCode(module);
-      if (checked) {
-        next.add('pricing:lookup:view');
-        next.add('pricing:lookup:meta-view');
-        next.add(code);
-      } else {
-        next.delete(code);
-      }
-      return { ...current, [roleKey]: [...next] };
-    });
-  }
-
-  function togglePricingModuleBlock(
-    roleKey: RoleKey,
-    scope: PricingModuleBlockScope,
-    module: Parameters<typeof pricingModuleBlockPermissionCode>[1],
-    checked: boolean,
-    mode?: PricingMarkupBlockMode
-  ) {
-    setDraftPermissions((current) => {
-      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
-      const code = scope === 'markup' && mode
-        ? pricingMarkupModuleBlockPermissionCode(mode, module)
-        : pricingModuleBlockPermissionCode(scope, module);
-      if (scope === 'markup' && mode) {
-        const legacyCode = pricingModuleBlockPermissionCode('markup', module);
-        const hadLegacyBlock = next.delete(legacyCode);
-        if (hadLegacyBlock) {
-          const oppositeMode: PricingMarkupBlockMode = mode === 'view' ? 'edit' : 'view';
-          next.add(pricingMarkupModuleBlockPermissionCode(oppositeMode, module));
-        }
-      }
       if (checked) next.add(code);
       else next.delete(code);
       return { ...current, [roleKey]: [...next] };
     });
   }
 
-  function togglePricingPriceBookBlock(
+  function togglePricingMarkupPermission(
     roleKey: RoleKey,
-    mode: Parameters<typeof pricingPriceBookBlockPermissionCode>[0],
-    module: Parameters<typeof pricingPriceBookBlockPermissionCode>[1],
+    module: Parameters<typeof pricingMarkupPermissionCode>[0],
+    action: Parameters<typeof pricingMarkupPermissionCode>[1],
     checked: boolean
   ) {
     setDraftPermissions((current) => {
       const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
-      const code = pricingPriceBookBlockPermissionCode(mode, module);
+      const code = pricingMarkupPermissionCode(module, action);
+      const viewCode = pricingMarkupPermissionCode(module, 'view');
+      const editCode = pricingMarkupPermissionCode(module, 'edit');
+      if (checked) {
+        next.add(code);
+        if (action === 'edit') next.add(viewCode);
+      } else {
+        next.delete(code);
+        if (action === 'view') next.delete(editCode);
+      }
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function setAllPricingMarkupPermissions(roleKey: RoleKey, checked: boolean) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      pricingMarkupPermissionControls.forEach((control) => {
+        control.actions.forEach((action) => checked ? next.add(action.code) : next.delete(action.code));
+      });
+      return { ...current, [roleKey]: [...next] };
+    });
+  }
+
+  function togglePricingPriceBookPermission(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+    setDraftPermissions((current) => {
+      const next = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
       if (checked) next.add(code);
       else next.delete(code);
       return { ...current, [roleKey]: [...next] };
@@ -2092,7 +2150,10 @@ export function SettingsPage({
                         ? getPermissionGroupAccessState(group, permissions, selectedRoleGrantedPermissions)
                         : { checked: false, indeterminate: false, grantedCount: 0 };
                       const administrator = isAdministratorRoleRow(selectedPermissionRole);
-                      const pricingLookupGroup = group === '报价查价 / 查价';
+                      const directBusinessGrantGroup = group === '报价查价 / 查价'
+                        || group === '报价查价 / 代理加价规则'
+                        || group === '报价查价 / 价格表管理'
+                        || group === '业务管理 / 草稿箱';
                       return (
                         <div
                           className={`role-permission-module-card${selected ? ' is-active is-current' : ''}${administrator || accessState.checked ? ' is-open' : ''}`}
@@ -2114,13 +2175,13 @@ export function SettingsPage({
                               </span>
                               <Text type="secondary">{administrator
                                 ? '管理员固定全部开放'
-                                : pricingLookupGroup
-                                  ? (accessState.checked ? '已开放，可配置 7 个查价模块' : '按模块分配查价能力')
+                                : directBusinessGrantGroup
+                                  ? (accessState.checked ? '已按右侧功能授权开放' : '由右侧功能授权自动开放')
                                   : accessState.checked ? '全部操作权限随入口生效' : '未开放入口'}</Text>
                             </span>
-                            <Tag color={administrator || accessState.checked ? 'blue' : undefined}>{administrator || accessState.checked ? '已开放' : pricingLookupGroup ? '待分配' : '未开放'}</Tag>
+                            <Tag color={administrator || accessState.checked ? 'blue' : undefined}>{administrator || accessState.checked ? '已开放' : directBusinessGrantGroup ? '待分配' : '未开放'}</Tag>
                           </button>
-                          <Checkbox
+                          {!directBusinessGrantGroup ? <Checkbox
                             aria-label={`授权进入${group.replace(`${permissionWorkspace.label} / `, '')}`}
                             disabled={administrator || !accessControl}
                             checked={administrator || accessState.checked}
@@ -2130,7 +2191,7 @@ export function SettingsPage({
                               setSelectedWorkspacePermissionGroup(group);
                               togglePermissionGroupAccess(selectedPermissionRole.key, group, permissions, event.target.checked);
                             }}
-                          />
+                          /> : null}
                         </div>
                       );
                     })}
@@ -2210,7 +2271,76 @@ export function SettingsPage({
                           ))}
                         </div>
                       </div>
-                    ) : !selectedPermissionAccessState.checked ? (
+                    ) : selectedPricingMarkupEntry ? (
+                      <div className="role-permission-stage-block-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>模块功能授权</Text>
+                          <Space size={6}>
+                            <Tag color="blue">{selectedPricingMarkupStates.reduce((total, control) => total + control.actions.filter((action) => action.checked).length, 0)}/14 已授权</Tag>
+                            <Button size="small" onClick={() => setAllPricingMarkupPermissions(selectedPermissionRole.key, true)}>全部勾选</Button>
+                            <Button size="small" onClick={() => setAllPricingMarkupPermissions(selectedPermissionRole.key, false)}>全部取消</Button>
+                          </Space>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid role-permission-pricing-module-grid">
+                          {selectedPricingMarkupStates.map((control) => (
+                            <div className={`role-permission-option role-permission-compact-option role-permission-pricing-module-option${control.actions.some((action) => action.checked) ? ' role-permission-granted' : ''}`} key={control.module}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <div className="role-permission-pricing-actions">
+                                {control.actions.map((action) => <Checkbox key={action.code} checked={action.checked} onChange={(event) => togglePricingMarkupPermission(selectedPermissionRole.key, control.module, action.key, event.target.checked)}>{action.label}</Checkbox>)}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedOrderEntryDrafts ? (
+                      <div className="role-permission-stage-block-panel role-permission-draft-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>草稿箱授权</Text>
+                          <Tag color={selectedOrderEntryDraftPermissionStates.some((control) => control.checked) ? 'blue' : 'orange'}>
+                            {selectedOrderEntryDraftPermissionStates.filter((control) => control.checked).length}/3 已授权
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedOrderEntryDraftPermissionStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={`分配草稿箱${control.label}`}
+                                checked={control.checked}
+                                onChange={(event) => toggleOrderEntryDraftPermission(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : selectedPendingReview ? (
+                      <div className="role-permission-stage-block-panel role-permission-draft-panel">
+                        <div className="role-permission-section-heading">
+                          <Text strong>待审核运单授权</Text>
+                          <Tag color={selectedPendingReviewPermissionStates.some((control) => control.checked) ? 'blue' : 'orange'}>
+                            {selectedPendingReviewPermissionStates.filter((control) => control.checked).length}/2 已授权
+                          </Tag>
+                        </div>
+                        <div className="role-permission-option-grid role-permission-stage-block-grid">
+                          {selectedPendingReviewPermissionStates.map((control) => (
+                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
+                              <span className="role-permission-option-copy role-permission-compact-copy">
+                                <Text strong>{control.label}</Text>
+                              </span>
+                              <Checkbox
+                                aria-label={`分配待审核运单${control.label}`}
+                                checked={control.checked}
+                                onChange={(event) => togglePendingReviewPermission(selectedPermissionRole.key, control.code, event.target.checked)}
+                              />
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ) : !selectedDirectBusinessGrantEntry && !selectedPermissionAccessState.checked ? (
                       <div className="role-permission-detail-empty">
                         <Text strong>{`先开放“进入${selectedWorkspacePermissions?.[0]?.replace(`${permissionWorkspace.label} / `, '') ?? '该模块'}”`}</Text>
                         <Text type="secondary">勾选二级入口后，该入口下现有的查看、录入、修改、审核等操作权限会一并生效。</Text>
@@ -2218,21 +2348,21 @@ export function SettingsPage({
                     ) : selectedOrderEntry ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
-                          <Text strong>录单财务屏蔽</Text>
-                          <Tag color={selectedOrderEntryFinanceMaskStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedOrderEntryFinanceMaskStates.some((control) => control.checked) ? '已设置屏蔽' : '默认全部显示'}
+                          <Text strong>录单授权</Text>
+                          <Tag color={selectedOrderEntryPermissionStates.some((control) => control.checked) ? 'blue' : 'orange'}>
+                            {selectedOrderEntryPermissionStates.filter((control) => control.checked).length}/3 已授权
                           </Tag>
                         </div>
                         <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedOrderEntryFinanceMaskStates.map((control) => (
+                          {selectedOrderEntryPermissionStates.map((control) => (
                             <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
                               <span className="role-permission-option-copy role-permission-compact-copy">
                                 <Text strong>{control.label}</Text>
                               </span>
                               <Checkbox
-                                aria-label={control.label}
+                                aria-label={`分配录单${control.label}`}
                                 checked={control.checked}
-                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                                onChange={(event) => toggleOrderEntryPermission(selectedPermissionRole.key, control.code, event.target.checked)}
                               />
                             </label>
                           ))}
@@ -2474,43 +2604,14 @@ export function SettingsPage({
                           ))}
                         </div>
                       </div>
-                    ) : selectedPricingModuleBlockScope ? (
-                      <div className="role-permission-stage-block-panel">
-                        <div className="role-permission-section-heading">
-                          <Text strong>模块屏蔽</Text>
-                          <Tag color={selectedPricingModuleBlockStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedPricingModuleBlockStates.some((control) => control.checked)
-                              ? `已屏蔽 ${selectedPricingModuleBlockStates.filter((control) => control.checked).length} ${selectedPricingModuleBlockScope === 'markup' ? '项' : '个模块'}`
-                              : '默认全部开放'}
-                          </Tag>
-                        </div>
-                        <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedPricingModuleBlockStates.map((control) => (
-                            <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
-                              <span className="role-permission-option-copy role-permission-compact-copy">
-                                <Text strong>{control.label}</Text>
-                              </span>
-                              <Checkbox
-                                aria-label={control.label}
-                                checked={control.checked}
-                                onChange={(event) => togglePricingModuleBlock(selectedPermissionRole.key, selectedPricingModuleBlockScope, control.module, event.target.checked, selectedPricingModuleBlockScope === 'markup' ? (control as { mode?: PricingMarkupBlockMode }).mode : undefined)}
-                              />
-                            </label>
-                          ))}
-                        </div>
-                      </div>
                     ) : selectedPriceBookManagementEntry ? (
                       <div className="role-permission-stage-block-panel">
                         <div className="role-permission-section-heading">
-                          <Text strong>价格表管理屏蔽</Text>
-                          <Tag color={selectedPricingPriceBookBlockStates.some((control) => control.checked) ? 'orange' : 'blue'}>
-                            {selectedPricingPriceBookBlockStates.some((control) => control.checked)
-                              ? `已屏蔽 ${selectedPricingPriceBookBlockStates.filter((control) => control.checked).length} 项`
-                              : '默认全部开放'}
-                          </Tag>
+                          <Text strong>价格表功能授权</Text>
+                          <Tag color="blue">{selectedPricingPriceBookStates.filter((control) => control.checked).length}/{selectedPricingPriceBookStates.length} 已授权</Tag>
                         </div>
                         <div className="role-permission-option-grid role-permission-stage-block-grid">
-                          {selectedPricingPriceBookBlockStates.map((control) => (
+                          {selectedPricingPriceBookStates.map((control) => (
                             <label className={`role-permission-option role-permission-compact-option${control.checked ? ' role-permission-granted' : ''}`} key={control.code}>
                               <span className="role-permission-option-copy role-permission-compact-copy">
                                 <Text strong>{control.label}</Text>
@@ -2518,7 +2619,7 @@ export function SettingsPage({
                               <Checkbox
                                 aria-label={control.label}
                                 checked={control.checked}
-                                onChange={(event) => togglePricingPriceBookBlock(selectedPermissionRole.key, control.mode, control.module, event.target.checked)}
+                                onChange={(event) => togglePricingPriceBookPermission(selectedPermissionRole.key, control.code, event.target.checked)}
                               />
                             </label>
                           ))}

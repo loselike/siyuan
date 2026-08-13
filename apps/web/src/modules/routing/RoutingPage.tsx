@@ -128,6 +128,13 @@ type PendingRoutingCostEditor = {
   amount?: number;
 };
 
+function calculateCostAmount(quantity?: number, unitPrice?: number, fallback?: number) {
+  if (quantity !== undefined && unitPrice !== undefined && Number.isFinite(quantity) && Number.isFinite(unitPrice)) {
+    return Number((quantity * unitPrice).toFixed(2));
+  }
+  return fallback;
+}
+
 function inferRoutingMode(shipment: Shipment) {
   const channel = `${shipment.routeAgentChannelName || ''} ${shipment.channelName || ''}`;
   if (/空运|空派|航班/.test(channel)) return '空运';
@@ -739,7 +746,7 @@ export function RoutingPage({
       billingQuantity,
       chargeWeightKg: type === 'BUSINESS_COST' ? billingUnit === 'KG' ? billingQuantity : undefined : row?.chargeWeightKg,
       unitPrice: row?.unitPrice,
-      amount: type === 'BUSINESS_COST' && billingQuantity !== undefined && row?.unitPrice !== undefined ? Number((billingQuantity * row.unitPrice).toFixed(2)) : row?.amount
+      amount: calculateCostAmount(type === 'BUSINESS_COST' ? billingQuantity : row?.chargeWeightKg, row?.unitPrice, row?.amount)
     });
   }
 
@@ -748,11 +755,14 @@ export function RoutingPage({
       if (!current) return current;
       const next = { ...current, ...values };
       const quantity = next.type === 'BUSINESS_COST' ? next.billingQuantity : next.chargeWeightKg;
-      if (calculateAmount) {
-        next.amount = quantity !== undefined && next.unitPrice !== undefined ? Number((quantity * next.unitPrice).toFixed(2)) : undefined;
-      }
+      if (calculateAmount) next.amount = calculateCostAmount(quantity, next.unitPrice);
       return next;
     });
+  }
+
+  function getCostEditorAmount(editor: PendingRoutingCostEditor) {
+    const quantity = editor.type === 'BUSINESS_COST' ? editor.billingQuantity : editor.chargeWeightKg;
+    return calculateCostAmount(quantity, editor.unitPrice, editor.amount);
   }
 
   async function saveCostEditor() {
@@ -769,7 +779,7 @@ export function RoutingPage({
       messageApi.warning(`请填写${costEditor.billingUnit === 'CBM' ? 'CBM 体积' : 'KG 计费重'}。`);
       return;
     }
-    if (costEditor.amount === undefined) {
+    if (getCostEditorAmount(costEditor) === undefined) {
       messageApi.warning('请填写总金额。');
       return;
     }
@@ -782,7 +792,7 @@ export function RoutingPage({
         billingQuantity: costEditor.type === 'BUSINESS_COST' ? costEditor.billingQuantity : undefined,
         chargeWeightKg: costEditor.type === 'BUSINESS_COST' ? (costEditor.billingUnit ?? 'KG') === 'KG' ? costEditor.billingQuantity : undefined : costEditor.chargeWeightKg,
         unitPrice: costEditor.unitPrice,
-        amount: costEditor.amount
+        amount: getCostEditorAmount(costEditor) ?? 0
       });
       setCostEditor(null);
     } catch (error) {
@@ -886,7 +896,7 @@ export function RoutingPage({
             {
               title: '总金额', dataIndex: 'amount', width: 120,
               render: (value: number, row: PendingRoutingCostRow) => isEditingRow(row) ? (
-                <InputNumber aria-label="总金额" min={0} precision={2} value={costEditor?.amount} onChange={(amount) => updateCostEditor({ amount: amount ?? undefined })} />
+                <InputNumber aria-label="总金额" min={0} precision={2} value={costEditor?.amount} disabled={costEditor?.unitPrice !== undefined && (type === 'BUSINESS_COST' ? costEditor?.billingQuantity !== undefined : costEditor?.chargeWeightKg !== undefined)} onChange={(amount) => updateCostEditor({ amount: amount ?? undefined })} />
               ) : `${value.toFixed(2)} ${row.currency ?? 'RMB'}`
             },
             canOperateCost ? {

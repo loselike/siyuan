@@ -13,7 +13,7 @@ export class PriceBookQueryController {
   ) {}
 
   @Get('pricing/books')
-  @RequirePermission('pricing:price-books:list-view')
+  @RequirePermission(['pricing:price-books:view', 'pricing:price-books:import', 'pricing:price-books:export', 'pricing:price-books:update', 'pricing:price-books:delete', 'pricing:price-books:health'])
   priceBooks(
     @Req() request: { user: Principal },
     @Query('includeRows') includeRows?: string,
@@ -26,7 +26,7 @@ export class PriceBookQueryController {
   }
 
   @Get('pricing/sync-health')
-  @RequirePermission('pricing:price-books:sync-health-view')
+  @RequirePermission('pricing:price-books:health')
   pricingSyncHealth(
     @Req() request: { user: Principal },
     @Query() query: { page?: number; pageSize?: number; legacyModule?: LegacyPricingModule | 'unclassified' }
@@ -35,31 +35,31 @@ export class PriceBookQueryController {
   }
 
   @Get('pricing/books/import-jobs/:id')
-  @RequirePermission('pricing:price-books:import-job-view')
+  @RequirePermission('pricing:price-books:import')
   priceBookImportJob(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.priceBookQueries.getPriceBookImportJob(request.user, id);
   }
 
   @Get('pricing/books/import-jobs')
-  @RequirePermission('pricing:price-books:import-job-view')
+  @RequirePermission('pricing:price-books:import')
   priceBookImportJobs(@Req() request: { user: Principal }, @Query() query: PriceBookImportJobListQuery) {
     return this.priceBookQueries.getPriceBookImportJobs(request.user, query);
   }
 
   @Get('pricing/legacy/sources')
-  @RequirePermission('pricing:price-books:legacy-source-view')
+  @RequirePermission('pricing:price-books:view')
   legacyPricingSources(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
     return this.repository.getLegacyPricingSources(request.user, module);
   }
 
   @Get('pricing/legacy/health-report')
-  @RequirePermission('pricing:price-books:health-report-view')
+  @RequirePermission('pricing:price-books:health')
   legacyPricingHealth(@Req() request: { user: Principal }, @Query('module') module?: LegacyPricingModule) {
     return this.repository.getLegacyPricingHealth(request.user, module);
   }
 
   @Get('pricing/legacy/quote-meta')
-  @RequirePermission('pricing:lookup:meta-view')
+  @RequirePermission(['pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea'])
   async legacyPricingMeta(@Req() request: { user: Principal }) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能访问内部查价');
@@ -68,19 +68,19 @@ export class PriceBookQueryController {
   }
 
   @Get('pricing/legacy/dubai-air-sea/display')
-  @RequirePermission(['pricing:lookup:dubai-image-view', 'pricing:dubai-display:active-view'])
+  @RequirePermission('pricing:lookup:dubai-air-sea')
   async legacyDubaiAirSeaDisplay(@Req() request: { user: Principal }) {
     return this.repository.getDubaiPriceDisplay(request.user);
   }
 
   @Get('pricing/legacy/dubai-air-sea/display-versions')
-  @RequirePermission('pricing:dubai-display:versions-view')
+  @RequirePermission('pricing:price-books:view')
   async legacyDubaiAirSeaDisplayVersions(@Req() request: { user: Principal }) {
     return this.repository.getDubaiPriceDisplayVersions(request.user);
   }
 
   @Get('pricing/south-africa/images')
-  @RequirePermission('pricing:south-africa:image-view')
+  @RequirePermission('pricing:lookup:south-africa')
   async southAfricaRateImages(@Req() request: { user: Principal }) {
     return this.repository.getSouthAfricaRateImages(request.user);
   }
