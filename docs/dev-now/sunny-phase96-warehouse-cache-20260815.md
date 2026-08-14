@@ -1,6 +1,6 @@
 # Sunny Phase96：仓库缓存授权范围隔离
 
-- 状态：in_progress
+- 状态：completed
 - 任务边界：只隔离 `WarehousePage` 的内存缓存键；不修改业务数据、系统数据、权限定义、既有 API 参数/返回语义、数据库 schema、迁移或既有操作链路。服务端仅附加不透明的 session 字段供缓存失效使用。
 - 用户验收目标：同一 API 客户端在角色或权限范围变化后重新打开仓库页面，不应直接展示上一授权范围的今日收货/在仓缓存。
 
@@ -35,6 +35,15 @@
 - API/Web typecheck、Shared build、`git diff --check`、`architecture:check:fast`。
 - 由于改动涉及数据范围缓存，发布前由独立风险审查检查角色/权限依赖、查询键一致性、导出就绪状态和 fail-closed 语义。
 - 47 发布涉及 API session 响应和 Web 缓存；无 migration、无业务/系统数据写入；发布后检查 runtime provenance、health、release lock/recovery，并用只读 session/health 证据确认 fingerprint 字段存在且权限拒绝路径未改变。
+
+## 发布与线上证据（2026-08-15）
+
+- 已在 `codex/release/phase96-integrate2` 精确发布，范围为 `web+api`；`MIGRATION_REQUIRED=false`，未执行迁移、写入业务数据或系统数据。
+- 运行版本：`git-051ad6499676_web-cae0defd104c_api-48096bfbc6af`；源码提交为 `051ad64996768e6548a5c923eaddae662c1a8b1d`。
+- 47 公网与容器内 health 均返回 `ok`；API/Web/Postgres/Redis 容器正常运行。
+- 发布后 provenance 审计为 `traceable`，`WEB_IMAGE_MATCH=true`、`API_IMAGE_MATCH=true`、`API_RELEASE_ID_MATCH=true`；发布锁为 `free`，recovery 为 `clear`。
+- 容器内只读 session 探针确认 fingerprint 为 64 位 opaque 字段；无今日收货权限的现有启用账号访问目标接口返回 403。探针未输出 token、密钥、账号标识或业务数据。
+- Web 构建仅有既有的大 chunk warning，没有构建失败或运行时 health 错误；浏览器排版与交互仍由用户在 47 人工检查。
 
 ## 未验证项
 
