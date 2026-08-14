@@ -43,7 +43,7 @@ branch: `codex/sunny-phase92-ui-contract`
 
 ## 发布与风险
 
-本切片尚未发布 47；只涉及共享表格契约和仓库只读调用边界，无 Prisma、业务数据、权限、财务口径或业务状态变更。发布前需在 phase91/唯一集成分支完成合并审查，再按 Web/API 白名单发布；UI 列设置位置由用户人工检查，仓库接口需用真实角色做允许/拒绝只读探针。
+本切片已发布 47：`git-152b1b3586cf_web-98b2e14ef6c0_api-f846a23dbc20`，范围 `web+api`，`MIGRATION_REQUIRED=false`。发布前后 provenance 均为 traceable，Web/API image match、API release ID、容器 health、公网 health、锁与 recovery 均通过。只涉及共享表格契约和仓库只读调用边界，无 Prisma、业务数据、权限、财务口径或业务状态变更。UI 列设置位置仍由用户人工检查，仓库接口后续需用真实角色做允许/拒绝只读探针。
 
 ## 下一轮重新排序
 
