@@ -1,7 +1,7 @@
 # Sunny 深度重构 Phase 68
 
 - 状态：`in_progress`
-- 分支：`codex/sunny-refactor-phase68`
+- 分支：`codex/sunny-refactor-phase68-release`
 - 基线提交：`9ca60ca`
 - 用户验收目标：恢复业务经理基础资料页面可用性；不弱化全局敏感字段屏蔽，不改变其他业务逻辑。
 
