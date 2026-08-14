@@ -23,7 +23,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --ignore-scripts
-      - run: npm run prisma:generate -w @siyuan/api
       - run: npm run typecheck
       - run: npm run test:all:safe
       - run: npm run governance:check

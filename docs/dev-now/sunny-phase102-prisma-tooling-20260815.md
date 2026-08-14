@@ -27,5 +27,6 @@
 
 - 新 worktree 在 `npm install --ignore-scripts` 后没有 `.prisma/client`；根 `npm run typecheck` 自动执行 `prisma generate`，随后 Shared/API/Web typecheck 全部通过。
 - 根 `npm run build` 自动生成 Prisma Client，Shared/API/Web 生产构建通过；未执行迁移、seed 或数据库写入。
+- 全回归 workflow 删除了根 `typecheck` 已覆盖的重复 Prisma 生成步骤；CI 仍在 typecheck 前生成一次，受影响任务脚本保持独立生成前置。
 - `git diff --check`、`npm run architecture:check:fast`（434 route contracts）通过；`npm run governance:check` 仍只被既有 context 状态治理阻断（活动文件超限及 Phase96–101 终态待归档）。
 - 复审未发现业务逻辑、权限、接口、数据库或发布脚本变化。下一最高收益回到模块化拆分，但应优先选择已有 Controller 边界并保持每次一条只读查询链路。
