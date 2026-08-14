@@ -13,7 +13,6 @@ import type {
   AgentChannelUpdateInput,
   AgentMarkupCreateInput,
   AgentMarkupListQuery,
-  MarkupRouteListQuery,
   MarkupRoutePreviewBatchInput,
   MarkupRoutePreviewInput,
   MarkupRouteTierBatchReplaceInput,
@@ -72,7 +71,6 @@ import type {
   PriceBookImportInput,
   PriceBookBatchDeleteInput,
   PriceBookImportTargetModule,
-  PriceBookRowsQuery,
   PriceBookRemarkUpdateInput,
   DubaiPriceDisplayActivateInput,
   DubaiSeaMarkupUpdateInput,
@@ -991,44 +989,6 @@ export class DataController {
       throw new ForbiddenException('客户不能访问内部查价');
     }
     return this.repository.quote(body);
-  }
-
-  @Get('pricing/books/rule-refresh-progress')
-  @RequirePermission('pricing:price-books:health')
-  async priceBookRuleRefreshProgress(@Req() request: { user: Principal }) {
-    return this.repository.getPriceBookRuleRefreshProgress(request.user);
-  }
-
-  @Get('pricing/book-rows')
-  @RequirePermission('pricing:price-books:view')
-  async priceBookRows(@Req() request: { user: Principal }, @Query() query: PriceBookRowsQuery) {
-    return this.repository.getPriceBookRows(request.user, undefined, query);
-  }
-
-  @Get('pricing/books/:id/rows')
-  @RequirePermission(['pricing:price-books:view', 'pricing:price-books:export', 'pricing:price-books:update', 'pricing:price-books:delete', 'pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
-  async priceBookRowsByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: PriceBookRowsQuery) {
-    return this.repository.getPriceBookRows(request.user, id, query);
-  }
-
-  @Get('pricing/books/:id/markup-routes')
-  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
-  async markupRoutesByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: MarkupRouteListQuery) {
-    return this.repository.getMarkupRoutes(request.user, id, query);
-  }
-
-  @Get('pricing/books/:id/download')
-  @RequirePermission('pricing:price-books:export')
-  async downloadPriceBook(@Req() request: { user: Principal }, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {
-    const file = await this.repository.downloadPriceBook(request.user, id);
-    const extension = extname(file.fileName).toLowerCase();
-    const mimeType = extension === '.xls'
-      ? 'application/vnd.ms-excel'
-      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    response.setHeader('Content-Type', mimeType);
-    response.setHeader('Content-Length', String(file.buffer.length));
-    response.setHeader('Content-Disposition', `attachment; filename="price-book${extension || '.xlsx'}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
-    return new StreamableFile(file.buffer);
   }
 
   @Post('pricing/cleanup-old-original-agents')

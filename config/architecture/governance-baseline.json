@@ -719,12 +719,12 @@
       "OperationsLineShipmentQueryController.lineShipmentInternalFlowLog"
     ],
     [
-      "GET /pricing/book-rows @ DataController.priceBookRows",
+      "GET /pricing/book-rows @ PriceBookQueryController.priceBookRows",
       "permission",
       [
         "pricing:price-books:view"
       ],
-      "DataController.priceBookRows"
+      "PriceBookQueryController.priceBookRows"
     ],
     [
       "GET /pricing/books @ PriceBookQueryController.priceBooks",
@@ -740,15 +740,15 @@
       "PriceBookQueryController.priceBooks"
     ],
     [
-      "GET /pricing/books/:id/download @ DataController.downloadPriceBook",
+      "GET /pricing/books/:id/download @ PriceBookQueryController.downloadPriceBook",
       "permission",
       [
         "pricing:price-books:export"
       ],
-      "DataController.downloadPriceBook"
+      "PriceBookQueryController.downloadPriceBook"
     ],
     [
-      "GET /pricing/books/:id/markup-routes @ DataController.markupRoutesByBook",
+      "GET /pricing/books/:id/markup-routes @ PriceBookQueryController.markupRoutesByBook",
       "permission",
       [
         "pricing:markup:amazon:view",
@@ -759,10 +759,10 @@
         "pricing:markup:southAfrica:view",
         "pricing:markup:usaAirSea:view"
       ],
-      "DataController.markupRoutesByBook"
+      "PriceBookQueryController.markupRoutesByBook"
     ],
     [
-      "GET /pricing/books/:id/rows @ DataController.priceBookRowsByBook",
+      "GET /pricing/books/:id/rows @ PriceBookQueryController.priceBookRowsByBook",
       "permission",
       [
         "pricing:markup:amazon:view",
@@ -777,7 +777,7 @@
         "pricing:price-books:update",
         "pricing:price-books:view"
       ],
-      "DataController.priceBookRowsByBook"
+      "PriceBookQueryController.priceBookRowsByBook"
     ],
     [
       "GET /pricing/books/import-jobs @ PriceBookQueryController.priceBookImportJobs",
@@ -796,12 +796,12 @@
       "PriceBookQueryController.priceBookImportJob"
     ],
     [
-      "GET /pricing/books/rule-refresh-progress @ DataController.priceBookRuleRefreshProgress",
+      "GET /pricing/books/rule-refresh-progress @ PriceBookQueryController.priceBookRuleRefreshProgress",
       "permission",
       [
         "pricing:price-books:health"
       ],
-      "DataController.priceBookRuleRefreshProgress"
+      "PriceBookQueryController.priceBookRuleRefreshProgress"
     ],
     [
       "GET /pricing/legacy/dubai-air-sea/display @ PriceBookQueryController.legacyDubaiAirSeaDisplay",
