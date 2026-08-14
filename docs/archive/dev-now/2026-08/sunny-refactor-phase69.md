@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 69：开发与发布提速五阶段
 
-- 状态：`in_progress`
+- 状态：`complete`
 - 会话标题：`Sunny｜开发发布提速五阶段｜01`
 - 续接自：`codex/sunny-refactor-phase68-release`
 - 上下文状态：`green`
@@ -55,7 +55,7 @@
 - [x] 阶段 4：客户来源四条 API 从 `DataController` 迁入独立 Controller/Application Service/Repository port；现有 Prisma/InMemory 实现、权限、字段、状态码、异常、事务与审计逻辑原样保留。
 - [x] 阶段 5：客户来源共享契约迁入独立 subpath，Web 页面改依赖窄客户端；新增不依赖 6,473 行全局 Harness 的模块 fixture，以及迁移前后共用 API E2E characterization。
 - [x] 本地安全门与 GitHub PR 检查。
-- [ ] 合并唯一主干、生成 digest manifest、47 精确发布与只读线上验收。
+- [x] 合并唯一主干、生成 digest manifest、47 精确发布与只读线上验收。
 
 ## 阶段重评 1–3
 
@@ -85,3 +85,19 @@
 - 受影响验证只执行与当前路径映射的领域效果测试、三端类型检查和治理门；历史宽 E2E 保留在 nightly/manual 全量回归，不再让无关陈旧断言阻断普通 PR。
 - API/Web/migration 镜像由三个独立 job 并行构建；PR 只构建验证，只有合并 `main` 才登录 GHCR、按 Git SHA 推送并生成 digest manifest。
 - Dockerfile 的构建缓存失效标记由 `RELEASE_BUILD_TOKEN` 更名为非敏感语义的 `RELEASE_BUILD_MARKER`，消除 BuildKit 把普通标记误报为 secret 的告警，不改变产物内容或运行逻辑。
+
+## 最终主干与 47 验收
+
+- PR #2 已合并到唯一主干；合并提交：`3a7e1ba05c5e78617072e876da1f98cacdb34802`。
+- main workflow `31795867819` 全部成功：affected 1m38s、Web image 2m5s、migration image 1m48s、API image 10m39s、release manifest 4s。
+- 47 只提升 main workflow 生成的 GHCR digest 镜像；发布范围 `web+api`，`MIGRATION_REQUIRED=false`，未执行数据库 migration。
+- 47 发布：`git-3a7e1ba05c5e_web-c53682f249b1_api-22f60fed8204`；运行提交精确匹配 `3a7e1ba05c5e78617072e876da1f98cacdb34802`。
+- provenance 为 `traceable`，`BUILD_PROVENANCE=GHCR_DIGESTS`，API/Web 镜像摘要与 release state 全部匹配；发布锁空闲且 recovery clear。
+- 47 本地容器 health、公网 API health 和首页均通过；客户来源匿名读取返回 401，证明新 Controller 仍由既有 JWT/RBAC 门保护。
+- 源码审计 524/524 一致，无 changed/local-only/remote-only。远端保留 22 个既有 AppleDouble `._*` 元数据文件（共 3,586 bytes），不参与源码、镜像或运行时；本任务未删除远端文件。
+
+## 完成后重评
+
+- 五阶段验收目标已完成，业务数据、系统数据、数据库迁移、权限模型、业务口径和页面交互均未改变。
+- 首次不可变制品提升的实测瓶颈为 API 镜像体积与冷拉取（约 497 MB 主层）；下一阶段最高价值是瘦身 API production image、保持 digest 发布，并用同一计时证据复测 2–5 分钟目标。
+- 业务代码剩余最高债务仍是 Prisma/InMemory Repository、`App.tsx`、`styles.css` 与宽测试 Harness；应继续按已验证的纵向模块样板逐个迁移，每个切片保持行为等价门，禁止大爆炸重写。
