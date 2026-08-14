@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "npm run dev -w @siyuan/web",
     "dev:api": "npm run dev -w @siyuan/api",
-    "build": "npm run build -w @siyuan/shared && npm run build -w @siyuan/api && npm run build -w @siyuan/web",
+    "build": "npm run build -w @siyuan/shared && npm run prisma:generate -w @siyuan/api && npm run build -w @siyuan/api && npm run build -w @siyuan/web",
     "test": "npm run test -w @siyuan/shared && npm run build -w @siyuan/shared && npm run test -w @siyuan/api && npm run test -w @siyuan/web",
     "test:web": "npm test -w @siyuan/web -- --run src/modules",
     "test:web:finance": "npm test -w @siyuan/web -- --run src/modules/finance",
@@ -38,7 +38,7 @@
     "architecture:check:self-test": "node scripts/check-architecture-governance.mjs --self-test",
     "architecture:check:security": "npm run test:api:safe -- --run src/modules/mojia-route-auth-contract.test.ts",
     "lint": "npm run lint -w @siyuan/api && npm run lint -w @siyuan/web",
-    "typecheck": "npm run build -w @siyuan/shared && npm run typecheck -w @siyuan/api && npm run typecheck -w @siyuan/web",
+    "typecheck": "npm run build -w @siyuan/shared && npm run prisma:generate -w @siyuan/api && npm run typecheck -w @siyuan/api && npm run typecheck -w @siyuan/web",
     "ci:affected": "node scripts/ci-affected.mjs --execute",
     "sync:47": "bash scripts/sync-47.sh",
     "sync:47:file": "bash scripts/cas-sync-47-file.sh",
