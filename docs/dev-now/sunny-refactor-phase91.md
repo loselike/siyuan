@@ -2,9 +2,9 @@
 
 - 状态：`in_progress`
 - 会话标题：`Sunny｜API制品与发布提速｜01`
-- 分支：`codex/sunny-refactor-phase91`
-- worktree：`/Users/j1ng/Tools/sunny-refactor-phase91`
-- 基线：`3a7e1ba05c5e78617072e876da1f98cacdb34802`
+- 分支：`codex/sunny-refactor-phase91-metadata`
+- worktree：`/Users/j1ng/Tools/sunny-refactor-phase91-metadata`
+- 基线：`34075aa611c6e05489e452c40c5966a0dc560a52`
 
 ## 用户验收目标
 
@@ -42,7 +42,9 @@
 
 - [x] 建立独立 worktree 和任务状态。
 - [x] 记录当前 Docker/npm 依赖基线：全 workspace 生产安装约 417 MB，API+Shared workspace 生产安装约 233 MB；该数值为临时安装目录观测，不代表最终镜像大小。
-- [ ] 修改 Dockerfile.api 的 workspace 安装范围和 npm cache mount。
-- [ ] 增加 API image metadata artifact。
-- [ ] 本地安全门、GitHub Actions、47 digest 发布和线上只读验收。
+- [x] 修改 Dockerfile.api 的 workspace 安装范围和 npm cache mount。
+- [x] 增加 API image metadata artifact（使用 action 原生 outputs，避免不支持的 `metadata-file` 输入）。
+- [x] 修复 governance-only 受影响验证缺少 Prisma/Shared 生成前置的问题，并增加自测。
+- [x] 本地安全门和 PR #3 主干镜像构建验证；PR #4 首次 affected 失败已定位为该前置问题并修复。
+- [ ] GitHub Actions、47 digest 发布和线上只读验收。
 - [ ] 发布后重评镜像层、冷拉取和启动耗时，决定是否进入订单查询纵向切片。

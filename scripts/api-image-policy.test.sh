@@ -13,7 +13,12 @@ if grep -Fq 'COPY apps/web/package.json' "$dockerfile"; then
   echo 'API image must not install the Web workspace manifest.' >&2
   exit 1
 fi
-grep -Fq 'metadata-file: ${{ runner.temp }}/siyuan-api-image-metadata.json' "$workflow"
+if grep -Fq 'metadata-file:' "$workflow"; then
+  echo 'docker/build-push-action metadata-file is not a supported input.' >&2
+  exit 1
+fi
+grep -Fq 'API_IMAGE_DIGEST: ${{ steps.build.outputs.digest }}' "$workflow"
+grep -Fq 'API_IMAGE_METADATA: ${{ steps.build.outputs.metadata }}' "$workflow"
 grep -Fq 'name: api-image-metadata-${{ github.sha }}' "$workflow"
 
 echo '[api-image-policy] PASS'
