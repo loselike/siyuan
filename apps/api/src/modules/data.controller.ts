@@ -12,7 +12,6 @@ import type {
   AgentChannelCreateInput,
   AgentChannelUpdateInput,
   AgentMarkupCreateInput,
-  AgentMarkupListQuery,
   MarkupRoutePreviewBatchInput,
   MarkupRoutePreviewInput,
   MarkupRouteTierBatchReplaceInput,
@@ -1219,18 +1218,6 @@ export class DataController {
     return this.repository.rebuildLegacyPricing(request.user, body.module);
   }
 
-  @Get('pricing/markup-rules')
-  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
-  async agentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
-    return this.repository.getAgentMarkupRules(request.user, query);
-  }
-
-  @Get('pricing/markup-rules/export')
-  @RequirePermission(['pricing:markup:amazon:export', 'pricing:markup:inquiry:export', 'pricing:markup:europeExpress:export', 'pricing:markup:southAfrica:export', 'pricing:markup:usaAirSea:export', 'pricing:markup:canadaAirSea:export', 'pricing:markup:dubaiAirSea:export'])
-  async exportAgentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
-    return this.repository.exportAgentMarkupRules(request.user, query);
-  }
-
   @Post('pricing/markup-rules/import')
   @RequirePermission(['pricing:markup:amazon:import', 'pricing:markup:inquiry:import', 'pricing:markup:europeExpress:import', 'pricing:markup:southAfrica:import', 'pricing:markup:usaAirSea:import', 'pricing:markup:canadaAirSea:import', 'pricing:markup:dubaiAirSea:import'])
   async importAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { rows?: AgentMarkupCreateInput[] }) {
@@ -1253,12 +1240,6 @@ export class DataController {
   @RequirePermission(['pricing:markup:amazon:delete', 'pricing:markup:inquiry:delete', 'pricing:markup:europeExpress:delete', 'pricing:markup:southAfrica:delete', 'pricing:markup:usaAirSea:delete', 'pricing:markup:canadaAirSea:delete', 'pricing:markup:dubaiAirSea:delete'])
   async batchDeleteAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { ids?: string[]; agentNames?: string[]; scopes?: Array<{ agentName?: string; priceBookId?: string; legacyModule?: LegacyPricingModule }> }) {
     return this.repository.batchDeleteAgentMarkupRules(request.user, body);
-  }
-
-  @Get('pricing/markup-rules/:id/preview')
-  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
-  async previewAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.previewAgentMarkupRule(request.user, id);
   }
 
   @Post('pricing/markup-rules/route-preview')
