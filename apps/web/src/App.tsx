@@ -1,4 +1,4 @@
-import type { ChangeEvent, Dispatch, ReactNode, SetStateAction } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -109,7 +109,7 @@ import {
   type ShipmentColumnOrderMode
 } from './modules/appShell/config';
 import { resolveModuleInitialSection } from './modules/appShell/moduleInitialSection';
-import { isWorkspaceScopeCurrent, resolveScopedWorkspaceRows, workspaceScopeKeyForGeneration, writeIfWorkspaceScopeCurrent } from './modules/appShell/workspaceScope';
+import { isWorkspaceScopeCurrent, resolveScopedWorkspaceRows, useWorkspaceScopeWriter, workspaceScopeKeyForGeneration, writeIfWorkspaceScopeCurrent } from './modules/appShell/workspaceScope';
 import { formatPaymentSummary, fulfillmentActionLabels, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
 import { CustomerPortal } from './modules/customer/CustomerPortal';
 import { resolveCustomerServiceInitialSection } from './modules/customerService/customerServiceNavigation';
@@ -336,91 +336,31 @@ export function App() {
   );
   const workspaceDataReady = loadedWorkspaceScopeKey === warehouseWorkspaceScopeKey;
   const scopedOutboundOrderOpen = workspaceDataReady ? outboundOrderOpen : false;
-  const setWorkspaceStateAtCurrentScope = useCallback(
-    <T,>(setter: Dispatch<SetStateAction<T>>, updater: SetStateAction<T>) => {
-      writeIfWorkspaceScopeCurrent(
-        warehouseWorkspaceScopeKeyRef.current,
-        warehouseWorkspaceScopeKey,
-        () => setter(updater)
-      );
-    },
-    [warehouseWorkspaceScopeKey]
-  );
-  const setLocalShipmentsAtCurrentScope = useCallback((updater: SetStateAction<Shipment[]>) => {
-    setWorkspaceStateAtCurrentScope(setLocalShipments, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setProblemTicketsAtCurrentScope = useCallback((updater: SetStateAction<ProblemTicketSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setProblemTickets, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setReceivablesAtCurrentScope = useCallback((updater: SetStateAction<ReceivableAuditSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setReceivables, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setBusinessCostAuditsAtCurrentScope = useCallback((updater: SetStateAction<BusinessCostAuditSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setBusinessCostAudits, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setPayableAuditsAtCurrentScope = useCallback((updater: SetStateAction<PayableAuditSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setPayableAudits, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setCustomerStatementsAtCurrentScope = useCallback((updater: SetStateAction<CustomerStatementSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setCustomerStatements, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setCustomerAccountsAtCurrentScope = useCallback((updater: SetStateAction<CustomerAccountSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setCustomerAccounts, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setAccountLedgerAtCurrentScope = useCallback((updater: SetStateAction<AccountLedgerSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setAccountLedger, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setMasterDataAtCurrentScope = useCallback((updater: SetStateAction<MasterDataSnapshot>) => {
-    setWorkspaceStateAtCurrentScope(setMasterData, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setCarrierTasksAtCurrentScope = useCallback((updater: SetStateAction<CarrierTaskSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setCarrierTasks, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setFeeNameCatalogItemsAtCurrentScope = useCallback((updater: SetStateAction<FinanceCatalogItemSummary[]>) => {
-    setWorkspaceStateAtCurrentScope(setFeeNameCatalogItems, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentFeeCatalogItemsAtCurrentScope = useCallback((updater: SetStateAction<FinanceCatalogItemSummary[] | null>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentFeeCatalogItems, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentFinanceDetailsAtCurrentScope = useCallback((updater: SetStateAction<Record<string, ShipmentFinanceDetailSummary>>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentFinanceDetails, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentFinanceLoadingAtCurrentScope = useCallback((updater: SetStateAction<boolean>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentFinanceLoading, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentReviewDetailsAtCurrentScope = useCallback((updater: SetStateAction<Record<string, ShipmentReviewDetailSummary>>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentReviewDetails, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentReviewDetailLoadingAtCurrentScope = useCallback((updater: SetStateAction<boolean>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentReviewDetailLoading, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentPackageDetailsAtCurrentScope = useCallback((updater: SetStateAction<Record<string, Pick<ShipmentReviewDetailSummary, 'shipment' | 'packages'>>>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentPackageDetails, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentPackageDetailLoadingAtCurrentScope = useCallback((updater: SetStateAction<boolean>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentPackageDetailLoading, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentPackageDetailErrorsAtCurrentScope = useCallback((updater: SetStateAction<Record<string, string>>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentPackageDetailErrors, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setShipmentPackageExportingAtCurrentScope = useCallback((updater: SetStateAction<boolean>) => {
-    setWorkspaceStateAtCurrentScope(setShipmentPackageExporting, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setBulkTrackingFileNameAtCurrentScope = useCallback((updater: SetStateAction<string | null>) => {
-    setWorkspaceStateAtCurrentScope(setBulkTrackingFileName, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setBulkTrackingRowsAtCurrentScope = useCallback((updater: SetStateAction<BulkTrackingImportRow[]>) => {
-    setWorkspaceStateAtCurrentScope(setBulkTrackingRows, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setBulkTrackingResultAtCurrentScope = useCallback((updater: SetStateAction<BulkTrackingImportResult | null>) => {
-    setWorkspaceStateAtCurrentScope(setBulkTrackingResult, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setBulkTrackingErrorAtCurrentScope = useCallback((updater: SetStateAction<string | null>) => {
-    setWorkspaceStateAtCurrentScope(setBulkTrackingError, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
-  const setBulkTrackingImportingAtCurrentScope = useCallback((updater: SetStateAction<boolean>) => {
-    setWorkspaceStateAtCurrentScope(setBulkTrackingImporting, updater);
-  }, [setWorkspaceStateAtCurrentScope]);
+  const setLocalShipmentsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setLocalShipments);
+  const setProblemTicketsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setProblemTickets);
+  const setReceivablesAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setReceivables);
+  const setBusinessCostAuditsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setBusinessCostAudits);
+  const setPayableAuditsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setPayableAudits);
+  const setCustomerStatementsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setCustomerStatements);
+  const setCustomerAccountsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setCustomerAccounts);
+  const setAccountLedgerAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setAccountLedger);
+  const setMasterDataAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setMasterData);
+  const setCarrierTasksAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setCarrierTasks);
+  const setFeeNameCatalogItemsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setFeeNameCatalogItems);
+  const setShipmentFeeCatalogItemsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentFeeCatalogItems);
+  const setShipmentFinanceDetailsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentFinanceDetails);
+  const setShipmentFinanceLoadingAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentFinanceLoading);
+  const setShipmentReviewDetailsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentReviewDetails);
+  const setShipmentReviewDetailLoadingAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentReviewDetailLoading);
+  const setShipmentPackageDetailsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentPackageDetails);
+  const setShipmentPackageDetailLoadingAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentPackageDetailLoading);
+  const setShipmentPackageDetailErrorsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentPackageDetailErrors);
+  const setShipmentPackageExportingAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setShipmentPackageExporting);
+  const setBulkTrackingFileNameAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setBulkTrackingFileName);
+  const setBulkTrackingRowsAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setBulkTrackingRows);
+  const setBulkTrackingResultAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setBulkTrackingResult);
+  const setBulkTrackingErrorAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setBulkTrackingError);
+  const setBulkTrackingImportingAtCurrentScope = useWorkspaceScopeWriter(warehouseWorkspaceScopeKeyRef, warehouseWorkspaceScopeKey, setBulkTrackingImporting);
   useEffect(() => {
     setLocalShipments([]);
     setLoadedWarehouseShipmentsScopeKey(null);
