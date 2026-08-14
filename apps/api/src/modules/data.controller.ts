@@ -87,7 +87,6 @@ import type {
   PriceLookupResponse,
   PricingQuoteRequest,
   PricingRuleCreateInput,
-  PricingRuleQuoteRequest,
   ReceivableAdjustmentInput,
   SurchargeCreateInput,
   ShipmentCreateInput,
@@ -1354,12 +1353,6 @@ export class DataController {
     return this.repository.batchDeletePriceBooks(request.user, body.ids);
   }
 
-  @Get('pricing/rules')
-  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
-  async pricingRules(@Req() request: { user: Principal }) {
-    return this.repository.getPricingRules(request.user);
-  }
-
   @Post('pricing/rules')
   @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async createPricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleCreateInput) {
@@ -1370,12 +1363,6 @@ export class DataController {
   @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async updatePricingRuleEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updatePricingRuleEnabled(request.user, id, body);
-  }
-
-  @Post('pricing/rules/quote')
-  @RequireAllPermissions('pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea')
-  async quotePricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleQuoteRequest) {
-    return this.repository.quotePricingRule(request.user, body);
   }
 
   @Get('finance/business-cost-audits')
