@@ -863,6 +863,37 @@ describe('Finance flows', () => {
     expect(screen.getByRole('button', { name: /补\s*充/ })).toBeInTheDocument();
   });
 
+  it('选中市场应付后新增费用只提交权威订单关联', async () => {
+    const user = userEvent.setup();
+    await renderAndLogin('admin', 'admin123');
+
+    await user.click(screen.getByRole('menuitem', { name: '财务管理' }));
+    await clickFinanceSideButton(user, '市场应付审核');
+    const payableRow = (await screen.findByText('代理运费')).closest('tr');
+    expect(payableRow).toBeTruthy();
+
+    await user.click(within(payableRow!).getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: '添加应付' }));
+    const dialog = await screen.findByRole('dialog', { name: '添加应付' });
+
+    await user.type(within(dialog).getByLabelText('计费重'), '5');
+    await user.type(within(dialog).getByLabelText('单价'), '10');
+    await user.click(within(dialog).getByRole('button', { name: '保存应付' }));
+
+    await waitFor(() => {
+      const request = (fetch as unknown as { mock: { calls: Array<[unknown, RequestInit | undefined]> } }).mock.calls.find(([input, init]) => (
+        String(input).includes('/api/finance/payable-audits') && init?.method === 'POST'
+      ));
+      expect(request).toBeTruthy();
+      const body = JSON.parse(String(request?.[1]?.body));
+      expect(body).toEqual(expect.objectContaining({ shipmentId: 's-1' }));
+      expect(body.systemOrderNo).toBeUndefined();
+      expect(body.customerOrderNo).toBeUndefined();
+      expect(body.transferNo).toBeUndefined();
+      expect(body.customerCode).toBeUndefined();
+    });
+  });
+
   it('registers and queries an agent bill manually', async () => {
     const user = userEvent.setup();
     await renderAndLogin('admin', 'admin123');

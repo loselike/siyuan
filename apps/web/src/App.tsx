@@ -1,14 +1,12 @@
-import type { ChangeEvent, MouseEvent, ReactNode } from 'react';
+import type { ChangeEvent, ReactNode } from 'react';
 import { lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
-  Card,
   Checkbox,
   Col,
   ConfigProvider,
   App as AntdApp,
-  Flex,
   Form,
   Input,
   InputNumber,
@@ -25,11 +23,9 @@ import {
   Tooltip,
   Typography
 } from 'antd';
+import type { InputRef } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
-  Bot,
-  ChevronDown,
-  ChevronRight,
   CircleDollarSign,
   ClipboardCheck,
   FileDown,
@@ -84,6 +80,7 @@ import { mergeShipmentListRecord } from './modules/shared/shipmentState';
 import { canViewOrderLifecycleBusinessCosts } from './modules/shared/businessCostAccess';
 import { LoginPage } from './modules/auth/LoginPage';
 import { AppPageBoundary, type PageRenderErrorReport } from './modules/appShell/AppPageBoundary';
+import { StaffSidebar } from './modules/appShell/StaffSidebar';
 import {
   appTheme,
   businessWorkspaceConfigs,
@@ -93,15 +90,12 @@ import {
   editableShipmentStatuses,
   emptyMasterData,
   getShipmentLifecycleStageCount,
-  getStaffModuleHref,
-  getStaffSectionHref,
   importCheckRows,
   isShipmentColumnOrderMode,
   menuItems,
   modulePageConfigs,
   passwordStrengthRule,
   parseStaffAppRoute,
-  resolveStaffSectionKey,
   sanitizeShipmentColumnOrder,
   sanitizeHiddenShipmentColumns,
   shipmentHiddenColumnsStorageKey,
@@ -115,13 +109,14 @@ import {
   type ShipmentColumnOrderMode
 } from './modules/appShell/config';
 import { resolveModuleInitialSection } from './modules/appShell/moduleInitialSection';
-import { resolveExpandedMenuAfterPrimaryClick } from './modules/appShell/sidebarMenuState';
-import { formatPaymentSummary, fulfillmentActionLabels, getRoleDisplayName, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
+import { formatPaymentSummary, fulfillmentActionLabels, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
 import { CustomerPortal } from './modules/customer/CustomerPortal';
 import { resolveCustomerServiceInitialSection } from './modules/customerService/customerServiceNavigation';
 import { ProblemTicketCreateModal } from './modules/customerService/ProblemTicketCreateModal';
 import { OrderFeePanel } from './modules/finance/orderFee/OrderFeePanel';
 import { NotificationCenter } from './modules/notifications/NotificationCenter';
+import { ForcedPasswordChangeModal } from './modules/appShell/ForcedPasswordChangeModal';
+import { PersonalCenterModal } from './modules/appShell/PersonalCenterModal';
 import { OperationsPage } from './modules/operations/OperationsPage';
 import { canViewOrderManagementAgentDetails } from './modules/orders/orderAgentPermissions';
 import {
@@ -137,16 +132,10 @@ import {
 import { downloadShipmentPackageDetailWorkbook, resolveShipmentPackageExportRows } from './modules/orders/shipmentPackageExport';
 import { RoutingPage, type RoutingAssignmentFormValues } from './modules/routing/RoutingPage';
 import { shouldLoadRoutingFeeNameCatalog } from './modules/routing/routingFeeCatalog';
-import {
-  getModuleSubNavSignature,
-  ModuleSubNavContext,
-  type ModuleSubNavContextValue,
-  type SidebarSubNavState
-} from './modules/shared/ModuleSubWorkspace';
+import { ModuleSubNavContext } from './modules/shared/ModuleSubWorkspace';
 import { MasterDataPage } from './modules/masterData/MasterDataPage';
 import { PricingPage } from './modules/pricing/PricingPage';
 import { ProblemTicketsPage } from './modules/problemTickets/ProblemTicketsPage';
-import { loadProblemTickets } from './modules/problemTickets/problemTicketClient';
 import { ReportsPage } from './modules/reports/ReportsPage';
 import { SettingsPage } from './modules/settings/SettingsPage';
 import { TrackingPage } from './modules/tracking/TrackingPage';
@@ -162,8 +151,26 @@ import { ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, Managed
 import { configureAccountTablePreferences } from './modules/shared/tablePreferences';
 
 import { CustomerServicePage, FinancePage, MiscFeesPage, WarehousePage, loadCustomerServicePage, loadFinancePage, loadMiscFeesPage, loadWarehousePage } from './modules/appShell/pageLoaders';
+import { clearPersistedSession, loadPersistedSession, persistSession } from './modules/appShell/sessionStore';
+import {
+  useNavigateToStaffRoute,
+  useRequestedStaffRoute,
+  useStaffRouteAccessFallback,
+  useStaffRoutePopState
+} from './modules/appShell/staffRouteNavigation';
+import {
+  resolveStaffSidebarActiveSection,
+  useStaffSidebarNavigation,
+  useStaffSidebarNavigationState
+} from './modules/appShell/staffSidebarNavigation';
+import { useCurrentSessionRefresh } from './modules/appShell/useCurrentSessionRefresh';
+import { useNotificationNavigation } from './modules/appShell/useNotificationNavigation';
+import {
+  createWorkspaceRefreshCoordinator,
+  refreshWorkspaceData
+} from './modules/appShell/workspaceRefresh';
 
-const { Header, Sider, Content } = Layout;
+const { Header, Content } = Layout;
 const { Text } = Typography;
 
 function normalizeRoutingAgentChannelName(value: string | undefined) {
@@ -184,28 +191,20 @@ interface ShipmentOperationLog {
 
 type ShipmentLogViewMode = 'operation' | 'routing';
 type ShipmentEditSource = 'operation' | 'operationsPool' | 'routing';
-function formatNavigationUnreadCount(count: number) {
-  return count > 999 ? '999+' : String(count);
-}
 
 export function App() {
   const [outboundOrderForm] = Form.useForm<OutboundOrderFormValues>();
   const selectedReceivingChannel = Form.useWatch('carrier', outboundOrderForm);
   const [editShipmentForm] = Form.useForm<EditShipmentOperationalFormValues>();
   const [routingAssignmentForm] = Form.useForm<RoutingAssignmentFormValues>();
-  const [session, setSession] = useState<Session | null>(() => {
-    const raw = localStorage.getItem('siyuan-session');
-    return raw ? (JSON.parse(raw) as Session) : null;
-  });
-  const [requestedAppRoute, setRequestedAppRoute] = useState(() => parseStaffAppRoute(window.location.pathname));
-  const [pendingNotificationTarget, setPendingNotificationTarget] = useState<{ type: string; id: string } | null>(() => {
-    const params = new URLSearchParams(window.location.search);
-    const type = params.get('notificationEntityType');
-    const id = params.get('notificationEntityId');
-    return type && id ? { type, id } : null;
-  });
-  const [expandedMenuKey, setExpandedMenuKey] = useState<MenuKey | null>('workspace');
-  const [sidebarSubNav, setSidebarSubNav] = useState<SidebarSubNavState | null>(null);
+  const [session, setSession] = useState<Session | null>(loadPersistedSession);
+  const [requestedAppRoute, setRequestedAppRoute] = useRequestedStaffRoute();
+  const {
+    expandedMenuKey,
+    setExpandedMenuKey,
+    sidebarSubNav,
+    setSidebarSubNav
+  } = useStaffSidebarNavigationState();
   const [navigationUnreadBadges, setNavigationUnreadBadges] = useState<Awaited<ReturnType<ApiClient['appShell']['navigationUnreadBadges']>>['items']>([]);
   const businessType: BusinessType = 'DEDICATED_LINE';
   const [activeWorkspaceSection, setActiveWorkspaceSection] = useState(() => resolveModuleInitialSection(
@@ -234,6 +233,7 @@ export function App() {
     }
   });
   const [keyword, setKeyword] = useState('');
+  const globalSearchInputRef = useRef<InputRef>(null);
   const [localShipments, setLocalShipments] = useState<Shipment[]>([]);
   const [shipmentOperationLogs, setShipmentOperationLogs] = useState<Record<string, ShipmentOperationLog[]>>({});
   const [problemTickets, setProblemTickets] = useState<ProblemTicketSummary[]>([]);
@@ -296,7 +296,8 @@ export function App() {
   const [forcePasswordChangeError, setForcePasswordChangeError] = useState<string | null>(null);
   const [feeNameCatalogItems, setFeeNameCatalogItems] = useState<FinanceCatalogItemSummary[]>([]);
   const [dataRefreshVersion, setDataRefreshVersion] = useState(0);
-  const lastDataRefreshRequestAtRef = useRef(Date.now());
+  const lastGlobalWorkspaceRefreshAtRef = useRef(Date.now());
+  const workspaceRefreshCoordinator = useMemo(() => createWorkspaceRefreshCoordinator(), []);
   const businessWorkspaceConfig = businessWorkspaceConfigs.DEDICATED_LINE;
   const apiClient = useMemo(
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
@@ -305,52 +306,11 @@ export function App() {
   useEffect(() => {
     configureAccountTablePreferences(session?.user.id, session?.accessToken ? apiClient : undefined);
   }, [apiClient, session?.accessToken, session?.user.id]);
-  const sessionRefreshInFlightRef = useRef<Promise<void> | null>(null);
-  const lastSessionRefreshAtRef = useRef(0);
-  const refreshCurrentSession = useCallback((force = false) => {
-    const accessToken = session?.accessToken;
-    if (!accessToken) return Promise.resolve();
-    if (sessionRefreshInFlightRef.current) return sessionRefreshInFlightRef.current;
-    if (!force && Date.now() - lastSessionRefreshAtRef.current < 60_000) return Promise.resolve();
-    lastSessionRefreshAtRef.current = Date.now();
-    const request = apiClient.currentSession().then((currentSession) => {
-      setSession((current) => {
-        if (!current || current.accessToken !== accessToken) return current;
-        const permissionsUnchanged = current.permissions.length === currentSession.permissions.length
-          && current.permissions.every((permission, index) => permission === currentSession.permissions[index]);
-        const userUnchanged = JSON.stringify(current.user) === JSON.stringify(currentSession.user);
-        if (permissionsUnchanged && userUnchanged) return current;
-        const nextSession: Session = {
-          ...current,
-          user: currentSession.user,
-          permissions: currentSession.permissions
-        };
-        localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
-        return nextSession;
-      });
-    }).finally(() => {
-      sessionRefreshInFlightRef.current = null;
-    });
-    sessionRefreshInFlightRef.current = request;
-    return request;
-  }, [apiClient, session?.accessToken]);
-  useEffect(() => {
-    if (!session?.accessToken) return;
-    void refreshCurrentSession(true).catch(() => undefined);
-    const refreshIfVisible = () => {
-      if (document.visibilityState === 'visible') void refreshCurrentSession().catch(() => undefined);
-    };
-    const intervalId = window.setInterval(refreshIfVisible, 5 * 60 * 1000);
-    window.addEventListener('focus', refreshIfVisible);
-    window.addEventListener('online', refreshIfVisible);
-    document.addEventListener('visibilitychange', refreshIfVisible);
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', refreshIfVisible);
-      window.removeEventListener('online', refreshIfVisible);
-      document.removeEventListener('visibilitychange', refreshIfVisible);
-    };
-  }, [refreshCurrentSession, session?.accessToken]);
+  const refreshCurrentSession = useCurrentSessionRefresh({
+    client: apiClient,
+    accessToken: session?.accessToken,
+    setSession
+  });
   const hasBlockingWork = useCallback(() => Boolean(
     document.querySelector('.ant-modal-wrap form, .ant-drawer-open form')
     || outboundOrderOpen
@@ -389,10 +349,6 @@ export function App() {
     () => menuItems.filter((item) => visibleMenuKeys.includes(item.key)),
     [visibleMenuKeys]
   );
-  const navigationUnreadByKey = useMemo(
-    () => new Map(navigationUnreadBadges.map((item) => [`${item.moduleKey}:${item.sectionKey ?? ''}`, item.unreadCount])),
-    [navigationUnreadBadges]
-  );
   const currentMenuKey = useMemo<MenuKey>(
     () =>
       session && session.user.role !== 'CUSTOMER' && requestedAppRoute?.menuKey && visibleMenuKeys.includes(requestedAppRoute.menuKey)
@@ -401,11 +357,26 @@ export function App() {
     [requestedAppRoute, session, visibleMenuKeys]
   );
   const requestedSectionKey = requestedAppRoute?.menuKey === currentMenuKey ? requestedAppRoute.sectionKey : undefined;
-  const resolvedRouteSectionKey = sidebarSubNav?.parentKey === currentMenuKey
-    ? resolveStaffSectionKey(currentMenuKey, requestedSectionKey, sidebarSubNav.items.map((item) => item.key))
-    : undefined;
-  const activeSectionKey = resolvedRouteSectionKey
-    ?? (sidebarSubNav?.parentKey === currentMenuKey ? sidebarSubNav.activeKey : undefined);
+  const activeSectionKey = resolveStaffSidebarActiveSection({
+    currentMenuKey,
+    requestedSectionKey,
+    sidebarSubNav
+  });
+  const currentPageSearchEnabled = currentMenuKey === 'receive'
+    && ['packages', 'consolidation', 'completed-consolidation'].includes(activeSectionKey ?? '');
+  useEffect(() => {
+    if (!currentPageSearchEnabled) setKeyword('');
+  }, [currentPageSearchEnabled]);
+  useEffect(() => {
+    const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
+      if (!currentPageSearchEnabled) return;
+      event.preventDefault();
+      globalSearchInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', handleGlobalSearchShortcut);
+    return () => window.removeEventListener('keydown', handleGlobalSearchShortcut);
+  }, [currentPageSearchEnabled]);
   const isCustomerServiceDataConfirm = currentMenuKey === 'customerService'
     && (
       activeSectionKey === 'data-confirm'
@@ -432,121 +403,44 @@ export function App() {
   }, [currentMenuKey, isCustomerServiceDataConfirm, session, visibleMenuKeys]);
   const orderManagementOwnsShipmentOverlays = currentMenuKey === 'orders'
     || (currentMenuKey === 'business' && activeSectionKey === 'order-management');
-  const navigateToAppRoute = useCallback((menuKey: MenuKey, sectionKey?: string, mode: 'push' | 'replace' = 'push', reloadHref?: string) => {
-    const href = getStaffSectionHref(menuKey, sectionKey);
-    navigateWithVersionCheck(reloadHref ?? href, () => {
-      const route = parseStaffAppRoute(href) ?? { menuKey, sectionKey };
-      if (window.location.pathname !== href) {
-        window.history[mode === 'replace' ? 'replaceState' : 'pushState'](null, '', href);
-      }
-      setRequestedAppRoute(route);
-      if (Date.now() - lastDataRefreshRequestAtRef.current >= 15_000) {
-        lastDataRefreshRequestAtRef.current = Date.now();
-        setDataRefreshVersion((current) => current + 1);
-      }
-      setNotice(null);
-      if (menuKey === 'customerService' && !sectionKey) {
-        setCustomerServiceInitialSection('service-dashboard');
-      }
-      setExpandedMenuKey(menuKey);
-      void refreshCurrentSession().catch(() => undefined);
-    });
-  }, [navigateWithVersionCheck, refreshCurrentSession, setNotice]);
-  const handleNotificationNavigate = useCallback((targetPath: string) => {
-    const targetUrl = new URL(targetPath, window.location.origin);
-    if (targetUrl.origin !== window.location.origin) {
-      message.warning('通知跳转地址无效');
-      return;
-    }
-    const targetRoute = parseStaffAppRoute(targetUrl.pathname);
-    if (!targetRoute || !visibleMenuKeys.includes(targetRoute.menuKey)) {
-      message.warning('当前账号没有该业务页面的访问权限');
-      return;
-    }
-    navigateToAppRoute(targetRoute.menuKey, targetRoute.sectionKey, 'push', `${targetUrl.pathname}${targetUrl.search}`);
-    if (targetUrl.search) {
-      window.history.replaceState(null, '', `${targetUrl.pathname}${targetUrl.search}`);
-    }
-    const targetType = targetUrl.searchParams.get('notificationEntityType');
-    const targetId = targetUrl.searchParams.get('notificationEntityId');
-    setPendingNotificationTarget(targetType && targetId ? { type: targetType, id: targetId } : null);
-  }, [navigateToAppRoute, visibleMenuKeys]);
-  const consumePendingNotificationTarget = useCallback((target: { type: string; id: string }) => {
-    setPendingNotificationTarget((current) => current?.type === target.type && current.id === target.id ? null : current);
-    const currentUrl = new URL(window.location.href);
-    if (
-      currentUrl.searchParams.get('notificationEntityType') === target.type
-      && currentUrl.searchParams.get('notificationEntityId') === target.id
-    ) {
-      currentUrl.searchParams.delete('notificationEntityType');
-      currentUrl.searchParams.delete('notificationEntityId');
-      window.history.replaceState(null, '', `${currentUrl.pathname}${currentUrl.search}`);
-    }
-  }, []);
-  const registerSidebarSubNav = useCallback(
-    (state: Omit<SidebarSubNavState, 'parentKey' | 'signature'>) => {
-      const signature = getModuleSubNavSignature(state.items);
-      setSidebarSubNav((current) => {
-        if (
-          current?.parentKey === currentMenuKey &&
-          current.activeKey === state.activeKey &&
-          current.signature === signature &&
-          current.onChange === state.onChange
-        ) {
-          return current;
-        }
-
-        return {
-          parentKey: currentMenuKey,
-          items: state.items,
-          activeKey: state.activeKey,
-          onChange: state.onChange,
-          signature
-        };
-      });
-    },
-    [currentMenuKey]
-  );
-  const clearSidebarSubNav = useCallback((parentKey: string) => {
-    setSidebarSubNav((current) => (current?.parentKey === parentKey ? null : current));
-  }, []);
-  const sidebarSubNavContextValue = useMemo<ModuleSubNavContextValue>(
-    () => ({
-      parentKey: currentMenuKey,
-      routeKey: `${currentMenuKey}:${requestedSectionKey ?? ''}`,
-      requestedSectionKey,
-      resolveSectionKey: (sectionKeys) => resolveStaffSectionKey(currentMenuKey, requestedSectionKey, sectionKeys),
-      navigateToSection: (sectionKey, mode) => navigateToAppRoute(currentMenuKey, sectionKey, mode),
-      register: registerSidebarSubNav,
-      clear: clearSidebarSubNav
-    }),
-    [clearSidebarSubNav, currentMenuKey, navigateToAppRoute, registerSidebarSubNav, requestedSectionKey]
-  );
-  const handlePrimaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, key: MenuKey) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    const clickResult = resolveExpandedMenuAfterPrimaryClick({
-      clickedKey: key,
-      currentKey: currentMenuKey,
-      expandedKey: expandedMenuKey,
-      hasSubNav: sidebarSubNav?.parentKey === key && sidebarSubNav.items.length > 0
-    });
-    setExpandedMenuKey(clickResult.expandedKey);
-    if (!clickResult.shouldNavigate) return;
-    navigateToAppRoute(key);
-  }, [currentMenuKey, expandedMenuKey, navigateToAppRoute, sidebarSubNav]);
-  const handleSecondaryMenuClick = useCallback((event: MouseEvent<globalThis.HTMLAnchorElement>, menuKey: MenuKey, sectionKey: string) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
-    event.preventDefault();
-    navigateToAppRoute(menuKey, sectionKey);
-  }, [navigateToAppRoute]);
-  const handleBrandClick = () => {
-    navigateToAppRoute('workspace', 'shipmentPool');
-  };
+  const navigateToAppRoute = useNavigateToStaffRoute({
+    navigateWithVersionCheck,
+    lastGlobalWorkspaceRefreshAtRef,
+    setRequestedAppRoute,
+    setDataRefreshVersion,
+    setNotice,
+    setCustomerServiceInitialSection,
+    setExpandedMenuKey,
+    refreshCurrentSession
+  });
+  const {
+    consumePendingNotificationTarget,
+    handleNotificationNavigate,
+    pendingNotificationTarget
+  } = useNotificationNavigation({
+    navigateToAppRoute,
+    visibleMenuKeys,
+    warn: message.warning
+  });
+  const {
+    handleBrandClick,
+    handlePrimaryMenuClick,
+    handleSecondaryMenuClick,
+    sidebarSubNavContextValue
+  } = useStaffSidebarNavigation({
+    currentMenuKey,
+    requestedSectionKey,
+    navigateToAppRoute,
+    expandedMenuKey,
+    setExpandedMenuKey,
+    sidebarSubNav,
+    setSidebarSubNav
+  });
   const canViewShipmentFinanceDetail = [
+    'business:review:view',
     'business:shipment:finance-detail-view',
-    'business:order-entry:business-cost-view',
-    'business:order-entry:business-cost-write',
+    'business:order-entry:business-cost',
+    'business:order-entry:payable-fee',
     'business:shipment:payable-view',
     'business:shipment:profit-view',
     'business:order-fee:profit-view',
@@ -576,12 +470,35 @@ export function App() {
     localStorage.setItem(shipmentHiddenColumnsStorageKey, JSON.stringify(hiddenShipmentColumns));
   }, [hiddenShipmentColumns]);
 
+  const workspaceRefreshUserId = session?.user.id;
+  const workspaceRefreshUserRole = session?.user.role;
+  const workspaceRefreshMustChangePassword = Boolean(session?.user.mustChangePassword);
+  const workspaceRefreshPermissionSignature = [...(session?.permissions ?? [])].sort().join('|');
+  const workspaceRefreshUser = useMemo<Principal | undefined>(
+    () => workspaceRefreshUserId && workspaceRefreshUserRole
+      ? { id: workspaceRefreshUserId, role: workspaceRefreshUserRole } as Principal
+      : undefined,
+    [workspaceRefreshUserId, workspaceRefreshUserRole]
+  );
+  const workspaceRefreshPermissions = useMemo<PermissionKey[]>(
+    () => workspaceRefreshPermissionSignature
+      ? workspaceRefreshPermissionSignature.split('|') as PermissionKey[]
+      : [],
+    [workspaceRefreshPermissionSignature]
+  );
   useEffect(() => {
-    if (!session || session.user.mustChangePassword) {
+    if (!workspaceRefreshUser || workspaceRefreshMustChangePassword) {
       return;
     }
-    void refreshWorkspace(apiClient, session.user, session.permissions ?? []);
-  }, [apiClient, dataRefreshVersion, isCustomerServiceDataConfirm, session]);
+    void refreshWorkspace(apiClient, workspaceRefreshUser, workspaceRefreshPermissions);
+  }, [
+    apiClient,
+    dataRefreshVersion,
+    isCustomerServiceDataConfirm,
+    workspaceRefreshMustChangePassword,
+    workspaceRefreshPermissions,
+    workspaceRefreshUser
+  ]);
 
   useEffect(() => {
     if (!session || session.user.mustChangePassword) return;
@@ -594,7 +511,7 @@ export function App() {
         || hasGlobalUnsavedWork()
       ) return;
       lastRefreshAt = Date.now();
-      lastDataRefreshRequestAtRef.current = lastRefreshAt;
+      lastGlobalWorkspaceRefreshAtRef.current = lastRefreshAt;
       setDataRefreshVersion((current) => current + 1);
     };
     const intervalId = window.setInterval(refreshStaleData, 60_000);
@@ -638,35 +555,17 @@ export function App() {
     }).catch(() => undefined);
   }, [activeSectionKey, apiClient, currentMenuKey, session]);
 
-  useEffect(() => {
-    if (!session || session.user.role === 'CUSTOMER') {
-      return;
-    }
-    const requestedMenuKey = requestedAppRoute?.menuKey;
-    const nextMenuKey = requestedMenuKey && visibleMenuKeys.includes(requestedMenuKey)
-      ? requestedMenuKey
-      : visibleMenuKeys[0] ?? 'workspace';
-    if (requestedMenuKey && !visibleMenuKeys.includes(requestedMenuKey)) {
-      const fallbackHref = getStaffModuleHref(nextMenuKey);
-      if (window.location.pathname !== fallbackHref) {
-        window.history.replaceState(null, '', fallbackHref);
-      }
-      setRequestedAppRoute({ menuKey: nextMenuKey });
-      setNotice('当前账号无权限访问该模块，已跳转至可访问模块。');
-    }
-  }, [requestedAppRoute, session, setNotice, visibleMenuKeys]);
+  useStaffRouteAccessFallback({
+    enabled: Boolean(session && session.user.role !== 'CUSTOMER'),
+    requestedAppRoute,
+    visibleMenuKeys,
+    setRequestedAppRoute,
+    setNotice
+  });
+  useStaffRoutePopState(setRequestedAppRoute);
 
   useEffect(() => {
-    const handlePopState = () => {
-      const route = parseStaffAppRoute(window.location.pathname);
-      setRequestedAppRoute(route);
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  useEffect(() => {
-    if (!session || session.user.role === 'CUSTOMER' || !shouldLoadRoutingFeeNameCatalog(currentMenuKey)) {
+    if (!session || session.user.role === 'CUSTOMER' || (!shouldLoadRoutingFeeNameCatalog(currentMenuKey) && currentMenuKey !== 'customerService')) {
       setFeeNameCatalogItems([]);
       return;
     }
@@ -871,13 +770,13 @@ export function App() {
         return current;
       }
       const nextSession = { ...current, user: { ...current.user, ...user } };
-      localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
+      persistSession(nextSession);
       return nextSession;
     });
   }
 
   function handleUnauthorized() {
-    localStorage.removeItem('siyuan-session');
+    clearPersistedSession();
     setSession(null);
     setLocalShipments([]);
     setProblemTickets([]);
@@ -900,67 +799,36 @@ export function App() {
     const currentPathRoute = parseStaffAppRoute(window.location.pathname);
     const skipIrrelevantWorkspaceData = isCustomerServiceDataConfirm
       || (currentPathRoute?.menuKey === 'customerService' && (currentPathRoute.sectionKey === 'data-confirm' || currentPathRoute.sectionKey === 'dataConfirm'));
-    const permissionSet = new Set(permissions);
-    const canReadFinance = !skipIrrelevantWorkspaceData && permissions.some((permission) => permission.startsWith('finance:'));
-    const canReadBusinessCosts = !skipIrrelevantWorkspaceData && permissionSet.has('finance:business-cost:read');
-    const canReadInternalFinance = !skipIrrelevantWorkspaceData && permissionSet.has('finance:payable:read');
-    const canReadCarrierTasks = !skipIrrelevantWorkspaceData && permissionSet.has('tracking:carrier-task:view') && user?.role !== 'CUSTOMER';
-    const canReadMasterData = !skipIrrelevantWorkspaceData && permissions.some((permission) => permission.startsWith('master-data:') && permission.endsWith(':read'));
-    const canReadProblems = !skipIrrelevantWorkspaceData && permissionSet.has('customer-service:problem:view');
-    const canReadBusinessShipments = !skipIrrelevantWorkspaceData && permissionSet.has('business:shipment:list');
-    const canReadWarehouseDispatch = !skipIrrelevantWorkspaceData && (permissionSet.has('warehouse:dispatch-pending:view') || permissionSet.has('warehouse:outbounded:view'));
-    const [nextShipments, nextTickets] = await Promise.all([
-      canReadBusinessShipments
-        ? client.shipments()
-        : canReadWarehouseDispatch
-          ? client.warehouseDispatchShipments()
-          : Promise.resolve([]),
-      canReadProblems ? loadProblemTickets(client) : Promise.resolve([])
-    ]);
-    setLocalShipments(nextShipments);
-    setProblemTickets(nextTickets);
-    if (canReadFinance || canReadBusinessCosts) {
-      const [nextReceivables, nextBusinessCosts, nextPayables, nextStatements, nextAccounts, nextLedger] = await Promise.all([
-        canReadFinance ? client.receivableAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-        canReadBusinessCosts ? client.businessCostAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-        canReadInternalFinance ? client.payableAudits({ pageSize: 100 }).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
-        canReadFinance ? client.customerStatements().catch(() => []) : Promise.resolve([]),
-        canReadFinance ? client.customerAccounts().catch(() => []) : Promise.resolve([]),
-        canReadFinance ? client.accountLedger().catch(() => []) : Promise.resolve([])
-      ]);
-      setReceivables(nextReceivables.rows);
-      setBusinessCostAudits(nextBusinessCosts.rows);
-      setPayableAudits(nextPayables.rows);
-      setCustomerStatements(nextStatements);
-      setCustomerAccounts(nextAccounts);
-      setAccountLedger(nextLedger);
-    } else {
-      setReceivables([]);
-      setBusinessCostAudits([]);
-      setPayableAudits([]);
-      setCustomerStatements([]);
-      setCustomerAccounts([]);
-      setAccountLedger([]);
-    }
-    if (canReadCarrierTasks) {
-      try {
-        setCarrierTasks(await client.carrierTaskQuery.carrierTasks());
-      } catch {
-        setCarrierTasks([]);
+    const scopeKey = [
+      user?.id ?? 'anonymous',
+      user?.role ?? 'unknown',
+      skipIrrelevantWorkspaceData ? 'data-confirm' : 'full',
+      [...permissions].sort().join(',')
+    ].join('|');
+    await workspaceRefreshCoordinator.run(scopeKey, () => refreshWorkspaceData({
+      client,
+      user,
+      permissions,
+      skipIrrelevantWorkspaceData,
+      emptyMasterData,
+      writers: {
+        setShipments: setLocalShipments,
+        setProblemTickets,
+        setReceivables,
+        setBusinessCostAudits,
+        setPayableAudits,
+        setCustomerStatements,
+        setCustomerAccounts,
+        setAccountLedger,
+        setCarrierTasks,
+        setMasterData
       }
-    } else {
-      setCarrierTasks([]);
-    }
-    if (canReadMasterData) {
-      setMasterData(await client.masterData());
-    } else {
-      setMasterData(emptyMasterData);
-    }
+    }));
   }
 
   async function handleLogin(username: string, password: string, captchaId: string, captchaCode: string) {
     const nextSession = await apiClient.login(username, password, captchaId, captchaCode);
-    localStorage.setItem('siyuan-session', JSON.stringify(nextSession));
+    persistSession(nextSession);
     setSession(nextSession);
     setPersonalCenterOpen(false);
     const requiresPasswordChange = Boolean(nextSession.user.mustChangePassword);
@@ -971,8 +839,6 @@ export function App() {
     if (requiresPasswordChange) {
       return;
     }
-    const loginClient = new ApiClient(() => nextSession.accessToken, handleUnauthorized);
-    await refreshWorkspace(loginClient, nextSession.user, nextSession.permissions ?? []);
   }
 
   async function openPersonalCenter() {
@@ -1024,7 +890,6 @@ export function App() {
       if (session) {
         const nextUser = { ...session.user, mustChangePassword: false };
         mergeSessionUser(nextUser);
-        await refreshWorkspace(apiClient, nextUser, session.permissions ?? []);
       }
       setNotice('密码已修改，可以继续使用系统');
     } catch (error) {
@@ -1547,7 +1412,7 @@ export function App() {
                     </Button>
                   )
                 )}
-                {record.status === 'WAITING_SORT' && (session?.user.role === 'ADMIN' || session?.permissions.includes('business:review:reverse') || session?.permissions.includes('market:pending-routing:update')) ? (
+                {record.status === 'WAITING_SORT' && (session?.user.role === 'ADMIN' || session?.permissions.includes('business:review:edit') || session?.permissions.includes('market:pending-routing:update')) ? (
                   <Popconfirm title="确认反审核该运单？" description="订单将回到待审核运单，待排货草稿会一并解除。" okText="反审核" cancelText="取消" onConfirm={() => void handleReverseShipmentReview(record)}>
                     <Button size="small" danger>反审核</Button>
                   </Popconfirm>
@@ -2302,9 +2167,7 @@ export function App() {
 
   const renderShipmentDetailContent = (shipment: Shipment) => {
     const transferNo = getDetailText(shipment.transferNo, '待获取快递号');
-    const canViewShipmentSensitiveFields = showFulfillmentAgentDetails
-      || canViewShipmentFinanceDetail
-      || Boolean(session?.permissions.includes('business:review:finance-detail-view'));
+    const canViewShipmentSensitiveFields = showFulfillmentAgentDetails || canViewShipmentFinanceDetail;
     const agentName = getDetailText(shipment.agentName, '未指定代理');
     const receivableCurrency = getShipmentReceivableCurrencyLabel(shipment);
     const receivableAmount = getShipmentReceivableAmountLabel(shipment);
@@ -2735,89 +2598,17 @@ export function App() {
         <a className="skip-link" href="#main-content">
           跳到主内容
         </a>
-        <Sider className="sidebar" width={196}>
-          <button type="button" className="brand" aria-label="返回运营工作台" onClick={handleBrandClick}>
-            <div className="brand-mark brand-logo-mark">
-              <img src="/green-cargo-logo.png" alt="Green Cargo 思远物流标识" width={66} height={36} />
-            </div>
-            <div>
-              <Text className="brand-title">思远物流</Text>
-              <Text className="brand-subtitle">AI TMS / OMS</Text>
-            </div>
-          </button>
-          <nav className="side-nav" role="menu" aria-label="员工端主导航">
-            {visibleMenuItems.map((item) => {
-              const isActive = currentMenuKey === item.key;
-              const subNav = sidebarSubNav?.parentKey === item.key ? sidebarSubNav : null;
-              const hasSubNav = Boolean(subNav?.items.length);
-              const isExpanded = isActive && expandedMenuKey === item.key && hasSubNav;
-              const moduleUnreadCount = navigationUnreadByKey.get(`${item.key}:`) ?? 0;
-
-              return (
-                <div className="side-nav-group" key={item.key}>
-                  <a
-                    href={getStaffModuleHref(item.key)}
-                    role="menuitem"
-                    className={`side-nav-item${isActive ? ' is-active' : ''}`}
-                    aria-label={item.label}
-                    aria-expanded={hasSubNav ? isExpanded : undefined}
-                    onClick={(event) => handlePrimaryMenuClick(event, item.key)}
-                  >
-                    <span className="side-nav-icon">{item.icon}</span>
-                    <span className="side-nav-label">{item.label}</span>
-                    <span className="side-nav-meta" aria-hidden="true">
-                      {moduleUnreadCount > 0 && !isExpanded ? (
-                        <span className="side-nav-unread-dot" title={`${formatNavigationUnreadCount(moduleUnreadCount)} 条未读变化`} />
-                      ) : null}
-                      {hasSubNav ? (
-                        <span className="side-nav-chevron">
-                          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                        </span>
-                      ) : null}
-                    </span>
-                  </a>
-                  {isExpanded && subNav ? (
-                    <div className="side-sub-nav" role="group" aria-label={`${item.label}二级功能`}>
-                      {subNav.items.map((subItem) => (
-                        (() => {
-                          const unreadCount = navigationUnreadByKey.get(`${item.key}:${subItem.key}`) ?? 0;
-                          return (
-                            <a
-                              href={getStaffSectionHref(item.key, subItem.key)}
-                              key={subItem.key}
-                              role="button"
-                              className={`side-sub-nav-item${subItem.key === activeSectionKey ? ' is-active' : ''}`}
-                              aria-current={subItem.key === activeSectionKey ? 'page' : undefined}
-                              onClick={(event) => {
-                                handleSecondaryMenuClick(event, item.key, subItem.key);
-                                setExpandedMenuKey(item.key);
-                              }}
-                            >
-                              <span className="side-sub-nav-label">{subItem.label}</span>
-                              {unreadCount > 0 ? (
-                                <span className="side-sub-nav-unread-count" aria-hidden="true" title={`${formatNavigationUnreadCount(unreadCount)} 条未读变化`}>
-                                  {formatNavigationUnreadCount(unreadCount)}
-                                </span>
-                              ) : null}
-                            </a>
-                          );
-                        })()
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </nav>
-          <Card className="sidebar-card" size="small">
-            <Space direction="vertical" size={8}>
-              <Flex align="center" gap={8}>
-                <Bot size={16} />
-                <Text strong>AI 助手在线</Text>
-              </Flex>
-            </Space>
-          </Card>
-        </Sider>
+        <StaffSidebar
+          activeSectionKey={activeSectionKey}
+          currentMenuKey={currentMenuKey}
+          expandedMenuKey={expandedMenuKey}
+          items={visibleMenuItems}
+          navigationUnreadBadges={navigationUnreadBadges}
+          sidebarSubNav={sidebarSubNav}
+          onBrandClick={handleBrandClick}
+          onPrimaryMenuClick={handlePrimaryMenuClick}
+          onSecondaryMenuClick={handleSecondaryMenuClick}
+        />
         <Layout>
           <Header className="topbar">
             <Space className="business-switch" role="group" aria-label="业务类型">
@@ -2831,10 +2622,14 @@ export function App() {
               </Button>
             </Space>
             <Input
+              ref={globalSearchInputRef}
               className="global-search"
               prefix={<Search size={16} />}
-              placeholder="搜索客户、内部单号、快递号、国家、渠道"
-              aria-label="全局搜索客户、内部单号、快递号、国家、渠道"
+              placeholder={currentPageSearchEnabled ? '搜索当前页面客户、单号、快递号、渠道' : '当前页面暂未接入搜索'}
+              aria-label="搜索当前页面"
+              aria-keyshortcuts="Control+K Meta+K"
+              title={currentPageSearchEnabled ? '只搜索当前仓库子页面' : '当前页面暂未接入搜索'}
+              disabled={!currentPageSearchEnabled}
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
               allowClear
@@ -2879,159 +2674,25 @@ export function App() {
           >
             <p>退出后需要重新登录才能继续使用系统。</p>
           </Modal>
-          <Modal
-            title="个人中心"
+          <PersonalCenterModal
             open={personalCenterOpen}
-            width={980}
-            destroyOnHidden
-            footer={(
-              <Button onClick={() => setPersonalCenterOpen(false)}>关闭</Button>
-            )}
-            onCancel={() => setPersonalCenterOpen(false)}
-          >
-            <Space direction="vertical" size={16} className="personal-center-shell">
-              <Card size="small" title="账号资料" className="personal-center-profile">
-                <div className="personal-center-readonly-grid" aria-label="只读账号信息">
-                  <div>
-                    <span>员工账号</span>
-                    <strong>{session.user.username}</strong>
-                  </div>
-                  <div>
-                    <span>当前角色</span>
-                    <Tag color={session.user.role === 'ADMIN' ? 'red' : 'blue'}>{getRoleDisplayName(session.user.role)}</Tag>
-                  </div>
-                </div>
-                <Form
-                  form={profileForm}
-                  layout="vertical"
-                  className="personal-center-profile-form"
-                  initialValues={{
-                    name: session.user.name,
-                    phone: session.user.phone,
-                    gender: (session.user.gender ?? 'UNKNOWN') as StaffGender,
-                    nickname: session.user.nickname
-                  }}
-                >
-                  <Form.Item name="name" label="姓名" rules={[{ max: 40, message: '姓名最多 40 个字符' }]}>
-                    <Input placeholder="请输入姓名" />
-                  </Form.Item>
-                  <Form.Item name="phone" label="手机号" rules={[{ max: 30, message: '手机号最多 30 个字符' }]}>
-                    <Input placeholder="请输入手机号" />
-                  </Form.Item>
-                  <Form.Item name="gender" label="性别">
-                    <Select options={staffGenderOptions} />
-                  </Form.Item>
-                  <Form.Item name="nickname" label="昵称" rules={[{ max: 40, message: '昵称最多 40 个字符' }]}>
-                    <Input placeholder="请输入昵称" />
-                  </Form.Item>
-                  <Button type="primary" onClick={() => void submitProfileUpdate()}>
-                    保存个人资料
-                  </Button>
-                </Form>
-              </Card>
-              <Row gutter={[16, 16]}>
-                <Col xs={24}>
-                  <Card size="small" title="修改密码" className="personal-center-card">
-                    <Form form={passwordForm} layout="vertical">
-                      <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        name="newPassword"
-                        label="新密码"
-                        rules={[
-                          { required: true, message: '请输入新密码' },
-                          passwordStrengthRule()
-                        ]}
-                        extra="密码长度需大于或等于 8 位，且至少包含大写字母、小写字母、数字、特殊字符中的 3 类。"
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Form.Item
-                        name="confirmPassword"
-                        label="确认新密码"
-                        dependencies={['newPassword']}
-                        rules={[
-                          { required: true, message: '请再次输入新密码' },
-                          ({ getFieldValue }) => ({
-                            validator(_, value) {
-                              if (!value || getFieldValue('newPassword') === value) {
-                                return Promise.resolve();
-                              }
-                              return Promise.reject(new Error('两次输入的新密码不一致'));
-                            }
-                          })
-                        ]}
-                      >
-                        <Input.Password />
-                      </Form.Item>
-                      <Button type="primary" block onClick={() => void submitPasswordChange()}>
-                        保存新密码
-                      </Button>
-                    </Form>
-                  </Card>
-                </Col>
-              </Row>
-            </Space>
-          </Modal>
-          <Modal
-            title="首次登录需要修改密码"
+            user={session.user}
+            profileForm={profileForm}
+            passwordForm={passwordForm}
+            passwordStrengthRule={passwordStrengthRule}
+            genderOptions={staffGenderOptions}
+            onClose={() => setPersonalCenterOpen(false)}
+            onSaveProfile={submitProfileUpdate}
+            onSavePassword={submitPasswordChange}
+          />
+          <ForcedPasswordChangeModal
             open={forcePasswordChangeOpen}
-            width={560}
-            closable={false}
-            maskClosable={false}
-            keyboard={false}
-            destroyOnHidden
-            footer={null}
-          >
-            <Space direction="vertical" size={16} style={{ width: '100%' }}>
-              <Alert
-                type="warning"
-                showIcon
-                message="请先修改初始密码"
-                description="新建账号或被管理员重置密码后，必须修改初始密码才能继续使用系统。新密码长度需大于或等于 8 位，并至少包含 3 种不同字符类型。"
-              />
-              {forcePasswordChangeError ? (
-                <Alert type="error" showIcon message={forcePasswordChangeError} />
-              ) : null}
-              <Form form={forcePasswordForm} layout="vertical" onFinish={() => void submitForcedPasswordChange()}>
-                <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: '请输入当前密码' }]}>
-                  <Input.Password autoFocus />
-                </Form.Item>
-                <Form.Item
-                  name="newPassword"
-                  label="新密码"
-                  rules={[
-                    { required: true, message: '请输入新密码' },
-                    passwordStrengthRule()
-                  ]}
-                >
-                  <Input.Password />
-                </Form.Item>
-                <Form.Item
-                  name="confirmPassword"
-                  label="确认新密码"
-                  dependencies={['newPassword']}
-                  rules={[
-                    { required: true, message: '请再次输入新密码' },
-                    ({ getFieldValue }) => ({
-                      validator(_, value) {
-                        if (!value || getFieldValue('newPassword') === value) {
-                          return Promise.resolve();
-                        }
-                        return Promise.reject(new Error('两次输入的新密码不一致'));
-                      }
-                    })
-                  ]}
-                >
-                  <Input.Password />
-                </Form.Item>
-                <Button type="primary" htmlType="submit" block loading={forcePasswordChangeLoading}>
-                  保存新密码并进入系统
-                </Button>
-              </Form>
-            </Space>
-          </Modal>
+            loading={forcePasswordChangeLoading}
+            error={forcePasswordChangeError}
+            form={forcePasswordForm}
+            passwordStrengthRule={passwordStrengthRule}
+            onSavePassword={submitForcedPasswordChange}
+          />
           <Modal
             title="选择发票模板"
             open={Boolean(invoiceTemplateSelection)}
@@ -3288,12 +2949,10 @@ export function App() {
                 notice={notice}
                 onDispatch={handleWarehouseDispatchShipment}
                 onShipmentUpdated={upsertLocalShipment}
-                canCreateOrderEntry={session.user.role === 'ADMIN' || (
-                  session.permissions.includes('business:order-entry:view')
-                  && session.permissions.includes('business:order-entry:create')
-                  && session.permissions.includes('warehouse:in-stock:order-entry-select')
-                )}
+                canCreateOrderEntry={session.user.role === 'ADMIN' || session.permissions.includes('warehouse:in-stock:order-entry')}
                 onCreateOrderEntryFromWarehouse={openOrderEntryFromWarehouse}
+                pageSearchKeyword={currentPageSearchEnabled ? keyword : ''}
+                onPageSearchKeywordChange={setKeyword}
                 findShipmentBySystemOrderNo={findShipmentBySystemOrderNo}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
               />
@@ -3303,6 +2962,7 @@ export function App() {
                 problemTickets={problemTickets}
                 businessCostAudits={businessCostAudits}
                 agents={masterData.agents}
+                feeNameCatalogItems={feeNameCatalogItems}
                 apiClient={apiClient}
                 permissions={session.permissions}
                 role={session.user.role}

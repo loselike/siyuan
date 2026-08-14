@@ -134,7 +134,7 @@ function scanControllerSource(file, sourceText, registeredControllers = new Set(
     }
     recognizedControllers.push(statement.name.text);
     const controllerPath = stringValue(controller.arguments[0]);
-    const classPermission = classDecorators.find((item) => item.name === 'RequirePermission');
+    const classPermission = classDecorators.find((item) => ['RequirePermission', 'RequireAllPermissions'].includes(item.name));
     const classAuth = classDecorators.some((item) => item.name === 'RequireAuth');
     for (const member of statement.members) {
       if (!ts.isMethodDeclaration(member) || !member.name) continue;
@@ -146,7 +146,7 @@ function scanControllerSource(file, sourceText, registeredControllers = new Set(
         }
         continue;
       }
-      const permission = methodDecorators.find((item) => item.name === 'RequirePermission') ?? classPermission;
+      const permission = methodDecorators.find((item) => ['RequirePermission', 'RequireAllPermissions'].includes(item.name)) ?? classPermission;
       const requireAuth = classAuth || methodDecorators.some((item) => item.name === 'RequireAuth');
       routes.push({
         controller: statement.name.text,
@@ -154,7 +154,11 @@ function scanControllerSource(file, sourceText, registeredControllers = new Set(
         method: http.name.toUpperCase(),
         route: joinRoute(controllerPath, stringValue(http.arguments[0])),
         auth: permission ? 'permission' : requireAuth ? 'auth' : 'none',
-        permissions: permission ? stringValues(permission.arguments[0]) : [],
+        permissions: permission
+          ? permission.name === 'RequireAllPermissions'
+            ? permission.arguments.map(stringValue)
+            : stringValues(permission.arguments[0])
+          : [],
         file: repositoryPath(file),
         line: lineNumber(sourceFile, member)
       });
@@ -581,6 +585,21 @@ function runScannerSelfTest() {
   if (routes.length !== 1 || routes[0].method !== 'ALL' || routes[0].route !== '/fixture/open' || routes[0].auth !== 'none') {
     throw new Error(`controller scanner self-test failed: ${JSON.stringify(routes)}`);
   }
+  const allPermissionRoutes = scanControllerSource(nonStandardControllerFile, `
+    @Controller('fixture')
+    class FixtureController {
+      @Get('protected')
+      @RequireAllPermissions('fixture:read', 'fixture:approve')
+      protectedRoute() {}
+    }
+  `).routes;
+  if (
+    allPermissionRoutes.length !== 1
+    || allPermissionRoutes[0].auth !== 'permission'
+    || allPermissionRoutes[0].permissions.join(',') !== 'fixture:read,fixture:approve'
+  ) {
+    throw new Error(`all-permissions scanner self-test failed: ${JSON.stringify(allPermissionRoutes)}`);
+  }
   let rejectedUnknownDecorator = false;
   try {
     scanControllerSource(nonStandardControllerFile, `
@@ -620,7 +639,7 @@ function runScannerSelfTest() {
     }
     if (!rejectedIndirectRegistration) throw new Error(`controller scanner must reject indirect module metadata: ${fixture}`);
   }
-  console.log('[architecture-baseline] SELF-TEST PASS (non-standard filename, @All, decorator alias and indirect module registration rejection)');
+  console.log('[architecture-baseline] SELF-TEST PASS (non-standard filename, @All, @RequireAllPermissions, decorator alias and indirect module registration rejection)');
 }
 
 const command = process.argv[2] ?? 'summary';

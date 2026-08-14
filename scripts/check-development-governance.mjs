@@ -28,7 +28,20 @@ const requiredGovernanceFiles = [
   'config/architecture/governance-baseline.json',
   'config/architecture/module-boundaries.json',
   'scripts/select-validation.mjs',
-  'config/validation/path-test-map.json'
+  'config/validation/path-test-map.json',
+  'scripts/lib/docker-container-image-id.sh',
+  'scripts/lib/47-release-images.sh',
+  'scripts/release-image-fence.test.sh',
+  'scripts/docker-container-image-id.test.sh',
+  'scripts/release-fingerprint-artifact-filter.test.sh',
+  'scripts/lib/47-release-ssh.sh',
+  'scripts/release-ssh-policy.test.sh',
+  'scripts/lib/release-source-policy.sh',
+  'scripts/release-source-policy.test.sh',
+  'scripts/ci-affected.mjs',
+  'scripts/ci-affected.test.mjs',
+  '.github/workflows/ci.yml',
+  '.github/workflows/full-regression.yml'
 ];
 
 const failures = [];
@@ -105,6 +118,8 @@ for (const forbiddenText of [
 const deployScript = readFileSync('scripts/deploy-47.sh', 'utf8');
 const syncScript = readFileSync('scripts/sync-47.sh', 'utf8');
 const releaseLockScript = readFileSync('scripts/lib/47-release-lock.sh', 'utf8');
+const releaseSshScript = readFileSync('scripts/lib/47-release-ssh.sh', 'utf8');
+const releaseImageScript = readFileSync('scripts/lib/47-release-images.sh', 'utf8');
 const whitelistDeployScript = readFileSync('scripts/deploy-47-whitelist.sh', 'utf8');
 const casSyncScript = readFileSync('scripts/cas-sync-47-file.sh', 'utf8');
 const captureBaselineScript = readFileSync('scripts/capture-47-release-baseline.sh', 'utf8');
@@ -112,6 +127,13 @@ const bootstrapMigrationExceptions = readFileSync('config/release/47-legacy-migr
 const bootstrapMigrationExceptionsSha256 = createHash('sha256').update(bootstrapMigrationExceptions).digest('hex');
 const fingerprintScript = readFileSync('scripts/print-47-release-fingerprints.sh', 'utf8');
 const resolveRecoveryScript = readFileSync('scripts/resolve-47-release-recovery.sh', 'utf8');
+const containerImageIdScript = readFileSync('scripts/lib/docker-container-image-id.sh', 'utf8');
+const runtimeManifestScript = readFileSync('scripts/capture-47-runtime-manifest.sh', 'utf8');
+const releaseSourcePolicyScript = readFileSync('scripts/lib/release-source-policy.sh', 'utf8');
+const provenanceAuditScript = readFileSync('scripts/audit-47-runtime-provenance.sh', 'utf8');
+if (!syncScript.includes("--exclude='node_modules'") || !syncScript.includes("--exclude='node_modules/'")) {
+  failures.push('47 sync must exclude node_modules directories and root symlinks');
+}
 const forceFullBlock = deployScript.match(/if \[\[ "\$FORCE_FULL" == true \]\]; then([\s\S]*?)\nfi/)?.[1] ?? '';
 if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
   failures.push('--full must not force Prisma migration execution');
@@ -119,16 +141,50 @@ if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
 if (!deployScript.includes('MIGRATION_REQUIRED=$DB_MIGRATION_REQUIRED')) {
   failures.push('deploy dry-run must print MIGRATION_REQUIRED');
 }
+if (!deployScript.includes('siyuan_47_assert_standard_release_source')
+  || !whitelistDeployScript.includes('siyuan_47_assert_whitelist_release_source')
+  || !releaseSourcePolicyScript.includes('main|codex/release/*')
+  || !releaseSourcePolicyScript.includes('SIYUAN_47_EMERGENCY_RELEASE')) {
+  failures.push('47 release entrypoints must enforce the unique main/release branch policy and explicit emergency CAS override');
+}
+for (const immutableImageGate of [
+  '--image-manifest',
+  'BUILD_MODE=',
+  'immutable-image-promotion',
+  'docker compose --profile tools pull',
+  'docker compose up -d --no-build',
+  'GHCR_DIGESTS',
+  'IMAGE_MANIFEST_SHA256='
+]) {
+  if (!deployScript.includes(immutableImageGate)) failures.push(`immutable image promotion is missing gate: ${immutableImageGate}`);
+}
+if (!provenanceAuditScript.includes('immutable-image-provenance-mismatch')
+  || !provenanceAuditScript.includes('GHCR_DIGESTS')) {
+  failures.push('runtime provenance must validate immutable GHCR digest evidence');
+}
+if (!deployScript.includes('state/docs-only synchronization completed successfully; runtime release state was preserved.')
+  || !deployScript.includes('SOURCE_BUNDLE_PATH_ARG="${SOURCE_BUNDLE_PATH:-__SIYUAN_NONE__}"')
+  || !deployScript.includes('[ "$source_bundle_path" != __SIYUAN_NONE__ ] || source_bundle_path=""')) {
+  failures.push('standard deploy must preserve runtime state for docs-only sync and transport empty source-bundle fields safely');
+}
 for (const bootstrapGate of [
   '--bootstrap-manifest',
   '--confirm-bootstrap',
+  '--current-baseline-cutover',
   'BOOTSTRAP_REMOTE_BASELINE_DRIFT',
   'BOOTSTRAP_APPLIED_MIGRATION_SET_MISMATCH',
-  'Bootstrap is only allowed for the explicitly frozen non-Git runtime.',
-  'docs/release-manifests/47/20260811-053014-customer-service-data-confirm-editable-20260811-1335',
-  'e1f03995d9299d8a7ac903dbbfea1dbf51bd7d803fb1db0cae357186584ba6b8'
+  'Bootstrap is only allowed for the explicitly frozen legacy-untraceable runtime.'
 ]) {
   if (!deployScript.includes(bootstrapGate)) failures.push(`bootstrap cutover is missing fail-closed gate: ${bootstrapGate}`);
+}
+for (const currentCutoverGate of [
+  'Current baseline cutover requires --bootstrap-manifest, --confirm-bootstrap and --source-bundle.',
+  'manifest_format_version" != "3"',
+  'bootstrap_capture_format=3',
+  'bootstrap_status" == traceable',
+  'chmod -R u+w "$BOOTSTRAP_RUNTIME_TMP"'
+]) {
+  if (!deployScript.includes(currentCutoverGate)) failures.push(`current baseline cutover is missing fail-closed gate: ${currentCutoverGate}`);
 }
 for (const sourceBundleGate of [
   '--source-bundle',
@@ -144,7 +200,11 @@ for (const sourceBundleGate of [
     failures.push(`GitHub-independent deploy is missing durable source bundle gate: ${sourceBundleGate}`);
   }
 }
-const provenanceAuditScript = readFileSync('scripts/audit-47-runtime-provenance.sh', 'utf8');
+const imageMismatchGateIndex = provenanceAuditScript.indexOf('if [[ -z "$web_image_expected"');
+const whitelistSourceGateIndex = provenanceAuditScript.indexOf('elif [[ "$source_mode" == WHITELIST_CAS ]]');
+if (imageMismatchGateIndex < 0 || whitelistSourceGateIndex < 0 || imageMismatchGateIndex > whitelistSourceGateIndex) {
+  failures.push('runtime provenance must report running-image mismatch before classifying whitelist source provenance');
+}
 if (!provenanceAuditScript.includes('release-source-bundle-checksum-mismatch')
   || !provenanceAuditScript.includes('release-source-bundle-is-writable')
   || !provenanceAuditScript.includes('init --bare')
@@ -165,6 +225,9 @@ if (!deployScript.includes('requires a completely clean release-coordinator work
 }
 if (!syncScript.includes("--exclude='.release-backups/'")) {
   failures.push('sync:47 must preserve remote .release-backups');
+}
+if (!syncScript.includes("--exclude='/.release-current'") || !syncScript.includes("--exclude='/.release-staging/'")) {
+  failures.push('sync:47 must preserve the active release pointer and recovery staging evidence');
 }
 if (!syncScript.includes("--exclude='.git'") || !syncScript.includes("--exclude='.git/'")) {
   failures.push('sync:47 must exclude both a standard .git directory and a worktree .git pointer file');
@@ -231,6 +294,11 @@ if (!captureBaselineScript.includes('siyuan_47_acquire_release_lock') || !captur
 if (!captureBaselineScript.includes('RELEASE_BASELINE_TREE_MISMATCH') || !captureBaselineScript.includes('BASELINE_RECEIPT=') || !deployScript.includes('git merge-base --is-ancestor')) {
   failures.push('standard release baseline must bind an exact remote tree to the same worktree branch and ancestor commit');
 }
+if ((captureBaselineScript.match(/siyuan_47_ssh_bounded_remote/g) ?? []).length !== 2
+  || !captureBaselineScript.includes('bash -s -- "$SIYUAN_47_DIR/.siyuan-release-state"')
+  || !captureBaselineScript.includes('env "SIYUAN_RELEASE_REPO_ROOT=$SIYUAN_47_DIR" bash -s')) {
+  failures.push('47 baseline capture must bound remote reads and SSH channel EOF waits');
+}
 if (!syncScript.includes('siyuan_47_verify_release_lock')) {
   failures.push('sync:47 apply must verify the global release lock');
 }
@@ -240,8 +308,61 @@ if (!releaseLockScript.includes('.siyuan-release-lock') || !releaseLockScript.in
 if (!releaseLockScript.includes('heartbeat_at') || !releaseLockScript.includes('siyuan_47_start_release_lock_heartbeat')) {
   failures.push('47 release lock must expose a heartbeat for audited stale-lock recovery');
 }
+if (!releaseLockScript.includes('47-release-ssh.sh')
+  || !releaseSshScript.includes('ServerAliveInterval')
+  || !releaseSshScript.includes('ServerAliveCountMax')
+  || !releaseSshScript.includes('siyuan_47_scp')) {
+  failures.push('47 release SSH/SCP must share bounded connect and keepalive policy');
+}
+for (const releaseScript of [deployScript, whitelistDeployScript]) {
+  if (!releaseScript.includes('siyuan_47_run_bounded_build docker compose build')
+    || !releaseScript.includes('SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800')
+    || !releaseScript.includes('siyuan_47_record_release_phase build-start')
+    || !releaseScript.includes('siyuan_47_record_release_phase health-complete')) {
+    failures.push('47 runtime build paths must emit phases and enforce a bounded plain-progress build');
+  }
+}
+if (!releaseSshScript.includes('timeout --signal=TERM --kill-after=60')
+  || !releaseSshScript.includes('RELEASE_BUILD_TIMEOUT')
+  || !releaseSshScript.includes('RELEASE_MIGRATION_TIMEOUT')
+  || !releaseSshScript.includes('manual_database_verification=required')
+  || !releaseSshScript.includes('ChannelTimeout=session=')
+  || !releaseSshScript.includes('ssh -G')
+  || !releaseLockScript.includes('remote_phase=$remote_phase')) {
+  failures.push('47 failed releases must retain the bounded-build and last-remote-phase recovery evidence');
+}
+for (const releaseScript of [deployScript, whitelistDeployScript]) {
+  if (!releaseScript.includes('siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS"')) {
+    failures.push('47 release paths must bound the complete remote runtime command');
+  }
+  if (!releaseScript.includes('SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS')) {
+    failures.push('47 release paths must bound the remote success-state command');
+  }
+  if (!releaseScript.includes('siyuan_47_run_bounded_migration docker compose')) {
+    failures.push('47 migration paths must have an independent timeout and manual-verification failure mode');
+  }
+}
 if (!releaseLockScript.includes('RELEASE_RECOVERY_REQUIRED') || !releaseLockScript.includes('exit 81')) {
   failures.push('47 release queue must block after an unresolved post-mutation failure');
+}
+if (!releaseImageScript.includes('RELEASE_IMAGE_FENCE_MISMATCH')
+  || !releaseImageScript.includes('.Descriptor.digest')
+  || !releaseImageScript.includes('siyuan_47_capture_release_image_ids')
+  || !releaseImageScript.includes('siyuan_47_verify_release_image_ids')
+  || !deployScript.includes('siyuan_47_export_release_images "$RELEASE_ID"')
+  || !whitelistDeployScript.includes('siyuan_47_export_release_images "$whitelist_release_id"')
+  || !whitelistDeployScript.includes('RELEASE_IMAGE_EXPORT_MISMATCH')
+  || !whitelistDeployScript.includes('RELEASE_CONTAINER_IMAGE_FENCE_MISMATCH')
+  || !whitelistDeployScript.includes('APPROVED_MIGRATIONS_ARG="${APPROVED_MIGRATIONS_CSV:-__SIYUAN_EMPTY__}"')
+  || !whitelistDeployScript.includes('RELEASE_ID_ARGUMENT_INVALID')
+  || !whitelistDeployScript.includes('COMPOSE_CREATED_REPLACEMENT_REMOVED')
+  || !whitelistDeployScript.includes('COMPOSE_RECREATE_RETRY_REFUSED')
+  || !whitelistDeployScript.includes('COMPOSE_RECREATE_RETRY=once')
+  || !whitelistDeployScript.includes('SOURCE_ROLLBACK_REQUIRED=true')
+  || !whitelistDeployScript.includes('WHITELIST_SOURCE_SNAPSHOT_CAPTURE_FAILED')
+  || !whitelistDeployScript.includes('verify-release-source-snapshot.sh')
+  || !whitelistDeployScript.includes("docker inspect --format '{{.Config.Image}}'")) {
+  failures.push('47 runtime releases must use release-scoped images and verify build IDs plus running container references');
 }
 if (!resolveRecoveryScript.includes('--expected-marker-sha') || !resolveRecoveryScript.includes('--confirm-recovered')) {
   failures.push('release recovery marker must only clear through an explicit checksum-bound resolution command');
@@ -255,11 +376,34 @@ if (!whitelistDeployScript.includes('--preflight-only') || !whitelistDeployScrip
 if (!whitelistDeployScript.includes('Whitelist scope mismatch') || !whitelistDeployScript.includes('WHITELIST_RELEASE_ID')) {
   failures.push('whitelist deploy must derive scope from targets and advance the remote release baseline');
 }
+if (!whitelistDeployScript.includes('RUNTIME_IMAGE_STATE_MISMATCH')
+  || !whitelistDeployScript.includes('RUNTIME_IMAGE_UNAVAILABLE')
+  || !whitelistDeployScript.includes('--adopt-current-runtime')
+  || !whitelistDeployScript.includes('Runtime adoption may only publish release-governance scripts')
+  || !whitelistDeployScript.includes('reviewed-zero-build-governance-release')) {
+  failures.push('whitelist deploy must fail closed on release-state image drift and tightly scope explicit runtime adoption');
+}
 if (!whitelistDeployScript.includes('WEB_FINGERPRINT=$web_fingerprint') || !whitelistDeployScript.includes('MIGRATE_FINGERPRINT=$migrate_fingerprint')) {
   failures.push('whitelist success state must use fingerprints recomputed from the actual remote tree');
 }
+if (!containerImageIdScript.includes('ImageManifestDescriptor')
+  || !containerImageIdScript.includes('{{else}}{{.Image}}')
+  || !whitelistDeployScript.includes('siyuan_docker_container_image_id')
+  || !deployScript.includes('siyuan_docker_container_image_id')
+  || !provenanceAuditScript.includes('siyuan_docker_container_image_id')
+  || !runtimeManifestScript.includes('siyuan_docker_container_image_id')
+  || !runtimeManifestScript.includes('SIYUAN_47_CAPTURE_FORMAT:-3')
+  || !deployScript.includes('SIYUAN_47_CAPTURE_FORMAT=2')) {
+  failures.push('release state, provenance audit and default runtime capture must share runnable Docker manifest identity while preserving the frozen v2 bootstrap verifier');
+}
 if (!fingerprintScript.includes('scope_hash web') || !fingerprintScript.includes('scope_hash migrate')) {
   failures.push('portable release fingerprint helper must cover web, api and migration manifests');
+}
+if (!fingerprintScript.includes('*/._*') || !deployScript.includes('*/._*')) {
+  failures.push('release fingerprints must ignore AppleDouble metadata in portable and standard deploy implementations');
+}
+if (!syncScript.includes("--exclude='._*'") || !syncScript.includes('COPYFILE_DISABLE=1') || !syncScript.includes('COPY_EXTENDED_ATTRIBUTES_DISABLE=1')) {
+  failures.push('source synchronization must neither transfer nor synthesize AppleDouble metadata');
 }
 if (fingerprintScript.includes('*/test-support/*') || fingerprintScript.includes('*/testSupport/*') || deployScript.includes('*/test-support/*') || deployScript.includes('*/testSupport/*')) {
   failures.push('release fingerprints must include non-test files under test-support because API TypeScript compiles all src/**/*.ts');

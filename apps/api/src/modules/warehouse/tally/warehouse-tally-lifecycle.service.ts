@@ -1,0 +1,63 @@
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import type { Principal } from '../../rbac.js';
+import {
+  WAREHOUSE_TALLY_LIFECYCLE_REPOSITORY,
+  type WarehouseTallyLifecycleRepository
+} from './warehouse-tally-lifecycle.repository.js';
+
+type WarehouseTallyTaskCreateInput = Parameters<
+  WarehouseTallyLifecycleRepository['createWarehouseTallyTask']
+>[1];
+type WarehouseTallyTaskUpdateInput = Parameters<
+  WarehouseTallyLifecycleRepository['updateWarehouseTallyTask']
+>[2];
+type WarehouseTallyTaskCompleteInput = Parameters<
+  WarehouseTallyLifecycleRepository['completeWarehouseTallyTask']
+>[2];
+
+@Injectable()
+export class WarehouseTallyLifecycleService {
+  constructor(
+    @Inject(WAREHOUSE_TALLY_LIFECYCLE_REPOSITORY)
+    private readonly repository: WarehouseTallyLifecycleRepository
+  ) {}
+
+  create(principal: Principal, input: WarehouseTallyTaskCreateInput) {
+    return this.repository.createWarehouseTallyTask(principal, input);
+  }
+
+  update(principal: Principal, id: string, input: WarehouseTallyTaskUpdateInput) {
+    return this.repository.updateWarehouseTallyTask(principal, id, input);
+  }
+
+  start(principal: Principal, id: string) {
+    return this.repository.startWarehouseTallyTask(principal, id);
+  }
+
+  complete(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput) {
+    return this.repository.completeWarehouseTallyTask(principal, id, input);
+  }
+
+  cancel(principal: Principal, id: string) {
+    return this.repository.cancelWarehouseTallyTask(principal, id);
+  }
+
+  restartProblem(principal: Principal, id: string) {
+    return this.repository.restartWarehouseTallyProblemTask(principal, id);
+  }
+
+  updateCompletedCount(
+    principal: Principal,
+    id: string,
+    input: unknown
+  ): never {
+    void principal;
+    void id;
+    void input;
+    throw new BadRequestException('已完成理货不允许直接修改件数，请先反审核');
+  }
+
+  reverseReview(principal: Principal, id: string) {
+    return this.repository.reverseReviewWarehouseTallyTask(principal, id);
+  }
+}

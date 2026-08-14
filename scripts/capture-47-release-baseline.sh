@@ -45,8 +45,12 @@ trap 'exit 143' TERM
 
 bash "$SCRIPT_DIR/audit-47-runtime-provenance.sh" --require-traceable
 
-remote_release_id="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" \
-  "sed -n 's/^RELEASE_ID=//p' '$SIYUAN_47_DIR/.siyuan-release-state' 2>/dev/null | tail -1")"
+remote_release_id="$(siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" \
+  bash -s -- "$SIYUAN_47_DIR/.siyuan-release-state" <<'REMOTE_SCRIPT'
+set -eu
+sed -n 's/^RELEASE_ID=//p' "$1" 2>/dev/null | tail -1
+REMOTE_SCRIPT
+)"
 if [[ -z "$remote_release_id" ]]; then
   remote_release_id="MISSING"
 fi
@@ -55,8 +59,8 @@ if [[ ! "$remote_release_id" =~ ^[A-Za-z0-9._:-]+$ ]]; then
   exit 80
 fi
 local_fingerprints="$(bash "$SCRIPT_DIR/print-47-release-fingerprints.sh")"
-remote_fingerprints="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" \
-  "SIYUAN_RELEASE_REPO_ROOT='$SIYUAN_47_DIR' bash -s" < "$SCRIPT_DIR/print-47-release-fingerprints.sh")"
+remote_fingerprints="$(siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" \
+  env "SIYUAN_RELEASE_REPO_ROOT=$SIYUAN_47_DIR" bash -s < "$SCRIPT_DIR/print-47-release-fingerprints.sh")"
 for field in WEB_FINGERPRINT API_FINGERPRINT MIGRATE_FINGERPRINT; do
   local_value="$(printf '%s\n' "$local_fingerprints" | sed -n "s/^$field=//p")"
   remote_value="$(printf '%s\n' "$remote_fingerprints" | sed -n "s/^$field=//p")"

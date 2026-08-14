@@ -22,7 +22,10 @@ export abstract class UserTablePreferenceService {
   abstract remove(principal: Principal, key: string): Promise<{ ok: true }>;
 }
 
-function normalizePreferenceKey(key: string) {
+export function parseUserTablePreferenceKey(key: unknown) {
+  if (typeof key !== 'string') {
+    throw new BadRequestException('表格偏好键无效');
+  }
   const normalized = key.trim();
   if (!normalized || normalized.length > maxPreferenceKeyLength || !preferenceKeyPattern.test(normalized)) {
     throw new BadRequestException('表格偏好键无效');
@@ -30,7 +33,7 @@ function normalizePreferenceKey(key: string) {
   return normalized;
 }
 
-function normalizePreferenceValue(value: unknown): UserTablePreferenceValue {
+export function parseUserTablePreferenceValue(value: unknown): UserTablePreferenceValue {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new BadRequestException('表格偏好内容必须是对象');
   }
@@ -58,14 +61,14 @@ export class PrismaUserTablePreferenceService extends UserTablePreferenceService
     });
     return rows.map((row) => ({
       key: row.preferenceKey,
-      value: normalizePreferenceValue(row.value),
+      value: parseUserTablePreferenceValue(row.value),
       updatedAt: row.updatedAt.toISOString()
     }));
   }
 
   async upsert(principal: Principal, key: string, value: unknown): Promise<UserTablePreferenceSummary> {
-    const preferenceKey = normalizePreferenceKey(key);
-    const normalizedValue = normalizePreferenceValue(value);
+    const preferenceKey = parseUserTablePreferenceKey(key);
+    const normalizedValue = parseUserTablePreferenceValue(value);
     const existing = await this.prisma.userTablePreference.findUnique({
       where: { userId_preferenceKey: { userId: principal.id, preferenceKey } },
       select: { id: true }
@@ -83,13 +86,13 @@ export class PrismaUserTablePreferenceService extends UserTablePreferenceService
     });
     return {
       key: row.preferenceKey,
-      value: normalizePreferenceValue(row.value),
+      value: parseUserTablePreferenceValue(row.value),
       updatedAt: row.updatedAt.toISOString()
     };
   }
 
   async remove(principal: Principal, key: string): Promise<{ ok: true }> {
-    const preferenceKey = normalizePreferenceKey(key);
+    const preferenceKey = parseUserTablePreferenceKey(key);
     await this.prisma.userTablePreference.deleteMany({
       where: { userId: principal.id, preferenceKey }
     });
@@ -108,8 +111,8 @@ export class InMemoryUserTablePreferenceService extends UserTablePreferenceServi
   }
 
   async upsert(principal: Principal, key: string, value: unknown): Promise<UserTablePreferenceSummary> {
-    const preferenceKey = normalizePreferenceKey(key);
-    const normalizedValue = normalizePreferenceValue(value);
+    const preferenceKey = parseUserTablePreferenceKey(key);
+    const normalizedValue = parseUserTablePreferenceValue(value);
     const userPreferences = this.preferences.get(principal.id) ?? new Map();
     if (!userPreferences.has(preferenceKey) && userPreferences.size >= maxPreferencesPerUser) {
       throw new BadRequestException('表格偏好数量已达上限');
@@ -121,7 +124,7 @@ export class InMemoryUserTablePreferenceService extends UserTablePreferenceServi
   }
 
   async remove(principal: Principal, key: string): Promise<{ ok: true }> {
-    this.preferences.get(principal.id)?.delete(normalizePreferenceKey(key));
+    this.preferences.get(principal.id)?.delete(parseUserTablePreferenceKey(key));
     return { ok: true };
   }
 }

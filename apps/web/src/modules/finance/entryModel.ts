@@ -92,7 +92,7 @@ export function createFinanceEntryFeeDraft(
   patch: Partial<FinanceEntryFeeDraft> = {}
 ): FinanceEntryFeeDraft {
   return {
-    id: createFinanceEntryDraftId(),
+    id: patch.id ?? createFinanceEntryDraftId(),
     type,
     name: patch.name ?? (type === 'RECEIVABLE' ? '运费' : type === 'BUSINESS_COST' ? '业务员成本' : '出货成本'),
     currency: normalizeFinanceCatalogCurrency(patch.currency) ?? 'RMB',

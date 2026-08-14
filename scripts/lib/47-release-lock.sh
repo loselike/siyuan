@@ -2,6 +2,10 @@
 
 # Shared 47 release-lock helpers. Callers must enable their own strict shell mode.
 
+SIYUAN_47_RELEASE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=47-release-ssh.sh
+source "$SIYUAN_47_RELEASE_LIB_DIR/47-release-ssh.sh"
+
 SIYUAN_47_REMOTE="${SIYUAN_47_REMOTE:-47}"
 SIYUAN_47_DIR="${SIYUAN_47_DIR:-/opt/siyuan}"
 SIYUAN_47_RELEASE_LOCK_DIR="${SIYUAN_47_RELEASE_LOCK_DIR:-${SIYUAN_47_DIR}/.siyuan-release-lock}"
@@ -22,7 +26,7 @@ siyuan_47_release_lock_owner() {
 }
 
 siyuan_47_release_lock_status() {
-  ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+  siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- \
     "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_RECOVERY_FILE" <<'REMOTE_SCRIPT'
 set -eu
 lock_dir="$1"
@@ -30,7 +34,7 @@ recovery_file="$2"
 if [ -f "$recovery_file" ]; then
   echo "RELEASE_RECOVERY_STATUS=required"
   echo "RECOVERY_MARKER_SHA=$(sha256sum "$recovery_file" | awk '{print $1}')"
-  sed -n 's/^\(owner\|phase\|recorded_at\)=/RECOVERY_\1=/p' "$recovery_file" | tr '[:lower:]' '[:upper:]'
+  sed -n 's/^\(owner\|phase\|remote_phase\|recorded_at\)=/RECOVERY_\1=/p' "$recovery_file" | tr '[:lower:]' '[:upper:]'
 else
   echo "RELEASE_RECOVERY_STATUS=clear"
 fi
@@ -39,7 +43,7 @@ if [ ! -d "$lock_dir" ]; then
   exit 0
 fi
 echo "RELEASE_LOCK_STATUS=held"
-for field in owner started_at heartbeat_at token; do
+for field in owner started_at heartbeat_at phase token; do
   if [ -f "$lock_dir/$field" ]; then
     value="$(sed -n '1p' "$lock_dir/$field")"
     if [ "$field" = "token" ]; then
@@ -56,20 +60,23 @@ siyuan_47_mark_release_recovery_required() {
   local token="${SIYUAN_47_RELEASE_LOCK_TOKEN:-}"
   local owner="${SIYUAN_47_RELEASE_LOCK_OWNER:-unknown}"
   [[ -n "$token" ]] || return 74
-  ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+  siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- \
     "$SIYUAN_47_RELEASE_LOCK_DIR" "$token" "$SIYUAN_47_RELEASE_RECOVERY_FILE" "$owner" "$phase" <<'REMOTE_SCRIPT'
 set -eu
 lock_dir="$1"; expected_token="$2"; recovery_file="$3"; owner="$4"; phase="$5"
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 [ "$actual_token" = "$expected_token" ] || exit 75
+remote_phase="$(sed -n '1p' "$lock_dir/phase" 2>/dev/null || true)"
+[ -n "$remote_phase" ] || remote_phase="unknown"
 recovery_tmp="$recovery_file.tmp.$expected_token"
 cat > "$recovery_tmp" <<RECOVERY
 owner=$owner
 phase=$phase
+remote_phase=$remote_phase
 recorded_at=$(date -Iseconds)
 RECOVERY
 mv "$recovery_tmp" "$recovery_file"
-echo "RELEASE_RECOVERY_REQUIRED phase=$phase" >&2
+echo "RELEASE_RECOVERY_REQUIRED phase=$phase remote_phase=$remote_phase" >&2
 REMOTE_SCRIPT
 }
 
@@ -78,7 +85,7 @@ siyuan_47_start_release_lock_heartbeat() {
   [[ -n "$token" ]] || return 74
   (
     while sleep "$SIYUAN_47_RELEASE_LOCK_HEARTBEAT_SECONDS"; do
-      ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+      siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- \
         "$SIYUAN_47_RELEASE_LOCK_DIR" "$token" <<'REMOTE_SCRIPT' >/dev/null 2>&1 || exit
 set -eu
 lock_dir="$1"
@@ -107,7 +114,7 @@ siyuan_47_verify_release_lock() {
     echo "47 release lock token is missing; run through deploy:47 or release:47:locked." >&2
     return 74
   fi
-  ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+  siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- \
     "$SIYUAN_47_RELEASE_LOCK_DIR" "$token" <<'REMOTE_SCRIPT'
 set -eu
 lock_dir="$1"
@@ -141,7 +148,7 @@ siyuan_47_acquire_release_lock() {
   deadline=$(( $(date +%s) + SIYUAN_47_RELEASE_LOCK_WAIT_SECONDS ))
 
   while true; do
-    if output="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+    if output="$(siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- \
       "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_RECOVERY_FILE" "$token" "$owner" "$started_at" <<'REMOTE_SCRIPT'
 set -eu
 remote_dir="$1"
@@ -165,6 +172,7 @@ if mkdir "$lock_dir" 2>/dev/null; then
   printf '%s\n' "$owner" > "$lock_dir/owner"
   printf '%s\n' "$started_at" > "$lock_dir/started_at"
   printf '%s\n' "$started_at" > "$lock_dir/heartbeat_at"
+  printf '%s\n' "lock-acquired" > "$lock_dir/phase"
   echo "RELEASE_LOCK_ACQUIRED=$owner"
   exit 0
 fi
@@ -205,7 +213,7 @@ siyuan_47_release_release_lock() {
   local token="${SIYUAN_47_RELEASE_LOCK_TOKEN:-}"
   [[ -n "$token" ]] || return 0
   siyuan_47_stop_release_lock_heartbeat
-  ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+  siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- \
     "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$token" <<'REMOTE_SCRIPT'
 set -eu
 remote_dir="$1"
@@ -224,7 +232,8 @@ if [ "$actual_token" != "$expected_token" ]; then
   echo "Release lock ownership changed; refusing to remove it." >&2
   exit 75
 fi
-rm -f "$lock_dir/token" "$lock_dir/owner" "$lock_dir/started_at" "$lock_dir/heartbeat_at"
+rm -f "$lock_dir/token" "$lock_dir/owner" "$lock_dir/started_at" "$lock_dir/heartbeat_at" \
+  "$lock_dir/phase" "$lock_dir/phase.tmp.$expected_token"
 rmdir "$lock_dir"
 REMOTE_SCRIPT
   unset SIYUAN_47_RELEASE_LOCK_TOKEN SIYUAN_47_RELEASE_LOCK_OWNER

@@ -5,6 +5,7 @@
 ## 发布原则
 
 - 47 是全局串行发布资源。Web、API、Shared、迁移和纯源码白名单共用同一把远端发布锁，不按服务拆锁；多个会话可以并行开发，但不得并行同步、构建、迁移、重启或写发布状态。
+- 运行时发布还必须为每个 release ID 使用唯一的 API/Web/db-migrate 镜像标签，并在构建后、迁移前、重启前按镜像 ID 做 fencing 校验；远端队列锁是协调机制，不单独充当 fencing。禁止用共享 `latest` 标签作为已验证候选的最终启动引用。
 - 标准发布只允许从完整 Git 源码构建。禁止把既有镜像作为基底覆盖编译后 JavaScript、从 source map 反向恢复源码、复用未由当前源码生成的 Shared `dist`/声明文件，或复用旧 Prisma Client 来绕过类型检查。此类产物只能作为故障取证，不能成为新基线。
 - 标准发布开始前先把候选分支推送到 `origin`，再用 `npm run release:47:baseline`：它要求发布协调 worktree 干净、HEAD 与同名远端分支精确一致，并核对当前提交的 Web/API/Prisma manifest 与 47 实际树完全一致，随后生成绑定 worktree、分支和祖先 commit 的 receipt。完成候选合并与验证后再次推送，并执行 `npm run deploy:47 -- --expected-release-id <记录值>`；远端 ID、receipt、远端分支 HEAD 或祖先关系任一不一致都会阻断。
 - baseline 捕获与标准 deploy 都会先执行 `audit:47:provenance -- --require-traceable`。当前这类 `legacy-untraceable` 线上状态不能进入标准同步；首次切换到统一 Git 基线必须走单独审查的 bootstrap cutover，不能用普通 deploy 参数绕过。
@@ -54,7 +55,7 @@ npm run deploy:47 -- --expected-release-id <上一步记录的值>
 
 `sync:47 --apply` 同时校验远端锁 token 和任务开始时的 `EXPECTED_RELEASE_ID`；缺失、锁属于其他发布或 baseline 已变化时直接拒绝。dry-run 不写远端。
 
-同步脚本会排除 `node_modules`、构建产物、`.git`、`.release-backups`、`.codex-release-staging`、`tmp`、`scraped_docs`、`outputs`、`.env` 等目录、远端发布备份和敏感文件。标准发布只允许发布协调 worktree 在 captured baseline 匹配时用 `rsync --delete` 形成精确候选镜像，并在构建前核对远端实际 manifest；功能 worktree 与白名单流程不得使用全树删除。
+同步脚本会排除 `node_modules`、构建产物、`.git`、`.release-backups`、`.release-current`、`.release-staging`、`.codex-release-staging`、`tmp`、`scraped_docs`、`outputs`、`.env` 等目录、远端发布备份、当前恢复指针和敏感文件。标准发布只允许发布协调 worktree 在 captured baseline 匹配时用 `rsync --delete` 形成精确候选镜像，并在构建前核对远端实际 manifest；功能 worktree 与白名单流程不得使用全树删除。
 
 同步与 Docker context 同时排除 `.release-manifests`、`.release-receipts`、staging、临时目录和配置取证目录，避免删除审计证据或把历史候选带入构建缓存。发布后用 `npm run audit:47:provenance -- --require-traceable` 校验 Git commit、运行镜像 ID、API 容器实际 release ID 与不可变 receipt；缺一项即视为不可追溯。
 
@@ -62,7 +63,7 @@ npm run deploy:47 -- --expected-release-id <上一步记录的值>
 
 ## 一次性 legacy bootstrap
 
-仅当 47 审计结果为 `legacy-untraceable` 或明确冻结的 `non-git-source`，且已经提交一份完整的 v2 manifest 时，允许主发布协调会话执行一次 bootstrap。`non-git-source` 只用于把现有 `WHITELIST_CAS` 运行态重新收敛为 Git 来源，不是日常发布入口：
+仅当 47 审计结果为 `legacy-untraceable`，且已经提交一份完整的 v2 冻结 manifest 时，允许主发布协调会话执行一次 bootstrap：
 
 ```bash
 npm run deploy:47 -- \
@@ -71,13 +72,26 @@ npm run deploy:47 -- \
   --confirm-bootstrap
 ```
 
-bootstrap 仍要求候选 worktree 完全干净、HEAD 与同名 `origin` 分支一致，并持有全链路发布锁。manifest 路径与 bundle hash 必须固定在发布脚本和治理检查中；锁内会重新捕获 47 的 release state、源码、Prisma、容器、镜像和运行产物，任一文件或 checksum 相对冻结 manifest 漂移都会停止，不能用新的线上值临时替换旧 manifest。
+bootstrap 仍要求候选 worktree 完全干净、HEAD 与同名 `origin` 分支一致，并持有全链路发布锁。锁内会重新捕获 47 的 release state、源码、Prisma、容器、镜像和运行产物；任一文件或 checksum 相对冻结 manifest 漂移都会停止，不能用新的线上值临时替换旧 manifest。
 
 若明确不使用 GitHub，可在同一命令增加 `--source-bundle`。此模式不降低源码可追溯要求：脚本会在锁内从完全干净的 HEAD 生成 Git bundle，校验 bundle 只包含当前提交后，将只读 bundle 原子保存到 47 的 `.release-bundles/<commit>.bundle`。release state 与不可变 receipt 同时绑定 bundle 路径和 SHA-256；后续 provenance audit 会重新校验文件权限、checksum、bundle 完整性及其 HEAD commit。没有 origin 分支或 bundle 两者之一，发布仍会被拒绝。
 
 bootstrap 不允许隐式数据库迁移。候选 migration 名称必须与生产 `_prisma_migrations` 的已完成集合完全一致，checksum 必须一致；历史遗留的三个 checksum 差异仅允许命中 `config/release/47-legacy-migration-checksums.tsv` 中同时绑定源码 hash 和生产记录 hash 的精确条目。未应用 migration 必须从候选移除并保留在冻结证据中，不能在 bootstrap 中顺带执行。
 
 只有锁内基线复核、精确同步、Web/API 生产构建、容器重启、内外网 health 全部成功后，脚本才写入首个 `GIT_SOURCE_BUILD` receipt 和 release state。同步之后任何失败都会写 recovery-required 标记并关闭发布队列；bootstrap 成功后该入口自动失效，后续只能走标准 baseline/deploy 流程。
+
+当线上已被白名单发布推进、旧 v2 bootstrap 清单不再描述当前运行时，可为已经逐文件吸收并提交的当前 47 基线采集一份 v3 清单，再执行一次受限 cutover：
+
+```bash
+npm run deploy:47 -- \
+  --expected-release-id <v3 清单中的 REMOTE_RELEASE_ID> \
+  --current-baseline-cutover \
+  --bootstrap-manifest docs/release-manifests/47/<v3 冻结目录> \
+  --confirm-bootstrap \
+  --source-bundle
+```
+
+该入口不接受 traceable 线上状态，强制使用已提交的 v3 清单和 Git bundle；锁内重新逐字节比较 release state、完整源码清单、Prisma 清单、容器、镜像和运行产物，并继续执行严格的已应用 migration 集合/checksum 核对。任一并发发布、源码或镜像变化都会在同步前停止；不能用它覆盖新的线上改动，也不能跳过历史迁移 checksum 例外白名单。
 
 ## 一键智能发布
 
@@ -88,6 +102,21 @@ npm run release:47:baseline
 # 完成候选合并与验证后
 npm run deploy:47 -- --expected-release-id <任务开始时记录的值>
 ```
+
+常规生产发布只允许从 `main` 或专用 `codex/release/*` 分支执行。普通功能分支必须先走 Pull Request 自动检查；白名单 CAS 在普通功能分支默认拒绝，只有经过明确应急审查并设置 `SIYUAN_47_EMERGENCY_RELEASE=true` 才能使用。这个开关不绕过全局锁、CAS checksum、migration、镜像身份、recovery 或 health 门。
+
+主干 CI 会按 Git SHA 构建 API、Web 和 migration 三个不可变 GHCR 镜像，并上传仅含完整 digest 的 `images.env`。下载与当前 `main` HEAD 对应的清单后，可以执行：
+
+```bash
+npm run release:47:baseline
+npm run deploy:47 -- \
+  --expected-release-id <基线 release ID> \
+  --image-manifest /absolute/path/to/images.env
+```
+
+制品提升会先校验清单 commit 与当前 HEAD、三个 `ghcr.io/...@sha256:<64 hex>` 引用和清单 SHA；47 只拉取 digest、以 `--no-build` 重启受影响服务，并把 digest 清单证据写入不可变 receipt。没有有效清单、GHCR 拉取失败或 migration 指纹变化都会在成功状态写入前失败关闭；migration 仍必须走独立 reviewed whitelist 流程，不会被制品提升隐式执行。
+
+Pull Request 使用 `scripts/ci-affected.mjs` 按 shared/API/Web/Prisma/治理路径选择类型检查，并通过 `config/validation/path-test-map.json` 执行与变更领域直接对应、没有占位符的最小效果测试；巨型 legacy E2E 不再因公共 Repository 变化而自动整组运行。`packages/shared` 只构建一次，每个阶段的耗时和退出码保存为 Actions artifact。完整回归保留在手动/夜间 workflow，不以减少 PR 验证为理由降低权限、迁移、财务和数据正确性门。
 
 脚本根据上一次成功发布记录的 Web、API、Prisma 运行时指纹自动判断范围。测试文件和文档可以同步到 47，但不会触发运行时镜像重建。标准发布发现 Prisma 指纹变化时只报告范围并阻断 apply；迁移必须改走 `deploy:47:whitelist`，由明确列出的 migration 目标形成 approved set，并在执行前确认线上全部 pending migrations 与 approved set 完全一致。开发闭环固定为最小本地安全门、差异检查、源码同步、受影响服务构建、必要迁移、重启、API/容器/代码验证和结果汇报。
 
@@ -174,6 +203,7 @@ curl -I http://127.0.0.1:${APP_PORT:-8899}/
 - 服务未启动：查看 `docker compose logs api web postgres redis`，按容器日志处理。
 - 数据问题：不要执行 reset/seed；需要人工确认备份和修复 SQL 后再处理。
 - `RELEASE_RECOVERY_STATUS=required`：停止所有新发布。主推进会话根据 marker 的 phase、`.release-backups`、迁移记录、容器和公网 health 完成恢复；确认后执行 `npm run release:47:resolve -- --expected-marker-sha <lock-status 输出> --confirm-recovered`。checksum 已变化或仍持锁时命令拒绝清除。
+- `RECOVERY_REMOTE_PHASE=migrate-start` 或出现 `RELEASE_MIGRATION_TIMEOUT`：禁止自动重跑发布或迁移。先只读核对生产 `_prisma_migrations`、目标 migration 的 checksum/完成状态及相关数据库对象，再决定补全、回滚或清除 recovery；不能仅凭容器退出码假定数据库已回滚。
 
 ## 后续优化方向
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { assertPermissionDefinitionsIntegrity, defaultPermissionsForRole, permissionDefinitions } from './rbac.js';
+import { hasEffectivePricingCapability } from '@siyuan/shared';
+import { assertPermissionDefinitionsIntegrity, defaultPermissionsForRole, normalizeRolePermissions, permissionDefinitions } from './rbac.js';
 
 const businessRoles = [
   'OPERATOR',
@@ -12,6 +13,12 @@ const businessRoles = [
 ] as const;
 
 describe('RBAC default permission inheritance', () => {
+  it('keeps one stored pricing action while deriving only its minimum read context', () => {
+    const grants = ['pricing:markup:amazon:edit'];
+    expect(hasEffectivePricingCapability(grants, 'pricing:markup:amazon:view')).toBe(true);
+    expect(hasEffectivePricingCapability(grants, 'pricing:markup:amazon:update')).toBe(true);
+    expect(hasEffectivePricingCapability(grants, 'pricing:markup:inquiry:view')).toBe(false);
+  });
   it('keeps permission codes and labels unique inside their business directories', () => {
     expect(() => assertPermissionDefinitionsIntegrity()).not.toThrow();
     expect(() => assertPermissionDefinitionsIntegrity([
@@ -57,13 +64,14 @@ describe('RBAC default permission inheritance', () => {
     const permissions = defaultPermissionsForRole('OPERATOR');
 
     expect(permissions).toEqual(expect.arrayContaining([
-      'business:review:approve',
+      'business:review:view',
+      'business:review:edit',
       'master-data:customers:view-own',
       'master-data:finance:read',
       'finance:water-receipt:read',
       'finance:water-receipt:voucher-upload',
       'finance:water-receipt:voucher-delete',
-      'pricing:south-africa:rules-read'
+      'pricing:lookup:south-africa'
     ]));
     expect(permissions).not.toContain('pricing:south-africa:rules-update');
     expect(permissions).not.toContain('finance:water-receipt:arrive');
@@ -84,4 +92,34 @@ describe('RBAC default permission inheritance', () => {
       'finance:customer-account:read'
     ]));
   });
+
+  it('registers customer service pending-routing masks without enabling them by default', () => {
+    expect(permissionDefinitions.map((permission) => permission.code)).toEqual(expect.arrayContaining([
+      'customer-service:pending-routing:fee-detail-block',
+      'customer-service:pending-routing:readonly-block'
+    ]));
+    expect(defaultPermissionsForRole('CUSTOMER_SERVICE')).not.toContain('customer-service:pending-routing:fee-detail-block');
+    expect(defaultPermissionsForRole('CUSTOMER_SERVICE')).not.toContain('customer-service:pending-routing:readonly-block');
+  });
+
+  it('keeps every pricing business feature as one independent persisted capability', () => {
+    const codes = permissionDefinitions.map((permission) => permission.code);
+    expect(codes).toEqual(expect.arrayContaining([
+      'pricing:markup:amazon:view',
+      'pricing:markup:amazon:edit',
+      'pricing:markup:dubaiAirSea:view',
+      'pricing:markup:dubaiAirSea:edit',
+      'pricing:price-books:view',
+      'pricing:price-books:delete'
+    ]));
+    expect(codes).not.toContain('pricing:markup:amazon:export');
+    expect(permissionDefinitions.find((permission) => permission.code === 'pricing:markup:update')?.assignable).toBe(false);
+    const normalized = normalizeRolePermissions('custom', [
+      'pricing:markup:amazon:edit'
+    ]);
+    expect(normalized).toEqual(['pricing:markup:amazon:edit', 'pricing:markup:amazon:view']);
+    expect(normalized).not.toContain('pricing:markup:amazon:export');
+    expect(normalized).not.toContain('pricing:markup:amazon:update');
+  });
+
 });

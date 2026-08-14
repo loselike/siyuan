@@ -36,6 +36,7 @@ if [[ "${MODE}" == "--apply" ]]; then
   RSYNC_MODE=()
 fi
 
+COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 \
 rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${RSYNC_DELETE[@]}"} \
   --exclude='.git' \
   --exclude='.git/' \
@@ -44,6 +45,7 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='.release-whitelist.lock' \
   --exclude='/9' \
   --exclude='.siyuan-release-state' \
+  --exclude='node_modules' \
   --exclude='node_modules/' \
   --exclude='dist/' \
   --exclude='apps/*/dist/' \
@@ -51,6 +53,8 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='apps/api/uploads/' \
   --exclude='backups/' \
   --exclude='.release-backups/' \
+  --exclude='/.release-current' \
+  --exclude='/.release-staging/' \
   --exclude='.release-manifests/' \
   --exclude='.release-receipts/' \
   --exclude='.release-bundles/' \
@@ -74,6 +78,7 @@ rsync -azc --itemize-changes ${RSYNC_MODE+"${RSYNC_MODE[@]}"} ${RSYNC_DELETE+"${
   --exclude='.worktrees/' \
   --exclude='*.log' \
   --exclude='*.tsbuildinfo' \
+  --exclude='._*' \
   --exclude='.DS_Store' \
   --include='.env.example' \
   --exclude='.env' \

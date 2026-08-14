@@ -35,7 +35,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
 
   async getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
     this.ensureWarehouseAccess(principal);
-    await this.ensurePendingViewNotBlocked(principal);
+    await this.ensurePendingView(principal);
     const items = await (this.prisma as any).warehouseConsolidationItem.findMany({
       where: { consolidationId: id },
       include: { package: true },
@@ -48,18 +48,26 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     query: WarehouseTallyTaskListQuery = {}
   ): Promise<WarehouseTallyTaskSummary[]> {
-    if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED') {
+    const problemOnly = query.problemOnly === true || query.problemOnly === 'true';
+    if (problemOnly && query.status && query.status !== 'CANCELLED') {
+      throw new BadRequestException('理货问题件查询不能同时指定其他任务状态');
+    }
+    if (problemOnly && (query.completedScope || query.completedFrom || query.completedTo)) {
+      throw new BadRequestException('理货问题件查询不能同时指定已完成理货范围');
+    }
+    if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED' && query.status !== 'CANCELLED') {
       throw new BadRequestException('理货任务状态无效');
     }
-    const canViewPending = await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view')
-      && !(await this.isPendingViewBlocked(principal));
-    const canViewCompleted = await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view')
-      && !(await this.isCompletedViewBlocked(principal));
+    const canViewPending = await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view');
+    const canViewCompleted = await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view');
     if (!canViewPending && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看理货任务');
     }
     if (query.status === 'PENDING' && !canViewPending) {
       throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
+    }
+    if ((problemOnly || query.status === 'CANCELLED') && !canViewPending) {
+      throw new ForbiddenException('当前用户组已屏蔽查看理货问题件');
     }
     const requestsCompleted = query.status === 'COMPLETED'
       || query.completedScope === 'RECENT'
@@ -71,7 +79,9 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     }
     const scope = this.operatorCustomerScope(principal);
     const where: any = {};
-    if (query.status) {
+    if (problemOnly || query.status === 'CANCELLED') {
+      where.status = 'CANCELLED';
+    } else if (query.status) {
       where.status = query.status;
     } else if (!canViewPending) {
       where.status = 'COMPLETED';
@@ -83,6 +93,18 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     }
     if (query.combinedOrderNo?.trim()) {
       where.sourceCombinedOrderNo = { contains: query.combinedOrderNo.trim(), mode: 'insensitive' };
+    }
+    if (query.keyword?.trim()) {
+      const keyword = query.keyword.trim();
+      where.OR = [
+        { taskNo: { contains: keyword, mode: 'insensitive' } },
+        { sourceCombinedOrderNo: { contains: keyword, mode: 'insensitive' } },
+        { customerCode: { contains: keyword, mode: 'insensitive' } },
+        { customerName: { contains: keyword, mode: 'insensitive' } },
+        { tallyChannel: { contains: keyword, mode: 'insensitive' } },
+        { tallyRequirement: { contains: keyword, mode: 'insensitive' } },
+        { remark: { contains: keyword, mode: 'insensitive' } }
+      ];
     }
     if (query.completedScope === 'RECENT' || query.completedScope === 'HISTORY' || query.completedFrom || query.completedTo) {
       where.status = 'COMPLETED';
@@ -107,7 +129,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       where,
       orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
     });
-    const completedRows = rows.filter((row: any) => row.status === 'COMPLETED');
+    const completedRows = rows.filter((row: any) => row.status === 'COMPLETED' && row.tallyProgressStatus !== 'CANCELLED');
     const outputRows = completedRows.length
       ? await (this.prisma as any).warehousePackage.findMany({
         where: {
@@ -128,6 +150,11 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       ...mapWarehouseTallyTask(row),
       outputPackages: outputsByTask.get(row.id) ?? []
     }));
+    if (problemOnly || query.status === 'CANCELLED') {
+      return mappedRows
+        .filter((row) => row.status === 'CANCELLED' && row.tallyProgressStatus === 'CANCELLED')
+        .sort((left, right) => Date.parse(right.cancelledAt ?? right.createdAt) - Date.parse(left.cancelledAt ?? left.createdAt));
+    }
     const pendingRows = sortWarehouseTallyTasks<WarehouseTallyTaskSummary>(mappedRows.filter((row) => row.status === 'PENDING'));
     return query.status === 'PENDING' ? pendingRows : [...pendingRows, ...mappedRows.filter((row) => row.status !== 'PENDING')];
   }
@@ -136,8 +163,8 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     id: string
   ): Promise<WarehousePackageSummary[]> {
-    await this.ensurePendingViewNotBlocked(principal);
-    if (!(await this.hasAnyPermission(principal, ['warehouse:tally-pending:detail-view']))) {
+    await this.ensurePendingView(principal);
+    if (!(await this.hasAnyPermission(principal, ['warehouse:tally-pending:view']))) {
       throw new ForbiddenException('当前角色不能查看理货原始包裹');
     }
     const scope = this.operatorCustomerScope(principal);
@@ -169,8 +196,8 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     packageId: string
   ): Promise<WarehouseTallyTaskSummary[]> {
-    await this.ensureCompletedViewNotBlocked(principal);
-    if (!(await this.hasAnyPermission(principal, ['warehouse:in-stock:tally-record-view']))) {
+    await this.ensureCompletedView(principal);
+    if (!(await this.hasAnyPermission(principal, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货历史');
     }
     const normalizedPackageId = packageId.trim();
@@ -224,7 +251,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     id: string
   ): Promise<WarehousePackageSummary[]> {
-    await this.ensureCompletedViewNotBlocked(principal);
+    await this.ensureCompletedView(principal);
     if (!(await this.hasAnyPermission(principal, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
@@ -244,25 +271,15 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     return false;
   }
 
-  private async isPendingViewBlocked(principal: Principal) {
-    return !isAdministratorRole(principal.role)
-      && await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view-block');
-  }
-
-  private async isCompletedViewBlocked(principal: Principal) {
-    return !isAdministratorRole(principal.role)
-      && await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view-block');
-  }
-
-  private async ensurePendingViewNotBlocked(principal: Principal) {
-    if (await this.isPendingViewBlocked(principal)) {
-      throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
+  private async ensurePendingView(principal: Principal) {
+    if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view'))) {
+      throw new ForbiddenException('当前角色不能查看未完成理货');
     }
   }
 
-  private async ensureCompletedViewNotBlocked(principal: Principal) {
-    if (await this.isCompletedViewBlocked(principal)) {
-      throw new ForbiddenException('当前用户组已屏蔽查看已完成理货');
+  private async ensureCompletedView(principal: Principal) {
+    if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view'))) {
+      throw new ForbiddenException('当前角色不能查看已完成理货');
     }
   }
 

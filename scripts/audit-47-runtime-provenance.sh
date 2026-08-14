@@ -16,6 +16,8 @@ result="$(ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- "$REMOTE_DIR" <<'REMOTE_
 set -euo pipefail
 remote_dir="$1"
 cd "$remote_dir"
+# shellcheck source=lib/docker-container-image-id.sh
+source scripts/lib/docker-container-image-id.sh
 
 state_file=.siyuan-release-state
 state_value() {
@@ -36,24 +38,29 @@ web_image_expected="$(state_value WEB_IMAGE_ID)"
 api_image_expected="$(state_value API_IMAGE_ID)"
 receipt_path="$(state_value RELEASE_RECEIPT_PATH)"
 receipt_sha_expected="$(state_value RELEASE_RECEIPT_SHA256)"
+build_provenance="$(state_value BUILD_PROVENANCE)"
+image_manifest_sha_expected="$(state_value IMAGE_MANIFEST_SHA256)"
+api_image_ref="$(state_value API_IMAGE_REF)"
+web_image_ref="$(state_value WEB_IMAGE_REF)"
+migrate_image_ref="$(state_value MIGRATE_IMAGE_REF)"
 
 web_container="$(docker compose ps -q web 2>/dev/null | tail -1)"
 api_container="$(docker compose ps -q api 2>/dev/null | tail -1)"
-web_image_actual="$(docker inspect --format '{{.Image}}' "$web_container" 2>/dev/null || true)"
-api_image_actual="$(docker inspect --format '{{.Image}}' "$api_container" 2>/dev/null || true)"
+web_image_actual="$(siyuan_docker_container_image_id "$web_container")"
+api_image_actual="$(siyuan_docker_container_image_id "$api_container")"
 api_release_id_actual="$(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$api_container" 2>/dev/null | sed -n 's/^RELEASE_ID=//p' | tail -1)"
 
 status=traceable
 reason=ok
-if [[ "$source_mode" == WHITELIST_CAS ]]; then
+if [[ -z "$web_image_expected" || -z "$api_image_expected" || "$web_image_expected" != "$web_image_actual" || "$api_image_expected" != "$api_image_actual" ]]; then
+  status=mismatch
+  reason=running-image-does-not-match-release-state
+elif [[ "$source_mode" == WHITELIST_CAS ]]; then
   status=non-git-source
   reason=whitelist-cas-is-not-a-git-source-build
 elif [[ ! "$git_commit" =~ ^[0-9a-f]{40}$ || -z "$git_branch" || "$source_mode" != GIT_SOURCE_BUILD ]]; then
   status=legacy-untraceable
   reason=missing-git-source-provenance
-elif [[ -z "$web_image_expected" || -z "$api_image_expected" || "$web_image_expected" != "$web_image_actual" || "$api_image_expected" != "$api_image_actual" ]]; then
-  status=mismatch
-  reason=running-image-does-not-match-release-state
 elif [[ "$api_release_id_actual" != "$release_id" ]]; then
   status=mismatch
   reason=api-runtime-release-id-does-not-match-release-state
@@ -140,6 +147,23 @@ else
   elif [[ "$receipt_format" == 2 && ( "$source_provenance" != ORIGIN_BRANCH || -n "$git_bundle_path" || -n "$git_bundle_sha_expected" ) ]]; then
     status=mismatch
     reason=invalid-origin-source-provenance
+  elif [[ -n "$build_provenance" && "$build_provenance" != SERVER_BUILD && "$build_provenance" != GHCR_DIGESTS ]]; then
+    status=mismatch
+    reason=invalid-build-provenance
+  elif [[ "$build_provenance" == GHCR_DIGESTS ]]; then
+    image_ref_pattern='^ghcr\.io/[a-z0-9._-]+/[a-z0-9._-]+@sha256:[0-9a-f]{64}$'
+    if [[ ! "$image_manifest_sha_expected" =~ ^[0-9a-f]{64}$ \
+      || ! "$api_image_ref" =~ $image_ref_pattern \
+      || ! "$web_image_ref" =~ $image_ref_pattern \
+      || ! "$migrate_image_ref" =~ $image_ref_pattern \
+      || "$(receipt_value BUILD_PROVENANCE)" != "$build_provenance" \
+      || "$(receipt_value IMAGE_MANIFEST_SHA256)" != "$image_manifest_sha_expected" \
+      || "$(receipt_value API_IMAGE_REF)" != "$api_image_ref" \
+      || "$(receipt_value WEB_IMAGE_REF)" != "$web_image_ref" \
+      || "$(receipt_value MIGRATE_IMAGE_REF)" != "$migrate_image_ref" ]]; then
+      status=mismatch
+      reason=immutable-image-provenance-mismatch
+    fi
   fi
 fi
 
@@ -150,6 +174,7 @@ printf 'SOURCE_MODE=%s\n' "${source_mode:-MISSING}"
 printf 'GIT_COMMIT=%s\n' "${git_commit:-MISSING}"
 printf 'GIT_BRANCH=%s\n' "${git_branch:-MISSING}"
 printf 'SOURCE_PROVENANCE=%s\n' "${source_provenance:-MISSING}"
+printf 'BUILD_PROVENANCE=%s\n' "${build_provenance:-LEGACY_SERVER_BUILD}"
 printf 'WEB_IMAGE_MATCH=%s\n' "$([[ -n "$web_image_expected" && "$web_image_expected" == "$web_image_actual" ]] && echo true || echo false)"
 printf 'API_IMAGE_MATCH=%s\n' "$([[ -n "$api_image_expected" && "$api_image_expected" == "$api_image_actual" ]] && echo true || echo false)"
 printf 'API_RELEASE_ID_MATCH=%s\n' "$([[ -n "$release_id" && "$release_id" == "$api_release_id_actual" ]] && echo true || echo false)"

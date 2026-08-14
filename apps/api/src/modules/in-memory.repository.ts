@@ -3,6 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
+import { pricingMarkupActionPermission, pricingMarkupModules, pricingMarkupViewPermission } from './pricing-markup-permissions.js';
+import {
+  attachPrimaryAgentBilling,
+  buildCustomerServiceDataConfirmRow,
+  isCustomerServiceDataApprovedFromRows,
+  scopeCustomerServiceDataConfirmRow,
+  validCustomerServiceDataCycleStart
+} from './customer-service/data-confirm/customer-service-data-confirm.policy.js';
+import { normalizeProblemTicketTagName, normalizeProblemTicketTagSnapshot } from './customer-service/problem-tag/problem-ticket-tag.policy.js';
 import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
 import {
   buildWarehouseMachineImportResponse,
@@ -33,6 +42,7 @@ import {
   summarizeLineShipmentFinance,
   summarizeLineShipmentPool,
   getLineShipmentEditStages,
+  lineShipmentStageEditPermissionCode,
   summarizeStatusCounts,
   matchUsPostalRule,
   matchesEuropeanPostalRule,
@@ -290,7 +300,6 @@ import {
   type CustomerServiceBusinessCostInput,
   type CustomerServiceDataReviewInput,
   type CustomerServiceDataReverseInput,
-  type CustomerServiceDataSnapshot,
   type CustomerServiceDataUpdateInput,
   type CustomerServiceFinanceItemUpdateInput,
   type CustomerServiceFinanceUpdatePreview,
@@ -325,6 +334,8 @@ import {
   type WarehouseSameSpecReplenishInput,
   type WarehouseSameSpecReplenishResponse,
   type WarehousePackageCreateInput,
+  type WarehousePackageDeleteInput,
+  type WarehousePackageDeleteResponse,
   type WarehousePackageGroupSummary,
   type WarehousePackageSplitInput,
   type WarehousePackageSplitResponse,
@@ -338,7 +349,7 @@ import {
   type WarehouseTallyLabelScanInput,
   type WarehouseTallyLabelScanResponse,
   type WarehouseTallyTaskCompleteInput,
-  type WarehouseTallyTaskCompletedCountUpdateInput,
+  type WarehouseTallyTaskCancelInput,
   type WarehouseTallyTaskPackageResultInput,
   type WarehouseTallyTaskCreateInput,
   type WarehouseTallyTaskListQuery,
@@ -348,6 +359,7 @@ import {
   type WarehouseTallyTaskUpdateInput,
   type WarehouseTodayQuery,
   type WarehouseTodayResponse,
+  hasEffectivePricingCapability,
   type WaterReceiptCreateInput,
   type ReceivableWaterReceiptCandidatesResponse,
   type WaterReceiptExportRequest,
@@ -364,9 +376,15 @@ import {
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
 import { isEarlyPaymentSettlementMethod, sortWarehouseTallyTasks, warehouseTallyChannels } from '@siyuan/shared';
+import {
+  buildWaterReceiptListTotals,
+  buildWaterReceiptVoucherAuditSnapshot,
+  redactWaterReceiptVoucher,
+  sanitizeWaterReceiptPaymentNo
+} from './finance/water-receipt/water-receipt-view.policy.js';
 import { PRICING_PARSER_RULE_VERSIONS, inferEuropeOversizeCargoType, inferEuropeTransportMode, inspectDubaiWorkbookSheets, inspectEuropeOversizeWorkbookSheets, normalizeEuropeTransportModeFilter, normalizePricingImportRowForModule, parsePriceWorkbookBuffer, pricingParserRuleVersion, summarizeEuropeTransportImportHealth } from './pricing-excel.js';
 import { amazonWeightBandMinimum, calculateLookupChargeableWeight, createWarehouseLookupProfile, inferAmazonWeightBandFromMin, normalizeAmazonCbmTier, normalizeAmazonOriginWarehouseName, normalizeAmazonWeightBand, selectPriceRowsForLookup, uniqueAmazonOriginWarehouseNames, withOpenEndedHighestPriceTiers } from './pricing/amazon-pricing.shared.js';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildAgentMarkupListResponse, buildMarkupRuleIndex, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, formatMarkupNumber, groupAgentSourcesByScope, isLegacyPricingModule, markupRuleIndexKey, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, textMatch, type ActivePriceBookAgentSource } from './pricing/agent-markup-query.shared.js';
 import { buildDubaiPriceTableResponse } from './pricing/dubai-pricing.shared.js';
 import { createLargeCargoProfile, isEuropeTransportMode, largeCargoRedirectMessage, type LargeCargoProfile } from './pricing/legacy-cargo-profile.shared.js';
 import { inferBackendPriceCarrierName, matchedTransitDays, publicPricingRouteCode } from './pricing/price-recommendation-display.shared.js';
@@ -405,16 +423,18 @@ import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse
 import {
   allPermissions,
   buildRolePermissionRow,
+  configuredPermissionsForRole,
   defaultPermissionsForRole,
   defaultRoleGroups,
   effectivePermissionsForRole,
-  filterWarehousePackageUpdatePermissions,
-  getForbiddenWarehousePackageUpdatePermissions,
   getPermissionDefinitions,
   getNewlyAddedMarketSensitivePermissions,
   getRoleMetadata,
+  isBusinessAgentRestrictedRole,
+  isBusinessAgentOwnOnlyRole,
   isBuiltinRoleKey,
   isAdministratorRole,
+  isPaymentVoucherGloballyMasked,
   normalizeRolePermissions,
   permissionDefinitions,
   protectedDataScopePermissions,
@@ -422,15 +442,13 @@ import {
   rolePermissions,
   toSessionRole,
   withImpliedUiPreferencePermissions,
-  workspaceFieldMaskKeys,
-  workspaceFieldMaskKeysForWorkspace,
-  workspaceFieldMaskPermissionCode,
+  globalFieldMaskKeys,
+  globalFieldMaskPermissionCode,
   type PermissionKey,
   type Principal,
   type RoleKey,
   type RolePermissionRow,
-  type PermissionWorkspaceKey,
-  type WorkspaceFieldMaskKey
+  type GlobalFieldMaskKey
 } from './rbac.js';
 import { customerServiceProblemPermissionsForStatus } from './problem-ticket-permissions.js';
 
@@ -452,10 +470,17 @@ type ReviewRestoreInputWithManual = ShipmentRestoreInput & {
   manualCreatedAt?: string;
 };
 
-type WorkspaceFieldMaskState = Record<WorkspaceFieldMaskKey, boolean>;
+type GlobalFieldMaskState = Record<GlobalFieldMaskKey, boolean>;
+
+type WarehouseRentVisibilityScope = {
+  mode: 'ALL' | 'SELF' | 'TEAM' | 'SITE' | 'NONE';
+  site?: string;
+  salespeople?: string[];
+};
 
 const staffGenderValues: StaffGender[] = ['UNKNOWN', 'MALE', 'FEMALE', 'OTHER'];
 const warehouseNavigationViewPermissions: PermissionKey[] = [
+  'warehouse:dashboard:view',
   'warehouse:today-receipt:view',
   'warehouse:in-stock:view',
   'warehouse:tally-pending:view',
@@ -1404,7 +1429,7 @@ export class InMemoryRepository {
     return { ok: true };
   }
 
-  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; fieldMaskWorkspace?: PermissionWorkspaceKey; includeLinePoolFinanceSummary?: boolean } = {}): Promise<Shipment[]> {
+  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; includeLinePoolFinanceSummary?: boolean } = {}): Promise<Shipment[]> {
     const canViewMarketAgent = await this.hasAnyPermission(principal.role, [
       'market:pending-routing:agent-channel-view',
       'market:routed:agent-channel-view'
@@ -1428,9 +1453,7 @@ export class InMemoryRepository {
     const canViewCustomerServiceTransferAgentWeight = Boolean(options.customerServiceTransferAgentWeight)
       && await this.hasPermission(principal.role, 'customer-service:transfer:view-agent-data');
     const canViewShipmentAgentWeight = await this.canViewShipmentAgentWeight(principal);
-    const fieldMaskWorkspace = options.fieldMaskWorkspace
-      ?? (options.salesScopeMode === 'ENTRY_ONLY' ? 'operations' : undefined);
-    const fieldMasks = await this.getWorkspaceFieldMaskState(principal, fieldMaskWorkspace);
+    const fieldMasks = await this.getGlobalFieldMaskState(principal);
     const canViewLinePoolFinanceSummary = options.includeLinePoolFinanceSummary === true && (
       await this.hasPermission(principal.role, 'operations:line-shipment:process')
       || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view')
@@ -1532,7 +1555,7 @@ export class InMemoryRepository {
     };
     const canViewCustomerServicePendingRouting = principal.role === 'ADMIN'
       || (await this.hasPermission(principal.role, 'customer-service:pending-routing:view')
-        && !(await this.hasPermission(principal.role, 'customer-service:pending-routing:readonly-block')));
+);
     const items = [
       read('customerService', 'pending-routing', canViewCustomerServicePendingRouting ? shipmentRows(['WAITING_SORT']) : []),
       read('customerService', 'waitingDeparture', shipmentRows(['WAITING_DEPARTURE'])),
@@ -1566,7 +1589,7 @@ export class InMemoryRepository {
     const visible = new Set<string>();
     if (await this.hasPermission(principal.role, 'operations:line-shipment:view')) visible.add('workspace');
     if (await this.hasAnyPermission(principal.role, warehouseNavigationViewPermissions)) visible.add('receive');
-    if (await this.hasAnyPermission(principal.role, ['business:dashboard:view', 'business:order-entry:view', 'business:review:list', 'business:shipment:list', 'business:order-ai:view'])) visible.add('business');
+    if (await this.hasAnyPermission(principal.role, ['business:dashboard:view', 'business:order-entry:view', 'business:review:view', 'business:shipment:list', 'business:order-ai:view'])) visible.add('business');
     if (await this.hasAnyPermission(principal.role, ['market:dashboard:view', 'market:pending-routing:view', 'market:routed:view', 'market:weekly-routing:view'])) visible.add('market');
     if (await this.hasAnyPermission(principal.role, ['customer-service:dashboard:view', 'customer-service:data-confirm:view', 'customer-service:transfer:view', 'customer-service:pending-routing:view', 'customer-service:waiting-departure:view', 'customer-service:departed:view', 'customer-service:arrived-port:view', 'customer-service:delivering:view', 'customer-service:signed:view', 'customer-service:problem:view'])) visible.add('customerService');
     if (await this.hasPermission(principal.role, 'finance:dashboard:view')) visible.add('finance');
@@ -1682,8 +1705,7 @@ export class InMemoryRepository {
   async getLineShipmentPool(principal: Principal, query: LineShipmentPoolQuery = {}): Promise<LineShipmentPoolResponse> {
     const allRows = (await this.getShipments(principal, {
       salesScopeMode: 'ENTRY_ONLY',
-      includeLinePoolFinanceSummary: true,
-      fieldMaskWorkspace: 'operations'
+      includeLinePoolFinanceSummary: true
     })).filter((shipment) => shipment.businessType === 'DEDICATED_LINE');
     const packageBindings = this.auditLogs
       .filter((log) => log.action === 'shipment.warehouse_packages.bind')
@@ -1804,6 +1826,7 @@ export class InMemoryRepository {
   }
 
   async createCustomerSource(principal: Principal, input: CustomerSourceInput): Promise<CustomerSourceSummary> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const name = requireMemoryCustomerSourceName(input.name);
     const normalizedName = normalizeMemoryCustomerSourceKey(name);
     if (this.customerSources.some((item) => item.normalizedName === normalizedName)) {
@@ -1827,6 +1850,7 @@ export class InMemoryRepository {
   }
 
   async updateCustomerSource(principal: Principal, id: string, input: Partial<CustomerSourceInput>): Promise<CustomerSourceSummary> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const source = this.customerSources.find((item) => item.id === id);
     if (!source) throw new NotFoundException('客户来源不存在');
     const before = { ...source };
@@ -1854,6 +1878,7 @@ export class InMemoryRepository {
   }
 
   async deleteCustomerSource(principal: Principal, id: string): Promise<{ id: string; deleted: true }> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const source = this.customerSources.find((item) => item.id === id);
     if (!source) throw new NotFoundException('客户来源不存在');
     const customerCount = this.customers.filter((customer) => normalizeMemoryCustomerSourceKey(customer.customerSource) === source.normalizedName).length;
@@ -1865,6 +1890,7 @@ export class InMemoryRepository {
   private resolveMemoryCustomerSourceForWrite(principal: Principal, input: CustomerCreateInput | CustomerUpdateInput): string | undefined {
     const name = typeof input.customerSource === 'string' ? input.customerSource.trim() : '';
     if (!name || !input.saveCustomerSourceToCatalog) return name || undefined;
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const normalizedName = normalizeMemoryCustomerSourceKey(name);
     const existing = this.customerSources.find((item) => item.normalizedName === normalizedName);
     if (existing) {
@@ -2641,33 +2667,19 @@ export class InMemoryRepository {
   }
 
   async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
-    if (isAdministratorRole(role)) return true;
-    if (this.roleMeta[role]?.enabled === false) return false;
-    return filterWarehousePackageUpdatePermissions(
-      role,
-      this.roleMeta[role]?.label ?? getRoleMetadata(role).label,
-      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
-    ).includes(permission);
+    if (!isAdministratorRole(role) && this.roleMeta[role]?.enabled === false) return false;
+    const permissions = effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
+    return permissions.includes(permission) || hasEffectivePricingCapability(permissions, permission);
   }
 
   private hasPermissionSync(role: RoleKey, permission: PermissionKey): boolean {
-    if (isAdministratorRole(role)) return true;
-    if (this.roleMeta[role]?.enabled === false) return false;
-    return filterWarehousePackageUpdatePermissions(
-      role,
-      this.roleMeta[role]?.label ?? getRoleMetadata(role).label,
-      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
-    ).includes(permission);
+    if (!isAdministratorRole(role) && this.roleMeta[role]?.enabled === false) return false;
+    return effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []).includes(permission);
   }
 
   async getPermissionsForRole(role: RoleKey): Promise<PermissionKey[]> {
-    if (isAdministratorRole(role)) return allPermissions();
-    if (this.roleMeta[role]?.enabled === false) return [];
-    return filterWarehousePackageUpdatePermissions(
-      role,
-      this.roleMeta[role]?.label ?? getRoleMetadata(role).label,
-      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
-    );
+    if (!isAdministratorRole(role) && this.roleMeta[role]?.enabled === false) return [];
+    return effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
   }
 
   async getRolePermissionMatrix(): Promise<{ availablePermissions: typeof permissionDefinitions; roles: RolePermissionRow[] }> {
@@ -2684,7 +2696,7 @@ export class InMemoryRepository {
     }
     principal.username = account.username;
     principal.assignedRole = account.role;
-    principal.role = toSessionRole(account.role);
+    principal.role = account.role;
     principal.site = account.site;
     principal.customerId = account.customerId;
     principal.name = account.name;
@@ -2695,12 +2707,12 @@ export class InMemoryRepository {
     principal.departmentId = account.departmentId;
     principal.directManagerId = account.directManagerId;
     principal.departmentTeamScope = undefined;
-    const permissions = await this.getPermissionsForRole(principal.role);
+    const permissions = await this.getPermissionsForRole(principal.assignedRole);
     principal.shipmentAllView = permissions.includes('business:shipment:all-view');
     principal.dataScope = principal.shipmentAllView
       ? undefined
       : permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
-    if (isAdministratorRole(principal.role) || !permissions.includes('business:shipment:team-view')) {
+    if (isAdministratorRole(principal.assignedRole) || !permissions.includes('business:shipment:team-view')) {
       return permissions;
     }
     const hasDirectReports = this.accounts.some((member) => member.directManagerId === account.id);
@@ -3132,11 +3144,8 @@ export class InMemoryRepository {
     if (this.roleMeta[templateRole]?.enabled === false) {
       throw new BadRequestException('停用用户组不能作为权限复制来源');
     }
-    const sourcePermissions = effectivePermissionsForRole(templateRole, this.rolePermissionMatrix[templateRole] ?? []);
-    if (getForbiddenWarehousePackageUpdatePermissions(role, label, sourcePermissions).length > 0) {
-      throw new ForbiddenException('来源用户组包含新用户组不能继承的仓库包裹修改权限');
-    }
-    const inheritedPermissions = filterWarehousePackageUpdatePermissions(role, label, sourcePermissions);
+    const sourcePermissions = configuredPermissionsForRole(templateRole, this.rolePermissionMatrix[templateRole] ?? []);
+    const inheritedPermissions = [...sourcePermissions];
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions([], inheritedPermissions).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
@@ -3173,11 +3182,6 @@ export class InMemoryRepository {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能停用；请先调整直属经理');
     }
     const before = this.buildMemoryRoleRow(role);
-    this.rolePermissionMatrix[role] = filterWarehousePackageUpdatePermissions(
-      role,
-      label,
-      this.rolePermissionMatrix[role] ?? []
-    );
     this.roleMeta[role] = {
       ...meta,
       label,
@@ -3209,9 +3213,6 @@ export class InMemoryRepository {
 
   async updateRolePermissions(principal: Principal, role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
     await this.ensurePermission(principal, 'system:role-permissions:save', '无权维护用户组权限');
-    if (isAdministratorRole(role)) {
-      throw new BadRequestException('管理员组是受保护的内置角色，不能修改权限');
-    }
     if (!this.roleMeta[role] && !isBuiltinRoleKey(role)) {
       throw new NotFoundException('用户组不存在');
     }
@@ -3219,20 +3220,16 @@ export class InMemoryRepository {
     const beforeEffective = effectivePermissionsForRole(role, before);
     const normalized = normalizeRolePermissions(role, permissions);
     normalized.push(...protectedDataScopePermissions.filter((permission) => beforeEffective.includes(permission)));
-    const roleLabel = this.roleMeta[role]?.label ?? getRoleMetadata(role).label;
-    if (getForbiddenWarehousePackageUpdatePermissions(role, roleLabel, normalized).length > 0) {
-      throw new ForbiddenException('仓库包裹修改权限只能授予仓库综合、仓库收货或仓库理货岗位');
-    }
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(beforeEffective, normalized).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
-    const effectivePermissions = filterWarehousePackageUpdatePermissions(role, roleLabel, normalized);
+    const effectivePermissions = normalized;
     const roleHasDirectReports = this.accounts.some((manager) => manager.role === role
       && this.accounts.some((item) => item.directManagerId === manager.id));
-    if (roleHasDirectReports && !effectivePermissions.includes('business:shipment:team-view')) {
+    if (!isAdministratorRole(role) && roleHasDirectReports && !effectivePermissions.includes('business:shipment:team-view')) {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能移除团队管理权限');
     }
-    if (roleHasDirectReports && effectivePermissions.includes('business:shipment:all-view')) {
+    if (!isAdministratorRole(role) && roleHasDirectReports && effectivePermissions.includes('business:shipment:all-view')) {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能授予全部运单查看权限');
     }
     this.rolePermissionMatrix[role] = effectivePermissions;
@@ -3260,12 +3257,9 @@ export class InMemoryRepository {
       throw new BadRequestException('停用用户组不能作为权限复制来源');
     }
     const before = effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
-    const sourcePermissions = effectivePermissionsForRole(sourceRoleKey, this.rolePermissionMatrix[sourceRoleKey] ?? []);
+    const sourcePermissions = configuredPermissionsForRole(sourceRoleKey, this.rolePermissionMatrix[sourceRoleKey] ?? []);
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, sourcePermissions).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
-    }
-    if (getForbiddenWarehousePackageUpdatePermissions(role, targetMeta.label, sourcePermissions).length > 0) {
-      throw new ForbiddenException('来源用户组包含目标岗位不能继承的仓库包裹修改权限');
     }
     const roleHasDirectReports = this.accounts.some((manager) => manager.role === role
       && this.accounts.some((item) => item.directManagerId === manager.id));
@@ -3365,6 +3359,9 @@ export class InMemoryRepository {
     }
     const voucher = this.paymentVouchers.find((item) => item.url === url);
     if (!voucher) throw new NotFoundException('凭证图片不存在');
+    if (isPaymentVoucherGloballyMasked(principal.globalFieldMasks)) {
+      throw new ForbiddenException('总规则已屏蔽付款凭证');
+    }
     const permissions: PermissionKey[] = voucher.pendingPaymentId
       ? ['finance:pending-payment:bill-voucher-view']
       : voucher.paymentApplicationId && voucher.voucherType === 'PAYMENT_RECEIPT'
@@ -3378,8 +3375,9 @@ export class InMemoryRepository {
 
   async recordHttpAudit(
     principal: Principal,
-    input: { method: string; path: string; result: 'SUCCESS' | 'FAILED'; durationMs: number; errorMessage?: string; ipAddress?: string; userAgent?: string }
+    input: { id?: string; method: string; path: string; result: 'SUCCESS' | 'FAILED'; durationMs: number; errorMessage?: string; ipAddress?: string; userAgent?: string }
   ) {
+    if (input.id && this.auditLogs.some((item) => item.id === input.id)) return;
     this.audit(
       `${auditModuleFromMemoryPath(input.path)}.request.${auditKindFromMemoryRequest(input.method, input.path)}${input.result === 'FAILED' ? '.failed' : ''}`,
       `${input.method.toUpperCase()} ${input.path}`.trim(),
@@ -3391,17 +3389,17 @@ export class InMemoryRepository {
         ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
         ...(input.ipAddress ? { ipAddress: input.ipAddress } : {}),
         ...(input.userAgent ? { userAgent: input.userAgent.slice(0, 300) } : {})
-      }
+      },
+      input.id
     );
   }
-
   quote(input: PricingQuoteRequest) {
     return calculateQuote(input);
   }
 
   async lookupPrice(principal: Principal, input: PriceLookupRequest): Promise<PriceLookupResponse> {
     this.ensureStaffPricingAccess(principal);
-    const priceRows = this.activePriceBookRows();
+    const priceRows = this.activePriceBookRows().filter((row) => !input.module || this.priceBooks.find((book) => book.id === row.priceBookId)?.targetModule === input.module);
     const response = createBackendPriceLookup(principal, input, priceRows, this.priceBooks, this.agentMarkupRules);
     const selectedRecommendation = response.cheapestRecommendations[0] ?? response.recommendations[0];
     const businessId = selectedRecommendation?.price.id ?? `price-lookup:${Date.now()}`;
@@ -3418,10 +3416,20 @@ export class InMemoryRepository {
 
   async getLegacyPricingMeta(principal: Principal): Promise<LegacyPricingMetaResponse> {
     this.ensureStaffPricingAccess(principal);
-    const canViewInternalSource = await this.hasPermission(principal.role, 'pricing:lookup:internal-source-view');
-    const rows = this.activePriceBookRows();
+    const lookupPermissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+      amazon: 'pricing:lookup:amazon', inquiry: 'pricing:lookup:europe-oversize', europeExpress: 'pricing:lookup:europe-express',
+      southAfrica: 'pricing:lookup:south-africa', usaAirSea: 'pricing:lookup:usa-air-sea', canadaAirSea: 'pricing:lookup:canada-air-sea', dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+    };
+    const authorizedModules = (await Promise.all(pricingMarkupModules.map(async (module) => (
+      isAdministratorRole(principal.role) || await this.hasPermission(principal.role, lookupPermissionByModule[module]) ? module : null
+    )))).filter((module): module is LegacyPricingModule => Boolean(module));
+    const canViewInternalSource = isAdministratorRole(principal.role);
     const activeBooks = this.priceBooks.filter((book) => !book.deleted);
     const targetModuleByBookId = new Map(activeBooks.map((book) => [book.id, book.targetModule]));
+    const rows = this.activePriceBookRows().filter((row) => {
+      const module = targetModuleByBookId.get(row.priceBookId) ?? inferInMemoryLegacyModule(row);
+      return Boolean(module && authorizedModules.includes(module));
+    });
     const rowsByModule = (module: LegacyPricingModule) => rows.filter((row) => (targetModuleByBookId.get(row.priceBookId) ?? inferInMemoryLegacyModule(row)) === module);
     const booksByModule = (module: LegacyPricingModule) => activeBooks.filter((book) => (book.targetModule ?? primaryLegacyModuleFromCounts(book.legacyModuleCounts)) === module);
     const amazonRows = rowsByModule('amazon');
@@ -3435,7 +3443,7 @@ export class InMemoryRepository {
         { key: 'dubaiAirSea', label: '迪拜空海运查询', rowCount: rowsByModule('dubaiAirSea').length, sourceCount: booksByModule('dubaiAirSea').length }
     ] as const;
     return {
-      modules: (await Promise.all(modules.map(async (module) => (await this.isPricingModuleBlocked(principal, 'lookup', module.key) ? null : module)))).filter((module): module is typeof modules[number] => Boolean(module)),
+      modules: modules.filter((module) => authorizedModules.includes(module.key)),
       agents: canViewInternalSource ? uniqueStrings(rows.map((row) => row.agentName)) : [],
       origins: uniqueAmazonOriginWarehouseNames(amazonRows.map((row) => row.sourceSheetName)),
       warehouseCodes: uniqueStrings(rows.map((row) => row.warehouseCode)),
@@ -3492,7 +3500,7 @@ export class InMemoryRepository {
 
   async getDubaiPriceDisplayVersionPageImage(principal: Principal, versionId: string, pageId: string) {
     await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
-    await this.ensurePermission(principal, 'pricing:dubai-display:versions-view', '无权查看迪拜价格表完整图片');
+    await this.ensurePermission(principal, 'pricing:price-books:view', '无权查看迪拜价格表完整图片');
     const version = this.dubaiPriceDisplayVersions.find((item) => item.id === versionId);
     const page = version?.pages.find((item) => item.id === pageId);
     if (!version || !page || version.status !== 'READY') {
@@ -3502,8 +3510,9 @@ export class InMemoryRepository {
   }
 
   async getDubaiPriceDisplayVersions(principal: Principal): Promise<DubaiPriceDisplayVersionListResponse> {
-    await this.ensurePermission(principal, 'pricing:dubai-display:versions-view', '无权查看迪拜价格表展示版本');
-    const canViewMarkup = await this.hasPermission(principal.role, 'pricing:dubai-display:markup-view');
+    await this.ensurePricingModuleNotBlocked(principal, 'lookup', 'dubaiAirSea', '迪拜空海运查询');
+    await this.ensurePermission(principal, 'pricing:price-books:view', '无权查看迪拜价格表展示版本');
+    const canViewMarkup = await this.hasPermission(principal.role, 'pricing:markup:dubaiAirSea:view');
     return {
       versions: this.dubaiPriceDisplayVersions.map((version) => ({
         id: version.id,
@@ -3529,7 +3538,7 @@ export class InMemoryRepository {
   }
 
   async activateDubaiPriceDisplayVersion(principal: Principal, id: string, input: DubaiPriceDisplayActivateInput) {
-    await this.ensurePermission(principal, 'pricing:dubai-display:activate', '无权发布迪拜价格表');
+    await this.ensurePermission(principal, 'pricing:price-books:update', '无权发布迪拜价格表');
     const version = this.dubaiPriceDisplayVersions.find((item) => item.id === id);
     if (!version) throw new NotFoundException('迪拜价格表展示版本不存在');
     if (version.status !== 'READY' || !version.pages.some((page) => page.mode === 'AIR' || page.mode === 'SEA')) throw new BadRequestException('价格表图片尚未转换完成，不能发布');
@@ -3545,7 +3554,7 @@ export class InMemoryRepository {
   }
 
   async retryDubaiPriceDisplayVersion(principal: Principal, id: string) {
-    await this.ensurePermission(principal, 'pricing:dubai-display:retry', '无权重新生成迪拜价格表图片');
+    await this.ensurePermission(principal, 'pricing:price-books:update', '无权重新生成迪拜价格表图片');
     const failedVersion = this.dubaiPriceDisplayVersions.find((item) => item.id === id);
     if (!failedVersion) throw new NotFoundException('迪拜价格表展示版本不存在');
     if (failedVersion.status !== 'FAILED') throw new BadRequestException('只有生成失败的版本可以重新生成');
@@ -3592,8 +3601,8 @@ export class InMemoryRepository {
   }
 
   async updateDubaiSeaMarkup(principal: Principal, id: string, input: DubaiSeaMarkupUpdateInput) {
-    await this.ensurePermission(principal, 'pricing:dubai-display:markup-update', '无权调整迪拜海运图片加价');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', 'dubaiAirSea', '代理加价规则', 'edit');
+    await this.ensurePermission(principal, 'pricing:markup:dubaiAirSea:update', '无权调整迪拜海运图片加价');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', 'dubaiAirSea', '代理加价规则', 'update');
     const source = this.dubaiPriceDisplayVersions.find((item) => item.id === id);
     if (!source) throw new NotFoundException('迪拜价格表展示版本不存在');
     if (source.status !== 'READY' || !source.salesSafe || !source.seaMarkupApplied || !source.isActiveSea) throw new ConflictException('该版本已不是当前有效海运图片，请刷新后再调整');
@@ -3654,12 +3663,12 @@ export class InMemoryRepository {
   }
 
   async getSouthAfricaRateImages(principal: Principal): Promise<SouthAfricaRateImageListResponse> {
-    await this.ensurePermission(principal, 'pricing:south-africa:image-view', '无权查看南非图片价格表');
+    await this.ensurePermission(principal, 'pricing:lookup:south-africa', '无权查看南非图片价格表');
     return { images: this.southAfricaRateImages.map((image) => ({ ...image })) };
   }
 
   async createSouthAfricaRateImage(principal: Principal, input: Omit<SouthAfricaRateImageSummary, 'id' | 'createdAt' | 'uploadedBy'>): Promise<SouthAfricaRateImageSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:image-upload', '无权上传南非图片价格表');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权上传南非图片价格表');
     const now = new Date().toISOString();
     const image: SouthAfricaRateImageSummary = {
       ...input,
@@ -3678,7 +3687,7 @@ export class InMemoryRepository {
   }
 
   async createSouthAfricaRateRule(principal: Principal, input: SouthAfricaRateRuleInput): Promise<SouthAfricaRateRuleSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:rules-create', '无权新增南非价格规则');
+    await this.ensurePermission(principal, 'pricing:markup:southAfrica:create', '无权新增南非价格规则');
     const now = new Date().toISOString();
     const rule = normalizeSouthAfricaRateRule(input, {
       id: `sa-rule-${Date.now()}-${this.southAfricaRateRules.length + 1}`,
@@ -3697,7 +3706,7 @@ export class InMemoryRepository {
   }
 
   async updateSouthAfricaRateRule(principal: Principal, id: string, input: SouthAfricaRateRuleInput): Promise<SouthAfricaRateRuleSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:rules-update', '无权修改南非价格规则');
+    await this.ensurePermission(principal, 'pricing:markup:southAfrica:update', '无权修改南非价格规则');
     const index = this.southAfricaRateRules.findIndex((rule) => rule.id === id);
     if (index === -1) throw new NotFoundException('南非价格规则不存在');
     const before = this.southAfricaRateRules[index];
@@ -3724,7 +3733,7 @@ export class InMemoryRepository {
   }
 
   async updateSouthAfricaRateRuleEnabled(principal: Principal, id: string, input: { enabled?: boolean }): Promise<SouthAfricaRateRuleSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:rules-enable', '无权启停南非价格规则');
+    await this.ensurePermission(principal, 'pricing:markup:southAfrica:status', '无权启停南非价格规则');
     const rule = this.southAfricaRateRules.find((item) => item.id === id);
     if (!rule) throw new NotFoundException('南非价格规则不存在');
     const before = { ...rule };
@@ -3742,7 +3751,7 @@ export class InMemoryRepository {
   }
 
   async deleteSouthAfricaRateRule(principal: Principal, id: string): Promise<SouthAfricaRateRuleSummary> {
-    await this.ensurePermission(principal, 'pricing:south-africa:rules-delete', '无权删除南非价格规则');
+    await this.ensurePermission(principal, 'pricing:markup:southAfrica:delete', '无权删除南非价格规则');
     const index = this.southAfricaRateRules.findIndex((rule) => rule.id === id);
     if (index === -1) throw new NotFoundException('南非价格规则不存在');
     const [rule] = this.southAfricaRateRules.splice(index, 1);
@@ -3942,32 +3951,29 @@ export class InMemoryRepository {
   }
 
   private async getPricingFieldVisibility(principal: Principal): Promise<PricingFieldVisibility> {
-    const can = (permission: PermissionKey) => this.hasPermission(principal.role, permission);
-    const [internalSource, cost, grossProfit, markupBreakdown, postalRule] = await Promise.all([
-      can('pricing:lookup:internal-source-view'),
-      can('pricing:lookup:cost-view'),
-      can('pricing:lookup:gross-profit-view'),
-      can('pricing:lookup:markup-breakdown-view'),
-      can('pricing:lookup:postal-rule-view')
-    ]);
+    const lookupGranted = (await Promise.all([
+      'pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express',
+      'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea',
+      'pricing:lookup:dubai-air-sea'
+    ].map((permission) => this.hasPermission(principal.role, permission as PermissionKey)))).some(Boolean);
     const canViewInternal = canViewPricingInternalRoute(principal.role);
     return {
-      internalSource: canViewInternal && internalSource,
-      cost: canViewInternal && cost,
-      grossProfit: canViewInternal && grossProfit,
-      markupBreakdown: canViewInternal && markupBreakdown,
-      postalRule
+      internalSource: canViewInternal && lookupGranted,
+      cost: canViewInternal && lookupGranted,
+      grossProfit: canViewInternal && lookupGranted,
+      markupBreakdown: canViewInternal && lookupGranted,
+      postalRule: lookupGranted
     };
   }
 
   async getLegacyPricingSources(principal: Principal, module?: LegacyPricingModule) {
-    await this.ensurePermission(principal, 'pricing:price-books:legacy-source-view', '无权查看亮崽报价源');
+    await this.ensurePermission(principal, 'pricing:price-books:view', '无权查看亮崽报价源');
     const sources = this.legacyPricingSources.filter((source) => !module || source.module === module);
     return { sources };
   }
 
   async importLegacyPricingSource(principal: Principal, input: LegacyPricingImportInput) {
-    await this.ensurePermission(principal, 'pricing:price-books:legacy-source-import', '无权导入亮崽报价副本');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权导入亮崽报价副本');
     if (!input.module || !input.fileName?.trim() || !Array.isArray(input.rows) || input.rows.length === 0) {
       throw new BadRequestException('亮崽报价源、文件名和报价行不能为空');
     }
@@ -3985,7 +3991,7 @@ export class InMemoryRepository {
   }
 
   async deleteLegacyPricingSource(principal: Principal, id: string) {
-    await this.ensurePermission(principal, 'pricing:price-books:legacy-source-delete', '无权删除亮崽报价副本');
+    await this.ensurePermission(principal, 'pricing:price-books:delete', '无权删除亮崽报价副本');
     const index = this.legacyPricingSources.findIndex((source) => source.id === id);
     if (index === -1) throw new NotFoundException('亮崽报价源不存在');
     const [source] = this.legacyPricingSources.splice(index, 1);
@@ -3994,26 +4000,30 @@ export class InMemoryRepository {
   }
 
   async rebuildLegacyPricing(principal: Principal, module?: LegacyPricingModule) {
-    await this.ensurePermission(principal, 'pricing:price-books:legacy-rebuild', '无权重建亮崽报价副本');
+    await this.ensurePermission(principal, 'pricing:price-books:update', '无权重建亮崽报价副本');
     const rowCount = this.activePriceBookRows().filter((row) => !module || module !== 'amazon' || row.warehouseCode).length;
     this.audit('pricing.legacy.rebuild', module ?? 'all', principal, null, { rowCount });
     return { module: module ?? 'all', rowCount, rebuiltAt: new Date().toISOString() };
   }
 
   async getLegacyPricingHealth(principal: Principal, module?: LegacyPricingModule) {
-    await this.ensurePermission(principal, 'pricing:price-books:health-report-view', '无权查看亮崽报价体检');
+    await this.ensurePermission(principal, 'pricing:price-books:health', '无权查看亮崽报价体检');
     const rowCount = this.activePriceBookRows().filter((row) => !module || module !== 'amazon' || row.warehouseCode).length;
     return { module: module ?? 'all', rowCount, issues: rowCount ? [] : [{ severity: 'warn', message: '暂无亮崽兼容报价副本' }] };
   }
 
-  async getAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupListResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:read', '无权查看代理加价规则');
-    const legacyModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
+  async getAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}, authorizationAction: import('@siyuan/shared').PricingMarkupAction = 'view'): Promise<AgentMarkupListResponse> {
+    const requestedModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
+    if (query.legacyModule && !requestedModule) throw new BadRequestException('查价模块参数无效');
+    const legacyModule = query.priceBookId
+      ? this.resolveMarkupBookModule(query.priceBookId, requestedModule === 'unclassified' ? undefined : requestedModule)
+      : requestedModule;
+    if (legacyModule === 'unclassified') await this.ensureAllPricingMarkupModules(principal, authorizationAction);
     if (legacyModule && legacyModule !== 'unclassified') {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则');
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则', authorizationAction);
     }
     if (legacyModule === 'dubaiAirSea') {
-      if (!await this.hasPermission(principal.role, 'pricing:dubai-display:markup-view')) {
+      if (!await this.hasPermission(principal.role, 'pricing:markup:dubaiAirSea:view')) {
         throw new ForbiddenException('无权查看迪拜海运图片加价');
       }
       const activeBookIds = new Set(this.priceBooks.filter((item) => !item.deleted && item.targetModule === 'dubaiAirSea').map((item) => item.id));
@@ -4033,27 +4043,27 @@ export class InMemoryRepository {
     }
     const blockedModules = new Set<LegacyPricingModule>();
     if (!legacyModule) {
-      for (const module of ['amazon', 'inquiry', 'europeExpress', 'southAfrica', 'usaAirSea', 'canadaAirSea', 'dubaiAirSea'] as LegacyPricingModule[]) {
-        if (await this.isPricingModuleBlocked(principal, 'markup', module)) blockedModules.add(module);
+      for (const module of pricingMarkupModules) {
+        await this.ensurePricingModuleNotBlocked(principal, 'markup', module, '代理加价规则', authorizationAction).catch(() => blockedModules.add(module));
       }
     }
     const priceRows = this.activePriceBookRowsForMarkupModule(legacyModule).filter((row) => {
       const module = this.priceBooks.find((book) => book.id === row.priceBookId)?.targetModule ?? inferInMemoryLegacyModule(row);
       return !module || !blockedModules.has(module);
     });
+    const canViewUnclassified = isAdministratorRole(principal.role) || blockedModules.size === 0;
     const sources = this.activePriceBookAgentSources().filter((source) => {
       if (legacyModule && (legacyModule === 'unclassified' ? source.legacyModule : source.legacyModule !== legacyModule)) return false;
-      return !source.legacyModule || !blockedModules.has(source.legacyModule);
+      return (Boolean(source.legacyModule) || canViewUnclassified) && (!source.legacyModule || !blockedModules.has(source.legacyModule));
     });
     const rules = filterAgentMarkupRulesByModule(this.agentMarkupRules, legacyModule, priceRows).filter((rule) => {
       const module = normalizeAgentMarkupLegacyModule(rule.legacyModule);
-      return !module || !blockedModules.has(module);
+      return (Boolean(module) || Boolean(legacyModule) || canViewUnclassified) && (!module || !blockedModules.has(module));
     });
     return buildAgentMarkupListResponse(buildSyncedAgentMarkupRules(rules, sources), priceRows, query);
   }
 
   async previewAgentMarkupRule(principal: Principal, id: string): Promise<AgentMarkupPreviewResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:preview', '无权查看规则命中线路');
     const rule = this.agentMarkupRules.find((item) => item.id === id && !item.deletedAt);
     if (!rule) {
       throw new NotFoundException('代理加价规则不存在');
@@ -4063,10 +4073,11 @@ export class InMemoryRepository {
   }
 
   async getMarkupRoutes(principal: Principal, priceBookId: string, query: MarkupRouteListQuery = {}): Promise<MarkupRouteListResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:read', '无权查看线路阶梯加价');
     const book = this.priceBooks.find((item) => item.id === priceBookId && !item.deleted);
     if (!book) throw new NotFoundException('价格表不存在或已删除');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', book.targetModule ?? undefined, '代理加价规则');
+    const authoritativeModule = normalizeAgentMarkupLegacyModule(book.targetModule ?? primaryLegacyModuleFromCounts(book.legacyModuleCounts));
+    if (!authoritativeModule) throw new BadRequestException('价格表未归类到查价模块');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', authoritativeModule, '代理加价规则');
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 50)));
     const keyword = query.keyword?.trim().toLocaleLowerCase();
@@ -4101,6 +4112,7 @@ export class InMemoryRepository {
         || left.destinationCountry.localeCompare(right.destinationCountry, 'zh-CN')
         || left.markupUnit.localeCompare(right.markupUnit));
     return {
+      legacyModule: authoritativeModule,
       rows: routes.slice((page - 1) * pageSize, page * pageSize),
       filterOptions,
       pagination: { page, pageSize, totalItems: routes.length }
@@ -4108,11 +4120,12 @@ export class InMemoryRepository {
   }
 
   async previewMarkupRoute(principal: Principal, input: MarkupRoutePreviewInput): Promise<MarkupRoutePreviewResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:read', '无权查看线路阶梯加价');
     const route = normalizeMarkupRoutePreviewInput(input);
     const book = this.priceBooks.find((item) => item.id === route.priceBookId && !item.deleted);
     if (!book) throw new NotFoundException('价格表不存在或已删除');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', book.targetModule ?? undefined, '代理加价规则');
+    const authoritativeModule = normalizeAgentMarkupLegacyModule(book.targetModule ?? primaryLegacyModuleFromCounts(book.legacyModuleCounts));
+    if (!authoritativeModule) throw new BadRequestException('价格表未归类到查价模块');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', authoritativeModule, '代理加价规则');
     if (book.agentShortName?.trim() && book.agentShortName.trim() !== route.agentName) throw new BadRequestException('代理与价格表绑定不一致');
     const rows = this.activePriceBookRows().filter((row) => markupRouteRowMatches(row, route));
     if (!rows.length) throw new NotFoundException('当前价格表未找到该真实线路');
@@ -4120,7 +4133,6 @@ export class InMemoryRepository {
   }
 
   async previewMarkupRoutesBatch(principal: Principal, input: MarkupRoutePreviewBatchInput): Promise<MarkupRoutePreviewBatchResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:read', '无权查看线路阶梯加价');
     if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > 100) {
       throw new BadRequestException('请选择 1 至 100 条线路预览报价');
     }
@@ -4156,12 +4168,13 @@ export class InMemoryRepository {
   }
 
   async replaceMarkupRouteTiers(principal: Principal, input: MarkupRouteTierReplaceInput): Promise<MarkupRoutePreviewResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:update', '无权维护线路阶梯加价');
     const route = normalizeMarkupRoutePreviewInput(input);
     const tiers = normalizeMarkupRouteTiers(input.tiers, route.markupUnit);
     const book = this.priceBooks.find((item) => item.id === route.priceBookId && !item.deleted);
     if (!book) throw new NotFoundException('价格表不存在或已删除');
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', book.targetModule ?? undefined, '代理加价规则', 'edit');
+    const authoritativeModule = normalizeAgentMarkupLegacyModule(book.targetModule ?? primaryLegacyModuleFromCounts(book.legacyModuleCounts));
+    if (!authoritativeModule) throw new BadRequestException('价格表未归类到查价模块');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', authoritativeModule, '代理加价规则', 'tier');
     if (!book.agentShortName?.trim()) throw new BadRequestException('价格表未绑定代理，不能维护线路阶梯加价');
     if (book.agentShortName.trim() !== route.agentName) throw new BadRequestException('代理与价格表绑定不一致');
     const rows = this.activePriceBookRows().filter((row) => markupRouteRowMatches(row, route));
@@ -4194,7 +4207,6 @@ export class InMemoryRepository {
   }
 
   async replaceMarkupRouteTiersBatch(principal: Principal, input: MarkupRouteTierBatchReplaceInput): Promise<MarkupRouteTierBatchReplaceResponse> {
-    await this.ensurePermission(principal, 'pricing:markup-tier:update', '无权批量维护线路阶梯加价');
     if (!Array.isArray(input.items) || input.items.length < 1 || input.items.length > 100) {
       throw new BadRequestException('请选择 1 至 100 条线路批量设置阶梯加价');
     }
@@ -4210,7 +4222,7 @@ export class InMemoryRepository {
       return { route, tiers, book };
     });
     for (const { book } of prepared) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', book.targetModule ?? undefined, '代理加价规则', 'edit');
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', book.targetModule ?? undefined, '代理加价规则', 'tier');
     }
     const keys = prepared.map(({ route }) => markupRouteScopeKey(route));
     if (new Set(keys).size !== keys.length) throw new BadRequestException('批量设置中存在重复线路');
@@ -4266,10 +4278,9 @@ export class InMemoryRepository {
   }
 
   async migrateLegacyMarkupRouteScopes(principal: Principal): Promise<{ migratedCount: number; archivedCount: number; skippedCount: number }> {
-    await this.ensurePermission(principal, 'pricing:markup:update', '无权迁移线路阶梯加价');
     const legacyTiers = this.agentMarkupRules.filter((rule) => !rule.deletedAt && rule.enabled && rule.markupUnit && !rule.priceBookId);
     for (const rule of legacyTiers) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'tier');
     }
     let migratedCount = 0;
     let archivedCount = 0;
@@ -4310,11 +4321,13 @@ export class InMemoryRepository {
   }
 
   async exportAgentMarkupRules(principal: Principal, query: AgentMarkupListQuery = {}): Promise<AgentMarkupExportResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:export', '无权导出代理加价规则');
-    const legacyModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
+    const requestedModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
+    const legacyModule = query.priceBookId
+      ? this.resolveMarkupBookModule(query.priceBookId, requestedModule === 'unclassified' ? undefined : requestedModule)
+      : requestedModule;
     if (legacyModule && legacyModule !== 'unclassified') {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则');
-    }
+      await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则', 'export');
+    } else await this.ensureAllPricingMarkupModules(principal, 'export');
     const priceRows = this.activePriceBookRowsForMarkupModule(legacyModule);
     const rules = filterAgentMarkupRulesByModule(this.agentMarkupRules, legacyModule, priceRows);
     const response = buildAgentMarkupListResponse(rules, priceRows, { ...query, page: 1, pageSize: AGENT_MARKUP_EXPORT_ROW_LIMIT });
@@ -4326,13 +4339,12 @@ export class InMemoryRepository {
   }
 
   async importAgentMarkupRules(principal: Principal, input: { rows?: AgentMarkupCreateInput[] }): Promise<AgentMarkupImportResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:import', '无权导入代理加价规则');
     const rows = Array.isArray(input.rows) ? input.rows : [];
     const created: AgentMarkupSummary[] = [];
     const errorRows: AgentMarkupImportResponse['errorRows'] = [];
     for (const [index, row] of rows.entries()) {
       try {
-        created.push(await this.createAgentMarkupRule(principal, row));
+        created.push(await this.createAgentMarkupRule(principal, row, 'import'));
       } catch (error) {
         errorRows.push({ index: index + 1, reason: error instanceof Error ? error.message : '规则格式错误' });
       }
@@ -4342,7 +4354,6 @@ export class InMemoryRepository {
   }
 
   async batchUpsertAgentMarkupRules(principal: Principal, input: { rows?: AgentMarkupCreateInput[] }): Promise<AgentMarkupImportResponse> {
-    await this.ensurePermission(principal, 'pricing:markup:batch-upsert', '无权批量维护代理加价规则');
     const rows = Array.isArray(input.rows) ? input.rows : [];
     const upserted: AgentMarkupSummary[] = [];
     const errorRows: AgentMarkupImportResponse['errorRows'] = [];
@@ -4351,11 +4362,7 @@ export class InMemoryRepository {
     for (const [index, row] of rows.entries()) {
       try {
         const normalized = normalizeAgentMarkupInput(row);
-        if (!normalized.legacyModule && normalized.priceBookId) {
-          const book = this.priceBooks.find((item) => item.id === normalized.priceBookId);
-          normalized.legacyModule = book?.targetModule ?? primaryLegacyModuleFromCounts(book?.legacyModuleCounts);
-        }
-        await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(normalized.legacyModule), '代理加价规则', 'edit');
+        normalized.legacyModule = await this.ensureAgentMarkupInputModule(principal, normalized, 'import');
         const existingRules = findAgentMarkupRulesByScope(this.agentMarkupRules, normalized);
         const existingRuleIds = new Set(existingRules.map((rule) => rule.id));
         validateAgentMarkupRule(normalized, priceRows, this.agentMarkupRules.filter((rule) => !existingRuleIds.has(rule.id)));
@@ -4409,17 +4416,16 @@ export class InMemoryRepository {
   }
 
   async batchUpdateAgentMarkupRules(principal: Principal, input: { ids?: string[]; agentNames?: string[]; scopes?: AgentMarkupBatchScopeInput[]; enabled?: boolean }): Promise<{ successCount: number; rows: AgentMarkupSummary[] }> {
-    await this.ensurePermission(principal, 'pricing:markup:batch-enable', '无权批量修改代理加价规则');
     if (typeof input.enabled !== 'boolean') {
       throw new BadRequestException('启停状态不能为空');
     }
     assertAgentMarkupBatchScope(input);
     for (const scope of normalizeAgentMarkupBatchScopes(input)) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(scope.legacyModule), '代理加价规则', 'edit');
+      await this.ensureAgentMarkupInputModule(principal, scope, 'status');
     }
     const rows = this.agentMarkupRules.filter((rule) => matchesAgentMarkupBatchScope(rule, input));
     for (const rule of rows) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+      await this.ensureAgentMarkupInputModule(principal, rule, 'status');
     }
     rows.forEach((rule) => {
       rule.enabled = input.enabled!;
@@ -4449,11 +4455,10 @@ export class InMemoryRepository {
   }
 
   async batchDeleteAgentMarkupRules(principal: Principal, input: { ids?: string[]; agentNames?: string[]; scopes?: AgentMarkupBatchScopeInput[] }): Promise<{ successCount: number; rows: AgentMarkupSummary[] }> {
-    await this.ensurePermission(principal, 'pricing:markup:batch-delete', '无权批量删除代理加价规则');
     assertAgentMarkupBatchScope(input);
     const deletedRows = this.agentMarkupRules.filter((rule) => matchesAgentMarkupBatchScope(rule, input)).map((rule) => ({ ...rule }));
     for (const rule of deletedRows) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+      await this.ensureAgentMarkupInputModule(principal, rule, 'delete');
     }
     removeMatching(this.agentMarkupRules, (rule) => matchesAgentMarkupBatchScope(rule, input));
     this.audit('pricing.markup.batch_delete', 'agent-markup-rules', principal, { rows: deletedRows }, { successCount: deletedRows.length, ids: deletedRows.map((rule) => rule.id), hardDelete: true, agentNames: normalizeStringList(input.agentNames), scopes: normalizeAgentMarkupBatchScopes(input) });
@@ -4467,14 +4472,9 @@ export class InMemoryRepository {
     return { successCount: deletedRows.length, rows: deletedRows };
   }
 
-  async createAgentMarkupRule(principal: Principal, input: AgentMarkupCreateInput): Promise<AgentMarkupSummary> {
-    await this.ensurePermission(principal, 'pricing:markup:default-create', '无权新增代理加价规则');
+  async createAgentMarkupRule(principal: Principal, input: AgentMarkupCreateInput, authorizationAction: 'create' | 'import' = 'create'): Promise<AgentMarkupSummary> {
     const normalized = normalizeAgentMarkupInput(input);
-    if (!normalized.legacyModule && normalized.priceBookId) {
-      const book = this.priceBooks.find((item) => item.id === normalized.priceBookId);
-      normalized.legacyModule = book?.targetModule ?? primaryLegacyModuleFromCounts(book?.legacyModuleCounts);
-    }
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(normalized.legacyModule), '代理加价规则', 'edit');
+    normalized.legacyModule = await this.ensureAgentMarkupInputModule(principal, normalized, authorizationAction);
     validateAgentMarkupRule(normalized, this.activePriceBookRows(), this.agentMarkupRules);
     const markupValue = normalized.markupValue ?? normalized.markupPerKg;
     if (!input.agentName?.trim() || !Number.isFinite(markupValue) || markupValue < 0) {
@@ -4498,7 +4498,6 @@ export class InMemoryRepository {
   }
 
   async updateAgentMarkupRule(principal: Principal, id: string, input: AgentMarkupUpdateInput): Promise<AgentMarkupSummary> {
-    await this.ensurePermission(principal, 'pricing:markup:update', '无权修改代理加价规则');
     const rule = this.agentMarkupRules.find((item) => item.id === id);
     if (!rule) {
       throw new NotFoundException('代理加价规则不存在');
@@ -4508,18 +4507,9 @@ export class InMemoryRepository {
     const currentModule = normalizeAgentMarkupLegacyModule(rule.legacyModule)
       ?? currentBook?.targetModule
       ?? primaryLegacyModuleFromCounts(currentBook?.legacyModuleCounts);
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', currentModule, '代理加价规则', 'edit');
+    await this.ensureAgentMarkupInputModule(principal, rule, 'update');
     const normalized = normalizeAgentMarkupInput({ ...rule, ...input });
-    const targetBook = normalized.priceBookId ? this.priceBooks.find((item) => item.id === normalized.priceBookId) : undefined;
-    const priceBookModule = targetBook?.targetModule ?? primaryLegacyModuleFromCounts(targetBook?.legacyModuleCounts);
-    const explicitModule = input.legacyModule === undefined ? undefined : normalizeAgentMarkupLegacyModule(input.legacyModule);
-    if (priceBookModule && explicitModule && priceBookModule !== explicitModule) {
-      throw new BadRequestException('价格表与代理加价模块不一致');
-    }
-    normalized.legacyModule = priceBookModule ?? explicitModule ?? normalizeAgentMarkupLegacyModule(normalized.legacyModule) ?? currentModule;
-    if (input.priceBookId !== undefined || input.legacyModule !== undefined) {
-      await this.ensurePricingModuleNotBlocked(principal, 'markup', normalized.legacyModule, '代理加价规则', 'edit');
-    }
+    normalized.legacyModule = await this.ensureAgentMarkupInputModule(principal, normalized, 'update') ?? currentModule;
     validateAgentMarkupRule(normalized, this.activePriceBookRows(), this.agentMarkupRules, id);
     if (input.agentName !== undefined) {
       rule.agentName = normalized.agentName;
@@ -4549,6 +4539,8 @@ export class InMemoryRepository {
     if (input.enabled !== undefined) {
       rule.enabled = input.enabled;
     }
+    if (input.priceBookId !== undefined) rule.priceBookId = normalized.priceBookId;
+    if (input.legacyModule !== undefined || input.priceBookId !== undefined) rule.legacyModule = normalized.legacyModule;
     rule.updatedAt = new Date().toISOString();
     this.audit('pricing.markup.update', id, principal, before, rule);
     void this.lineage?.recordEvent('pricing.markup.rule_change', {
@@ -4562,13 +4554,12 @@ export class InMemoryRepository {
   }
 
   async deleteAgentMarkupRule(principal: Principal, id: string): Promise<AgentMarkupSummary> {
-    await this.ensurePermission(principal, 'pricing:markup:delete', '无权删除代理加价规则');
     const index = this.agentMarkupRules.findIndex((item) => item.id === id && !item.deletedAt);
     if (index === -1) {
       throw new NotFoundException('代理加价规则不存在');
     }
     const rule = this.agentMarkupRules[index];
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalizeAgentMarkupLegacyModule(rule.legacyModule), '代理加价规则', 'edit');
+    await this.ensureAgentMarkupInputModule(principal, rule, 'delete');
     this.agentMarkupRules.splice(index, 1);
     const before = { ...rule };
     this.audit('pricing.markup_rule.delete', id, principal, before, { hardDelete: true });
@@ -4583,7 +4574,6 @@ export class InMemoryRepository {
   }
 
   async getAgentChannelCustomRemarks(principal: Principal, legacyModule: LegacyPricingModule): Promise<AgentChannelCustomRemarkSummary[]> {
-    await this.ensurePermission(principal, 'pricing:channel-remark:read', '无权查看代理渠道自定义备注');
     await this.ensurePricingModuleNotBlocked(principal, 'markup', legacyModule, '代理加价规则');
     return this.agentChannelCustomRemarks
       .filter((remark) => remark.legacyModule === legacyModule)
@@ -4592,11 +4582,8 @@ export class InMemoryRepository {
   }
 
   async upsertAgentChannelCustomRemark(principal: Principal, input: AgentChannelCustomRemarkInput): Promise<AgentChannelCustomRemarkSummary> {
-    if (!(await this.hasAnyPermission(principal.role, ['pricing:channel-remark:create', 'pricing:channel-remark:update']))) {
-      throw new ForbiddenException('无权维护代理渠道自定义备注');
-    }
     const normalized = normalizeAgentChannelCustomRemarkInput(input);
-    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalized.legacyModule, '代理加价规则');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', normalized.legacyModule, '代理加价规则', 'update');
     const moduleRows = this.activePriceBookRows().filter((row) => {
       const book = this.priceBooks.find((item) => item.id === row.priceBookId);
       return (book?.targetModule ?? inferInMemoryLegacyModule(row)) === normalized.legacyModule;
@@ -4618,9 +4605,9 @@ export class InMemoryRepository {
   }
 
   async updateAgentChannelCustomRemarkEnabled(principal: Principal, id: string, enabled: boolean): Promise<AgentChannelCustomRemarkSummary> {
-    await this.ensurePermission(principal, 'pricing:channel-remark:enable', '无权启停代理渠道自定义备注');
     const remark = this.agentChannelCustomRemarks.find((item) => item.id === id);
     if (!remark) throw new NotFoundException('代理渠道自定义备注不存在');
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', remark.legacyModule, '代理加价规则', 'status');
     const before = { ...remark };
     remark.enabled = enabled;
     remark.updatedAt = new Date().toISOString();
@@ -4629,7 +4616,9 @@ export class InMemoryRepository {
   }
 
   async getPriceBooks(principal: Principal, includeRows = false, targetModule?: PriceBookImportTargetModule | 'unclassified'): Promise<PriceBooksResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:list-view', '无权查看价格表');
+    const hasContextPermission = await Promise.all((['view', 'import', 'export', 'update', 'delete', 'health'] as const)
+      .map((action) => this.hasPermission(principal.role, `pricing:price-books:${action}` as PermissionKey)));
+    if (!hasContextPermission.some(Boolean)) throw new ForbiddenException('无权查看价格表');
     void includeRows;
     const activeBooks = this.priceBooks
       .filter((book) => !book.deleted)
@@ -4645,7 +4634,7 @@ export class InMemoryRepository {
   }
 
   async downloadPriceBook(principal: Principal, id: string): Promise<{ fileName: string; buffer: Buffer }> {
-    await this.ensurePermission(principal, 'pricing:price-books:rows-view', '无权下载价格表');
+    await this.ensurePermission(principal, 'pricing:price-books:export', '无权下载价格表');
     const book = this.priceBooks.find((item) => item.id === id && !item.deleted);
     if (!book) throw new NotFoundException('价格表不存在');
     const importJob = this.priceBookImportJobs.find((item) => item.book?.id === id && item.sourceBuffer);
@@ -4656,7 +4645,7 @@ export class InMemoryRepository {
   }
 
   async getPriceBookRuleRefreshProgress(principal: Principal): Promise<PricingRuleRefreshProgressResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:sync-health-view', '无权查看价格表规则同步进度');
+    await this.ensurePermission(principal, 'pricing:price-books:health', '无权查看价格表规则同步进度');
     const modules = Object.keys(PRICING_PARSER_RULE_VERSIONS) as PriceBookImportTargetModule[];
     return {
       generatedAt: new Date().toISOString(),
@@ -4687,13 +4676,24 @@ export class InMemoryRepository {
   }
 
   async getPriceBookRows(principal: Principal, priceBookId?: string, query: PriceBookRowsQuery = {}): Promise<PriceBookRowsResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:rows-view', '无权查看价格表线路');
+    await this.ensurePermission(principal, 'pricing:price-books:view', '无权查看价格表线路');
     const pricingVisibility = await this.getPricingFieldVisibility(principal);
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize ?? 100)));
     const agentName = query.agentName?.trim();
     if (!priceBookId && !agentName) {
       throw new BadRequestException('查看线路必须选择价格表或代理，避免全量扫描价格行');
+    }
+    const markupAccessRequested = query.markupContext === true || Boolean(query.markupModule) || Boolean(query.markupAmount || query.markupSource || (query.markupSort && query.markupSort !== 'NONE'));
+    if (markupAccessRequested) {
+      if (priceBookId) {
+        const module = this.resolveMarkupBookModule(priceBookId, query.markupModule);
+        await this.ensurePricingModuleNotBlocked(principal, 'markup', module, '代理加价规则');
+      } else if (query.markupModule) {
+        await this.ensurePricingModuleNotBlocked(principal, 'markup', query.markupModule, '代理加价规则');
+      } else {
+        throw new BadRequestException('加价规则线路查询必须指定模块');
+      }
     }
     const activeBookIds = new Set(this.priceBooks.filter((book) => !book.deleted).map((book) => book.id));
     const activeBookById = new Map(this.priceBooks.filter((book) => !book.deleted).map((book) => [book.id, book]));
@@ -4713,17 +4713,18 @@ export class InMemoryRepository {
         left.minWeightKg - right.minWeightKg
       );
     const rowModules = Array.from(new Set(filtered.map((row) => activeBookById.get(row.priceBookId)?.targetModule ?? primaryLegacyModuleFromCounts(activeBookById.get(row.priceBookId)?.legacyModuleCounts)).filter(Boolean))) as LegacyPricingModule[];
-    const markupSources = this.activePriceBookAgentSources().filter((source) => !rowModules.length || (rowModules.length === 1 && source.legacyModule === rowModules[0]));
+    const markupSources = markupAccessRequested ? this.activePriceBookAgentSources().filter((source) => !rowModules.length || (rowModules.length === 1 && source.legacyModule === rowModules[0])) : [];
     const filteredBookIds = new Set(filtered.map((row) => row.priceBookId));
-    const markupRules = buildSyncedAgentMarkupRules(this.agentMarkupRules.filter((rule) =>
+    const markupRules = markupAccessRequested ? buildSyncedAgentMarkupRules(this.agentMarkupRules.filter((rule) =>
       !rule.priceBookId
         ? (rowModules.length === 1 ? rule.legacyModule === rowModules[0] : true)
         : filteredBookIds.has(rule.priceBookId)
-    ), markupSources);
+    ), markupSources) : [];
     const enrichedRows = filtered.map((row) => {
       const book = activeBookById.get(row.priceBookId);
       const ownerAgentName = book?.agentShortName || agentName || row.agentName;
-      return enrichPriceBookRowMarkup({ ...row, agentName: cleanOldOriginalAgentNameForDisplay(book?.fileName, row.agentName) }, markupRules, ownerAgentName);
+      const visible = { ...row, agentName: cleanOldOriginalAgentNameForDisplay(book?.fileName, row.agentName) };
+      return markupAccessRequested ? enrichPriceBookRowMarkup(visible, markupRules, ownerAgentName) : visible;
     });
     const controlledRows = applyPriceBookRowMarkupControls(enrichedRows, query);
     const pageRows = controlledRows.slice((page - 1) * pageSize, page * pageSize);
@@ -4742,7 +4743,7 @@ export class InMemoryRepository {
   }
 
   async getPricingSyncHealth(principal: Principal, query: { page?: number; pageSize?: number; legacyModule?: LegacyPricingModule | 'unclassified' } = {}): Promise<PricingSyncHealthResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:sync-health-view', '无权查看价格表同步体检');
+    await this.ensurePermission(principal, 'pricing:price-books:health', '无权查看价格表同步体检');
     const legacyModule = normalizeAgentMarkupModuleQuery(query.legacyModule);
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize ?? 50)));
@@ -4830,7 +4831,7 @@ export class InMemoryRepository {
   async cleanupOldOriginalAgentData(principal: Principal, input: { dryRun?: boolean } = {}): Promise<PricingOldOriginalAgentCleanupResponse> {
     const dryRun = input.dryRun !== false;
     if (dryRun) {
-      await this.ensurePermission(principal, 'pricing:price-books:cleanup-original-agents', '无权预览旧原始代理清理');
+      await this.ensurePermission(principal, 'pricing:price-books:update', '无权预览旧原始代理清理');
     } else {
       this.ensureAdmin(principal, '只有管理员可以执行旧原始代理清理');
     }
@@ -4944,7 +4945,7 @@ export class InMemoryRepository {
   }
 
   async createPriceBookImportJob(principal: Principal, input: { fileName: string; targetModule?: PriceBookImportTargetModule; agentId?: string; agentShortName?: string; buffer: Buffer; filePath?: string }): Promise<PriceBookImportJobResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:upload', '无权上传价格表');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权上传价格表');
     const targetModule = normalizePriceBookImportTargetModule(input.targetModule);
     await this.ensurePriceBookOperationNotBlocked(principal, 'create', targetModule, '新增价格表');
     const boundAgent = targetModule === 'dubaiAirSea' && !input.agentId?.trim() && !input.agentShortName?.trim()
@@ -4986,7 +4987,7 @@ export class InMemoryRepository {
   }
 
   async getPriceBookImportJob(principal: Principal, id: string): Promise<PriceBookImportJobResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:import-job-view', '无权查看价格表导入任务');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权查看价格表导入任务');
     const job = this.priceBookImportJobs.find((item) => item.id === id);
     if (!job) {
       throw new NotFoundException('价格表导入任务不存在');
@@ -4996,7 +4997,7 @@ export class InMemoryRepository {
   }
 
   async getPriceBookImportJobs(principal: Principal, query: PriceBookImportJobListQuery = {}): Promise<PriceBookImportJobListResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:import-job-view', '无权查看价格表导入任务');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权查看价格表导入任务');
     const page = Math.max(1, Number(query.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Number(query.pageSize ?? 20)));
     const filtered = this.priceBookImportJobs
@@ -5009,7 +5010,7 @@ export class InMemoryRepository {
   }
 
   async retryPriceBookImportJob(principal: Principal, id: string): Promise<PriceBookImportJobResponse> {
-    await this.ensurePermission(principal, 'pricing:price-books:upload', '无权重试价格表导入任务');
+    await this.ensurePermission(principal, 'pricing:price-books:import', '无权重试价格表导入任务');
     const job = this.priceBookImportJobs.find((item) => item.id === id);
     if (!job) throw new NotFoundException('价格表导入任务不存在');
     if (!['FAILED', 'PARTIAL_FAILED'].includes(job.status)) throw new BadRequestException('只有失败或部分失败的导入任务可以重试');
@@ -5115,7 +5116,7 @@ export class InMemoryRepository {
   }
 
   async updatePriceBookRemark(principal: Principal, id: string, input: PriceBookRemarkUpdateInput): Promise<PriceBookSummary> {
-    await this.ensurePermission(principal, 'pricing:price-books:remark-update', '无权维护价格表备注');
+    await this.ensurePermission(principal, 'pricing:price-books:update', '无权维护价格表备注');
     const book = this.priceBooks.find((item) => item.id === id && !item.deleted);
     if (!book) {
       throw new NotFoundException('价格表不存在');
@@ -5296,12 +5297,17 @@ export class InMemoryRepository {
   }
 
   async getWarehouseRentRules(principal: Principal): Promise<WarehouseRentRuleSummary[]> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:rent-rule:view'))) {
+    if (!(await this.hasPermission(principal.role, 'warehouse:rent-detail:view'))) {
       throw new ForbiddenException('当前角色不能查看仓租规则');
     }
-    const siteScope = this.warehouseRentSiteScope(principal);
+    const rentScope = await this.warehouseRentVisibilityScope(principal);
+    if (rentScope.mode === 'NONE') {
+      throw new ForbiddenException('当前角色不能查看仓租数据');
+    }
     return this.warehouseRentRules
-      .filter((rule) => !siteScope || !rule.site || rule.site === siteScope)
+      .filter((rule) => rentScope.mode === 'ALL'
+        || !rule.site
+        || (rentScope.mode === 'SITE' && rule.site === rentScope.site))
       .map((rule) => ({ ...rule }))
       .sort((left, right) =>
         (left.site ?? '').localeCompare(right.site ?? '')
@@ -5317,8 +5323,10 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:rent-detail:view'))) {
       throw new ForbiddenException('当前角色不能查看仓租细分表');
     }
-    const salesScope = this.operatorCustomerScope(principal);
-    const siteScope = this.warehouseRentSiteScope(principal);
+    const rentScope = await this.warehouseRentVisibilityScope(principal);
+    if (rentScope.mode === 'NONE') {
+      throw new ForbiddenException('当前角色不能查看仓租数据');
+    }
     const outboundAtByShipmentId = new Map(
       this.shipments
         .filter((shipment) => shipment.outboundAt)
@@ -5326,8 +5334,9 @@ export class InMemoryRepository {
     );
     const response = calculateWarehouseRentDetails(
       this.warehousePackages
-        .filter((pkg) => !siteScope || pkg.site === siteScope)
-        .filter((pkg) => !salesScope || (pkg.salesperson && salesScope.includes(pkg.salesperson)))
+        .filter((pkg) => rentScope.mode === 'ALL'
+          || (rentScope.mode === 'SITE' && pkg.site === rentScope.site)
+          || ((rentScope.mode === 'SELF' || rentScope.mode === 'TEAM') && Boolean(pkg.salesperson) && (rentScope.salespeople ?? []).includes(pkg.salesperson!)))
         .map((pkg) => ({
           id: pkg.id,
           sourcePackageId: pkg.sourcePackageId,
@@ -5374,9 +5383,7 @@ export class InMemoryRepository {
     principal: Principal,
     input: WarehouseRentRuleInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const normalized = normalizeMemoryWarehouseRentRuleInput(input);
     assertMemoryWarehouseRentRuleDoesNotOverlap(this.warehouseRentRules, normalized);
     const now = new Date().toISOString();
@@ -5398,9 +5405,7 @@ export class InMemoryRepository {
     id: string,
     input: WarehouseRentRuleInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const current = this.warehouseRentRules.find((rule) => rule.id === id);
     if (!current) throw new NotFoundException('仓租规则不存在');
     if (!current.enabled || current.effectiveTo) {
@@ -5440,9 +5445,7 @@ export class InMemoryRepository {
     principal: Principal,
     id: string
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const currentIndex = this.warehouseRentRules.findIndex((rule) => rule.id === id);
     if (currentIndex < 0) throw new NotFoundException('仓租规则不存在');
     const current = this.warehouseRentRules[currentIndex]!;
@@ -5528,9 +5531,7 @@ export class InMemoryRepository {
     id: string,
     input: WarehouseRentRuleEnabledInput
   ): Promise<WarehouseRentRuleSummary> {
-    if (!isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, 'warehouse:rent-rule:manage'))) {
-      throw new ForbiddenException('当前角色不能维护仓租规则');
-    }
+    await this.ensureWarehouseRentRuleManage(principal);
     const current = this.warehouseRentRules.find((rule) => rule.id === id);
     if (!current) throw new NotFoundException('仓租规则不存在');
     if (current.enabled === (input.enabled === true)) {
@@ -5606,21 +5607,50 @@ export class InMemoryRepository {
     return { ...current };
   }
 
-  private warehouseRentSiteScope(principal: Principal): string | undefined {
+  private async warehouseRentVisibilityScope(principal: Principal): Promise<WarehouseRentVisibilityScope> {
     if (isAdministratorRole(principal.role)) {
-      return undefined;
+      return { mode: 'ALL' };
     }
+    const [all, siteScope, team, self] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:rent-detail:scope-all'),
+      this.hasPermission(principal.role, 'warehouse:rent-detail:scope-site'),
+      this.hasPermission(principal.role, 'warehouse:rent-detail:scope-team'),
+      this.hasPermission(principal.role, 'warehouse:rent-detail:scope-self')
+    ]);
+    if (all) return { mode: 'ALL' };
     const site = principal.site?.trim()
       || this.accounts.find((account) => account.id === principal.id)?.site?.trim();
-    if (!site) {
-      throw new ForbiddenException('仓库账号未配置站点，不能查看仓租数据');
+    if (siteScope && site) return { mode: 'SITE', site };
+    if (team) {
+      const salespeople = principal.departmentTeamScope?.filter(Boolean) ?? [];
+      if (salespeople.length) return { mode: 'TEAM', salespeople };
     }
-    return site;
+    if (self) {
+      const salespeople = [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
+      if (salespeople.length) return { mode: 'SELF', salespeople };
+    }
+    return { mode: 'NONE' };
+  }
+
+  private async ensureWarehouseRentRuleManage(principal: Principal): Promise<void> {
+    if (isAdministratorRole(principal.role)) {
+      return;
+    }
+    if (!(await this.hasPermission(principal.role, 'warehouse:rent-detail:edit'))) {
+      throw new ForbiddenException('当前角色不能维护仓租规则');
+    }
   }
 
   async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
-    await this.ensureAnyPermission(principal, ['warehouse:today-receipt:view', 'warehouse:in-stock:view'], '没有仓库包裹查看权限');
-    return this.withConfirmedWarehouseTally(this.warehousePackages);
+    const [canToday, canInStock] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:today-receipt:view'),
+      this.hasPermission(principal.role, 'warehouse:in-stock:view')
+    ]);
+    if (!canToday && !canInStock) throw new ForbiddenException('没有仓库包裹查看权限');
+    const rows = canInStock
+      ? this.warehousePackages
+      : this.warehousePackages.filter((pkg) => this.isWarehousePackageToday(pkg));
+    return this.withConfirmedWarehouseTally(rows);
   }
 
   private withConfirmedWarehouseTally(packages: WarehousePackageSummary[]): WarehousePackageSummary[] {
@@ -5672,13 +5702,14 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:today-receipt:view'))) {
       throw new ForbiddenException('当前角色不能查看今日收货');
     }
-    if (query.site?.trim()) {
-      await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:site-filter-block');
-    }
-    const { start, end } = resolveWarehouseTodayRange(query);
-    const businessCustomerScoped = Boolean(this.operatorCustomerScope(principal)) && query.dataScope !== 'ALL';
+    const { start, end } = resolveWarehouseTodayRange(await this.hasPermission(principal.role, 'warehouse:in-stock:view') ? query : { datePreset: 'TODAY' });
+    const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
+    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
+      ? principal.departmentTeamScope!.filter(Boolean)
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
     const ownedCustomers = businessCustomerScoped
-      ? this.customers.filter((customer) => customer.salesperson === principal.username)
+      ? this.customers.filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson))
       : undefined;
     const ownedCustomerCodes = ownedCustomers
       ? new Set(ownedCustomers.map((customer) => customer.code))
@@ -5727,11 +5758,13 @@ export class InMemoryRepository {
     if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:view'))) {
       throw new ForbiddenException('当前角色不能查看在仓数据');
     }
-    const warehouseWideScope = ['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)
-      || await this.hasPermission(principal.role, 'warehouse:in-stock:update');
-    const businessCustomerScoped = !warehouseWideScope && query.dataScope !== 'ALL';
+    const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
+    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
+      ? principal.departmentTeamScope!.filter(Boolean)
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
     const ownedCustomers = businessCustomerScoped
-      ? this.customers.filter((customer) => customer.salesperson === principal.username)
+      ? this.customers.filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson))
       : undefined;
     const ownedCustomerCodes = ownedCustomers
       ? new Set(ownedCustomers.map((customer) => customer.code))
@@ -5756,6 +5789,17 @@ export class InMemoryRepository {
       && keyword(pkg.customerOrderNo, query.customerOrderNo)
       && keyword(pkg.domesticTrackingNo, query.domesticTrackingNo)
       && keyword(pkg.combinedOrderNo, query.combinedOrderNo)
+      && (!query.keyword?.trim() || [
+        pkg.customerCode,
+        pkg.customerName,
+        pkg.customerOrderNo,
+        pkg.domesticTrackingNo,
+        pkg.combinedOrderNo,
+        pkg.systemOrderNo,
+        pkg.receivingChannel,
+        pkg.destinationCountry,
+        pkg.site
+      ].some((value) => keyword(value, query.keyword)))
       && (!operationIds || operationIds.has(pkg.id))
       && (!ownedCustomerCodes || ownedCustomerCodes.has(pkg.customerCode))
     );
@@ -5787,8 +5831,56 @@ export class InMemoryRepository {
   }
 
   async getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
-    const response = await this.getWarehouseInStock(principal, { dataScope: 'ALL' });
-    return { totals: response.totals };
+    if (!(await this.hasAnyPermission(principal.role, ['warehouse:dashboard:view', 'warehouse:in-stock:view']))) {
+      throw new ForbiddenException('当前角色不能查看仓库看板或在仓汇总');
+    }
+    const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
+    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
+      ? principal.departmentTeamScope!.filter(Boolean)
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
+    const ownedCustomers = businessCustomerScoped
+      ? this.customers.filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson))
+      : undefined;
+    const ownedCustomerCodes = ownedCustomers ? new Set(ownedCustomers.map((customer) => customer.code)) : undefined;
+    const ownedCustomerIds = ownedCustomers ? new Set(ownedCustomers.map((customer) => customer.id)) : undefined;
+    const grouped = new Map<string, WarehousePackageSummary[]>();
+    this.withConfirmedWarehouseTally(this.warehousePackages.filter((pkg) => pkg.status === 'RECEIVED' && (!ownedCustomerCodes || ownedCustomerCodes.has(pkg.customerCode))))
+      .forEach((row) => grouped.set(row.combinedOrderNo, [...(grouped.get(row.combinedOrderNo) ?? []), row]));
+    return {
+      totals: summarizeWarehouseInStockTotals(
+        [...grouped.values()].flat(),
+        this.shipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH' && (!ownedCustomerIds || ownedCustomerIds.has(shipment.customerId))).length
+      )
+    };
+  }
+
+  async deleteWarehousePackages(principal: Principal, input: WarehousePackageDeleteInput): Promise<WarehousePackageDeleteResponse> {
+    const ids = Array.from(new Set((input.ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
+    if (!ids.length) throw new BadRequestException('请至少选择一个包裹');
+    const reason = input.reason?.trim() ?? '';
+    if (!reason) throw new BadRequestException('请填写删除原因');
+    if (reason.length > 200) throw new BadRequestException('删除原因不能超过 200 个字符');
+    const canToday = isAdministratorRole(principal.role) || await this.hasPermission(principal.role, 'warehouse:today-receipt:delete');
+    const canInStock = isAdministratorRole(principal.role) || await this.hasPermission(principal.role, 'warehouse:in-stock:delete');
+    if (!canToday && !canInStock) throw new ForbiddenException('当前角色没有删除仓库包裹权限');
+    const packages = ids.map((id) => this.warehousePackages.find((pkg) => pkg.id === id));
+    if (packages.some((pkg) => !pkg)) throw new NotFoundException('部分包裹不存在或已删除');
+    const rows = packages as WarehousePackageSummary[];
+    if (rows.some((pkg) => this.isWarehousePackageToday(pkg) && !canToday)
+      || rows.some((pkg) => !this.isWarehousePackageToday(pkg) && !canInStock)) {
+      throw new ForbiddenException('当前角色不能删除所选日期范围内的仓库包裹');
+    }
+    const scope = this.operatorCustomerScope(principal);
+    if (scope && rows.some((pkg) => !pkg.salesperson || !scope.includes(pkg.salesperson))) throw new ForbiddenException('业务员只能删除自己名下包裹');
+    const draftIds = new Set(this.shipments.filter((shipment) => !shipment.deletedAt).flatMap((shipment) => shipment.draftWarehousePackageIds ?? []));
+    const consolidationIds = new Set(this.warehouseConsolidations.flatMap((record) => record.packageIds));
+    const tallyIds = new Set(this.warehouseTallyTasks.filter((task) => task.tallyProgressStatus !== 'CANCELLED').flatMap((task) => [...task.packageIds, task.appliedPackageId].filter(Boolean) as string[]));
+    const unsafe = rows.filter((pkg) => !['PENDING', 'RECEIVED'].includes(pkg.status) || pkg.shipmentId || pkg.systemOrderNo || pkg.tallyTaskId || pkg.tallyTaskNo || pkg.sourcePackageId || pkg.archivedByPackageId || draftIds.has(pkg.id) || consolidationIds.has(pkg.id) || tallyIds.has(pkg.id));
+    if (unsafe.length) throw new BadRequestException(`包裹 ${unsafe.map((pkg) => pkg.combinedOrderNo || pkg.id).join('、')} 已进入理货、合票、录单或出库流程，不能删除`);
+    for (let index = this.warehousePackages.length - 1; index >= 0; index -= 1) if (ids.includes(this.warehousePackages[index]!.id)) this.warehousePackages.splice(index, 1);
+    this.audit('warehouse.package.batch_delete', ids.join(','), principal, rows.map((pkg) => ({ id: pkg.id, combinedOrderNo: pkg.combinedOrderNo, status: pkg.status })), { ids, hardDelete: true, reason });
+    return { deletedIds: ids, deletedCount: ids.length };
   }
 
   async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {
@@ -5797,7 +5889,6 @@ export class InMemoryRepository {
 
   async getWarehouseManualReceiptCustomers(principal: Principal) {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     return this.customers
       .filter((customer) => customer.enabled)
       .map((customer) => ({ code: customer.code, name: customer.name }))
@@ -5806,7 +5897,6 @@ export class InMemoryRepository {
 
   async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string) {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const normalizedCode = customerCode?.trim() ?? '';
     if (!normalizedCode) {
       throw new BadRequestException('请填写客户编号');
@@ -5820,7 +5910,7 @@ export class InMemoryRepository {
     if (!customer.enabled) {
       throw new BadRequestException('客户已停用，不能收货');
     }
-    if (isAdministratorRole(principal.role) || principal.shipmentAllView) return;
+    if (isAdministratorRole(principal.role) || (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))) return;
     const salesScope = principal.dataScope === 'SALES_OWN'
       ? [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))
       : principal.departmentTeamScope?.filter(Boolean);
@@ -5833,8 +5923,7 @@ export class InMemoryRepository {
   }
 
   async previewWarehouseMachineImport(principal: Principal, parsed: ParsedWarehouseMachineImport) {
-    await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:batch-import-block');
+    await this.ensureWarehouseMachineImportPermission(principal, parsed);
     return buildWarehouseMachineImportResponse(parsed, this.findExistingWarehouseMachineImportKeys(parsed));
   }
 
@@ -5843,8 +5932,7 @@ export class InMemoryRepository {
     parsed: ParsedWarehouseMachineImport,
     meta: { fileHash: string }
   ) {
-    await this.ensurePermission(principal, 'warehouse:in-stock:machine-import', '没有仓库批量导入权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:batch-import-block');
+    await this.ensureWarehouseMachineImportPermission(principal, parsed);
     const auditTargets = new Set([
       `warehouse-machine-import:${meta.fileHash}`,
       `warehouse-machine-import:${meta.fileHash.slice(0, 16)}`
@@ -5960,7 +6048,6 @@ export class InMemoryRepository {
 
   async createWarehousePackage(principal: Principal, input: WarehousePackageCreateInput): Promise<WarehousePackageSummary> {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     if (input.scanSource !== '墨家设备') {
       await this.assertWarehouseManualReceiptCustomer(principal, input.customerCode);
     }
@@ -5996,7 +6083,6 @@ export class InMemoryRepository {
 
   async createWarehouseManualReceipt(principal: Principal, input: WarehouseManualReceiptCreateInput): Promise<WarehouseManualReceiptCreateResponse> {
     await this.ensurePermission(principal, 'warehouse:today-receipt:manual-create', '没有仓库手工收货权限');
-    await this.ensureTodayReceiptMask(principal, 'warehouse:today-receipt:manual-create-block');
     const packageInputs = buildWarehouseManualReceiptPackageInputs(input);
     const firstPackageInput = packageInputs[0]!;
     await this.assertWarehouseManualReceiptCustomer(principal, firstPackageInput.customerCode);
@@ -6044,25 +6130,13 @@ export class InMemoryRepository {
   }
 
   async replenishWarehouseSameSpec(principal: Principal, id: string, input: WarehouseSameSpecReplenishInput): Promise<WarehouseSameSpecReplenishResponse> {
-    await this.ensurePermission(principal, 'warehouse:in-stock:same-spec-replenish', '没有同箱规补录权限');
-    const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
     const supplementCount = Math.floor(Number(input.supplementCount));
     if (!Number.isInteger(supplementCount) || supplementCount < 1 || supplementCount > 500) {
       throw new BadRequestException('补录箱数必须为 1 至 500 的正整数');
     }
     const source = this.warehousePackages.find((pkg) => pkg.id === id);
     if (!source) throw new NotFoundException('仓库包裹不存在');
-    if (!isAdministratorRole(principal.role) && !principal.shipmentAllView) {
-      if (permissions.includes('data-scope:sales-own')) {
-        const customer = this.customers.find((item) => item.code === source.customerCode);
-        const identities = [principal.username, principal.name, principal.nickname].filter(Boolean);
-        if (!customer?.salesperson || !identities.includes(customer.salesperson)) {
-          throw new ForbiddenException('只能对本人归属客户的包裹补录');
-        }
-      } else if (!principal.site || source.site !== principal.site) {
-        throw new ForbiddenException('只能对本站包裹补录');
-      }
-    }
+    await this.ensureWarehousePackageEditPermission(principal, source, '没有同箱规补录权限');
     if (source.status !== 'RECEIVED' || source.systemOrderNo || source.shipmentId || source.tallyTaskId) {
       throw new BadRequestException('仅未录单、未理货、未合票且未出库的在仓过机记录可以同箱规补录');
     }
@@ -6214,15 +6288,13 @@ export class InMemoryRepository {
   }
 
   async updateWarehousePackageRemark(principal: Principal, id: string, input: { remark?: string }): Promise<WarehousePackageSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:update'))) {
-      throw new ForbiddenException('当前角色不能修改在仓包裹备注');
-    }
     const index = this.warehousePackages.findIndex((pkg) => pkg.id === id);
     if (index < 0) {
       throw new NotFoundException('仓库包裹不存在');
     }
     this.ensureWarehousePackagesNotInPendingTally([id]);
     const before = this.warehousePackages[index];
+    await this.ensureWarehousePackageEditPermission(principal, before, '当前角色不能修改该日期范围内的仓库包裹备注');
     if (!canUpdateUnenteredWarehousePackage(before.status, before.shipmentId)) {
       throw new BadRequestException('只有有效在仓包裹可以修改备注');
     }
@@ -6243,15 +6315,13 @@ export class InMemoryRepository {
   }
 
   async updateWarehousePackage(principal: Principal, id: string, input: WarehousePackageUpdateInput): Promise<WarehousePackageSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:update'))) {
-      throw new ForbiddenException('当前角色不能修改在仓包裹');
-    }
     const index = this.warehousePackages.findIndex((pkg) => pkg.id === id);
     if (index < 0) {
       throw new NotFoundException('仓库包裹不存在');
     }
     this.ensureWarehousePackagesNotInPendingTally([id]);
     const before = this.warehousePackages[index];
+    await this.ensureWarehousePackageEditPermission(principal, before, '当前角色不能修改该日期范围内的仓库包裹');
     if (!canUpdateUnenteredWarehousePackage(before.status, before.shipmentId)) {
       if (before.shipmentId) {
         throw new BadRequestException('包裹已绑定正式运单，不能直接修改');
@@ -6277,6 +6347,7 @@ export class InMemoryRepository {
     if (domesticTrackingNo.length > 64) {
       throw new BadRequestException('快递单号最长 64 位');
     }
+    this.ensureWarehousePackageCustomerScope(principal, customerCode);
     const expectedTotalPackageCount = input.expectedTotalPackageCount === undefined
       ? before.expectedTotalPackageCount
       : Math.max(1, Math.floor(Number(input.expectedTotalPackageCount) || 1));
@@ -6429,15 +6500,13 @@ export class InMemoryRepository {
   }
 
   async updateWarehousePackageException(principal: Principal, id: string, input: { manualException?: string }): Promise<WarehousePackageSummary> {
-    if (!(await this.hasPermission(principal.role, 'warehouse:in-stock:update'))) {
-      throw new ForbiddenException('当前角色不能修改在仓包裹异常');
-    }
     const index = this.warehousePackages.findIndex((pkg) => pkg.id === id);
     if (index < 0) {
       throw new NotFoundException('仓库包裹不存在');
     }
     this.ensureWarehousePackagesNotInPendingTally([id]);
     const before = this.warehousePackages[index];
+    await this.ensureWarehousePackageEditPermission(principal, before, '当前角色不能修改该日期范围内的仓库包裹异常');
     if (!canUpdateUnenteredWarehousePackage(before.status, before.shipmentId)) {
       throw new BadRequestException('只有有效在仓包裹可以修改异常');
     }
@@ -6458,7 +6527,7 @@ export class InMemoryRepository {
   }
 
   async createWarehouseConsolidation(principal: Principal, input: WarehouseConsolidationCreateInput): Promise<WarehouseConsolidationSummary> {
-    await this.ensurePermission(principal, input.mode === 'MERGE_AND_SHIP' ? 'warehouse:tally-pending:merge-and-ship' : 'warehouse:tally-pending:merge-only', '没有仓库合并权限');
+    await this.ensurePermission(principal, input.mode === 'MERGE_AND_SHIP' ? 'warehouse:tally-pending:complete-and-ship' : 'warehouse:tally-pending:process', '没有仓库合并权限');
     if (!Array.isArray(input.packageIds) || input.packageIds.length === 0) {
       throw new BadRequestException('请先选择要合并的包裹');
     }
@@ -6516,7 +6585,7 @@ export class InMemoryRepository {
   }
 
   async createShipmentFromWarehouseConsolidation(principal: Principal, id: string): Promise<WarehouseConsolidationSummary> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:merge-and-ship', '没有仓库合并出货权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:complete-and-ship', '没有仓库合并出货权限');
     const consolidation = this.warehouseConsolidations.find((item) => item.id === id);
     if (!consolidation) {
       throw new NotFoundException('合并批次不存在');
@@ -6554,8 +6623,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:detail-view', '没有仓库合并明细权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:view', '没有仓库合并明细权限');
     const consolidation = this.warehouseConsolidations.find((item) => item.id === id);
     if (!consolidation) {
       throw new NotFoundException('合并批次不存在');
@@ -6570,10 +6638,8 @@ export class InMemoryRepository {
     if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED') {
       throw new BadRequestException('理货任务状态无效');
     }
-    const canViewPending = await this.hasPermission(principal.role, 'warehouse:tally-pending:view')
-      && !(await this.isWarehouseTallyPendingBlocked(principal, 'warehouse:tally-pending:view-block'));
-    const canViewCompleted = await this.hasPermission(principal.role, 'warehouse:tally-completed:view')
-      && !(await this.isWarehouseTallyCompletedBlocked(principal, 'warehouse:tally-completed:view-block'));
+    const canViewPending = await this.hasPermission(principal.role, 'warehouse:tally-pending:view');
+    const canViewCompleted = await this.hasPermission(principal.role, 'warehouse:tally-completed:view');
     if (!canViewPending && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看理货任务');
     }
@@ -6591,6 +6657,15 @@ export class InMemoryRepository {
         (!effectiveStatus || task.status === effectiveStatus)
         && keyword(task.customerCode, query.customerCode)
         && keyword(task.sourceCombinedOrderNo, query.combinedOrderNo)
+        && (!query.keyword?.trim() || [
+          task.taskNo,
+          task.sourceCombinedOrderNo,
+          task.customerCode,
+          task.customerName,
+          task.tallyChannel,
+          task.tallyRequirement,
+          task.remark
+        ].some((value) => keyword(value, query.keyword)))
         && matchesMemoryWarehouseTallyScope(task, query)
         && (!scope || scope.includes(task.salesperson ?? ''))
       )
@@ -6598,7 +6673,7 @@ export class InMemoryRepository {
         const sourceIds = new Set(task.packageIds);
         const outputs = task.status === 'COMPLETED'
           ? this.warehousePackages
-            .filter((pkg) => pkg.tallyTaskId === task.id && !sourceIds.has(pkg.id))
+            .filter((pkg) => pkg.tallyTaskId === task.id && !sourceIds.has(pkg.id) && pkg.status !== 'TALLIED_ARCHIVED')
             .sort((left, right) => (left.packageIndex ?? 0) - (right.packageIndex ?? 0))
           : [];
         return {
@@ -6613,8 +6688,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskSourcePackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:detail-view', '当前角色不能查看理货原始包裹');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:view', '当前角色不能查看理货原始包裹');
     const scope = this.operatorCustomerScope(principal);
     const task = this.warehouseTallyTasks.find((item) =>
       item.id === id
@@ -6637,7 +6711,6 @@ export class InMemoryRepository {
     principal: Principal,
     query: WarehouseTallyRepeatStatisticsQuery = {}
   ): Promise<WarehouseTallyRepeatStatisticsResponse> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看重复理货统计');
     }
@@ -6654,8 +6727,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string): Promise<WarehouseTallyTaskSummary[]> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:in-stock:tally-record-view']))) {
+    if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货历史');
     }
     const normalizedPackageId = packageId.trim();
@@ -6717,7 +6789,7 @@ export class InMemoryRepository {
   }
 
   async createWarehouseTallyTask(principal: Principal, input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-create', '没有创建理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:in-stock:tally', '没有创建理货任务权限');
     if (!warehouseTallyChannels.includes(input.tallyChannel)) {
       throw new BadRequestException('请选择有效的理货渠道');
     }
@@ -6797,9 +6869,7 @@ export class InMemoryRepository {
   }
 
   async startWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:process-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-process', '没有开始理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:process', '没有开始理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
     const before = this.warehouseTallyTasks[index];
@@ -6824,9 +6894,7 @@ export class InMemoryRepository {
   }
 
   async updateWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskUpdateInput): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:update-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-update', '没有修改理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:edit', '没有修改理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -6894,9 +6962,7 @@ export class InMemoryRepository {
   }
 
   async cancelWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:cancel-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-cancel', '没有取消理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:cancel', '没有取消理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -6911,17 +6977,191 @@ export class InMemoryRepository {
       return cloneWarehouseTallyTask(before);
     }
     if (before.status !== 'PENDING') {
-      throw new BadRequestException('只有未完成理货任务可以取消');
+      throw new BadRequestException('只有未完成理货任务可以退回重理');
     }
-    const updated: WarehouseTallyTaskSummary = { ...before, status: 'CANCELLED' };
+    const now = new Date().toISOString();
+    const sourcePackages = this.warehousePackages.filter((pkg) => before.packageIds.includes(pkg.id));
+    if (sourcePackages.length !== before.packageIds.length) {
+      throw new BadRequestException('理货原始包裹不存在，无法退回重理');
+    }
+    if (sourcePackages.some((pkg) => pkg.status === 'CONSOLIDATED' || pkg.status === 'SHIPPED' || pkg.shipmentId || pkg.systemOrderNo)) {
+      throw new BadRequestException('理货任务已合票或出库，不能退回重理');
+    }
+    const updated: WarehouseTallyTaskSummary = {
+      ...before,
+      status: 'CANCELLED',
+      tallyProgressStatus: 'CANCELLED',
+      cancelReason: '退回重理',
+      cancelledAt: now,
+      cancelledBy: principal.username
+    };
     this.warehouseTallyTasks[index] = updated;
-    this.audit('warehouse.tally.cancel', id, principal, before, updated);
+    this.warehousePackages.forEach((pkg, packageIndex) => {
+      if (pkg.tallyTaskId !== id) return;
+      this.warehousePackages[packageIndex] = {
+        ...pkg,
+        status: 'RECEIVED',
+        tallyTaskId: undefined,
+        tallyTaskNo: undefined,
+        archivedByPackageId: undefined,
+        archivedByPackageNo: undefined,
+        archivedReason: undefined,
+        archivedAt: undefined
+      };
+    });
+    this.audit('warehouse.tally.return_for_rework', id, principal, before, { ...updated, restoredPackageIds: before.packageIds });
     return cloneWarehouseTallyTask(updated);
   }
 
+  async restartWarehouseTallyProblemTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensurePermission(principal, 'warehouse:in-stock:tally', '没有重新发起理货权限');
+    const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
+    if (index < 0) throw new NotFoundException('理货问题件不存在');
+    const before = this.warehouseTallyTasks[index];
+    if (before.status !== 'CANCELLED' || before.tallyProgressStatus !== 'CANCELLED') {
+      throw new BadRequestException('只有理货问题件可以重新发起理货');
+    }
+    const scope = this.operatorCustomerScope(principal);
+    const hasScopedPackage = !scope || this.warehousePackages.some((pkg) => before.packageIds.includes(pkg.id) && Boolean(pkg.salesperson) && scope.includes(pkg.salesperson!));
+    if (!hasScopedPackage) throw new ForbiddenException('当前账号不能处理该理货问题件');
+    const alreadyRestarted = this.warehouseTallyTasks.find((task) => task.previousTallyTaskId === id && task.status === 'PENDING');
+    if (alreadyRestarted) return cloneWarehouseTallyTask(alreadyRestarted);
+    const sourcePackages = before.packageIds.map((packageId) => this.warehousePackages.find((pkg) => pkg.id === packageId)).filter(Boolean) as WarehousePackageSummary[];
+    if (sourcePackages.length !== before.packageIds.length || sourcePackages.some((pkg) => pkg.status !== 'RECEIVED' || pkg.shipmentId || pkg.systemOrderNo)) {
+      throw new BadRequestException('理货问题件原始包裹已被其他流程处理，请刷新后重试');
+    }
+    if (sourcePackages.some((pkg) => pkg.measurementStatus === 'PENDING_REMEASURE')) {
+      throw new BadRequestException('理货问题件待重新过机，完成测量后才能再次理货');
+    }
+    if (this.warehouseTallyTasks.some((task) => task.status === 'PENDING' && task.packageIds.some((packageId) => before.packageIds.includes(packageId)))) {
+      throw new BadRequestException('包裹正在其他理货任务中，请刷新后重试');
+    }
+    const taskNoPrefix = before.taskNo.match(/^(.*LH)\d{2}$/)?.[1] ?? (before.taskNo.endsWith('LH') ? before.taskNo : `${before.taskNo}LH`);
+    const now = new Date().toISOString();
+    const restarted: WarehouseTallyTaskSummary = {
+      ...before,
+      id: randomUUID(),
+      taskNo: nextWarehouseRetallyTaskNo(before.taskNo, this.warehouseTallyTasks.map((task) => task.taskNo).filter((taskNo) => taskNo.startsWith(taskNoPrefix))),
+      status: 'PENDING',
+      tallyProgressStatus: 'WAITING',
+      rootTallyTaskId: before.rootTallyTaskId ?? before.id,
+      previousTallyTaskId: before.id,
+      tallySequence: (before.tallySequence ?? 1) + 1,
+      createdBy: principal.username,
+      createdAt: now,
+      labelStatus: 'NOT_GENERATED',
+      cancelledAt: undefined,
+      cancelledBy: undefined,
+      cancelReason: undefined
+    };
+    this.warehouseTallyTasks.unshift(restarted);
+    this.audit('warehouse.tally.restart_from_problem', restarted.id, principal, before, restarted);
+    return cloneWarehouseTallyTask(restarted);
+  }
+
+  async cancelCompletedWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput): Promise<WarehouseTallyTaskSummary> {
+    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse', '没有取消已完成理货权限');
+    const rawReason = input?.reason;
+    if (typeof rawReason !== 'string') throw new BadRequestException('取消理货必须填写原因');
+    const reason = rawReason.trim();
+    if (!reason || reason.length > 300) throw new BadRequestException('取消理货原因须填写且不超过300字');
+    const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
+    if (index < 0) throw new NotFoundException('理货任务不存在');
+    const before = this.warehouseTallyTasks[index];
+    const scope = this.operatorCustomerScope(principal);
+    const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
+      before.packageIds.includes(pkg.id) && Boolean(pkg.salesperson) && scope.includes(pkg.salesperson!)
+    );
+    if (!hasScopedPackage) throw new ForbiddenException('当前账号不能处理该理货任务');
+    if (before.status !== 'COMPLETED' || before.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('只有未取消的已完成理货任务可以取消');
+    }
+    const sourceIds = new Set(before.packageIds);
+    const sourcePackages = this.warehousePackages.filter((pkg) => sourceIds.has(pkg.id));
+    const outputPackages = this.warehousePackages
+      .filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id) && pkg.status !== 'TALLIED_ARCHIVED')
+      .sort((left, right) => (left.packageIndex ?? 0) - (right.packageIndex ?? 0));
+    if (sourcePackages.length !== before.packageIds.length || !outputPackages.length) {
+      throw new ConflictException('理货结果或原始包裹不完整，不能取消理货');
+    }
+    if (sourcePackages.some((pkg) => pkg.status !== 'TALLIED_ARCHIVED' || pkg.tallyTaskId !== id)) {
+      throw new ConflictException('原始包裹状态已变化，请刷新后重试');
+    }
+    if (sourcePackages.some((pkg) => pkg.systemOrderNo || pkg.shipmentId)
+      || outputPackages.some((pkg) => pkg.status !== 'RECEIVED' || pkg.systemOrderNo || pkg.shipmentId || pkg.measurementStatus !== 'PENDING_REMEASURE')
+      || this.warehouseConsolidations.some((consolidation) => consolidation.packageIds.some((packageId) => outputPackages.some((pkg) => pkg.id === packageId)))) {
+      throw new BadRequestException('理货结果已复测、合票或出库，不能取消理货');
+    }
+    const now = new Date().toISOString();
+    const outputIds = new Set(outputPackages.map((pkg) => pkg.id));
+    this.warehousePackages.forEach((pkg, packageIndex) => {
+      let updatedPackage = pkg;
+      if (outputIds.has(pkg.id)) {
+        updatedPackage = { ...pkg, status: 'TALLIED_ARCHIVED', archivedReason: '理货取消', archivedAt: now };
+      } else if (sourceIds.has(pkg.id)) {
+        updatedPackage = {
+          ...pkg,
+          status: 'RECEIVED',
+          tallyTaskId: undefined,
+          tallyTaskNo: undefined,
+          archivedByPackageId: undefined,
+          archivedByPackageNo: undefined,
+          archivedReason: undefined,
+          archivedAt: undefined
+        };
+      }
+      if (updatedPackage !== pkg) this.warehousePackages[packageIndex] = updatedPackage;
+    });
+    const updated: WarehouseTallyTaskSummary = {
+      ...before,
+      tallyProgressStatus: 'CANCELLED',
+      cancelReason: reason,
+      cancelledAt: now,
+      cancelledBy: principal.username
+    };
+    this.warehouseTallyTasks[index] = updated;
+    const taskNoPrefix = before.taskNo.match(/^(.*LH)\d{2}$/)?.[1] ?? (before.taskNo.endsWith('LH') ? before.taskNo : `${before.taskNo}LH`);
+    const reopenedTask: WarehouseTallyTaskSummary = {
+      id: randomUUID(),
+      taskNo: nextWarehouseRetallyTaskNo(before.taskNo, this.warehouseTallyTasks.map((task) => task.taskNo).filter((taskNo) => taskNo.startsWith(taskNoPrefix))),
+      status: 'PENDING',
+      tallyChannel: before.tallyChannel,
+      tallyProgressStatus: 'WAITING',
+      rootTallyTaskId: before.rootTallyTaskId ?? before.id,
+      previousTallyTaskId: before.id,
+      tallySequence: (before.tallySequence ?? 1) + 1,
+      packageIds: [...before.packageIds],
+      sourcePackageId: before.sourcePackageId,
+      sourceCombinedOrderNo: before.sourceCombinedOrderNo,
+      customerCode: before.customerCode,
+      customerName: before.customerName,
+      salesperson: before.salesperson,
+      packageCount: before.packageCount,
+      originalWeightKg: before.originalWeightKg,
+      originalLengthCm: before.originalLengthCm,
+      originalWidthCm: before.originalWidthCm,
+      originalHeightCm: before.originalHeightCm,
+      originalVolumetricWeightKg: before.originalVolumetricWeightKg,
+      originalVolumetricWeightKg5000: before.originalVolumetricWeightKg5000,
+      tallyRequirement: before.tallyRequirement,
+      remark: before.remark,
+      createdBy: principal.username,
+      createdAt: now,
+      labelStatus: 'NOT_GENERATED'
+    };
+    this.warehouseTallyTasks.unshift(reopenedTask);
+    this.audit('warehouse.tally.cancel_completed', id, principal, before, {
+      ...updated,
+      restoredPackageIds: before.packageIds,
+      archivedResultPackageIds: outputPackages.map((pkg) => pkg.id),
+      reopenedTask
+    });
+    this.audit('warehouse.tally.reopen', reopenedTask.id, principal, updated, reopenedTask);
+    return cloneWarehouseTallyTask(reopenedTask);
+  }
+
   async reverseReviewWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, ['warehouse:tally-completed:view-block', 'warehouse:tally-completed:reverse-block']);
-    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse-review', '没有反审核已完成理货权限');
+    await this.ensurePermission(principal, 'warehouse:tally-completed:reverse', '没有反审核已完成理货权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
     const before = this.warehouseTallyTasks[index];
@@ -7020,21 +7260,8 @@ export class InMemoryRepository {
     return cloneWarehouseTallyTask(updated);
   }
 
-  async updateCompletedWarehouseTallyTaskCount(
-    principal: Principal,
-    id: string,
-    input: WarehouseTallyTaskCompletedCountUpdateInput
-  ): Promise<WarehouseTallyTaskSummary> {
-    void principal;
-    void id;
-    void input;
-    throw new BadRequestException('已完成理货不允许直接修改件数，请先反审核');
-  }
-
   async completeWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:view-block');
-    await this.ensureWarehouseTallyPendingUnblocked(principal, 'warehouse:tally-pending:process-block');
-    await this.ensurePermission(principal, 'warehouse:tally-pending:task-process', '没有完成理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:process', '没有完成理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -7247,8 +7474,7 @@ export class InMemoryRepository {
   }
 
   async generateWarehouseTallyTaskLabel(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
-    await this.ensurePermission(principal, 'warehouse:tally-label:generate', '没有生成理货标签权限');
+    await this.ensurePermission(principal, 'warehouse:tally-completed:print', '没有生成理货标签权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -7257,8 +7483,10 @@ export class InMemoryRepository {
     if (before.status !== 'COMPLETED') {
       throw new BadRequestException('请先完成理货再生成标签');
     }
+    if (before.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，不能生成标签');
+    }
     if (before.labelNo) {
-      await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-label:reprint-block');
     }
     const labelNo = before.taskNo;
     const labelQrContent = buildWarehouseTallyLabelQrContent(before, labelNo);
@@ -7310,7 +7538,6 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskOutputPackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
     if (!(await this.hasAnyPermission(principal.role, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
@@ -7327,7 +7554,7 @@ export class InMemoryRepository {
     }
     const sourceIds = new Set(task.packageIds);
     const outputs = this.warehousePackages
-      .filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id))
+      .filter((pkg) => pkg.tallyTaskId === id && !sourceIds.has(pkg.id) && pkg.status !== 'TALLIED_ARCHIVED')
       .sort((left, right) => (left.packageIndex ?? 0) - (right.packageIndex ?? 0));
     const rows = outputs.length ? outputs : this.warehousePackages.filter((pkg) => sourceIds.has(pkg.id));
     return rows.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }));
@@ -7406,8 +7633,7 @@ export class InMemoryRepository {
   }
 
   async applyWarehouseTallyTaskLabel(principal: Principal, input: WarehouseTallyLabelScanInput): Promise<WarehouseTallyLabelScanResponse> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
-    await this.ensurePermission(principal, 'warehouse:tally-label:scan-apply', '没有扫描应用理货标签权限');
+    await this.ensurePermission(principal, 'warehouse:tally-completed:scan', '没有扫描应用理货标签权限');
     const labelNo = input.labelNo?.trim();
     if (!labelNo) {
       throw new BadRequestException('请扫描或填写理货标签号');
@@ -7426,6 +7652,9 @@ export class InMemoryRepository {
     if (beforeTask.status !== 'COMPLETED' || beforeTask.labelStatus !== 'GENERATED') {
       throw new BadRequestException('请先完成理货并生成标签');
     }
+    if (beforeTask.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，标签已失效');
+    }
     if (matchedPackage.measurementStatus === 'PENDING_REMEASURE') {
       throw new BadRequestException('该理货标签待重新过机，请通过设备回传或人工录入测量数据');
     }
@@ -7437,14 +7666,15 @@ export class InMemoryRepository {
   }
 
   private async markWarehouseTallyTaskLabelOutput(principal: Principal, id: string, action: 'print' | 'download'): Promise<WarehouseTallyTaskSummary> {
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, 'warehouse:tally-completed:view-block');
-    await this.ensureWarehouseTallyCompletedUnblocked(principal, action === 'print' ? 'warehouse:tally-label:reprint-block' : 'warehouse:tally-label:download-block');
-    await this.ensurePermission(principal, action === 'print' ? 'warehouse:tally-label:print' : 'warehouse:tally-label:download', '没有输出理货标签权限');
+    await this.ensurePermission(principal, action === 'print' ? 'warehouse:tally-completed:print' : 'warehouse:tally-completed:download', '没有输出理货标签权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
     }
     const before = this.warehouseTallyTasks[index];
+    if (before.tallyProgressStatus === 'CANCELLED') {
+      throw new BadRequestException('理货任务已取消，标签已失效');
+    }
     if (!before.labelNo || before.labelStatus !== 'GENERATED') {
       throw new BadRequestException('请先生成理货标签');
     }
@@ -7750,12 +7980,15 @@ export class InMemoryRepository {
     const receivable = (await this.getReceivableAudits(principal, { page: 1, pageSize: -1 })).rows.find((row) => row.id === id);
     if (!receivable?.customerId) throw new NotFoundException('当前权限范围内未找到应收记录');
     await this.ensureWaterReceiptCurrentCustomerAccess(principal, { customerId: receivable.customerId });
-    const receivableExchangeRate = this.resolveWaterReceiptRmbExchangeRate(receivable.currency);
+    const receivableCurrency = this.normalizeWaterReceiptCurrency(receivable.currency);
     return {
       receivableId: receivable.id,
       customerCode: receivable.customerCode,
       rows: this.waterReceipts
-        .filter((row) => row.customerId === receivable.customerId && ['ARRIVED', 'PARTIAL_MATCHED'].includes(row.status) && row.balance > 0)
+        .filter((row) => row.customerId === receivable.customerId
+          && this.normalizeWaterReceiptCurrency(row.currency) === receivableCurrency
+          && ['ARRIVED', 'PARTIAL_MATCHED'].includes(row.status)
+          && row.balance > 0)
         .map((row) => {
           const receiptExchangeRate = this.resolveWaterReceiptRmbExchangeRate(row.currency);
           const pendingAllocatedAmount = roundMoney(this.waterReceiptMatchRequests
@@ -7775,11 +8008,11 @@ export class InMemoryRepository {
             balance: row.balance,
             rmbBalance: roundMoney(row.balance * receiptExchangeRate),
             rmbAvailableAllocationAmount: roundMoney(availableAllocationAmount * receiptExchangeRate),
-            exchangeRate: this.normalizeWaterReceiptCurrency(row.currency) !== 'RMB' ? receiptExchangeRate : receivableExchangeRate,
+            exchangeRate: receiptExchangeRate,
             status: row.status
           };
         })
-        .filter((row) => Number(row.rmbAvailableAllocationAmount ?? 0) > 0)
+        .filter((row) => Number(row.availableAllocationAmount ?? 0) > 0)
     };
   }
 
@@ -7803,7 +8036,7 @@ export class InMemoryRepository {
           : row.status === query.status;
       }
       return query.includeArchived || !['ARCHIVED', 'VOIDED'].includes(row.status);
-    }).map((row) => this.redactWaterReceiptVoucher(row, canViewVoucher));
+    }).map((row) => redactWaterReceiptVoucher(row, canViewVoucher));
     return this.buildWaterReceiptListResponse(this.decorateWaterReceiptRows(rows), query);
   }
 
@@ -7867,23 +8100,24 @@ export class InMemoryRepository {
   }
 
   async updateWaterReceipt(principal: Principal, id: string, input: WaterReceiptUpdateInput): Promise<WaterReceiptSummary> {
-    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:manage');
     const row = this.findWaterReceiptById(id);
+    await this.ensureWaterReceiptPermission(principal, row.status === 'PENDING' ? 'finance:water-receipt:manage' : 'finance:water-receipt:arrived-update');
     const canViewAll = await this.ensureWaterReceiptRecordAccess(principal, row);
     if (!canViewAll && row.status !== 'PENDING') {
       throw new ForbiddenException('业务员只能修改本人录入的未到账水单');
     }
     if (row.status === 'VOIDED') throw new BadRequestException('已作废水单不能修改');
     const before = { ...row };
-    if (row.status !== 'PENDING' && input.amount !== undefined) {
-      if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(row.status)) {
-        throw new BadRequestException('已归档水单不能再调整金额');
+    const isArrived = row.status !== 'PENDING';
+    if (isArrived) {
+      if (!input.adjustReason?.trim()) throw new BadRequestException('修改已到账水单必须填写原因');
+      if (row.matches.some((match) => !match.voided) || Number(row.matchedAmount ?? 0) > 0) {
+        throw new BadRequestException('该水单已匹配应收，请先撤销全部匹配后再修改');
       }
-      await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:adjust');
-      if (!input.adjustReason?.trim()) throw new BadRequestException('修改已到账金额必须填写原因');
-    }
-    if (row.status !== 'PENDING' && (input.customerId || input.customerCode || input.receiptMethod || input.receiptDate || input.currency)) {
-      throw new BadRequestException('已到账水单只能调整金额、付款编号或备注');
+      const pendingAllocation = this.waterReceiptMatchRequests
+        .filter((request) => request.waterReceiptId === row.id && request.status === 'PENDING')
+        .reduce((sum, request) => sum + Number(request.amount), 0);
+      if (pendingAllocation > 0) throw new BadRequestException('该水单存在待审核匹配，请先处理或取消后再修改');
     }
     const customer = input.customerId || input.customerCode ? this.findCustomerForWaterReceipt(input.customerId, input.customerCode) : undefined;
     if (customer && !canViewAll) {
@@ -7892,45 +8126,101 @@ export class InMemoryRepository {
         throw new ForbiddenException('只能为本人客户维护水单');
       }
     }
+    const previousCustomerId = row.customerId;
+    const previousCurrency = row.currency;
+    const previousBalance = Number(row.balance);
+    const receiptDate = input.receiptDate ? new Date(input.receiptDate) : undefined;
+    if (receiptDate && Number.isNaN(receiptDate.getTime())) throw new BadRequestException('水单日期无效');
+    const paymentNo = this.requireUniqueWaterReceiptPaymentNo(input.paymentNo, row.id);
+    const nextAmount = input.amount === undefined ? Number(row.amount) : Number(input.amount);
+    if (!Number.isFinite(nextAmount) || nextAmount <= 0) throw new BadRequestException('水单金额必须大于 0');
+    const pendingAmount = this.waterReceiptMatchRequests
+      .filter((request) => request.waterReceiptId === row.id && request.status === 'PENDING')
+      .reduce((sum, request) => sum + Number(request.amount), 0);
+    if (nextAmount < roundMoney(Number(row.matchedAmount) + pendingAmount)) {
+      throw new BadRequestException('水单金额不能小于已落账与待审核分配合计金额');
+    }
+    const nextCustomerId = customer?.id ?? previousCustomerId;
+    const oldCurrency = this.normalizeWaterReceiptCurrency(previousCurrency);
+    const nextCurrency = this.normalizeWaterReceiptCurrency(input.currency ?? row.currency);
+    if (!['RMB', 'USD'].includes(nextCurrency)) throw new BadRequestException('水单币种只能选择 RMB 或 USD');
+    if (isArrived && !nextCustomerId) throw new BadRequestException('已到账水单必须保留客户编号');
+    const nextReceiptBalance = roundMoney(nextAmount - Number(row.matchedAmount));
+    const accountChanged = isArrived && (
+      nextAmount !== Number(row.amount)
+      || nextCustomerId !== previousCustomerId
+      || nextCurrency !== oldCurrency
+    );
+    const ledgerChanged = isArrived && (
+      accountChanged
+      || input.paymentNo !== row.paymentNo
+      || input.receiptMethod !== row.receiptMethod
+    );
+    let accountSyncAudit: Record<string, unknown> | undefined;
+    if (accountChanged) {
+      if (!previousCustomerId || !row.accountLedgerId) throw new ConflictException('已到账水单缺少客户账户或账本，不能同步修改');
+      const oldAccount = this.customerAccounts.find((item) => item.customerId === previousCustomerId && item.currency === oldCurrency);
+      const ledger = this.accountLedger.find((item) => item.id === row.accountLedgerId);
+      if (!oldAccount || !ledger) throw new ConflictException('原客户账户或水单账本不存在，不能同步修改');
+      const currentReceiptBalance = previousBalance;
+      const sameAccount = nextCustomerId === previousCustomerId && nextCurrency === oldCurrency;
+      const sourceAccountBalanceBefore = oldAccount.balance;
+      let targetAccountBalanceBefore: number | undefined;
+      let targetAccountBalanceAfter: number;
+      if (sameAccount) {
+        const nextAccountBalance = roundMoney(oldAccount.balance + nextReceiptBalance - currentReceiptBalance);
+        if (nextAccountBalance < 0) throw new ConflictException('调整后客户账户余额不能小于 0');
+        oldAccount.balance = nextAccountBalance;
+        targetAccountBalanceAfter = nextAccountBalance;
+      } else {
+        const oldAccountBalance = roundMoney(oldAccount.balance - currentReceiptBalance);
+        if (oldAccountBalance < 0) throw new ConflictException('原客户账户余额不足，不能变更水单归属');
+        oldAccount.balance = oldAccountBalance;
+        const nextAccount = this.customerAccounts.find((item) => item.customerId === nextCustomerId && item.currency === nextCurrency);
+        if (nextAccount) {
+          targetAccountBalanceBefore = nextAccount.balance;
+          targetAccountBalanceAfter = roundMoney(nextAccount.balance + nextReceiptBalance);
+          nextAccount.balance = targetAccountBalanceAfter;
+        } else {
+          targetAccountBalanceAfter = nextReceiptBalance;
+          this.customerAccounts.push({ customerId: nextCustomerId as string, customerName: customer ? `${customer.code}-${customer.name}` : nextCustomerId as string, balance: targetAccountBalanceAfter, currency: nextCurrency });
+        }
+      }
+      accountSyncAudit = {
+        sourceAccount: { customerId: previousCustomerId, currency: oldCurrency, balanceBefore: sourceAccountBalanceBefore, balanceAfter: sameAccount ? targetAccountBalanceAfter : roundMoney(sourceAccountBalanceBefore - currentReceiptBalance) },
+        targetAccount: { customerId: nextCustomerId, currency: nextCurrency, balanceBefore: targetAccountBalanceBefore ?? (sameAccount ? sourceAccountBalanceBefore : 0), balanceAfter: targetAccountBalanceAfter },
+        receiptBalanceBefore: currentReceiptBalance,
+        receiptBalanceAfter: nextReceiptBalance
+      };
+      ledger.amount = nextAmount;
+      ledger.balance = nextReceiptBalance;
+      ledger.customerId = nextCustomerId as string;
+      ledger.customerName = customer ? `${customer.code}-${customer.name}` : ledger.customerName;
+    }
     if (customer) {
       row.customerId = customer.id;
       row.customerCode = customer.code;
       row.customerName = `${customer.code}-${customer.name}`;
       row.salesperson = customer.salesperson;
     }
-    if (input.amount !== undefined) {
-      const amount = Number(input.amount);
-      const pendingAmount = this.waterReceiptMatchRequests
-        .filter((request) => request.waterReceiptId === row.id && request.status === 'PENDING')
-        .reduce((sum, request) => sum + request.amount, 0);
-      if (amount < roundMoney(row.matchedAmount + pendingAmount)) {
-        throw new BadRequestException('水单金额不能小于已落账与待审核分配合计金额');
-      }
-      if (row.status !== 'PENDING' && amount !== row.amount) {
-        const account = this.customerAccounts.find((item) => item.customerId === row.customerId && item.currency === row.currency);
-        const ledger = this.accountLedger.find((item) => item.id === row.accountLedgerId);
-        if (!account || !ledger) throw new ConflictException('已到账水单缺少客户账户或账本，不能调整金额');
-        const nextAccountBalance = roundMoney(account.balance + amount - row.amount);
-        if (nextAccountBalance < 0) throw new ConflictException('调整后客户账户余额不能小于 0');
-        account.balance = nextAccountBalance;
-        ledger.amount = amount;
-        ledger.balance = roundMoney(amount - row.matchedAmount);
-      }
-      row.amount = amount;
-      row.balance = roundMoney(amount - row.matchedAmount);
-      if (row.status !== 'PENDING') {
-        row.status = row.balance <= 0 ? 'ARCHIVED' : row.matchedAmount > 0 ? 'PARTIAL_MATCHED' : 'ARRIVED';
-        row.archivedAt = row.balance <= 0 ? new Date().toISOString() : undefined;
-      }
-    }
     if (input.site !== undefined) row.site = input.site || '思远收款';
     if (input.receiptMethod !== undefined) row.receiptMethod = input.receiptMethod;
-    if (input.currency !== undefined) row.currency = input.currency;
-    if (input.receiptDate) row.receiptDate = new Date(input.receiptDate).toISOString();
-    row.paymentNo = this.requireUniqueWaterReceiptPaymentNo(input.paymentNo, row.id);
+    if (input.currency !== undefined) row.currency = nextCurrency;
+    if (receiptDate) row.receiptDate = receiptDate.toISOString();
+    row.amount = nextAmount;
+    row.balance = nextReceiptBalance;
+    if (isArrived) {
+      row.status = row.balance <= 0 ? 'ARCHIVED' : row.matchedAmount > 0 ? 'PARTIAL_MATCHED' : 'ARRIVED';
+      row.archivedAt = row.balance <= 0 ? (row.archivedAt ?? new Date().toISOString()) : undefined;
+      if (ledgerChanged && row.accountLedgerId) {
+        const ledger = this.accountLedger.find((item) => item.id === row.accountLedgerId);
+        if (ledger) ledger.note = input.paymentNo ?? row.paymentNo ?? input.receiptMethod ?? row.receiptMethod;
+      }
+    }
+    row.paymentNo = paymentNo;
     if (input.remark !== undefined) row.remark = input.remark;
     row.updatedAt = new Date().toISOString();
-    this.audit('finance.water_receipt.update', row.id, principal, before, row);
+    this.audit('finance.water_receipt.update', row.id, principal, before, isArrived ? { ...row, adjustReason: input.adjustReason?.trim(), accountSync: accountSyncAudit } : row);
     return row;
   }
 
@@ -8033,7 +8323,10 @@ export class InMemoryRepository {
         ),
         currentMatchRequest: this.findCurrentWaterReceiptMatchRequest(id, 'SYSTEM', fee.id)
       }));
-    return this.decorateReceivableRows([...systemRows, ...rows].sort((left, right) =>
+    const receiptCurrency = this.normalizeWaterReceiptCurrency(receipt.currency);
+    return this.decorateReceivableRows([...systemRows, ...rows]
+      .filter((row) => this.normalizeWaterReceiptCurrency(row.currency) === receiptCurrency)
+      .sort((left, right) =>
       (new Date(left.createdAt ?? 0).getTime() - new Date(right.createdAt ?? 0).getTime())
       || left.id.localeCompare(right.id)
     ));
@@ -8067,6 +8360,7 @@ export class InMemoryRepository {
       const receivableExchangeRate = amountCurrency === 'RMB'
         ? this.resolveWaterReceiptRmbExchangeRate(receivableCurrency)
         : 1;
+      if (receivableCurrency !== receiptCurrency) throw new BadRequestException('水单币种与应收币种不一致');
       const expectedRate = receiptCurrency !== 'RMB'
         ? receiptExchangeRate
         : receivableCurrency !== 'RMB'
@@ -8680,7 +8974,7 @@ export class InMemoryRepository {
     const before = row.voucher ? { ...row.voucher } : undefined;
     const voucher: WaterReceiptVoucherSummary = { id: before?.id ?? `wrv-${this.waterReceipts.length + 1}`, waterReceiptId: row.id, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.sizeBytes, url: input.url, uploadedBy: principal.username, createdAt: new Date().toISOString() };
     row.voucher = voucher;
-    this.audit('finance.water_receipt.voucher', row.id, principal, before ? this.toWaterReceiptVoucherAuditSnapshot(row, before) : null, this.toWaterReceiptVoucherAuditSnapshot(row, voucher, before));
+    this.audit('finance.water_receipt.voucher', row.id, principal, before ? buildWaterReceiptVoucherAuditSnapshot(row, before) : null, buildWaterReceiptVoucherAuditSnapshot(row, voucher, before));
     return voucher;
   }
 
@@ -8691,7 +8985,7 @@ export class InMemoryRepository {
     if (!row.voucher) throw new NotFoundException('水单凭证不存在');
     const before = { ...row.voucher };
     row.voucher = undefined;
-    this.audit('finance.water_receipt.voucher.delete', row.id, principal, this.toWaterReceiptVoucherAuditSnapshot(row, before), null);
+    this.audit('finance.water_receipt.voucher.delete', row.id, principal, buildWaterReceiptVoucherAuditSnapshot(row, before), null);
     return { deleted: true };
   }
 
@@ -10243,6 +10537,7 @@ export class InMemoryRepository {
   }
 
   async getReviewPendingShipments(principal: Principal): Promise<Shipment[]> {
+    await this.ensurePermission(principal, 'business:review:view', '没有待审核运单查看权限');
     await this.cleanupOverdueReviewShipments(principal);
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     return this.visibleReviewShipments(principal, true)
@@ -10262,6 +10557,7 @@ export class InMemoryRepository {
   }
 
   async getReviewDeletedShipments(principal: Principal): Promise<Shipment[]> {
+    await this.ensurePermission(principal, 'business:review:view', '没有待审核运单查看权限');
     await this.cleanupOverdueReviewShipments(principal);
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     return this.shipments
@@ -10282,12 +10578,11 @@ export class InMemoryRepository {
   }
 
   async getShipmentReviewDetail(principal: Principal, shipmentId: string): Promise<ShipmentReviewDetailSummary> {
+    await this.ensurePermission(principal, 'business:review:view', '没有待审核运单查看权限');
     const shipment = this.shipments.find((item) => item.id === shipmentId);
     const deletedAndVisible = Boolean(shipment && this.deletedShipmentIds.has(shipmentId) && this.canAccessShipment(principal, shipment, true));
-    if (!shipment || (!this.visibleReviewShipments(principal, true).some((item) => item.id === shipmentId) && !deletedAndVisible)) {
-      throw new NotFoundException('运单不存在');
-    }
-    if (this.deletedShipmentIds.has(shipmentId) && !(await this.hasPermission(principal.role, 'business:review:restore'))) {
+    const reviewStatusVisible = Boolean(shipment && ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status));
+    if (!shipment || !reviewStatusVisible || (!this.visibleReviewShipments(principal, true).some((item) => item.id === shipmentId) && !deletedAndVisible)) {
       throw new NotFoundException('运单不存在');
     }
     return this.buildShipmentReviewDetail(principal, shipment);
@@ -10306,6 +10601,7 @@ export class InMemoryRepository {
   }
 
   async updateShipmentReviewBasic(principal: Principal, shipmentId: string, input: ShipmentReviewBasicUpdateInput): Promise<ShipmentReviewDetailSummary> {
+    await this.ensurePermission(principal, 'business:review:edit', '没有待审核运单编辑权限');
     const shipment = this.visibleReviewShipment(principal, shipmentId, true);
     if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status)) {
       throw new BadRequestException('订单已进入后续流程，不能再直接修改待审核资料');
@@ -10326,7 +10622,7 @@ export class InMemoryRepository {
     if (!customer || !customer.enabled) {
       throw new BadRequestException('客户不存在或已停用，请先维护客户资料');
     }
-    this.assertDepartmentTeamEdit(principal, shipment, 'business:shipment:update-basic');
+    this.assertDepartmentTeamEdit(principal, shipment, 'business:review:edit');
     this.ensureOrderEntryCustomerAccess(principal, customer, true);
     const channel = this.channels.find((item) => item.name === companyChannelName && item.enabled);
     if (!channel) {
@@ -10382,10 +10678,9 @@ export class InMemoryRepository {
     }
     const before = { ...shipment };
     const statusFrom = before.status;
-    const canBusinessReview = await this.hasPermission(principal.role, 'business:review:approve')
-      && (!isAdministratorRole(principal.role) || options.businessReview === true);
+    const canBusinessReview = await this.hasPermission(principal.role, 'business:review:edit');
     if (canBusinessReview) {
-      this.assertDepartmentTeamEdit(principal, shipment, 'business:review:approve');
+      this.assertDepartmentTeamEdit(principal, shipment, 'business:review:edit');
       const detail = await this.buildShipmentReviewDetail(principal, shipment);
       if (detail.approvalWarnings.length) {
         throw new BadRequestException(`审核资料未完整：${detail.approvalWarnings.join('；')}`);
@@ -10445,7 +10740,7 @@ export class InMemoryRepository {
     if (principal.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能驳回运单');
     }
-    if (!await this.hasPermission(principal.role, 'business:review:reject')) {
+    if (!await this.hasPermission(principal.role, 'business:review:edit')) {
       throw new ForbiddenException('当前角色不能终审运单');
     }
     const reason = input.reason?.trim();
@@ -10508,7 +10803,7 @@ export class InMemoryRepository {
     await this.ensurePendingRoutingMask(principal, 'market:pending-routing:reroute-block');
     const scope = this.operatorCustomerScope(principal);
     const isOwner = Boolean(scope && (scope.includes(shipment?.salesperson ?? '') || scope.includes(this.findCustomerByCode(shipment?.customerCode ?? '')?.salesperson ?? '')));
-    const canReverse = await this.hasPermission(principal.role, 'business:review:reverse');
+    const canReverse = await this.hasPermission(principal.role, 'business:review:edit');
     if (!shipment || !canReverse || (scope && !isOwner)) throw new NotFoundException('运单不存在');
     if (shipment.status !== 'WAITING_SORT') throw new BadRequestException(`订单已进入${shipmentStatusLabels[shipment.status]}，不能反审核`);
     const financeItems = this.shipmentFinanceItems.filter((item) => item.shipmentId === shipment.id && !item.voided);
@@ -10551,7 +10846,7 @@ export class InMemoryRepository {
     if (principal.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能删除运单');
     }
-    if (!(await this.hasPermission(principal.role, 'business:review:delete'))) {
+    if (!(await this.hasPermission(principal.role, 'business:review:edit'))) {
       throw new ForbiddenException('当前角色不能删除待审核订单');
     }
     const index = this.shipments.findIndex((item) => item.id === shipmentId && !this.deletedShipmentIds.has(item.id));
@@ -10563,59 +10858,27 @@ export class InMemoryRepository {
       throw new BadRequestException('已进入后续流转的订单不能从待审核模块永久删除');
     }
     const reason = input.reason?.trim();
-    if (!reason) throw new BadRequestException('永久删除必须填写原因');
-    const hasFinancialReference = this.payablePaymentApplications.some((item) => item.shipmentId === shipment.id)
-      || this.paymentApplicationItems.some((item) => item.shipmentId === shipment.id)
-      || this.waterReceipts.some((receipt) => receipt.matches.some((match) => match.shipmentId === shipment.id))
-      || this.receivableFees.some((item) => item.shipmentId === shipment.id
-        && !item.voided
-        && (item.settled || item.reconciliationStatus === 'CONFIRMED' || (item.receivedAmount ?? 0) > 0))
-      || this.payableFees.some((item) => item.shipmentId === shipment.id && item.settled)
-      || this.shipmentFinanceItems.some((item) => item.shipmentId === shipment.id
-        && !item.voided
-        && (item.locked || item.reconciliationStatus === 'CONFIRMED' || (item.receivedAmount ?? 0) > 0));
-    if (hasFinancialReference) {
-      throw new BadRequestException('订单已被付款、水单或已审核财务记录引用，请先解除关联后再永久删除');
-    }
-    const detailBeforeDelete = await this.buildShipmentReviewDetail(principal, shipment);
+    if (!reason) throw new BadRequestException('删除必须填写原因');
     const before = { ...shipment };
-    this.shipments.splice(index, 1);
-    this.deletedShipmentIds.delete(shipment.id);
+    const deletedAt = new Date().toISOString();
+    this.deletedShipmentIds.add(shipment.id);
+    shipment.deletedAt = deletedAt;
+    shipment.deletedBy = principal.username;
+    shipment.deletedReason = reason;
+    shipment.deleteType = 'MANUAL';
     this.audit('shipment.review.delete', shipment.id, principal, before, {
-      deleted: true,
-      deletionMode: 'PERMANENT',
+      ...shipment,
+      reviewStatus: 'DELETED',
       statusFrom: before.status,
-      deletedBy: principal.username,
+      statusTo: shipment.status,
+      reviewer: principal.username,
       deleteReason: reason,
-      receivableTotal: detailBeforeDelete.finance.receivableTotal,
-      businessCostTotal: detailBeforeDelete.finance.businessCostTotal ?? 0,
-      payableTotal: detailBeforeDelete.finance.payableTotal
-    });
-    void this.lineage?.recordEvent('orders.management.delete_restore', {
-      actorUsername: principal.username,
-      businessId: shipment.id,
-      payload: {
-        action: 'hard_delete',
-        shipmentId: shipment.id,
-        systemOrderNo: shipment.systemOrderNo,
-        customerOrderNo: shipment.customerOrderNo,
-        status: shipment.status,
-        deleted: true,
-        deleteReason: reason
-      },
-      sourceRefs: [{ nodeType: 'shipment', id: shipment.id }],
-      metrics: {
-        hardDeleted: 1,
-        receivableTotal: detailBeforeDelete.finance.receivableTotal,
-        businessCostTotal: detailBeforeDelete.finance.businessCostTotal ?? 0,
-        payableTotal: detailBeforeDelete.finance.payableTotal
-      }
     });
     return { id: shipment.id, deleted: true };
   }
 
   async restoreShipment(principal: Principal, shipmentId: string, input: ReviewRestoreInputWithManual = {}): Promise<ShipmentReviewDetailSummary> {
-    if (!(await this.hasPermission(principal.role, 'business:review:restore'))) {
+    if (!(await this.hasPermission(principal.role, 'business:review:edit'))) {
       throw new ForbiddenException('当前角色不能恢复运单');
     }
     const shipment = this.shipments.find((item) => item.id === shipmentId);
@@ -10671,7 +10934,7 @@ export class InMemoryRepository {
   }
 
   async permanentlyDeleteShipmentReview(principal: Principal, shipmentId: string): Promise<{ id: string; deleted: true }> {
-    if (!(await this.hasPermission(principal.role, 'business:review:purge'))) {
+    if (!(await this.hasPermission(principal.role, 'business:review:edit'))) {
       throw new ForbiddenException('当前角色不能彻底删除待审核订单');
     }
     const index = this.shipments.findIndex((shipment) => shipment.id === shipmentId);
@@ -10931,7 +11194,11 @@ export class InMemoryRepository {
   }
 
   async getOrderEntryWarehousePackages(principal: Principal, query: OrderEntryWarehousePackageQuery): Promise<WarehousePackageSummary[]> {
-    await this.ensurePermission(principal, 'business:order-entry:warehouse-package-select', '没有录单仓库包裹选择权限');
+    const canSelectForOrderEntry = await this.hasPermission(principal.role, 'business:order-entry:warehouse-package-select');
+    const canEditPendingReview = await this.hasPermission(principal.role, 'business:review:edit');
+    if (!canSelectForOrderEntry && !canEditPendingReview) {
+      throw new ForbiddenException('没有录单仓库包裹选择权限');
+    }
     const packageIds = normalizeOrderEntryPackageIds(query.packageIds);
     const customerCode = query.customerCode?.trim();
     const editingShipmentId = query.shipmentId?.trim();
@@ -10944,6 +11211,9 @@ export class InMemoryRepository {
       : undefined;
     if (editingShipmentId && (!editingShipment || !['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(editingShipment.status))) {
       throw new BadRequestException('只有待审核或录单编辑状态的运单才能查看当前包裹');
+    }
+    if (!canSelectForOrderEntry && editingShipment?.status !== 'REVIEW_PENDING') {
+      throw new ForbiddenException('待审核运单编辑权限只能调整待审核订单包裹');
     }
     if (editingShipment?.customerCode && customerCode && editingShipment.customerCode !== customerCode) {
       throw new BadRequestException('当前运单客户与筛选客户不一致');
@@ -11110,9 +11380,22 @@ export class InMemoryRepository {
   }
 
   async getOrderEntryDetail(principal: Principal, shipmentId: string): Promise<OrderEntryDetailSummary> {
-    await this.ensurePermission(principal, 'business:order-entry:view', '没有录单详情查看权限');
+    const canViewOrderEntry = await this.hasPermission(principal.role, 'business:order-entry:view');
+    const canEditDraft = await this.hasPermission(principal.role, 'business:order-entry:draft-edit');
+    const canEditPendingReview = await this.hasPermission(principal.role, 'business:review:edit');
+    if (!canViewOrderEntry && !canEditDraft && !canEditPendingReview) {
+      await this.recordPermissionDenied(principal, {
+        permissions: ['business:order-entry:view', 'business:order-entry:draft-edit'],
+        method: 'GET',
+        path: `/api/shipments/${shipmentId}/order-entry`
+      });
+      throw new ForbiddenException('没有录单详情查看权限');
+    }
     const shipment = this.getShipmentById(shipmentId);
     if (!this.visibleReviewShipments(principal, true).some((item) => item.id === shipment.id)) {
+      throw new NotFoundException('录单不存在');
+    }
+    if (!canViewOrderEntry && !canEditDraft && shipment.status !== 'REVIEW_PENDING') {
       throw new NotFoundException('录单不存在');
     }
     const packageIds = new Set(shipment.draftWarehousePackageIds ?? []);
@@ -11120,31 +11403,39 @@ export class InMemoryRepository {
     const items = this.shipmentFinanceItems.filter((item) => item.shipmentId === shipment.id && !item.voided);
     const canViewPayables = this.canViewOrderEntryPayables(principal);
     const canViewBusinessCosts = this.canViewOrderEntryBusinessCosts(principal);
-    const exposePayables = canViewPayables && !this.canMaskOrderEntryPayables(principal);
-    const exposeBusinessCosts = canViewBusinessCosts && !this.canMaskOrderEntryBusinessCosts(principal);
+    const canViewReceivables = isAdministratorRole(principal.role)
+      || await this.hasAnyPermission(principal.role, ['business:order-entry:edit', 'business:order-entry:draft-edit', 'business:review:edit']);
+    const exposePayables = canViewPayables;
+    const exposeBusinessCosts = canViewBusinessCosts;
     const canViewSensitivePayables = this.canUseSensitiveOrderEntryPayables(principal);
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     const visibleShipment = this.redactOrderEntrySensitiveShipment(principal, shipment, canViewAgentWeight);
     return {
       shipment: visibleShipment,
       packages,
-      receivables: items.filter((item) => item.type === 'RECEIVABLE').map((item) => this.toReceivableFinanceSummary(item, shipment)),
-      receivableSnapshotVersion: buildBusinessCostSnapshotVersion(items.filter((item) => item.type === 'RECEIVABLE')),
-      businessCosts: exposeBusinessCosts
-        ? items
-            .filter((item) => item.type === 'BUSINESS_COST')
-            .map((item) => this.toBusinessCostFinanceSummary(item, shipment))
-            .map((item) => canViewSensitivePayables ? item : { ...item, agentId: undefined, agentName: undefined })
+      receivables: canViewReceivables
+        ? items.filter((item) => item.type === 'RECEIVABLE').map((item) => this.toReceivableFinanceSummary(item, shipment))
         : [],
-      businessCostSnapshotVersion: exposeBusinessCosts
-        ? buildBusinessCostSnapshotVersion(items.filter((item) => item.type === 'BUSINESS_COST'))
+      receivableSnapshotVersion: canViewReceivables
+        ? buildBusinessCostSnapshotVersion(items.filter((item) => item.type === 'RECEIVABLE'))
         : undefined,
-      payables: exposePayables
-        ? items.filter((item) => item.type === 'PAYABLE').map((item) => {
-          const row = this.toPayableFinanceSummary(item, shipment);
-          return canViewSensitivePayables ? row : { ...row, agentId: undefined, agentName: undefined, paymentNo: undefined };
-        })
-        : [],
+      ...(exposeBusinessCosts
+        ? {
+            businessCosts: items
+              .filter((item) => item.type === 'BUSINESS_COST')
+              .map((item) => this.toBusinessCostFinanceSummary(item, shipment))
+              .map((item) => canViewSensitivePayables ? item : { ...item, agentId: undefined, agentName: undefined }),
+            businessCostSnapshotVersion: buildBusinessCostSnapshotVersion(items.filter((item) => item.type === 'BUSINESS_COST'))
+          }
+        : {}),
+      ...(exposePayables
+        ? {
+            payables: items.filter((item) => item.type === 'PAYABLE').map((item) => {
+              const row = this.toPayableFinanceSummary(item, shipment);
+              return canViewSensitivePayables ? row : { ...row, agentId: undefined, agentName: undefined, paymentNo: undefined };
+            })
+          }
+        : {}),
       canViewPayables: exposePayables
     };
   }
@@ -11158,7 +11449,11 @@ export class InMemoryRepository {
       ...input,
       shipment: { ...input.shipment, reviewValidationError: serverReviewValidationError }
     };
-    await this.ensurePermission(principal, 'business:order-entry:draft-save', '没有保存录单草稿权限');
+    const canEditOrderEntryDraft = await this.hasAnyPermission(principal.role, ['business:order-entry:edit', 'business:order-entry:draft-edit']);
+    const canEditPendingReview = await this.hasPermission(principal.role, 'business:review:edit');
+    if (!canEditOrderEntryDraft && !canEditPendingReview) {
+      throw new ForbiddenException('没有编辑录单草稿权限');
+    }
     if (input.submitForReview) {
       await this.ensurePermission(principal, 'business:order-entry:submit-review', '没有提交审核权限');
     }
@@ -11169,11 +11464,14 @@ export class InMemoryRepository {
     if (!this.visibleReviewShipments(principal, true).some((item) => item.id === shipment.id)) {
       throw new NotFoundException('录单草稿不存在');
     }
+    if (!canEditOrderEntryDraft && shipment.status !== 'REVIEW_PENDING') {
+      throw new NotFoundException('录单草稿不存在');
+    }
     if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status)) {
       throw new BadRequestException('只有草稿或退回修改的录单可以继续编辑');
     }
     const isPendingReviewEdit = shipment.status === 'REVIEW_PENDING';
-    this.assertDepartmentTeamEdit(principal, shipment, 'business:order-entry:draft-save');
+    this.assertDepartmentTeamEdit(principal, shipment, canEditOrderEntryDraft ? 'business:order-entry:draft-edit' : 'business:review:edit');
     const isDepartmentTeamEdit = Boolean(shipment.entryBy && shipment.entryBy !== principal.username && !isAdministratorRole(principal.role));
     if (isDepartmentTeamEdit && (input.payables ?? []).length) {
       throw new ForbiddenException('经理不能修改部门成员录单的应付费用');
@@ -11202,7 +11500,7 @@ export class InMemoryRepository {
       this.assertDepartmentTeamEdit(principal, shipment, 'business:order-entry:submit-review');
     }
     if (isDepartmentTeamEdit && canWriteBusinessCosts) {
-      this.assertDepartmentTeamEdit(principal, shipment, 'business:order-entry:business-cost-write');
+      this.assertDepartmentTeamEdit(principal, shipment, 'business:order-entry:business-cost');
     }
     const activeTeamBusinessCosts = isDepartmentTeamEdit && canWriteBusinessCosts
       ? this.shipmentFinanceItems.filter((item) => item.shipmentId === shipment.id && item.type === 'BUSINESS_COST' && !item.voided)
@@ -11836,7 +12134,7 @@ export class InMemoryRepository {
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     if (principal.role !== 'CUSTOMER'
       && !isAdministratorRole(principal.role)
-      && !principal.shipmentAllView
+      && !(principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))
       && principal.dataScope !== 'SALES_OWN'
       && !principal.departmentTeamScope?.length) {
       throw new ForbiddenException('当前岗位未配置录单数据范围');
@@ -12263,15 +12561,8 @@ export class InMemoryRepository {
       throw new BadRequestException('运单排货后才能出库');
     }
     const routed = routeLog.after as { agentId?: string; agentChannelName?: string } | undefined;
-    const hasActivePayable = this.shipmentFinanceItems.some((item) => (
-      item.shipmentId === shipment.id
-      && item.type === 'PAYABLE'
-      && !item.voided
-      && item.amount > 0
-      && item.agentName === shipment.agentName
-    )) || this.payableFees.some((item) => item.shipmentId === shipment.id && item.amount > 0);
-    if (!shipment.agentId || !shipment.channelId || !routed?.agentChannelName || !hasActivePayable) {
-      throw new BadRequestException('请先完成代理、渠道和应付成本后再出库');
+    if (!shipment.agentId || !shipment.channelId || !routed?.agentChannelName) {
+      throw new BadRequestException('请先完成代理和渠道后再出库');
     }
     const handover = this.latestWarehouseHandover(shipment.id);
     if (!handover || handover.agentId !== shipment.agentId) {
@@ -12811,16 +13102,20 @@ export class InMemoryRepository {
         return after?.shipmentId === shipment.id && after?.originalStatusPool === 'SIGNED';
       })
     });
-    const blockedPermissions = stages.map((stage) => ('operations:line-shipment:stage-edit-block:' + stage.toLowerCase().replaceAll('_', '-')) as PermissionKey);
-    for (const permission of blockedPermissions) {
-      if (await this.hasPermission(principal.role, permission)) {
-        await this.recordPermissionDenied(principal, {
-          permissions: [permission],
-          method: 'PATCH',
-          path: '/api/operations/line-shipments/' + shipment.id + '/operational'
-        });
-        throw new ForbiddenException('当前运单阶段已屏蔽编辑');
-      }
+    const requiredPermissions = stages.map((stage) => lineShipmentStageEditPermissionCode(stage) as PermissionKey);
+    const legacyBlockedPermissions = stages.map((stage) => (`operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}`) as PermissionKey);
+    const [granted, blocked] = await Promise.all([
+      Promise.all(requiredPermissions.map((permission) => this.hasPermission(principal.role, permission))),
+      Promise.all(legacyBlockedPermissions.map((permission) => this.hasPermission(principal.role, permission)))
+    ]);
+    const missing = requiredPermissions.filter((_, index) => !granted[index] || blocked[index]);
+    if (missing.length > 0) {
+      await this.recordPermissionDenied(principal, {
+        permissions: missing,
+        method: 'PATCH',
+        path: '/api/operations/line-shipments/' + shipment.id + '/operational'
+      });
+      throw new ForbiddenException('当前用户组未分配当前运单阶段编辑权限');
     }
   }
 
@@ -13544,7 +13839,7 @@ export class InMemoryRepository {
 
   private async ensureShipmentLabelAccess(principal: Principal, shipment: Shipment) {
     const [canViewWarehouseLabel, canViewTransferLabel] = await Promise.all([
-      this.hasPermission(principal.role, 'warehouse:dispatch-pending:label-view'),
+      this.hasPermission(principal.role, 'warehouse:dispatch-pending:label-manage'),
       this.hasPermission(principal.role, 'customer-service:transfer:label-view')
     ]);
     const warehouseAllowed = canViewWarehouseLabel && shipment.status === 'WAITING_DISPATCH';
@@ -13616,7 +13911,7 @@ export class InMemoryRepository {
 
   async createProblemTicketCommonTag(principal: Principal, input: CommonTagCreateInput): Promise<CommonTagSummary> {
     await this.ensurePermission(principal, 'customer-service:problem:tag-manage', '无权维护常用标签');
-    const name = normalizeMemoryProblemTicketCommonTagName(input.name);
+    const name = normalizeProblemTicketTagName(input.name);
     if (this.problemTicketCommonTags.filter((tag) => tag.enabled).length >= 10) {
       throw new BadRequestException('常用标签最多维护 10 个');
     }
@@ -13638,7 +13933,7 @@ export class InMemoryRepository {
 
   async updateProblemTicketCommonTag(principal: Principal, id: string, input: CommonTagUpdateInput): Promise<CommonTagSummary> {
     await this.ensurePermission(principal, 'customer-service:problem:tag-manage', '无权维护常用标签');
-    const name = normalizeMemoryProblemTicketCommonTagName(input.name);
+    const name = normalizeProblemTicketTagName(input.name);
     const tag = this.problemTicketCommonTags.find((item) => item.id === id);
     if (!tag) throw new NotFoundException('常用标签不存在');
     if (this.problemTicketCommonTags.some((item) => item.id !== id && item.name === name)) {
@@ -13669,7 +13964,7 @@ export class InMemoryRepository {
 
   async createProblemTicket(principal: Principal, shipmentId: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
     const shipment = this.visibleShipment(principal, shipmentId);
-    const tagSnapshot = normalizeMemoryProblemTicketTagSnapshot(input.tags);
+    const tagSnapshot = normalizeProblemTicketTagSnapshot(input.tags);
     if (tagSnapshot?.some((name) => !this.problemTicketCommonTags.some((tag) => tag.enabled && tag.name === name))) {
       throw new BadRequestException('常用标签已变更，请刷新后重试');
     }
@@ -13813,11 +14108,7 @@ export class InMemoryRepository {
   private buildMemoryRoleRow(role: RoleKey): RolePermissionRow {
     const meta = this.roleMeta[role];
     const roleLabel = meta?.label ?? getRoleMetadata(role).label;
-    const permissions = filterWarehousePackageUpdatePermissions(
-      role,
-      roleLabel,
-      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
-    );
+    const permissions = configuredPermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
     return buildRolePermissionRow(role, permissions, {
       label: roleLabel,
       description: meta?.description,
@@ -13835,15 +14126,19 @@ export class InMemoryRepository {
     return false;
   }
 
-  private async getWorkspaceFieldMaskState(principal: Principal, workspace?: PermissionWorkspaceKey): Promise<WorkspaceFieldMaskState> {
-    const state = Object.fromEntries(workspaceFieldMaskKeys.map((key) => [key, false])) as WorkspaceFieldMaskState;
-    if (!workspace || isAdministratorRole(principal.role)) return state;
-    const keys = workspaceFieldMaskKeysForWorkspace(workspace);
-    const entries = await Promise.all(keys.map(async (key) => [
+  private async getGlobalFieldMaskState(principal: Principal): Promise<GlobalFieldMaskState> {
+    if (principal.globalFieldMasks) return principal.globalFieldMasks;
+    const state = Object.fromEntries(globalFieldMaskKeys.map((key) => [key, false])) as GlobalFieldMaskState;
+    const entries = await Promise.all(globalFieldMaskKeys.map(async (key) => [
       key,
-      await this.hasPermission(principal.role, workspaceFieldMaskPermissionCode(workspace, key))
+      await this.hasPermission(principal.role, globalFieldMaskPermissionCode(key))
     ] as const));
     entries.forEach(([key, enabled]) => { state[key] = enabled; });
+    if (state['agent-data']) {
+      state['agent-short-name'] = true;
+      state['agent-company-name'] = true;
+      state['agent-channel'] = true;
+    }
     return state;
   }
 
@@ -14053,10 +14348,6 @@ export class InMemoryRepository {
     throw new ForbiddenException('当前角色已屏蔽该操作');
   }
 
-  private async ensureTodayReceiptMask(principal: Principal, mask: PermissionKey) {
-    if (isAdministratorRole(principal.role) || !(await this.hasPermission(principal.role, mask))) return;
-    throw new ForbiddenException('当前角色已屏蔽该操作');
-  }
 
   private async ensurePendingRoutingRouteAccess(principal: Principal, shipment: Shipment, body: ShipmentRouteInput, shouldApprove: boolean) {
     if (isAdministratorRole(principal.role) || shipment.status !== 'WAITING_SORT') return;
@@ -14152,6 +14443,10 @@ export class InMemoryRepository {
     allowPendingReviewBusinessCostWrite = false
   ) {
     if (isAdministratorRole(principal.role)) return;
+    const orderEntryEditable = ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment?.status ?? '');
+    if (orderEntryEditable && type === 'BUSINESS_COST' && await this.hasPermission(principal.role, 'business:order-entry:business-cost')) return;
+    if (orderEntryEditable && type === 'PAYABLE' && await this.hasPermission(principal.role, 'business:order-entry:payable-fee')) return;
+    if (orderEntryEditable && type === 'RECEIVABLE' && await this.hasPermission(principal.role, 'business:order-entry:edit')) return;
     if (allowPendingReviewBusinessCostWrite && await this.canWritePendingReviewBusinessCost(principal, type, shipment)) return;
     if (type === 'BUSINESS_COST' && await this.isRestrictedBusinessCostActor(principal)) {
       throw new ForbiddenException('业务成本只能在待审核状态修改');
@@ -14186,8 +14481,7 @@ export class InMemoryRepository {
   private async canWritePendingReviewBusinessCost(principal: Principal, type?: ShipmentFinanceItemType, shipment?: Shipment) {
     return type === 'BUSINESS_COST'
       && shipment?.status === 'REVIEW_PENDING'
-      && !this.canMaskOrderEntryBusinessCosts(principal)
-      && await this.hasPermission(principal.role, 'business:order-entry:business-cost-write');
+      && await this.hasPermission(principal.role, 'business:order-entry:business-cost');
   }
 
   private async ensurePendingReviewBusinessCostWrite(
@@ -14199,8 +14493,7 @@ export class InMemoryRepository {
       throw new ForbiddenException('业务成本只能在待审核状态修改');
     }
     if (type !== 'BUSINESS_COST'
-      || this.canMaskOrderEntryBusinessCosts(principal)
-      || !await this.hasPermission(principal.role, 'business:order-entry:business-cost-write')) {
+      || !await this.hasPermission(principal.role, 'business:order-entry:business-cost')) {
       throw new ForbiddenException('没有填写业务成本权限');
     }
   }
@@ -14253,50 +14546,31 @@ export class InMemoryRepository {
 
   private canViewOrderEntryPayables(principal: Principal) {
     const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
-    return !this.canMaskOrderEntryPayables(principal)
-      && (permissions.includes('business:order-entry:view')
-        || permissions.includes('finance:order-fee:payable:view')
-        || permissions.includes('finance:order-fee:payable:manage'));
+    return permissions.includes('business:order-entry:payable-fee');
   }
 
   private canManageOrderEntryPayables(principal: Principal) {
     const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
-    return !this.canMaskOrderEntryPayables(principal)
-      && (permissions.includes('business:order-entry:view') || permissions.includes('finance:order-fee:payable:manage'));
+    return permissions.includes('business:order-entry:payable-fee');
   }
 
   private canWriteOrderEntryBusinessCosts(principal: Principal) {
     const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
-    return !this.canMaskOrderEntryBusinessCosts(principal)
-      && permissions.includes('business:order-entry:business-cost-write');
+    return permissions.includes('business:order-entry:business-cost');
   }
 
   private canViewOrderEntryBusinessCosts(principal: Principal) {
     const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
-    return !this.canMaskOrderEntryBusinessCosts(principal)
-      && (permissions.includes('business:order-entry:view')
-        || permissions.includes('business:order-entry:business-cost-view')
-        || permissions.includes('business:order-entry:business-cost-write'));
-  }
-
-  private canMaskOrderEntryBusinessCosts(principal: Principal) {
-    if (isAdministratorRole(principal.role)) return false;
-    const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
-    return permissions.includes('business:order-entry:business-cost-mask');
-  }
-
-  private canMaskOrderEntryPayables(principal: Principal) {
-    if (isAdministratorRole(principal.role)) return false;
-    const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
-    return permissions.includes('business:order-entry:payable-fee-mask');
+    return permissions.includes('business:order-entry:business-cost');
   }
 
   private canViewShipmentFinanceDetail(principal: Principal) {
     return this.hasAnyPermission(principal.role, [
       'customer-service:data-confirm:business-update',
+      'business:review:view',
       'business:shipment:finance-detail-view',
-      'business:order-entry:business-cost-view',
-      'business:order-entry:business-cost-write',
+      'business:order-entry:business-cost',
+      'business:order-entry:payable-fee',
       'business:shipment:payable-view',
       'business:shipment:profit-view',
       'business:order-fee:profit-view',
@@ -14356,7 +14630,7 @@ export class InMemoryRepository {
   private canViewShipmentReceivables(principal: Principal) {
     return this.hasAnyPermission(principal.role, [
       'business:shipment:finance-detail-view',
-      'business:review:finance-detail-view',
+      'business:review:view',
       'finance:receivable:read',
       'finance:receivable:detail',
       'finance:receivable:update'
@@ -14364,7 +14638,10 @@ export class InMemoryRepository {
   }
 
   private canUseSensitiveOrderEntryPayables(principal: Principal) {
-    return effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []).includes('finance:payable:view-sensitive');
+    const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
+    return permissions.includes('business:order-entry:business-cost')
+      || permissions.includes('business:order-entry:payable-fee')
+      || permissions.includes('finance:payable:view-sensitive');
   }
 
   private redactOrderEntrySensitiveShipment(principal: Principal, shipment: Shipment, canViewAgentWeight = false): Shipment {
@@ -14546,13 +14823,25 @@ export class InMemoryRepository {
   }
 
   async ensureOrderEntryInputAccess(principal: Principal, input: OrderEntryCreateInput, currentShipmentId?: string) {
-    await this.ensurePermission(principal, currentShipmentId ? 'business:order-entry:draft-save' : 'business:order-entry:create', '没有录单维护权限');
+    let canEditOrderEntryDraft = false;
+    if (currentShipmentId) {
+      canEditOrderEntryDraft = await this.hasAnyPermission(principal.role, ['business:order-entry:edit', 'business:order-entry:draft-edit']);
+      const canEditPendingReview = await this.hasPermission(principal.role, 'business:review:edit');
+      if (!canEditOrderEntryDraft && !canEditPendingReview) {
+        throw new ForbiddenException('没有录单编辑权限');
+      }
+    } else {
+      await this.ensurePermission(principal, 'business:order-entry:edit', '没有录单编辑权限');
+    }
     if ((input.businessCosts?.length ?? 0) > 0 && !this.canWriteOrderEntryBusinessCosts(principal)) {
       throw new ForbiddenException('当前岗位不能录入业务成本');
     }
     if (currentShipmentId) {
       const shipment = this.getShipmentById(currentShipmentId);
       if (!this.visibleReviewShipments(principal, true).some((item) => item.id === shipment.id)) {
+        throw new NotFoundException('录单草稿不存在');
+      }
+      if (!canEditOrderEntryDraft && shipment.status !== 'REVIEW_PENDING') {
         throw new NotFoundException('录单草稿不存在');
       }
       if (!['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment.status)) {
@@ -15459,31 +15748,11 @@ export class InMemoryRepository {
   }
 
   private requireUniqueWaterReceiptPaymentNo(value: string | undefined, currentId?: string) {
-    const paymentNo = sanitizeManualPaymentNo(value);
+    const paymentNo = sanitizeWaterReceiptPaymentNo(value);
     if (!paymentNo) throw new BadRequestException('付款编号不能为空');
-    const duplicate = this.waterReceipts.find((row) => row.id !== currentId && sanitizeManualPaymentNo(row.paymentNo) === paymentNo);
+    const duplicate = this.waterReceipts.find((row) => row.id !== currentId && sanitizeWaterReceiptPaymentNo(row.paymentNo) === paymentNo);
     if (duplicate) throw new BadRequestException('付款编号已存在，不能重复录入');
     return paymentNo;
-  }
-
-  private redactWaterReceiptVoucher(row: WaterReceiptSummary, canViewVoucher: boolean): WaterReceiptSummary {
-    if (canViewVoucher || !row.voucher) return row;
-    return { ...row, voucher: undefined };
-  }
-
-  private toWaterReceiptVoucherAuditSnapshot(row: WaterReceiptSummary, voucher: WaterReceiptVoucherSummary, before?: WaterReceiptVoucherSummary) {
-    return {
-      waterReceiptId: row.id,
-      receiptNo: row.receiptNo,
-      voucherId: voucher.id,
-      fileName: voucher.fileName,
-      sizeBytes: voucher.sizeBytes,
-      mimeType: voucher.mimeType,
-      uploadedBy: voucher.uploadedBy,
-      uploadedAt: voucher.createdAt,
-      previousVoucherId: before?.id,
-      previousFileName: before?.fileName
-    };
   }
 
   private normalizeWaterReceiptCurrency(currencyValue?: string): string {
@@ -15619,54 +15888,7 @@ export class InMemoryRepository {
         && (query.minAmount === undefined || row.amount >= Number(query.minAmount))
         && (query.maxAmount === undefined || row.amount <= Number(query.maxAmount));
     });
-    const totals = filtered.reduce((acc, row) => {
-      acc.amount = roundMoney(acc.amount + row.amount);
-      acc.matchedAmount = roundMoney(acc.matchedAmount + row.matchedAmount);
-      acc.pendingAllocatedAmount = roundMoney(acc.pendingAllocatedAmount + Number(row.pendingAllocatedAmount ?? 0));
-      acc.availableAllocationAmount = roundMoney(acc.availableAllocationAmount + Number(row.availableAllocationAmount ?? row.balance));
-      acc.balance = roundMoney(acc.balance + row.balance);
-      acc.rmbAmount = roundMoney(acc.rmbAmount + Number(row.rmbAmount ?? 0));
-      acc.rmbMatchedAmount = roundMoney(acc.rmbMatchedAmount + Number(row.rmbMatchedAmount ?? 0));
-      acc.rmbPendingAllocatedAmount = roundMoney(acc.rmbPendingAllocatedAmount + Number(row.rmbPendingAllocatedAmount ?? 0));
-      acc.rmbAvailableAllocationAmount = roundMoney(acc.rmbAvailableAllocationAmount + Number(row.rmbAvailableAllocationAmount ?? row.rmbBalance ?? 0));
-      acc.rmbBalance = roundMoney(acc.rmbBalance + Number(row.rmbBalance ?? 0));
-      const currency = row.currency ?? 'RMB';
-      const currencyTotal = acc.amountByCurrency.find((item) => item.currency === currency);
-      if (currencyTotal) {
-        currencyTotal.amount = roundMoney(currencyTotal.amount + row.amount);
-        currencyTotal.matchedAmount = roundMoney(currencyTotal.matchedAmount + row.matchedAmount);
-        currencyTotal.balance = roundMoney(currencyTotal.balance + row.balance);
-      } else {
-        acc.amountByCurrency.push({
-          currency,
-          amount: roundMoney(row.amount),
-          matchedAmount: roundMoney(row.matchedAmount),
-          balance: roundMoney(row.balance)
-        });
-      }
-      if (row.status === 'PENDING') acc.pendingCount += 1;
-      if (row.status === 'ARRIVED' || row.status === 'PARTIAL_MATCHED') acc.arrivedCount += 1;
-      if (row.status === 'MATCHED') acc.matchedCount += 1;
-      if (row.status === 'ARCHIVED') acc.archivedCount += 1;
-      return acc;
-    }, {
-      count: filtered.length,
-      pendingCount: 0,
-      arrivedCount: 0,
-      matchedCount: 0,
-      archivedCount: 0,
-      amount: 0,
-      matchedAmount: 0,
-      pendingAllocatedAmount: 0,
-      availableAllocationAmount: 0,
-      balance: 0,
-      amountByCurrency: [] as Array<{ currency: string; amount: number; matchedAmount: number; balance: number }>,
-      rmbAmount: 0,
-      rmbMatchedAmount: 0,
-      rmbPendingAllocatedAmount: 0,
-      rmbAvailableAllocationAmount: 0,
-      rmbBalance: 0
-    });
+    const totals = buildWaterReceiptListTotals(filtered);
     const { page, pageSize, rows: pagedRows } = this.paginateRows(filtered, query);
     return { rows: pagedRows, totals, pagination: { page, pageSize, totalItems: filtered.length } };
   }
@@ -16610,11 +16832,11 @@ export class InMemoryRepository {
     };
   }
 
-  private audit(action: string, target: string, principal: Principal, before: unknown, after: unknown) {
+  private audit(action: string, target: string, principal: Principal, before: unknown, after: unknown, id?: string) {
     const auditModule = inferInMemoryAuditModule(action);
     const result = inferInMemoryAuditResult(action);
     this.auditLogs.unshift({
-      id: `audit-${Date.now()}-${this.auditLogs.length + 1}`,
+      id: id ?? `audit-${Date.now()}-${this.auditLogs.length + 1}`,
       actorId: principal.id,
       actorUsername: principal.username,
       action,
@@ -16630,7 +16852,6 @@ export class InMemoryRepository {
       createdAt: new Date().toISOString()
     });
   }
-
   private cloneAuditValue(value: unknown) {
     return value == null ? undefined : JSON.parse(JSON.stringify(value));
   }
@@ -16808,7 +17029,7 @@ export class InMemoryRepository {
     return summarizeLineShipmentFinance(items);
   }
 
-  private maskShipmentListFields(principal: Principal, shipment: Shipment, marketVisibility: { canViewMarketAgent: boolean; canViewLegacyMarketCostDetails: boolean; canViewLegacyMarketCostTotals: boolean; canViewRoutedCostDetails: boolean; canViewRoutedCostTotals: boolean; exposeWarehouseRouting: boolean; canViewAgentWeight?: boolean; fieldMasks?: WorkspaceFieldMaskState } = { canViewMarketAgent: false, canViewLegacyMarketCostDetails: false, canViewLegacyMarketCostTotals: false, canViewRoutedCostDetails: false, canViewRoutedCostTotals: false, exposeWarehouseRouting: false, canViewAgentWeight: false }): Shipment {
+  private maskShipmentListFields(principal: Principal, shipment: Shipment, marketVisibility: { canViewMarketAgent: boolean; canViewLegacyMarketCostDetails: boolean; canViewLegacyMarketCostTotals: boolean; canViewRoutedCostDetails: boolean; canViewRoutedCostTotals: boolean; exposeWarehouseRouting: boolean; canViewAgentWeight?: boolean; fieldMasks?: GlobalFieldMaskState } = { canViewMarketAgent: false, canViewLegacyMarketCostDetails: false, canViewLegacyMarketCostTotals: false, canViewRoutedCostDetails: false, canViewRoutedCostTotals: false, exposeWarehouseRouting: false, canViewAgentWeight: false }): Shipment {
     const { paymentAmountUsd, paymentAmountCny, paymentMethod, ...visible } = shipment;
     const safeVisible = { ...visible };
     const invoiceAgent = this.agents.find((item) => item.id === shipment.agentId || item.name === shipment.agentName || item.shortName === shipment.agentName);
@@ -16911,7 +17132,7 @@ export class InMemoryRepository {
   }
 
   private operatorCustomerScope(principal: Principal) {
-    if (principal.shipmentAllView) return undefined;
+    if (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role)) return undefined;
     const isSalesScoped = principal.dataScope === 'SALES_OWN'
       || effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []).includes('data-scope:sales-own')
       || isSalesScopedRole(principal.role);
@@ -16922,7 +17143,7 @@ export class InMemoryRepository {
   }
 
   private orderEntryCustomerScope(principal: Principal, allowDepartmentTeam = false) {
-    if (isAdministratorRole(principal.role) || principal.shipmentAllView) return undefined;
+    if (isAdministratorRole(principal.role) || (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))) return undefined;
     if (principal.departmentTeamScope?.length) return principal.departmentTeamScope;
     if (principal.dataScope === 'SALES_OWN') {
       return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
@@ -17320,23 +17541,57 @@ export class InMemoryRepository {
   }
 
   private async isPricingModuleBlocked(principal: Principal, scope: 'lookup' | 'markup', module?: LegacyPricingModule, mode: 'view' | 'edit' = 'view') {
-    if (!module || isAdministratorRole(principal.role)) return false;
-    if (await this.hasPermission(principal.role, `pricing:${scope}:module-block:${module}` as PermissionKey)) return true;
-    return scope === 'markup' && this.hasPermission(principal.role, `pricing:markup:${mode}-block:${module}` as PermissionKey);
+    void principal; void scope; void module; void mode;
+    return false;
   }
 
   private async ensurePriceBookOperationNotBlocked(principal: Principal, mode: 'create' | 'delete' | 'remark', module?: PriceBookImportTargetModule, label = '价格表操作') {
-    if (!module || isAdministratorRole(principal.role)) return;
-    const blocked = await this.hasPermission(principal.role, `pricing:price-books:${mode}-block:${module}` as PermissionKey);
-    if (blocked) {
-      throw new ForbiddenException(`${label}已被当前用户组屏蔽`);
+    void principal; void mode; void module; void label;
+  }
+
+  private async ensurePricingModuleNotBlocked(principal: Principal, scope: 'lookup' | 'markup', module: LegacyPricingModule | undefined, label: string, action: import('@siyuan/shared').PricingMarkupAction = 'view') {
+    if (scope === 'markup') {
+      if (isAdministratorRole(principal.role)) return;
+      if (!module) throw new ForbiddenException('必须指定已授权的加价规则模块');
+      const permission = action === 'view' ? pricingMarkupViewPermission(module) : pricingMarkupActionPermission(module, action);
+      if (!(await this.hasPermission(principal.role, permission))) {
+        throw new ForbiddenException(action === 'view' ? '当前角色没有该模块的加价规则查看权限' : '当前角色没有该功能权限');
+      }
+      return;
+    }
+    if (scope === 'lookup' && module && !isAdministratorRole(principal.role)) {
+      const permissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+        amazon: 'pricing:lookup:amazon', inquiry: 'pricing:lookup:europe-oversize', europeExpress: 'pricing:lookup:europe-express',
+        southAfrica: 'pricing:lookup:south-africa', usaAirSea: 'pricing:lookup:usa-air-sea', canadaAirSea: 'pricing:lookup:canada-air-sea', dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+      };
+      if (!(await this.hasPermission(principal.role, permissionByModule[module]))) throw new ForbiddenException(`${label}模块未分配查价权限`);
+    }
+    if (await this.isPricingModuleBlocked(principal, scope, module, action === 'view' ? 'view' : 'edit')) {
+      throw new ForbiddenException(`${label}模块已被当前用户组屏蔽`);
     }
   }
 
-  private async ensurePricingModuleNotBlocked(principal: Principal, scope: 'lookup' | 'markup', module: LegacyPricingModule | undefined, label: string, mode: 'view' | 'edit' = 'view') {
-    if (await this.isPricingModuleBlocked(principal, scope, module, mode)) {
-      throw new ForbiddenException(`${label}模块已被当前用户组屏蔽`);
+  private async ensureAllPricingMarkupModules(principal: Principal, action: import('@siyuan/shared').PricingMarkupAction) {
+    for (const module of pricingMarkupModules) await this.ensurePricingModuleNotBlocked(principal, 'markup', module, '代理加价规则', action);
+  }
+
+  private resolveMarkupBookModule(priceBookId: string | undefined, requestedModule?: LegacyPricingModule) {
+    if (!priceBookId) return requestedModule;
+    const book = this.priceBooks.find((item) => item.id === priceBookId && !item.deleted);
+    if (!book) throw new NotFoundException('价格表不存在或已删除');
+    const actual = normalizeAgentMarkupLegacyModule(book.targetModule ?? primaryLegacyModuleFromCounts(book.legacyModuleCounts));
+    if (requestedModule && actual !== requestedModule) throw new BadRequestException('价格表与查价模块不一致');
+    return actual;
+  }
+
+  private async ensureAgentMarkupInputModule(principal: Principal, input: { priceBookId?: string; legacyModule?: LegacyPricingModule | 'unclassified' }, action: import('@siyuan/shared').PricingMarkupAction) {
+    const module = this.resolveMarkupBookModule(input.priceBookId, normalizeAgentMarkupLegacyModule(input.legacyModule));
+    if (!module) {
+      await this.ensureAllPricingMarkupModules(principal, action);
+      return undefined;
     }
+    await this.ensurePricingModuleNotBlocked(principal, 'markup', module, '代理加价规则', action);
+    return module;
   }
 
   private ensureAdmin(principal: Principal, message = '只有管理员可以操作') {
@@ -17345,36 +17600,62 @@ export class InMemoryRepository {
     }
   }
 
+  private isWarehousePackageToday(pkg: { scanTime?: string | Date | null; createdAt?: string | Date | null }): boolean {
+    const { start, end } = resolveWarehouseTodayRange({});
+    const occurredAt = new Date(pkg.scanTime ?? pkg.createdAt ?? 0);
+    return Number.isFinite(occurredAt.getTime()) && occurredAt >= start && occurredAt < end;
+  }
+
+  private async ensureWarehousePackageEditPermission(
+    principal: Principal,
+    pkg: { scanTime?: string | Date | null; createdAt?: string | Date | null; customerCode?: string; salesperson?: string },
+    message: string
+  ): Promise<void> {
+    if (this.isWarehousePackageToday(pkg)) {
+      await this.ensureAnyPermission(principal, ['warehouse:today-receipt:edit', 'warehouse:in-stock:edit'], message);
+    } else {
+      await this.ensurePermission(principal, 'warehouse:in-stock:edit', message);
+    }
+    const salespeople = this.warehousePackageSalesScope(principal);
+    if (!salespeople) return;
+    const salesperson = this.customers.find((customer) => customer.code === pkg.customerCode)?.salesperson?.trim();
+    if (!salesperson || !salespeople.includes(salesperson)) {
+      throw new ForbiddenException('只能修改本人或当前部门成员名下的仓库包裹');
+    }
+  }
+
+  private warehousePackageSalesScope(principal: Principal): string[] | undefined {
+    if (isAdministratorRole(principal.role)
+      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)) return undefined;
+    const team = principal.departmentTeamScope?.filter(Boolean);
+    return Array.from(new Set(team?.length
+      ? team
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
+  }
+
+  private ensureWarehousePackageCustomerScope(principal: Principal, customerCode: string): void {
+    const salespeople = this.warehousePackageSalesScope(principal);
+    if (!salespeople) return;
+    const customer = this.customers.find((item) => item.code === customerCode);
+    if (!customer?.salesperson || !salespeople.includes(customer.salesperson)) {
+      throw new ForbiddenException('只能将包裹归属到本人或当前部门成员名下的客户');
+    }
+  }
+
+  private async ensureWarehouseMachineImportPermission(principal: Principal, parsed: ParsedWarehouseMachineImport): Promise<void> {
+    const [canToday, canInStock] = await Promise.all([
+      this.hasPermission(principal.role, 'warehouse:today-receipt:import'),
+      this.hasPermission(principal.role, 'warehouse:in-stock:import')
+    ]);
+    if (!canToday && !canInStock) throw new ForbiddenException('没有仓库批量导入权限');
+    if (!canInStock && parsed.candidates.some((candidate) => !this.isWarehousePackageToday(candidate))) {
+      throw new ForbiddenException('今日收货导入仅允许导入当日过机记录');
+    }
+  }
+
   private async ensurePermission(principal: Principal, permission: PermissionKey, message = '没有访问权限') {
     if (!(await this.hasPermission(principal.role, permission))) {
       throw new ForbiddenException(message);
-    }
-  }
-
-  private async isWarehouseTallyPendingBlocked(principal: Principal, permission: PermissionKey) {
-    return !isAdministratorRole(principal.role) && await this.hasPermission(principal.role, permission);
-  }
-
-  private async isWarehouseTallyCompletedBlocked(principal: Principal, permission: PermissionKey) {
-    return !isAdministratorRole(principal.role) && await this.hasPermission(principal.role, permission);
-  }
-
-  private async ensureWarehouseTallyPendingUnblocked(principal: Principal, permission: PermissionKey) {
-    if (await this.isWarehouseTallyPendingBlocked(principal, permission)) {
-      throw new ForbiddenException('当前用户组已屏蔽该未完成理货操作');
-    }
-  }
-
-  private async ensureWarehouseTallyCompletedUnblocked(
-    principal: Principal,
-    permissions: PermissionKey | PermissionKey[]
-  ) {
-    if (isAdministratorRole(principal.role)) return;
-    const blockedPermissions = Array.isArray(permissions) ? permissions : [permissions];
-    for (const permission of blockedPermissions) {
-      if (await this.hasPermission(principal.role, permission)) {
-        throw new ForbiddenException('当前用户组已屏蔽该已完成理货操作');
-      }
     }
   }
 
@@ -17590,14 +17871,6 @@ function isLegacyAutoRoutePayable(item: {
     && item.chargeWeightKg !== undefined
     && item.unitPrice !== undefined
     && item.remark?.startsWith('市场排货渠道：') === true;
-}
-
-function sanitizeManualPaymentNo(value?: string): string | undefined {
-  if (value === undefined || value === null) return undefined;
-  const cleaned = String(value).replace(/[\u0000-\u001f\u007f\u200b-\u200d\ufeff<>]/g, '').trim();
-  if (!cleaned) return undefined;
-  if (cleaned.length > 80) throw new BadRequestException('付款编号不能超过 80 个字符');
-  return cleaned;
 }
 
 function buildWarehousePackageSummary(id: string, input: WarehousePackageCreateInput): WarehousePackageSummary {
@@ -18433,142 +18706,10 @@ function buildDubaiSeaImageMarkupRule(input: {
   };
 }
 
-function buildAgentMarkupListResponse(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[], query: AgentMarkupListQuery): AgentMarkupListResponse {
-  const includeHits = shouldIncludeAgentMarkupHits(query);
-  const activeRows = rules.filter((rule) => !rule.deletedAt);
-  const enriched = includeHits ? activeRows.map((rule) => {
-    const matches = matchingPriceRowsForRule(rule, priceRows);
-    return { ...rule, hitCount: matches.length, routeHitCount: countDistinctMarkupRoutes(matches) };
-  }) : activeRows;
-  const scoped = enriched
-    .filter((rule) => textMatch(rule.priceBookId ?? '', query.priceBookId))
-    .filter((rule) => textMatch(rule.agentName, query.agentName))
-    .sort((left, right) => compareAgentMarkupRules(left, right, query));
-  const page = Math.max(1, Number(query.page ?? 1));
-  const pageSize = Number(query.pageSize ?? 20);
-  const grouped = query.detail
-    ? scoped
-      .filter((rule) => textMatch(rule.channelName ?? '', query.channelName))
-      .filter((rule) => textMatch(rule.realChannelName ?? '', query.realChannelName))
-      .filter((rule) => textMatch(rule.destinationCountry ?? '', query.destinationCountry))
-      .filter((rule) => query.status === 'ENABLED' ? rule.enabled : query.status === 'DISABLED' ? !rule.enabled : true)
-    : groupAgentMarkupRows(scoped, priceRows)
-      .filter((rule) => query.status === 'ENABLED' ? rule.enabled : query.status === 'DISABLED' ? !rule.enabled : true)
-      .filter((rule) => agentMarkupGroupMatchesRouteFilters(rule, priceRows, query));
-  const rows = pageSize < 0 ? grouped : grouped.slice((page - 1) * pageSize, page * pageSize);
-  const matchedRows = includeHits ? new Set(enriched.flatMap((rule) => matchingPriceRowsForRule(rule, priceRows).map((row) => row.id))) : new Set<string>();
-  return {
-    metrics: {
-      totalRules: activeRows.length,
-      enabledRules: activeRows.filter((rule) => rule.enabled).length,
-      disabledRules: activeRows.filter((rule) => !rule.enabled).length,
-      unmatchedQuotes: includeHits ? priceRows.filter((row) => !matchedRows.has(row.id)).length : 0,
-      systemDefaultScopes: new Set(activeRows.filter((rule) => rule.defaultRuleSource === 'SYSTEM_DEFAULT').map(agentMarkupScopeKey)).size,
-      latestUpdatedAt: activeRows.map((rule) => rule.updatedAt).filter(Boolean).sort().at(-1)
-    },
-    rows,
-    filterOptions: {
-      agentNames: uniqueTextValues(priceRows.map((row) => row.agentName)),
-      channelNames: uniqueTextValues(priceRows.map((row) => row.channelName)),
-      realChannelNames: uniqueTextValues(priceRows.map((row) => row.realChannelName?.trim() || row.channelName)),
-      destinationCountries: uniqueTextValues(priceRows.map((row) => row.destinationCountry))
-    },
-    pagination: { page, pageSize: pageSize < 0 ? grouped.length : pageSize, totalItems: grouped.length }
-  };
-}
 
-function agentMarkupGroupMatchesRouteFilters(rule: AgentMarkupSummary, priceRows: PriceBookRowSummary[], query: AgentMarkupListQuery) {
-  if (!query.channelName && !query.realChannelName && !query.destinationCountry) return true;
-  return priceRows
-    .filter((row) => rule.priceBookId ? row.priceBookId === rule.priceBookId : row.agentName === rule.agentName)
-    .some((row) => textMatch(row.channelName, query.channelName)
-      && textMatch(row.realChannelName?.trim() || row.channelName, query.realChannelName)
-      && textMatch(row.destinationCountry, query.destinationCountry));
-}
 
-function uniqueTextValues(values: Array<string | undefined>) {
-  return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))).sort((left, right) => left.localeCompare(right, 'zh-CN'));
-}
 
-function groupAgentMarkupRows(rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[]) {
-  const groups = new Map<string, AgentMarkupSummary[]>();
-  for (const rule of rules) {
-    const key = agentMarkupScopeKey(rule);
-    const list = groups.get(key) ?? [];
-    list.push(rule);
-    groups.set(key, list);
-  }
-  return [...groups.entries()].map(([, rows]) => {
-    const enabledRows = rows.filter((rule) => rule.enabled);
-    const effectiveRows = enabledRows.length ? enabledRows : rows;
-    const sorted = [...effectiveRows].sort((left, right) => markupScopeRank(left) - markupScopeRank(right) || (left.priority ?? 100) - (right.priority ?? 100) || safeTime(right.updatedAt) - safeTime(left.updatedAt));
-    const primary = sorted[0];
-    const hitIds = new Set(enabledRows.flatMap((rule) => matchingPriceRowsForRule(rule, priceRows).map((row) => row.id)));
-    const latestUpdatedAt = rows.map((rule) => rule.updatedAt).filter(Boolean).sort().at(-1);
-    const display = buildAgentMarkupDisplay(primary, rules, priceRows);
-    return {
-      ...primary,
-      id: primary.priceBookId ? `agent:${primary.priceBookId}:${primary.agentName}` : `agent:${primary.agentName}`,
-      agentName: primary.agentName,
-      channelName: undefined,
-      realChannelName: undefined,
-      destinationCountry: undefined,
-      enabled: rows.some((rule) => rule.enabled),
-      ruleCount: enabledRows.length,
-      hitCount: hitIds.size,
-      ruleBreakdown: buildAgentMarkupRuleBreakdown(enabledRows),
-      ...display,
-      updatedAt: latestUpdatedAt ?? primary.updatedAt
-    };
-  });
-}
 
-function buildAgentMarkupDisplay(primary: AgentMarkupSummary, rules: AgentMarkupSummary[], priceRows: PriceBookRowSummary[]) {
-  if (primary.rulePurpose === 'DUBAI_SEA_IMAGE') {
-    const amount = Number(primary.markupValue ?? primary.markupPerKg);
-    return {
-      markupDisplayMode: 'UNIFORM' as const,
-      defaultMarkupDisplay: `+¥${formatMarkupNumber(amount)}/CBM（空运不变）`,
-      markupRange: `+¥${formatMarkupNumber(amount)}/CBM`,
-      markupBuckets: []
-    };
-  }
-  const scopeRows = priceRows.filter((row) => primary.priceBookId ? row.priceBookId === primary.priceBookId : row.agentName === primary.agentName);
-  if (scopeRows.length === 0) {
-    return {
-      markupDisplayMode: 'RETAINED_ONLY' as const,
-      defaultMarkupDisplay: '仅保留规则',
-      markupRange: undefined,
-      markupBuckets: []
-    };
-  }
-  const buckets = new Map<number, number>();
-  for (const row of scopeRows) {
-    const resolved = resolvePriceBookRowMarkup(row, rules, primary.agentName);
-    const value = roundMoney(Number(resolved.lineMarkupPerKg ?? 0.5));
-    buckets.set(value, (buckets.get(value) ?? 0) + 1);
-  }
-  const markupBuckets = [...buckets.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([markupPerKg, lineCount]) => ({ markupPerKg, lineCount }));
-  if (markupBuckets.length <= 1) {
-    const value = markupBuckets[0]?.markupPerKg ?? primary.markupPerKg;
-    return {
-      markupDisplayMode: 'UNIFORM' as const,
-      defaultMarkupDisplay: formatMarkupPerKg(value),
-      markupRange: formatMarkupPerKg(value),
-      markupBuckets
-    };
-  }
-  const min = markupBuckets[0].markupPerKg;
-  const max = markupBuckets[markupBuckets.length - 1].markupPerKg;
-  return {
-    markupDisplayMode: 'MIXED' as const,
-    defaultMarkupDisplay: '混合加价',
-    markupRange: `+¥${formatMarkupNumber(min)}-${formatMarkupNumber(max)}/KG`,
-    markupBuckets
-  };
-}
 
 function normalizeDubaiSeaMarkupPerCbm(value: unknown) {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1000) {
@@ -18600,55 +18741,9 @@ function buildAgentMarkupPreview(rule: AgentMarkupSummary, priceRows: PriceBookR
   };
 }
 
-function countDistinctMarkupRoutes(rows: PriceBookRowSummary[]) {
-  return new Set(rows.map((row) => [
-    row.priceBookId,
-    row.channelName,
-    row.realChannelName?.trim() || row.channelName,
-    row.destinationCountry,
-    markupUnitForRow(row)
-  ].join('\u0001'))).size;
-}
 
-function buildAgentMarkupRuleBreakdown(rules: AgentMarkupSummary[]) {
-  const breakdown = { defaultRules: 0, countryRules: 0, routeRules: 0, routeTierRules: 0, otherRules: 0 };
-  for (const rule of rules) {
-    const hasRoute = Boolean(rule.channelName || rule.realChannelName);
-    const hasTier = Boolean(rule.markupUnit && rule.minChargeableValue !== undefined);
-    if (hasRoute && hasTier) breakdown.routeTierRules += 1;
-    else if (hasRoute) breakdown.routeRules += 1;
-    else if (rule.destinationCountry) breakdown.countryRules += 1;
-    else if (!hasTier) breakdown.defaultRules += 1;
-    else breakdown.otherRules += 1;
-  }
-  return breakdown;
-}
 
-function compareAgentMarkupRules(left: AgentMarkupSummary, right: AgentMarkupSummary, query: AgentMarkupListQuery) {
-  const direction = query.sortOrder === 'desc' ? -1 : 1;
-  const sortBy = query.sortBy;
-  if (!sortBy) return markupScopeRank(left) - markupScopeRank(right) || (left.priority ?? 100) - (right.priority ?? 100) || safeTime(right.updatedAt) - safeTime(left.updatedAt);
-  const stringValue = (rule: AgentMarkupSummary) => String(rule[sortBy as keyof AgentMarkupSummary] ?? '');
-  const numericValue = (rule: AgentMarkupSummary) => sortBy === 'markupValue'
-    ? Number(rule.markupValue ?? rule.markupPerKg ?? 0)
-    : sortBy === 'priority'
-      ? Number(rule.priority ?? 100)
-      : sortBy === 'enabled'
-        ? Number(rule.enabled)
-        : sortBy === 'updatedAt'
-          ? safeTime(rule.updatedAt)
-          : Number.NaN;
-  const leftNumeric = numericValue(left);
-  const rightNumeric = numericValue(right);
-  const compared = Number.isFinite(leftNumeric) && Number.isFinite(rightNumeric)
-    ? leftNumeric - rightNumeric
-    : stringValue(left).localeCompare(stringValue(right), 'zh-CN');
-  return direction * compared || (left.priority ?? 100) - (right.priority ?? 100) || safeTime(right.updatedAt) - safeTime(left.updatedAt);
-}
 
-function textMatch(value: string, keyword?: string) {
-  return !keyword?.trim() || value.toLowerCase().includes(keyword.trim().toLowerCase());
-}
 
 function uniqueStrings(values: Array<string | undefined>) {
   return Array.from(new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))).sort((left, right) => left.localeCompare(right, 'zh-CN'));
@@ -19107,14 +19202,6 @@ function assertMemoryProblemTicketCommonTagAdmin(principal: Principal) {
   if (!isAdministratorRole(principal.role)) throw new ForbiddenException('仅管理员可以维护常用标签');
 }
 
-function normalizeMemoryProblemTicketCommonTagName(value: unknown): string {
-  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
-  if (!name) throw new BadRequestException('请填写标签名称');
-  if (name.length > 20) throw new BadRequestException('标签名称最多 20 个字符');
-  if (/[，,]/.test(name)) throw new BadRequestException('标签名称不能包含逗号');
-  return name;
-}
-
 function normalizeMemoryCustomerSourceKey(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLocaleLowerCase('zh-CN') : '';
 }
@@ -19124,14 +19211,6 @@ function requireMemoryCustomerSourceName(value: unknown): string {
   if (!name) throw new BadRequestException('客户来源名称不能为空');
   if (name.length > 80) throw new BadRequestException('客户来源名称不能超过 80 个字符');
   return name;
-}
-
-function normalizeMemoryProblemTicketTagSnapshot(value: unknown): string[] | undefined {
-  if (value === undefined) return undefined;
-  if (!Array.isArray(value)) throw new BadRequestException('常用标签格式不正确');
-  if (value.length > 10) throw new BadRequestException('单个问题件最多选择 10 个常用标签');
-  const tags = [...new Set(value.map((item) => normalizeMemoryProblemTicketCommonTagName(item)))];
-  return tags.length ? tags : undefined;
 }
 
 function isFinalReviewRole(role: string): boolean {
@@ -19263,102 +19342,6 @@ function buildLegacyWarehouseContact(input: Pick<AgentCreateInput, 'warehouseCon
   return input.warehouseContact?.trim()
     || [input.warehouseContactName1?.trim(), input.warehouseContactPhone1?.trim()].filter(Boolean).join(' ')
     || undefined;
-}
-
-type CustomerServiceDataAuditRow = {
-  action: string;
-  after?: unknown;
-  createdAt: string | Date;
-};
-
-function isCustomerServiceDataApprovedFromRows(rows: CustomerServiceDataAuditRow[], kind: 'business' | 'agent', outboundAt?: string | Date) {
-  const latest = rows.find((row) => customerServiceDataAuditIsInCurrentCycle(row, outboundAt) && [
-    `customer_service.${kind}_data.approved`,
-    `customer_service.${kind}_data.reversed`
-  ].includes(row.action));
-  return latest?.action === `customer_service.${kind}_data.approved`;
-}
-
-function readCustomerServiceDataSnapshot(rows: CustomerServiceDataAuditRow[], kind: 'business' | 'agent', outboundAt?: string | Date): CustomerServiceDataSnapshot | undefined {
-  const row = rows.find((item) => customerServiceDataAuditIsInCurrentCycle(item, outboundAt) && item.action === `customer_service.${kind}_data.updated`);
-  const after = row?.after && typeof row.after === 'object' ? row.after as Record<string, unknown> : undefined;
-  const snapshot = after?.snapshot && typeof after.snapshot === 'object' ? after.snapshot as Record<string, unknown> : undefined;
-  if (!snapshot) return undefined;
-  const result = {
-    packageCount: Number(snapshot.packageCount),
-    weightKg: Number(snapshot.weightKg),
-    volumeCbm: Number(snapshot.volumeCbm),
-    chargeWeightKg: Number(snapshot.chargeWeightKg)
-  };
-  return Number.isInteger(result.packageCount)
-    && result.packageCount > 0
-    && [result.weightKg, result.volumeCbm, result.chargeWeightKg].every((value) => Number.isFinite(value) && value > 0)
-    ? result
-    : undefined;
-}
-
-function buildCustomerServiceDataConfirmRow(shipment: Shipment, rows: CustomerServiceDataAuditRow[]): CustomerServiceDataConfirmRow {
-  return {
-    shipment,
-    businessDataApproved: isCustomerServiceDataApprovedFromRows(rows, 'business', shipment.outboundAt),
-    agentDataApproved: isCustomerServiceDataApprovedFromRows(rows, 'agent', shipment.outboundAt),
-    businessDataSnapshot: readCustomerServiceDataSnapshot(rows, 'business', shipment.outboundAt),
-    agentDataSnapshot: readCustomerServiceDataSnapshot(rows, 'agent', shipment.outboundAt)
-  };
-}
-
-function attachPrimaryAgentBilling(
-  row: CustomerServiceDataConfirmRow,
-  billing?: { agentBillingQuantity: number; agentBillingUnit: FinanceBillingUnit }
-): CustomerServiceDataConfirmRow {
-  return billing ? { ...row, agentBillingQuantity: billing.agentBillingQuantity, agentBillingUnit: billing.agentBillingUnit } : row;
-}
-
-function scopeCustomerServiceDataConfirmRow(
-  row: CustomerServiceDataConfirmRow,
-  permissions: { canViewBusiness: boolean; canViewAgent: boolean }
-): CustomerServiceDataConfirmRow {
-  const shipment = { ...row.shipment } as Record<string, unknown>;
-  const scoped: CustomerServiceDataConfirmRow = { shipment: shipment as unknown as Shipment };
-  if (permissions.canViewBusiness) {
-    scoped.businessDataApproved = row.businessDataApproved;
-    scoped.businessDataSnapshot = row.businessDataSnapshot;
-  } else {
-    [
-      'packageCount', 'actualWeightKg', 'weightKg', 'volumeCbm', 'receivableWeightKg', 'chargeableWeightKg',
-      'declarationRequired', 'sensitive', 'cargoDataSource', 'chargeWeightOverridden'
-    ].forEach((key) => delete shipment[key]);
-  }
-  if (permissions.canViewAgent) {
-    scoped.agentDataApproved = row.agentDataApproved;
-    scoped.agentDataSnapshot = row.agentDataSnapshot;
-    scoped.agentBillingQuantity = row.agentBillingQuantity;
-    scoped.agentBillingUnit = row.agentBillingUnit;
-  } else {
-    [
-      'agentId', 'agentName', 'agentWeightKg', 'channelId', 'channelName', 'carrier', 'routeAgentChannelName',
-      'routeChargeWeightKg', 'routeUnitPrice', 'routeOtherFee', 'routeCostTotal', 'routeCurrency', 'routeCostSummary'
-    ].forEach((key) => delete shipment[key]);
-  }
-  return scoped;
-}
-
-function customerServiceDataAuditIsInCurrentCycle(row: CustomerServiceDataAuditRow, outboundAt?: string | Date) {
-  const cycleStartedAt = validCustomerServiceDataCycleStart(outboundAt);
-  if (!cycleStartedAt) return true;
-  const after = row.after && typeof row.after === 'object' ? row.after as Record<string, unknown> : undefined;
-  if (typeof after?.dataConfirmationCycleStartedAt === 'string') {
-    const auditedCycle = validCustomerServiceDataCycleStart(after.dataConfirmationCycleStartedAt);
-    return Boolean(auditedCycle && auditedCycle.getTime() === cycleStartedAt.getTime());
-  }
-  const createdAt = new Date(row.createdAt);
-  return !Number.isNaN(createdAt.getTime()) && createdAt.getTime() >= cycleStartedAt.getTime();
-}
-
-function validCustomerServiceDataCycleStart(value?: string | Date | null) {
-  if (!value) return undefined;
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 type NormalizedMemoryWarehouseRentRuleInput = Omit<

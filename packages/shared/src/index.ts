@@ -788,13 +788,13 @@ export function summarizeLineShipmentFinance(items: LineShipmentFinanceSourceIte
         ...(total.billingUnits.size ? { billingUnits: [...total.billingUnits].sort() } : {})
       }));
   };
-  const receivableStatus = receivables.length === 0
+  // Matching is the first business gate. Only after every receivable has
+  // matched water-receipt funds should the audit state be shown.
+  const receivableStatus = receivables.length === 0 || receivables.some((item) => item.receiptStatus !== 'RECEIVED')
     ? 'UNMATCHED' as const
     : receivables.some((item) => !['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))
       ? 'PENDING_REVIEW' as const
-      : receivables.some((item) => item.receiptStatus !== 'RECEIVED')
-        ? 'UNMATCHED' as const
-        : 'APPROVED' as const;
+      : 'APPROVED' as const;
   let payableStatus: LineShipmentPayableStatus | undefined;
   if (payables.length) {
     payableStatus = payables.some((item) => item.reconciliationStatus === 'LOCKED')
@@ -822,7 +822,7 @@ export interface LineShipmentPoolRow {
   financeSummary?: LineShipmentFinanceSummary;
 }
 
-/** 专线运单池可单独屏蔽编辑的阶段。未配置屏蔽时默认允许编辑。 */
+/** 专线运单池可单独授权编辑的阶段。只有明确授权当前阶段时才允许编辑。 */
 export const lineShipmentEditStageKeys = [
   'REVIEW_PENDING',
   'WAITING_SORT',
@@ -840,6 +840,11 @@ export const lineShipmentEditStageKeys = [
 ] as const;
 
 export type LineShipmentEditStageKey = typeof lineShipmentEditStageKeys[number];
+
+/** 将阶段枚举映射为统一的正向授权码，供前后端共同派生。 */
+export function lineShipmentStageEditPermissionCode(stage: LineShipmentEditStageKey): string {
+  return `operations:line-shipment:stage-edit:${stage.toLowerCase().replaceAll('_', '-')}`;
+}
 
 export const lineShipmentEditStageLabels: Record<LineShipmentEditStageKey, string> = {
   REVIEW_PENDING: '待审核',
@@ -1400,6 +1405,8 @@ export interface PriceBookRowsQuery {
   markupAmount?: string;
   markupSource?: PriceBookRowMarkupSource | 'ALL';
   markupSort?: 'ASC' | 'DESC' | 'NONE';
+  markupModule?: LegacyPricingModule;
+  markupContext?: boolean;
 }
 
 export interface PriceBookRowsResponse {
@@ -1668,6 +1675,7 @@ export interface MarkupRouteSummary {
 }
 
 export interface MarkupRouteListResponse {
+  legacyModule: LegacyPricingModule;
   rows: MarkupRouteSummary[];
   filterOptions: { destinationCountries: string[]; markupUnits: AgentMarkupUnit[] };
   pagination: { page: number; pageSize: number; totalItems: number };
@@ -1850,6 +1858,8 @@ export interface AgentMarkupImportResponse {
 }
 
 export interface PriceLookupRequest {
+  /** Explicit module scope for the generic lookup endpoint. */
+  module?: LegacyPricingModule;
   amazonCode?: string;
   productName?: string;
   destinationCountry: string;
@@ -4586,7 +4596,7 @@ export interface OrderEntryDetailSummary {
   receivableSnapshotVersion?: string;
   businessCosts?: BusinessCostFeeSummary[];
   businessCostSnapshotVersion?: string;
-  payables: PayableFeeSummary[];
+  payables?: PayableFeeSummary[];
   canViewPayables: boolean;
 }
 
@@ -4664,32 +4674,12 @@ export interface CustomerSummary {
   enabled: boolean;
 }
 
-export interface CustomerSourceSummary {
-  id: string;
-  name: string;
-  normalizedName: string;
-  remark?: string;
-  sortOrder: number;
-  enabled: boolean;
-  customerCount: number;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface CustomerSourceInput {
-  name: string;
-  remark?: string;
-  enabled?: boolean;
-}
-
-export interface CustomerSourceListQuery {
-  keyword?: string;
-  enabledOnly?: boolean;
-}
-
-export interface CustomerSourceListResponse {
-  items: CustomerSourceSummary[];
-}
+export type {
+  CustomerSourceInput,
+  CustomerSourceListQuery,
+  CustomerSourceListResponse,
+  CustomerSourceSummary
+} from './customer-source.js';
 
 export interface CustomerContactSummary {
   id: string;
@@ -6326,3 +6316,4 @@ function nextActionFromStatus(status: ShipmentStatus): string {
 
   return labels[status] ?? '处理异常';
 }
+export * from './pricing-capabilities.js';

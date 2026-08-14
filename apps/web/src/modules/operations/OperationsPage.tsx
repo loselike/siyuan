@@ -2,7 +2,7 @@ import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bot, Boxes, ChevronDown, ChevronUp, ClipboardList, FileInput, Filter, PackagePlus, RotateCcw, Search, Send, ShieldAlert, Sparkles, Truck, Wallet, Warehouse } from 'lucide-react';
 import { Alert, Badge, Button, Card, Col, Dropdown, Flex, Input, Modal, Progress, Row, Select, Space, Tag, Typography, message } from 'antd';
-import { businessTypeLabels, shipmentStatusLabels, type BusinessType, type LineShipmentFinanceTotal, type LineShipmentPoolQuery, type LineShipmentPoolResponse, type LineShipmentPoolRow, type LineShipmentStatusGroup, type ProblemTicketCreateInput, type Shipment, type ShipmentStatus, type ShipmentInternalFlowLogResponse } from '@siyuan/shared';
+import { businessTypeLabels, lineShipmentStageEditPermissionCode, shipmentStatusLabels, type BusinessType, type LineShipmentFinanceTotal, type LineShipmentPoolQuery, type LineShipmentPoolResponse, type LineShipmentPoolRow, type LineShipmentStatusGroup, type ProblemTicketCreateInput, type Shipment, type ShipmentStatus, type ShipmentInternalFlowLogResponse } from '@siyuan/shared';
 import type { ApiClient, PermissionKey, RoleKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, MetricCard, riskLabel, type ManagedTableColumn } from '../shared/ui';
@@ -176,7 +176,7 @@ const linePoolTableLocale = { emptyText: '暂无符合条件的运单' };
 type OperationsFieldMaskKey = 'agent-short-name' | 'agent-company-name' | 'agent-channel' | 'agent-data' | 'payable-cost' | 'payable-status';
 
 function operationsFieldMaskPermissionCode(key: OperationsFieldMaskKey): string {
-  return `system:workspace-mask:operations:${key}`;
+  return `system:global-mask:${key}`;
 }
 
 export function getOperationsFieldVisibility(role: RoleKey, permissions: readonly string[]) {
@@ -382,8 +382,8 @@ export function OperationsPage({
   const canProcess = can('operations:line-shipment:process') && can('operations:line-shipment:status-update');
   const canProcessLineShipment = useCallback((row: LineShipmentPoolRow) => {
     if (!canProcess || role === 'ADMIN') return canProcess;
-    return !(row.editStages ?? []).some((stage) =>
-      permissionSet.has(`operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey)
+    return (row.editStages ?? []).every((stage) =>
+      permissionSet.has(lineShipmentStageEditPermissionCode(stage) as PermissionKey)
     );
   }, [canProcess, permissionSet, role]);
   const workspaceItems = useMemo(() => [

@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/47-release-lock.sh
 source "$SCRIPT_DIR/lib/47-release-lock.sh"
+# shellcheck source=lib/release-source-policy.sh
+source "$SCRIPT_DIR/lib/release-source-policy.sh"
 
 PUBLIC_URL="${SIYUAN_47_PUBLIC_URL:-http://47.120.33.111:8899}"
 SCOPE=""
@@ -14,11 +16,15 @@ APPLIED_TARGETS=()
 APPLIED_EXPECTED_SHAS=()
 APPLIED_BACKUP_DIRS=()
 CAS_PHASE=false
+SOURCE_ROLLBACK_REQUIRED=false
 REMOTE_MUTATION_STARTED=false
 FAILURE_PHASE="whitelist-cas"
 APPROVED_MIGRATIONS=()
 APPROVED_MIGRATION_SPECS=()
 NO_CACHE=false
+ADOPT_CURRENT_RUNTIME=false
+SIYUAN_47_BUILD_TIMEOUT_SECONDS="${SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800}"
+SIYUAN_47_MIGRATION_TIMEOUT_SECONDS="${SIYUAN_47_MIGRATION_TIMEOUT_SECONDS:-900}"
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -40,17 +46,31 @@ while [[ "$#" -gt 0 ]]; do
       NO_CACHE=true
       shift
       ;;
+    --adopt-current-runtime)
+      ADOPT_CURRENT_RUNTIME=true
+      shift
+      ;;
     *)
-      echo "Usage: npm run deploy:47:whitelist -- [--no-cache] --scope <none|web|api|web+api|api+migrate|web+api+migrate> --file <candidate> <target> <expected-sha|MISSING> [--file ...]" >&2
+      echo "Usage: npm run deploy:47:whitelist -- [--no-cache] [--adopt-current-runtime] --scope <none|web|api|web+api|api+migrate|web+api+migrate> --file <candidate> <target> <expected-sha|MISSING> [--file ...]" >&2
       exit 2
       ;;
   esac
 done
 
+siyuan_47_assert_whitelist_release_source
+
 case "$SCOPE" in
   none|web|api|web+api|api+migrate|web+api+migrate) ;;
   *) echo "Unsupported whitelist release scope: $SCOPE" >&2; exit 2 ;;
 esac
+if ! [[ "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ \
+  && "$SIYUAN_47_SSH_CHANNEL_IDLE_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  echo "47 build, migration, remote, state, and channel timeouts must be positive integers." >&2
+  exit 2
+fi
 if [[ "${#SOURCE_FILES[@]}" -eq 0 ]]; then
   echo "At least one --file candidate is required." >&2
   exit 2
@@ -139,6 +159,18 @@ if [[ "$SCOPE" != "$REQUIRED_SCOPE" ]]; then
   echo "Whitelist scope mismatch: requested=$SCOPE required=$REQUIRED_SCOPE for the declared targets." >&2
   exit 2
 fi
+if [[ "$ADOPT_CURRENT_RUNTIME" == true ]]; then
+  if [[ "$SCOPE" != none ]]; then
+    echo "Runtime adoption is only allowed for a zero-build scope none governance release." >&2
+    exit 2
+  fi
+  for target_file in "${TARGET_FILES[@]}"; do
+    case "$target_file" in
+      scripts/*) ;;
+      *) echo "Runtime adoption may only publish release-governance scripts: $target_file" >&2; exit 2 ;;
+    esac
+  done
+fi
 APPROVED_MIGRATIONS_CSV=""
 APPROVED_MIGRATION_SPECS_CSV=""
 if [[ "${#APPROVED_MIGRATIONS[@]}" -gt 0 ]]; then
@@ -147,18 +179,19 @@ fi
 if [[ "${#APPROVED_MIGRATION_SPECS[@]}" -gt 0 ]]; then
   APPROVED_MIGRATION_SPECS_CSV="$(IFS=,; printf '%s' "${APPROVED_MIGRATION_SPECS[*]}")"
 fi
+APPROVED_MIGRATIONS_ARG="${APPROVED_MIGRATIONS_CSV:-__SIYUAN_EMPTY__}"
 
 cleanup_release_lock() {
   local exit_code=$?
   trap - EXIT INT TERM
   local rollback_succeeded=false
   local preserve_lock=false
-  if [[ "$exit_code" -ne 0 && "$CAS_PHASE" == true && "${#APPLIED_TARGETS[@]}" -gt 0 ]]; then
+  if [[ "$exit_code" -ne 0 && "$SOURCE_ROLLBACK_REQUIRED" == true && "${#APPLIED_TARGETS[@]}" -gt 0 ]]; then
     rollback_args=()
     for index in "${!APPLIED_TARGETS[@]}"; do
       rollback_args+=("${APPLIED_TARGETS[$index]}" "${APPLIED_EXPECTED_SHAS[$index]}" "${APPLIED_BACKUP_DIRS[$index]}")
     done
-    if ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+    if siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- \
       "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SIYUAN_47_DIR" "${rollback_args[@]}" <<'REMOTE_SCRIPT'
 set -eu
 lock_dir="$1"; expected_token="$2"; remote_dir="$3"; shift 3
@@ -214,9 +247,46 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 CAS_PHASE=true
 
-PREVIOUS_RELEASE_ID="$(ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" \
+PREVIOUS_RELEASE_ID="$(siyuan_47_ssh "$SIYUAN_47_REMOTE" \
   "sed -n 's/^RELEASE_ID=//p' '$SIYUAN_47_DIR/.siyuan-release-state' 2>/dev/null | tail -1")"
 [[ -n "$PREVIOUS_RELEASE_ID" ]] || PREVIOUS_RELEASE_ID="MISSING"
+runtime_image_state_match="$(siyuan_47_ssh "$SIYUAN_47_REMOTE" bash -s -- "$SIYUAN_47_DIR" <<'REMOTE_SCRIPT'
+set -euo pipefail
+remote_dir="$1"
+cd "$remote_dir"
+# shellcheck source=lib/docker-container-image-id.sh
+source scripts/lib/docker-container-image-id.sh
+state_value() {
+  sed -n "s/^$1=//p" .siyuan-release-state 2>/dev/null | tail -1
+}
+web_expected="$(state_value WEB_IMAGE_ID)"
+api_expected="$(state_value API_IMAGE_ID)"
+web_container="$(docker compose ps -q web 2>/dev/null | tail -1)"
+api_container="$(docker compose ps -q api 2>/dev/null | tail -1)"
+web_actual="$(siyuan_docker_container_image_id "$web_container")"
+api_actual="$(siyuan_docker_container_image_id "$api_container")"
+if [[ -z "$web_actual" || -z "$api_actual" ]]; then
+  printf 'unavailable\n'
+elif [[ -n "$web_expected" && -n "$api_expected" && "$web_expected" == "$web_actual" && "$api_expected" == "$api_actual" ]]; then
+  printf 'true\n'
+else
+  printf 'false\n'
+fi
+REMOTE_SCRIPT
+)"
+if [[ "$runtime_image_state_match" == unavailable ]]; then
+  echo "RUNTIME_IMAGE_UNAVAILABLE: Web/API running image identity could not be resolved." >&2
+  exit 83
+elif [[ "$runtime_image_state_match" != true ]]; then
+  if [[ "$ADOPT_CURRENT_RUNTIME" != true ]]; then
+    echo "RUNTIME_IMAGE_STATE_MISMATCH: whitelist release refused before source mutation." >&2
+    echo "Inspect the running release and use --adopt-current-runtime only for a reviewed, zero-build governance release." >&2
+    exit 83
+  fi
+  echo "RUNTIME_IMAGE_STATE_ADOPTION=reviewed-zero-build-governance-release"
+  curl --retry 3 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/api/health"
+  curl --retry 3 --retry-delay 1 --retry-connrefused -fsS -o /dev/null "$PUBLIC_URL/"
+fi
 WHITELIST_RELEASE_ID="whitelist-$(
   {
     printf '%s\n' "$PREVIOUS_RELEASE_ID"
@@ -238,6 +308,7 @@ for index in "${!SOURCE_FILES[@]}"; do
 done
 
 REMOTE_MUTATION_STARTED=true
+SOURCE_ROLLBACK_REQUIRED=true
 for index in "${!SOURCE_FILES[@]}"; do
   cas_output="$("$SCRIPT_DIR/cas-sync-47-file.sh" \
     --source "${SOURCE_FILES[$index]}" \
@@ -252,7 +323,7 @@ for index in "${!SOURCE_FILES[@]}"; do
 done
 
 if [[ "$NEEDS_MIGRATE" == true ]]; then
-  ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+  siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" bash -s -- \
     "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$APPROVED_MIGRATIONS_CSV" "$APPROVED_MIGRATION_SPECS_CSV" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"; lock_dir="$2"; expected_token="$3"; approved_migrations_csv="$4"; approved_migration_specs_csv="$5"
@@ -290,9 +361,19 @@ fi
 CAS_PHASE=false
 FAILURE_PHASE="whitelist-build-migrate-restart-health"
 
+EXPECTED_SOURCE_FINGERPRINTS="$(siyuan_47_ssh "$SIYUAN_47_REMOTE" \
+  "cd '$SIYUAN_47_DIR' && bash scripts/print-47-release-fingerprints.sh")"
+EXPECTED_SOURCE_WEB="$(printf '%s\n' "$EXPECTED_SOURCE_FINGERPRINTS" | sed -n 's/^WEB_FINGERPRINT=//p')"
+EXPECTED_SOURCE_API="$(printf '%s\n' "$EXPECTED_SOURCE_FINGERPRINTS" | sed -n 's/^API_FINGERPRINT=//p')"
+EXPECTED_SOURCE_MIGRATE="$(printf '%s\n' "$EXPECTED_SOURCE_FINGERPRINTS" | sed -n 's/^MIGRATE_FINGERPRINT=//p')"
+[[ -n "$EXPECTED_SOURCE_WEB" && -n "$EXPECTED_SOURCE_API" && -n "$EXPECTED_SOURCE_MIGRATE" ]] || {
+  echo "WHITELIST_SOURCE_SNAPSHOT_CAPTURE_FAILED" >&2
+  exit 83
+}
+
 if [[ "$SCOPE" != "none" ]]; then
-  ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
-  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_CSV" "$NO_CACHE" "$WHITELIST_RELEASE_ID" <<'REMOTE_SCRIPT'
+  siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" bash -s -- \
+  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_ARG" "$NO_CACHE" "$WHITELIST_RELEASE_ID" "$EXPECTED_SOURCE_WEB" "$EXPECTED_SOURCE_API" "$EXPECTED_SOURCE_MIGRATE" "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"
 lock_dir="$2"
@@ -301,12 +382,41 @@ scope="$4"
 approved_migrations_csv="${5:-}"
 no_cache="${6:-false}"
 whitelist_release_id="${7:-unknown}"
+expected_source_web="$8"
+expected_source_api="$9"
+expected_source_migrate="${10}"
+build_timeout_seconds="${11}"
+migration_timeout_seconds="${12}"
+[[ "$approved_migrations_csv" == __SIYUAN_EMPTY__ ]] && approved_migrations_csv=""
+if [[ ! "$whitelist_release_id" =~ ^whitelist-[0-9a-f]{24}$ ]]; then
+  echo "RELEASE_ID_ARGUMENT_INVALID actual=$whitelist_release_id" >&2
+  exit 83
+fi
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [[ "$actual_token" != "$expected_token" ]]; then
   echo "47 release lock ownership changed before whitelist build." >&2
   exit 75
 fi
 cd "$remote_dir"
+# shellcheck source=lib/47-release-images.sh
+source scripts/lib/47-release-images.sh
+# shellcheck source=lib/47-release-ssh.sh
+source scripts/lib/47-release-ssh.sh
+
+verify_whitelist_source_snapshot() {
+  SIYUAN_RELEASE_REPO_ROOT="$remote_dir" bash scripts/verify-release-source-snapshot.sh \
+    "$expected_source_web" "$expected_source_api" "$expected_source_migrate"
+}
+
+siyuan_47_export_release_images "$whitelist_release_id"
+export VITE_RELEASE_ID="$whitelist_release_id"
+export RELEASE_ID="$whitelist_release_id"
+if [[ "${SIYUAN_API_IMAGE:-}" != "siyuan-api:${whitelist_release_id}" \
+  || "${SIYUAN_WEB_IMAGE:-}" != "siyuan-web:${whitelist_release_id}" \
+  || "${SIYUAN_MIGRATE_IMAGE:-}" != "siyuan-db-migrate:${whitelist_release_id}" ]]; then
+  echo "RELEASE_IMAGE_EXPORT_MISMATCH release=$whitelist_release_id" >&2
+  exit 83
+fi
 
 build_services=()
 restart_services=()
@@ -329,12 +439,75 @@ if [[ "$no_cache" == true ]]; then
   build_args+=(--no-cache)
 fi
 build_args+=(--build-arg "VITE_RELEASE_ID=$whitelist_release_id")
-docker compose build "${build_args[@]}" "${build_services[@]}"
+api_changed=false
+web_changed=false
+migrate_changed=false
+[[ "$scope" == *api* ]] && api_changed=true
+[[ "$scope" == *web* ]] && web_changed=true
+[[ "$scope" == *migrate* ]] && migrate_changed=true
+siyuan_47_record_release_phase build-start "$lock_dir" "$expected_token"
+SIYUAN_47_BUILD_TIMEOUT_SECONDS="$build_timeout_seconds" BUILDKIT_PROGRESS=plain \
+  siyuan_47_run_bounded_build docker compose build "${build_args[@]}" "${build_services[@]}"
+siyuan_47_record_release_phase build-complete "$lock_dir" "$expected_token"
+verify_whitelist_source_snapshot
+siyuan_47_capture_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
+siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 if [[ "$scope" == *"+migrate" ]]; then
-  docker compose --profile tools run --rm db-migrate </dev/null
+  siyuan_47_record_release_phase migrate-start "$lock_dir" "$expected_token"
+  siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
+  SIYUAN_47_MIGRATION_TIMEOUT_SECONDS="$migration_timeout_seconds" \
+    siyuan_47_run_bounded_migration docker compose --profile tools run --rm db-migrate </dev/null
+  siyuan_47_record_release_phase migrate-complete "$lock_dir" "$expected_token"
 fi
-docker compose up -d --no-deps "${restart_services[@]}"
+if [[ "$scope" == *api* || "$scope" == *web* ]]; then
+  siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
+fi
+verify_whitelist_source_snapshot
+siyuan_47_record_release_phase restart-start "$lock_dir" "$expected_token"
+if ! docker compose up -d --no-deps "${restart_services[@]}"; then
+  cleaned_created_replacement=false
+  for service in "${restart_services[@]}"; do
+    expected_image=""
+    case "$service" in
+      api) expected_image="$SIYUAN_API_IMAGE" ;;
+      web) expected_image="$SIYUAN_WEB_IMAGE" ;;
+    esac
+    while IFS= read -r candidate_id; do
+      [[ -n "$candidate_id" ]] || continue
+      candidate_status="$(docker inspect --format '{{.State.Status}}' "$candidate_id" 2>/dev/null || true)"
+      candidate_image="$(docker inspect --format '{{.Config.Image}}' "$candidate_id" 2>/dev/null || true)"
+      candidate_workdir="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.working_dir"}}' "$candidate_id" 2>/dev/null || true)"
+      if [[ "$candidate_status" == created && "$candidate_image" == "$expected_image" && "$candidate_workdir" == "$remote_dir" ]]; then
+        docker rm "$candidate_id"
+        cleaned_created_replacement=true
+        echo "COMPOSE_CREATED_REPLACEMENT_REMOVED service=$service container=$candidate_id"
+      fi
+    done < <(docker ps -aq --filter "label=com.docker.compose.service=$service" --filter status=created)
+  done
+  if [[ "$cleaned_created_replacement" != true ]]; then
+    echo "COMPOSE_RECREATE_RETRY_REFUSED: no release-scoped Created replacement was found." >&2
+    exit 83
+  fi
+  echo "COMPOSE_RECREATE_RETRY=once"
+  docker compose up -d --no-deps "${restart_services[@]}"
+fi
+siyuan_47_record_release_phase restart-complete "$lock_dir" "$expected_token"
 
+for service in "${restart_services[@]}"; do
+  expected_image=""
+  case "$service" in
+    api) expected_image="$SIYUAN_API_IMAGE" ;;
+    web) expected_image="$SIYUAN_WEB_IMAGE" ;;
+  esac
+  container_id="$(docker compose ps -q "$service" | tail -1)"
+  running_image_ref="$(docker inspect --format '{{.Config.Image}}' "$container_id" 2>/dev/null | tail -1)"
+  if [[ -z "$container_id" || "$running_image_ref" != "$expected_image" ]]; then
+    echo "RELEASE_CONTAINER_IMAGE_FENCE_MISMATCH service=$service expected=$expected_image actual=${running_image_ref:-MISSING}" >&2
+    exit 83
+  fi
+done
+
+siyuan_47_record_release_phase health-start "$lock_dir" "$expected_token"
 for _ in $(seq 1 45); do
   if docker compose exec -T api node -e "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))" </dev/null >/dev/null 2>&1; then
     break
@@ -350,6 +523,7 @@ if [[ "$scope" == *"web"* ]]; then
   [[ "$container_index" == "$served_index" ]]
 fi
 docker compose ps
+siyuan_47_record_release_phase health-complete "$lock_dir" "$expected_token"
 trap - ERR
 REMOTE_SCRIPT
 
@@ -360,13 +534,17 @@ REMOTE_SCRIPT
 else
   echo "Whitelist files synchronized under the 47 release lock; no service rebuild requested."
 fi
-ssh -o ConnectTimeout=20 "$SIYUAN_47_REMOTE" bash -s -- \
+siyuan_47_release_phase state-write-start
+siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" bash -s -- \
   "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SIYUAN_47_DIR" "$WHITELIST_RELEASE_ID" <<'REMOTE_SCRIPT'
 set -eu
 lock_dir="$1"
 expected_token="$2"
 remote_dir="$3"
 release_id="$4"
+# shellcheck source=lib/47-release-ssh.sh
+source "$remote_dir/scripts/lib/47-release-ssh.sh"
+siyuan_47_record_release_phase state-write-start "$lock_dir" "$expected_token"
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [ "$actual_token" != "$expected_token" ]; then
   echo "47 release lock ownership changed before whitelist state update." >&2
@@ -374,6 +552,8 @@ if [ "$actual_token" != "$expected_token" ]; then
 fi
 state_file="$remote_dir/.siyuan-release-state"
 state_tmp="$state_file.tmp.$expected_token"
+# shellcheck source=lib/docker-container-image-id.sh
+source "$remote_dir/scripts/lib/docker-container-image-id.sh"
 fingerprints="$(bash "$remote_dir/scripts/print-47-release-fingerprints.sh")"
 web_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^WEB_FINGERPRINT=//p')"
 api_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^API_FINGERPRINT=//p')"
@@ -381,8 +561,8 @@ migrate_fingerprint="$(printf '%s\n' "$fingerprints" | sed -n 's/^MIGRATE_FINGER
 [[ -n "$web_fingerprint" && -n "$api_fingerprint" && -n "$migrate_fingerprint" ]]
 web_container="$(cd "$remote_dir" && docker compose ps -q web 2>/dev/null | tail -1)"
 api_container="$(cd "$remote_dir" && docker compose ps -q api 2>/dev/null | tail -1)"
-web_image_id="$(docker inspect --format '{{.Image}}' "$web_container" 2>/dev/null || true)"
-api_image_id="$(docker inspect --format '{{.Image}}' "$api_container" 2>/dev/null || true)"
+web_image_id="$(siyuan_docker_container_image_id "$web_container")"
+api_image_id="$(siyuan_docker_container_image_id "$api_container")"
 cat > "$state_tmp" <<STATE
 WEB_FINGERPRINT=$web_fingerprint
 API_FINGERPRINT=$api_fingerprint
@@ -394,6 +574,8 @@ WEB_IMAGE_ID=$web_image_id
 API_IMAGE_ID=$api_image_id
 STATE
 mv "$state_tmp" "$state_file"
+siyuan_47_record_release_phase state-write-complete "$lock_dir" "$expected_token"
 REMOTE_SCRIPT
+SOURCE_ROLLBACK_REQUIRED=false
 echo
 echo "47 whitelist deployment completed successfully under the global release lock."

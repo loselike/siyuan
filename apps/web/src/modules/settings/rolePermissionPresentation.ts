@@ -226,20 +226,10 @@ export function isUiPreferencePermission(permission: Pick<PermissionDefinition, 
 export function isLineShipmentStageEditBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
   return permission.code.startsWith('operations:line-shipment:stage-edit-block:');
 }
-
-export function isPricingModuleBlockPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
-  return permission.code.startsWith('pricing:lookup:module-block:')
-    || permission.code.startsWith('pricing:markup:module-block:')
-    || permission.code.startsWith('pricing:markup:view-block:')
-    || permission.code.startsWith('pricing:markup:edit-block:')
-    || permission.code.startsWith('pricing:price-books:create-block:')
-    || permission.code.startsWith('pricing:price-books:delete-block:')
-    || permission.code.startsWith('pricing:price-books:remark-block:');
+export function isLineShipmentStageEditPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
+  return permission.code.startsWith('operations:line-shipment:stage-edit:');
 }
 
-export function isWarehouseTallyPendingMaskPermission(permission: Pick<PermissionDefinition, 'code'>): boolean {
-  return permission.code.startsWith('warehouse:tally-pending:') && permission.code.endsWith('-block');
-}
 
 export function inferPermissionRisk(permission: Pick<PermissionDefinition, 'code' | 'label'>): PermissionControlRisk {
   const value = `${permission.code} ${permission.label}`;
@@ -267,8 +257,8 @@ export function getPermissionControls(group: string, permissions: PermissionDefi
   const configurablePermissions = permissions.filter(
     (permission) => !isUiPreferencePermission(permission)
       && !isLineShipmentStageEditBlockPermission(permission)
-      && !isPricingModuleBlockPermission(permission)
-      && !isWarehouseTallyPendingMaskPermission(permission)
+      && !isLineShipmentStageEditPermission(permission)
+      && !permission.code.includes('-block')
   );
   if (!configured) {
     return configurablePermissions.map((permission) => {
@@ -367,12 +357,6 @@ export function updatePermissionControl(
 ): PermissionKey[] {
   const next = new Set(grantedPermissions);
   control.codes.forEach((code) => checked ? next.add(code) : next.delete(code));
-  if (checked && control.codes.includes('business:order-entry:business-cost-write')) {
-    next.add('business:order-entry:business-cost-view');
-  }
-  if (!checked && control.codes.includes('business:order-entry:business-cost-view')) {
-    next.delete('business:order-entry:business-cost-write');
-  }
   return [...next];
 }
 

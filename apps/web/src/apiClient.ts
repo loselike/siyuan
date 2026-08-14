@@ -303,6 +303,7 @@ import type {
   NotificationUnreadSummary
 } from './modules/notifications/notificationTypes';
 import { AppShellClient } from './api/appShellClient';
+import { AuthAccountClient } from './api/authAccountClient';
 import { AuditQueryClient } from './api/auditQueryClient';
 import { CarrierTaskQueryClient } from './api/carrierTaskQueryClient';
 import { MarkupQueryClient } from './api/markupQueryClient';
@@ -365,18 +366,17 @@ export type PermissionKey =
   | 'business:dashboard:trend-view'
   | 'business:dashboard:pending-review-summary'
   | 'business:order-entry:view'
+  | 'business:order-entry:edit'
+  | 'business:order-entry:business-cost'
+  | 'business:order-entry:payable-fee'
   | 'business:order-entry:warehouse-package-select'
   | 'business:order-entry:create'
   | 'business:order-entry:draft-view'
-  | 'business:order-entry:draft-save'
+  | 'business:order-entry:draft-edit'
   | 'business:order-entry:draft-delete'
   | 'business:order-entry:submit-review'
   | 'business:order-entry:invoice-upload'
   | 'business:order-entry:label-upload'
-  | 'business:order-entry:business-cost-view'
-  | 'business:order-entry:business-cost-write'
-  | 'business:order-entry:business-cost-mask'
-  | 'business:order-entry:payable-fee-mask'
   | 'business:order-fee:view'
   | 'business:order-fee:create'
   | 'business:order-fee:update'
@@ -384,17 +384,8 @@ export type PermissionKey =
   | 'business:order-fee:lock'
   | 'business:order-fee:unlock'
   | 'business:order-fee:profit-view'
-  | 'business:review:list'
-  | 'business:review:detail'
-  | 'business:review:deleted-list'
-  | 'business:review:approve'
-  | 'business:review:reject'
-  | 'business:review:reverse'
-  | 'business:review:delete'
-  | 'business:review:restore'
-  | 'business:review:purge'
-  | 'business:review:finance-detail-view'
-  | 'business:review:operation-log-view'
+  | 'business:review:view'
+  | 'business:review:edit'
   | 'business:shipment:list'
   | 'business:shipment:detail'
   | 'business:shipment:self-view'
@@ -468,81 +459,47 @@ export type PermissionKey =
   | 'market:weekly-routing:sensitive-stats-view'
   | 'market:weekly-routing:export'
   | 'market:weekly-routing:column-setting'
+  | 'warehouse:dashboard:view'
   | 'warehouse:today-receipt:view'
-  | 'warehouse:today-receipt:filter'
+  | 'warehouse:today-receipt:edit'
+  | 'warehouse:today-receipt:delete'
   | 'warehouse:today-receipt:manual-create'
-  | 'warehouse:today-receipt:batch-import-block'
-  | 'warehouse:today-receipt:batch-download-block'
-  | 'warehouse:today-receipt:site-filter-block'
-  | 'warehouse:today-receipt:manual-create-block'
-  | 'warehouse:today-receipt:update'
-  | 'warehouse:today-receipt:remark-update'
-  | 'warehouse:today-receipt:exception-manage'
-  | 'warehouse:today-receipt:device-import'
-  | 'warehouse:today-receipt:device-log-view'
-  | 'warehouse:today-receipt:column-setting'
+  | 'warehouse:today-receipt:import'
+  | 'warehouse:today-receipt:export'
   | 'warehouse:in-stock:view'
-  | 'warehouse:in-stock:machine-import'
-  | 'warehouse:in-stock:update'
-  | 'warehouse:in-stock:same-spec-replenish'
+  | 'warehouse:in-stock:edit'
+  | 'warehouse:in-stock:delete'
   | 'warehouse:in-stock:split'
-  | 'warehouse:in-stock:batch-select'
-  | 'warehouse:in-stock:tally-start'
-  | 'warehouse:in-stock:batch-tally-start'
-  | 'warehouse:in-stock:order-entry-select'
-  | 'warehouse:in-stock:batch-order-entry'
-  | 'warehouse:in-stock:tally-record-view'
-  | 'warehouse:in-stock:column-setting'
+  | 'warehouse:in-stock:tally'
+  | 'warehouse:in-stock:order-entry'
+  | 'warehouse:in-stock:import'
+  | 'warehouse:in-stock:export'
   | 'warehouse:tally-pending:view'
-  | 'warehouse:tally-pending:view-block'
-  | 'warehouse:tally-pending:task-create'
-  | 'warehouse:tally-pending:task-update'
-  | 'warehouse:tally-pending:update-block'
-  | 'warehouse:tally-pending:task-cancel'
-  | 'warehouse:tally-pending:cancel-block'
-  | 'warehouse:tally-pending:task-process'
-  | 'warehouse:tally-pending:process-block'
-  | 'warehouse:tally-pending:merge-only'
-  | 'warehouse:tally-pending:merge-and-ship'
-  | 'warehouse:tally-pending:split'
-  | 'warehouse:tally-pending:detail-view'
-  | 'warehouse:tally-pending:history-view'
-  | 'warehouse:tally-pending:filter'
+  | 'warehouse:tally-pending:edit'
+  | 'warehouse:tally-pending:cancel'
+  | 'warehouse:tally-pending:process'
+  | 'warehouse:tally-pending:complete-and-ship'
   | 'warehouse:tally-completed:view'
-  | 'warehouse:tally-completed:view-block'
-  | 'warehouse:tally-completed:history-view'
-  | 'warehouse:tally-completed:detail-view'
-  | 'warehouse:tally-completed:reverse-review'
-  | 'warehouse:tally-completed:reverse-block'
-  | 'warehouse:tally-history:correct'
-  | 'warehouse:tally-label:generate'
-  | 'warehouse:tally-label:reprint'
-  | 'warehouse:tally-label:reprint-block'
-  | 'warehouse:tally-label:print'
-  | 'warehouse:tally-label:download'
-  | 'warehouse:tally-label:download-block'
-  | 'warehouse:tally-label:scan-apply'
-  | 'warehouse:tally-label:overwrite-package'
+  | 'warehouse:tally-completed:print'
+  | 'warehouse:tally-completed:download'
+  | 'warehouse:tally-completed:scan'
+  | 'warehouse:tally-completed:reverse'
+  | 'warehouse:tally-completed:correct'
   | 'warehouse:dispatch-pending:view'
-  | 'warehouse:dispatch-pending:batch-select'
-  | 'warehouse:dispatch-pending:handover-preview'
+  | 'warehouse:dispatch-pending:edit'
   | 'warehouse:dispatch-pending:handover-print'
-  | 'warehouse:dispatch-pending:dispatch-confirm'
-  | 'warehouse:dispatch-pending:batch-dispatch-confirm'
+  | 'warehouse:dispatch-pending:label-manage'
   | 'warehouse:dispatch-pending:shipping-mark-confirm'
-  | 'warehouse:dispatch-pending:label-generate'
-  | 'warehouse:dispatch-pending:label-view'
-  | 'warehouse:dispatch-pending:label-void'
-  | 'warehouse:dispatch-pending:declaration-update'
-  | 'warehouse:dispatch-pending:column-setting'
+  | 'warehouse:dispatch-pending:confirm'
   | 'warehouse:outbounded:view'
-  | 'warehouse:outbounded:handover-view'
-  | 'warehouse:outbounded:detail-view'
   | 'warehouse:outbounded:export'
   | 'warehouse:rent-detail:view'
   | 'warehouse:rent-detail:export'
-  | 'warehouse:rent-rule:view'
-  | 'warehouse:rent-rule:manage'
+  | 'warehouse:rent-detail:edit'
+  | 'warehouse:rent-detail:scope-self'
+  | 'warehouse:rent-detail:scope-team'
+  | 'warehouse:rent-detail:scope-site'
+  | 'warehouse:rent-detail:scope-all'
   | `pricing:${string}`
   | 'finance:business-cost:read'
   | 'finance:business-cost:manage'
@@ -580,6 +537,7 @@ export type PermissionKey =
   | 'finance:water-receipt:arrive'
   | 'finance:water-receipt:match'
   | 'finance:water-receipt:adjust'
+  | 'finance:water-receipt:arrived-update'
   | 'finance:water-receipt:void'
   | 'finance:water-receipt:archive'
   | 'finance:water-receipt:export'
@@ -739,6 +697,7 @@ function formatApiErrorMessage(body: string, status: number): string {
 
 export class ApiClient {
   readonly appShell = new AppShellClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
+  readonly authAccount = new AuthAccountClient(<T>(path: string, init?: RequestInit, authenticated?: boolean) => this.request<T>(path, init, authenticated));
   readonly auditQuery = new AuditQueryClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly carrierTaskQuery = new CarrierTaskQueryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
@@ -762,34 +721,31 @@ export class ApiClient {
   ) {}
 
   async captcha(): Promise<CaptchaChallenge> {
-    return this.request('/auth/captcha', { method: 'GET' }, false);
+    return this.authAccount.captcha<CaptchaChallenge>();
   }
 
   async login(username: string, password: string, captchaId?: string, captchaCode?: string): Promise<Session> {
-    return this.request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password, captchaId, captchaCode }) }, false);
+    return this.authAccount.login<Session>(username, password, captchaId, captchaCode);
   }
 
   async me(): Promise<Principal> {
-    return this.request('/auth/me');
+    return this.authAccount.me<Principal>();
   }
 
   async currentSession(): Promise<Pick<Session, 'user' | 'permissions'>> {
-    return this.request('/auth/session');
+    return this.authAccount.currentSession<Pick<Session, 'user' | 'permissions'>>();
   }
 
   async userTablePreferences(): Promise<UserTablePreferenceSummary[]> {
-    return this.request('/user-table-preferences');
+    return this.authAccount.userTablePreferences<UserTablePreferenceSummary[]>();
   }
 
   async updateUserTablePreference(key: string, value: UserTablePreferenceValue): Promise<UserTablePreferenceSummary> {
-    return this.request(`/user-table-preferences/${encodeURIComponent(key)}`, {
-      method: 'PUT',
-      body: JSON.stringify({ value })
-    });
+    return this.authAccount.updateUserTablePreference<UserTablePreferenceSummary>(key, value);
   }
 
   async deleteUserTablePreference(key: string): Promise<{ ok: true }> {
-    return this.request(`/user-table-preferences/${encodeURIComponent(key)}`, { method: 'DELETE' });
+    return this.authAccount.deleteUserTablePreference<{ ok: true }>(key);
   }
 
   async downloadProtectedAsset(url: string): Promise<Blob> {
@@ -810,11 +766,11 @@ export class ApiClient {
   }
 
   async updateProfile(input: ProfileUpdateInput): Promise<Principal> {
-    return this.request('/auth/profile', { method: 'PUT', body: JSON.stringify(input) });
+    return this.authAccount.updateProfile<Principal>(input);
   }
 
   async changePassword(input: { currentPassword: string; newPassword: string }): Promise<{ ok: true }> {
-    return this.request('/auth/change-password', { method: 'POST', body: JSON.stringify(input) });
+    return this.authAccount.changePassword<{ ok: true }>(input);
   }
 
   async shipments(): Promise<Shipment[]> {
@@ -1581,6 +1537,10 @@ export class ApiClient {
 
   async cancelWarehouseTallyTask(id: string): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/cancel`, { method: 'POST' });
+  }
+
+  async restartWarehouseTallyProblemTask(id: string): Promise<WarehouseTallyTaskSummary> {
+    return this.request(`/warehouse/tally-problem-tasks/${id}/restart`, { method: 'POST' });
   }
 
   async completeWarehouseTallyTask(id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {

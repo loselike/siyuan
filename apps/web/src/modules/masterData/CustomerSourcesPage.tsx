@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Checkbox, Col, Form, Input, Modal, Popconfirm, Row, Select, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import type { CustomerSourceInput, CustomerSourceSummary } from '@siyuan/shared';
-import { ApiClient } from '../../apiClient';
+import type { CustomerSourceInput, CustomerSourceSummary } from '@siyuan/shared/customer-source';
 import { ManagedTable, tenRowTablePagination } from '../shared/ui';
 import { formatBeijingDateTime } from '../shared/format';
+import type { CustomerSourceClient } from './customerSourceClient';
 
 const { Text } = Typography;
 
 interface CustomerSourcesPageProps {
-  apiClient: ApiClient;
+  apiClient: CustomerSourceClient;
   canWrite: boolean;
   canDelete: boolean;
   onNotice: (message: string) => void;

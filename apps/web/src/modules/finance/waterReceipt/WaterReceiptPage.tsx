@@ -320,15 +320,17 @@ export function createWaterReceiptUpdatePayload(
     };
   }
 
-  const payload: WaterReceiptUpdateInput = {
+  return {
+    customerCode: values.customerCode,
+    site: values.site,
+    receiptMethod: values.receiptMethod,
+    receiptDate: values.receiptDate,
+    currency: values.currency,
+    amount: values.amount,
     paymentNo: values.paymentNo,
-    remark: values.remark
+    remark: values.remark,
+    adjustReason: values.adjustReason?.trim()
   };
-  if (hasWaterReceiptAmountChanged(row, values.amount)) {
-    payload.amount = values.amount;
-    payload.adjustReason = values.adjustReason?.trim();
-  }
-  return payload;
 }
 
 export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, customers, settlementOptions, renderShipmentOrderNoLink, notificationTargetId, onNotificationTargetHandled, readOnlyMatching = false }: WaterReceiptPageProps) {
@@ -384,10 +386,11 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
   const canVoucher = hasPermission(permissions, 'finance:water-receipt:voucher-upload');
   const canViewVoucher = hasPermission(permissions, 'finance:water-receipt:voucher-view') || canVoucher;
   const canViewAll = hasPermission(permissions, 'finance:water-receipt:view-all');
-  const canAdjust = hasPermission(permissions, 'finance:water-receipt:adjust');
-  const watchedAmount = Form.useWatch('amount', form);
+  const canArrivedEdit = hasPermission(permissions, 'finance:water-receipt:arrived-update');
   const editingAfterArrival = Boolean(editing && editing.status !== 'PENDING');
-  const amountChanged = Boolean(editing && editingAfterArrival && hasWaterReceiptAmountChanged(editing, watchedAmount));
+  const editingHasActiveMatches = Boolean(editing?.matches?.some((match) => !match.voided));
+  const editingHasPendingAllocation = Number(editing?.pendingAllocatedAmount ?? 0) > 0;
+  const editingBlocked = editingAfterArrival && (editingHasActiveMatches || editingHasPendingAllocation);
   const summaryRmbAmount = response.totals.rmbAmount
     ?? (response.rows.every((row) => ['RMB', 'CNY'].includes((row.currency ?? 'RMB').toUpperCase())) ? response.totals.amount : undefined);
   const summaryRmbBalance = response.totals.rmbBalance
@@ -530,7 +533,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
   }, [apiClient, notificationTargetId, onNotificationTargetHandled]);
 
   useEffect(() => {
-    if (!formOpen) return undefined;
+    if (!formOpen && mode !== 'arrival') return undefined;
     let active = true;
     setSiteOptionsLoading(true);
     void apiClient.waterReceiptSiteOptions()
@@ -546,7 +549,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
     return () => {
       active = false;
     };
-  }, [apiClient, formOpen]);
+  }, [apiClient, formOpen, mode]);
 
   const openCreate = () => {
     setEditing(null);
@@ -936,7 +939,10 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
       width: 300,
       render: (_, row) => (
         <Space size={6}>
-          {canManage && (canViewAll || row.status === 'PENDING') ? <Button size="small" onClick={() => openEdit(row)}>编辑</Button> : null}
+          {((row.status === 'PENDING' && canManage)
+            || (row.status !== 'PENDING' && row.status !== 'VOIDED' && canArrivedEdit && canViewAll))
+            ? <Button size="small" onClick={() => openEdit(row)}>编辑</Button>
+            : null}
           {canArrive && row.status === 'PENDING' ? (
             <WaterReceiptArriveAction
               row={row}
@@ -1002,7 +1008,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
         </Space>
       )
     }
-  ], [apiClient, arrivingIds, canArchive, canArrive, canManage, canMatch, canViewAll, canViewMatchRecords, canViewVoucher, canVoid, canVoucher, isMatchingMode, load, renderShipmentOrderNoLink, voucherForm]);
+  ], [apiClient, arrivingIds, canArchive, canArrive, canArrivedEdit, canManage, canMatch, canViewAll, canViewMatchRecords, canViewVoucher, canVoid, canVoucher, isMatchingMode, load, renderShipmentOrderNoLink, voucherForm]);
 
   const matrixColumns = useMemo<ManagedTableColumns<WaterReceiptSummary>>(() => [
     {
@@ -1283,6 +1289,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
         >
           <Row gutter={12}>
             <Col xs={24} md={6}><Form.Item name="receiptNo" label="水单编号"><Input allowClear /></Form.Item></Col>
+            {mode === 'arrival' ? <Col xs={24} md={6}><Form.Item name="site" label="站点"><Select allowClear showSearch optionFilterProp="label" loading={siteOptionsLoading} options={siteOptions} /></Form.Item></Col> : null}
             <Col xs={24} md={6}><Form.Item name="customerCode" label="客户编号"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="salesperson" label="业务员归属"><Input allowClear /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="receiptMethod" label="结算方式"><Select allowClear options={settlementOptions} /></Form.Item></Col>
@@ -1394,6 +1401,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
         width={760}
         open={formOpen}
         confirmLoading={formSubmitting}
+        okButtonProps={{ disabled: editingBlocked }}
         okText="确认保存"
         cancelText="取消"
         onCancel={() => {
@@ -1409,8 +1417,8 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
             <Alert
               type="warning"
               showIcon
-              message={canAdjust ? '当前水单已到账，仅可修改到账金额、付款编号和备注' : '当前水单已到账，仅可修改付款编号和备注'}
-              description={canAdjust ? '修改到账金额时必须填写原因，客户、站点、结算方式、日期和币种已锁定。' : '当前账号没有“已到账金额调整”权限，其他到账前字段也已锁定。'}
+              message={editingBlocked ? '该水单已有匹配或待审核分配，暂不能修改' : '当前水单已到账，允许修改全部字段'}
+              description={editingBlocked ? '请先撤销全部匹配，并处理或取消待审核分配后，再重新打开编辑。' : '保存时必须填写修改原因，系统会同步更新客户账户、账本和业务侧收款数据。'}
               style={{ marginBottom: 16 }}
             />
           ) : null}
@@ -1418,7 +1426,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
           {editing ? <Form.Item label="水单编号"><Input aria-label="水单编号" value={editing.receiptNo} readOnly /></Form.Item> : null}
           <Form.Item name="customerCode" label="客户编号" rules={[{ required: true, message: '请选择客户编号' }]}>
             <Select
-              disabled={editingAfterArrival}
+              disabled={editingBlocked}
               showSearch
               optionFilterProp="label"
               placeholder="输入客户编号搜索"
@@ -1428,7 +1436,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
           </Form.Item>
           <Form.Item name="site" label="站点">
             <Select
-              disabled={editingAfterArrival}
+              disabled={editingBlocked}
               aria-label="站点"
               showSearch
               allowClear
@@ -1439,14 +1447,14 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
             />
           </Form.Item>
           {editing?.status === 'PENDING' && editing.receiptMethod && !settlementOptions.some((item) => item.value === editing.receiptMethod) ? <Text type="warning">当前历史结算方式已停用，保存前请改选启用结算方式。</Text> : null}
-          <Form.Item name="receiptMethod" label="结算方式" rules={[{ required: true, message: '请选择结算方式' }]}><Select disabled={editingAfterArrival} aria-label="结算方式" options={editorSettlementOptions} /></Form.Item>
-          <Form.Item name="receiptDate" label="日期" rules={[{ required: true, message: '请选择日期' }]}><AppDatePicker disabled={editingAfterArrival} /></Form.Item>
-          <Form.Item name="currency" label="币种" rules={[{ required: true, message: '请选择币种' }]}><Select disabled={editingAfterArrival} options={['RMB', 'USD'].map((value) => ({ label: value, value }))} /></Form.Item>
-          <Form.Item name="amount" label="到账金额" rules={[{ required: true, message: '请填写到账金额' }]}><InputNumber disabled={editingAfterArrival && !canAdjust} min={Math.max(0.01, Number(editing?.matchedAmount ?? 0))} precision={2} style={{ width: '100%' }} /></Form.Item>
-          {amountChanged ? <Form.Item name="adjustReason" label="已到账金额修改原因" rules={[{ required: true, whitespace: true, message: '修改已到账金额必须填写原因' }]}><Input placeholder="请说明本次金额调整原因" /></Form.Item> : null}
-          <Form.Item name="paymentNo" label="付款编号" rules={[{ required: true, whitespace: true, message: '请填写付款编号' }]}><Input aria-label="付款编号" /></Form.Item>
+          <Form.Item name="receiptMethod" label="结算方式" rules={[{ required: true, message: '请选择结算方式' }]}><Select disabled={editingBlocked} aria-label="结算方式" options={editorSettlementOptions} /></Form.Item>
+          <Form.Item name="receiptDate" label="日期" rules={[{ required: true, message: '请选择日期' }]}><AppDatePicker disabled={editingBlocked} /></Form.Item>
+          <Form.Item name="currency" label="币种" rules={[{ required: true, message: '请选择币种' }]}><Select disabled={editingBlocked} options={['RMB', 'USD'].map((value) => ({ label: value, value }))} /></Form.Item>
+          <Form.Item name="amount" label="到账金额" rules={[{ required: true, message: '请填写到账金额' }]}><InputNumber disabled={editingBlocked} min={0.01} precision={2} style={{ width: '100%' }} /></Form.Item>
+          {editingAfterArrival ? <Form.Item name="adjustReason" label="到账水单修改原因" rules={[{ required: true, whitespace: true, message: '请填写到账水单修改原因' }]}><Input placeholder="请说明本次水单修改原因" disabled={editingBlocked} /></Form.Item> : null}
+          <Form.Item name="paymentNo" label="付款编号" rules={[{ required: true, whitespace: true, message: '请填写付款编号' }]}><Input aria-label="付款编号" disabled={editingBlocked} /></Form.Item>
           {!editing ? <Form.Item label="水单图片（可选）"><VoucherImageInput apiClient={apiClient} onFileChange={setCreateVoucherFile} /></Form.Item> : null}
-          <Form.Item name="remark" label="备注"><Input.TextArea rows={3} /></Form.Item>
+          <Form.Item name="remark" label="备注"><Input.TextArea rows={3} disabled={editingBlocked} /></Form.Item>
         </Form>
       </Modal>
 

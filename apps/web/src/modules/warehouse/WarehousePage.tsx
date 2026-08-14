@@ -1,8 +1,8 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, InputNumber, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
+import { Alert, App as AntdApp, Button, Card, Checkbox, Col, Descriptions, Drawer, Flex, Input, Modal, Popconfirm, Radio, Row, Segmented, Space, Statistic, Tag, Tooltip, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { Download, FileText, PackageCheck, PackagePlus, Plus, Trash2 } from 'lucide-react';
+import { Download } from 'lucide-react';
 import { sortWarehouseTallyTasks, warehouseTallyChannels, warehouseTallyProgressStatusLabels } from '@siyuan/shared';
 import { type BusinessCostAuditSummary, type MiscFeeTallyDueItem, type Shipment, type StaffRoleKey, type WarehouseConsolidationSummary, type WarehouseInStockPageResponse, type WarehouseInStockQuery, type WarehouseInStockTotals, type WarehouseMachineImportResponse, type WarehouseManualReceiptCartonSpecInput, type WarehouseManualReceiptCreateInput, type WarehouseManualReceiptCustomerOption, type WarehousePackageSummary, type WarehousePackageUpdateInput, type WarehouseTallyHistoricalAggregateCorrectionPreview, type WarehouseTallyHistoricalAggregateScanSummary, type WarehouseTallyRepeatBatchSummary, type WarehouseTallyRepeatOperatorSummary, type WarehouseTallyRepeatStatisticsQuery, type WarehouseTallyRepeatStatisticsResponse, type WarehouseTallyTaskSummary, type WarehouseTodayQuery, type WarehouseTodayTotals } from '@siyuan/shared';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
@@ -12,11 +12,10 @@ import { formatBeijingDateTime, formatBeijingDateTimeInputValue, parseBeijingDat
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
-import { PlaceholderPanel } from '../shared/PlaceholderPanel';
 import { ShipmentRiskFlag, isShipmentRiskFlagActive } from '../shared/ShipmentRiskFlag';
-import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, MetricCard, paginationWhenNeeded, renderFilterActions, renderFilterField, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
+import { AppDatePicker, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, paginationWhenNeeded, renderFilterActions, renderFilterField, renderNoticeBar, resolveListPaginationChange, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
+import { addRowsWorksheet, createWorkbook, downloadWorkbook } from '../shared/excel';
 import {
-  calculateWarehousePackageMetrics,
   calculateWarehouseVolumetricWeight,
   escapeHtml,
   formatWarehousePackageNo,
@@ -39,9 +38,11 @@ import { WarehouseRentDetailPanel } from './WarehouseRentDetailPanel';
 import { WarehouseMachineImportModal } from './WarehouseMachineImportModal';
 import { WarehouseCreateTallyModal } from './WarehouseCreateTallyModal';
 import { WarehouseCompleteTallyModal, type WarehouseTallySourceItem } from './WarehouseCompleteTallyModal';
+import { WarehouseDashboardPanel } from './WarehouseDashboardPanel';
+import { WarehousePackageEditModal } from './WarehousePackageEditModal';
+import { WarehouseManualReceiptDrawer } from './WarehouseManualReceiptDrawer';
 import { downloadWarehouseMachineExport, isWarehouseMachineExportReady, resolveWarehouseMachineExportRecords } from './warehouseMachineExport';
 import {
-  calculateCartonSpecTotals,
   attachWarehouseRentDetails,
   canEditUnenteredWarehousePackage,
   createEmptyCartonSpec,
@@ -70,9 +71,45 @@ import {
   type WarehousePackageDraft,
   type WarehousePackageEditDraft
 } from './warehousePageModel';
-import { canUseWarehouseSameSpecReplenish } from './warehouseSameSpecPermission';
 
 export { canEditUnenteredWarehousePackage } from './warehousePageModel';
+
+export type WarehousePendingDispatchFilter = {
+  outboundNo: string;
+  agentShortName: string;
+  sensitive: 'ALL' | 'YES' | 'NO';
+  declaration: 'ALL' | 'YES' | 'NO';
+};
+
+export const emptyWarehousePendingDispatchFilter: WarehousePendingDispatchFilter = {
+  outboundNo: '',
+  agentShortName: '',
+  sensitive: 'ALL',
+  declaration: 'ALL'
+};
+
+export function filterWarehouseLabelQueueRows(
+  rows: WarehouseLabelQueueRow[],
+  filters: WarehousePendingDispatchFilter
+) {
+  const outboundNoKeyword = filters.outboundNo.trim().toLowerCase();
+  const agentKeyword = filters.agentShortName.trim().toLowerCase();
+  const matchesKeyword = (value: string | undefined, keyword: string) => !keyword || (value ?? '').toLowerCase().includes(keyword);
+  return rows.filter((row) => {
+    const outboundNo = row.kind === 'shipment'
+      ? resolveShipmentOutboundOrderNo(row.shipment)
+      : row.consolidation.outboundOrderNo;
+    const agentShortName = row.kind === 'shipment'
+      ? (row.shipment as Shipment & { agentShortName?: string }).agentShortName || row.shipment.agentName || '-'
+      : '待确认代理';
+    const sensitive = row.kind === 'shipment' && Boolean(row.shipment.sensitive);
+    const declaration = row.kind === 'shipment' && Boolean(row.shipment.declarationRequired);
+    return matchesKeyword(outboundNo, outboundNoKeyword)
+      && matchesKeyword(agentShortName, agentKeyword)
+      && (filters.sensitive === 'ALL' || sensitive === (filters.sensitive === 'YES'))
+      && (filters.declaration === 'ALL' || declaration === (filters.declaration === 'YES'));
+  });
+}
 
 export function getWarehouseOutboundRemark(shipment?: Shipment) {
   return shipment?.warehouseOutboundRemark?.trim() || undefined;
@@ -272,6 +309,8 @@ export function WarehousePage({
   apiClient,
   refreshVersion = 0,
   initialSection,
+  pageSearchKeyword = '',
+  onPageSearchKeywordChange,
   notificationTarget,
   onNotificationTargetHandled,
   role,
@@ -289,6 +328,9 @@ export function WarehousePage({
   apiClient: ApiClient;
   refreshVersion?: number;
   initialSection?: string;
+  /** The fixed header search value, scoped to the active warehouse sub-page. */
+  pageSearchKeyword?: string;
+  onPageSearchKeywordChange?: (keyword: string) => void;
   notificationTarget?: { type: string; id: string };
   onNotificationTargetHandled?: (target: { type: string; id: string }) => void;
   role: StaffRoleKey;
@@ -309,65 +351,54 @@ export function WarehousePage({
     description: '覆盖包裹件重尺、理货合并拆分、面单队列&待仓库出货和交接资料，作为仓库作业主入口。'
   };
   const hasWarehousePermission = (permission: PermissionKey) => isAdministratorRole(role) || permissions.includes(permission);
-  const hasWarehouseMask = (permission: PermissionKey) => !isAdministratorRole(role) && permissions.includes(permission);
+  const canWarehouseDashboardView = hasWarehousePermission('warehouse:dashboard:view');
   const canTodayReceiptView = hasWarehousePermission('warehouse:today-receipt:view');
-  const canWarehouseMachineImport = hasWarehousePermission('warehouse:in-stock:machine-import');
-  const canTodayReceiptCreate = hasWarehousePermission('warehouse:today-receipt:manual-create')
-    && !hasWarehouseMask('warehouse:today-receipt:manual-create-block');
-  const canTodayReceiptBatchImport = canWarehouseMachineImport
-    && !hasWarehouseMask('warehouse:today-receipt:batch-import-block');
-  const canTodayReceiptBatchDownload = !hasWarehouseMask('warehouse:today-receipt:batch-download-block');
-  const canTodayReceiptSiteFilter = !hasWarehouseMask('warehouse:today-receipt:site-filter-block');
+  const canTodayReceiptEdit = hasWarehousePermission('warehouse:today-receipt:edit');
+  const canTodayReceiptCreate = hasWarehousePermission('warehouse:today-receipt:manual-create');
+  const canTodayReceiptBatchImport = hasWarehousePermission('warehouse:today-receipt:import');
+  const canTodayReceiptBatchDownload = hasWarehousePermission('warehouse:today-receipt:export');
+  const canTodayReceiptSiteFilter = canTodayReceiptView;
+  const canTodayReceiptDelete = hasWarehousePermission('warehouse:today-receipt:delete');
   const canInStockView = hasWarehousePermission('warehouse:in-stock:view');
-  const canInStockUpdate = hasWarehousePermission('warehouse:in-stock:update');
-  const canInStockSameSpecReplenish = canUseWarehouseSameSpecReplenish(role, permissions);
+  const canInStockUpdate = hasWarehousePermission('warehouse:in-stock:edit');
+  const canInStockDelete = hasWarehousePermission('warehouse:in-stock:delete');
+  const canInStockSameSpecReplenish = canInStockUpdate;
   const canReplenishWarehouseSameSpec = (record: WarehouseInboundPackage) => canInStockSameSpecReplenish
     && isEligibleWarehouseSameSpecSource(record);
-  const canToggleTodayDataScope = canTodayReceiptView && permissions.includes('data-scope:sales-own');
-  const canTodayReceiptRemark = canInStockUpdate;
-  const canTodayReceiptException = canInStockUpdate;
-  const canInStockSelect = hasWarehousePermission('warehouse:in-stock:batch-select');
-  const canTallyStart = hasWarehousePermission('warehouse:in-stock:tally-start') || hasWarehousePermission('warehouse:in-stock:batch-tally-start');
+  const canToggleTodayDataScope = false;
+  const canTodayReceiptRemark = canTodayReceiptEdit;
+  const canTodayReceiptException = canTodayReceiptEdit;
+  const canInStockImport = hasWarehousePermission('warehouse:in-stock:import');
+  const canInStockExport = hasWarehousePermission('warehouse:in-stock:export');
+  const canTallyStart = hasWarehousePermission('warehouse:in-stock:tally');
   const canInStockSplit = hasWarehousePermission('warehouse:in-stock:split');
-  const canInStockTallyRecordView = canInStockView || hasWarehousePermission('warehouse:in-stock:tally-record-view');
-  const canTallyPendingView = hasWarehousePermission('warehouse:tally-pending:view')
-    && !hasWarehouseMask('warehouse:tally-pending:view-block');
-  const canTallyUpdate = canTallyPendingView
-    && hasWarehousePermission('warehouse:tally-pending:task-update')
-    && !hasWarehouseMask('warehouse:tally-pending:update-block');
-  const canTallyCancel = canTallyPendingView
-    && hasWarehousePermission('warehouse:tally-pending:task-cancel')
-    && !hasWarehouseMask('warehouse:tally-pending:cancel-block');
-  const canTallyProcess = canTallyPendingView
-    && hasWarehousePermission('warehouse:tally-pending:task-process')
-    && !hasWarehouseMask('warehouse:tally-pending:process-block');
-  const canTallyDetail = canTallyPendingView && hasWarehousePermission('warehouse:tally-pending:detail-view');
-  const canTallyCompletedView = hasWarehousePermission('warehouse:tally-completed:view')
-    && !hasWarehouseMask('warehouse:tally-completed:view-block');
-  const canTallyCompletedDetail = canTallyCompletedView && hasWarehousePermission('warehouse:tally-completed:detail-view');
-  const canTallyCompletedReverseReview = canTallyCompletedView
-    && hasWarehousePermission('warehouse:tally-completed:reverse-review')
-    && !hasWarehouseMask('warehouse:tally-completed:reverse-block');
-  const canTallyHistoryCorrect = canTallyCompletedView && hasWarehousePermission('warehouse:tally-history:correct');
-  const canTallyLabelGenerate = canTallyCompletedView && hasWarehousePermission('warehouse:tally-label:generate');
-  const canTallyLabelPrint = canTallyCompletedView
-    && (hasWarehousePermission('warehouse:tally-label:print') || hasWarehousePermission('warehouse:tally-label:reprint'))
-    && !hasWarehouseMask('warehouse:tally-label:reprint-block');
-  const canTallyLabelDownload = canTallyCompletedView
-    && hasWarehousePermission('warehouse:tally-label:download')
-    && !hasWarehouseMask('warehouse:tally-label:download-block');
+  const canInStockTallyRecordView = canInStockView;
+  const canTallyPendingView = hasWarehousePermission('warehouse:tally-pending:view');
+  const canTallyUpdate = hasWarehousePermission('warehouse:tally-pending:edit');
+  const canTallyCancel = hasWarehousePermission('warehouse:tally-pending:cancel');
+  const canTallyProcess = hasWarehousePermission('warehouse:tally-pending:process');
+  const canTallyCompleteAndShip = hasWarehousePermission('warehouse:tally-pending:complete-and-ship');
+  const canTallyDetail = canTallyPendingView;
+  const canTallyCompletedView = hasWarehousePermission('warehouse:tally-completed:view');
+  const canTallyCompletedDetail = canTallyCompletedView;
+  const canTallyCompletedReverseReview = hasWarehousePermission('warehouse:tally-completed:reverse');
+  const canTallyHistoryCorrect = hasWarehousePermission('warehouse:tally-completed:correct');
+  const canTallyLabelGenerate = hasWarehousePermission('warehouse:tally-completed:print');
+  const canTallyLabelPrint = hasWarehousePermission('warehouse:tally-completed:print');
+  const canTallyLabelDownload = hasWarehousePermission('warehouse:tally-completed:download');
   const canDispatchView = hasWarehousePermission('warehouse:dispatch-pending:view');
-  const canDispatchSelect = hasWarehousePermission('warehouse:dispatch-pending:batch-select');
+  const canDispatchSelect = canDispatchView;
   const canHandoverPrint = hasWarehousePermission('warehouse:dispatch-pending:handover-print');
-  const canDispatchConfirm = hasWarehousePermission('warehouse:dispatch-pending:dispatch-confirm');
-  const canBatchDispatchConfirm = hasWarehousePermission('warehouse:dispatch-pending:batch-dispatch-confirm');
+  const canDispatchConfirm = hasWarehousePermission('warehouse:dispatch-pending:confirm');
+  const canBatchDispatchConfirm = canDispatchConfirm;
   const canShippingMarkConfirm = hasWarehousePermission('warehouse:dispatch-pending:shipping-mark-confirm');
-  const canEditDispatchDeclaration = hasWarehousePermission('warehouse:dispatch-pending:declaration-update');
+  const canEditDispatchDeclaration = hasWarehousePermission('warehouse:dispatch-pending:edit');
   const canOutboundedView = hasWarehousePermission('warehouse:outbounded:view');
+  const canOutboundedExport = hasWarehousePermission('warehouse:outbounded:export');
   const canRentDetailView = hasWarehousePermission('warehouse:rent-detail:view');
   const canRentDetailExport = hasWarehousePermission('warehouse:rent-detail:export');
-  const canRentRuleView = hasWarehousePermission('warehouse:rent-rule:view');
-  const canRentRuleManage = hasWarehousePermission('warehouse:rent-rule:manage');
+  const canRentRuleView = canRentDetailView;
+  const canRentRuleManage = hasWarehousePermission('warehouse:rent-detail:edit');
   const workQueue = shipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH');
   const pendingRoutingShipments = shipments.filter((shipment) => shipment.status === 'WAITING_SORT');
   const initialCache = getWarehousePageCache(apiClient);
@@ -382,6 +413,7 @@ export function WarehousePage({
     ? initialCache.tallyTasks.rows
     : [];
   const [activeReceiveSection, setActiveReceiveSection] = useState(initialSection ?? 'today');
+  const previousSearchSectionRef = useRef(activeReceiveSection);
   const [warehousePackages, setWarehousePackages] = useState<WarehouseInboundPackage[]>(cachedPackages);
   const warehousePackagesFallbackRef = useRef<Promise<WarehouseInboundPackage[]> | null>(null);
   const shipmentsRef = useRef(shipments);
@@ -410,8 +442,14 @@ export function WarehousePage({
   const [todayFilters, setTodayFilters] = useState<WarehouseTodayQuery>(emptyTodayFilters);
   const [todayReceiptRefreshVersion, setTodayReceiptRefreshVersion] = useState(0);
   const [selectedTodayPackageIds, setSelectedTodayPackageIds] = useState<string[]>([]);
+  const [warehouseDeleteScope, setWarehouseDeleteScope] = useState<'today-receipt' | 'in-stock' | null>(null);
+  const [warehouseDeletePackageIds, setWarehouseDeletePackageIds] = useState<string[]>([]);
+  const [warehouseDeleteReason, setWarehouseDeleteReason] = useState('');
+  const [deletingWarehousePackages, setDeletingWarehousePackages] = useState(false);
   const [todayReceiptPagination, setTodayReceiptPagination] = useState({ current: 1, pageSize: warehouseTablePageSize });
   const [selectedWarehouseQueueRowIds, setSelectedWarehouseQueueRowIds] = useState<string[]>([]);
+  const [pendingDispatchFilterDraft, setPendingDispatchFilterDraft] = useState<WarehousePendingDispatchFilter>(emptyWarehousePendingDispatchFilter);
+  const [pendingDispatchFilters, setPendingDispatchFilters] = useState<WarehousePendingDispatchFilter>(emptyWarehousePendingDispatchFilter);
   const [batchHandoverOpen, setBatchHandoverOpen] = useState(false);
   const [batchHandoverRemark, setBatchHandoverRemark] = useState('');
   const [batchHandoverPrintOrientation, setBatchHandoverPrintOrientation] = useState<WarehouseHandoverPrintOrientation>('landscape');
@@ -447,6 +485,9 @@ export function WarehousePage({
   const [inStockPagination, setInStockPagination] = useState({ current: 1, pageSize: warehouseTablePageSize });
   const [tallyTaskPackageIds, setTallyTaskPackageIds] = useState<string[]>([]);
   const [tallyTasks, setTallyTasks] = useState<WarehouseTallyTaskSummary[]>(cachedTallyTasks);
+  const [tallyProblemTasks, setTallyProblemTasks] = useState<WarehouseTallyTaskSummary[]>([]);
+  const [pendingTallyView, setPendingTallyView] = useState<'tasks' | 'problems'>('tasks');
+  const [restartingTallyProblemTaskId, setRestartingTallyProblemTaskId] = useState<string | null>(null);
   const [tallyChannelDraft, setTallyChannelDraft] = useState('');
   const [, setTallySortTick] = useState(0);
   const [tallyRequirementDraft, setTallyRequirementDraft] = useState('');
@@ -458,9 +499,6 @@ export function WarehousePage({
   const [cancellingTallyTask, setCancellingTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
   const [cancellingTallySubmitting, setCancellingTallySubmitting] = useState(false);
   const [completingTallyTask, setCompletingTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
-  const [editingCompletedTallyTask, setEditingCompletedTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
-  const [editingCompletedTallyCount, setEditingCompletedTallyCount] = useState(1);
-  const [editingCompletedTallySubmitting, setEditingCompletedTallySubmitting] = useState(false);
   const [tallyCompleteError, setTallyCompleteError] = useState<string | null>(null);
   const [tallyCompleteSubmitting, setTallyCompleteSubmitting] = useState(false);
   const tallyCompleteSubmittingRef = useRef(false);
@@ -545,6 +583,21 @@ export function WarehousePage({
   const needsInStock = ['packages', 'consolidation'].includes(activeReceiveSection);
   const needsCompletedArchive = activeReceiveSection === 'dashboard' || activeReceiveSection === 'completed-consolidation';
   const needsTallyTasks = ['dashboard', 'consolidation', 'completed-consolidation'].includes(activeReceiveSection);
+  const pageSearchQueryKeyword = pageSearchKeyword.trim().length >= 2 ? pageSearchKeyword.trim() : undefined;
+  useEffect(() => {
+    if (previousSearchSectionRef.current === activeReceiveSection) return;
+    previousSearchSectionRef.current = activeReceiveSection;
+    onPageSearchKeywordChange?.('');
+  }, [activeReceiveSection, onPageSearchKeywordChange]);
+  useEffect(() => {
+    if (activeReceiveSection !== 'packages') return;
+    const timeoutId = window.setTimeout(() => {
+      setInStockPagination((current) => current.current === 1 ? current : { ...current, current: 1 });
+      setInStockFilterDraft((current) => ({ ...current, keyword: pageSearchQueryKeyword }));
+      setInStockFilters((current) => ({ ...current, keyword: pageSearchQueryKeyword }));
+    }, pageSearchKeyword.trim() ? 280 : 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeReceiveSection, pageSearchKeyword, pageSearchQueryKeyword]);
   const mergeWarehousePackages = useCallback((
     rows: WarehouseInboundPackage[],
     options: { recalculateCustomerProgress?: boolean } = {}
@@ -822,13 +875,14 @@ export function WarehousePage({
     };
   }, [activeReceiveSection, apiClient, canInStockUpdate, canInStockView, canRentDetailView, inStockFilters, inStockPagination.current, inStockPagination.pageSize, inStockRefreshVersion, loadWarehousePackagesFallback, mergeWarehousePackages, message, needsInStock, refreshVersion, role, workQueue.length]);
   useEffect(() => {
-    if (!canInStockView || !needsInStockSummary) return;
+    if ((!canWarehouseDashboardView && !canInStockView) || !needsInStockSummary) return;
     let alive = true;
     apiClient.warehouseQuery.warehouseInStockSummary()
       .then((response) => {
         if (alive) setInStockTotals(response.totals);
       })
       .catch(async () => {
+        if (!canInStockView) return;
         const warehousePackageFallback = await loadWarehousePackagesFallback();
         if (!alive) return;
         const fallbackRows = filterInStockRows(warehousePackageFallback, {}, role);
@@ -838,7 +892,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canInStockView, loadWarehousePackagesFallback, mergeWarehousePackages, needsInStockSummary, refreshVersion, role, workQueue.length]);
+  }, [apiClient, canInStockView, canWarehouseDashboardView, loadWarehousePackagesFallback, mergeWarehousePackages, needsInStockSummary, refreshVersion, role, workQueue.length]);
   useEffect(() => {
     if (!canTallyCompletedView) {
       setCompletedTallyArchiveRows([]);
@@ -846,7 +900,7 @@ export function WarehousePage({
     }
     if (!needsCompletedArchive) return;
     let alive = true;
-    apiClient.warehouseQuery.warehouseInStock({ status: 'TALLIED_ARCHIVED' })
+    apiClient.warehouseQuery.warehouseInStock({ status: 'TALLIED_ARCHIVED', keyword: pageSearchQueryKeyword })
       .then((response) => {
         if (!alive) return;
         const mappedRows = response.rows.map(mapWarehouseApiPackageToInbound).filter(isRecentWarehouseTallyArchive);
@@ -864,16 +918,17 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canTallyCompletedView, loadWarehousePackagesFallback, mergeWarehousePackages, needsCompletedArchive, refreshVersion]);
+  }, [apiClient, canTallyCompletedView, loadWarehousePackagesFallback, mergeWarehousePackages, needsCompletedArchive, pageSearchQueryKeyword, refreshVersion]);
   useEffect(() => {
     if (!canTallyPendingView && !canTallyCompletedView) {
       setTallyTasks([]);
+      setTallyProblemTasks([]);
       return;
     }
     if (!needsTallyTasks) return;
     let alive = true;
     const loadTallyTasks = () => {
-      void apiClient.warehouseQuery.warehouseTallyTasks()
+      void apiClient.warehouseQuery.warehouseTallyTasks({ keyword: pageSearchQueryKeyword })
         .then((rows) => {
           if (!alive) return;
           getWarehousePageCache(apiClient).tallyTasks = { updatedAt: Date.now(), rows };
@@ -882,16 +937,27 @@ export function WarehousePage({
         .catch(() => {
           // Keep the last successful snapshot during a transient polling failure.
         });
+      if (canTallyPendingView) {
+        void apiClient.warehouseQuery.warehouseTallyTasks({ problemOnly: true, keyword: pageSearchQueryKeyword })
+          .then((rows) => {
+            if (alive) setTallyProblemTasks(rows);
+          })
+          .catch(() => {
+            // Keep the last successful problem snapshot during a transient polling failure.
+          });
+      } else {
+        setTallyProblemTasks([]);
+      }
     };
     loadTallyTasks();
-    const refreshTimer = activeReceiveSection === 'completed-consolidation'
+    const refreshTimer = activeReceiveSection === 'completed-consolidation' || activeReceiveSection === 'consolidation'
       ? window.setInterval(loadTallyTasks, 5000)
       : undefined;
     return () => {
       alive = false;
       if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
     };
-  }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, refreshVersion]);
+  }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, pageSearchQueryKeyword, refreshVersion]);
   useEffect(() => {
     const refreshTimer = window.setInterval(() => setTallySortTick((current) => current + 1), 30_000);
     return () => window.clearInterval(refreshTimer);
@@ -932,7 +998,6 @@ export function WarehousePage({
     tallyRepeatFilters,
     tallyRepeatRefreshVersion
   ]);
-  const draftMetrics = calculateCartonSpecTotals(packageDraft.cartonSpecs);
   const selectedManualReceiptCustomer = manualReceiptCustomers.find((customer) => customer.code === packageDraft.customerCode.trim());
   const manualReceiptCustomerOptions = manualReceiptCustomers.map((customer) => ({
     value: customer.code,
@@ -942,9 +1007,9 @@ export function WarehousePage({
     !keyword.trim() || (value ?? '').toLowerCase().includes(keyword.trim().toLowerCase());
   const isOperatorView = !['ADMIN', 'WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(role)
     && !canInStockUpdate;
-  const canToggleInStockDataScope = isOperatorView;
-  const viewingAllTodayData = canToggleTodayDataScope && todayFilters.dataScope === 'ALL';
-  const viewingAllInStockData = canToggleInStockDataScope && inStockFilters.dataScope === 'ALL';
+  const canToggleInStockDataScope = false;
+  const viewingAllTodayData = false;
+  const viewingAllInStockData = false;
   const orderEntryActionLabel = '录单';
   function filterTodayRows(rows: WarehouseInboundPackage[], filters: WarehouseTodayQuery, currentRole: StaffRoleKey) {
     const keyword = (value: string | undefined, needle: string | undefined) =>
@@ -989,6 +1054,17 @@ export function WarehousePage({
       .filter((pkg) =>
         isInStockPackage(pkg)
         && (currentRole === 'OPERATOR' || !filters.site?.trim() || pkg.site === filters.site.trim())
+        && (!filters.keyword?.trim() || [
+          pkg.customerCode,
+          pkg.customerName,
+          pkg.customerOrderNo,
+          pkg.domesticTrackingNo,
+          pkg.combinedOrderNo,
+          pkg.systemOrderNo,
+          pkg.receivingChannel,
+          pkg.destinationCountry,
+          pkg.site
+        ].some((value) => keyword(value, filters.keyword)))
         && keyword(pkg.customerOrderNo, filters.customerOrderNo)
         && keyword(pkg.domesticTrackingNo, filters.domesticTrackingNo)
         && keyword(pkg.combinedOrderNo, filters.combinedOrderNo)
@@ -1003,6 +1079,48 @@ export function WarehousePage({
     setSelectedTodayPackageIds((current) =>
       checked ? Array.from(new Set([...current, packageId])) : current.filter((id) => id !== packageId)
     );
+  }
+  function openWarehousePackageDelete(scope: 'today-receipt' | 'in-stock', ids: string[]) {
+    const normalizedIds = Array.from(new Set(ids.filter(Boolean)));
+    if (!normalizedIds.length) {
+      setWarehouseNotice('请先勾选需要删除的包裹');
+      return;
+    }
+    setWarehouseDeleteScope(scope);
+    setWarehouseDeletePackageIds(normalizedIds);
+    setWarehouseDeleteReason('');
+  }
+  function closeWarehousePackageDelete() {
+    if (deletingWarehousePackages) return;
+    setWarehouseDeleteScope(null);
+    setWarehouseDeletePackageIds([]);
+    setWarehouseDeleteReason('');
+  }
+  async function confirmWarehousePackageDelete() {
+    if (!warehouseDeleteScope || !warehouseDeletePackageIds.length) return;
+    const reason = warehouseDeleteReason.trim();
+    if (!reason) {
+      setWarehouseNotice('请填写删除原因');
+      return;
+    }
+    setDeletingWarehousePackages(true);
+    try {
+      const response = await apiClient.warehouseQuery.deleteWarehousePackages(warehouseDeleteScope, { ids: warehouseDeletePackageIds, reason });
+      const deletedIds = new Set(response.deletedIds);
+      setWarehousePackages((current) => current.filter((pkg) => !deletedIds.has(pkg.id)));
+      setTodayReceiptRows((current) => current.filter((pkg) => !deletedIds.has(pkg.id)));
+      setInStockRows((current) => current.filter((pkg) => !deletedIds.has(pkg.id)));
+      setSelectedTodayPackageIds((current) => current.filter((id) => !deletedIds.has(id)));
+      setSelectedInStockPackageIds((current) => current.filter((id) => !deletedIds.has(id)));
+      setTodayReceiptRefreshVersion((current) => current + 1);
+      setInStockRefreshVersion((current) => current + 1);
+      setWarehouseNotice(`已删除 ${response.deletedCount} 个包裹`);
+      closeWarehousePackageDelete();
+    } catch (error) {
+      setWarehouseNotice(error instanceof Error ? error.message : '包裹删除失败');
+    } finally {
+      setDeletingWarehousePackages(false);
+    }
   }
   function renderWarehouseSelectAllHeader(
     rowIds: string[],
@@ -1038,6 +1156,13 @@ export function WarehousePage({
     () => sortPendingTallyTasksByRequestTime(tallyTasks.filter((task) => task.status === 'PENDING')),
     [tallyTasks]
   );
+  const restartedProblemTaskById = useMemo(() => {
+    const result = new Map<string, WarehouseTallyTaskSummary>();
+    tallyTasks
+      .filter((task) => task.status === 'PENDING' && task.previousTallyTaskId)
+      .forEach((task) => result.set(task.previousTallyTaskId!, task));
+    return result;
+  }, [tallyTasks]);
   const editingTallyPackageOptions = useMemo(() => {
     if (!editingTallyTask) return [];
     const blockedPackageIds = new Set(
@@ -1057,11 +1182,11 @@ export function WarehousePage({
       )
       .sort((left, right) => (left.inboundAt ?? left.createdAt ?? '').localeCompare(right.inboundAt ?? right.createdAt ?? ''));
   }, [editingTallyTask, inStockRows, pendingTallyTasks, todayReceiptRows, warehousePackages]);
-  const completedTallyTasks = tallyTasks.filter((task) => task.status === 'COMPLETED' && isRecentWarehouseTallyTask(task));
+  const completedTallyTasks = tallyTasks.filter((task) => task.status === 'COMPLETED' && task.tallyProgressStatus !== 'CANCELLED' && isRecentWarehouseTallyTask(task));
   const completedTallyTaskByKey = useMemo(() => {
     const taskByKey = new Map<string, WarehouseTallyTaskSummary>();
     tallyTasks
-      .filter((task) => task.status === 'COMPLETED')
+      .filter((task) => task.status === 'COMPLETED' && task.tallyProgressStatus !== 'CANCELLED')
       .forEach((task) => {
         taskByKey.set(task.id, task);
         taskByKey.set(task.taskNo, task);
@@ -1115,9 +1240,10 @@ export function WarehousePage({
     ...warehouseShipmentQueue.map((shipment) => ({ id: `shipment-${shipment.id}`, kind: 'shipment' as const, shipment })),
     ...warehouseOutboundQueue.map((record) => ({ id: `consolidation-${record.id}`, kind: 'consolidation' as const, consolidation: record }))
   ];
-  const warehouseLabelQueueRowIdsKey = warehouseLabelQueueRows.map((row) => row.id).join('\u0000');
+  const filteredWarehouseLabelQueueRows = filterWarehouseLabelQueueRows(warehouseLabelQueueRows, pendingDispatchFilters);
+  const warehouseLabelQueueRowIdsKey = filteredWarehouseLabelQueueRows.map((row) => row.id).join('\u0000');
   useEffect(() => {
-    const visibleIds = new Set(warehouseLabelQueueRows.map((row) => row.id));
+    const visibleIds = new Set(filteredWarehouseLabelQueueRows.map((row) => row.id));
     setSelectedWarehouseQueueRowIds((current) => {
       const next = current.filter((id) => visibleIds.has(id));
       return next.length === current.length ? current : next;
@@ -1125,7 +1251,7 @@ export function WarehousePage({
   }, [warehouseLabelQueueRowIdsKey]);
   const warehouseQueueRowSelection = useMemo(() => {
     if (!canDispatchSelect) return undefined;
-    const visibleRowIds = new Set(warehouseLabelQueueRows.map((row) => row.id));
+    const visibleRowIds = new Set(filteredWarehouseLabelQueueRows.map((row) => row.id));
     return {
       selectedRowKeys: selectedWarehouseQueueRowIds,
       onChange: (keys: Key[]) => setSelectedWarehouseQueueRowIds(keys.map(String).filter((key) => visibleRowIds.has(key))),
@@ -1136,31 +1262,16 @@ export function WarehousePage({
       })
     };
   }, [canDispatchSelect, selectedWarehouseQueueRowIds, warehouseLabelQueueRowIdsKey]);
-  const selectedWarehouseQueueRows = warehouseLabelQueueRows.filter((row) => selectedWarehouseQueueRowIds.includes(row.id));
+  const selectedWarehouseQueueRows = filteredWarehouseLabelQueueRows.filter((row) => selectedWarehouseQueueRowIds.includes(row.id));
   const selectedWarehouseQueueTicketCount = selectedWarehouseQueueRows.length;
   const selectedWarehouseQueueHandoverRows = selectedWarehouseQueueRows.map(createWarehouseHandoverRowFromQueue);
   const selectedWarehouseQueueHandoverGroups = groupWarehouseHandoverRowsByAgent(selectedWarehouseQueueHandoverRows);
   const selectedWarehouseQueueRequiresShippingMark = selectedWarehouseQueueRows.some((row) => row.kind === 'shipment' && row.shipment.shippingMarkRequired);
   const selectedWarehouseQueuePackageCount = selectedWarehouseQueueRows.reduce((sum, row) => sum + getWarehouseQueuePackageCount(row), 0);
-  // 看板与待出库队列共用同一行集，避免示例数与实际作业数据分叉。
-  const dashboardStats = [
-    { label: '待出库', value: warehouseLabelQueueRows.length, helper: '渠道确认后等待仓库处理' },
-    { label: '待理货', value: inStockTotals.pendingTallyTickets, helper: '分批到仓待合并' },
-    { label: '收货异常', value: inStockTotals.exceptionTickets, helper: '件重尺或资料待复核' }
-  ];
   const warehouseOutboundedRows: WarehouseHandoverRow[] = shipments
     .filter((shipment) => Boolean(shipment.outboundAt || shipment.dispatchedAt))
     .map(createWarehouseOutboundedRowFromShipment)
     .sort((a, b) => new Date(b.outboundAt ?? 0).getTime() - new Date(a.outboundAt ?? 0).getTime());
-  const packageEditMetrics = packageEditDraft ? calculateWarehousePackageMetrics({
-    weightKg: packageEditDraft.weightKg,
-    lengthCm: packageEditDraft.lengthCm,
-    widthCm: packageEditDraft.widthCm,
-    heightCm: packageEditDraft.heightCm,
-    packageCount: packageEditDraft.packageCount,
-    divisor: 5000
-  }) : null;
-
   function getConsolidationPackages(record: WarehouseConsolidationRecord) {
     return warehousePackages.filter((pkg) => record.packageIds.includes(pkg.id));
   }
@@ -1179,6 +1290,7 @@ export function WarehousePage({
         waybillNo: row.shipment.systemOrderNo,
         warehouseEntryNo: formatWarehouseHandoverEntryNo(row.shipment),
         cargoName: formatWarehouseHandoverCargoName(row.shipment),
+        cargoAttributes: formatWarehouseHandoverCargoAttributes(row.shipment),
         customerName: row.shipment.customerName,
         customerOrderNo: row.shipment.customerOrderNo,
         destinationCountry: row.shipment.destinationCountry,
@@ -1192,6 +1304,7 @@ export function WarehousePage({
       }, { agentChannelName });
     }
     const packages = getConsolidationPackages(row.consolidation);
+    const shipment = findShipmentBySystemOrderNo(row.consolidation.outboundOrderNo);
     const channelName = packages[0]?.receivingChannel || '待确认';
     const agentName = '待确认代理';
     return Object.assign({
@@ -1203,6 +1316,7 @@ export function WarehousePage({
       waybillNo: row.consolidation.outboundOrderNo,
       warehouseEntryNo: '-',
       cargoName: formatWarehouseHandoverCargoName(undefined, packages),
+      cargoAttributes: formatWarehouseHandoverCargoAttributes(shipment),
       customerName: packages[0]?.systemOrderNo ?? '理货包裹',
       customerOrderNo: Array.from(new Set(packages.map((pkg) => pkg.customerOrderNo))).join('、') || '-',
       destinationCountry: getConsolidationDestination(row.consolidation),
@@ -1229,6 +1343,7 @@ export function WarehousePage({
       waybillNo: shipment.systemOrderNo,
       warehouseEntryNo: formatWarehouseHandoverEntryNo(shipment),
       cargoName: formatWarehouseHandoverCargoName(shipment),
+      cargoAttributes: formatWarehouseHandoverCargoAttributes(shipment),
       customerName: shipment.customerName,
       customerOrderNo: shipment.customerOrderNo,
       destinationCountry: shipment.destinationCountry,
@@ -1275,6 +1390,16 @@ export function WarehousePage({
     }
     const fromPackageRemark = packages.map((pkg) => pkg.remark?.trim()).find(Boolean);
     return fromPackageRemark || '-';
+  }
+
+  function formatWarehouseHandoverCargoAttributes(shipment?: Shipment) {
+    const fbaWarehouseCode = shipment?.fbaWarehouseCode?.trim();
+    const fbaInboundNo = shipment?.fbaInboundNo?.trim();
+    const isFba = Boolean(fbaWarehouseCode || fbaInboundNo);
+    const warehouseLabel = fbaWarehouseCode || (isFba ? '代码未填写' : '-');
+    const cargoType = shipment?.cargoType?.trim() || '-';
+    const sensitive = shipment ? (shipment.sensitive ? '是' : '否') : '-';
+    return `FBA：${shipment ? (isFba ? '是' : '否') : '-'}\n仓库代码：${warehouseLabel}\n货物类型：${cargoType}\n敏感：${sensitive}`;
   }
 
   function getConsolidationDestination(record: WarehouseConsolidationRecord) {
@@ -1396,7 +1521,7 @@ export function WarehousePage({
   }
 
   function getWarehouseQueueAgent(row: WarehouseLabelQueueRow) {
-    return row.kind === 'shipment' ? row.shipment.agentName || '-' : '待确认代理';
+    return row.kind === 'shipment' ? row.shipment.agentShortName || row.shipment.agentName || '-' : '待确认代理';
   }
 
   function getWarehouseQueueProductName(row: WarehouseLabelQueueRow) {
@@ -1404,6 +1529,23 @@ export function WarehousePage({
       return row.shipment.productName || row.shipment.cargoType || '-';
     }
     return formatWarehouseHandoverCargoName(undefined, getConsolidationPackages(row.consolidation));
+  }
+
+  function getWarehouseQueueShipment(row: WarehouseLabelQueueRow) {
+    return row.kind === 'shipment' ? row.shipment : findShipmentBySystemOrderNo(row.consolidation.outboundOrderNo);
+  }
+
+  function getWarehouseQueueCargoType(row: WarehouseLabelQueueRow) {
+    return getWarehouseQueueShipment(row)?.cargoType?.trim() || '-';
+  }
+
+  function getWarehouseQueueFba(row: WarehouseLabelQueueRow) {
+    const shipment = getWarehouseQueueShipment(row);
+    if (!shipment) return '-';
+    const fbaWarehouseCode = shipment.fbaWarehouseCode?.trim();
+    const fbaInboundNo = shipment.fbaInboundNo?.trim();
+    if (!fbaWarehouseCode && !fbaInboundNo) return '否';
+    return fbaWarehouseCode ? `是 / ${fbaWarehouseCode}` : '是 / 仓库代码未填写';
   }
 
   function getWarehouseQueueDeclarationRequired(row: WarehouseLabelQueueRow) {
@@ -1475,7 +1617,7 @@ export function WarehousePage({
       sorter: (a: WarehouseLabelQueueRow, b: WarehouseLabelQueueRow) => getWarehouseQueueOutboundNo(a).localeCompare(getWarehouseQueueOutboundNo(b)),
       render: (_: unknown, record: WarehouseLabelQueueRow) => renderShipmentOrderNoLink(getWarehouseQueueOutboundNo(record), { shipment: record.kind === 'shipment' ? record.shipment : findShipmentBySystemOrderNo(record.consolidation.outboundOrderNo) })
     },
-    { key: 'agent', title: agentFieldLabels.detailedCompanyName, width: 180, sorter: (a: WarehouseLabelQueueRow, b: WarehouseLabelQueueRow) => getWarehouseQueueAgent(a).localeCompare(getWarehouseQueueAgent(b)), render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueAgent(record) },
+    { key: 'agent', title: '代理简称', width: 110, sorter: (a: WarehouseLabelQueueRow, b: WarehouseLabelQueueRow) => getWarehouseQueueAgent(a).localeCompare(getWarehouseQueueAgent(b)), render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueAgent(record) },
     { key: 'agentChannel', title: agentFieldLabels.channel, width: 120, render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueAgentChannel(record) },
     { key: 'customerCode', title: '客户编号', width: 110, sorter: (a: WarehouseLabelQueueRow, b: WarehouseLabelQueueRow) => getWarehouseQueueCustomerCode(a).localeCompare(getWarehouseQueueCustomerCode(b)), render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueCustomerCode(record) },
     { key: 'destination', title: '目的地', width: 90, sorter: (a: WarehouseLabelQueueRow, b: WarehouseLabelQueueRow) => getWarehouseQueueDestination(a).localeCompare(getWarehouseQueueDestination(b)), render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueDestination(record) },
@@ -1491,6 +1633,8 @@ export function WarehousePage({
       ]
     },
     { key: 'shippingMark', title: '唛头', width: 96, render: (_: unknown, record: WarehouseLabelQueueRow) => record.kind === 'shipment' ? renderShippingMarkTag(record.shipment.shippingMarkRequired) : <Text type="secondary">-</Text> },
+    { key: 'cargoType', title: '货物类型', width: 120, render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueCargoType(record) },
+    { key: 'fba', title: 'FBA', width: 130, render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueFba(record) },
     { key: 'warehouseOutboundRemark', title: '出库备注', width: 220, className: 'managed-table-wrap-cell', render: (_: unknown, record: WarehouseLabelQueueRow) => renderWarehouseOutboundRemark(record) },
     { key: 'productName', title: '品名', width: 130, render: (_: unknown, record: WarehouseLabelQueueRow) => getWarehouseQueueProductName(record) },
     {
@@ -1531,7 +1675,7 @@ export function WarehousePage({
       const remarkRow = handoverRemark
         ? `<tr class="handover-remark-row">
                 <th>交接备注</th>
-                <td colspan="6" class="handover-remark">${escapeHtml(handoverRemark)}</td>
+                <td colspan="8" class="handover-remark">${escapeHtml(handoverRemark)}</td>
               </tr>`
         : '';
       const tableRows = groupRows.map((row) => `
@@ -1540,6 +1684,7 @@ export function WarehousePage({
         <td>${escapeHtml(row.warehouseEntryNo)}</td>
         <td>${escapeHtml(getWarehouseHandoverTemplateChannel(row))}</td>
         <td>${escapeHtml(row.cargoName)}</td>
+        <td class="handover-attributes">${escapeHtml(row.cargoAttributes).replace(/\n/g, '<br />')}</td>
         <td>${row.packageCount}</td>
         <td class="${isShipmentRiskFlagActive(row.customsRefundText) ? 'shipment-risk-flag-active' : ''}">${escapeHtml(row.customsRefundText)}</td>
         <td>${escapeHtml(row.destinationCountry)}</td>
@@ -1550,11 +1695,11 @@ export function WarehousePage({
           <table class="agent-handover-table">
             <thead>
               <tr>
-                <th class="company-title" colspan="7">深圳思远国际货运代理有限公司</th>
+                <th class="company-title" colspan="8">深圳思远国际货运代理有限公司</th>
               </tr>
               <tr>
                 <th class="field-label">代理</th>
-                <td class="field-value" colspan="2">${escapeHtml(groupName)}</td>
+                <td class="field-value" colspan="3">${escapeHtml(groupName)}</td>
                 <th class="field-label">出货时间</th>
                 <td class="field-value" colspan="3">${escapeHtml(createdAt)}</td>
               </tr>
@@ -1563,6 +1708,7 @@ export function WarehousePage({
                 <th>入仓号</th>
                 <th>渠道</th>
                 <th>品名</th>
+                <th>货物属性</th>
                 <th>件数</th>
                 <th>是否<br />报关退税</th>
                 <th>目的地</th>
@@ -1573,12 +1719,12 @@ export function WarehousePage({
               ${remarkRow}
               <tr>
                 <th class="summary-label">票数</th>
-                <td class="summary-value" colspan="2">${groupRows.length}</td>
+                <td class="summary-value" colspan="3">${groupRows.length}</td>
                 <th class="summary-label">件数</th>
                 <td class="summary-value" colspan="3">${totalPackages}</td>
               </tr>
               <tr>
-                <td class="receiver-sign" colspan="7">收件人：</td>
+                <td class="receiver-sign" colspan="8">收件人：</td>
               </tr>
             </tbody>
           </table>
@@ -1607,6 +1753,7 @@ export function WarehousePage({
     tbody td { height: 10mm; font-size: 2.8mm; }
     .handover-remark-row th, .handover-remark-row td { min-height: 10mm; font-size: 3mm; }
     .handover-remark { text-align: left; white-space: pre-wrap; }
+    .handover-attributes { font-size: 2.45mm; line-height: 1.35; }
     .summary-label { height: 11mm; font-size: 3.8mm; font-weight: 800; }
     .summary-value { font-size: 4.2mm; font-weight: 800; }
     .receiver-sign { height: 10mm; text-align: left; padding-left: 48%; font-size: 3.2mm; font-weight: 800; }
@@ -1621,6 +1768,7 @@ export function WarehousePage({
     .summary-label { font-size: 3.1mm; }
     .summary-value { font-size: 3.6mm; }
     .receiver-sign { font-size: 2.8mm; }
+    .handover-attributes { font-size: 2.15mm; }
     ` : ''}
   </style>
 </head>
@@ -1711,7 +1859,7 @@ export function WarehousePage({
     { key: 'outbounded', label: '已出库', description: '仓库出库历史' },
     { key: 'rent-details', label: '仓租细分表', description: '逐票仓租计算与规则' }
   ].filter((item) => ({
-    dashboard: canTodayReceiptView || canInStockView || canTallyPendingView || canTallyCompletedView || canDispatchView || canOutboundedView || canRentDetailView,
+    dashboard: canWarehouseDashboardView,
     today: canTodayReceiptView,
     packages: canInStockView,
     consolidation: canTallyPendingView,
@@ -2199,17 +2347,20 @@ export function WarehousePage({
     actions: {
       title: '操作',
       key: 'actions',
-      width: 60,
+      width: 150,
       fixed: 'right',
       align: 'center',
       className: 'warehouse-today-action-column',
-      render: (_, record) => canInStockUpdate && canEditUnenteredWarehousePackage(record) ? (
-        <Button size="small" onClick={() => openWarehousePackageEdit(record)}>修改</Button>
-      ) : null
+      render: (_, record) => (
+        <Space size={6}>
+          {canInStockUpdate && canEditUnenteredWarehousePackage(record) ? <Button size="small" onClick={() => openWarehousePackageEdit(record)}>修改</Button> : null}
+          {canTodayReceiptDelete ? <Button size="small" danger onClick={() => openWarehousePackageDelete('today-receipt', [record.id])}>删除</Button> : null}
+        </Space>
+      )
     }
   };
   const todayReceiptColumnKeys = Object.keys(todayReceiptColumnDefinitions)
-    .filter((key) => (key !== 'site' || !isOperatorView) && (key !== 'actions' || canInStockUpdate));
+    .filter((key) => (key !== 'site' || !isOperatorView) && (key !== 'actions' || canInStockUpdate || canTodayReceiptDelete));
   const todayReceiptColumns = todayReceiptColumnKeys
     .map((key) => todayReceiptColumnDefinitions[key])
     .filter(Boolean) as ColumnsType<WarehouseInboundPackage>;
@@ -2257,7 +2408,7 @@ export function WarehousePage({
         );
       }
     },
-    ...(todayReceiptColumnKeys.includes('actions') ? [{ ...todayReceiptColumnDefinitions.actions, key: 'actions', title: '', width: 60, resizable: false, fixed: 'right' as const }] : [])
+    ...(todayReceiptColumnKeys.includes('actions') ? [{ ...todayReceiptColumnDefinitions.actions, key: 'actions', title: '', width: 150, resizable: false, fixed: 'right' as const }] : [])
   ];
 
   function calculatePackageGirth(record: WarehouseInboundPackage) {
@@ -2471,13 +2622,14 @@ export function WarehousePage({
                 : undefined}
             onClick={() => void openOrderEntryFromInStock([record.id])}
           >{alreadyBound ? '已录单' : orderEntryActionLabel}</Button> : null}
+          {canInStockDelete ? <Button size="small" danger onClick={() => openWarehousePackageDelete('in-stock', [record.id])}>删除</Button> : null}
         </div>
         );
       }
     }
   };
   const inStockColumnKeys = Object.keys(inStockColumnDefinitions)
-    .filter((key) => (key !== 'site' || !isOperatorView) && ((canInStockSelect || canInStockUpdate || canTallyStart || canInStockSplit || canCreateOrderEntry) || (key !== 'select' && key !== 'actions')));
+    .filter((key) => (key !== 'site' || !isOperatorView) && ((canInStockUpdate || canTallyStart || canInStockSplit || canCreateOrderEntry || canInStockDelete) || (key !== 'select' && key !== 'actions')));
   const inStockColumns = inStockColumnKeys
     .map((key) => inStockColumnDefinitions[key])
     .filter(Boolean) as ManagedTableColumns<WarehouseInboundPackage>;
@@ -2531,7 +2683,7 @@ export function WarehousePage({
         );
       }
     },
-    ...(inStockColumnKeys.includes('actions') ? [{ ...inStockColumnDefinitions.actions, key: 'actions', title: '操作', width: 76, resizable: false, fixed: 'right' as const }] : [])
+    ...(inStockColumnKeys.includes('actions') ? [{ ...inStockColumnDefinitions.actions, key: 'actions', title: '操作', width: 120, resizable: false, fixed: 'right' as const }] : [])
   ];
 
   const warehousePackageColumns: ColumnsType<WarehouseInboundPackage> = [
@@ -2844,14 +2996,32 @@ export function WarehousePage({
     try {
       const cancelled = await apiClient.cancelWarehouseTallyTask(cancellingTallyTask.id);
       setTallyTasks((current) => current.map((task) => task.id === cancelled.id ? cancelled : task));
+      setTallyProblemTasks((current) => [cancelled, ...current.filter((task) => task.id !== cancelled.id)]);
       setSelectedInStockPackageIds([]);
       setInStockRefreshVersion((current) => current + 1);
       setCancellingTallyTask(null);
-      setWarehouseNotice(`理货任务 ${cancelled.taskNo} 已取消，原包裹可重新发起理货`);
+      setPendingTallyView('problems');
+      setWarehouseNotice(`理货任务 ${cancelled.taskNo} 已退回理货问题件，原包裹已回到在仓数据`);
     } catch (error) {
-      setWarehouseNotice(error instanceof Error ? error.message : '取消理货任务失败');
+      setWarehouseNotice(error instanceof Error ? error.message : '退回重理失败');
     } finally {
       setCancellingTallySubmitting(false);
+    }
+  }
+
+  async function restartWarehouseTallyProblemTask(task: WarehouseTallyTaskSummary) {
+    if (restartingTallyProblemTaskId) return;
+    setRestartingTallyProblemTaskId(task.id);
+    try {
+      const restarted = await apiClient.restartWarehouseTallyProblemTask(task.id);
+      setTallyTasks((current) => [restarted, ...current.filter((item) => item.id !== restarted.id)]);
+      setInStockRefreshVersion((current) => current + 1);
+      setPendingTallyView('tasks');
+      setWarehouseNotice(`理货问题件 ${task.taskNo} 已重新发起理货，新任务号 ${restarted.taskNo}`);
+    } catch (error) {
+      setWarehouseNotice(error instanceof Error ? error.message : '重新发起理货失败');
+    } finally {
+      setRestartingTallyProblemTaskId(null);
     }
   }
 
@@ -2899,7 +3069,7 @@ export function WarehousePage({
       return;
     }
     setTallyCompleteError(null);
-    let printWindow: Window | null = null;
+    let printWindow: ReturnType<typeof window.open> = null;
     let completedTask: WarehouseTallyTaskSummary | undefined;
     try {
       const sourcePackages = completingTallyTask.packageIds
@@ -3013,30 +3183,6 @@ export function WarehousePage({
 
   function replaceTallyTask(updated: WarehouseTallyTaskSummary) {
     setTallyTasks((current) => current.map((task) => (task.id === updated.id ? updated : task)));
-  }
-
-  function openEditCompletedTallyCount(task: WarehouseTallyTaskSummary) {
-    setEditingCompletedTallyTask(task);
-    setEditingCompletedTallyCount(task.completedPackageCount ?? 1);
-  }
-
-  async function updateCompletedTallyCount() {
-    if (!editingCompletedTallyTask || editingCompletedTallySubmitting) return;
-    setEditingCompletedTallySubmitting(true);
-    try {
-      const updated = await apiClient.reverseReviewWarehouseTallyTask(editingCompletedTallyTask.id);
-      replaceTallyTask(updated);
-      setSelectedTallyTaskDetails((current) => current.map((task) => task.id === updated.id ? updated : task));
-      setEditingCompletedTallyTask(null);
-      setInStockRefreshVersion((current) => current + 1);
-      setActiveReceiveSection('consolidation');
-      setWarehouseNotice(`理货任务 \${updated.taskNo} 已反审核，原包裹已回到未完成理货，可重新勾选后完成`);
-      message.success('反审核成功，已回到未完成理货');
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '理货反审核失败');
-    } finally {
-      setEditingCompletedTallySubmitting(false);
-    }
   }
 
   async function openHistoricalAggregateCorrection(task: WarehouseTallyTaskSummary) {
@@ -3274,7 +3420,7 @@ export function WarehousePage({
 
   async function handleTodayWarehouseMachineExport() {
     if (!canTodayReceiptBatchDownload) {
-      setWarehouseNotice('当前角色已屏蔽批量下载');
+      setWarehouseNotice('当前角色没有今日收货批量下载权限');
       return;
     }
     if (!isWarehouseMachineExportReady(todayReceiptRowsQueryKey, warehouseQueryKey(todayFilters))) {
@@ -3299,6 +3445,15 @@ export function WarehousePage({
     }
   }
 
+  async function handleOutboundedExport() {
+    const workbook = createWorkbook();
+    addRowsWorksheet(workbook, '已出库', [
+      ['交接单号', '出货单号', '客户', '目的地', '出货件数', '计费重 KG', '公司渠道', agentFieldLabels.detailedCompanyName, '出库时间', '操作人', '状态'],
+      ...warehouseOutboundedRows.map((row) => [row.handoverNo, row.outboundOrderNo, row.customerName, row.destinationCountry, row.packageCount, row.chargeableWeightKg, row.channelName, row.agentName, row.outboundAt ? formatBeijingDateTime(row.outboundAt) : '', row.outboundBy, row.status])
+    ], { headerRow: true });
+    await downloadWorkbook(workbook, `已出库-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
   const pendingRoutingColumns = createPendingRoutingColumns({ businessCostAudits, mode: 'warehouse' });
   const tallySourceItems: WarehouseTallySourceItem[] = (completingTallyTask?.packageIds ?? []).map((packageId) => {
     const pkg = [...inStockRows, ...warehousePackages, ...todayReceiptRows].find((item) => item.id === packageId);
@@ -3313,29 +3468,19 @@ export function WarehousePage({
       <AppPageHeader
         title={config.title}
         description={activeReceiveSection === 'dashboard' ? config.description : undefined}
-        actions={
-          <AppActionGroup>
-            <Button icon={<PackageCheck size={16} />}>收货扫描</Button>
-            <Button type="primary" icon={<FileText size={16} />}>模拟面单</Button>
-          </AppActionGroup>
-        }
       />
 
       {renderNoticeBar(notice)}
       {renderNoticeBar(warehouseNotice)}
 
-      {activeReceiveSection === 'dashboard' ? (
-        <Row gutter={[16, 16]}>
-          {dashboardStats.map((stat) => (
-            <Col xs={24} md={8} key={stat.label}>
-              <MetricCard icon={<PackagePlus />} title={stat.label} value={stat.value} extra={stat.helper} />
-            </Col>
-          ))}
-        </Row>
-      ) : null}
-
       <ModuleSubWorkspace items={receiveSubItems} activeKey={activeReceiveSection} onChange={setActiveReceiveSection}>
-      {activeReceiveSection === 'dashboard' ? <PlaceholderPanel title="仓库看板" /> : null}
+      {activeReceiveSection === 'dashboard' ? (
+        <WarehouseDashboardPanel
+          totals={inStockTotals}
+          visibleSections={new Set(receiveSubItems.map((item) => item.key))}
+          onOpenSection={setActiveReceiveSection}
+        />
+      ) : null}
       {activeReceiveSection === 'rent-details' ? (
         <WarehouseRentDetailPanel
           apiClient={apiClient}
@@ -3352,12 +3497,10 @@ export function WarehousePage({
           completedArchiveRows={recentCompletedTallyArchiveRows}
           completedTaskByKey={completedTallyTaskByKey}
           canViewDetail={canTallyCompletedDetail}
-          canUpdateCount={canTallyCompletedReverseReview}
           canGenerateLabel={canTallyLabelGenerate}
           canPrintLabel={canTallyLabelPrint}
           canDownloadLabel={canTallyLabelDownload}
           onViewTask={(task) => setSelectedTallyTaskDetails([task])}
-          onUpdateCount={openEditCompletedTallyCount}
           onGenerateLabel={(task) => void generateWarehouseTallyLabel(task)}
           onPrintLabel={(task) => void printWarehouseTallyLabel(task)}
           onDownloadLabel={(task) => void downloadWarehouseTallyLabel(task)}
@@ -3411,10 +3554,10 @@ export function WarehousePage({
                     onChange={(event) => updateTodayFilterDraft({ datePreset: event.target.value as WarehouseTodayQuery['datePreset'] })}
                   >
                     <option value="TODAY">今日</option>
-                    <option value="WEEK">本周</option>
-                    <option value="LAST_7_DAYS">最近 7 天</option>
-                    <option value="MONTH">本月</option>
-                    <option value="CUSTOM">自定义</option>
+                    {canInStockView ? <option value="WEEK">本周</option> : null}
+                    {canInStockView ? <option value="LAST_7_DAYS">最近 7 天</option> : null}
+                    {canInStockView ? <option value="MONTH">本月</option> : null}
+                    {canInStockView ? <option value="CUSTOM">自定义</option> : null}
                   </select>
                 ))}
               </Col>
@@ -3548,6 +3691,7 @@ export function WarehousePage({
                   添加异常
                 </Button>
               ) : null}
+              {canTodayReceiptDelete ? <Button danger disabled={!selectedTodayPackageIds.length} onClick={() => openWarehousePackageDelete('today-receipt', selectedTodayPackageIds)}>批量删除</Button> : null}
               {canTodayReceiptCreate ? <Button type="primary" onClick={() => setManualReceiptDrawerOpen(true)}>手动添加收货</Button> : null}
             </Space>
           )}
@@ -3601,164 +3745,21 @@ export function WarehousePage({
           />
         </Card>
 
-        <Drawer
-          title="手动添加收货"
-          width={760}
+        <WarehouseManualReceiptDrawer
           open={manualReceiptDrawerOpen}
+          draft={packageDraft}
+          customerOptions={manualReceiptCustomerOptions}
+          customersLoading={manualReceiptCustomersLoading}
+          selectedCustomerName={selectedManualReceiptCustomer?.name}
           onClose={() => setManualReceiptDrawerOpen(false)}
-          destroyOnHidden={false}
-          footer={(
-            <Flex justify="space-between" align="center" gap={12} className="warehouse-today-drawer-footer">
-              <Space wrap>
-                <Tag color="cyan">箱规 {packageDraft.cartonSpecs.length} 条</Tag>
-                <Tag color="blue">总件数 {draftMetrics.totalPackages} 件</Tag>
-                <Tag color="purple">总体积 {draftMetrics.totalCbm.toFixed(3)} CBM</Tag>
-                <Tag color="geekblue">总实重 {draftMetrics.totalActualWeightKg.toFixed(2)} KG</Tag>
-              </Space>
-              <Button type="primary" onClick={() => void addTodayManualPackage()}>确认添加收货</Button>
-            </Flex>
-          )}
-        >
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <div>
-              <Text strong>基础信息</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={24} md={12}>
-                  <Text strong>客户编号</Text>
-                  <AutoComplete
-                    aria-label="手动添加客户编号"
-                    className="warehouse-manual-receipt-customer-select"
-                    style={{ width: '100%' }}
-                    value={packageDraft.customerCode}
-                    options={manualReceiptCustomerOptions}
-                    placeholder={manualReceiptCustomersLoading ? '正在加载客户资料' : '输入客户编号或名称搜索'}
-                    filterOption={(inputValue, option) => String(option?.label ?? '').toLowerCase().includes(inputValue.toLowerCase())}
-                    onChange={patchTodayManualCustomerCode}
-                    onSelect={patchTodayManualCustomerCode}
-                  />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>客户名称 / 匹配状态</Text>
-                  <Input
-                    aria-label="手动添加客户名称"
-                    value={selectedManualReceiptCustomer?.name ?? (packageDraft.customerCode.trim() ? '待客户建档匹配' : '')}
-                    placeholder="已建档客户自动带出；未建档编号可先收货"
-                    readOnly
-                  />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>快递单号</Text>
-                  <Input aria-label="手动添加快递单号" value={packageDraft.domesticTrackingNo} onChange={(event) => patchTodayManualTrackingNo(event.target.value)} />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>客户编号-快递单号</Text>
-                  <Input
-                    aria-label="手动添加客户编号-快递单号"
-                    value={packageDraft.combinedOrderNo}
-                    onChange={(event) => patchPackageDraft({ combinedOrderNo: event.target.value })}
-                  />
-                </Col>
-              </Row>
-            </div>
-
-            <div>
-              <Flex justify="space-between" align="center" className="warehouse-carton-spec-header">
-                <Text strong>箱规</Text>
-                <Text type="secondary">一条箱规保存为一行在仓记录</Text>
-              </Flex>
-              <div className="warehouse-carton-specs" role="group" aria-label="手动添加箱规">
-                {packageDraft.cartonSpecs.map((spec, index) => (
-                  <div className="warehouse-carton-spec-row" key={`carton-${index}`}>
-                    <div className="warehouse-carton-spec-index">#{index + 1}</div>
-                    <div className="warehouse-carton-spec-field">
-                      <Text strong>重量 KG</Text>
-                      <InputNumber
-                        aria-label={`第 ${index + 1} 条箱规重量 KG`}
-                        min={0}
-                        precision={2}
-                        value={spec.weightKg}
-                        onChange={(value) => patchCartonSpec(index, { weightKg: Number(value) || 0 })}
-                      />
-                    </div>
-                    <div className="warehouse-carton-dimensions">
-                      <div className="warehouse-carton-spec-field">
-                        <Text strong>长 cm</Text>
-                        <InputNumber
-                          aria-label={`第 ${index + 1} 条箱规长 cm`}
-                          min={0}
-                          precision={2}
-                          value={spec.lengthCm}
-                          onChange={(value) => patchCartonSpec(index, { lengthCm: Number(value) || 0 })}
-                        />
-                      </div>
-                      <div className="warehouse-carton-spec-field">
-                        <Text strong>宽 cm</Text>
-                        <InputNumber
-                          aria-label={`第 ${index + 1} 条箱规宽 cm`}
-                          min={0}
-                          precision={2}
-                          value={spec.widthCm}
-                          onChange={(value) => patchCartonSpec(index, { widthCm: Number(value) || 0 })}
-                        />
-                      </div>
-                      <div className="warehouse-carton-spec-field">
-                        <Text strong>高 cm</Text>
-                        <InputNumber
-                          aria-label={`第 ${index + 1} 条箱规高 cm`}
-                          min={0}
-                          precision={2}
-                          value={spec.heightCm}
-                          onChange={(value) => patchCartonSpec(index, { heightCm: Number(value) || 0 })}
-                        />
-                      </div>
-                    </div>
-                    <div className="warehouse-carton-spec-field warehouse-carton-count">
-                      <Text strong>件数</Text>
-                      <InputNumber
-                        aria-label={`第 ${index + 1} 条箱规件数`}
-                        min={1}
-                        precision={0}
-                        value={spec.packageCount}
-                        onChange={(value) => patchCartonSpec(index, { packageCount: Math.max(1, Math.floor(Number(value) || 1)) })}
-                      />
-                    </div>
-                    <div className="warehouse-carton-actions">
-                      <Tooltip title="新增箱规">
-                        <Button aria-label={`在第 ${index + 1} 条后新增箱规`} icon={<Plus size={16} />} onClick={addCartonSpec} />
-                      </Tooltip>
-                      <Tooltip title={packageDraft.cartonSpecs.length <= 1 ? '至少保留一条箱规' : '删除箱规'}>
-                        <Button
-                          aria-label={`删除第 ${index + 1} 条箱规`}
-                          icon={<Trash2 size={16} />}
-                          disabled={packageDraft.cartonSpecs.length <= 1}
-                          onClick={() => removeCartonSpec(index)}
-                        />
-                      </Tooltip>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <Text strong>备注异常</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={24}>
-                  <Text strong>扫描时间</Text>
-                  <Input aria-label="手动添加扫描时间" type="datetime-local" value={packageDraft.scanTime} onChange={(event) => patchPackageDraft({ scanTime: event.target.value })} />
-                </Col>
-                <Col xs={24}>
-                  <Text strong>备注</Text>
-                  <Input aria-label="手动添加备注" value={packageDraft.remark} onChange={(event) => patchPackageDraft({ remark: event.target.value })} />
-                </Col>
-                <Col xs={24}>
-                  <Text strong>异常</Text>
-                  <Input aria-label="手动添加异常" value={packageDraft.manualException} onChange={(event) => patchPackageDraft({ manualException: event.target.value })} />
-                </Col>
-              </Row>
-            </div>
-          </Space>
-        </Drawer>
+          onConfirm={() => void addTodayManualPackage()}
+          onDraftChange={patchPackageDraft}
+          onCustomerCodeChange={patchTodayManualCustomerCode}
+          onTrackingNoChange={patchTodayManualTrackingNo}
+          onCartonSpecChange={patchCartonSpec}
+          onAddCartonSpec={addCartonSpec}
+          onRemoveCartonSpec={removeCartonSpec}
+        />
       </Space>
       ) : null}
       {activeReceiveSection === 'packages' ? (
@@ -3865,7 +3866,7 @@ export function WarehousePage({
               {selectedUnmaintainedCustomerPackages.length ? <Tag color="error" aria-live="polite">含 {selectedUnmaintainedCustomerPackages.length} 件客户未建档</Tag> : null}
             </Space>
             <Space wrap>
-              <Button
+              {canInStockExport ? <Button
                 icon={<Download size={15} />}
                 loading={machineExporting}
                 disabled={!inStockRows.length || !isWarehouseMachineExportReady(inStockRowsQueryKey, warehouseQueryKey(inStockFilters))}
@@ -3875,9 +3876,10 @@ export function WarehousePage({
                   ? `下载已选 ${selectedInStockPackageCount} 条记录`
                   : '未勾选时下载当前筛选结果全部数据'}
                 onClick={() => void handleWarehouseMachineExport()}
-              >{selectedInStockPackageCount ? `下载已选（${selectedInStockPackageCount}）` : '批量下载'}</Button>
-              {canWarehouseMachineImport ? <Button onClick={() => setMachineImportOpen(true)}>批量导入</Button> : null}
+              >{selectedInStockPackageCount ? `下载已选（${selectedInStockPackageCount}）` : '批量下载'}</Button> : null}
+              {canInStockImport ? <Button onClick={() => setMachineImportOpen(true)}>批量导入</Button> : null}
               {canTallyStart ? <Button onClick={() => openWarehouseTallyTask(selectedInStockPackageIds)}>批量理货</Button> : null}
+              {canInStockDelete ? <Button danger disabled={!selectedInStockPackageIds.length} onClick={() => openWarehousePackageDelete('in-stock', selectedInStockPackageIds)}>批量删除</Button> : null}
               {canCreateOrderEntry ? <Button
                 type="primary"
                 loading={orderEntryPreparing && !selectedUnmaintainedCustomerPackages.length}
@@ -3910,7 +3912,7 @@ export function WarehousePage({
                     columns: inStockColumns,
                     ariaLabel: (record) => `查看在仓货物 ${formatWarehousePackageNo(record)} 详情`
                   } : false,
-                  columnSettings: hasWarehousePermission('warehouse:in-stock:column-setting') ? {
+                  columnSettings: canInStockView ? {
                     storageKey: 'sunny.warehouse.inStock.matrix-columns-v1',
                     title: '在仓矩阵列设置',
                     lockedKeys: ['actions']
@@ -3930,7 +3932,7 @@ export function WarehousePage({
                     title: '在仓货物详情',
                     ariaLabel: (record) => `查看在仓货物 ${formatWarehousePackageNo(record)} 详情`
                   } : false,
-                  columnSettings: hasWarehousePermission('warehouse:in-stock:column-setting') ? {
+                  columnSettings: canInStockView ? {
                     storageKey: 'sunny.warehouse.inStock.columns',
                     title: '在仓数据列设置',
                     lockedKeys: ['actions'],
@@ -3944,7 +3946,7 @@ export function WarehousePage({
             loading={inStockLoading}
             recordDetailTarget={notificationPackageDetailTarget ? { key: `notification-warehouse-package:${notificationPackageDetailTarget.id}`, record: notificationPackageDetailTarget } : null}
             size="small"
-            rowSelection={(canInStockSelect || canInStockUpdate || canTallyStart || canInStockSplit || canCreateOrderEntry) ? {
+            rowSelection={(canInStockUpdate || canTallyStart || canInStockSplit || canCreateOrderEntry || canInStockDelete) ? {
               selectedRowKeys: selectedInStockPackageIds,
               onChange: (selectedRowKeys) => setSelectedInStockPackageIds(selectedRowKeys.map(String)),
               getTitleCheckboxProps: () => ({ 'aria-label': '全选在仓包裹' }),
@@ -3966,12 +3968,22 @@ export function WarehousePage({
       <Space direction="vertical" size={16} className="warehouse-tally-workspace">
           <Card
             title={(
-              <Space size={12}>
+              <Space size={12} wrap>
                 <span>未完成理货</span>
-                <Text type="secondary">共 {pendingTallyTasks.length} 条</Text>
+                <Text type="secondary">共 {pendingTallyView === 'tasks' ? pendingTallyTasks.length : tallyProblemTasks.length} 条</Text>
+                <Segmented
+                  size="small"
+                  value={pendingTallyView}
+                  onChange={(value) => setPendingTallyView(value as 'tasks' | 'problems')}
+                  options={[
+                    { label: '任务', value: 'tasks' },
+                    { label: `理货问题件${tallyProblemTasks.length ? ` (${tallyProblemTasks.length})` : ''}`, value: 'problems' }
+                  ]}
+                />
               </Space>
             )}
           >
+          {pendingTallyView === 'tasks' ? (
             <ManagedTable<WarehouseTallyTaskSummary>
               recordDetail={{ title: '未完成理货任务详情' }}
               rowKey="id"
@@ -4014,12 +4026,57 @@ export function WarehousePage({
                       {canTallyUpdate ? <Button size="small" onClick={() => openEditTallyTask(task)}>修改</Button> : null}
                       {canTallyProcess && task.tallyProgressStatus !== 'IN_PROGRESS' ? <Button size="small" onClick={() => void startWarehouseTallyTask(task)}>开始理货</Button> : null}
                       {canTallyProcess ? <Button size="small" type="primary" onClick={() => openCompleteTallyTask(task)}>处理理货</Button> : null}
-                      {canTallyCancel ? <Button size="small" danger onClick={() => setCancellingTallyTask(task)}>取消任务</Button> : null}
+                      {canTallyCancel ? <Button size="small" danger onClick={() => setCancellingTallyTask(task)}>退回重理</Button> : null}
                     </Space>
                   )
                 }
               ]}
             />
+          ) : (
+            <ManagedTable<WarehouseTallyTaskSummary>
+              recordDetail={{ title: '理货问题件详情' }}
+              rowKey="id"
+              dataSource={tallyProblemTasks}
+              size="small"
+              pagination={tenRowTablePagination}
+              columnSettingsPlacement="toolbar"
+              scroll={{ x: 1280 }}
+              locale={{ emptyText: '暂无理货问题件' }}
+              columns={[
+                { title: '退回时间', dataIndex: 'cancelledAt', width: 170, defaultSortOrder: 'descend', sorter: (a, b) => (a.cancelledAt ?? '').localeCompare(b.cancelledAt ?? ''), render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+                { title: '原理货任务号', dataIndex: 'taskNo', width: 210 },
+                { title: '来源组合号', dataIndex: 'sourceCombinedOrderNo', width: 210 },
+                { title: '客户编号', dataIndex: 'customerCode', width: 100 },
+                { title: '理货渠道', dataIndex: 'tallyChannel', width: 100, render: (value?: string) => value || <Tag>待补充</Tag> },
+                { title: '件数', dataIndex: 'packageCount', width: 80, align: 'right' },
+                { title: '原始重量', dataIndex: 'originalWeightKg', width: 110, align: 'right', render: (value: number) => `${value.toFixed(2)} KG` },
+                { title: '问题原因', dataIndex: 'cancelReason', width: 180, render: (value?: string) => value || '退回重理' },
+                { title: '处理人', dataIndex: 'cancelledBy', width: 110, render: (value?: string) => value || '-' },
+                {
+                  title: '操作',
+                  key: 'actions',
+                  width: 180,
+                  fixed: 'right',
+                  render: (_, task) => {
+                    const restarted = restartedProblemTaskById.get(task.id);
+                    return restarted ? (
+                      <Tag color="blue">已重新发起：{restarted.taskNo}</Tag>
+                    ) : (
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={restartingTallyProblemTaskId === task.id}
+                        disabled={!canTallyStart}
+                        onClick={() => void restartWarehouseTallyProblemTask(task)}
+                      >
+                        重新发起理货
+                      </Button>
+                    );
+                  }
+                }
+              ]}
+            />
+          )}
           </Card>
           <div hidden>
           <Card
@@ -4191,10 +4248,10 @@ export function WarehousePage({
                   <Text strong>{selectedWarehouseTotals.chargeableWeightKg.toFixed(2)} KG</Text>
                 </div>
               </div>
-              {hasWarehousePermission('warehouse:tally-pending:merge-only') || hasWarehousePermission('warehouse:tally-pending:merge-and-ship') ? (
+              {canTallyProcess || canTallyCompleteAndShip ? (
                 <div className="warehouse-tally-action-buttons">
-                  {hasWarehousePermission('warehouse:tally-pending:merge-only') ? <Button block onClick={() => void consolidateSelectedPackages('MERGE_ONLY')}>合并成一箱</Button> : null}
-                  {hasWarehousePermission('warehouse:tally-pending:merge-and-ship') ? <Button type="primary" block onClick={() => void consolidateSelectedPackages('MERGE_AND_SHIP')}>理货并创建出货单</Button> : null}
+                  {canTallyProcess ? <Button block onClick={() => void consolidateSelectedPackages('MERGE_ONLY')}>合并成一箱</Button> : null}
+                  {canTallyCompleteAndShip ? <Button type="primary" block onClick={() => void consolidateSelectedPackages('MERGE_AND_SHIP')}>理货并创建出货单</Button> : null}
                 </div>
               ) : null}
               <Alert
@@ -4248,31 +4305,69 @@ export function WarehousePage({
           </Space>
         )}
       >
-        <ManagedTable<WarehouseLabelQueueRow>
-          recordDetail={{ title: '待出库详情' }}
-          rowKey="id"
-          dataSource={warehouseLabelQueueRows}
-          size="small"
-          pagination={tenRowTablePagination}
-          rowSelection={warehouseQueueRowSelection}
-          minimumScrollX={1720}
-          columnSettingsPlacement="toolbar"
-          className="warehouse-label-queue-table"
-          columns={warehouseQueueColumns}
-          columnSettings={hasWarehousePermission('warehouse:dispatch-pending:column-setting') ? {
-            storageKey: warehouseQueueColumnSettingsKey,
-            title: '待出库列设置',
-            labels: warehouseQueueColumnLabels,
-            defaultColumnOrder: warehouseQueueDefaultColumnKeys
-          } : undefined}
-          locale={{ emptyText: '暂无待打单出货单，请先在渠道排货中分配渠道，或在理货管理中选择“理货并创建出货单”。' }}
-        />
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={8} xl={5}>
+              {renderFilterField('出货单号', <Input allowClear aria-label="待出库出货单号筛选" value={pendingDispatchFilterDraft.outboundNo} onChange={(event) => setPendingDispatchFilterDraft((current) => ({ ...current, outboundNo: event.target.value }))} />)}
+            </Col>
+            <Col xs={24} md={8} xl={5}>
+              {renderFilterField('代理简称', <Input allowClear aria-label="待出库代理简称筛选" value={pendingDispatchFilterDraft.agentShortName} onChange={(event) => setPendingDispatchFilterDraft((current) => ({ ...current, agentShortName: event.target.value }))} />)}
+            </Col>
+            <Col xs={24} md={8} xl={4}>
+              {renderFilterField('敏感', <select aria-label="待出库敏感筛选" className="native-select" value={pendingDispatchFilterDraft.sensitive} onChange={(event) => setPendingDispatchFilterDraft((current) => ({ ...current, sensitive: event.target.value as WarehousePendingDispatchFilter['sensitive'] }))}>
+                <option value="ALL">全部</option>
+                <option value="YES">是</option>
+                <option value="NO">否</option>
+              </select>)}
+            </Col>
+            <Col xs={24} md={8} xl={4}>
+              {renderFilterField('报关', <select aria-label="待出库报关筛选" className="native-select" value={pendingDispatchFilterDraft.declaration} onChange={(event) => setPendingDispatchFilterDraft((current) => ({ ...current, declaration: event.target.value as WarehousePendingDispatchFilter['declaration'] }))}>
+                <option value="ALL">全部</option>
+                <option value="YES">是</option>
+                <option value="NO">否</option>
+              </select>)}
+            </Col>
+            <Col xs={24} md={8} xl={6}>
+              {renderFilterActions(
+                () => {
+                  setPendingDispatchFilters({ ...pendingDispatchFilterDraft });
+                  setSelectedWarehouseQueueRowIds([]);
+                },
+                () => {
+                  setPendingDispatchFilterDraft({ ...emptyWarehousePendingDispatchFilter });
+                  setPendingDispatchFilters({ ...emptyWarehousePendingDispatchFilter });
+                  setSelectedWarehouseQueueRowIds([]);
+                }
+              )}
+            </Col>
+          </Row>
+          <ManagedTable<WarehouseLabelQueueRow>
+            recordDetail={{ title: '待出库详情' }}
+            rowKey="id"
+            dataSource={filteredWarehouseLabelQueueRows}
+            size="small"
+            pagination={tenRowTablePagination}
+            rowSelection={warehouseQueueRowSelection}
+            minimumScrollX={1720}
+            columnSettingsPlacement="toolbar"
+            className="warehouse-label-queue-table"
+            columns={warehouseQueueColumns}
+            columnSettings={canDispatchView ? {
+              storageKey: warehouseQueueColumnSettingsKey,
+              title: '待出库列设置',
+              labels: warehouseQueueColumnLabels,
+              defaultColumnOrder: warehouseQueueDefaultColumnKeys
+            } : undefined}
+            locale={{ emptyText: '暂无待打单出货单，请先在渠道排货中分配渠道，或在理货管理中选择“理货并创建出货单”。' }}
+          />
+        </Space>
       </Card>
       ) : null}
 
       {activeReceiveSection === 'outbounded' ? (
       <Card
         title="已出库"
+        extra={canOutboundedExport ? <Button icon={<Download size={15} />} onClick={() => void handleOutboundedExport()}>导出</Button> : null}
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <Alert
@@ -4429,34 +4524,6 @@ export function WarehousePage({
       </Modal>
 
       <Modal
-        title={editingCompletedTallyTask ? `反审核理货任务 · ${editingCompletedTallyTask.taskNo}` : '反审核理货任务'}
-        open={Boolean(editingCompletedTallyTask)}
-        onCancel={() => {
-          if (!editingCompletedTallySubmitting) setEditingCompletedTallyTask(null);
-        }}
-        onOk={() => void updateCompletedTallyCount()}
-        okText="确认反审核"
-        cancelText="取消"
-        confirmLoading={editingCompletedTallySubmitting}
-        cancelButtonProps={{ disabled: editingCompletedTallySubmitting }}
-        closable={!editingCompletedTallySubmitting}
-        maskClosable={!editingCompletedTallySubmitting}
-        width={520}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            type="warning"
-            showIcon
-            message="已完成理货不允许直接修改件数"
-          />
-          <Descriptions size="small" column={2} bordered>
-            <Descriptions.Item label="理货任务号">{editingCompletedTallyTask?.taskNo || '-'}</Descriptions.Item>
-            <Descriptions.Item label="理货后件数">{editingCompletedTallyTask?.completedPackageCount ?? '-'} 件</Descriptions.Item>
-          </Descriptions>
-        </Space>
-      </Modal>
-
-      <Modal
         title="代理交接单"
         open={batchHandoverOpen}
         onCancel={() => {
@@ -4499,7 +4566,7 @@ export function WarehousePage({
                 { label: '竖向', value: 'portrait' }
               ]}
             />
-            <Text type="secondary">横向适合 7 列完整显示；竖向会自动缩小字体并保留全部字段。</Text>
+            <Text type="secondary">横向适合 8 列完整显示；竖向会自动缩小字体并保留全部字段。</Text>
           </div>
           <div className="warehouse-agent-handover-remark-editor">
             <label htmlFor="warehouse-handover-remark">交接备注（本次打印）</label>
@@ -4540,6 +4607,7 @@ export function WarehousePage({
                     <th>入仓号</th>
                     <th>渠道</th>
                     <th>品名</th>
+                    <th>货物属性</th>
                     <th>件数</th>
                     <th>是否<br />报关退税</th>
                     <th>目的地</th>
@@ -4552,6 +4620,9 @@ export function WarehousePage({
                       <td>{row.warehouseEntryNo}</td>
                       <td>{getWarehouseHandoverTemplateChannel(row)}</td>
                       <td>{row.cargoName}</td>
+                      <td className="warehouse-agent-handover-attributes">
+                        {row.cargoAttributes.split('\n').map((line) => <div key={line}>{line}</div>)}
+                      </td>
                       <td>{row.packageCount}</td>
                       <td><ShipmentRiskFlag value={row.customsRefundText} /></td>
                       <td>{row.destinationCountry}</td>
@@ -4559,12 +4630,12 @@ export function WarehousePage({
                   ))}
                   <tr>
                     <th>票数</th>
-                    <td colSpan={2}>{rows.length}</td>
+                    <td colSpan={3}>{rows.length}</td>
                     <th>件数</th>
                     <td colSpan={3}>{rows.reduce((sum, row) => sum + row.packageCount, 0)}</td>
                   </tr>
                   <tr>
-                    <td colSpan={7} className="warehouse-agent-handover-receiver">收件人：</td>
+                    <td colSpan={8} className="warehouse-agent-handover-receiver">收件人：</td>
                   </tr>
                 </tbody>
               </table>
@@ -4596,134 +4667,52 @@ export function WarehousePage({
         </Space>
       </Modal>
       <Modal
-        title="修改入仓包裹"
-        open={Boolean(editingPackage && packageEditDraft)}
-        onCancel={() => {
-          if (!savingPackageEdit) closeWarehousePackageEdit();
-        }}
-        onOk={() => void saveWarehousePackageEdit()}
-        okText="保存"
+        title={`删除仓库包裹（${warehouseDeletePackageIds.length} 个）`}
+        open={Boolean(warehouseDeleteScope)}
+        onCancel={closeWarehousePackageDelete}
+        onOk={() => void confirmWarehousePackageDelete()}
+        okText="确认删除"
+        okButtonProps={{ danger: true, disabled: !warehouseDeleteReason.trim() }}
         cancelText="取消"
-        confirmLoading={savingPackageEdit}
-        closable={!savingPackageEdit}
-        keyboard={!savingPackageEdit}
-        maskClosable={!savingPackageEdit}
-        cancelButtonProps={{ disabled: savingPackageEdit }}
-        width={760}
+        confirmLoading={deletingWarehousePackages}
         destroyOnHidden
       >
-        {editingPackage && packageEditDraft ? (
-          <Space direction="vertical" size={16} style={{ width: '100%' }}>
-            <Alert
-              type="info"
-              showIcon
-              message={`正在修改 ${editingPackage.combinedOrderNo}`}
-              description="可同时修改入仓基础数据和补录同箱规记录；不改变理货、录单、出库或财务流程。"
-            />
-            {sameSpecRequestAttempted ? (
-              <Alert
-                type="warning"
-                showIcon
-                message="上次补录结果待确认"
-                description="输入已锁定，请直接点击保存，系统将使用同一请求号安全重试。"
-              />
-            ) : null}
-            <div>
-              <Text strong>基础信息</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={24} md={8}>
-                  <Text strong>客户编号</Text>
-                  <Input aria-label="修改客户编号" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} value={packageEditDraft.customerCode} onChange={(event) => patchPackageEditCustomerCode(event.target.value)} />
-                </Col>
-                <Col xs={24} md={8}>
-                  <Text strong>快递单号</Text>
-                  <Input aria-label="修改快递单号" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} value={packageEditDraft.domesticTrackingNo} onChange={(event) => patchPackageEditTrackingNo(event.target.value)} />
-                </Col>
-                <Col xs={24} md={8}>
-                  <Text strong>客户编号-快递单号</Text>
-                  <Input aria-label="修改客户编号-快递单号" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} value={packageEditDraft.combinedOrderNo} onChange={(event) => patchPackageEditCombinedOrderNo(event.target.value)} />
-                </Col>
-                {canInStockSameSpecReplenish ? (
-                  <Col xs={12} md={8}>
-                    <Text strong>同箱规补录</Text>
-                    <InputNumber
-                      aria-label="同箱规补录箱数"
-                      min={0}
-                      max={500}
-                      precision={0}
-                      value={sameSpecSupplementCount}
-                      disabled={!canReplenishWarehouseSameSpec(editingPackage) || savingPackageEdit || sameSpecRequestAttempted}
-                      onChange={(value) => updateSameSpecSupplementCount(Number(value ?? 0))}
-                      placeholder="填写新增箱数"
-                      style={{ width: '100%' }}
-                    />
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {canReplenishWarehouseSameSpec(editingPackage)
-                        ? `将新增 ${sameSpecSupplementCount || 0} 条、每条 1 件；原记录不变`
-                        : '仅支持未理货、未录单的原始过机记录'}
-                    </Text>
-                  </Col>
-                ) : null}
-                <Col xs={12} md={8}>
-                  <Text strong>件序号</Text>
-                  <InputNumber aria-label="修改件序号" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={1} precision={0} value={packageEditDraft.packageIndex} onChange={(value) => patchPackageEditDraft({ packageIndex: Number(value) || 1 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={24} md={8}>
-                  <Text strong>扫描时间</Text>
-                  <Input aria-label="修改扫描时间" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} type="datetime-local" value={packageEditDraft.scanTime} onChange={(event) => patchPackageEditDraft({ scanTime: event.target.value })} />
-                </Col>
-              </Row>
-            </div>
-
-            <div>
-              <Text strong>件重尺</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={12} md={6}>
-                  <Text strong>单件实重</Text>
-                  <InputNumber aria-label="修改单件实重" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={0} precision={2} value={packageEditDraft.weightKg} onChange={(value) => patchPackageEditDraft({ weightKg: Number(value) || 0 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={12} md={4}>
-                  <Text strong>长 cm</Text>
-                  <InputNumber aria-label="修改长 cm" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={0} precision={1} value={packageEditDraft.lengthCm} onChange={(value) => patchPackageEditDraft({ lengthCm: Number(value) || 0 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={12} md={4}>
-                  <Text strong>宽 cm</Text>
-                  <InputNumber aria-label="修改宽 cm" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={0} precision={1} value={packageEditDraft.widthCm} onChange={(value) => patchPackageEditDraft({ widthCm: Number(value) || 0 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={12} md={4}>
-                  <Text strong>高 cm</Text>
-                  <InputNumber aria-label="修改高 cm" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={0} precision={1} value={packageEditDraft.heightCm} onChange={(value) => patchPackageEditDraft({ heightCm: Number(value) || 0 })} style={{ width: '100%' }} />
-                </Col>
-                <Col xs={12} md={6}>
-                  <Text strong>件数</Text>
-                  <InputNumber aria-label="修改件数" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} min={1} precision={0} value={packageEditDraft.packageCount} onChange={(value) => patchPackageEditDraft({ packageCount: Number(value) || 1 })} style={{ width: '100%' }} />
-                </Col>
-              </Row>
-              {packageEditMetrics ? (
-                <Space wrap style={{ marginTop: 12 }}>
-                  <Tag color="cyan">体积 {packageEditMetrics.cbm.toFixed(3)} CBM</Tag>
-                  <Tag color="blue">5000材积 {calculateWarehouseVolumetricWeight(packageEditDraft, 5000).toFixed(2)} KG</Tag>
-                  <Tag color="purple">6000材积 {calculateWarehouseVolumetricWeight(packageEditDraft, 6000).toFixed(2)} KG</Tag>
-                </Space>
-              ) : null}
-            </div>
-
-            <div>
-              <Text strong>备注异常</Text>
-              <Row gutter={[12, 12]} className="warehouse-today-drawer-section">
-                <Col xs={24} md={12}>
-                  <Text strong>备注</Text>
-                  <Input.TextArea aria-label="修改备注" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} rows={3} value={packageEditDraft.remark} onChange={(event) => patchPackageEditDraft({ remark: event.target.value })} />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Text strong>人工异常</Text>
-                  <Input.TextArea aria-label="修改人工异常" disabled={!canInStockUpdate || savingPackageEdit || sameSpecRequestAttempted} rows={3} value={packageEditDraft.manualException} onChange={(event) => patchPackageEditDraft({ manualException: event.target.value })} />
-                </Col>
-              </Row>
-            </div>
-          </Space>
-        ) : null}
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="warning"
+            showIcon
+            message="删除后不可恢复"
+            description="删除会永久移除包裹记录；已理货、合票、录单、重新过机或出库的包裹不能删除。"
+          />
+          <Text type="secondary">请填写删除原因，系统会记录操作人、删除时间和包裹明细。</Text>
+          <Input.TextArea
+            aria-label="删除原因"
+            rows={3}
+            maxLength={200}
+            showCount
+            placeholder="例如：重复扫描、测试数据、客户取消收货"
+            value={warehouseDeleteReason}
+            onChange={(event) => setWarehouseDeleteReason(event.target.value)}
+          />
+        </Space>
       </Modal>
+      <WarehousePackageEditModal
+        record={editingPackage}
+        draft={packageEditDraft}
+        saving={savingPackageEdit}
+        canEdit={canInStockUpdate}
+        canShowSameSpecReplenish={canInStockSameSpecReplenish}
+        canReplenishSameSpec={Boolean(editingPackage && canReplenishWarehouseSameSpec(editingPackage))}
+        sameSpecSupplementCount={sameSpecSupplementCount}
+        sameSpecRequestAttempted={sameSpecRequestAttempted}
+        onCancel={closeWarehousePackageEdit}
+        onConfirm={() => void saveWarehousePackageEdit()}
+        onDraftChange={patchPackageEditDraft}
+        onCustomerCodeChange={patchPackageEditCustomerCode}
+        onTrackingNoChange={patchPackageEditTrackingNo}
+        onCombinedOrderNoChange={patchPackageEditCombinedOrderNo}
+        onSameSpecSupplementCountChange={updateSameSpecSupplementCount}
+      />
       <Modal
         title="理货明细"
         open={Boolean(selectedConsolidation)}
@@ -4816,13 +4805,13 @@ export function WarehousePage({
         </Space>
       </Modal>
       <Modal
-        title="取消理货任务"
+        title="退回重理"
         open={Boolean(cancellingTallyTask)}
         onCancel={() => {
           if (!cancellingTallySubmitting) setCancellingTallyTask(null);
         }}
         onOk={() => void cancelPendingTallyTask()}
-        okText="确认取消任务"
+        okText="确认退回重理"
         cancelText="返回"
         okButtonProps={{ danger: true }}
         confirmLoading={cancellingTallySubmitting}
@@ -4833,8 +4822,8 @@ export function WarehousePage({
         <Alert
           type="warning"
           showIcon
-          message={cancellingTallyTask ? `确认取消理货任务 ${cancellingTallyTask.taskNo}？` : '确认取消理货任务？'}
-          description="任务和操作记录会保留，不会删除原包裹；取消后原包裹可重新发起理货。已完成的理货任务不能取消。"
+          message={cancellingTallyTask ? `确认将理货任务 ${cancellingTallyTask.taskNo} 退回重理？` : '确认退回重理？'}
+          description="任务和操作记录会保留，原包裹会回到在仓数据，并进入理货问题件；已完成的理货任务不允许退回重理。"
         />
       </Modal>
       <WarehouseCompleteTallyModal

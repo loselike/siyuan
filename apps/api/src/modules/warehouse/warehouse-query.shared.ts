@@ -144,6 +144,37 @@ export async function mapWarehousePackagesWithConfirmedTally(
   });
 }
 
+export async function annotateWarehouseTallyCompletion<T extends { id?: string; tallyTaskId?: string | null }>(
+  prisma: PrismaService,
+  rows: readonly T[]
+): Promise<Array<T & { tallyCompleted: boolean }>> {
+  const rowIds = rows.map((row) => row.id).filter((id): id is string => Boolean(id));
+  const directTaskIds = rows.map((row) => row.tallyTaskId).filter((id): id is string => Boolean(id));
+  if (!rowIds.length && !directTaskIds.length) return rows.map((row) => ({ ...row, tallyCompleted: false }));
+  const warehouseTallyTask = (prisma as any).warehouseTallyTask;
+  if (!warehouseTallyTask?.findMany) return rows.map((row) => ({ ...row, tallyCompleted: false }));
+  const tasks = await warehouseTallyTask.findMany({
+    where: {
+      OR: [
+        ...(rowIds.length ? [{ packageIds: { hasSome: rowIds } }, { appliedPackageId: { in: rowIds } }] : []),
+        ...(directTaskIds.length ? [{ id: { in: directTaskIds } }] : [])
+      ]
+    },
+    select: { id: true, status: true, packageIds: true, appliedPackageId: true }
+  });
+  const completedPackageIds = new Set<string>();
+  const completedTaskIds = new Set<string>();
+  for (const task of tasks as Array<{ id: string; status: string; packageIds?: string[]; appliedPackageId?: string | null }>) {
+    if (task.status !== 'COMPLETED') continue;
+    completedTaskIds.add(task.id);
+    for (const id of [...(task.packageIds ?? []), task.appliedPackageId].filter(Boolean) as string[]) completedPackageIds.add(id);
+  }
+  return rows.map((row) => ({
+    ...row,
+    tallyCompleted: Boolean((row.id && completedPackageIds.has(row.id)) || (row.tallyTaskId && completedTaskIds.has(row.tallyTaskId)))
+  }));
+}
+
 export function summarizeWarehousePackageGroups(packages: WarehousePackageSummary[]): WarehousePackageGroupSummary[] {
   const groups = new Map<string, WarehousePackageSummary[]>();
   for (const pkg of packages) {
@@ -181,9 +212,11 @@ export function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
     taskNo: row.taskNo,
     status: row.status,
     tallyChannel: warehouseTallyChannels.includes(row.tallyChannel) ? row.tallyChannel : undefined,
-    tallyProgressStatus: row.status === 'COMPLETED'
-      ? 'COMPLETED'
-      : row.tallyProgressStatus === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'WAITING',
+    tallyProgressStatus: row.tallyProgressStatus === 'CANCELLED'
+      ? 'CANCELLED'
+      : row.status === 'COMPLETED'
+        ? 'COMPLETED'
+        : row.tallyProgressStatus === 'IN_PROGRESS' ? 'IN_PROGRESS' : 'WAITING',
     tallyStartedAt: row.tallyStartedAt?.toISOString?.() ?? undefined,
     tallyStartedBy: row.tallyStartedBy ?? undefined,
     rootTallyTaskId: row.rootTallyTaskId ?? row.id,
@@ -227,7 +260,10 @@ export function mapWarehouseTallyTask(row: any): WarehouseTallyTaskSummary {
     appliedPackageId: row.appliedPackageId ?? undefined,
     appliedPackageNo: row.appliedPackageNo ?? undefined,
     labelAppliedAt: row.labelAppliedAt?.toISOString?.() ?? undefined,
-    labelAppliedBy: row.labelAppliedBy ?? undefined
+    labelAppliedBy: row.labelAppliedBy ?? undefined,
+    cancelReason: row.cancelReason ?? undefined,
+    cancelledAt: row.cancelledAt?.toISOString?.() ?? undefined,
+    cancelledBy: row.cancelledBy ?? undefined
   };
 }
 

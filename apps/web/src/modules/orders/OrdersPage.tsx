@@ -235,10 +235,12 @@ type OrderManagementFilters = {
   createdTo?: string;
   customerKeyword: string;
   outboundOrderKeyword: string;
+  site: string;
+  salesperson: string;
 };
 
 function createEmptyOrderManagementFilters(): OrderManagementFilters {
-  return { customerKeyword: '', outboundOrderKeyword: '' };
+  return { customerKeyword: '', outboundOrderKeyword: '', site: '', salesperson: '' };
 }
 
 export function matchesOrderManagementFilters(shipment: Shipment, filters: OrderManagementFilters) {
@@ -248,7 +250,9 @@ export function matchesOrderManagementFilters(shipment: Shipment, filters: Order
   const customerKeyword = filters.customerKeyword.toLowerCase();
   if (customerKeyword && ![shipment.customerCode, shipment.customerName].some((value) => value?.toLowerCase().includes(customerKeyword))) return false;
   const outboundOrderKeyword = filters.outboundOrderKeyword.toLowerCase();
-  return !outboundOrderKeyword || resolveShipmentOutboundOrderNo(shipment).toLowerCase().includes(outboundOrderKeyword);
+  if (outboundOrderKeyword && !resolveShipmentOutboundOrderNo(shipment).toLowerCase().includes(outboundOrderKeyword)) return false;
+  if (filters.site && shipment.site?.trim() !== filters.site) return false;
+  return !filters.salesperson || shipment.salesperson?.trim() === filters.salesperson;
 }
 
 
@@ -338,6 +342,16 @@ export function OrdersPage({
   const [downloadingBusinessInvoiceId, setDownloadingBusinessInvoiceId] = useState<string>();
   const [filterDraft, setFilterDraft] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
   const [appliedFilters, setAppliedFilters] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
+  const siteOptions = useMemo(() => {
+    return [...new Set(shipments.map((shipment) => shipment.site?.trim()).filter((value): value is string => Boolean(value)))]
+      .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+      .map((value) => ({ label: value, value }));
+  }, [shipments]);
+  const salespersonOptions = useMemo(() => {
+    return [...new Set(shipments.map((shipment) => shipment.salesperson?.trim()).filter((value): value is string => Boolean(value)))]
+      .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+      .map((value) => ({ label: value, value }));
+  }, [shipments]);
   const filteredShipments = useMemo(() => {
     return shipments.filter((shipment) => matchesOrderManagementFilters(shipment, appliedFilters));
   }, [appliedFilters, shipments]);
@@ -345,7 +359,9 @@ export function OrdersPage({
     setAppliedFilters({
       ...filterDraft,
       customerKeyword: filterDraft.customerKeyword.trim(),
-      outboundOrderKeyword: filterDraft.outboundOrderKeyword.trim()
+      outboundOrderKeyword: filterDraft.outboundOrderKeyword.trim(),
+      site: filterDraft.site.trim(),
+      salesperson: filterDraft.salesperson.trim()
     });
   };
   const resetFilters = () => {
@@ -519,6 +535,28 @@ export function OrdersPage({
         value={filterDraft.outboundOrderKeyword}
         onChange={(event) => setFilterDraft((current) => ({ ...current, outboundOrderKeyword: event.target.value }))}
         onPressEnter={applyFilters}
+      />
+      <Select
+        allowClear
+        showSearch
+        optionFilterProp="label"
+        aria-label="站点"
+        placeholder="站点"
+        className="fulfillment-board-filter-select"
+        value={filterDraft.site || undefined}
+        options={siteOptions}
+        onChange={(value) => setFilterDraft((current) => ({ ...current, site: value ?? '' }))}
+      />
+      <Select
+        allowClear
+        showSearch
+        optionFilterProp="label"
+        aria-label="业务员"
+        placeholder="业务员"
+        className="fulfillment-board-filter-select"
+        value={filterDraft.salesperson || undefined}
+        options={salespersonOptions}
+        onChange={(value) => setFilterDraft((current) => ({ ...current, salesperson: value ?? '' }))}
       />
       <Button type="primary" onClick={applyFilters}>查询</Button>
       <Button onClick={resetFilters}>重置</Button>

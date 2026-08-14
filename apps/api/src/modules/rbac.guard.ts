@@ -1,15 +1,16 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException, ForbiddenException, Inject } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
-import { PrismaRepository } from './prisma.repository.js';
-import { REQUIRED_AUTH, REQUIRED_PERMISSION } from './require-permission.decorator.js';
-import { type PermissionKey, type Principal } from './rbac.js';
+import { REQUIRED_AUTH, REQUIRED_PERMISSION, REQUIRED_PERMISSION_MODE } from './require-permission.decorator.js';
+import { hasEffectivePricingCapability } from '@siyuan/shared';
+import { resolveGlobalFieldMaskState, type PermissionKey, type Principal } from './rbac.js';
+import { AuthSessionService } from './auth/auth-session.service.js';
 
 @Injectable()
 export class RbacGuard implements CanActivate {
   constructor(
     @Inject(Reflector) private readonly reflector: Reflector,
-    @Inject(PrismaRepository) private readonly repository: PrismaRepository
+    @Inject(AuthSessionService) private readonly sessions: AuthSessionService
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -21,6 +22,9 @@ export class RbacGuard implements CanActivate {
       context.getHandler(),
       context.getClass()
     ]);
+    const permissionMode = this.reflector.getAllAndOverride<'any' | 'all' | undefined>(REQUIRED_PERMISSION_MODE, [
+      context.getHandler(), context.getClass()
+    ]) ?? 'any';
 
     if (!permission && !authRequired) {
       return true;
@@ -35,7 +39,8 @@ export class RbacGuard implements CanActivate {
 
     try {
       const principal = jwt.verify(authorization.slice(7), jwtSecret()) as Principal;
-      const effectivePermissions = await this.repository.hydratePrincipalDepartmentScope(principal);
+      const effectivePermissions = await this.sessions.hydrateCurrentSession(principal);
+      principal.globalFieldMasks = resolveGlobalFieldMaskState(effectivePermissions);
       request.user = principal;
 
       if (principal.mustChangePassword && !isPasswordBootstrapRequest(request.method, request.url)) {
@@ -47,8 +52,11 @@ export class RbacGuard implements CanActivate {
       }
 
       const permissions = Array.isArray(permission) ? permission : [permission];
-      if (!permissions.some((item) => effectivePermissions.includes(item))) {
-        await (this.repository as any).recordPermissionDenied?.(principal, {
+      const granted = permissionMode === 'all'
+        ? permissions.every((item) => hasEffectivePricingCapability(effectivePermissions, item) || effectivePermissions.includes(item))
+        : permissions.some((item) => hasEffectivePricingCapability(effectivePermissions, item) || effectivePermissions.includes(item));
+      if (!granted) {
+        await this.sessions.recordPermissionDenied(principal, {
           permissions,
           method: request.method,
           path: request.url

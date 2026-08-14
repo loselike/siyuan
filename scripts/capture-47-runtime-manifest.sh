@@ -4,7 +4,13 @@ set -euo pipefail
 REMOTE="${SIYUAN_47_REMOTE:-47}"
 REMOTE_DIR="${SIYUAN_47_DIR:-/opt/siyuan}"
 OUTPUT_ROOT="${SIYUAN_47_MANIFEST_DIR:-docs/release-manifests/47}"
+CAPTURE_FORMAT="${SIYUAN_47_CAPTURE_FORMAT:-3}"
 LOCAL_TMP="$(mktemp -d "${TMPDIR:-/tmp}/siyuan-47-runtime-manifest.XXXXXX")"
+
+case "$CAPTURE_FORMAT" in
+  2|3) ;;
+  *) echo "Unsupported runtime manifest capture format: $CAPTURE_FORMAT" >&2; exit 2 ;;
+esac
 
 cleanup() {
   rm -rf -- "$LOCAL_TMP"
@@ -13,11 +19,14 @@ trap cleanup EXIT INT TERM
 
 archive="$LOCAL_TMP/capture.tar"
 
-ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- "$REMOTE_DIR" > "$archive" <<'REMOTE_SCRIPT'
+ssh -o ConnectTimeout=20 "$REMOTE" bash -s -- "$REMOTE_DIR" "$CAPTURE_FORMAT" > "$archive" <<'REMOTE_SCRIPT'
 set -euo pipefail
 
 remote_dir="$1"
+capture_format="$2"
 cd "$remote_dir"
+# shellcheck source=lib/docker-container-image-id.sh
+source scripts/lib/docker-container-image-id.sh
 
 capture_tmp="$(mktemp -d /tmp/siyuan-47-runtime-manifest.XXXXXX)"
 cleanup_remote() {
@@ -45,7 +54,7 @@ case "$release_id" in
 esac
 
 {
-  printf 'CAPTURE_FORMAT_VERSION=2\n'
+  printf 'CAPTURE_FORMAT_VERSION=%s\n' "$capture_format"
   printf 'CAPTURED_AT=%s\n' "$captured_at"
   printf 'REMOTE_DIR=%s\n' "$remote_dir"
   printf 'REMOTE_RELEASE_ID=%s\n' "$release_id"
@@ -67,7 +76,7 @@ esac
 } > "$capture_tmp/metadata.env"
 
 if [[ -f .siyuan-release-state ]]; then
-  sed -n '/^\(WEB_FINGERPRINT\|API_FINGERPRINT\|MIGRATE_FINGERPRINT\|RELEASE_ID\|RELEASED_AT\|SOURCE_MODE\|GIT_COMMIT\|GIT_BRANCH\|WEB_IMAGE_ID\|API_IMAGE_ID\|RELEASE_RECEIPT_PATH\|RELEASE_RECEIPT_SHA256\)=/p' \
+  sed -n '/^\(WEB_FINGERPRINT\|API_FINGERPRINT\|MIGRATE_FINGERPRINT\|RELEASE_ID\|RELEASED_AT\|SOURCE_MODE\|GIT_COMMIT\|GIT_BRANCH\|WEB_IMAGE_ID\|API_IMAGE_ID\|BUILD_PROVENANCE\|IMAGE_MANIFEST_SHA256\|API_IMAGE_REF\|WEB_IMAGE_REF\|MIGRATE_IMAGE_REF\|RELEASE_RECEIPT_PATH\|RELEASE_RECEIPT_SHA256\)=/p' \
     .siyuan-release-state > "$capture_tmp/release-state.env"
 else
   : > "$capture_tmp/release-state.env"
@@ -104,20 +113,47 @@ printf 'SOURCE_TREE_MANIFEST_SHA256=%s\n' "$source_tree_sha" >> "$capture_tmp/me
 done > "$capture_tmp/prisma-files.tsv"
 
 container_ids="$(docker compose ps -aq 2>/dev/null || true)"
-if [[ -n "$container_ids" ]]; then
-  while IFS= read -r container_id; do
-    [[ -n "$container_id" ]] || continue
-    docker inspect --format '{{.Name}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{.Config.Image}}{{"\t"}}{{.Image}}{{"\t"}}{{.Created}}{{"\t"}}{{.State.Status}}{{"\t"}}{{.State.StartedAt}}' "$container_id"
-  done <<< "$container_ids" | LC_ALL=C sort
-fi > "$capture_tmp/containers.tsv"
-
-if [[ -s "$capture_tmp/containers.tsv" ]]; then
-  cut -f4 "$capture_tmp/containers.tsv" | LC_ALL=C sort -u | while IFS= read -r image_id; do
-    [[ -n "$image_id" ]] || continue
-    docker image inspect --format '{{.Id}}{{"\t"}}{{.Created}}{{"\t"}}{{json .RepoTags}}{{"\t"}}{{json .RepoDigests}}' "$image_id"
-  done | LC_ALL=C sort > "$capture_tmp/images.tsv"
+if [[ "$capture_format" == "2" ]]; then
+  if [[ -n "$container_ids" ]]; then
+    while IFS= read -r container_id; do
+      [[ -n "$container_id" ]] || continue
+      docker inspect --format '{{.Name}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{.Config.Image}}{{"\t"}}{{.Image}}{{"\t"}}{{.Created}}{{"\t"}}{{.State.Status}}{{"\t"}}{{.State.StartedAt}}' "$container_id"
+    done <<< "$container_ids" | LC_ALL=C sort
+  fi > "$capture_tmp/containers.tsv"
+  if [[ -s "$capture_tmp/containers.tsv" ]]; then
+    cut -f4 "$capture_tmp/containers.tsv" | LC_ALL=C sort -u | while IFS= read -r image_id; do
+      [[ -n "$image_id" ]] || continue
+      docker image inspect --format '{{.Id}}{{"\t"}}{{.Created}}{{"\t"}}{{json .RepoTags}}{{"\t"}}{{json .RepoDigests}}' "$image_id"
+    done | LC_ALL=C sort > "$capture_tmp/images.tsv"
+  else
+    : > "$capture_tmp/images.tsv"
+  fi
 else
-  : > "$capture_tmp/images.tsv"
+  if [[ -n "$container_ids" ]]; then
+    while IFS= read -r container_id; do
+      [[ -n "$container_id" ]] || continue
+      runtime_image_id="$(siyuan_docker_container_image_id "$container_id")"
+      [[ -n "$runtime_image_id" ]] || {
+        echo "Could not resolve runtime image identity for container $container_id." >&2
+        exit 81
+      }
+      docker inspect --format '{{.Name}}{{"\t"}}{{index .Config.Labels "com.docker.compose.service"}}{{"\t"}}{{.Config.Image}}{{"\t"}}' "$container_id" \
+        | tr -d '\n'
+      printf '%s\t' "$runtime_image_id"
+      docker inspect --format '{{.Created}}{{"\t"}}{{.State.Status}}{{"\t"}}{{.State.StartedAt}}' "$container_id"
+    done <<< "$container_ids" | LC_ALL=C sort
+  fi > "$capture_tmp/containers.tsv"
+  if [[ -n "$container_ids" ]]; then
+    while IFS= read -r container_id; do
+      [[ -n "$container_id" ]] || continue
+      runtime_image_id="$(siyuan_docker_container_image_id "$container_id")"
+      [[ -n "$runtime_image_id" ]] || continue
+      printf '%s\t' "$runtime_image_id"
+      docker inspect --format '{{.Image}}{{"\t"}}{{.Created}}{{"\t"}}{{.Config.Image}}{{"\t"}}{{json .ImageManifestDescriptor}}' "$container_id"
+    done <<< "$container_ids" | LC_ALL=C sort -u > "$capture_tmp/images.tsv"
+  else
+    : > "$capture_tmp/images.tsv"
+  fi
 fi
 
 {

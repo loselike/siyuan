@@ -54,7 +54,7 @@ export function summarizeWarehouseTallyRepeats(
   now = new Date()
 ): WarehouseTallyRepeatStatisticsResponse {
   const completedTasks = tasks
-    .filter((task): task is CompletedTallyTask => task.status === 'COMPLETED' && Boolean(task.completedAt))
+    .filter((task): task is CompletedTallyTask => task.status === 'COMPLETED' && task.tallyProgressStatus !== 'CANCELLED' && Boolean(task.completedAt))
     .sort((left, right) => {
       const sequenceDifference = (left.tallySequence ?? 1) - (right.tallySequence ?? 1);
       return sequenceDifference || new Date(left.completedAt).getTime() - new Date(right.completedAt).getTime();

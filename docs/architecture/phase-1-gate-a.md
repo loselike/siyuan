@@ -26,7 +26,7 @@ npm run architecture:check:self-test
 
 ## 2. 路由鉴权契约
 
-[`config/architecture/governance-baseline.json`](../../config/architecture/governance-baseline.json) 固化当前 414 个 Controller/handler 路由契约（对应当前全部 HTTP method + path）的：
+[`config/architecture/governance-baseline.json`](../../config/architecture/governance-baseline.json) 固化当前 432 个 Controller/handler 路由契约（对应当前全部 HTTP method + path）的：
 
 - Controller/handler owner。
 - `auth` / `permission` / `none` 策略。
@@ -49,34 +49,45 @@ Mojia 检查使用 AST 验证设备 token validator 是 handler 第一条有效�
 
 本门没有把 `RbacGuard` 改为默认拒绝。当前 4 个无 metadata 路由依赖既有行为；未来切换默认拒绝需要单独的兼容设计和 47 鉴权验收。
 
+### 2026-08-12 运行基线复核
+
+本次以 47 当前运行源码快照 `0323ac6` 为权威基线，逐条复核并冻结此前已上线但未进入治理 baseline 的 3 个新路由和 5 组权限集合变化；这次只更新保护网，不修改运行时代码或业务语义：
+
+- `warehouse/in-stock-page` 继续使用 `warehouse:in-stock:view`；Prisma 查询对业务岗位执行本人客户范围并裁剪站点，对仓库岗位保留全仓读取，查询会写入 `warehouse.in_stock.view` 审计。
+- 理货开始与取消已完成分别使用 `warehouse:tally-pending:task-process`、`warehouse:tally-completed:reverse-review`；开始处理继续校验屏蔽权限、任务状态与并发占用，取消已完成另行校验原因、包裹数据范围和下游占用，两条路径均写审计。
+- 水单修改入口增加 `finance:water-receipt:arrived-update`，但 Repository 仍按水单状态二次判权；已到账修改继续要求原因、禁止存在已落账或待审核匹配，并在事务内同步账户、账本和审计。
+- 单票费用详情和增删改入口增加录单/待排货权限，但 Repository 仍按运单归属、状态、费用类型、字段裁剪、锁定/审核/水单关联及事务内二次检查控制实际能力。
+
+复核证据由现有仓库查询 Repository 定向测试、订单财务详情允许/拒绝与字段裁剪 E2E、财务水单/单票费用 E2E，以及 `architecture:check` 的完整路由元数据对比共同提供。未被测试覆盖的既有实现差异不在本次治理更新中修正，需单独建立行为任务。
+
 ## 3. 增量债务预算
 
 当前预算阻止以下指标增长：
 
-- `DataController` 路由数：267。
-- 根 `ApiClient` 方法/直接请求数：347/334。
-- Shared 根导入生产文件：116。
-- 生产源码 `as any`：865。
-- 直接 `process.env`：33。
+- `DataController` 路由数：271。
+- 根 `ApiClient` 方法/直接请求数：365/350。
+- Shared 根导入生产文件：138。
+- 生产源码 `as any`：924。
+- 直接 `process.env`：36。
 - 静态循环依赖：0。
-- 总 Prisma/InMemory Repository 方法：660/550。
+- 总 Prisma/InMemory Repository 方法：713/599。
 
 以下集中热点同时被冻结为逐文件行数上限；任何一个文件继续变长都会直接失败：
 
 | 热点 | 行数上限 |
 | --- | ---: |
-| Prisma Repository | 29,429 |
-| InMemory Repository | 17,674 |
-| DataController | 2,878 |
-| Shared 根入口 | 6,455 |
-| 根 ApiClient | 2,448 |
-| 全局 CSS | 12,291 |
-| 全局测试桩 | 6,439 |
-| WarehousePage | 4,584 |
-| PricingPage | 3,628 |
-| MasterDataPage | 3,222 |
+| Prisma Repository | 32,134 |
+| InMemory Repository | 19,600 |
+| DataController | 3,021 |
+| Shared 根入口 | 6,328 |
+| 根 ApiClient | 2,614 |
+| 全局 CSS | 13,162 |
+| 全局测试桩 | 6,457 |
+| WarehousePage | 4,938 |
+| PricingPage | 3,720 |
+| MasterDataPage | 3,281 |
 
-同时保存 2 个已知孤儿候选、1 组完全重复源码和当前重复路由集合；出现新的孤儿候选、重复源码或重复路由会失败。已有债务可以直接下降；下降后应在独立治理变更中收紧 baseline，不能重新扩大。
+同时保存 5 个已知孤儿候选、1 组完全重复源码和当前重复路由集合；出现新的孤儿候选、重复源码或重复路由会失败。已有债务可以直接下降；下降后应在独立治理变更中收紧 baseline，不能重新扩大。
 
 预算不是架构 KPI。合理新增内部依赖边、文件和领域模块不受总量限制；被限制的都是阶段 0 已确认需要停止增长的集中点。新功能应进入领域 Controller、Service、Repository adapter、领域 API Client 或页面子模块，不能靠提高热点预算继续向巨型文件追加。
 
@@ -86,8 +97,8 @@ Mojia 检查使用 AST 验证设备 token validator 是 handler 第一条有效�
 
 | Workspace | 当前错误 | 规则分布 |
 | --- | ---: | --- |
-| API | 89 | unused 42、no-undef 36、其余 11 |
-| Web | 130 | unused 27、no-undef 94、hooks 7、其余 2 |
+| API | 100 | unused 51、no-undef 39、其余 10 |
+| Web | 150 | unused 32、no-undef 109、hooks 7、其余 2 |
 
 检查器重新运行 ESLint JSON 输出，并同时按 workspace/rule 与 file/rule 比较：任何既有 rule 总量增长、任一文件同规则增长、新文件产生错误，或出现新的错误 rule，都会失败；错误减少允许通过。这样既不能靠把错误从一个文件挪到另一个文件绕过，也可以逐批修复配置和源码问题。
 
@@ -104,7 +115,7 @@ diff -u config/architecture/governance-baseline.json /tmp/sunny-architecture-bas
 
 评审必须说明每一项上升或鉴权变化。只有新增债务有明确例外、替代保护和退出条件时，才能更新正式 baseline；热点行数预算原则上只允许下降，不得用“让 CI 通过”为理由整体重采样。
 
-2026-08-05 已从47当前运行源码建立独立干净集成分支，Web、API、迁移三类指纹逐字一致后重新冻结路由、结构、lint 与热点预算。该动作是可追溯治理快照，不代表对已有业务权限语义完成独立安全审计。
+2026-08-12 已从 47 当前运行源码快照 `0323ac6` 独立复核并冻结路由、结构与热点预算；完整 lint 上限沿用既有逐文件/逐规则 baseline，未通过整表重采样放大。新增债务不是目标额度：后续切片只能保持或下降，下降后应立即收紧。
 
 ## 6. 已知边界
 

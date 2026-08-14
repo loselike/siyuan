@@ -474,18 +474,54 @@
 .customer-service-business-cost-head,
 .customer-service-business-cost-row {
   display: grid;
-  grid-template-columns: minmax(150px, 1.5fr) 78px minmax(130px, 1.1fr) minmax(105px, 0.9fr) minmax(100px, 0.9fr) minmax(110px, 1fr) 142px;
+  grid-template-columns: var(--customer-service-fee-grid, 250px 90px 155px 155px 135px 155px 130px);
   gap: 8px;
-  min-width: 930px;
+  min-width: 1070px;
   align-items: center;
   padding: 8px 10px;
 }
 
 .customer-service-business-cost-head {
+  user-select: none;
   color: var(--sy-text-secondary);
   background: #f5f8fc;
   font-size: 11px;
   font-weight: 600;
+}
+
+.customer-service-fee-column-head {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-right: 7px;
+}
+
+.customer-service-fee-resize-handle {
+  position: absolute;
+  top: -8px;
+  right: -5px;
+  z-index: 1;
+  width: 10px;
+  height: calc(100% + 16px);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.customer-service-fee-resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 4px;
+  width: 1px;
+  background: transparent;
+}
+
+.customer-service-fee-resize-handle:hover::after,
+.customer-service-fee-resize-handle:active::after {
+  background: var(--sy-primary);
 }
 
 .customer-service-business-cost-row {
@@ -501,14 +537,14 @@
 .customer-service-business-cost-total {
   display: flex;
   justify-content: space-between;
-  min-width: 930px;
+  min-width: 1070px;
   padding: 10px;
   border-top: 1px solid var(--sy-border-soft);
   background: #f8fbff;
 }
 
 .customer-service-business-cost-empty {
-  min-width: 930px;
+  min-width: 1070px;
   padding: 22px 10px;
   color: var(--sy-text-secondary);
   text-align: center;
@@ -1550,8 +1586,9 @@ a:focus-visible,
 
 .global-search {
   flex: 1 1 420px;
-  max-width: 520px;
-  min-width: 280px;
+  width: min(560px, 100%);
+  max-width: 640px;
+  min-width: 240px;
 }
 
 .topbar > .ant-space:last-child {
@@ -5142,6 +5179,10 @@ body.is-resizing-table-column {
   width: 220px;
 }
 
+.fulfillment-board-filter-select {
+  width: 140px;
+}
+
 .fulfillment-board-card-columns .fulfillment-table .ant-table-thead > tr > th {
   padding: 9px 7px;
   font-size: 12px;
@@ -5541,16 +5582,58 @@ body.is-resizing-table-column {
   padding: 10px 12px;
   border: 1px solid var(--sy-border-soft);
   border-radius: 7px;
-  background: var(--sy-surface-soft);
+  background: #f8fafc;
+  transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
 }
 
-.role-permission-module-card.is-active {
-  border-color: #b8ceff;
-  background: #f4f7ff;
+.role-permission-module-card.is-active,
+.role-permission-module-card.is-current,
+.role-permission-module-card[data-current='true'] {
+  border-color: var(--sy-primary);
+  background: var(--sy-primary);
+  box-shadow: 0 5px 14px rgb(31 91 214 / 28%);
+  transform: translateY(-1px);
 }
 
 .role-permission-module-card.is-open {
+  border-color: #b8ceff;
+  background: #eef4ff;
   box-shadow: inset 3px 0 0 var(--sy-primary);
+}
+
+.role-permission-module-card.is-active.is-open,
+.role-permission-module-card.is-current.is-open,
+.role-permission-module-card[data-current='true'].is-open {
+  border-color: var(--sy-primary);
+  background: var(--sy-primary);
+  box-shadow: 0 5px 14px rgb(31 91 214 / 28%);
+}
+
+.role-permission-module-card.is-active .role-permission-module-select,
+.role-permission-module-card.is-active .role-permission-module-select .ant-typography,
+.role-permission-module-card.is-current .role-permission-module-select,
+.role-permission-module-card.is-current .role-permission-module-select .ant-typography,
+.role-permission-module-card[data-current='true'] .role-permission-module-select,
+.role-permission-module-card[data-current='true'] .role-permission-module-select .ant-typography {
+  color: #fff;
+}
+
+.role-permission-module-card .role-permission-module-select .ant-typography-secondary {
+  color: #111827 !important;
+}
+
+.role-permission-module-card.is-active .role-permission-module-select .ant-typography-secondary,
+.role-permission-module-card.is-current .role-permission-module-select .ant-typography-secondary,
+.role-permission-module-card[data-current='true'] .role-permission-module-select .ant-typography-secondary {
+  color: #fff !important;
+}
+
+.role-permission-module-card.is-active .ant-tag,
+.role-permission-module-card.is-current .ant-tag,
+.role-permission-module-card[data-current='true'] .ant-tag {
+  color: #fff;
+  border-color: rgb(255 255 255 / 52%);
+  background: rgb(255 255 255 / 14%);
 }
 
 .role-permission-module-select {
@@ -5569,6 +5652,25 @@ body.is-resizing-table-column {
   display: grid;
   gap: 3px;
   min-width: 0;
+}
+
+.role-permission-module-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.role-permission-module-current {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid rgb(255 255 255 / 48%);
+  border-radius: 999px;
+  color: #fff;
+  background: rgb(255 255 255 / 16%);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 18px;
 }
 
 .role-permission-module-select .ant-typography {
@@ -5709,9 +5811,17 @@ body.is-resizing-table-column {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.role-permission-draft-panel {
+  max-width: 560px;
+}
+
 .role-permission-option.role-permission-stage-blocked {
   border-color: #f0b4a8;
   background: #fff7f5;
+}
+.role-permission-option.role-permission-granted {
+  border-color: #9bbcff;
+  background: #f3f7ff;
 }
 
 .role-permission-section:last-child {
@@ -5790,6 +5900,46 @@ body.is-resizing-table-column {
   grid-column: 1;
   grid-row: 1;
   line-height: 1.25;
+}
+
+.role-permission-pricing-module-option {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(30px, auto) auto;
+  align-content: space-between;
+  align-items: start;
+  gap: 3px;
+  min-width: 0;
+  min-height: 68px;
+  padding: 6px 8px;
+}
+
+.role-permission-pricing-module-grid {
+  gap: 6px;
+  padding: 8px 10px 10px;
+}
+
+.role-permission-pricing-module-option .role-permission-compact-copy > .ant-typography {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.role-permission-pricing-actions {
+  display: flex;
+  grid-column: 1;
+  grid-row: 2;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.role-permission-pricing-module-option .role-permission-pricing-actions .ant-checkbox-wrapper {
+  display: inline-flex;
+  grid-column: auto;
+  grid-row: auto;
+  justify-self: auto;
+  font-size: 13px;
+  color: var(--sy-text);
 }
 
 .role-permission-option.role-permission-risk-sensitive {
@@ -6412,6 +6562,12 @@ body.is-resizing-table-column {
 .warehouse-agent-handover-table td {
   font-size: 15px;
   font-weight: 650;
+}
+
+.warehouse-agent-handover-attributes {
+  font-size: 13px !important;
+  line-height: 1.35;
+  text-align: left !important;
 }
 
 .warehouse-agent-handover-table th:last-child,
@@ -10030,8 +10186,9 @@ body.is-resizing-table-column {
   }
 
   .global-search {
+    width: 100%;
     max-width: none;
-    min-width: 100%;
+    min-width: 0;
   }
 
   .content {
@@ -10068,6 +10225,10 @@ body.is-resizing-table-column {
   .fulfillment-board-filters .ant-space-item:nth-child(-n + 2) .ant-input,
   .fulfillment-board-filters .ant-space-item:nth-child(3) .ant-input-affix-wrapper {
     width: 100%;
+  }
+
+  .fulfillment-board-filter-select {
+    min-width: 140px;
   }
 
   .page-heading {

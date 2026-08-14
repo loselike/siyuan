@@ -55,24 +55,17 @@ function getDefaultFeeName(items: FinanceCatalogItemSummary[], preferred: string
 }
 
 export function resolveOrderEntryBusinessCostAccess(role: RoleKey, permissions: readonly PermissionKey[]) {
-  const canManage = role === 'ADMIN' || permissions.includes('business:order-entry:business-cost-write');
+  const canManage = role === 'ADMIN' || permissions.includes('business:order-entry:business-cost');
   return {
     canManage,
-    canView: canManage || permissions.includes('business:order-entry:business-cost-view')
+    canView: canManage
   };
 }
 
 export function resolveOrderEntryFinanceVisibility(role: RoleKey, permissions: readonly PermissionKey[]) {
-  const moduleGranted = role === 'ADMIN' || permissions.includes('business:order-entry:view');
   const legacyBusinessCostAccess = resolveOrderEntryBusinessCostAccess(role, permissions);
-  const maskBusinessCosts = role !== 'ADMIN' && permissions.includes('business:order-entry:business-cost-mask');
-  const maskPayables = role !== 'ADMIN' && permissions.includes('business:order-entry:payable-fee-mask');
-  const canViewPayableByExistingPermission = role === 'ADMIN'
-    || permissions.includes('finance:order-fee:payable:view')
-    || permissions.includes('finance:order-fee:payable:manage');
-  const canEditPayableByExistingPermission = role === 'ADMIN' || permissions.includes('finance:order-fee:payable:manage');
+  const canManagePayables = role === 'ADMIN' || permissions.includes('business:order-entry:payable-fee');
   const canViewFinanceAuditFields = role === 'ADMIN' || [
-    'business:review:finance-detail-view',
     'finance:order-fee:payable:view',
     'finance:payable:view-sensitive',
     'finance:business-cost:view-agent',
@@ -80,12 +73,12 @@ export function resolveOrderEntryFinanceVisibility(role: RoleKey, permissions: r
   ].some((permission) => permissions.includes(permission as PermissionKey));
 
   return {
-    canViewOrderEntryBusinessCosts: !maskBusinessCosts && (moduleGranted || legacyBusinessCostAccess.canView),
-    canWriteOrderEntryBusinessCosts: !maskBusinessCosts && (moduleGranted || legacyBusinessCostAccess.canManage),
-    canViewOrderEntryPayables: !maskPayables && (moduleGranted || canViewPayableByExistingPermission),
-    canEditOrderEntryPayables: !maskPayables && (moduleGranted || canEditPayableByExistingPermission),
-    canViewBusinessCostAuditFields: !maskBusinessCosts && canViewFinanceAuditFields,
-    canViewPayableAuditFields: !maskPayables && canViewFinanceAuditFields
+    canViewOrderEntryBusinessCosts: legacyBusinessCostAccess.canView,
+    canWriteOrderEntryBusinessCosts: legacyBusinessCostAccess.canManage,
+    canViewOrderEntryPayables: canManagePayables,
+    canEditOrderEntryPayables: canManagePayables,
+    canViewBusinessCostAuditFields: legacyBusinessCostAccess.canView && canViewFinanceAuditFields,
+    canViewPayableAuditFields: canManagePayables && canViewFinanceAuditFields
   };
 }
 
@@ -172,9 +165,11 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     createFinanceEntryFeeDraft('BUSINESS_COST', { name: getDefaultFeeName(financeCatalogItems, '业务员成本') })
   ]);
   const [businessCostSnapshotVersion, setBusinessCostSnapshotVersion] = useState<string>();
+  const [initialBusinessCostIds, setInitialBusinessCostIds] = useState<string[]>([]);
   const [payables, setPayables] = useState<FinanceEntryFeeDraft[]>([
     createFinanceEntryFeeDraft('PAYABLE')
   ]);
+  const [initialPayableIds, setInitialPayableIds] = useState<string[]>([]);
   const [cargoDataSource, setCargoDataSource] = useState<'AUTO_MATCHED' | 'MANUAL_ADJUSTED'>('AUTO_MATCHED');
   const [chargeWeightOverridden, setChargeWeightOverridden] = useState(false);
   const [receiverContactEdited, setReceiverContactEdited] = useState(false);
@@ -185,6 +180,10 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
   const canViewOrderEntryBusinessCosts = orderEntryFinanceVisibility.canViewOrderEntryBusinessCosts;
   const canViewBusinessCostAuditFields = orderEntryFinanceVisibility.canViewBusinessCostAuditFields;
   const canViewPayableAuditFields = orderEntryFinanceVisibility.canViewPayableAuditFields;
+  const canEditOrderEntry = role === 'ADMIN'
+    || permissions.includes('business:order-entry:edit')
+    || Boolean(draftId && permissions.includes('business:order-entry:draft-edit'));
+  const canMaintainOrderEntryFinance = canWriteOrderEntryBusinessCosts || canEditOrderEntryPayables;
   const canEditEntryAt = role === 'ADMIN' || permissions.includes('finance:payable:manage');
   const settlementRows = useMemo(() => getSettlementMethodRows(financeCatalogItems), [financeCatalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
@@ -627,7 +626,9 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     setReceivableSnapshotVersion(undefined);
     setBusinessCosts(canWriteOrderEntryBusinessCosts ? [createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })] : []);
     setBusinessCostSnapshotVersion(undefined);
+    setInitialBusinessCostIds([]);
     setPayables(canViewOrderEntryPayables ? [createFinanceEntryFeeDraft('PAYABLE')] : []);
+    setInitialPayableIds([]);
     setDraftOwnerUsername(undefined);
     onDraftClosed?.();
   };
@@ -635,8 +636,9 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
   const hydrateDraftDetail = useCallback((detail: OrderEntryDetailSummary) => {
     const shipment = detail.shipment;
     setDraftOwnerUsername(resolveOrderEntrySalesperson(username, shipment));
-    const toFeeDraft = (type: ShipmentFinanceItemType, row: typeof detail.receivables[number] | NonNullable<typeof detail.businessCosts>[number] | typeof detail.payables[number]) =>
+    const toFeeDraft = (type: ShipmentFinanceItemType, row: typeof detail.receivables[number] | NonNullable<typeof detail.businessCosts>[number] | NonNullable<typeof detail.payables>[number]) =>
       createFinanceEntryFeeDraft(type, {
+        id: row.id,
         name: row.name,
         currency: row.currency,
         amount: row.amount,
@@ -694,9 +696,12 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       ? (visibleBusinessCosts.length ? visibleBusinessCosts.map((row) => toFeeDraft('BUSINESS_COST', row)) : [createFinanceEntryFeeDraft('BUSINESS_COST', { name: businessCostDefaultFeeName })])
       : (canViewOrderEntryBusinessCosts ? visibleBusinessCosts.map((row) => toFeeDraft('BUSINESS_COST', row)) : []));
     setBusinessCostSnapshotVersion(detail.businessCostSnapshotVersion);
+    setInitialBusinessCostIds(visibleBusinessCosts.map((row) => row.id));
+    const visiblePayables = detail.payables ?? [];
     setPayables(canViewOrderEntryPayables
-      ? (detail.payables.length ? detail.payables.map((row) => toFeeDraft('PAYABLE', row)) : [createFinanceEntryFeeDraft('PAYABLE')])
+      ? (visiblePayables.length ? visiblePayables.map((row) => toFeeDraft('PAYABLE', row)) : [createFinanceEntryFeeDraft('PAYABLE')])
       : []);
+    setInitialPayableIds(canViewOrderEntryPayables ? visiblePayables.map((row) => row.id) : []);
   }, [agents, businessCostDefaultFeeName, canUseAgentFields, canViewOrderEntryBusinessCosts, canViewOrderEntryPayables, canWriteOrderEntryBusinessCosts, form, receivableDefaultFeeName, username]);
 
   useEffect(() => {
@@ -973,9 +978,50 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
     }))
     .filter((row) => row.name && row.amount > 0);
 
+  const saveAuthorizedFinanceSections = async () => {
+    if (!draftId) {
+      modal.warning({ title: '请先创建录单草稿', content: '仅有成本权限时，只能维护已有草稿的业务成本或应付费用。' });
+      return;
+    }
+    const syncSection = async (
+      type: 'BUSINESS_COST' | 'PAYABLE',
+      rows: FinanceEntryFeeDraft[],
+      initialIds: string[]
+    ) => {
+      const activeIds = new Set(rows.map((row) => row.id).filter((id) => initialIds.includes(id)));
+      for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        const input = buildFeeRows([row], type)[0];
+        if (!input) continue;
+        if (initialIds.includes(row.id)) await apiClient.updateShipmentFinanceItem(draftId, row.id, input);
+        else await apiClient.createShipmentFinanceItem(draftId, input);
+      }
+      // Delete last so a failed create/update cannot remove valid existing data first.
+      for (const id of initialIds) {
+        if (!activeIds.has(id)) await apiClient.deleteShipmentFinanceItem(draftId, id);
+      }
+    };
+    setSubmitting(true);
+    try {
+      if (canWriteOrderEntryBusinessCosts) await syncSection('BUSINESS_COST', businessCosts, initialBusinessCostIds);
+      if (canEditOrderEntryPayables) await syncSection('PAYABLE', payables, initialPayableIds);
+      const detail = await apiClient.orderEntryDetail(draftId);
+      hydrateDraftDetail(detail);
+      modal.success({ title: '费用已保存', content: '仅更新了已授权的费用区块，其他录单数据保持不变。' });
+    } catch (error) {
+      modal.error({ title: '费用保存失败', content: error instanceof Error ? error.message : '请稍后重试' });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const submit = async (submitForReview: boolean) => {
+    if (!canEditOrderEntry) {
+      await saveAuthorizedFinanceSections();
+      return;
+    }
     if (!canSaveDraft) {
-      modal.warning({ title: '没有保存草稿权限', content: '请联系管理员授予“保存录单草稿”权限后再编辑。' });
+      modal.warning({ title: '没有编辑草稿权限', content: '请联系管理员授予“草稿箱 / 编辑”权限后再操作。' });
       return;
     }
     if (!draftId && !canCreateOrderEntry) {
@@ -1548,6 +1594,7 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
             ) : null}
             <Form
               form={form}
+              disabled={!canEditOrderEntry}
               layout="vertical"
               initialValues={{ currency: 'RMB', declarationRequired: false, sensitive: false, entryAt: entryAtDefault, saveReceiverToCustomer: false }}
               onValuesChange={handleEntryValuesChange}
@@ -1769,14 +1816,14 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
         </Col>
       </Row>
       <div className="finance-entry-fee-stack">
-        {renderFeeTable('RECEIVABLE', '应收费用', receivables)}
+        {canEditOrderEntry ? renderFeeTable('RECEIVABLE', '应收费用', receivables) : null}
         {canViewOrderEntryBusinessCosts ? renderFeeTable('BUSINESS_COST', '业务成本', businessCosts) : null}
         {canEditOrderEntryPayables ? renderFeeTable('PAYABLE', '应付费用', payables) : null}
       </div>
       <div className="finance-entry-actions">
-        <Button onClick={reset} disabled={submitting || draftLoading}>清空</Button>
-        <Button onClick={() => submit(false)} loading={submitting} disabled={draftLoading || !canSaveDraft || (!draftId && !canCreateOrderEntry)}>保存草稿</Button>
-        <Button type="primary" onClick={() => submit(true)} loading={submitting} disabled={draftLoading || !canSaveDraft || !canSubmitForReview || (!draftId && !canCreateOrderEntry)}>提交审核</Button>
+        {canEditOrderEntry ? <Button onClick={reset} disabled={submitting || draftLoading}>清空</Button> : null}
+        <Button onClick={() => submit(false)} loading={submitting} disabled={draftLoading || (!canEditOrderEntry && (!draftId || !canMaintainOrderEntryFinance)) || (canEditOrderEntry && (!canSaveDraft || (!draftId && !canCreateOrderEntry)))}>{canEditOrderEntry ? '保存草稿' : '保存费用'}</Button>
+        {canEditOrderEntry ? <Button type="primary" onClick={() => submit(true)} loading={submitting} disabled={draftLoading || !canSaveDraft || !canSubmitForReview || (!draftId && !canCreateOrderEntry)}>提交审核</Button> : null}
       </div>
       <Modal
         title={`已选包裹详情（${selectedPackages.length} 条）`}

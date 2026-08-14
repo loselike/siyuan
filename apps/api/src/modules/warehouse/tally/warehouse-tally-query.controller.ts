@@ -12,7 +12,7 @@ export class WarehouseTallyQueryController {
   ) {}
 
   @Get('warehouse/consolidations/:id/items')
-  @RequirePermission('warehouse:tally-pending:detail-view')
+  @RequirePermission('warehouse:tally-pending:view')
   warehouseConsolidationItems(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.service.listConsolidationItems(request.user, id);
   }
@@ -24,13 +24,13 @@ export class WarehouseTallyQueryController {
   }
 
   @Get('warehouse/tally-tasks/:id/source-packages')
-  @RequirePermission('warehouse:tally-pending:detail-view')
+  @RequirePermission('warehouse:tally-pending:view')
   warehouseTallyTaskSourcePackages(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.service.listTaskSourcePackages(request.user, id);
   }
 
   @Get('warehouse/tally-task-history-chain')
-  @RequirePermission('warehouse:in-stock:tally-record-view')
+  @RequirePermission('warehouse:tally-completed:view')
   warehouseTallyTaskHistoryChain(@Req() request: { user: Principal }, @Query('packageId') packageId: string) {
     return this.service.listTaskHistoryChain(request.user, packageId);
   }

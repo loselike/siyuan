@@ -1,0 +1,42 @@
+-- A previous repair used the latest canonical audit row, after legacy denies
+-- had already been removed.  Recover the last audit snapshot that still
+-- contained each deny and remove only the corresponding positive actions.
+CREATE TEMP TABLE "_WarehouseDenyRepairCounts" ("tableName" text PRIMARY KEY, "rowCount" bigint NOT NULL) ON COMMIT DROP;
+INSERT INTO "_WarehouseDenyRepairCounts" VALUES
+  ('WarehousePackage', (SELECT COUNT(*) FROM "WarehousePackage")),
+  ('WarehouseTallyTask', (SELECT COUNT(*) FROM "WarehouseTallyTask")),
+  ('WarehouseRentRule', (SELECT COUNT(*) FROM "WarehouseRentRule")),
+  ('Shipment', (SELECT COUNT(*) FROM "Shipment")),
+  ('User', (SELECT COUNT(*) FROM "User")),
+  ('Role', (SELECT COUNT(*) FROM "Role"));
+
+WITH latest_legacy_state AS (
+  SELECT DISTINCT ON (audit."target") audit."target", audit."after"
+  FROM "AuditLog" audit
+  WHERE audit."action" IN ('system.role_permissions.update', 'system.role_permissions.copy')
+    AND audit."target" LIKE 'role:%'
+    AND jsonb_typeof(audit."after"::jsonb) = 'array'
+    AND (audit."after"::text LIKE '%warehouse:%block%' OR audit."after"::text LIKE '%warehouse:%mask%')
+  ORDER BY audit."target", audit."createdAt" DESC
+), denied("blocker", "actions") AS (
+  VALUES
+    ('warehouse:today-receipt:manual-create-block', ARRAY['warehouse:today-receipt:manual-create']::text[]),
+    ('warehouse:today-receipt:batch-import-block', ARRAY['warehouse:today-receipt:import','warehouse:in-stock:import']::text[]),
+    ('warehouse:today-receipt:batch-download-block', ARRAY['warehouse:today-receipt:export']::text[])
+), blocked_role_actions AS (
+  SELECT role."id" AS "roleId", unnest(denied."actions") AS "code"
+  FROM latest_legacy_state state
+  JOIN "Role" role ON state."target" = 'role:' || role."name"
+  CROSS JOIN denied
+  WHERE state."after"::jsonb @> to_jsonb(ARRAY[denied."blocker"]::text[])
+)
+DELETE FROM "_PermissionToRole" link
+USING blocked_role_actions blocked, "Permission" permission
+WHERE link."B" = blocked."roleId"
+  AND link."A" = permission."id"
+  AND permission."code" = blocked."code";
+
+DO $$
+BEGIN
+  IF (SELECT "rowCount" FROM "_WarehouseDenyRepairCounts" WHERE "tableName" = 'WarehousePackage') <> (SELECT COUNT(*) FROM "WarehousePackage") OR (SELECT "rowCount" FROM "_WarehouseDenyRepairCounts" WHERE "tableName" = 'WarehouseTallyTask') <> (SELECT COUNT(*) FROM "WarehouseTallyTask") OR (SELECT "rowCount" FROM "_WarehouseDenyRepairCounts" WHERE "tableName" = 'WarehouseRentRule') <> (SELECT COUNT(*) FROM "WarehouseRentRule") OR (SELECT "rowCount" FROM "_WarehouseDenyRepairCounts" WHERE "tableName" = 'Shipment') <> (SELECT COUNT(*) FROM "Shipment") OR (SELECT "rowCount" FROM "_WarehouseDenyRepairCounts" WHERE "tableName" = 'User') <> (SELECT COUNT(*) FROM "User") OR (SELECT "rowCount" FROM "_WarehouseDenyRepairCounts" WHERE "tableName" = 'Role') <> (SELECT COUNT(*) FROM "Role") THEN RAISE EXCEPTION 'warehouse deny repair modified protected business rows'; END IF;
+END $$;

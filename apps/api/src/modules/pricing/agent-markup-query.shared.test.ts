@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentMarkupSummary, PriceBookRowSummary } from '@siyuan/shared';
-import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildMarkupRuleIndex, countAgentMarkupHits, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, findBestPriceBookRouteMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits } from './agent-markup-query.shared.js';
+import { agentMarkupScopeKey, applyAgentMarkup, applyPriceBookRowMarkupControls, buildAgentMarkupListResponse, buildMarkupRuleIndex, countAgentMarkupHits, enrichPriceBookRowMarkup, filterAgentMarkupRulesByModule, findBestMarkupRule, findBestPriceBookRouteMarkupRule, formatMarkupNumber, formatMarkupPerKg, groupAgentSourcesByScope, hasPriceBookRowMarkupControls, isLegacyPricingModule, markupRuleIndexKey, markupScopeRank, markupSpecificity, markupUnitForRow, matchingPriceRowsForRule, normalizeAgentMarkupLegacyModule, normalizeAgentMarkupModuleQuery, normalizeAgentSources, resolvePriceBookRowMarkup, safeTime, shouldIncludeAgentMarkupHits, textMatch } from './agent-markup-query.shared.js';
 
 function priceRow(id: string, overrides: Partial<PriceBookRowSummary> = {}): PriceBookRowSummary {
   return {
@@ -139,7 +139,76 @@ describe('agent markup query helpers', () => {
     expect(sources.find((source) => source.priceBookId === 'book-c')?.legacyModule).toBeUndefined();
     expect(merged).toEqual([
       { agentName: '代理甲', priceBookId: 'book-b', fileName: '甲表.xlsx', lineCount: 1, legacyModule: 'amazon' },
-      { agentName: '代理甲', priceBookId: 'book-b', fileName: '乙表.xlsx', lineCount: 5, legacyModule: 'amazon' }
+      expect.objectContaining({ agentName: '代理甲', priceBookId: 'book-b', fileName: '乙表.xlsx', lineCount: 5, legacyModule: 'amazon' })
     ]);
+  });
+
+  it('keeps grouped list metrics, mixed buckets, filters and unlimited pagination', () => {
+    const rules = [
+      markupRule({ id: 'default', priceBookId: 'book-a', defaultRuleSource: 'SYSTEM_DEFAULT', markupValue: 0.5, updatedAt: '2026-08-01T00:00:00.000Z' }),
+      markupRule({ id: 'route', priceBookId: 'book-a', channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国', markupValue: 0.1, updatedAt: '2026-08-02T00:00:00.000Z' }),
+      markupRule({ id: 'disabled', priceBookId: 'book-a', markupValue: 0.8, enabled: false, updatedAt: '2026-08-03T00:00:00.000Z' })
+    ];
+    const rows = [
+      priceRow('route-row', { realChannelName: '线路甲' }),
+      priceRow('default-row', { channelName: '渠道乙', realChannelName: '线路乙', destinationCountry: '德国' })
+    ];
+
+    const result = buildAgentMarkupListResponse(rules, rows, { page: 1, pageSize: -1, destinationCountry: '德国' });
+
+    expect(result.metrics).toEqual({
+      totalRules: 3,
+      enabledRules: 2,
+      disabledRules: 1,
+      unmatchedQuotes: 0,
+      systemDefaultScopes: 1,
+      latestUpdatedAt: '2026-08-03T00:00:00.000Z'
+    });
+    expect(result.rows).toEqual([
+      expect.objectContaining({
+        id: 'agent:book-a:代理甲',
+        markupDisplayMode: 'MIXED',
+        markupRange: '+¥0.10-0.50/KG',
+        markupBuckets: [{ markupPerKg: 0.1, lineCount: 1 }, { markupPerKg: 0.5, lineCount: 1 }],
+        ruleCount: 2,
+        hitCount: 2,
+        ruleBreakdown: { defaultRules: 1, countryRules: 0, routeRules: 1, routeTierRules: 0, otherRules: 0 }
+      })
+    ]);
+    expect(result.filterOptions).toEqual({
+      agentNames: ['代理甲'],
+      channelNames: ['渠道甲', '渠道乙'],
+      realChannelNames: ['线路甲', '线路乙'],
+      destinationCountries: ['德国', '美国']
+    });
+    expect(result.pagination).toEqual({ page: 1, pageSize: 1, totalItems: 1 });
+  });
+
+  it('keeps detail filters, status sorting and page slicing', () => {
+    const rules = [
+      markupRule({ id: 'enabled-low', channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国', markupValue: 0.2, updatedAt: '2026-08-01T00:00:00.000Z' }),
+      markupRule({ id: 'enabled-high', channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国', markupValue: 0.8, updatedAt: '2026-08-02T00:00:00.000Z' }),
+      markupRule({ id: 'disabled', channelName: '渠道甲', realChannelName: '线路甲', destinationCountry: '美国', markupValue: 1, enabled: false }),
+      markupRule({ id: 'other-channel', channelName: '渠道乙', realChannelName: '线路乙', destinationCountry: '德国', markupValue: 2 })
+    ];
+
+    const result = buildAgentMarkupListResponse(rules, [], {
+      detail: true,
+      channelName: '渠道甲',
+      realChannelName: '线路甲',
+      destinationCountry: '美国',
+      status: 'ENABLED',
+      sortBy: 'markupValue',
+      sortOrder: 'desc',
+      page: 2,
+      pageSize: 1,
+      includeHits: false
+    });
+
+    expect(result.rows.map((row) => row.id)).toEqual(['enabled-low']);
+    expect(result.pagination).toEqual({ page: 2, pageSize: 1, totalItems: 2 });
+    expect(result.metrics.unmatchedQuotes).toBe(0);
+    expect(textMatch('  AbC渠道  ', 'abc')).toBe(true);
+    expect(textMatch('渠道甲', '渠道乙')).toBe(false);
   });
 });

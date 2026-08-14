@@ -42,7 +42,7 @@ import {
 
 describe('US postal-code pricing rules', () => {
   it('matches five-digit ZIP codes by the documented leading-digit groups', () => {
-    expect(matchUsPostalRule('5-7（邮编）', '65644')).toEqual(expect.objectContaining({ priority: 3, matchedLabel: '5-7（邮编）' }));
+    expect(matchUsPostalRule('5-7（邮编）', '65644')).toEqual(expect.objectContaining({ priority: 3, matchedLabel: '5-7' }));
     expect(matchUsPostalRule('4、5、6、7邮编', '65644')).toEqual(expect.objectContaining({ priority: 3 }));
     expect(matchUsPostalRule('0-1-2-4（邮编）', '35644')).toBeUndefined();
     expect(matchUsPostalRule('0-1-2-4（邮编）', '25644')).toEqual(expect.objectContaining({ priority: 3 }));
@@ -314,7 +314,7 @@ describe('shipment import validation', () => {
 
     expect(result.validRows).toHaveLength(1);
     expect(result.errors).toEqual([
-      { rowNumber: 2, field: 'customerOrderNo', message: '客户单号重复' },
+      { rowNumber: 2, field: 'customerOrderNo', message: '出货单号重复' },
       { rowNumber: 3, field: 'destinationCountry', message: '目的地国家不能为空' },
       { rowNumber: 3, field: 'weightKg', message: '重量必须大于 0' },
       { rowNumber: 3, field: 'channelName', message: '渠道不能为空' }
@@ -651,14 +651,17 @@ describe('fulfillment workflow rules', () => {
       sampleShipment('other-status', 'DEDICATED_LINE', 'WAITING_SORT')
     ];
 
-    const options = { businessDataApprovedShipmentIds: ['transfer-no-outbounded', 'transfer-no-waiting'] };
+    const options = {
+      businessDataApprovedShipmentIds: ['transfer-no-outbounded', 'transfer-no-waiting'],
+      agentDataApprovedShipmentIds: ['transfer-no-outbounded', 'transfer-no-waiting']
+    };
     const dataConfirm = summarizeLineShipmentPool(shipments, { statusGroup: 'DATA_CONFIRM', datePreset: 'ALL' }, options);
     const transferNo = summarizeLineShipmentPool(shipments, { statusGroup: 'TRANSFER_NO', datePreset: 'ALL' }, options);
 
     expect(dataConfirm.statusCounts.DATA_CONFIRM).toBe(1);
     expect(dataConfirm.rows.map((row) => row.shipment.id)).toEqual(['data-confirm']);
-    expect(transferNo.statusCounts.TRANSFER_NO).toBe(2);
-    expect(transferNo.rows.map((row) => row.shipment.id)).toEqual(expect.arrayContaining(['transfer-no-outbounded', 'transfer-no-waiting']));
+    expect(transferNo.statusCounts.TRANSFER_NO).toBe(1);
+    expect(transferNo.rows.map((row) => row.shipment.id)).toEqual(['transfer-no-outbounded']);
   });
 
   it('keeps line-shipment after-sale filter scoped to signed problem tickets', () => {

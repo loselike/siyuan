@@ -6,6 +6,7 @@ export interface WarehouseInStockTotalsRow {
   weightKg?: number | null;
   cbm?: number | null;
   status?: string | null;
+  tallyCompleted?: boolean | null;
   manualException?: unknown;
   exceptions?: readonly unknown[] | null;
 }
@@ -41,7 +42,7 @@ export function summarizeWarehouseInStockTotals(
     totalCbm: roundWarehouseTotal(rows.reduce((sum, row) => sum + Number(row.cbm ?? 0), 0)),
     waitingDispatchTickets,
     pendingTallyTickets: Array.from(grouped.values()).filter((items) =>
-      items.some((item) => item.status === 'RECEIVED')
+      items.some((item) => item.status === 'RECEIVED' && item.tallyCompleted !== true)
     ).length,
     exceptionTickets: Array.from(grouped.values()).filter((items) =>
       items.some((item) => item.manualException || (Array.isArray(item.exceptions) && item.exceptions.length))

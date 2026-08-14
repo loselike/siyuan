@@ -1,5 +1,6 @@
-import { render, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WarehousePackageSummary, WarehouseTodayTotals } from '@siyuan/shared';
 import type { ApiClient } from '../../apiClient';
 import { WarehousePage } from './WarehousePage';
@@ -37,6 +38,8 @@ const totals: WarehouseTodayTotals = {
 };
 
 describe('WarehousePage scoped loading', () => {
+  afterEach(cleanup);
+
   it('does not request the full package snapshot while scoped queries succeed', async () => {
     const warehousePackages = vi.fn().mockResolvedValue([row]);
     const warehouseTodayReceipts = vi.fn().mockResolvedValue({ rows: [row], totals });
@@ -102,9 +105,14 @@ describe('WarehousePage scoped loading', () => {
     const warehousePackages = vi.fn().mockResolvedValue([row]);
     const warehouseTodayReceipts = vi.fn().mockResolvedValue({ rows: [row], totals });
     const warehouseInStock = vi.fn().mockResolvedValue({ rows: [row], totals });
+    const warehouseInStockPage = vi.fn().mockResolvedValue({
+      rows: [row],
+      totals,
+      pagination: { page: 1, pageSize: 10, totalItems: 1, totalPages: 1 }
+    });
     const warehouseInStockSummary = vi.fn().mockResolvedValue({ totals });
     const apiClient = {
-      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockSummary }
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockPage, warehouseInStockSummary }
     } as unknown as ApiClient;
 
     render(
@@ -121,7 +129,43 @@ describe('WarehousePage scoped loading', () => {
       />
     );
 
-    await waitFor(() => expect(warehouseInStock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(warehouseInStockPage).toHaveBeenCalledTimes(1));
+    expect(warehouseInStock).not.toHaveBeenCalled();
     expect(warehouseInStockSummary).not.toHaveBeenCalled();
+  });
+
+  it('opens the existing permitted workspace from the dashboard action', async () => {
+    const user = userEvent.setup();
+    const warehousePackages = vi.fn().mockResolvedValue([row]);
+    const warehouseTodayReceipts = vi.fn().mockResolvedValue({ rows: [row], totals });
+    const warehouseInStock = vi.fn().mockResolvedValue({ rows: [row], totals });
+    const warehouseInStockSummary = vi.fn().mockResolvedValue({ totals });
+    const apiClient = {
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts, warehouseInStock, warehouseInStockSummary }
+    } as unknown as ApiClient;
+
+    render(
+      <WarehousePage
+        apiClient={apiClient}
+        role="WAREHOUSE"
+        permissions={['warehouse:dashboard:view', 'warehouse:today-receipt:view', 'warehouse:in-stock:view']}
+        initialSection="dashboard"
+        shipments={[]}
+        notice={null}
+        onDispatch={vi.fn()}
+        findShipmentBySystemOrderNo={() => undefined}
+        renderShipmentOrderNoLink={(systemOrderNo) => systemOrderNo ?? '-'}
+      />
+    );
+
+    await user.click(await screen.findByRole('button', { name: '查看今日收货' }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('region', { name: '今日收货' })).toHaveLength(1);
+    });
+    expect(warehouseTodayReceipts).toHaveBeenCalledTimes(1);
+    expect(warehouseInStockSummary).toHaveBeenCalledTimes(1);
+    expect(warehouseInStock).not.toHaveBeenCalled();
+    expect(warehousePackages).not.toHaveBeenCalled();
   });
 });

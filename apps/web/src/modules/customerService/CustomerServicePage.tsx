@@ -1,9 +1,9 @@
-import { useEffect, useRef, useMemo, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Typography, message } from 'antd';
+import { useEffect, useRef, useMemo, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { Alert, AutoComplete, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Typography, message } from 'antd';
 import { Download } from 'lucide-react';
 import type { ColumnsType } from 'antd/es/table';
-import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
-import { isAdministratorRole, type ApiClient } from '../../apiClient';
+import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type FinanceCatalogItemSummary, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
+import { type ApiClient } from '../../apiClient';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, isBeijingCurrentWeek, isBeijingToday, parseBeijingDateTimeInputToIso } from '../shared/format';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
@@ -45,6 +45,35 @@ function createCustomerServiceBusinessCostDraft(row: CustomerServiceFinanceUpdat
     editable: row.selectable,
     statusLabel: row.selectable ? '可修改' : row.locked ? '已锁定' : row.reconciliationStatus === 'CONFIRMED' ? '已审核' : '不可修改'
   };
+}
+
+type CustomerServiceFeeColumnKey = 'name' | 'currency' | 'billingUnit' | 'billingQuantity' | 'unitPrice' | 'amount' | 'action';
+
+const customerServiceFeeColumnSpecs: Array<{ key: CustomerServiceFeeColumnKey; label: string; width: number; minWidth: number }> = [
+  { key: 'name', label: '费用名称', width: 250, minWidth: 150 },
+  { key: 'currency', label: '币种', width: 90, minWidth: 72 },
+  { key: 'billingUnit', label: '计费方式', width: 155, minWidth: 110 },
+  { key: 'billingQuantity', label: '计费数量', width: 155, minWidth: 110 },
+  { key: 'unitPrice', label: '单价', width: 135, minWidth: 100 },
+  { key: 'amount', label: '总金额', width: 155, minWidth: 120 },
+  { key: 'action', label: '操作', width: 130, minWidth: 110 }
+];
+
+function defaultCustomerServiceFeeColumnWidths() {
+  return Object.fromEntries(customerServiceFeeColumnSpecs.map((column) => [column.key, column.width])) as Record<CustomerServiceFeeColumnKey, number>;
+}
+
+function createCustomerServiceFeeNameOptions(items: FinanceCatalogItemSummary[]) {
+  const names = new Set<string>();
+  return [...items]
+    .filter((item) => item.category === 'FEE_NAME' && item.enabled)
+    .sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name, 'zh-CN'))
+    .flatMap((item) => {
+      const name = item.name.trim();
+      if (!name || names.has(name)) return [];
+      names.add(name);
+      return [{ label: name, value: name }];
+    });
 }
 
 export const customerServiceOutboundOrderSearchSections = [
@@ -397,6 +426,7 @@ export function CustomerServicePage({
   problemTickets,
   businessCostAudits = [],
   agents = [],
+  feeNameCatalogItems = [],
   apiClient,
   onShipmentUpdated,
   onProblemTicketCreated,
@@ -410,6 +440,7 @@ export function CustomerServicePage({
   problemTickets: ProblemTicketSummary[];
   businessCostAudits?: BusinessCostAuditSummary[];
   agents?: AgentSummary[];
+  feeNameCatalogItems?: FinanceCatalogItemSummary[];
   apiClient?: ApiClient;
   onShipmentUpdated?: (shipment: Shipment) => void;
   onProblemTicketCreated?: (ticket: ProblemTicketSummary) => void;
@@ -448,6 +479,8 @@ export function CustomerServicePage({
   const [dataEditPayableCosts, setDataEditPayableCosts] = useState<CustomerServiceBusinessCostDraft[]>([]);
   const [dataEditCostPreview, setDataEditCostPreview] = useState<CustomerServiceFinanceUpdatePreview | null>(null);
   const [dataEditCostPreviewLoading, setDataEditCostPreviewLoading] = useState(false);
+  const [feeColumnWidths, setFeeColumnWidths] = useState<Record<CustomerServiceFeeColumnKey, number>>(defaultCustomerServiceFeeColumnWidths);
+  const feeColumnResizeRef = useRef<{ key: CustomerServiceFeeColumnKey; startX: number; startWidth: number } | null>(null);
   const [dataReverseTarget, setDataReverseTarget] = useState<{ shipment: Shipment; kind: 'business' | 'agent' | 'all' } | null>(null);
   const [labelShipment, setLabelShipment] = useState<Shipment | null>(null);
   const [columnSettingsOpen, setColumnSettingsOpen] = useState(false);
@@ -467,6 +500,11 @@ export function CustomerServicePage({
   const [departureConfirmError, setDepartureConfirmError] = useState<string | null>(null);
   const [problemColumnOrder, setProblemColumnOrder] = useState<ProblemColumnKey[]>(defaultProblemColumnOrder);
   const [hiddenProblemColumns, setHiddenProblemColumns] = useState<ProblemColumnKey[]>([]);
+  const feeNameOptions = useMemo(() => createCustomerServiceFeeNameOptions(feeNameCatalogItems), [feeNameCatalogItems]);
+  const feeGridTemplate = useMemo(
+    () => customerServiceFeeColumnSpecs.map((column) => `${feeColumnWidths[column.key]}px`).join(' '),
+    [feeColumnWidths]
+  );
   const [problemFilters, setProblemFilters] = useState({
     salesperson: '',
     minDwellDays: '',
@@ -524,20 +562,13 @@ export function CustomerServicePage({
   const canViewDataConfirmBusiness = permissions.includes('customer-service:data-confirm:business-view');
   const canViewDataConfirmAgent = permissions.includes('customer-service:data-confirm:agent-view');
   const can = (permission: string) => permissions.includes(permission);
-  const isMaskEnabled = (permission: string) => !isAdministratorRole(role) && can(permission);
-  const canFillTransferNo = canTransferWrite && !isMaskEnabled('customer-service:transfer:fill-block');
-  const canViewPendingRouting = can('customer-service:pending-routing:view') && !isMaskEnabled('customer-service:pending-routing:readonly-block');
-  const canApproveBusinessData = can('customer-service:data-confirm:business-approve')
-    && !isMaskEnabled('customer-service:data-confirm:business-approve-block');
-  const canUpdateBusinessData = can('customer-service:data-confirm:business-update')
-    && !isMaskEnabled('customer-service:data-confirm:business-update-block');
-  const canUpdateAgentData = can('customer-service:data-confirm:agent-update')
-    && !isMaskEnabled('customer-service:data-confirm:agent-update-block');
-  const canApproveAgentData = can('customer-service:data-confirm:agent-approve')
-    && !isMaskEnabled('customer-service:data-confirm:agent-approve-block');
-  const canApproveAllData = can('customer-service:data-confirm:approve-all')
-    && !isMaskEnabled('customer-service:data-confirm:business-approve-block')
-    && !isMaskEnabled('customer-service:data-confirm:agent-approve-block');
+  const canFillTransferNo = canTransferWrite;
+  const canViewPendingRouting = can('customer-service:pending-routing:view');
+  const canApproveBusinessData = can('customer-service:data-confirm:business-approve');
+  const canUpdateBusinessData = can('customer-service:data-confirm:business-update');
+  const canUpdateAgentData = can('customer-service:data-confirm:agent-update');
+  const canApproveAgentData = can('customer-service:data-confirm:agent-approve');
+  const canApproveAllData = can('customer-service:data-confirm:approve-all');
   const canProblemView = can('customer-service:problem:view');
   const canColumnSetting: Record<string, boolean> = {
     dataConfirm: can('customer-service:data-confirm:column-setting'), transferNo: can('customer-service:transfer:column-setting'),
@@ -1340,7 +1371,7 @@ export function CustomerServicePage({
     () => createPendingRoutingColumns({
       businessCostAudits,
       mode: 'customerService',
-      onViewFees: can('customer-service:pending-routing:fee-detail-view') && !isMaskEnabled('customer-service:pending-routing:fee-detail-block') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
       canViewBusinessCost: false,
       canViewPayableCost: false,
       canViewAgentChannel: can('customer-service:pending-routing:agent-view')
@@ -1351,7 +1382,7 @@ export function CustomerServicePage({
     () => createPendingRoutingColumns({
       businessCostAudits,
       mode: 'customerService',
-      onViewFees: can('customer-service:pending-routing:fee-detail-view') && !isMaskEnabled('customer-service:pending-routing:fee-detail-block') ? (shipment) => void openFeeDetail(shipment) : undefined,
+      onViewFees: can('customer-service:pending-routing:fee-detail-view') ? (shipment) => void openFeeDetail(shipment) : undefined,
       canViewBusinessCost: false,
       canViewPayableCost: false,
       canViewAgentChannel: can('customer-service:pending-routing:agent-view'),
@@ -1623,6 +1654,48 @@ export function CustomerServicePage({
     const unitPrice = row.unitPrice === undefined || row.unitPrice === null ? undefined : Number(row.unitPrice);
     if (unitPrice === undefined) return Number(dataEditCostPreview?.rows.find((item) => item.id === row.id)?.amount ?? 0);
     return Number((getPayableCostQuantity(row) * unitPrice).toFixed(2));
+  }
+
+  function startFeeColumnResize(key: CustomerServiceFeeColumnKey, event: ReactPointerEvent<HTMLSpanElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const width = feeColumnWidths[key];
+    feeColumnResizeRef.current = { key, startX: event.clientX, startWidth: width };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveFeeColumnResize(key: CustomerServiceFeeColumnKey, event: ReactPointerEvent<HTMLSpanElement>) {
+    const resize = feeColumnResizeRef.current;
+    if (!resize || resize.key !== key) return;
+    const minWidth = customerServiceFeeColumnSpecs.find((column) => column.key === key)?.minWidth ?? 80;
+    setFeeColumnWidths((current) => ({
+      ...current,
+      [key]: Math.max(minWidth, resize.startWidth + event.clientX - resize.startX)
+    }));
+  }
+
+  function endFeeColumnResize(event: ReactPointerEvent<HTMLSpanElement>) {
+    feeColumnResizeRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function renderFeeColumnHeader() {
+    return customerServiceFeeColumnSpecs.map((column) => (
+      <span className="customer-service-fee-column-head" key={column.key}>
+        <span>{column.label}</span>
+        <span
+          className="customer-service-fee-resize-handle"
+          role="separator"
+          aria-label={`调整${column.label}列宽`}
+          onPointerDown={(event) => startFeeColumnResize(column.key, event)}
+          onPointerMove={(event) => moveFeeColumnResize(column.key, event)}
+          onPointerUp={endFeeColumnResize}
+          onPointerCancel={endFeeColumnResize}
+        />
+      </span>
+    ));
   }
 
   function updateBusinessCostDraft(key: string, patch: Partial<CustomerServiceBusinessCostDraft>) {
@@ -2802,10 +2875,10 @@ export function CustomerServicePage({
               </div>
               {dataEditCostPreviewLoading ? <div className="customer-service-data-edit-loading"><Spin size="small" /><Text type="secondary">费用加载中...</Text></div> : (
                 <div className="customer-service-business-cost-table" role="table" aria-label="业务成本费用表">
-                  <div className="customer-service-business-cost-head" role="row"><span>费用名称</span><span>币种</span><span>计费方式</span><span>计费数量</span><span>单价</span><span>总金额</span><span>操作</span></div>
+                  <div className="customer-service-business-cost-head" role="row" style={{ gridTemplateColumns: feeGridTemplate }}>{renderFeeColumnHeader()}</div>
                   {dataEditBusinessCosts.map((row) => (
-                    <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-business-cost-row">
-                      <Input aria-label={`业务成本费用名称-${row.key}`} value={row.name} disabled={!row.editable} placeholder="费用名称" onChange={(event) => updateBusinessCostDraft(row.key, { name: event.target.value })} />
+                    <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-business-cost-row" style={{ gridTemplateColumns: feeGridTemplate }}>
+                      <AutoComplete aria-label={`业务成本费用名称-${row.key}`} value={row.name} options={feeNameOptions} filterOption={(inputValue, option) => String(option?.value ?? '').toLocaleLowerCase().includes(inputValue.toLocaleLowerCase())} disabled={!row.editable} placeholder="输入或匹配费用名称" onChange={(value) => updateBusinessCostDraft(row.key, { name: value })} />
                       <Select aria-label={`业务成本币种-${row.key}`} value={row.currency ?? 'RMB'} disabled={!row.editable} options={[{ value: 'RMB', label: 'RMB' }, { value: 'USD', label: 'USD' }]} onChange={(value) => updateBusinessCostDraft(row.key, { currency: value })} />
                       <Select aria-label={`业务成本计费方式-${row.key}`} value={row.billingUnit} disabled={!row.editable} options={[{ value: 'KG', label: '计费重（KG）' }, { value: 'CBM', label: '计费体积（CBM）' }]} onChange={(value: FinanceBillingUnit) => updateBusinessCostDraft(row.key, { billingUnit: value })} />
                       <InputNumber aria-label={`业务成本计费数量-${row.key}`} value={getBusinessCostQuantity(row)} readOnly addonAfter={row.billingUnit === 'CBM' ? 'CBM' : 'KG'} />
@@ -2829,10 +2902,10 @@ export function CustomerServicePage({
               {dataEditCostPreviewLoading ? <div className="customer-service-data-edit-loading"><Spin size="small" /><Text type="secondary">费用加载中...</Text></div> : null}
               {!dataEditCostPreviewLoading ? (
                 <div className="customer-service-business-cost-table" role="table" aria-label="应付成本费用表">
-                  <div className="customer-service-business-cost-head" role="row"><span>费用名称</span><span>币种</span><span>计费方式</span><span>计费数量</span><span>单价</span><span>总金额</span><span>操作</span></div>
+                  <div className="customer-service-business-cost-head" role="row" style={{ gridTemplateColumns: feeGridTemplate }}>{renderFeeColumnHeader()}</div>
                   {dataEditPayableCosts.map((row) => (
-                    <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-payable-cost-row">
-                      <Input aria-label={`应付成本费用名称-${row.key}`} value={row.name} disabled={!row.editable} placeholder="费用名称" onChange={(event) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, name: event.target.value } : item))} />
+                    <div className="customer-service-business-cost-row" role="row" key={row.key} data-testid="customer-service-payable-cost-row" style={{ gridTemplateColumns: feeGridTemplate }}>
+                      <AutoComplete aria-label={`应付成本费用名称-${row.key}`} value={row.name} options={feeNameOptions} filterOption={(inputValue, option) => String(option?.value ?? '').toLocaleLowerCase().includes(inputValue.toLocaleLowerCase())} disabled={!row.editable} placeholder="输入或匹配费用名称" onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, name: value } : item))} />
                       <Select aria-label={`应付成本币种-${row.key}`} value={row.currency ?? 'RMB'} disabled={!row.editable} options={[{ value: 'RMB', label: 'RMB' }, { value: 'USD', label: 'USD' }]} onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, currency: value } : item))} />
                       <Select aria-label={`应付成本计费方式-${row.key}`} value={row.billingUnit} disabled={!row.editable} options={[{ value: 'KG', label: '计费重（KG）' }, { value: 'CBM', label: '计费体积（CBM）' }]} onChange={(value: FinanceBillingUnit) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, billingUnit: value, billingQuantity: undefined, billingQuantityTouched: true } : item))} />
                       <InputNumber aria-label={`应付成本计费数量-${row.key}`} min={0} precision={row.billingUnit === 'CBM' ? 6 : 3} value={getPayableCostQuantity(row)} disabled={!row.editable} addonAfter={row.billingUnit === 'CBM' ? 'CBM' : 'KG'} onChange={(value) => setDataEditPayableCosts((current) => current.map((item) => item.key === row.key ? { ...item, billingQuantity: value === null ? undefined : Number(value), billingQuantityTouched: true } : item))} />

@@ -40,7 +40,6 @@ interface OrderFeeEditorState {
 interface ReceiptMatchState {
   row: ReceivableFeeSummary;
   amount: number;
-  exchangeRate?: number;
 }
 
 interface OrderFeePanelProps {
@@ -234,7 +233,7 @@ export function OrderFeePanel({
     ));
   const visibleReceivables = [
     'business:shipment:finance-detail-view',
-    'business:review:finance-detail-view',
+    'business:review:view',
     'finance:receivable:read',
     'finance:receivable:detail',
     'finance:receivable:update'
@@ -270,7 +269,7 @@ export function OrderFeePanel({
     hasUiPermission(role, permissions, 'finance:business-cost:manage')
     && hasUiPermission(role, permissions, 'finance:business-cost:view-agent')
   );
-  const hasOrderEntryBusinessCostWrite = hasUiPermission(role, permissions, 'business:order-entry:business-cost-write');
+  const hasOrderEntryBusinessCostWrite = hasUiPermission(role, permissions, 'business:order-entry:business-cost');
   const canWritePendingReviewBusinessCost = shipment.status === 'REVIEW_PENDING' && hasOrderEntryBusinessCostWrite;
   const usesPendingReviewBusinessCostOnly = !canManageBusinessCostSensitiveFields && (
     hasOrderEntryBusinessCostWrite
@@ -343,14 +342,8 @@ export function OrderFeePanel({
     setReceiptLoading(true);
     try {
       const response = await apiClient.receivableWaterReceiptCandidates(row.id);
-      const rows = response.rows.filter((item) => Number(item.rmbAvailableAllocationAmount ?? item.rmbBalance ?? item.balance) > 0);
-      const exchangeRate = rows[0]?.exchangeRate;
+      const rows = response.rows.filter((item) => Number(item.availableAllocationAmount ?? item.balance) > 0);
       setReceiptRows(rows);
-      setReceiptMatch((current) => current ? {
-        ...current,
-        exchangeRate,
-        amount: exchangeRate ? Number((unpaid * exchangeRate).toFixed(2)) : current.amount
-      } : current);
     } catch (error) {
       Modal.error({ title: '水单加载失败', content: error instanceof Error ? error.message : '请稍后重试' });
     } finally {
@@ -361,9 +354,8 @@ export function OrderFeePanel({
   const submitReceiptMatch = useCallback(async (receipt: ReceivableWaterReceiptCandidate) => {
     if (!receiptMatch) return;
     const unpaid = Math.max(0, receiptMatch.row.amount - Number(receiptMatch.row.receivedAmount ?? 0));
-    const receivableExchangeRate = Number(receiptMatch.exchangeRate ?? receipt.exchangeRate ?? 1);
-    const availableRmb = Number(receipt.rmbAvailableAllocationAmount ?? receipt.rmbBalance ?? receipt.balance);
-    const amount = Number(Math.min(receiptMatch.amount, availableRmb, unpaid * receivableExchangeRate).toFixed(2));
+    const availableAmount = Number(receipt.availableAllocationAmount ?? receipt.balance);
+    const amount = Number(Math.min(receiptMatch.amount, availableAmount, unpaid).toFixed(2));
     if (amount <= 0) {
       message.warning('匹配金额必须大于 0');
       return;
@@ -371,8 +363,7 @@ export function OrderFeePanel({
     setSubmitting(true);
     try {
       await apiClient.matchWaterReceiptOrders(receipt.id, {
-        amountCurrency: 'RMB',
-        exchangeRate: receivableExchangeRate,
+        amountCurrency: 'SOURCE',
         matches: [{
           receivableId: receiptMatch.row.id,
           receivableSourceType: receiptMatch.row.sourceType ?? 'MANUAL',
@@ -594,6 +585,14 @@ export function OrderFeePanel({
       key: 'currency',
       width: isReceivable ? '9%' : '10%',
       render: (_, row) => <Tag>{row.currency ?? 'RMB'}</Tag>
+    },
+    {
+      title: '原币金额',
+      key: 'amount',
+      width: isReceivable ? '16%' : '18%',
+      align: 'right',
+      render: (_, row) => formatFinanceAmount(row.amount, row.currency),
+      sorter: (left, right) => left.amount - right.amount
     },
     {
       title: '人民币合计',
@@ -950,12 +949,12 @@ export function OrderFeePanel({
         destroyOnHidden
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Text type="secondary">提交后进入财务“水单匹配”，财务审核通过后才更新水单、应收和客户账户余额。</Text>
+          <Text type="secondary">仅显示同客户、同币种且仍有原币余额的已到账水单；提交后进入财务“水单匹配”，审核通过后才更新水单、应收和客户账户余额。</Text>
           <InputNumber
             min={0}
             precision={2}
             value={receiptMatch?.amount}
-            addonBefore="本次匹配人民币金额"
+            addonBefore={`本次匹配 ${receiptMatch?.row.currency ?? 'RMB'} 金额`}
             onChange={(value) => setReceiptMatch((current) => current ? { ...current, amount: Number(value ?? 0) } : current)}
           />
           <ManagedTable<ReceivableWaterReceiptCandidate>
@@ -969,7 +968,7 @@ export function OrderFeePanel({
             columns={[
               { title: '水单编号', dataIndex: 'receiptNo', width: 160 },
               { title: '原币金额', dataIndex: 'amount', width: 120, align: 'right', render: (value: number, row) => `${row.currency} ${value.toFixed(2)}` },
-              { title: '人民币可用余额', dataIndex: 'rmbAvailableAllocationAmount', width: 150, align: 'right', render: (value: number | undefined, row) => `¥${Number(value ?? row.rmbBalance ?? row.balance).toFixed(2)}` },
+              { title: '原币可用余额', dataIndex: 'availableAllocationAmount', width: 150, align: 'right', render: (value: number | undefined, row) => `${row.currency} ${Number(value ?? row.balance).toFixed(2)}` },
               { title: '付款编号', dataIndex: 'paymentNo', width: 140, render: (value?: string) => value || '-' },
               { title: '操作', key: 'actions', width: 100, fixed: 'right', render: (_, row) => <Button size="small" type="primary" onClick={() => submitReceiptMatch(row)}>提交申请</Button> }
             ]}

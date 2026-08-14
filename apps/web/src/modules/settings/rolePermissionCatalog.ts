@@ -1,5 +1,5 @@
 import type { PermissionDefinition, PermissionKey } from '../../apiClient';
-import { lineShipmentEditStageKeys, lineShipmentEditStageLabels, type LegacyPricingModule, type LineShipmentEditStageKey } from '@siyuan/shared';
+import { PRICING_MARKUP_ACTIONS, PRICING_PRICE_BOOK_ACTIONS, lineShipmentEditStageKeys, lineShipmentEditStageLabels, pricingMarkupCapability, type LegacyPricingModule, type LineShipmentEditStageKey, type PricingMarkupGrantAction } from '@siyuan/shared';
 
 export type PermissionWorkspaceKey =
   | 'operations'
@@ -14,7 +14,7 @@ export type PermissionWorkspaceKey =
   | 'master'
   | 'system';
 
-export type WorkspaceFieldMaskKey =
+export type GlobalFieldMaskKey =
   | 'agent-short-name'
   | 'agent-company-name'
   | 'agent-channel'
@@ -22,7 +22,7 @@ export type WorkspaceFieldMaskKey =
   | 'payable-cost'
   | 'payable-status';
 
-export const firstLevelFieldMaskCatalog: Array<{ key: WorkspaceFieldMaskKey; label: string; description: string }> = [
+export const globalFieldMaskCatalog: Array<{ key: GlobalFieldMaskKey; label: string; description: string }> = [
   { key: 'agent-short-name', label: '屏蔽代理简称', description: '不返回代理简称字段。' },
   { key: 'agent-company-name', label: '屏蔽代理详细公司名', description: '不返回代理详细公司名字段。' },
   { key: 'agent-channel', label: '屏蔽代理渠道', description: '不返回代理渠道字段。' },
@@ -31,47 +31,79 @@ export const firstLevelFieldMaskCatalog: Array<{ key: WorkspaceFieldMaskKey; lab
   { key: 'payable-status', label: '屏蔽应付状态', description: '不返回应付结算、核销和锁定状态字段。' }
 ];
 
-export const firstLevelFieldMaskCatalogByWorkspace: Partial<Record<PermissionWorkspaceKey, typeof firstLevelFieldMaskCatalog>> = {
-  operations: firstLevelFieldMaskCatalog
-};
-
-export function getFirstLevelFieldMaskCatalog(workspace: PermissionWorkspaceKey) {
-  return firstLevelFieldMaskCatalogByWorkspace[workspace] ?? [];
+export function globalFieldMaskPermissionCode(mask: GlobalFieldMaskKey): PermissionKey {
+  return `system:global-mask:${mask}` as PermissionKey;
 }
 
-export function workspaceFieldMaskPermissionCode(workspace: PermissionWorkspaceKey, mask: WorkspaceFieldMaskKey): PermissionKey {
-  return `system:workspace-mask:${workspace}:${mask}` as PermissionKey;
+export function isGlobalFieldMaskPermission(code: string): boolean {
+  return code.startsWith('system:global-mask:');
 }
 
-export function isWorkspaceFieldMaskPermission(code: string): boolean {
-  return code.startsWith('system:workspace-mask:');
-}
+export type OrderEntryPermissionKey = 'edit' | 'business-cost' | 'payable-fee';
 
-export type OrderEntryFinanceMaskKey = 'business-cost' | 'payable-fee';
-
-export const orderEntryFinanceMaskControls: Array<{
-  key: OrderEntryFinanceMaskKey;
+export const orderEntryPermissionControls: Array<{
+  key: OrderEntryPermissionKey;
   label: string;
-  description: string;
   code: PermissionKey;
 }> = [
   {
+    key: 'edit',
+    label: '编辑',
+    code: 'business:order-entry:edit'
+  },
+  {
     key: 'business-cost',
-    label: '屏蔽业务成本',
-    description: '不返回业务成本区块、字段和接口数据。',
-    code: 'business:order-entry:business-cost-mask'
+    label: '业务成本',
+    code: 'business:order-entry:business-cost'
   },
   {
     key: 'payable-fee',
-    label: '屏蔽应付费用',
-    description: '不返回应付费用区块、字段和接口数据。',
-    code: 'business:order-entry:payable-fee-mask'
+    label: '应付费用',
+    code: 'business:order-entry:payable-fee'
   }
 ];
 
-export function isOrderEntryFinanceMaskPermission(code: string): boolean {
-  return orderEntryFinanceMaskControls.some((control) => control.code === code);
+export function isOrderEntryPermission(code: string): boolean {
+  return orderEntryPermissionControls.some((control) => control.code === code);
 }
+
+export const customerServiceTransferPermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看转单号', code: 'customer-service:transfer:view' },
+  { label: '填写转单号', code: 'customer-service:transfer:write' },
+  { label: '批量填写转单号', code: 'customer-service:transfer:batch-write' },
+  { label: '填写分单号', code: 'customer-service:transfer:sub-order-write' },
+  { label: '推送业务待办', code: 'customer-service:transfer:push-sales' },
+  { label: '查看追踪网站', code: 'customer-service:transfer:tracking-website-view' },
+  { label: '上传面单', code: 'customer-service:transfer:label-upload' },
+  { label: '查看面单', code: 'customer-service:transfer:label-view' },
+  { label: '查看出库时间', code: 'customer-service:transfer:view-outbound-time' },
+  { label: '查看代理信息', code: 'customer-service:transfer:view-agent' },
+  { label: '查看代理数据', code: 'customer-service:transfer:view-agent-data' },
+  { label: '查看敏感货物属性', code: 'customer-service:transfer:view-sensitive' },
+  { label: '查看全部授权订单', code: 'customer-service:transfer:view-all' },
+  { label: '保存列设置', code: 'customer-service:transfer:column-setting' }
+];
+
+export const customerServicePendingRoutingPermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看待排货', code: 'customer-service:pending-routing:view' },
+  { label: '查看费用明细', code: 'customer-service:pending-routing:fee-detail-view' },
+  { label: '查看代理信息', code: 'customer-service:pending-routing:agent-view' },
+  { label: '创建问题件', code: 'customer-service:pending-routing:problem-create' },
+  { label: '保存列设置', code: 'customer-service:pending-routing:column-setting' }
+];
+
+export const customerServiceDataConfirmPermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看数据确认', code: 'customer-service:data-confirm:view' },
+  { label: '查看业务数据', code: 'customer-service:data-confirm:business-view' },
+  { label: '修改业务数据', code: 'customer-service:data-confirm:business-update' },
+  { label: '审核业务数据', code: 'customer-service:data-confirm:business-approve' },
+  { label: '查看代理数据', code: 'customer-service:data-confirm:agent-view' },
+  { label: '修改代理数据', code: 'customer-service:data-confirm:agent-update' },
+  { label: '审核代理数据', code: 'customer-service:data-confirm:agent-approve' },
+  { label: '全部审核', code: 'customer-service:data-confirm:approve-all' },
+  { label: '反审核', code: 'customer-service:data-confirm:reverse' },
+  { label: '保存列设置', code: 'customer-service:data-confirm:column-setting' }
+];
 
 export const customerServiceTransferFillMaskControls: Array<{
   label: string;
@@ -110,48 +142,6 @@ export function isCustomerServiceDataConfirmMaskPermission(code: string): boolea
   return customerServiceDataConfirmMaskControls.some((control) => control.code === code);
 }
 
-export const warehouseTodayReceiptMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽批量导入', code: 'warehouse:today-receipt:batch-import-block' },
-  { label: '屏蔽批量下载', code: 'warehouse:today-receipt:batch-download-block' },
-  { label: '屏蔽站点筛选', code: 'warehouse:today-receipt:site-filter-block' },
-  { label: '屏蔽手动添加收货', code: 'warehouse:today-receipt:manual-create-block' }
-];
-
-export function isWarehouseTodayReceiptMaskPermission(code: string): boolean {
-  return warehouseTodayReceiptMaskControls.some((control) => control.code === code);
-}
-
-export const warehouseTallyPendingMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽查看', code: 'warehouse:tally-pending:view-block' },
-  { label: '屏蔽修改', code: 'warehouse:tally-pending:update-block' },
-  { label: '屏蔽取消任务', code: 'warehouse:tally-pending:cancel-block' },
-  { label: '屏蔽处理理货', code: 'warehouse:tally-pending:process-block' }
-];
-
-export function isWarehouseTallyPendingMaskPermission(code: string): boolean {
-  return warehouseTallyPendingMaskControls.some((control) => control.code === code);
-}
-
-export const warehouseTallyCompletedMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽查看', code: 'warehouse:tally-completed:view-block' },
-  { label: '屏蔽重新打印', code: 'warehouse:tally-label:reprint-block' },
-  { label: '屏蔽下载', code: 'warehouse:tally-label:download-block' },
-  { label: '屏蔽反审核', code: 'warehouse:tally-completed:reverse-block' }
-];
-
-export function isWarehouseTallyCompletedMaskPermission(code: string): boolean {
-  return warehouseTallyCompletedMaskControls.some((control) => control.code === code);
-}
-
 export const marketPendingRoutingMaskControls: Array<{
   label: string;
   code: PermissionKey;
@@ -183,14 +173,23 @@ export function isMarketRoutedMaskPermission(code: string): boolean {
   return marketRoutedMaskControls.some((control) => control.code === code);
 }
 
-/** 历史录单财务权限仍由 API 兼容，但不再作为录单二级入口的可配置项展示。 */
-export function isLegacyOrderEntryFinancePermission(code: string): boolean {
-  return code === 'business:order-entry:business-cost-view'
-    || code === 'business:order-entry:business-cost-write';
-}
-
 export function lineShipmentStageEditBlockPermissionCode(stage: LineShipmentEditStageKey): PermissionKey {
   return `operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey;
+}
+
+export function lineShipmentStageEditPermissionCode(stage: LineShipmentEditStageKey): PermissionKey {
+  return `operations:line-shipment:stage-edit:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey;
+}
+
+export const lineShipmentStageEditControls = lineShipmentEditStageKeys.map((stage) => ({
+  stage,
+  label: `授权${lineShipmentEditStageLabels[stage]}编辑`,
+  description: `勾选后，拥有“专线运单池”基础权限的用户组可处理该阶段运单。`,
+  code: lineShipmentStageEditPermissionCode(stage)
+}));
+
+export function isLineShipmentStageEditPermission(code: string): boolean {
+  return code.startsWith('operations:line-shipment:stage-edit:');
 }
 
 export const lineShipmentStageEditBlockControls = lineShipmentEditStageKeys.map((stage) => ({
@@ -204,9 +203,6 @@ export function isLineShipmentStageEditBlockPermission(code: string): boolean {
   return code.startsWith('operations:line-shipment:stage-edit-block:');
 }
 
-export type PricingModuleBlockScope = 'lookup' | 'markup';
-export type PricingMarkupBlockMode = 'view' | 'edit';
-
 export const pricingModuleControls: Array<{ module: LegacyPricingModule; label: string }> = [
   { module: 'amazon', label: '亚马逊查询' },
   { module: 'inquiry', label: '欧洲超大件综合查询' },
@@ -217,97 +213,49 @@ export const pricingModuleControls: Array<{ module: LegacyPricingModule; label: 
   { module: 'dubaiAirSea', label: '迪拜空海运查询' }
 ];
 
-export function pricingModuleBlockPermissionCode(scope: PricingModuleBlockScope, module: LegacyPricingModule): PermissionKey {
-  return `pricing:${scope}:module-block:${module}` as PermissionKey;
+const pricingLookupPermissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+  amazon: 'pricing:lookup:amazon',
+  inquiry: 'pricing:lookup:europe-oversize',
+  europeExpress: 'pricing:lookup:europe-express',
+  southAfrica: 'pricing:lookup:south-africa',
+  usaAirSea: 'pricing:lookup:usa-air-sea',
+  canadaAirSea: 'pricing:lookup:canada-air-sea',
+  dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+};
+
+export function pricingLookupPermissionCode(module: LegacyPricingModule): PermissionKey {
+  return pricingLookupPermissionByModule[module];
 }
 
-export function pricingMarkupModuleBlockPermissionCode(mode: PricingMarkupBlockMode, module: LegacyPricingModule): PermissionKey {
-  return `pricing:markup:${mode}-block:${module}` as PermissionKey;
+export function pricingMarkupPermissionCode(module: LegacyPricingModule, action: PricingMarkupGrantAction): PermissionKey {
+  return pricingMarkupCapability(module, action) as PermissionKey;
 }
 
-export const pricingLookupModuleBlockControls = pricingModuleControls.map((control) => ({
+export const pricingMarkupPermissionControls = pricingModuleControls.map((control) => ({
   ...control,
-  label: `屏蔽${control.label}`,
-  description: `勾选后，仍保留“查价”入口，但隐藏${control.label}，并拒绝该模块的查价请求。`,
-  code: pricingModuleBlockPermissionCode('lookup', control.module)
+  actions: PRICING_MARKUP_ACTIONS.map((action) => ({ ...action, code: pricingMarkupPermissionCode(control.module, action.key) }))
 }));
 
-export const pricingMarkupModuleBlockControls = pricingModuleControls.map((control) => ({
-  ...control,
-  label: `屏蔽${control.label.replace(/查询$/, '')}加价规则`,
-  description: `勾选后，仍保留“代理加价规则”入口，但隐藏${control.label.replace(/查询$/, '')}加价规则，并拒绝该模块的规则请求。`,
-  code: pricingModuleBlockPermissionCode('markup', control.module)
+export const pricingPriceBookPermissionControls = PRICING_PRICE_BOOK_ACTIONS.map((action) => ({
+  ...action,
+  code: `pricing:price-books:${action.key}` as PermissionKey
 }));
 
-export const pricingMarkupViewBlockControls = pricingModuleControls.map((control) => ({
+export const pricingLookupModuleControls = pricingModuleControls.map((control) => ({
   ...control,
-  mode: 'view' as const,
-  label: `屏蔽查看${control.label.replace(/查询$/, '')}加价规则`,
-  description: `勾选后，仍保留“代理加价规则”入口，但隐藏${control.label.replace(/查询$/, '')}加价规则并拒绝查看请求。`,
-  code: pricingMarkupModuleBlockPermissionCode('view', control.module)
+  code: pricingLookupPermissionCode(control.module)
 }));
 
-export const pricingMarkupEditBlockControls = pricingModuleControls.map((control) => ({
-  ...control,
-  mode: 'edit' as const,
-  label: `屏蔽编辑${control.label.replace(/查询$/, '')}加价规则`,
-  description: `勾选后，仍可查看${control.label.replace(/查询$/, '')}加价规则，但不能新增、修改、启停、删除或批量维护。`,
-  code: pricingMarkupModuleBlockPermissionCode('edit', control.module)
-}));
+export const orderEntryDraftPermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看', code: 'business:order-entry:draft-view' },
+  { label: '编辑', code: 'business:order-entry:draft-edit' },
+  { label: '删除', code: 'business:order-entry:draft-delete' }
+];
 
-export type PricingPriceBookBlockMode = 'create' | 'delete' | 'remark';
-
-function pricingPriceBookChannelLabel(control: { label: string }) {
-  return control.label.replace(/综合查询$|查询$/, '');
-}
-
-export function pricingPriceBookBlockPermissionCode(mode: PricingPriceBookBlockMode, module: LegacyPricingModule): PermissionKey {
-  return `pricing:price-books:${mode}-block:${module}` as PermissionKey;
-}
-
-export const pricingPriceBookCreateBlockControls = pricingModuleControls.map((control) => ({
-  ...control,
-  mode: 'create' as const,
-  label: `屏蔽${pricingPriceBookChannelLabel(control)}新增`,
-  description: `勾选后，仍可进入价格表管理，但不能新增${pricingPriceBookChannelLabel(control)}价格表。`,
-  code: pricingPriceBookBlockPermissionCode('create', control.module)
-}));
-
-export const pricingPriceBookDeleteBlockControls = pricingModuleControls.map((control) => ({
-  ...control,
-  mode: 'delete' as const,
-  label: `屏蔽${pricingPriceBookChannelLabel(control)}删减`,
-  description: `勾选后，仍可查看${pricingPriceBookChannelLabel(control)}价格表，但不能删减价格表。`,
-  code: pricingPriceBookBlockPermissionCode('delete', control.module)
-}));
-
-export const pricingPriceBookRemarkBlockControls = pricingModuleControls.map((control) => ({
-  ...control,
-  mode: 'remark' as const,
-  label: `屏蔽${pricingPriceBookChannelLabel(control)}修改备注`,
-  description: `勾选后，仍可查看${pricingPriceBookChannelLabel(control)}价格表，但不能修改默认备注。`,
-  code: pricingPriceBookBlockPermissionCode('remark', control.module)
-}));
-
-export function isPricingPriceBookBlockPermission(code: string): boolean {
-  return code.startsWith('pricing:price-books:create-block:')
-    || code.startsWith('pricing:price-books:delete-block:')
-    || code.startsWith('pricing:price-books:remark-block:');
-}
-
-export function isPricingModuleBlockPermission(code: string): boolean {
-  return code.startsWith('pricing:lookup:module-block:')
-    || code.startsWith('pricing:markup:module-block:')
-    || code.startsWith('pricing:markup:view-block:')
-    || code.startsWith('pricing:markup:edit-block:')
-    || isPricingPriceBookBlockPermission(code);
-}
-
-export function isPricingMarkupModuleBlockPermission(code: string): boolean {
-  return code.startsWith('pricing:markup:module-block:')
-    || code.startsWith('pricing:markup:view-block:')
-    || code.startsWith('pricing:markup:edit-block:');
-}
+export const pendingReviewPermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看', code: 'business:review:view' },
+  { label: '编辑', code: 'business:review:edit' }
+];
 
 interface PermissionWorkspaceGroup {
   label: string;
@@ -339,13 +287,12 @@ export const permissionWorkspaceCatalog: PermissionWorkspaceDefinition[] = [
   {
     key: 'business',
     label: '业务管理',
-    groups: ['业务看板', '录单', '待审核运单', '运单管理', 'AI 订单助手'].map((label) => ({ label }))
+    groups: ['业务看板', '录单', '草稿箱', '待审核运单', '运单管理', 'AI 订单助手'].map((label) => ({ label }))
   },
   {
     key: 'warehouse',
     label: '仓库管理',
-    // 仓库看板是所有仓库读权限的聚合页，没有独立 RBAC 入口，故不制造重复勾选项。
-    groups: ['今日收货', '在仓数据', '未完成理货', '已完成理货', '待出库', '已出库', '仓租细分表'].map((label) => ({ label }))
+    groups: ['仓库看板', '今日收货', '在仓数据', '未完成理货', '已完成理货', '待出库', '已出库', '仓租细分表', '仓租数据范围'].map((label) => ({ label }))
   },
   {
     key: 'market',
@@ -428,13 +375,9 @@ export function getWorkspacePermissionGroups(
     const permissions = permissionGroups
       .filter(([candidate]) => candidate === prefix || candidate.startsWith(`${prefix} / `))
       .flatMap(([, groupPermissions]) => groupPermissions)
-      .filter((permission) => !isWorkspaceFieldMaskPermission(permission.code))
-      .filter((permission) => !isOrderEntryFinanceMaskPermission(permission.code))
-      .filter((permission) => !isLegacyOrderEntryFinancePermission(permission.code))
-      // 屏蔽项只在对应三级面板单独配置，不能随二级入口默认授予。
-      .filter((permission) => !isWarehouseTodayReceiptMaskPermission(permission.code))
-      .filter((permission) => !isWarehouseTallyPendingMaskPermission(permission.code))
-      .filter((permission) => !isWarehouseTallyCompletedMaskPermission(permission.code))
+      .filter((permission) => !isGlobalFieldMaskPermission(permission.code))
+      .filter((permission) => !isOrderEntryPermission(permission.code))
+      .filter((permission) => !permission.code.includes('-block'))
       .filter((permission) => !isMarketPendingRoutingMaskPermission(permission.code))
       .filter((permission) => !isMarketRoutedMaskPermission(permission.code))
       .filter((permission) => !isCustomerServicePendingRoutingMaskPermission(permission.code))

@@ -104,8 +104,8 @@ function statusTag(value?: string) {
   return <Tag color={status === 'CONFIRMED' ? 'success' : status === 'VOIDED' ? 'default' : 'warning'}>{status === 'CONFIRMED' ? '已审核' : status === 'VOIDED' ? '已删除' : '待审核'}</Tag>;
 }
 
-export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange, onGoPendingPayment }: PayableAuditPageProps) {
-  const { message, modal } = AntdApp.useApp();
+export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogItems, renderShipmentOrderNoLink, onRowsChange }: PayableAuditPageProps) {
+  const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PayableAuditListQuery>();
   const [form] = Form.useForm<PayableAuditCreateInput & PayableAuditUpdateInput>();
   const [query, setQuery] = useState<PayableAuditListQuery>(defaultQuery);
@@ -120,6 +120,8 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
   const [editingRow, setEditingRow] = useState<PayableAuditSummary | null>(null);
   const [matchedShipment, setMatchedShipment] = useState<PayableAuditShipmentMatchSummary | null>(null);
   const [matchingShipment, setMatchingShipment] = useState(false);
+  const [savingEditor, setSavingEditor] = useState(false);
+  const [selectedShipmentLocked, setSelectedShipmentLocked] = useState(false);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
 
   const canManage = hasPermission(permissions, 'finance:payable:manage');
@@ -137,6 +139,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
     () => response.rows.filter((row) => selectedIds.includes(row.id)),
     [response.rows, selectedIds]
   );
+  const selectedCreateRow = selectedRows.length === 1 ? selectedRows[0] : undefined;
   const hasSelectedMiscFeeHang = selectedRows.some((row) => row.auditSource === 'MISC_FEE_HANG');
 
   const loadRows = async (nextQuery = query) => {
@@ -160,9 +163,25 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
     setResponse((current) => ({ ...current, rows, pagination: { ...current.pagination, totalItems: Math.max(current.pagination.totalItems, rows.length) } }));
   }, [rows]);
 
-  const openEditor = (row?: PayableAuditSummary) => {
+  const toShipmentMatchSummary = (row: PayableAuditSummary): PayableAuditShipmentMatchSummary => ({
+    shipmentId: row.shipmentId,
+    customerCode: row.customerCode,
+    customerName: row.customerName,
+    customerOrderNo: row.customerOrderNo,
+    outboundOrderNo: row.outboundOrderNo,
+    systemOrderNo: row.systemOrderNo,
+    transferNo: row.transferNo,
+    salesperson: row.salesperson,
+    agentName: row.agentName,
+    agentChannel: row.agentChannel
+  });
+
+  const openEditor = (row?: PayableAuditSummary, prefillRow?: PayableAuditSummary) => {
     setEditingRow(row ?? null);
-    setMatchedShipment(null);
+    const prefilledShipment = !row && prefillRow?.shipmentId ? toShipmentMatchSummary(prefillRow) : null;
+    setMatchedShipment(prefilledShipment);
+    setSelectedShipmentLocked(Boolean(prefilledShipment));
+    form.resetFields();
     form.setFieldsValue(row ? {
       name: row.name,
       chargeWeightKg: row.chargeWeightKg,
@@ -171,40 +190,34 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
       currency: row.currency ?? 'RMB',
       paymentNo: row.paymentNo,
       remark: row.remark
-    } : { name: '代理成本', currency: 'RMB' });
+    } : {
+      ...(prefilledShipment ? {
+        shipmentId: prefilledShipment.shipmentId,
+        systemOrderNo: prefilledShipment.systemOrderNo,
+        customerOrderNo: prefilledShipment.customerOrderNo,
+        transferNo: prefilledShipment.transferNo,
+        customerCode: prefilledShipment.customerCode
+      } : {}),
+      name: '代理成本',
+      currency: 'RMB'
+    });
     setEditorOpen(true);
   };
 
-  const pendingPaymentQueryFor = (row?: PayableAuditSummary): PendingPaymentListQuery => ({
-    page: 1,
-    pageSize: 10,
-    status: 'PENDING',
-    currency: 'ALL',
-    sortBy: 'date',
-    sortOrder: 'desc',
-    systemOrderNo: row?.auditSource === 'MISC_FEE_HANG' ? undefined : row?.systemOrderNo,
-    customerCode: row?.customerCode,
-    agent: row?.agentName
-  });
-
-  const showPendingPaymentPrompt = (row?: PayableAuditSummary) => {
-    modal.success({
-      title: '已完成市场应付审核',
-      content: row?.systemOrderNo
-        ? `市场应付已审核，已生成待付款记录：${row.systemOrderNo}。请补充供应商账单截图和代理收款银行信息。`
-        : '市场应付已审核，已生成待付款记录。请到待付款补充供应商账单截图和代理收款银行信息。',
-      okText: '去待付款',
-      cancelText: '留在当前页',
-      onOk: () => {
-        onGoPendingPayment?.(pendingPaymentQueryFor(row));
-      }
-    });
+  const handleEditorValuesChange = (changedValues: Partial<PayableAuditCreateInput & PayableAuditUpdateInput>, values: PayableAuditCreateInput & PayableAuditUpdateInput) => {
+    syncAmount(values);
+    if (editingRow || selectedShipmentLocked) return;
+    const associationFields = ['shipmentId', 'outboundOrderNo', 'systemOrderNo', 'customerOrderNo', 'transferNo', 'customerCode'];
+    if (Object.keys(changedValues).some((key) => associationFields.includes(key))) {
+      setMatchedShipment(null);
+      if (form.getFieldValue('shipmentId')) form.setFieldValue('shipmentId', undefined);
+    }
   };
 
   const auditOne = async (row: PayableAuditSummary) => {
     await apiClient.auditPayable(row.id);
     await loadRows();
-    showPendingPaymentPrompt(row);
+    message.success('应付已审核并生成待付款记录，可继续审核下一张');
   };
 
   const reverseAuditOne = async (row: PayableAuditSummary) => {
@@ -241,30 +254,56 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
         customerCode: matched.customerCode
       });
       message.success('订单已匹配');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '订单匹配失败，请检查关联单号后重试');
     } finally {
       setMatchingShipment(false);
     }
   };
 
   const submitEditor = async () => {
-    const values = await form.validateFields();
-    const payload = {
-      ...values,
-      amount: typeof values.chargeWeightKg === 'number' && typeof values.unitPrice === 'number'
-        ? calculateMonetaryTotal(values.chargeWeightKg, values.unitPrice)
-        : values.amount
-    };
-    if (editingRow) {
-      await apiClient.updatePayableAudit(editingRow.id, payload);
-      message.success('应付费用已修改');
-    } else {
-      await apiClient.createPayableAudit({ ...payload, shipmentId: matchedShipment?.shipmentId ?? values.shipmentId });
-      message.success('应付费用已新增');
+    if (savingEditor) return;
+    setSavingEditor(true);
+    try {
+      const values = await form.validateFields();
+      const payload = {
+        ...values,
+        amount: typeof values.chargeWeightKg === 'number' && typeof values.unitPrice === 'number'
+          ? calculateMonetaryTotal(values.chargeWeightKg, values.unitPrice)
+          : values.amount
+      };
+      if (editingRow) {
+        await apiClient.updatePayableAudit(editingRow.id, payload);
+        message.success('应付费用已修改');
+      } else {
+        const createPayload = matchedShipment
+          ? {
+              ...payload,
+              shipmentId: matchedShipment.shipmentId
+            }
+          : payload;
+        if (matchedShipment) {
+          delete createPayload.outboundOrderNo;
+          delete createPayload.systemOrderNo;
+          delete createPayload.customerOrderNo;
+          delete createPayload.transferNo;
+          delete createPayload.customerCode;
+        }
+        await apiClient.createPayableAudit(createPayload);
+        message.success('应付费用已新增');
+      }
+      setEditorOpen(false);
+      setEditingRow(null);
+      setMatchedShipment(null);
+      setSelectedShipmentLocked(false);
+      form.resetFields();
+      await loadRows();
+    } catch (error) {
+      if (error && typeof error === 'object' && 'errorFields' in error) return;
+      message.error(error instanceof Error ? error.message : '保存应付失败，请稍后重试');
+    } finally {
+      setSavingEditor(false);
     }
-    setEditorOpen(false);
-    setEditingRow(null);
-    form.resetFields();
-    await loadRows();
   };
 
   const syncAmount = (values: PayableAuditCreateInput & PayableAuditUpdateInput) => {
@@ -291,9 +330,7 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
       message.success(`处理完成：成功 ${result.successCount} 条`);
     }
     await loadRows();
-    if (action === 'audit' && result.successCount > 0) {
-      showPendingPaymentPrompt();
-    }
+    if (action === 'audit' && result.successCount > 0) message.success('应付已审核并生成待付款记录，可继续审核下一张');
   };
 
   const baseColumns: Record<ColumnKey, ColumnsType<PayableAuditSummary>[number]> = {
@@ -431,7 +468,14 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
             ], exported.rows as unknown as Array<Record<string, unknown>>);
             message.success(`应付导出已生成：${exported.rows.length} 条`);
           }}>导出</Button>
-          <Button type="primary" onClick={() => openEditor()} disabled={!canManage}>添加应付</Button>
+          <Button
+            type="primary"
+            onClick={() => openEditor(undefined, selectedCreateRow)}
+            disabled={!canManage || selectedIds.length > 1}
+            title={selectedIds.length > 1 ? '添加应付只能引用一笔已选单据' : undefined}
+          >
+            添加应付
+          </Button>
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()} />
         </Space>
       }
@@ -529,15 +573,15 @@ export function PayableAuditPage({ apiClient, permissions, rows, financeCatalogI
           void loadRows(next);
         }}
       />
-      <Modal title={editingRow ? '修改应付费用' : '添加应付'} className="finance-modal" width={800} open={editorOpen} onCancel={() => { setEditorOpen(false); setEditingRow(null); setMatchedShipment(null); form.resetFields(); }} onOk={submitEditor} okText="保存应付" cancelText="取消">
-        <Form form={form} layout="vertical" initialValues={{ name: '代理成本', currency: 'RMB' }} onValuesChange={(_, values) => syncAmount(values)}>
+      <Modal title={editingRow ? '修改应付费用' : '添加应付'} className="finance-modal" width={800} open={editorOpen} confirmLoading={savingEditor} okButtonProps={{ disabled: matchingShipment }} onCancel={() => { if (savingEditor) return; setEditorOpen(false); setEditingRow(null); setMatchedShipment(null); setSelectedShipmentLocked(false); form.resetFields(); }} onOk={submitEditor} okText="保存应付" cancelText="取消">
+        <Form form={form} layout="vertical" initialValues={{ name: '代理成本', currency: 'RMB' }} onValuesChange={handleEditorValuesChange}>
           {!editingRow ? (
             <>
               <Form.Item name="shipmentId" hidden><Input /></Form.Item>
-              <Form.Item name="systemOrderNo" label="关联订单"><Input placeholder="按出货单号或内部单号匹配" /></Form.Item>
-              <Form.Item name="customerOrderNo" label="出货单号"><Input placeholder="可选，按出货单号匹配" /></Form.Item>
-              <Form.Item name="transferNo" label="转单号"><Input placeholder="可选，按转单号匹配" /></Form.Item>
-              <Form.Item name="customerCode" label="客户编号"><Input placeholder="可选，按客户编号匹配" /></Form.Item>
+              <Form.Item name="systemOrderNo" label="关联订单"><Input readOnly={selectedShipmentLocked} placeholder="按出货单号或内部单号匹配" /></Form.Item>
+              <Form.Item name="customerOrderNo" label="出货单号"><Input readOnly={selectedShipmentLocked} placeholder="可选，按出货单号匹配" /></Form.Item>
+              <Form.Item name="transferNo" label="转单号"><Input readOnly={selectedShipmentLocked} placeholder="可选，按转单号匹配" /></Form.Item>
+              <Form.Item name="customerCode" label="客户编号"><Input readOnly={selectedShipmentLocked} placeholder="可选，按客户编号匹配" /></Form.Item>
               <Button loading={matchingShipment} onClick={() => void matchShipment()}>匹配订单</Button>
               {matchedShipment ? (
                 <Card size="small" className="finance-audit-summary">

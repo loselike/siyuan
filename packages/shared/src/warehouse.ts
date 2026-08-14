@@ -6,12 +6,45 @@ export type WarehouseTallyLabelStatus = 'NOT_GENERATED' | 'GENERATED';
 export type WarehouseMeasurementStatus = 'MEASURED' | 'PENDING_REMEASURE';
 export type WarehouseTallyLifecycleStatus = '待理货' | '理货中' | '已理货' | '二次理货';
 export type WarehouseTallyChannel = '快递' | '空运' | '卡航' | '铁路' | '海运';
-export type WarehouseTallyProgressStatus = 'WAITING' | 'IN_PROGRESS' | 'COMPLETED';
+export type WarehouseTallyProgressStatus = 'WAITING' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
+export type WarehouseTallyPreferredTimeSlot = 'MORNING' | 'AFTERNOON' | 'ALL_DAY';
 export const warehouseTallyChannels: WarehouseTallyChannel[] = ['快递', '空运', '卡航', '铁路', '海运'];
+export interface WarehouseTallySortRule {
+  channel: WarehouseTallyChannel;
+  sortOrder: number;
+  preferredTimeSlot: WarehouseTallyPreferredTimeSlot;
+  enabled: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface WarehouseTallySortRuleInput {
+  channel: WarehouseTallyChannel;
+  sortOrder: number;
+  preferredTimeSlot: WarehouseTallyPreferredTimeSlot;
+  enabled: boolean;
+}
+
+export interface WarehouseTallySortRulesUpdateInput {
+  rules: WarehouseTallySortRuleInput[];
+}
+
+export const warehouseTallyDefaultSortRules: ReadonlyArray<WarehouseTallySortRuleInput> = [
+  { channel: '快递', sortOrder: 1, preferredTimeSlot: 'MORNING', enabled: true },
+  { channel: '空运', sortOrder: 2, preferredTimeSlot: 'AFTERNOON', enabled: true },
+  { channel: '卡航', sortOrder: 3, preferredTimeSlot: 'ALL_DAY', enabled: true },
+  { channel: '铁路', sortOrder: 4, preferredTimeSlot: 'ALL_DAY', enabled: true },
+  { channel: '海运', sortOrder: 4, preferredTimeSlot: 'ALL_DAY', enabled: true }
+];
+
+export function createDefaultWarehouseTallySortRules(): WarehouseTallySortRule[] {
+  return warehouseTallyDefaultSortRules.map((rule) => ({ ...rule }));
+}
 export const warehouseTallyProgressStatusLabels: Record<WarehouseTallyProgressStatus, string> = {
   WAITING: '待理货',
   IN_PROGRESS: '理货中',
-  COMPLETED: '已完成'
+  COMPLETED: '已完成',
+  CANCELLED: '已取消'
 };
 
 function warehouseTallyBeijingHour(now: Date): number {
@@ -23,20 +56,29 @@ function warehouseTallyBeijingHour(now: Date): number {
   return Number(hour);
 }
 
-export function warehouseTallyChannelPriority(channel: string | undefined, now = new Date()): number {
-  const morningOrder = ['快递', '空运', '卡航', '铁路', '海运'];
-  const afternoonOrder = ['空运', '快递', '卡航', '铁路', '海运'];
-  const order = warehouseTallyBeijingHour(now) < 12 ? morningOrder : afternoonOrder;
-  const index = order.indexOf(channel ?? '');
-  return index >= 0 ? index : order.length;
+function isWarehouseTallyPreferredTimeSlot(rule: WarehouseTallySortRule, now: Date) {
+  const hour = warehouseTallyBeijingHour(now);
+  return (rule.preferredTimeSlot === 'MORNING' && hour < 12)
+    || (rule.preferredTimeSlot === 'AFTERNOON' && hour >= 12);
+}
+
+export function warehouseTallyChannelPriority(
+  channel: string | undefined,
+  now = new Date(),
+  rules: WarehouseTallySortRule[] = createDefaultWarehouseTallySortRules()
+): number {
+  const rule = rules.find((item) => item.channel === channel);
+  if (!rule || !rule.enabled) return Number.MAX_SAFE_INTEGER;
+  return rule.sortOrder + (isWarehouseTallyPreferredTimeSlot(rule, now) ? -10_000 : 0);
 }
 
 export function sortWarehouseTallyTasks<T extends { tallyChannel?: string; createdAt: string; taskNo?: string; id?: string }>(
   tasks: T[],
-  now = new Date()
+  now = new Date(),
+  rules: WarehouseTallySortRule[] = createDefaultWarehouseTallySortRules()
 ): T[] {
   return [...tasks].sort((left, right) => {
-    const channelOrder = warehouseTallyChannelPriority(left.tallyChannel, now) - warehouseTallyChannelPriority(right.tallyChannel, now);
+    const channelOrder = warehouseTallyChannelPriority(left.tallyChannel, now, rules) - warehouseTallyChannelPriority(right.tallyChannel, now, rules);
     if (channelOrder !== 0) return channelOrder;
     const createdOrder = Date.parse(left.createdAt) - Date.parse(right.createdAt);
     if (Number.isFinite(createdOrder) && createdOrder !== 0) return createdOrder;
@@ -248,6 +290,16 @@ export interface WarehousePackageUpdateInput {
   manualException?: string;
 }
 
+export interface WarehousePackageDeleteInput {
+  ids: string[];
+  reason: string;
+}
+
+export interface WarehousePackageDeleteResponse {
+  deletedIds: string[];
+  deletedCount: number;
+}
+
 export type WarehouseTodayDatePreset = 'TODAY' | 'WEEK' | 'LAST_7_DAYS' | 'MONTH' | 'CUSTOM';
 
 export interface WarehouseTodayQuery {
@@ -283,6 +335,8 @@ export interface WarehouseInStockQuery {
   domesticTrackingNo?: string;
   combinedOrderNo?: string;
   operationKeyword?: string;
+  /** Fixed header search keyword, scoped to the active warehouse page. */
+  keyword?: string;
   status?: WarehousePackageStatus;
 }
 
@@ -508,13 +562,19 @@ export interface WarehouseTallyTaskSummary {
   appliedPackageNo?: string;
   labelAppliedAt?: string;
   labelAppliedBy?: string;
+  cancelReason?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
   outputPackages?: WarehousePackageSummary[];
 }
 
 export interface WarehouseTallyTaskListQuery {
   status?: WarehouseTallyTaskStatus;
+  problemOnly?: boolean | string;
   customerCode?: string;
   combinedOrderNo?: string;
+  /** Fixed header search keyword, scoped to the active tally page. */
+  keyword?: string;
   completedScope?: 'RECENT' | 'HISTORY' | 'ALL';
   completedFrom?: string;
   completedTo?: string;
@@ -587,6 +647,10 @@ export interface WarehouseTallyTaskUpdateInput {
   packageIds?: string[];
   tallyRequirement?: string;
   remark?: string;
+}
+
+export interface WarehouseTallyTaskCancelInput {
+  reason: string;
 }
 
 export interface WarehouseTallyTaskCompletedCountUpdateInput {

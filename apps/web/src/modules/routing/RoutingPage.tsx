@@ -17,7 +17,7 @@ import {
 } from '@siyuan/shared';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
-import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
+import { createPendingRoutingColumns, getPendingRoutingApprovalReadiness } from '../shared/pendingRoutingColumns';
 import { getRoutingAgentChannelName, getRoutingAgentShortName } from './routingAgentDisplay';
 import { createRoutingFeeNameOptions } from './routingFeeCatalog';
 import { selectRecentRoutedShipmentHistory, selectRoutedShipmentHistory } from './routingHistory';
@@ -127,6 +127,13 @@ type PendingRoutingCostEditor = {
   unitPrice?: number;
   amount?: number;
 };
+
+function calculateCostAmount(quantity?: number, unitPrice?: number, fallback?: number) {
+  if (quantity !== undefined && unitPrice !== undefined && Number.isFinite(quantity) && Number.isFinite(unitPrice)) {
+    return Number((quantity * unitPrice).toFixed(2));
+  }
+  return fallback;
+}
 
 function inferRoutingMode(shipment: Shipment) {
   const channel = `${shipment.routeAgentChannelName || ''} ${shipment.channelName || ''}`;
@@ -251,6 +258,7 @@ export function RoutingPage({
   const [routedView, setRoutedView] = useState<'recent' | 'history'>('recent');
   const watchedAgentId = Form.useWatch('agentId', assignmentForm);
   const watchedAgentChannelName = Form.useWatch('agentChannelName', assignmentForm);
+  const watchedDestinationCountry = Form.useWatch('destinationCountry', assignmentForm);
   const feeNameOptions = useMemo(() => createRoutingFeeNameOptions(feeNameCatalogItems), [feeNameCatalogItems]);
 
   useEffect(() => {
@@ -577,6 +585,12 @@ export function RoutingPage({
     && !matchedAgentChannel
   );
   const isDisabledAgentChannel = matchedAgentChannel?.enabled === false;
+  const assignmentReadiness = assignmentShipment ? getPendingRoutingApprovalReadiness({
+    destinationCountry: watchedDestinationCountry ?? assignmentShipment.destinationCountry,
+    channelId: assignmentShipment.channelId,
+    agentId: watchedAgentId ?? assignmentShipment.agentId,
+    routeAgentChannelName: watchedAgentChannelName ?? assignmentShipment.routeAgentChannelName
+  }) : undefined;
 
   const marketColumns: ColumnsType<Shipment> = useMemo(
     () => [
@@ -732,7 +746,7 @@ export function RoutingPage({
       billingQuantity,
       chargeWeightKg: type === 'BUSINESS_COST' ? billingUnit === 'KG' ? billingQuantity : undefined : row?.chargeWeightKg,
       unitPrice: row?.unitPrice,
-      amount: type === 'BUSINESS_COST' && billingQuantity !== undefined && row?.unitPrice !== undefined ? Number((billingQuantity * row.unitPrice).toFixed(2)) : row?.amount
+      amount: calculateCostAmount(type === 'BUSINESS_COST' ? billingQuantity : row?.chargeWeightKg, row?.unitPrice, row?.amount)
     });
   }
 
@@ -741,11 +755,14 @@ export function RoutingPage({
       if (!current) return current;
       const next = { ...current, ...values };
       const quantity = next.type === 'BUSINESS_COST' ? next.billingQuantity : next.chargeWeightKg;
-      if (calculateAmount) {
-        next.amount = quantity !== undefined && next.unitPrice !== undefined ? Number((quantity * next.unitPrice).toFixed(2)) : undefined;
-      }
+      if (calculateAmount) next.amount = calculateCostAmount(quantity, next.unitPrice);
       return next;
     });
+  }
+
+  function getCostEditorAmount(editor: PendingRoutingCostEditor) {
+    const quantity = editor.type === 'BUSINESS_COST' ? editor.billingQuantity : editor.chargeWeightKg;
+    return calculateCostAmount(quantity, editor.unitPrice, editor.amount);
   }
 
   async function saveCostEditor() {
@@ -762,7 +779,7 @@ export function RoutingPage({
       messageApi.warning(`请填写${costEditor.billingUnit === 'CBM' ? 'CBM 体积' : 'KG 计费重'}。`);
       return;
     }
-    if (costEditor.amount === undefined) {
+    if (getCostEditorAmount(costEditor) === undefined) {
       messageApi.warning('请填写总金额。');
       return;
     }
@@ -775,7 +792,7 @@ export function RoutingPage({
         billingQuantity: costEditor.type === 'BUSINESS_COST' ? costEditor.billingQuantity : undefined,
         chargeWeightKg: costEditor.type === 'BUSINESS_COST' ? (costEditor.billingUnit ?? 'KG') === 'KG' ? costEditor.billingQuantity : undefined : costEditor.chargeWeightKg,
         unitPrice: costEditor.unitPrice,
-        amount: costEditor.amount
+        amount: getCostEditorAmount(costEditor) ?? 0
       });
       setCostEditor(null);
     } catch (error) {
@@ -879,7 +896,7 @@ export function RoutingPage({
             {
               title: '总金额', dataIndex: 'amount', width: 120,
               render: (value: number, row: PendingRoutingCostRow) => isEditingRow(row) ? (
-                <InputNumber aria-label="总金额" min={0} precision={2} value={costEditor?.amount} onChange={(amount) => updateCostEditor({ amount: amount ?? undefined })} />
+                <InputNumber aria-label="总金额" min={0} precision={2} value={costEditor?.amount} disabled={costEditor?.unitPrice !== undefined && (type === 'BUSINESS_COST' ? costEditor?.billingQuantity !== undefined : costEditor?.chargeWeightKg !== undefined)} onChange={(amount) => updateCostEditor({ amount: amount ?? undefined })} />
               ) : `${value.toFixed(2)} ${row.currency ?? 'RMB'}`
             },
             canOperateCost ? {
@@ -1502,6 +1519,17 @@ export function RoutingPage({
                     <Col xs={12} md={6}>出货单号：{resolveShipmentOutboundOrderNo(assignmentShipment)}</Col>
                     <Col xs={12} md={6}>公司渠道：{assignmentShipment.channelName || '-'}</Col>
                     <Col xs={24} md={12}>货物数据：{assignmentShipment.packageCount} 件 / {assignmentShipment.receivableWeightKg.toFixed(2)} KG / {assignmentShipment.volumeCbm?.toFixed(3) ?? '0.000'} CBM</Col>
+                  </Row>
+                </Card>
+              ) : null}
+              {assignmentShipment ? (
+                <Card size="small" className="routing-assignment-context routing-assignment-route-context">
+                  <Row gutter={[16, 6]}>
+                    <Col xs={12} md={5}>国家：{watchedDestinationCountry?.trim() || assignmentShipment.destinationCountry || '-'}</Col>
+                    <Col xs={12} md={7}>公司渠道：{assignmentShipment.channelName || '-'}</Col>
+                    <Col xs={12} md={4}>邮编：{assignmentShipment.receiverPostalCode?.trim() || '-'}</Col>
+                    <Col xs={12} md={4}>亚马逊代码：{assignmentShipment.fbaWarehouseCode?.trim() || '-'}</Col>
+                    <Col xs={24} md={4}>资料状态：<Tag color={assignmentReadiness?.ready ? 'green' : 'gold'}>{assignmentReadiness?.ready ? '资料完整' : '待补资料'}</Tag></Col>
                   </Row>
                 </Card>
               ) : null}

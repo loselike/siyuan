@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Headers, Inject, Logger, NotFoundException, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UnauthorizedException, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { resolveUploadDirectory, resolveUploadRoot } from '../configure-app.js';
@@ -36,8 +36,6 @@ import type {
   CustomerContactCreateInput,
   CustomerContactUpdateInput,
   CustomerCreateInput,
-  CustomerSourceInput,
-  CustomerSourceListQuery,
   CustomerUpdateInput,
   CustomerUserCreateInput,
   EnabledUpdateInput,
@@ -57,11 +55,6 @@ import type {
   PaidPaymentUpdateInput,
   PaymentConfirmPaidInput,
   PaymentWaterReceiptInput,
-  ShipmentDispatchInput,
-  WarehouseHandoverPrintInput,
-  WarehouseRentDetailQuery,
-  WarehouseRentRuleEnabledInput,
-  WarehouseRentRuleInput,
   VoucherImageUploadContext,
   PayableAuditBatchInput,
   PayableAuditListQuery,
@@ -98,25 +91,13 @@ import type {
   PricingQuoteRequest,
   PricingRuleCreateInput,
   PricingRuleQuoteRequest,
-  CommonTagCreateInput,
-  CommonTagUpdateInput,
-  ProblemTicketCreateInput,
   ReceivableAdjustmentInput,
   SurchargeCreateInput,
-  RoleGroupInput,
-  BulkTrackingApplyRequest,
   ShipmentCreateInput,
   ShipmentFinanceItemCreateInput,
   ShipmentFinanceItemUpdateInput,
   ShipmentImportRequest,
   ShipmentOperationalUpdateInput,
-  CustomerServiceDataConfirmListQuery,
-  CustomerServiceDataReviewInput,
-  CustomerServiceDataReverseInput,
-  CustomerServiceDataUpdateInput,
-  CustomerServiceFinanceItemUpdateInput,
-  CustomerServiceFinanceUpdatePreview,
-  CustomerServiceFinanceUpdatePreviewRow,
   CustomerServiceTransferBatchInput,
   ShipmentPaymentUpdateInput,
   ShipmentRerouteInput,
@@ -125,69 +106,39 @@ import type {
   ShipmentReviewBasicUpdateInput,
   ShipmentReviewDeleteInput,
   ShipmentReviewRejectInput,
-  SiteCreateInput,
-  SiteUpdateInput,
-  StaffAccountCreateInput,
-  StaffAccountPasswordResetInput,
-  StaffAccountQuery,
-  StaffAccountUpdateInput,
-  TrackingEventInput,
-  WarehouseConsolidationCreateInput,
-  WarehouseManualReceiptCreateInput,
-  WarehouseSameSpecReplenishInput,
-  WarehousePackageCreateInput,
-  WarehousePackageSplitInput,
-  WarehousePackageUpdateInput,
-  WarehouseTallyTaskCompleteInput,
-  WarehouseTallyTaskCompletedCountUpdateInput,
-  WarehouseTallyTaskCreateInput,
-  WarehouseTallyLabelScanInput,
-  WarehouseTallyHistoricalAggregateCorrectionInput,
-  WarehouseTallyRepeatStatisticsQuery,
-  WarehouseTallyTaskUpdateInput,
   MasterDataSnapshot,
   NavigationReadStateInput
 } from '@siyuan/shared';
 import { PrismaRepository } from './prisma.repository.js';
 import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
+import { buildMasterDataSnapshotSelection, hasSalesOwnDataScope } from './master-data/master-data-snapshot.selection.js';
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
-import { parseWarehouseMachineWorkbook } from './warehouse-machine-import.js';
-import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
-import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
-import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
+import { RequireAllPermissions, RequireAuth, RequirePermission } from './require-permission.decorator.js';
+import { isAdministratorRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-const MOJIA_REQUEST_SAMPLE_RETENTION_MS = 72 * 60 * 60 * 1000;
-const MOJIA_REQUEST_SAMPLE_MAX_BYTES = 16 * 1024;
-const MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES = 100;
-const MOJIA_REQUEST_SAMPLE_WRITE_CONCURRENCY = 2;
+const pricingLookupPermissionByModule: Record<LegacyPricingModule, PermissionKey> = {
+  amazon: 'pricing:lookup:amazon',
+  inquiry: 'pricing:lookup:europe-oversize',
+  europeExpress: 'pricing:lookup:europe-express',
+  southAfrica: 'pricing:lookup:south-africa',
+  usaAirSea: 'pricing:lookup:usa-air-sea',
+  canadaAirSea: 'pricing:lookup:canada-air-sea',
+  dubaiAirSea: 'pricing:lookup:dubai-air-sea'
+};
 
 @Controller()
 export class DataController {
   constructor(
     @Inject(PrismaRepository) private readonly repository: PrismaRepository,
-    @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService,
-    @Inject(WarehouseInventoryQueryService)
-    private readonly warehouseInventoryQueries: WarehouseInventoryQueryService
+    @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService
   ) {}
-
   private readonly imageMimeExtensions: Record<string, string> = {
     'image/png': '.png',
     'image/jpeg': '.jpg',
     'image/webp': '.webp',
     'image/gif': '.gif'
-  };
-  private readonly logger = new Logger(DataController.name);
-  private readonly mojiaRequestSampleWriteQueue: Array<{
-    run: () => void;
-    drop: () => void;
-    priority: boolean;
-  }> = [];
-  private mojiaRequestSampleActiveWrites = 0;
-  private readonly labelFileMimeExtensions: Record<string, string> = {
-    ...this.imageMimeExtensions,
-    'application/pdf': '.pdf'
   };
   private readonly excelMimeExtensions: Record<string, string> = {
     'application/vnd.ms-excel': '.xls',
@@ -262,7 +213,7 @@ export class DataController {
   }
 
   private async sanitizeSouthAfricaRateRuleForPrincipal(principal: Principal, rule: SouthAfricaRateRuleSummary): Promise<SouthAfricaRateRuleSummary> {
-    if (await this.hasAnyPermission(principal.role, ['pricing:south-africa:cost-markup-view'])) return rule;
+    if (await this.hasAnyPermission(principal.role, ['pricing:markup:southAfrica:view'])) return rule;
     const { costPerCbm: _costPerCbm, markupPerCbm: _markupPerCbm, ...businessRule } = rule;
     return businessRule;
   }
@@ -280,16 +231,6 @@ export class DataController {
       path: 'warehouse granular action'
     }).catch(() => undefined);
     throw new ForbiddenException('没有访问权限');
-  }
-
-  private async ensurePermissionUnblocked(principal: Principal, mask: PermissionKey) {
-    if (isAdministratorRole(principal.role) || !(await this.repository.hasPermission(principal.role, mask))) return;
-    await (this.repository as any).recordPermissionDenied?.(principal, {
-      permissions: [mask],
-      method: 'SERVER',
-      path: `customer-service masked action: ${mask}`
-    }).catch(() => undefined);
-    throw new ForbiddenException('当前角色已屏蔽该操作');
   }
 
   private async ensureAnyPermission(principal: Principal, permissions: PermissionKey[]) {
@@ -320,19 +261,24 @@ export class DataController {
     }
   }
 
-  private async ensureOrderEntryBusinessCostWritePermission(principal: Principal, input: OrderEntryCreateInput, method: 'POST' | 'PUT', path: string) {
+  private async ensureOrderEntryFinanceWritePermissions(principal: Principal, input: OrderEntryCreateInput, method: 'POST' | 'PUT', path: string) {
     const hasBusinessCost = (input.businessCosts ?? []).some((row) => (
       Boolean(row.name?.trim()) || Number(row.amount ?? 0) > 0 || Number(row.unitPrice ?? 0) > 0
     ));
-    const hasLegacyWrite = await this.repository.hasPermission(principal.role, 'business:order-entry:business-cost-write');
-    const isMasked = !isAdministratorRole(principal.role)
-      && await this.repository.hasPermission(principal.role, 'business:order-entry:business-cost-mask');
-    const hasModuleWrite = await this.repository.hasPermission(principal.role, 'business:order-entry:view');
-    if (!hasBusinessCost || (!isMasked && (hasLegacyWrite || hasModuleWrite || isAdministratorRole(principal.role)))) return;
-    await this.repository.recordPermissionDenied(principal, { permissions: ['business:order-entry:business-cost-write'], method, path });
-    throw new ForbiddenException('没有填写业务成本权限');
+    if (hasBusinessCost && !isAdministratorRole(principal.role)
+      && !await this.repository.hasPermission(principal.role, 'business:order-entry:business-cost')) {
+      await this.repository.recordPermissionDenied(principal, { permissions: ['business:order-entry:business-cost'], method, path });
+      throw new ForbiddenException('没有业务成本权限');
+    }
+    const hasPayable = (input.payables ?? []).some((row) => (
+      Boolean(row.name?.trim()) || Number(row.amount ?? 0) > 0 || Number(row.unitPrice ?? 0) > 0
+    ));
+    if (hasPayable && !isAdministratorRole(principal.role)
+      && !await this.repository.hasPermission(principal.role, 'business:order-entry:payable-fee')) {
+      await this.repository.recordPermissionDenied(principal, { permissions: ['business:order-entry:payable-fee'], method, path });
+      throw new ForbiddenException('没有应付费用权限');
+    }
   }
-
   private scopeMasterDataCustomers(principal: Principal, snapshot: MasterDataSnapshot): MasterDataSnapshot {
     if (!hasSalesOwnDataScope(principal)) return snapshot;
     const scope = new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value)));
@@ -346,210 +292,6 @@ export class DataController {
     };
   }
 
-  private ensureMojiaDeviceToken(headers: Record<string, string | string[] | undefined>, queryToken?: string) {
-    const expected = process.env.MOJIA_DEVICE_TOKEN?.trim();
-    const headerValue = headers['x-device-token'];
-    const actual = (Array.isArray(headerValue) ? headerValue[0] : headerValue)?.trim() || queryToken?.trim();
-    if (!expected || actual !== expected) {
-      throw new UnauthorizedException('设备 token 无效');
-    }
-  }
-
-  private toWarehousePackageInput(body: MojiaMeasurementInput): WarehousePackageCreateInput {
-    const barcode = String(body.barcode ?? body.orderNo ?? '').trim();
-    const separatorIndex = barcode.search(/[-－—–]/);
-    if (!barcode && !body.customerCode) {
-      throw new BadRequestException('请填写条码');
-    }
-    const measuredAt = normalizeMojiaMeasuredAt(body.measuredAt);
-    const deviceNo = String(body.deviceNo ?? body.machineNo ?? '').trim();
-    const customerOrderNo = String(
-      body.customerCode ?? (separatorIndex > 0 ? barcode.slice(0, separatorIndex) : '待补客户')
-    ).trim();
-    const parsedTrackingNo = separatorIndex > 0 ? barcode.slice(separatorIndex + 1).trim() : '';
-    const providedTrackingNo = body.trackingNo !== undefined ? String(body.trackingNo).trim() : parsedTrackingNo;
-    const domesticTrackingNo = providedTrackingNo || '待补充';
-    const remark = deviceNo ? `设备号：${deviceNo}` : '';
-    return {
-      customerCode: customerOrderNo,
-      customerOrderNo,
-      domesticTrackingNo,
-      combinedOrderNo: `${customerOrderNo}-${domesticTrackingNo}`,
-      expectedTotalPackageCount: positiveInt(body.expectedTotalPackageCount, 1),
-      packageIndex: positiveInt(body.packageIndex, 1),
-      packageCount: positiveInt(body.packageCount, 1),
-      weightKg: positiveNumber(body.weightKg ?? body.weight, 'weight'),
-      lengthCm: positiveNumber(body.lengthCm ?? body.length, 'length'),
-      widthCm: positiveNumber(body.widthCm ?? body.width, 'width'),
-      heightCm: positiveNumber(body.heightCm ?? body.height, 'height'),
-      scanTime: measuredAt,
-      scanSource: '墨家设备',
-      remark: remark || undefined
-    };
-  }
-
-  @Post('integrations/mojia/measurements')
-  async receiveMojiaMeasurement(
-    @Headers() headers: Record<string, string | string[] | undefined>,
-    @Query('token') queryToken: string | undefined,
-    @Body() body: MojiaMeasurementInput
-  ) {
-    this.ensureMojiaDeviceToken(headers, queryToken);
-    const startedAt = Date.now();
-    const measurement = body && typeof body === 'object' ? body : {};
-    const sampleId = this.createMojiaRequestSample(measurement);
-    try {
-      const barcode = String(measurement.barcode ?? measurement.orderNo ?? '').trim();
-      if (barcode) {
-        const matched = await this.repository.applyWarehouseTallyMeasurementByBarcode(mojiaPrincipal, {
-          barcode,
-          weightKg: positiveNumber(measurement.weightKg ?? measurement.weight, 'weight'),
-          lengthCm: positiveNumber(measurement.lengthCm ?? measurement.length, 'length'),
-          widthCm: positiveNumber(measurement.widthCm ?? measurement.width, 'width'),
-          heightCm: positiveNumber(measurement.heightCm ?? measurement.height, 'height'),
-          measuredAt: normalizeMojiaMeasuredAt(measurement.measuredAt),
-          deviceNo: String(measurement.deviceNo ?? measurement.machineNo ?? '').trim() || undefined
-        });
-        if (matched) {
-          this.completeMojiaRequestSample(sampleId, 'SUCCESS', matched.package.id);
-          return { result: 'true', message: `${matched.package.labelNo} ${matched.alreadyApplied ? '已接收' : '复测覆盖成功'}` };
-        }
-      }
-      const input = this.toWarehousePackageInput(measurement);
-      const duplicate = await this.findDuplicateMojiaPackage(input);
-      if (duplicate) {
-        this.completeMojiaRequestSample(sampleId, 'SUCCESS');
-        return { result: 'true', message: `${duplicate.combinedOrderNo} 已接收` };
-      }
-      const created = await this.repository.createWarehousePackage(mojiaPrincipal, input);
-      this.completeMojiaRequestSample(sampleId, 'SUCCESS', created.id);
-      return { result: 'true', message: `${created.combinedOrderNo} 录入成功` };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '录入失败';
-      this.completeMojiaRequestSample(sampleId, 'FAILED', undefined, message);
-      await this.recordMojiaPushFailure(message, startedAt);
-      return { result: 'false', message };
-    }
-  }
-
-  private createMojiaRequestSample(body: MojiaMeasurementInput): Promise<string | undefined> {
-    try {
-      const receivedAt = new Date();
-      const parsedPayload = sanitizeMojiaRequestSamplePayload(body as Record<string, unknown>);
-      const serialized = JSON.stringify(parsedPayload);
-      const originalBytes = Buffer.byteLength(serialized, 'utf8');
-      const payload = originalBytes <= MOJIA_REQUEST_SAMPLE_MAX_BYTES
-        ? parsedPayload
-        : {
-            _sampling: {
-              omitted: true,
-              reason: 'PAYLOAD_TOO_LARGE',
-              originalBytes,
-              fieldCount: Object.keys(parsedPayload).length,
-              fieldNames: Object.keys(parsedPayload).slice(0, 20).map((field) => field.slice(0, 80))
-            }
-          };
-      return this.enqueueMojiaRequestSampleWrite(() => this.repository.createMojiaRequestSample({
-        deviceNo: String(body.deviceNo ?? body.machineNo ?? '').trim() || undefined,
-        payload,
-        payloadHash: createHash('sha256').update(serialized).digest('hex'),
-        receivedAt,
-        expiresAt: new Date(receivedAt.getTime() + MOJIA_REQUEST_SAMPLE_RETENTION_MS)
-      }));
-    } catch {
-      this.logger.warn('墨家请求采样写入失败，业务接收继续执行');
-      return Promise.resolve(undefined);
-    }
-  }
-
-  private completeMojiaRequestSample(
-    sampleId: Promise<string | undefined>,
-    result: 'SUCCESS' | 'FAILED',
-    warehousePackageId?: string,
-    errorMessage?: string
-  ) {
-    void sampleId.then((resolvedSampleId) => {
-      if (!resolvedSampleId) return;
-      void this.enqueueMojiaRequestSampleWrite(async () => {
-        await this.repository.completeMojiaRequestSample(resolvedSampleId, {
-          result,
-          warehousePackageId,
-          errorMessage: errorMessage?.slice(0, 1000),
-          completedAt: new Date()
-        });
-      }, true);
-    });
-  }
-
-  private enqueueMojiaRequestSampleWrite<T>(task: () => Promise<T>, priority = false): Promise<T | undefined> {
-    if (!priority && this.mojiaRequestSampleWriteQueue.length >= MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES) {
-      this.logger.warn('墨家请求采样队列已满，本次采样已丢弃');
-      return Promise.resolve(undefined);
-    }
-    return new Promise((resolve) => {
-      const queued = {
-        priority,
-        drop: () => resolve(undefined),
-        run: () => {
-          this.mojiaRequestSampleActiveWrites += 1;
-          void task()
-            .then(resolve)
-            .catch(() => {
-              this.logger.warn('墨家请求采样后台写入失败，业务接收结果不受影响');
-              resolve(undefined);
-            })
-            .finally(() => {
-              this.mojiaRequestSampleActiveWrites -= 1;
-              this.drainMojiaRequestSampleWriteQueue();
-            });
-        }
-      };
-      if (priority) {
-        if (this.mojiaRequestSampleWriteQueue.length >= MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES) {
-          let normalIndex = -1;
-          for (let index = this.mojiaRequestSampleWriteQueue.length - 1; index >= 0; index -= 1) {
-            if (!this.mojiaRequestSampleWriteQueue[index]?.priority) {
-              normalIndex = index;
-              break;
-            }
-          }
-          if (normalIndex >= 0) this.mojiaRequestSampleWriteQueue.splice(normalIndex, 1)[0]?.drop();
-        }
-        this.mojiaRequestSampleWriteQueue.unshift(queued);
-      } else {
-        this.mojiaRequestSampleWriteQueue.push(queued);
-      }
-      this.drainMojiaRequestSampleWriteQueue();
-    });
-  }
-
-  private drainMojiaRequestSampleWriteQueue() {
-    while (
-      this.mojiaRequestSampleActiveWrites < MOJIA_REQUEST_SAMPLE_WRITE_CONCURRENCY
-      && this.mojiaRequestSampleWriteQueue.length > 0
-    ) {
-      this.mojiaRequestSampleWriteQueue.shift()?.run();
-    }
-  }
-
-  private async recordMojiaPushFailure(message: string, startedAt: number) {
-    await (this.repository as any).recordHttpAudit?.(mojiaPrincipal, {
-      method: 'POST',
-      path: '/api/integrations/mojia/measurements',
-      result: 'FAILED',
-      durationMs: Date.now() - startedAt,
-      errorMessage: message
-    }).catch(() => undefined);
-  }
-
-  private async findDuplicateMojiaPackage(input: WarehousePackageCreateInput) {
-    return this.warehouseInventoryQueries.findDuplicateMojiaPackage(mojiaPrincipal, {
-      combinedOrderNo: input.combinedOrderNo as string,
-      scanTime: input.scanTime,
-      remark: input.remark
-    });
-  }
-
   @Post('navigation/read-state')
   @RequirePermission('business:shipment:list')
   async markNavigationRead(@Req() request: { user: Principal }, @Body() input: NavigationReadStateInput) {
@@ -558,13 +300,13 @@ export class DataController {
   }
 
   @Get('shipments/review-pending')
-  @RequirePermission('business:review:list')
+  @RequirePermission('business:review:view')
   async reviewPendingShipments(@Req() request: { user: Principal }) {
     return this.repository.getReviewPendingShipments(request.user);
   }
 
   @Get('shipments/review-deleted')
-  @RequirePermission('business:review:deleted-list')
+  @RequirePermission('business:review:view')
   async reviewDeletedShipments(@Req() request: { user: Principal }) {
     return this.repository.getReviewDeletedShipments(request.user);
   }
@@ -577,29 +319,28 @@ export class DataController {
   }
 
   @Post('shipments/order-entry')
-  @RequirePermission('business:order-entry:create')
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:create'])
   async createOrderEntry(@Req() request: { user: Principal }, @Body() body: OrderEntryCreateInput) {
     ensureInternalOrderEntryScope(request.user);
-    const followupPermission = body.submitForReview ? 'business:order-entry:submit-review' : 'business:order-entry:draft-save';
-    if (!await this.repository.hasPermission(request.user.role, followupPermission)) {
-      await this.repository.recordPermissionDenied(request.user, { permissions: [followupPermission], method: 'POST', path: '/api/shipments/order-entry' });
-      throw new ForbiddenException(body.submitForReview ? '没有提交审核权限' : '没有保存草稿权限');
+    if (body.submitForReview && !await this.repository.hasPermission(request.user.role, 'business:order-entry:submit-review')) {
+      await this.repository.recordPermissionDenied(request.user, { permissions: ['business:order-entry:submit-review'], method: 'POST', path: '/api/shipments/order-entry' });
+      throw new ForbiddenException('没有提交审核权限');
     }
-    await this.ensureOrderEntryBusinessCostWritePermission(request.user, body, 'POST', '/api/shipments/order-entry');
+    await this.ensureOrderEntryFinanceWritePermissions(request.user, body, 'POST', '/api/shipments/order-entry');
     await this.repository.ensureOrderEntryInputAccess(request.user, body);
     await this.ensureOrderEntryFeeNamesEnabled(body);
     return this.repository.createOrderEntry(request.user, body);
   }
 
   @Put('shipments/:id/order-entry-draft')
-  @RequirePermission('business:order-entry:draft-save')
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:draft-edit', 'business:review:edit'])
   async updateOrderEntryDraft(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: OrderEntryDraftUpdateInput) {
     ensureInternalOrderEntryScope(request.user);
     if (body.submitForReview && !await this.repository.hasPermission(request.user.role, 'business:order-entry:submit-review')) {
       await this.repository.recordPermissionDenied(request.user, { permissions: ['business:order-entry:submit-review'], method: 'PUT', path: `/api/shipments/${id}/order-entry-draft` });
       throw new ForbiddenException('没有提交审核权限');
     }
-    await this.ensureOrderEntryBusinessCostWritePermission(request.user, body, 'PUT', `/api/shipments/${id}/order-entry-draft`);
+    await this.ensureOrderEntryFinanceWritePermissions(request.user, body, 'PUT', `/api/shipments/${id}/order-entry-draft`);
     await this.repository.ensureOrderEntryInputAccess(request.user, body, id);
     await this.ensureOrderEntryFeeNamesEnabled(body);
     return this.repository.updateOrderEntryDraft(request.user, id, body);
@@ -613,17 +354,16 @@ export class DataController {
   }
 
   @Get('shipments/:id/review-detail')
-  @RequirePermission('business:review:detail')
+  @RequirePermission('business:review:view')
   async shipmentReviewDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.getShipmentReviewDetail(request.user, id);
   }
 
   @Get('shipments/:id/package-detail')
   @RequirePermission([
-    'business:review:detail',
     'business:shipment:detail',
     'operations:line-shipment:detail',
-    'warehouse:outbounded:detail-view'
+    'warehouse:outbounded:view'
   ])
   async shipmentPackageDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
     if (request.user.role === 'CUSTOMER') {
@@ -633,7 +373,7 @@ export class DataController {
   }
 
   @Put('shipments/:id/review-basic')
-  @RequirePermission('business:shipment:update-basic')
+  @RequirePermission('business:review:edit')
   async updateShipmentReviewBasic(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentReviewBasicUpdateInput) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('当前角色不能修改待审核运单资料');
@@ -642,7 +382,7 @@ export class DataController {
   }
 
   @Post('shipments/:id/review/approve')
-  @RequirePermission('business:review:approve')
+  @RequirePermission('business:review:edit')
   async approveShipmentReview(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body?: { businessReview?: boolean }) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能审核运单');
@@ -651,7 +391,7 @@ export class DataController {
   }
 
   @Post('shipments/:id/review/reject')
-  @RequirePermission('business:review:reject')
+  @RequirePermission('business:review:edit')
   async rejectShipmentReview(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentReviewRejectInput) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能驳回运单');
@@ -660,14 +400,14 @@ export class DataController {
   }
 
   @Post('shipments/:id/review/reverse')
-  @RequirePermission('business:review:reverse')
+  @RequirePermission('business:review:edit')
   async reverseShipmentReview(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string } = {}) {
     if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能反审核运单');
     return this.repository.reverseShipmentReview(request.user, id, body);
   }
 
   @Delete('shipments/:id/review')
-  @RequirePermission('business:review:delete')
+  @RequirePermission('business:review:edit')
   async deleteShipmentReview(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentReviewDeleteInput) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能删除运单');
@@ -676,7 +416,7 @@ export class DataController {
   }
 
   @Post('shipments/:id/restore')
-  @RequirePermission('business:review:restore')
+  @RequirePermission('business:review:edit')
   async restoreShipment(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentRestoreInput) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能恢复运单');
@@ -685,7 +425,7 @@ export class DataController {
   }
 
   @Delete('shipments/:id/review/permanent')
-  @RequirePermission('business:review:purge')
+  @RequirePermission('business:review:edit')
   async permanentlyDeleteShipmentReview(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.permanentlyDeleteShipmentReview(request.user, id);
   }
@@ -704,7 +444,7 @@ export class DataController {
   }
 
   @Post('shipments/:id/receive')
-  @RequirePermission('warehouse:today-receipt:update')
+  @RequirePermission('warehouse:today-receipt:edit')
   async receiveShipment(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.receiveShipment(request.user, id);
   }
@@ -734,25 +474,6 @@ export class DataController {
     return this.repository.deletePendingRoutingShipment(request.user, id, body);
   }
 
-  @Post('shipments/:id/dispatch')
-  @RequireAuth()
-  async dispatchShipment(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentDispatchInput) {
-    await this.ensurePermission(request.user, 'warehouse:dispatch-pending:dispatch-confirm');
-    if (body.batchDispatchSource) {
-      await this.ensurePermission(request.user, 'warehouse:dispatch-pending:batch-dispatch-confirm');
-    }
-    if (body.shippingMarkConfirmed) {
-      await this.ensurePermission(request.user, 'warehouse:dispatch-pending:shipping-mark-confirm');
-    }
-    return this.repository.dispatchShipment(request.user, id, body);
-  }
-
-  @Post('warehouse/handover/print')
-  @RequirePermission('warehouse:dispatch-pending:handover-print')
-  async printWarehouseHandover(@Req() request: { user: Principal }, @Body() body: WarehouseHandoverPrintInput) {
-    return this.repository.printWarehouseHandover(request.user, body);
-  }
-
   @Post('master-data/agent-invoice-template/upload')
   @RequirePermission('master-data:agents:invoice-template-manage')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
@@ -776,109 +497,6 @@ export class DataController {
       fileName: normalizedFile.originalname,
       url: `/api/uploads/${basename(uploadDir)}/${fileName}`
     };
-  }
-
-  @Post('shipments/:id/business-data/approve')
-  @RequirePermission('customer-service:data-confirm:business-approve')
-  async approveShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-approve-block');
-    return this.repository.approveShipmentBusinessData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/agent-data/approve')
-  @RequirePermission('customer-service:data-confirm:agent-approve')
-  async approveShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-approve-block');
-    return this.repository.approveShipmentAgentData(request.user, id, body);
-  }
-
-  @Patch('shipments/:id/business-data')
-  @RequirePermission('customer-service:data-confirm:business-update')
-  async updateShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-update-block');
-    return this.repository.updateShipmentBusinessData(request.user, id, body);
-  }
-
-  @Get('shipments/:id/customer-service/cost-preview')
-  @RequirePermission(['customer-service:data-confirm:business-update', 'customer-service:data-confirm:agent-update'])
-  async customerServiceCostPreview(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Query('kind') kind?: string
-  ): Promise<CustomerServiceFinanceUpdatePreview> {
-    if (kind !== undefined && kind !== 'business' && kind !== 'agent') throw new BadRequestException('费用预览类型无效');
-    const normalizedKind = kind === 'agent' ? 'agent' : 'business';
-    await this.ensurePermission(
-      request.user,
-      normalizedKind === 'agent'
-        ? 'customer-service:data-confirm:agent-update'
-        : 'customer-service:data-confirm:business-update'
-    );
-    await this.ensurePermissionUnblocked(
-      request.user,
-      normalizedKind === 'agent'
-        ? 'customer-service:data-confirm:agent-update-block'
-        : 'customer-service:data-confirm:business-update-block'
-    );
-    return this.repository.getCustomerServiceFinanceUpdatePreview(request.user, id, normalizedKind);
-  }
-
-  @Put('shipments/:id/customer-service/finance-items/:feeId')
-  @RequirePermission(['customer-service:data-confirm:business-update', 'customer-service:data-confirm:agent-update'])
-  async updateCustomerServiceFinanceItem(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Param('feeId') feeId: string,
-    @Query('kind') kind: string,
-    @Body() body: CustomerServiceFinanceItemUpdateInput
-  ): Promise<CustomerServiceFinanceUpdatePreviewRow> {
-    if (kind !== 'business' && kind !== 'agent') throw new BadRequestException('费用修改类型无效');
-    await this.ensurePermission(
-      request.user,
-      kind === 'agent'
-        ? 'customer-service:data-confirm:agent-update'
-        : 'customer-service:data-confirm:business-update'
-    );
-    await this.ensurePermissionUnblocked(
-      request.user,
-      kind === 'agent'
-        ? 'customer-service:data-confirm:agent-update-block'
-        : 'customer-service:data-confirm:business-update-block'
-    );
-    return this.repository.updateCustomerServiceFinanceItem(request.user, id, feeId, kind, body);
-  }
-
-  @Patch('shipments/:id/agent-data')
-  @RequirePermission('customer-service:data-confirm:agent-update')
-  async updateShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataUpdateInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-update-block');
-    return this.repository.updateShipmentAgentData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/business-data/reverse')
-  @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentBusinessData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
-    return this.repository.reverseShipmentBusinessData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/agent-data/reverse')
-  @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentAgentData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
-    return this.repository.reverseShipmentAgentData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/data-confirmation/approve-all')
-  @RequirePermission('customer-service:data-confirm:approve-all')
-  async approveShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReviewInput) {
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:business-approve-block');
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:data-confirm:agent-approve-block');
-    return this.repository.approveShipmentAllData(request.user, id, body);
-  }
-
-  @Post('shipments/:id/data-confirmation/reverse-all')
-  @RequirePermission('customer-service:data-confirm:reverse')
-  async reverseShipmentAllData(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CustomerServiceDataReverseInput) {
-    return this.repository.reverseShipmentAllData(request.user, id, body);
   }
 
   @Patch('shipments/:id/operational')
@@ -923,6 +541,7 @@ export class DataController {
   @RequirePermission('operations:line-shipment:status-update')
   async updateOperationShipmentOperational(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentOperationalUpdateInput) {
     if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能人工修改运单');
+    await this.ensurePermission(request.user, 'operations:line-shipment:process');
     if (body.status === 'WAITING_DISPATCH' || body.channelId !== undefined) {
       throw new BadRequestException('排货状态和渠道请通过市场排货入口修改');
     }
@@ -943,23 +562,13 @@ export class DataController {
       'customer-service:signed:view'
     ]);
     const rows = await this.repository.customerServiceShipments(request.user);
-    if (request.user.role !== 'ADMIN' && await this.repository.hasPermission(request.user.role, 'customer-service:pending-routing:readonly-block')) {
-      return rows.filter((shipment) => shipment.status !== 'WAITING_SORT');
-    }
     return rows;
-  }
-
-  @Get('customer-service/data-confirm-shipments')
-  @RequirePermission('customer-service:data-confirm:view')
-  async customerServiceDataConfirmShipments(@Req() request: { user: Principal }, @Query() query: CustomerServiceDataConfirmListQuery) {
-    return this.repository.customerServiceDataConfirmShipmentsPage(request.user, query);
   }
 
   @Post('customer-service/transfer-shipments/fill')
   @RequireAuth()
   async fillCustomerServiceTransferShipments(@Req() request: { user: Principal }, @Body() body: CustomerServiceTransferBatchInput) {
     await this.ensurePermission(request.user, 'customer-service:transfer:write');
-    await this.ensurePermissionUnblocked(request.user, 'customer-service:transfer:fill-block');
     if (body.rows.length > 1) await this.ensurePermission(request.user, 'customer-service:transfer:batch-write');
     if (body.rows.some((row) => Boolean(row.subOrderNo?.trim()))) await this.ensurePermission(request.user, 'customer-service:transfer:sub-order-write');
     if (body.rows.some((row) => Boolean(row.pushToSales))) await this.ensurePermission(request.user, 'customer-service:transfer:push-sales');
@@ -975,17 +584,6 @@ export class DataController {
     return this.repository.registerShipmentPayment(request.user, id, body);
   }
 
-  @Post('shipments/tracking-events/import')
-  @RequireAuth()
-  async importTrackingEvents(@Req() request: { user: Principal }, @Body() body: BulkTrackingApplyRequest) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能批量导入轨迹');
-    }
-    await this.ensurePermission(request.user, 'tracking:external:import-confirm');
-    await this.ensurePermission(request.user, 'tracking:external:overwrite');
-    return this.repository.importTrackingEvents(request.user, body);
-  }
-
   @Delete('shipments/:id')
   @RequirePermission('business:shipment:delete')
   async deleteShipment(@Req() request: { user: Principal }, @Param('id') id: string) {
@@ -993,156 +591,6 @@ export class DataController {
       throw new ForbiddenException('客户不能删除运单');
     }
     return this.repository.deleteShipment(request.user, id);
-  }
-
-  @Post('shipments/:id/labels')
-  @RequirePermission('warehouse:dispatch-pending:label-generate')
-  async createShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能申请面单');
-    }
-    return this.repository.createShipmentLabel(request.user, id);
-  }
-
-  @Post('shipments/:id/labels/upload')
-  @RequireAuth()
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 10 * 1024 * 1024 } }))
-  async uploadShipmentLabel(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
-    @Body() body: { transferNo?: string }
-  ) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能上传面单');
-    }
-    await this.ensureAnyPermission(request.user, ['business:order-entry:label-upload', 'customer-service:transfer:label-upload', 'customer-service:waiting-departure:label-upload']);
-    if (!file) throw new BadRequestException('请上传面单');
-    this.assertShipmentLabelFile(file);
-    const uploadRoot = resolveUploadRoot();
-    const uploadDir = process.env.LABEL_UPLOAD_DIR ?? join(uploadRoot, 'labels');
-    await mkdir(uploadDir, { recursive: true });
-    const extension = this.labelFileMimeExtensions[file.mimetype];
-    const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
-    await writeFile(join(uploadDir, fileName), file.buffer);
-    return this.repository.uploadShipmentLabel(request.user, id, {
-      fileName: file.originalname,
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
-      url: `/api/uploads/${basename(uploadDir)}/${fileName}`,
-      transferNo: body.transferNo
-    });
-  }
-
-  @Post('shipments/:id/invoice/upload')
-  @RequirePermission('business:order-entry:invoice-upload')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
-  async uploadShipmentBusinessInvoice(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined
-  ) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能上传业务发票');
-    }
-    if (!file) throw new BadRequestException('请上传业务发票');
-    this.assertExcelFile(file);
-    const uploadRoot = resolveUploadRoot();
-    const uploadDir = join(uploadRoot, 'business-invoices');
-    await mkdir(uploadDir, { recursive: true });
-    const extension = extname(file.originalname).toLowerCase();
-    const fileName = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${randomUUID()}${extension}`;
-    await writeFile(join(uploadDir, fileName), file.buffer);
-    return this.repository.uploadShipmentBusinessInvoice(request.user, id, {
-      fileName: file.originalname,
-      mimeType: file.mimetype,
-      sizeBytes: file.size,
-      url: `/api/uploads/${basename(uploadDir)}/${fileName}`
-    });
-  }
-
-  @Get('shipments/:id/invoice-template/download')
-  @RequirePermission('business:order-entry:invoice-upload')
-  async downloadShipmentInvoiceTemplate(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Query('templateId') templateId: string | undefined,
-    @Query('templateSlot') templateSlot: string | undefined,
-    @Res({ passthrough: true }) response: Response
-  ) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能下载代理发票模板');
-    }
-    let resolvedTemplateId = templateId?.trim() || undefined;
-    if (!resolvedTemplateId && templateSlot !== undefined) {
-      const slot = Number(templateSlot);
-      if (slot !== 1 && slot !== 2 && slot !== 3) {
-        throw new BadRequestException('发票模板序号必须为 1、2 或 3');
-      }
-      resolvedTemplateId = `legacy-${slot}`;
-    }
-    const file = await this.repository.downloadShipmentInvoiceTemplate(request.user, id, resolvedTemplateId);
-    const mimeType = file.extension === '.xls'
-      ? 'application/vnd.ms-excel'
-      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    const downloadName = `发票模板${file.extension}`;
-    response.setHeader('Content-Type', mimeType);
-    response.setHeader('Content-Length', String(file.buffer.length));
-    response.setHeader('Content-Disposition', `attachment; filename="invoice-template${file.extension}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`);
-    response.setHeader('Cache-Control', 'private, no-store');
-    return new StreamableFile(file.buffer);
-  }
-
-  @Get('shipments/:id/invoice/download')
-  @RequirePermission('business:order-entry:invoice-upload')
-  async downloadShipmentBusinessInvoice(@Req() request: { user: Principal }, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {
-    if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能下载业务发票');
-    const file = await this.repository.downloadShipmentBusinessInvoice(request.user, id);
-    response.setHeader('Content-Type', file.mimeType);
-    response.setHeader('Content-Length', String(file.buffer.length));
-    response.setHeader('Content-Disposition', `attachment; filename="business-invoice${extname(file.fileName)}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
-    response.setHeader('Cache-Control', 'private, no-store');
-    return new StreamableFile(file.buffer);
-  }
-
-  @Get('shipments/:id/labels/:labelId/file')
-  @RequireAuth()
-  async downloadShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string, @Param('labelId') labelId: string, @Res({ passthrough: true }) response: Response) {
-    if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能下载内部面单');
-    await this.ensureAnyPermission(request.user, ['warehouse:dispatch-pending:label-view', 'customer-service:transfer:label-view']);
-    const file = await this.repository.downloadShipmentLabel(request.user, id, labelId);
-    response.setHeader('Content-Type', file.mimeType);
-    response.setHeader('Content-Length', String(file.buffer.length));
-    response.setHeader('Content-Disposition', `attachment; filename="shipment-label${extname(file.fileName)}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
-    response.setHeader('Cache-Control', 'private, no-store');
-    return new StreamableFile(file.buffer);
-  }
-
-  @Post('shipments/:id/labels/:labelId/void')
-  @RequirePermission('warehouse:dispatch-pending:label-void')
-  async voidShipmentLabel(@Req() request: { user: Principal }, @Param('id') id: string, @Param('labelId') labelId: string) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能作废面单');
-    }
-    return this.repository.voidShipmentLabel(request.user, id, labelId);
-  }
-
-  @Post('carrier-tasks/:id/run')
-  @RequirePermission('tracking:carrier-task:run')
-  async runCarrierTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { fail?: boolean }) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能执行承运商任务');
-    }
-    return this.repository.runCarrierTask(request.user, id, body);
-  }
-
-  @Post('carrier-tasks/:id/retry')
-  @RequirePermission('tracking:carrier-task:retry')
-  async retryCarrierTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { fail?: boolean }) {
-    if (request.user.role === 'CUSTOMER') {
-      throw new ForbiddenException('客户不能重试承运商任务');
-    }
-    return this.repository.retryCarrierTask(request.user, id, body);
   }
 
   @Post('shipments/:id/fees/generate')
@@ -1160,8 +608,8 @@ export class DataController {
     'customer-service:data-confirm:business-update',
     'business:shipment:finance-detail-view',
     'business:order-entry:view',
-    'business:order-entry:business-cost-view',
-    'business:order-entry:business-cost-write',
+    'business:order-entry:business-cost',
+    'business:order-entry:payable-fee',
     'market:pending-routing:detail',
     'market:pending-routing:business-cost-view',
     'market:pending-routing:payable-cost-view',
@@ -1179,10 +627,11 @@ export class DataController {
     'finance:payable:view-profit'
   ])
   async getShipmentFinanceDetail(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role !== 'ADMIN' && await this.repository.hasPermission(request.user.role, 'customer-service:pending-routing:fee-detail-block')) {
+    const customerServicePendingView = await this.repository.hasPermission(request.user.role, 'customer-service:pending-routing:view');
+    if (customerServicePendingView) {
       const shipment = (await this.repository.getShipments(request.user)).find((item) => item.id === id);
       if (shipment?.status === 'WAITING_SORT') {
-        await this.ensurePermissionUnblocked(request.user, 'customer-service:pending-routing:fee-detail-block');
+        await this.ensurePermission(request.user, 'customer-service:pending-routing:fee-detail-view');
       }
     }
     return this.repository.getShipmentFinanceDetail(request.user, id);
@@ -1195,13 +644,13 @@ export class DataController {
   }
 
   @Post('shipments/:id/finance-items')
-  @RequirePermission(['business:order-entry:view', 'business:order-entry:business-cost-write', 'business:order-fee:create', 'market:pending-routing:update'])
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:create', 'market:pending-routing:update'])
   async createShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentFinanceItemCreateInput) {
     return this.repository.createShipmentFinanceItem(request.user, id, body);
   }
 
   @Put('shipments/:id/finance-items/:feeId')
-  @RequirePermission(['business:order-entry:view', 'business:order-entry:business-cost-write', 'business:order-fee:update', 'market:pending-routing:update'])
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:update', 'market:pending-routing:update'])
   async updateShipmentFinanceItem(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -1212,19 +661,19 @@ export class DataController {
   }
 
   @Delete('shipments/:id/finance-items/:feeId')
-  @RequirePermission(['business:order-entry:view', 'business:order-entry:business-cost-write', 'business:order-fee:delete', 'market:pending-routing:update'])
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:delete', 'market:pending-routing:update'])
   async deleteShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
     return this.repository.deleteShipmentFinanceItem(request.user, id, feeId);
   }
 
   @Post('shipments/:id/review-business-costs')
-  @RequirePermission('business:order-entry:business-cost-write')
+  @RequirePermission('business:order-entry:business-cost')
   async createPendingReviewBusinessCost(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentFinanceItemCreateInput) {
     return this.repository.createPendingReviewBusinessCost(request.user, id, body);
   }
 
   @Put('shipments/:id/review-business-costs/:feeId')
-  @RequirePermission('business:order-entry:business-cost-write')
+  @RequirePermission('business:order-entry:business-cost')
   async updatePendingReviewBusinessCost(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -1235,7 +684,7 @@ export class DataController {
   }
 
   @Delete('shipments/:id/review-business-costs/:feeId')
-  @RequirePermission('business:order-entry:business-cost-write')
+  @RequirePermission('business:order-entry:business-cost')
   async deletePendingReviewBusinessCost(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
     return this.repository.deletePendingReviewBusinessCost(request.user, id, feeId);
   }
@@ -1252,81 +701,6 @@ export class DataController {
     return this.repository.unlockShipmentFinanceItem(request.user, id, feeId);
   }
 
-  @Post('shipments/:id/tracking-events')
-  @RequirePermission('tracking:external:single-add')
-  async addTrackingEvent(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: TrackingEventInput) {
-    return this.repository.addTrackingEvent(request.user, id, body);
-  }
-
-  @Post('operations/line-shipments/:id/tracking-events')
-  @RequirePermission('operations:line-shipment:tracking-add')
-  async addOperationTrackingEvent(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: TrackingEventInput) {
-    return this.repository.addTrackingEvent(request.user, id, body);
-  }
-
-  @Get('customer-service/problem-tags')
-  @RequireAuth()
-  async problemTicketCommonTags(@Req() request: { user: Principal }) {
-    await this.ensureAnyPermission(request.user, ['customer-service:problem:view', 'customer-service:problem:create', 'customer-service:pending-routing:problem-create', 'customer-service:waiting-departure:problem-create', 'customer-service:departed:problem-create', 'customer-service:arrived-port:problem-create', 'customer-service:delivering:problem-create', 'customer-service:delivering:after-sale-create', 'customer-service:signed:after-sale-create', 'operations:line-shipment:problem-create', 'business:shipment:problem-create']);
-    return this.repository.getProblemTicketCommonTags(request.user);
-  }
-
-  @Post('customer-service/problem-tags')
-  @RequirePermission('customer-service:problem:tag-manage')
-  async createProblemTicketCommonTag(@Req() request: { user: Principal }, @Body() body: CommonTagCreateInput) {
-    return this.repository.createProblemTicketCommonTag(request.user, body);
-  }
-
-  @Put('customer-service/problem-tags/:id')
-  @RequirePermission('customer-service:problem:tag-manage')
-  async updateProblemTicketCommonTag(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: CommonTagUpdateInput) {
-    return this.repository.updateProblemTicketCommonTag(request.user, id, body);
-  }
-
-  @Delete('customer-service/problem-tags/:id')
-  @RequirePermission('customer-service:problem:tag-manage')
-  async deleteProblemTicketCommonTag(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteProblemTicketCommonTag(request.user, id);
-  }
-
-  @Post('shipments/:id/problem-tickets')
-  @RequireAuth()
-  async createProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    await this.ensureAnyPermission(request.user, ['customer-service:problem:create', 'customer-service:pending-routing:problem-create', 'customer-service:waiting-departure:problem-create', 'customer-service:departed:problem-create', 'customer-service:arrived-port:problem-create', 'customer-service:delivering:problem-create', 'customer-service:delivering:after-sale-create', 'customer-service:signed:after-sale-create']);
-    await this.repository.assertCustomerServiceProblemCreationAllowed(request.user, id);
-    return this.repository.createProblemTicket(request.user, id, body);
-  }
-
-  @Post('business/shipments/:id/problem-tickets')
-  @RequirePermission('business:shipment:problem-create')
-  async createBusinessProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    return this.repository.createProblemTicket(request.user, id, { ...body, customerVisible: true, pushToSales: undefined });
-  }
-
-  @Post('operations/line-shipments/:id/problem-tickets')
-  @RequirePermission('operations:line-shipment:problem-create')
-  async createOperationProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ProblemTicketCreateInput) {
-    return this.repository.createProblemTicket(request.user, id, { ...body, customerVisible: false, pushToSales: undefined });
-  }
-
-  @Post('problem-tickets/:id/replies')
-  @RequirePermission('customer-service:problem:reply')
-  async replyProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { message?: string }) {
-    return this.repository.replyProblemTicket(request.user, id, body.message ?? '');
-  }
-
-  @Post('problem-tickets/:id/close')
-  @RequirePermission('customer-service:problem:close')
-  async closeProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
-    return this.repository.closeProblemTicket(request.user, id, body.reason);
-  }
-
-  @Post('problem-tickets/:id/assist')
-  @RequirePermission('customer-service:problem:assist')
-  async assistProblemTicket(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { reason?: string }) {
-    return this.repository.assistProblemTicket(request.user, id, body.reason ?? '需要协助处理');
-  }
-
   @Get('master-data')
   @RequirePermission([
     'master-data:customers:read',
@@ -1340,7 +714,6 @@ export class DataController {
     'master-data:assistant:read'
   ])
   async masterData(@Req() request: { user: Principal }) {
-    const snapshot = await this.repository.getMasterData();
     const canReadCustomers = await this.hasAnyPermission(request.user.role, ['master-data:customers:read']);
     const canReadFinanceCatalog = await this.hasAnyPermission(request.user.role, ['master-data:finance:read']);
     const canReadAgents = await this.repository.hasPermission(request.user.role, 'master-data:agents:read');
@@ -1348,6 +721,12 @@ export class DataController {
     const canReadChannels = await this.repository.hasPermission(request.user.role, 'master-data:channels:read');
     const canReadChannelCategories = await this.hasAnyPermission(request.user.role, ['master-data:channel-categories:read']);
     const canReadExchangeRates = await this.hasAnyPermission(request.user.role, ['master-data:exchange-rates:read']);
+    const snapshot = await this.repository.getMasterData(buildMasterDataSnapshotSelection(request.user, {
+      customers: canReadCustomers, financeCatalog: canReadFinanceCatalog,
+      agents: canReadAgents, agentChannels: canReadAgentChannels,
+      channels: canReadChannels, channelCategories: canReadChannelCategories,
+      exchangeRates: canReadExchangeRates
+    }));
     let result = snapshot;
     if (!canReadCustomers) {
       result = { ...result, customers: [], contacts: [], customerUsers: [] };
@@ -1377,31 +756,6 @@ export class DataController {
   @RequirePermission('master-data:customers:read')
   async masterDataCustomers(@Req() request: { user: Principal }) {
     return this.scopeMasterDataCustomers(request.user, await this.repository.getMasterData()).customers;
-  }
-
-  @Get('master-data/customer-sources')
-  @RequirePermission('master-data:customers:read')
-  async masterDataCustomerSources(@Query('keyword') keyword?: string, @Query('enabledOnly') enabledOnly?: string) {
-    const query: CustomerSourceListQuery = { keyword, enabledOnly: enabledOnly === 'true' };
-    return this.repository.listCustomerSources(query);
-  }
-
-  @Post('master-data/customer-sources')
-  @RequirePermission('master-data:customers:create')
-  async createMasterDataCustomerSource(@Req() request: { user: Principal }, @Body() body: CustomerSourceInput) {
-    return this.repository.createCustomerSource(request.user, body);
-  }
-
-  @Put('master-data/customer-sources/:id')
-  @RequirePermission('master-data:customers:update')
-  async updateMasterDataCustomerSource(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: Partial<CustomerSourceInput>) {
-    return this.repository.updateCustomerSource(request.user, id, body);
-  }
-
-  @Delete('master-data/customer-sources/:id')
-  @RequirePermission('master-data:customers:delete')
-  async deleteMasterDataCustomerSource(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteCustomerSource(request.user, id);
   }
 
   @Post('master-data/customers')
@@ -1624,125 +978,6 @@ export class DataController {
     return this.repository.updateExchangeRate(request.user, id, { enabled: false });
   }
 
-  @Get('system/roles')
-  @RequirePermission(['system:user-groups:read', 'system:role-permissions:read'])
-  async systemRoles() {
-    return this.repository.getRolePermissionMatrix();
-  }
-
-  @Post('system/roles')
-  @RequirePermission('system:user-groups:create')
-  async createSystemRole(@Req() request: { user: Principal }, @Body() body: RoleGroupInput) {
-    return this.repository.createRoleGroup(request.user, body);
-  }
-
-  @Put('system/roles/:role')
-  @RequirePermission('system:user-groups:update')
-  async updateSystemRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body() body: RoleGroupInput) {
-    return this.repository.updateRoleGroup(request.user, role, body);
-  }
-
-  @Put('system/roles/:role/enabled')
-  @RequirePermission('system:user-groups:enable')
-  async updateSystemRoleEnabled(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateRoleGroupEnabled(request.user, role, body);
-  }
-
-  @Delete('system/roles/:role')
-  @RequirePermission('system:user-groups:delete')
-  async deleteSystemRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey) {
-    return this.repository.deleteRoleGroup(request.user, role);
-  }
-
-  @Get('system/staff-accounts')
-  @RequirePermission('system:accounts:read')
-  async systemStaffAccounts(@Req() request: { user: Principal }, @Query() query: StaffAccountQuery) {
-    return this.repository.getStaffAccounts(request.user, query);
-  }
-
-  @Post('system/sites')
-  @RequirePermission('system:sites:create')
-  async createSystemSite(@Req() request: { user: Principal }, @Body() body: SiteCreateInput) {
-    return this.repository.createSite(request.user, body);
-  }
-
-  @Put('system/sites/:id')
-  @RequirePermission('system:sites:update')
-  async updateSystemSite(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: SiteUpdateInput) {
-    return this.repository.updateSite(request.user, id, body);
-  }
-
-  @Put('system/sites/:id/enabled')
-  @RequirePermission('system:sites:enable')
-  async updateSystemSiteEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateSiteEnabled(request.user, id, body);
-  }
-
-  @Post('system/staff-accounts')
-  @RequirePermission('system:accounts:create')
-  async createSystemStaffAccount(@Req() request: { user: Principal }, @Body() body: StaffAccountCreateInput) {
-    return this.repository.createStaffAccount(request.user, body);
-  }
-
-  @Put('system/staff-accounts/:id/enabled')
-  @RequirePermission('system:accounts:enable')
-  async updateSystemStaffAccountEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateStaffAccountEnabled(request.user, id, body);
-  }
-
-  @Put('system/staff-accounts/:id')
-  @RequirePermission('system:accounts:update-profile')
-  async updateSystemStaffAccount(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: StaffAccountUpdateInput) {
-    if (body.role) await this.ensurePermission(request.user, 'system:accounts:update-role');
-    if (body.site !== undefined) await this.ensurePermission(request.user, 'system:accounts:update-site');
-    if (body.enabled !== undefined) await this.ensurePermission(request.user, 'system:accounts:enable');
-    if (body.password !== undefined) await this.ensurePermission(request.user, 'system:accounts:reset-password');
-    // 部门调整当前复用账号资料维护权限；部门不联动用户组或站点。
-    return this.repository.updateStaffAccount(request.user, id, body);
-  }
-
-  @Delete('system/staff-accounts/:id')
-  @RequirePermission('system:accounts:delete')
-  async deleteSystemStaffAccount(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteStaffAccount(request.user, id);
-  }
-
-  @Post('system/staff-accounts/reset-passwords')
-  @RequirePermission('system:accounts:reset-password')
-  async resetSystemStaffAccountPasswords(@Req() request: { user: Principal }, @Body() body: StaffAccountPasswordResetInput) {
-    return this.repository.resetStaffAccountPasswords(request.user, body);
-  }
-
-  @Put('system/staff-accounts/:id/site')
-  @RequirePermission('system:accounts:update-site')
-  async updateSystemStaffAccountSite(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: { site?: string }
-  ) {
-    return this.repository.updateStaffAccountSite(request.user, id, body);
-  }
-
-  @Put('system/roles/:role/permissions')
-  @RequirePermission('system:role-permissions:save')
-  async updateRolePermissions(
-    @Req() request: { user: Principal },
-    @Param('role') role: RoleKey,
-    @Body() body: { permissions?: PermissionKey[] }
-  ) {
-    return this.repository.updateRolePermissions(request.user, role, body.permissions ?? []);
-  }
-
-  @Put('system/roles/:role/permissions/copy')
-  @RequirePermission('system:role-permissions:copy-role')
-  async copyRolePermissions(
-    @Req() request: { user: Principal },
-    @Param('role') role: RoleKey,
-    @Body() body: { sourceRoleKey?: RoleKey }
-  ) {
-    return this.repository.copyRolePermissions(request.user, role, body.sourceRoleKey);
-  }
-
   @Get('system/audit-logs')
   @RequirePermission('system:audit:read')
   async systemAuditLogs(@Req() request: { user: Principal }, @Query() query: AuditLogQuery) {
@@ -1750,7 +985,7 @@ export class DataController {
   }
 
   @Post('pricing/quote')
-  @RequirePermission('pricing:lookup:view')
+  @RequireAllPermissions('pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea')
   quote(@Req() request: { user: Principal }, @Body() body: PricingQuoteRequest) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能访问内部查价');
@@ -1759,31 +994,31 @@ export class DataController {
   }
 
   @Get('pricing/books/rule-refresh-progress')
-  @RequirePermission('pricing:price-books:sync-health-view')
+  @RequirePermission('pricing:price-books:health')
   async priceBookRuleRefreshProgress(@Req() request: { user: Principal }) {
     return this.repository.getPriceBookRuleRefreshProgress(request.user);
   }
 
   @Get('pricing/book-rows')
-  @RequirePermission('pricing:price-books:rows-view')
+  @RequirePermission('pricing:price-books:view')
   async priceBookRows(@Req() request: { user: Principal }, @Query() query: PriceBookRowsQuery) {
     return this.repository.getPriceBookRows(request.user, undefined, query);
   }
 
   @Get('pricing/books/:id/rows')
-  @RequirePermission('pricing:price-books:rows-view')
+  @RequirePermission(['pricing:price-books:view', 'pricing:price-books:export', 'pricing:price-books:update', 'pricing:price-books:delete', 'pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
   async priceBookRowsByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: PriceBookRowsQuery) {
     return this.repository.getPriceBookRows(request.user, id, query);
   }
 
   @Get('pricing/books/:id/markup-routes')
-  @RequirePermission('pricing:markup-tier:read')
+  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
   async markupRoutesByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: MarkupRouteListQuery) {
     return this.repository.getMarkupRoutes(request.user, id, query);
   }
 
   @Get('pricing/books/:id/download')
-  @RequirePermission('pricing:price-books:rows-view')
+  @RequirePermission('pricing:price-books:export')
   async downloadPriceBook(@Req() request: { user: Principal }, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {
     const file = await this.repository.downloadPriceBook(request.user, id);
     const extension = extname(file.fileName).toLowerCase();
@@ -1797,16 +1032,25 @@ export class DataController {
   }
 
   @Post('pricing/cleanup-old-original-agents')
-  @RequirePermission('pricing:price-books:cleanup-original-agents')
+  @RequirePermission('pricing:price-books:update')
   async cleanupOldOriginalAgents(@Req() request: { user: Principal }, @Body() body: { dryRun?: boolean }) {
     return this.repository.cleanupOldOriginalAgentData(request.user, { dryRun: body?.dryRun !== false });
   }
 
   @Post('pricing/lookup')
-  @RequirePermission('pricing:lookup:view')
+  @RequirePermission(['pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea'])
   async priceLookup(@Req() request: { user: Principal }, @Body() body: PriceLookupRequest) {
     if (request.user.role === 'CUSTOMER') {
       throw new ForbiddenException('客户不能访问内部查价');
+    }
+    if (!isAdministratorRole(request.user.role)) {
+      const requiredPermissions = body.module
+        ? [pricingLookupPermissionByModule[body.module]]
+        : Object.values(pricingLookupPermissionByModule);
+      const granted = await Promise.all(requiredPermissions.map((permission) => this.repository.hasPermission(request.user.role, permission)));
+      if (!granted.every(Boolean)) {
+        throw new ForbiddenException('当前用户组未分配该查价模块');
+      }
     }
     const [response, agentNames] = await Promise.all([
       this.repository.lookupPrice(request.user, body),
@@ -1864,7 +1108,7 @@ export class DataController {
   }
 
   @Get('pricing/legacy/dubai-air-sea/table')
-  @RequirePermission('pricing:dubai-display:markup-view')
+  @RequirePermission('pricing:lookup:dubai-air-sea')
   async legacyDubaiAirSeaTable(@Req() request: { user: Principal }) {
     const [table, agentNames] = await Promise.all([this.repository.getDubaiPriceTable(request.user), this.repository.getPricingAgentNames()]);
     const sanitize = (row: typeof table.air[number]) => ({
@@ -1876,7 +1120,7 @@ export class DataController {
   }
 
   @Get('pricing/legacy/dubai-air-sea/display-pages/:id/image')
-  @RequirePermission(['pricing:lookup:dubai-image-view', 'pricing:dubai-display:active-view'])
+  @RequirePermission('pricing:lookup:dubai-air-sea')
   async legacyDubaiAirSeaDisplayPageImage(@Req() request: { user: Principal }, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {
     const file = await this.repository.getDubaiPriceDisplayPageImage(request.user, id);
     response.setHeader('Content-Type', file.mimeType);
@@ -1886,7 +1130,7 @@ export class DataController {
   }
 
   @Get('pricing/legacy/dubai-air-sea/display-versions/:versionId/pages/:pageId/image')
-  @RequirePermission('pricing:dubai-display:versions-view')
+  @RequirePermission('pricing:price-books:view')
   async legacyDubaiAirSeaDisplayVersionPageImage(
     @Req() request: { user: Principal },
     @Param('versionId') versionId: string,
@@ -1901,19 +1145,19 @@ export class DataController {
   }
 
   @Put('pricing/legacy/dubai-air-sea/display-versions/:id/activate')
-  @RequirePermission('pricing:dubai-display:activate')
+  @RequirePermission('pricing:price-books:update')
   async activateLegacyDubaiAirSeaDisplayVersion(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: DubaiPriceDisplayActivateInput) {
     return this.repository.activateDubaiPriceDisplayVersion(request.user, id, body);
   }
 
   @Post('pricing/legacy/dubai-air-sea/display-versions/:id/retry')
-  @RequirePermission('pricing:dubai-display:retry')
+  @RequirePermission('pricing:price-books:update')
   async retryLegacyDubaiAirSeaDisplayVersion(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.retryDubaiPriceDisplayVersion(request.user, id);
   }
 
   @Post('pricing/legacy/dubai-air-sea/display-versions/:id/sea-markup')
-  @RequirePermission('pricing:dubai-display:markup-update')
+  @RequirePermission('pricing:markup:dubaiAirSea:update')
   async updateLegacyDubaiSeaMarkup(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: DubaiSeaMarkupUpdateInput) {
     return this.repository.updateDubaiSeaMarkup(request.user, id, body);
   }
@@ -1928,10 +1172,10 @@ export class DataController {
   }
 
   @Get('pricing/south-africa/rules')
-  @RequirePermission('pricing:south-africa:rules-read')
+  @RequirePermission('pricing:lookup:south-africa')
   async southAfricaRateRules(@Req() request: { user: Principal }) {
     const response = await this.repository.getSouthAfricaRateRules(request.user);
-    const canViewCostMarkup = await this.hasAnyPermission(request.user.role, ['pricing:south-africa:cost-markup-view']);
+    const canViewCostMarkup = await this.hasAnyPermission(request.user.role, ['pricing:markup:southAfrica:view']);
     return {
       ...response,
       rules: response.rules.map((rule) => {
@@ -1944,31 +1188,31 @@ export class DataController {
   }
 
   @Post('pricing/south-africa/rules')
-  @RequirePermission('pricing:south-africa:rules-create')
+  @RequirePermission('pricing:markup:southAfrica:create')
   async createSouthAfricaRateRule(@Req() request: { user: Principal }, @Body() body: SouthAfricaRateRuleInput) {
     return this.sanitizeSouthAfricaRateRuleForPrincipal(request.user, await this.repository.createSouthAfricaRateRule(request.user, body));
   }
 
   @Put('pricing/south-africa/rules/:id')
-  @RequirePermission('pricing:south-africa:rules-update')
+  @RequirePermission('pricing:markup:southAfrica:update')
   async updateSouthAfricaRateRule(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: SouthAfricaRateRuleInput) {
     return this.sanitizeSouthAfricaRateRuleForPrincipal(request.user, await this.repository.updateSouthAfricaRateRule(request.user, id, body));
   }
 
   @Patch('pricing/south-africa/rules/:id/enabled')
-  @RequirePermission('pricing:south-africa:rules-enable')
+  @RequirePermission('pricing:markup:southAfrica:status')
   async updateSouthAfricaRateRuleEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { enabled?: boolean }) {
     return this.sanitizeSouthAfricaRateRuleForPrincipal(request.user, await this.repository.updateSouthAfricaRateRuleEnabled(request.user, id, body));
   }
 
   @Delete('pricing/south-africa/rules/:id')
-  @RequirePermission('pricing:south-africa:rules-delete')
+  @RequirePermission('pricing:markup:southAfrica:delete')
   async deleteSouthAfricaRateRule(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.sanitizeSouthAfricaRateRuleForPrincipal(request.user, await this.repository.deleteSouthAfricaRateRule(request.user, id));
   }
 
   @Post('pricing/south-africa/images')
-  @RequirePermission('pricing:south-africa:image-upload')
+  @RequirePermission('pricing:price-books:import')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES } }))
   async uploadSouthAfricaRateImage(
     @Req() request: { user: Principal },
@@ -1998,109 +1242,109 @@ export class DataController {
   }
 
   @Post('pricing/legacy/sources/import')
-  @RequirePermission('pricing:price-books:legacy-source-import')
+  @RequirePermission('pricing:price-books:import')
   async importLegacyPricingSource(@Req() request: { user: Principal }, @Body() body: LegacyPricingImportInput) {
     return this.repository.importLegacyPricingSource(request.user, body);
   }
 
   @Delete('pricing/legacy/sources/:id')
-  @RequirePermission('pricing:price-books:legacy-source-delete')
+  @RequirePermission('pricing:price-books:delete')
   async deleteLegacyPricingSource(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deleteLegacyPricingSource(request.user, id);
   }
 
   @Post('pricing/legacy/rebuild')
-  @RequirePermission('pricing:price-books:legacy-rebuild')
+  @RequirePermission('pricing:price-books:update')
   async rebuildLegacyPricing(@Req() request: { user: Principal }, @Body() body: { module?: LegacyPricingModule }) {
     return this.repository.rebuildLegacyPricing(request.user, body.module);
   }
 
   @Get('pricing/markup-rules')
-  @RequirePermission('pricing:markup:read')
+  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
   async agentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
     return this.repository.getAgentMarkupRules(request.user, query);
   }
 
   @Get('pricing/markup-rules/export')
-  @RequirePermission('pricing:markup:export')
+  @RequirePermission(['pricing:markup:amazon:export', 'pricing:markup:inquiry:export', 'pricing:markup:europeExpress:export', 'pricing:markup:southAfrica:export', 'pricing:markup:usaAirSea:export', 'pricing:markup:canadaAirSea:export', 'pricing:markup:dubaiAirSea:export'])
   async exportAgentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
     return this.repository.exportAgentMarkupRules(request.user, query);
   }
 
   @Post('pricing/markup-rules/import')
-  @RequirePermission('pricing:markup:import')
+  @RequirePermission(['pricing:markup:amazon:import', 'pricing:markup:inquiry:import', 'pricing:markup:europeExpress:import', 'pricing:markup:southAfrica:import', 'pricing:markup:usaAirSea:import', 'pricing:markup:canadaAirSea:import', 'pricing:markup:dubaiAirSea:import'])
   async importAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { rows?: AgentMarkupCreateInput[] }) {
     return this.repository.importAgentMarkupRules(request.user, body);
   }
 
   @Post('pricing/markup-rules/batch-upsert')
-  @RequirePermission('pricing:markup:batch-upsert')
+  @RequirePermission(['pricing:markup:amazon:import', 'pricing:markup:inquiry:import', 'pricing:markup:europeExpress:import', 'pricing:markup:southAfrica:import', 'pricing:markup:usaAirSea:import', 'pricing:markup:canadaAirSea:import', 'pricing:markup:dubaiAirSea:import'])
   async batchUpsertAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { rows?: AgentMarkupCreateInput[] }) {
     return this.repository.batchUpsertAgentMarkupRules(request.user, body);
   }
 
   @Post('pricing/markup-rules/batch-status')
-  @RequirePermission('pricing:markup:batch-enable')
+  @RequirePermission(['pricing:markup:amazon:status', 'pricing:markup:inquiry:status', 'pricing:markup:europeExpress:status', 'pricing:markup:southAfrica:status', 'pricing:markup:usaAirSea:status', 'pricing:markup:canadaAirSea:status', 'pricing:markup:dubaiAirSea:status'])
   async batchUpdateAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { ids?: string[]; agentNames?: string[]; scopes?: Array<{ agentName?: string; priceBookId?: string; legacyModule?: LegacyPricingModule }>; enabled?: boolean }) {
     return this.repository.batchUpdateAgentMarkupRules(request.user, body);
   }
 
   @Post('pricing/markup-rules/batch-delete')
-  @RequirePermission('pricing:markup:batch-delete')
+  @RequirePermission(['pricing:markup:amazon:delete', 'pricing:markup:inquiry:delete', 'pricing:markup:europeExpress:delete', 'pricing:markup:southAfrica:delete', 'pricing:markup:usaAirSea:delete', 'pricing:markup:canadaAirSea:delete', 'pricing:markup:dubaiAirSea:delete'])
   async batchDeleteAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { ids?: string[]; agentNames?: string[]; scopes?: Array<{ agentName?: string; priceBookId?: string; legacyModule?: LegacyPricingModule }> }) {
     return this.repository.batchDeleteAgentMarkupRules(request.user, body);
   }
 
   @Get('pricing/markup-rules/:id/preview')
-  @RequirePermission('pricing:markup:preview')
+  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
   async previewAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.previewAgentMarkupRule(request.user, id);
   }
 
   @Post('pricing/markup-rules/route-preview')
-  @RequirePermission('pricing:markup-tier:read')
+  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
   async previewMarkupRoute(@Req() request: { user: Principal }, @Body() body: MarkupRoutePreviewInput) {
     return this.repository.previewMarkupRoute(request.user, body);
   }
 
   @Post('pricing/markup-rules/route-preview/batch')
-  @RequirePermission('pricing:markup-tier:read')
+  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
   async previewMarkupRoutesBatch(@Req() request: { user: Principal }, @Body() body: MarkupRoutePreviewBatchInput) {
     return this.repository.previewMarkupRoutesBatch(request.user, body);
   }
 
   @Post('pricing/markup-rules/route-tiers')
-  @RequirePermission('pricing:markup-tier:update')
+  @RequirePermission(['pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier'])
   async replaceMarkupRouteTiers(@Req() request: { user: Principal }, @Body() body: MarkupRouteTierReplaceInput) {
     return this.repository.replaceMarkupRouteTiers(request.user, body);
   }
 
   @Post('pricing/markup-rules/route-tiers/batch')
-  @RequirePermission('pricing:markup-tier:update')
+  @RequirePermission(['pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier'])
   async replaceMarkupRouteTiersBatch(@Req() request: { user: Principal }, @Body() body: MarkupRouteTierBatchReplaceInput) {
     return this.repository.replaceMarkupRouteTiersBatch(request.user, body);
   }
 
   @Post('pricing/markup-rules/migrate-pricebook-scopes')
-  @RequirePermission('pricing:markup:update')
+  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async migrateLegacyMarkupRouteScopes(@Req() request: { user: Principal }) {
     return this.repository.migrateLegacyMarkupRouteScopes(request.user);
   }
 
   @Post('pricing/markup-rules')
-  @RequirePermission('pricing:markup:default-create')
+  @RequirePermission(['pricing:markup:amazon:create', 'pricing:markup:inquiry:create', 'pricing:markup:europeExpress:create', 'pricing:markup:southAfrica:create', 'pricing:markup:usaAirSea:create', 'pricing:markup:canadaAirSea:create', 'pricing:markup:dubaiAirSea:create'])
   async createAgentMarkupRule(@Req() request: { user: Principal }, @Body() body: AgentMarkupCreateInput) {
     return this.repository.createAgentMarkupRule(request.user, body);
   }
 
   @Put('pricing/markup-rules/:id')
-  @RequirePermission('pricing:markup:update')
+  @RequirePermission(['pricing:markup:amazon:update', 'pricing:markup:inquiry:update', 'pricing:markup:europeExpress:update', 'pricing:markup:southAfrica:update', 'pricing:markup:usaAirSea:update', 'pricing:markup:canadaAirSea:update', 'pricing:markup:dubaiAirSea:update'])
   async updateAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: AgentMarkupUpdateInput) {
     return this.repository.updateAgentMarkupRule(request.user, id, body);
   }
 
   @Delete('pricing/markup-rules/:id')
-  @RequirePermission('pricing:markup:delete')
+  @RequirePermission(['pricing:markup:amazon:delete', 'pricing:markup:inquiry:delete', 'pricing:markup:europeExpress:delete', 'pricing:markup:southAfrica:delete', 'pricing:markup:usaAirSea:delete', 'pricing:markup:canadaAirSea:delete', 'pricing:markup:dubaiAirSea:delete'])
   async deleteAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deleteAgentMarkupRule(request.user, id);
   }
@@ -2112,7 +1356,7 @@ export class DataController {
   }
 
   @Post('pricing/books/import-jobs')
-  @RequirePermission('pricing:price-books:upload')
+  @RequirePermission('pricing:price-books:import')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: PRICE_BOOK_FILE_IMPORT_MAX_BYTES } }))
   async createPriceBookImportJob(
     @Req() request: { user: Principal },
@@ -2146,13 +1390,13 @@ export class DataController {
   }
 
   @Post('pricing/books/import-jobs/:id/retry')
-  @RequirePermission('pricing:price-books:upload')
+  @RequirePermission('pricing:price-books:import')
   async retryPriceBookImportJob(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.retryPriceBookImportJob(request.user, id);
   }
 
   @Put('pricing/books/:id/remark')
-  @RequirePermission('pricing:price-books:remark-update')
+  @RequirePermission('pricing:price-books:update')
   async updatePriceBookRemark(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: PriceBookRemarkUpdateInput) {
     return this.repository.updatePriceBookRemark(request.user, id, body);
   }
@@ -2170,252 +1414,27 @@ export class DataController {
   }
 
   @Get('pricing/rules')
-  @RequirePermission('pricing:markup-tier:read')
+  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async pricingRules(@Req() request: { user: Principal }) {
     return this.repository.getPricingRules(request.user);
   }
 
   @Post('pricing/rules')
-  @RequirePermission('pricing:markup-tier:create')
+  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async createPricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleCreateInput) {
     return this.repository.createPricingRule(request.user, body);
   }
 
   @Put('pricing/rules/:id/enabled')
-  @RequirePermission('pricing:markup-tier:enable')
+  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async updatePricingRuleEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updatePricingRuleEnabled(request.user, id, body);
   }
 
   @Post('pricing/rules/quote')
-  @RequirePermission('pricing:lookup:view')
+  @RequireAllPermissions('pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea')
   async quotePricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleQuoteRequest) {
     return this.repository.quotePricingRule(request.user, body);
-  }
-
-  @Get('warehouse/rent-details')
-  @RequirePermission('warehouse:rent-detail:view')
-  async warehouseRentDetails(@Req() request: { user: Principal }, @Query() query: WarehouseRentDetailQuery) {
-    return this.repository.getWarehouseRentDetails(request.user, query);
-  }
-
-  @Get('warehouse/rent-details/export')
-  @RequirePermission('warehouse:rent-detail:export')
-  async exportWarehouseRentDetails(@Req() request: { user: Principal }, @Query() query: WarehouseRentDetailQuery) {
-    return this.repository.exportWarehouseRentDetails(request.user, query);
-  }
-
-  @Get('warehouse/rent-rules')
-  @RequirePermission('warehouse:rent-rule:view')
-  async warehouseRentRules(@Req() request: { user: Principal }) {
-    return this.repository.getWarehouseRentRules(request.user);
-  }
-
-  @Post('warehouse/rent-rules')
-  @RequirePermission('warehouse:rent-rule:manage')
-  async createWarehouseRentRule(@Req() request: { user: Principal }, @Body() body: WarehouseRentRuleInput) {
-    return this.repository.createWarehouseRentRule(request.user, body);
-  }
-
-  @Put('warehouse/rent-rules/:id')
-  @RequirePermission('warehouse:rent-rule:manage')
-  async updateWarehouseRentRule(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseRentRuleInput
-  ) {
-    return this.repository.updateWarehouseRentRule(request.user, id, body);
-  }
-
-  @Delete('warehouse/rent-rules/:id')
-  @RequirePermission('warehouse:rent-rule:manage')
-  async deleteWarehouseRentRule(
-    @Req() request: { user: Principal },
-    @Param('id') id: string
-  ) {
-    return this.repository.deleteWarehouseRentRule(request.user, id);
-  }
-
-  @Put('warehouse/rent-rules/:id/enabled')
-  @RequirePermission('warehouse:rent-rule:manage')
-  async updateWarehouseRentRuleEnabled(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseRentRuleEnabledInput
-  ) {
-    return this.repository.updateWarehouseRentRuleEnabled(request.user, id, body);
-  }
-
-  @Post('warehouse/packages/machine-import')
-  @RequirePermission('warehouse:in-stock:machine-import')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
-  async warehouseMachineImport(
-    @Req() request: { user: Principal },
-    @UploadedFile() file: { originalname: string; mimetype: string; size: number; buffer: Buffer } | undefined,
-    @Body('commit') commit?: string
-  ) {
-    if (!file?.buffer?.length) throw new BadRequestException('请上传机器过机 Excel 文件');
-    const normalizedFile = { ...file, originalname: normalizeUploadedFileName(file.originalname) };
-    this.assertExcelFile(normalizedFile);
-    const parsed = parseWarehouseMachineWorkbook(normalizedFile.buffer, normalizedFile.originalname);
-    if (String(commit).toLowerCase() === 'true') {
-      return this.repository.importWarehouseMachineImport(request.user, parsed, {
-        fileHash: createHash('sha256').update(normalizedFile.buffer).digest('hex')
-      });
-    }
-    return this.repository.previewWarehouseMachineImport(request.user, parsed);
-  }
-
-  @Post('warehouse/packages')
-  @RequirePermission('warehouse:today-receipt:manual-create')
-  async createWarehousePackage(@Req() request: { user: Principal }, @Body() body: WarehousePackageCreateInput) {
-    await this.repository.assertWarehouseManualReceiptCustomer(request.user, body.customerCode);
-    return this.repository.createWarehousePackage(request.user, body);
-  }
-
-  @Post('warehouse/packages/manual-receipt')
-  @RequirePermission('warehouse:today-receipt:manual-create')
-  async createWarehouseManualReceipt(@Req() request: { user: Principal }, @Body() body: WarehouseManualReceiptCreateInput) {
-    await this.repository.assertWarehouseManualReceiptCustomer(request.user, body.customerCode);
-    return this.repository.createWarehouseManualReceipt(request.user, body);
-  }
-
-  @Post('warehouse/packages/:id/same-spec-replenish')
-  @RequirePermission('warehouse:in-stock:same-spec-replenish')
-  async replenishWarehouseSameSpec(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseSameSpecReplenishInput) {
-    return this.repository.replenishWarehouseSameSpec(request.user, id, body);
-  }
-
-  @Post('warehouse/packages/:id/split')
-  @RequirePermission('warehouse:in-stock:split')
-  async splitWarehousePackage(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehousePackageSplitInput) {
-    return this.repository.splitWarehousePackage(request.user, id, body);
-  }
-
-  @Patch('warehouse/packages/:id')
-  @RequirePermission('warehouse:in-stock:update')
-  async updateWarehousePackage(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehousePackageUpdateInput) {
-    return this.repository.updateWarehousePackage(request.user, id, body);
-  }
-
-  @Put('warehouse/packages/:id/remark')
-  @RequirePermission('warehouse:in-stock:update')
-  async updateWarehousePackageRemark(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { remark?: string }) {
-    return this.repository.updateWarehousePackageRemark(request.user, id, body);
-  }
-
-  @Patch('warehouse/packages/:id/exception')
-  @RequirePermission('warehouse:in-stock:update')
-  async updateWarehousePackageException(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: { manualException?: string }) {
-    return this.repository.updateWarehousePackageException(request.user, id, body);
-  }
-
-  @Post('warehouse/consolidations')
-  @RequireAuth()
-  async createWarehouseConsolidation(@Req() request: { user: Principal }, @Body() body: WarehouseConsolidationCreateInput) {
-    await this.ensurePermission(request.user, body.mode === 'MERGE_AND_SHIP' ? 'warehouse:tally-pending:merge-and-ship' : 'warehouse:tally-pending:merge-only');
-    return this.repository.createWarehouseConsolidation(request.user, body);
-  }
-
-  @Post('warehouse/consolidations/:id/create-shipment')
-  @RequirePermission('warehouse:tally-pending:merge-and-ship')
-  async createWarehouseConsolidationShipment(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.createShipmentFromWarehouseConsolidation(request.user, id);
-  }
-
-  @Get('warehouse/tally-repeat-statistics')
-  @RequirePermission('warehouse:tally-completed:view')
-  async warehouseTallyRepeatStatistics(
-    @Req() request: { user: Principal },
-    @Query() query: WarehouseTallyRepeatStatisticsQuery
-  ) {
-    return this.repository.getWarehouseTallyRepeatStatistics(request.user, query);
-  }
-
-  @Post('warehouse/tally-tasks')
-  @RequirePermission('warehouse:tally-pending:task-create')
-  async createWarehouseTallyTask(@Req() request: { user: Principal }, @Body() body: WarehouseTallyTaskCreateInput) {
-    return this.repository.createWarehouseTallyTask(request.user, body);
-  }
-
-  @Patch('warehouse/tally-tasks/:id')
-  @RequirePermission('warehouse:tally-pending:task-update')
-  async updateWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseTallyTaskUpdateInput) {
-    return this.repository.updateWarehouseTallyTask(request.user, id, body);
-  }
-
-  @Post('warehouse/tally-tasks/:id/start')
-  @RequirePermission('warehouse:tally-pending:task-process')
-  async startWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.startWarehouseTallyTask(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/cancel')
-  @RequirePermission('warehouse:tally-pending:task-cancel')
-  async cancelWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.cancelWarehouseTallyTask(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/complete')
-  @RequirePermission('warehouse:tally-pending:task-process')
-  async completeWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: WarehouseTallyTaskCompleteInput) {
-    return this.repository.completeWarehouseTallyTask(request.user, id, body);
-  }
-
-  @Patch('warehouse/tally-tasks/:id/completed-count')
-  @RequireAuth()
-  async updateCompletedWarehouseTallyTaskCount(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseTallyTaskCompletedCountUpdateInput
-  ) {
-    return this.repository.updateCompletedWarehouseTallyTaskCount(request.user, id, body);
-  }
-
-  @Post('warehouse/tally-tasks/:id/reverse-review')
-  @RequirePermission('warehouse:tally-completed:reverse-review')
-  async reverseReviewWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.reverseReviewWarehouseTallyTask(request.user, id);
-  }
-
-  @Get('warehouse/tally-tasks/:id/historical-aggregate-correction')
-  @RequirePermission('warehouse:tally-history:correct')
-  async warehouseTallyHistoricalAggregateCorrectionPreview(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.getWarehouseTallyHistoricalAggregateCorrectionPreview(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/historical-aggregate-correction')
-  @RequirePermission('warehouse:tally-history:correct')
-  async correctWarehouseTallyHistoricalAggregate(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseTallyHistoricalAggregateCorrectionInput
-  ) {
-    return this.repository.correctWarehouseTallyHistoricalAggregate(request.user, id, body);
-  }
-
-  @Post('warehouse/tally-tasks/:id/label')
-  @RequirePermission('warehouse:tally-label:generate')
-  async generateWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.generateWarehouseTallyTaskLabel(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/label/print')
-  @RequirePermission(['warehouse:tally-label:print', 'warehouse:tally-label:reprint'])
-  async printWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.printWarehouseTallyTaskLabel(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/label/download')
-  @RequirePermission('warehouse:tally-label:download')
-  async downloadWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.downloadWarehouseTallyTaskLabel(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/label-scan')
-  @RequirePermission('warehouse:tally-label:scan-apply')
-  async applyWarehouseTallyTaskLabel(@Req() request: { user: Principal }, @Body() body: WarehouseTallyLabelScanInput) {
-    return this.repository.applyWarehouseTallyTaskLabel(request.user, body);
   }
 
   @Get('finance/business-cost-audits')
@@ -2775,19 +1794,6 @@ export class DataController {
     }
   }
 
-  private assertShipmentLabelFile(file: { mimetype: string; originalname: string; buffer: Buffer }) {
-    if (!this.labelFileMimeExtensions[file.mimetype]) {
-      throw new BadRequestException('仅支持图片或 PDF 面单');
-    }
-    if (file.mimetype === 'application/pdf') {
-      if (extname(file.originalname).toLowerCase() !== '.pdf' || file.buffer.subarray(0, 4).toString('ascii') !== '%PDF') {
-        throw new BadRequestException('PDF 面单内容格式无效');
-      }
-      return;
-    }
-    this.assertVoucherImage(file);
-  }
-
   private assertExcelFile(file: { mimetype: string; originalname: string; buffer: Buffer }) {
     const extension = extname(file.originalname).toLowerCase();
     if (!['.xls', '.xlsx'].includes(extension) || extension === '.xlsm') {
@@ -2905,104 +1911,6 @@ function normalizeUploadedFileName(fileName: string) {
   return normalized.replace(/[\\/:\0]/g, '_').trim() || '未命名文件';
 }
 
-function hasSalesOwnDataScope(principal: Principal): boolean {
-  return principal.dataScope === 'SALES_OWN'
-    || (isSalesScopedRole(principal.role) && principal.role !== 'UG_MARKET');
-}
-
-function sanitizeMojiaRequestSamplePayload(value: Record<string, unknown>): Record<string, unknown> {
-  return sanitizeMojiaRequestSampleValue(value, 0) as Record<string, unknown>;
-}
-
-function sanitizeMojiaRequestSampleValue(value: unknown, depth: number): unknown {
-  if (!value || typeof value !== 'object') return value;
-  if (depth >= 8) return '[OMITTED_MAX_DEPTH]';
-  if (Array.isArray(value)) return value.map((item) => sanitizeMojiaRequestSampleValue(item, depth + 1));
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [
-    key,
-    isMojiaRequestSampleSensitiveKey(key)
-      ? '[REDACTED]'
-      : sanitizeMojiaRequestSampleValue(child, depth + 1)
-  ]));
-}
-
-function isMojiaRequestSampleSensitiveKey(key: string): boolean {
-  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
-  return /密码|令牌|密钥|签名|口令|凭证/.test(key)
-    || normalized === 'auth'
-    || normalized === 'jwt'
-    || normalized === 'bearer'
-    || normalized.includes('authorization')
-    || normalized.endsWith('token')
-    || normalized.endsWith('password')
-    || normalized.endsWith('passwd')
-    || normalized.endsWith('pwd')
-    || normalized.endsWith('secret')
-    || normalized.endsWith('credential')
-    || normalized.endsWith('cookie')
-    || normalized.endsWith('apikey')
-    || normalized.endsWith('accesskey')
-    || normalized.endsWith('privatekey')
-    || normalized.endsWith('sessionid')
-    || normalized.endsWith('sessionkey')
-    || normalized.endsWith('signature')
-    || normalized === 'sign';
-}
-
-type MojiaMeasurementInput = {
-  orderNo?: unknown;
-  barcode?: unknown;
-  customerCode?: unknown;
-  trackingNo?: unknown;
-  length?: unknown;
-  width?: unknown;
-  height?: unknown;
-  weight?: unknown;
-  lengthCm?: unknown;
-  widthCm?: unknown;
-  heightCm?: unknown;
-  weightKg?: unknown;
-  packageCount?: unknown;
-  packageIndex?: unknown;
-  expectedTotalPackageCount?: unknown;
-  measuredAt?: unknown;
-  machineNo?: unknown;
-  deviceNo?: unknown;
-};
-
-const mojiaPrincipal: Principal = {
-  id: 'system-mojia-device',
-  username: 'mojia-device',
-  role: 'WAREHOUSE',
-  name: '墨家设备'
-};
-
-function positiveNumber(value: unknown, field: string): number {
-  const numberValue = Number(value);
-  if (!Number.isFinite(numberValue) || numberValue <= 0) {
-    throw new BadRequestException(`${field} 必须是大于 0 的数字`);
-  }
-  return numberValue;
-}
-
-function positiveInt(value: unknown, fallback: number): number {
-  const numberValue = Math.floor(Number(value) || fallback);
-  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
-}
-
-function normalizeMojiaMeasuredAt(value: unknown): string | undefined {
-  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
-  const raw = String(value).trim();
-  if (!raw) return undefined;
-  const numeric = Number(raw);
-  const normalizedRaw = raw.replace(/^(\d{4})[./](\d{1,2})[./](\d{1,2})[ T/](\d{1,2}:\d{1,2}(?::\d{1,2})?)$/, '$1-$2-$3 $4');
-  const date = Number.isFinite(numeric)
-    ? new Date(raw.length <= 10 ? numeric * 1000 : numeric)
-    : new Date(normalizedRaw);
-  if (Number.isNaN(date.getTime())) return undefined;
-  date.setMilliseconds(0);
-  return date.toISOString();
-}
 function ensureInternalOrderEntryScope(principal: Principal) {
   if (principal.role === 'CUSTOMER') throw new ForbiddenException('当前角色不能使用内部录单');
   if (principal.shipmentAllView || principal.dataScope === 'SALES_OWN' || principal.departmentTeamScope?.length) return;
