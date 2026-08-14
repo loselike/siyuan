@@ -710,7 +710,7 @@ export type ManagedTableProps<RecordType extends object> = Omit<TableProps<Recor
   columns: ManagedTableColumns<RecordType>;
   minimumScrollX?: number;
   columnSettings?: ManagedTableColumnSettings | false;
-  columnSettingsPlacement?: 'toolbar';
+  columnSettingsPlacement?: 'column' | 'toolbar';
   density?: ManagedTableDensity;
   toolbarLeading?: ReactNode;
   toolbarActions?: ReactNode;
@@ -848,7 +848,7 @@ export function ManagedTable<RecordType extends object>({
   columns,
   minimumScrollX = 960,
   columnSettings,
-  columnSettingsPlacement = 'toolbar',
+  columnSettingsPlacement = 'column',
   density = 'auto',
   toolbarLeading,
   toolbarActions,
@@ -1116,6 +1116,22 @@ export function ManagedTable<RecordType extends object>({
       : managedColumns;
     return applyManagedTableActionColumnClass(detailAwareColumns);
   }, [detailDisabledColumnKeys, internalRecordDetailEnabled, managedColumns]);
+  const managedColumnsWithSettings = useMemo(() => {
+    if (!tableSettingsButton || columnSettingsPlacement !== 'column') {
+      return managedColumnsForTable;
+    }
+    const settingsColumn: ColumnsType<RecordType>[number] = {
+      key: '__managed_table_column_settings',
+      title: <span className="managed-table-settings-header">{tableSettingsButton}</span>,
+      width: 48,
+      fixed: 'right',
+      align: 'center',
+      className: 'managed-table-settings-column',
+      onHeaderCell: () => ({ className: 'managed-table-settings-column' }),
+      render: () => null
+    };
+    return [...managedColumnsForTable, settingsColumn];
+  }, [columnSettingsPlacement, managedColumnsForTable, tableSettingsButton]);
   const visibleBusinessColumnCount = useMemo(
     () => collectManagedTableColumnKeys(managedColumnsForTable as ManagedColumnLike[])
       .filter((key) => !isManagedTableSelectionColumnKey(key) && !isManagedTableActionColumnKey(key))
@@ -1317,7 +1333,7 @@ export function ManagedTable<RecordType extends object>({
           resizableColumns ? 'managed-table-resizable' : null,
           className
         ].filter(Boolean).join(' ')}
-        columns={managedColumnsForTable}
+        columns={managedColumnsWithSettings}
         components={managedComponents}
         pagination={effectivePagination}
         rowSelection={managedRowSelection}

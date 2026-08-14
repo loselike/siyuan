@@ -246,6 +246,24 @@ describe('ManagedTable', () => {
     expect(screen.getByRole('button', { name: '列设置' }).closest('.managed-table-settings-column')).toBeInTheDocument();
   });
 
+  it('列设置 supports the explicit toolbar placement without adding a table column', () => {
+    render(
+      <ManagedTable
+        rowKey="id"
+        columns={[{ key: 'customerCode', title: '客户编号', dataIndex: 'customerCode', width: 120 }]}
+        dataSource={[{ id: 'row-1', customerCode: '9409' }]}
+        pagination={false}
+        columnSettingsPlacement="toolbar"
+        columnSettings={{ storageKey: 'sunny.test.toolbar-columns', title: '工具栏列设置' }}
+      />
+    );
+
+    const settingsButton = screen.getByRole('button', { name: '列设置' });
+    expect(settingsButton.closest('.managed-table-toolbar')).toBeInTheDocument();
+    expect(settingsButton.closest('.managed-table-settings-column')).toBeNull();
+    expect(screen.getAllByRole('columnheader')).toHaveLength(1);
+  });
+
   it('selection keeps rowSelection tables selectable from the first header column', () => {
     function SelectableTable() {
       const [selectedRowKeys, setSelectedRowKeys] = useState<Key[]>([]);

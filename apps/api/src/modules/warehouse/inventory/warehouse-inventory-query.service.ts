@@ -1,6 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type { Principal } from '../../rbac.js';
-import type { WarehouseInStockPageQuery } from '@siyuan/shared';
+import type {
+  WarehouseInStockPageQuery,
+  WarehouseInStockQuery,
+  WarehouseTodayQuery
+} from '@siyuan/shared';
 import {
   WAREHOUSE_INVENTORY_QUERY_REPOSITORY,
   type MojiaWarehouseDuplicateQuery,
@@ -18,8 +22,20 @@ export class WarehouseInventoryQueryService {
     return this.repository.getWarehousePackages(principal);
   }
 
+  listTodayReceipts(principal: Principal, query: WarehouseTodayQuery) {
+    return this.repository.getWarehouseTodayReceipts(principal, query);
+  }
+
+  listInStock(principal: Principal, query: WarehouseInStockQuery) {
+    return this.repository.getWarehouseInStock(principal, query);
+  }
+
   listInStockPage(principal: Principal, query: WarehouseInStockPageQuery) {
     return this.repository.getWarehouseInStockPage(principal, query);
+  }
+
+  getInStockSummary(principal: Principal) {
+    return this.repository.getWarehouseInStockSummary(principal);
   }
 
   listPackageGroups(principal: Principal) {

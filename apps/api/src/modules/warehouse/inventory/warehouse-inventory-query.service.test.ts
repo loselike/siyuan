@@ -11,6 +11,30 @@ function repositoryStub(
 ): WarehouseInventoryQueryRepository {
   return {
     getWarehousePackages: vi.fn().mockResolvedValue([]),
+    getWarehouseTodayReceipts: vi.fn().mockResolvedValue({
+      totals: {
+        receiptTickets: 0,
+        totalPackages: 0,
+        totalWeightKg: 0,
+        totalCbm: 0,
+        waitingDispatchTickets: 0,
+        pendingTallyTickets: 0,
+        exceptionTickets: 0
+      },
+      rows: []
+    }),
+    getWarehouseInStock: vi.fn().mockResolvedValue({
+      totals: {
+        receiptTickets: 0,
+        totalPackages: 0,
+        totalWeightKg: 0,
+        totalCbm: 0,
+        waitingDispatchTickets: 0,
+        pendingTallyTickets: 0,
+        exceptionTickets: 0
+      },
+      rows: []
+    }),
     getWarehouseInStockPage: vi.fn().mockResolvedValue({
       totals: {
         receiptTickets: 0,
@@ -23,6 +47,17 @@ function repositoryStub(
       },
       rows: [],
       pagination: { page: 1, pageSize: 10, totalItems: 0 }
+    }),
+    getWarehouseInStockSummary: vi.fn().mockResolvedValue({
+      totals: {
+        receiptTickets: 0,
+        totalPackages: 0,
+        totalWeightKg: 0,
+        totalCbm: 0,
+        waitingDispatchTickets: 0,
+        pendingTallyTickets: 0,
+        exceptionTickets: 0
+      }
     }),
     getWarehousePackageGroups: vi.fn().mockResolvedValue([]),
     getWarehouseManualReceiptCustomers: vi.fn().mockResolvedValue([]),
@@ -59,5 +94,27 @@ describe('WarehouseInventoryQueryService', () => {
     await expect(service.findDuplicateMojiaPackage(principal, duplicateQuery))
       .resolves.toEqual({ combinedOrderNo: '9476-SF9476' });
     expect(repository.findDuplicateMojiaPackage).toHaveBeenCalledWith(principal, duplicateQuery);
+  });
+
+  it('keeps legacy warehouse read responses behind the module service boundary', async () => {
+    const principal = warehousePrincipal();
+    const todayQuery = { customerOrderNo: '9476' };
+    const inStockQuery = { status: 'RECEIVED' as const, keyword: 'SF9476' };
+    const todayResponse = { rows: [], totals: { receiptTickets: 0 } };
+    const inStockResponse = { rows: [], totals: { receiptTickets: 0 } };
+    const summaryResponse = { totals: { receiptTickets: 0 } };
+    const repository = repositoryStub({
+      getWarehouseTodayReceipts: vi.fn().mockResolvedValue(todayResponse),
+      getWarehouseInStock: vi.fn().mockResolvedValue(inStockResponse),
+      getWarehouseInStockSummary: vi.fn().mockResolvedValue(summaryResponse)
+    });
+    const service = new WarehouseInventoryQueryService(repository);
+
+    await expect(service.listTodayReceipts(principal, todayQuery)).resolves.toBe(todayResponse);
+    await expect(service.listInStock(principal, inStockQuery)).resolves.toBe(inStockResponse);
+    await expect(service.getInStockSummary(principal)).resolves.toBe(summaryResponse);
+    expect(repository.getWarehouseTodayReceipts).toHaveBeenCalledWith(principal, todayQuery);
+    expect(repository.getWarehouseInStock).toHaveBeenCalledWith(principal, inStockQuery);
+    expect(repository.getWarehouseInStockSummary).toHaveBeenCalledWith(principal);
   });
 });

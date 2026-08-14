@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { PrismaService } from '../../prisma.service.js';
 import type { Principal } from '../../rbac.js';
-import { PrismaWarehouseInventoryQueryRepository } from './warehouse-inventory-query.repository.js';
+import {
+  PrismaWarehouseInventoryQueryRepository,
+  type WarehouseInventoryLegacyOperations
+} from './warehouse-inventory-query.repository.js';
 
 const admin: Principal = { id: 'u-admin', username: 'admin', role: 'ADMIN' };
 const operator: Principal = { id: 'u-operator', username: 'operator', role: 'OPERATOR' };
@@ -34,14 +37,34 @@ function packageRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function createRepository(prisma: Record<string, unknown>) {
+function createRepository(
+  prisma: Record<string, unknown>,
+  legacyRepository?: Partial<WarehouseInventoryLegacyOperations>
+) {
   return new PrismaWarehouseInventoryQueryRepository(
     prisma as unknown as PrismaService,
-    { hasPermission: vi.fn().mockImplementation(async (role: Principal['role']) => role === 'ADMIN') }
+    { hasPermission: vi.fn().mockImplementation(async (role: Principal['role']) => role === 'ADMIN') },
+    legacyRepository as WarehouseInventoryLegacyOperations | undefined
   );
 }
 
 describe('PrismaWarehouseInventoryQueryRepository', () => {
+  it('keeps legacy warehouse reads behind the new repository port during migration', async () => {
+    const legacyRepository = {
+      getWarehouseTodayReceipts: vi.fn().mockResolvedValue({ rows: ['today'] }),
+      getWarehouseInStock: vi.fn().mockResolvedValue({ rows: ['in-stock'] }),
+      getWarehouseInStockSummary: vi.fn().mockResolvedValue({ totals: { receiptTickets: 1 } })
+    };
+    const repository = createRepository({}, legacyRepository);
+
+    await expect(repository.getWarehouseTodayReceipts(admin, { customerOrderNo: '9476' })).resolves.toEqual({ rows: ['today'] });
+    await expect(repository.getWarehouseInStock(admin, { keyword: 'SF9476' })).resolves.toEqual({ rows: ['in-stock'] });
+    await expect(repository.getWarehouseInStockSummary(admin)).resolves.toEqual({ totals: { receiptTickets: 1 } });
+    expect(legacyRepository.getWarehouseTodayReceipts).toHaveBeenCalledWith(admin, { customerOrderNo: '9476' });
+    expect(legacyRepository.getWarehouseInStock).toHaveBeenCalledWith(admin, { keyword: 'SF9476' });
+    expect(legacyRepository.getWarehouseInStockSummary).toHaveBeenCalledWith(admin);
+  });
+
   it('keeps package ordering, confirmed tally state and response mapping unchanged', async () => {
     const packageFindMany = vi.fn().mockResolvedValue([
       packageRow(),

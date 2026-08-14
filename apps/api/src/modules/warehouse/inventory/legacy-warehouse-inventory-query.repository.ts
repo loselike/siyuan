@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { PrismaRepository } from '../../prisma.repository.js';
 import type { Principal } from '../../rbac.js';
-import type { WarehouseInStockPageQuery } from '@siyuan/shared';
+import type { WarehouseInStockPageQuery, WarehouseInStockQuery, WarehouseTodayQuery } from '@siyuan/shared';
 import type {
   MojiaWarehouseDuplicateQuery,
   WarehouseInventoryQueryRepository
@@ -15,6 +15,14 @@ export class LegacyWarehouseInventoryQueryRepository implements WarehouseInvento
     return this.repository.getWarehousePackages(principal);
   }
 
+  getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery) {
+    return this.repository.getWarehouseTodayReceipts(principal, query);
+  }
+
+  getWarehouseInStock(principal: Principal, query: WarehouseInStockQuery) {
+    return this.repository.getWarehouseInStock(principal, query);
+  }
+
   async getWarehouseInStockPage(principal: Principal, query: WarehouseInStockPageQuery) {
     const page = Math.max(1, Math.trunc(Number(query.page) || 1));
     const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(query.pageSize) || 10)));
@@ -24,6 +32,10 @@ export class LegacyWarehouseInventoryQueryRepository implements WarehouseInvento
       rows: response.rows.slice((page - 1) * pageSize, page * pageSize),
       pagination: { page, pageSize, totalItems: response.rows.length }
     };
+  }
+
+  getWarehouseInStockSummary(principal: Principal) {
+    return this.repository.getWarehouseInStockSummary(principal);
   }
 
   getWarehousePackageGroups(principal: Principal) {

@@ -1,10 +1,15 @@
-import { ForbiddenException, Inject, Injectable } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, Optional } from '@nestjs/common';
 import type {
+  WarehouseInStockQuery,
   WarehouseInStockPageQuery,
   WarehouseInStockPageResponse,
+  WarehouseInStockResponse,
   WarehousePackageGroupSummary,
-  WarehousePackageSummary
+  WarehousePackageSummary,
+  WarehouseTodayQuery,
+  WarehouseTodayResponse
 } from '@siyuan/shared';
+import { PrismaRepository } from '../../prisma.repository.js';
 import { PrismaService } from '../../prisma.service.js';
 import { isAdministratorRole, isBusinessAgentRestrictedRole, type PermissionKey, type Principal } from '../../rbac.js';
 import {
@@ -28,9 +33,23 @@ export interface MojiaWarehouseDuplicateQuery {
   remark?: string;
 }
 
+/**
+ * Compatibility bridge for read methods that are still hosted by the legacy
+ * repository. The controller can depend on the warehouse boundary while
+ * each method is migrated independently with characterization coverage.
+ */
+export interface WarehouseInventoryLegacyOperations {
+  getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery): Promise<WarehouseTodayResponse>;
+  getWarehouseInStock(principal: Principal, query: WarehouseInStockQuery): Promise<WarehouseInStockResponse>;
+  getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>>;
+}
+
 export interface WarehouseInventoryQueryRepository {
   getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]>;
+  getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery): Promise<WarehouseTodayResponse>;
+  getWarehouseInStock(principal: Principal, query: WarehouseInStockQuery): Promise<WarehouseInStockResponse>;
   getWarehouseInStockPage(principal: Principal, query: WarehouseInStockPageQuery): Promise<WarehouseInStockPageResponse>;
+  getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>>;
   getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]>;
   getWarehouseManualReceiptCustomers(principal: Principal): Promise<Array<{ code: string; name: string }>>;
   findDuplicateMojiaPackage(
@@ -44,7 +63,9 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(WAREHOUSE_INVENTORY_QUERY_AUTHORIZER)
-    private readonly authorizer: WarehouseInventoryQueryAuthorizer
+    private readonly authorizer: WarehouseInventoryQueryAuthorizer,
+    @Optional() @Inject(PrismaRepository)
+    private readonly legacyRepository?: WarehouseInventoryLegacyOperations
   ) {}
 
   async getWarehousePackages(principal: Principal): Promise<WarehousePackageSummary[]> {
@@ -76,6 +97,14 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
       orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
     });
     return mapWarehousePackagesWithConfirmedTally(this.prisma, rows);
+  }
+
+  getWarehouseTodayReceipts(principal: Principal, query: WarehouseTodayQuery) {
+    return this.requireLegacyRepository().getWarehouseTodayReceipts(principal, query);
+  }
+
+  getWarehouseInStock(principal: Principal, query: WarehouseInStockQuery) {
+    return this.requireLegacyRepository().getWarehouseInStock(principal, query);
   }
 
   async getWarehouseInStockPage(
@@ -201,6 +230,10 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     return response;
   }
 
+  getWarehouseInStockSummary(principal: Principal) {
+    return this.requireLegacyRepository().getWarehouseInStockSummary(principal);
+  }
+
   async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {
     return summarizeWarehousePackageGroups(await this.getWarehousePackages(principal));
   }
@@ -244,6 +277,13 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
       orderBy: [{ customerOrderNo: 'asc' }, { scanTime: 'asc' }]
     });
     return row ? { combinedOrderNo: query.combinedOrderNo } : undefined;
+  }
+
+  private requireLegacyRepository(): WarehouseInventoryLegacyOperations {
+    if (!this.legacyRepository) {
+      throw new Error('仓库查询兼容仓储未配置');
+    }
+    return this.legacyRepository;
   }
 
 }
