@@ -180,7 +180,7 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
     });
   });
 
-  it('enforces the owned-customer scope and strips site for a business role', async () => {
+  it('keeps warehouse inventory full-scope for a recognized business role', async () => {
     const scopedRow = packageRow({ site: '深圳仓' });
     const packageFindMany = vi.fn().mockResolvedValue([scopedRow]);
     const queryRaw = vi.fn().mockResolvedValue([{
@@ -192,9 +192,7 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
       pendingTallyTickets: 1n,
       exceptionTickets: 0n
     }]);
-    const customerFindMany = vi.fn()
-      .mockResolvedValueOnce([{ code: 'C001' }])
-      .mockResolvedValueOnce([{ code: 'C001', salesperson: 'operator' }]);
+    const customerFindMany = vi.fn().mockResolvedValue([{ code: 'C001', salesperson: 'operator' }]);
     const repository = createRepository({
       warehousePackage: { findMany: packageFindMany },
       $queryRaw: queryRaw,
@@ -206,13 +204,13 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
 
     const response = await repository.getWarehouseInStockPage(operator, { dataScope: 'OWN' });
 
-    expect(response.rows).toEqual([expect.not.objectContaining({ site: expect.anything() })]);
+    expect(response.rows).toEqual([expect.objectContaining({ site: '深圳仓', salesperson: 'operator' })]);
     expect(packageFindMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { status: 'RECEIVED', customerCode: { in: ['C001'] } }
+      where: { status: 'RECEIVED' }
     }));
     const aggregateSql = queryRaw.mock.calls[0]?.[0] as { sql: string; values: unknown[] };
-    expect(aggregateSql.sql).toContain('"customerCode" IN (?)');
-    expect(aggregateSql.values).toEqual(['RECEIVED', 'C001']);
+    expect(aggregateSql.sql).not.toContain('"customerCode" IN (?)');
+    expect(aggregateSql.values).toEqual(['RECEIVED']);
   });
 
   it('keeps page totals and audit semantics while avoiding an unbounded package read', async () => {
