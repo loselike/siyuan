@@ -103,6 +103,21 @@ npm run release:47:baseline
 npm run deploy:47 -- --expected-release-id <任务开始时记录的值>
 ```
 
+常规生产发布只允许从 `main` 或专用 `codex/release/*` 分支执行。普通功能分支必须先走 Pull Request 自动检查；白名单 CAS 在普通功能分支默认拒绝，只有经过明确应急审查并设置 `SIYUAN_47_EMERGENCY_RELEASE=true` 才能使用。这个开关不绕过全局锁、CAS checksum、migration、镜像身份、recovery 或 health 门。
+
+主干 CI 会按 Git SHA 构建 API、Web 和 migration 三个不可变 GHCR 镜像，并上传仅含完整 digest 的 `images.env`。下载与当前 `main` HEAD 对应的清单后，可以执行：
+
+```bash
+npm run release:47:baseline
+npm run deploy:47 -- \
+  --expected-release-id <基线 release ID> \
+  --image-manifest /absolute/path/to/images.env
+```
+
+制品提升会先校验清单 commit 与当前 HEAD、三个 `ghcr.io/...@sha256:<64 hex>` 引用和清单 SHA；47 只拉取 digest、以 `--no-build` 重启受影响服务，并把 digest 清单证据写入不可变 receipt。没有有效清单、GHCR 拉取失败或 migration 指纹变化都会在成功状态写入前失败关闭；migration 仍必须走独立 reviewed whitelist 流程，不会被制品提升隐式执行。
+
+Pull Request 使用 `scripts/ci-affected.mjs` 按 shared/API/Web/Prisma/治理路径选择验证。`packages/shared` 先只构建一次，Vitest 使用 `--changed <base>` 运行受影响测试；每个阶段的耗时和退出码保存为 Actions artifact。完整回归保留在手动/夜间 workflow，不以减少 PR 验证为理由降低权限、迁移、财务和数据正确性门。
+
 脚本根据上一次成功发布记录的 Web、API、Prisma 运行时指纹自动判断范围。测试文件和文档可以同步到 47，但不会触发运行时镜像重建。标准发布发现 Prisma 指纹变化时只报告范围并阻断 apply；迁移必须改走 `deploy:47:whitelist`，由明确列出的 migration 目标形成 approved set，并在执行前确认线上全部 pending migrations 与 approved set 完全一致。开发闭环固定为最小本地安全门、差异检查、源码同步、受影响服务构建、必要迁移、重启、API/容器/代码验证和结果汇报。
 
 线上验证失败不结束任务：必须定位根因、修改代码、只重跑受影响的最小本地安全门、重新精确发布并复验，直到 47 服务端和代码证据通过；若故障影响可用性、数据或权限安全，优先回滚/恢复后再修复。

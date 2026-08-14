@@ -4,6 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/47-release-lock.sh
 source "$SCRIPT_DIR/lib/47-release-lock.sh"
+# shellcheck source=lib/release-source-policy.sh
+source "$SCRIPT_DIR/lib/release-source-policy.sh"
 
 PUBLIC_URL="${SIYUAN_47_PUBLIC_URL:-http://47.120.33.111:8899}"
 SCOPE=""
@@ -54,6 +56,8 @@ while [[ "$#" -gt 0 ]]; do
       ;;
   esac
 done
+
+siyuan_47_assert_whitelist_release_source
 
 case "$SCOPE" in
   none|web|api|web+api|api+migrate|web+api+migrate) ;;

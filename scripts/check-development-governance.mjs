@@ -35,7 +35,13 @@ const requiredGovernanceFiles = [
   'scripts/docker-container-image-id.test.sh',
   'scripts/release-fingerprint-artifact-filter.test.sh',
   'scripts/lib/47-release-ssh.sh',
-  'scripts/release-ssh-policy.test.sh'
+  'scripts/release-ssh-policy.test.sh',
+  'scripts/lib/release-source-policy.sh',
+  'scripts/release-source-policy.test.sh',
+  'scripts/ci-affected.mjs',
+  'scripts/ci-affected.test.mjs',
+  '.github/workflows/ci.yml',
+  '.github/workflows/full-regression.yml'
 ];
 
 const failures = [];
@@ -123,6 +129,8 @@ const fingerprintScript = readFileSync('scripts/print-47-release-fingerprints.sh
 const resolveRecoveryScript = readFileSync('scripts/resolve-47-release-recovery.sh', 'utf8');
 const containerImageIdScript = readFileSync('scripts/lib/docker-container-image-id.sh', 'utf8');
 const runtimeManifestScript = readFileSync('scripts/capture-47-runtime-manifest.sh', 'utf8');
+const releaseSourcePolicyScript = readFileSync('scripts/lib/release-source-policy.sh', 'utf8');
+const provenanceAuditScript = readFileSync('scripts/audit-47-runtime-provenance.sh', 'utf8');
 if (!syncScript.includes("--exclude='node_modules'") || !syncScript.includes("--exclude='node_modules/'")) {
   failures.push('47 sync must exclude node_modules directories and root symlinks');
 }
@@ -132,6 +140,27 @@ if (/MIGRATE_CHANGED=true/.test(forceFullBlock)) {
 }
 if (!deployScript.includes('MIGRATION_REQUIRED=$DB_MIGRATION_REQUIRED')) {
   failures.push('deploy dry-run must print MIGRATION_REQUIRED');
+}
+if (!deployScript.includes('siyuan_47_assert_standard_release_source')
+  || !whitelistDeployScript.includes('siyuan_47_assert_whitelist_release_source')
+  || !releaseSourcePolicyScript.includes('main|codex/release/*')
+  || !releaseSourcePolicyScript.includes('SIYUAN_47_EMERGENCY_RELEASE')) {
+  failures.push('47 release entrypoints must enforce the unique main/release branch policy and explicit emergency CAS override');
+}
+for (const immutableImageGate of [
+  '--image-manifest',
+  'BUILD_MODE=',
+  'immutable-image-promotion',
+  'docker compose --profile tools pull',
+  'docker compose up -d --no-build',
+  'GHCR_DIGESTS',
+  'IMAGE_MANIFEST_SHA256='
+]) {
+  if (!deployScript.includes(immutableImageGate)) failures.push(`immutable image promotion is missing gate: ${immutableImageGate}`);
+}
+if (!provenanceAuditScript.includes('immutable-image-provenance-mismatch')
+  || !provenanceAuditScript.includes('GHCR_DIGESTS')) {
+  failures.push('runtime provenance must validate immutable GHCR digest evidence');
 }
 if (!deployScript.includes('state/docs-only synchronization completed successfully; runtime release state was preserved.')
   || !deployScript.includes('SOURCE_BUNDLE_PATH_ARG="${SOURCE_BUNDLE_PATH:-__SIYUAN_NONE__}"')
@@ -171,7 +200,6 @@ for (const sourceBundleGate of [
     failures.push(`GitHub-independent deploy is missing durable source bundle gate: ${sourceBundleGate}`);
   }
 }
-const provenanceAuditScript = readFileSync('scripts/audit-47-runtime-provenance.sh', 'utf8');
 const imageMismatchGateIndex = provenanceAuditScript.indexOf('if [[ -z "$web_image_expected"');
 const whitelistSourceGateIndex = provenanceAuditScript.indexOf('elif [[ "$source_mode" == WHITELIST_CAS ]]');
 if (imageMismatchGateIndex < 0 || whitelistSourceGateIndex < 0 || imageMismatchGateIndex > whitelistSourceGateIndex) {

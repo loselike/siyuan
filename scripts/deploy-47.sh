@@ -7,6 +7,8 @@ PUBLIC_URL="${SIYUAN_47_PUBLIC_URL:-http://47.120.33.111:8899}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/47-release-lock.sh
 source "$SCRIPT_DIR/lib/47-release-lock.sh"
+# shellcheck source=lib/release-source-policy.sh
+source "$SCRIPT_DIR/lib/release-source-policy.sh"
 MODE="apply"
 FORCE_FULL=false
 PRINT_FINGERPRINTS=false
@@ -21,6 +23,12 @@ CURRENT_BASELINE_CUTOVER=false
 SOURCE_BUNDLE_TMP=""
 SOURCE_BUNDLE_PATH=""
 SOURCE_BUNDLE_SHA256=""
+IMAGE_MANIFEST_FILE=""
+IMAGE_MANIFEST_SHA256=""
+PREBUILT_IMAGE_MODE=false
+PREBUILT_API_IMAGE=""
+PREBUILT_WEB_IMAGE=""
+PREBUILT_MIGRATE_IMAGE=""
 BOOTSTRAP_MIGRATION_EXCEPTION_FILE="config/release/47-legacy-migration-checksums.tsv"
 APPROVED_BOOTSTRAP_MANIFEST_DIR="docs/release-manifests/47/20260810-042420-runtime-stage-view-20260810020229"
 APPROVED_BOOTSTRAP_BUNDLE_SHA256="fb419d6d56e6ec807ebbb136a7ad8daa7791b9c94e8deb5eee192629cd0da4e4"
@@ -109,10 +117,23 @@ while [[ "$#" -gt 0 ]]; do
     --confirm-bootstrap) CONFIRM_BOOTSTRAP=true ;;
     --current-baseline-cutover) CURRENT_BASELINE_CUTOVER=true ;;
     --source-bundle) SOURCE_BUNDLE_MODE=true ;;
-    *) echo "Usage: npm run deploy:47 -- [--dry-run] [--full] [--lock-status] [--expected-release-id <id>] [--source-bundle] [--current-baseline-cutover --bootstrap-manifest <dir> --confirm-bootstrap]"; exit 2 ;;
+    --image-manifest)
+      IMAGE_MANIFEST_FILE="${2:-}"
+      shift
+      ;;
+    *) echo "Usage: npm run deploy:47 -- [--dry-run] [--full] [--lock-status] [--expected-release-id <id>] [--source-bundle] [--image-manifest <images.env>] [--current-baseline-cutover --bootstrap-manifest <dir> --confirm-bootstrap]"; exit 2 ;;
   esac
   shift
 done
+
+if [[ -n "$IMAGE_MANIFEST_FILE" ]]; then
+  if [[ -n "$BOOTSTRAP_MANIFEST_DIR" || "$CONFIRM_BOOTSTRAP" == true || "$CURRENT_BASELINE_CUTOVER" == true \
+    || "$SOURCE_BUNDLE_MODE" == true || ! -f "$IMAGE_MANIFEST_FILE" || -L "$IMAGE_MANIFEST_FILE" ]]; then
+    echo "Immutable image promotion requires a regular manifest and cannot be combined with bootstrap/source-bundle mode." >&2
+    exit 2
+  fi
+  PREBUILT_IMAGE_MODE=true
+fi
 
 if [[ -n "$EXPECTED_RELEASE_ID" && ! "$EXPECTED_RELEASE_ID" =~ ^[A-Za-z0-9._:-]+$ ]]; then
   echo "Expected release ID contains unsupported characters." >&2
@@ -151,6 +172,9 @@ if [[ "$CURRENT_BASELINE_CUTOVER" == true ]]; then
     exit 2
   fi
   APPROVED_BOOTSTRAP_MANIFEST_DIR="$BOOTSTRAP_MANIFEST_DIR"
+fi
+if [[ "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false ]]; then
+  siyuan_47_assert_standard_release_source "$MODE" "$CURRENT_BASELINE_CUTOVER"
 fi
 if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false && -z "$EXPECTED_RELEASE_ID" ]]; then
   echo "deploy:47 apply requires the baseline captured when this candidate started." >&2
@@ -311,6 +335,29 @@ GIT_COMMIT="$(git rev-parse HEAD)"
 GIT_BRANCH="$(git branch --show-current)"
 RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RELEASE_ID="git-${GIT_COMMIT:0:12}_web-${WEB_FINGERPRINT:0:12}_api-${API_FINGERPRINT:0:12}"
+if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
+  manifest_value() {
+    local key="$1"
+    sed -n "s/^$key=//p" "$IMAGE_MANIFEST_FILE"
+  }
+  if [[ "$(wc -l < "$IMAGE_MANIFEST_FILE" | tr -d ' ')" != 5 \
+    || "$(manifest_value FORMAT_VERSION)" != 1 \
+    || "$(manifest_value GIT_COMMIT)" != "$GIT_COMMIT" ]]; then
+    echo "Immutable image manifest does not describe the current Git commit." >&2
+    exit 88
+  fi
+  PREBUILT_API_IMAGE="$(manifest_value API_IMAGE)"
+  PREBUILT_MIGRATE_IMAGE="$(manifest_value MIGRATE_IMAGE)"
+  PREBUILT_WEB_IMAGE="$(manifest_value WEB_IMAGE)"
+  image_ref_pattern='^ghcr\.io/[a-z0-9._-]+/[a-z0-9._-]+@sha256:[0-9a-f]{64}$'
+  if [[ ! "$PREBUILT_API_IMAGE" =~ $image_ref_pattern \
+    || ! "$PREBUILT_MIGRATE_IMAGE" =~ $image_ref_pattern \
+    || ! "$PREBUILT_WEB_IMAGE" =~ $image_ref_pattern ]]; then
+    echo "Immutable image manifest contains an invalid digest reference." >&2
+    exit 88
+  fi
+  IMAGE_MANIFEST_SHA256="$(sha256_file "$IMAGE_MANIFEST_FILE")"
+fi
 if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false && ( ! "$GIT_COMMIT" =~ ^[0-9a-f]{40}$ || -z "$GIT_BRANCH" ) ]]; then
   echo "deploy:47 apply requires an attached Git branch and a full source commit." >&2
   exit 85
@@ -568,6 +615,7 @@ fi
 
 echo "RELEASE_SCOPE=$RELEASE_SCOPE"
 echo "MIGRATION_REQUIRED=$DB_MIGRATION_REQUIRED"
+echo "BUILD_MODE=$([[ "$PREBUILT_IMAGE_MODE" == true ]] && echo immutable-image-promotion || echo server-build)"
 echo "DIRTY_RUNTIME_COUNT=$DIRTY_RUNTIME_COUNT"
 echo "Release scope: web=$WEB_CHANGED api=$API_CHANGED migrate=$DB_MIGRATION_REQUIRED"
 if [[ -n "$SYNC_CHANGES" ]]; then
@@ -680,7 +728,9 @@ siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" "$REMOT
   "$REMOTE_DIR" "$WEB_CHANGED" "$API_CHANGED" "$DB_MIGRATION_REQUIRED" \
   "$WEB_FINGERPRINT" "$API_FINGERPRINT" "$MIGRATE_FINGERPRINT" "$RELEASE_ID" \
   "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
-  "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" <<'REMOTE_SCRIPT'
+  "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" \
+  "$PREBUILT_IMAGE_MODE" "${PREBUILT_API_IMAGE:-__SIYUAN_NONE__}" \
+  "${PREBUILT_WEB_IMAGE:-__SIYUAN_NONE__}" "${PREBUILT_MIGRATE_IMAGE:-__SIYUAN_NONE__}" <<'REMOTE_SCRIPT'
 set -euo pipefail
 REMOTE_DIR="$1"
 WEB_CHANGED="$2"
@@ -694,6 +744,10 @@ RELEASE_LOCK_DIR="$9"
 RELEASE_LOCK_TOKEN="${10}"
 BUILD_TIMEOUT_SECONDS="${11}"
 MIGRATION_TIMEOUT_SECONDS="${12}"
+PREBUILT_IMAGE_MODE="${13}"
+PREBUILT_API_IMAGE="${14}"
+PREBUILT_WEB_IMAGE="${15}"
+PREBUILT_MIGRATE_IMAGE="${16}"
 cd "$REMOTE_DIR"
 # shellcheck source=lib/47-release-images.sh
 source scripts/lib/47-release-images.sh
@@ -706,7 +760,13 @@ if [[ "$actual_lock_token" != "$RELEASE_LOCK_TOKEN" ]]; then
 fi
 export VITE_RELEASE_ID="$RELEASE_ID"
 export RELEASE_ID="$RELEASE_ID"
-siyuan_47_export_release_images "$RELEASE_ID"
+if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
+  export SIYUAN_API_IMAGE="$PREBUILT_API_IMAGE"
+  export SIYUAN_WEB_IMAGE="$PREBUILT_WEB_IMAGE"
+  export SIYUAN_MIGRATE_IMAGE="$PREBUILT_MIGRATE_IMAGE"
+else
+  siyuan_47_export_release_images "$RELEASE_ID"
+fi
 
 remote_fingerprints="$(bash scripts/print-47-release-fingerprints.sh)"
 remote_web="$(printf '%s\n' "$remote_fingerprints" | sed -n 's/^WEB_FINGERPRINT=//p')"
@@ -728,10 +788,17 @@ build_services=()
 [[ "$API_CHANGED" == true ]] && build_services+=(api)
 [[ "$WEB_CHANGED" == true ]] && build_services+=(web)
 if ((${#build_services[@]})); then
-  siyuan_47_record_release_phase build-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
-  SIYUAN_47_BUILD_TIMEOUT_SECONDS="$BUILD_TIMEOUT_SECONDS" BUILDKIT_PROGRESS=plain \
-    siyuan_47_run_bounded_build docker compose build "${build_services[@]}"
-  siyuan_47_record_release_phase build-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
+  if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
+    siyuan_47_record_release_phase artifact-pull-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
+    SIYUAN_47_BUILD_TIMEOUT_SECONDS="$BUILD_TIMEOUT_SECONDS" \
+      siyuan_47_run_bounded_build docker compose --profile tools pull "${build_services[@]}"
+    siyuan_47_record_release_phase artifact-pull-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
+  else
+    siyuan_47_record_release_phase build-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
+    SIYUAN_47_BUILD_TIMEOUT_SECONDS="$BUILD_TIMEOUT_SECONDS" BUILDKIT_PROGRESS=plain \
+      siyuan_47_run_bounded_build docker compose build "${build_services[@]}"
+    siyuan_47_record_release_phase build-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
+  fi
   siyuan_47_capture_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
   siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
 fi
@@ -750,7 +817,11 @@ restart_services=()
 if ((${#restart_services[@]})); then
   siyuan_47_record_release_phase restart-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
   siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
-  docker compose up -d --remove-orphans "${restart_services[@]}"
+  if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
+    docker compose up -d --no-build --remove-orphans "${restart_services[@]}"
+  else
+    docker compose up -d --remove-orphans "${restart_services[@]}"
+  fi
   siyuan_47_record_release_phase restart-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
 fi
 
@@ -781,12 +852,26 @@ SOURCE_PROVENANCE="ORIGIN_BRANCH"
 [[ "$SOURCE_BUNDLE_MODE" == true ]] && SOURCE_PROVENANCE="GIT_BUNDLE"
 SOURCE_BUNDLE_PATH_ARG="${SOURCE_BUNDLE_PATH:-__SIYUAN_NONE__}"
 SOURCE_BUNDLE_SHA256_ARG="${SOURCE_BUNDLE_SHA256:-__SIYUAN_NONE__}"
+BUILD_PROVENANCE_ARG="SERVER_BUILD"
+IMAGE_MANIFEST_SHA256_ARG="__SIYUAN_NONE__"
+PREBUILT_API_IMAGE_ARG="__SIYUAN_NONE__"
+PREBUILT_WEB_IMAGE_ARG="__SIYUAN_NONE__"
+PREBUILT_MIGRATE_IMAGE_ARG="__SIYUAN_NONE__"
+if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
+  BUILD_PROVENANCE_ARG="GHCR_DIGESTS"
+  IMAGE_MANIFEST_SHA256_ARG="$IMAGE_MANIFEST_SHA256"
+  PREBUILT_API_IMAGE_ARG="$PREBUILT_API_IMAGE"
+  PREBUILT_WEB_IMAGE_ARG="$PREBUILT_WEB_IMAGE"
+  PREBUILT_MIGRATE_IMAGE_ARG="$PREBUILT_MIGRATE_IMAGE"
+fi
 siyuan_47_release_phase state-write-start
 siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" "$REMOTE" bash -s -- \
   "$REMOTE_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" \
   "$WEB_FINGERPRINT" "$API_FINGERPRINT" "$MIGRATE_FINGERPRINT" "$RELEASE_ID" \
   "$GIT_COMMIT" "$GIT_BRANCH" "$RELEASED_AT" \
-  "$SOURCE_PROVENANCE" "$SOURCE_BUNDLE_PATH_ARG" "$SOURCE_BUNDLE_SHA256_ARG" <<'REMOTE_SCRIPT'
+  "$SOURCE_PROVENANCE" "$SOURCE_BUNDLE_PATH_ARG" "$SOURCE_BUNDLE_SHA256_ARG" \
+  "$BUILD_PROVENANCE_ARG" "$IMAGE_MANIFEST_SHA256_ARG" \
+  "$PREBUILT_API_IMAGE_ARG" "$PREBUILT_WEB_IMAGE_ARG" "$PREBUILT_MIGRATE_IMAGE_ARG" <<'REMOTE_SCRIPT'
 set -eu
 remote_dir="$1"
 lock_dir="$2"
@@ -801,8 +886,17 @@ released_at="${10}"
 source_provenance="${11}"
 source_bundle_path="${12}"
 source_bundle_sha256="${13}"
+build_provenance="${14}"
+image_manifest_sha256="${15}"
+prebuilt_api_image="${16}"
+prebuilt_web_image="${17}"
+prebuilt_migrate_image="${18}"
 [ "$source_bundle_path" != __SIYUAN_NONE__ ] || source_bundle_path=""
 [ "$source_bundle_sha256" != __SIYUAN_NONE__ ] || source_bundle_sha256=""
+[ "$image_manifest_sha256" != __SIYUAN_NONE__ ] || image_manifest_sha256=""
+[ "$prebuilt_api_image" != __SIYUAN_NONE__ ] || prebuilt_api_image=""
+[ "$prebuilt_web_image" != __SIYUAN_NONE__ ] || prebuilt_web_image=""
+[ "$prebuilt_migrate_image" != __SIYUAN_NONE__ ] || prebuilt_migrate_image=""
 # shellcheck source=lib/47-release-ssh.sh
 source "$remote_dir/scripts/lib/47-release-ssh.sh"
 siyuan_47_record_release_phase state-write-start "$lock_dir" "$expected_token"
@@ -871,6 +965,11 @@ API_FINGERPRINT=$api_fingerprint
 MIGRATE_FINGERPRINT=$migrate_fingerprint
 WEB_IMAGE_ID=$web_image_id
 API_IMAGE_ID=$api_image_id
+BUILD_PROVENANCE=$build_provenance
+IMAGE_MANIFEST_SHA256=$image_manifest_sha256
+API_IMAGE_REF=$prebuilt_api_image
+WEB_IMAGE_REF=$prebuilt_web_image
+MIGRATE_IMAGE_REF=$prebuilt_migrate_image
 RECEIPT
 if [ -e "$receipt_path" ]; then
   receipt_mode="$(stat -c '%a' "$receipt_path")"
@@ -907,6 +1006,11 @@ GIT_BUNDLE_PATH=$source_bundle_path
 GIT_BUNDLE_SHA256=$source_bundle_sha256
 WEB_IMAGE_ID=$web_image_id
 API_IMAGE_ID=$api_image_id
+BUILD_PROVENANCE=$build_provenance
+IMAGE_MANIFEST_SHA256=$image_manifest_sha256
+API_IMAGE_REF=$prebuilt_api_image
+WEB_IMAGE_REF=$prebuilt_web_image
+MIGRATE_IMAGE_REF=$prebuilt_migrate_image
 RELEASE_RECEIPT_PATH=.release-receipts/$release_id.env
 RELEASE_RECEIPT_SHA256=$receipt_sha256
 STATE

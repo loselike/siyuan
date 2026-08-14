@@ -1,0 +1,30 @@
+name: Sunny Full Regression
+
+on:
+  schedule:
+    - cron: '20 18 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sunny-full-regression
+  cancel-in-progress: false
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run prisma:generate -w @siyuan/api
+      - run: npm run typecheck
+      - run: npm run test:all:safe
+      - run: npm run governance:check
+

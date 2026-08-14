@@ -1,0 +1,124 @@
+name: Sunny CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sunny-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  affected:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Select and execute affected validation
+        env:
+          SIYUAN_CI_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || 'HEAD^' }}
+        run: node scripts/ci-affected.mjs --execute --base "$SIYUAN_CI_BASE" --timings "$RUNNER_TEMP/siyuan-ci-affected-timings.json"
+      - name: Upload timing evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: affected-validation-${{ github.sha }}
+          path: ${{ runner.temp }}/siyuan-ci-affected-timings.json
+          if-no-files-found: error
+          retention-days: 14
+
+  images:
+    needs: affected
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - name: Login to GHCR on main
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: api
+        name: Build API immutable image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.api
+          target: runner
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ghcr.io/${{ github.repository_owner }}/siyuan-api:git-${{ github.sha }}
+          cache-from: type=gha,scope=siyuan-api
+          cache-to: type=gha,mode=max,scope=siyuan-api
+          provenance: true
+          sbom: true
+      - id: migrate
+        name: Build migration immutable image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.api
+          target: prisma-runner
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ghcr.io/${{ github.repository_owner }}/siyuan-db-migrate:git-${{ github.sha }}
+          cache-from: type=gha,scope=siyuan-api
+          cache-to: type=gha,mode=max,scope=siyuan-api
+          provenance: true
+          sbom: true
+      - id: web
+        name: Build Web immutable image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.web
+          target: runner
+          build-args: |
+            VITE_API_BASE_URL=/api
+            VITE_RELEASE_ID=git-${{ github.sha }}
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: ghcr.io/${{ github.repository_owner }}/siyuan-web:git-${{ github.sha }}
+          cache-from: type=gha,scope=siyuan-web
+          cache-to: type=gha,mode=max,scope=siyuan-web
+          provenance: true
+          sbom: true
+      - name: Write immutable release manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          API_DIGEST: ${{ steps.api.outputs.digest }}
+          MIGRATE_DIGEST: ${{ steps.migrate.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web.outputs.digest }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/siyuan-release"
+          {
+            printf 'FORMAT_VERSION=1\n'
+            printf 'GIT_COMMIT=%s\n' "$GITHUB_SHA"
+            printf 'API_IMAGE=ghcr.io/%s/siyuan-api@%s\n' "$GITHUB_REPOSITORY_OWNER" "$API_DIGEST"
+            printf 'MIGRATE_IMAGE=ghcr.io/%s/siyuan-db-migrate@%s\n' "$GITHUB_REPOSITORY_OWNER" "$MIGRATE_DIGEST"
+            printf 'WEB_IMAGE=ghcr.io/%s/siyuan-web@%s\n' "$GITHUB_REPOSITORY_OWNER" "$WEB_DIGEST"
+          } > "$RUNNER_TEMP/siyuan-release/images.env"
+      - name: Upload immutable image manifest
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-images-${{ github.sha }}
+          path: ${{ runner.temp }}/siyuan-release/images.env
+          if-no-files-found: error
+          retention-days: 30
+
