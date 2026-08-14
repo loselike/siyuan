@@ -21,6 +21,10 @@
     "./customer-source": {
       "types": "./dist/customer-source.d.ts",
       "import": "./dist/customer-source.js"
+    },
+    "./warehouse": {
+      "types": "./dist/warehouse.d.ts",
+      "import": "./dist/warehouse.js"
     }
   },
   "scripts": {

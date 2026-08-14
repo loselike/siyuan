@@ -19,6 +19,7 @@ import {
 } from '../warehouse-query.shared.js';
 import { resolveWarehouseTodayRange } from '../warehouse-domain.shared.js';
 import { queryWarehouseInStockAggregate } from './warehouse-in-stock-aggregate.query.js';
+import { getWarehouseInStockSummary } from './warehouse-in-stock-summary.query.js';
 
 export const WAREHOUSE_INVENTORY_QUERY_REPOSITORY = 'WAREHOUSE_INVENTORY_QUERY_REPOSITORY';
 export const WAREHOUSE_INVENTORY_QUERY_AUTHORIZER = 'WAREHOUSE_INVENTORY_QUERY_AUTHORIZER';
@@ -231,7 +232,7 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   }
 
   getWarehouseInStockSummary(principal: Principal) {
-    return this.requireLegacyRepository().getWarehouseInStockSummary(principal);
+    return getWarehouseInStockSummary(this.prisma, this.authorizer, principal);
   }
 
   async getWarehousePackageGroups(principal: Principal): Promise<WarehousePackageGroupSummary[]> {

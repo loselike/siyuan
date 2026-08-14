@@ -52,17 +52,54 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
   it('keeps legacy warehouse reads behind the new repository port during migration', async () => {
     const legacyRepository = {
       getWarehouseTodayReceipts: vi.fn().mockResolvedValue({ rows: ['today'] }),
-      getWarehouseInStock: vi.fn().mockResolvedValue({ rows: ['in-stock'] }),
-      getWarehouseInStockSummary: vi.fn().mockResolvedValue({ totals: { receiptTickets: 1 } })
+      getWarehouseInStock: vi.fn().mockResolvedValue({ rows: ['in-stock'] })
     };
     const repository = createRepository({}, legacyRepository);
 
     await expect(repository.getWarehouseTodayReceipts(admin, { customerOrderNo: '9476' })).resolves.toEqual({ rows: ['today'] });
     await expect(repository.getWarehouseInStock(admin, { keyword: 'SF9476' })).resolves.toEqual({ rows: ['in-stock'] });
-    await expect(repository.getWarehouseInStockSummary(admin)).resolves.toEqual({ totals: { receiptTickets: 1 } });
     expect(legacyRepository.getWarehouseTodayReceipts).toHaveBeenCalledWith(admin, { customerOrderNo: '9476' });
     expect(legacyRepository.getWarehouseInStock).toHaveBeenCalledWith(admin, { keyword: 'SF9476' });
-    expect(legacyRepository.getWarehouseInStockSummary).toHaveBeenCalledWith(admin);
+  });
+
+  it('runs the extracted summary strategy from the Prisma adapter', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([{
+      totalItems: 2n,
+      receiptTickets: 1n,
+      totalPackages: 3n,
+      totalWeightKg: 25,
+      totalCbm: 0.08,
+      pendingTallyTickets: 1n,
+      exceptionTickets: 1n
+    }]);
+    const auditCreate = vi.fn().mockResolvedValue({});
+    const legacySummary = vi.fn().mockResolvedValue({ totals: { receiptTickets: 999 } });
+    const repository = createRepository({
+      $queryRaw: queryRaw,
+      shipment: { count: vi.fn().mockResolvedValue(3) },
+      auditLog: { create: auditCreate },
+      customer: { findMany: vi.fn() }
+    }, { getWarehouseInStockSummary: legacySummary });
+
+    await expect(repository.getWarehouseInStockSummary(admin)).resolves.toEqual({
+      totals: {
+        receiptTickets: 1,
+        totalPackages: 3,
+        totalWeightKg: 25,
+        totalCbm: 0.08,
+        waitingDispatchTickets: 3,
+        pendingTallyTickets: 1,
+        exceptionTickets: 1
+      }
+    });
+    expect(legacySummary).not.toHaveBeenCalled();
+    expect(auditCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: 'warehouse.in_stock.view',
+        target: 'warehouse:in-stock',
+        after: { query: {}, rowCount: 2 }
+      })
+    }));
   });
 
   it('keeps package ordering, confirmed tally state and response mapping unchanged', async () => {

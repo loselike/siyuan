@@ -485,7 +485,7 @@ import {
   resolveWarehouseTallyRecentCutoff
 } from './warehouse/warehouse-query.shared.js';
 import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
-import { queryWarehouseInStockAggregate } from './warehouse/inventory/warehouse-in-stock-aggregate.query.js';
+import { getWarehouseInStockSummary } from './warehouse/inventory/warehouse-in-stock-summary.query.js';
 import {
   allPermissions,
   buildRolePermissionRow,
@@ -8289,52 +8289,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getWarehouseInStockSummary(principal: Principal): Promise<Pick<WarehouseInStockResponse, 'totals'>> {
-    if (!(await this.hasAnyPermission(principal.role, ['warehouse:dashboard:view', 'warehouse:in-stock:view']))) {
-      throw new ForbiddenException('当前角色不能查看仓库看板或在仓汇总');
-    }
-    const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
-    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
-    const salespeople = principal.departmentTeamScope?.filter(Boolean).length
-      ? principal.departmentTeamScope!.filter(Boolean)
-      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
-    const ownedCustomerCodes = businessCustomerScoped
-      ? (await this.prisma.customer.findMany({
-          where: { salesperson: { in: salespeople } },
-          select: { code: true }
-        })).map((customer) => customer.code)
-      : undefined;
-    const [aggregate, waitingDispatchTickets] = await Promise.all([
-      queryWarehouseInStockAggregate(this.prisma, {
-        status: 'RECEIVED',
-        ...(ownedCustomerCodes ? { customerCode: { in: ownedCustomerCodes } } : {})
-      }, businessCustomerScoped ? salespeople : undefined),
-      this.prisma.shipment.count({
-        where: {
-          status: 'WAITING_DISPATCH',
-          ...(businessCustomerScoped ? { customer: { salesperson: { in: salespeople } } } : {})
-        }
-      })
-    ]);
-    const response = {
-      totals: {
-        receiptTickets: aggregate.receiptTickets,
-        totalPackages: aggregate.totalPackages,
-        totalWeightKg: aggregate.totalWeightKg,
-        totalCbm: aggregate.totalCbm,
-        waitingDispatchTickets,
-        pendingTallyTickets: aggregate.pendingTallyTickets,
-        exceptionTickets: aggregate.exceptionTickets
-      }
-    };
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'warehouse.in_stock.view',
-        target: 'warehouse:in-stock',
-        after: toAuditJson({ query: {}, rowCount: aggregate.totalItems })
-      }
-    });
-    return response;
+    return getWarehouseInStockSummary(this.prisma, this, principal);
   }
 
   async assertWarehouseManualReceiptCustomer(principal: Principal, customerCode?: string, db: any = this.prisma) {
