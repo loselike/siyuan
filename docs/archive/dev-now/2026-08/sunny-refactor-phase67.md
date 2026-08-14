@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 67
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase67`
 - 基线提交：`970b0b1`
 - 用户验收目标：每轮重新扫描并选择最高 ROI；所有既有业务逻辑保持不变。
@@ -43,7 +43,6 @@
 
 ## 下一步
 
-1. 运行全局字段、仓库聚合/问题件、生命周期与市场应付定向回归。
-2. 执行治理门、迁移集合只读核对和 Review；提交并推送干净候选。
-3. 锁内执行 current-baseline cutover，恢复 Git bundle provenance；线上复核 health、镜像/state、业务只读样本、锁和 recovery。
-4. 发布后重新扫描安全/数据、前端数据流、后端架构、UI 四类候选并重新排序。
+1. 已提交并推送 `d8760b1a827b501f575bc233e1fb225a86986ea3`，锁内 current-baseline cutover 发布为 `git-d8760b1a827b_web-d83509e7b062_api-71777427f952`；没有执行迁移或写生产业务数据。
+2. 发布后 provenance 为 `traceable / GIT_SOURCE_BUILD / GIT_BUNDLE`，Web/API 镜像、API release ID、state 全部匹配；源码 518/518 一致，公网 health 200，仓库在仓分页管理员只读探针 200，新问题件重启路由匿名 401、旧已完成取消路由 404，迁移/新旧权限码计数为 `1|6|0`，锁 free、recovery clear。
+3. 重新扫描发现当前最高优先级已转向 P0 用户体验故障：业务经理在 `/app/master` 与 `/app/master/customers` 持续触发 `Cannot read properties of undefined (reading 'filter')`，由已上线的客户端错误遥测直接证明。该问题属于当前 47 既有运行树，不归因于逐字节 cutover，但必须立即进入独立修复轮次，不能继续做架构拆分。
