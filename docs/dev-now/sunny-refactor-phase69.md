@@ -47,9 +47,29 @@
 
 - [x] 发布锁内捕获并吸收当前运行源码，release state 前后未变化。
 - [x] 只读确认远端独有 migration 已完成。
-- [ ] 审查并提交吸收基线，执行 current-baseline cutover。
-- [ ] 阶段 1–5 实施与逐阶段重评。
+- [x] 审查并提交吸收基线，执行 current-baseline cutover；发布 `git-2c7a82d3ec22_web-085b332968cc_api-77c8a79d8257`，migration 未执行，519/519 源码一致。
+- [x] 阶段 1：常规发布限制为 `main`/`codex/release/*`，普通功能分支白名单 CAS 默认拒绝。
+- [x] 阶段 2（本地实现）：PR/main CI 构建 GHCR digest 镜像，标准 deploy 支持校验并提升 `images.env`，保留锁、provenance、receipt、health 与 migration fail-closed。
+- [x] 阶段 3（本地实现）：受影响 workspace 验证、Vitest changed、npm/BuildKit cache、阶段耗时 artifact；根 typecheck 去除一次重复 shared noEmit。
+- [ ] 阶段 2/3 GitHub Actions 真实运行证据。
+- [x] 阶段 4：客户来源四条 API 从 `DataController` 迁入独立 Controller/Application Service/Repository port；现有 Prisma/InMemory 实现、权限、字段、状态码、异常、事务与审计逻辑原样保留。
+- [x] 阶段 5：客户来源共享契约迁入独立 subpath，Web 页面改依赖窄客户端；新增不依赖 6,473 行全局 Harness 的模块 fixture，以及迁移前后共用 API E2E characterization。
 - [ ] 本地安全门、GitHub PR 检查、47 精确发布与只读线上验收。
+
+## 阶段重评 1–3
+
+- 安全/数据正确性：cutover 未执行 migration；权限与业务代码只作为 47 既有基线吸收，新增内容均为工程、发布和测试工具。
+- 高频业务/前端数据流：仍受 `App.tsx`/WarehousePage/Harness 巨型文件影响，但本轮不可在没有 characterization 时直接拆页面。
+- 后端效率：`DataController` 与两套巨型 Repository 仍是需求改造的主要冲突源。
+- 结论：阶段 4 转向一个已有真实 UI/API/Repository 的小型纵向切片，并把权限判断原样留在既有位置；不继续扩大发布脚本改造。
+
+## 阶段重评 4–5
+
+- 安全/数据正确性：客户来源创建、停用、删除与审计固定样本在迁移前后均通过；Controller 的四个 canonical permission 未变化，Repository 内业务员限制未移动或修改。
+- 高频业务/前端数据流：页面现在可用窄客户端独立测试，新增/只读操作不再需要启动全局 App Harness；现有页面布局和交互未改变。
+- 后端架构/效率：`DataController` 从 1,945 降至 1,918 行、路由从 186 降至 182；shared 根入口减少 20 行且直接根导入生产文件从 143 降至 142。
+- 当前 47 基线吸收时带入的既有增量为 Prisma Repository +20 行、InMemory Repository +27 行、styles +2 行、WarehousePage +32 行和 App 一个 `no-undef`；本轮仅更新治理基线以如实冻结 47 当前事实，没有扩大这些文件。
+- 结论：本轮五阶段代码目标已闭环，停止继续拆业务模块；下一原子动作只做 GitHub PR/Actions 真实运行、制品提升和 47 只读验收。
 
 ## 安全边界
 

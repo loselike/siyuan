@@ -54,6 +54,9 @@ import { MiscFeeService } from './finance/misc-fee/misc-fee.service.js';
 import { InMemoryRepository } from './in-memory.repository.js';
 import { LineageWatcher } from './lineage-watcher.js';
 import { LineageQueryController } from './lineage-query.controller.js';
+import { CustomerSourceController } from './master-data/customer-source/customer-source.controller.js';
+import { CUSTOMER_SOURCE_REPOSITORY } from './master-data/customer-source/customer-source.repository.js';
+import { CustomerSourceService } from './master-data/customer-source/customer-source.service.js';
 import { MasterDataChannelQueryController } from './master-data/channel/master-data-channel-query.controller.js';
 import { MasterDataReferenceQueryController } from './master-data-reference-query.controller.js';
 import { AnnouncementController, NotificationController, NotificationOperationsController } from './notifications/notification.controller.js';
@@ -279,6 +282,11 @@ const problemTicketTagRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
+const customerSourceRepositoryProvider = {
+  provide: CUSTOMER_SOURCE_REPOSITORY,
+  useExisting: PrismaRepository
+};
+
 const problemTicketCommandRepositoryProvider = {
   provide: PROBLEM_TICKET_COMMAND_REPOSITORY,
   useExisting: PrismaRepository
@@ -361,6 +369,7 @@ const systemIdentityAdminRepositoryProvider = {
     CustomerServiceDataConfirmController,
     ProblemTicketCommandController,
     ProblemTicketTagController,
+    CustomerSourceController,
     FinanceCatalogController,
     PayerBankAccountController,
     FinanceReceivableController,
@@ -412,6 +421,8 @@ const systemIdentityAdminRepositoryProvider = {
     problemTicketCommandRepositoryProvider,
     ProblemTicketTagService,
     problemTicketTagRepositoryProvider,
+    CustomerSourceService,
+    customerSourceRepositoryProvider,
     PayerBankAccountService,
     FinanceReceivableService,
     WaterReceiptAllocationService,

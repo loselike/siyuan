@@ -17,6 +17,10 @@
     "./problem-ticket": {
       "types": "./dist/problem-ticket.d.ts",
       "import": "./dist/problem-ticket.js"
+    },
+    "./customer-source": {
+      "types": "./dist/customer-source.d.ts",
+      "import": "./dist/customer-source.js"
     }
   },
   "scripts": {

@@ -36,8 +36,6 @@ import type {
   CustomerContactCreateInput,
   CustomerContactUpdateInput,
   CustomerCreateInput,
-  CustomerSourceInput,
-  CustomerSourceListQuery,
   CustomerUpdateInput,
   CustomerUserCreateInput,
   EnabledUpdateInput,
@@ -758,31 +756,6 @@ export class DataController {
   @RequirePermission('master-data:customers:read')
   async masterDataCustomers(@Req() request: { user: Principal }) {
     return this.scopeMasterDataCustomers(request.user, await this.repository.getMasterData()).customers;
-  }
-
-  @Get('master-data/customer-sources')
-  @RequirePermission('master-data:customers:read')
-  async masterDataCustomerSources(@Query('keyword') keyword?: string, @Query('enabledOnly') enabledOnly?: string) {
-    const query: CustomerSourceListQuery = { keyword, enabledOnly: enabledOnly === 'true' };
-    return this.repository.listCustomerSources(query);
-  }
-
-  @Post('master-data/customer-sources')
-  @RequirePermission('master-data:customers:create')
-  async createMasterDataCustomerSource(@Req() request: { user: Principal }, @Body() body: CustomerSourceInput) {
-    return this.repository.createCustomerSource(request.user, body);
-  }
-
-  @Put('master-data/customer-sources/:id')
-  @RequirePermission('master-data:customers:update')
-  async updateMasterDataCustomerSource(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: Partial<CustomerSourceInput>) {
-    return this.repository.updateCustomerSource(request.user, id, body);
-  }
-
-  @Delete('master-data/customer-sources/:id')
-  @RequirePermission('master-data:customers:delete')
-  async deleteMasterDataCustomerSource(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteCustomerSource(request.user, id);
   }
 
   @Post('master-data/customers')

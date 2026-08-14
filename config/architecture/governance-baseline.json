@@ -105,12 +105,12 @@
       "DataController.deleteMasterDataChannel"
     ],
     [
-      "DELETE /master-data/customer-sources/:id @ DataController.deleteMasterDataCustomerSource",
+      "DELETE /master-data/customer-sources/:id @ CustomerSourceController.delete",
       "permission",
       [
         "master-data:customers:delete"
       ],
-      "DataController.deleteMasterDataCustomerSource"
+      "CustomerSourceController.delete"
     ],
     [
       "DELETE /master-data/customers/:id @ DataController.deleteMasterDataCustomer",
@@ -545,12 +545,12 @@
       "MasterDataChannelQueryController.masterDataChannels"
     ],
     [
-      "GET /master-data/customer-sources @ DataController.masterDataCustomerSources",
+      "GET /master-data/customer-sources @ CustomerSourceController.list",
       "permission",
       [
         "master-data:customers:read"
       ],
-      "DataController.masterDataCustomerSources"
+      "CustomerSourceController.list"
     ],
     [
       "GET /master-data/customers @ DataController.masterDataCustomers",
@@ -2021,12 +2021,12 @@
       "DataController.batchDeleteMasterDataChannels"
     ],
     [
-      "POST /master-data/customer-sources @ DataController.createMasterDataCustomerSource",
+      "POST /master-data/customer-sources @ CustomerSourceController.create",
       "permission",
       [
         "master-data:customers:create"
       ],
-      "DataController.createMasterDataCustomerSource"
+      "CustomerSourceController.create"
     ],
     [
       "POST /master-data/customers @ DataController.createMasterDataCustomer",
@@ -3291,12 +3291,12 @@
       "DataController.updateMasterDataChannelEnabled"
     ],
     [
-      "PUT /master-data/customer-sources/:id @ DataController.updateMasterDataCustomerSource",
+      "PUT /master-data/customer-sources/:id @ CustomerSourceController.update",
       "permission",
       [
         "master-data:customers:update"
       ],
-      "DataController.updateMasterDataCustomerSource"
+      "CustomerSourceController.update"
     ],
     [
       "PUT /master-data/customers/:id @ DataController.updateMasterDataCustomer",
@@ -3550,11 +3550,11 @@
     ]
   ],
   "debt": {
-    "dataControllerRoutesMax": 186,
+    "dataControllerRoutesMax": 182,
     "apiClientMethodsMax": 365,
     "apiClientDirectRequestsMax": 341,
-    "sharedRootImportFilesMax": 143,
-    "asAnyMax": 921,
+    "sharedRootImportFilesMax": 142,
+    "asAnyMax": 919,
     "directProcessEnvMax": 36,
     "dependencyCyclesMax": 0,
     "knownOrphanCandidates": [
@@ -3572,14 +3572,14 @@
     "prismaRepositoryMethodsMax": 718,
     "inMemoryRepositoryMethodsMax": 601,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 32129,
-      "apps/api/src/modules/in-memory.repository.ts": 19460,
-      "apps/api/src/modules/data.controller.ts": 1945,
-      "packages/shared/src/index.ts": 6339,
+      "apps/api/src/modules/prisma.repository.ts": 32149,
+      "apps/api/src/modules/in-memory.repository.ts": 19487,
+      "apps/api/src/modules/data.controller.ts": 1918,
+      "packages/shared/src/index.ts": 6319,
       "apps/web/src/apiClient.ts": 2562,
-      "apps/web/src/styles.css": 13220,
+      "apps/web/src/styles.css": 13222,
       "apps/web/src/modules/testSupport/appTestHarness.tsx": 6473,
-      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4876,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4908,
       "apps/web/src/modules/pricing/PricingPage.tsx": 3699,
       "apps/web/src/modules/masterData/MasterDataPage.tsx": 3281
     }
@@ -3671,7 +3671,8 @@
           "error:no-undef": 2
         },
         "src/App.tsx": {
-          "error:@typescript-eslint/no-unused-vars": 3
+          "error:@typescript-eslint/no-unused-vars": 3,
+          "error:no-undef": 1
         },
         "src/apiClient.ts": {
           "error:@typescript-eslint/no-unused-vars": 2,
