@@ -56,8 +56,11 @@ const commands = [];
 const add = (label, command, commandArgs) => commands.push({ label, command, args: commandArgs });
 const addShell = (label, shell) => commands.push({ label, shell });
 add('diff-check', 'git', ['diff', '--check', base, 'HEAD']);
-if (api || web || shared) add('shared-build', 'npm', ['run', 'build', '-w', '@siyuan/shared']);
-if (prisma || api) add('prisma-generate', 'npm', ['run', 'prisma:generate', '-w', '@siyuan/api']);
+// Governance includes the security contract test, which imports Prisma and the
+// built Shared package even when the changed files are only workflow/scripts.
+// Keep those prerequisites in the plan so a governance-only PR is reproducible.
+if (api || web || shared || governance) add('shared-build', 'npm', ['run', 'build', '-w', '@siyuan/shared']);
+if (prisma || api || governance) add('prisma-generate', 'npm', ['run', 'prisma:generate', '-w', '@siyuan/api']);
 if (api) add('api-typecheck', 'npm', ['run', 'typecheck', '-w', '@siyuan/api']);
 if (web) add('web-typecheck', 'npm', ['run', 'typecheck', '-w', '@siyuan/web']);
 const selection = JSON.parse(execFileSync(process.execPath, [selectorPath, '--json', ...paths], { encoding: 'utf8' }));
