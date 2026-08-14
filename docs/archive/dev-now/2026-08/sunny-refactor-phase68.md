@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 68
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase68-release`
 - 基线提交：`9ca60ca`
 - 用户验收目标：恢复业务经理基础资料页面可用性；不弱化全局敏感字段屏蔽，不改变其他业务逻辑。
@@ -38,7 +38,7 @@
 
 ## 下一步
 
-1. 执行全局字段规则定向测试、API/Web 类型检查与治理门。
-2. 对安全泄露、其他路由漂移和前端契约做 Review。
-3. 精确发布 API；用同一业务经理角色复核 200、两个空数组及新 release 的错误遥测。
-4. 发布后重新扫描全局候选并重新排序。
+1. 已发布 API 版本 `git-45d0cbc8bbc1_web-d83509e7b062_api-5db26f1e8860`；同一业务经理角色返回 200，`agents`/`agentChannels` 均存在且长度为 0，意外敏感键计数为 0。
+2. 发布后 3 分钟内该 `undefined.filter` 客户端错误计数为 0；页面崩溃的服务端数据契约根因已关闭。
+3. 本轮发布完成后，另一会话在全局锁内同步 8 个仓库/前端文件并重建 Web/API；当前源码仍保留本轮 Interceptor 修复，同一角色复核继续通过，但运行 state 已变为 `whitelist-28cf7242a3078ec55c5692df`，容器使用无 release tag 镜像且 health release ID 为 `unknown`，provenance 审计为 mismatch。
+4. 全局重评因此转向发布正确性：下一轮必须先逐字节吸收这 8 个并发改动、审查其业务影响并恢复 Git/image/state provenance，不能直接用本分支覆盖它们。
