@@ -7,6 +7,10 @@ export function isWorkspaceScopeCurrent(currentScopeKey: string, expectedScopeKe
   return currentScopeKey === expectedScopeKey;
 }
 
+export function workspaceScopeKeyForGeneration(authorizationScopeKey: string, generation: number): string {
+  return `${authorizationScopeKey}|generation:${generation}`;
+}
+
 export function writeIfWorkspaceScopeCurrent(
   currentScopeKey: string,
   expectedScopeKey: string,
