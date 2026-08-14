@@ -1,6 +1,6 @@
 # Sunny Phase97：非仓库运单消费者授权范围隔离
 
-- 状态：ready_for_release
+- 状态：completed
 - 任务边界：在不修改业务数据、系统数据、权限定义、数据库结构、迁移或 API 业务语义的前提下，收紧 App 内工作区快照、表单、下载和异步副作用的授权范围边界。
 - 用户验收目标：角色、团队、站点、客户归属或权限范围变化后，财务、客服、客户门户、轨迹导入、全局运单入口、表单和文件下载不能继续读取或写回上一范围的数据；同一固定业务功能的接口、权限、状态、金额、审计和持久化语义保持不变。
 
@@ -33,5 +33,20 @@ Phase96 已隔离 `WarehousePage`，但全局扫描发现 App 仍把未校验 `l
 ## 发布边界
 
 - 发布范围为 `web` + `api`：API HMAC 摘要和 Web scope fencing 均需部署；无 Prisma schema/migration 变化，不运行 `db-migrate`，不得写入 47 业务数据或系统数据。
-- 发布前需从干净集成 worktree 捕获 47 baseline、仅纳入本分支白名单文件并通过 release lock；发布后核对 Web/API 镜像与源码 provenance、health、锁/recovery，并使用只读页面相关接口或容器内身份确认允许/拒绝路径。
+- 已从干净集成 worktree 捕获 47 baseline，并通过 release lock 精确发布；发布后核对 Web/API 镜像与源码 provenance、health、锁/recovery。
 - 浏览器视觉与真实角色切换仍由用户在 47 人工检查。
+
+## 发布与线上证据（2026-08-15）
+
+- 集成分支：`codex/release/phase97-integrate`；候选提交：`75e27680972230e712b4291e10c126b8cfb07623`。
+- 发布范围：`web+api`；`MIGRATION_REQUIRED=false`，未执行迁移，未写入业务数据、系统数据或权限数据。
+- 运行版本：`git-75e276809722_web-cc5318aa9692_api-fb50f8dc1ab0`；API/Web 镜像均由该 Git 提交在 47 构建。
+- 发布阶段：server build、API/Web 重启、容器 health、公网 health 全部成功；公网 `/api/health` 返回 `ok=true`，首页 HTTP 200。
+- 发布后 provenance：`traceable`，`WEB_IMAGE_MATCH=true`、`API_IMAGE_MATCH=true`、`API_RELEASE_ID_MATCH=true`；release lock 为 `free`，recovery 为 `clear`。
+- 独立高风险审查在发布前未发现 P0/P1；P2 为未挂载 AntD Form 警告、缺少 App 级 A→B 组件 characterization、同 scope 不同请求代际陈旧响应，不影响本切片发布结论。
+
+## 未验证项与后续
+
+- 未做浏览器视觉验收；用户需在 47 人工检查仓库/业务/客服/财务页面的范围切换、表单清空、发票和单件明细下载。
+- 后续可补 3 条 App 级 deferred characterization，并为同一授权范围增加单调 request generation，避免 A→B→A 时旧请求覆盖同范围新请求。
+- 下一个重构切片需重新比较安全/数据流/架构效率/UI 四类候选，不默认继续扩大本切片。
