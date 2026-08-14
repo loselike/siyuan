@@ -50,7 +50,7 @@ describe('PrismaRepository warehouse in-stock summary', () => {
     const business: Principal = {
       id: 'u-business',
       username: 'operator',
-      role: 'OPERATOR',
+      role: 'FINANCE',
       departmentTeamScope: ['operator', 'teammate']
     };
     const customerFindMany = vi.fn().mockResolvedValue([{ code: 'C001' }, { code: 'C002' }]);
@@ -91,8 +91,8 @@ describe('PrismaRepository warehouse in-stock summary', () => {
     });
   });
 
-  it('keeps an empty business customer scope empty inside the aggregate statement', async () => {
-    const business: Principal = { id: 'u-empty', username: 'nobody', role: 'OPERATOR' };
+  it('keeps an empty customer scope empty inside the aggregate statement', async () => {
+    const business: Principal = { id: 'u-empty', username: 'nobody', role: 'FINANCE' };
     const queryRaw = vi.fn().mockResolvedValue([{
       totalItems: 0n,
       receiptTickets: 0n,
