@@ -2,9 +2,14 @@ FROM docker.m.daocloud.io/library/node:22-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
-COPY apps/web/package.json apps/web/package.json
 COPY packages/shared/package.json packages/shared/package.json
-RUN npm ci
+RUN --mount=type=cache,id=siyuan-api-npm,target=/root/.npm,sharing=locked \
+  npm ci \
+    --workspace=@siyuan/api \
+    --workspace=@siyuan/shared \
+    --include-workspace-root=false \
+    --no-audit \
+    --no-fund
 
 FROM deps AS build
 COPY tsconfig.base.json ./
