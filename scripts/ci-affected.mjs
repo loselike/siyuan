@@ -3,6 +3,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const execute = args.includes('--execute');
@@ -13,6 +14,7 @@ const base = baseIndex >= 0 ? args[baseIndex + 1] : process.env.SIYUAN_CI_BASE |
 const timingPath = timingIndex >= 0
   ? resolve(args[timingIndex + 1])
   : resolve(process.env.RUNNER_TEMP || '/tmp', 'siyuan-ci-affected-timings.json');
+const selectorPath = fileURLToPath(new URL('./select-validation.mjs', import.meta.url));
 
 function changedPaths() {
   try {
@@ -52,14 +54,17 @@ const governance = rootRuntime || paths.some((path) =>
 
 const commands = [];
 const add = (label, command, commandArgs) => commands.push({ label, command, args: commandArgs });
+const addShell = (label, shell) => commands.push({ label, shell });
 add('diff-check', 'git', ['diff', '--check', base, 'HEAD']);
 if (api || web || shared) add('shared-build', 'npm', ['run', 'build', '-w', '@siyuan/shared']);
 if (prisma || api) add('prisma-generate', 'npm', ['run', 'prisma:generate', '-w', '@siyuan/api']);
 if (api) add('api-typecheck', 'npm', ['run', 'typecheck', '-w', '@siyuan/api']);
 if (web) add('web-typecheck', 'npm', ['run', 'typecheck', '-w', '@siyuan/web']);
-if (shared) add('shared-tests', 'npm', ['run', 'test:shared:safe', '--', '--changed', base]);
-if (api) add('api-tests', 'npm', ['run', 'test:api:safe', '--', '--changed', base]);
-if (web) add('web-tests', 'npm', ['run', 'test:web:safe', '--', '--changed', base]);
+const selection = JSON.parse(execFileSync(process.execPath, [selectorPath, '--json', ...paths], { encoding: 'utf8' }));
+const concreteEffects = [...new Set(selection.effect.filter((command) => (
+  !command.includes('<') && command !== 'npm run governance:check'
+)))];
+for (const [index, command] of concreteEffects.entries()) addShell(`effect-${index + 1}`, command);
 if (governance) add('governance', 'npm', ['run', 'governance:check']);
 if (!api && !web && !shared && !governance) add('context-governance', 'npm', ['run', 'context:check']);
 
@@ -67,7 +72,11 @@ const plan = {
   base,
   paths,
   scopes: { shared, api, web, prisma, governance },
-  commands: commands.map(({ label, command, args: commandArgs }) => ({ label, command: [command, ...commandArgs].join(' ') }))
+  validationRules: selection.rules,
+  commands: commands.map((item) => ({
+    label: item.label,
+    command: item.shell ?? [item.command, ...item.args].join(' ')
+  }))
 };
 
 if (!execute) {
@@ -79,7 +88,9 @@ const startedAt = new Date().toISOString();
 const timings = [];
 for (const item of commands) {
   const start = performance.now();
-  const result = spawnSync(item.command, item.args, { stdio: 'inherit', env: process.env });
+  const result = item.shell
+    ? spawnSync('/bin/sh', ['-lc', item.shell], { stdio: 'inherit', env: process.env })
+    : spawnSync(item.command, item.args, { stdio: 'inherit', env: process.env });
   const durationMs = Math.round(performance.now() - start);
   timings.push({ label: item.label, durationMs, exitCode: result.status ?? 1 });
   if (result.status !== 0) {

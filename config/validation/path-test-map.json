@@ -35,6 +35,22 @@
       "safety": ["npm run typecheck", "npm run governance:check"]
     },
     {
+      "id": "customer-source",
+      "patterns": [
+        "apps/api/src/modules/master-data/customer-source/**",
+        "apps/web/src/modules/masterData/CustomerSourcesPage.tsx",
+        "apps/web/src/modules/masterData/CustomerSourcesPage.test.tsx",
+        "apps/web/src/modules/masterData/customerSourceClient.ts",
+        "packages/shared/src/customer-source.ts"
+      ],
+      "risk": "permission-and-audit-boundary",
+      "effect": [
+        "npm run test:api:safe -- --run src/modules/master-data/customer-source/customer-source.service.test.ts src/modules/master-data/customer-source/customer-source.e2e.test.ts",
+        "npm run test:web:safe -- --run src/modules/masterData/CustomerSourcesPage.test.tsx"
+      ],
+      "safety": ["npm run typecheck", "npm run governance:check"]
+    },
+    {
       "id": "web-test-harness",
       "patterns": ["apps/web/src/modules/testSupport/**"],
       "risk": "test-only",
@@ -45,7 +61,7 @@
       "id": "shared",
       "patterns": ["packages/shared/**"],
       "risk": "cross-workspace-contract",
-      "effect": ["npm run test:shared:safe -- --run <closest-domain-test>"],
+      "effect": ["npm run test:shared:safe -- --run"],
       "safety": ["npm run typecheck"]
     },
     {

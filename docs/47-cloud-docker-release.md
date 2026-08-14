@@ -116,7 +116,7 @@ npm run deploy:47 -- \
 
 制品提升会先校验清单 commit 与当前 HEAD、三个 `ghcr.io/...@sha256:<64 hex>` 引用和清单 SHA；47 只拉取 digest、以 `--no-build` 重启受影响服务，并把 digest 清单证据写入不可变 receipt。没有有效清单、GHCR 拉取失败或 migration 指纹变化都会在成功状态写入前失败关闭；migration 仍必须走独立 reviewed whitelist 流程，不会被制品提升隐式执行。
 
-Pull Request 使用 `scripts/ci-affected.mjs` 按 shared/API/Web/Prisma/治理路径选择验证。`packages/shared` 先只构建一次，Vitest 使用 `--changed <base>` 运行受影响测试；每个阶段的耗时和退出码保存为 Actions artifact。完整回归保留在手动/夜间 workflow，不以减少 PR 验证为理由降低权限、迁移、财务和数据正确性门。
+Pull Request 使用 `scripts/ci-affected.mjs` 按 shared/API/Web/Prisma/治理路径选择类型检查，并通过 `config/validation/path-test-map.json` 执行与变更领域直接对应、没有占位符的最小效果测试；巨型 legacy E2E 不再因公共 Repository 变化而自动整组运行。`packages/shared` 只构建一次，每个阶段的耗时和退出码保存为 Actions artifact。完整回归保留在手动/夜间 workflow，不以减少 PR 验证为理由降低权限、迁移、财务和数据正确性门。
 
 脚本根据上一次成功发布记录的 Web、API、Prisma 运行时指纹自动判断范围。测试文件和文档可以同步到 47，但不会触发运行时镜像重建。标准发布发现 Prisma 指纹变化时只报告范围并阻断 apply；迁移必须改走 `deploy:47:whitelist`，由明确列出的 migration 目标形成 approved set，并在执行前确认线上全部 pending migrations 与 approved set 完全一致。开发闭环固定为最小本地安全门、差异检查、源码同步、受影响服务构建、必要迁移、重启、API/容器/代码验证和结果汇报。
 
