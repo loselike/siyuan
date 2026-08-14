@@ -592,7 +592,7 @@ export interface Principal {
   phone?: string;
   gender?: StaffGender;
   nickname?: string;
-  mustChangePassword?: boolean;
+  mustChangePassword?: boolean; warehouseScopeFingerprint?: string;
 }
 
 export interface ProfileUpdateInput {

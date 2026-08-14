@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WarehousePackageSummary, WarehouseTodayTotals } from '@siyuan/shared';
 import type { ApiClient } from '../../apiClient';
 import { WarehousePage } from './WarehousePage';
+import { resolveScopedWarehouseFallbackShipments } from './warehousePageCache';
 
 const row = {
   id: 'package-1',
@@ -39,6 +40,14 @@ const totals: WarehouseTodayTotals = {
 
 describe('WarehousePage scoped loading', () => {
   afterEach(cleanup);
+
+  it('does not use unmarked or cross-scope shipments in the fallback snapshot', () => {
+    const shipments = [{ id: 'stale-shipment' }];
+
+    expect(resolveScopedWarehouseFallbackShipments(shipments, undefined, 'scope-b')).toEqual([]);
+    expect(resolveScopedWarehouseFallbackShipments(shipments, 'scope-a', 'scope-b')).toEqual([]);
+    expect(resolveScopedWarehouseFallbackShipments(shipments, 'scope-b', 'scope-b')).toEqual(shipments);
+  });
 
   it('does not request the full package snapshot while scoped queries succeed', async () => {
     const warehousePackages = vi.fn().mockResolvedValue([row]);
@@ -116,6 +125,58 @@ describe('WarehousePage scoped loading', () => {
     expect(warehousePackages).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.queryByText('ORDER-1-SF001')).not.toBeInTheDocument());
     expect(await screen.findByText('today unavailable')).toBeInTheDocument();
+  });
+
+  it('does not reuse a cached today snapshot after the authorization scope changes', async () => {
+    let rejectSecondRequest: (error?: unknown) => void = () => undefined;
+    const secondRequest = new Promise<never>((_, reject) => {
+      rejectSecondRequest = reject;
+    });
+    const warehouseTodayReceipts = vi.fn()
+      .mockResolvedValueOnce({ rows: [row], totals })
+      .mockReturnValueOnce(secondRequest);
+    const apiClient = {
+      warehouseQuery: { warehouseTodayReceipts }
+    } as unknown as ApiClient;
+
+    const { rerender } = render(
+      <WarehousePage
+        apiClient={apiClient}
+        role="WAREHOUSE"
+        permissions={['warehouse:today-receipt:view']}
+        warehouseScopeFingerprint="scope-a"
+        initialSection="today"
+        shipments={[]}
+        notice={null}
+        onDispatch={vi.fn()}
+        findShipmentBySystemOrderNo={() => undefined}
+        renderShipmentOrderNoLink={(systemOrderNo) => systemOrderNo ?? '-'}
+      />
+    );
+
+    await waitFor(() => expect(warehouseTodayReceipts).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('ORDER-1-SF001')).toBeInTheDocument();
+
+    rerender(
+      <WarehousePage
+        apiClient={apiClient}
+        role="WAREHOUSE"
+        permissions={['warehouse:today-receipt:view']}
+        warehouseScopeFingerprint="scope-b"
+        initialSection="today"
+        refreshVersion={1}
+        shipments={[]}
+        notice={null}
+        onDispatch={vi.fn()}
+        findShipmentBySystemOrderNo={() => undefined}
+        renderShipmentOrderNoLink={(systemOrderNo) => systemOrderNo ?? '-'}
+      />
+    );
+
+    await waitFor(() => expect(warehouseTodayReceipts).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText('ORDER-1-SF001')).not.toBeInTheDocument();
+    rejectSecondRequest(new Error('scope refresh failed'));
+    await waitFor(() => expect(screen.getByText('scope refresh failed')).toBeInTheDocument());
   });
 
   it('shares one lazy full-package fallback when scoped queries fail', async () => {

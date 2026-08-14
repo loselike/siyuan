@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { PRICING_BUSINESS_CAPABILITIES, PRICING_MODULES } from '@siyuan/shared';
 
 export type BuiltinRoleKey = 'ADMIN' | 'CUSTOMER_SERVICE' | 'OPERATOR' | 'WAREHOUSE' | 'FINANCE' | 'CUSTOMER';
@@ -462,6 +463,31 @@ export interface Principal {
   departmentTeamScope?: string[];
   shipmentAllView?: boolean;
   globalFieldMasks?: GlobalFieldMaskState;
+  /** Opaque client cache boundary; derived from the hydrated authorization scope. */
+  warehouseScopeFingerprint?: string;
+}
+
+export function createPrincipalScopeFingerprint(
+  principal: Principal,
+  permissions: PermissionKey[] = [],
+  secret: string
+) {
+  const scope = {
+    id: principal.id,
+    username: principal.username,
+    name: principal.name ?? null,
+    nickname: principal.nickname ?? null,
+    site: principal.site ?? null,
+    role: principal.role,
+    assignedRole: principal.assignedRole ?? null,
+    dataScope: principal.dataScope ?? null,
+    shipmentAllView: principal.shipmentAllView === true,
+    departmentTeamScope: Array.from(new Set(principal.departmentTeamScope ?? [])).sort(),
+    permissions: Array.from(new Set(permissions)).sort()
+  };
+  return createHmac('sha256', secret)
+    .update(`siyuan:warehouse-scope:v1:${JSON.stringify(scope)}`)
+    .digest('hex');
 }
 
 export interface PermissionDefinition {
