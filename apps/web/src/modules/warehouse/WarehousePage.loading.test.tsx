@@ -71,6 +71,53 @@ describe('WarehousePage scoped loading', () => {
     expect(warehousePackages).not.toHaveBeenCalled();
   });
 
+  it('fails closed when today receipts cannot be loaded', async () => {
+    const warehousePackages = vi.fn().mockResolvedValue([row]);
+    const warehouseTodayReceipts = vi.fn()
+      .mockResolvedValueOnce({ rows: [row], totals })
+      .mockRejectedValueOnce(new Error('today unavailable'));
+    const apiClient = {
+      warehouseQuery: { warehousePackages, warehouseTodayReceipts }
+    } as unknown as ApiClient;
+
+    const { rerender } = render(
+      <WarehousePage
+        apiClient={apiClient}
+        role="WAREHOUSE"
+        permissions={['warehouse:today-receipt:view']}
+        initialSection="today"
+        shipments={[]}
+        notice={null}
+        onDispatch={vi.fn()}
+        findShipmentBySystemOrderNo={() => undefined}
+        renderShipmentOrderNoLink={(systemOrderNo) => systemOrderNo ?? '-'}
+      />
+    );
+
+    await waitFor(() => expect(warehouseTodayReceipts).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('ORDER-1-SF001')).toBeInTheDocument();
+
+    rerender(
+      <WarehousePage
+        apiClient={apiClient}
+        role="WAREHOUSE"
+        permissions={['warehouse:today-receipt:view']}
+        initialSection="today"
+        refreshVersion={1}
+        shipments={[]}
+        notice={null}
+        onDispatch={vi.fn()}
+        findShipmentBySystemOrderNo={() => undefined}
+        renderShipmentOrderNoLink={(systemOrderNo) => systemOrderNo ?? '-'}
+      />
+    );
+
+    await waitFor(() => expect(warehouseTodayReceipts).toHaveBeenCalledTimes(2));
+    expect(warehousePackages).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText('ORDER-1-SF001')).not.toBeInTheDocument());
+    expect(await screen.findByText('today unavailable')).toBeInTheDocument();
+  });
+
   it('shares one lazy full-package fallback when scoped queries fail', async () => {
     const warehousePackages = vi.fn().mockResolvedValue([row]);
     const warehouseTodayReceipts = vi.fn().mockRejectedValue(new Error('today unavailable'));

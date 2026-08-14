@@ -754,24 +754,21 @@ export function WarehousePage({
         setSelectedTodayPackageIds([]);
         setTodayReceiptPagination((current) => ({ ...current, current: 1 }));
       })
-      .catch(async () => {
-        // OWN 视图不能在接口失败时退回未经客户归属过滤的全仓快照。
-        const warehousePackageFallback = canToggleTodayDataScope && todayFilters.dataScope !== 'ALL'
-          ? []
-          : await loadWarehousePackagesFallback();
+      .catch((error: unknown) => {
         if (!alive) return;
-        const fallbackRows = filterTodayRows(warehousePackageFallback, todayFilters, role);
-        mergeWarehousePackages(fallbackRows);
-        setTodayReceiptRows(fallbackRows);
+        // 今日收货接口失败时不能退回全量 warehousePackages 快照：该快照可能包含历史日期，
+        // 且其数据范围由另一个接口决定。失败即清空当前查询，避免把未经过本接口裁剪的数据展示给用户。
+        setTodayReceiptRows([]);
         setTodayReceiptRowsQueryKey(null);
-        setTodayTotals(calculateTodayTotals(fallbackRows, workQueue.length));
+        setTodayTotals(calculateTodayTotals([], workQueue.length));
         setSelectedTodayPackageIds([]);
         setTodayReceiptPagination((current) => ({ ...current, current: 1 }));
+        setWarehouseNotice(error instanceof Error ? error.message : '今日收货加载失败，请稍后重试');
       });
     return () => {
       alive = false;
     };
-  }, [apiClient, canTodayReceiptView, canToggleTodayDataScope, loadWarehousePackagesFallback, mergeWarehousePackages, needsTodayReceipts, refreshVersion, role, todayFilters, todayReceiptRefreshVersion, workQueue.length]);
+  }, [apiClient, canTodayReceiptView, mergeWarehousePackages, needsTodayReceipts, refreshVersion, role, todayFilters, todayReceiptRefreshVersion, workQueue.length]);
   useEffect(() => {
     if (!canInStockView) {
       setInStockRows([]);
@@ -1011,18 +1008,6 @@ export function WarehousePage({
   const viewingAllTodayData = false;
   const viewingAllInStockData = false;
   const orderEntryActionLabel = '录单';
-  function filterTodayRows(rows: WarehouseInboundPackage[], filters: WarehouseTodayQuery, currentRole: StaffRoleKey) {
-    const keyword = (value: string | undefined, needle: string | undefined) =>
-      !needle?.trim() || (value ?? '').toLowerCase().includes(needle.trim().toLowerCase());
-    return rows
-      .filter((pkg) =>
-        (currentRole === 'OPERATOR' || !filters.site?.trim() || pkg.site === filters.site.trim())
-        && keyword(pkg.customerOrderNo, filters.customerOrderNo)
-        && keyword(pkg.domesticTrackingNo, filters.domesticTrackingNo)
-        && keyword(pkg.combinedOrderNo, filters.combinedOrderNo)
-      )
-      .map((pkg) => (currentRole === 'OPERATOR' ? { ...pkg, site: undefined } : pkg));
-  }
   function calculateTodayTotals(rows: WarehouseInboundPackage[], waitingDispatchTickets: number): WarehouseTodayTotals {
     const grouped = new Map<string, WarehouseInboundPackage[]>();
     rows.forEach((row) => {
