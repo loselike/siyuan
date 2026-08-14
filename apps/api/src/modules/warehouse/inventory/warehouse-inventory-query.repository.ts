@@ -6,7 +6,7 @@ import type {
   WarehousePackageSummary
 } from '@siyuan/shared';
 import { PrismaService } from '../../prisma.service.js';
-import { isAdministratorRole, type PermissionKey, type Principal } from '../../rbac.js';
+import { isAdministratorRole, isBusinessAgentRestrictedRole, type PermissionKey, type Principal } from '../../rbac.js';
 import {
   mapWarehousePackagesWithConfirmedTally,
   resolveWarehouseTallyRecentCutoff,
@@ -58,10 +58,15 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
-    const ownedCustomerCodes = warehouseWideScope ? undefined : (await this.prisma.customer.findMany({
-      where: { salesperson: { in: salespeople } },
-      select: { code: true }
-    })).map((customer) => customer.code);
+    const businessCustomerScoped = !warehouseWideScope
+      && !isBusinessAgentRestrictedRole(principal.role)
+      && principal.dataScope !== 'SALES_OWN';
+    const ownedCustomerCodes = businessCustomerScoped
+      ? (await this.prisma.customer.findMany({
+          where: { salesperson: { in: salespeople } },
+          select: { code: true }
+        })).map((customer) => customer.code)
+      : undefined;
     const today = resolveWarehouseTodayRange({});
     const rows = await (this.prisma as any).warehousePackage.findMany({
       where: {
@@ -82,7 +87,9 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     const warehouseWideScope = isAdministratorRole(principal.role)
       || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
     // 数据范围由服务端岗位/权限派生；客户端 dataScope 只用于展示偏好，不能扩权。
-    const businessCustomerScoped = !warehouseWideScope;
+    const businessCustomerScoped = !warehouseWideScope
+      && !isBusinessAgentRestrictedRole(principal.role)
+      && principal.dataScope !== 'SALES_OWN';
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
