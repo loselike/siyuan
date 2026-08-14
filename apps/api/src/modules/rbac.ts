@@ -475,6 +475,7 @@ export function createPrincipalScopeFingerprint(
   const scope = {
     id: principal.id,
     username: principal.username,
+    customerId: principal.customerId ?? null,
     name: principal.name ?? null,
     nickname: principal.nickname ?? null,
     site: principal.site ?? null,

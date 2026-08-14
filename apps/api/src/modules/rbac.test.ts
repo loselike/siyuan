@@ -27,6 +27,8 @@ describe('RBAC default permission inheritance', () => {
 
     expect(reordered).toBe(first);
     expect(changed).not.toBe(first);
+    expect(createPrincipalScopeFingerprint({ ...principal, customerId: 'customer-a' }, ['warehouse:today-receipt:view'], 'test-secret'))
+      .not.toBe(createPrincipalScopeFingerprint({ ...principal, customerId: 'customer-b' }, ['warehouse:today-receipt:view'], 'test-secret'));
   });
 
   it('keeps one stored pricing action while deriving only its minimum read context', () => {
