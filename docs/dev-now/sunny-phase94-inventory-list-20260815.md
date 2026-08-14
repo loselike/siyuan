@@ -31,7 +31,9 @@ implementation branch: `codex/sunny-phase94-inventory-list`
 
 ## 发布状态与风险
 
-尚未发布 47。主要风险是旧实现中的权限/归属二次查询顺序和历史 `operationKeyword` 审计筛选口径；若固定样本出现任何差异，停止扩大迁移并保留 Phase93 版本。
+已发布 47：`git-33a330fa2ae9_web-759d59ea475b_api-724b18a2de6f`。发布范围为 `api`，`MIGRATION_REQUIRED=false`；API 构建、重启、内外 health、运行时 provenance、镜像与 state/API release ID 一致性、锁与 recovery 均通过。运行时为 `GIT_SOURCE_BUILD`/`SERVER_BUILD`，源码分支为 `codex/release/phase94-integrate2`。本切片没有 migration，也没有业务数据、系统数据或权限逻辑写入。
+
+风险集中在历史 `operationKeyword` 审计筛选的真实数据覆盖；实现逐句保留旧查询，但本轮只用本地固定样本验证，未对 47 做带业务员身份的写入或大规模筛选。构建后 API 线上证据通过，因此不阻断本轮。
 
 ## 下一轮重评
 
