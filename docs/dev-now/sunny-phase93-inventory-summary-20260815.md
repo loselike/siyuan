@@ -1,8 +1,10 @@
 # Sunny Phase93：仓库在库汇总策略抽取（2026-08-15）
 
-- 状态：`in_progress`
-worktree: `/Users/j1ng/Tools/sunny-phase93-inventory-summary`
-branch: `codex/sunny-phase93-inventory-summary`
+- 状态：`completed`
+implementation worktree: `/Users/j1ng/Tools/sunny-phase93-inventory-summary`
+implementation branch: `codex/sunny-phase93-inventory-summary`
+release worktree: `/Users/j1ng/Tools/sunny-phase93-integrate`
+release branch: `codex/release/phase93-integrate`
 
 ## 用户边界
 
@@ -26,15 +28,17 @@ branch: `codex/sunny-phase93-inventory-summary`
 
 - 首次安全测试因新 worktree 无依赖失败：`vitest: command not found`；安装锁定依赖后重跑。
 - `npm run build -w @siyuan/shared`：通过。
-- `npm run test:api:safe -- --run src/modules/warehouse/inventory/warehouse-inventory-query.repository.test.ts src/modules/prisma.repository.warehouse-in-stock-summary.test.ts`：12/12 通过。
+- `npm run test:api:safe -- --run src/modules/warehouse/inventory/warehouse-inventory-query.repository.test.ts src/modules/prisma.repository.warehouse-in-stock-summary.test.ts`：13/13 通过。
 - `npm run typecheck -w @siyuan/api`：通过。
 - `npm run governance:check`：通过（434 route contracts、security 3/3、lint no-new-debt）。
 - `git diff --check`：通过。
 
 ## 发布状态与风险
 
-本切片尚未发布 47。没有 migration；发布范围将由 `packages/shared` 子路径与 API 查询策略实际影响推导为 `web+api` 或 `api`，发布前必须在干净 release worktree 完成基线捕获和合并。风险集中在旧 summary characterization 与当前权限角色语义的历史测试漂移，已按 phase91 实际代码修正 fixture，未改变权限判断。
+已发布 47：`git-3ef98771a79e_web-759d59ea475b_api-3483f44e769e`。发布范围为 `web+api`，`MIGRATION_REQUIRED=false`；构建、API/Web 重启、内外 health、运行时 provenance、镜像与 state/API release ID 一致性、锁与 recovery 均通过。运行时为 `GIT_SOURCE_BUILD`/`SERVER_BUILD`，源码分支为 `codex/release/phase93-integrate`。本切片没有 migration，也没有业务数据、系统数据或权限逻辑写入。构建仍报告既有 Vite 大 chunk 警告（最大约 1.18 MB），未改变发布结果。
+
+风险集中在后续继续抽取时的查询逐字段等价与真实数据范围；本切片保留公开 Repository 方法、旧兼容适配器和权限/审计顺序，下一轮必须先用固定仓库样本重跑原方法与新策略的对比，再决定是否扩大范围。
 
 ## 下一轮重评
 
-发布后重新比较安全/数据正确性、高频仓库查询与前端数据流、架构效率和 UI；若真实汇总响应与旧方法逐字段等价，再继续抽取今日收货或在库列表查询；否则停止扩大迁移并回滚本切片。
+发布后重新比较安全/数据正确性、高频仓库查询与前端数据流、架构效率和 UI；若真实汇总响应与旧方法逐字段等价，再继续抽取今日收货或在库列表查询；否则停止扩大迁移并回滚本切片。UI 人工验收入口为仓库页面：默认 `ManagedTable` 列设置按钮应固定在表格右侧，显式 toolbar 配置的页面仍保持原位置。
