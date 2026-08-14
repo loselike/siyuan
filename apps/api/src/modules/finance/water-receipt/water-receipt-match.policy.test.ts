@@ -84,4 +84,3 @@ describe('water receipt match policy', () => {
     expect(run).toThrow(message);
   });
 });
-

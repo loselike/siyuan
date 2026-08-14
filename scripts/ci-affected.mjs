@@ -91,4 +91,3 @@ for (const item of commands) {
 mkdirSync(dirname(timingPath), { recursive: true });
 writeFileSync(timingPath, `${JSON.stringify({ ...plan, startedAt, finishedAt: new Date().toISOString(), timings }, null, 2)}\n`);
 console.log(`CI_AFFECTED_OK timings=${timingPath}`);
-

@@ -24,4 +24,3 @@ if (!plan.scopes.api || plan.scopes.web || plan.scopes.shared) throw new Error('
 if (!plan.commands.some((item) => item.label === 'api-tests')) throw new Error('API test command was not selected');
 if (plan.commands.some((item) => item.label === 'web-tests')) throw new Error('Web tests were selected for API-only change');
 console.log('CI_AFFECTED_SELF_TEST_OK');
-

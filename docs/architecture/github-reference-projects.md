@@ -20,4 +20,3 @@ This catalog records which patterns Sunny deliberately adopts. It is a design co
 4. Shared API types and runtime validation evolve together.
 5. Back-office pages use one predictable workbench grammar: page header, compact filters, `ManagedTable`, detail surface, explicit state and permission feedback.
 6. A slice is migrated only with observable success and rejection tests plus a production-compatible rollout path.
-

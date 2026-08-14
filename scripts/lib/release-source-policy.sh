@@ -40,4 +40,3 @@ siyuan_47_assert_whitelist_release_source() {
   echo "Whitelist CAS is emergency-only outside main/codex/release/*; set SIYUAN_47_EMERGENCY_RELEASE=true after explicit review." >&2
   return 87
 }
-

@@ -22,4 +22,3 @@ if siyuan_47_assert_whitelist_release_source codex/feature false 2>/dev/null; th
 fi
 
 echo "RELEASE_SOURCE_POLICY_TEST_OK"
-

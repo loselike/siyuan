@@ -27,4 +27,3 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:all:safe
       - run: npm run governance:check
-
