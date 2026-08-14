@@ -41,6 +41,13 @@
 - 通过审查后只发布 Web；无 migration、无 API 构建。
 - 发布后检查 Web 静态产物、容器状态、首页与 `/api/health`，并保留 47 运行时 provenance。
 
+## 发布证据
+
+- 已发布 47：`git-ac00ae36dbd0_web-92a9d9039db4_api-724b18a2de6f`。
+- 发布范围：`web`；`MIGRATION_REQUIRED=false`；未执行数据库迁移或业务数据写入。
+- Web/API 镜像构建、容器重启、内外 health、源码 provenance、镜像匹配、API release ID、lock/recovery 均通过。
+- 运行时 provenance：`GIT_SOURCE_BUILD` / `SERVER_BUILD`，发布提交 `ac00ae36dbd064ae9dc9f6f60fc4cfb264d2adaf`，来源分支 `codex/release/phase95-integrate`。
+
 ## 下一轮重评
 
 发布后重新扫描前端数据流与仓库页面热点；若 fail-closed 已关闭数据范围风险，再评估按查询域抽取 WarehousePage hook，而不是继续大规模拆分。
