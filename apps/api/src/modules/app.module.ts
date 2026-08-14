@@ -67,6 +67,7 @@ import {
   PrismaNotificationService
 } from './notifications/notification.service.js';
 import { OperationsLineShipmentQueryController } from './operations/line-shipment/operations-line-shipment-query.controller.js';
+import { AgentMarkupQueryController } from './pricing/agent-markup-query.controller.js';
 import { PriceBookQueryController } from './pricing/price-book/price-book-query.controller.js';
 import {
   LegacyPriceBookQueryRepository,
@@ -379,6 +380,7 @@ const systemIdentityAdminRepositoryProvider = {
     MiscFeeController,
     MasterDataChannelQueryController,
     OperationsLineShipmentQueryController,
+    AgentMarkupQueryController,
     OrderEntryQueryController,
     PriceBookQueryController,
     ShipmentBusinessInvoiceController,
