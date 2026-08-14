@@ -1,6 +1,6 @@
 # Sunny Phase93：仓库在库汇总策略抽取（2026-08-15）
 
-- 状态：`completed`
+- 状态：`in_progress`
 implementation worktree: `/Users/j1ng/Tools/sunny-phase93-inventory-summary`
 implementation branch: `codex/sunny-phase93-inventory-summary`
 release worktree: `/Users/j1ng/Tools/sunny-phase93-integrate`
