@@ -28,6 +28,12 @@ Phase99 47 发布实测范围为 `web`，但 `docker compose up` 在重启阶段
 - `bash scripts/release-service-plan.test.sh`、`bash scripts/release-image-fence.test.sh` 通过。
 - `git diff --check` 通过。
 - 独立发布风险审查：未发现 P0/P1/P2；8 组合 planner 矩阵和 image-fence 门禁通过。仍需先处理既有 context governance 阻断，再发布发布脚本/测试/状态文档；不运行数据库迁移。
+- 47 只读能力探针：远端 Docker Compose 为 `2.40.3+ds1-0ubuntu1`，支持重启阶段使用 `--pull never`；本机未安装 Docker，因此未做本地 Compose 实执行。
+
+## 当前发布门禁
+
+- `npm run governance:check` 的 development governance 已通过，但 context governance 仍 fail-closed：`docs/dev-now` 有 18 个活动文件（上限 12），且 Phase96–99 四个已终态文件尚未归档。
+- 这些状态文件不属于本阶段，不能为发布绕过、覆盖或删除；因此本阶段代码已提交并推送，但暂不执行 47 脚本发布。治理状态清理后，应重新跑本阶段门禁，再以 scope `none` 的 reviewed-zero-build governance release 精确同步脚本文件。
 
 ## 发布边界
 
