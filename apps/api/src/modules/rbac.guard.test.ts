@@ -60,6 +60,7 @@ describe('RbacGuard current session characterization', () => {
 
     await expect(state.guard.canActivate(context)).resolves.toBe(true);
     expect(state.request.user?.username).toBe('current-name');
+    expect(state.request.user?.warehouseScopeFingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(state.sessions.hydrateCurrentSession).toHaveBeenCalledOnce();
   });
 

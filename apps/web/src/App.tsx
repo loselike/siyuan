@@ -169,6 +169,7 @@ import {
   createWorkspaceRefreshCoordinator,
   refreshWorkspaceData
 } from './modules/appShell/workspaceRefresh';
+import { warehouseAuthorizationScopeKey } from './modules/warehouse/warehousePageCache';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
@@ -235,6 +236,7 @@ export function App() {
   const [keyword, setKeyword] = useState('');
   const globalSearchInputRef = useRef<InputRef>(null);
   const [localShipments, setLocalShipments] = useState<Shipment[]>([]);
+  const [loadedWarehouseShipmentsScopeKey, setLoadedWarehouseShipmentsScopeKey] = useState<string | null>(null);
   const [shipmentOperationLogs, setShipmentOperationLogs] = useState<Record<string, ShipmentOperationLog[]>>({});
   const [problemTickets, setProblemTickets] = useState<ProblemTicketSummary[]>([]);
   const [receivables, setReceivables] = useState<ReceivableAuditSummary[]>([]);
@@ -303,6 +305,26 @@ export function App() {
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
     [session?.accessToken]
   );
+  const warehouseWorkspaceScopeKey = warehouseAuthorizationScopeKey(
+    session?.user.role ?? 'unknown',
+    session?.permissions ?? [],
+    session?.user.warehouseScopeFingerprint
+  );
+  const warehouseWorkspaceScopeKeyRef = useRef(warehouseWorkspaceScopeKey);
+  warehouseWorkspaceScopeKeyRef.current = warehouseWorkspaceScopeKey;
+  useEffect(() => {
+    setLocalShipments([]);
+    setLoadedWarehouseShipmentsScopeKey(null);
+    setProblemTickets([]);
+    setReceivables([]);
+    setBusinessCostAudits([]);
+    setPayableAudits([]);
+    setCustomerStatements([]);
+    setCustomerAccounts([]);
+    setAccountLedger([]);
+    setCarrierTasks([]);
+    setMasterData(emptyMasterData);
+  }, [warehouseWorkspaceScopeKey]);
   useEffect(() => {
     configureAccountTablePreferences(session?.user.id, session?.accessToken ? apiClient : undefined);
   }, [apiClient, session?.accessToken, session?.user.id]);
@@ -472,13 +494,14 @@ export function App() {
 
   const workspaceRefreshUserId = session?.user.id;
   const workspaceRefreshUserRole = session?.user.role;
+  const workspaceRefreshWarehouseScopeFingerprint = session?.user.warehouseScopeFingerprint;
   const workspaceRefreshMustChangePassword = Boolean(session?.user.mustChangePassword);
   const workspaceRefreshPermissionSignature = [...(session?.permissions ?? [])].sort().join('|');
   const workspaceRefreshUser = useMemo<Principal | undefined>(
     () => workspaceRefreshUserId && workspaceRefreshUserRole
-      ? { id: workspaceRefreshUserId, role: workspaceRefreshUserRole } as Principal
+      ? { id: workspaceRefreshUserId, role: workspaceRefreshUserRole, warehouseScopeFingerprint: workspaceRefreshWarehouseScopeFingerprint } as Principal
       : undefined,
-    [workspaceRefreshUserId, workspaceRefreshUserRole]
+    [workspaceRefreshUserId, workspaceRefreshUserRole, workspaceRefreshWarehouseScopeFingerprint]
   );
   const workspaceRefreshPermissions = useMemo<PermissionKey[]>(
     () => workspaceRefreshPermissionSignature
@@ -802,9 +825,18 @@ export function App() {
     const scopeKey = [
       user?.id ?? 'anonymous',
       user?.role ?? 'unknown',
+      user?.warehouseScopeFingerprint ?? 'warehouse-scope-unknown',
       skipIrrelevantWorkspaceData ? 'data-confirm' : 'full',
       [...permissions].sort().join(',')
     ].join('|');
+    const requestWarehouseScopeKey = warehouseAuthorizationScopeKey(
+      user?.role ?? 'unknown',
+      permissions,
+      user?.warehouseScopeFingerprint
+    );
+    const setIfCurrentWarehouseScope = <T,>(writer: (value: T) => void) => (value: T) => {
+      if (warehouseWorkspaceScopeKeyRef.current === requestWarehouseScopeKey) writer(value);
+    };
     await workspaceRefreshCoordinator.run(scopeKey, () => refreshWorkspaceData({
       client,
       user,
@@ -812,16 +844,20 @@ export function App() {
       skipIrrelevantWorkspaceData,
       emptyMasterData,
       writers: {
-        setShipments: setLocalShipments,
-        setProblemTickets,
-        setReceivables,
-        setBusinessCostAudits,
-        setPayableAudits,
-        setCustomerStatements,
-        setCustomerAccounts,
-        setAccountLedger,
-        setCarrierTasks,
-        setMasterData
+        setShipments: (rows) => {
+          if (warehouseWorkspaceScopeKeyRef.current !== requestWarehouseScopeKey) return;
+          setLocalShipments(rows);
+          setLoadedWarehouseShipmentsScopeKey(requestWarehouseScopeKey);
+        },
+        setProblemTickets: setIfCurrentWarehouseScope(setProblemTickets),
+        setReceivables: setIfCurrentWarehouseScope(setReceivables),
+        setBusinessCostAudits: setIfCurrentWarehouseScope(setBusinessCostAudits),
+        setPayableAudits: setIfCurrentWarehouseScope(setPayableAudits),
+        setCustomerStatements: setIfCurrentWarehouseScope(setCustomerStatements),
+        setCustomerAccounts: setIfCurrentWarehouseScope(setCustomerAccounts),
+        setAccountLedger: setIfCurrentWarehouseScope(setAccountLedger),
+        setCarrierTasks: setIfCurrentWarehouseScope(setCarrierTasks),
+        setMasterData: setIfCurrentWarehouseScope(setMasterData)
       }
     }));
   }
@@ -872,6 +908,8 @@ export function App() {
   async function submitProfileUpdate() {
     const values = await profileForm.validateFields();
     const profile = await apiClient.updateProfile(values);
+    // The profile response carries a freshly hydrated scope fingerprint, so
+    // cache invalidation is atomic with the successful profile update.
     mergeSessionUser(profile);
     setNotice('个人资料已更新');
   }
@@ -900,13 +938,13 @@ export function App() {
   }
 
   const businessShipments = useMemo(
-    () => localShipments,
-    [localShipments]
+    () => loadedWarehouseShipmentsScopeKey === warehouseWorkspaceScopeKey ? localShipments : [],
+    [loadedWarehouseShipmentsScopeKey, localShipments, warehouseWorkspaceScopeKey]
   );
   const findShipmentBySystemOrderNo = useCallback(
     (systemOrderNo?: string) =>
-      systemOrderNo ? localShipments.find((shipment) => shipment.systemOrderNo === systemOrderNo || resolveShipmentOutboundOrderNo(shipment) === systemOrderNo) : undefined,
-    [localShipments]
+      systemOrderNo ? businessShipments.find((shipment) => shipment.systemOrderNo === systemOrderNo || resolveShipmentOutboundOrderNo(shipment) === systemOrderNo) : undefined,
+    [businessShipments]
   );
   const openShipmentDetail = useCallback((shipment: Shipment) => {
     setShipmentFinancePrewarmed(false);
@@ -1065,6 +1103,11 @@ export function App() {
       return exists ? current.map((item) => (item.id === shipment.id ? mergeShipmentListRecord(item, shipment) : item)) : [shipment, ...current];
     });
   }
+
+  const upsertWarehouseScopedShipment = useCallback((shipment: Shipment) => {
+    if (warehouseWorkspaceScopeKeyRef.current !== warehouseWorkspaceScopeKey) return;
+    upsertLocalShipment(shipment);
+  }, [warehouseWorkspaceScopeKey]);
 
   const shipmentColumnMap: Record<ShipmentColumnKey, ManagedTableColumns<Shipment>[number]> = {
     createdAt: {
@@ -1567,12 +1610,14 @@ export function App() {
   }
 
   async function handleWarehouseDispatchShipment(record: Shipment, options: { shippingMarkConfirmed?: boolean; handoverNo?: string; batchDispatchSource?: string; miscFeeIdsToMatch?: string[] } = {}) {
+    const requestWarehouseScopeKey = warehouseWorkspaceScopeKey;
     const updated = await apiClient.dispatchShipment(record.id, {
       shippingMarkConfirmed: options.shippingMarkConfirmed,
       handoverNo: options.handoverNo,
       batchDispatchSource: options.batchDispatchSource,
       miscFeeIdsToMatch: options.miscFeeIdsToMatch
     });
+    if (warehouseWorkspaceScopeKeyRef.current !== requestWarehouseScopeKey) return;
     setLocalShipments((current) => current.map((shipment) => (shipment.id === record.id ? mergeShipmentListRecord(shipment, updated) : shipment)));
     appendShipmentOperationLog(record.id, '仓库管理：确认出库');
     setNotice(`仓库已确认 ${record.systemOrderNo} 出库，已进入客服数据确认`);
@@ -2933,6 +2978,7 @@ export function App() {
               />
             ) : currentMenuKey === 'receive' ? (
               <WarehousePage
+                key={warehouseWorkspaceScopeKey}
                 apiClient={apiClient}
                 refreshVersion={dataRefreshVersion}
                 initialSection={resolveModuleInitialSection(
@@ -2944,11 +2990,13 @@ export function App() {
                 onNotificationTargetHandled={consumePendingNotificationTarget}
                 role={session.user.role}
                 permissions={session.permissions}
+                warehouseScopeFingerprint={session.user.warehouseScopeFingerprint}
+                shipmentsScopeKey={warehouseWorkspaceScopeKey}
                 shipments={businessShipments}
                 businessCostAudits={businessCostAudits}
                 notice={notice}
                 onDispatch={handleWarehouseDispatchShipment}
-                onShipmentUpdated={upsertLocalShipment}
+                onShipmentUpdated={upsertWarehouseScopedShipment}
                 canCreateOrderEntry={session.user.role === 'ADMIN' || session.permissions.includes('warehouse:in-stock:order-entry')}
                 onCreateOrderEntryFromWarehouse={openOrderEntryFromWarehouse}
                 pageSearchKeyword={currentPageSearchEnabled ? keyword : ''}
