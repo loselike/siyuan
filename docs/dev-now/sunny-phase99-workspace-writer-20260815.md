@@ -1,6 +1,6 @@
 # Sunny Phase99：工作区状态写入边界
 
-- 状态：ready_for_release
+- 状态：completed
 - 任务边界：把 App 中重复的 scope-sensitive React state writer 收敛到一个 app-shell helper，保持现有授权范围、请求代际、页面状态和业务接口完全不变。
 - 用户验收目标：已有仓库/业务/财务/客服工作区在异步请求完成后仍只写入发起请求的当前 scope；切换账号、团队、站点或请求代际时，旧 promise 继续 fail-closed。
 
@@ -31,3 +31,14 @@ Phase98 已解决 A→B→A 的请求代际隔离并完成 47 发布。复评后
 
 - 目标服务：`web`；候选文件仅 `apps/web/src/App.tsx`、`apps/web/src/modules/appShell/workspaceScope.ts`、对应测试与本状态文件。
 - 47 发布前重新捕获当前运行基线；发布后核对 Web provenance、镜像、health、锁/recovery。视觉和真实角色切换由用户人工验收。
+
+## 发布证据
+
+- 发布分支：`codex/release/phase99-integrate`
+- 发布提交：`ba0879661f3661a02e5485fad122ef89f17e1032`
+- 运行版本：`git-ba0879661f36_web-83bd411bad38_api-fb50f8dc1ab0`
+- 发布范围：`web`；`MIGRATION_REQUIRED=false`；无 Prisma schema/migration 或业务数据写入。
+- 47 发布：Web 构建、重启、本地 health 和公网 health 通过；公网首页 HTTP 200。
+- 发布后 provenance：`traceable`；`WEB_IMAGE_MATCH=true`、`API_IMAGE_MATCH=true`、`API_RELEASE_ID_MATCH=true`。
+- 发布锁与 recovery：`RELEASE_LOCK_STATUS=free`、`RELEASE_RECOVERY_STATUS=clear`。
+- 仍需用户在 47 人工检查：仓库、业务、财务、客服页面在切换账号/团队/站点和请求刷新后的表格、弹窗、表单及下载；本轮不改变权限或业务数据。
