@@ -874,7 +874,7 @@
       "PriceBookQueryController.legacyPricingSources"
     ],
     [
-      "GET /pricing/markup-rules @ DataController.agentMarkupRules",
+      "GET /pricing/markup-rules @ AgentMarkupQueryController.agentMarkupRules",
       "permission",
       [
         "pricing:markup:amazon:view",
@@ -885,10 +885,10 @@
         "pricing:markup:southAfrica:view",
         "pricing:markup:usaAirSea:view"
       ],
-      "DataController.agentMarkupRules"
+      "AgentMarkupQueryController.agentMarkupRules"
     ],
     [
-      "GET /pricing/markup-rules/:id/preview @ DataController.previewAgentMarkupRule",
+      "GET /pricing/markup-rules/:id/preview @ AgentMarkupQueryController.previewAgentMarkupRule",
       "permission",
       [
         "pricing:markup:amazon:view",
@@ -899,10 +899,10 @@
         "pricing:markup:southAfrica:view",
         "pricing:markup:usaAirSea:view"
       ],
-      "DataController.previewAgentMarkupRule"
+      "AgentMarkupQueryController.previewAgentMarkupRule"
     ],
     [
-      "GET /pricing/markup-rules/export @ DataController.exportAgentMarkupRules",
+      "GET /pricing/markup-rules/export @ AgentMarkupQueryController.exportAgentMarkupRules",
       "permission",
       [
         "pricing:markup:amazon:export",
@@ -913,7 +913,7 @@
         "pricing:markup:southAfrica:export",
         "pricing:markup:usaAirSea:export"
       ],
-      "DataController.exportAgentMarkupRules"
+      "AgentMarkupQueryController.exportAgentMarkupRules"
     ],
     [
       "GET /pricing/rules @ DataController.pricingRules",
