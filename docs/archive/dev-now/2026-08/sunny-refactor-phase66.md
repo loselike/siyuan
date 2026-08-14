@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 66
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/sunny-refactor-phase56`
 - 基线提交：`d138e7b`
 - 47 基线：`git-5424c2eb4664_web-dc928f06c904_api-5e1c513e1d3d`
@@ -37,9 +37,17 @@
 - 迁移后：墨家入口固定样本 1/1，设备 token 契约 3/3，master-data 构造 characterization 2/2，Web 抽屉/弹窗 4/4，API/Web typecheck、434 路由完整治理、context governance、lint no-new-debt、`git diff --check` 通过。
 - 额外理货复测宽 E2E 在迁移后与干净发布基线均在创建理货任务处同样返回既有 400；它在进入墨家路由前失败，未作为本轮回归归因，也未修改预期掩盖旧问题。
 - Open Code Review 确定性预览纳入 8 个运行时/治理文件；LLM 端点未配置，未读取或请求凭据，最终结论以人工对抗式审查与独立专项审查为准。
+- 独立风险审查未发现 P0/P1；P2 为采样队列/超限/降级缺专用 Service characterization，以及 Phase65 的 shared root import、Harness 行数漂移本轮才正式记入治理基线。
 
-## 待完成
+## 发布结果
 
-- 收口独立审查结论与必要修复。
-- 提交并推送功能分支；从干净发布协调 worktree 获取 47 baseline receipt 后合并、发布 API/Web、执行无生产写入线上探针。
-- 发布后重新扫描安全/数据正确性、前端数据 owner、后端巨型边界、测试基础设施和发布链，选出 Phase67，而不是自动继续拆 `DataController`。
+- 功能分支提交 `f8af63d`、发布协调提交 `08ffa12` 已推送；标准 Git 发布同步 22 个变更文件，未修改 Prisma schema/migration 或生产业务数据。
+- 47 发布 ID：`git-08ffa122a7aa_web-3331a4a72688_api-c12712d49090`，Git provenance `traceable/ok`，API/Web 生产构建、不可变镜像、容器 release ID、内外 health、锁和 recovery 均正常。
+- 线上无写入探针：错误设备 token 返回原 401 与 `设备 token 无效`；远端源码及 API 容器产物均存在新路由，最近三分钟 API 关键错误为 0，公网 Web/API 均 200。
+
+## 发布后重评
+
+- 安全/数据正确性未出现新的已证实 P0/P1；不能为了结构优化改变 token、JWT、财务或状态语义。
+- `DataController` 已降至 1,945 行/186 路由，但财务、定价、基础资料和运单仍集中；两套 Repository 31,983/19,416 行继续是最大结构债务。
+- WarehousePage 4,854 行、App 3,229 行、Harness 6,473 行仍是高复杂度候选；Phase66 的主链已闭环，下一轮不得自动继续拆墨家或 `DataController`。
+- 下一轮优先重新比较：有真实数据量证据的 Repository 查询下推、小型高频前端数据 owner、以及墨家采样 Service characterization。当前建议先偿还采样保护网 P2，再决定是否继续后端边界，以免生产设备链只依赖逐字迁移证据。
