@@ -51,10 +51,11 @@
 - [x] 阶段 1：常规发布限制为 `main`/`codex/release/*`，普通功能分支白名单 CAS 默认拒绝。
 - [x] 阶段 2（本地实现）：PR/main CI 构建 GHCR digest 镜像，标准 deploy 支持校验并提升 `images.env`，保留锁、provenance、receipt、health 与 migration fail-closed。
 - [x] 阶段 3（本地实现）：受影响 workspace 验证、Vitest changed、npm/BuildKit cache、阶段耗时 artifact；根 typecheck 去除一次重复 shared noEmit。
-- [ ] 阶段 2/3 GitHub Actions 真实运行证据。
+- [x] 阶段 2/3 GitHub Actions 真实运行证据：PR run `31791937058` 的 affected、API、Web、migration 三类镜像任务全部通过；镜像构建并行执行，affected 1m44s、Web 2m1s、migration 2m35s、API 6m50s。
 - [x] 阶段 4：客户来源四条 API 从 `DataController` 迁入独立 Controller/Application Service/Repository port；现有 Prisma/InMemory 实现、权限、字段、状态码、异常、事务与审计逻辑原样保留。
 - [x] 阶段 5：客户来源共享契约迁入独立 subpath，Web 页面改依赖窄客户端；新增不依赖 6,473 行全局 Harness 的模块 fixture，以及迁移前后共用 API E2E characterization。
-- [ ] 本地安全门、GitHub PR 检查、47 精确发布与只读线上验收。
+- [x] 本地安全门与 GitHub PR 检查。
+- [ ] 合并唯一主干、生成 digest manifest、47 精确发布与只读线上验收。
 
 ## 阶段重评 1–3
 
@@ -76,3 +77,11 @@
 - 检测到新的 pending migration、线上写入需求、权限/状态/金额契约变化时立即停止，将该项退出本重构任务。
 - 镜像仓库或 GitHub/47 凭据缺失时只落地 fail-closed 配置；秘密不写入仓库、不输出到日志。
 - 47 基线漂移时停止同步并重新捕获，不覆盖并发发布。
+
+## GitHub Actions 实证
+
+- PR：`https://github.com/loselike/siyuan/pull/2`。
+- 首个最终形态真实运行：`https://github.com/loselike/siyuan/actions/runs/31791937058`，结论 `success`。
+- 受影响验证只执行与当前路径映射的领域效果测试、三端类型检查和治理门；历史宽 E2E 保留在 nightly/manual 全量回归，不再让无关陈旧断言阻断普通 PR。
+- API/Web/migration 镜像由三个独立 job 并行构建；PR 只构建验证，只有合并 `main` 才登录 GHCR、按 Git SHA 推送并生成 digest manifest。
+- Dockerfile 的构建缓存失效标记由 `RELEASE_BUILD_TOKEN` 更名为非敏感语义的 `RELEASE_BUILD_MARKER`，消除 BuildKit 把普通标记误报为 secret 的告警，不改变产物内容或运行逻辑。
