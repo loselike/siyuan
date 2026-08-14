@@ -109,7 +109,7 @@ import {
   type ShipmentColumnOrderMode
 } from './modules/appShell/config';
 import { resolveModuleInitialSection } from './modules/appShell/moduleInitialSection';
-import { isWorkspaceScopeCurrent, resolveScopedWorkspaceRows, writeIfWorkspaceScopeCurrent } from './modules/appShell/workspaceScope';
+import { isWorkspaceScopeCurrent, resolveScopedWorkspaceRows, workspaceScopeKeyForGeneration, writeIfWorkspaceScopeCurrent } from './modules/appShell/workspaceScope';
 import { formatPaymentSummary, fulfillmentActionLabels, getVisibleStaffMenuKeysByPermissions, resolveFulfillmentAction } from './modules/appShell/utils';
 import { CustomerPortal } from './modules/customer/CustomerPortal';
 import { resolveCustomerServiceInitialSection } from './modules/customerService/customerServiceNavigation';
@@ -257,18 +257,26 @@ export function App() {
     session?.permissions ?? [],
     session?.user.warehouseScopeFingerprint
   );
-  const noticeScopeKeyRef = useRef(noticeScopeKey);
-  noticeScopeKeyRef.current = noticeScopeKey;
+  const warehouseCacheScopeKey = noticeScopeKey;
+  const previousWarehouseCacheScopeKeyRef = useRef(warehouseCacheScopeKey);
+  const workspaceScopeGenerationRef = useRef(0);
+  if (previousWarehouseCacheScopeKeyRef.current !== warehouseCacheScopeKey) {
+    previousWarehouseCacheScopeKeyRef.current = warehouseCacheScopeKey;
+    workspaceScopeGenerationRef.current += 1;
+  }
+  const warehouseWorkspaceScopeKey = workspaceScopeKeyForGeneration(warehouseCacheScopeKey, workspaceScopeGenerationRef.current);
+  const warehouseWorkspaceScopeKeyRef = useRef(warehouseWorkspaceScopeKey);
+  warehouseWorkspaceScopeKeyRef.current = warehouseWorkspaceScopeKey;
   const setNotice = useCallback((message: string | null) => {
     writeIfWorkspaceScopeCurrent(
-      noticeScopeKeyRef.current,
-      noticeScopeKey,
+      warehouseWorkspaceScopeKeyRef.current,
+      warehouseWorkspaceScopeKey,
       () => {
         setNoticeState(createNoticeMessage(message));
-        setNoticeScopeKeyState(noticeScopeKey);
+        setNoticeScopeKeyState(warehouseWorkspaceScopeKey);
       }
     );
-  }, [noticeScopeKey]);
+  }, [warehouseWorkspaceScopeKey]);
   const [outboundOrderOpen, setOutboundOrderOpen] = useState(false);
   const [editingShipment, setEditingShipment] = useState<Shipment | null>(null);
   const [editingShipmentSource, setEditingShipmentSource] = useState<ShipmentEditSource>('operation');
@@ -326,9 +334,6 @@ export function App() {
     () => new ApiClient(() => session?.accessToken ?? null, handleUnauthorized),
     [session?.accessToken]
   );
-  const warehouseWorkspaceScopeKey = noticeScopeKey;
-  const warehouseWorkspaceScopeKeyRef = useRef(warehouseWorkspaceScopeKey);
-  warehouseWorkspaceScopeKeyRef.current = warehouseWorkspaceScopeKey;
   const workspaceDataReady = loadedWorkspaceScopeKey === warehouseWorkspaceScopeKey;
   const scopedOutboundOrderOpen = workspaceDataReady ? outboundOrderOpen : false;
   const setWorkspaceStateAtCurrentScope = useCallback(
@@ -1010,13 +1015,10 @@ export function App() {
       user?.role ?? 'unknown',
       user?.warehouseScopeFingerprint ?? 'warehouse-scope-unknown',
       skipIrrelevantWorkspaceData ? 'data-confirm' : 'full',
-      [...permissions].sort().join(',')
+      [...permissions].sort().join(','),
+      warehouseWorkspaceScopeKey
     ].join('|');
-    const requestWarehouseScopeKey = warehouseAuthorizationScopeKey(
-      user?.role ?? 'unknown',
-      permissions,
-      user?.warehouseScopeFingerprint
-    );
+    const requestWarehouseScopeKey = warehouseWorkspaceScopeKey;
     const setIfCurrentWarehouseScope = <T,>(writer: (value: T) => void) => (value: T) => {
       if (warehouseWorkspaceScopeKeyRef.current === requestWarehouseScopeKey) writer(value);
     };
@@ -3298,7 +3300,7 @@ export function App() {
                 role={session.user.role}
                 permissions={session.permissions}
                 warehouseScopeFingerprint={session.user.warehouseScopeFingerprint}
-                shipmentsScopeKey={warehouseWorkspaceScopeKey}
+                shipmentsScopeKey={warehouseCacheScopeKey}
                 shipments={businessShipments}
                 businessCostAudits={scopedBusinessCostAudits}
                 notice={scopedNotice}
