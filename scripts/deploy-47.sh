@@ -753,6 +753,10 @@ cd "$REMOTE_DIR"
 source scripts/lib/47-release-images.sh
 # shellcheck source=lib/47-release-ssh.sh
 source scripts/lib/47-release-ssh.sh
+# shellcheck source=lib/47-release-service-plan.sh
+source scripts/lib/47-release-service-plan.sh
+API_IMAGE_REFRESH_REQUIRED=false
+siyuan_47_api_image_refresh_required "$WEB_CHANGED" "$API_CHANGED" && API_IMAGE_REFRESH_REQUIRED=true
 actual_lock_token="$(sed -n '1p' "$RELEASE_LOCK_DIR/token" 2>/dev/null || true)"
 if [[ "$actual_lock_token" != "$RELEASE_LOCK_TOKEN" ]]; then
   echo "47 release lock ownership changed before build." >&2
@@ -784,9 +788,9 @@ failure_logs() {
 trap failure_logs ERR
 
 build_services=()
-[[ "$MIGRATE_CHANGED" == true ]] && build_services+=(db-migrate)
-[[ "$API_CHANGED" == true ]] && build_services+=(api)
-[[ "$WEB_CHANGED" == true ]] && build_services+=(web)
+while IFS= read -r service; do
+  [[ -n "$service" ]] && build_services+=("$service")
+done < <(siyuan_47_plan_build_services "$WEB_CHANGED" "$API_CHANGED" "$MIGRATE_CHANGED")
 if ((${#build_services[@]})); then
   if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
     siyuan_47_record_release_phase artifact-pull-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
@@ -799,29 +803,30 @@ if ((${#build_services[@]})); then
       siyuan_47_run_bounded_build docker compose build "${build_services[@]}"
     siyuan_47_record_release_phase build-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
   fi
-  siyuan_47_capture_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
-  siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
+  siyuan_47_capture_release_image_ids "$API_IMAGE_REFRESH_REQUIRED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
+  siyuan_47_verify_release_image_ids "$API_IMAGE_REFRESH_REQUIRED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
 fi
 
 if [[ "$MIGRATE_CHANGED" == true ]]; then
   siyuan_47_record_release_phase migrate-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
-  siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
+  siyuan_47_verify_release_image_ids "$API_IMAGE_REFRESH_REQUIRED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
   SIYUAN_47_MIGRATION_TIMEOUT_SECONDS="$MIGRATION_TIMEOUT_SECONDS" \
     siyuan_47_run_bounded_migration docker compose --profile tools run --rm db-migrate </dev/null
   siyuan_47_record_release_phase migrate-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
 fi
 
 restart_services=()
-[[ "$API_CHANGED" == true ]] && restart_services+=(api)
-[[ "$WEB_CHANGED" == true ]] && restart_services+=(web)
+while IFS= read -r service; do
+  [[ -n "$service" ]] && restart_services+=("$service")
+done < <(siyuan_47_plan_restart_services "$WEB_CHANGED" "$API_CHANGED")
 if ((${#restart_services[@]})); then
   siyuan_47_record_release_phase restart-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
-  siyuan_47_verify_release_image_ids "$API_CHANGED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
-  if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
-    docker compose up -d --no-build --remove-orphans "${restart_services[@]}"
-  else
-    docker compose up -d --remove-orphans "${restart_services[@]}"
-  fi
+  siyuan_47_verify_release_image_ids "$API_IMAGE_REFRESH_REQUIRED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
+  # Every selected service was already built or pulled above.  --no-build
+  # prevents Compose from trying the registry (and then rebuilding a cached
+  # unchanged service) during restart, while preserving the unified release
+  # ID and the image-fence checks above.
+  docker compose up -d --no-build --pull never --remove-orphans "${restart_services[@]}"
   siyuan_47_record_release_phase restart-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
 fi
 
