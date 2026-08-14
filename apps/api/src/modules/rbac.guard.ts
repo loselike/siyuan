@@ -3,7 +3,7 @@ import { Reflector } from '@nestjs/core';
 import jwt from 'jsonwebtoken';
 import { REQUIRED_AUTH, REQUIRED_PERMISSION, REQUIRED_PERMISSION_MODE } from './require-permission.decorator.js';
 import { hasEffectivePricingCapability } from '@siyuan/shared';
-import { type PermissionKey, type Principal } from './rbac.js';
+import { resolveGlobalFieldMaskState, type PermissionKey, type Principal } from './rbac.js';
 import { AuthSessionService } from './auth/auth-session.service.js';
 
 @Injectable()
@@ -40,6 +40,7 @@ export class RbacGuard implements CanActivate {
     try {
       const principal = jwt.verify(authorization.slice(7), jwtSecret()) as Principal;
       const effectivePermissions = await this.sessions.hydrateCurrentSession(principal);
+      principal.globalFieldMasks = resolveGlobalFieldMaskState(effectivePermissions);
       request.user = principal;
 
       if (principal.mustChangePassword && !isPasswordBootstrapRequest(request.method, request.url)) {

@@ -48,7 +48,14 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     query: WarehouseTallyTaskListQuery = {}
   ): Promise<WarehouseTallyTaskSummary[]> {
-    if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED') {
+    const problemOnly = query.problemOnly === true || query.problemOnly === 'true';
+    if (problemOnly && query.status && query.status !== 'CANCELLED') {
+      throw new BadRequestException('理货问题件查询不能同时指定其他任务状态');
+    }
+    if (problemOnly && (query.completedScope || query.completedFrom || query.completedTo)) {
+      throw new BadRequestException('理货问题件查询不能同时指定已完成理货范围');
+    }
+    if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED' && query.status !== 'CANCELLED') {
       throw new BadRequestException('理货任务状态无效');
     }
     const canViewPending = await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view');
@@ -58,6 +65,9 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     }
     if (query.status === 'PENDING' && !canViewPending) {
       throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
+    }
+    if ((problemOnly || query.status === 'CANCELLED') && !canViewPending) {
+      throw new ForbiddenException('当前用户组已屏蔽查看理货问题件');
     }
     const requestsCompleted = query.status === 'COMPLETED'
       || query.completedScope === 'RECENT'
@@ -69,7 +79,9 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     }
     const scope = this.operatorCustomerScope(principal);
     const where: any = {};
-    if (query.status) {
+    if (problemOnly || query.status === 'CANCELLED') {
+      where.status = 'CANCELLED';
+    } else if (query.status) {
       where.status = query.status;
     } else if (!canViewPending) {
       where.status = 'COMPLETED';
@@ -126,6 +138,11 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       ...mapWarehouseTallyTask(row),
       outputPackages: outputsByTask.get(row.id) ?? []
     }));
+    if (problemOnly || query.status === 'CANCELLED') {
+      return mappedRows
+        .filter((row) => row.status === 'CANCELLED' && row.tallyProgressStatus === 'CANCELLED')
+        .sort((left, right) => Date.parse(right.cancelledAt ?? right.createdAt) - Date.parse(left.cancelledAt ?? left.createdAt));
+    }
     const pendingRows = sortWarehouseTallyTasks<WarehouseTallyTaskSummary>(mappedRows.filter((row) => row.status === 'PENDING'));
     return query.status === 'PENDING' ? pendingRows : [...pendingRows, ...mappedRows.filter((row) => row.status !== 'PENDING')];
   }

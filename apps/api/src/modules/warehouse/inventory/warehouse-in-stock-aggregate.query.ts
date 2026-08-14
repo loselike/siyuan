@@ -30,6 +30,7 @@ export async function queryWarehouseInStockAggregate(
   const rows = await prisma.$queryRaw<WarehouseInStockAggregateRow[]>(Prisma.sql`
     WITH "filtered" AS (
       SELECT
+        "id",
         "combinedOrderNo",
         "customerOrderNo",
         "domesticTrackingNo",
@@ -41,6 +42,19 @@ export async function queryWarehouseInStockAggregate(
         "exceptions"
       FROM "WarehousePackage"
       WHERE ${aggregateWhere}
+    ),
+    "pending_tally_tickets" AS (
+      SELECT
+        COALESCE(
+          NULLIF(task."sourceCombinedOrderNo", ''),
+          NULLIF(filtered."combinedOrderNo", ''),
+          filtered."customerOrderNo" || '-' || filtered."domesticTrackingNo"
+        ) AS "ticketKey"
+      FROM "WarehouseTallyTask" task
+      JOIN "filtered" filtered ON filtered."id" = ANY(task."packageIds")
+      WHERE task."status" = 'PENDING'
+        AND task."tallyProgressStatus" IN ('WAITING', 'IN_PROGRESS')
+      GROUP BY 1
     ),
     "tickets" AS (
       SELECT
@@ -56,7 +70,7 @@ export async function queryWarehouseInStockAggregate(
       COALESCE(SUM("packageCount"), 0)::bigint AS "totalPackages",
       COALESCE(SUM("weightKg"::double precision * "packageCount"), 0::double precision) AS "totalWeightKg",
       COALESCE(SUM("cbm"::double precision), 0::double precision) AS "totalCbm",
-      (SELECT COUNT(*)::bigint FROM "tickets" WHERE "pendingTally") AS "pendingTallyTickets",
+      (SELECT COUNT(*)::bigint FROM "pending_tally_tickets") AS "pendingTallyTickets",
       (SELECT COUNT(*)::bigint FROM "tickets" WHERE "hasException") AS "exceptionTickets"
     FROM "filtered"
   `);

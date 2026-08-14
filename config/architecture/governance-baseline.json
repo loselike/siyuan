@@ -3050,12 +3050,12 @@
       "WarehouseTallyLifecycleController.cancelWarehouseTallyTask"
     ],
     [
-      "POST /warehouse/tally-tasks/:id/cancel-completed @ WarehouseTallyLifecycleController.cancelCompletedWarehouseTallyTask",
+      "POST /warehouse/tally-problem-tasks/:id/restart @ WarehouseTallyLifecycleController.restartWarehouseTallyProblemTask",
       "permission",
       [
-        "warehouse:tally-completed:reverse"
+        "warehouse:in-stock:tally"
       ],
-      "WarehouseTallyLifecycleController.cancelCompletedWarehouseTallyTask"
+      "WarehouseTallyLifecycleController.restartWarehouseTallyProblemTask"
     ],
     [
       "POST /warehouse/tally-tasks/:id/complete @ WarehouseTallyLifecycleController.completeWarehouseTallyTask",
@@ -3569,17 +3569,17 @@
       "apps/api/src/modules/notifications/notification.types.ts = apps/web/src/modules/notifications/notificationTypes.ts"
     ],
     "knownDuplicateRouteGroups": [],
-    "prismaRepositoryMethodsMax": 715,
-    "inMemoryRepositoryMethodsMax": 598,
+    "prismaRepositoryMethodsMax": 718,
+    "inMemoryRepositoryMethodsMax": 601,
     "hotspotLinesMax": {
-      "apps/api/src/modules/prisma.repository.ts": 31983,
-      "apps/api/src/modules/in-memory.repository.ts": 19416,
+      "apps/api/src/modules/prisma.repository.ts": 32129,
+      "apps/api/src/modules/in-memory.repository.ts": 19460,
       "apps/api/src/modules/data.controller.ts": 1945,
       "packages/shared/src/index.ts": 6339,
-      "apps/web/src/apiClient.ts": 2566,
+      "apps/web/src/apiClient.ts": 2562,
       "apps/web/src/styles.css": 13220,
       "apps/web/src/modules/testSupport/appTestHarness.tsx": 6473,
-      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4856,
+      "apps/web/src/modules/warehouse/WarehousePage.tsx": 4876,
       "apps/web/src/modules/pricing/PricingPage.tsx": 3699,
       "apps/web/src/modules/masterData/MasterDataPage.tsx": 3281
     }

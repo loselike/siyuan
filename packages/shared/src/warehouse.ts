@@ -568,6 +568,7 @@ export interface WarehouseTallyTaskSummary {
 
 export interface WarehouseTallyTaskListQuery {
   status?: WarehouseTallyTaskStatus;
+  problemOnly?: boolean | string;
   customerCode?: string;
   combinedOrderNo?: string;
   completedScope?: 'RECENT' | 'HISTORY' | 'ALL';

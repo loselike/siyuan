@@ -176,7 +176,7 @@ const linePoolTableLocale = { emptyText: '暂无符合条件的运单' };
 type OperationsFieldMaskKey = 'agent-short-name' | 'agent-company-name' | 'agent-channel' | 'agent-data' | 'payable-cost' | 'payable-status';
 
 function operationsFieldMaskPermissionCode(key: OperationsFieldMaskKey): string {
-  return `system:workspace-mask:operations:${key}`;
+  return `system:global-mask:${key}`;
 }
 
 export function getOperationsFieldVisibility(role: RoleKey, permissions: readonly string[]) {

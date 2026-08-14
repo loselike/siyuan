@@ -71,6 +71,7 @@ export class AuthController {
       id: account.id,
       username: account.username,
       role: account.role,
+      assignedRole: account.assignedRole,
       site: account.site,
       customerId: account.customerId,
       name: account.name,
@@ -79,7 +80,7 @@ export class AuthController {
       nickname: account.nickname,
       mustChangePassword: account.mustChangePassword
     };
-    const permissions = await this.repository.getPermissionsForRole(account.role);
+    const permissions = await this.repository.getPermissionsForRole(account.assignedRole ?? account.role);
     principal.dataScope = permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
     await this.repository.recordLoginLog(principal, loginMeta);
     loginRateBuckets.delete(loginAccountRateKey);
@@ -101,7 +102,7 @@ export class AuthController {
   @RequireAuth()
   async session(@Req() request: { user: Principal }) {
     const user = await this.repository.getProfile(request.user);
-    const permissions = await this.repository.getPermissionsForRole(user.role);
+    const permissions = await this.repository.getPermissionsForRole(user.assignedRole ?? user.role);
     user.dataScope = permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
     return { user, permissions };
   }

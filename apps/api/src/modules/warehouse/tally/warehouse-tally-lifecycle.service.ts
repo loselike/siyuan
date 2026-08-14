@@ -11,9 +11,6 @@ type WarehouseTallyTaskCreateInput = Parameters<
 type WarehouseTallyTaskUpdateInput = Parameters<
   WarehouseTallyLifecycleRepository['updateWarehouseTallyTask']
 >[2];
-type WarehouseTallyTaskCancelInput = Parameters<
-  WarehouseTallyLifecycleRepository['cancelCompletedWarehouseTallyTask']
->[2];
 type WarehouseTallyTaskCompleteInput = Parameters<
   WarehouseTallyLifecycleRepository['completeWarehouseTallyTask']
 >[2];
@@ -45,8 +42,8 @@ export class WarehouseTallyLifecycleService {
     return this.repository.cancelWarehouseTallyTask(principal, id);
   }
 
-  cancelCompleted(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput) {
-    return this.repository.cancelCompletedWarehouseTallyTask(principal, id, input);
+  restartProblem(principal: Principal, id: string) {
+    return this.repository.restartWarehouseTallyProblemTask(principal, id);
   }
 
   updateCompletedCount(

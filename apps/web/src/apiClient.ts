@@ -269,7 +269,6 @@ import type {
   WarehouseTallyLabelScanResponse,
   WarehouseTallyTaskCompleteInput,
   WarehouseTallyTaskCompletedCountUpdateInput,
-  WarehouseTallyTaskCancelInput,
   WarehouseTallyHistoricalAggregateCorrectionPreview,
   WarehouseTallyHistoricalAggregateCorrectionInput,
   WarehouseTallyHistoricalAggregateCorrectionResult,
@@ -1540,6 +1539,10 @@ export class ApiClient {
     return this.request(`/warehouse/tally-tasks/${id}/cancel`, { method: 'POST' });
   }
 
+  async restartWarehouseTallyProblemTask(id: string): Promise<WarehouseTallyTaskSummary> {
+    return this.request(`/warehouse/tally-problem-tasks/${id}/restart`, { method: 'POST' });
+  }
+
   async completeWarehouseTallyTask(id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/complete`, { method: 'POST', body: JSON.stringify(input) });
   }
@@ -1556,13 +1559,6 @@ export class ApiClient {
 
   async reverseReviewWarehouseTallyTask(id: string): Promise<WarehouseTallyTaskSummary> {
     return this.request(`/warehouse/tally-tasks/${id}/reverse-review`, { method: 'POST' });
-  }
-
-  async cancelCompletedWarehouseTallyTask(id: string, input: WarehouseTallyTaskCancelInput): Promise<WarehouseTallyTaskSummary> {
-    return this.request(`/warehouse/tally-tasks/${id}/cancel-completed`, {
-      method: 'POST',
-      body: JSON.stringify(input)
-    });
   }
 
   async warehouseTallyHistoricalAggregateCorrectionPreview(id: string): Promise<WarehouseTallyHistoricalAggregateCorrectionPreview> {

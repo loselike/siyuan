@@ -44,6 +44,7 @@ import {
 import { PayerBankAccountService } from './finance/payer-bank/payer-bank-account.service.js';
 import { FinanceReceivableController } from './finance/receivable/finance-receivable.controller.js';
 import { FinanceReceivableService } from './finance/receivable/finance-receivable.service.js';
+import { GlobalFieldMaskInterceptor } from './global-field-mask.interceptor.js';
 import { WATER_RECEIPT_ALLOCATION_REPOSITORY } from './finance/water-receipt/water-receipt-allocation.repository.js';
 import { WaterReceiptAllocationService } from './finance/water-receipt/water-receipt-allocation.service.js';
 import { WATER_RECEIPT_LIFECYCLE_REPOSITORY } from './finance/water-receipt/water-receipt-lifecycle.repository.js';
@@ -473,6 +474,10 @@ const systemIdentityAdminRepositoryProvider = {
     {
       provide: APP_INTERCEPTOR,
       useClass: AuditInterceptor
+    },
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: GlobalFieldMaskInterceptor
     }
   ]
 })

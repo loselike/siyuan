@@ -14,7 +14,7 @@ export type PermissionWorkspaceKey =
   | 'master'
   | 'system';
 
-export type WorkspaceFieldMaskKey =
+export type GlobalFieldMaskKey =
   | 'agent-short-name'
   | 'agent-company-name'
   | 'agent-channel'
@@ -22,7 +22,7 @@ export type WorkspaceFieldMaskKey =
   | 'payable-cost'
   | 'payable-status';
 
-export const firstLevelFieldMaskCatalog: Array<{ key: WorkspaceFieldMaskKey; label: string; description: string }> = [
+export const globalFieldMaskCatalog: Array<{ key: GlobalFieldMaskKey; label: string; description: string }> = [
   { key: 'agent-short-name', label: '屏蔽代理简称', description: '不返回代理简称字段。' },
   { key: 'agent-company-name', label: '屏蔽代理详细公司名', description: '不返回代理详细公司名字段。' },
   { key: 'agent-channel', label: '屏蔽代理渠道', description: '不返回代理渠道字段。' },
@@ -31,20 +31,12 @@ export const firstLevelFieldMaskCatalog: Array<{ key: WorkspaceFieldMaskKey; lab
   { key: 'payable-status', label: '屏蔽应付状态', description: '不返回应付结算、核销和锁定状态字段。' }
 ];
 
-export const firstLevelFieldMaskCatalogByWorkspace: Partial<Record<PermissionWorkspaceKey, typeof firstLevelFieldMaskCatalog>> = {
-  operations: firstLevelFieldMaskCatalog
-};
-
-export function getFirstLevelFieldMaskCatalog(workspace: PermissionWorkspaceKey) {
-  return firstLevelFieldMaskCatalogByWorkspace[workspace] ?? [];
+export function globalFieldMaskPermissionCode(mask: GlobalFieldMaskKey): PermissionKey {
+  return `system:global-mask:${mask}` as PermissionKey;
 }
 
-export function workspaceFieldMaskPermissionCode(workspace: PermissionWorkspaceKey, mask: WorkspaceFieldMaskKey): PermissionKey {
-  return `system:workspace-mask:${workspace}:${mask}` as PermissionKey;
-}
-
-export function isWorkspaceFieldMaskPermission(code: string): boolean {
-  return code.startsWith('system:workspace-mask:');
+export function isGlobalFieldMaskPermission(code: string): boolean {
+  return code.startsWith('system:global-mask:');
 }
 
 export type OrderEntryPermissionKey = 'edit' | 'business-cost' | 'payable-fee';
@@ -383,7 +375,7 @@ export function getWorkspacePermissionGroups(
     const permissions = permissionGroups
       .filter(([candidate]) => candidate === prefix || candidate.startsWith(`${prefix} / `))
       .flatMap(([, groupPermissions]) => groupPermissions)
-      .filter((permission) => !isWorkspaceFieldMaskPermission(permission.code))
+      .filter((permission) => !isGlobalFieldMaskPermission(permission.code))
       .filter((permission) => !isOrderEntryPermission(permission.code))
       .filter((permission) => !permission.code.includes('-block'))
       .filter((permission) => !isMarketPendingRoutingMaskPermission(permission.code))

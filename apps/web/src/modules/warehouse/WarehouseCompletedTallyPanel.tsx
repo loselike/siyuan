@@ -26,12 +26,10 @@ export function WarehouseCompletedTallyPanel({
   completedArchiveRows,
   completedTaskByKey,
   canViewDetail,
-  canUpdateCount,
   canGenerateLabel,
   canPrintLabel,
   canDownloadLabel,
   onViewTask,
-  onUpdateCount,
   onGenerateLabel,
   onPrintLabel,
   onDownloadLabel,
@@ -53,12 +51,10 @@ export function WarehouseCompletedTallyPanel({
   completedArchiveRows: WarehouseInboundPackage[];
   completedTaskByKey: ReadonlyMap<string, WarehouseTallyTaskSummary>;
   canViewDetail: boolean;
-  canUpdateCount: boolean;
   canGenerateLabel: boolean;
   canPrintLabel: boolean;
   canDownloadLabel: boolean;
   onViewTask: (task: WarehouseTallyTaskSummary) => void;
-  onUpdateCount: (task: WarehouseTallyTaskSummary) => void;
   onGenerateLabel: (task: WarehouseTallyTaskSummary) => void;
   onPrintLabel: (task: WarehouseTallyTaskSummary) => void;
   onDownloadLabel: (task: WarehouseTallyTaskSummary) => void;
@@ -200,7 +196,6 @@ export function WarehouseCompletedTallyPanel({
               render: (_, task) => (
                 <Space size={6}>
                   {canViewDetail ? <Button size="small" onClick={() => onViewTask(task)}>查看</Button> : null}
-                  {canUpdateCount && task.tallyProgressStatus !== 'CANCELLED' ? <Button size="small" danger onClick={() => onUpdateCount(task)}>取消理货</Button> : null}
                   {task.tallyProgressStatus !== 'CANCELLED' && (canGenerateLabel || canPrintLabel || canDownloadLabel) ? (
                     <>
                       {!task.labelNo && canGenerateLabel ? <Button size="small" onClick={() => onGenerateLabel(task)}>生成标签</Button> : null}

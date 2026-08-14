@@ -488,32 +488,29 @@ import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse
 import { queryWarehouseInStockAggregate } from './warehouse/inventory/warehouse-in-stock-aggregate.query.js';
 import {
   allPermissions,
-  allRuntimePermissions,
   buildRolePermissionRow,
+  configuredPermissionsForRole,
   defaultPermissionsForRole,
   effectivePermissionsForRole,
-  filterWarehousePackageUpdatePermissions,
-  getForbiddenWarehousePackageUpdatePermissions,
   getPermissionDefinitions,
   getNewlyAddedMarketSensitivePermissions,
   getRoleMetadata,
   isAdministratorRole,
   isBuiltinRoleKey,
+  isPaymentVoucherGloballyMasked,
   normalizeRolePermissions,
   permissionDefinitions,
   protectedDataScopePermissions,
   roleMetadata,
   toSessionRole,
   withImpliedUiPreferencePermissions,
-  workspaceFieldMaskKeys,
-  workspaceFieldMaskKeysForWorkspace,
-  workspaceFieldMaskPermissionCode,
+  globalFieldMaskKeys,
+  globalFieldMaskPermissionCode,
   type PermissionKey,
   type Principal,
   type RoleKey,
   type RolePermissionRow,
-  type PermissionWorkspaceKey,
-  type WorkspaceFieldMaskKey
+  type GlobalFieldMaskKey
 } from './rbac.js';
 import { pricingMarkupActionPermission, pricingMarkupModules, pricingMarkupViewPermission } from './pricing-markup-permissions.js';
 import { customerServiceProblemPermissionsForStatus } from './problem-ticket-permissions.js';
@@ -556,7 +553,7 @@ type ReviewRestoreInputWithManual = ShipmentRestoreInput & {
   manualCreatedAt?: string;
 };
 
-type WorkspaceFieldMaskState = Record<WorkspaceFieldMaskKey, boolean>;
+type GlobalFieldMaskState = Record<GlobalFieldMaskKey, boolean>;
 
 type WarehouseRentVisibilityScope = {
   mode: 'ALL' | 'SELF' | 'TEAM' | 'SITE' | 'NONE';
@@ -1263,7 +1260,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return (await this.mapShipmentResponses([row]))[0];
   }
 
-  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; fieldMaskWorkspace?: PermissionWorkspaceKey; includeLinePoolFinanceSummary?: boolean } = {}): Promise<Shipment[]> {
+  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; includeLinePoolFinanceSummary?: boolean } = {}): Promise<Shipment[]> {
     const [canViewAgentIdentity, canViewLegacyMarketCostDetails, canViewLegacyMarketCostTotals, canViewRoutedCostDetails, canViewRoutedCostTotals, canViewReceivableSummary, canViewCustomerServiceAgent, canViewCustomerServiceTransferAgentWeight, canViewShipmentAgentWeight] = await Promise.all([
       this.hasAnyPermission(principal.role, [
         'master-data:agents:read',
@@ -1298,9 +1295,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         : Promise.resolve(false),
       this.canViewShipmentAgentWeight(principal)
     ]);
-    const fieldMaskWorkspace = options.fieldMaskWorkspace
-      ?? (options.salesScopeMode === 'ENTRY_ONLY' ? 'operations' : undefined);
-    const fieldMasks = await this.getWorkspaceFieldMaskState(principal, fieldMaskWorkspace);
+    const fieldMasks = await this.getGlobalFieldMaskState(principal);
     const canViewLinePoolFinanceSummary = options.includeLinePoolFinanceSummary === true && (
       await this.hasPermission(principal.role, 'operations:line-shipment:process')
       || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view')
@@ -1854,8 +1849,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   async getLineShipmentPool(principal: Principal, query: LineShipmentPoolQuery = {}): Promise<LineShipmentPoolResponse> {
     const allRows = (await this.getShipments(principal, {
       salesScopeMode: 'ENTRY_ONLY',
-      includeLinePoolFinanceSummary: true,
-      fieldMaskWorkspace: 'operations'
+      includeLinePoolFinanceSummary: true
     })).filter((shipment) => shipment.businessType === 'DEDICATED_LINE');
     const packageSummariesByShipmentId = await this.buildLineShipmentPackageSummaries(allRows);
     const shipmentIds = allRows.map((shipment) => shipment.id);
@@ -3314,38 +3308,26 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
-    if (isAdministratorRole(role)) {
-      return true;
-    }
     const row = await this.prisma.role.findUnique({
       where: { name: role },
       include: { permissions: true }
     });
-    if (row && row.enabled !== true) {
+    if (!isAdministratorRole(role) && row && row.enabled !== true) {
       return false;
     }
-    const permissions = filterWarehousePackageUpdatePermissions(
-      role,
-      row?.label ?? getRoleMetadata(role).label,
-      resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey))
-    );
+    const permissions = resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey));
     return permissions.includes(permission) || hasEffectivePricingCapability(permissions, permission);
   }
 
   async getPermissionsForRole(role: RoleKey): Promise<PermissionKey[]> {
-    if (isAdministratorRole(role)) return allRuntimePermissions();
     const row = await this.prisma.role.findUnique({
       where: { name: role },
       include: { permissions: true }
     });
-    if (row && row.enabled !== true) {
+    if (!isAdministratorRole(role) && row && row.enabled !== true) {
       return [];
     }
-    const permissions = filterWarehousePackageUpdatePermissions(
-      role,
-      row?.label ?? getRoleMetadata(role).label,
-      resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey))
-    );
+    const permissions = resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey));
     if (permissions.includes('data-scope:sales-own')) this.salesScopedRoleCache.add(role);
     else this.salesScopedRoleCache.delete(role);
     return permissions;
@@ -3422,7 +3404,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     principal.username = account.username;
     principal.assignedRole = account.role.name as RoleKey;
-    principal.role = toSessionRole(account.role.name as RoleKey);
+    principal.role = account.role.name as RoleKey;
     principal.site = account.site ?? undefined;
     principal.customerId = account.customerId ?? undefined;
     principal.name = account.name ?? undefined;
@@ -3433,12 +3415,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     principal.departmentId = account.departmentId ?? undefined;
     principal.directManagerId = account.directManagerId ?? undefined;
     principal.departmentTeamScope = undefined;
-    const permissions = await this.getPermissionsForRole(principal.role);
+    const permissions = await this.getPermissionsForRole(principal.assignedRole);
     principal.shipmentAllView = permissions.includes('business:shipment:all-view');
     principal.dataScope = principal.shipmentAllView
       ? undefined
       : permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
-    if (isAdministratorRole(principal.role) || !permissions.includes('business:shipment:team-view')) return permissions;
+    if (isAdministratorRole(principal.assignedRole) || !permissions.includes('business:shipment:team-view')) return permissions;
     const hasDirectReports = await this.prisma.user.count({ where: { directManagerId: account.id } }) > 0;
     if (!account.site) {
       if (principal.shipmentAllView && !hasDirectReports) return permissions;
@@ -3912,11 +3894,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (source?.enabled === false) {
         throw new BadRequestException('停用用户组不能作为权限复制来源');
       }
-      const sourcePermissions = resolveStoredRolePermissions(sourceRoleKey, source?.permissions.map((item) => item.code as PermissionKey));
-      if (getForbiddenWarehousePackageUpdatePermissions(code, normalized.label, sourcePermissions).length > 0) {
-        throw new ForbiddenException('来源用户组包含新用户组不能继承的仓库包裹修改权限');
-      }
-      const permissions = filterWarehousePackageUpdatePermissions(code, normalized.label, sourcePermissions);
+      const sourcePermissions = resolveStoredRolePermissionsForManagement(sourceRoleKey, source?.permissions.map((item) => item.code as PermissionKey));
+      const permissions = [...sourcePermissions];
       if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions([], permissions).length > 0) {
         throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
       }
@@ -3975,11 +3954,10 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if ((before.label ?? '').trim() !== '仓库理货' && normalized.label === '仓库理货') {
       await this.ensurePermission(principal, 'system:role-permissions:save', '改为仓库理货岗位需要用户组授权权限');
     }
-    const currentPermissions = resolveStoredRolePermissions(role, before.permissions.map((item) => item.code as PermissionKey));
-    const effectivePermissions = filterWarehousePackageUpdatePermissions(role, normalized.label, currentPermissions);
+    const configuredPermissions = resolveStoredRolePermissionsForManagement(role, before.permissions.map((item) => item.code as PermissionKey));
     const persistedPermissions = before.permissions.some((item) => item.code === rolePermissionConfigurationMarker)
-      ? [...effectivePermissions, rolePermissionConfigurationMarker]
-      : effectivePermissions;
+      ? [...configuredPermissions, rolePermissionConfigurationMarker]
+      : configuredPermissions;
     const duplicated = await transaction.role.findFirst({ where: { label: normalized.label, name: { not: role } } });
     if (duplicated) {
       throw new BadRequestException('用户组名称已存在');
@@ -4060,9 +4038,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async updateRolePermissions(principal: Principal, role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
     await this.ensurePermission(principal, 'system:role-permissions:save', '无权维护用户组权限');
-    if (isAdministratorRole(role)) {
-      throw new BadRequestException('管理员组是受保护的内置角色，不能修改权限');
-    }
     return this.prisma.$transaction(async (transaction) => {
     await this.lockRolePermissionGraphMutation(transaction);
     const existing = await transaction.role.findUnique({ where: { name: role }, include: { permissions: true } });
@@ -4072,22 +4047,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const before = resolveStoredRolePermissions(role, existing?.permissions.map((item) => item.code as PermissionKey));
     const normalized = normalizeRolePermissions(role, permissions);
     normalized.push(...protectedDataScopePermissions.filter((permission) => before.includes(permission)));
-    const roleLabel = existing?.label ?? getRoleMetadata(role).label;
-    if (getForbiddenWarehousePackageUpdatePermissions(role, roleLabel, normalized).length > 0) {
-      throw new ForbiddenException('仓库包裹修改权限只能授予仓库综合、仓库收货或仓库理货岗位');
-    }
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, normalized).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
-    const effectivePermissions = filterWarehousePackageUpdatePermissions(role, roleLabel, normalized);
+    const effectivePermissions = normalized;
     const roleHasDirectReports = await transaction.user.findFirst({
       where: { role: { name: role }, directReports: { some: {} } },
       select: { id: true }
     });
-    if (roleHasDirectReports && !effectivePermissions.includes('business:shipment:team-view')) {
+    if (!isAdministratorRole(role) && roleHasDirectReports && !effectivePermissions.includes('business:shipment:team-view')) {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能移除团队管理权限');
     }
-    if (roleHasDirectReports && effectivePermissions.includes('business:shipment:all-view')) {
+    if (!isAdministratorRole(role) && roleHasDirectReports && effectivePermissions.includes('business:shipment:all-view')) {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能授予全部运单查看权限');
     }
     for (const permission of effectivePermissions) {
@@ -4166,12 +4137,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       }
 
       const before = resolveStoredRolePermissions(role, target.permissions.map((item) => item.code as PermissionKey));
-      const sourcePermissions = resolveStoredRolePermissions(sourceRoleKey, source?.permissions.map((item) => item.code as PermissionKey));
+      const sourcePermissions = resolveStoredRolePermissionsForManagement(sourceRoleKey, source?.permissions.map((item) => item.code as PermissionKey));
       if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, sourcePermissions).length > 0) {
         throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
-      }
-      if (getForbiddenWarehousePackageUpdatePermissions(role, target.label ?? undefined, sourcePermissions).length > 0) {
-        throw new ForbiddenException('来源用户组包含目标岗位不能继承的仓库包裹修改权限');
       }
       const roleHasDirectReports = await transaction.user.findFirst({
         where: { role: { name: role }, directReports: { some: {} } },
@@ -4337,6 +4305,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
     const voucher = await this.prisma.paymentVoucher.findFirst({ where: { url } });
     if (!voucher) throw new NotFoundException('凭证图片不存在');
+    if (isPaymentVoucherGloballyMasked(principal.globalFieldMasks)) {
+      throw new ForbiddenException('总规则已屏蔽付款凭证');
+    }
     const permissions: PermissionKey[] = voucher.pendingPaymentId
       ? ['finance:pending-payment:bill-voucher-view']
       : voucher.paymentApplicationId && voucher.voucherType === 'PAYMENT_RECEIPT'
@@ -8620,8 +8591,6 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async replenishWarehouseSameSpec(principal: Principal, id: string, input: WarehouseSameSpecReplenishInput): Promise<WarehouseSameSpecReplenishResponse> {
-    const permissions = await this.getPermissionsForRole(principal.role);
-    const salesOwnScope = permissions.includes('data-scope:sales-own');
     const supplementCount = Number(input.supplementCount);
     const requestId = typeof input.requestId === 'string' ? input.requestId.trim() : '';
     if (!Number.isInteger(supplementCount) || supplementCount < 1 || supplementCount > 500) {
@@ -8634,18 +8603,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "WarehousePackage" WHERE "id" = ${id} FOR UPDATE`);
       const source = await tx.warehousePackage.findUnique({ where: { id } });
       if (!source) throw new NotFoundException('仓库包裹不存在');
-      await this.ensureWarehousePackageEditPermission(principal, source, '没有同箱规补录权限');
-      if (!isAdministratorRole(principal.role) && !principal.shipmentAllView) {
-        if (salesOwnScope) {
-          const customer = await tx.customer.findUnique({ where: { code: source.customerCode }, select: { salesperson: true } });
-          const identities = [principal.username, principal.name, principal.nickname].filter(Boolean);
-          if (!customer?.salesperson || !identities.includes(customer.salesperson)) {
-            throw new ForbiddenException('只能对本人归属客户的包裹补录');
-          }
-        } else if (!principal.site || source.site !== principal.site) {
-          throw new ForbiddenException('只能对本站包裹补录');
-        }
-      }
+      await this.ensureWarehousePackageEditPermission(principal, source, '没有同箱规补录权限', tx);
       if (source.status !== 'RECEIVED' || source.systemOrderNo || source.shipmentId || source.tallyTaskId) {
         throw new BadRequestException('仅未录单、未理货、未合票且未出库的在仓过机记录可以同箱规补录');
       }
@@ -9001,7 +8959,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!existing) {
         throw new NotFoundException('仓库包裹不存在');
       }
-      await this.ensureWarehousePackageEditPermission(principal, existing, '当前角色不能修改该日期范围内的仓库包裹备注');
+      await this.ensureWarehousePackageEditPermission(principal, existing, '当前角色不能修改该日期范围内的仓库包裹备注', tx);
       if (!canUpdateUnenteredWarehousePackage(existing.status as WarehousePackageStatus, existing.shipmentId)) {
         throw new BadRequestException('只有有效在仓包裹可以修改备注');
       }
@@ -9060,6 +9018,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (domesticTrackingNo.length > 64) {
       throw new BadRequestException('快递单号最长 64 位');
     }
+    await this.ensureWarehousePackageCustomerScope(principal, customerCode);
     const expectedTotalPackageCount = input.expectedTotalPackageCount === undefined
       ? existing.expectedTotalPackageCount
       : Math.max(1, Math.floor(Number(input.expectedTotalPackageCount) || 1));
@@ -9106,6 +9065,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!current) {
         throw new NotFoundException('仓库包裹不存在');
       }
+      await this.ensureWarehousePackageEditPermission(principal, current, '当前角色不能修改该日期范围内的仓库包裹', tx);
+      await this.ensureWarehousePackageCustomerScope(principal, customerCode, tx);
       if (new Date(current.updatedAt).getTime() !== new Date(existing.updatedAt).getTime()) {
         throw new BadRequestException('包裹数据已发生变化，请刷新后重试');
       }
@@ -9253,7 +9214,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!existing) {
         throw new NotFoundException('仓库包裹不存在');
       }
-      await this.ensureWarehousePackageEditPermission(principal, existing, '当前角色不能修改该日期范围内的仓库包裹异常');
+      await this.ensureWarehousePackageEditPermission(principal, existing, '当前角色不能修改该日期范围内的仓库包裹异常', tx);
       if (!canUpdateUnenteredWarehousePackage(existing.status as WarehousePackageStatus, existing.shipmentId)) {
         throw new BadRequestException('只有有效在仓包裹可以修改异常');
       }
@@ -9834,22 +9795,168 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         return mapWarehouseTallyTask(existing);
       }
       if (existing.status !== 'PENDING') {
-        throw new BadRequestException('只有未完成理货任务可以取消');
+        throw new BadRequestException('只有未完成理货任务可以退回重理');
+      }
+      if (existing.packageIds.length) {
+        await tx.$queryRaw(Prisma.sql`
+          SELECT "id"
+          FROM "WarehousePackage"
+          WHERE "id" IN (${Prisma.join(existing.packageIds)})
+          ORDER BY "id"
+          FOR UPDATE
+        `);
+      }
+      const sourceRows = await tx.warehousePackage.findMany({
+        where: { id: { in: existing.packageIds } },
+        include: { consolidationItems: { select: { id: true } } }
+      });
+      if (sourceRows.length !== existing.packageIds.length) {
+        throw new BadRequestException('理货原始包裹不存在，无法退回重理');
+      }
+      if (sourceRows.some((row: any) =>
+        row.status === 'CONSOLIDATED'
+        || row.status === 'SHIPPED'
+        || row.shipmentId
+        || row.systemOrderNo
+        || (row.consolidationItems?.length ?? 0) > 0
+      )) {
+        throw new BadRequestException('理货任务已合票或出库，不能退回重理');
       }
       const updated = await tx.warehouseTallyTask.update({
         where: { id },
-        data: { status: 'CANCELLED' }
+        data: {
+          status: 'CANCELLED',
+          tallyProgressStatus: 'CANCELLED',
+          cancelReason: '退回重理',
+          cancelledAt: new Date(),
+          cancelledBy: principal.username
+        }
+      });
+      const linkedPackages = sourceRows.filter((row: any) => row.tallyTaskId === id);
+      if (linkedPackages.length) {
+        await tx.warehousePackage.updateMany({
+          where: {
+            id: { in: linkedPackages.map((row: any) => row.id) },
+            tallyTaskId: id,
+            shipmentId: null,
+            systemOrderNo: null
+          },
+          data: {
+            status: 'RECEIVED',
+            tallyTaskId: null,
+            tallyTaskNo: null,
+            archivedByPackageId: null,
+            archivedByPackageNo: null,
+            archivedReason: null,
+            archivedAt: null
+          }
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally.return_for_rework',
+          target: id,
+          before: toAuditJson(mapWarehouseTallyTask(existing)),
+          after: toAuditJson({
+            task: mapWarehouseTallyTask(updated),
+            restoredPackageIds: linkedPackages.map((row: any) => row.id)
+          })
+        }
+      });
+      return mapWarehouseTallyTask(updated);
+    });
+  }
+
+  async restartWarehouseTallyProblemTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensurePermission(principal, 'warehouse:in-stock:tally', '没有重新发起理货权限');
+    const scope = this.operatorCustomerScope(principal);
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "WarehouseTallyTask" WHERE "id" = ${id} FOR UPDATE
+      `);
+      const existing = await tx.warehouseTallyTask.findUnique({ where: { id } });
+      if (!existing) throw new NotFoundException('理货问题件不存在');
+      if (existing.status !== 'CANCELLED' || existing.tallyProgressStatus !== 'CANCELLED') {
+        throw new BadRequestException('只有理货问题件可以重新发起理货');
+      }
+      const scopedPackageCount = !scope ? 1 : await tx.warehousePackage.count({
+        where: { id: { in: existing.packageIds }, salesperson: { in: scope } }
+      });
+      if (!scopedPackageCount) throw new ForbiddenException('当前账号不能处理该理货问题件');
+      const alreadyRestarted = await tx.warehouseTallyTask.findFirst({
+        where: { previousTallyTaskId: id, status: 'PENDING' },
+        orderBy: [{ createdAt: 'desc' }]
+      });
+      if (alreadyRestarted) return mapWarehouseTallyTask(alreadyRestarted);
+      if (existing.packageIds.length) {
+        await tx.$queryRaw(Prisma.sql`
+          SELECT "id"
+          FROM "WarehousePackage"
+          WHERE "id" IN (${Prisma.join(existing.packageIds)})
+          ORDER BY "id"
+          FOR UPDATE
+        `);
+      }
+      const packages = await tx.warehousePackage.findMany({
+        where: { id: { in: existing.packageIds } },
+        orderBy: [{ createdAt: 'asc' }]
+      });
+      if (packages.length !== existing.packageIds.length || packages.some((row: any) => row.status !== 'RECEIVED')) {
+        throw new BadRequestException('理货问题件原始包裹已被其他流程处理，请刷新后重试');
+      }
+      if (packages.some((row: any) => row.shipmentId || row.systemOrderNo || row.status === 'CONSOLIDATED' || row.status === 'SHIPPED')) {
+        throw new BadRequestException('理货问题件已合票或出库，不能重新发起理货');
+      }
+      if (packages.some((row: any) => row.measurementStatus === 'PENDING_REMEASURE')) {
+        throw new BadRequestException('理货问题件待重新过机，完成测量后才能再次理货');
+      }
+      const conflict = await tx.warehouseTallyTask.findFirst({
+        where: { status: 'PENDING', packageIds: { hasSome: existing.packageIds } }
+      });
+      if (conflict) throw new BadRequestException('包裹正在其他理货任务中，请刷新后重试');
+      const taskNoPrefix = existing.taskNo.match(/^(.*LH)\d{2}$/)?.[1] ?? (existing.taskNo.endsWith('LH') ? existing.taskNo : `${existing.taskNo}LH`);
+      const existingTaskNos = await tx.warehouseTallyTask.findMany({
+        where: { taskNo: { startsWith: taskNoPrefix } },
+        select: { taskNo: true }
+      });
+      const restarted = await tx.warehouseTallyTask.create({
+        data: {
+          id: randomUUID(),
+          taskNo: nextWarehouseRetallyTaskNo(existing.taskNo, existingTaskNos.map((task: { taskNo: string }) => task.taskNo)),
+          tallyChannel: existing.tallyChannel,
+          tallyProgressStatus: 'WAITING',
+          rootTallyTaskId: existing.rootTallyTaskId ?? existing.id,
+          previousTallyTaskId: existing.id,
+          tallySequence: Number(existing.tallySequence ?? 1) + 1,
+          packageIds: existing.packageIds,
+          sourcePackageId: existing.sourcePackageId,
+          sourceCombinedOrderNo: existing.sourceCombinedOrderNo,
+          customerCode: existing.customerCode,
+          customerName: existing.customerName,
+          salesperson: existing.salesperson,
+          packageCount: existing.packageCount,
+          originalWeightKg: existing.originalWeightKg,
+          originalLengthCm: existing.originalLengthCm,
+          originalWidthCm: existing.originalWidthCm,
+          originalHeightCm: existing.originalHeightCm,
+          originalVolumetricWeightKg: existing.originalVolumetricWeightKg,
+          originalVolumetricWeightKg5000: existing.originalVolumetricWeightKg5000,
+          tallyRequirement: existing.tallyRequirement,
+          remark: existing.remark,
+          createdBy: principal.username
+        }
       });
       await tx.auditLog.create({
         data: {
           actorId: principal.id,
-          action: 'warehouse.tally.cancel',
-          target: id,
+          action: 'warehouse.tally.restart_from_problem',
+          target: restarted.id,
           before: toAuditJson(mapWarehouseTallyTask(existing)),
-          after: toAuditJson(mapWarehouseTallyTask(updated))
+          after: toAuditJson(mapWarehouseTallyTask(restarted))
         }
       });
-      return mapWarehouseTallyTask(updated);
+      return mapWarehouseTallyTask(restarted);
     });
   }
 
@@ -18498,30 +18605,17 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!canTransitionShipment(shipment.status as ShipmentStatus, 'OUTBOUNDED')) {
       throw new BadRequestException('当前状态不允许出库');
     }
-    const [routeLog, activePayables, activeSystemPayables] = await Promise.all([
-      this.prisma.auditLog.findFirst({
-        where: { action: 'shipment.route', target: shipment.id },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true, after: true, createdAt: true }
-      }),
-      (this.prisma as any).shipmentFinanceItem.findMany({
-        where: { shipmentId: shipment.id, type: 'PAYABLE', voided: false },
-        select: { amount: true, agentName: true }
-      }),
-      (this.prisma as any).payableFee.findMany({
-        where: { shipmentId: shipment.id, amount: { gt: 0 } },
-        select: { amount: true }
-      })
-    ]);
+    const routeLog = await this.prisma.auditLog.findFirst({
+      where: { action: 'shipment.route', target: shipment.id },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, after: true, createdAt: true }
+    });
     if (!routeLog) {
       throw new BadRequestException('运单排货后才能出库');
     }
     const routed = routeLog.after as { agentId?: string; agentChannelName?: string } | null | undefined;
-    const hasCurrentAgentPayable = activePayables.some((item: any) => (
-      Number(item.amount) > 0 && item.agentName === shipment.agent?.name
-    )) || activeSystemPayables.some((item: any) => Number(item.amount) > 0);
-    if (!shipment.agentId || !shipment.channelId || !routed?.agentChannelName || !hasCurrentAgentPayable) {
-      throw new BadRequestException('请先完成代理、渠道和应付成本后再出库');
+    if (!shipment.agentId || !shipment.channelId || !routed?.agentChannelName) {
+      throw new BadRequestException('请先完成代理和渠道后再出库');
     }
     const handover = await this.latestWarehouseHandover(shipment.id);
     if (!handover || handover.agentId !== shipment.agentId) {
@@ -20850,14 +20944,48 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   private async ensureWarehousePackageEditPermission(
     principal: Principal,
-    pkg: { scanTime?: string | Date | null; createdAt?: string | Date | null },
-    message: string
+    pkg: { scanTime?: string | Date | null; createdAt?: string | Date | null; customerCode?: string | null; salesperson?: string | null },
+    message: string,
+    client: any = this.prisma
   ): Promise<void> {
     if (this.isWarehousePackageToday(pkg)) {
       await this.ensureAnyPermission(principal, ['warehouse:today-receipt:edit', 'warehouse:in-stock:edit'], message);
-      return;
+    } else {
+      await this.ensurePermission(principal, 'warehouse:in-stock:edit', message);
     }
-    await this.ensurePermission(principal, 'warehouse:in-stock:edit', message);
+    const salespeople = this.warehousePackageSalesScope(principal);
+    if (!salespeople) return;
+    const customerCode = pkg.customerCode?.trim();
+    const salesperson = customerCode
+      ? (await client.customer.findFirst({
+          where: { code: customerCode },
+          select: { salesperson: true }
+        }))?.salesperson?.trim()
+      : undefined;
+    if (!salesperson || !salespeople.includes(salesperson)) {
+      throw new ForbiddenException('只能修改本人或当前部门成员名下的仓库包裹');
+    }
+  }
+
+  private warehousePackageSalesScope(principal: Principal): string[] | undefined {
+    if (isAdministratorRole(principal.role)
+      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)) return undefined;
+    const team = principal.departmentTeamScope?.filter(Boolean);
+    return Array.from(new Set(team?.length
+      ? team
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
+  }
+
+  private async ensureWarehousePackageCustomerScope(principal: Principal, customerCode: string, client: any = this.prisma): Promise<void> {
+    const salespeople = this.warehousePackageSalesScope(principal);
+    if (!salespeople) return;
+    const customer = await client.customer.findFirst({
+      where: { code: customerCode },
+      select: { salesperson: true }
+    });
+    if (!customer?.salesperson || !salespeople.includes(customer.salesperson)) {
+      throw new ForbiddenException('只能将包裹归属到本人或当前部门成员名下的客户');
+    }
   }
 
   private async ensureWarehouseMachineImportPermission(principal: Principal, parsed: ParsedWarehouseMachineImport): Promise<void> {
@@ -20905,15 +21033,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return false;
   }
 
-  private async getWorkspaceFieldMaskState(principal: Principal, workspace?: PermissionWorkspaceKey): Promise<WorkspaceFieldMaskState> {
-    const state = Object.fromEntries(workspaceFieldMaskKeys.map((key) => [key, false])) as WorkspaceFieldMaskState;
-    if (!workspace || isAdministratorRole(principal.role)) return state;
-    const keys = workspaceFieldMaskKeysForWorkspace(workspace);
-    const entries = await Promise.all(keys.map(async (key) => [
+  private async getGlobalFieldMaskState(principal: Principal): Promise<GlobalFieldMaskState> {
+    if (principal.globalFieldMasks) return principal.globalFieldMasks;
+    const state = Object.fromEntries(globalFieldMaskKeys.map((key) => [key, false])) as GlobalFieldMaskState;
+    const entries = await Promise.all(globalFieldMaskKeys.map(async (key) => [
       key,
-      await this.hasPermission(principal.role, workspaceFieldMaskPermissionCode(workspace, key))
+      await this.hasPermission(principal.role, globalFieldMaskPermissionCode(key))
     ] as const));
     entries.forEach(([key, enabled]) => { state[key] = enabled; });
+    if (state['agent-data']) {
+      state['agent-short-name'] = true;
+      state['agent-company-name'] = true;
+      state['agent-channel'] = true;
+    }
     return state;
   }
 
@@ -24497,7 +24629,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return account.username;
   }
 
-  private maskShipmentListFields(principal: Principal, shipment: Shipment, marketVisibility: { canViewAgentIdentity: boolean; canViewLegacyMarketCostDetails: boolean; canViewLegacyMarketCostTotals: boolean; canViewRoutedCostDetails: boolean; canViewRoutedCostTotals: boolean; exposeWarehouseRouting: boolean; allowSalesScopedAgent: boolean; canViewAgentWeight?: boolean; fieldMasks?: WorkspaceFieldMaskState } = { canViewAgentIdentity: false, canViewLegacyMarketCostDetails: false, canViewLegacyMarketCostTotals: false, canViewRoutedCostDetails: false, canViewRoutedCostTotals: false, exposeWarehouseRouting: false, allowSalesScopedAgent: false, canViewAgentWeight: false }): Shipment {
+  private maskShipmentListFields(principal: Principal, shipment: Shipment, marketVisibility: { canViewAgentIdentity: boolean; canViewLegacyMarketCostDetails: boolean; canViewLegacyMarketCostTotals: boolean; canViewRoutedCostDetails: boolean; canViewRoutedCostTotals: boolean; exposeWarehouseRouting: boolean; allowSalesScopedAgent: boolean; canViewAgentWeight?: boolean; fieldMasks?: GlobalFieldMaskState } = { canViewAgentIdentity: false, canViewLegacyMarketCostDetails: false, canViewLegacyMarketCostTotals: false, canViewRoutedCostDetails: false, canViewRoutedCostTotals: false, exposeWarehouseRouting: false, allowSalesScopedAgent: false, canViewAgentWeight: false }): Shipment {
     const { paymentAmountUsd, paymentAmountCny, paymentMethod, ...visible } = shipment;
     const safeVisible = { ...visible };
     if (this.operatorCustomerScope(principal) && principal.role !== 'UG_MARKET' && !marketVisibility.allowSalesScopedAgent) {
@@ -31686,11 +31818,7 @@ function createRoleGroupCode(label: string): string {
 function mapRoleRow(row: PrismaRole & { permissions?: PrismaPermission[] }): RolePermissionRow {
   const role = row.name as RoleKey;
   const roleLabel = row.label ?? getRoleMetadata(role).label;
-  const permissions = filterWarehousePackageUpdatePermissions(
-    role,
-    roleLabel,
-    resolveStoredRolePermissions(role, row.permissions?.map((item) => item.code as PermissionKey))
-  );
+  const permissions = resolveStoredRolePermissionsForManagement(role, row.permissions?.map((item) => item.code as PermissionKey));
   return buildRolePermissionRow(role, permissions, {
     label: roleLabel,
     description: row.description ?? undefined,
@@ -31768,6 +31896,24 @@ function resolveStoredRolePermissions(role: RoleKey, permissions?: readonly stri
     effective.push('data-scope:sales-own');
   }
   return effective;
+}
+
+function resolveStoredRolePermissionsForManagement(role: RoleKey, permissions?: readonly string[]): PermissionKey[] {
+  const explicitlyConfigured = permissions?.includes(rolePermissionConfigurationMarker) === true;
+  const stored = (permissions ?? []).filter((permission) => permission !== rolePermissionConfigurationMarker) as PermissionKey[];
+  const configured = permissions === undefined
+    ? configuredPermissionsForRole(role)
+    : explicitlyConfigured
+      ? configuredPermissionsForRole(role, stored)
+      : configuredPermissionsForRole(role, [...defaultPermissionsForRole(role), ...stored]);
+  const legacySalesScopedCustomRole = !isBuiltinRoleKey(role)
+    && role !== 'UG_MARKET'
+    && stored.includes('business:order-entry:view')
+    && stored.includes('master-data:customers:view-own');
+  if (legacySalesScopedCustomRole && !configured.includes('data-scope:sales-own')) {
+    configured.push('data-scope:sales-own');
+  }
+  return configured;
 }
 
 function normalizeStaffProfile(input: StaffProfileInput) {

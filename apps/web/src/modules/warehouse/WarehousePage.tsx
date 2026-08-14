@@ -479,6 +479,9 @@ export function WarehousePage({
   const [inStockPagination, setInStockPagination] = useState({ current: 1, pageSize: warehouseTablePageSize });
   const [tallyTaskPackageIds, setTallyTaskPackageIds] = useState<string[]>([]);
   const [tallyTasks, setTallyTasks] = useState<WarehouseTallyTaskSummary[]>(cachedTallyTasks);
+  const [tallyProblemTasks, setTallyProblemTasks] = useState<WarehouseTallyTaskSummary[]>([]);
+  const [pendingTallyView, setPendingTallyView] = useState<'tasks' | 'problems'>('tasks');
+  const [restartingTallyProblemTaskId, setRestartingTallyProblemTaskId] = useState<string | null>(null);
   const [tallyChannelDraft, setTallyChannelDraft] = useState('');
   const [, setTallySortTick] = useState(0);
   const [tallyRequirementDraft, setTallyRequirementDraft] = useState('');
@@ -490,9 +493,6 @@ export function WarehousePage({
   const [cancellingTallyTask, setCancellingTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
   const [cancellingTallySubmitting, setCancellingTallySubmitting] = useState(false);
   const [completingTallyTask, setCompletingTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
-  const [editingCompletedTallyTask, setEditingCompletedTallyTask] = useState<WarehouseTallyTaskSummary | null>(null);
-  const [completedTallyCancelReason, setCompletedTallyCancelReason] = useState('');
-  const [editingCompletedTallySubmitting, setEditingCompletedTallySubmitting] = useState(false);
   const [tallyCompleteError, setTallyCompleteError] = useState<string | null>(null);
   const [tallyCompleteSubmitting, setTallyCompleteSubmitting] = useState(false);
   const tallyCompleteSubmittingRef = useRef(false);
@@ -901,6 +901,7 @@ export function WarehousePage({
   useEffect(() => {
     if (!canTallyPendingView && !canTallyCompletedView) {
       setTallyTasks([]);
+      setTallyProblemTasks([]);
       return;
     }
     if (!needsTallyTasks) return;
@@ -915,9 +916,20 @@ export function WarehousePage({
         .catch(() => {
           // Keep the last successful snapshot during a transient polling failure.
         });
+      if (canTallyPendingView) {
+        void apiClient.warehouseQuery.warehouseTallyTasks({ problemOnly: true })
+          .then((rows) => {
+            if (alive) setTallyProblemTasks(rows);
+          })
+          .catch(() => {
+            // Keep the last successful problem snapshot during a transient polling failure.
+          });
+      } else {
+        setTallyProblemTasks([]);
+      }
     };
     loadTallyTasks();
-    const refreshTimer = activeReceiveSection === 'completed-consolidation'
+    const refreshTimer = activeReceiveSection === 'completed-consolidation' || activeReceiveSection === 'consolidation'
       ? window.setInterval(loadTallyTasks, 5000)
       : undefined;
     return () => {
@@ -1112,6 +1124,13 @@ export function WarehousePage({
     () => sortPendingTallyTasksByRequestTime(tallyTasks.filter((task) => task.status === 'PENDING')),
     [tallyTasks]
   );
+  const restartedProblemTaskById = useMemo(() => {
+    const result = new Map<string, WarehouseTallyTaskSummary>();
+    tallyTasks
+      .filter((task) => task.status === 'PENDING' && task.previousTallyTaskId)
+      .forEach((task) => result.set(task.previousTallyTaskId!, task));
+    return result;
+  }, [tallyTasks]);
   const editingTallyPackageOptions = useMemo(() => {
     if (!editingTallyTask) return [];
     const blockedPackageIds = new Set(
@@ -2945,14 +2964,32 @@ export function WarehousePage({
     try {
       const cancelled = await apiClient.cancelWarehouseTallyTask(cancellingTallyTask.id);
       setTallyTasks((current) => current.map((task) => task.id === cancelled.id ? cancelled : task));
+      setTallyProblemTasks((current) => [cancelled, ...current.filter((task) => task.id !== cancelled.id)]);
       setSelectedInStockPackageIds([]);
       setInStockRefreshVersion((current) => current + 1);
       setCancellingTallyTask(null);
-      setWarehouseNotice(`理货任务 ${cancelled.taskNo} 已取消，原包裹可重新发起理货`);
+      setPendingTallyView('problems');
+      setWarehouseNotice(`理货任务 ${cancelled.taskNo} 已退回理货问题件，原包裹已回到在仓数据`);
     } catch (error) {
-      setWarehouseNotice(error instanceof Error ? error.message : '取消理货任务失败');
+      setWarehouseNotice(error instanceof Error ? error.message : '退回重理失败');
     } finally {
       setCancellingTallySubmitting(false);
+    }
+  }
+
+  async function restartWarehouseTallyProblemTask(task: WarehouseTallyTaskSummary) {
+    if (restartingTallyProblemTaskId) return;
+    setRestartingTallyProblemTaskId(task.id);
+    try {
+      const restarted = await apiClient.restartWarehouseTallyProblemTask(task.id);
+      setTallyTasks((current) => [restarted, ...current.filter((item) => item.id !== restarted.id)]);
+      setInStockRefreshVersion((current) => current + 1);
+      setPendingTallyView('tasks');
+      setWarehouseNotice(`理货问题件 ${task.taskNo} 已重新发起理货，新任务号 ${restarted.taskNo}`);
+    } catch (error) {
+      setWarehouseNotice(error instanceof Error ? error.message : '重新发起理货失败');
+    } finally {
+      setRestartingTallyProblemTaskId(null);
     }
   }
 
@@ -3114,38 +3151,6 @@ export function WarehousePage({
 
   function replaceTallyTask(updated: WarehouseTallyTaskSummary) {
     setTallyTasks((current) => current.map((task) => (task.id === updated.id ? updated : task)));
-  }
-
-  function openEditCompletedTallyCount(task: WarehouseTallyTaskSummary) {
-    setEditingCompletedTallyTask(task);
-    setCompletedTallyCancelReason('');
-  }
-
-  async function updateCompletedTallyCount() {
-    if (!editingCompletedTallyTask || editingCompletedTallySubmitting) return;
-    setEditingCompletedTallySubmitting(true);
-    try {
-      const reason = completedTallyCancelReason.trim();
-      if (!reason) {
-        message.error('请填写取消理货原因');
-        return;
-      }
-      const updated = await apiClient.cancelCompletedWarehouseTallyTask(editingCompletedTallyTask.id, { reason });
-      setTallyTasks((current) => [
-        ...current.filter((task) => task.id !== editingCompletedTallyTask.id && task.id !== updated.id),
-        updated
-      ]);
-      setSelectedTallyTaskDetails((current) => current.map((task) => task.id === updated.id ? updated : task));
-      setEditingCompletedTallyTask(null);
-      setInStockRefreshVersion((current) => current + 1);
-      setActiveReceiveSection('consolidation');
-      setWarehouseNotice(`理货任务 ${updated.taskNo} 已退回未完成理货，可重新处理`);
-      message.success('取消理货成功，任务已退回未完成理货');
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : '理货反审核失败');
-    } finally {
-      setEditingCompletedTallySubmitting(false);
-    }
   }
 
   async function openHistoricalAggregateCorrection(task: WarehouseTallyTaskSummary) {
@@ -3460,12 +3465,10 @@ export function WarehousePage({
           completedArchiveRows={recentCompletedTallyArchiveRows}
           completedTaskByKey={completedTallyTaskByKey}
           canViewDetail={canTallyCompletedDetail}
-          canUpdateCount={canTallyCompletedReverseReview}
           canGenerateLabel={canTallyLabelGenerate}
           canPrintLabel={canTallyLabelPrint}
           canDownloadLabel={canTallyLabelDownload}
           onViewTask={(task) => setSelectedTallyTaskDetails([task])}
-          onUpdateCount={openEditCompletedTallyCount}
           onGenerateLabel={(task) => void generateWarehouseTallyLabel(task)}
           onPrintLabel={(task) => void printWarehouseTallyLabel(task)}
           onDownloadLabel={(task) => void downloadWarehouseTallyLabel(task)}
@@ -3933,12 +3936,22 @@ export function WarehousePage({
       <Space direction="vertical" size={16} className="warehouse-tally-workspace">
           <Card
             title={(
-              <Space size={12}>
+              <Space size={12} wrap>
                 <span>未完成理货</span>
-                <Text type="secondary">共 {pendingTallyTasks.length} 条</Text>
+                <Text type="secondary">共 {pendingTallyView === 'tasks' ? pendingTallyTasks.length : tallyProblemTasks.length} 条</Text>
+                <Segmented
+                  size="small"
+                  value={pendingTallyView}
+                  onChange={(value) => setPendingTallyView(value as 'tasks' | 'problems')}
+                  options={[
+                    { label: '任务', value: 'tasks' },
+                    { label: `理货问题件${tallyProblemTasks.length ? ` (${tallyProblemTasks.length})` : ''}`, value: 'problems' }
+                  ]}
+                />
               </Space>
             )}
           >
+          {pendingTallyView === 'tasks' ? (
             <ManagedTable<WarehouseTallyTaskSummary>
               recordDetail={{ title: '未完成理货任务详情' }}
               rowKey="id"
@@ -3981,12 +3994,57 @@ export function WarehousePage({
                       {canTallyUpdate ? <Button size="small" onClick={() => openEditTallyTask(task)}>修改</Button> : null}
                       {canTallyProcess && task.tallyProgressStatus !== 'IN_PROGRESS' ? <Button size="small" onClick={() => void startWarehouseTallyTask(task)}>开始理货</Button> : null}
                       {canTallyProcess ? <Button size="small" type="primary" onClick={() => openCompleteTallyTask(task)}>处理理货</Button> : null}
-                      {canTallyCancel ? <Button size="small" danger onClick={() => setCancellingTallyTask(task)}>取消任务</Button> : null}
+                      {canTallyCancel ? <Button size="small" danger onClick={() => setCancellingTallyTask(task)}>退回重理</Button> : null}
                     </Space>
                   )
                 }
               ]}
             />
+          ) : (
+            <ManagedTable<WarehouseTallyTaskSummary>
+              recordDetail={{ title: '理货问题件详情' }}
+              rowKey="id"
+              dataSource={tallyProblemTasks}
+              size="small"
+              pagination={tenRowTablePagination}
+              columnSettingsPlacement="toolbar"
+              scroll={{ x: 1280 }}
+              locale={{ emptyText: '暂无理货问题件' }}
+              columns={[
+                { title: '退回时间', dataIndex: 'cancelledAt', width: 170, defaultSortOrder: 'descend', sorter: (a, b) => (a.cancelledAt ?? '').localeCompare(b.cancelledAt ?? ''), render: (value?: string) => value ? formatBeijingDateTime(value) : '-' },
+                { title: '原理货任务号', dataIndex: 'taskNo', width: 210 },
+                { title: '来源组合号', dataIndex: 'sourceCombinedOrderNo', width: 210 },
+                { title: '客户编号', dataIndex: 'customerCode', width: 100 },
+                { title: '理货渠道', dataIndex: 'tallyChannel', width: 100, render: (value?: string) => value || <Tag>待补充</Tag> },
+                { title: '件数', dataIndex: 'packageCount', width: 80, align: 'right' },
+                { title: '原始重量', dataIndex: 'originalWeightKg', width: 110, align: 'right', render: (value: number) => `${value.toFixed(2)} KG` },
+                { title: '问题原因', dataIndex: 'cancelReason', width: 180, render: (value?: string) => value || '退回重理' },
+                { title: '处理人', dataIndex: 'cancelledBy', width: 110, render: (value?: string) => value || '-' },
+                {
+                  title: '操作',
+                  key: 'actions',
+                  width: 180,
+                  fixed: 'right',
+                  render: (_, task) => {
+                    const restarted = restartedProblemTaskById.get(task.id);
+                    return restarted ? (
+                      <Tag color="blue">已重新发起：{restarted.taskNo}</Tag>
+                    ) : (
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={restartingTallyProblemTaskId === task.id}
+                        disabled={!canTallyStart}
+                        onClick={() => void restartWarehouseTallyProblemTask(task)}
+                      >
+                        重新发起理货
+                      </Button>
+                    );
+                  }
+                }
+              ]}
+            />
+          )}
           </Card>
           <div hidden>
           <Card
@@ -4434,42 +4492,6 @@ export function WarehousePage({
       </Modal>
 
       <Modal
-        title={editingCompletedTallyTask ? `取消理货 · ${editingCompletedTallyTask.taskNo}` : '取消理货'}
-        open={Boolean(editingCompletedTallyTask)}
-        onCancel={() => {
-          if (!editingCompletedTallySubmitting) setEditingCompletedTallyTask(null);
-        }}
-        onOk={() => void updateCompletedTallyCount()}
-        okText="确认取消理货"
-        cancelText="取消"
-        confirmLoading={editingCompletedTallySubmitting}
-        cancelButtonProps={{ disabled: editingCompletedTallySubmitting }}
-        closable={!editingCompletedTallySubmitting}
-        maskClosable={!editingCompletedTallySubmitting}
-        width={520}
-      >
-        <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <Alert
-            type="warning"
-            showIcon
-            message="取消后原任务会作废归档，并生成新的待理货任务退回未完成理货；原包裹恢复为待理货，理货结果包裹作废归档，可重新处理"
-          />
-          <Descriptions size="small" column={2} bordered>
-            <Descriptions.Item label="理货任务号">{editingCompletedTallyTask?.taskNo || '-'}</Descriptions.Item>
-            <Descriptions.Item label="理货后件数">{editingCompletedTallyTask?.completedPackageCount ?? '-'} 件</Descriptions.Item>
-          </Descriptions>
-          <Input.TextArea
-            value={completedTallyCancelReason}
-            onChange={(event) => setCompletedTallyCancelReason(event.target.value)}
-            placeholder="请填写取消理货原因"
-            maxLength={300}
-            showCount
-            rows={3}
-          />
-        </Space>
-      </Modal>
-
-      <Modal
         title="代理交接单"
         open={batchHandoverOpen}
         onCancel={() => {
@@ -4751,13 +4773,13 @@ export function WarehousePage({
         </Space>
       </Modal>
       <Modal
-        title="取消理货任务"
+        title="退回重理"
         open={Boolean(cancellingTallyTask)}
         onCancel={() => {
           if (!cancellingTallySubmitting) setCancellingTallyTask(null);
         }}
         onOk={() => void cancelPendingTallyTask()}
-        okText="确认取消任务"
+        okText="确认退回重理"
         cancelText="返回"
         okButtonProps={{ danger: true }}
         confirmLoading={cancellingTallySubmitting}
@@ -4768,8 +4790,8 @@ export function WarehousePage({
         <Alert
           type="warning"
           showIcon
-          message={cancellingTallyTask ? `确认取消理货任务 ${cancellingTallyTask.taskNo}？` : '确认取消理货任务？'}
-          description="任务和操作记录会保留，不会删除原包裹；取消后原包裹可重新发起理货。已完成的理货任务不能取消。"
+          message={cancellingTallyTask ? `确认将理货任务 ${cancellingTallyTask.taskNo} 退回重理？` : '确认退回重理？'}
+          description="任务和操作记录会保留，原包裹会回到在仓数据，并进入理货问题件；已完成的理货任务不允许退回重理。"
         />
       </Modal>
       <WarehouseCompleteTallyModal

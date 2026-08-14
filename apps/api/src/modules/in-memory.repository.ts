@@ -422,18 +422,17 @@ import { resolveWarehouseTallyRecentCutoff } from './warehouse/warehouse-query.s
 import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
 import {
   allPermissions,
-  allRuntimePermissions,
   buildRolePermissionRow,
+  configuredPermissionsForRole,
   defaultPermissionsForRole,
   defaultRoleGroups,
   effectivePermissionsForRole,
-  filterWarehousePackageUpdatePermissions,
-  getForbiddenWarehousePackageUpdatePermissions,
   getPermissionDefinitions,
   getNewlyAddedMarketSensitivePermissions,
   getRoleMetadata,
   isBuiltinRoleKey,
   isAdministratorRole,
+  isPaymentVoucherGloballyMasked,
   normalizeRolePermissions,
   permissionDefinitions,
   protectedDataScopePermissions,
@@ -441,15 +440,13 @@ import {
   rolePermissions,
   toSessionRole,
   withImpliedUiPreferencePermissions,
-  workspaceFieldMaskKeys,
-  workspaceFieldMaskKeysForWorkspace,
-  workspaceFieldMaskPermissionCode,
+  globalFieldMaskKeys,
+  globalFieldMaskPermissionCode,
   type PermissionKey,
   type Principal,
   type RoleKey,
   type RolePermissionRow,
-  type PermissionWorkspaceKey,
-  type WorkspaceFieldMaskKey
+  type GlobalFieldMaskKey
 } from './rbac.js';
 import { customerServiceProblemPermissionsForStatus } from './problem-ticket-permissions.js';
 
@@ -471,7 +468,7 @@ type ReviewRestoreInputWithManual = ShipmentRestoreInput & {
   manualCreatedAt?: string;
 };
 
-type WorkspaceFieldMaskState = Record<WorkspaceFieldMaskKey, boolean>;
+type GlobalFieldMaskState = Record<GlobalFieldMaskKey, boolean>;
 
 type WarehouseRentVisibilityScope = {
   mode: 'ALL' | 'SELF' | 'TEAM' | 'SITE' | 'NONE';
@@ -1430,7 +1427,7 @@ export class InMemoryRepository {
     return { ok: true };
   }
 
-  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; fieldMaskWorkspace?: PermissionWorkspaceKey; includeLinePoolFinanceSummary?: boolean } = {}): Promise<Shipment[]> {
+  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; includeLinePoolFinanceSummary?: boolean } = {}): Promise<Shipment[]> {
     const canViewMarketAgent = await this.hasAnyPermission(principal.role, [
       'market:pending-routing:agent-channel-view',
       'market:routed:agent-channel-view'
@@ -1454,9 +1451,7 @@ export class InMemoryRepository {
     const canViewCustomerServiceTransferAgentWeight = Boolean(options.customerServiceTransferAgentWeight)
       && await this.hasPermission(principal.role, 'customer-service:transfer:view-agent-data');
     const canViewShipmentAgentWeight = await this.canViewShipmentAgentWeight(principal);
-    const fieldMaskWorkspace = options.fieldMaskWorkspace
-      ?? (options.salesScopeMode === 'ENTRY_ONLY' ? 'operations' : undefined);
-    const fieldMasks = await this.getWorkspaceFieldMaskState(principal, fieldMaskWorkspace);
+    const fieldMasks = await this.getGlobalFieldMaskState(principal);
     const canViewLinePoolFinanceSummary = options.includeLinePoolFinanceSummary === true && (
       await this.hasPermission(principal.role, 'operations:line-shipment:process')
       || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view')
@@ -1708,8 +1703,7 @@ export class InMemoryRepository {
   async getLineShipmentPool(principal: Principal, query: LineShipmentPoolQuery = {}): Promise<LineShipmentPoolResponse> {
     const allRows = (await this.getShipments(principal, {
       salesScopeMode: 'ENTRY_ONLY',
-      includeLinePoolFinanceSummary: true,
-      fieldMaskWorkspace: 'operations'
+      includeLinePoolFinanceSummary: true
     })).filter((shipment) => shipment.businessType === 'DEDICATED_LINE');
     const packageBindings = this.auditLogs
       .filter((log) => log.action === 'shipment.warehouse_packages.bind')
@@ -2667,34 +2661,19 @@ export class InMemoryRepository {
   }
 
   async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
-    if (isAdministratorRole(role)) return true;
-    if (this.roleMeta[role]?.enabled === false) return false;
-    const permissions = filterWarehousePackageUpdatePermissions(
-      role,
-      this.roleMeta[role]?.label ?? getRoleMetadata(role).label,
-      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
-    );
+    if (!isAdministratorRole(role) && this.roleMeta[role]?.enabled === false) return false;
+    const permissions = effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
     return permissions.includes(permission) || hasEffectivePricingCapability(permissions, permission);
   }
 
   private hasPermissionSync(role: RoleKey, permission: PermissionKey): boolean {
-    if (isAdministratorRole(role)) return true;
-    if (this.roleMeta[role]?.enabled === false) return false;
-    return filterWarehousePackageUpdatePermissions(
-      role,
-      this.roleMeta[role]?.label ?? getRoleMetadata(role).label,
-      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
-    ).includes(permission);
+    if (!isAdministratorRole(role) && this.roleMeta[role]?.enabled === false) return false;
+    return effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []).includes(permission);
   }
 
   async getPermissionsForRole(role: RoleKey): Promise<PermissionKey[]> {
-    if (isAdministratorRole(role)) return allRuntimePermissions();
-    if (this.roleMeta[role]?.enabled === false) return [];
-    return filterWarehousePackageUpdatePermissions(
-      role,
-      this.roleMeta[role]?.label ?? getRoleMetadata(role).label,
-      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
-    );
+    if (!isAdministratorRole(role) && this.roleMeta[role]?.enabled === false) return [];
+    return effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
   }
 
   async getRolePermissionMatrix(): Promise<{ availablePermissions: typeof permissionDefinitions; roles: RolePermissionRow[] }> {
@@ -2711,7 +2690,7 @@ export class InMemoryRepository {
     }
     principal.username = account.username;
     principal.assignedRole = account.role;
-    principal.role = toSessionRole(account.role);
+    principal.role = account.role;
     principal.site = account.site;
     principal.customerId = account.customerId;
     principal.name = account.name;
@@ -2722,12 +2701,12 @@ export class InMemoryRepository {
     principal.departmentId = account.departmentId;
     principal.directManagerId = account.directManagerId;
     principal.departmentTeamScope = undefined;
-    const permissions = await this.getPermissionsForRole(principal.role);
+    const permissions = await this.getPermissionsForRole(principal.assignedRole);
     principal.shipmentAllView = permissions.includes('business:shipment:all-view');
     principal.dataScope = principal.shipmentAllView
       ? undefined
       : permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
-    if (isAdministratorRole(principal.role) || !permissions.includes('business:shipment:team-view')) {
+    if (isAdministratorRole(principal.assignedRole) || !permissions.includes('business:shipment:team-view')) {
       return permissions;
     }
     const hasDirectReports = this.accounts.some((member) => member.directManagerId === account.id);
@@ -3159,11 +3138,8 @@ export class InMemoryRepository {
     if (this.roleMeta[templateRole]?.enabled === false) {
       throw new BadRequestException('停用用户组不能作为权限复制来源');
     }
-    const sourcePermissions = effectivePermissionsForRole(templateRole, this.rolePermissionMatrix[templateRole] ?? []);
-    if (getForbiddenWarehousePackageUpdatePermissions(role, label, sourcePermissions).length > 0) {
-      throw new ForbiddenException('来源用户组包含新用户组不能继承的仓库包裹修改权限');
-    }
-    const inheritedPermissions = filterWarehousePackageUpdatePermissions(role, label, sourcePermissions);
+    const sourcePermissions = configuredPermissionsForRole(templateRole, this.rolePermissionMatrix[templateRole] ?? []);
+    const inheritedPermissions = [...sourcePermissions];
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions([], inheritedPermissions).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
@@ -3200,11 +3176,6 @@ export class InMemoryRepository {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能停用；请先调整直属经理');
     }
     const before = this.buildMemoryRoleRow(role);
-    this.rolePermissionMatrix[role] = filterWarehousePackageUpdatePermissions(
-      role,
-      label,
-      this.rolePermissionMatrix[role] ?? []
-    );
     this.roleMeta[role] = {
       ...meta,
       label,
@@ -3236,9 +3207,6 @@ export class InMemoryRepository {
 
   async updateRolePermissions(principal: Principal, role: RoleKey, permissions: PermissionKey[]): Promise<RolePermissionRow> {
     await this.ensurePermission(principal, 'system:role-permissions:save', '无权维护用户组权限');
-    if (isAdministratorRole(role)) {
-      throw new BadRequestException('管理员组是受保护的内置角色，不能修改权限');
-    }
     if (!this.roleMeta[role] && !isBuiltinRoleKey(role)) {
       throw new NotFoundException('用户组不存在');
     }
@@ -3246,20 +3214,16 @@ export class InMemoryRepository {
     const beforeEffective = effectivePermissionsForRole(role, before);
     const normalized = normalizeRolePermissions(role, permissions);
     normalized.push(...protectedDataScopePermissions.filter((permission) => beforeEffective.includes(permission)));
-    const roleLabel = this.roleMeta[role]?.label ?? getRoleMetadata(role).label;
-    if (getForbiddenWarehousePackageUpdatePermissions(role, roleLabel, normalized).length > 0) {
-      throw new ForbiddenException('仓库包裹修改权限只能授予仓库综合、仓库收货或仓库理货岗位');
-    }
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(beforeEffective, normalized).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
-    const effectivePermissions = filterWarehousePackageUpdatePermissions(role, roleLabel, normalized);
+    const effectivePermissions = normalized;
     const roleHasDirectReports = this.accounts.some((manager) => manager.role === role
       && this.accounts.some((item) => item.directManagerId === manager.id));
-    if (roleHasDirectReports && !effectivePermissions.includes('business:shipment:team-view')) {
+    if (!isAdministratorRole(role) && roleHasDirectReports && !effectivePermissions.includes('business:shipment:team-view')) {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能移除团队管理权限');
     }
-    if (roleHasDirectReports && effectivePermissions.includes('business:shipment:all-view')) {
+    if (!isAdministratorRole(role) && roleHasDirectReports && effectivePermissions.includes('business:shipment:all-view')) {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能授予全部运单查看权限');
     }
     this.rolePermissionMatrix[role] = effectivePermissions;
@@ -3287,12 +3251,9 @@ export class InMemoryRepository {
       throw new BadRequestException('停用用户组不能作为权限复制来源');
     }
     const before = effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
-    const sourcePermissions = effectivePermissionsForRole(sourceRoleKey, this.rolePermissionMatrix[sourceRoleKey] ?? []);
+    const sourcePermissions = configuredPermissionsForRole(sourceRoleKey, this.rolePermissionMatrix[sourceRoleKey] ?? []);
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, sourcePermissions).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
-    }
-    if (getForbiddenWarehousePackageUpdatePermissions(role, targetMeta.label, sourcePermissions).length > 0) {
-      throw new ForbiddenException('来源用户组包含目标岗位不能继承的仓库包裹修改权限');
     }
     const roleHasDirectReports = this.accounts.some((manager) => manager.role === role
       && this.accounts.some((item) => item.directManagerId === manager.id));
@@ -3392,6 +3353,9 @@ export class InMemoryRepository {
     }
     const voucher = this.paymentVouchers.find((item) => item.url === url);
     if (!voucher) throw new NotFoundException('凭证图片不存在');
+    if (isPaymentVoucherGloballyMasked(principal.globalFieldMasks)) {
+      throw new ForbiddenException('总规则已屏蔽付款凭证');
+    }
     const permissions: PermissionKey[] = voucher.pendingPaymentId
       ? ['finance:pending-payment:bill-voucher-view']
       : voucher.paymentApplicationId && voucher.voucherType === 'PAYMENT_RECEIPT'
@@ -6148,7 +6112,6 @@ export class InMemoryRepository {
   }
 
   async replenishWarehouseSameSpec(principal: Principal, id: string, input: WarehouseSameSpecReplenishInput): Promise<WarehouseSameSpecReplenishResponse> {
-    const permissions = effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []);
     const supplementCount = Math.floor(Number(input.supplementCount));
     if (!Number.isInteger(supplementCount) || supplementCount < 1 || supplementCount > 500) {
       throw new BadRequestException('补录箱数必须为 1 至 500 的正整数');
@@ -6156,17 +6119,6 @@ export class InMemoryRepository {
     const source = this.warehousePackages.find((pkg) => pkg.id === id);
     if (!source) throw new NotFoundException('仓库包裹不存在');
     await this.ensureWarehousePackageEditPermission(principal, source, '没有同箱规补录权限');
-    if (!isAdministratorRole(principal.role) && !principal.shipmentAllView) {
-      if (permissions.includes('data-scope:sales-own')) {
-        const customer = this.customers.find((item) => item.code === source.customerCode);
-        const identities = [principal.username, principal.name, principal.nickname].filter(Boolean);
-        if (!customer?.salesperson || !identities.includes(customer.salesperson)) {
-          throw new ForbiddenException('只能对本人归属客户的包裹补录');
-        }
-      } else if (!principal.site || source.site !== principal.site) {
-        throw new ForbiddenException('只能对本站包裹补录');
-      }
-    }
     if (source.status !== 'RECEIVED' || source.systemOrderNo || source.shipmentId || source.tallyTaskId) {
       throw new BadRequestException('仅未录单、未理货、未合票且未出库的在仓过机记录可以同箱规补录');
     }
@@ -6377,6 +6329,7 @@ export class InMemoryRepository {
     if (domesticTrackingNo.length > 64) {
       throw new BadRequestException('快递单号最长 64 位');
     }
+    this.ensureWarehousePackageCustomerScope(principal, customerCode);
     const expectedTotalPackageCount = input.expectedTotalPackageCount === undefined
       ? before.expectedTotalPackageCount
       : Math.max(1, Math.floor(Number(input.expectedTotalPackageCount) || 1));
@@ -6997,12 +6950,86 @@ export class InMemoryRepository {
       return cloneWarehouseTallyTask(before);
     }
     if (before.status !== 'PENDING') {
-      throw new BadRequestException('只有未完成理货任务可以取消');
+      throw new BadRequestException('只有未完成理货任务可以退回重理');
     }
-    const updated: WarehouseTallyTaskSummary = { ...before, status: 'CANCELLED' };
+    const now = new Date().toISOString();
+    const sourcePackages = this.warehousePackages.filter((pkg) => before.packageIds.includes(pkg.id));
+    if (sourcePackages.length !== before.packageIds.length) {
+      throw new BadRequestException('理货原始包裹不存在，无法退回重理');
+    }
+    if (sourcePackages.some((pkg) => pkg.status === 'CONSOLIDATED' || pkg.status === 'SHIPPED' || pkg.shipmentId || pkg.systemOrderNo)) {
+      throw new BadRequestException('理货任务已合票或出库，不能退回重理');
+    }
+    const updated: WarehouseTallyTaskSummary = {
+      ...before,
+      status: 'CANCELLED',
+      tallyProgressStatus: 'CANCELLED',
+      cancelReason: '退回重理',
+      cancelledAt: now,
+      cancelledBy: principal.username
+    };
     this.warehouseTallyTasks[index] = updated;
-    this.audit('warehouse.tally.cancel', id, principal, before, updated);
+    this.warehousePackages.forEach((pkg, packageIndex) => {
+      if (pkg.tallyTaskId !== id) return;
+      this.warehousePackages[packageIndex] = {
+        ...pkg,
+        status: 'RECEIVED',
+        tallyTaskId: undefined,
+        tallyTaskNo: undefined,
+        archivedByPackageId: undefined,
+        archivedByPackageNo: undefined,
+        archivedReason: undefined,
+        archivedAt: undefined
+      };
+    });
+    this.audit('warehouse.tally.return_for_rework', id, principal, before, { ...updated, restoredPackageIds: before.packageIds });
     return cloneWarehouseTallyTask(updated);
+  }
+
+  async restartWarehouseTallyProblemTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
+    await this.ensurePermission(principal, 'warehouse:in-stock:tally', '没有重新发起理货权限');
+    const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
+    if (index < 0) throw new NotFoundException('理货问题件不存在');
+    const before = this.warehouseTallyTasks[index];
+    if (before.status !== 'CANCELLED' || before.tallyProgressStatus !== 'CANCELLED') {
+      throw new BadRequestException('只有理货问题件可以重新发起理货');
+    }
+    const scope = this.operatorCustomerScope(principal);
+    const hasScopedPackage = !scope || this.warehousePackages.some((pkg) => before.packageIds.includes(pkg.id) && Boolean(pkg.salesperson) && scope.includes(pkg.salesperson!));
+    if (!hasScopedPackage) throw new ForbiddenException('当前账号不能处理该理货问题件');
+    const alreadyRestarted = this.warehouseTallyTasks.find((task) => task.previousTallyTaskId === id && task.status === 'PENDING');
+    if (alreadyRestarted) return cloneWarehouseTallyTask(alreadyRestarted);
+    const sourcePackages = before.packageIds.map((packageId) => this.warehousePackages.find((pkg) => pkg.id === packageId)).filter(Boolean) as WarehousePackageSummary[];
+    if (sourcePackages.length !== before.packageIds.length || sourcePackages.some((pkg) => pkg.status !== 'RECEIVED' || pkg.shipmentId || pkg.systemOrderNo)) {
+      throw new BadRequestException('理货问题件原始包裹已被其他流程处理，请刷新后重试');
+    }
+    if (sourcePackages.some((pkg) => pkg.measurementStatus === 'PENDING_REMEASURE')) {
+      throw new BadRequestException('理货问题件待重新过机，完成测量后才能再次理货');
+    }
+    if (this.warehouseTallyTasks.some((task) => task.status === 'PENDING' && task.packageIds.some((packageId) => before.packageIds.includes(packageId)))) {
+      throw new BadRequestException('包裹正在其他理货任务中，请刷新后重试');
+    }
+    const taskNoPrefix = before.taskNo.match(/^(.*LH)\d{2}$/)?.[1] ?? (before.taskNo.endsWith('LH') ? before.taskNo : `${before.taskNo}LH`);
+    const now = new Date().toISOString();
+    const restarted: WarehouseTallyTaskSummary = {
+      ...before,
+      id: randomUUID(),
+      taskNo: nextWarehouseRetallyTaskNo(before.taskNo, this.warehouseTallyTasks.map((task) => task.taskNo).filter((taskNo) => taskNo.startsWith(taskNoPrefix))),
+      status: 'PENDING',
+      tallyProgressStatus: 'WAITING',
+      rootTallyTaskId: before.rootTallyTaskId ?? before.id,
+      previousTallyTaskId: before.id,
+      tallySequence: (before.tallySequence ?? 1) + 1,
+      createdBy: principal.username,
+      createdAt: now,
+      labelStatus: 'NOT_GENERATED',
+      cancelledAt: undefined,
+      cancelledBy: undefined,
+      cancelReason: undefined
+    };
+    this.warehouseTallyTasks.unshift(restarted);
+    this.audit('warehouse.tally.restart_from_problem', restarted.id, principal, before, restarted);
+    return cloneWarehouseTallyTask(restarted);
   }
 
   async cancelCompletedWarehouseTallyTask(principal: Principal, id: string, input: WarehouseTallyTaskCancelInput): Promise<WarehouseTallyTaskSummary> {
@@ -12507,15 +12534,8 @@ export class InMemoryRepository {
       throw new BadRequestException('运单排货后才能出库');
     }
     const routed = routeLog.after as { agentId?: string; agentChannelName?: string } | undefined;
-    const hasActivePayable = this.shipmentFinanceItems.some((item) => (
-      item.shipmentId === shipment.id
-      && item.type === 'PAYABLE'
-      && !item.voided
-      && item.amount > 0
-      && item.agentName === shipment.agentName
-    )) || this.payableFees.some((item) => item.shipmentId === shipment.id && item.amount > 0);
-    if (!shipment.agentId || !shipment.channelId || !routed?.agentChannelName || !hasActivePayable) {
-      throw new BadRequestException('请先完成代理、渠道和应付成本后再出库');
+    if (!shipment.agentId || !shipment.channelId || !routed?.agentChannelName) {
+      throw new BadRequestException('请先完成代理和渠道后再出库');
     }
     const handover = this.latestWarehouseHandover(shipment.id);
     if (!handover || handover.agentId !== shipment.agentId) {
@@ -14061,11 +14081,7 @@ export class InMemoryRepository {
   private buildMemoryRoleRow(role: RoleKey): RolePermissionRow {
     const meta = this.roleMeta[role];
     const roleLabel = meta?.label ?? getRoleMetadata(role).label;
-    const permissions = filterWarehousePackageUpdatePermissions(
-      role,
-      roleLabel,
-      effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
-    );
+    const permissions = configuredPermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
     return buildRolePermissionRow(role, permissions, {
       label: roleLabel,
       description: meta?.description,
@@ -14083,15 +14099,19 @@ export class InMemoryRepository {
     return false;
   }
 
-  private async getWorkspaceFieldMaskState(principal: Principal, workspace?: PermissionWorkspaceKey): Promise<WorkspaceFieldMaskState> {
-    const state = Object.fromEntries(workspaceFieldMaskKeys.map((key) => [key, false])) as WorkspaceFieldMaskState;
-    if (!workspace || isAdministratorRole(principal.role)) return state;
-    const keys = workspaceFieldMaskKeysForWorkspace(workspace);
-    const entries = await Promise.all(keys.map(async (key) => [
+  private async getGlobalFieldMaskState(principal: Principal): Promise<GlobalFieldMaskState> {
+    if (principal.globalFieldMasks) return principal.globalFieldMasks;
+    const state = Object.fromEntries(globalFieldMaskKeys.map((key) => [key, false])) as GlobalFieldMaskState;
+    const entries = await Promise.all(globalFieldMaskKeys.map(async (key) => [
       key,
-      await this.hasPermission(principal.role, workspaceFieldMaskPermissionCode(workspace, key))
+      await this.hasPermission(principal.role, globalFieldMaskPermissionCode(key))
     ] as const));
     entries.forEach(([key, enabled]) => { state[key] = enabled; });
+    if (state['agent-data']) {
+      state['agent-short-name'] = true;
+      state['agent-company-name'] = true;
+      state['agent-channel'] = true;
+    }
     return state;
   }
 
@@ -16982,7 +17002,7 @@ export class InMemoryRepository {
     return summarizeLineShipmentFinance(items);
   }
 
-  private maskShipmentListFields(principal: Principal, shipment: Shipment, marketVisibility: { canViewMarketAgent: boolean; canViewLegacyMarketCostDetails: boolean; canViewLegacyMarketCostTotals: boolean; canViewRoutedCostDetails: boolean; canViewRoutedCostTotals: boolean; exposeWarehouseRouting: boolean; canViewAgentWeight?: boolean; fieldMasks?: WorkspaceFieldMaskState } = { canViewMarketAgent: false, canViewLegacyMarketCostDetails: false, canViewLegacyMarketCostTotals: false, canViewRoutedCostDetails: false, canViewRoutedCostTotals: false, exposeWarehouseRouting: false, canViewAgentWeight: false }): Shipment {
+  private maskShipmentListFields(principal: Principal, shipment: Shipment, marketVisibility: { canViewMarketAgent: boolean; canViewLegacyMarketCostDetails: boolean; canViewLegacyMarketCostTotals: boolean; canViewRoutedCostDetails: boolean; canViewRoutedCostTotals: boolean; exposeWarehouseRouting: boolean; canViewAgentWeight?: boolean; fieldMasks?: GlobalFieldMaskState } = { canViewMarketAgent: false, canViewLegacyMarketCostDetails: false, canViewLegacyMarketCostTotals: false, canViewRoutedCostDetails: false, canViewRoutedCostTotals: false, exposeWarehouseRouting: false, canViewAgentWeight: false }): Shipment {
     const { paymentAmountUsd, paymentAmountCny, paymentMethod, ...visible } = shipment;
     const safeVisible = { ...visible };
     const invoiceAgent = this.agents.find((item) => item.id === shipment.agentId || item.name === shipment.agentName || item.shortName === shipment.agentName);
@@ -17561,14 +17581,38 @@ export class InMemoryRepository {
 
   private async ensureWarehousePackageEditPermission(
     principal: Principal,
-    pkg: { scanTime?: string | Date | null; createdAt?: string | Date | null },
+    pkg: { scanTime?: string | Date | null; createdAt?: string | Date | null; customerCode?: string; salesperson?: string },
     message: string
   ): Promise<void> {
     if (this.isWarehousePackageToday(pkg)) {
       await this.ensureAnyPermission(principal, ['warehouse:today-receipt:edit', 'warehouse:in-stock:edit'], message);
-      return;
+    } else {
+      await this.ensurePermission(principal, 'warehouse:in-stock:edit', message);
     }
-    await this.ensurePermission(principal, 'warehouse:in-stock:edit', message);
+    const salespeople = this.warehousePackageSalesScope(principal);
+    if (!salespeople) return;
+    const salesperson = this.customers.find((customer) => customer.code === pkg.customerCode)?.salesperson?.trim();
+    if (!salesperson || !salespeople.includes(salesperson)) {
+      throw new ForbiddenException('只能修改本人或当前部门成员名下的仓库包裹');
+    }
+  }
+
+  private warehousePackageSalesScope(principal: Principal): string[] | undefined {
+    if (isAdministratorRole(principal.role)
+      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)) return undefined;
+    const team = principal.departmentTeamScope?.filter(Boolean);
+    return Array.from(new Set(team?.length
+      ? team
+      : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
+  }
+
+  private ensureWarehousePackageCustomerScope(principal: Principal, customerCode: string): void {
+    const salespeople = this.warehousePackageSalesScope(principal);
+    if (!salespeople) return;
+    const customer = this.customers.find((item) => item.code === customerCode);
+    if (!customer?.salesperson || !salespeople.includes(customer.salesperson)) {
+      throw new ForbiddenException('只能将包裹归属到本人或当前部门成员名下的客户');
+    }
   }
 
   private async ensureWarehouseMachineImportPermission(principal: Principal, parsed: ParsedWarehouseMachineImport): Promise<void> {

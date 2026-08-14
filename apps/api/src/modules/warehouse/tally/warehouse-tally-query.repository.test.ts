@@ -47,7 +47,10 @@ describe('PrismaWarehouseTallyQueryRepository', () => {
       orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
     });
     expect(packageFindMany).toHaveBeenCalledWith({
-      where: { tallyTaskId: { in: ['task-1'] } },
+      where: {
+        tallyTaskId: { in: ['task-1'] },
+        status: { not: 'TALLIED_ARCHIVED' }
+      },
       orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]
     });
     expect(result).toEqual([
@@ -90,6 +93,43 @@ describe('PrismaWarehouseTallyQueryRepository', () => {
         customerCode: 'C001'
       })
     }));
+  });
+
+  it('returns only cancelled problem tasks for the problem-only view', async () => {
+    const taskFindMany = vi.fn().mockResolvedValue([
+      tallyTaskRow({
+        id: 'problem-newer',
+        taskNo: 'TL-PROBLEM-2',
+        status: 'CANCELLED',
+        tallyProgressStatus: 'CANCELLED',
+        completedAt: null,
+        cancelledAt: new Date('2026-08-14T02:00:00.000Z')
+      }),
+      tallyTaskRow({
+        id: 'problem-older',
+        taskNo: 'TL-PROBLEM-1',
+        status: 'CANCELLED',
+        tallyProgressStatus: 'WAITING',
+        completedAt: null,
+        cancelledAt: new Date('2026-08-14T01:00:00.000Z')
+      })
+    ]);
+    const { repository } = createRepository({
+      warehouseTallyTask: { findMany: taskFindMany },
+      warehousePackage: { findMany: vi.fn() }
+    });
+
+    await expect(repository.getWarehouseTallyTasks(admin, { problemOnly: true })).resolves.toEqual([
+      expect.objectContaining({ id: 'problem-newer', status: 'CANCELLED', tallyProgressStatus: 'CANCELLED' })
+    ]);
+    expect(taskFindMany).toHaveBeenCalledWith({
+      where: { status: 'CANCELLED' },
+      orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
+    });
+    await expect(repository.getWarehouseTallyTasks(admin, {
+      problemOnly: true,
+      completedScope: 'RECENT'
+    })).rejects.toThrow('理货问题件查询不能同时指定已完成理货范围');
   });
 
   it('keeps output fallback, missing-task error and permission denial unchanged', async () => {

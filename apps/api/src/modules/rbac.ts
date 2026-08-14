@@ -461,6 +461,7 @@ export interface Principal {
   directManagerId?: string;
   departmentTeamScope?: string[];
   shipmentAllView?: boolean;
+  globalFieldMasks?: GlobalFieldMaskState;
 }
 
 export interface PermissionDefinition {
@@ -483,7 +484,7 @@ export type PermissionWorkspaceKey =
   | 'master'
   | 'system';
 
-export type WorkspaceFieldMaskKey =
+export type GlobalFieldMaskKey =
   | 'agent-short-name'
   | 'agent-company-name'
   | 'agent-channel'
@@ -491,7 +492,7 @@ export type WorkspaceFieldMaskKey =
   | 'payable-cost'
   | 'payable-status';
 
-export const workspaceFieldMaskKeys: readonly WorkspaceFieldMaskKey[] = [
+export const globalFieldMaskKeys: readonly GlobalFieldMaskKey[] = [
   'agent-short-name',
   'agent-company-name',
   'agent-channel',
@@ -500,20 +501,7 @@ export const workspaceFieldMaskKeys: readonly WorkspaceFieldMaskKey[] = [
   'payable-status'
 ];
 
-/** 一级屏蔽规则只对明确配置的一级模块生效；当前仅配置运营工作台。 */
-export const permissionWorkspaceMaskCatalog: ReadonlyArray<{
-  key: PermissionWorkspaceKey;
-  label: string;
-  keys: readonly WorkspaceFieldMaskKey[];
-}> = [
-  { key: 'operations', label: '运营工作台', keys: workspaceFieldMaskKeys }
-];
-
-export function workspaceFieldMaskKeysForWorkspace(workspace: PermissionWorkspaceKey): readonly WorkspaceFieldMaskKey[] {
-  return permissionWorkspaceMaskCatalog.find((item) => item.key === workspace)?.keys ?? [];
-}
-
-const workspaceFieldMaskLabels: Record<WorkspaceFieldMaskKey, string> = {
+const globalFieldMaskLabels: Record<GlobalFieldMaskKey, string> = {
   'agent-short-name': '屏蔽代理简称',
   'agent-company-name': '屏蔽代理详细公司名',
   'agent-channel': '屏蔽代理渠道',
@@ -522,17 +510,80 @@ const workspaceFieldMaskLabels: Record<WorkspaceFieldMaskKey, string> = {
   'payable-status': '屏蔽应付状态'
 };
 
-export function workspaceFieldMaskPermissionCode(workspace: PermissionWorkspaceKey, mask: WorkspaceFieldMaskKey): PermissionKey {
-  return `system:workspace-mask:${workspace}:${mask}` as PermissionKey;
+export function globalFieldMaskPermissionCode(mask: GlobalFieldMaskKey): PermissionKey {
+  return `system:global-mask:${mask}` as PermissionKey;
 }
 
-const workspaceFieldMaskPermissionDefinitions: PermissionDefinition[] = permissionWorkspaceMaskCatalog.flatMap((workspace) =>
-  workspace.keys.map((mask) => ({
-    code: workspaceFieldMaskPermissionCode(workspace.key, mask),
-    label: `一级屏蔽规则 · ${workspace.label} · ${workspaceFieldMaskLabels[mask]}`,
-    group: '系统管理 / 角色权限分配'
-  }))
-);
+export type GlobalFieldMaskState = Record<GlobalFieldMaskKey, boolean>;
+
+export function resolveGlobalFieldMaskState(permissions: readonly PermissionKey[]): GlobalFieldMaskState {
+  const granted = new Set(permissions);
+  const state = Object.fromEntries(globalFieldMaskKeys.map((key) => [
+    key,
+    granted.has(globalFieldMaskPermissionCode(key))
+  ])) as GlobalFieldMaskState;
+  if (state['agent-data']) {
+    state['agent-short-name'] = true;
+    state['agent-company-name'] = true;
+    state['agent-channel'] = true;
+  }
+  return state;
+}
+
+export function isPaymentVoucherGloballyMasked(state: GlobalFieldMaskState | undefined): boolean {
+  return state?.['agent-short-name'] === true
+    || state?.['agent-company-name'] === true
+    || state?.['agent-channel'] === true
+    || state?.['agent-data'] === true
+    || state?.['payable-cost'] === true
+    || state?.['payable-status'] === true;
+}
+
+export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[]): PermissionKey[] {
+  const masks = resolveGlobalFieldMaskState(permissions);
+  return permissions.filter((permission) => {
+    if (masks['agent-short-name'] || masks['agent-company-name'] || masks['agent-channel'] || masks['agent-data']) {
+      if (/^pricing:price-books:(?:upload|import|legacy-source-import|legacy-rebuild|cleanup-original-agents)$/.test(permission)) return false;
+      if (permission === 'finance:pending-payment:payment-voucher-upload'
+        || permission === 'finance:paid-payment:voucher-upload') return false;
+    }
+    if (masks['agent-data']) {
+      if (permission.startsWith('master-data:agents:') || permission.startsWith('master-data:agent-channels:')) return false;
+      if (/^(customer-service|market):.*:(?:agent|agent-data|view-agent|view-agent-data|agent-view|agent-channel-view|agent-cost-view|agent-stats-view)$/.test(permission)) return false;
+      if (permission.startsWith('finance:agent-bill:')) return false;
+    }
+    if (masks['agent-channel']) {
+      if (permission.startsWith('master-data:agent-channels:')) return false;
+      if (permission.endsWith(':agent-channel-view') || permission.endsWith(':channel-mode-stats-view')) return false;
+    }
+    if (masks['payable-cost']) {
+      if (/^finance:payable:(?:manage|export|payment|attachment|attachment-view|view-sensitive|view-profit|paid-export|paid-voucher)$/.test(permission)) return false;
+      if (/^finance:pending-payment:(?:create|update|bill-voucher-view|payment-voucher-view|payment-voucher-upload|export|view-sensitive)$/.test(permission)) return false;
+      if (/^finance:paid-payment:(?:update|voucher-view|voucher-upload|export|view-sensitive)$/.test(permission)) return false;
+      if (/^finance:agent-bill:(?:import|save|difference-manage|difference-resolve|attachment-view|export|view-sensitive)$/.test(permission)) return false;
+      if (/^pricing:price-books:(?:upload|import|legacy-source-import|legacy-rebuild|cleanup-original-agents|cost-row-view|export)$/.test(permission)) return false;
+      if (permission === 'business:order-entry:payable-fee' || permission === 'business:shipment:payable-view' || permission === 'business:shipment:profit-view') return false;
+      if (/:(?:payable-cost-view|agent-cost-view|cost-total-view|cost-view|view-profit)$/.test(permission)) return false;
+      if (/^misc-fee:[^:]+:(?:create|update|export|view-payable|settlement-generate)$/.test(permission)) return false;
+      if (/^misc-fee:[^:]+:attachment-view$/.test(permission)) return false;
+    }
+    if (masks['payable-status']) {
+      if (/^finance:payable:(?:audit|reverse|void|payment|paid-confirm|paid-reverse|batch-audit|batch-reverse|batch-void)$/.test(permission)) return false;
+      if (/^finance:pending-payment:(?:create|update|cancel|payment-voucher-upload)$/.test(permission)) return false;
+      if (/^finance:paid-payment:(?:confirm|update|reverse|voucher-upload)$/.test(permission)) return false;
+      if (/^finance:agent-bill:(?:save|difference-resolve|archive|reverse-archive)$/.test(permission)) return false;
+      if (/^finance:(?:pending-payment:(?:payment-voucher-view)|paid-payment:voucher-view|payable:paid-voucher)$/.test(permission)) return false;
+      if (/^misc-fee:[^:]+:(?:confirm|audit|reverse-audit|void|match|hang|hang-approve|settlement-generate|settlement-audit|settlement-reverse)$/.test(permission)) return false;
+    }
+    return true;
+  });
+}
+
+const globalFieldMaskPermissionDefinitions: PermissionDefinition[] = globalFieldMaskKeys.map((mask) => ({
+  code: globalFieldMaskPermissionCode(mask),
+  label: `总规则 · ${globalFieldMaskLabels[mask]}`,
+  group: '系统管理 / 角色权限分配'
+}));
 
 export interface RolePermissionRow {
   key: RoleKey;
@@ -907,7 +958,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
     ['notifications', 'operations-read', '查看通知运行状态'], ['notifications', 'retry', '重试失败通知'],
     ['base-config', 'read', '查看系统基础配置'], ['base-config', 'template-manage', '维护系统模板'], ['base-config', 'status-dictionary-manage', '维护状态字典'], ['base-config', 'default-manage', '维护默认配置'], ['base-config', 'import-config-manage', '维护导入配置'], ['base-config', 'export-config-manage', '维护导出配置'], ['base-config', 'audit-view', '查看配置变更记录'], ['base-config', 'restore', '恢复系统配置'], ['base-config', 'export', '导出系统配置'], ['config', 'import', '导入系统配置'], ['permissions', 'export', '导出权限矩阵']
   ].map(([section, action, label]) => ({ code: `system:${section}:${action}` as PermissionKey, label, group: `系统管理 / ${({ 'user-groups': '用户组', accounts: '用户名', sites: '站点', audit: '操作日志', 'role-permissions': '角色权限分配', security: '权限安全区', 'ai-security': 'AI 接口安全', announcements: '公告管理', notifications: '通知运行', 'base-config': '系统基础配置', config: '系统基础配置', permissions: '角色权限分配' } as Record<string, string>)[section]}` })),
-  ...workspaceFieldMaskPermissionDefinitions
+  ...globalFieldMaskPermissionDefinitions
 ];
 
 const pricingMarkupLegacyActions = new Set<PermissionKey>([
@@ -1182,7 +1233,7 @@ export function allPermissions(): PermissionKey[] {
 export function allRuntimePermissions(): PermissionKey[] {
   return [...new Set<PermissionKey>([
     ...permissionDefinitions
-      .filter((item) => !item.code.includes('-block') && !item.code.includes(':block:'))
+      .filter((item) => !item.code.includes('-block') && !item.code.includes(':block:') && !item.code.startsWith('system:global-mask:'))
       .map((item) => item.code),
     'data-scope:sales-own',
     'data-scope:misc-fee-all',
@@ -1289,13 +1340,25 @@ export const protectedDataScopePermissions: readonly PermissionKey[] = [
   'data-scope:misc-fee-market'
 ];
 
-export function effectivePermissionsForRole(
+export function configuredPermissionsForRole(
   role: RoleKey,
   configuredPermissions?: readonly PermissionKey[]
 ): PermissionKey[] {
-  if (isAdministratorRole(role)) return allRuntimePermissions();
+  const configuredGlobalMasks = globalFieldMaskKeys
+    .map(globalFieldMaskPermissionCode)
+    .filter((permission) => configuredPermissions?.includes(permission));
+  if (configuredGlobalMasks.includes(globalFieldMaskPermissionCode('agent-data'))) {
+    for (const dependency of ['agent-short-name', 'agent-company-name', 'agent-channel'] as GlobalFieldMaskKey[]) {
+      const code = globalFieldMaskPermissionCode(dependency);
+      if (!configuredGlobalMasks.includes(code)) configuredGlobalMasks.push(code);
+    }
+  }
+  if (isAdministratorRole(role)) return [...allRuntimePermissions(), ...configuredGlobalMasks];
   if (role === 'CUSTOMER') {
-    return withImpliedOperationalPermissions(withImpliedUiPreferencePermissions(defaultPermissionsForRole(role)));
+    return [
+      ...withImpliedOperationalPermissions(withImpliedUiPreferencePermissions(defaultPermissionsForRole(role))),
+      ...configuredGlobalMasks
+    ];
   }
   const permissions = configuredPermissions === undefined
     ? defaultPermissionsForRole(role)
@@ -1325,16 +1388,31 @@ export function effectivePermissionsForRole(
   return withImpliedOperationalPermissions(withImpliedUiPreferencePermissions([...new Set(effective)]));
 }
 
+export function effectivePermissionsForRole(
+  role: RoleKey,
+  configuredPermissions?: readonly PermissionKey[]
+): PermissionKey[] {
+  return applyGlobalPermissionDenies(configuredPermissionsForRole(role, configuredPermissions));
+}
+
 export function normalizeRolePermissions(role: RoleKey, permissions: PermissionKey[]): PermissionKey[] {
   if (isAdministratorRole(role)) {
-    return allRuntimePermissions();
+    return configuredPermissionsForRole(role, permissions);
   }
   if (role === 'CUSTOMER') {
     const customerPermissions = new Set(defaultPermissionsForRole('CUSTOMER'));
-    return [...new Set(permissions)].filter((permission) => customerPermissions.has(permission));
+    return [...new Set(permissions)].filter((permission) =>
+      customerPermissions.has(permission) || globalFieldMaskKeys.some((mask) => permission === globalFieldMaskPermissionCode(mask))
+    );
   }
   const allowed = new Set(allPermissions());
   const normalized = [...new Set(permissions)].filter((permission) => allowed.has(permission));
+  if (normalized.includes(globalFieldMaskPermissionCode('agent-data'))) {
+    for (const dependency of ['agent-short-name', 'agent-company-name', 'agent-channel'] as GlobalFieldMaskKey[]) {
+      const code = globalFieldMaskPermissionCode(dependency);
+      if (!normalized.includes(code)) normalized.push(code);
+    }
+  }
   const pricingCapabilityCodes = new Set(PRICING_BUSINESS_CAPABILITIES.map((item) => item.code as PermissionKey));
   if (permissions.some((permission) => permission.startsWith('pricing:'))) {
     for (let index = normalized.length - 1; index >= 0; index -= 1) {
@@ -1383,6 +1461,10 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
       if (!normalized.includes(dependency)) normalized.push(dependency);
     }
   }
+  if (normalized.includes('warehouse:in-stock:edit')
+    && !normalized.includes('warehouse:in-stock:view')) {
+    normalized.push('warehouse:in-stock:view');
+  }
   if (normalized.includes('warehouse:in-stock:order-entry')) {
     for (const dependency of [
       'business:order-entry:view',
@@ -1421,42 +1503,9 @@ export function getNewlyAddedMarketSensitivePermissions(
   return after.filter((permission) => marketSensitivePermissionKeys.has(permission) && !existing.has(permission));
 }
 
-const warehouseInStockUpdateRoleKeys = new Set<RoleKey>([
-  'ADMIN',
-  YOYO_ADMIN_ROLE_KEY,
-  'WAREHOUSE',
-  'UG_WAREHOUSE_RECEIVE'
-]);
-
-export function filterWarehousePackageUpdatePermissions(
-  role: RoleKey,
-  roleLabel: string | undefined,
-  permissions: readonly PermissionKey[]
-): PermissionKey[] {
-  const isWarehouseTally = roleLabel?.trim() === '仓库理货';
-  const filtered = permissions.filter((permission) => {
-    if (permission === 'warehouse:in-stock:edit') {
-      return warehouseInStockUpdateRoleKeys.has(role) || isWarehouseTally;
-    }
-    return true;
-  });
-  return filtered;
-}
-
-export function getForbiddenWarehousePackageUpdatePermissions(
-  role: RoleKey,
-  roleLabel: string | undefined,
-  permissions: readonly PermissionKey[]
-): PermissionKey[] {
-  const allowed = new Set(filterWarehousePackageUpdatePermissions(role, roleLabel, permissions));
-  return permissions.filter((permission) =>
-    permission === 'warehouse:in-stock:edit' && !allowed.has(permission)
-  );
-}
-
 export function defaultPermissionsForRole(role: RoleKey): PermissionKey[] {
   if (isBuiltinRoleKey(role)) {
-    return filterWarehousePackageUpdatePermissions(role, getRoleMetadata(role).label, rolePermissions[role]);
+    return [...rolePermissions[role]];
   }
   const roleGroup = defaultRoleGroups.find((group) => group.key === role);
   if (roleGroup) {
@@ -1507,7 +1556,7 @@ export function defaultPermissionsForRole(role: RoleKey): PermissionKey[] {
         'business:shipment:payment-record'
       );
     }
-    return filterWarehousePackageUpdatePermissions(role, roleGroup.label, [...new Set(inherited)]);
+    return [...new Set(inherited)];
   }
   return [];
 }

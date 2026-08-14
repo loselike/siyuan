@@ -6,7 +6,6 @@ import { WarehouseTallyLifecycleService } from './warehouse-tally-lifecycle.serv
 type WarehouseTallyTaskCreateInput = Parameters<WarehouseTallyLifecycleService['create']>[1];
 type WarehouseTallyTaskUpdateInput = Parameters<WarehouseTallyLifecycleService['update']>[2];
 type WarehouseTallyTaskCompleteInput = Parameters<WarehouseTallyLifecycleService['complete']>[2];
-type WarehouseTallyTaskCancelInput = Parameters<WarehouseTallyLifecycleService['cancelCompleted']>[2];
 
 @Controller()
 export class WarehouseTallyLifecycleController {
@@ -46,6 +45,12 @@ export class WarehouseTallyLifecycleController {
     return this.lifecycle.cancel(request.user, id);
   }
 
+  @Post('warehouse/tally-problem-tasks/:id/restart')
+  @RequirePermission('warehouse:in-stock:tally')
+  restartWarehouseTallyProblemTask(@Req() request: { user: Principal }, @Param('id') id: string) {
+    return this.lifecycle.restartProblem(request.user, id);
+  }
+
   @Post('warehouse/tally-tasks/:id/complete')
   @RequirePermission('warehouse:tally-pending:process')
   completeWarehouseTallyTask(
@@ -70,15 +75,5 @@ export class WarehouseTallyLifecycleController {
   @RequirePermission('warehouse:tally-completed:reverse')
   reverseReviewWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.lifecycle.reverseReview(request.user, id);
-  }
-
-  @Post('warehouse/tally-tasks/:id/cancel-completed')
-  @RequirePermission('warehouse:tally-completed:reverse')
-  cancelCompletedWarehouseTallyTask(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: WarehouseTallyTaskCancelInput
-  ) {
-    return this.lifecycle.cancelCompleted(request.user, id, body);
   }
 }

@@ -3,6 +3,7 @@ import { RequireAuth } from './require-permission.decorator.js';
 import type { Principal } from './rbac.js';
 import { AiService, type AiAssistRequest } from './ai.service.js';
 import { PrismaRepository } from './prisma.repository.js';
+import { maskGlobalSensitiveAiContext } from './global-field-mask.interceptor.js';
 
 @Controller('ai')
 export class AiController {
@@ -31,7 +32,8 @@ export class AiController {
       || await this.repository.hasPermission(request.user.role, 'business:order-ai:finance-context');
     const canUseAllOrderContext = body.module !== '业务管理'
       || await this.repository.hasPermission(request.user.role, 'business:order-ai:all-order-context');
-    const context = this.sanitizeBusinessContext(body.context, { canUseFinanceContext, canUseAllOrderContext });
+    const permissionScopedContext = this.sanitizeBusinessContext(body.context, { canUseFinanceContext, canUseAllOrderContext });
+    const context = maskGlobalSensitiveAiContext(permissionScopedContext, request.user.globalFieldMasks);
     return this.aiService.assist({ ...body, context });
   }
 

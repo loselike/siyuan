@@ -15,7 +15,7 @@ export type WarehouseTallyLifecycleRepository = Pick<
   | 'updateWarehouseTallyTask'
   | 'startWarehouseTallyTask'
   | 'cancelWarehouseTallyTask'
+  | 'restartWarehouseTallyProblemTask'
   | 'completeWarehouseTallyTask'
   | 'reverseReviewWarehouseTallyTask'
-  | 'cancelCompletedWarehouseTallyTask'
 >;

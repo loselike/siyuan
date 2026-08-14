@@ -256,6 +256,11 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
     expect(packageFindMany).toHaveBeenCalledTimes(1);
     expect(packageFindMany).toHaveBeenCalledWith(expect.objectContaining({ skip: 1, take: 1 }));
     expect(queryRaw).toHaveBeenCalledTimes(1);
+    const aggregateSql = queryRaw.mock.calls[0]?.[0] as { sql: string; values: unknown[] };
+    expect(aggregateSql.sql).toContain('"WarehouseTallyTask"');
+    expect(aggregateSql.sql).toContain('ANY(task."packageIds")');
+    expect(aggregateSql.sql).toContain('task."status" = \'PENDING\'');
+    expect(aggregateSql.sql).toContain('task."tallyProgressStatus" IN (\'WAITING\', \'IN_PROGRESS\')');
     expect(auditCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         action: 'warehouse.in_stock.view',

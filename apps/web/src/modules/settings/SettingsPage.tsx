@@ -22,7 +22,8 @@ import { createUserGroupSiteOptions, matchesUserGroupSiteOption } from './userGr
 import {
   getPermissionWorkspaceDefinition,
   getWorkspacePermissionGroups,
-  getFirstLevelFieldMaskCatalog,
+  globalFieldMaskCatalog,
+  globalFieldMaskPermissionCode,
   permissionWorkspaceCatalog,
   lineShipmentStageEditControls,
   lineShipmentStageEditPermissionCode,
@@ -41,7 +42,6 @@ import {
   marketRoutedMaskControls,
   isMarketPendingRoutingMaskPermission,
   isMarketRoutedMaskPermission,
-  workspaceFieldMaskPermissionCode,
   type PermissionWorkspaceKey
 } from './rolePermissionCatalog';
 
@@ -725,11 +725,11 @@ export function SettingsPage({
   const selectedWorkspacePermissions = workspacePermissionGroups.find(([group]) => group === selectedWorkspacePermissionGroup)
     ?? null;
   const firstLevelFieldMaskControls = useMemo(
-    () => getFirstLevelFieldMaskCatalog(selectedPermissionWorkspace).map((rule) => ({
+    () => globalFieldMaskCatalog.map((rule) => ({
       ...rule,
-      code: workspaceFieldMaskPermissionCode(selectedPermissionWorkspace, rule.key)
+      code: globalFieldMaskPermissionCode(rule.key)
     })),
-    [selectedPermissionWorkspace]
+    []
   );
   const selectedPermissionAccessControl = selectedWorkspacePermissions
     ? getPermissionGroupAccessControl(selectedWorkspacePermissions[0], selectedWorkspacePermissions[1])
@@ -1121,11 +1121,31 @@ export function SettingsPage({
     });
   }
 
-  function toggleWorkspaceFieldMask(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+  function togglePermissionFlag(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
     setDraftPermissions((current) => {
       const granted = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
       if (checked) granted.add(code);
       else granted.delete(code);
+      return { ...current, [roleKey]: Array.from(granted) };
+    });
+  }
+
+  function toggleGlobalFieldMask(roleKey: RoleKey, code: PermissionKey, checked: boolean) {
+    setDraftPermissions((current) => {
+      const granted = new Set(current[roleKey] ?? selectedPermissionRole?.permissions ?? []);
+      const agentDataCode = globalFieldMaskPermissionCode('agent-data');
+      const impliedAgentCodes = [
+        globalFieldMaskPermissionCode('agent-short-name'),
+        globalFieldMaskPermissionCode('agent-company-name'),
+        globalFieldMaskPermissionCode('agent-channel')
+      ];
+      if (checked) {
+        granted.add(code);
+        if (code === agentDataCode) impliedAgentCodes.forEach((item) => granted.add(item));
+      } else {
+        granted.delete(code);
+        if (impliedAgentCodes.includes(code)) granted.delete(agentDataCode);
+      }
       return { ...current, [roleKey]: Array.from(granted) };
     });
   }
@@ -2194,34 +2214,44 @@ export function SettingsPage({
                       </Space>
                     </Space>
                     <Space className="role-permission-detail-actions">
-                      <Button size="small" type="primary" disabled={selectedPermissionRoleIsAdministrator} onClick={() => saveRolePermissions(selectedPermissionRole)}>
+                      <Button size="small" type="primary" disabled={selectedPermissionRoleIsAdministrator && !selectedTotalRules} onClick={() => saveRolePermissions(selectedPermissionRole)}>
                         保存权限
                       </Button>
                     </Space>
                   </Flex>
                   {selectedPermissionRoleIsAdministrator ? (
-                    <Text type="secondary" className="role-permission-preserved-note">管理员及管理员等效用户组固定拥有全部权限，管理员组本身受保护，不能修改。</Text>
+                    <Text type="secondary" className="role-permission-preserved-note">管理员及管理员等效用户组固定拥有全部正向权限；总规则仍可配置且不可绕过。</Text>
                   ) : null}
                   <div className="role-permission-sections" data-testid="role-permission-option-grid">
-                    {selectedPermissionRoleIsAdministrator ? (
+                    {selectedPermissionRoleIsAdministrator && !selectedTotalRules ? (
                       <div className="role-permission-detail-empty">
                         <Text strong>管理员组权限固定开放</Text>
-                        <Text type="secondary">管理员组本身不可修改；请选择普通用户组配置二级入口。</Text>
+                        <Text type="secondary">管理员正向权限不可修改；如需限制敏感字段，请切换到“总规则”。</Text>
                       </div>
                     ) : selectedTotalRules && firstLevelFieldMaskControls.length ? (
                       <div className="role-permission-mask-panel">
+                        <div className="role-permission-section-heading">
+                          <Space direction="vertical" size={0}>
+                            <Text strong>全局最高优先级屏蔽</Text>
+                            <Text type="secondary">勾选后在全部模块、接口、导出和 AI 上生效；屏蔽优先于任何查看或编辑授权。</Text>
+                          </Space>
+                          <Tag color="red">勾选＝屏蔽</Tag>
+                        </div>
                         <div className="role-permission-option-grid">
                           {firstLevelFieldMaskControls.map((control) => {
                             const granted = new Set(selectedRoleGrantedPermissions);
+                            const agentDataChecked = granted.has(globalFieldMaskPermissionCode('agent-data'));
+                            const impliedByAgentData = agentDataChecked && ['agent-short-name', 'agent-company-name', 'agent-channel'].includes(control.key);
                             return (
-                              <label className="role-permission-option role-permission-compact-option" key={control.code}>
+                              <label className={`role-permission-option role-permission-compact-option${granted.has(control.code) || impliedByAgentData ? ' role-permission-granted' : ''}`} key={control.code}>
                                 <span className="role-permission-option-copy role-permission-compact-copy">
                                   <Text strong>{control.label}</Text>
                                 </span>
                                 <Checkbox
                                   aria-label={control.label}
-                                  checked={granted.has(control.code)}
-                                  onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                                  checked={granted.has(control.code) || impliedByAgentData}
+                                  disabled={impliedByAgentData}
+                                  onChange={(event) => toggleGlobalFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
                                 />
                               </label>
                             );
@@ -2406,7 +2436,7 @@ export function SettingsPage({
                               <Checkbox
                                 aria-label={control.label}
                                 checked={control.checked}
-                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                                onChange={(event) => togglePermissionFlag(selectedPermissionRole.key, control.code, event.target.checked)}
                               />
                             </label>
                           ))}
@@ -2429,7 +2459,7 @@ export function SettingsPage({
                               <Checkbox
                                 aria-label={control.label}
                                 checked={control.checked}
-                                onChange={(event) => toggleWorkspaceFieldMask(selectedPermissionRole.key, control.code, event.target.checked)}
+                                onChange={(event) => togglePermissionFlag(selectedPermissionRole.key, control.code, event.target.checked)}
                               />
                             </label>
                           ))}
