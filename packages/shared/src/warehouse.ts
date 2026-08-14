@@ -335,6 +335,8 @@ export interface WarehouseInStockQuery {
   domesticTrackingNo?: string;
   combinedOrderNo?: string;
   operationKeyword?: string;
+  /** Fixed header search keyword, scoped to the active warehouse page. */
+  keyword?: string;
   status?: WarehousePackageStatus;
 }
 
@@ -571,6 +573,8 @@ export interface WarehouseTallyTaskListQuery {
   problemOnly?: boolean | string;
   customerCode?: string;
   combinedOrderNo?: string;
+  /** Fixed header search keyword, scoped to the active tally page. */
+  keyword?: string;
   completedScope?: 'RECENT' | 'HISTORY' | 'ALL';
   completedFrom?: string;
   completedTo?: string;

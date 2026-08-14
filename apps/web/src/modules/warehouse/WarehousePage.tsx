@@ -309,6 +309,8 @@ export function WarehousePage({
   apiClient,
   refreshVersion = 0,
   initialSection,
+  pageSearchKeyword = '',
+  onPageSearchKeywordChange,
   notificationTarget,
   onNotificationTargetHandled,
   role,
@@ -326,6 +328,9 @@ export function WarehousePage({
   apiClient: ApiClient;
   refreshVersion?: number;
   initialSection?: string;
+  /** The fixed header search value, scoped to the active warehouse sub-page. */
+  pageSearchKeyword?: string;
+  onPageSearchKeywordChange?: (keyword: string) => void;
   notificationTarget?: { type: string; id: string };
   onNotificationTargetHandled?: (target: { type: string; id: string }) => void;
   role: StaffRoleKey;
@@ -408,6 +413,7 @@ export function WarehousePage({
     ? initialCache.tallyTasks.rows
     : [];
   const [activeReceiveSection, setActiveReceiveSection] = useState(initialSection ?? 'today');
+  const previousSearchSectionRef = useRef(activeReceiveSection);
   const [warehousePackages, setWarehousePackages] = useState<WarehouseInboundPackage[]>(cachedPackages);
   const warehousePackagesFallbackRef = useRef<Promise<WarehouseInboundPackage[]> | null>(null);
   const shipmentsRef = useRef(shipments);
@@ -577,6 +583,21 @@ export function WarehousePage({
   const needsInStock = ['packages', 'consolidation'].includes(activeReceiveSection);
   const needsCompletedArchive = activeReceiveSection === 'dashboard' || activeReceiveSection === 'completed-consolidation';
   const needsTallyTasks = ['dashboard', 'consolidation', 'completed-consolidation'].includes(activeReceiveSection);
+  const pageSearchQueryKeyword = pageSearchKeyword.trim().length >= 2 ? pageSearchKeyword.trim() : undefined;
+  useEffect(() => {
+    if (previousSearchSectionRef.current === activeReceiveSection) return;
+    previousSearchSectionRef.current = activeReceiveSection;
+    onPageSearchKeywordChange?.('');
+  }, [activeReceiveSection, onPageSearchKeywordChange]);
+  useEffect(() => {
+    if (activeReceiveSection !== 'packages') return;
+    const timeoutId = window.setTimeout(() => {
+      setInStockPagination((current) => current.current === 1 ? current : { ...current, current: 1 });
+      setInStockFilterDraft((current) => ({ ...current, keyword: pageSearchQueryKeyword }));
+      setInStockFilters((current) => ({ ...current, keyword: pageSearchQueryKeyword }));
+    }, pageSearchKeyword.trim() ? 280 : 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeReceiveSection, pageSearchKeyword, pageSearchQueryKeyword]);
   const mergeWarehousePackages = useCallback((
     rows: WarehouseInboundPackage[],
     options: { recalculateCustomerProgress?: boolean } = {}
@@ -879,7 +900,7 @@ export function WarehousePage({
     }
     if (!needsCompletedArchive) return;
     let alive = true;
-    apiClient.warehouseQuery.warehouseInStock({ status: 'TALLIED_ARCHIVED' })
+    apiClient.warehouseQuery.warehouseInStock({ status: 'TALLIED_ARCHIVED', keyword: pageSearchQueryKeyword })
       .then((response) => {
         if (!alive) return;
         const mappedRows = response.rows.map(mapWarehouseApiPackageToInbound).filter(isRecentWarehouseTallyArchive);
@@ -897,7 +918,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canTallyCompletedView, loadWarehousePackagesFallback, mergeWarehousePackages, needsCompletedArchive, refreshVersion]);
+  }, [apiClient, canTallyCompletedView, loadWarehousePackagesFallback, mergeWarehousePackages, needsCompletedArchive, pageSearchQueryKeyword, refreshVersion]);
   useEffect(() => {
     if (!canTallyPendingView && !canTallyCompletedView) {
       setTallyTasks([]);
@@ -907,7 +928,7 @@ export function WarehousePage({
     if (!needsTallyTasks) return;
     let alive = true;
     const loadTallyTasks = () => {
-      void apiClient.warehouseQuery.warehouseTallyTasks()
+      void apiClient.warehouseQuery.warehouseTallyTasks({ keyword: pageSearchQueryKeyword })
         .then((rows) => {
           if (!alive) return;
           getWarehousePageCache(apiClient).tallyTasks = { updatedAt: Date.now(), rows };
@@ -917,7 +938,7 @@ export function WarehousePage({
           // Keep the last successful snapshot during a transient polling failure.
         });
       if (canTallyPendingView) {
-        void apiClient.warehouseQuery.warehouseTallyTasks({ problemOnly: true })
+        void apiClient.warehouseQuery.warehouseTallyTasks({ problemOnly: true, keyword: pageSearchQueryKeyword })
           .then((rows) => {
             if (alive) setTallyProblemTasks(rows);
           })
@@ -936,7 +957,7 @@ export function WarehousePage({
       alive = false;
       if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
     };
-  }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, refreshVersion]);
+  }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, pageSearchQueryKeyword, refreshVersion]);
   useEffect(() => {
     const refreshTimer = window.setInterval(() => setTallySortTick((current) => current + 1), 30_000);
     return () => window.clearInterval(refreshTimer);
@@ -1033,6 +1054,17 @@ export function WarehousePage({
       .filter((pkg) =>
         isInStockPackage(pkg)
         && (currentRole === 'OPERATOR' || !filters.site?.trim() || pkg.site === filters.site.trim())
+        && (!filters.keyword?.trim() || [
+          pkg.customerCode,
+          pkg.customerName,
+          pkg.customerOrderNo,
+          pkg.domesticTrackingNo,
+          pkg.combinedOrderNo,
+          pkg.systemOrderNo,
+          pkg.receivingChannel,
+          pkg.destinationCountry,
+          pkg.site
+        ].some((value) => keyword(value, filters.keyword)))
         && keyword(pkg.customerOrderNo, filters.customerOrderNo)
         && keyword(pkg.domesticTrackingNo, filters.domesticTrackingNo)
         && keyword(pkg.combinedOrderNo, filters.combinedOrderNo)

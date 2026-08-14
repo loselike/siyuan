@@ -430,6 +430,8 @@ import {
   getPermissionDefinitions,
   getNewlyAddedMarketSensitivePermissions,
   getRoleMetadata,
+  isBusinessAgentRestrictedRole,
+  isBusinessAgentOwnOnlyRole,
   isBuiltinRoleKey,
   isAdministratorRole,
   isPaymentVoucherGloballyMasked,
@@ -1824,6 +1826,7 @@ export class InMemoryRepository {
   }
 
   async createCustomerSource(principal: Principal, input: CustomerSourceInput): Promise<CustomerSourceSummary> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const name = requireMemoryCustomerSourceName(input.name);
     const normalizedName = normalizeMemoryCustomerSourceKey(name);
     if (this.customerSources.some((item) => item.normalizedName === normalizedName)) {
@@ -1847,6 +1850,7 @@ export class InMemoryRepository {
   }
 
   async updateCustomerSource(principal: Principal, id: string, input: Partial<CustomerSourceInput>): Promise<CustomerSourceSummary> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const source = this.customerSources.find((item) => item.id === id);
     if (!source) throw new NotFoundException('客户来源不存在');
     const before = { ...source };
@@ -1874,6 +1878,7 @@ export class InMemoryRepository {
   }
 
   async deleteCustomerSource(principal: Principal, id: string): Promise<{ id: string; deleted: true }> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const source = this.customerSources.find((item) => item.id === id);
     if (!source) throw new NotFoundException('客户来源不存在');
     const customerCount = this.customers.filter((customer) => normalizeMemoryCustomerSourceKey(customer.customerSource) === source.normalizedName).length;
@@ -1885,6 +1890,7 @@ export class InMemoryRepository {
   private resolveMemoryCustomerSourceForWrite(principal: Principal, input: CustomerCreateInput | CustomerUpdateInput): string | undefined {
     const name = typeof input.customerSource === 'string' ? input.customerSource.trim() : '';
     if (!name || !input.saveCustomerSourceToCatalog) return name || undefined;
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const normalizedName = normalizeMemoryCustomerSourceKey(name);
     const existing = this.customerSources.find((item) => item.normalizedName === normalizedName);
     if (existing) {
@@ -5698,7 +5704,7 @@ export class InMemoryRepository {
     }
     const { start, end } = resolveWarehouseTodayRange(await this.hasPermission(principal.role, 'warehouse:in-stock:view') ? query : { datePreset: 'TODAY' });
     const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
-    const businessCustomerScoped = !warehouseWideScope;
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
@@ -5753,7 +5759,7 @@ export class InMemoryRepository {
       throw new ForbiddenException('当前角色不能查看在仓数据');
     }
     const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
-    const businessCustomerScoped = !warehouseWideScope;
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
@@ -5783,6 +5789,17 @@ export class InMemoryRepository {
       && keyword(pkg.customerOrderNo, query.customerOrderNo)
       && keyword(pkg.domesticTrackingNo, query.domesticTrackingNo)
       && keyword(pkg.combinedOrderNo, query.combinedOrderNo)
+      && (!query.keyword?.trim() || [
+        pkg.customerCode,
+        pkg.customerName,
+        pkg.customerOrderNo,
+        pkg.domesticTrackingNo,
+        pkg.combinedOrderNo,
+        pkg.systemOrderNo,
+        pkg.receivingChannel,
+        pkg.destinationCountry,
+        pkg.site
+      ].some((value) => keyword(value, query.keyword)))
       && (!operationIds || operationIds.has(pkg.id))
       && (!ownedCustomerCodes || ownedCustomerCodes.has(pkg.customerCode))
     );
@@ -5818,12 +5835,13 @@ export class InMemoryRepository {
       throw new ForbiddenException('当前角色不能查看仓库看板或在仓汇总');
     }
     const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
-    const ownedCustomers = warehouseWideScope
-      ? undefined
-      : this.customers.filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson));
+    const ownedCustomers = businessCustomerScoped
+      ? this.customers.filter((customer) => customer.salesperson && salespeople.includes(customer.salesperson))
+      : undefined;
     const ownedCustomerCodes = ownedCustomers ? new Set(ownedCustomers.map((customer) => customer.code)) : undefined;
     const ownedCustomerIds = ownedCustomers ? new Set(ownedCustomers.map((customer) => customer.id)) : undefined;
     const grouped = new Map<string, WarehousePackageSummary[]>();
@@ -5892,7 +5910,7 @@ export class InMemoryRepository {
     if (!customer.enabled) {
       throw new BadRequestException('客户已停用，不能收货');
     }
-    if (isAdministratorRole(principal.role) || principal.shipmentAllView) return;
+    if (isAdministratorRole(principal.role) || (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))) return;
     const salesScope = principal.dataScope === 'SALES_OWN'
       ? [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))
       : principal.departmentTeamScope?.filter(Boolean);
@@ -6639,6 +6657,15 @@ export class InMemoryRepository {
         (!effectiveStatus || task.status === effectiveStatus)
         && keyword(task.customerCode, query.customerCode)
         && keyword(task.sourceCombinedOrderNo, query.combinedOrderNo)
+        && (!query.keyword?.trim() || [
+          task.taskNo,
+          task.sourceCombinedOrderNo,
+          task.customerCode,
+          task.customerName,
+          task.tallyChannel,
+          task.tallyRequirement,
+          task.remark
+        ].some((value) => keyword(value, query.keyword)))
         && matchesMemoryWarehouseTallyScope(task, query)
         && (!scope || scope.includes(task.salesperson ?? ''))
       )
@@ -12107,7 +12134,7 @@ export class InMemoryRepository {
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     if (principal.role !== 'CUSTOMER'
       && !isAdministratorRole(principal.role)
-      && !principal.shipmentAllView
+      && !(principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))
       && principal.dataScope !== 'SALES_OWN'
       && !principal.departmentTeamScope?.length) {
       throw new ForbiddenException('当前岗位未配置录单数据范围');
@@ -17105,7 +17132,7 @@ export class InMemoryRepository {
   }
 
   private operatorCustomerScope(principal: Principal) {
-    if (principal.shipmentAllView) return undefined;
+    if (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role)) return undefined;
     const isSalesScoped = principal.dataScope === 'SALES_OWN'
       || effectivePermissionsForRole(principal.role, this.rolePermissionMatrix[principal.role] ?? []).includes('data-scope:sales-own')
       || isSalesScopedRole(principal.role);
@@ -17116,7 +17143,7 @@ export class InMemoryRepository {
   }
 
   private orderEntryCustomerScope(principal: Principal, allowDepartmentTeam = false) {
-    if (isAdministratorRole(principal.role) || principal.shipmentAllView) return undefined;
+    if (isAdministratorRole(principal.role) || (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))) return undefined;
     if (principal.departmentTeamScope?.length) return principal.departmentTeamScope;
     if (principal.dataScope === 'SALES_OWN') {
       return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));

@@ -788,13 +788,13 @@ export function summarizeLineShipmentFinance(items: LineShipmentFinanceSourceIte
         ...(total.billingUnits.size ? { billingUnits: [...total.billingUnits].sort() } : {})
       }));
   };
-  const receivableStatus = receivables.length === 0
+  // Matching is the first business gate. Only after every receivable has
+  // matched water-receipt funds should the audit state be shown.
+  const receivableStatus = receivables.length === 0 || receivables.some((item) => item.receiptStatus !== 'RECEIVED')
     ? 'UNMATCHED' as const
     : receivables.some((item) => !['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING'))
       ? 'PENDING_REVIEW' as const
-      : receivables.some((item) => item.receiptStatus !== 'RECEIVED')
-        ? 'UNMATCHED' as const
-        : 'APPROVED' as const;
+      : 'APPROVED' as const;
   let payableStatus: LineShipmentPayableStatus | undefined;
   if (payables.length) {
     payableStatus = payables.some((item) => item.reconciliationStatus === 'LOCKED')

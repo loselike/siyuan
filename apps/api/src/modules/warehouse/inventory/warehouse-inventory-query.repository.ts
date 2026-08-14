@@ -105,6 +105,20 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
     if (query.combinedOrderNo?.trim()) {
       where.combinedOrderNo = { contains: query.combinedOrderNo.trim(), mode: 'insensitive' };
     }
+    if (query.keyword?.trim()) {
+      const keyword = query.keyword.trim();
+      where.OR = [
+        { customerCode: { contains: keyword, mode: 'insensitive' } },
+        { customerName: { contains: keyword, mode: 'insensitive' } },
+        { customerOrderNo: { contains: keyword, mode: 'insensitive' } },
+        { domesticTrackingNo: { contains: keyword, mode: 'insensitive' } },
+        { combinedOrderNo: { contains: keyword, mode: 'insensitive' } },
+        { systemOrderNo: { contains: keyword, mode: 'insensitive' } },
+        { receivingChannel: { contains: keyword, mode: 'insensitive' } },
+        { destinationCountry: { contains: keyword, mode: 'insensitive' } },
+        { site: { contains: keyword, mode: 'insensitive' } }
+      ];
+    }
     if (ownedCustomerCodes) where.customerCode = { in: ownedCustomerCodes };
     if (query.operationKeyword?.trim()) {
       const normalizedKeyword = query.operationKeyword.trim().toLowerCase();

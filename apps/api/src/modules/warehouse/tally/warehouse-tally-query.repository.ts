@@ -94,6 +94,18 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     if (query.combinedOrderNo?.trim()) {
       where.sourceCombinedOrderNo = { contains: query.combinedOrderNo.trim(), mode: 'insensitive' };
     }
+    if (query.keyword?.trim()) {
+      const keyword = query.keyword.trim();
+      where.OR = [
+        { taskNo: { contains: keyword, mode: 'insensitive' } },
+        { sourceCombinedOrderNo: { contains: keyword, mode: 'insensitive' } },
+        { customerCode: { contains: keyword, mode: 'insensitive' } },
+        { customerName: { contains: keyword, mode: 'insensitive' } },
+        { tallyChannel: { contains: keyword, mode: 'insensitive' } },
+        { tallyRequirement: { contains: keyword, mode: 'insensitive' } },
+        { remark: { contains: keyword, mode: 'insensitive' } }
+      ];
+    }
     if (query.completedScope === 'RECENT' || query.completedScope === 'HISTORY' || query.completedFrom || query.completedTo) {
       where.status = 'COMPLETED';
       const completedAt: Record<string, Date> = {};

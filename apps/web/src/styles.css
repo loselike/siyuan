@@ -1586,8 +1586,9 @@ a:focus-visible,
 
 .global-search {
   flex: 1 1 420px;
-  max-width: 520px;
-  min-width: 280px;
+  width: min(560px, 100%);
+  max-width: 640px;
+  min-width: 240px;
 }
 
 .topbar > .ant-space:last-child {
@@ -10185,8 +10186,9 @@ body.is-resizing-table-column {
   }
 
   .global-search {
+    width: 100%;
     max-width: none;
-    min-width: 100%;
+    min-width: 0;
   }
 
   .content {

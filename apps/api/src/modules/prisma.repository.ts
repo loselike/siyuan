@@ -495,6 +495,8 @@ import {
   getPermissionDefinitions,
   getNewlyAddedMarketSensitivePermissions,
   getRoleMetadata,
+  isBusinessAgentRestrictedRole,
+  isBusinessAgentOwnOnlyRole,
   isAdministratorRole,
   isBuiltinRoleKey,
   isPaymentVoucherGloballyMasked,
@@ -926,6 +928,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   ): Promise<string | null> {
     const sourceName = normalizeCustomerSourceName(input.customerSource);
     if (!sourceName || !input.saveCustomerSourceToCatalog) return sourceName;
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const normalizedName = normalizeCustomerSourceKey(sourceName);
     const sourceRepository = (tx as any).customerSource;
     const existing = await sourceRepository.findUnique({ where: { normalizedName } });
@@ -2030,6 +2033,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async createCustomerSource(principal: Principal, input: CustomerSourceInput): Promise<CustomerSourceSummary> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const name = requireCustomerSourceName(input.name);
     const normalizedName = normalizeCustomerSourceKey(name);
     const sourceRepository = (this.prisma as any).customerSource;
@@ -2053,6 +2057,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async updateCustomerSource(principal: Principal, id: string, input: Partial<CustomerSourceInput>): Promise<CustomerSourceSummary> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const sourceRepository = (this.prisma as any).customerSource;
     const current = await sourceRepository.findUnique({ where: { id } });
     if (!current) throw new NotFoundException('客户来源不存在');
@@ -2090,6 +2095,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async deleteCustomerSource(principal: Principal, id: string): Promise<{ id: string; deleted: true }> {
+    if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const sourceRepository = (this.prisma as any).customerSource;
     const current = await sourceRepository.findUnique({ where: { id } });
     if (!current) throw new NotFoundException('客户来源不存在');
@@ -8056,7 +8062,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException('当前角色不能查看今日收货');
     }
     const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
-    const businessCustomerScoped = !warehouseWideScope;
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
@@ -8135,7 +8141,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
     // 业务员默认只看当前归属给自己的客户；主动选择“全部”时可读取全仓货物事实数据。
-    const businessCustomerScoped = !warehouseWideScope;
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
@@ -8160,6 +8166,20 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     }
     if (query.combinedOrderNo?.trim()) {
       where.combinedOrderNo = { contains: query.combinedOrderNo.trim(), mode: 'insensitive' };
+    }
+    if (query.keyword?.trim()) {
+      const keyword = query.keyword.trim();
+      where.OR = [
+        { customerCode: { contains: keyword, mode: 'insensitive' } },
+        { customerName: { contains: keyword, mode: 'insensitive' } },
+        { customerOrderNo: { contains: keyword, mode: 'insensitive' } },
+        { domesticTrackingNo: { contains: keyword, mode: 'insensitive' } },
+        { combinedOrderNo: { contains: keyword, mode: 'insensitive' } },
+        { systemOrderNo: { contains: keyword, mode: 'insensitive' } },
+        { receivingChannel: { contains: keyword, mode: 'insensitive' } },
+        { destinationCountry: { contains: keyword, mode: 'insensitive' } },
+        { site: { contains: keyword, mode: 'insensitive' } }
+      ];
     }
     if (ownedCustomerCodes) {
       where.customerCode = { in: ownedCustomerCodes };
@@ -8273,7 +8293,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       throw new ForbiddenException('当前角色不能查看仓库看板或在仓汇总');
     }
     const warehouseWideScope = isAdministratorRole(principal.role) || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
-    const businessCustomerScoped = !warehouseWideScope;
+    const businessCustomerScoped = !warehouseWideScope && !isBusinessAgentRestrictedRole(principal.role);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
@@ -8335,7 +8355,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!customer.enabled) {
       throw new BadRequestException('客户已停用，不能收货');
     }
-    if (isAdministratorRole(principal.role) || principal.shipmentAllView) return;
+    if (isAdministratorRole(principal.role) || (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))) return;
     const salesScope = principal.dataScope === 'SALES_OWN'
       ? [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))
       : principal.departmentTeamScope?.filter(Boolean);
@@ -17929,7 +17949,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     if (principal.role !== 'CUSTOMER'
       && !isAdministratorRole(principal.role)
-      && !principal.shipmentAllView
+      && !(principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))
       && principal.dataScope !== 'SALES_OWN'
       && !principal.departmentTeamScope?.length) {
       throw new ForbiddenException('当前岗位未配置录单数据范围');
@@ -24572,7 +24592,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private operatorCustomerScope(principal: Principal) {
-    if (principal.shipmentAllView) return undefined;
+    if (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role)) return undefined;
     const isSalesScoped = principal.dataScope === 'SALES_OWN'
       || this.salesScopedRoleCache.has(principal.role)
       || isSalesScopedRole(principal.role);
@@ -24587,7 +24607,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     salesScopeMode: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY' = 'CUSTOMER_OR_ENTRY',
     allowDepartmentTeam = true
   ) {
-    if (principal.shipmentAllView) return undefined;
+    if (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role)) return undefined;
     const departmentTeamScope = allowDepartmentTeam ? principal.departmentTeamScope?.filter(Boolean) : undefined;
     if (departmentTeamScope?.length) return { entryBy: { in: departmentTeamScope } };
     const scope = this.operatorCustomerScope(principal);
@@ -24598,7 +24618,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   private orderEntryCustomerScope(principal: Principal, allowDepartmentTeam = false) {
-    if (isAdministratorRole(principal.role) || principal.shipmentAllView) return undefined;
+    if (isAdministratorRole(principal.role) || (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))) return undefined;
     if (principal.departmentTeamScope?.length) return principal.departmentTeamScope;
     if (principal.dataScope === 'SALES_OWN') {
       return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));

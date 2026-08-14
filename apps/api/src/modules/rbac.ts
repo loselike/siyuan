@@ -1259,6 +1259,20 @@ export function isBusinessAgentRestrictedRole(role: string): boolean {
   return isSalesScopedRole(role) && role !== 'UG_MARKET';
 }
 
+export function isBusinessAgentOwnOnlyRole(role: string): boolean {
+  return [
+    'OPERATOR',
+    'UG_BUSINESS',
+    'UG_SZ_WUHAN',
+    'UG_ZZ_SIHUA',
+    'UG_WH_JIUYULIAN'
+  ].includes(role);
+}
+
+function isBusinessAgentCrossScopePermission(permission: PermissionKey): boolean {
+  return /(?:^|:)(?:all-view|team-view|view-all|all-order-context|scope-all)$/.test(permission);
+}
+
 const uiPreferencePermissionDependencies = {
   'business:shipment:column-setting': 'business:shipment:list',
   'market:pending-routing:column-setting': 'market:pending-routing:view',
@@ -1406,7 +1420,9 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
     );
   }
   const allowed = new Set(allPermissions());
-  const normalized = [...new Set(permissions)].filter((permission) => allowed.has(permission));
+  const normalized = [...new Set(permissions)]
+    .filter((permission) => allowed.has(permission))
+    .filter((permission) => !isBusinessAgentOwnOnlyRole(role) || !isBusinessAgentCrossScopePermission(permission));
   if (normalized.includes(globalFieldMaskPermissionCode('agent-data'))) {
     for (const dependency of ['agent-short-name', 'agent-company-name', 'agent-channel'] as GlobalFieldMaskKey[]) {
       const code = globalFieldMaskPermissionCode(dependency);

@@ -23,6 +23,7 @@ import {
   Tooltip,
   Typography
 } from 'antd';
+import type { InputRef } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   CircleDollarSign,
@@ -232,6 +233,7 @@ export function App() {
     }
   });
   const [keyword, setKeyword] = useState('');
+  const globalSearchInputRef = useRef<InputRef>(null);
   const [localShipments, setLocalShipments] = useState<Shipment[]>([]);
   const [shipmentOperationLogs, setShipmentOperationLogs] = useState<Record<string, ShipmentOperationLog[]>>({});
   const [problemTickets, setProblemTickets] = useState<ProblemTicketSummary[]>([]);
@@ -360,6 +362,21 @@ export function App() {
     requestedSectionKey,
     sidebarSubNav
   });
+  const currentPageSearchEnabled = currentMenuKey === 'receive'
+    && ['packages', 'consolidation', 'completed-consolidation'].includes(activeSectionKey ?? '');
+  useEffect(() => {
+    if (!currentPageSearchEnabled) setKeyword('');
+  }, [currentPageSearchEnabled]);
+  useEffect(() => {
+    const handleGlobalSearchShortcut = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
+      if (!currentPageSearchEnabled) return;
+      event.preventDefault();
+      globalSearchInputRef.current?.focus();
+    };
+    window.addEventListener('keydown', handleGlobalSearchShortcut);
+    return () => window.removeEventListener('keydown', handleGlobalSearchShortcut);
+  }, [currentPageSearchEnabled]);
   const isCustomerServiceDataConfirm = currentMenuKey === 'customerService'
     && (
       activeSectionKey === 'data-confirm'
@@ -2605,10 +2622,14 @@ export function App() {
               </Button>
             </Space>
             <Input
+              ref={globalSearchInputRef}
               className="global-search"
               prefix={<Search size={16} />}
-              placeholder="搜索客户、内部单号、快递号、国家、渠道"
-              aria-label="全局搜索客户、内部单号、快递号、国家、渠道"
+              placeholder={currentPageSearchEnabled ? '搜索当前页面客户、单号、快递号、渠道' : '当前页面暂未接入搜索'}
+              aria-label="搜索当前页面"
+              aria-keyshortcuts="Control+K Meta+K"
+              title={currentPageSearchEnabled ? '只搜索当前仓库子页面' : '当前页面暂未接入搜索'}
+              disabled={!currentPageSearchEnabled}
               value={keyword}
               onChange={(event) => setKeyword(event.target.value)}
               allowClear
@@ -2930,6 +2951,8 @@ export function App() {
                 onShipmentUpdated={upsertLocalShipment}
                 canCreateOrderEntry={session.user.role === 'ADMIN' || session.permissions.includes('warehouse:in-stock:order-entry')}
                 onCreateOrderEntryFromWarehouse={openOrderEntryFromWarehouse}
+                pageSearchKeyword={currentPageSearchEnabled ? keyword : ''}
+                onPageSearchKeywordChange={setKeyword}
                 findShipmentBySystemOrderNo={findShipmentBySystemOrderNo}
                 renderShipmentOrderNoLink={renderShipmentOrderNoLink}
               />
