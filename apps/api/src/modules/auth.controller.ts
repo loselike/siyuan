@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 import { PrismaRepository } from './prisma.repository.js';
 import { RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { jwtSecret } from './rbac.guard.js';
-import type { Principal } from './rbac.js';
+import { createPrincipalScopeFingerprint, type Principal } from './rbac.js';
 
 const captchaStore = new Map<string, { codeHash: Buffer; expiresAt: number }>();
 const captchaRateBuckets = new Map<string, RateBucket>();
@@ -82,6 +82,7 @@ export class AuthController {
     };
     const permissions = await this.repository.getPermissionsForRole(account.assignedRole ?? account.role);
     principal.dataScope = permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
+    principal.warehouseScopeFingerprint = createPrincipalScopeFingerprint(principal, permissions, jwtSecret());
     await this.repository.recordLoginLog(principal, loginMeta);
     loginRateBuckets.delete(loginAccountRateKey);
 
@@ -104,18 +105,30 @@ export class AuthController {
     const user = await this.repository.getProfile(request.user);
     const permissions = await this.repository.getPermissionsForRole(user.assignedRole ?? user.role);
     user.dataScope = permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
+    user.warehouseScopeFingerprint = request.user.warehouseScopeFingerprint;
     return { user, permissions };
   }
 
   @Put('profile')
   @RequireAuth()
-  updateProfile(@Req() request: { user: Principal }, @Body() body: { name?: string; phone?: string; gender?: string; nickname?: string }) {
-    return this.repository.updateProfile(request.user, {
+  async updateProfile(@Req() request: { user: Principal }, @Body() body: { name?: string; phone?: string; gender?: string; nickname?: string }) {
+    const profile = await this.repository.updateProfile(request.user, {
       name: body?.name,
       phone: body?.phone,
       gender: body?.gender,
       nickname: body?.nickname
     });
+    const hydratedScopePrincipal = { ...request.user, ...profile };
+    try {
+      const permissions = await this.repository.hydratePrincipalDepartmentScope(hydratedScopePrincipal);
+      profile.warehouseScopeFingerprint = createPrincipalScopeFingerprint(hydratedScopePrincipal, permissions, jwtSecret());
+    } catch {
+      // The profile write already succeeded. Return a one-time opaque boundary
+      // so the client cannot keep using a cache derived from the old scope;
+      // the next authenticated session refresh will replace it with HMAC data.
+      profile.warehouseScopeFingerprint = `scope-refresh-required:${randomUUID()}`;
+    }
+    return profile;
   }
 
   @Get('login-logs')

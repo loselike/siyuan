@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hasEffectivePricingCapability } from '@siyuan/shared';
-import { assertPermissionDefinitionsIntegrity, defaultPermissionsForRole, normalizeRolePermissions, permissionDefinitions } from './rbac.js';
+import { assertPermissionDefinitionsIntegrity, createPrincipalScopeFingerprint, defaultPermissionsForRole, normalizeRolePermissions, permissionDefinitions, type Principal } from './rbac.js';
 
 const businessRoles = [
   'OPERATOR',
@@ -13,6 +13,22 @@ const businessRoles = [
 ] as const;
 
 describe('RBAC default permission inheritance', () => {
+  it('keeps the warehouse scope fingerprint stable for ordering but changes it for scope changes', () => {
+    const principal: Principal = {
+      id: 'user-1',
+      username: 'operator',
+      role: 'UG_BUSINESS',
+      departmentTeamScope: ['teammate', 'operator'],
+      site: 'CN'
+    };
+    const first = createPrincipalScopeFingerprint(principal, ['warehouse:today-receipt:view', 'business:shipment:detail'], 'test-secret');
+    const reordered = createPrincipalScopeFingerprint({ ...principal, departmentTeamScope: ['operator', 'teammate'] }, ['business:shipment:detail', 'warehouse:today-receipt:view'], 'test-secret');
+    const changed = createPrincipalScopeFingerprint({ ...principal, departmentTeamScope: ['operator'] }, ['business:shipment:detail', 'warehouse:today-receipt:view'], 'test-secret');
+
+    expect(reordered).toBe(first);
+    expect(changed).not.toBe(first);
+  });
+
   it('keeps one stored pricing action while deriving only its minimum read context', () => {
     const grants = ['pricing:markup:amazon:edit'];
     expect(hasEffectivePricingCapability(grants, 'pricing:markup:amazon:view')).toBe(true);

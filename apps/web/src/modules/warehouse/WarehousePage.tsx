@@ -42,6 +42,7 @@ import { WarehouseDashboardPanel } from './WarehouseDashboardPanel';
 import { WarehousePackageEditModal } from './WarehousePackageEditModal';
 import { WarehouseManualReceiptDrawer } from './WarehouseManualReceiptDrawer';
 import { downloadWarehouseMachineExport, isWarehouseMachineExportReady, resolveWarehouseMachineExportRecords } from './warehouseMachineExport';
+import { getWarehousePageCache, isFreshWarehouseSnapshot, resolveScopedWarehouseFallbackShipments, warehouseAuthorizationScopeKey, warehouseQueryKey } from './warehousePageCache';
 import {
   attachWarehouseRentDetails,
   canEditUnenteredWarehousePackage,
@@ -199,7 +200,6 @@ function clearWarehouseSameSpecPendingRequest(packageId: string) {
 const { Text } = Typography;
 type WarehouseHandoverPrintOrientation = 'landscape' | 'portrait';
 const warehouseTablePageSize = 10;
-const warehousePageCacheTtlMs = 15_000;
 const defaultWarehouseTodayFilters: WarehouseTodayQuery = {
   dataScope: 'OWN',
   datePreset: 'TODAY',
@@ -235,41 +235,6 @@ const emptyWarehouseTallyRepeatStatistics: WarehouseTallyRepeatStatisticsRespons
   batches: [],
   updatedAt: ''
 };
-
-type WarehouseRowsSnapshot<TTotals> = {
-  updatedAt: number;
-  rows: WarehouseInboundPackage[];
-  totals: TTotals;
-};
-
-type WarehousePageCache = {
-  packages?: { updatedAt: number; rows: WarehouseInboundPackage[] };
-  todayByQuery: Map<string, WarehouseRowsSnapshot<WarehouseTodayTotals>>;
-  inStockByQuery: Map<string, WarehouseRowsSnapshot<WarehouseInStockTotals>>;
-  completedArchive?: { updatedAt: number; rows: WarehouseInboundPackage[] };
-  tallyTasks?: { updatedAt: number; rows: WarehouseTallyTaskSummary[] };
-};
-
-const warehousePageCache = new WeakMap<ApiClient, WarehousePageCache>();
-
-function getWarehousePageCache(apiClient: ApiClient) {
-  const cached = warehousePageCache.get(apiClient);
-  if (cached) return cached;
-  const created: WarehousePageCache = {
-    todayByQuery: new Map(),
-    inStockByQuery: new Map()
-  };
-  warehousePageCache.set(apiClient, created);
-  return created;
-}
-
-function isFreshWarehouseSnapshot(updatedAt: number) {
-  return Date.now() - updatedAt <= warehousePageCacheTtlMs;
-}
-
-function warehouseQueryKey(query: WarehouseTodayQuery | WarehouseInStockQuery) {
-  return JSON.stringify(query);
-}
 
 function downloadHtmlFile(html: string, fileName: string, mimeType: string) {
   const blob = new globalThis.Blob([html], { type: mimeType });
@@ -315,6 +280,8 @@ export function WarehousePage({
   onNotificationTargetHandled,
   role,
   permissions = [],
+  warehouseScopeFingerprint,
+  shipmentsScopeKey,
   shipments,
   businessCostAudits = [],
   notice,
@@ -335,6 +302,8 @@ export function WarehousePage({
   onNotificationTargetHandled?: (target: { type: string; id: string }) => void;
   role: StaffRoleKey;
   permissions?: PermissionKey[];
+  warehouseScopeFingerprint?: string;
+  shipmentsScopeKey?: string;
   shipments: Shipment[];
   businessCostAudits?: BusinessCostAuditSummary[];
   notice: string | null;
@@ -400,12 +369,16 @@ export function WarehousePage({
   const canRentRuleView = canRentDetailView;
   const canRentRuleManage = hasWarehousePermission('warehouse:rent-detail:edit');
   const workQueue = shipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH');
+  // The API client is token-scoped, but a session can still change role or
+  // permissions without replacing that client. Keep cached rows isolated by
+  // the same authorization inputs used by this page's visibility checks.
+  const warehouseCacheScopeKey = warehouseAuthorizationScopeKey(role, permissions, warehouseScopeFingerprint);
   const pendingRoutingShipments = shipments.filter((shipment) => shipment.status === 'WAITING_SORT');
-  const initialCache = getWarehousePageCache(apiClient);
+  const initialCache = getWarehousePageCache(apiClient, warehouseCacheScopeKey);
   const cachedPackages = initialCache.packages && isFreshWarehouseSnapshot(initialCache.packages.updatedAt)
     ? initialCache.packages.rows
     : [];
-  const cachedToday = initialCache.todayByQuery.get(warehouseQueryKey(defaultWarehouseTodayFilters));
+  const cachedToday = initialCache.todayByQuery.get(warehouseQueryKey(defaultWarehouseTodayFilters, warehouseCacheScopeKey));
   const cachedCompletedArchive = initialCache.completedArchive && isFreshWarehouseSnapshot(initialCache.completedArchive.updatedAt)
     ? initialCache.completedArchive.rows
     : [];
@@ -415,15 +388,18 @@ export function WarehousePage({
   const [activeReceiveSection, setActiveReceiveSection] = useState(initialSection ?? 'today');
   const previousSearchSectionRef = useRef(activeReceiveSection);
   const [warehousePackages, setWarehousePackages] = useState<WarehouseInboundPackage[]>(cachedPackages);
-  const warehousePackagesFallbackRef = useRef<Promise<WarehouseInboundPackage[]> | null>(null);
-  const shipmentsRef = useRef(shipments);
-  shipmentsRef.current = shipments;
+  const warehousePackagesFallbackRef = useRef<{
+    scopeKey: string;
+    promise: Promise<WarehouseInboundPackage[]>;
+  } | null>(null);
+  const shipmentsRef = useRef<{ scopeKey: string | undefined; rows: Shipment[] }>({ scopeKey: shipmentsScopeKey, rows: shipments });
+  shipmentsRef.current = { scopeKey: shipmentsScopeKey, rows: shipments };
   const [todayReceiptRows, setTodayReceiptRows] = useState<WarehouseInboundPackage[]>(
     cachedToday && isFreshWarehouseSnapshot(cachedToday.updatedAt) ? cachedToday.rows : []
   );
   const [todayReceiptRowsQueryKey, setTodayReceiptRowsQueryKey] = useState<string | null>(
     cachedToday && isFreshWarehouseSnapshot(cachedToday.updatedAt)
-      ? warehouseQueryKey(defaultWarehouseTodayFilters)
+      ? warehouseQueryKey(defaultWarehouseTodayFilters, warehouseCacheScopeKey)
       : null
   );
   const [todayTotals, setTodayTotals] = useState<WarehouseTodayTotals>(cachedToday && isFreshWarehouseSnapshot(cachedToday.updatedAt)
@@ -584,6 +560,40 @@ export function WarehousePage({
   const needsCompletedArchive = activeReceiveSection === 'dashboard' || activeReceiveSection === 'completed-consolidation';
   const needsTallyTasks = ['dashboard', 'consolidation', 'completed-consolidation'].includes(activeReceiveSection);
   const pageSearchQueryKeyword = pageSearchKeyword.trim().length >= 2 ? pageSearchKeyword.trim() : undefined;
+  const previousWarehouseCacheScopeKeyRef = useRef(warehouseCacheScopeKey);
+  useEffect(() => {
+    if (previousWarehouseCacheScopeKeyRef.current === warehouseCacheScopeKey) return;
+    previousWarehouseCacheScopeKeyRef.current = warehouseCacheScopeKey;
+    // A scope change invalidates every cache-derived row, not only the two
+    // paged query maps. Keep the page fail-closed until the new scope loads.
+    warehousePackagesFallbackRef.current = null;
+    setWarehousePackages([]);
+    setTodayReceiptRows([]);
+    setTodayReceiptRowsQueryKey(null);
+    setTodayTotals(calculateTodayTotals([], workQueue.length));
+    setSelectedTodayPackageIds([]);
+    setTodayReceiptPagination((current) => ({ ...current, current: 1 }));
+    setInStockRows([]);
+    setInStockRowsQueryKey(null);
+    setInStockTotalItems(0);
+    setInStockTotals(calculateTodayTotals([], workQueue.length));
+    setInStockLoading(false);
+    setSelectedInStockPackageIds([]);
+    setInStockPagination((current) => ({ ...current, current: 1 }));
+    setCompletedTallyArchiveRows([]);
+    setTallyTasks([]);
+    setTallyProblemTasks([]);
+    setSelectedTallyTaskDetails([]);
+    setSelectedTallySourcePackages(undefined);
+    setNotificationPackageDetailTarget(null);
+    setSelectedPackageIds([]);
+    setSelectedConsolidationId(null);
+    setManualReceiptCustomers([]);
+    setManualReceiptCustomersLoading(false);
+    setTallyRepeatStatistics(emptyWarehouseTallyRepeatStatistics);
+    setTallyRepeatStatisticsLoading(false);
+    setTallyRepeatOperatorOptions([]);
+  }, [warehouseCacheScopeKey, workQueue.length]);
   useEffect(() => {
     if (previousSearchSectionRef.current === activeReceiveSection) return;
     previousSearchSectionRef.current = activeReceiveSection;
@@ -608,28 +618,29 @@ export function WarehousePage({
       const mergedRows = options.recalculateCustomerProgress === false
         ? [...rowById.values()]
         : withWarehouseCustomerProgress([...rowById.values()]);
-      getWarehousePageCache(apiClient).packages = { updatedAt: Date.now(), rows: mergedRows };
+      getWarehousePageCache(apiClient, warehouseCacheScopeKey).packages = { updatedAt: Date.now(), rows: mergedRows };
       return mergedRows;
     });
-  }, [apiClient]);
+  }, [apiClient, warehouseCacheScopeKey]);
   const loadWarehousePackagesFallback = useCallback(() => {
-    if (!warehousePackagesFallbackRef.current) {
-      warehousePackagesFallbackRef.current = apiClient.warehouseQuery.warehousePackages()
-        .then((rows) => {
-          const mappedRows = withWarehouseCustomerProgress(rows.map(mapWarehouseApiPackageToInbound));
-          getWarehousePageCache(apiClient).packages = { updatedAt: Date.now(), rows: mappedRows };
-          return mappedRows;
-        })
-        .catch(() => withWarehouseCustomerProgress([
-          ...createWarehouseApiPackages(),
-          ...createInitialWarehousePackages(shipmentsRef.current)
-        ]));
-    }
-    return warehousePackagesFallbackRef.current;
-  }, [apiClient]);
+    const cachedFallback = warehousePackagesFallbackRef.current;
+    if (cachedFallback?.scopeKey === warehouseCacheScopeKey) return cachedFallback.promise;
+    const promise = apiClient.warehouseQuery.warehousePackages()
+      .then((rows) => {
+        const mappedRows = withWarehouseCustomerProgress(rows.map(mapWarehouseApiPackageToInbound));
+        getWarehousePageCache(apiClient, warehouseCacheScopeKey).packages = { updatedAt: Date.now(), rows: mappedRows };
+        return mappedRows;
+      })
+      .catch(() => withWarehouseCustomerProgress([
+        ...createWarehouseApiPackages(),
+        ...createInitialWarehousePackages(resolveScopedWarehouseFallbackShipments(shipmentsRef.current.rows, shipmentsRef.current.scopeKey, warehouseCacheScopeKey))
+      ]));
+    warehousePackagesFallbackRef.current = { scopeKey: warehouseCacheScopeKey, promise };
+    return promise;
+  }, [apiClient, warehouseCacheScopeKey]);
   useEffect(() => {
     warehousePackagesFallbackRef.current = null;
-  }, [loadWarehousePackagesFallback, refreshVersion]);
+  }, [loadWarehousePackagesFallback, refreshVersion, warehouseCacheScopeKey]);
   useEffect(() => {
     if (initialSection) setActiveReceiveSection(initialSection);
   }, [initialSection]);
@@ -705,7 +716,7 @@ export function WarehousePage({
     }
     finish();
     return () => { alive = false; };
-  }, [apiClient, canInStockView, canTallyCompletedDetail, canTallyCompletedView, notificationTarget, onNotificationTargetHandled]);
+  }, [apiClient, canInStockView, canTallyCompletedDetail, canTallyCompletedView, notificationTarget, onNotificationTargetHandled, warehouseCacheScopeKey]);
   useEffect(() => {
     if (!manualReceiptDrawerOpen) return;
     let cancelled = false;
@@ -723,7 +734,7 @@ export function WarehousePage({
     return () => {
       cancelled = true;
     };
-  }, [apiClient, manualReceiptDrawerOpen]);
+  }, [apiClient, manualReceiptDrawerOpen, warehouseCacheScopeKey]);
   useEffect(() => {
     if (!canTodayReceiptView && !canInStockView && !canTallyCompletedView) {
       setWarehousePackages([]);
@@ -742,13 +753,14 @@ export function WarehousePage({
       .then((response) => {
         if (!alive) return;
         const mappedRows = response.rows.map(mapWarehouseApiPackageToInbound);
-        getWarehousePageCache(apiClient).todayByQuery.set(warehouseQueryKey(todayFilters), {
+        const queryKey = warehouseQueryKey(todayFilters, warehouseCacheScopeKey);
+        getWarehousePageCache(apiClient, warehouseCacheScopeKey).todayByQuery.set(queryKey, {
           updatedAt: Date.now(),
           rows: mappedRows,
           totals: response.totals
         });
         setTodayReceiptRows(mappedRows);
-        setTodayReceiptRowsQueryKey(warehouseQueryKey(todayFilters));
+        setTodayReceiptRowsQueryKey(queryKey);
         mergeWarehousePackages(mappedRows);
         setTodayTotals(response.totals);
         setSelectedTodayPackageIds([]);
@@ -768,7 +780,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canTodayReceiptView, mergeWarehousePackages, needsTodayReceipts, refreshVersion, role, todayFilters, todayReceiptRefreshVersion, workQueue.length]);
+  }, [apiClient, canTodayReceiptView, mergeWarehousePackages, needsTodayReceipts, refreshVersion, role, todayFilters, todayReceiptRefreshVersion, warehouseCacheScopeKey, workQueue.length]);
   useEffect(() => {
     if (!canInStockView) {
       setInStockRows([]);
@@ -781,7 +793,7 @@ export function WarehousePage({
     let alive = true;
     const shouldShowQueryFeedback = inStockQueryFeedbackRef.current;
     inStockQueryFeedbackRef.current = false;
-    const queryKey = warehouseQueryKey(inStockFilters);
+    const queryKey = warehouseQueryKey(inStockFilters, warehouseCacheScopeKey);
     setInStockLoading(true);
     setInStockRowsQueryKey(null);
     const serverPaginated = activeReceiveSection === 'packages';
@@ -800,7 +812,7 @@ export function WarehousePage({
           ? (response as WarehouseInStockPageResponse).pagination.totalItems
           : mappedRows.length;
         if (!serverPaginated) {
-          getWarehousePageCache(apiClient).inStockByQuery.set(queryKey, {
+          getWarehousePageCache(apiClient, warehouseCacheScopeKey).inStockByQuery.set(queryKey, {
             updatedAt: Date.now(),
             rows: mappedRows,
             totals: response.totals
@@ -826,7 +838,7 @@ export function WarehousePage({
               if (!alive) return;
               const rowsWithRent = attachWarehouseRentDetails(mappedRows, rentResponse.rows);
               if (!serverPaginated) {
-                getWarehousePageCache(apiClient).inStockByQuery.set(queryKey, {
+                getWarehousePageCache(apiClient, warehouseCacheScopeKey).inStockByQuery.set(queryKey, {
                   updatedAt: Date.now(),
                   rows: rowsWithRent,
                   totals: response.totals
@@ -870,7 +882,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [activeReceiveSection, apiClient, canInStockUpdate, canInStockView, canRentDetailView, inStockFilters, inStockPagination.current, inStockPagination.pageSize, inStockRefreshVersion, loadWarehousePackagesFallback, mergeWarehousePackages, message, needsInStock, refreshVersion, role, workQueue.length]);
+  }, [activeReceiveSection, apiClient, canInStockUpdate, canInStockView, canRentDetailView, inStockFilters, inStockPagination.current, inStockPagination.pageSize, inStockRefreshVersion, loadWarehousePackagesFallback, mergeWarehousePackages, message, needsInStock, refreshVersion, role, warehouseCacheScopeKey, workQueue.length]);
   useEffect(() => {
     if ((!canWarehouseDashboardView && !canInStockView) || !needsInStockSummary) return;
     let alive = true;
@@ -889,7 +901,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canInStockView, canWarehouseDashboardView, loadWarehousePackagesFallback, mergeWarehousePackages, needsInStockSummary, refreshVersion, role, workQueue.length]);
+  }, [apiClient, canInStockView, canWarehouseDashboardView, loadWarehousePackagesFallback, mergeWarehousePackages, needsInStockSummary, refreshVersion, role, warehouseCacheScopeKey, workQueue.length]);
   useEffect(() => {
     if (!canTallyCompletedView) {
       setCompletedTallyArchiveRows([]);
@@ -901,7 +913,7 @@ export function WarehousePage({
       .then((response) => {
         if (!alive) return;
         const mappedRows = response.rows.map(mapWarehouseApiPackageToInbound).filter(isRecentWarehouseTallyArchive);
-        getWarehousePageCache(apiClient).completedArchive = { updatedAt: Date.now(), rows: mappedRows };
+        getWarehousePageCache(apiClient, warehouseCacheScopeKey).completedArchive = { updatedAt: Date.now(), rows: mappedRows };
         setCompletedTallyArchiveRows(mappedRows);
         mergeWarehousePackages(mappedRows);
       })
@@ -915,7 +927,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canTallyCompletedView, loadWarehousePackagesFallback, mergeWarehousePackages, needsCompletedArchive, pageSearchQueryKeyword, refreshVersion]);
+  }, [apiClient, canTallyCompletedView, loadWarehousePackagesFallback, mergeWarehousePackages, needsCompletedArchive, pageSearchQueryKeyword, refreshVersion, warehouseCacheScopeKey]);
   useEffect(() => {
     if (!canTallyPendingView && !canTallyCompletedView) {
       setTallyTasks([]);
@@ -928,7 +940,7 @@ export function WarehousePage({
       void apiClient.warehouseQuery.warehouseTallyTasks({ keyword: pageSearchQueryKeyword })
         .then((rows) => {
           if (!alive) return;
-          getWarehousePageCache(apiClient).tallyTasks = { updatedAt: Date.now(), rows };
+          getWarehousePageCache(apiClient, warehouseCacheScopeKey).tallyTasks = { updatedAt: Date.now(), rows };
           setTallyTasks(rows);
         })
         .catch(() => {
@@ -954,7 +966,7 @@ export function WarehousePage({
       alive = false;
       if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
     };
-  }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, pageSearchQueryKeyword, refreshVersion]);
+  }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, pageSearchQueryKeyword, refreshVersion, warehouseCacheScopeKey]);
   useEffect(() => {
     const refreshTimer = window.setInterval(() => setTallySortTick((current) => current + 1), 30_000);
     return () => window.clearInterval(refreshTimer);
@@ -993,7 +1005,8 @@ export function WarehousePage({
     completedTallyView,
     refreshVersion,
     tallyRepeatFilters,
-    tallyRepeatRefreshVersion
+    tallyRepeatRefreshVersion,
+    warehouseCacheScopeKey
   ]);
   const selectedManualReceiptCustomer = manualReceiptCustomers.find((customer) => customer.code === packageDraft.customerCode.trim());
   const manualReceiptCustomerOptions = manualReceiptCustomers.map((customer) => ({
@@ -3375,7 +3388,7 @@ export function WarehousePage({
   }
 
   async function handleWarehouseMachineExport() {
-    if (!isWarehouseMachineExportReady(inStockRowsQueryKey, warehouseQueryKey(inStockFilters))) {
+    if (!isWarehouseMachineExportReady(inStockRowsQueryKey, warehouseQueryKey(inStockFilters, warehouseCacheScopeKey))) {
       setWarehouseNotice('在仓数据正在更新，请加载完成后再下载');
       return;
     }
@@ -3408,7 +3421,7 @@ export function WarehousePage({
       setWarehouseNotice('当前角色没有今日收货批量下载权限');
       return;
     }
-    if (!isWarehouseMachineExportReady(todayReceiptRowsQueryKey, warehouseQueryKey(todayFilters))) {
+    if (!isWarehouseMachineExportReady(todayReceiptRowsQueryKey, warehouseQueryKey(todayFilters, warehouseCacheScopeKey))) {
       setWarehouseNotice('今日收货数据正在更新，请加载完成后再下载');
       return;
     }
@@ -3654,8 +3667,8 @@ export function WarehousePage({
               {canTodayReceiptBatchDownload ? <Button
                 icon={<Download size={15} />}
                 loading={machineExporting}
-                disabled={!todayReceiptRows.length || !isWarehouseMachineExportReady(todayReceiptRowsQueryKey, warehouseQueryKey(todayFilters))}
-                title={!isWarehouseMachineExportReady(todayReceiptRowsQueryKey, warehouseQueryKey(todayFilters))
+                disabled={!todayReceiptRows.length || !isWarehouseMachineExportReady(todayReceiptRowsQueryKey, warehouseQueryKey(todayFilters, warehouseCacheScopeKey))}
+                title={!isWarehouseMachineExportReady(todayReceiptRowsQueryKey, warehouseQueryKey(todayFilters, warehouseCacheScopeKey))
                   ? '今日收货数据加载完成后可下载'
                   : selectedTodayPackageIds.length
                   ? `下载已选 ${selectedTodayPackageIds.length} 条记录`
@@ -3854,8 +3867,8 @@ export function WarehousePage({
               {canInStockExport ? <Button
                 icon={<Download size={15} />}
                 loading={machineExporting}
-                disabled={!inStockRows.length || !isWarehouseMachineExportReady(inStockRowsQueryKey, warehouseQueryKey(inStockFilters))}
-                title={!isWarehouseMachineExportReady(inStockRowsQueryKey, warehouseQueryKey(inStockFilters))
+                disabled={!inStockRows.length || !isWarehouseMachineExportReady(inStockRowsQueryKey, warehouseQueryKey(inStockFilters, warehouseCacheScopeKey))}
+                title={!isWarehouseMachineExportReady(inStockRowsQueryKey, warehouseQueryKey(inStockFilters, warehouseCacheScopeKey))
                   ? '在仓数据加载完成后可下载'
                   : selectedInStockPackageCount
                   ? `下载已选 ${selectedInStockPackageCount} 条记录`
