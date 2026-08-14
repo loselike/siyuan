@@ -1,6 +1,6 @@
-# Sunny Phase92：ManagedTable 契约修复（2026-08-15）
+# Sunny Phase92：ManagedTable 与仓库查询边界（2026-08-15）
 
-status: in_progress
+- 状态：`in_progress`
 worktree: `/Users/j1ng/Tools/sunny-phase92-ui-contract`
 branch: `codex/sunny-phase92-ui-contract`
 
@@ -35,10 +35,16 @@ branch: `codex/sunny-phase92-ui-contract`
 - `git diff --check`：通过
 - 完整 `finance.test.tsx` 仍有既有导航/环境失败（24/26），未作为本切片成功证据，也未顺手修改。
 
+## 第二个小切片：仓库查询边界
+
+- 将 `warehouse/today-receipts`、`warehouse/in-stock`、`warehouse/in-stock-summary` 三个只读入口从 Controller 的直接 `PrismaRepository` 依赖收口到 `WarehouseInventoryQueryService` 和 `WarehouseInventoryQueryRepository` port。
+- Prisma 实现暂时通过显式 `WarehouseInventoryLegacyOperations` 兼容桥调用旧方法；Legacy/InMemory 实现保持原委托。没有复制或改写查询、权限、审计、返回字段和数据范围逻辑，后续可逐个替换桥接方法并用同一保护网验收。
+- 新增 Service/Repository bridge characterization；`warehouse-inventory-query` 定向测试 11/11、API typecheck、治理/架构/安全检查通过。
+
 ## 发布与风险
 
-本切片尚未发布 47；只涉及 UI 共享组件，无 Prisma、权限、财务口径或业务状态变更。发布前需在 phase91/唯一集成分支完成合并审查，再按 Web 白名单发布并由用户人工检查列设置视觉位置。
+本切片尚未发布 47；只涉及共享表格契约和仓库只读调用边界，无 Prisma、业务数据、权限、财务口径或业务状态变更。发布前需在 phase91/唯一集成分支完成合并审查，再按 Web/API 白名单发布；UI 列设置位置由用户人工检查，仓库接口需用真实角色做允许/拒绝只读探针。
 
 ## 下一轮重新排序
 
-重新扫描后最高收益从共享契约转为真实高频模块的纵向拆分。优先选择仓库工作台或财务审核列表之一，先固定页面验收样本，再抽取页面模型/API client/Repository port/定向测试；不同时拆 `App.tsx`、`Repository` 和全局 CSS。
+重新扫描后继续选择“仓库工作台剩余读方法的真实实现迁移”或“财务审核列表查询边界”二选一；优先用 47 只读接口/容器证据确认真实调用，再一次只替换一个兼容桥方法。继续保留 `App.tsx`、巨型 `Repository` 和全局 CSS 的分步迁移，不做一次性重写。
