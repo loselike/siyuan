@@ -916,7 +916,7 @@
       "AgentMarkupQueryController.exportAgentMarkupRules"
     ],
     [
-      "GET /pricing/rules @ DataController.pricingRules",
+      "GET /pricing/rules @ PricingRuleQueryController.pricingRules",
       "permission",
       [
         "pricing:markup:amazon:tier",
@@ -927,7 +927,7 @@
         "pricing:markup:southAfrica:tier",
         "pricing:markup:usaAirSea:tier"
       ],
-      "DataController.pricingRules"
+      "PricingRuleQueryController.pricingRules"
     ],
     [
       "GET /pricing/south-africa/images @ PriceBookQueryController.southAfricaRateImages",
@@ -2587,7 +2587,7 @@
       "DataController.createPricingRule"
     ],
     [
-      "POST /pricing/rules/quote @ DataController.quotePricingRule",
+      "POST /pricing/rules/quote @ PricingRuleQueryController.quotePricingRule",
       "permission",
       [
         "pricing:lookup:amazon",
@@ -2598,7 +2598,7 @@
         "pricing:lookup:south-africa",
         "pricing:lookup:usa-air-sea"
       ],
-      "DataController.quotePricingRule"
+      "PricingRuleQueryController.quotePricingRule"
     ],
     [
       "POST /pricing/south-africa/images @ DataController.uploadSouthAfricaRateImage",
