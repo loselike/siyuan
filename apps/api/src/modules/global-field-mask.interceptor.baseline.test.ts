@@ -66,4 +66,26 @@ describe('global sensitive field deny baseline', () => {
     expect(isPaymentVoucherGloballyMasked(state)).toBe(true);
     expect(isGlobalSensitiveFilePathBlocked('/api/finance/voucher-images', state)).toBe(false);
   });
+
+  it('preserves empty master-data collection contracts without exposing masked agent rows', () => {
+    const state = resolveGlobalFieldMaskState([
+      'system:global-mask:agent-data'
+    ] as PermissionKey[]);
+
+    expect(maskGlobalSensitiveValue({
+      customers: [],
+      agents: [],
+      agentChannels: [],
+      carriers: []
+    }, state, '/api/master-data')).toEqual({
+      customers: [],
+      agents: [],
+      agentChannels: [],
+      carriers: []
+    });
+    expect(maskGlobalSensitiveValue({
+      agents: [{ id: 'agent-1', name: 'masked-agent' }],
+      agentChannels: [{ id: 'channel-1', name: 'masked-channel' }]
+    }, state, '/api/master-data')).toEqual({});
+  });
 });

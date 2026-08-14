@@ -52,9 +52,24 @@ const contextualPayableStatusKeys = new Set([
 // Query controls such as costScope select a view; they are not payable data.
 // Keep them usable when the response's payable fields are globally masked.
 const nonSensitiveControlKeys = new Set(['costscope']);
+const masterDataRequiredMaskedCollectionKeys = new Set(['agents', 'agentchannels']);
 
 function normalizedKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+function shouldPreserveMaskedEmptyCollection(
+  rawKey: string,
+  value: unknown,
+  requestPath: string,
+  ancestors: readonly string[]
+): boolean {
+  const path = requestPath.split('?')[0] ?? requestPath;
+  return ancestors.length === 0
+    && /^\/api\/master-data\/?$/i.test(path)
+    && Array.isArray(value)
+    && value.length === 0
+    && masterDataRequiredMaskedCollectionKeys.has(normalizedKey(rawKey));
 }
 
 function hasAnyMask(state?: GlobalFieldMaskState): boolean {
@@ -170,9 +185,14 @@ export function maskGlobalSensitiveValue<T>(
     return value.map((item, index) => maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, String(index)])) as T;
   }
   if (typeof value !== 'object' || value instanceof Date || Buffer.isBuffer(value) || value instanceof StreamableFile) return value;
-  const masked = Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => !fieldIsMasked(key, state, requestPath, ancestors))
-    .map(([key, item]) => [key, maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, key])]));
+  const masked: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (fieldIsMasked(key, state, requestPath, ancestors)) {
+      if (shouldPreserveMaskedEmptyCollection(key, item, requestPath, ancestors)) masked[key] = [];
+      continue;
+    }
+    masked[key] = maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, key]);
+  }
   return masked as T;
 }
 
