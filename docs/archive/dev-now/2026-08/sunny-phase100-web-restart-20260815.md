@@ -1,6 +1,6 @@
 # Sunny Phase100：发布重启阶段禁止重复构建
 
-- 状态：in_progress
+- 状态：published_47
 - 任务边界：修复标准 Docker Compose 发布在已完成受影响服务构建后，重启阶段再次尝试 registry pull/build 的耗时问题；不改变统一 release ID、镜像 fencing、health、state、权限或业务数据。
 - 用户验收目标：Web-only 或 Web+API 发布只在显式 build/pull 阶段准备镜像，重启阶段直接使用已验证镜像；发布失败仍 fail-closed，API/Web 运行版本仍与 state 一致。
 
@@ -27,13 +27,14 @@ Phase99 47 发布实测范围为 `web`，但 `docker compose up` 在重启阶段
 - `bash -n scripts/deploy-47.sh scripts/lib/47-release-service-plan.sh scripts/release-service-plan.test.sh scripts/release-image-fence.test.sh` 通过。
 - `bash scripts/release-service-plan.test.sh`、`bash scripts/release-image-fence.test.sh` 通过。
 - `git diff --check` 通过。
-- 独立发布风险审查：未发现 P0/P1/P2；8 组合 planner 矩阵和 image-fence 门禁通过。仍需先处理既有 context governance 阻断，再发布发布脚本/测试/状态文档；不运行数据库迁移。
+- 独立发布风险审查：未发现 P0/P1/P2；8 组合 planner 矩阵和 image-fence 门禁通过。治理状态归档后，development/context/architecture 三层治理门禁全部通过；本次未运行数据库迁移。
 - 47 只读能力探针：远端 Docker Compose 为 `2.40.3+ds1-0ubuntu1`，支持重启阶段使用 `--pull never`；本机未安装 Docker，因此未做本地 Compose 实执行。
 
-## 当前发布门禁
+## 发布结果
 
-- `npm run governance:check` 的 development governance 已通过，但 context governance 仍 fail-closed：`docs/dev-now` 有 18 个活动文件（上限 12），且 Phase96–99 四个已终态文件尚未归档。
-- 这些状态文件不属于本阶段，不能为发布绕过、覆盖或删除；因此本阶段代码已提交并推送，但暂不执行 47 脚本发布。治理状态清理后，应重新跑本阶段门禁，再以 scope `none` 的 reviewed-zero-build governance release 精确同步脚本文件。
+- 发布前已归档有明确完成/47 证据的历史状态文件；当前 `npm run governance:check` 通过，活动状态 6 个、归档 238 个。
+- Phase100–104 累计候选已按标准 Git source build 发布到 47：`git-55b8bfdd5c02_web-c4459d996b26_api-31e97a08a648`，提交 `55b8bfdd5c02c49648f843f0cf7ce28c8bbc8a79`，分支 `codex/release/phase104-integrate-v2`。
+- 发布范围为 `web+api`，`MIGRATION_REQUIRED=false`；API/Web 构建、重启、内外 health、运行镜像 fence、provenance、锁与 recovery 均通过。
 
 ## 发布边界
 
