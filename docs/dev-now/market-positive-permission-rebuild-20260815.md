@@ -32,7 +32,7 @@
 
 - 站点规则已落地：启用账号或对象 owner 的空 `site` 按“深圳思远”解析；仍要求市场对象能够解析到有效 owner，避免无归属数据被放大可见。迁移不修改这些业务记录。
 - 本候选修改包含 API、Web、shared 与 Prisma migration；业务表仅做行数保护快照，迁移不写业务表。
-- 候选仍需通过精确的 API/Web 安全门和 47 Docker 构建后再执行 `prisma migrate deploy`；不得把其他并发脏文件带入发布。
+- 已通过精确的 API/Web 安全门和 47 Docker 构建；迁移仅更新权限目录及角色权限关系。
 - 已知候选基线存在若干非市场模块的未落地依赖，若构建仍失败，应生成只含本任务白名单的可构建候选，不得绕过安全门发布。
 
 ## 继续验证｜2026-08-15 12:57
@@ -64,4 +64,12 @@
 - 市场权限 Web 定向测试：4/4 通过。
 - RBAC 定向测试：15/15 通过。
 - `git diff --check`：通过。
-- 待执行：推送干净 release 分支、执行标准 47 baseline/deploy，运行唯一迁移并完成 API、容器及公网 health 验证。
+- 已推送干净 release 分支并完成 47 current-baseline cutover，随后通过白名单迁移发布唯一权限迁移，最后再次切回 Git source build。
+
+## 47 发布完成｜2026-08-15
+
+- 代码发布提交：`19bf2bc3019617ace067ab44dd8e5c58f8044f61`；发布 ID：`git-19bf2bc30196_web-4e8dd60c5196_api-1e56ec9e0f8`。
+- `20260814130000_rebuild_market_positive_permissions` 已成功执行；47 只读核对显示迁移完成、17 个 canonical market 权限存在、旧 `market:%-block%` 权限为 0。
+- 业务表只读行数核对：Shipment 58、ShipmentFinanceItem 274、AuditLog 146532；迁移未修改业务数据。
+- 线上 API health 200，Web 200；Web/API 镜像匹配，Git provenance traceable，release lock free，recovery clear。
+- 空账号站点按“深圳思远”运行时解析，有站点账号按自身站点隔离；迁移未回写账号或业务对象。
