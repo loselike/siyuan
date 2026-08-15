@@ -1,6 +1,6 @@
 # Sunny Phase94：仓库在库列表读取策略抽取（2026-08-15）
 
-- 状态：`in_progress`
+- 状态：`published_47`
 implementation worktree: `/Users/j1ng/Tools/sunny-phase94-inventory-list`
 implementation branch: `codex/sunny-phase94-inventory-list`
 

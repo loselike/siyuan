@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 42
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - 分支：`codex/sunny-refactor-phase42`
 - 基线提交：`71ae784`
 - 47 基线发布：`whitelist-5ff54e642bb396194f8e3bbd`

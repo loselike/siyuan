@@ -1,6 +1,6 @@
 # Sunny 深度重构 Phase 43
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - 分支：`codex/sunny-refactor-phase43`
 - 基线提交：`641b8d3`
 - 47 记录基线：`whitelist-9fda300b81a046c50fa26700`（已被 13:03 的 Web/API 容器替换，状态文件未同步）
