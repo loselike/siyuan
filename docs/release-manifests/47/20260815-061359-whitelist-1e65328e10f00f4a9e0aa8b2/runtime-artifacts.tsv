@@ -1,0 +1,4 @@
+api	/app/node_modules/.prisma/client/schema.prisma	4ff2ae9dc50093d2a8e5a8e6359ca8ba5c6057764c6ba7289947718c575853a9
+api	/app/packages/shared/dist/index.d.ts	ba599b029d372cbc1e598607765133c7f88cc740abb8d48f72905e4fcdbc90e1
+api	/app/packages/shared/dist/index.js	6c3087437ba35276236e4fe06e6764183743b497cb084eceb4ca807bef897de5
+web	/usr/share/nginx/html/index.html	9aa664d11cc99727ba7014a1d38bb6c51dc8b8c17cc2238f90eb2dae40560e54
