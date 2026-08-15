@@ -1,6 +1,6 @@
 # Sunny Phase92：ManagedTable 与仓库查询边界（2026-08-15）
 
-- 状态：`in_progress`
+- 状态：`published_47`
 worktree: `/Users/j1ng/Tools/sunny-phase92-ui-contract`
 branch: `codex/sunny-phase92-ui-contract`
 

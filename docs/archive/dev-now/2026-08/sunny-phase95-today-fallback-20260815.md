@@ -1,6 +1,6 @@
 # Sunny Phase95：今日收货失败回退安全收口（2026-08-15）
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - worktree：`/Users/j1ng/Tools/sunny-phase95-today-fallback`
 - branch：`codex/sunny-phase95-today-fallback`
 
