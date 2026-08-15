@@ -142,37 +142,6 @@ export function isCustomerServiceDataConfirmMaskPermission(code: string): boolea
   return customerServiceDataConfirmMaskControls.some((control) => control.code === code);
 }
 
-export const marketPendingRoutingMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽排货', code: 'market:pending-routing:route-block' },
-  { label: '屏蔽修改', code: 'market:pending-routing:update-block' },
-  { label: '屏蔽审核', code: 'market:pending-routing:audit-block' },
-  { label: '屏蔽操作日志', code: 'market:pending-routing:operation-log-block' },
-  { label: '屏蔽业务成本修改', code: 'market:pending-routing:business-cost-update-block' },
-  { label: '屏蔽业务成本新增', code: 'market:pending-routing:business-cost-create-block' },
-  { label: '屏蔽业务成本删除', code: 'market:pending-routing:business-cost-delete-block' },
-  { label: '屏蔽退回重审', code: 'market:pending-routing:reroute-block' }
-];
-
-export function isMarketPendingRoutingMaskPermission(code: string): boolean {
-  return marketPendingRoutingMaskControls.some((control) => control.code === code);
-}
-
-export const marketRoutedMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽退回重排', code: 'market:routed:reroute-block' },
-  { label: '屏蔽修改', code: 'market:routed:update-block' },
-  { label: '屏蔽排货日志', code: 'market:routed:log-block' }
-];
-
-export function isMarketRoutedMaskPermission(code: string): boolean {
-  return marketRoutedMaskControls.some((control) => control.code === code);
-}
-
 export function lineShipmentStageEditBlockPermissionCode(stage: LineShipmentEditStageKey): PermissionKey {
   return `operations:line-shipment:stage-edit-block:${stage.toLowerCase().replaceAll('_', '-')}` as PermissionKey;
 }
@@ -301,7 +270,7 @@ export const permissionWorkspaceCatalog: PermissionWorkspaceDefinition[] = [
       { label: '市场看板' },
       { label: '待排货' },
       { label: '已排货' },
-      { label: '排货数据', permissionGroup: '本周排货数据' }
+      { label: '排货数据' }
     ]
   },
   {
@@ -378,8 +347,6 @@ export function getWorkspacePermissionGroups(
       .filter((permission) => !isGlobalFieldMaskPermission(permission.code))
       .filter((permission) => !isOrderEntryPermission(permission.code))
       .filter((permission) => !permission.code.includes('-block'))
-      .filter((permission) => !isMarketPendingRoutingMaskPermission(permission.code))
-      .filter((permission) => !isMarketRoutedMaskPermission(permission.code))
       .filter((permission) => !isCustomerServicePendingRoutingMaskPermission(permission.code))
       .filter((permission) => !isCustomerServiceDataConfirmMaskPermission(permission.code))
       .filter((permission) => !isCustomerServiceTransferFillMaskPermission(permission.code))

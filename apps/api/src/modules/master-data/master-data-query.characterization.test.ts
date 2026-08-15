@@ -34,7 +34,7 @@ function controllerWithPermissions(granted: readonly string[]) {
   };
   return {
     repository,
-    controller: new DataController(repository as never, {} as never)
+    controller: new DataController(repository as never, {} as never, {} as never)
   };
 }
 

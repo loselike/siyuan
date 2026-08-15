@@ -57,7 +57,7 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
       'market:dashboard:view',
       'market:pending-routing:view',
       'market:routed:view',
-      'market:weekly-routing:view'
+      'market:routing-report:view'
     )],
     ['customerService', canAny('customer-service:dashboard:view', 'customer-service:data-confirm:view', 'customer-service:transfer:view', 'customer-service:pending-routing:view', 'customer-service:waiting-departure:view', 'customer-service:departed:view', 'customer-service:arrived-port:view', 'customer-service:delivering:view', 'customer-service:signed:view', 'customer-service:problem:view')],
     ['logisticsTracking', canAny('tracking:carrier-task:view', 'tracking:external:view')],

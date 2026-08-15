@@ -101,10 +101,10 @@ describe('RBAC default permission inheritance', () => {
     expect(defaultPermissionsForRole('UG_MARKET')).toEqual(expect.arrayContaining([
       'master-data:agents:read',
       'master-data:agent-channels:read',
-      'market:pending-routing:confirm'
+      'market:pending-routing:approve'
     ]));
     expect(defaultPermissionsForRole('WAREHOUSE').some((permission) => permission.startsWith('finance:'))).toBe(false);
-    expect(defaultPermissionsForRole('FINANCE')).not.toContain('market:pending-routing:confirm');
+    expect(defaultPermissionsForRole('FINANCE')).not.toContain('market:pending-routing:approve');
     expect(defaultPermissionsForRole('CUSTOMER')).toEqual(expect.arrayContaining([
       'business:shipment:self-view',
       'finance:customer-account:read'

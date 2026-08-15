@@ -36,7 +36,7 @@ const payableCostKeys = new Set([
   'payablecost', 'payablecosts', 'payableamount', 'payableamounts', 'payabletotal',
   'payabletotalamount', 'payablecosttotals', 'payablecurrency', 'payablefee',
   'payablefees', 'routechargeweightkg', 'routeunitprice', 'routeotherfee', 'routecosttotal', 'routecurrency',
-  'routecostsummary', 'businesscost', 'businesscosts', 'businesscosttotal', 'costamount', 'costtotal',
+  'routecostsummary', 'costamount', 'costtotal',
   'grossprofit', 'profit', 'profits', 'profitsection', 'profitsections', 'profitamount', 'profitrate',
   'grossmargin', 'marginamount', 'marginrate'
 ]);
@@ -52,24 +52,9 @@ const contextualPayableStatusKeys = new Set([
 // Query controls such as costScope select a view; they are not payable data.
 // Keep them usable when the response's payable fields are globally masked.
 const nonSensitiveControlKeys = new Set(['costscope']);
-const masterDataRequiredMaskedCollectionKeys = new Set(['agents', 'agentchannels']);
 
 function normalizedKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
-}
-
-function shouldPreserveMaskedEmptyCollection(
-  rawKey: string,
-  value: unknown,
-  requestPath: string,
-  ancestors: readonly string[]
-): boolean {
-  const path = requestPath.split('?')[0] ?? requestPath;
-  return ancestors.length === 0
-    && /^\/api\/master-data\/?$/i.test(path)
-    && Array.isArray(value)
-    && value.length === 0
-    && masterDataRequiredMaskedCollectionKeys.has(normalizedKey(rawKey));
 }
 
 function hasAnyMask(state?: GlobalFieldMaskState): boolean {
@@ -112,8 +97,13 @@ function fieldIsMasked(
   if (nonSensitiveControlKeys.has(key)) return false;
   const ancestorPath = ancestors.map(normalizedKey).join('.');
   const agentMaster = isAgentMasterPath(requestPath) || /(?:^|\.)(?:agent|agents|agentdetail|agentdetails)(?:\.|$)/.test(ancestorPath);
-  const payableContext = /payable|payment|settlement|reconciliation|writeoff|routecost|businesscost|agentcost|profit|margin|miscfeehang/
-    .test(`${requestPath}.${ancestorPath}`.replace(/[^a-z0-9.]/gi, '').toLowerCase());
+  const marketCostMutation = /\/api\/shipments\/[^/]+\/(?:route|finance-items)(?:\/|\?|$)/i.test(requestPath);
+  const requestContext = `${requestPath}.${ancestorPath}`.replace(/[^a-z0-9.]/gi, '').toLowerCase();
+  // Business cost is an independent finance section. A payable-cost mask must
+  // not remove it just because its field names contain "cost" or "amount".
+  const businessCostContext = /businesscost/.test(requestContext) || key.startsWith('businesscost');
+  const payableContext = marketCostMutation || /payable|payment|settlement|reconciliation|writeoff|routecost|agentcost|profit|margin|miscfeehang/
+    .test(requestContext);
   const agentMasked = state['agent-short-name'] || state['agent-company-name'] || state['agent-channel'] || state['agent-data'];
   const narrativeContext = /(?:audit|lineage|internal-flow|flow-log|notification)/i.test(requestPath);
 
@@ -131,8 +121,8 @@ function fieldIsMasked(
     && (agentChannelKeys.has(key) || isAgentChannelMasterPath(requestPath) && ['name', 'channelname', 'channelid'].includes(key)
       || key.includes('agent') && /(?:channel|route)/.test(key))) return true;
   if (state['agent-data'] && (agentDataKeys.has(key) || key.includes('agent') && key !== 'useragent')) return true;
-  if (state['payable-cost'] && (payableCostKeys.has(key)
-    || /(?:cost|profit|margin)/.test(key)
+  if (state['payable-cost'] && !businessCostContext && (payableCostKeys.has(key)
+    || /(?:profit|margin)/.test(key)
     || /payable/.test(key) && /(?:amount|total|currency|fee|price|rate|quantity|weight)/.test(key)
     || payableContext && /(?:amount|total|currency|unitprice|price|rate|quantity|weight)/.test(key))) return true;
   if (state['payable-status'] && (payableStatusKeys.has(key)
@@ -140,6 +130,46 @@ function fieldIsMasked(
     || /(?:payable|payment)/.test(key) && /(?:status|settled|locked|paid|verified)/.test(key)
     || payableContext && /(?:status|settled|locked|paid|verified|voided|pendingcount|confirmedcount|voidedcount|waitingpaymentcount|paidcount)/.test(key))) return true;
   return false;
+}
+
+function isEmptyMaskedRequestValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (Array.isArray(value)) return value.length === 0;
+  return typeof value === 'string' && value.trim() === '';
+}
+
+function isOrderEntryFinancePath(requestPath: string): boolean {
+  const path = requestPath.split('?')[0] ?? requestPath;
+  return /\/api\/shipments\/order-entry(?:\/|$)/i.test(path)
+    || /\/api\/shipments\/[^/]+\/order-entry-draft(?:\/|$)/i.test(path);
+}
+
+/**
+ * Masked finance fields are optional on order entry. If an old client still
+ * sends one, remove only that field and let the ordinary order payload save;
+ * all other endpoints continue to use the strict request deny policy below.
+ */
+export function stripGlobalSensitiveRequestFields<T>(
+  value: T,
+  state: GlobalFieldMaskState | undefined,
+  requestPath: string,
+  ancestors: readonly string[] = []
+): T {
+  if (!state || !hasAnyMask(state) || value === null || value === undefined) return value;
+  if (Array.isArray(value)) {
+    return value.map((item, index) => stripGlobalSensitiveRequestFields(item, state, requestPath, [...ancestors, String(index)])) as T;
+  }
+  if (typeof value !== 'object' || value instanceof Date || Buffer.isBuffer(value)) return value;
+  const stripped = Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key, item]) => {
+      const orderEntryFinanceContainer = isOrderEntryFinancePath(requestPath)
+        && state['payable-cost']
+        && normalizedKey(key) === 'payables';
+      return !(fieldIsMasked(key, state, requestPath, ancestors) || orderEntryFinanceContainer)
+        || isEmptyMaskedRequestValue(item);
+    })
+    .map(([key, item]) => [key, stripGlobalSensitiveRequestFields(item, state, requestPath, [...ancestors, key])]));
+  return stripped as T;
 }
 
 export function assertGlobalFieldMaskRequestAllowed(
@@ -167,7 +197,7 @@ export function assertGlobalFieldMaskRequestAllowed(
         throw new ForbiddenException('总规则已屏蔽该排序字段');
       }
     }
-    if (fieldIsMasked(key, state, requestPath, ancestors)) {
+    if (fieldIsMasked(key, state, requestPath, ancestors) && !isEmptyMaskedRequestValue(item)) {
       throw new ForbiddenException('总规则已屏蔽该字段，不能查看或修改');
     }
     assertGlobalFieldMaskRequestAllowed(item, state, requestPath, [...ancestors, key]);
@@ -185,14 +215,9 @@ export function maskGlobalSensitiveValue<T>(
     return value.map((item, index) => maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, String(index)])) as T;
   }
   if (typeof value !== 'object' || value instanceof Date || Buffer.isBuffer(value) || value instanceof StreamableFile) return value;
-  const masked: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    if (fieldIsMasked(key, state, requestPath, ancestors)) {
-      if (shouldPreserveMaskedEmptyCollection(key, item, requestPath, ancestors)) masked[key] = [];
-      continue;
-    }
-    masked[key] = maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, key]);
-  }
+  const masked = Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !fieldIsMasked(key, state, requestPath, ancestors))
+    .map(([key, item]) => [key, maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, key])]));
   return masked as T;
 }
 
@@ -207,7 +232,7 @@ function maskAiFinanceRows(value: unknown, state: GlobalFieldMaskState): unknown
       if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
       const record = row as Record<string, unknown>;
       const rowKey = typeof record.key === 'string' ? normalizedKey(record.key) : '';
-      const hidesCost = state['payable-cost'] && (rowKey === 'payable' || rowKey === 'businesscost');
+      const hidesCost = state['payable-cost'] && rowKey === 'payable';
       const hidesStatus = state['payable-status'] && rowKey === 'payable';
       return Object.fromEntries(Object.entries(record).filter(([field]) => {
         const normalizedField = normalizedKey(field);
@@ -253,7 +278,11 @@ export class GlobalFieldMaskInterceptor implements NestInterceptor {
       throw new ForbiddenException('总规则已屏蔽该导出或下载中的敏感数据');
     }
     if (!/\/ai\/assist(?:\?|$)/i.test(requestPath)) {
-      assertGlobalFieldMaskRequestAllowed(request.body, state, requestPath);
+      const requestBody = isOrderEntryFinancePath(requestPath)
+        ? stripGlobalSensitiveRequestFields(request.body, state, requestPath)
+        : request.body;
+      if (isOrderEntryFinancePath(requestPath)) request.body = requestBody;
+      assertGlobalFieldMaskRequestAllowed(requestBody, state, requestPath);
     }
     assertGlobalFieldMaskRequestAllowed(request.query, state, requestPath);
     assertGlobalFieldMaskRequestAllowed(request.params, state, requestPath);

@@ -303,7 +303,6 @@ import type {
   NotificationUnreadSummary
 } from './modules/notifications/notificationTypes';
 import { AppShellClient } from './api/appShellClient';
-import { AuthAccountClient } from './api/authAccountClient';
 import { AuditQueryClient } from './api/auditQueryClient';
 import { CarrierTaskQueryClient } from './api/carrierTaskQueryClient';
 import { MarkupQueryClient } from './api/markupQueryClient';
@@ -410,55 +409,22 @@ export type PermissionKey =
   | 'business:order-ai:all-order-context'
   | 'business:order-ai:export-result'
   | 'market:dashboard:view'
-  | 'market:dashboard:pending-summary'
-  | 'market:dashboard:routed-summary'
-  | 'market:dashboard:weekly-summary'
-  | 'market:dashboard:agent-stats-view'
-  | 'market:dashboard:channel-mode-stats-view'
-  | 'market:dashboard:sensitive-summary-view'
   | 'market:pending-routing:view'
-  | 'market:pending-routing:detail'
-  | 'market:pending-routing:assign'
-  | 'market:pending-routing:save-draft'
-  | 'market:pending-routing:confirm'
-  | 'market:pending-routing:audit'
-  | 'market:pending-routing:update'
-  | 'market:pending-routing:delete'
-  | 'market:pending-routing:operation-log-view'
-  | 'market:pending-routing:business-cost-view'
-  | 'market:pending-routing:payable-cost-view'
-  | 'market:pending-routing:agent-channel-view'
-  | 'market:pending-routing:cost-field-view'
-  | 'market:pending-routing:column-setting'
-  | 'market:pending-routing:route-block'
-  | 'market:pending-routing:update-block'
-  | 'market:pending-routing:audit-block'
-  | 'market:pending-routing:operation-log-block'
-  | 'market:pending-routing:business-cost-update-block'
-  | 'market:pending-routing:business-cost-create-block'
-  | 'market:pending-routing:business-cost-delete-block'
-  | 'market:pending-routing:reroute-block'
+  | 'market:pending-routing:route'
+  | 'market:pending-routing:edit'
+  | 'market:pending-routing:approve'
+  | 'market:pending-routing:operation-log:view'
+  | 'market:pending-routing:business-cost:view'
+  | 'market:pending-routing:business-cost:create'
+  | 'market:pending-routing:business-cost:edit'
+  | 'market:pending-routing:business-cost:delete'
+  | 'market:pending-routing:return-review'
   | 'market:routed:view'
-  | 'market:routed:detail'
-  | 'market:routed:update'
+  | 'market:routed:edit'
   | 'market:routed:reroute'
-  | 'market:routed:log-view'
-  | 'market:routed:agent-cost-view'
-  | 'market:routed:cost-total-view'
-  | 'market:routed:agent-channel-view'
-  | 'market:routed:column-setting'
-  | 'market:routed:reroute-block'
-  | 'market:routed:update-block'
-  | 'market:routed:log-block'
-  | 'market:weekly-routing:view'
-  | 'market:weekly-routing:detail'
-  | 'market:weekly-routing:agent-stats-view'
-  | 'market:weekly-routing:channel-mode-stats-view'
-  | 'market:weekly-routing:cost-view'
-  | 'market:weekly-routing:reroute-stats-view'
-  | 'market:weekly-routing:sensitive-stats-view'
-  | 'market:weekly-routing:export'
-  | 'market:weekly-routing:column-setting'
+  | 'market:routed:routing-log:view'
+  | 'market:routing-report:view'
+  | 'market:routing-report:export'
   | 'warehouse:dashboard:view'
   | 'warehouse:today-receipt:view'
   | 'warehouse:today-receipt:edit'
@@ -592,7 +558,7 @@ export interface Principal {
   phone?: string;
   gender?: StaffGender;
   nickname?: string;
-  mustChangePassword?: boolean; warehouseScopeFingerprint?: string;
+  mustChangePassword?: boolean;
 }
 
 export interface ProfileUpdateInput {
@@ -697,7 +663,6 @@ function formatApiErrorMessage(body: string, status: number): string {
 
 export class ApiClient {
   readonly appShell = new AppShellClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
-  readonly authAccount = new AuthAccountClient(<T>(path: string, init?: RequestInit, authenticated?: boolean) => this.request<T>(path, init, authenticated));
   readonly auditQuery = new AuditQueryClient(<T>(path: string, init?: RequestInit) => this.request<T>(path, init));
   readonly carrierTaskQuery = new CarrierTaskQueryClient(<T>(path: string, init?: RequestInit) =>
     this.request<T>(path, init)
@@ -721,31 +686,87 @@ export class ApiClient {
   ) {}
 
   async captcha(): Promise<CaptchaChallenge> {
-    return this.authAccount.captcha<CaptchaChallenge>();
+    return this.request('/auth/captcha', { method: 'GET' }, false);
   }
 
   async login(username: string, password: string, captchaId?: string, captchaCode?: string): Promise<Session> {
-    return this.authAccount.login<Session>(username, password, captchaId, captchaCode);
+    return this.request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password, captchaId, captchaCode }) }, false);
   }
 
   async me(): Promise<Principal> {
-    return this.authAccount.me<Principal>();
+    return this.request('/auth/me');
   }
 
   async currentSession(): Promise<Pick<Session, 'user' | 'permissions'>> {
-    return this.authAccount.currentSession<Pick<Session, 'user' | 'permissions'>>();
+    return this.request('/auth/session');
+  }
+
+  /**
+   * Compatibility facades for pages that still call the legacy flat client.
+   * The request/response contracts live in the focused API clients; keeping
+   * these delegates avoids a flag-day UI migration and does not alter routes,
+   * permissions, or response shaping.
+   */
+  auditLogs(query: Parameters<AuditQueryClient['auditLogs']>[0] = {}) {
+    return this.auditQuery.auditLogs(query);
+  }
+
+  priceBookRows(
+    priceBookId?: string,
+    query: Parameters<PriceBookQueryClient['priceBookRows']>[1] = {}
+  ) {
+    return this.priceBookQuery.priceBookRows(priceBookId, query);
+  }
+
+  legacyPricingMeta() {
+    return this.priceBookQuery.legacyPricingMeta();
+  }
+
+  southAfricaRateRules() {
+    return this.priceBookQuery.southAfricaRateRules();
+  }
+
+  dubaiPriceDisplay() {
+    return this.priceBookQuery.dubaiPriceDisplay();
+  }
+
+  dubaiPriceDisplayVersions() {
+    return this.priceBookQuery.dubaiPriceDisplayVersions();
+  }
+
+  priceBookRuleRefreshProgress() {
+    return this.priceBookQuery.priceBookRuleRefreshProgress();
+  }
+
+  pricingSyncHealth(query: Parameters<PriceBookQueryClient['pricingSyncHealth']>[0] = {}) {
+    return this.priceBookQuery.pricingSyncHealth(query);
+  }
+
+  agentMarkupRules(query: Parameters<MarkupQueryClient['agentMarkupRules']>[0] = {}) {
+    return this.markupQuery.agentMarkupRules(query);
+  }
+
+  exportAgentMarkupRules(query: Parameters<MarkupQueryClient['exportAgentMarkupRules']>[0] = {}) {
+    return this.markupQuery.exportAgentMarkupRules(query);
+  }
+
+  warehouseTallyTaskHistoryChain(packageId: string) {
+    return this.warehouseQuery.warehouseTallyTaskHistoryChain(packageId);
   }
 
   async userTablePreferences(): Promise<UserTablePreferenceSummary[]> {
-    return this.authAccount.userTablePreferences<UserTablePreferenceSummary[]>();
+    return this.request('/user-table-preferences');
   }
 
   async updateUserTablePreference(key: string, value: UserTablePreferenceValue): Promise<UserTablePreferenceSummary> {
-    return this.authAccount.updateUserTablePreference<UserTablePreferenceSummary>(key, value);
+    return this.request(`/user-table-preferences/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value })
+    });
   }
 
   async deleteUserTablePreference(key: string): Promise<{ ok: true }> {
-    return this.authAccount.deleteUserTablePreference<{ ok: true }>(key);
+    return this.request(`/user-table-preferences/${encodeURIComponent(key)}`, { method: 'DELETE' });
   }
 
   async downloadProtectedAsset(url: string): Promise<Blob> {
@@ -766,15 +787,27 @@ export class ApiClient {
   }
 
   async updateProfile(input: ProfileUpdateInput): Promise<Principal> {
-    return this.authAccount.updateProfile<Principal>(input);
+    return this.request('/auth/profile', { method: 'PUT', body: JSON.stringify(input) });
   }
 
   async changePassword(input: { currentPassword: string; newPassword: string }): Promise<{ ok: true }> {
-    return this.authAccount.changePassword<{ ok: true }>(input);
+    return this.request('/auth/change-password', { method: 'POST', body: JSON.stringify(input) });
   }
 
   async shipments(): Promise<Shipment[]> {
     return this.request('/shipments?costScope=routed');
+  }
+
+  async marketShipments(): Promise<Shipment[]> {
+    return this.request('/market/shipments?costScope=routed');
+  }
+
+  async marketRoutingOptions(): Promise<Pick<MasterDataSnapshot, 'agents' | 'agentChannels' | 'channels'>> {
+    return this.request('/market/routing-options');
+  }
+
+  async marketRoutingReportRows(): Promise<Shipment[]> {
+    return this.request('/market/routing-report/rows');
   }
 
   async warehouseDispatchShipments(): Promise<Shipment[]> {
@@ -883,10 +916,6 @@ export class ApiClient {
 
   async rerouteShipment(id: string, body: ShipmentRerouteInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/reroute`, { method: 'POST', body: JSON.stringify(body) });
-  }
-
-  async deletePendingRoutingShipment(id: string, body: ShipmentReviewDeleteInput): Promise<Shipment> {
-    return this.request(`/shipments/${id}/pending-routing`, { method: 'DELETE', body: JSON.stringify(body) });
   }
 
   async dispatchShipment(id: string, body: ShipmentDispatchInput): Promise<Shipment> {
@@ -1540,7 +1569,7 @@ export class ApiClient {
   }
 
   async restartWarehouseTallyProblemTask(id: string): Promise<WarehouseTallyTaskSummary> {
-    return this.request(`/warehouse/tally-problem-tasks/${id}/restart`, { method: 'POST' });
+    return this.request(`/warehouse/tally-tasks/${id}/restart-problem`, { method: 'POST' });
   }
 
   async completeWarehouseTallyTask(id: string, input: WarehouseTallyTaskCompleteInput): Promise<WarehouseTallyTaskSummary> {

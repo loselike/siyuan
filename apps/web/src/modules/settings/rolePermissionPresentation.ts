@@ -21,139 +21,123 @@ export const permissionControlCategoryOrder: PermissionControlCategory[] = ['页
 const marketPermissionControls: Record<string, PermissionControl[]> = {
   '市场管理 / 市场看板': [
     {
-      id: 'market-dashboard-access',
-      label: '进入市场看板',
-      description: '查看待排货、已排货及周期排货的基础概览。',
+      id: 'market-dashboard-view',
+      label: '查看',
+      description: '查看市场看板。',
       category: '页面访问',
       risk: 'normal',
       bulkGrantEligible: true,
-      codes: ['market:dashboard:view', 'market:dashboard:pending-summary', 'market:dashboard:routed-summary', 'market:dashboard:weekly-summary']
-    },
-    {
-      id: 'market-dashboard-agent-analysis',
-      label: '查看代理与渠道分析',
-      description: '显示真实代理维度以及空运、海运渠道统计。',
-      category: '敏感字段',
-      risk: 'sensitive',
-      codes: ['market:dashboard:agent-stats-view', 'market:dashboard:channel-mode-stats-view'],
-      adminGrantOnly: true
-    },
-    {
-      id: 'market-dashboard-sensitive-analysis',
-      label: '查看敏感货与申报分析',
-      description: '查看敏感货物和需要报关货物的周期统计。',
-      category: '页面访问',
-      risk: 'normal',
-      bulkGrantEligible: true,
-      codes: ['market:dashboard:sensitive-summary-view']
+      codes: ['market:dashboard:view']
     }
   ],
   '市场管理 / 待排货': [
     {
-      id: 'market-pending-access',
-      label: '查看待排货',
-      description: '查看待排货列表、详情和该票排货操作记录。',
+      id: 'market-pending-view',
+      label: '查看',
+      description: '查看待排货列表和详情。',
       category: '页面访问',
       risk: 'normal',
       bulkGrantEligible: true,
-      codes: ['market:pending-routing:view', 'market:pending-routing:detail', 'market:pending-routing:operation-log-view']
+      codes: ['market:pending-routing:view']
     },
     {
-      id: 'market-pending-maintain',
-      label: '填写和修改排货资料',
-      description: '打开排货、保存草稿，并在允许状态下修改排货资料。',
+      id: 'market-pending-route',
+      label: '排货',
+      description: '为待排货订单分配代理和渠道并保存排货资料。',
       category: '业务操作',
       risk: 'normal',
-      codes: ['market:pending-routing:assign', 'market:pending-routing:save-draft', 'market:pending-routing:update']
+      codes: ['market:pending-routing:route']
     },
     {
-      id: 'market-pending-business-cost',
+      id: 'market-pending-edit',
+      label: '修改',
+      description: '修改待排货订单的排货资料。',
+      category: '业务操作',
+      risk: 'normal',
+      codes: ['market:pending-routing:edit']
+    },
+    {
+      id: 'market-pending-approve',
+      label: '审核',
+      description: '审核排货并推进订单状态。',
+      category: '高风险操作',
+      risk: 'high',
+      codes: ['market:pending-routing:approve']
+    },
+    {
+      id: 'market-pending-operation-log-view',
+      label: '查看操作日志',
+      description: '查看该票待排货操作记录。',
+      category: '页面访问',
+      risk: 'normal',
+      codes: ['market:pending-routing:operation-log:view']
+    },
+    {
+      id: 'market-pending-business-cost-view',
       label: '查看业务成本',
       description: '查看业务成本明细，不包含真实应付和利润。',
       category: '敏感字段',
       risk: 'sensitive',
-      codes: ['market:pending-routing:business-cost-view'],
-      adminGrantOnly: true
+      codes: ['market:pending-routing:business-cost:view']
     },
     {
-      id: 'market-pending-payable-cost',
-      label: '查看真实应付成本',
-      description: '查看代理真实应付金额，仅管理员可向有业务需要的用户组授权。',
+      id: 'market-pending-business-cost-create',
+      label: '新增业务成本',
+      description: '新增业务成本；审核后仍只允许新增，不允许改动已审核成本。',
       category: '敏感字段',
       risk: 'sensitive',
-      codes: ['market:pending-routing:payable-cost-view'],
-      adminGrantOnly: true
+      codes: ['market:pending-routing:business-cost:create']
     },
     {
-      id: 'market-pending-agent-channel',
-      label: '查看真实代理与代理渠道',
-      description: '显示代理完整身份及真实代理渠道，仅管理员可授权。',
+      id: 'market-pending-business-cost-edit',
+      label: '修改业务成本',
+      description: '修改未完成审核的业务成本。',
       category: '敏感字段',
       risk: 'sensitive',
-      codes: ['market:pending-routing:agent-channel-view'],
-      adminGrantOnly: true
+      codes: ['market:pending-routing:business-cost:edit']
     },
     {
-      id: 'market-pending-market-cost',
-      label: '查看市场计费与成本',
-      description: '查看市场计费重、单价及成本字段。',
-      category: '敏感字段',
-      risk: 'sensitive',
-      codes: ['market:pending-routing:cost-field-view'],
-      adminGrantOnly: true
-    },
-    {
-      id: 'market-pending-confirm',
-      label: '确认并审核排货',
-      description: '确认排货结果并使订单进入仓库待出库。',
+      id: 'market-pending-business-cost-delete',
+      label: '删除业务成本',
+      description: '删除未完成审核的业务成本。',
       category: '高风险操作',
       risk: 'high',
-      codes: ['market:pending-routing:confirm', 'market:pending-routing:audit']
+      codes: ['market:pending-routing:business-cost:delete']
     },
     {
-      id: 'market-pending-delete',
-      label: '删除待排货订单',
-      description: '从待排货工作池删除订单，必须保留操作审计。',
+      id: 'market-pending-return-review',
+      label: '退回重审',
+      description: '将待排货订单退回业务重新审核。',
       category: '高风险操作',
-      risk: 'critical',
-      codes: ['market:pending-routing:delete']
+      risk: 'high',
+      codes: ['market:pending-routing:return-review']
     }
   ],
   '市场管理 / 已排货': [
     {
-      id: 'market-routed-access',
-      label: '查看已排货',
-      description: '查看已排货历史、详情和排货操作记录。',
+      id: 'market-routed-view',
+      label: '查看',
+      description: '查看已排货列表和详情。',
       category: '页面访问',
       risk: 'normal',
       bulkGrantEligible: true,
-      codes: ['market:routed:view', 'market:routed:detail', 'market:routed:log-view']
+      codes: ['market:routed:view']
     },
     {
-      id: 'market-routed-update',
-      label: '修改已排货资料',
+      id: 'market-routed-edit',
+      label: '修改',
       description: '修改已排货订单中允许调整的运营资料。',
       category: '业务操作',
       risk: 'normal',
-      codes: ['market:routed:update']
+      codes: ['market:routed:edit']
     },
     {
-      id: 'market-routed-agent-channel',
-      label: '查看真实代理渠道',
-      description: '显示已排货订单的真实代理身份和代理渠道。',
-      category: '敏感字段',
-      risk: 'sensitive',
-      codes: ['market:routed:agent-channel-view'],
-      adminGrantOnly: true
-    },
-    {
-      id: 'market-routed-cost',
-      label: '查看代理成本与市场成本',
-      description: '查看代理成本及市场成本合计，仅管理员可授权。',
-      category: '敏感字段',
-      risk: 'sensitive',
-      codes: ['market:routed:agent-cost-view', 'market:routed:cost-total-view'],
-      adminGrantOnly: true
+      id: 'market-routed-routing-log-view',
+      label: '查看排货日志',
+      description: '查看已排货订单的排货记录。',
+      category: '页面访问',
+      risk: 'normal',
+      codes: ['market:routed:routing-log:view']
     },
     {
       id: 'market-routed-reroute',
@@ -164,49 +148,23 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       codes: ['market:routed:reroute']
     }
   ],
-  '市场管理 / 本周排货数据': [
+  '市场管理 / 排货数据': [
     {
-      id: 'market-period-access',
-      label: '查看排货数据',
+      id: 'market-report-view',
+      label: '查看',
       description: '查看本周或本月排货汇总和明细。',
       category: '页面访问',
       risk: 'normal',
       bulkGrantEligible: true,
-      codes: ['market:weekly-routing:view', 'market:weekly-routing:detail']
+      codes: ['market:routing-report:view']
     },
     {
-      id: 'market-period-exception-analysis',
-      label: '查看异常与申报分析',
-      description: '查看退回重排、敏感货和申报统计。',
-      category: '页面访问',
-      risk: 'normal',
-      codes: ['market:weekly-routing:reroute-stats-view', 'market:weekly-routing:sensitive-stats-view']
-    },
-    {
-      id: 'market-period-agent-analysis',
-      label: '查看代理与渠道统计',
-      description: '按真实代理和渠道维度分析周期排货数据。',
-      category: '敏感字段',
-      risk: 'sensitive',
-      codes: ['market:weekly-routing:agent-stats-view', 'market:weekly-routing:channel-mode-stats-view'],
-      adminGrantOnly: true
-    },
-    {
-      id: 'market-period-cost',
-      label: '查看周期成本',
-      description: '查看周期内排货成本汇总。',
-      category: '敏感字段',
-      risk: 'sensitive',
-      codes: ['market:weekly-routing:cost-view'],
-      adminGrantOnly: true
-    },
-    {
-      id: 'market-period-export',
-      label: '导出排货数据',
+      id: 'market-report-export',
+      label: '导出',
       description: '导出当前周期排货明细，导出内容继续按字段权限裁剪。',
       category: '高风险操作',
       risk: 'high',
-      codes: ['market:weekly-routing:export']
+      codes: ['market:routing-report:export']
     }
   ]
 };

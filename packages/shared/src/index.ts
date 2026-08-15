@@ -4231,6 +4231,8 @@ export interface BusinessCostFeeSummary {
   unitPrice?: number;
   amountOverridden?: boolean;
   chargeWeightChange?: ChargeWeightChangeSummary;
+  /** Whether a market-scoped operator may still edit this row. */
+  marketEditable?: boolean;
 }
 
 export type ShipmentFinanceProfitKey = 'RECEIVABLE_PAYABLE' | 'RECEIVABLE_BUSINESS' | 'BUSINESS_PAYABLE';

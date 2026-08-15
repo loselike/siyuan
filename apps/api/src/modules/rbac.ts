@@ -91,55 +91,22 @@ export type PermissionKey =
   | 'business:order-ai:all-order-context'
   | 'business:order-ai:export-result'
   | 'market:dashboard:view'
-  | 'market:dashboard:pending-summary'
-  | 'market:dashboard:routed-summary'
-  | 'market:dashboard:weekly-summary'
-  | 'market:dashboard:agent-stats-view'
-  | 'market:dashboard:channel-mode-stats-view'
-  | 'market:dashboard:sensitive-summary-view'
   | 'market:pending-routing:view'
-  | 'market:pending-routing:detail'
-  | 'market:pending-routing:assign'
-  | 'market:pending-routing:save-draft'
-  | 'market:pending-routing:confirm'
-  | 'market:pending-routing:audit'
-  | 'market:pending-routing:update'
-  | 'market:pending-routing:delete'
-  | 'market:pending-routing:operation-log-view'
-  | 'market:pending-routing:business-cost-view'
-  | 'market:pending-routing:payable-cost-view'
-  | 'market:pending-routing:agent-channel-view'
-  | 'market:pending-routing:cost-field-view'
-  | 'market:pending-routing:column-setting'
-  | 'market:pending-routing:route-block'
-  | 'market:pending-routing:update-block'
-  | 'market:pending-routing:audit-block'
-  | 'market:pending-routing:operation-log-block'
-  | 'market:pending-routing:business-cost-update-block'
-  | 'market:pending-routing:business-cost-create-block'
-  | 'market:pending-routing:business-cost-delete-block'
-  | 'market:pending-routing:reroute-block'
+  | 'market:pending-routing:route'
+  | 'market:pending-routing:edit'
+  | 'market:pending-routing:approve'
+  | 'market:pending-routing:operation-log:view'
+  | 'market:pending-routing:business-cost:view'
+  | 'market:pending-routing:business-cost:create'
+  | 'market:pending-routing:business-cost:edit'
+  | 'market:pending-routing:business-cost:delete'
+  | 'market:pending-routing:return-review'
   | 'market:routed:view'
-  | 'market:routed:detail'
-  | 'market:routed:update'
+  | 'market:routed:edit'
   | 'market:routed:reroute'
-  | 'market:routed:log-view'
-  | 'market:routed:agent-cost-view'
-  | 'market:routed:cost-total-view'
-  | 'market:routed:agent-channel-view'
-  | 'market:routed:column-setting'
-  | 'market:routed:reroute-block'
-  | 'market:routed:update-block'
-  | 'market:routed:log-block'
-  | 'market:weekly-routing:view'
-  | 'market:weekly-routing:detail'
-  | 'market:weekly-routing:agent-stats-view'
-  | 'market:weekly-routing:channel-mode-stats-view'
-  | 'market:weekly-routing:cost-view'
-  | 'market:weekly-routing:reroute-stats-view'
-  | 'market:weekly-routing:sensitive-stats-view'
-  | 'market:weekly-routing:export'
-  | 'market:weekly-routing:column-setting'
+  | 'market:routed:routing-log:view'
+  | 'market:routing-report:view'
+  | 'market:routing-report:export'
   | 'warehouse:dashboard:view'
   | 'warehouse:today-receipt:view'
   | 'warehouse:today-receipt:edit'
@@ -571,6 +538,7 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
   return permissions.filter((permission) => {
     if (masks['agent-short-name'] || masks['agent-company-name'] || masks['agent-channel'] || masks['agent-data']) {
       if (/^pricing:price-books:(?:upload|import|legacy-source-import|legacy-rebuild|cleanup-original-agents)$/.test(permission)) return false;
+      if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
       if (permission === 'finance:pending-payment:payment-voucher-upload'
         || permission === 'finance:paid-payment:voucher-upload') return false;
     }
@@ -584,6 +552,8 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
       if (permission.endsWith(':agent-channel-view') || permission.endsWith(':channel-mode-stats-view')) return false;
     }
     if (masks['payable-cost']) {
+      if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
+      if (/^market:pending-routing:business-cost:(?:view|create|edit|delete)$/.test(permission)) return false;
       if (/^finance:payable:(?:manage|export|payment|attachment|attachment-view|view-sensitive|view-profit|paid-export|paid-voucher)$/.test(permission)) return false;
       if (/^finance:pending-payment:(?:create|update|bill-voucher-view|payment-voucher-view|payment-voucher-upload|export|view-sensitive)$/.test(permission)) return false;
       if (/^finance:paid-payment:(?:update|voucher-view|voucher-upload|export|view-sensitive)$/.test(permission)) return false;
@@ -595,6 +565,7 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
       if (/^misc-fee:[^:]+:attachment-view$/.test(permission)) return false;
     }
     if (masks['payable-status']) {
+      if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
       if (/^finance:payable:(?:audit|reverse|void|payment|paid-confirm|paid-reverse|batch-audit|batch-reverse|batch-void)$/.test(permission)) return false;
       if (/^finance:pending-payment:(?:create|update|cancel|payment-voucher-upload)$/.test(permission)) return false;
       if (/^finance:paid-payment:(?:confirm|update|reverse|voucher-upload)$/.test(permission)) return false;
@@ -729,56 +700,23 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'business:order-ai:finance-context', label: '允许 AI 使用财务上下文', group: '业务管理 / AI 订单助手' },
   { code: 'business:order-ai:all-order-context', label: '允许 AI 使用全部订单上下文', group: '业务管理 / AI 订单助手' },
   { code: 'business:order-ai:export-result', label: '导出 AI 订单结果', group: '业务管理 / AI 订单助手' },
-  { code: 'market:dashboard:view', label: '查看市场看板', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:pending-summary', label: '查看待排货概览', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:routed-summary', label: '查看已排货概览', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:weekly-summary', label: '查看本周排货统计', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:agent-stats-view', label: '查看代理统计', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:channel-mode-stats-view', label: '查看空海运渠道统计', group: '市场管理 / 市场看板' },
-  { code: 'market:dashboard:sensitive-summary-view', label: '查看敏感货与申报统计', group: '市场管理 / 市场看板' },
-  { code: 'market:pending-routing:view', label: '查看待排货列表', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:detail', label: '查看待排货详情', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:assign', label: '打开并填写排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:save-draft', label: '保存排货资料', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:confirm', label: '确认排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:audit', label: '审核排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:update', label: '修改排货资料', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:delete', label: '删除待排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:operation-log-view', label: '查看待排货操作日志', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:business-cost-view', label: '查看业务成本', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:payable-cost-view', label: '查看应付成本', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:agent-channel-view', label: '查看代理与代理渠道', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:cost-field-view', label: '查看计费重与市场成本', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:column-setting', label: '保存待排货列设置', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:route-block', label: '屏蔽排货', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:update-block', label: '屏蔽修改', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:audit-block', label: '屏蔽审核', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:operation-log-block', label: '屏蔽操作日志', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:business-cost-update-block', label: '屏蔽业务成本修改', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:business-cost-create-block', label: '屏蔽业务成本新增', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:business-cost-delete-block', label: '屏蔽业务成本删除', group: '市场管理 / 待排货' },
-  { code: 'market:pending-routing:reroute-block', label: '屏蔽退回重审', group: '市场管理 / 待排货' },
-  { code: 'market:routed:view', label: '查看已排货列表', group: '市场管理 / 已排货' },
-  { code: 'market:routed:detail', label: '查看已排货详情', group: '市场管理 / 已排货' },
-  { code: 'market:routed:update', label: '修改已排货资料', group: '市场管理 / 已排货' },
+  { code: 'market:dashboard:view', label: '查看', group: '市场管理 / 市场看板' },
+  { code: 'market:pending-routing:view', label: '查看', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:route', label: '排货', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:edit', label: '修改', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:approve', label: '审核', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:operation-log:view', label: '查看操作日志', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost:view', label: '查看业务成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost:create', label: '新增业务成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost:edit', label: '修改业务成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:business-cost:delete', label: '删除业务成本', group: '市场管理 / 待排货' },
+  { code: 'market:pending-routing:return-review', label: '退回重审', group: '市场管理 / 待排货' },
+  { code: 'market:routed:view', label: '查看', group: '市场管理 / 已排货' },
+  { code: 'market:routed:edit', label: '修改', group: '市场管理 / 已排货' },
   { code: 'market:routed:reroute', label: '退回重排', group: '市场管理 / 已排货' },
-  { code: 'market:routed:log-view', label: '查看排货日志', group: '市场管理 / 已排货' },
-  { code: 'market:routed:agent-cost-view', label: '查看代理成本', group: '市场管理 / 已排货' },
-  { code: 'market:routed:cost-total-view', label: '查看市场成本合计', group: '市场管理 / 已排货' },
-  { code: 'market:routed:agent-channel-view', label: '查看代理渠道', group: '市场管理 / 已排货' },
-  { code: 'market:routed:column-setting', label: '保存已排货列设置', group: '市场管理 / 已排货' },
-  { code: 'market:routed:reroute-block', label: '屏蔽退回重排', group: '市场管理 / 已排货' },
-  { code: 'market:routed:update-block', label: '屏蔽修改', group: '市场管理 / 已排货' },
-  { code: 'market:routed:log-block', label: '屏蔽排货日志', group: '市场管理 / 已排货' },
-  { code: 'market:weekly-routing:view', label: '查看本周排货数据', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:detail', label: '查看本周排货明细', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:agent-stats-view', label: '查看本周代理统计', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:channel-mode-stats-view', label: '查看本周渠道统计', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:cost-view', label: '查看本周成本', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:reroute-stats-view', label: '查看本周退回重排统计', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:sensitive-stats-view', label: '查看本周敏感货与申报统计', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:export', label: '导出本周排货数据', group: '市场管理 / 本周排货数据' },
-  { code: 'market:weekly-routing:column-setting', label: '保存本周排货列设置', group: '市场管理 / 本周排货数据' },
+  { code: 'market:routed:routing-log:view', label: '查看排货日志', group: '市场管理 / 已排货' },
+  { code: 'market:routing-report:view', label: '查看', group: '市场管理 / 排货数据' },
+  { code: 'market:routing-report:export', label: '导出', group: '市场管理 / 排货数据' },
   { code: 'warehouse:dashboard:view', label: '查看', group: '仓库管理 / 仓库看板' },
   { code: 'warehouse:today-receipt:view', label: '查看', group: '仓库管理 / 今日收货' },
   { code: 'warehouse:today-receipt:edit', label: '编辑', group: '仓库管理 / 今日收货' },
@@ -1082,10 +1020,10 @@ const warehouseBasePermissions: PermissionKey[] = [
 
 const marketBasePermissions: PermissionKey[] = [
   'business:shipment:agent-weight-view',
-  'market:dashboard:view', 'market:dashboard:pending-summary', 'market:dashboard:routed-summary', 'market:dashboard:weekly-summary', 'market:dashboard:agent-stats-view', 'market:dashboard:channel-mode-stats-view', 'market:dashboard:sensitive-summary-view',
-  'market:pending-routing:view', 'market:pending-routing:detail', 'market:pending-routing:assign', 'market:pending-routing:save-draft', 'market:pending-routing:confirm', 'market:pending-routing:audit', 'market:pending-routing:update', 'market:pending-routing:delete', 'market:pending-routing:operation-log-view', 'market:pending-routing:business-cost-view', 'market:pending-routing:payable-cost-view', 'market:pending-routing:agent-channel-view', 'market:pending-routing:cost-field-view', 'market:pending-routing:column-setting',
-  'market:routed:view', 'market:routed:detail', 'market:routed:update', 'market:routed:reroute', 'market:routed:log-view', 'market:routed:agent-cost-view', 'market:routed:cost-total-view', 'market:routed:agent-channel-view', 'market:routed:column-setting',
-  'market:weekly-routing:view', 'market:weekly-routing:detail', 'market:weekly-routing:agent-stats-view', 'market:weekly-routing:channel-mode-stats-view', 'market:weekly-routing:cost-view', 'market:weekly-routing:reroute-stats-view', 'market:weekly-routing:sensitive-stats-view', 'market:weekly-routing:column-setting'
+  'market:dashboard:view',
+  'market:pending-routing:view', 'market:pending-routing:route', 'market:pending-routing:edit', 'market:pending-routing:approve', 'market:pending-routing:operation-log:view', 'market:pending-routing:business-cost:view', 'market:pending-routing:business-cost:create', 'market:pending-routing:business-cost:edit', 'market:pending-routing:business-cost:delete', 'market:pending-routing:return-review',
+  'market:routed:view', 'market:routed:edit', 'market:routed:reroute', 'market:routed:routing-log:view',
+  'market:routing-report:view', 'market:routing-report:export'
 ];
 
 const customerServiceBasePermissions: PermissionKey[] = permissionDefinitions
@@ -1286,6 +1224,11 @@ export function isBusinessAgentRestrictedRole(role: string): boolean {
   return isSalesScopedRole(role) && role !== 'UG_MARKET';
 }
 
+/**
+ * Individual business roles must stay on their own-customer data scope.
+ * Managers/supervisors intentionally keep their team scope and are not in
+ * this list; a role must opt into those broader grants explicitly.
+ */
 export function isBusinessAgentOwnOnlyRole(role: string): boolean {
   return [
     'OPERATOR',
@@ -1302,9 +1245,6 @@ function isBusinessAgentCrossScopePermission(permission: PermissionKey): boolean
 
 const uiPreferencePermissionDependencies = {
   'business:shipment:column-setting': 'business:shipment:list',
-  'market:pending-routing:column-setting': 'market:pending-routing:view',
-  'market:routed:column-setting': 'market:routed:view',
-  'market:weekly-routing:column-setting': 'market:weekly-routing:view',
   'tracking:carrier-task:column-setting': 'tracking:carrier-task:view',
   'tracking:external:column-setting': 'tracking:external:view',
   'customer-service:data-confirm:column-setting': 'customer-service:data-confirm:view',
@@ -1504,10 +1444,6 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
       if (!normalized.includes(dependency)) normalized.push(dependency);
     }
   }
-  if (normalized.includes('warehouse:in-stock:edit')
-    && !normalized.includes('warehouse:in-stock:view')) {
-    normalized.push('warehouse:in-stock:view');
-  }
   if (normalized.includes('warehouse:in-stock:order-entry')) {
     for (const dependency of [
       'business:order-entry:view',
@@ -1517,23 +1453,32 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
       if (!normalized.includes(dependency)) normalized.push(dependency);
     }
   }
+  const marketViewDependencies: Array<[PermissionKey, PermissionKey]> = [
+    ['market:pending-routing:route', 'market:pending-routing:view'],
+    ['market:pending-routing:edit', 'market:pending-routing:view'],
+    ['market:pending-routing:approve', 'market:pending-routing:view'],
+    ['market:pending-routing:operation-log:view', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:view', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:create', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:create', 'market:pending-routing:business-cost:view'],
+    ['market:pending-routing:business-cost:edit', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:edit', 'market:pending-routing:business-cost:view'],
+    ['market:pending-routing:business-cost:delete', 'market:pending-routing:view'],
+    ['market:pending-routing:business-cost:delete', 'market:pending-routing:business-cost:view'],
+    ['market:pending-routing:return-review', 'market:pending-routing:view'],
+    ['market:routed:edit', 'market:routed:view'],
+    ['market:routed:reroute', 'market:routed:view'],
+    ['market:routed:routing-log:view', 'market:routed:view'],
+    ['market:routing-report:export', 'market:routing-report:view']
+  ];
+  for (const [action, view] of marketViewDependencies) {
+    if (normalized.includes(action) && !normalized.includes(view)) normalized.push(view);
+  }
   return withImpliedOperationalPermissions(normalized);
 }
 
 const marketSensitivePermissionKeys = new Set<PermissionKey>([
   'business:shipment:agent-weight-view',
-  'market:dashboard:agent-stats-view',
-  'market:dashboard:channel-mode-stats-view',
-  'market:pending-routing:business-cost-view',
-  'market:pending-routing:payable-cost-view',
-  'market:pending-routing:agent-channel-view',
-  'market:pending-routing:cost-field-view',
-  'market:routed:agent-cost-view',
-  'market:routed:cost-total-view',
-  'market:routed:agent-channel-view',
-  'market:weekly-routing:agent-stats-view',
-  'market:weekly-routing:channel-mode-stats-view',
-  'market:weekly-routing:cost-view',
   'finance:payable:view-sensitive',
   'finance:business-cost:view-agent'
 ]);
@@ -1567,17 +1512,14 @@ export function defaultPermissionsForRole(role: RoleKey): PermissionKey[] {
         || !permission.startsWith('warehouse:'));
     }
     if (role === 'UG_MARKET') {
-      const marketInherited = inherited.filter((permission) =>
-        permission !== 'data-scope:sales-own'
-        && permission !== 'warehouse:in-stock:import'
-        && !permission.startsWith('finance:water-receipt:')
-        && !permission.startsWith('finance:water-match:')
-        && !permission.startsWith('misc-fee:purchase:'));
       return [...new Set<PermissionKey>([
-        ...marketInherited,
+        ...pricingLookupBusinessPermissions,
         'data-scope:misc-fee-market',
         'master-data:agents:read',
         'master-data:agent-channels:read',
+        'master-data:channels:read',
+        'master-data:channel-categories:read',
+        'master-data:exchange-rates:read',
         ...marketBasePermissions,
         ...miscFeeMarketPermissions,
         ...pricingManagementPermissions
