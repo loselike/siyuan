@@ -26,6 +26,46 @@ describe('warehouse package lifecycle API contract', () => {
     }
   });
 
+  it('validates same-spec replenishment before repository lookup without weakening guards', async () => {
+    const adminToken = await app.loginAs('admin');
+    const customerToken = await app.loginAs('customer');
+    const path = '/api/warehouse/packages/codex-phase3-nonexistent/same-spec-replenish';
+
+    await request(app.getHttpServer())
+      .post(path)
+      .send({ supplementCount: true, requestId: 'phase3-request' })
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(customerToken))
+      .send({ supplementCount: true, requestId: 'phase3-request' })
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ supplementCount: true, requestId: 'phase3-request' })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('补录箱数必须为 1 至 500 的正整数');
+      });
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ supplementCount: 2 })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('页面已更新，请刷新后重新发起补录');
+      });
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ supplementCount: '2', requestId: '  phase3-request  ' })
+      .expect(404)
+      .expect((response) => {
+        expect(response.body.message).toBe('仓库包裹不存在');
+      });
+  });
+
   it('preserves create, replenish idempotency, update, remark, exception, split and manual-receipt effects', async () => {
     const adminToken = await app.loginAs('admin');
     const authorization = app.auth(adminToken);
