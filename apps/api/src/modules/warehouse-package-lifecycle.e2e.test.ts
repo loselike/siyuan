@@ -66,6 +66,46 @@ describe('warehouse package lifecycle API contract', () => {
       });
   });
 
+  it('validates nested manual-receipt input without weakening authentication or permission guards', async () => {
+    const adminToken = await app.loginAs('admin');
+    const customerToken = await app.loginAs('customer');
+    const invalidBody = {
+      customerCode: '9409',
+      domesticTrackingNo: 'KY-PH4-INVALID',
+      cartonSpecs: [{ weightKg: true, lengthCm: 40, widthCm: 30, heightCm: 20, packageCount: 1 }]
+    };
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .send(invalidBody)
+      .expect(401);
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .set('Authorization', app.auth(customerToken))
+      .send(invalidBody)
+      .expect(403);
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .set('Authorization', app.auth(adminToken))
+      .send(invalidBody)
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('第 1 条箱规重量必须大于 0');
+      });
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages/manual-receipt')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: 'TOO-LONG-9',
+        domesticTrackingNo: 'KY-PH4-NO-WRITE',
+        cartonSpecs: [{ weightKg: '8', lengthCm: '40', widthCm: '30', heightCm: '20', packageCount: '1' }]
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('客户编号最长 8 位');
+      });
+  });
+
   it('preserves create, replenish idempotency, update, remark, exception, split and manual-receipt effects', async () => {
     const adminToken = await app.loginAs('admin');
     const authorization = app.auth(adminToken);

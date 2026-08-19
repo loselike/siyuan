@@ -1,5 +1,8 @@
 import { Body, Controller, Inject, Param, Patch, Post, Put, Req } from '@nestjs/common';
-import { warehouseSameSpecReplenishInputSchema } from '@siyuan/shared/warehouse-input';
+import {
+  warehouseManualReceiptCreateInputSchema,
+  warehouseSameSpecReplenishInputSchema
+} from '@siyuan/shared/warehouse-input';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 import { RuntimeInputPipe } from '../../runtime-input.pipe.js';
@@ -33,7 +36,7 @@ export class WarehousePackageLifecycleController {
   @RequirePermission('warehouse:today-receipt:manual-create')
   createWarehouseManualReceipt(
     @Req() request: { user: Principal },
-    @Body() body: WarehouseManualReceiptCreateInput
+    @Body(new RuntimeInputPipe(warehouseManualReceiptCreateInputSchema)) body: WarehouseManualReceiptCreateInput
   ) {
     return this.warehousePackageLifecycle.createManualReceipt(request.user, body);
   }
