@@ -4,6 +4,7 @@ import {
   warehouseManualReceiptCreateInputSchema,
   warehousePackageCreateInputSchema,
   warehousePackageSplitInputSchema,
+  warehousePackageUpdateInputSchema,
   warehouseSameSpecReplenishInputSchema
 } from './warehouse-input.js';
 
@@ -181,6 +182,105 @@ describe('warehousePackageSplitInputSchema', () => {
   it('rejects a non-string remark after validating the effective split shape', () => {
     expect(() => warehousePackageSplitInputSchema.parse({ pieces: [1, 1], remark: 123 })).toThrow(
       new RuntimeInputValidationError('备注格式不正确')
+    );
+  });
+});
+
+describe('warehousePackageUpdateInputSchema', () => {
+  it('normalizes legacy numeric strings while leaving domain clamping and trimming to the repository', () => {
+    expect(warehousePackageUpdateInputSchema.parse({
+      customerCode: ' 9409 ',
+      customerOrderNo: '9409',
+      domesticTrackingNo: ' KY-UPDATE-001 ',
+      combinedOrderNo: '9409-KY-UPDATE-001',
+      expectedTotalPackageCount: '3.8',
+      packageIndex: '9',
+      packageCount: '2.8',
+      weightKg: '12.345',
+      lengthCm: '42.345',
+      widthCm: 31,
+      heightCm: '21',
+      scanTime: '2026-08-19T08:00:00.000+08:00',
+      remark: ' 保留原始空格，既有领域层负责 trim ',
+      manualException: ' 外箱破损 ',
+      ignored: 'not-forwarded'
+    })).toEqual({
+      customerCode: ' 9409 ',
+      customerOrderNo: '9409',
+      domesticTrackingNo: ' KY-UPDATE-001 ',
+      combinedOrderNo: '9409-KY-UPDATE-001',
+      expectedTotalPackageCount: 3,
+      packageIndex: 9,
+      packageCount: 2,
+      weightKg: 12.345,
+      lengthCm: 42.345,
+      widthCm: 31,
+      heightCm: 21,
+      scanTime: '2026-08-19T08:00:00.000+08:00',
+      remark: ' 保留原始空格，既有领域层负责 trim ',
+      manualException: ' 外箱破损 '
+    });
+  });
+
+  it('preserves absent fields and explicit legacy defaults including a null scan time', () => {
+    expect(warehousePackageUpdateInputSchema.parse({})).toEqual({});
+    expect(warehousePackageUpdateInputSchema.parse({
+      expectedTotalPackageCount: null,
+      packageIndex: '',
+      packageCount: null,
+      weightKg: null,
+      lengthCm: '',
+      widthCm: null,
+      heightCm: '',
+      scanTime: null
+    })).toEqual({
+      expectedTotalPackageCount: 1,
+      packageIndex: 1,
+      packageCount: 1,
+      weightKg: 0,
+      lengthCm: 0,
+      widthCm: 0,
+      heightCm: 0,
+      scanTime: null
+    });
+  });
+
+  it.each([
+    [undefined],
+    [null],
+    [[]],
+    ['not-an-object']
+  ])('rejects a non-object package update payload', (input) => {
+    expect(() => warehousePackageUpdateInputSchema.parse(input)).toThrow(
+      new RuntimeInputValidationError('包裹修改参数格式不正确')
+    );
+  });
+
+  it.each([
+    ['expectedTotalPackageCount', true, '预计总箱数格式不正确'],
+    ['packageIndex', [], '箱序号格式不正确'],
+    ['packageCount', {}, '件数格式不正确'],
+    ['weightKg', 'not-a-number', '重量格式不正确'],
+    ['lengthCm', false, '长宽高格式不正确'],
+    ['widthCm', [], '长宽高格式不正确'],
+    ['heightCm', {}, '长宽高格式不正确']
+  ])('rejects an invalid numeric %s field', (field, invalidValue, message) => {
+    expect(() => warehousePackageUpdateInputSchema.parse({ [field]: invalidValue })).toThrow(
+      new RuntimeInputValidationError(message)
+    );
+  });
+
+  it.each([
+    ['customerCode', 9409, '客户编号格式不正确'],
+    ['customerOrderNo', {}, '客户单号格式不正确'],
+    ['combinedOrderNo', [], '合并单号格式不正确'],
+    ['domesticTrackingNo', true, '快递单号格式不正确'],
+    ['scanTime', 123, '扫描时间格式不正确'],
+    ['remark', false, '备注格式不正确'],
+    ['manualException', {}, '异常说明格式不正确']
+  ])('rejects a non-string %s field', (field, invalidValue, message) => {
+    expect(() => warehousePackageUpdateInputSchema.parse({ [field]: invalidValue })).toThrow(
+      new RuntimeInputValidationError(message)
     );
   });
 });

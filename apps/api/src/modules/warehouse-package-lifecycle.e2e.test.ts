@@ -206,6 +206,140 @@ describe('warehouse package lifecycle API contract', () => {
       });
   });
 
+  it('preserves package update numeric-string, flooring, clamping and explicit default behavior', async () => {
+    const adminToken = await app.loginAs('admin');
+    const authorization = app.auth(adminToken);
+    const trackingNo = `KY-PH7-CHAR-${Date.now()}`;
+    const created = await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', authorization)
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: trackingNo,
+        expectedTotalPackageCount: 1,
+        packageIndex: 1,
+        packageCount: 1,
+        weightKg: 8,
+        lengthCm: 40,
+        widthCm: 30,
+        heightCm: 20,
+        scanTime: '2026-08-19T08:00:00.000+08:00'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${created.body.id}`)
+      .set('Authorization', authorization)
+      .send({
+        expectedTotalPackageCount: '3.8',
+        packageIndex: '9',
+        packageCount: '2.8',
+        weightKg: '12.345',
+        lengthCm: '42.345',
+        widthCm: '31',
+        heightCm: '21',
+        remark: '  phase7 numeric strings  ',
+        ignored: 'not-forwarded'
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          id: created.body.id,
+          customerCode: '9409',
+          domesticTrackingNo: trackingNo,
+          expectedTotalPackageCount: 3,
+          packageIndex: 3,
+          packageCount: 2,
+          weightKg: 12.35,
+          lengthCm: 42.35,
+          widthCm: 31,
+          heightCm: 21,
+          remark: 'phase7 numeric strings'
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .patch(`/api/warehouse/packages/${created.body.id}`)
+      .set('Authorization', authorization)
+      .send({
+        expectedTotalPackageCount: null,
+        packageIndex: '',
+        packageCount: null,
+        weightKg: null,
+        lengthCm: '',
+        widthCm: null,
+        heightCm: '',
+        scanTime: null
+      })
+      .expect(200)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          id: created.body.id,
+          customerCode: '9409',
+          domesticTrackingNo: trackingNo,
+          expectedTotalPackageCount: 1,
+          packageIndex: 1,
+          packageCount: 1,
+          weightKg: 0,
+          lengthCm: 0,
+          widthCm: 0,
+          heightCm: 0,
+          scanTime: '2026-08-19T08:00:00.000+08:00',
+          remark: 'phase7 numeric strings'
+        }));
+      });
+  });
+
+  it('validates package update input before repository lookup without weakening authentication or permission guards', async () => {
+    const adminToken = await app.loginAs('admin');
+    const customerToken = await app.loginAs('customer');
+    const path = '/api/warehouse/packages/codex-phase7-nonexistent';
+    const invalidBody = { weightKg: true };
+
+    await request(app.getHttpServer())
+      .patch(path)
+      .send(invalidBody)
+      .expect(401);
+    await request(app.getHttpServer())
+      .patch(path)
+      .set('Authorization', app.auth(customerToken))
+      .send(invalidBody)
+      .expect(403);
+    await request(app.getHttpServer())
+      .patch(path)
+      .set('Authorization', app.auth(adminToken))
+      .send(invalidBody)
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('重量格式不正确');
+      });
+    await request(app.getHttpServer())
+      .patch(path)
+      .set('Authorization', app.auth(adminToken))
+      .send([])
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('包裹修改参数格式不正确');
+      });
+    await request(app.getHttpServer())
+      .patch(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ remark: {} })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('备注格式不正确');
+      });
+    await request(app.getHttpServer())
+      .patch(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ packageCount: '2.8', weightKg: '12.345', remark: '  phase7 valid  ' })
+      .expect(404)
+      .expect((response) => {
+        expect(response.body.message).toBe('仓库包裹不存在');
+      });
+  });
+
   it('preserves split numeric strings, pieces precedence and split-count defaults', async () => {
     const adminToken = await app.loginAs('admin');
     const authorization = app.auth(adminToken);

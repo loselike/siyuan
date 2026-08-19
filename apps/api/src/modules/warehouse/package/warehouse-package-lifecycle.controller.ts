@@ -3,6 +3,7 @@ import {
   warehouseManualReceiptCreateInputSchema,
   warehousePackageCreateInputSchema,
   warehousePackageSplitInputSchema,
+  warehousePackageUpdateInputSchema,
   warehouseSameSpecReplenishInputSchema
 } from '@siyuan/shared/warehouse-input';
 import { RequirePermission } from '../../require-permission.decorator.js';
@@ -68,7 +69,7 @@ export class WarehousePackageLifecycleController {
   updateWarehousePackage(
     @Req() request: { user: Principal },
     @Param('id') id: string,
-    @Body() body: WarehousePackageUpdateInput
+    @Body(new RuntimeInputPipe(warehousePackageUpdateInputSchema)) body: WarehousePackageUpdateInput
   ) {
     return this.warehousePackageLifecycle.update(request.user, id, body);
   }

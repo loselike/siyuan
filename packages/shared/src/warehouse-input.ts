@@ -7,6 +7,7 @@ import type {
   WarehouseManualReceiptCreateInput,
   WarehousePackageCreateInput,
   WarehousePackageSplitInput,
+  WarehousePackageUpdateInput,
   WarehouseSameSpecReplenishInput
 } from './warehouse.js';
 
@@ -93,6 +94,46 @@ export const warehousePackageSplitInputSchema = defineRuntimeSchema<WarehousePac
   return {
     splitCount,
     ...(remark === undefined ? {} : { remark })
+  };
+});
+
+export const warehousePackageUpdateInputSchema = defineRuntimeSchema<WarehousePackageUpdateInput>((value) => {
+  if (!isRecord(value)) {
+    throw new RuntimeInputValidationError('包裹修改参数格式不正确');
+  }
+  const customerCode = parseOptionalString(value.customerCode, '客户编号格式不正确');
+  const customerOrderNo = parseOptionalString(value.customerOrderNo, '客户单号格式不正确');
+  const domesticTrackingNo = parseOptionalString(value.domesticTrackingNo, '快递单号格式不正确');
+  const combinedOrderNo = parseOptionalString(value.combinedOrderNo, '合并单号格式不正确');
+  const expectedTotalPackageCount = parseOptionalLegacyPositiveInteger(
+    value.expectedTotalPackageCount,
+    '预计总箱数格式不正确'
+  );
+  const packageIndex = parseOptionalLegacyPositiveInteger(value.packageIndex, '箱序号格式不正确');
+  const packageCount = parseOptionalLegacyPositiveInteger(value.packageCount, '件数格式不正确');
+  const weightKg = parseOptionalLegacyMeasurement(value.weightKg, '重量格式不正确');
+  const lengthCm = parseOptionalLegacyMeasurement(value.lengthCm, '长宽高格式不正确');
+  const widthCm = parseOptionalLegacyMeasurement(value.widthCm, '长宽高格式不正确');
+  const heightCm = parseOptionalLegacyMeasurement(value.heightCm, '长宽高格式不正确');
+  const scanTime = parseOptionalLegacyScanTime(value.scanTime);
+  const remark = parseOptionalString(value.remark, '备注格式不正确');
+  const manualException = parseOptionalString(value.manualException, '异常说明格式不正确');
+
+  return {
+    ...(customerCode === undefined ? {} : { customerCode }),
+    ...(customerOrderNo === undefined ? {} : { customerOrderNo }),
+    ...(domesticTrackingNo === undefined ? {} : { domesticTrackingNo }),
+    ...(combinedOrderNo === undefined ? {} : { combinedOrderNo }),
+    ...(expectedTotalPackageCount === undefined ? {} : { expectedTotalPackageCount }),
+    ...(packageIndex === undefined ? {} : { packageIndex }),
+    ...(packageCount === undefined ? {} : { packageCount }),
+    ...(weightKg === undefined ? {} : { weightKg }),
+    ...(lengthCm === undefined ? {} : { lengthCm }),
+    ...(widthCm === undefined ? {} : { widthCm }),
+    ...(heightCm === undefined ? {} : { heightCm }),
+    ...(scanTime === undefined ? {} : { scanTime: scanTime as string }),
+    ...(remark === undefined ? {} : { remark }),
+    ...(manualException === undefined ? {} : { manualException })
   };
 });
 
@@ -198,6 +239,22 @@ function parseLegacyMeasurement(value: unknown, message: string): number {
     return 0;
   }
   return parseFiniteNumber(value, message);
+}
+
+function parseOptionalLegacyPositiveInteger(value: unknown, message: string): number | undefined {
+  return value === undefined ? undefined : parseLegacyPositiveInteger(value, message);
+}
+
+function parseOptionalLegacyMeasurement(value: unknown, message: string): number | undefined {
+  return value === undefined ? undefined : parseLegacyMeasurement(value, message);
+}
+
+function parseOptionalLegacyScanTime(value: unknown): string | null | undefined {
+  if (value === undefined || value === null) return value;
+  if (typeof value !== 'string') {
+    throw new RuntimeInputValidationError('扫描时间格式不正确');
+  }
+  return value;
 }
 
 function parseLegacySplitCount(value: unknown): number {
