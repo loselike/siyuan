@@ -1281,13 +1281,13 @@
       "WarehouseInventoryQueryController.warehousePackageGroups"
     ],
     [
-      "GET /warehouse/packages @ WarehousePackagesQueryController.warehousePackages",
+      "GET /warehouse/packages @ WarehouseInventoryQueryController.warehousePackages",
       "permission",
       [
         "warehouse:in-stock:view",
         "warehouse:today-receipt:view"
       ],
-      "WarehousePackagesQueryController.warehousePackages"
+      "WarehouseInventoryQueryController.warehousePackages"
     ],
     [
       "GET /warehouse/rent-details @ WarehouseRentController.warehouseRentDetails",

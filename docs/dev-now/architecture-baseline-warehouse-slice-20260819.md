@@ -9,7 +9,9 @@
 - 会话 slug：`architecture-baseline-warehouse-slice-20260819`
 - 分支：`codex/architecture-baseline-20260819`
 - worktree：`/Users/j1ng/Tools/sunny-architecture-baseline-20260819`
-- 基线提交：`cbbd83ad5d63a68305674c6b302dec1d2f5b5b62`
+- 原始基线提交：`cbbd83ad5d63a68305674c6b302dec1d2f5b5b62`
+- 47 运行树基线提交：`2daa13baafe98e95115330ce56f2ca9a2ea57d98`
+- 当前候选提交：`4a9ad3ab`
 - 认领时间：`2026-08-19 Asia/Shanghai`
 
 ## 输入摘要
@@ -43,26 +45,34 @@
 - 已从最近可追溯发布提交建立独立分支和 worktree，根工作树 445 项内容未被修改或清理。
 - 已采集 47 runtime manifest：`docs/release-manifests/47/20260819-080525-whitelist-f22a31bcc68bbdef8a478842/`。
 - 已把 73 个生产差异文件与 8 个远端独有文件逐字节吸收到本分支；复核为本地 539、远端 539、539 全部一致、运行时漂移 0。
-- 正在建立独立 Git 基线提交；随后以该提交为类型错误修复起点。
+- 已提交唯一 47 运行树基线 `2daa13b`，并修复三个只影响测试类型的过期 stub；Shared/API/Web 类型错误全部清零。
+- 执行期间 `origin/main` 继续推进，但其运行树相对当前 47 有 85 个内容差异、3 个本地独有和 15 个远端独有。为避免覆盖并发会话，本切片没有发布该分支，而是把仓库模块提交移植回精确 47 基线。
+- 新增 `DataAccessModule`，统一注册/导出 Prisma 或 InMemory 根 adapter；新增 `WarehouseInventoryModule` 接管 inventory controller、query service、repository adapter 和 authorizer 装配。
+- `GET /api/warehouse/packages` 保留原 controller/handler 与权限元数据，但其 controller 已由独立 Warehouse Module 注册；根 `AppModule` 不再手工装配该代表查询的 controller/service/repository/authorizer。
+- 其他 today/in-stock/delete/group/customer 路由仍保留在旧 controller，未越界迁移。
+- 开发期间检测到另一会话把 12 个 Web 文件推进 47；已再次采集 v3 manifest `20260819-084348-whitelist-f22a31bcc68bbdef8a478842` 并逐字节吸收这些文件，没有覆盖或改写其内容。
+- 当前候选相对 47 运行树精确为：538 个运行时文件一致、1 个预期修改（`app.module.ts`）、2 个预期新增（两个 Module）、0 个远端缺失；22 个 AppleDouble 历史文件仍排除且未删除。
 
 ## 验证
 
-- 已通过：`bash scripts/audit-47-source-drift.sh --summary --fail-on-drift`，539/539 一致、漂移 0。
-- 待执行：`npm run typecheck`，Shared/API/Web 全部为 0。
-- 待执行：`npm run governance:check` 与 `git diff --check`。
-- 代表切片完成后：仓库查询 characterization、管理员允许路径、无权限拒绝路径、47 只读固定样本。
+- 基线已通过：`bash scripts/audit-47-source-drift.sh --summary --fail-on-drift`，539/539 一致、漂移 0。
+- 重构后：warehouse inventory E2E、Service、Prisma adapter、Module wiring 共 18/18 通过；管理员允许、客户 403、未登录 401 均由 E2E 覆盖。
+- 双模式 DI：InMemory 1/1、`USE_PRISMA_REPOSITORY=true` 1/1 通过。
+- 类型：Shared/API/Web 全部 0；新增测试后 API typecheck 再次通过。
+- 治理：本切片没有改变 route/handler/permission；当前 47 基线自带的 `governance-baseline.json` 与运行源码存在大量既有权限/路由债务，且另一会话状态文件缺 canonical status，完整 `governance:check` 不能作为本轮通过项，未擅自替其他会话重写基线。
+- 静态安全门：`git diff --check` 通过。
 
 ## 交接
 
-- 阻塞：无。
-- 剩余风险：47 是 81 文件白名单组合树，当前尚无唯一 Git commit；在逐字节吸收、类型清零和审查完成前禁止发布或开始业务结构迁移。
+- 阻塞：47 运行镜像与 release state provenance 不一致，`release:47:baseline` 已失败关闭；必须从本分支完成 current-baseline cutover，不能走普通白名单覆盖。
+- 剩余风险：发布前仍需把当前分支推送为耐久来源，并在全局锁内重新确认 47 源码仍等于基线 `2daa13b`；若远端再次变化，必须重新吸收而不是覆盖。
 - 用户验收目标：以不改变现有业务行为的方式，获得干净可追溯基线，并让仓库在仓查询不再经过 God Controller/Repository。
-- 效果证据：待补充。
-- 安全证据：待补充。
-- 未验证项：类型错误清单、固定在仓包裹与拒绝角色样本。
-- 发布状态：`未发布；当前仅建立隔离基线`。
+- 效果证据：同一 inventory 契约 18/18；路由权限 200/401/403 保持。
+- 安全证据：代表接口继续只调用 `WarehouseInventoryQueryService`；InMemory/Prisma 两种装配均可解析，目标 route/handler/permission 源码未改。
+- 未验证项：47 current-baseline cutover、线上管理员真实在仓包裹响应、无权限真实角色拒绝路径。
+- 发布状态：`待 current-baseline cutover；普通发布入口已因 provenance mismatch 阻断`。
 - 稳定附件：无。
-- 准确下一步：提交 47 当前运行树基线，运行三端类型检查并逐项修复现存漂移。
+- 准确下一步：提交状态合并、推送 `codex/architecture-baseline-20260819`，按 current-baseline cutover 恢复 47 Git provenance 后验证线上仓库只读样本。
 - 建议新标题：`Sunny｜底层架构优化｜02`
 - 建议新状态文件：`docs/dev-now/architecture-baseline-warehouse-slice-20260819-02.md`
 - 接手要求：状态改为 `handed_off` 后，新的唯一写会话才能继续。

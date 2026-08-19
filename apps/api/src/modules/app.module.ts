@@ -120,7 +120,6 @@ import {
   WAREHOUSE_DISPATCH_REPOSITORY
 } from './warehouse/dispatch/warehouse-dispatch.repository.js';
 import { WarehouseDispatchService } from './warehouse/dispatch/warehouse-dispatch.service.js';
-import { WarehouseInventoryQueryController } from './warehouse/inventory/warehouse-inventory-query.controller.js';
 import { WarehouseInventoryModule } from './warehouse/inventory/warehouse-inventory.module.js';
 import { WarehousePackageLifecycleController } from './warehouse/package/warehouse-package-lifecycle.controller.js';
 import { WAREHOUSE_PACKAGE_LIFECYCLE_REPOSITORY } from './warehouse/package/warehouse-package-lifecycle.repository.js';
@@ -367,7 +366,6 @@ const systemIdentityAdminRepositoryProvider = {
     CarrierTaskCommandController,
     WarehouseDispatchController,
     MojiaMeasurementController,
-    WarehouseInventoryQueryController,
     WarehouseMachineImportController,
     WarehousePackageLifecycleController,
     WarehouseRentController,

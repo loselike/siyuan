@@ -16,7 +16,7 @@ import { downloadCsv } from '../exportCsv';
 import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput';
 import { formatBeijingDateTime } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
-import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, type ManagedTableColumns } from '../../shared/ui';
+import { AppDatePicker, isAppDateRangeInvalid, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, renderAuthorizedAction, type ManagedTableColumns } from '../../shared/ui';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
 
@@ -457,7 +457,7 @@ export function PendingPaymentPage({ apiClient, permissions, role, renderShipmen
       extra={(
         <Space>
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()}>刷新</Button>
-          <Button icon={<Download size={15} />} disabled={!canExport} onClick={() => void exportRows()}>导出</Button>
+          {renderAuthorizedAction(canExport, <Button icon={<Download size={15} />} onClick={() => void exportRows()}>导出</Button>)}
         </Space>
       )}
     >
@@ -509,8 +509,8 @@ export function PendingPaymentPage({ apiClient, permissions, role, renderShipmen
               批量发起付款
             </Button>
           ) : null}
-          <Text type="secondary">已选 {selectedRows.length} 条</Text>
-          {hasMultipleApplicationGroups ? <Text type="warning">当前包含多个付款组，请分组提交</Text> : null}
+          {canCreatePaymentApplication ? <Text type="secondary">已选 {selectedRows.length} 条</Text> : null}
+          {canCreatePaymentApplication && hasMultipleApplicationGroups ? <Text type="warning">当前包含多个付款组，请分组提交</Text> : null}
         </Space>
         <Space wrap className="finance-payment-command-summary">
           {fieldVisibility.showPayableCost ? selectedAmountByCurrency.map((item) => <Tag color="blue" key={`selected-${item.currency}`}>已选 {item.currency}：{formatMoney(item.amount)}</Tag>) : null}
@@ -549,7 +549,7 @@ export function PendingPaymentPage({ apiClient, permissions, role, renderShipmen
         size="small"
         loading={loading}
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
-        rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.status === 'APPLIED' || row.status === 'INVALIDATED' || row.status === 'PAID' }) }}
+        rowSelection={canCreatePaymentApplication ? { selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.status === 'APPLIED' || row.status === 'INVALIDATED' || row.status === 'PAID' }) } : undefined}
         rowClassName={(row) => selectedIds.includes(row.id) ? 'finance-payment-row-selected' : ''}
         dataSource={response.rows}
         onChange={(pagination, _, sorter) => {
@@ -648,7 +648,7 @@ export function PendingPaymentPage({ apiClient, permissions, role, renderShipmen
                   </Form.Item>
                 </Col>
                 <Col xs={24} md={4}>
-                  <Button className="full-width" disabled={!canMaintainBank} onClick={startManualBankEntry}>新增填写</Button>
+                  {canMaintainBank ? <Button className="full-width" onClick={startManualBankEntry}>新增填写</Button> : null}
                 </Col>
               </Row>
               <div className="finance-payment-bank-divider"><span>银行资料</span></div>
@@ -668,19 +668,18 @@ export function PendingPaymentPage({ apiClient, permissions, role, renderShipmen
               </Row>
             </section> : null}
             <Row gutter={12} className="finance-payment-support-row">
-              <Col xs={24} md={12}>
+              {canUploadAttachment ? <Col xs={24} md={12}>
                 <section className="finance-payment-modal-section finance-payment-support-section">
                   <div className="finance-payment-section-title">供应商账单截图</div>
                   <Form.Item name="voucherImage">
                     <VoucherImageInput
                       apiClient={apiClient}
-                      disabled={!canUploadAttachment}
                       onFileChange={setApplicationVoucherFile}
                     />
                   </Form.Item>
                 </section>
-              </Col>
-              <Col xs={24} md={12}>
+              </Col> : null}
+              <Col xs={24} md={canUploadAttachment ? 12 : 24}>
                 <section className="finance-payment-modal-section finance-payment-support-section">
                   <div className="finance-payment-section-title">备注</div>
                   <Form.Item name="remark"><Input.TextArea rows={3} placeholder="填写付款说明（选填）" /></Form.Item>

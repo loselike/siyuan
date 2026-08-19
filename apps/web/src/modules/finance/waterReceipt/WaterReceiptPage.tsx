@@ -1459,10 +1459,10 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
 
       <Modal title="记录水单凭证" className="finance-modal" width={720} open={Boolean(voucherRow)} onCancel={() => setVoucherRow(null)} onOk={() => void submitVoucher()} destroyOnHidden>
         <Form form={voucherForm} layout="vertical">
-          <Form.Item name="voucherImage" label="水单凭证截图">
+          {canVoucher ? <Form.Item name="voucherImage" label="水单凭证截图">
             <VoucherImageInput
               apiClient={apiClient}
-              disabled={!canVoucher || !voucherRow}
+              disabled={!voucherRow}
               uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'WATER_RECEIPT', waterReceiptId: voucherRow?.id }) as Promise<VoucherImageValue>}
               onUploaded={(voucher) => setVoucherRow((current) => current
                 ? {
@@ -1475,7 +1475,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
                   }
                 : current)}
             />
-          </Form.Item>
+          </Form.Item> : null}
           {!voucherRow?.voucher ? <Text type="secondary">暂无水单图片</Text> : null}
           {voucherRow?.voucher && canDeleteVoucher ? <Popconfirm title="确认删除水单凭证？" onConfirm={() => void deleteVoucher()}><Button danger>删除图片</Button></Popconfirm> : null}
         </Form>

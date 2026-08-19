@@ -17,7 +17,7 @@ import { createFinanceFeeNameOptions, financeCatalogCurrencyOptions } from '../c
 import { downloadCsv } from '../exportCsv';
 import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
-import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
+import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, renderAuthorizedAction, type ManagedTableColumns } from '../../shared/ui';
 import { ChargeWeightChangeTag } from '../ChargeWeightChangeTag';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
@@ -145,6 +145,8 @@ export function BusinessCostAuditPage({
   const canBatchReverse = canReverse;
   const canBatchVoid = canVoid;
   const canExport = hasPermission(permissions, 'finance:business-cost:export');
+  const canUseBatchSelection = canBatchAudit || canBatchReverse || canBatchVoid || canExport;
+  const canUseRowActions = canManage || canAudit || canReverse || canVoid;
   const canViewAgent = fieldVisibility.showAgentCompanyName && (hasPermission(permissions, 'finance:business-cost:view-agent') || response.rows.some((row) => row.canViewAgent));
   const canViewProfit = hasPermission(permissions, 'finance:business-cost:view-profit') || response.rows.some((row) => row.canViewProfit);
   const feeNameOptions = useMemo(
@@ -311,19 +313,27 @@ export function BusinessCostAuditPage({
       fixed: 'right',
       render: (_, row) => (
         <Space size={4}>
-          <Button size="small" disabled={!canManage || row.reconciliationStatus === 'CONFIRMED' || row.voided} onClick={() => openEditor(row)}>修改</Button>
+          {renderAuthorizedAction(canManage,
+            <Button size="small" disabled={row.reconciliationStatus === 'CONFIRMED' || row.voided} onClick={() => openEditor(row)}>修改</Button>
+          )}
           {row.reconciliationStatus === 'CONFIRMED' ? (
-            <Popconfirm title="确认反审核该业务成本？" onConfirm={async () => { await apiClient.reverseAuditBusinessCost(row.id); await loadRows(); }} okText="反审核" cancelText="取消">
-              <Button size="small" disabled={!canReverse}>反审核</Button>
-            </Popconfirm>
+            renderAuthorizedAction(canReverse,
+              <Popconfirm title="确认反审核该业务成本？" onConfirm={async () => { await apiClient.reverseAuditBusinessCost(row.id); await loadRows(); }} okText="反审核" cancelText="取消">
+                <Button size="small">反审核</Button>
+              </Popconfirm>
+            )
           ) : (
-            <Popconfirm title="确认审核该业务成本？" onConfirm={async () => { await apiClient.auditBusinessCost(row.id); await loadRows(); }} okText="审核" cancelText="取消">
-              <Button size="small" type="primary" disabled={!canAudit || row.voided}>审核</Button>
+            renderAuthorizedAction(canAudit,
+              <Popconfirm title="确认审核该业务成本？" onConfirm={async () => { await apiClient.auditBusinessCost(row.id); await loadRows(); }} okText="审核" cancelText="取消">
+                <Button size="small" type="primary" disabled={row.voided}>审核</Button>
+              </Popconfirm>
+            )
+          )}
+          {renderAuthorizedAction(canVoid,
+            <Popconfirm title="确认作废该业务成本？" onConfirm={async () => { await apiClient.deleteBusinessCostAudit(row.id); await loadRows(); }} okText="作废" cancelText="取消">
+              <Button size="small" danger disabled={row.reconciliationStatus === 'CONFIRMED' || row.voided}>作废</Button>
             </Popconfirm>
           )}
-          <Popconfirm title="确认作废该业务成本？" onConfirm={async () => { await apiClient.deleteBusinessCostAudit(row.id); await loadRows(); }} okText="作废" cancelText="取消">
-            <Button size="small" danger disabled={!canVoid || row.reconciliationStatus === 'CONFIRMED' || row.voided}>作废</Button>
-          </Popconfirm>
         </Space>
       )
     }
@@ -331,7 +341,8 @@ export function BusinessCostAuditPage({
 
   const unavailableColumns = new Set<ColumnKey>([
     ...(!canViewAgent ? ['agentName' as const] : []),
-    ...(!canViewProfit ? ['businessProfit' as const] : [])
+    ...(!canViewProfit ? ['businessProfit' as const] : []),
+    ...(!canUseRowActions ? ['action' as const] : [])
   ]);
   const columns = defaultColumnOrder
     .filter((key) => !unavailableColumns.has(key))
@@ -377,7 +388,7 @@ export function BusinessCostAuditPage({
         />
       )
     },
-    { ...baseColumns.action, key: 'action', width: 150, fixed: 'right' }
+    ...(canUseRowActions ? [{ ...baseColumns.action, key: 'action', width: 150, fixed: 'right' as const }] : [])
   ];
 
   return (
@@ -386,16 +397,16 @@ export function BusinessCostAuditPage({
       className="finance-work-card"
       extra={
         <Space wrap>
-          <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canBatchAudit}>批量审核</Button>
-          </Popconfirm>
-          <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canBatchReverse}>批量反审核</Button>
-          </Popconfirm>
-          <Popconfirm title={`确认批量作废已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('void')} okText="批量作废" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canBatchVoid} danger>批量作废</Button>
-          </Popconfirm>
-          <Button disabled={!canExport} onClick={async () => {
+          {renderAuthorizedAction(canBatchAudit, <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消">
+            <Button disabled={!selectedIds.length}>批量审核</Button>
+          </Popconfirm>)}
+          {renderAuthorizedAction(canBatchReverse, <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消">
+            <Button disabled={!selectedIds.length}>批量反审核</Button>
+          </Popconfirm>)}
+          {renderAuthorizedAction(canBatchVoid, <Popconfirm title={`确认批量作废已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('void')} okText="批量作废" cancelText="取消">
+            <Button disabled={!selectedIds.length} danger>批量作废</Button>
+          </Popconfirm>)}
+          {renderAuthorizedAction(canExport, <Button onClick={async () => {
             const exported = await apiClient.exportBusinessCostAudits({ ids: selectedIds.length ? selectedIds : undefined, query });
             downloadCsv('business-cost-audits.csv', [
               ...(fieldVisibility.showAgentCompanyName ? [{ key: 'agentName', label: agentFieldLabels.detailedCompanyName }] : []),
@@ -416,8 +427,8 @@ export function BusinessCostAuditPage({
               { key: 'remark', label: '备注' }
             ], exported.rows as unknown as Array<Record<string, unknown>>);
             message.success(`业务成本导出已生成：${exported.rows.length} 条`);
-          }}>导出</Button>
-          <Button type="primary" onClick={() => openEditor()} disabled={!canManage}>添加成本</Button>
+          }}>导出</Button>)}
+          {renderAuthorizedAction(canManage, <Button type="primary" onClick={() => openEditor()}>添加成本</Button>)}
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()} />
         </Space>
       }
@@ -476,7 +487,7 @@ export function BusinessCostAuditPage({
               columnSettings: {
                 storageKey: 'siyuan.finance.businessCostAudit.matrix-columns.v2',
                 title: '业务成本审核矩阵列设置',
-                lockedKeys: ['action']
+                lockedKeys: canUseRowActions ? ['action'] : []
               }
             }
           },
@@ -500,7 +511,7 @@ export function BusinessCostAuditPage({
         loading={loading}
         dataSource={response.rows}
         locale={{ emptyText: '暂无已自审通过的业务成本待审项' }}
-        rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) }}
+        rowSelection={canUseBatchSelection ? { selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) } : undefined}
         columnSettingsPlacement="toolbar"
         pagination={{ current: response.pagination.page, pageSize: response.pagination.pageSize, total: response.pagination.totalItems, showSizeChanger: true }}
         onChange={(pagination: TablePaginationConfig, _filters, sorter) => {

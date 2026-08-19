@@ -14,6 +14,12 @@ export class WarehouseInventoryQueryController {
     private readonly auditedRepository: PrismaRepository
   ) {}
 
+  @Get('warehouse/packages')
+  @RequirePermission(['warehouse:today-receipt:view', 'warehouse:in-stock:view'])
+  warehousePackages(@Req() request: { user: Principal }) {
+    return this.service.listPackages(request.user);
+  }
+
   @Get('warehouse/today-receipts')
   @RequirePermission('warehouse:today-receipt:view')
   warehouseTodayReceipts(@Req() request: { user: Principal }, @Query() query: WarehouseTodayQuery) {

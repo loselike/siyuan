@@ -514,7 +514,14 @@ export function MasterDataPage({
   const canReadExchangeRates = hasMasterPermission('master-data:exchange-rates:read');
   const canCreateExchangeRates = hasMasterPermission('master-data:exchange-rates:create');
   const canUpdateExchangeRates = hasMasterPermission('master-data:exchange-rates:update');
+  const canSubmitMasterExchangeRate = editingMasterExchangeRate ? canUpdateExchangeRates : canCreateExchangeRates;
   const canDisableExchangeRates = hasMasterPermission('master-data:exchange-rates:disable');
+  useEffect(() => {
+    if (editingMasterExchangeRate && !canUpdateExchangeRates) {
+      setEditingMasterExchangeRate(null);
+      masterExchangeRateForm.setFieldsValue({ baseCurrency: 'USD', quoteCurrency: 'RMB', rate: '', activeAt: todayDate(), endAt: '' });
+    }
+  }, [canUpdateExchangeRates, editingMasterExchangeRate, masterExchangeRateForm]);
   const canReadAssistant = hasMasterPermission('master-data:assistant:read');
   const canReadAgentBanks = canReadAgents
     && fieldVisibility.showAgentData
@@ -913,7 +920,7 @@ export function MasterDataPage({
   const selectedCompanyChannel = selectedCompanyChannelIds.length === 1
     ? companyChannelRows.find((channel) => channel.id === selectedCompanyChannelIds[0]) ?? null
     : null;
-  const canDeleteSelectedCompanyChannels = selectedCompanyChannelIds.length > 0 && canDeleteChannels;
+  const canDeleteSelectedCompanyChannels = selectedCompanyChannelIds.length > 0;
   const enabledCompanyChannelCategoryOptions = masterData.channelCategories.filter((category) => category.enabled).map((category) => category.name);
   const companyChannelCategoryFilterOptions = Array.from(new Set([...enabledCompanyChannelCategoryOptions, ...companyChannelRows.map((channel) => channel.category)].filter(Boolean)));
   const companyChannelCategoryFormOptions = Array.from(new Set([...enabledCompanyChannelCategoryOptions, editingMasterCompanyChannel?.category].filter(Boolean)));
@@ -1727,6 +1734,7 @@ export function MasterDataPage({
   }
 
   async function handleSubmitMasterExchangeRate() {
+    if (!canSubmitMasterExchangeRate) return;
     const values = await masterExchangeRateForm.validateFields();
     const input = {
       baseCurrency: values.baseCurrency.trim().toUpperCase(),
@@ -1874,6 +1882,7 @@ export function MasterDataPage({
                   scroll={{ x: 560 }}
                   locale={{ emptyText: '暂无启用汇率' }}
                 />
+                {canSubmitMasterExchangeRate ? <>
                 <Text strong>历史汇率:新增</Text>
                 <Form form={masterExchangeRateForm} layout="vertical" initialValues={{ baseCurrency: 'USD', quoteCurrency: 'RMB', activeAt: todayDate(), endAt: '' }}>
                   <Row gutter={12} align="bottom">
@@ -1920,7 +1929,6 @@ export function MasterDataPage({
                           <Button
                             type="primary"
                             aria-label={editingMasterExchangeRate ? '保存修改历史汇率' : '新增历史汇率'}
-                            disabled={editingMasterExchangeRate ? !canUpdateExchangeRates : !canCreateExchangeRates}
                             onClick={() => void handleSubmitMasterExchangeRate()}
                           >
                             {editingMasterExchangeRate ? '保存修改' : '新增'}
@@ -1930,6 +1938,7 @@ export function MasterDataPage({
                     </Col>
                   </Row>
                 </Form>
+                </> : null}
                 <Text strong>历史汇率:列表</Text>
                 <ManagedTable
                   recordDetail={{ title: '历史汇率详情' }}
@@ -3276,11 +3285,10 @@ export function MasterDataPage({
                               key={field.key}
                               size="small"
                               title={fields.length === 1 ? '收款银行账户' : `收款银行账户${agentItemOrdinals[index]}`}
-                              extra={fields.length > 1 ? (
+                              extra={fields.length > 1 && canWriteBankAccount ? (
                                 <Button
                                   aria-label={`删除收款银行账户${agentItemOrdinals[index]}`}
                                   danger
-                                  disabled={!canWriteBankAccount}
                                   icon={<Trash2 size={15} />}
                                   onClick={() => remove(field.name)}
                                   size="small"

@@ -4,7 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import type { AgentSummary, PaymentVoucherInput, PaymentVoucherListQuery, PaymentVoucherSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { formatBeijingDateTime } from '../../shared/format';
-import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, tenRowTablePagination, type ManagedTableColumns } from '../../shared/ui';
+import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, renderAuthorizedAction, tenRowTablePagination, type ManagedTableColumns } from '../../shared/ui';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions } from '../../shared/agentIdentity';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
@@ -47,6 +47,7 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
   const canResolveDifference = hasPermission(permissions, 'finance:agent-bill:difference-resolve');
   const canArchive = hasPermission(permissions, 'finance:agent-bill:archive');
   const canReverseArchive = hasPermission(permissions, 'finance:agent-bill:reverse-archive');
+  const canUseRowActions = canResolveDifference || canArchive || canReverseArchive;
   const agentOptions = getDetailedCompanyAgentOptions(agents);
   const agentNameOptions = agentOptions.map((option) => ({ ...option, value: agents.find((agent) => agent.id === option.value)?.name ?? option.label }));
 
@@ -159,19 +160,18 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
     { title: '明细文件/图片', dataIndex: 'fileName', width: 180 },
     { title: '导入人', dataIndex: 'uploadedBy', width: 100 },
     { title: '导入时间', dataIndex: 'createdAt', width: 170, render: formatBeijingDateTime },
-    { title: '操作', key: 'actions', width: 180, fixed: 'right', render: (_, row) => (
+    ...(canUseRowActions ? [{ title: '操作', key: 'actions', width: 180, fixed: 'right' as const, render: (_: unknown, row: PaymentVoucherSummary) => (
       <Space size={6}>
-        <Button size="small" disabled={!canResolveDifference || row.status !== 'DIFFERENCE_PENDING'} loading={saving} onClick={() => handleDifference(row)}>处理差异</Button>
-        <Button
-          size="small"
-          disabled={row.status === 'ARCHIVED' ? !canReverseArchive : !canArchive}
-          loading={saving}
-          onClick={() => handleArchive(row)}
-        >
-          {row.status === 'ARCHIVED' ? '反归档' : '归档'}
-        </Button>
+        {renderAuthorizedAction(canResolveDifference,
+          <Button size="small" disabled={row.status !== 'DIFFERENCE_PENDING'} loading={saving} onClick={() => handleDifference(row)}>处理差异</Button>
+        )}
+        {renderAuthorizedAction(row.status === 'ARCHIVED' ? canReverseArchive : canArchive,
+          <Button size="small" loading={saving} onClick={() => handleArchive(row)}>
+            {row.status === 'ARCHIVED' ? '反归档' : '归档'}
+          </Button>
+        )}
       </Space>
-    ) }
+    ) }] : [])
   ];
 
   const matrixColumns: ManagedTableColumns<PaymentVoucherSummary> = [
@@ -228,7 +228,7 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
         />
       )
     },
-    { ...columns[columns.length - 1], key: 'actions', width: 150, fixed: 'right' }
+    ...(canUseRowActions ? [{ ...columns[columns.length - 1], key: 'actions', width: 150, fixed: 'right' as const }] : [])
   ];
 
   return (
@@ -243,8 +243,8 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
         </Form>
       </Card>
 
-      {!historicalMode && canUseAgentBillFields ? <Card title="登记代理账单" className="finance-work-card">
-        <Form name="agentBillImport" form={form} layout="vertical" disabled={!canImport} initialValues={{ currency: 'RMB' }} onFinish={submit}>
+      {!historicalMode && canImport ? <Card title="登记代理账单" className="finance-work-card">
+        <Form name="agentBillImport" form={form} layout="vertical" initialValues={{ currency: 'RMB' }} onFinish={submit}>
           <Row gutter={[12, 0]}>
             <Col xs={24} md={6}><Form.Item name="billNo" label="账单号" rules={[{ required: true, whitespace: true, message: '请输入账单号' }]}><Input /></Form.Item></Col>
             <Col xs={24} md={6}><Form.Item name="agentId" label={agentFieldLabels.detailedCompanyName} rules={[{ required: true, message: '请选择代理详细公司名' }]}><Select showSearch optionFilterProp="searchText" options={agentOptions} /></Form.Item></Col>
@@ -272,7 +272,7 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
             <Col xs={24} md={4}><Form.Item name="kuayueStatus" label="跨越状态"><Select allowClear options={[{ label: '已登记', value: 'REGISTERED' }, { label: '已关联', value: 'LINKED' }, { label: '已归档', value: 'ARCHIVED' }]} /></Form.Item></Col>
             <Col xs={24} md={8}><Form.Item name="fileName" label="明细文件/图片" rules={[{ required: true, whitespace: true, message: '请输入文件名' }]}><Input /></Form.Item></Col>
             <Col xs={24} md={10}><Form.Item name="url" label="文件路径/URL"><Input /></Form.Item></Col>
-            <Col xs={24} md={6}><Form.Item label=" "><Button type="primary" htmlType="submit" loading={saving} disabled={!canImport}>保存代理账单</Button></Form.Item></Col>
+            <Col xs={24} md={6}><Form.Item label=" "><Button type="primary" htmlType="submit" loading={saving}>保存代理账单</Button></Form.Item></Col>
           </Row>
         </Form>
       </Card> : null}

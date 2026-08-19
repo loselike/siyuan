@@ -206,50 +206,6 @@
           ]
         }
       ]
-    },
-    {
-      "name": "warehouse-packages-query-slice",
-      "status": "representative-read-slice",
-      "files": [
-        {
-          "path": "apps/api/src/modules/warehouse/inventory/warehouse-packages-query.controller.ts",
-          "requiredImports": [
-            "./warehouse-inventory-query.service.js"
-          ],
-          "forbiddenImports": [
-            "../../prisma.service.js",
-            "../../prisma.repository.js",
-            "./warehouse-inventory-query.repository.js"
-          ],
-          "forbiddenText": [
-            "this.prisma",
-            "this.repository"
-          ]
-        },
-        {
-          "path": "apps/api/src/modules/warehouse/inventory/warehouse-inventory-query.service.ts",
-          "requiredImports": [
-            "./warehouse-inventory-query.repository.js"
-          ],
-          "forbiddenImports": [
-            "../../prisma.service.js",
-            "../../prisma.repository.js",
-            "./warehouse-packages-query.controller.js"
-          ],
-          "forbiddenText": [
-            "this.prisma"
-          ]
-        },
-        {
-          "path": "apps/api/src/modules/warehouse/inventory/warehouse-inventory.module.ts",
-          "requiredImports": [
-            "../../data-access.module.js",
-            "./warehouse-packages-query.controller.js",
-            "./warehouse-inventory-query.service.js",
-            "./warehouse-inventory-query.repository.js"
-          ]
-        }
-      ]
     }
   ]
 }

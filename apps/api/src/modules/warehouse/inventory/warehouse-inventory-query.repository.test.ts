@@ -335,7 +335,7 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
     });
   });
 
-  it('keeps warehouse inventory full-scope for a recognized business role', async () => {
+  it('keeps operator inventory customer-scoped with warehouse site redacted', async () => {
     const scopedRow = packageRow({ site: '深圳仓' });
     const packageFindMany = vi.fn().mockResolvedValue([scopedRow]);
     const queryRaw = vi.fn().mockResolvedValue([{
@@ -353,19 +353,28 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
       $queryRaw: queryRaw,
       warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
       customer: { findMany: customerFindMany },
-      shipment: { count: vi.fn().mockResolvedValue(0) },
+      shipment: {
+        count: vi.fn().mockResolvedValue(0),
+        findMany: vi.fn().mockResolvedValue([])
+      },
       auditLog: { create: vi.fn().mockResolvedValue({}), findMany: vi.fn() }
     });
 
     const response = await repository.getWarehouseInStockPage(operator, { dataScope: 'OWN' });
 
-    expect(response.rows).toEqual([expect.objectContaining({ site: '深圳仓', salesperson: 'operator' })]);
+    expect(response.rows).toEqual([expect.objectContaining({ salesperson: 'operator' })]);
+    expect(response.rows[0]).not.toHaveProperty('site');
     expect(packageFindMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { status: 'RECEIVED' }
+      where: {
+        status: 'RECEIVED',
+        customerCode: { in: ['C001'] },
+        shipmentId: null,
+        systemOrderNo: null
+      }
     }));
     const aggregateSql = queryRaw.mock.calls[0]?.[0] as { sql: string; values: unknown[] };
-    expect(aggregateSql.sql).not.toContain('"customerCode" IN (?)');
-    expect(aggregateSql.values).toEqual(['RECEIVED']);
+    expect(aggregateSql.sql).toContain('"customerCode" IN (?)');
+    expect(aggregateSql.values).toEqual(['RECEIVED', 'C001']);
   });
 
   it('keeps page totals and audit semantics while avoiding an unbounded package read', async () => {
@@ -387,7 +396,10 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
       },
       warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
       customer: { findMany: vi.fn().mockResolvedValue([{ code: 'C001', salesperson: 'operator' }]) },
-      shipment: { count: vi.fn().mockResolvedValue(4) },
+      shipment: {
+        count: vi.fn().mockResolvedValue(4),
+        findMany: vi.fn().mockResolvedValue([])
+      },
       auditLog: { create: auditCreate, findMany: vi.fn() },
       $queryRaw: queryRaw
     });
@@ -442,7 +454,10 @@ describe('PrismaWarehouseInventoryQueryRepository', () => {
     const repository = createRepository({
       warehousePackage: { findMany: vi.fn().mockResolvedValue([]) },
       warehouseTallyTask: { findMany: vi.fn().mockResolvedValue([]) },
-      shipment: { count: vi.fn().mockResolvedValue(0) },
+      shipment: {
+        count: vi.fn().mockResolvedValue(0),
+        findMany: vi.fn().mockResolvedValue([])
+      },
       auditLog: { create: vi.fn().mockResolvedValue({}), findMany: auditFindMany },
       $queryRaw: queryRaw
     });

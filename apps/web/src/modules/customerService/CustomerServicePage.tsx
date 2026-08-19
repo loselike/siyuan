@@ -1544,13 +1544,13 @@ export function CustomerServicePage({
   }, [activeSection, apiClient, canTransferView]);
 
   function openTransferFill(shipmentsToFill: Shipment[]) {
-    if (!canFillTransferNo || !shipmentsToFill.length) return;
+    if (!canFillTransferNo || !shipmentsToFill.length || (shipmentsToFill.length > 1 && !canTransferBatchWrite)) return;
     setTransferFillRows(shipmentsToFill);
     transferForm.setFieldsValue({ rows: shipmentsToFill.map(() => ({ pushToSales: false })) });
   }
 
   async function submitTransferFill() {
-    if (!apiClient || !canFillTransferNo) {
+    if (!apiClient || !canFillTransferNo || (transferFillRows.length > 1 && !canTransferBatchWrite)) {
       setTransferFillRows([]);
       return;
     }
@@ -2612,7 +2612,7 @@ export function CustomerServicePage({
                         ? '数据加载失败，请重试'
                         : '暂无待确认数据'
                   } : undefined}
-                  rowSelection={activeSection === 'transferNo' && canFillTransferNo ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
+                  rowSelection={activeSection === 'transferNo' && canFillTransferNo ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true, type: canTransferBatchWrite ? 'checkbox' : 'radio' } : undefined}
                   pagination={activeSection === 'dataConfirm' ? {
                     ...tenRowTablePagination,
                     current: dataConfirmPagination.page,
