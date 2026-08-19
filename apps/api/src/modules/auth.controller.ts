@@ -72,6 +72,7 @@ export class AuthController {
       username: account.username,
       role: account.role,
       assignedRole: account.assignedRole,
+      roleLabel: account.roleLabel ?? undefined,
       site: account.site,
       customerId: account.customerId,
       name: account.name,

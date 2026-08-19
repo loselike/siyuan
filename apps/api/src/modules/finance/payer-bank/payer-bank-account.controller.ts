@@ -10,18 +10,18 @@ export class PayerBankAccountController {
 
   @Get()
   @RequirePermission('master-data:payer-banks:read')
-  async list(@Query('keyword') keyword?: string) {
-    return this.service.list({ keyword });
+  async list(@Req() request: { user: Principal }, @Query('keyword') keyword?: string) {
+    return this.service.list(request.user, { keyword });
   }
 
   @Post()
-  @RequirePermission('master-data:payer-banks:manage')
+  @RequirePermission('master-data:payer-banks:create')
   async create(@Req() request: { user: Principal }, @Body() body: PayerBankAccountInput) {
     return this.service.create(request.user, body);
   }
 
   @Put(':id')
-  @RequirePermission('master-data:payer-banks:manage')
+  @RequirePermission('master-data:payer-banks:update')
   async update(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -31,7 +31,7 @@ export class PayerBankAccountController {
   }
 
   @Delete(':id')
-  @RequirePermission('master-data:payer-banks:manage')
+  @RequirePermission('master-data:payer-banks:delete')
   async delete(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.service.delete(request.user, id);
   }

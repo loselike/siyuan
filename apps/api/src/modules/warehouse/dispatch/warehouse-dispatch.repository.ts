@@ -13,6 +13,7 @@ export type WarehouseDispatchRepository = Pick<
   PrismaRepository,
   | 'getWarehouseDispatchShipments'
   | 'updateWarehouseDispatchDeclaration'
+  | 'updateWarehouseDispatchInboundNo'
   | 'getWarehouseHandover'
   | 'printWarehouseHandover'
   | 'dispatchShipment'

@@ -1,9 +1,9 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { AutoComplete, Button, Card, Col, Descriptions, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, AutoComplete, Button, Card, Col, Descriptions, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { Download, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 import type { PaidPaymentListQuery, PaidPaymentListResponse, PaidPaymentSummary, PayerBankAccountSummary, PaymentVoucherSummary } from '@siyuan/shared';
-import type { ApiClient, PermissionKey } from '../../../apiClient';
+import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { downloadCsv } from '../exportCsv';
 import { VoucherImageInput, type VoucherImageValue } from '../VoucherImageInput';
 import { ProtectedVoucherImage } from '../ProtectedVoucherImage';
@@ -11,6 +11,7 @@ import { formatBeijingDate, formatBusinessDate } from '../../shared/format';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, type ManagedTableColumns } from '../../shared/ui';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
+import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
 
 const { Text } = Typography;
 const PAID_PAYMENT_MATRIX_COLUMN_WIDTH = 280;
@@ -18,6 +19,7 @@ const PAID_PAYMENT_MATRIX_COLUMN_WIDTH = 280;
 type PaidPaymentPageProps = {
   apiClient: ApiClient;
   permissions: PermissionKey[];
+  role?: RoleKey | string;
   renderShipmentOrderNoLink: (systemOrderNo?: string) => ReactNode;
   viewMode: 'waiting' | 'paid';
 };
@@ -98,7 +100,7 @@ function renderVoucherThumb(apiClient: ApiClient, vouchers: PaymentVoucherSummar
   );
 }
 
-export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoLink, viewMode }: PaidPaymentPageProps) {
+export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOrderNoLink, viewMode }: PaidPaymentPageProps) {
   const [queryForm] = Form.useForm<PaidPaymentListQuery>();
   const [confirmForm] = Form.useForm<ConfirmFormValues>();
   const [supplementForm] = Form.useForm<SupplementFormValues>();
@@ -120,12 +122,23 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
   const [payerBankAccounts, setPayerBankAccounts] = useState<PayerBankAccountSummary[]>([]);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
 
-  const canConfirm = hasPermission(permissions, 'finance:paid-payment:confirm');
-  const canUpdate = hasPermission(permissions, 'finance:paid-payment:update');
-  const canReverse = hasPermission(permissions, 'finance:paid-payment:reverse');
-  const canExport = hasPermission(permissions, 'finance:paid-payment:export');
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
+  const canViewPayableCost = fieldVisibility.showPayableCost;
+  const canViewPayableAgentData = fieldVisibility.showAgentData
+    && fieldVisibility.showAgentShortName
+    && fieldVisibility.showAgentCompanyName
+    && fieldVisibility.showAgentChannel;
+  const canViewPayableBankData = canViewPayableAgentData && fieldVisibility.showAgentShortName && canViewPayableCost;
+  const canConfirm = canViewPayableBankData && fieldVisibility.showPayableStatus && hasPermission(permissions, 'finance:paid-payment:confirm');
+  const canUpdate = fieldVisibility.showPayableStatus && hasPermission(permissions, 'finance:paid-payment:update');
+  const canReverse = fieldVisibility.showPayableStatus && hasPermission(permissions, 'finance:paid-payment:reverse');
+  const canExport = fieldVisibility.showPayableCost
+    && fieldVisibility.showPayableStatus
+    && hasPermission(permissions, 'finance:paid-payment:export');
+  const canViewVoucher = hasPermission(permissions, 'finance:paid-payment:voucher-view');
   const canUploadVoucher = hasPermission(permissions, 'finance:paid-payment:voucher-upload');
-  const canReadPayerBanks = hasPermission(permissions, 'master-data:payer-banks:read');
+  const canViewBank = canViewPayableBankData && hasPermission(permissions, 'finance:paid-payment:bank-view');
+  const canReadPayerBanks = canViewPayableBankData && hasPermission(permissions, 'master-data:payer-banks:read');
 
   const load = useCallback(async (nextQuery = query) => {
     setLoading(true);
@@ -210,6 +223,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
   }, [selectedRows]);
 
   const openConfirm = (row: PaidPaymentSummary) => {
+    if (!canConfirm) return;
     setSelectedRow(row);
     setConfirmReceiptFile(undefined);
     confirmForm.setFieldsValue({
@@ -268,18 +282,17 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
       const result = await apiClient.exportPaidPayments({ query: { ...query, status: fixedStatus }, ...(ids.length ? { ids } : {}) });
       downloadCsv(viewMode === 'waiting' ? 'waiting-payments.csv' : 'paid-payments.csv', [
         { key: 'date', label: '日期' },
-        { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
+        ...(fieldVisibility.showAgentCompanyName ? [{ key: 'agentName', label: agentFieldLabels.detailedCompanyName }] : []),
         { key: 'salesperson', label: '业务员' },
         { key: 'customerCode', label: '客户编号' },
         { key: 'outboundOrderNo', label: '出货单号' },
         { key: 'feeName', label: '应付费用' },
         { key: 'currency', label: '币种' },
-        { key: 'totalAmount', label: '合计金额' },
+        ...(canViewPayableCost ? [{ key: 'totalAmount', label: '合计金额' }] : []),
         { key: 'remark', label: '备注' },
-        { key: 'payerBankName', label: '付款方银行' },
-        { key: 'paidAt', label: '付款日期' },
-        { key: 'paidBy', label: '付款人' },
-        { key: 'status', label: '状态' }
+        ...(canViewBank ? [{ key: 'payerBankName', label: '付款方银行' }] : []),
+        ...(fieldVisibility.showPayableStatus ? [{ key: 'paidAt', label: '付款日期' }, { key: 'paidBy', label: '付款人' }] : []),
+        ...(fieldVisibility.showPayableStatus ? [{ key: 'status', label: '状态' }] : [])
       ], result.rows.map((row) => ({
         ...row,
         date: formatBusinessDate(row.date),
@@ -292,6 +305,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
   };
 
   const openSupplement = (row: PaidPaymentSummary) => {
+    if (!canUpdate && !canUploadVoucher) return;
     setSupplementRow(row);
     supplementForm.setFieldsValue({
       paidRemark: row.paidRemark ?? row.remark,
@@ -319,35 +333,35 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
 
   const columns = useMemo<ManagedTableColumns<PaidPaymentSummary>>(() => [
     { title: '日期', dataIndex: 'date', width: 155, render: (value?: string) => formatBusinessDate(value) },
-    { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value ?? '-' },
+    ...(canViewPayableAgentData ? [{ title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value ?? '-' }] : []),
     { title: '业务员', dataIndex: 'salesperson', width: 120, render: (value?: string) => value ?? '-' },
     { title: '客户编号', dataIndex: 'customerCode', width: 120, render: (value?: string) => value ?? '-' },
     { title: '出货单号', dataIndex: 'systemOrderNo', width: 210, render: (_: string | undefined, row) => renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(row)) },
     { title: '应付费用', dataIndex: 'feeName', width: 180, render: (value?: string) => value ?? '-' },
-    { title: '状态', dataIndex: 'status', width: 100, render: statusTag },
+    ...(fieldVisibility.showPayableStatus ? [{ title: '状态', dataIndex: 'status', width: 100, render: statusTag }] : []),
     { title: '币种', dataIndex: 'currency', width: 90, render: (value?: string) => <Tag>{value ?? 'RMB'}</Tag> },
-    { title: '合计金额', dataIndex: 'totalAmount', width: 120, align: 'right', render: (value: number) => formatAmount(value) },
+    ...(canViewPayableCost ? [{ title: '合计金额', dataIndex: 'totalAmount', width: 120, align: 'right' as const, render: (value: number) => formatAmount(value) }] : []),
     { title: '备注', dataIndex: 'remark', width: 180, ellipsis: true, render: (value?: string) => value ?? '-' },
-    {
+    ...(canViewVoucher ? [{
       title: '对账单凭证',
       dataIndex: 'billVouchers',
       width: 190,
-      render: (_, row) => renderVoucherThumb(apiClient, row.billVouchers, '对账单凭证', setPreviewUrl)
-    },
-    {
+      render: (_: unknown, row: PaidPaymentSummary) => renderVoucherThumb(apiClient, row.billVouchers, '对账单凭证', setPreviewUrl)
+    }] : []),
+    ...(canViewBank ? [{
       title: '收款方银行信息',
       dataIndex: 'payeeBankAccount',
       width: 300,
-      render: (_, row) => <Text className="table-compact-text" title={formatBankInfo(row)}>{formatBankInfo(row)}</Text>
-    },
-    { title: '付款方银行', dataIndex: 'payerBankName', width: 180, render: (value?: string) => value ?? '-' },
-    { title: '付款日期', dataIndex: 'paidAt', width: 155, render: (value?: string) => formatBusinessDate(value) },
-    {
+      render: (_: unknown, row: PaidPaymentSummary) => <Text className="table-compact-text" title={formatBankInfo(row)}>{formatBankInfo(row)}</Text>
+    }] : []),
+    ...(canViewBank ? [{ title: '付款方银行', dataIndex: 'payerBankName', width: 180, render: (value?: string) => value ?? '-' }] : []),
+    ...(canViewPayableCost ? [{ title: '付款日期', dataIndex: 'paidAt', width: 155, render: (value?: string) => formatBusinessDate(value) }] : []),
+    ...(canViewVoucher ? [{
       title: '水单',
       dataIndex: 'waterReceipts',
       width: 180,
-      render: (_, row) => renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl)
-    },
+      render: (_: unknown, row: PaidPaymentSummary) => renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl)
+    }] : []),
     {
       title: '操作',
       key: 'action',
@@ -365,7 +379,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
         </Space>
       )
     }
-  ], [canConfirm, canReverse, canUpdate, canUploadVoucher, renderShipmentOrderNoLink]);
+  ], [apiClient, canConfirm, canReverse, canUpdate, canUploadVoucher, canViewBank, canViewPayableAgentData, canViewPayableCost, canViewVoucher, fieldVisibility.showPayableStatus, renderShipmentOrderNoLink]);
   const recordDetailColumns = useMemo<ManagedTableColumns<PaidPaymentSummary>>(() => [
     ...columns,
     {
@@ -385,7 +399,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
                     { key: 'customerCode', label: '客户编号', children: item.customerCode || '-' },
                     { key: 'feeName', label: '应付费用', children: item.feeName || '-' },
                     { key: 'currency', label: '币种', children: item.currency },
-                    { key: 'amount', label: '金额', children: formatAmount(item.amount) }
+                    ...(canViewPayableCost ? [{ key: 'amount', label: '金额', children: formatAmount(item.amount) }] : [])
                   ]}
                 />
               </Card>
@@ -399,7 +413,7 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
   const matrixColumns = useMemo<ManagedTableColumns<PaidPaymentSummary>>(() => [
     {
       key: 'matrixPayment',
-      title: '付款与代理',
+      title: canViewPayableAgentData ? '付款与代理' : '付款信息',
       width: PAID_PAYMENT_MATRIX_COLUMN_WIDTH,
       className: 'managed-matrix-group-primary',
       render: (_value, row) => (
@@ -407,9 +421,9 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
           labelWidth={66}
           fields={[
             { key: 'date', label: '申请日期', value: formatBusinessDate(row.date) },
-            { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true },
-            { key: 'status', label: '状态', value: statusTag(row.status) },
-            { key: 'totalAmount', label: '合计金额', value: <Text strong>{row.currency} {formatAmount(row.totalAmount)}</Text> }
+            canViewPayableAgentData ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
+            fieldVisibility.showPayableStatus ? { key: 'status', label: '状态', value: statusTag(row.status) } : null,
+            canViewPayableCost ? { key: 'totalAmount', label: '合计金额', value: <Text strong>{row.currency} {formatAmount(row.totalAmount)}</Text> } : null
           ]}
         />
       )
@@ -433,23 +447,27 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
     },
     {
       key: 'matrixEvidence',
-      title: '凭证与银行',
+      title: canViewBank || canViewVoucher ? '凭证与银行' : '付款信息',
       width: PAID_PAYMENT_MATRIX_COLUMN_WIDTH,
       render: (_value, row) => (
         <ManagedMatrixCell
           labelWidth={66}
           fields={[
-            { key: 'billVouchers', label: '对账凭证', value: renderVoucherThumb(apiClient, row.billVouchers, '对账单凭证', setPreviewUrl) },
-            { key: 'payeeBankAccount', label: '收款银行', value: formatBankInfo(row), title: formatBankInfo(row), wrap: true },
-            { key: 'payerBankName', label: '付款方银行', value: row.payerBankName || '-', title: row.payerBankName },
-            { key: 'paidAt', label: '付款日期', value: formatBusinessDate(row.paidAt) },
-            { key: 'waterReceipts', label: '水单', value: renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl) }
+            canViewVoucher ? { key: 'billVouchers', label: '对账凭证', value: renderVoucherThumb(apiClient, row.billVouchers, '对账单凭证', setPreviewUrl) } : null,
+            canViewBank ? { key: 'payeeBankAccount', label: '收款银行', value: formatBankInfo(row), title: formatBankInfo(row), wrap: true } : null,
+            canViewBank ? { key: 'payerBankName', label: '付款方银行', value: row.payerBankName || '-', title: row.payerBankName } : null,
+            canViewPayableCost ? { key: 'paidAt', label: '付款日期', value: formatBusinessDate(row.paidAt) } : null,
+            canViewVoucher ? { key: 'waterReceipts', label: '水单', value: renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl) } : null
           ]}
         />
       )
     },
     { ...columns[columns.length - 1], key: 'action', width: PAID_PAYMENT_MATRIX_COLUMN_WIDTH, fixed: 'right' }
-  ], [columns, renderShipmentOrderNoLink]);
+  ], [apiClient, canViewBank, canViewPayableAgentData, canViewPayableCost, canViewVoucher, columns, fieldVisibility.showPayableStatus, renderShipmentOrderNoLink]);
+
+  if (!fieldVisibility.showPayableCost || !fieldVisibility.showPayableStatus) {
+    return <Alert type="warning" showIcon message="当前账号无权查看该页面" />;
+  }
 
   return (
     <Space direction="vertical" size={12} className="finance-workspace">
@@ -471,11 +489,11 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
           onFinish={(values) => setQuery({ ...defaultQuery(viewMode), ...values, status: fixedStatus, page: 1 })}
         >
           <Row gutter={[10, 10]} className="finance-filter-bar finance-audit-filter-grid finance-paid-filter-primary">
-            <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={agentFieldLabels.detailedCompanyName}><Input allowClear placeholder="输入代理名称" /></Form.Item></Col>
+            {fieldVisibility.showAgentCompanyName ? <Col xs={24} md={8} xl={4}><Form.Item name="agent" label={agentFieldLabels.detailedCompanyName}><Input allowClear placeholder="输入代理名称" /></Form.Item></Col> : null}
             <Col xs={24} md={8} xl={4}><Form.Item name="salesperson" label="业务员"><Input allowClear placeholder="输入业务员" /></Form.Item></Col>
             <Col xs={24} md={8} xl={4}><Form.Item name="customerCode" label="客户编号"><Input allowClear placeholder="输入客户编号" /></Form.Item></Col>
             <Col xs={24} md={8} xl={4}><Form.Item name="systemOrderNo" label="出货单号"><Input allowClear placeholder="输入出货单号" /></Form.Item></Col>
-            <Col xs={24} md={8} xl={4}><Form.Item name="payeeName" label="收款方名称"><Input allowClear placeholder="输入收款方名称" /></Form.Item></Col>
+            {canViewBank ? <Col xs={24} md={8} xl={4}><Form.Item name="payeeName" label="收款方名称"><Input allowClear placeholder="输入收款方名称" /></Form.Item></Col> : null}
             <Col xs={24} md={16} xl={4} className="finance-audit-filter-actions finance-paid-filter-actions">
               <Space size={8} wrap>
                 <Button type="primary" htmlType="submit" icon={<Search size={15} />}>查询</Button>
@@ -494,9 +512,9 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
             <Row gutter={[10, 10]} className="finance-audit-filter-grid finance-audit-filter-advanced finance-paid-filter-advanced">
               <Col xs={24} md={8} xl={4}><Form.Item name="feeName" label="应付费用"><Input allowClear placeholder="输入费用名称" /></Form.Item></Col>
               <Col xs={24} md={8} xl={4}><Form.Item name="currency" label="币种"><Select placeholder="全部币种" options={[{ label: '全部', value: 'ALL' }, { label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
-              <Col xs={24} md={8} xl={4}><Form.Item name="amount" label="合计金额"><InputNumber min={0} placeholder="输入金额" style={{ width: '100%' }} /></Form.Item></Col>
-              <Col xs={24} md={8} xl={4}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear placeholder="输入收款账号" /></Form.Item></Col>
-              <Col xs={24} md={8} xl={4}><Form.Item name="payerBank" label="付款方银行信息"><Input allowClear placeholder="输入付款银行" /></Form.Item></Col>
+              {canViewPayableCost ? <Col xs={24} md={8} xl={4}><Form.Item name="amount" label="合计金额"><InputNumber min={0} placeholder="输入金额" style={{ width: '100%' }} /></Form.Item></Col> : null}
+              {canViewBank ? <Col xs={24} md={8} xl={4}><Form.Item name="bankAccountNo" label="收款方银行账号"><Input allowClear placeholder="输入收款账号" /></Form.Item></Col> : null}
+              {canViewBank ? <Col xs={24} md={8} xl={4}><Form.Item name="payerBank" label="付款方银行信息"><Input allowClear placeholder="输入付款银行" /></Form.Item></Col> : null}
               <Col xs={24} md={8} xl={4}><Form.Item name="remark" label="备注"><Input allowClear placeholder="输入备注关键词" /></Form.Item></Col>
               <Col xs={24} md={8} xl={4}><Form.Item name="applicationDateFrom" label="申请付款日期起"><AppDatePicker /></Form.Item></Col>
               <Col xs={24} md={8} xl={4}><Form.Item name="applicationDateTo" label="申请付款日期止"><AppDatePicker /></Form.Item></Col>
@@ -512,12 +530,12 @@ export function PaidPaymentPage({ apiClient, permissions, renderShipmentOrderNoL
           <Space size={8} wrap className="finance-work-summary">
             <Text type="secondary">{pageLabel} {viewMode === 'waiting' ? response.totals.waitingPaymentCount : response.totals.paidCount}</Text>
             <Text type="secondary">已选 {selectedPaymentIds.length}</Text>
-            {response.totals.amountByCurrency.map((item) => <Text key={item.currency} strong>{item.currency} {formatAmount(item.amount)}</Text>)}
+            {fieldVisibility.showPayableCost ? response.totals.amountByCurrency.map((item) => <Text key={item.currency} strong>{item.currency} {formatAmount(item.amount)}</Text>) : null}
           </Space>
           <Space size={8} wrap className="finance-paid-selected-groups">
             {selectedGroups.length ? selectedGroups.map((group) => (
               <Tag key={group.key} color="blue">
-                {group.payeeName} / {group.currency} / {group.bankAccountNo} / {group.bankName} / {group.count} 条 / {formatAmount(group.amount)}
+                {canViewBank ? `${group.payeeName} / ` : ''}{group.currency} / {group.count} 条{canViewBank ? ` / ${group.bankAccountNo} / ${group.bankName}` : ''}{canViewPayableCost ? ` / ${formatAmount(group.amount)}` : ''}
               </Tag>
             )) : <Text type="secondary">勾选后按收款方名称、币种、银行账号合并付款组</Text>}
           </Space>

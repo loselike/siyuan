@@ -228,6 +228,7 @@ import type {
   ShipmentFinanceItemUpdateInput,
   ShipmentDispatchInput,
   WarehouseDispatchDeclarationUpdateInput,
+  WarehouseDispatchInboundNoUpdateInput,
   WarehouseHandoverPrintInput,
   WarehouseHandoverPrintResponse,
   ShipmentRestoreInput,
@@ -402,7 +403,6 @@ export type PermissionKey =
   | 'business:shipment:profit-view'
   | 'business:shipment:agent-weight-view'
   | 'business:shipment:export'
-  | 'business:shipment:column-setting'
   | 'business:order-ai:view'
   | 'business:order-ai:assist'
   | 'business:order-ai:finance-context'
@@ -418,6 +418,10 @@ export type PermissionKey =
   | 'market:pending-routing:business-cost:create'
   | 'market:pending-routing:business-cost:edit'
   | 'market:pending-routing:business-cost:delete'
+  | 'market:pending-routing:payable-cost:view'
+  | 'market:pending-routing:payable-cost:create'
+  | 'market:pending-routing:payable-cost:edit'
+  | 'market:pending-routing:payable-cost:delete'
   | 'market:pending-routing:return-review'
   | 'market:routed:view'
   | 'market:routed:edit'
@@ -552,6 +556,7 @@ export interface Principal {
   username: string;
   role: RoleKey;
   assignedRole?: RoleKey;
+  roleLabel?: string;
   site?: string;
   customerId?: string;
   name?: string;
@@ -818,6 +823,10 @@ export class ApiClient {
     return this.request(`/warehouse/dispatch-shipments/${id}/declaration`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
+  async updateWarehouseDispatchInboundNo(id: string, input: WarehouseDispatchInboundNoUpdateInput): Promise<Shipment> {
+    return this.request(`/warehouse/dispatch-shipments/${id}/inbound-no`, { method: 'PATCH', body: JSON.stringify(input) });
+  }
+
   async reviewPendingShipments(): Promise<Shipment[]> {
     return this.request('/shipments/review-pending');
   }
@@ -978,8 +987,8 @@ export class ApiClient {
     return this.request(`/operations/line-shipments/${id}/operational`, { method: 'PATCH', body: JSON.stringify(input) });
   }
 
-  async customerServiceShipments(): Promise<Shipment[]> {
-    return this.request('/customer-service/shipments');
+  async customerServiceShipments(includeProblem = false): Promise<Shipment[]> {
+    return this.request(`/customer-service/shipments${includeProblem ? '?includeProblem=true' : ''}`);
   }
 
   async customerServiceTransferShipments(): Promise<Shipment[]> {
@@ -1628,6 +1637,14 @@ export class ApiClient {
     return this.request(`/shipments/${id}/finance-items/${feeId}`, { method: 'PUT', body: JSON.stringify(input) });
   }
 
+  async createMarketRoutingCost(id: string, input: ShipmentFinanceItemCreateInput): Promise<PayableFeeSummary | BusinessCostFeeSummary> {
+    return this.request(`/market/shipments/${id}/routing-costs`, { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async updateMarketRoutingCost(id: string, feeId: string, input: ShipmentFinanceItemUpdateInput): Promise<PayableFeeSummary | BusinessCostFeeSummary> {
+    return this.request(`/market/shipments/${id}/routing-costs/${feeId}`, { method: 'PUT', body: JSON.stringify(input) });
+  }
+
   async deleteShipmentFinanceItem(id: string, feeId: string): Promise<ReceivableFeeSummary | PayableFeeSummary | BusinessCostFeeSummary> {
     return this.request(`/shipments/${id}/finance-items/${feeId}`, { method: 'DELETE' });
   }
@@ -1677,6 +1694,15 @@ export class ApiClient {
 
   async createFinanceCatalogItem(input: FinanceCatalogItemInput): Promise<FinanceCatalogItemSummary> {
     return this.request('/finance/catalog', { method: 'POST', body: JSON.stringify(input) });
+  }
+
+  async createFinanceProductName(
+    input: Pick<FinanceCatalogItemInput, 'name' | 'enabled' | 'remark'>
+  ): Promise<FinanceCatalogItemSummary> {
+    return this.request('/finance/catalog/product-name', {
+      method: 'POST',
+      body: JSON.stringify(input)
+    });
   }
 
   async updateFinanceCatalogItem(id: string, input: Partial<FinanceCatalogItemInput>): Promise<FinanceCatalogItemSummary> {

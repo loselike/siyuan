@@ -11,7 +11,7 @@ export class CarrierTaskCommandController {
   ) {}
 
   @Post('carrier-tasks/:id/run')
-  @RequirePermission('tracking:carrier-task:run')
+  @RequirePermission('tracking:carrier-task:sync')
   runCarrierTask(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -21,7 +21,7 @@ export class CarrierTaskCommandController {
   }
 
   @Post('carrier-tasks/:id/retry')
-  @RequirePermission('tracking:carrier-task:retry')
+  @RequirePermission('tracking:carrier-task:sync')
   retryCarrierTask(
     @Req() request: { user: Principal },
     @Param('id') id: string,

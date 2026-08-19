@@ -1,5 +1,5 @@
-import { Controller, Get, Inject, Param, Query, Req } from '@nestjs/common';
-import type { WarehouseTallyTaskListQuery } from '@siyuan/shared';
+import { Body, Controller, Get, Inject, Param, Put, Query, Req } from '@nestjs/common';
+import type { WarehouseTallySortRulesUpdateInput, WarehouseTallyTaskListQuery } from '@siyuan/shared';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 import { WarehouseTallyQueryService } from './warehouse-tally-query.service.js';
@@ -15,6 +15,18 @@ export class WarehouseTallyQueryController {
   @RequirePermission('warehouse:tally-pending:view')
   warehouseConsolidationItems(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.service.listConsolidationItems(request.user, id);
+  }
+
+  @Get('warehouse/tally-sort-rules')
+  @RequirePermission('warehouse:tally-pending:view')
+  warehouseTallySortRules(@Req() request: { user: Principal }) {
+    return this.service.listSortRules(request.user);
+  }
+
+  @Put('warehouse/tally-sort-rules')
+  @RequirePermission('warehouse:tally-pending:edit')
+  updateWarehouseTallySortRules(@Req() request: { user: Principal }, @Body() body: WarehouseTallySortRulesUpdateInput) {
+    return this.service.updateSortRules(request.user, body);
   }
 
   @Get('warehouse/tally-tasks')

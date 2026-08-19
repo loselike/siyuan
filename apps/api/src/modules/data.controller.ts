@@ -50,7 +50,6 @@ import type {
   PaymentApplicationCancelInput,
   PaymentApplicationCreateInput,
   PaymentApplicationExportRequest,
-  PaymentApplicationUpdateInput,
   PaidPaymentExportRequest,
   PaidPaymentListQuery,
   PaidPaymentReverseInput,
@@ -170,7 +169,7 @@ export class DataController {
     'application/octet-stream': ''
   };
 
-  private projectMarketShipment(shipment: Shipment): Partial<Shipment> & Pick<Shipment, 'id' | 'status' | 'createdAt'> {
+  private projectMarketShipment(shipment: Shipment, includeRouteCost = false): Partial<Shipment> & Pick<Shipment, 'id' | 'status' | 'createdAt'> {
     return {
       id: shipment.id,
       createdAt: shipment.createdAt,
@@ -216,6 +215,14 @@ export class DataController {
       routedAt: shipment.routedAt,
       routeReturnedAt: shipment.routeReturnedAt,
       routeAgentChannelName: shipment.routeAgentChannelName,
+      ...(includeRouteCost ? {
+        routeChargeWeightKg: shipment.routeChargeWeightKg,
+        routeUnitPrice: shipment.routeUnitPrice,
+        routeOtherFee: shipment.routeOtherFee,
+        routeCostTotal: shipment.routeCostTotal,
+        routeCurrency: shipment.routeCurrency
+      } : {}),
+      warehouseOutboundRemark: shipment.warehouseOutboundRemark,
       shippingMarkRequired: shipment.shippingMarkRequired,
       hasProblemTicket: shipment.hasProblemTicket,
       site: shipment.site
@@ -223,7 +230,7 @@ export class DataController {
   }
 
   private projectMarketRoutingReportShipment(shipment: Shipment): Partial<Shipment> & Pick<Shipment, 'id' | 'status' | 'createdAt'> {
-    const projected = this.projectMarketShipment(shipment);
+    const projected = this.projectMarketShipment(shipment, true);
     return {
       id: projected.id,
       createdAt: projected.createdAt,
@@ -288,7 +295,7 @@ export class DataController {
       const detailVisible = (canViewPending && shipment.status === 'WAITING_SORT')
         || (canViewRouted && shipment.status === 'WAITING_DISPATCH')
         || (canViewRouted && canReroute && ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status));
-      if (detailVisible) return [this.projectMarketShipment(shipment)];
+      if (detailVisible) return [this.projectMarketShipment(shipment, true)];
       if (reportVisible) return [this.projectMarketRoutingReportShipment(shipment)];
       const dashboardVisible = canViewDashboard && (
         shipment.status === 'WAITING_SORT'
@@ -385,7 +392,8 @@ export class DataController {
   }
 
   private async sanitizeSouthAfricaRateRuleForPrincipal(principal: Principal, rule: SouthAfricaRateRuleSummary): Promise<SouthAfricaRateRuleSummary> {
-    if (await this.hasAnyPermission(principal.role, ['pricing:markup:southAfrica:view'])) return rule;
+    if (!principal.globalFieldMasks?.['payable-cost']
+      && await this.hasAnyPermission(principal.role, ['pricing:markup:southAfrica:view'])) return rule;
     const { costPerCbm: _costPerCbm, markupPerCbm: _markupPerCbm, ...businessRule } = rule;
     return businessRule;
   }
@@ -434,6 +442,19 @@ export class DataController {
   }
 
   private async ensureOrderEntryFinanceWritePermissions(principal: Principal, input: OrderEntryCreateInput, method: 'POST' | 'PUT', path: string) {
+    if (method === 'PUT' && !Array.isArray(input.receivables)) {
+      throw new BadRequestException('保存录单草稿时必须完整提交应收费用列表');
+    }
+    const hasReceivableMutation = method === 'PUT'
+      ? true
+      : (input.receivables ?? []).some((row) => Boolean(row.name?.trim()) || Number(row.amount ?? 0) > 0);
+    if (hasReceivableMutation && !isAdministratorRole(principal.role)) {
+      const permission: PermissionKey = method === 'PUT' ? 'business:order-fee:update' : 'business:order-fee:create';
+      if (!await this.repository.hasPermission(principal.role, permission)) {
+        await this.repository.recordPermissionDenied(principal, { permissions: [permission], method, path });
+        throw new ForbiddenException(`没有订单费用${method === 'PUT' ? '修改' : '新增'}权限`);
+      }
+    }
     const hasBusinessCost = (input.businessCosts ?? []).some((row) => (
       Boolean(row.name?.trim()) || Number(row.amount ?? 0) > 0 || Number(row.unitPrice ?? 0) > 0
     ));
@@ -709,7 +730,7 @@ export class DataController {
   }
 
   @Put('shipments/:id/order-entry-draft')
-  @RequirePermission(['business:order-entry:edit', 'business:order-entry:draft-edit', 'business:review:edit'])
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:draft-edit', 'business:review:edit', 'business:order-fee:update'])
   async updateOrderEntryDraft(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: OrderEntryDraftUpdateInput) {
     ensureInternalOrderEntryScope(request.user);
     if (body.submitForReview && !await this.repository.hasPermission(request.user.role, 'business:order-entry:submit-review')) {
@@ -910,7 +931,7 @@ export class DataController {
     } else {
       await this.ensurePermission(request.user, 'market:pending-routing:approve');
     }
-    return this.projectMarketShipment(await this.repository.routeShipment(request.user, id, body));
+    return this.projectMarketShipment(await this.repository.routeShipment(request.user, id, body), true);
   }
 
   @Get('market/routing-report/rows')
@@ -1029,7 +1050,7 @@ export class DataController {
 
   @Get('customer-service/shipments')
   @RequireAuth()
-  async customerServiceShipments(@Req() request: { user: Principal }) {
+  async customerServiceShipments(@Req() request: { user: Principal }, @Query('includeProblem') includeProblem?: string) {
     await this.ensureAnyPermission(request.user, [
       'customer-service:pending-routing:view',
       'customer-service:data-confirm:view',
@@ -1040,7 +1061,7 @@ export class DataController {
       'customer-service:delivering:view',
       'customer-service:signed:view'
     ]);
-    const rows = await this.repository.customerServiceShipments(request.user);
+    const rows = await this.repository.customerServiceShipments(request.user, includeProblem === 'true');
     return rows;
   }
 
@@ -1087,13 +1108,15 @@ export class DataController {
     'customer-service:data-confirm:business-update',
     'business:shipment:finance-detail-view',
     'business:order-entry:view',
+    'business:order-fee:view',
     'business:order-entry:business-cost',
     'business:order-entry:payable-fee',
     'market:pending-routing:business-cost:view',
+    'market:pending-routing:payable-cost:view',
     'business:shipment:payable-view',
     'business:shipment:profit-view',
     'business:order-fee:profit-view',
-    'finance:receivable:detail',
+    'finance:receivable:read',
     'finance:business-cost:read',
     'finance:business-cost:view-profit',
     'finance:order-fee:payable:view',
@@ -1115,19 +1138,19 @@ export class DataController {
   }
 
   @Post('shipments/:id/receivable-adjustments')
-  @RequirePermission('finance:receivable:update')
+  @RequirePermission('finance:order-fee:receivable:manage')
   async addReceivableAdjustment(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ReceivableAdjustmentInput) {
     return this.repository.addReceivableAdjustment(request.user, id, body);
   }
 
   @Post('shipments/:id/finance-items')
-  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:create', 'market:pending-routing:business-cost:create'])
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:create', 'finance:order-fee:receivable:manage', 'finance:business-cost:manage', 'finance:order-fee:payable:manage', 'finance:payable:manage'])
   async createShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentFinanceItemCreateInput) {
     return this.repository.createShipmentFinanceItem(request.user, id, body);
   }
 
   @Put('shipments/:id/finance-items/:feeId')
-  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:update', 'market:pending-routing:business-cost:edit'])
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:update', 'finance:order-fee:receivable:manage', 'finance:business-cost:manage', 'finance:order-fee:payable:manage', 'finance:payable:manage'])
   async updateShipmentFinanceItem(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -1137,8 +1160,25 @@ export class DataController {
     return this.repository.updateShipmentFinanceItem(request.user, id, feeId, body);
   }
 
+  @Post('market/shipments/:id/routing-costs')
+  @RequirePermission(['market:pending-routing:business-cost:create', 'market:pending-routing:payable-cost:create'])
+  async createMarketRoutingCost(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ShipmentFinanceItemCreateInput) {
+    return this.repository.createMarketRoutingCost(request.user, id, body);
+  }
+
+  @Put('market/shipments/:id/routing-costs/:feeId')
+  @RequirePermission(['market:pending-routing:business-cost:edit', 'market:pending-routing:payable-cost:edit'])
+  async updateMarketRoutingCost(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Param('feeId') feeId: string,
+    @Body() body: ShipmentFinanceItemUpdateInput
+  ) {
+    return this.repository.updateMarketRoutingCost(request.user, id, feeId, body);
+  }
+
   @Delete('shipments/:id/finance-items/:feeId')
-  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:delete', 'market:pending-routing:business-cost:delete'])
+  @RequirePermission(['business:order-entry:edit', 'business:order-entry:business-cost', 'business:order-entry:payable-fee', 'business:order-fee:delete', 'finance:order-fee:receivable:manage', 'finance:business-cost:manage', 'finance:order-fee:payable:manage', 'finance:payable:manage', 'market:pending-routing:business-cost:delete', 'market:pending-routing:payable-cost:delete'])
   async deleteShipmentFinanceItem(@Req() request: { user: Principal }, @Param('id') id: string, @Param('feeId') feeId: string) {
     return this.repository.deleteShipmentFinanceItem(request.user, id, feeId);
   }
@@ -1237,9 +1277,9 @@ export class DataController {
 
   @Get('master-data/customer-sources')
   @RequirePermission('master-data:customers:read')
-  async masterDataCustomerSources(@Query('keyword') keyword?: string, @Query('enabledOnly') enabledOnly?: string) {
+  async masterDataCustomerSources(@Req() request: { user: Principal }, @Query('keyword') keyword?: string, @Query('enabledOnly') enabledOnly?: string) {
     const query: CustomerSourceListQuery = { keyword, enabledOnly: enabledOnly === 'true' };
-    return this.repository.listCustomerSources(query);
+    return this.repository.listCustomerSources(request.user, query);
   }
 
   @Post('master-data/customer-sources')
@@ -1291,7 +1331,7 @@ export class DataController {
   }
 
   @Put('master-data/customers/:id/enabled')
-  @RequirePermission('master-data:customers:enable')
+  @RequirePermission('master-data:customers:update')
   async updateMasterDataCustomerEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateCustomerEnabled(request.user, id, body);
   }
@@ -1315,13 +1355,13 @@ export class DataController {
   }
 
   @Put('master-data/agents/:id/enabled')
-  @RequirePermission('master-data:agents:enable')
+  @RequirePermission('master-data:agents:update')
   async updateMasterDataAgentEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateAgentEnabled(request.user, id, body);
   }
 
   @Post('master-data/agents/batch-enabled')
-  @RequirePermission('master-data:agents:batch-enable')
+  @RequirePermission('master-data:agents:update')
   async batchUpdateMasterDataAgentsEnabled(@Req() request: { user: Principal }, @Body() body: { ids?: string[]; enabled?: boolean }) {
     const ids = Array.from(new Set((body.ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
     if (!ids.length) {
@@ -1335,7 +1375,7 @@ export class DataController {
   }
 
   @Post('master-data/agents/batch-delete')
-  @RequirePermission('master-data:agents:batch-delete')
+  @RequirePermission('master-data:agents:delete')
   async batchDeleteMasterDataAgents(@Req() request: { user: Principal }, @Body() body: { ids?: string[] }): Promise<AgentDeleteResponse> {
     const ids = Array.from(new Set((body.ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
     if (!ids.length) {
@@ -1363,7 +1403,7 @@ export class DataController {
   }
 
   @Put('master-data/agent-channels/:id/enabled')
-  @RequirePermission('master-data:agent-channels:enable')
+  @RequirePermission('master-data:agent-channels:update')
   async updateMasterDataAgentChannelEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateAgentChannelEnabled(request.user, id, body);
   }
@@ -1375,13 +1415,13 @@ export class DataController {
   }
 
   @Post('master-data/carriers')
-  @RequirePermission('master-data:channels:carrier-manage')
+  @RequirePermission('master-data:channels:create')
   async createMasterDataCarrier(@Req() request: { user: Principal }, @Body() body: CarrierCreateInput) {
     return this.repository.createCarrier(request.user, body);
   }
 
   @Put('master-data/carriers/:id/enabled')
-  @RequirePermission('master-data:channels:carrier-enable')
+  @RequirePermission('master-data:channels:update')
   async updateMasterDataCarrierEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateCarrierEnabled(request.user, id, body);
   }
@@ -1399,13 +1439,13 @@ export class DataController {
   }
 
   @Put('master-data/channels/:id/enabled')
-  @RequirePermission('master-data:channels:enable')
+  @RequirePermission('master-data:channels:update')
   async updateMasterDataChannelEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateChannelEnabled(request.user, id, body);
   }
 
   @Post('master-data/channels/batch-delete')
-  @RequirePermission('master-data:channels:batch-delete')
+  @RequirePermission('master-data:channels:delete')
   async batchDeleteMasterDataChannels(@Req() request: { user: Principal }, @Body() body: { ids?: string[] }): Promise<ChannelDeleteResponse> {
     const ids = Array.from(new Set((body.ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
     if (!ids.length) {
@@ -1433,7 +1473,7 @@ export class DataController {
   }
 
   @Put('master-data/channel-categories/:id/enabled')
-  @RequirePermission('master-data:channel-categories:enable')
+  @RequirePermission('master-data:channel-categories:update')
   async updateMasterDataChannelCategoryEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updateChannelCategoryEnabled(request.user, id, body);
   }
@@ -1477,7 +1517,7 @@ export class DataController {
   @Delete('master-data/exchange-rates/:id')
   @RequirePermission('master-data:exchange-rates:disable')
   async deleteMasterDataExchangeRate(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.updateExchangeRate(request.user, id, { enabled: false });
+    return this.repository.updateExchangeRate(request.user, id, { enabled: false }, 'master-data:exchange-rates:disable');
   }
 
   @Get('system/roles')
@@ -2083,19 +2123,19 @@ export class DataController {
   }
 
   @Post('finance/business-cost-audits/:id/audit')
-  @RequirePermission('finance:business-cost:batch-audit')
+  @RequirePermission('finance:business-cost:audit')
   async auditBusinessCostAudit(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.auditBusinessCostAudit(request.user, id);
   }
 
   @Post('finance/business-cost-audits/:id/reverse-audit')
-  @RequirePermission('finance:business-cost:batch-reverse')
+  @RequirePermission('finance:business-cost:reverse')
   async reverseAuditBusinessCostAudit(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.reverseAuditBusinessCostAudit(request.user, id);
   }
 
   @Delete('finance/business-cost-audits/:id')
-  @RequirePermission('finance:business-cost:batch-void')
+  @RequirePermission('finance:business-cost:void')
   async deleteBusinessCostAudit(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deleteBusinessCostAudit(request.user, id);
   }
@@ -2131,13 +2171,13 @@ export class DataController {
   }
 
   @Post('finance/payable-audits')
-  @RequirePermission('finance:payable:match-shipment')
+  @RequirePermission('finance:payable:manage')
   async createPayableAudit(@Req() request: { user: Principal }, @Body() body: PayableAuditCreateInput) {
     return this.repository.createPayableAudit(request.user, body);
   }
 
   @Post('finance/payable-audits/match-shipment')
-  @RequirePermission('finance:payable:manage')
+  @RequirePermission('finance:payable:match-shipment')
   async matchPayableAuditShipment(@Req() request: { user: Principal }, @Body() body: PayableAuditShipmentMatchInput) {
     return this.repository.matchPayableAuditShipment(request.user, body);
   }
@@ -2149,19 +2189,19 @@ export class DataController {
   }
 
   @Post('finance/payable-audits/:id/audit')
-  @RequirePermission('finance:payable:batch-audit')
+  @RequirePermission('finance:payable:audit')
   async auditPayableAudit(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.auditPayableAudit(request.user, id);
   }
 
   @Post('finance/payable-audits/:id/reverse-audit')
-  @RequirePermission('finance:payable:batch-reverse')
+  @RequirePermission('finance:payable:reverse')
   async reverseAuditPayableAudit(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.reverseAuditPayableAudit(request.user, id);
   }
 
   @Delete('finance/payable-audits/:id')
-  @RequirePermission('finance:payable:batch-void')
+  @RequirePermission('finance:payable:void')
   async deletePayableAudit(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.repository.deletePayableAudit(request.user, id);
   }
@@ -2249,12 +2289,6 @@ export class DataController {
     }
   }
 
-  @Put('finance/payment-applications/:id')
-  @RequirePermission('finance:pending-payment:update')
-  async updatePaymentApplication(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: PaymentApplicationUpdateInput) {
-    return this.repository.updatePaymentApplication(request.user, id, body);
-  }
-
   @Post('finance/payment-applications/:id/cancel')
   @RequirePermission('finance:pending-payment:cancel')
   async cancelPaymentApplication(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: PaymentApplicationCancelInput) {
@@ -2298,13 +2332,13 @@ export class DataController {
   }
 
   @Patch('finance/payment-vouchers/:id/difference')
-  @RequirePermission('finance:agent-bill:difference-manage')
+  @RequirePermission('finance:agent-bill:difference-resolve')
   async updatePaymentVoucherDifference(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: PaymentVoucherDifferenceInput) {
     return this.repository.updatePaymentVoucherDifference(request.user, id, body);
   }
 
   @Patch('finance/payment-vouchers/:id/archive')
-  @RequirePermission('finance:agent-bill:archive')
+  @RequirePermission(['finance:agent-bill:archive', 'finance:agent-bill:reverse-archive'])
   async updatePaymentVoucherArchive(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: PaymentVoucherArchiveInput) {
     return this.repository.updatePaymentVoucherArchive(request.user, id, body);
   }
@@ -2477,14 +2511,18 @@ export class DataController {
   }
 
   @Get('finance/agent-bank-accounts')
-  @RequirePermission(['master-data:agents:bank-view', 'finance:paid-payment:bank-view'])
+  @RequirePermission(['master-data:agents:read', 'finance:paid-payment:bank-view'])
   async agentBankAccounts(@Req() request: { user: Principal }, @Query() query: { agentName?: string; agentId?: string; includeDisabled?: string | boolean }) {
     return this.repository.getAgentBankAccounts(request.user, query);
   }
 
   @Post('finance/agent-bank-accounts')
-  @RequirePermission(['master-data:agents:bank-manage', 'finance:pending-payment:bank-manage'])
+  @RequireAuth()
   async upsertAgentBankAccount(@Req() request: { user: Principal }, @Body() body: AgentBankAccountInput) {
+    await this.ensureAnyPermission(request.user, [
+      body.id ? 'master-data:agents:update' : 'master-data:agents:create',
+      'finance:pending-payment:bank-manage'
+    ]);
     return this.repository.upsertAgentBankAccount(request.user, body);
   }
 

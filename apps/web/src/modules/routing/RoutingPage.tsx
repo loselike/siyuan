@@ -1,11 +1,13 @@
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Select, Space, Statistic, Table, Tabs, Tag, Typography } from 'antd';
+import { useEffect, useMemo, useState } from 'react';
+import { Alert, App as AntdApp, AutoComplete, Button, Card, Checkbox, Col, Flex, Form, Input, InputNumber, Modal, Popconfirm, Row, Segmented, Select, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { FormInstance } from 'antd/es/form';
 import type { ColumnsType } from 'antd/es/table';
 import { Activity, Boxes, ClipboardCheck, FileInput, RotateCcw, Sparkles } from 'lucide-react';
 import {
   createFulfillmentAdvice,
+  type FinanceBillingUnit,
+  type FinanceCatalogItemSummary,
   shipmentStatusLabels,
   type BusinessCostAuditSummary,
   type PayableAuditSummary,
@@ -16,9 +18,17 @@ import {
 } from '@siyuan/shared';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { createPendingRoutingColumns } from '../shared/pendingRoutingColumns';
-import { countryOptions, filterLocationOption } from '../finance/entry/countryStateOptions';
+import { getGlobalFieldMaskVisibility } from '../shared/globalFieldMask';
 import { downloadCsv } from '../finance/exportCsv';
-import { AppActionGroup, AppPageHeader, ManagedTable, MetricCard, RoutingStatusTag, StatusTag, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { createRoutingFeeNameOptions } from './routingFeeCatalog';
+import { getRoutingAgentShortName } from './routingAgentDisplay';
+import { formatRoutingFeeStatus } from './routingFeeStatus';
+import { selectRecentRoutedShipmentHistory, selectRoutedShipmentHistory } from './routingHistory';
+import { getRoutingPeriodSnapshot, type RoutingDataPeriod } from './routingPeriod';
+import { emptyRoutedShipmentFilters, filterRoutedShipments, type RoutedShipmentFilters } from './routingRoutedFilters';
+import { AppActionGroup, AppDateRangePicker, AppPageHeader, ManagedTable, MetricCard, RoutingStatusTag, StatusTag, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
+import { formatBeijingDateTime, getBeijingDayStartTimestamp } from '../shared/format';
+import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import type { PermissionKey } from '../../apiClient';
 
 const { Text } = Typography;
@@ -43,11 +53,6 @@ export interface RoutingAssignmentFormValues {
   channelId?: string;
   manualChannelName?: string;
   agentChannelName?: string;
-  chargeWeightKg?: number;
-  unitPrice?: number;
-  otherFee?: number;
-  otherFeeRemark?: string;
-  currency?: string;
   shippingMarkRequired?: boolean;
   warehouseOutboundRemark?: string;
   saveAgentChannelToMasterData?: boolean;
@@ -77,6 +82,33 @@ type MarketStatusGroup = {
   icon: ReactNode;
   actions: MarketStatusAction[];
 };
+type PendingRoutingFilters = {
+  salesperson: string;
+  customerCode: string;
+  systemOrderNo: string;
+};
+
+const emptyPendingRoutingFilters: PendingRoutingFilters = {
+  salesperson: '',
+  customerCode: '',
+  systemOrderNo: ''
+};
+
+function matchesRoutingFilter(value: string | undefined, keyword: string) {
+  const normalizedKeyword = keyword.trim().toLocaleLowerCase();
+  return !normalizedKeyword || (value ?? '').toLocaleLowerCase().includes(normalizedKeyword);
+}
+
+export function filterPendingRoutingShipments(shipments: Shipment[], filters: PendingRoutingFilters) {
+  return shipments.filter((shipment) => (
+    matchesRoutingFilter(shipment.salesperson, filters.salesperson)
+    && matchesRoutingFilter(shipment.customerCode, filters.customerCode)
+    && (
+      matchesRoutingFilter(resolveShipmentOutboundOrderNo(shipment), filters.systemOrderNo)
+      || matchesRoutingFilter(shipment.systemOrderNo, filters.systemOrderNo)
+    )
+  ));
+}
 type PendingRoutingCostRow = {
   id: string;
   shipmentId: string;
@@ -86,10 +118,25 @@ type PendingRoutingCostRow = {
   rmbAmount?: number;
   chargeWeightKg?: number;
   unitPrice?: number;
+  billingUnit?: FinanceBillingUnit;
+  billingQuantity?: number;
+  reconciliationStatus?: string;
   marketEditable?: boolean;
   customerCode?: string;
   systemOrderNo?: string;
   transferNo?: string;
+};
+
+type PendingRoutingCostEditor = {
+  type: 'BUSINESS_COST' | 'PAYABLE';
+  id?: string;
+  name: string;
+  currency: string;
+  billingUnit?: FinanceBillingUnit;
+  billingQuantity?: number;
+  chargeWeightKg?: number;
+  unitPrice?: number;
+  amount?: number;
 };
 
 function inferRoutingMode(shipment: Shipment) {
@@ -125,9 +172,12 @@ export function RoutingPage({
   assignmentShipment,
   assignmentForm,
   masterData,
+  feeNameCatalogItems,
   businessCostAudits,
+  payableAudits,
   assignmentFinanceDetail,
   permissions,
+  isAdministrator,
   onOpenAssignment,
   onApproveRouting,
   onCancelAssignment,
@@ -149,12 +199,13 @@ export function RoutingPage({
   assignmentShipment: Shipment | null;
   assignmentForm: FormInstance<RoutingAssignmentFormValues>;
   masterData: MasterDataSnapshot;
+  feeNameCatalogItems?: FinanceCatalogItemSummary[];
   businessCostAudits?: BusinessCostAuditSummary[];
   payableAudits?: PayableAuditSummary[];
   assignmentFinanceDetail?: ShipmentFinanceDetailSummary;
   permissions: PermissionKey[];
   isAdministrator?: boolean;
-  onOpenAssignment: (shipment: Shipment, mode?: 'assign' | 'update') => void;
+  onOpenAssignment: (shipment: Shipment, mode?: 'assign' | 'update' | 'business-cost' | 'payable-cost') => void;
   onApproveRouting: (shipment: Shipment) => Promise<void>;
   onCancelAssignment: () => void;
   onConfirmAssignment: (approve: boolean) => Promise<boolean>;
@@ -163,7 +214,7 @@ export function RoutingPage({
   onViewRoutingLog: (shipment: Shipment) => void;
   onViewPendingRoutingLog: (shipment: Shipment) => void;
   onReturnReview: (shipment: Shipment) => Promise<void> | void;
-  onSavePendingRoutingCost: (shipment: Shipment, type: 'BUSINESS_COST' | 'PAYABLE', feeId: string | undefined, input: { name: string; currency: string; chargeWeightKg?: number; unitPrice?: number; amount: number }) => Promise<void>;
+  onSavePendingRoutingCost: (shipment: Shipment, type: 'BUSINESS_COST' | 'PAYABLE', feeId: string | undefined, input: { name: string; currency: string; billingUnit?: FinanceBillingUnit; billingQuantity?: number; chargeWeightKg?: number; unitPrice?: number; amount: number }) => Promise<void>;
   onDeletePendingRoutingCost: (shipment: Shipment, feeId: string) => Promise<void>;
   onLoadRoutingReportExportRows: () => Promise<Shipment[]>;
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
@@ -172,27 +223,37 @@ export function RoutingPage({
   const { message: messageApi } = AntdApp.useApp();
   const permissionSet = useMemo(() => new Set(permissions), [permissions]);
   const can = (permission: PermissionKey) => permissionSet.has(permission);
-  const hasGlobalMask = (mask: 'agent-short-name' | 'agent-company-name' | 'agent-channel' | 'agent-data' | 'payable-cost') =>
-    can(`system:global-mask:${mask}` as PermissionKey);
+  const fieldVisibility = useMemo(
+    () => getGlobalFieldMaskVisibility(isAdministrator ? 'ADMIN' : undefined, permissions),
+    [isAdministrator, permissions]
+  );
   const canViewDashboard = can('market:dashboard:view');
   const canViewPending = can('market:pending-routing:view');
   const canViewRouted = can('market:routed:view');
   const canViewWeekly = can('market:routing-report:view');
-  const canAssign = can('market:pending-routing:route');
-  const canSaveDraft = canAssign || can('market:pending-routing:edit');
-  const canCreateAgentChannel = can('master-data:agent-channels:create');
-  const canConfirm = can('market:pending-routing:approve');
-  const canUpdatePending = can('market:pending-routing:edit');
+  const routeRequiredMaskActive = !fieldVisibility.showAgentData
+    || !fieldVisibility.showAgentShortName
+    || !fieldVisibility.showAgentCompanyName
+    || !fieldVisibility.showAgentChannel
+    || !fieldVisibility.showPayableCost
+    || !fieldVisibility.showPayableStatus;
+  const canAssign = can('market:pending-routing:route') && !routeRequiredMaskActive;
+  const canUpdatePending = can('market:pending-routing:edit') && !routeRequiredMaskActive;
+  const canSaveDraft = canAssign || canUpdatePending;
+  const canConfirm = can('market:pending-routing:approve') && !routeRequiredMaskActive;
   const canUpdateRouted = can('market:routed:edit');
   const canReroute = can('market:routed:reroute');
   const canViewPendingLog = can('market:pending-routing:operation-log:view');
   const canViewRoutedLog = can('market:routed:routing-log:view');
   const canReturnReview = can('market:pending-routing:return-review');
   const canViewBusinessCost = can('market:pending-routing:business-cost:view');
-  const canViewAgentChannel = !hasGlobalMask('agent-data')
-    && !hasGlobalMask('agent-short-name')
-    && !hasGlobalMask('agent-company-name')
-    && !hasGlobalMask('agent-channel');
+  const canViewPayableCost = can('market:pending-routing:payable-cost:view') && fieldVisibility.showPayableCost;
+  const canViewAgentChannel = fieldVisibility.showAgentData
+    && fieldVisibility.showAgentShortName
+    && fieldVisibility.showAgentCompanyName
+    && fieldVisibility.showAgentChannel;
+  const canViewRouteCost = (canAssign || canUpdatePending || canViewRouted) && fieldVisibility.showPayableCost;
+  const canCreateAgentChannel = canViewAgentChannel && can('master-data:agent-channels:create');
   const routingSubItems = useMemo<ModuleSubNavItem[]>(
     () => [
       canViewDashboard ? { key: 'market-dashboard', label: '市场看板', description: '市场作业总览' } : null,
@@ -203,18 +264,23 @@ export function RoutingPage({
     [canViewDashboard, canViewPending, canViewRouted, canViewWeekly]
   );
   const [activeSection, setActiveSection] = useState(() => routingSubItems[0]?.key ?? 'market-dashboard');
+  const [businessClock, setBusinessClock] = useState(() => Date.now());
+  const [routingDataPeriod, setRoutingDataPeriod] = useState<RoutingDataPeriod>('week');
   const [rerouteShipment, setRerouteShipment] = useState<Shipment | null>(null);
   const [routingReportExporting, setRoutingReportExporting] = useState(false);
-  const [assignmentActiveTab, setAssignmentActiveTab] = useState('basic');
-  const requestedAssignmentTabRef = useRef<'basic' | 'business-cost'>('basic');
   const [assignmentSubmitting, setAssignmentSubmitting] = useState(false);
   const [rerouteForm] = Form.useForm<{ reason?: string }>();
-  const [costEditor, setCostEditor] = useState<{ id?: string } | null>(null);
-  const [costForm] = Form.useForm<{ name?: string; currency?: string; chargeWeightKg?: number; unitPrice?: number; amount?: number }>();
+  const [costEditor, setCostEditor] = useState<PendingRoutingCostEditor | null>(null);
+  const [costSaving, setCostSaving] = useState(false);
+  const [pendingFilterDraft, setPendingFilterDraft] = useState<PendingRoutingFilters>(emptyPendingRoutingFilters);
+  const [pendingFilters, setPendingFilters] = useState<PendingRoutingFilters>(emptyPendingRoutingFilters);
+  const [pendingPagination, setPendingPagination] = useState({ current: 1, pageSize: 10 });
+  const [routedFilterDraft, setRoutedFilterDraft] = useState<RoutedShipmentFilters>(emptyRoutedShipmentFilters);
+  const [routedFilters, setRoutedFilters] = useState<RoutedShipmentFilters>(emptyRoutedShipmentFilters);
+  const [routedPagination, setRoutedPagination] = useState({ current: 1, pageSize: 10 });
+  const [routedView, setRoutedView] = useState<'recent' | 'history'>('recent');
   const watchedAgentId = Form.useWatch('agentId', assignmentForm);
-  const editingCostWeight = Form.useWatch('chargeWeightKg', costForm);
-  const editingCostUnitPrice = Form.useWatch('unitPrice', costForm);
-  const editingCostAmount = Form.useWatch('amount', costForm);
+  const feeNameOptions = useMemo(() => createRoutingFeeNameOptions(feeNameCatalogItems ?? []), [feeNameCatalogItems]);
 
   useEffect(() => {
     if (!routingSubItems.some((item) => item.key === activeSection)) {
@@ -223,27 +289,30 @@ export function RoutingPage({
   }, [activeSection, routingSubItems]);
 
   useEffect(() => {
-    if (assignmentShipment) {
-      setAssignmentActiveTab(requestedAssignmentTabRef.current);
-      requestedAssignmentTabRef.current = 'basic';
-    }
-  }, [assignmentShipment?.id]);
+    const timer = window.setInterval(() => setBusinessClock(Date.now()), 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
-  function openAssignment(shipment: Shipment, mode: 'assign' | 'update' | 'business-cost') {
-    requestedAssignmentTabRef.current = mode === 'business-cost' ? 'business-cost' : 'basic';
-    onOpenAssignment(shipment, mode === 'business-cost' ? 'update' : mode);
+  function openAssignment(shipment: Shipment, mode: 'assign' | 'update' | 'business-cost' | 'payable-cost') {
+    if (mode !== 'business-cost' && mode !== 'payable-cost' && !canViewAgentChannel) {
+      messageApi.warning('代理字段已按权限屏蔽，当前账号不能进行排货分配。');
+      return;
+    }
+    onOpenAssignment(shipment, mode);
   }
 
   const submitAssignment = async (approve: boolean) => {
+    if (costEditor) {
+      messageApi.warning('请先保存或取消正在编辑的费用明细。');
+      return false;
+    }
     try {
       const values = await assignmentForm.validateFields();
       if (!values.agentId) {
-        setAssignmentActiveTab('basic');
         messageApi.warning('请先在基本信息选择代理。');
         return false;
       }
     } catch {
-      setAssignmentActiveTab('basic');
       messageApi.warning('请先在基本信息补齐国家、代理和代理渠道。');
       return false;
     }
@@ -257,27 +326,65 @@ export function RoutingPage({
   };
 
   const pendingShipments = useMemo(() => shipments.filter((shipment) => shipment.status === 'WAITING_SORT'), [shipments]);
-  const routedShipments = useMemo(
-    () => shipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH'
-      || (canReroute && ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status))),
-    [canReroute, shipments]
+  const filteredPendingShipments = useMemo(
+    () => filterPendingRoutingShipments(pendingShipments, pendingFilters),
+    [pendingFilters, pendingShipments]
+  );
+  const applyPendingRoutingFilters = () => {
+    setPendingFilters({
+      salesperson: pendingFilterDraft.salesperson.trim(),
+      customerCode: pendingFilterDraft.customerCode.trim(),
+      systemOrderNo: pendingFilterDraft.systemOrderNo.trim()
+    });
+    setPendingPagination((current) => ({ ...current, current: 1 }));
+  };
+  const resetPendingRoutingFilters = () => {
+    setPendingFilterDraft(emptyPendingRoutingFilters);
+    setPendingFilters(emptyPendingRoutingFilters);
+    setPendingPagination((current) => ({ ...current, current: 1 }));
+  };
+  const routedShipments = useMemo(() => selectRoutedShipmentHistory(shipments), [shipments]);
+  const recentRoutedShipments = useMemo(
+    () => selectRecentRoutedShipmentHistory(shipments, businessClock),
+    [businessClock, shipments]
+  );
+  const scopedRoutedShipments = routedView === 'history' ? routedShipments : recentRoutedShipments;
+  const filteredRoutedShipments = useMemo(
+    () => filterRoutedShipments(scopedRoutedShipments, masterData.agents, routedFilters),
+    [masterData.agents, routedFilters, scopedRoutedShipments]
+  );
+  const routedAgentShortNameOptions = useMemo(
+    () => [...new Set(scopedRoutedShipments
+      .map((shipment) => getRoutingAgentShortName(shipment, masterData.agents))
+      .filter((shortName) => shortName !== '-'))]
+      .sort((left, right) => left.localeCompare(right, 'zh-CN'))
+      .map((shortName) => ({ label: shortName, value: shortName })),
+    [masterData.agents, scopedRoutedShipments]
+  );
+  const applyRoutedFilters = () => {
+    setRoutedFilters({ ...routedFilterDraft, agentShortName: routedFilterDraft.agentShortName.trim() });
+    setRoutedPagination((current) => ({ ...current, current: 1 }));
+  };
+  const resetRoutedFilters = () => {
+    setRoutedFilterDraft(emptyRoutedShipmentFilters);
+    setRoutedFilters(emptyRoutedShipmentFilters);
+    setRoutedPagination((current) => ({ ...current, current: 1 }));
+  };
+  const waitingDispatchShipments = useMemo(
+    () => routedShipments.filter((shipment) => shipment.status === 'WAITING_DISPATCH'),
+    [routedShipments]
   );
   const returnableShipments = useMemo(() => shipments.filter((shipment) => ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status)), [shipments]);
-  const weekStart = useMemo(() => {
-    const date = new Date();
-    const day = date.getDay() || 7;
-    date.setHours(0, 0, 0, 0);
-    date.setDate(date.getDate() - day + 1);
-    return date.getTime();
-  }, []);
-  const dayStart = useMemo(() => {
-    const date = new Date();
-    date.setHours(0, 0, 0, 0);
-    return date.getTime();
-  }, []);
-  const weeklyRoutedShipments = useMemo(
-    () => shipments.filter((shipment) => shipment.routedAt && new Date(shipment.routedAt).getTime() >= weekStart),
-    [shipments, weekStart]
+  const dayStart = useMemo(() => getBeijingDayStartTimestamp(businessClock), [businessClock]);
+  const routingPeriodLabel = routingDataPeriod === 'week' ? '本周' : '本月';
+  const periodSnapshot = useMemo(
+    () => getRoutingPeriodSnapshot(shipments, routingDataPeriod, businessClock),
+    [businessClock, routingDataPeriod, shipments]
+  );
+  const periodRoutedShipments = periodSnapshot.routedShipments;
+  const periodDetailShipments = useMemo(
+    () => [...periodRoutedShipments, ...returnableShipments.filter((item) => !periodRoutedShipments.some((row) => row.id === item.id))],
+    [periodRoutedShipments, returnableShipments]
   );
   const todayRoutedShipments = useMemo(
     () => shipments.filter((shipment) => shipment.routedAt && new Date(shipment.routedAt).getTime() >= dayStart),
@@ -287,30 +394,18 @@ export function RoutingPage({
     () => shipments.filter((shipment) => shipment.outboundAt && new Date(shipment.outboundAt).getTime() >= dayStart),
     [shipments, dayStart]
   );
-  const weeklyOutboundShipments = useMemo(
-    () => shipments.filter((shipment) => shipment.outboundAt && new Date(shipment.outboundAt).getTime() >= weekStart),
-    [shipments, weekStart]
+  const periodOutboundShipments = periodSnapshot.outboundShipments;
+  const reroutedInPeriod = periodSnapshot.reroutedShipments;
+  const periodAgentStats = useMemo(
+    () => summarizeTop(periodRoutedShipments.map((shipment) => shipment.agentName || '未分配')),
+    [periodRoutedShipments]
   );
-  const reroutedThisWeek = useMemo(
-    () => shipments.filter((shipment) => shipment.routeReturnedAt && new Date(shipment.routeReturnedAt).getTime() >= weekStart),
-    [shipments, weekStart]
+  const periodChannelModeStats = useMemo(
+    () => summarizeTop(periodRoutedShipments.map(inferRoutingMode), 3),
+    [periodRoutedShipments]
   );
-  const weeklyAgentStats = useMemo(
-    () => summarizeTop(weeklyRoutedShipments.map((shipment) => shipment.agentName || '未分配')),
-    [weeklyRoutedShipments]
-  );
-  const weeklyChannelModeStats = useMemo(
-    () => summarizeTop(weeklyRoutedShipments.map(inferRoutingMode), 3),
-    [weeklyRoutedShipments]
-  );
-  const weeklySensitiveCount = useMemo(
-    () => weeklyRoutedShipments.filter((shipment) => shipment.sensitive === true).length,
-    [weeklyRoutedShipments]
-  );
-  const weeklyDeclaredCount = useMemo(
-    () => weeklyRoutedShipments.filter((shipment) => shipment.declarationRequired === true).length,
-    [weeklyRoutedShipments]
-  );
+  const periodSensitiveCount = periodSnapshot.sensitiveCount;
+  const periodDeclaredCount = periodSnapshot.declaredCount;
 
   async function exportRoutingReport() {
     setRoutingReportExporting(true);
@@ -361,7 +456,7 @@ export function RoutingPage({
         {
           label: '待排货',
           value: pendingShipments.length,
-          helper: '等待市场分配代理渠道',
+          helper: canViewAgentChannel ? '等待市场分配代理渠道' : '等待市场处理',
           tone: pendingShipments.length > 0 ? 'amber' : 'gray',
           sectionKey: 'pending-routing'
         }
@@ -369,14 +464,14 @@ export function RoutingPage({
     },
     {
       title: '流转中',
-      description: '已完成排货，等待仓库出库',
-      tone: routedShipments.length > 0 ? 'blue' : 'gray',
+      description: '排货历史与当前待出库进度',
+      tone: waitingDispatchShipments.length > 0 ? 'blue' : 'gray',
       icon: <Activity size={18} />,
       actions: [
         {
           label: '已排货/待出库',
           value: routedShipments.length,
-          helper: '已进入仓库出库前置阶段',
+          helper: `排货历史，其中 ${waitingDispatchShipments.length} 票待出库`,
           tone: routedShipments.length > 0 ? 'blue' : 'gray',
           sectionKey: 'routed'
         },
@@ -391,8 +486,8 @@ export function RoutingPage({
     },
     {
       title: '今日结果',
-      description: '仓库出库与本周完成情况',
-      tone: todayOutboundShipments.length > 0 || weeklyOutboundShipments.length > 0 ? 'green' : 'gray',
+      description: `仓库出库与${routingPeriodLabel}完成情况`,
+      tone: todayOutboundShipments.length > 0 || periodOutboundShipments.length > 0 ? 'green' : 'gray',
       icon: <ClipboardCheck size={18} />,
       actions: [
         {
@@ -403,55 +498,72 @@ export function RoutingPage({
           sectionKey: 'weekly-routing'
         },
         {
-          label: '本周已出库',
-          value: weeklyOutboundShipments.length,
-          helper: '本周已完成出库',
-          tone: weeklyOutboundShipments.length > 0 ? 'green' : 'gray',
+          label: `${routingPeriodLabel}已出库`,
+          value: periodOutboundShipments.length,
+          helper: `${routingPeriodLabel}已完成出库`,
+          tone: periodOutboundShipments.length > 0 ? 'green' : 'gray',
           sectionKey: 'weekly-routing'
         }
       ]
     },
     {
-      title: '本周风险',
+      title: `${routingPeriodLabel}风险`,
       description: '异常与特殊处理提醒',
-      tone: reroutedThisWeek.length > 0 ? 'red' : (weeklySensitiveCount > 0 || weeklyDeclaredCount > 0 ? 'indigo' : 'gray'),
+      tone: reroutedInPeriod.length > 0 ? 'red' : (periodSensitiveCount > 0 || periodDeclaredCount > 0 ? 'indigo' : 'gray'),
       icon: <RotateCcw size={18} />,
       actions: [
         {
           label: '退回重排',
-          value: reroutedThisWeek.length,
-          helper: '本周退回需复核',
-          tone: reroutedThisWeek.length > 0 ? 'red' : 'gray',
+          value: reroutedInPeriod.length,
+          helper: `${routingPeriodLabel}退回需复核`,
+          tone: reroutedInPeriod.length > 0 ? 'red' : 'gray',
           sectionKey: 'weekly-routing'
         },
         {
           label: '敏感货物',
-          value: weeklySensitiveCount,
+          value: periodSensitiveCount,
           helper: '带电/带磁/敏感',
-          tone: weeklySensitiveCount > 0 ? 'indigo' : 'gray',
+          tone: periodSensitiveCount > 0 ? 'indigo' : 'gray',
           sectionKey: 'weekly-routing'
         },
         {
           label: '报关货物',
-          value: weeklyDeclaredCount,
-          helper: '本周需要报关',
-          tone: weeklyDeclaredCount > 0 ? 'indigo' : 'gray',
+          value: periodDeclaredCount,
+          helper: `${routingPeriodLabel}需要报关`,
+          tone: periodDeclaredCount > 0 ? 'indigo' : 'gray',
           sectionKey: 'weekly-routing'
         }
       ]
     }
   ], [
+    canViewAgentChannel,
     pendingShipments.length,
-    reroutedThisWeek.length,
+    periodDeclaredCount,
+    periodOutboundShipments.length,
+    periodSensitiveCount,
+    reroutedInPeriod.length,
     routedShipments.length,
+    routingPeriodLabel,
     todayOutboundShipments.length,
     todayRoutedShipments.length,
-    weeklyDeclaredCount,
-    weeklyOutboundShipments.length,
-    weeklySensitiveCount
+    waitingDispatchShipments.length
   ]);
 
+  const renderRoutingPeriodSelector = (ariaLabel: string) => (
+    <Segmented<RoutingDataPeriod>
+      aria-label={ariaLabel}
+      size="small"
+      options={[
+        { label: '本周', value: 'week' },
+        { label: '本月', value: 'month' }
+      ]}
+      value={routingDataPeriod}
+      onChange={setRoutingDataPeriod}
+    />
+  );
+
   const formatAmount = (amount?: number, currency = 'RMB') => typeof amount === 'number' ? `${amount.toFixed(2)} ${currency}` : '-';
+  const formatWeight = (weight?: number) => typeof weight === 'number' ? `${weight.toFixed(3)} KG` : '-';
   const sameShipmentFees = (shipment: Shipment) => (businessCostAudits ?? []).filter((fee) => fee.shipmentId === shipment.id || fee.systemOrderNo === shipment.systemOrderNo);
   const renderFeeRows = (rows: BusinessCostAuditSummary[]) => rows.length ? (
     <Space direction="vertical" size={0}>
@@ -488,6 +600,12 @@ export function RoutingPage({
       { title: '出货单号', dataIndex: 'systemOrderNo', width: 180 },
       { title: '货物数据', width: 140, render: (_, record) => `${record.packageCount} 件 / ${record.receivableWeightKg.toFixed(2)} kg` },
       { title: '目的地', dataIndex: 'destinationCountry', width: 90 },
+      ...(canViewRouteCost ? [
+        { title: '代理计费重', width: 104, render: (_: unknown, record: Shipment) => record.routeChargeWeightKg === undefined ? '-' : `${record.routeChargeWeightKg.toFixed(3)} KG` },
+        { title: '代理单价', width: 96, render: (_: unknown, record: Shipment) => formatAmount(record.routeUnitPrice, record.routeCurrency) },
+        { title: '代理其他费用', width: 116, render: (_: unknown, record: Shipment) => formatAmount(record.routeOtherFee, record.routeCurrency) },
+        { title: '代理总成本', width: 112, render: (_: unknown, record: Shipment) => formatAmount(record.routeCostTotal, record.routeCurrency) }
+      ] : []),
       ...(canViewAgentChannel ? [
         { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '待分配' },
         { title: '代理渠道', dataIndex: 'routeAgentChannelName', width: 150, render: (value: string | undefined, record: Shipment) => value || record.channelName || '待分配' }
@@ -531,7 +649,7 @@ export function RoutingPage({
               {canViewBusinessCost ? (
                 <Button size="small" onClick={() => openAssignment(record, 'business-cost')}>业务成本</Button>
               ) : null}
-              {canRerouteRecord && canReroute ? (
+              {canRerouteRecord && canReroute && canViewAgentChannel ? (
                 <Button size="small" icon={<RotateCcw size={14} />} onClick={() => setRerouteShipment(record)}>
                   退回重排
                 </Button>
@@ -541,7 +659,7 @@ export function RoutingPage({
         }
       }
     ],
-    [canAssign, canReroute, canUpdateRouted, canViewAgentChannel, canViewBusinessCost, canViewRoutedLog, onEditShipment, onViewRoutingLog]
+    [canAssign, canReroute, canUpdateRouted, canViewAgentChannel, canViewBusinessCost, canViewRouteCost, canViewRoutedLog, onEditShipment, onViewRoutingLog]
   );
 
   const weeklyColumns: ColumnsType<Shipment> = useMemo(() => {
@@ -553,7 +671,7 @@ export function RoutingPage({
         title: '排货操作',
         width: 112,
         fixed: 'right',
-        render: (_: unknown, record: Shipment) => ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(record.status) ? (
+        render: (_: unknown, record: Shipment) => canViewAgentChannel && ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(record.status) ? (
           <Button size="small" icon={<RotateCcw size={14} />} onClick={() => setRerouteShipment(record)}>
             退回重排
           </Button>
@@ -568,14 +686,14 @@ export function RoutingPage({
       onRoute: canAssign ? (shipment) => openAssignment(shipment, 'assign') : undefined,
       onApprove: canConfirm ? (shipment) => void onApproveRouting(shipment) : undefined,
       onModify: canUpdatePending ? (shipment) => openAssignment(shipment, 'update') : undefined,
-      onViewFees: canViewBusinessCost ? (shipment) => openAssignment(shipment, 'business-cost') : undefined,
       onViewLog: canViewPendingLog ? onViewPendingRoutingLog : undefined,
       onReturnReview: canReturnReview ? onReturnReview : undefined,
       canViewBusinessCost,
-      canViewPayableCost: false,
-      canViewAgentChannel
+      canViewPayableCost,
+      canViewAgentChannel,
+      canViewRouteCost
     }),
-    [businessCostAudits, canAssign, canConfirm, canReturnReview, canUpdatePending, canViewAgentChannel, canViewBusinessCost, canViewPendingLog, onApproveRouting, onReturnReview, onViewPendingRoutingLog]
+    [businessCostAudits, canAssign, canConfirm, canReturnReview, canUpdatePending, canViewAgentChannel, canViewBusinessCost, canViewPayableCost, canViewPendingLog, canViewRouteCost, onApproveRouting, onReturnReview, onViewPendingRoutingLog]
   );
 
   const assignmentBusinessCosts = useMemo(
@@ -585,58 +703,202 @@ export function RoutingPage({
       : [],
     [assignmentShipment, assignmentFinanceDetail, businessCostAudits]
   );
-  function openCostEditor(row?: { id: string; name: string; currency?: string; chargeWeightKg?: number; unitPrice?: number; amount?: number }) {
-    costForm.setFieldsValue({
-      name: row?.name ?? '', currency: row?.currency ?? 'RMB', chargeWeightKg: row?.chargeWeightKg,
-      unitPrice: row?.unitPrice, amount: row?.amount
+  const assignmentPayables = useMemo(
+    () => assignmentShipment
+      ? (assignmentFinanceDetail?.payables ?? (payableAudits ?? []).filter((fee) => fee.shipmentId === assignmentShipment.id || fee.systemOrderNo === assignmentShipment.systemOrderNo))
+        .map((fee) => ({ ...fee, customerCode: assignmentShipment.customerCode, systemOrderNo: assignmentShipment.systemOrderNo, transferNo: assignmentShipment.transferNo }))
+      : [],
+    [assignmentShipment, assignmentFinanceDetail, payableAudits]
+  );
+  function openCostEditor(
+    type: 'BUSINESS_COST' | 'PAYABLE',
+    row?: { id: string; name: string; currency?: string; billingUnit?: FinanceBillingUnit; billingQuantity?: number; chargeWeightKg?: number; unitPrice?: number; amount?: number },
+    billingUnitOverride?: FinanceBillingUnit
+  ) {
+    const billingUnit = billingUnitOverride ?? row?.billingUnit ?? 'KG';
+    const billingQuantity = billingUnitOverride !== undefined && billingUnitOverride !== (row?.billingUnit ?? 'KG')
+      ? billingUnitOverride === 'CBM' ? assignmentShipment?.volumeCbm : row?.chargeWeightKg
+      : row?.billingQuantity ?? row?.chargeWeightKg;
+    setCostEditor({
+      type,
+      id: row?.id,
+      name: row?.name ?? '',
+      currency: row?.currency ?? 'RMB',
+      billingUnit,
+      billingQuantity,
+      chargeWeightKg: billingUnit === 'KG' ? billingQuantity : undefined,
+      unitPrice: row?.unitPrice,
+      amount: calculateCostAmount(billingQuantity, row?.unitPrice, row?.amount)
     });
-    setCostEditor({ id: row?.id });
   }
 
-  function renderCostTab(rows: PendingRoutingCostRow[]) {
+  function updateCostEditor(values: Partial<PendingRoutingCostEditor>, calculateAmount = false) {
+    setCostEditor((current) => {
+      if (!current) return current;
+      const next = { ...current, ...values };
+      const quantity = next.billingQuantity;
+      if (calculateAmount) next.amount = calculateCostAmount(quantity, next.unitPrice);
+      return next;
+    });
+  }
+
+  function getCostEditorAmount(editor: PendingRoutingCostEditor) {
+    const quantity = editor.billingQuantity;
+    return calculateCostAmount(quantity, editor.unitPrice, editor.amount);
+  }
+
+  async function saveCostEditor() {
+    if (!assignmentShipment || !costEditor) return;
+    if (!costEditor.name.trim()) {
+      messageApi.warning('请选择费用名称。');
+      return;
+    }
+    if (!costEditor.currency) {
+      messageApi.warning('请选择币种。');
+      return;
+    }
+    if (costEditor.billingQuantity === undefined) {
+      messageApi.warning(`请填写${costEditor.billingUnit === 'CBM' ? 'CBM 体积' : 'KG 计费重'}。`);
+      return;
+    }
+    if (!costEditor.id && costEditor.unitPrice === undefined) {
+      messageApi.warning('请填写单价。');
+      return;
+    }
+    if (getCostEditorAmount(costEditor) === undefined) {
+      messageApi.warning('请填写总金额。');
+      return;
+    }
+    setCostSaving(true);
+    try {
+      await onSavePendingRoutingCost(assignmentShipment, costEditor.type, costEditor.id, {
+        name: costEditor.name.trim(),
+        currency: costEditor.currency,
+        billingUnit: costEditor.billingUnit ?? 'KG',
+        billingQuantity: costEditor.billingQuantity,
+        chargeWeightKg: (costEditor.billingUnit ?? 'KG') === 'KG' ? costEditor.billingQuantity : undefined,
+        unitPrice: costEditor.unitPrice,
+        amount: getCostEditorAmount(costEditor) ?? 0
+      });
+      setCostEditor(null);
+    } catch (error) {
+      messageApi.error(error instanceof Error ? error.message : '费用保存失败，请稍后重试。');
+    } finally {
+      setCostSaving(false);
+    }
+  }
+
+  function renderCostTab(type: 'BUSINESS_COST' | 'PAYABLE', rows: PendingRoutingCostRow[]) {
     const total = rows.reduce((sum, row) => sum + Number(row.rmbAmount ?? row.amount ?? 0), 0);
-    const canCreateCost = can('market:pending-routing:business-cost:create');
-    const canUpdateCost = can('market:pending-routing:business-cost:edit');
-    const canDeleteCost = can('market:pending-routing:business-cost:delete');
-    const canOperateCost = canUpdateCost || canDeleteCost;
+    const newFeeNameOptions = type === 'PAYABLE'
+      ? feeNameOptions.filter((item) => item.value !== '代理成本')
+      : feeNameOptions;
+    const amountColumnIndex = type === 'BUSINESS_COST' ? 7 : 8;
+    const canManageCost = type === 'BUSINESS_COST'
+      ? canViewBusinessCost && (can('market:pending-routing:business-cost:create') || can('market:pending-routing:business-cost:edit') || can('market:pending-routing:business-cost:delete'))
+      : canViewPayableCost && (can('market:pending-routing:payable-cost:create') || can('market:pending-routing:payable-cost:edit') || can('market:pending-routing:payable-cost:delete'));
+    const canCreateCost = canManageCost && (type === 'BUSINESS_COST' ? can('market:pending-routing:business-cost:create') : can('market:pending-routing:payable-cost:create'));
+    const canUpdateCost = canManageCost && (type === 'BUSINESS_COST' ? can('market:pending-routing:business-cost:edit') : can('market:pending-routing:payable-cost:edit'));
+    const canDeleteCost = canManageCost && (type === 'BUSINESS_COST' ? can('market:pending-routing:business-cost:delete') : can('market:pending-routing:payable-cost:delete'));
+    // Create-only roles still need the operation column while the temporary
+    // row is being edited so they can save or cancel the new fee.
+    const canOperateCost = canCreateCost || canUpdateCost || canDeleteCost;
+    const editingThisType = costEditor?.type === type;
+    const editableRows: PendingRoutingCostRow[] = editingThisType && !costEditor.id && assignmentShipment
+      ? [...rows, {
+          id: '__new_cost__', shipmentId: assignmentShipment.id, name: '', amount: 0,
+          currency: costEditor.currency, customerCode: assignmentShipment.customerCode,
+          systemOrderNo: assignmentShipment.systemOrderNo, transferNo: assignmentShipment.transferNo
+        }]
+      : rows;
+    const isEditingRow = (row: PendingRoutingCostRow) => editingThisType && (costEditor.id ? row.id === costEditor.id : row.id === '__new_cost__');
     return (
       <Space direction="vertical" size={12} className="full-width">
         <Flex justify="space-between" align="center">
-          <Text type="secondary">按运单归并；金额优先按计费重 × 单价自动计算，合计按 RMB 口径展示。</Text>
-          {canCreateCost ? <Button size="small" onClick={() => openCostEditor()}>新增费用</Button> : null}
+          <Text type="secondary">按运单归并；{type === 'BUSINESS_COST' ? '业务成本' : '应付成本'}按“计费数量 × 单价”计算，可选择 KG 或 CBM，合计按 RMB 口径展示。</Text>
+          {canCreateCost ? <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type)}>新增费用</Button> : null}
         </Flex>
-        <Table
+        <ManagedTable
+          className="routing-assignment-cost-table"
           size="small"
           rowKey="id"
           pagination={false}
-          scroll={{ x: 920 }}
-          dataSource={rows}
+          scroll={{ x: 1080 }}
+          dataSource={editableRows}
           locale={{ emptyText: '暂无费用明细' }}
-          columns={[
-            { title: '费用名称', dataIndex: 'name', width: 130 },
+          columns={([
+            {
+              title: '费用名称', dataIndex: 'name', width: 150,
+              render: (value: string, row: PendingRoutingCostRow) => isEditingRow(row) ? (
+                <Select aria-label="费用名称" showSearch optionFilterProp="label" placeholder="选择费用名称"
+                  value={costEditor?.name || undefined} options={costEditor?.id ? feeNameOptions : newFeeNameOptions} notFoundContent="暂无启用费用名称"
+                  onChange={(name) => {
+                    const currency = feeNameOptions.find((item) => item.value === name)?.currency;
+                    updateCostEditor({ name, ...(currency === 'RMB' || currency === 'USD' ? { currency } : {}) });
+                  }} />
+              ) : value
+            },
             { title: '客户编号', dataIndex: 'customerCode', width: 100 },
             { title: '运单号', dataIndex: 'systemOrderNo', width: 150 },
             { title: '转单号', dataIndex: 'transferNo', width: 130, render: (value?: string) => value || '-' },
-            { title: '币种', dataIndex: 'currency', width: 76 },
-            { title: '计费重', dataIndex: 'chargeWeightKg', width: 90, render: (value?: number) => value ? `${value.toFixed(2)} kg` : '-' },
-            { title: '单价', dataIndex: 'unitPrice', width: 86, render: (value?: number) => value?.toFixed(2) ?? '-' },
-            { title: '总金额', dataIndex: 'amount', width: 110, render: (value: number, row: PendingRoutingCostRow) => `${value.toFixed(2)} ${row.currency ?? 'RMB'}` },
+            ...(type === 'PAYABLE' ? [{ title: '对账状态', dataIndex: 'reconciliationStatus', width: 100, render: (value?: string) => formatRoutingFeeStatus(value) }] : []),
+            {
+              title: '币种', dataIndex: 'currency', width: 90,
+              render: (value: string | undefined, row: PendingRoutingCostRow) => isEditingRow(row)
+                ? <Select aria-label="币种" value={costEditor?.currency} options={[{ label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} onChange={(currency) => updateCostEditor({ currency })} />
+                : value
+            },
+            {
+              title: '计费方式 / 数量',
+              dataIndex: 'billingQuantity', width: 190,
+              render: (value: number | undefined, row: PendingRoutingCostRow) => isEditingRow(row) ? (
+                <Space.Compact>
+                  <Select aria-label="计费方式" value={costEditor?.billingUnit ?? 'KG'} options={[{ label: '计费重（KG）', value: 'KG' }, { label: '体积（CBM）', value: 'CBM' }]}
+                    onChange={(billingUnit: FinanceBillingUnit) => {
+                      const billingQuantity = billingUnit === 'CBM' ? assignmentShipment?.volumeCbm : costEditor?.chargeWeightKg;
+                      updateCostEditor({ billingUnit, billingQuantity, chargeWeightKg: billingUnit === 'KG' ? billingQuantity : undefined }, true);
+                    }} style={{ width: 112 }} />
+                  <InputNumber aria-label="计费数量" min={0} precision={costEditor?.billingUnit === 'CBM' ? 6 : 3} value={costEditor?.billingQuantity}
+                    onChange={(billingQuantity) => updateCostEditor({ billingQuantity: billingQuantity ?? undefined }, true)} />
+                </Space.Compact>
+              ) : `${(row.billingQuantity ?? row.chargeWeightKg ?? 0).toFixed(row.billingUnit === 'CBM' ? 6 : 2)} ${row.billingUnit === 'CBM' ? 'CBM' : 'KG'}`
+            },
+            {
+              title: '单价', dataIndex: 'unitPrice', width: 100,
+              render: (value: number | undefined, row: PendingRoutingCostRow) => isEditingRow(row)
+                ? <InputNumber aria-label="单价" min={0} precision={2} value={costEditor?.unitPrice} onChange={(unitPrice) => updateCostEditor({ unitPrice: unitPrice ?? undefined }, true)} />
+                : value?.toFixed(2) ?? '-'
+            },
+            {
+              title: '总金额', dataIndex: 'amount', width: 120,
+              render: (value: number, row: PendingRoutingCostRow) => isEditingRow(row)
+                ? <InputNumber aria-label="总金额" min={0} precision={2} value={costEditor?.amount}
+                    disabled={costEditor?.unitPrice !== undefined && costEditor.billingQuantity !== undefined}
+                    onChange={(amount) => updateCostEditor({ amount: amount ?? undefined })} />
+                : `${value.toFixed(2)} ${row.currency ?? 'RMB'}`
+            },
             canOperateCost ? {
-              title: '操作', width: 112, fixed: 'right' as const, render: (_: unknown, row: PendingRoutingCostRow) => (
-                <Space size={4}>
-                  {canUpdateCost
-                    && row.marketEditable !== false
-                    ? <Button size="small" onClick={() => openCostEditor(row)}>修改</Button>
-                    : null}
-                  {canDeleteCost
-                    && row.marketEditable !== false
-                    ? <Button size="small" danger onClick={() => assignmentShipment && void onDeletePendingRoutingCost(assignmentShipment, row.id)}>删除</Button>
-                    : null}
-                </Space>
-              )
+              title: '操作', width: 120, fixed: 'right' as const,
+              render: (_: unknown, row: PendingRoutingCostRow) => isEditingRow(row) ? (
+                <Space size={4}><Button size="small" type="primary" loading={costSaving} onClick={() => void saveCostEditor()}>保存</Button><Button size="small" disabled={costSaving} onClick={() => setCostEditor(null)}>取消</Button></Space>
+              ) : <Space size={4}>
+                {canUpdateCost && row.marketEditable !== false ? <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type, row)}>修改</Button> : null}
+                {canDeleteCost && row.marketEditable !== false ? (
+                  <Popconfirm
+                    title="确认删除该费用？"
+                    description="删除后费用明细将从该运单中移除，且不能恢复。"
+                    okText="确认删除"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                    onConfirm={() => assignmentShipment && void onDeletePendingRoutingCost(assignmentShipment, row.id)}
+                  >
+                    <Button size="small" danger disabled={Boolean(costEditor)}>删除</Button>
+                  </Popconfirm>
+                ) : null}
+              </Space>
             } : null
-          ].filter(Boolean) as ColumnsType<PendingRoutingCostRow>}
-          summary={() => <Table.Summary.Row><Table.Summary.Cell index={0} colSpan={7}>合计（RMB）</Table.Summary.Cell><Table.Summary.Cell index={7}>{total.toFixed(2)} RMB</Table.Summary.Cell><Table.Summary.Cell index={8} /></Table.Summary.Row>}
+          ].filter(Boolean) as ColumnsType<PendingRoutingCostRow>)}
+          summary={() => <Table.Summary.Row><Table.Summary.Cell index={0} colSpan={amountColumnIndex}>合计（RMB）</Table.Summary.Cell><Table.Summary.Cell index={amountColumnIndex}>{total.toFixed(2)} RMB</Table.Summary.Cell>{canOperateCost ? <Table.Summary.Cell index={amountColumnIndex + 1} /> : null}</Table.Summary.Row>}
         />
       </Space>
     );
@@ -654,32 +916,122 @@ export function RoutingPage({
         );
       }
       const statusIndex = marketColumns.findIndex((column) => column.title === '状态');
+      const routedOperationalColumns: ColumnsType<Shipment> = [
+        {
+          key: 'warehouseOutboundRemark',
+          dataIndex: 'warehouseOutboundRemark',
+          title: '出库备注',
+          width: 220,
+          render: (value?: string) => value || '-'
+        },
+        {
+          key: 'outboundAt',
+          title: '出库时间',
+          width: 136,
+          render: (_: unknown, record: Shipment) => record.outboundAt ? formatBeijingDateTime(record.outboundAt) : '-'
+        }
+      ];
       const columns = statusIndex >= 0
-        ? [...marketColumns.slice(0, statusIndex), ...costColumns, ...marketColumns.slice(statusIndex)]
-        : [...marketColumns, ...costColumns];
+        ? [...marketColumns.slice(0, statusIndex), ...costColumns, ...routedOperationalColumns, ...marketColumns.slice(statusIndex)]
+        : [...marketColumns, ...costColumns, ...routedOperationalColumns];
+      const agentIndex = columns.findIndex((column) => column.title === '代理');
+      const columnsWithAgentShortName = agentIndex >= 0
+        ? [
+            ...columns.slice(0, agentIndex + 1),
+            {
+              key: 'agentShortName',
+              title: '代理简称',
+              width: 96,
+              render: (_: unknown, record: Shipment) => getRoutingAgentShortName(record, masterData.agents),
+              sorter: (left: Shipment, right: Shipment) => getRoutingAgentShortName(left, masterData.agents)
+                .localeCompare(getRoutingAgentShortName(right, masterData.agents), 'zh-CN')
+            },
+            ...columns.slice(agentIndex + 1)
+          ]
+        : columns;
       const routedColumnWidths = new Map<string, number>([
+        ['录单时间', 136],
         ['进入时间', 136],
         ['站点', 72],
         ['业务员', 82],
         ['客户编号', 92],
         ['客户', 132],
-        ['运单号', 152],
-        ['货物数据', 118],
+        ['出货单号', 152],
+        ['转单号', 132],
+        ['件数', 72],
+        ['应收计费重', 104],
         ['目的地', 76],
         ['代理', 104],
+        ['代理简称', 96],
         ['代理渠道', 130],
+        ['出库备注', 220],
+        ['出库时间', 136],
         ['状态', 96],
         ['排货操作', 168]
       ]);
-      return columns.map((column) => {
+      const routedDataColumns: ColumnsType<Shipment> = [];
+      columnsWithAgentShortName.forEach((column) => {
         const title = String(column.title ?? '');
         const baseColumn = routedColumnWidths.has(title) ? { ...column, width: routedColumnWidths.get(title) } : column;
-        return title === '进入时间'
-          ? { ...baseColumn, title: '排货时间', render: (_: unknown, record: Shipment) => new Date(getRoutingStageTime(record)).toLocaleString('zh-CN', { hour12: false }) }
-          : baseColumn;
+        if (title === '进入时间') {
+          routedDataColumns.push(
+            {
+              key: 'createdAt',
+              dataIndex: 'createdAt',
+              title: '录单时间',
+              width: 136,
+              render: (value: string) => formatBeijingDateTime(value),
+              sorter: (left, right) => new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+            },
+            {
+              ...baseColumn,
+              key: 'routedAt',
+              title: '排货时间',
+              render: (_: unknown, record: Shipment) => formatBeijingDateTime(record.routedAt ?? record.createdAt),
+              sorter: (left, right) => new Date(left.routedAt ?? left.createdAt).getTime() - new Date(right.routedAt ?? right.createdAt).getTime()
+            }
+          );
+          return;
+        }
+        if (title === '出货单号') {
+          routedDataColumns.push(
+            baseColumn,
+            {
+              key: 'transferNo',
+              dataIndex: 'transferNo',
+              title: '转单号',
+              width: 132,
+              render: (value?: string) => value || '-'
+            }
+          );
+          return;
+        }
+        if (title === '货物数据') {
+          routedDataColumns.push(
+            {
+              key: 'packageCount',
+              dataIndex: 'packageCount',
+              title: '件数',
+              width: 72,
+              align: 'right',
+              render: (value: number) => `${value} 件`
+            },
+            {
+              key: 'receivableWeightKg',
+              dataIndex: 'receivableWeightKg',
+              title: '应收计费重',
+              width: 104,
+              align: 'right',
+              render: (value?: number) => formatWeight(value)
+            }
+          );
+          return;
+        }
+        routedDataColumns.push(baseColumn);
       });
+      return routedDataColumns;
     },
-    [businessCostAudits, canViewBusinessCost, marketColumns]
+    [businessCostAudits, canViewBusinessCost, marketColumns, masterData.agents]
   );
 
   return (
@@ -713,8 +1065,8 @@ export function RoutingPage({
                     })),
                     routedShipments: routedShipments.slice(0, 20).map((shipment) => ({
                       systemOrderNo: shipment.systemOrderNo,
-                      agentName: shipment.agentName,
                       channelName: shipment.channelName,
+                      ...(canViewAgentChannel ? { agentName: shipment.agentName, routeAgentChannelName: shipment.routeAgentChannelName } : {}),
                       status: shipment.status
                     })),
                     scenarios: config.siliconFlowScenarios
@@ -772,23 +1124,27 @@ export function RoutingPage({
                     </Card>
                   ))}
                 </div>
-                <Card className="module-grid market-dashboard-weekly" title="本周排货数据">
+                <Card
+                  className="module-grid market-dashboard-weekly"
+                  title={`${routingPeriodLabel}排货数据`}
+                  extra={renderRoutingPeriodSelector('市场看板统计周期')}
+                >
                   <Row gutter={[16, 12]}>
                     {canViewAgentChannel ? <Col xs={24} lg={8}>
-                      <Text strong>本周排货代理</Text>
-                      {renderMarketStatList(weeklyAgentStats, '本周暂无排货代理')}
+                      <Text strong>{routingPeriodLabel}排货代理</Text>
+                      {renderMarketStatList(periodAgentStats, `${routingPeriodLabel}暂无排货代理`)}
                     </Col> : null}
                     {canViewAgentChannel ? <Col xs={24} lg={8}>
-                      <Text strong>本周排货渠道（空运/海运）</Text>
-                      {renderMarketStatList(weeklyChannelModeStats, '本周暂无排货渠道')}
+                      <Text strong>{routingPeriodLabel}排货渠道（空运/海运）</Text>
+                      {renderMarketStatList(periodChannelModeStats, `${routingPeriodLabel}暂无排货渠道`)}
                     </Col> : null}
                     <>
                     <Col xs={12} lg={4}>
-                      <Statistic title="本周敏感货物" value={weeklySensitiveCount} suffix="票" />
+                      <Statistic title={`${routingPeriodLabel}敏感货物`} value={periodSensitiveCount} suffix="票" />
                       <Text type="secondary">带电/带磁/敏感</Text>
                     </Col>
                     <Col xs={12} lg={4}>
-                      <Statistic title="本周报关货物" value={weeklyDeclaredCount} suffix="票" />
+                      <Statistic title={`${routingPeriodLabel}报关货物`} value={periodDeclaredCount} suffix="票" />
                       <Text type="secondary">需要报关</Text>
                     </Col>
                     </>
@@ -798,15 +1154,62 @@ export function RoutingPage({
             ) : null}
 
             {activeSection === 'pending-routing' ? (
-              <Card className="module-grid" title="待排货">
+              <Card className="module-grid routing-pending-card" title="待排货">
                 <ManagedTable
                   rowKey="id"
                   size="small"
                   columns={pendingColumns}
-                  dataSource={pendingShipments}
-                  pagination={tenRowTablePagination}
-                  minimumScrollX={2120}
+                  dataSource={filteredPendingShipments}
+                  pagination={{
+                    ...tenRowTablePagination,
+                    current: pendingPagination.current,
+                    pageSize: pendingPagination.pageSize,
+                    onChange: (current, pageSize) => setPendingPagination({ current, pageSize })
+                  }}
+                  minimumScrollX={2530}
                   onRow={canUpdatePending ? (record) => ({ onDoubleClick: () => openAssignment(record, 'update') }) : undefined}
+                  toolbarLeading={(
+                    <div className="routing-pending-filter-bar" role="search" aria-label="待排货筛选">
+                      <label className="routing-pending-filter-field">
+                        <span>业务员</span>
+                        <Input
+                          aria-label="按业务员筛选"
+                          allowClear
+                          size="small"
+                          value={pendingFilterDraft.salesperson}
+                          onChange={(event) => setPendingFilterDraft((current) => ({ ...current, salesperson: event.target.value }))}
+                          onPressEnter={applyPendingRoutingFilters}
+                        />
+                      </label>
+                      <label className="routing-pending-filter-field">
+                        <span>客户编号</span>
+                        <Input
+                          aria-label="按客户编号筛选"
+                          allowClear
+                          size="small"
+                          value={pendingFilterDraft.customerCode}
+                          onChange={(event) => setPendingFilterDraft((current) => ({ ...current, customerCode: event.target.value }))}
+                          onPressEnter={applyPendingRoutingFilters}
+                        />
+                      </label>
+                      <label className="routing-pending-filter-field">
+                        <span>出货单号</span>
+                        <Input
+                          aria-label="按出货单号筛选"
+                          allowClear
+                          size="small"
+                          value={pendingFilterDraft.systemOrderNo}
+                          onChange={(event) => setPendingFilterDraft((current) => ({ ...current, systemOrderNo: event.target.value }))}
+                          onPressEnter={applyPendingRoutingFilters}
+                        />
+                      </label>
+                      <div className="routing-pending-filter-actions">
+                        <Button size="small" type="primary" onClick={applyPendingRoutingFilters}>查询</Button>
+                        <Button size="small" onClick={resetPendingRoutingFilters}>重置</Button>
+                        <Text type="secondary">显示 {filteredPendingShipments.length} / 共 {pendingShipments.length} 条</Text>
+                      </div>
+                    </div>
+                  )}
                   columnSettingsPlacement="column"
                   columnSettings={{ storageKey: 'sunny.routing.pending.columns.market-review-v2', title: '待排货列设置' }}
                 />
@@ -814,15 +1217,79 @@ export function RoutingPage({
             ) : null}
 
             {activeSection === 'routed' ? (
-              <Card className="module-grid" title="已排货">
+              <Card
+                className="module-grid routing-routed-card"
+                title={(
+                  <Space size={12} wrap>
+                    <span>已排货</span>
+                    <Segmented
+                      aria-label="已排货数据范围"
+                      size="small"
+                      value={routedView}
+                      options={[
+                        { label: '近30天', value: 'recent' },
+                        { label: '全部历史', value: 'history' }
+                      ]}
+                      onChange={(value) => {
+                        setRoutedView(value as 'recent' | 'history');
+                        setRoutedPagination((current) => ({ ...current, current: 1 }));
+                      }}
+                    />
+                  </Space>
+                )}
+              >
                 <ManagedTable
                   rowKey="id"
                   size="small"
                   className="routing-routed-table"
                   columns={routedColumns}
-                  dataSource={routedShipments}
-                  pagination={tenRowTablePagination}
-                  minimumScrollX={2100}
+                  dataSource={filteredRoutedShipments}
+                  locale={{ emptyText: routedView === 'history' ? '暂无排货历史' : '近30天暂无已排货记录' }}
+                  pagination={{
+                    ...tenRowTablePagination,
+                    current: routedPagination.current,
+                    pageSize: routedPagination.pageSize,
+                    onChange: (current, pageSize) => setRoutedPagination({ current, pageSize })
+                  }}
+                  minimumScrollX={2850}
+                  toolbarLeading={(
+                    <div className="routing-routed-filter-bar" role="search" aria-label={routedView === 'history' ? '排货历史筛选' : '已排货筛选'}>
+                      <label className="routing-pending-filter-field routing-routed-filter-field routing-routed-date-filter">
+                        <span>录单时间</span>
+                        <AppDateRangePicker
+                          aria-label="按录单时间筛选"
+                          size="small"
+                          value={[routedFilterDraft.entryDateFrom || undefined, routedFilterDraft.entryDateTo || undefined]}
+                          onChange={([entryDateFrom, entryDateTo]) => setRoutedFilterDraft((current) => ({
+                            ...current,
+                            entryDateFrom: entryDateFrom ?? '',
+                            entryDateTo: entryDateTo ?? ''
+                          }))}
+                        />
+                      </label>
+                      <label className="routing-pending-filter-field routing-routed-filter-field">
+                        <span>代理简称</span>
+                        <Select
+                          aria-label="按代理简称筛选"
+                          allowClear
+                          showSearch
+                          size="small"
+                          optionFilterProp="label"
+                          options={routedAgentShortNameOptions}
+                          placeholder="全部代理"
+                          value={routedFilterDraft.agentShortName || undefined}
+                          onChange={(agentShortName?: string) => setRoutedFilterDraft((current) => ({ ...current, agentShortName: agentShortName ?? '' }))}
+                        />
+                      </label>
+                      <div className="routing-pending-filter-actions routing-routed-filter-actions">
+                        <Button size="small" type="primary" onClick={applyRoutedFilters}>查询</Button>
+                        <Button size="small" onClick={resetRoutedFilters}>重置</Button>
+                        <Text type="secondary">
+                          显示 {filteredRoutedShipments.length} / {routedView === 'history' ? '全部历史' : '近30天'}共 {scopedRoutedShipments.length} 条
+                        </Text>
+                      </div>
+                    </div>
+                  )}
                   columnSettingsPlacement="column"
                   columnSettings={{ storageKey: 'sunny.routing.routed.columns', title: '已排货列设置' }}
                 />
@@ -831,17 +1298,21 @@ export function RoutingPage({
 
             {activeSection === 'weekly-routing' ? (
               <Space direction="vertical" size={16} className="full-width">
+                <Flex justify="space-between" align="center" gap={12} wrap className="routing-period-toolbar">
+                  <Text strong>{routingPeriodLabel}排货概览</Text>
+                  {renderRoutingPeriodSelector('排货明细统计周期')}
+                </Flex>
                 <Row gutter={[16, 16]}>
-                  <Col xs={24} md={8}><MetricCard icon={<ClipboardCheck />} title="本周已排" value={weeklyRoutedShipments.length} extra="市场已分配代理渠道" /></Col>
-                  <Col xs={24} md={8}><MetricCard icon={<Activity />} title="本周未出库" value={weeklyRoutedShipments.filter((item) => item.status === 'WAITING_DISPATCH').length} extra="等待仓库确认出库" /></Col>
-                  <Col xs={24} md={8}><MetricCard icon={<Boxes />} title="本周已出库" value={weeklyRoutedShipments.filter((item) => item.status !== 'WAITING_DISPATCH').length} extra="仓库已确认出库或后续状态" /></Col>
+                  <Col xs={24} md={8}><MetricCard icon={<ClipboardCheck />} title={`${routingPeriodLabel}已排`} value={periodRoutedShipments.length} extra={canViewAgentChannel ? '市场已分配代理渠道' : '市场已完成排货'} /></Col>
+                  <Col xs={24} md={8}><MetricCard icon={<Activity />} title={`${routingPeriodLabel}未出库`} value={periodRoutedShipments.filter((item) => item.status === 'WAITING_DISPATCH').length} extra="等待仓库确认出库" /></Col>
+                  <Col xs={24} md={8}><MetricCard icon={<Boxes />} title={`${routingPeriodLabel}已出库`} value={periodRoutedShipments.filter((item) => item.status !== 'WAITING_DISPATCH').length} extra="仓库已确认出库或后续状态" /></Col>
                 </Row>
-                <Card className="module-grid" title="排货明细">
+                <Card className="module-grid" title={`${routingPeriodLabel}排货明细`}>
                   <ManagedTable
                     rowKey="id"
                     size="small"
                     columns={weeklyColumns}
-                    dataSource={[...weeklyRoutedShipments, ...returnableShipments.filter((item) => !weeklyRoutedShipments.some((row) => row.id === item.id))]}
+                    dataSource={periodDetailShipments}
                     pagination={tenRowTablePagination}
                     minimumScrollX={1750}
                     columnSettings={{ storageKey: 'sunny.routing.weekly.columns', title: '排货数据列设置' }}
@@ -857,142 +1328,139 @@ export function RoutingPage({
         title="市场排货"
         open={Boolean(assignmentShipment)}
         destroyOnHidden
-        width={680}
+        width={1320}
+        className="routing-assignment-modal"
         footer={(
           <Space>
-            <Button disabled={assignmentSubmitting} onClick={onCancelAssignment}>取消</Button>
-            {canSaveDraft ? <Button type="primary" loading={assignmentSubmitting} onClick={() => void submitAssignment(false)}>确认保存</Button> : null}
+            <Button disabled={assignmentSubmitting || costSaving} onClick={() => { setCostEditor(null); onCancelAssignment(); }}>取消</Button>
+            {canViewAgentChannel && canSaveDraft ? <Button type="primary" loading={assignmentSubmitting} onClick={() => void submitAssignment(false)}>确认保存</Button> : null}
           </Space>
         )}
-        onCancel={onCancelAssignment}
+        onCancel={() => { setCostEditor(null); onCancelAssignment(); }}
       >
         <Alert
           className="notice-bar"
           type="info"
           showIcon
-          message="这里仅保存代理与渠道等排货资料；返回列表点击审核后，订单才会进入仓库待出库。"
+          message={canViewBusinessCost || canViewPayableCost
+            ? '这里保存代理与渠道等排货资料；业务成本和应付成本请在下方费用明细中维护。返回列表点击审核后，订单才会进入仓库待出库。'
+            : '这里仅保存代理与渠道等排货资料；返回列表点击审核后，订单才会进入仓库待出库。'}
         />
-        <Tabs
-          activeKey={assignmentActiveTab}
-          onChange={setAssignmentActiveTab}
-          items={[
-            {
-              key: 'basic',
-              label: '基本信息',
-              disabled: !canSaveDraft,
-              children: <>
-        {assignmentShipment ? (
-          <Card size="small" className="routing-assignment-context" title="订单信息">
-            <Row gutter={[12, 8]}>
-              <Col span={12}>日期：{new Date(assignmentShipment.reviewedAt ?? assignmentShipment.createdAt).toLocaleDateString('zh-CN')}</Col>
-              <Col span={12}>站点：{assignmentShipment.site || '-'}</Col>
-              <Col span={12}>业务员：{assignmentShipment.salesperson || '-'}</Col>
-              <Col span={12}>客户编号：{assignmentShipment.customerCode || '-'}</Col>
-              <Col span={12}>出货单号：{assignmentShipment.systemOrderNo}</Col>
-              <Col span={12}>公司渠道：{assignmentShipment.channelName || '-'}</Col>
-              <Col span={12}>货物数据：{assignmentShipment.packageCount} 件 / {assignmentShipment.receivableWeightKg.toFixed(2)} kg / {assignmentShipment.volumeCbm?.toFixed(3) ?? '0.000'} CBM</Col>
-            </Row>
-          </Card>
-        ) : null}
-        <Form form={assignmentForm} layout="vertical">
-          <Form.Item name="channelId" hidden>
-            <Input />
-          </Form.Item>
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item name="destinationCountry" label="国家" rules={[{ required: true, whitespace: true, message: '请选择国家' }]}>
-                <Input disabled />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="agentId" label="代理">
-                <Select
-                  showSearch
-                  placeholder="选择基础资料里的代理"
-                  optionFilterProp="label"
-                  options={masterData.agents
-                    .filter((agent) => agent.enabled)
-                    .map((agent) => ({
-                      label: [agent.shortName, agent.name].filter(Boolean).join(' / '),
-                      value: agent.id
-                    }))}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={12}>
-              <Form.Item name="agentChannelName" label="代理渠道" rules={[{ required: true, whitespace: true, message: '请输入代理渠道' }]}>
-                <AutoComplete
-                  options={agentChannelOptions}
-                  placeholder="例如 宇环 DHL"
-                  filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
-                />
-              </Form.Item>
-            </Col>
-            {canCreateAgentChannel ? (
-              <Col xs={24} md={12}>
-                <Form.Item name="saveAgentChannelToMasterData" valuePropName="checked" initialValue={false}>
-                  <Checkbox>保存代理渠道到资料库</Checkbox>
-                </Form.Item>
-              </Col>
-            ) : null}
-            <Col xs={24}>
-              <Form.Item name="shippingMarkRequired" valuePropName="checked" initialValue={false}>
-                <Checkbox>需要贴麦头</Checkbox>
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
-              </>
-            },
-            ...(canViewBusinessCost ? [{ key: 'business-cost', label: '业务成本', children: renderCostTab(assignmentBusinessCosts) }] : [])
-          ]}
-        />
-      </Modal>
+        <div className="routing-assignment-sections">
+          {canViewAgentChannel ? (
+            <section className="routing-assignment-section" aria-labelledby="routing-assignment-basic-title">
+              <div className="routing-assignment-section-header">
+                <Text strong id="routing-assignment-basic-title">基本信息</Text>
+                <Text type="secondary">订单资料、代理与渠道</Text>
+              </div>
+              <div className="routing-assignment-section-body routing-assignment-basic-body">
+                {assignmentShipment ? (
+                  <Card size="small" className="routing-assignment-context" title="订单信息">
+                    <Row gutter={[16, 6]}>
+                      <Col xs={12} md={6}>日期：{new Date(assignmentShipment.reviewedAt ?? assignmentShipment.createdAt).toLocaleDateString('zh-CN')}</Col>
+                      <Col xs={12} md={6}>站点：{assignmentShipment.site || '-'}</Col>
+                      <Col xs={12} md={6}>业务员：{assignmentShipment.salesperson || '-'}</Col>
+                      <Col xs={12} md={6}>客户编号：{assignmentShipment.customerCode || '-'}</Col>
+                      <Col xs={12} md={6}>出货单号：{assignmentShipment.systemOrderNo}</Col>
+                      <Col xs={12} md={6}>公司渠道：{assignmentShipment.channelName || '-'}</Col>
+                      <Col xs={24} md={12}>货物数据：{assignmentShipment.packageCount} 件 / {assignmentShipment.receivableWeightKg.toFixed(2)} kg / {assignmentShipment.volumeCbm?.toFixed(3) ?? '0.000'} CBM</Col>
+                      <Col xs={12} md={6}>亚马逊代码：{assignmentShipment.fbaWarehouseCode?.trim() || '-'}</Col>
+                      <Col xs={12} md={6}>邮编：{assignmentShipment.receiverPostalCode?.trim() || '-'}</Col>
+                      <Col xs={24} md={12}>备注：{assignmentShipment.remark?.trim() || '-'}</Col>
+                    </Row>
+                  </Card>
+                ) : null}
+                <Form form={assignmentForm} layout="vertical" className="routing-assignment-form">
+                  <Form.Item name="channelId" hidden>
+                    <Input />
+                  </Form.Item>
+                  <Row gutter={[14, 0]}>
+                    <Col xs={24} sm={12} lg={5}>
+                      <Form.Item name="destinationCountry" label="国家" rules={[{ required: true, whitespace: true, message: '请选择国家' }]}>
+                        <Input disabled />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12} lg={5}>
+                      <Form.Item name="agentId" label="代理">
+                        <Select
+                          showSearch
+                          placeholder="选择基础资料里的代理"
+                          optionFilterProp="label"
+                          options={masterData.agents
+                            .filter((agent) => agent.enabled)
+                            .map((agent) => ({
+                              label: [agent.shortName, agent.name].filter(Boolean).join(' / '),
+                              value: agent.id
+                            }))}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={16} lg={9}>
+                      <Form.Item name="agentChannelName" label="代理渠道" rules={[{ required: true, whitespace: true, message: '请输入代理渠道' }]}>
+                        <AutoComplete
+                          options={agentChannelOptions}
+                          placeholder="例如 宇环 DHL"
+                          filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+                        />
+                      </Form.Item>
+                      {canCreateAgentChannel ? (
+                        <Form.Item name="saveAgentChannelToMasterData" valuePropName="checked" initialValue={false}>
+                          <Checkbox>保存代理渠道到资料库</Checkbox>
+                        </Form.Item>
+                      ) : null}
+                    </Col>
+                    <Col xs={24} sm={8} lg={5}>
+                      <Form.Item name="shippingMarkRequired" label="出库要求" valuePropName="checked" initialValue={false} style={{ marginBottom: 8 }}>
+                        <Checkbox>需要贴麦头</Checkbox>
+                      </Form.Item>
+                      <Form.Item
+                        name="warehouseOutboundRemark"
+                        label="出库备注（推送仓库）"
+                        rules={[{ max: 500, message: '出库备注不能超过 500 个字符' }]}
+                        style={{ marginBottom: 0 }}
+                      >
+                        <Input.TextArea
+                          rows={2}
+                          maxLength={500}
+                          showCount
+                          placeholder="例如：易碎、需加固、分箱贴标"
+                        />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                </Form>
+              </div>
+            </section>
+          ) : null}
 
-      <Modal
-        title={costEditor ? '业务成本费用' : '费用'}
-        open={Boolean(costEditor)}
-        destroyOnHidden
-        okText="保存费用"
-        cancelText="取消"
-        onCancel={() => { setCostEditor(null); costForm.resetFields(); }}
-        onOk={() => void costForm.validateFields().then(async (values) => {
-          if (!assignmentShipment || !costEditor) return;
-          const calculated = calculateCostAmount(values.chargeWeightKg, values.unitPrice, values.amount);
-          if (calculated === undefined) {
-            messageApi.error('请输入总金额，或同时填写计费重和单价');
-            return;
-          }
-          await onSavePendingRoutingCost(assignmentShipment, 'BUSINESS_COST', costEditor.id, {
-            name: values.name!.trim(), currency: values.currency ?? 'RMB', chargeWeightKg: values.chargeWeightKg,
-            unitPrice: values.unitPrice, amount: calculated
-          });
-          setCostEditor(null);
-          costForm.resetFields();
-        })}
-      >
-        <Form
-          form={costForm}
-          layout="vertical"
-          onValuesChange={(_changed, values) => {
-            const calculated = calculateCostAmount(values.chargeWeightKg, values.unitPrice);
-            if (calculated !== undefined) costForm.setFieldValue('amount', calculated);
-          }}
-        >
-          <Row gutter={12}>
-            <Col xs={24} md={12}><Form.Item name="name" label="费用名称" rules={[{ required: true, whitespace: true, message: '请输入费用名称' }]}><Input /></Form.Item></Col>
-            <Col xs={24} md={12}><Form.Item name="currency" label="币种" rules={[{ required: true }]}><Select options={[{ label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} /></Form.Item></Col>
-            <Col xs={24} md={12}><Form.Item name="chargeWeightKg" label="计费重"><InputNumber min={0} precision={3} className="full-width" /></Form.Item></Col>
-            <Col xs={24} md={12}><Form.Item name="unitPrice" label="单价"><InputNumber min={0} precision={2} className="full-width" /></Form.Item></Col>
-            <Col xs={24} md={12}><Form.Item name="amount" label="总金额" extra="计费重和单价均填写后自动计算"><InputNumber min={0} precision={2} className="full-width" disabled={calculateCostAmount(editingCostWeight, editingCostUnitPrice) !== undefined} /></Form.Item></Col>
-            <Col xs={24} md={12}><Form.Item label="自动总金额"><Text strong>{Number(editingCostWeight || 0) > 0 && Number(editingCostUnitPrice || 0) > 0 ? `${(Number(editingCostWeight) * Number(editingCostUnitPrice)).toFixed(2)} ${costForm.getFieldValue('currency') ?? 'RMB'}` : `${Number(editingCostAmount || 0).toFixed(2)} ${costForm.getFieldValue('currency') ?? 'RMB'}`}</Text></Form.Item></Col>
-          </Row>
-        </Form>
-      </Modal>
+          {canViewBusinessCost ? (
+            <section className="routing-assignment-section" aria-labelledby="routing-assignment-business-cost-title">
+              <div className="routing-assignment-section-header">
+                <Text strong id="routing-assignment-business-cost-title">业务成本</Text>
+                <Text type="secondary">录单产生的客户侧成本</Text>
+              </div>
+              <div className="routing-assignment-section-body routing-assignment-cost-body">
+                {renderCostTab('BUSINESS_COST', assignmentBusinessCosts)}
+              </div>
+            </section>
+          ) : null}
 
+          {canViewPayableCost ? (
+            <section className="routing-assignment-section" aria-labelledby="routing-assignment-payable-cost-title">
+              <div className="routing-assignment-section-header">
+                <Text strong id="routing-assignment-payable-cost-title">应付成本</Text>
+                <Text type="secondary">代理侧计费与应付明细</Text>
+              </div>
+              <div className="routing-assignment-section-body routing-assignment-cost-body">
+                {renderCostTab('PAYABLE', assignmentPayables)}
+              </div>
+            </section>
+          ) : null}
+        </div>
+      </Modal>
       <Modal
         title="代理退回重排"
-        open={Boolean(rerouteShipment)}
+        open={Boolean(rerouteShipment) && canViewAgentChannel}
         destroyOnHidden
         okText="确认退回"
         cancelText="取消"

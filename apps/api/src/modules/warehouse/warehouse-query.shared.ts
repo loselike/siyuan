@@ -283,10 +283,19 @@ export async function loadWarehouseTallyTaskOutputPackages(
     where: {
       tallyTaskId: id,
       id: { notIn: task.packageIds },
-      status: { not: 'TALLIED_ARCHIVED' },
-      OR: [
-        { archivedReason: null },
-        { archivedReason: { not: WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } }
+      AND: [
+        {
+          OR: [
+            { status: { not: 'TALLIED_ARCHIVED' } },
+            { status: 'TALLIED_ARCHIVED', archivedReason: '理货待重新过机' }
+          ]
+        },
+        {
+          OR: [
+            { archivedReason: null },
+            { archivedReason: { not: WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } }
+          ]
+        }
       ]
     },
     orderBy: [{ packageIndex: 'asc' }, { createdAt: 'asc' }]

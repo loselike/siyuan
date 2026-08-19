@@ -103,6 +103,28 @@ export function calculateFinanceItemAmount(
   return fallback;
 }
 
+export function calculateMarketRoutingCostAmount(
+  type: ShipmentFinanceItemType,
+  input: BillingFields & { amount?: unknown } = {},
+  current?: BillingFields & { amount?: unknown }
+): number | undefined {
+  const quantity = resolveFinanceItemQuantity(type, input, current);
+  const unitPrice = input.unitPrice ?? current?.unitPrice;
+  if (quantity !== undefined && unitPrice !== undefined
+    && Number.isFinite(quantity) && quantity >= 0
+    && Number.isFinite(Number(unitPrice)) && Number(unitPrice) >= 0) {
+    return Number((quantity * Number(unitPrice)).toFixed(2));
+  }
+  if (!current || current.unitPrice !== undefined && current.unitPrice !== null) return undefined;
+  const currentQuantity = resolveFinanceItemQuantity(type, current);
+  const currentAmount = Number(current.amount);
+  const requestedAmount = input.amount === undefined || input.amount === null ? currentAmount : Number(input.amount);
+  const quantityUnchanged = quantity === currentQuantity;
+  const amountUnchanged = Number.isFinite(currentAmount) && requestedAmount === currentAmount;
+  const unitPriceUnchanged = input.unitPrice === undefined || input.unitPrice === null;
+  return quantityUnchanged && amountUnchanged && unitPriceUnchanged ? currentAmount : undefined;
+}
+
 export function isFinanceAmountOverridden(input: BillingFields & { amount?: unknown }) {
   const amount = Number(input.amount);
   if (!Number.isFinite(amount)) return false;

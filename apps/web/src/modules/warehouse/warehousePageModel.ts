@@ -289,7 +289,8 @@ export type WarehouseQueueColumnKey =
   | 'warehouseOutboundRemark'
   | 'productName'
   | 'declaration'
-  | 'sensitive';
+  | 'sensitive'
+  | 'actions';
 
 export const warehouseQueueColumnSettingsKey = 'warehouse-label-queue-columns:visible-business-fields';
 
@@ -313,7 +314,8 @@ export const warehouseQueueDefaultColumnKeys: WarehouseQueueColumnKey[] = [
   'warehouseOutboundRemark',
   'productName',
   'declaration',
-  'sensitive'
+  'sensitive',
+  'actions'
 ];
 
 export const warehouseQueueColumnLabels: Record<WarehouseQueueColumnKey, string> = {
@@ -336,7 +338,8 @@ export const warehouseQueueColumnLabels: Record<WarehouseQueueColumnKey, string>
   warehouseOutboundRemark: '出库备注',
   productName: '品名',
   declaration: '报关',
-  sensitive: '敏感'
+  sensitive: '敏感',
+  actions: '操作'
 };
 
 export function createWarehouseHandoverNo(outboundOrderNo: string) {

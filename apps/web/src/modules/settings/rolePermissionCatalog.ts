@@ -39,6 +39,19 @@ export function isGlobalFieldMaskPermission(code: string): boolean {
   return code.startsWith('system:global-mask:');
 }
 
+/**
+ * Legacy market mask/block permissions are kept out of the assignable catalog.
+ * They may still exist in an old role snapshot during the migration window,
+ * but the settings UI must only expose the canonical positive permissions.
+ */
+export function isMarketPendingRoutingMaskPermission(code: string): boolean {
+  return code.startsWith('market:pending-routing:') && /(block|mask)/i.test(code);
+}
+
+export function isMarketRoutedMaskPermission(code: string): boolean {
+  return code.startsWith('market:routed:') && /(block|mask)/i.test(code);
+}
+
 export type OrderEntryPermissionKey = 'edit' | 'business-cost' | 'payable-fee';
 
 export const orderEntryPermissionControls: Array<{
@@ -81,7 +94,6 @@ export const customerServiceTransferPermissionControls: Array<{ label: string; c
   { label: '查看代理数据', code: 'customer-service:transfer:view-agent-data' },
   { label: '查看敏感货物属性', code: 'customer-service:transfer:view-sensitive' },
   { label: '查看全部授权订单', code: 'customer-service:transfer:view-all' },
-  { label: '保存列设置', code: 'customer-service:transfer:column-setting' }
 ];
 
 export const customerServicePendingRoutingPermissionControls: Array<{ label: string; code: PermissionKey }> = [
@@ -89,7 +101,6 @@ export const customerServicePendingRoutingPermissionControls: Array<{ label: str
   { label: '查看费用明细', code: 'customer-service:pending-routing:fee-detail-view' },
   { label: '查看代理信息', code: 'customer-service:pending-routing:agent-view' },
   { label: '创建问题件', code: 'customer-service:pending-routing:problem-create' },
-  { label: '保存列设置', code: 'customer-service:pending-routing:column-setting' }
 ];
 
 export const customerServiceDataConfirmPermissionControls: Array<{ label: string; code: PermissionKey }> = [
@@ -102,44 +113,23 @@ export const customerServiceDataConfirmPermissionControls: Array<{ label: string
   { label: '审核代理数据', code: 'customer-service:data-confirm:agent-approve' },
   { label: '全部审核', code: 'customer-service:data-confirm:approve-all' },
   { label: '反审核', code: 'customer-service:data-confirm:reverse' },
-  { label: '保存列设置', code: 'customer-service:data-confirm:column-setting' }
 ];
 
-export const customerServiceTransferFillMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽填写转单号', code: 'customer-service:transfer:fill-block' }
-];
-
-export function isCustomerServiceTransferFillMaskPermission(code: string): boolean {
-  return customerServiceTransferFillMaskControls.some((control) => control.code === code);
-}
-
-export const customerServicePendingRoutingMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽查看费用', code: 'customer-service:pending-routing:fee-detail-block' },
-  { label: '屏蔽只读', code: 'customer-service:pending-routing:readonly-block' }
-];
-
-export function isCustomerServicePendingRoutingMaskPermission(code: string): boolean {
-  return customerServicePendingRoutingMaskControls.some((control) => control.code === code);
-}
-
-export const customerServiceDataConfirmMaskControls: Array<{
-  label: string;
-  code: PermissionKey;
-}> = [
-  { label: '屏蔽业务审核', code: 'customer-service:data-confirm:business-approve-block' },
-  { label: '屏蔽业务修改', code: 'customer-service:data-confirm:business-update-block' },
-  { label: '屏蔽代理修改', code: 'customer-service:data-confirm:agent-update-block' },
-  { label: '屏蔽代理审核', code: 'customer-service:data-confirm:agent-approve-block' }
-];
-
-export function isCustomerServiceDataConfirmMaskPermission(code: string): boolean {
-  return customerServiceDataConfirmMaskControls.some((control) => control.code === code);
+/** Returns the parent module-view permission for an assignable customer-service action. */
+export function customerServiceViewPermissionFor(code: PermissionKey): PermissionKey | undefined {
+  if (!code.startsWith('customer-service:') || code.endsWith('-block')) return undefined;
+  // 售后入口是受限子集，不能因为勾选售后查看而打开完整状态池。
+  if (
+    code === 'customer-service:problem:after-sale-view'
+    || code === 'customer-service:signed:after-sale-view'
+  ) return undefined;
+  if (
+    code === 'customer-service:signed:after-sale-assist'
+    || code === 'customer-service:signed:after-sale-close'
+  ) return 'customer-service:signed:after-sale-view';
+  const separator = code.lastIndexOf(':');
+  if (separator <= 'customer-service:'.length || code.slice(separator + 1) === 'view') return undefined;
+  return `${code.slice(0, separator)}:view` as PermissionKey;
 }
 
 export function lineShipmentStageEditBlockPermissionCode(stage: LineShipmentEditStageKey): PermissionKey {
@@ -347,9 +337,8 @@ export function getWorkspacePermissionGroups(
       .filter((permission) => !isGlobalFieldMaskPermission(permission.code))
       .filter((permission) => !isOrderEntryPermission(permission.code))
       .filter((permission) => !permission.code.includes('-block'))
-      .filter((permission) => !isCustomerServicePendingRoutingMaskPermission(permission.code))
-      .filter((permission) => !isCustomerServiceDataConfirmMaskPermission(permission.code))
-      .filter((permission) => !isCustomerServiceTransferFillMaskPermission(permission.code))
+      .filter((permission) => !isMarketPendingRoutingMaskPermission(permission.code))
+      .filter((permission) => !isMarketRoutedMaskPermission(permission.code))
       .filter((permission, index, all) => all.findIndex((item) => item.code === permission.code) === index);
     return permissions.length ? [[canonicalGroup, permissions] as [string, PermissionDefinition[]]] : [];
   });

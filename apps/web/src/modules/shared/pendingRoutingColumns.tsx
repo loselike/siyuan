@@ -41,19 +41,28 @@ export function createPendingRoutingColumns(options: {
   onApprove?: (shipment: Shipment) => void;
   onModify?: (shipment: Shipment) => void;
   onViewFees?: (shipment: Shipment) => void;
+  onViewPayableFees?: (shipment: Shipment) => void;
   onViewLog?: (shipment: Shipment) => void;
   onReturnReview?: (shipment: Shipment) => void;
   canViewBusinessCost?: boolean;
   canViewPayableCost?: boolean;
   canViewAgentChannel?: boolean;
+  canViewRouteCost?: boolean;
   /** Retained for callers that switch between the standard and matrix table layouts. */
   presentation?: 'columns' | 'matrix';
 }): ColumnsType<Shipment> {
-  const { businessCostAudits = [], payableAudits = [], mode, onRoute, onApprove, onModify, onViewFees, onViewLog, onReturnReview, canViewBusinessCost: businessCostPermission, canViewPayableCost: payableCostPermission, canViewAgentChannel: agentChannelPermission } = options;
+  const { businessCostAudits = [], payableAudits = [], mode, onRoute, onApprove, onModify, onViewFees, onViewPayableFees, onViewLog, onReturnReview, canViewBusinessCost: businessCostPermission, canViewPayableCost: payableCostPermission, canViewAgentChannel: agentChannelPermission, canViewRouteCost: routeCostPermission } = options;
   // 客服保留只读列位置但不返回敏感金额；仓库不展示成本列。
   const canViewPayableCost = mode === 'market' ? false : payableCostPermission ?? true;
   const canViewBusinessCost = businessCostPermission ?? mode !== 'warehouse';
   const canViewAgentChannel = agentChannelPermission ?? mode === 'market';
+  const canViewRouteCost = routeCostPermission ?? mode === 'market';
+  const routeCostColumns: ColumnsType<Shipment> = mode === 'market' && canViewRouteCost ? [
+    { title: '计费重', width: 92, render: (_, record) => record.routeChargeWeightKg === undefined ? '-' : `${record.routeChargeWeightKg.toFixed(3)} KG` },
+    { title: '单价', width: 92, render: (_, record) => formatAmount(record.routeUnitPrice, record.routeCurrency) },
+    { title: '其他费用', width: 104, render: (_, record) => formatAmount(record.routeOtherFee, record.routeCurrency) },
+    { title: '总成本', width: 108, render: (_, record) => formatAmount(record.routeCostTotal, record.routeCurrency) }
+  ] : [];
   const businessCostColumns: ColumnsType<Shipment> = canViewBusinessCost ? [
     { title: '业务成本', width: 180, render: (_, record) => renderFeeRows(getBusinessCosts(record, businessCostAudits)) },
     {
@@ -67,12 +76,11 @@ export function createPendingRoutingColumns(options: {
       }
     }
   ] : [];
-  const payableCostColumns: ColumnsType<Shipment> = mode === 'customerService' ? [
+  const payableCostColumns: ColumnsType<Shipment> = mode === 'customerService' && canViewPayableCost ? [
     {
       title: '应付成本',
       width: 150,
       render: (_, record) => {
-        if (!canViewPayableCost) return <Text type="secondary">-</Text>;
         const costs = getPayableCosts(record, payableAudits);
         return costs.length ? renderFeeRows(costs) : record.routeCostTotal ? <Text>代理成本 {formatAmount(record.routeCostTotal, record.routeCurrency)}</Text> : <Text type="secondary">-</Text>;
       }
@@ -82,12 +90,16 @@ export function createPendingRoutingColumns(options: {
       width: 120,
       align: 'right',
       render: (_, record) => {
-        if (!canViewPayableCost) return <Text type="secondary">-</Text>;
         const costs = getPayableCosts(record, payableAudits);
         if (costs.length) return formatAmount(costs.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
         return formatAmount(record.routeCostTotal, record.routeCurrency);
       }
     }
+  ] : [];
+  const marketOrderInfoColumns: ColumnsType<Shipment> = mode === 'market' ? [
+    { title: '备注', dataIndex: 'remark', width: 180, ellipsis: true, render: (value?: string) => value?.trim() || '-' },
+    { title: '亚马逊代码', dataIndex: 'fbaWarehouseCode', width: 120, ellipsis: true, render: (value?: string) => value?.trim() || '-' },
+    { title: '邮编', dataIndex: 'receiverPostalCode', width: 110, ellipsis: true, render: (value?: string) => value?.trim() || '-' }
   ] : [];
 
   return [
@@ -105,24 +117,21 @@ export function createPendingRoutingColumns(options: {
     },
     { title: '货物数据', width: 180, render: (_, record) => `${record.packageCount} 件 / 实重 ${(record.weightKg ?? record.receivableWeightKg).toFixed(2)} kg / 计费 ${record.receivableWeightKg.toFixed(2)} kg` },
     ...businessCostColumns,
-    {
-      title: '选项',
-      width: 84,
-      render: (_, record) => mode === 'market'
-        ? onRoute ? <Button size="small" onClick={() => onRoute(record)}>排货</Button> : null
-        : <Text type="secondary">待市场排货</Text>
-    },
+    ...routeCostColumns,
+    ...(mode === 'market' ? [] : [{ title: '选项', width: 84, render: () => <Text type="secondary">待市场排货</Text> }]),
     ...(canViewAgentChannel ? [
       { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '待分配' },
       { title: '代理渠道', dataIndex: 'routeAgentChannelName', width: 150, render: (value?: string) => value || '待分配' }
     ] : []),
     ...payableCostColumns,
+    ...marketOrderInfoColumns,
     {
       title: '操作',
       width: mode === 'market' ? 270 : onViewFees ? 150 : 90,
       fixed: 'right',
       render: (_, record) => mode === 'market' ? (
         <Space size={4} wrap>
+          {onRoute ? <Button size="small" onClick={() => onRoute(record)}>排货</Button> : null}
           {onApprove ? (
             <Button size="small" type="primary" onClick={() => onApprove(record)}>
               审核
@@ -141,6 +150,11 @@ export function createPendingRoutingColumns(options: {
           {onViewFees ? (
             <Button size="small" onClick={() => onViewFees(record)}>
               业务成本
+            </Button>
+          ) : null}
+          {onViewPayableFees ? (
+            <Button size="small" onClick={() => onViewPayableFees(record)}>
+              应付成本
             </Button>
           ) : null}
           {onReturnReview ? (

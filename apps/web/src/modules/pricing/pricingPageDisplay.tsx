@@ -20,6 +20,34 @@ export function formatKgCurrencyRate(amount: number) {
   return `¥${formatKgRate(amount)}`;
 }
 
+export type PricingLookupResultFieldVisibility = {
+  channel: boolean;
+  requirement: boolean;
+  customRemark: boolean;
+  cost: boolean;
+  markupBreakdown: boolean;
+  grossProfit: boolean;
+};
+
+/**
+ * 业务员查价保留可用于报价沟通的线路、渠道要求和业务备注；
+ * 只有成本、加价计算过程和毛利属于内部价格字段。
+ */
+export function resolvePricingLookupResultFieldVisibility(
+  canViewLookupModule: boolean,
+  canViewInternalPricing: boolean
+): PricingLookupResultFieldVisibility {
+  const canViewInternal = canViewLookupModule && canViewInternalPricing;
+  return {
+    channel: canViewLookupModule,
+    requirement: canViewLookupModule,
+    customRemark: canViewLookupModule,
+    cost: canViewInternal,
+    markupBreakdown: canViewInternal,
+    grossProfit: canViewInternal
+  };
+}
+
 export function formatMarkupValue(rule: Pick<AgentMarkupSummary, 'markupType' | 'markupValue' | 'markupPerKg' | 'markupUnit'>) {
   const type = rule.markupType ?? 'WEIGHT';
   const value = rule.markupValue ?? rule.markupPerKg;

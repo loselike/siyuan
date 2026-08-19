@@ -11,7 +11,7 @@ import type {
 } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { PrismaService } from '../../prisma.service.js';
-import { isAdministratorRole, isBusinessAgentRestrictedRole, type PermissionKey, type Principal } from '../../rbac.js';
+import { isWarehouseWideScopePrincipal, type PermissionKey, type Principal } from '../../rbac.js';
 import {
   mapWarehousePackagesWithConfirmedTally,
   resolveWarehouseTallyRecentCutoff,
@@ -76,14 +76,11 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
       this.authorizer.hasPermission(principal.role, 'warehouse:in-stock:view')
     ]);
     if (!canToday && !canInStock) throw new ForbiddenException('没有仓库包裹查看权限');
-    const warehouseWideScope = isAdministratorRole(principal.role)
-      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isWarehouseWideScopePrincipal(principal);
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
-    const businessCustomerScoped = !warehouseWideScope
-      && !isBusinessAgentRestrictedRole(principal.role)
-      && principal.dataScope !== 'SALES_OWN';
+    const businessCustomerScoped = !warehouseWideScope;
     const ownedCustomerCodes = businessCustomerScoped
       ? (await this.prisma.customer.findMany({
           where: { salesperson: { in: salespeople } },
@@ -115,12 +112,9 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
   ): Promise<WarehouseInStockPageResponse> {
     const page = Math.max(1, Math.trunc(Number(query.page) || 1));
     const pageSize = Math.min(100, Math.max(1, Math.trunc(Number(query.pageSize) || 10)));
-    const warehouseWideScope = isAdministratorRole(principal.role)
-      || ['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role);
+    const warehouseWideScope = isWarehouseWideScopePrincipal(principal);
     // 数据范围由服务端岗位/权限派生；客户端 dataScope 只用于展示偏好，不能扩权。
-    const businessCustomerScoped = !warehouseWideScope
-      && !isBusinessAgentRestrictedRole(principal.role)
-      && principal.dataScope !== 'SALES_OWN';
+    const businessCustomerScoped = !warehouseWideScope;
     const salespeople = principal.departmentTeamScope?.filter(Boolean).length
       ? principal.departmentTeamScope!.filter(Boolean)
       : [principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value));
@@ -170,6 +164,22 @@ export class PrismaWarehouseInventoryQueryRepository implements WarehouseInvento
         .map((row) => row.target)
         .filter(Boolean)));
       where.id = ids.length ? { in: ids } : { in: ['__none__'] };
+    }
+    if (query.status !== 'TALLIED_ARCHIVED') {
+      // 在仓可用池与录单选择保持同一归属口径：已绑定运单或被活动草稿
+      // 预占的包裹都不能继续作为可用库存展示。
+      where.shipmentId = null;
+      where.systemOrderNo = null;
+      const activeDrafts = await this.prisma.shipment.findMany({
+        where: { deletedAt: null },
+        select: { draftWarehousePackageIds: true }
+      });
+      const draftOccupiedPackageIds = Array.from(new Set(
+        activeDrafts.flatMap((shipment) => shipment.draftWarehousePackageIds ?? []).filter(Boolean)
+      ));
+      if (draftOccupiedPackageIds.length) {
+        where.NOT = { id: { in: draftOccupiedPackageIds } };
+      }
     }
 
     const [aggregate, pageRows, waitingDispatchTickets] = await Promise.all([

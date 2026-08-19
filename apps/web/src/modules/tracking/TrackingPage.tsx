@@ -9,6 +9,7 @@ import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, ManagedMa
 import { formatBeijingDateTime } from '../shared/format';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { formatTrackingImportDate } from './bulkImport';
+import type { ExternalTrackingShipmentSummary } from '../../api/carrierTaskQueryClient';
 
 const { Text } = Typography;
 
@@ -17,7 +18,7 @@ const trackingPageConfig = {
   description: '集中处理外部承运商轨迹录入、同步、未上网和长时间未更新；内部订单节点请在运单内部轨迹查看。'
 };
 
-function formatLatestTrackingTime(shipment: Shipment) {
+function formatLatestTrackingTime(shipment: ExternalTrackingShipmentSummary) {
   return shipment.latestTrackingUpdatedAt ? formatBeijingDateTime(shipment.latestTrackingUpdatedAt) : formatBeijingDateTime(shipment.createdAt);
 }
 
@@ -40,9 +41,10 @@ export function TrackingPage({
   onConfirmBulkTrackingImport,
   onRunTask,
   onRetryTask,
+  onResolveDetailShipment,
   onViewShipment
 }: {
-  shipments: Shipment[];
+  shipments: ExternalTrackingShipmentSummary[];
   tasks: CarrierTaskSummary[];
   notice: string | null;
   permissions: string[];
@@ -55,15 +57,15 @@ export function TrackingPage({
   onConfirmBulkTrackingImport: () => Promise<void>;
   onRunTask: (task: CarrierTaskSummary) => Promise<void>;
   onRetryTask: (task: CarrierTaskSummary) => Promise<void>;
+  onResolveDetailShipment: (shipmentId: string) => Promise<Shipment | undefined>;
   onViewShipment: (shipment: Shipment) => void;
 }) {
   const config = trackingPageConfig;
   const can = (permission: string) => permissions.includes(permission);
   const canTaskView = can('tracking:carrier-task:view');
   const canExternalView = can('tracking:external:view');
-  const canUpload = can('tracking:external:import-upload');
-  const canPreview = can('tracking:external:import-preview');
-  const canConfirmBulkImport = can('tracking:external:import-confirm') && can('tracking:external:overwrite');
+  const canSyncTasks = can('tracking:carrier-task:sync');
+  const canImport = can('tracking:external:import');
   const staleCount = shipments.filter((shipment) => shipment.trackingStaleDays >= 5).length;
   const [activeTrackingSection, setActiveTrackingSection] = useState('latest');
   const trackingSubItems: ModuleSubNavItem[] = [
@@ -80,8 +82,8 @@ export function TrackingPage({
     return (
       <Space direction="vertical" size={0}>
         <Space size={4}>
-          {shipment ? (
-            <Button className="order-number-link" type="link" size="small" onClick={() => onViewShipment(shipment)}>
+          {shipment && can('tracking:external:detail') ? (
+            <Button className="order-number-link" type="link" size="small" onClick={() => void onResolveDetailShipment(shipment.id).then((detail) => detail && onViewShipment(detail))}>
               {systemOrderNo}
             </Button>
           ) : (
@@ -110,19 +112,19 @@ export function TrackingPage({
       )
     },
     { key: 'attempts', title: '尝试次数', dataIndex: 'attempts', width: 90 },
-    ...(can('tracking:carrier-task:error-view') ? [{ key: 'lastError', title: '错误信息', dataIndex: 'lastError', width: 260, render: (value?: string) => value ?? '-' }] : []),
+    { key: 'lastError', title: '错误信息', dataIndex: 'lastError', width: 260, render: (value?: string) => value ?? '-' },
     {
       key: 'action',
       title: '操作',
       width: 160,
       render: (_, task) => (
         <Space>
-          {task.status === 'PENDING' && can('tracking:carrier-task:run') ? (
+          {task.status === 'PENDING' && canSyncTasks ? (
             <Button size="small" onClick={() => void onRunTask(task)}>
               同步轨迹
             </Button>
           ) : null}
-          {task.status === 'FAILED' && can('tracking:carrier-task:retry') ? (
+          {task.status === 'FAILED' && canSyncTasks ? (
             <Button size="small" onClick={() => void onRetryTask(task)}>
               重试
             </Button>
@@ -131,7 +133,7 @@ export function TrackingPage({
       )
     }
   ];
-  const allLatestColumns: ColumnsType<Shipment> = [
+  const allLatestColumns: ColumnsType<ExternalTrackingShipmentSummary> = [
     {
       key: 'latestTrackingUpdatedAt',
       title: '更新时间',
@@ -143,7 +145,7 @@ export function TrackingPage({
     { key: 'transferNo', title: '转单号', dataIndex: 'transferNo', width: 170, render: (value?: string) => value || '-' },
     { key: 'latestTracking', title: '最新物流轨迹', dataIndex: 'latestTracking', width: 320, render: (value?: string) => value || '-' },
     { key: 'location', title: '地点', width: 110, render: (_, shipment) => extractTrackingLocation(shipment.latestTracking) || '-' },
-    { key: 'status', title: '状态', dataIndex: 'status', width: 120, render: (status: Shipment['status']) => <Tag>{shipmentStatusLabels[status] ?? status}</Tag> },
+    { key: 'status', title: '状态', dataIndex: 'status', width: 120, render: (status: ExternalTrackingShipmentSummary['status']) => <Tag>{shipmentStatusLabels[status] ?? status}</Tag> },
     {
       key: 'trackingStaleDays',
       title: '未更新天数',
@@ -156,12 +158,12 @@ export function TrackingPage({
       title: '操作',
       width: 110,
       fixed: 'right',
-      render: (_: unknown, shipment: Shipment) => <Button size="small" onClick={() => onViewShipment(shipment)}>查看详情</Button>
+      render: (_: unknown, shipment: ExternalTrackingShipmentSummary) => (
+        <Button size="small" onClick={() => void onResolveDetailShipment(shipment.id).then((detail) => detail && onViewShipment(detail))}>查看详情</Button>
+      )
     }
   ];
-  const latestColumns = allLatestColumns.filter((column) => column.key !== 'latestTracking' || can('tracking:external:latest-view'))
-    .filter((column) => column.key !== 'trackingStaleDays' || can('tracking:external:stale-days-view'))
-    .filter((column) => column.key !== 'action' || can('tracking:external:detail'));
+  const latestColumns = allLatestColumns.filter((column) => column.key !== 'action' || can('tracking:external:detail'));
   const taskActionColumn = taskColumns.find((column) => column.key === 'action');
   const taskMatrixColumns: ManagedTableColumns<CarrierTaskSummary> = [
     {
@@ -215,7 +217,7 @@ export function TrackingPage({
         />
       )
     },
-    ...(can('tracking:carrier-task:error-view') ? [{
+    ...([{
       key: 'matrixException',
       title: '异常信息',
       width: 230,
@@ -227,26 +229,26 @@ export function TrackingPage({
           ]}
         />
       )
-    }] : []),
+    }]),
     ...(taskActionColumn ? [{ ...taskActionColumn, title: '操作', width: 140, fixed: 'right' as const }] : [])
   ];
   const latestActionColumn = latestColumns.find((column) => column.key === 'action');
-  const latestMatrixColumns: ManagedTableColumns<Shipment> = [
+  const latestMatrixColumns: ManagedTableColumns<ExternalTrackingShipmentSummary> = [
     {
       key: 'matrixUpdated',
       title: '更新信息',
       width: 155,
       className: 'managed-matrix-group-primary',
-      render: (_: unknown, shipment: Shipment) => (
+      render: (_: unknown, shipment: ExternalTrackingShipmentSummary) => (
         <ManagedMatrixCell
           labelWidth={54}
           fields={[
             { key: 'latestTrackingUpdatedAt', label: '更新时间', value: <ManagedMatrixDateTime value={formatLatestTrackingTime(shipment)} /> },
-            can('tracking:external:stale-days-view') ? {
+            {
               key: 'trackingStaleDays',
               label: '未更新',
               value: <Tag color={shipment.trackingStaleDays >= 5 ? 'orange' : 'green'}>{shipment.trackingStaleDays ? `${shipment.trackingStaleDays} 天` : '今日更新'}</Tag>
-            } : null
+            }
           ]}
         />
       )
@@ -255,7 +257,7 @@ export function TrackingPage({
       key: 'matrixShipment',
       title: '运单信息',
       width: 240,
-      render: (_: unknown, shipment: Shipment) => (
+      render: (_: unknown, shipment: ExternalTrackingShipmentSummary) => (
         <ManagedMatrixCell
           labelWidth={54}
           fields={[
@@ -270,11 +272,11 @@ export function TrackingPage({
       key: 'matrixTracking',
       title: '轨迹信息',
       width: 300,
-      render: (_: unknown, shipment: Shipment) => (
+      render: (_: unknown, shipment: ExternalTrackingShipmentSummary) => (
         <ManagedMatrixCell
           labelWidth={66}
           fields={[
-            can('tracking:external:latest-view') ? { key: 'latestTracking', label: '最新轨迹', value: shipment.latestTracking || '-', title: shipment.latestTracking, wrap: true } : null,
+            { key: 'latestTracking', label: '最新轨迹', value: shipment.latestTracking || '-', title: shipment.latestTracking, wrap: true },
             { key: 'location', label: '地点', value: extractTrackingLocation(shipment.latestTracking) || '-' }
           ]}
         />
@@ -284,7 +286,7 @@ export function TrackingPage({
       key: 'matrixStatus',
       title: '履约状态',
       width: 140,
-      render: (_: unknown, shipment: Shipment) => (
+      render: (_: unknown, shipment: ExternalTrackingShipmentSummary) => (
         <ManagedMatrixCell
           labelWidth={48}
           fields={[
@@ -359,7 +361,7 @@ export function TrackingPage({
                 minimumScrollX: 0,
                 tableLayout: 'fixed',
                 recordDetail: { title: '轨迹任务详情', columns: taskColumns },
-                columnSettings: can('tracking:carrier-task:column-setting') ? {
+                columnSettings: can('tracking:carrier-task:view') ? {
                   storageKey: 'sunny.tracking.tasks.matrix-columns-v1',
                   title: '轨迹任务矩阵列设置',
                   lockedKeys: ['action']
@@ -373,7 +375,7 @@ export function TrackingPage({
                 className: 'tracking-tasks-ledger-table',
                 minimumScrollX: 1180,
                 recordDetail: { title: '轨迹任务详情' },
-                columnSettings: can('tracking:carrier-task:column-setting') ? {
+                columnSettings: can('tracking:carrier-task:view') ? {
                   storageKey: 'siyuan-tracking-task-hidden-columns',
                   title: '轨迹任务列设置',
                   labels: {
@@ -402,7 +404,7 @@ export function TrackingPage({
       <Card
         className="module-card tracking-latest-card"
         title="外部物流轨迹"
-        extra={canUpload ? (
+        extra={canImport ? (
           <Space>
             <label className="ant-btn ant-btn-default ant-btn-sm" htmlFor="bulk-tracking-upload" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
               <Upload size={14} />
@@ -434,7 +436,7 @@ export function TrackingPage({
                   minimumScrollX: 0,
                   tableLayout: 'fixed',
                   recordDetail: { title: '最新轨迹详情', columns: latestColumns },
-                  columnSettings: can('tracking:external:column-setting') ? {
+                  columnSettings: can('tracking:external:view') ? {
                     storageKey: 'sunny.tracking.latest.matrix-columns-v1',
                     title: '外部物流轨迹矩阵列设置',
                     lockedKeys: ['action']
@@ -448,7 +450,7 @@ export function TrackingPage({
                   className: 'tracking-latest-ledger-table',
                   minimumScrollX: 1380,
                   recordDetail: { title: '最新轨迹详情' },
-                  columnSettings: can('tracking:external:column-setting') ? {
+                  columnSettings: can('tracking:external:view') ? {
                     storageKey: 'siyuan-tracking-latest-hidden-columns',
                     title: '外部物流轨迹列设置',
                     labels: {
@@ -472,7 +474,7 @@ export function TrackingPage({
             dataSource={shipments}
             pagination={tenRowTablePagination}
           />
-          {canPreview && (bulkTrackingFileName || bulkTrackingError || bulkTrackingResult) ? (
+          {canImport && (bulkTrackingFileName || bulkTrackingError || bulkTrackingResult) ? (
             <Card size="small" className="tracking-import-preview-card" title="导入轨迹预览">
               <Space direction="vertical" size={12} className="full-width">
                 {bulkTrackingFileName ? <Text type="secondary">{bulkTrackingFileName}</Text> : null}
@@ -482,11 +484,11 @@ export function TrackingPage({
                     <Space wrap>
                       <Tag color="default">原始行数 {bulkTrackingResult.rawRowCount ?? bulkTrackingRows.length}</Tag>
                       <Tag color="blue">可覆盖运单数 {bulkTrackingResult.matchedShipmentCount ?? bulkTrackingResult.shipmentPreviews?.length ?? 0}</Tag>
-                      {can('tracking:external:unmatched-view') ? <Tag color={bulkTrackingResult.unmatchedOrderNos.length ? 'orange' : 'green'}>未匹配 {bulkTrackingResult.unmatchedOrderNos.length}</Tag> : null}
-                      {can('tracking:external:import-error-view') ? <Tag color={bulkTrackingResult.errorRows?.length ? 'red' : 'green'}>错误行 {bulkTrackingResult.errorRows?.length ?? 0}</Tag> : null}
+                      <Tag color={bulkTrackingResult.unmatchedOrderNos.length ? 'orange' : 'green'}>未匹配 {bulkTrackingResult.unmatchedOrderNos.length}</Tag>
+                      <Tag color={bulkTrackingResult.errorRows?.length ? 'red' : 'green'}>错误行 {bulkTrackingResult.errorRows?.length ?? 0}</Tag>
                       <Tag color={bulkTrackingResult.conflictOrderNos?.length ? 'red' : 'green'}>冲突单号 {bulkTrackingResult.conflictOrderNos?.length ?? 0}</Tag>
                     </Space>
-                    {can('tracking:external:unmatched-view') && bulkTrackingResult.unmatchedOrderNos.length ? <Text type="secondary">未匹配出货单号：{bulkTrackingResult.unmatchedOrderNos.join('、')}</Text> : null}
+                    {bulkTrackingResult.unmatchedOrderNos.length ? <Text type="secondary">未匹配出货单号：{bulkTrackingResult.unmatchedOrderNos.join('、')}</Text> : null}
                     {bulkTrackingResult.conflictOrderNos?.length ? <Text type="danger">冲突单号：{bulkTrackingResult.conflictOrderNos.join('、')}</Text> : null}
                     <ManagedTable
                       rowKey="shipmentId"
@@ -508,7 +510,7 @@ export function TrackingPage({
                       columnSettings={false}
                       recordDetail={false}
                     />
-                    {can('tracking:external:import-error-view') && bulkTrackingResult.errorRows?.length ? (
+                    {bulkTrackingResult.errorRows?.length ? (
                       <ManagedTable
                         rowKey={(row) => `${row.rowNumber}-${row.reason}`}
                         size="small"
@@ -524,7 +526,7 @@ export function TrackingPage({
                       type="primary"
                       icon={<FileInput size={16} />}
                       loading={bulkTrackingImporting}
-                      disabled={!canConfirmBulkImport || !hasBulkImportPreview}
+                      disabled={!hasBulkImportPreview}
                       onClick={() => void onConfirmBulkTrackingImport()}
                     >
                       确认导入

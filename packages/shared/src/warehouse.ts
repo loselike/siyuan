@@ -593,6 +593,8 @@ export interface WarehouseTallyRepeatStatisticsQuery {
 export interface WarehouseTallyRepeatStatisticsSummary {
   completedBatchCount: number;
   repeatedBatchCount: number;
+  /** Number of completed tally task events in the selected period. */
+  tallyCount: number;
   extraTallyCount: number;
   repeatRate: number;
   maxTallyCount: number;
@@ -600,6 +602,20 @@ export interface WarehouseTallyRepeatStatisticsSummary {
 
 export interface WarehouseTallyRepeatSalespersonSummary extends WarehouseTallyRepeatStatisticsSummary {
   salesperson: string;
+  latestCompletedAt?: string;
+  latestRepeatedAt?: string;
+}
+
+export interface WarehouseTallyRepeatAgentSummary extends WarehouseTallyRepeatStatisticsSummary {
+  agentShortName: string;
+  latestCompletedAt?: string;
+  latestRepeatedAt?: string;
+}
+
+export interface WarehouseTallyRepeatCustomerSummary extends WarehouseTallyRepeatStatisticsSummary {
+  customerCode: string;
+  customerName?: string;
+  latestCompletedAt?: string;
   latestRepeatedAt?: string;
 }
 
@@ -614,11 +630,16 @@ export interface WarehouseTallyRepeatBatchSummary {
   rootTallyTaskId: string;
   rootTaskNo: string;
   salesperson: string;
+  agentShortName?: string;
   tallyOperators: string[];
   customerCode: string;
   customerName?: string;
   sourceCombinedOrderNo: string;
   tallyCount: number;
+  /** Number of tally events in the selected period; tallyCount remains the lifetime chain count. */
+  periodTallyCount: number;
+  /** Repeat events in the selected period (sequence > 1). */
+  periodExtraTallyCount: number;
   firstCompletedAt: string;
   lastCompletedAt: string;
   latestTaskId: string;
@@ -630,6 +651,8 @@ export interface WarehouseTallyRepeatBatchSummary {
 
 export interface WarehouseTallyRepeatStatisticsResponse {
   summary: WarehouseTallyRepeatStatisticsSummary;
+  agents: WarehouseTallyRepeatAgentSummary[];
+  customers: WarehouseTallyRepeatCustomerSummary[];
   salespeople: WarehouseTallyRepeatSalespersonSummary[];
   operators: WarehouseTallyRepeatOperatorSummary[];
   batches: WarehouseTallyRepeatBatchSummary[];

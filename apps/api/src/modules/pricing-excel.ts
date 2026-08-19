@@ -59,9 +59,9 @@ export const PRICING_PARSER_RULE_VERSIONS: Record<PriceBookImportTargetModule, n
   amazon: 9,
   // v7 applies the same shared requirement and transit contract to inquiry.
   inquiry: 7,
-  // v10 adds the EPS customs/product/zone matrix used by its legacy .xls
-  // Europe air-price workbook without changing other supplier profiles.
-  europeExpress: 10,
+  // v12 keeps each side-by-side Zhenyun tax/channel group independent while
+  // restoring the sheet prefix to the customer-facing channel label.
+  europeExpress: 12,
   southAfrica: 1,
   // v8 also recognises structurally valid Topuda US sea courier sheets from
   // the selected USA Air/Sea module, without requiring "美国" in the sheet name.
@@ -909,54 +909,81 @@ function parseZhenyunEuropeExpressPriceWorkbook(
   agentShortName?: string
 ): ImportedPriceRow[] {
   const sheet = workbook.worksheets.find((item) => item.name.includes('欧洲空派快递派'));
-  if (!sheet) return [];
-  const rows = worksheetToRows(sheet);
-  const agentName = agentShortName?.trim() || inferAgentNameFromText(sourceName ?? sheet.name) || '深圳振韵国际';
-  const sheetTotalRemark = extractZhenyunSheetTotalRequirement(rows);
-  return rows.flatMap((headers, headerIndex) => {
-    if (normalizeHeader(headers[0]) !== '目的地') return [];
-    const tierColumns = buildImportedTierColumns(headers).filter((item) => item.tier.kind === 'kg');
-    if (tierColumns.length < 2) return [];
-    const group = findZhenyunExpressGroup(rows, headerIndex);
-    if (!group) return [];
-    const channelName = `${sheet.name} - ${group}`;
-    const transitLabel = headers
-      .slice(Math.max(...tierColumns.map((item) => item.columnIndex)) + 1)
-      .map((cell) => extractZhenyunTransitLabel(cell))
-      .find(Boolean);
-    const specialRemark = mergeRemarkBlocks(...headers.map(cellToRemarkLine), sheetTotalRemark);
-    return zhenyunSectionDataRows(rows, headerIndex).flatMap(({ row, rowIndex }) => {
-      const destinations = splitZhenyunExpressDestinations(cellToText(row[0]));
-      if (!destinations.length) return [];
-      return tierColumns.flatMap(({ columnIndex, tier }, tierIndex) => {
-        const costPerKg = cellToNumber(row[columnIndex]);
-        if (costPerKg <= 0) return [];
-        const nextTier = tierColumns[tierIndex + 1]?.tier;
-        const maxWeightKg = tier.maxWeightKg >= 99999 && nextTier && nextTier.minWeightKg > tier.minWeightKg
-          ? Number((nextTier.minWeightKg - 0.001).toFixed(3))
-          : tier.maxWeightKg;
-        return destinations.map(({ destinationCountry, postalRule }, destinationIndex) => ({
-          id: `import-price-${Date.now()}-${sheet.name}-${headerIndex}-${rowIndex}-${columnIndex}-${destinationIndex}`,
-          agentName,
-          sourceSheetName: sheet.name,
-          carrierName: inferPriceCarrierName({ channelName }),
-          channelName,
-          realChannelName: group,
-          businessRouteName: group,
-          destinationCountry,
-          postalRule,
-          minWeightKg: tier.minWeightKg,
-          maxWeightKg,
-          costPerKg,
-          priceTierLabel: tier.label,
-          currency: 'RMB',
-          transitDays: parseTransitDays(transitLabel),
-          transitLabel,
-          ...(specialRemark ? { specialRemark } : {})
-        }));
+  const airRows = !sheet ? [] : (() => {
+    const rows = worksheetToRows(sheet);
+    const agentName = agentShortName?.trim() || inferAgentNameFromText(sourceName ?? sheet.name) || '深圳振韵国际';
+    const sheetTotalRemark = extractZhenyunSheetTotalRequirement(rows);
+    return rows.flatMap((headers, headerIndex) => {
+      if (normalizeHeader(headers[0]) !== '目的地') return [];
+      const tierColumns = buildImportedTierColumns(headers).filter((item) => item.tier.kind === 'kg');
+      if (tierColumns.length < 2) return [];
+      const group = findZhenyunExpressGroup(rows, headerIndex);
+      if (!group) return [];
+      const channelName = `${sheet.name} - ${group}`;
+      const transitLabel = headers
+        .slice(Math.max(...tierColumns.map((item) => item.columnIndex)) + 1)
+        .map((cell) => extractZhenyunTransitLabel(cell))
+        .find(Boolean);
+      const specialRemark = mergeRemarkBlocks(...headers.map(cellToRemarkLine), sheetTotalRemark);
+      return zhenyunSectionDataRows(rows, headerIndex).flatMap(({ row, rowIndex }) => {
+        const destinations = splitZhenyunExpressDestinations(cellToText(row[0]));
+        if (!destinations.length) return [];
+        return tierColumns.flatMap(({ columnIndex, tier }, tierIndex) => {
+          const costPerKg = cellToNumber(row[columnIndex]);
+          if (costPerKg <= 0) return [];
+          const nextTier = tierColumns[tierIndex + 1]?.tier;
+          const maxWeightKg = tier.maxWeightKg >= 99999 && nextTier && nextTier.minWeightKg > tier.minWeightKg
+            ? Number((nextTier.minWeightKg - 0.001).toFixed(3))
+            : tier.maxWeightKg;
+          return destinations.map(({ destinationCountry, postalRule }, destinationIndex) => ({
+            id: `import-price-${Date.now()}-${sheet.name}-${headerIndex}-${rowIndex}-${columnIndex}-${destinationIndex}`,
+            agentName,
+            sourceSheetName: sheet.name,
+            carrierName: inferPriceCarrierName({ channelName }),
+            channelName,
+            realChannelName: group,
+            businessRouteName: group,
+            destinationCountry,
+            postalRule,
+            minWeightKg: tier.minWeightKg,
+            maxWeightKg,
+            costPerKg,
+            priceTierLabel: tier.label,
+            currency: 'RMB',
+            transitDays: parseTransitDays(transitLabel),
+            transitLabel,
+            ...(specialRemark ? { specialRemark } : {})
+          }));
+        });
       });
     });
-  });
+  })();
+
+  // A supplier workbook may include Amazon and oversized-price tabs next to
+  // the Europe Express tables. Only known Europe tabs enter this quote pool.
+  const horizontalWorkbook: SimpleWorkbook = {
+    worksheets: workbook.worksheets.filter((item) => isZhenyunEuropeExpressHorizontalSheet(item.name))
+  };
+  return [
+    ...airRows,
+    ...parseHorizontalTierPriceWorkbook(horizontalWorkbook, sourceName, 'europeExpress', {
+      channelNameMode: 'sheet-route',
+      groupedTiersByRoute: true
+    })
+  ];
+}
+
+const ZHENYUN_EUROPE_EXPRESS_HORIZONTAL_SHEETS = new Set([
+  '欧洲铁路包税',
+  '欧洲海运快递派送',
+  '意大利专线',
+  '波兰专线',
+  '西班牙专线',
+  '法国专线'
+]);
+
+function isZhenyunEuropeExpressHorizontalSheet(sheetName: string): boolean {
+  return ZHENYUN_EUROPE_EXPRESS_HORIZONTAL_SHEETS.has(sheetName.replace(/\s+/g, '').trim());
 }
 
 /**
@@ -2553,10 +2580,17 @@ function parseDubaiSeaCbmTier(text: string) {
   return { label: text.trim() };
 }
 
+type HorizontalTierPriceWorkbookOptions = {
+  channelNameMode?: 'sheet-route' | 'route';
+  /** Keep adjacent weight columns within the same side-by-side route group. */
+  groupedTiersByRoute?: boolean;
+};
+
 function parseHorizontalTierPriceWorkbook(
   workbook: SimpleWorkbook,
   sourceName?: string,
-  targetModule?: PriceBookImportTargetModule
+  targetModule?: PriceBookImportTargetModule,
+  options?: HorizontalTierPriceWorkbookOptions
 ): ImportedPriceRow[] {
   return workbook.worksheets.flatMap((sheet) => {
     const sheetName = sheet.name;
@@ -2615,19 +2649,30 @@ function parseHorizontalTierPriceWorkbook(
           if (costPerKg <= 0) {
             return [];
           }
+          const routeName = options?.channelNameMode || options?.groupedTiersByRoute
+            ? inferHorizontalRouteName(rows, headerIndex, columnIndex, sectionName, sheetName)
+            : undefined;
           const channelName = firstHeader === '渠道'
             ? `${sectionName} ${label}`.trim()
-            : inferHorizontalChannelName(rows, headerIndex, columnIndex, sectionName);
-          const nextRange = tierColumns[tierIndex + 1]?.range;
+            : options?.channelNameMode === 'route'
+              ? routeName ?? inferHorizontalChannelName(rows, headerIndex, columnIndex, sectionName)
+              : options?.channelNameMode === 'sheet-route'
+                ? `${sheetName} - ${routeName ?? inferHorizontalChannelName(rows, headerIndex, columnIndex, sectionName)}`.trim()
+                : inferHorizontalChannelName(rows, headerIndex, columnIndex, sectionName);
+          const nextRange = options?.groupedTiersByRoute && routeName
+            ? tierColumns
+              .slice(tierIndex + 1)
+              .find((candidate) => inferHorizontalRouteName(rows, headerIndex, candidate.columnIndex, sectionName, sheetName) === routeName)?.range
+            : tierColumns[tierIndex + 1]?.range;
           const maxWeightKg = range.maxWeightKg ?? (nextRange && nextRange.minWeightKg > range.minWeightKg ? nextRange.minWeightKg - 0.001 : 99999);
           return destinations.flatMap((destinationCountry, destinationIndex) => rowWarehouseCodes.map((warehouseCode) => ({
             id: `import-price-${Date.now()}-${sheetName}-${headerIndex}-${offset}-${columnIndex}-${destinationIndex}-${warehouseCode ?? 'none'}`,
             agentName: inferAgentNameFromText(sheetName) ?? inferAgentNameFromText(sourceName ?? '') ?? '未知代理',
             sourceSheetName: sectionOriginName ?? sheetName,
             carrierName: inferPriceCarrierName({ channelName }),
-          channelName,
-          realChannelName: channelName,
-          businessRouteName: sectionName,
+            channelName,
+            realChannelName: firstHeader === '渠道' ? channelName : routeName ?? channelName,
+            businessRouteName: firstHeader === '渠道' ? sectionName : routeName ?? sectionName,
             warehouseCode,
             destinationCountry,
             postalRule: firstHeader === '渠道' ? undefined : label,
@@ -3049,6 +3094,26 @@ function findHorizontalSectionName(rows: Array<Array<string | number | null>>, h
     }
   }
   return sheetName;
+}
+
+/** Resolve the nearest side-by-side channel header for one price column. */
+function inferHorizontalRouteName(
+  rows: Array<Array<string | number | null>>,
+  headerIndex: number,
+  columnIndex: number,
+  fallback: string,
+  sheetName?: string
+) {
+  const group = nearestLeftText(rows[headerIndex - 1] ?? [], columnIndex);
+  const normalizedGroup = normalizeHeader(group);
+  if (
+    group
+    && !['系统下单渠道', '适用情况', '备注', '时效', '渠道要求', '要求', '说明'].includes(normalizedGroup)
+    && !/^(?:备注|时效|渠道要求|要求|说明)(?:[:：].*)?$/.test(group)
+  ) {
+    return group.trim();
+  }
+  return cleanEuropePriceGroup(fallback, sheetName) ?? fallback;
 }
 
 function inferHorizontalChannelName(

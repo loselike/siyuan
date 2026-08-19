@@ -12,7 +12,7 @@ import {
   validCustomerServiceDataCycleStart
 } from './customer-service/data-confirm/customer-service-data-confirm.policy.js';
 import { normalizeProblemTicketTagName, normalizeProblemTicketTagSnapshot } from './customer-service/problem-tag/problem-ticket-tag.policy.js';
-import { calculateFinanceItemAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
+import { calculateFinanceItemAmount, calculateMarketRoutingCostAmount, isFinanceAmountOverridden, isFinanceBillingUnit, resolveBusinessCostBillingFields, resolveFinanceCostBillingFields, resolvePrimaryCustomerServicePayableBilling } from './finance-billing.js';
 import {
   buildWarehouseMachineImportResponse,
   warehouseMachineImportKey,
@@ -44,6 +44,7 @@ import {
   getLineShipmentEditStages,
   lineShipmentStageEditPermissionCode,
   summarizeStatusCounts,
+  toExternalTrackingShipmentSummary,
   matchUsPostalRule,
   matchesEuropeanPostalRule,
   normalizeUsPostalCode,
@@ -309,6 +310,7 @@ import {
   type ShipmentPaymentUpdateInput,
   type ShipmentDispatchInput,
   type WarehouseDispatchDeclarationUpdateInput,
+  type WarehouseDispatchInboundNoUpdateInput,
   type WarehouseHandoverPrintInput,
   type WarehouseHandoverPrintResponse,
   type WarehouseHandoverSummary,
@@ -353,6 +355,8 @@ import {
   type WarehouseTallyTaskPackageResultInput,
   type WarehouseTallyTaskCreateInput,
   type WarehouseTallyTaskListQuery,
+  type WarehouseTallySortRule,
+  type WarehouseTallySortRulesUpdateInput,
   type WarehouseTallyRepeatStatisticsQuery,
   type WarehouseTallyRepeatStatisticsResponse,
   type WarehouseTallyTaskSummary,
@@ -375,7 +379,7 @@ import {
   type WaterReceiptVoucherInput,
   type WaterReceiptVoucherSummary
 } from '@siyuan/shared';
-import { isEarlyPaymentSettlementMethod, sortWarehouseTallyTasks, warehouseTallyChannels } from '@siyuan/shared';
+import { createDefaultWarehouseTallySortRules, isEarlyPaymentSettlementMethod, warehouseTallyChannels } from '@siyuan/shared';
 import {
   buildWaterReceiptListTotals,
   buildWaterReceiptVoucherAuditSnapshot,
@@ -419,6 +423,7 @@ import {
   warehousePackageSplitTotals
 } from './warehouse/warehouse-domain.shared.js';
 import { resolveWarehouseTallyRecentCutoff } from './warehouse/warehouse-query.shared.js';
+import { normalizeWarehouseTallySortRuleInput, sortPendingWarehouseTallyTasks } from './warehouse/tally/warehouse-tally-sort-rules.js';
 import { summarizeWarehouseInStockTotals } from './warehouse/inventory/warehouse-inventory-query.logic.js';
 import {
   allPermissions,
@@ -430,20 +435,26 @@ import {
   getPermissionDefinitions,
   getNewlyAddedMarketSensitivePermissions,
   getRoleMetadata,
+  hiddenPersistedApiPermissionsForRole,
   isBusinessAgentRestrictedRole,
   isBusinessAgentOwnOnlyRole,
   isBuiltinRoleKey,
+  isWarehouseWideScopePrincipal,
   isAdministratorRole,
+  isFinanceBankDataGloballyMasked,
   isPaymentVoucherGloballyMasked,
+  managementPermissionsForRole,
   normalizeRolePermissions,
   permissionDefinitions,
   protectedDataScopePermissions,
   globalFieldMaskKeys,
   globalFieldMaskPermissionCode,
+  hasExplicitFinanceReceivableAllViewPermission,
+  isFinanceFullScopeRole,
   roleMetadata,
   rolePermissions,
+  trackingShipmentScopeForPrincipal,
   toSessionRole,
-  withImpliedUiPreferencePermissions,
   type PermissionKey,
   type Principal,
   type RoleKey,
@@ -772,6 +783,7 @@ interface StoredShipmentFinanceItem {
   voidedAt?: string;
   createdAt: string;
   updatedAt: string;
+  sourceType?: 'SYSTEM' | 'FINANCE_ITEM';
 }
 
 interface StoredAgentBankAccount extends AgentBankAccountSummary {}
@@ -1126,6 +1138,7 @@ export class InMemoryRepository {
   readonly warehouseRentRules: WarehouseRentRuleSummary[] = [];
   readonly warehouseConsolidations: WarehouseConsolidationSummary[] = [];
   readonly warehouseTallyTasks: WarehouseTallyTaskSummary[] = [];
+  readonly warehouseTallySortRules: WarehouseTallySortRule[] = createDefaultWarehouseTallySortRules();
 
   private readonly shipments: Array<Shipment & { customerId: string; channelId?: string; agentId?: string }> = [
     this.seedShipment('s-seed-1', 'c-9409', 'DAL-0605-AU', 'SYGJ06059409051', 'WAITING_SORT', 'FEDEX AU 促销', '远东'),
@@ -1322,6 +1335,7 @@ export class InMemoryRepository {
       username: account.username,
       role: toSessionRole(account.role),
       assignedRole: account.role,
+      roleLabel: this.roleMeta[account.role]?.label ?? getRoleMetadata(account.role).label,
       customerId: account.customerId,
       ...pickMemoryStaffProfile(account),
       mustChangePassword: account.mustChangePassword === true
@@ -1392,6 +1406,7 @@ export class InMemoryRepository {
       username: account.username,
       role: toSessionRole(account.role),
       assignedRole: account.role,
+      roleLabel: this.roleMeta[account.role]?.label ?? getRoleMetadata(account.role).label,
       customerId: account.customerId,
       ...pickMemoryStaffProfile(account),
       mustChangePassword: account.mustChangePassword === true
@@ -1431,13 +1446,22 @@ export class InMemoryRepository {
     return { ok: true };
   }
 
-  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; includeLinePoolFinanceSummary?: boolean; marketSiteScope?: boolean } = {}): Promise<Shipment[]> {
+  async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; includeLinePoolFinanceSummary?: boolean; marketSiteScope?: boolean; customerServiceScope?: boolean } = {}): Promise<Shipment[]> {
     const canViewMarketAgent = await this.hasAnyPermission(principal.role, [
       'master-data:agents:read',
       'master-data:agent-channels:read'
     ]);
-    const canViewLegacyMarketCostDetails = false;
-    const canViewLegacyMarketCostTotals = false;
+    const fieldMasks = await this.getGlobalFieldMaskState(principal);
+    const canViewMarketRouteCost = options.marketSiteScope === true
+      && !fieldMasks['payable-cost']
+      && await this.hasAnyPermission(principal.role, [
+        'market:pending-routing:route',
+        'market:pending-routing:edit',
+        'market:routed:view',
+        'market:routing-report:view'
+      ]);
+    const canViewLegacyMarketCostDetails = canViewMarketRouteCost;
+    const canViewLegacyMarketCostTotals = canViewMarketRouteCost;
     const canViewRoutedCostDetails = false;
     const canViewRoutedCostTotals = false;
     const canViewCustomerServiceAgent = Boolean(options.customerServiceFieldScope)
@@ -1445,7 +1469,6 @@ export class InMemoryRepository {
     const canViewCustomerServiceTransferAgentWeight = Boolean(options.customerServiceTransferAgentWeight)
       && await this.hasPermission(principal.role, 'customer-service:transfer:view-agent-data');
     const canViewShipmentAgentWeight = await this.canViewShipmentAgentWeight(principal);
-    const fieldMasks = await this.getGlobalFieldMaskState(principal);
     const canViewLinePoolFinanceSummary = options.includeLinePoolFinanceSummary === true && (
       await this.hasPermission(principal.role, 'operations:line-shipment:process')
       || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view')
@@ -1454,6 +1477,10 @@ export class InMemoryRepository {
       ? this.shipments
         .filter((shipment) => !this.deletedShipmentIds.has(shipment.id))
         .filter((shipment) => this.isShipmentInMarketSiteScope(principal, shipment))
+      : options.customerServiceScope
+        ? this.shipments
+          .filter((shipment) => !this.deletedShipmentIds.has(shipment.id))
+          .filter((shipment) => this.isShipmentInCustomerServiceScope(principal, shipment))
       : this.visibleShipments(principal, options.salesScopeMode);
     return scopedShipments.map((shipment) => this.maskShipmentListFields(
       principal,
@@ -1475,6 +1502,24 @@ export class InMemoryRepository {
         fieldMasks
       }
     ));
+  }
+
+  async getTrackingShipments(principal: Principal): Promise<Shipment[]> {
+    switch (trackingShipmentScopeForPrincipal(principal)) {
+      case 'all':
+      case 'customer': return this.getShipments(principal);
+      case 'customer-service': return this.getShipments(principal, { customerServiceScope: true });
+      case 'market': return this.getShipments(principal, { marketSiteScope: true });
+      case 'sales': return this.getShipments({ ...principal, dataScope: 'SALES_OWN' });
+      default: return [];
+    }
+  }
+
+  async getTrackingShipmentDetail(principal: Principal, shipmentId: string): Promise<Shipment> {
+    await this.ensurePermission(principal, 'tracking:external:detail');
+    const shipment = (await this.getTrackingShipments(principal)).find((item) => item.id === shipmentId);
+    if (!shipment) throw new NotFoundException('运单不存在');
+    return shipment;
   }
 
   async getWarehouseDispatchShipments(principal: Principal): Promise<Shipment[]> {
@@ -1512,6 +1557,30 @@ export class InMemoryRepository {
         changedBy: principal.username
       });
     }
+    return this.scopeShipmentAgentWeight(shipment, await this.canViewShipmentAgentWeight(principal));
+  }
+
+  async updateWarehouseDispatchInboundNo(
+    principal: Principal,
+    shipmentId: string,
+    input: WarehouseDispatchInboundNoUpdateInput
+  ): Promise<Shipment> {
+    await this.ensurePermission(principal, 'warehouse:dispatch-pending:edit', '没有待出库修改权限');
+    const normalizedInboundNo = this.normalizeInboundNo(input.inboundNo);
+    if (!normalizedInboundNo) throw new BadRequestException('请填写入仓号');
+    const shipment = this.visibleShipment(principal, shipmentId);
+    if (shipment.status !== 'WAITING_DISPATCH') {
+      throw new BadRequestException('只有待出库订单可以修改入仓号');
+    }
+    this.assertInboundNoAvailable(normalizedInboundNo, shipment.id);
+    const before = { inboundNo: shipment.inboundNo, status: shipment.status, systemOrderNo: shipment.systemOrderNo };
+    shipment.inboundNo = normalizedInboundNo;
+    this.audit('warehouse.dispatch.inbound-no.update', shipment.id, principal, before, {
+      inboundNo: shipment.inboundNo,
+      status: shipment.status,
+      systemOrderNo: shipment.systemOrderNo,
+      changedBy: principal.username
+    });
     return this.scopeShipmentAgentWeight(shipment, await this.canViewShipmentAgentWeight(principal));
   }
 
@@ -1732,7 +1801,15 @@ export class InMemoryRepository {
       })
       .map((row) => (row.after as Record<string, string>).shipmentId);
     const financeSummariesByShipmentId = Object.fromEntries(allRows.flatMap((shipment) => shipment.linePoolFinanceSummary ? [[shipment.id, shipment.linePoolFinanceSummary] as const] : []));
-    const response = summarizeLineShipmentPool(allRows, query, { businessDataApprovedShipmentIds, agentDataApprovedShipmentIds, afterSaleShipmentIds, packageSummariesByShipmentId, financeSummariesByShipmentId });
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    const response = summarizeLineShipmentPool(allRows, query, {
+      businessDataApprovedShipmentIds,
+      agentDataApprovedShipmentIds,
+      afterSaleShipmentIds,
+      packageSummariesByShipmentId,
+      financeSummariesByShipmentId,
+      includeAgentKeyword: !fieldMasks['agent-company-name'] && !fieldMasks['agent-data']
+    });
     const canViewSensitive = await this.hasPermission(principal.role, 'operations:line-shipment:process')
       || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view');
     if (canViewSensitive) return response;
@@ -1832,7 +1909,8 @@ export class InMemoryRepository {
       .filter((name) => name.length >= 2)));
   }
 
-  async listCustomerSources(query: CustomerSourceListQuery = {}): Promise<CustomerSourceListResponse> {
+  async listCustomerSources(principal: Principal, query: CustomerSourceListQuery = {}): Promise<CustomerSourceListResponse> {
+    await this.ensurePermission(principal, 'master-data:customers:read');
     const keyword = query.keyword?.trim().toLocaleLowerCase('zh-CN');
     const items = this.customerSources
       .filter((item) => query.enabledOnly ? item.enabled : true)
@@ -1846,6 +1924,7 @@ export class InMemoryRepository {
   }
 
   async createCustomerSource(principal: Principal, input: CustomerSourceInput): Promise<CustomerSourceSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:create');
     if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const name = requireMemoryCustomerSourceName(input.name);
     const normalizedName = normalizeMemoryCustomerSourceKey(name);
@@ -1870,6 +1949,7 @@ export class InMemoryRepository {
   }
 
   async updateCustomerSource(principal: Principal, id: string, input: Partial<CustomerSourceInput>): Promise<CustomerSourceSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:update');
     if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const source = this.customerSources.find((item) => item.id === id);
     if (!source) throw new NotFoundException('客户来源不存在');
@@ -1898,6 +1978,7 @@ export class InMemoryRepository {
   }
 
   async deleteCustomerSource(principal: Principal, id: string): Promise<{ id: string; deleted: true }> {
+    await this.ensurePermission(principal, 'master-data:customers:delete');
     if (isBusinessAgentRestrictedRole(principal.role)) throw new ForbiddenException('业务员不能维护全局客户来源字典');
     const source = this.customerSources.find((item) => item.id === id);
     if (!source) throw new NotFoundException('客户来源不存在');
@@ -1939,6 +2020,7 @@ export class InMemoryRepository {
   }
 
   async createCustomer(principal: Principal, input: CustomerCreateInput): Promise<CustomerSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:create');
     if (!input.code?.trim() || !input.name?.trim()) {
       throw new BadRequestException('客户代码和名称不能为空');
     }
@@ -1982,6 +2064,7 @@ export class InMemoryRepository {
   }
 
   async updateCustomer(principal: Principal, id: string, input: CustomerUpdateInput): Promise<CustomerSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:update');
     const customer = this.findCustomer(id);
     const before = { ...customer };
     this.ensureCustomerMasterAccess(principal, customer);
@@ -2033,6 +2116,7 @@ export class InMemoryRepository {
   }
 
   async createCustomerContact(principal: Principal, customerId: string, input: CustomerContactCreateInput): Promise<CustomerContactSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:contacts-manage');
     const customer = this.findCustomer(customerId);
     this.ensureCustomerMasterAccess(principal, customer);
     if (!input.name?.trim()) {
@@ -2072,6 +2156,7 @@ export class InMemoryRepository {
   }
 
   async updateCustomerContact(principal: Principal, customerId: string, contactId: string, input: CustomerContactUpdateInput): Promise<CustomerContactSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:contacts-manage');
     const customer = this.findCustomer(customerId);
     this.ensureCustomerMasterAccess(principal, customer);
     const contact = this.customerContacts.find((item) => item.id === contactId && item.customerId === customer.id);
@@ -2093,6 +2178,7 @@ export class InMemoryRepository {
   }
 
   async createCustomerUser(principal: Principal, customerId: string, input: CustomerUserCreateInput): Promise<CustomerUserSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:user-create');
     const customer = this.findCustomer(customerId);
     this.ensureCustomerMasterAccess(principal, customer);
     if (!input.username?.trim() || !input.password?.trim()) {
@@ -2116,6 +2202,7 @@ export class InMemoryRepository {
   }
 
   async updateCustomerEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<CustomerSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:update');
     const customer = this.findCustomer(id);
     const before = { ...customer };
     this.ensureCustomerMasterAccess(principal, customer);
@@ -2125,6 +2212,7 @@ export class InMemoryRepository {
   }
 
   async deleteCustomer(principal: Principal, id: string): Promise<CustomerSummary> {
+    await this.ensurePermission(principal, 'master-data:customers:delete');
     const customer = this.findCustomer(id);
     const before = { ...customer };
     this.ensureCustomerMasterAccess(principal, customer);
@@ -2144,6 +2232,7 @@ export class InMemoryRepository {
   }
 
   async createAgent(principal: Principal, input: AgentCreateInput): Promise<AgentSummary> {
+    await this.ensurePermission(principal, 'master-data:agents:create');
     if (!input.name?.trim()) {
       throw new BadRequestException('代理名称不能为空');
     }
@@ -2190,6 +2279,7 @@ export class InMemoryRepository {
   }
 
   async updateAgent(principal: Principal, id: string, input: AgentUpdateInput): Promise<AgentSummary> {
+    await this.ensurePermission(principal, 'master-data:agents:update');
     const agent = this.findEnabledEntity(this.agents, id, '代理不存在');
     const before = { ...agent };
     if (!input.name?.trim()) {
@@ -2245,6 +2335,7 @@ export class InMemoryRepository {
   }
 
   async updateAgentEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<AgentSummary> {
+    await this.ensurePermission(principal, 'master-data:agents:update');
     const agent = this.findEnabledEntity(this.agents, id, '代理不存在');
     const before = { ...agent };
     agent.enabled = input.enabled === true;
@@ -2253,6 +2344,7 @@ export class InMemoryRepository {
   }
 
   async deleteAgents(principal: Principal, ids: string[]): Promise<AgentDeleteResponse> {
+    await this.ensurePermission(principal, 'master-data:agents:delete');
     const uniqueIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
     if (!uniqueIds.length) {
       throw new BadRequestException('请选择代理资料');
@@ -2293,6 +2385,7 @@ export class InMemoryRepository {
   }
 
   async createAgentChannel(principal: Principal, input: AgentChannelCreateInput): Promise<AgentChannelSummary> {
+    await this.ensurePermission(principal, 'master-data:agent-channels:create');
     if (!(await this.hasPermission(principal.role, 'master-data:agent-channels:create'))) {
       throw new ForbiddenException('没有新增代理渠道权限');
     }
@@ -2313,6 +2406,7 @@ export class InMemoryRepository {
   }
 
   async updateAgentChannel(principal: Principal, id: string, input: AgentChannelUpdateInput): Promise<AgentChannelSummary> {
+    await this.ensurePermission(principal, 'master-data:agent-channels:update');
     const channel = this.findEnabledEntity(this.agentChannels, id, '代理渠道不存在');
     const agent = this.findEnabledEntity(this.agents, input.agentId, '代理不存在');
     const before = { ...channel };
@@ -2330,6 +2424,7 @@ export class InMemoryRepository {
   }
 
   async updateAgentChannelEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<AgentChannelSummary> {
+    await this.ensurePermission(principal, 'master-data:agent-channels:update');
     const channel = this.findEnabledEntity(this.agentChannels, id, '代理渠道不存在');
     const before = { ...channel };
     channel.enabled = input.enabled === true;
@@ -2338,6 +2433,7 @@ export class InMemoryRepository {
   }
 
   async deleteAgentChannel(principal: Principal, id: string): Promise<AgentChannelSummary> {
+    await this.ensurePermission(principal, 'master-data:agent-channels:delete');
     const channel = this.findEnabledEntity(this.agentChannels, id, '代理渠道不存在');
     const before = { ...channel };
     this.agentChannels.splice(this.agentChannels.findIndex((item) => item.id === id), 1);
@@ -2345,7 +2441,8 @@ export class InMemoryRepository {
     return before;
   }
 
-  async createCarrier(_principal: Principal, input: CarrierCreateInput): Promise<CarrierSummary> {
+  async createCarrier(principal: Principal, input: CarrierCreateInput): Promise<CarrierSummary> {
+    await this.ensurePermission(principal, 'master-data:channels:create');
     if (!input.name?.trim()) {
       throw new BadRequestException('承运商名称不能为空');
     }
@@ -2354,13 +2451,15 @@ export class InMemoryRepository {
     return { ...carrier };
   }
 
-  async updateCarrierEnabled(_principal: Principal, id: string, input: EnabledUpdateInput): Promise<CarrierSummary> {
+  async updateCarrierEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<CarrierSummary> {
+    await this.ensurePermission(principal, 'master-data:channels:update');
     const carrier = this.findEnabledEntity(this.carriers, id, '承运商不存在');
     carrier.enabled = input.enabled === true;
     return { ...carrier };
   }
 
   async createChannel(principal: Principal, input: ChannelCreateInput): Promise<ChannelSummary> {
+    await this.ensurePermission(principal, 'master-data:channels:create');
     if (!input.name?.trim()) {
       throw new BadRequestException('渠道名称不能为空');
     }
@@ -2425,6 +2524,7 @@ export class InMemoryRepository {
   }
 
   async updateChannel(principal: Principal, id: string, input: ChannelUpdateInput): Promise<ChannelSummary> {
+    await this.ensurePermission(principal, 'master-data:channels:update');
     const channel = this.findEnabledEntity(this.channels, id, '渠道不存在');
     const before = this.channelSummary(channel);
     if (!input.name?.trim()) {
@@ -2513,6 +2613,7 @@ export class InMemoryRepository {
   }
 
   async updateChannelEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<ChannelSummary> {
+    await this.ensurePermission(principal, 'master-data:channels:update');
     const channel = this.findEnabledEntity(this.channels, id, '渠道不存在');
     const before = this.channelSummary(channel);
     channel.enabled = input.enabled === true;
@@ -2522,6 +2623,7 @@ export class InMemoryRepository {
   }
 
   async deleteChannels(principal: Principal, ids: string[]): Promise<ChannelDeleteResponse> {
+    await this.ensurePermission(principal, 'master-data:channels:delete');
     const uniqueIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
     if (!uniqueIds.length) {
       throw new BadRequestException('请选择公司渠道');
@@ -2553,6 +2655,7 @@ export class InMemoryRepository {
   }
 
   async deleteChannel(principal: Principal, id: string): Promise<ChannelSummary> {
+    await this.ensurePermission(principal, 'master-data:channels:delete');
     const result = await this.deleteChannels(principal, [id]);
     const deletedChannel = result.deletedChannels[0];
     if (deletedChannel) return deletedChannel;
@@ -2564,6 +2667,7 @@ export class InMemoryRepository {
   }
 
   async createChannelCategory(principal: Principal, input: ChannelCategoryCreateInput): Promise<ChannelCategorySummary> {
+    await this.ensurePermission(principal, 'master-data:channel-categories:create');
     const name = input.name?.trim();
     if (!name) {
       throw new BadRequestException('类别名称不能为空');
@@ -2578,6 +2682,7 @@ export class InMemoryRepository {
   }
 
   async updateChannelCategory(principal: Principal, id: string, input: ChannelCategoryUpdateInput): Promise<ChannelCategorySummary> {
+    await this.ensurePermission(principal, 'master-data:channel-categories:update');
     const category = this.findEnabledEntity(this.channelCategories, id, '类别不存在');
     const before = { ...category };
     const name = input.name?.trim();
@@ -2594,6 +2699,7 @@ export class InMemoryRepository {
   }
 
   async updateChannelCategoryEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<ChannelCategorySummary> {
+    await this.ensurePermission(principal, 'master-data:channel-categories:update');
     const category = this.findEnabledEntity(this.channelCategories, id, '类别不存在');
     const before = { ...category };
     category.enabled = input.enabled === true;
@@ -2602,6 +2708,7 @@ export class InMemoryRepository {
   }
 
   async deleteChannelCategory(principal: Principal, id: string): Promise<ChannelCategorySummary> {
+    await this.ensurePermission(principal, 'master-data:channel-categories:delete');
     const category = this.findEnabledEntity(this.channelCategories, id, '类别不存在');
     const before = { ...category };
     if (this.channels.some((channel) => channel.category === category.name)) {
@@ -2613,6 +2720,7 @@ export class InMemoryRepository {
   }
 
   async createSurcharge(principal: Principal, input: SurchargeCreateInput): Promise<SurchargeSummary> {
+    await this.ensurePermission(principal, 'master-data:finance:surcharge-manage');
     if (!input.name?.trim() || input.amount <= 0) {
       throw new BadRequestException('附加费名称和金额无效');
     }
@@ -2623,6 +2731,7 @@ export class InMemoryRepository {
   }
 
   async updateSurchargeEnabled(principal: Principal, id: string, input: EnabledUpdateInput): Promise<SurchargeSummary> {
+    await this.ensurePermission(principal, 'master-data:finance:surcharge-enable');
     const surcharge = this.findEnabledEntity(this.surcharges, id, '附加费不存在');
     const before = { ...surcharge };
     surcharge.enabled = input.enabled === true;
@@ -2631,6 +2740,7 @@ export class InMemoryRepository {
   }
 
   async createFuelRate(principal: Principal, input: FuelRateCreateInput): Promise<FuelRateSummary> {
+    await this.ensurePermission(principal, 'master-data:finance:fuel-rate-manage');
     const channel = this.findEnabledEntity(this.channels, input.channelId, '渠道不存在');
     if (input.rate < 0) {
       throw new BadRequestException('燃油费率无效');
@@ -2648,6 +2758,7 @@ export class InMemoryRepository {
   }
 
   async createExchangeRate(principal: Principal, input: ExchangeRateCreateInput): Promise<ExchangeRateSummary> {
+    await this.ensurePermission(principal, 'master-data:exchange-rates:create');
     const activeAt = new Date(input.activeAt);
     const endAt = input.endAt ? new Date(input.endAt) : undefined;
     if (!input.baseCurrency?.trim() || !input.quoteCurrency?.trim() || input.rate <= 0 || !endAt || Number.isNaN(activeAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt < activeAt) {
@@ -2667,7 +2778,8 @@ export class InMemoryRepository {
     return { ...exchangeRate };
   }
 
-  async updateExchangeRate(principal: Principal, id: string, input: ExchangeRateUpdateInput): Promise<ExchangeRateSummary> {
+  async updateExchangeRate(principal: Principal, id: string, input: ExchangeRateUpdateInput, permission: 'master-data:exchange-rates:update' | 'master-data:exchange-rates:disable' = 'master-data:exchange-rates:update'): Promise<ExchangeRateSummary> {
+    await this.ensurePermission(principal, permission);
     const exchangeRate = this.exchangeRates.find((row) => row.id === id);
     if (!exchangeRate) throw new BadRequestException('汇率不存在');
     const before = { ...exchangeRate };
@@ -2729,6 +2841,10 @@ export class InMemoryRepository {
     principal.departmentTeamScope = undefined;
     const permissions = await this.getPermissionsForRole(principal.assignedRole);
     principal.shipmentAllView = permissions.includes('business:shipment:all-view');
+    const fixedFinanceFullScope = isFinanceFullScopeRole(principal.assignedRole);
+    principal.financeAllView = fixedFinanceFullScope;
+    principal.financeReceivableAllView = fixedFinanceFullScope
+      || hasExplicitFinanceReceivableAllViewPermission(permissions);
     principal.dataScope = principal.shipmentAllView
       ? undefined
       : permissions.includes('data-scope:sales-own') ? 'SALES_OWN' : undefined;
@@ -3164,7 +3280,7 @@ export class InMemoryRepository {
     if (this.roleMeta[templateRole]?.enabled === false) {
       throw new BadRequestException('停用用户组不能作为权限复制来源');
     }
-    const sourcePermissions = configuredPermissionsForRole(templateRole, this.rolePermissionMatrix[templateRole] ?? []);
+    const sourcePermissions = managementPermissionsForRole(templateRole, this.rolePermissionMatrix[templateRole] ?? []);
     const inheritedPermissions = [...sourcePermissions];
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions([], inheritedPermissions).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
@@ -3255,6 +3371,7 @@ export class InMemoryRepository {
     const beforeEffective = effectivePermissionsForRole(role, before);
     const normalized = normalizeRolePermissions(role, permissions);
     normalized.push(...protectedDataScopePermissions.filter((permission) => beforeEffective.includes(permission)));
+    normalized.push(...hiddenPersistedApiPermissionsForRole(role, before));
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(beforeEffective, normalized).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
@@ -3292,7 +3409,8 @@ export class InMemoryRepository {
       throw new BadRequestException('停用用户组不能作为权限复制来源');
     }
     const before = effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
-    const sourcePermissions = configuredPermissionsForRole(sourceRoleKey, this.rolePermissionMatrix[sourceRoleKey] ?? []);
+    const sourcePermissions = managementPermissionsForRole(sourceRoleKey, this.rolePermissionMatrix[sourceRoleKey] ?? []);
+    sourcePermissions.push(...hiddenPersistedApiPermissionsForRole(role, this.rolePermissionMatrix[role] ?? []));
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, sourcePermissions).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
@@ -3348,7 +3466,13 @@ export class InMemoryRepository {
           });
         }
       });
-    return { rows, suspiciousDeleteWarnings, pagination: { page, pageSize, totalItems: filtered.length }, dashboard: buildAuditDashboard(this.auditLogs) };
+    const includeDashboard = query.includeDashboard !== false && String(query.includeDashboard).toLowerCase() !== 'false';
+    return {
+      rows,
+      suspiciousDeleteWarnings,
+      pagination: { page, pageSize, totalItems: filtered.length },
+      dashboard: buildAuditDashboard(includeDashboard ? this.auditLogs : [])
+    };
   }
 
   async getLineageTrace(principal: Principal, resultType: string, businessId: string) {
@@ -3394,17 +3518,35 @@ export class InMemoryRepository {
     }
     const voucher = this.paymentVouchers.find((item) => item.url === url);
     if (!voucher) throw new NotFoundException('凭证图片不存在');
-    if (isPaymentVoucherGloballyMasked(principal.globalFieldMasks)) {
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    if (isPaymentVoucherGloballyMasked(fieldMasks)) {
       throw new ForbiddenException('总规则已屏蔽付款凭证');
     }
-    const permissions: PermissionKey[] = voucher.pendingPaymentId
-      ? ['finance:pending-payment:bill-voucher-view']
-      : voucher.paymentApplicationId && voucher.voucherType === 'PAYMENT_RECEIPT'
-        ? ['finance:paid-payment:voucher-view']
-        : voucher.paymentApplicationId
-          ? ['finance:pending-payment:payment-voucher-view']
-          : ['finance:agent-bill:read'];
-    await this.ensureAnyPermission(principal, permissions, '无权查看付款凭证');
+    const pending = voucher.pendingPaymentId
+      ? this.payablePaymentApplications.find((row) => row.id === voucher.pendingPaymentId)
+      : undefined;
+    const application = voucher.paymentApplicationId
+      ? this.paymentApplications.find((row) => row.id === voucher.paymentApplicationId)
+      : pending
+        ? (() => {
+          const item = this.paymentApplicationItems.find((entry) => entry.pendingPaymentId === pending.id);
+          return item ? this.paymentApplications.find((row) => row.id === item.paymentApplicationId) : undefined;
+        })()
+        : undefined;
+    const pendingIds = application
+      ? this.paymentApplicationItems.filter((item) => item.paymentApplicationId === application.id).map((item) => item.pendingPaymentId)
+      : pending ? [pending.id] : [];
+    for (const pendingId of pendingIds) {
+      const row = this.payablePaymentApplications.find((item) => item.id === pendingId);
+      if (row && !this.canExposePendingPaymentToFinance(row)) throw new NotFoundException('凭证图片不存在');
+    }
+    if (application?.status === 'PAID') {
+      await this.ensurePermission(principal, 'finance:paid-payment:voucher-view', '无权查看付款凭证');
+    } else if (pending || application) {
+      await this.ensurePermission(principal, 'finance:pending-payment:bill-voucher-upload', '无权查看付款凭证');
+    } else {
+      await this.ensurePermission(principal, 'finance:agent-bill:read', '无权查看付款凭证');
+    }
     return { fileName: voucher.fileName, mimeType: voucher.mimeType };
   }
 
@@ -3458,7 +3600,7 @@ export class InMemoryRepository {
     const authorizedModules = (await Promise.all(pricingMarkupModules.map(async (module) => (
       isAdministratorRole(principal.role) || await this.hasPermission(principal.role, lookupPermissionByModule[module]) ? module : null
     )))).filter((module): module is LegacyPricingModule => Boolean(module));
-    const canViewInternalSource = isAdministratorRole(principal.role);
+    const canViewInternalSource = canViewPricingInternalForPrincipal(principal);
     const activeBooks = this.priceBooks.filter((book) => !book.deleted);
     const targetModuleByBookId = new Map(activeBooks.map((book) => [book.id, book.targetModule]));
     const rows = this.activePriceBookRows().filter((row) => {
@@ -3921,11 +4063,11 @@ export class InMemoryRepository {
       return {
       id: item.price.id,
       module: normalizedInput.module,
-      ...(canViewPricingInternalRoute(principal.role) ? { sourceId: item.price.priceBookId } : {}),
+      ...(canViewPricingInternalForPrincipal(principal) ? { sourceId: item.price.priceBookId } : {}),
       agentName: item.agentName,
       origin: item.price.sourceSheetName,
-      channelName: canViewPricingInternalRoute(principal.role) ? displayRow.channelName : item.channelName,
-      serviceName: item.businessRouteName,
+      channelName: canViewPricingInternalForPrincipal(principal) ? displayRow.channelName : item.channelName,
+      serviceName: canViewPricingInternalForPrincipal(principal) ? item.businessRouteName : item.channelName,
       ...(normalizedInput.module === 'inquiry' ? {
         transportMode: isEuropeTransportMode(item.price.transportMode) ? item.price.transportMode : inferEuropeTransportMode(item.price),
         cargoType: item.price.cargoType ?? inferEuropeOversizeCargoType(item.price)
@@ -3937,9 +4079,9 @@ export class InMemoryRepository {
         : undefined,
       weightSegmentLabel: item.weightSegmentLabel,
       quoteMode: item.price.cbmPrice ? 'cbm' : 'kg',
-      ...(canViewPricingInternalRoute(principal.role) ? { costUnitPrice: item.price.costPerKg ?? item.salesRatePerKg } : {}),
+      ...(canViewPricingInternalForPrincipal(principal) ? { costUnitPrice: item.price.costPerKg ?? item.salesRatePerKg } : {}),
       salesUnitPrice: item.salesRatePerKg,
-      ...(canViewPricingInternalRoute(principal.role) ? { costTotal: item.totalCost ?? item.totalSales } : {}),
+      ...(canViewPricingInternalForPrincipal(principal) ? { costTotal: item.totalCost ?? item.totalSales } : {}),
       salesTotal: item.totalSales,
       grossProfit: item.grossProfit,
       chargeableWeightKg: lookup.chargeableWeightKg,
@@ -3991,7 +4133,7 @@ export class InMemoryRepository {
       'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea',
       'pricing:lookup:dubai-air-sea'
     ].map((permission) => this.hasPermission(principal.role, permission as PermissionKey)))).some(Boolean);
-    const canViewInternal = canViewPricingInternalRoute(principal.role);
+    const canViewInternal = canViewPricingInternalForPrincipal(principal);
     return {
       internalSource: canViewInternal && lookupGranted,
       cost: canViewInternal && lookupGranted,
@@ -5820,6 +5962,7 @@ export class InMemoryRepository {
       (archivedOnly
         ? pkg.status === 'TALLIED_ARCHIVED' && Boolean(pkg.archivedAt) && new Date(pkg.archivedAt!) >= archivedCutoff
         : pkg.status === 'RECEIVED')
+      && (archivedOnly || (!pkg.shipmentId && !pkg.systemOrderNo && !this.isWarehousePackageDraftOccupied(pkg.id)))
       && (!query.site?.trim() || businessCustomerScoped || pkg.site === query.site.trim())
       && keyword(pkg.customerOrderNo, query.customerOrderNo)
       && keyword(pkg.domesticTrackingNo, query.domesticTrackingNo)
@@ -5880,7 +6023,13 @@ export class InMemoryRepository {
     const ownedCustomerCodes = ownedCustomers ? new Set(ownedCustomers.map((customer) => customer.code)) : undefined;
     const ownedCustomerIds = ownedCustomers ? new Set(ownedCustomers.map((customer) => customer.id)) : undefined;
     const grouped = new Map<string, WarehousePackageSummary[]>();
-    this.withConfirmedWarehouseTally(this.warehousePackages.filter((pkg) => pkg.status === 'RECEIVED' && (!ownedCustomerCodes || ownedCustomerCodes.has(pkg.customerCode))))
+    this.withConfirmedWarehouseTally(this.warehousePackages.filter((pkg) => (
+      pkg.status === 'RECEIVED'
+      && !pkg.shipmentId
+      && !pkg.systemOrderNo
+      && !this.isWarehousePackageDraftOccupied(pkg.id)
+      && (!ownedCustomerCodes || ownedCustomerCodes.has(pkg.customerCode))
+    )))
       .forEach((row) => grouped.set(row.combinedOrderNo, [...(grouped.get(row.combinedOrderNo) ?? []), row]));
     return {
       totals: summarizeWarehouseInStockTotals(
@@ -6727,10 +6876,33 @@ export class InMemoryRepository {
           outputPackages: outputs.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }))
         };
       });
-    const pendingRows = sortWarehouseTallyTasks(rows.filter((task) => task.status === 'PENDING'));
+    const pendingRows = sortPendingWarehouseTallyTasks(
+      rows.filter((task) => task.status === 'PENDING'),
+      this.warehouseTallySortRules
+    );
     return effectiveStatus === 'PENDING'
       ? pendingRows
       : [...pendingRows, ...rows.filter((task) => task.status !== 'PENDING')];
+  }
+
+  async getWarehouseTallySortRules(principal: Principal): Promise<WarehouseTallySortRule[]> {
+    await this.ensurePermission(principal, 'warehouse:tally-pending:view', '当前角色不能查看理货排序规则');
+    return this.warehouseTallySortRules.map((rule) => ({ ...rule }));
+  }
+
+  async updateWarehouseTallySortRules(
+    principal: Principal,
+    input: WarehouseTallySortRulesUpdateInput
+  ): Promise<WarehouseTallySortRule[]> {
+    await this.ensurePermission(principal, 'warehouse:tally-pending:edit', '当前角色不能修改理货排序规则');
+    const normalized = normalizeWarehouseTallySortRuleInput(input);
+    const before = this.warehouseTallySortRules.map((rule) => ({ ...rule }));
+    const updatedAt = new Date().toISOString();
+    this.warehouseTallySortRules.splice(0, this.warehouseTallySortRules.length, ...normalized
+      .map((rule) => ({ ...rule, updatedAt, updatedBy: principal.username }))
+      .sort((left, right) => left.sortOrder - right.sortOrder || left.channel.localeCompare(right.channel)));
+    this.audit('warehouse.tally.sort_rules.update', 'warehouse:tally-sort-rules', principal, before, this.warehouseTallySortRules);
+    return this.warehouseTallySortRules.map((rule) => ({ ...rule }));
   }
 
   async getWarehouseTallyTaskSourcePackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
@@ -6769,7 +6941,20 @@ export class InMemoryRepository {
     const tasks = this.warehouseTallyTasks.filter((task) =>
       task.status === 'COMPLETED' && (!scopedRootIds || scopedRootIds.has(task.rootTallyTaskId ?? task.id))
     );
-    return summarizeWarehouseTallyRepeats(tasks, query);
+    const shipmentById = new Map(this.shipments.map((shipment) => [shipment.id, shipment]));
+    const packageById = new Map(this.warehousePackages.map((pkg) => [pkg.id, pkg]));
+    const tasksWithAgents = tasks.map((task) => {
+      const agentShortName = Array.from(new Set([
+        ...task.packageIds,
+        task.sourcePackageId
+      ]
+        .map((packageId) => packageById.get(packageId)?.shipmentId)
+        .map((shipmentId) => shipmentId ? shipmentById.get(shipmentId)?.agentShortName || shipmentById.get(shipmentId)?.agentName : undefined)
+        .filter((value): value is string => Boolean(value?.trim()))))
+        .join('、') || undefined;
+      return { ...task, agentShortName };
+    });
+    return summarizeWarehouseTallyRepeats(tasksWithAgents, query);
   }
 
   async getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string): Promise<WarehouseTallyTaskSummary[]> {
@@ -6789,26 +6974,32 @@ export class InMemoryRepository {
     const visitedTaskIds = new Set<string>();
     const chain: WarehouseTallyTaskSummary[] = [];
     let currentPackageId: string | undefined = normalizedPackageId;
-    let currentTaskId: string | undefined;
+    let legacyPreviousTaskId: string | undefined;
 
-    while ((currentPackageId || currentTaskId) && chain.length < 20) {
-      const lookupPackageId: string = currentPackageId ?? '';
-      const currentPackage: WarehousePackageSummary | undefined = this.warehousePackages.find((pkg) => pkg.id === lookupPackageId);
-      const task: WarehouseTallyTaskSummary | undefined = this.warehouseTallyTasks
-        .filter((item) => item.status === 'COMPLETED' && !visitedTaskIds.has(item.id) && (!scopedCustomerCode || item.customerCode === scopedCustomerCode))
-        .filter((item) => currentTaskId
-          ? item.id === currentTaskId
-          : item.id === currentPackage?.tallyTaskId
-            || item.taskNo === currentPackage?.tallyTaskNo
-            || item.appliedPackageId === lookupPackageId
-            || item.sourcePackageId === lookupPackageId
-            || item.packageIds.includes(lookupPackageId))
-        .sort((left, right) => new Date(right.completedAt ?? right.createdAt).getTime() - new Date(left.completedAt ?? left.createdAt).getTime())[0];
+    while ((currentPackageId || legacyPreviousTaskId) && chain.length < 20) {
+      const lookupPackageId: string | undefined = currentPackageId;
+      const currentPackage: WarehousePackageSummary | undefined = lookupPackageId
+        ? this.warehousePackages.find((pkg) => pkg.id === lookupPackageId)
+        : undefined;
+      let task: WarehouseTallyTaskSummary | undefined = lookupPackageId ? this.warehouseTallyTasks
+        .filter((item) => item.status === 'COMPLETED' && item.tallyProgressStatus !== 'CANCELLED' && !visitedTaskIds.has(item.id) && (!scopedCustomerCode || item.customerCode === scopedCustomerCode))
+        .filter((item) => item.id === currentPackage?.tallyTaskId
+          || item.taskNo === currentPackage?.tallyTaskNo
+          || item.appliedPackageId === lookupPackageId
+          || item.sourcePackageId === lookupPackageId
+          || item.packageIds.includes(lookupPackageId))
+        .sort((left, right) => new Date(right.completedAt ?? right.createdAt).getTime() - new Date(left.completedAt ?? left.createdAt).getTime())[0] : undefined;
+      if (!task && legacyPreviousTaskId && !visitedTaskIds.has(legacyPreviousTaskId)) {
+        task = this.warehouseTallyTasks.find((item) => item.id === legacyPreviousTaskId
+          && item.status === 'COMPLETED'
+          && item.tallyProgressStatus !== 'CANCELLED'
+          && (!scopedCustomerCode || item.customerCode === scopedCustomerCode));
+      }
       if (!task) break;
       visitedTaskIds.add(task.id);
       chain.push(cloneWarehouseTallyTask(task));
-      currentTaskId = task.previousTallyTaskId;
-      currentPackageId = task.sourcePackageId;
+      currentPackageId = currentPackage?.sourcePackageId;
+      legacyPreviousTaskId = task.previousTallyTaskId;
     }
 
     const orderedChain = chain.reverse();
@@ -6836,6 +7027,7 @@ export class InMemoryRepository {
 
   async createWarehouseTallyTask(principal: Principal, input: WarehouseTallyTaskCreateInput): Promise<WarehouseTallyTaskSummary> {
     await this.ensurePermission(principal, 'warehouse:in-stock:tally', '没有创建理货任务权限');
+    const scope = this.warehouseTallyCustomerScope(principal);
     if (!warehouseTallyChannels.includes(input.tallyChannel)) {
       throw new BadRequestException('请选择有效的理货渠道');
     }
@@ -6852,6 +7044,9 @@ export class InMemoryRepository {
       throw new BadRequestException('只有有效在仓包裹可以发起理货');
     }
     const packages = selected as WarehousePackageSummary[];
+    if (scope && packages.some((pkg) => !pkg.salesperson || !scope.includes(pkg.salesperson))) {
+      throw new ForbiddenException('不能把当前账号数据范围外的包裹加入理货任务');
+    }
     if (packages.some((pkg) => pkg.measurementStatus === 'PENDING_REMEASURE')) {
       throw new BadRequestException('理货后包裹待重新过机，完成测量后才能再次理货');
     }
@@ -6863,21 +7058,15 @@ export class InMemoryRepository {
       throw new BadRequestException('包裹正在理货中，请完成当前任务后再发起二次理货');
     }
     const first = packages[0];
-    const previousTask = first.tallyTaskId
-      ? this.warehouseTallyTasks.find((task) => task.id === first.tallyTaskId)
-      : this.warehouseTallyTasks.find((task) => task.taskNo === first.tallyTaskNo);
     const taskId = `wht-${this.warehouseTallyTasks.length + 1}`;
     const task: WarehouseTallyTaskSummary = {
       id: taskId,
-      taskNo: previousTask
-        ? nextWarehouseRetallyTaskNo(previousTask.taskNo, this.warehouseTallyTasks.map((task) => task.taskNo))
-        : this.nextWarehouseTallyTaskNo(first.customerCode),
+      taskNo: this.nextWarehouseTallyTaskNo(first.customerCode),
       status: 'PENDING',
       tallyChannel: input.tallyChannel,
       tallyProgressStatus: 'WAITING',
-      rootTallyTaskId: previousTask?.rootTallyTaskId ?? previousTask?.id ?? taskId,
-      previousTallyTaskId: previousTask?.id,
-      tallySequence: previousTask ? (previousTask.tallySequence ?? 1) + 1 : 1,
+      rootTallyTaskId: taskId,
+      tallySequence: 1,
       packageIds,
       sourcePackageId: first.id,
       sourceCombinedOrderNo: first.combinedOrderNo,
@@ -6919,7 +7108,7 @@ export class InMemoryRepository {
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
     const before = this.warehouseTallyTasks[index];
-    const scope = this.operatorCustomerScope(principal);
+    const scope = this.warehouseTallyCustomerScope(principal);
     const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
       (before.packageIds.includes(pkg.id) || pkg.tallyTaskId === before.id)
       && Boolean(pkg.salesperson)
@@ -6946,7 +7135,7 @@ export class InMemoryRepository {
       throw new NotFoundException('理货任务不存在');
     }
     const before = this.warehouseTallyTasks[index];
-    const scope = this.operatorCustomerScope(principal);
+    const scope = this.warehouseTallyCustomerScope(principal);
     const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
       (before.packageIds.includes(pkg.id) || pkg.tallyTaskId === before.id)
       && Boolean(pkg.salesperson)
@@ -7040,7 +7229,7 @@ export class InMemoryRepository {
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
     const before = this.warehouseTallyTasks[index];
-    const scope = this.operatorCustomerScope(principal);
+    const scope = this.warehouseTallyCustomerScope(principal);
     const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
       before.packageIds.includes(pkg.id) && Boolean(pkg.salesperson) && scope.includes(pkg.salesperson!)
     );
@@ -7056,7 +7245,7 @@ export class InMemoryRepository {
     if (sourcePackages.length !== before.packageIds.length || !outputPackages.length) {
       throw new ConflictException('理货结果或原始包裹不完整，不能取消理货');
     }
-    if (sourcePackages.some((pkg) => pkg.status !== 'TALLIED_ARCHIVED' || pkg.tallyTaskId !== id)) {
+    if (sourcePackages.some((pkg) => pkg.status !== 'TALLIED_ARCHIVED')) {
       throw new ConflictException('原始包裹状态已变化，请刷新后重试');
     }
     if (sourcePackages.some((pkg) => pkg.systemOrderNo || pkg.shipmentId)
@@ -7065,6 +7254,9 @@ export class InMemoryRepository {
       throw new BadRequestException('理货结果已复测、合票或出库，不能取消理货');
     }
     const now = new Date().toISOString();
+    const previousTask = before.previousTallyTaskId
+      ? this.warehouseTallyTasks.find((task) => task.id === before.previousTallyTaskId)
+      : undefined;
     const outputIds = new Set(outputPackages.map((pkg) => pkg.id));
     this.warehousePackages.forEach((pkg, packageIndex) => {
       let updatedPackage = pkg;
@@ -7074,8 +7266,8 @@ export class InMemoryRepository {
         updatedPackage = {
           ...pkg,
           status: 'RECEIVED',
-          tallyTaskId: undefined,
-          tallyTaskNo: undefined,
+          tallyTaskId: pkg.tallyTaskId === id ? previousTask?.id : pkg.tallyTaskId,
+          tallyTaskNo: pkg.tallyTaskId === id ? previousTask?.taskNo : pkg.tallyTaskNo,
           archivedByPackageId: undefined,
           archivedByPackageNo: undefined,
           archivedReason: undefined,
@@ -7137,7 +7329,7 @@ export class InMemoryRepository {
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
     const before = this.warehouseTallyTasks[index];
-    const scope = this.operatorCustomerScope(principal);
+    const scope = this.warehouseTallyCustomerScope(principal);
     const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
       (before.packageIds.includes(pkg.id) || pkg.tallyTaskId === before.id)
       && Boolean(pkg.salesperson)
@@ -7153,7 +7345,7 @@ export class InMemoryRepository {
     if (sourcePackages.length !== before.packageIds.length || !outputPackages.length) {
       throw new ConflictException('理货结果或原始包裹不完整，不能反审核');
     }
-    if (sourcePackages.some((pkg) => pkg.status !== 'TALLIED_ARCHIVED' || pkg.tallyTaskId !== id)) {
+    if (sourcePackages.some((pkg) => pkg.status !== 'TALLIED_ARCHIVED')) {
       throw new ConflictException('原始包裹状态已变化，请刷新后重试');
     }
     if (sourcePackages.some((pkg) => pkg.systemOrderNo || pkg.shipmentId)
@@ -7186,8 +7378,8 @@ export class InMemoryRepository {
           archivedByPackageNo: undefined,
           archivedReason: undefined,
           archivedAt: undefined,
-          tallyTaskId: previousTask?.id,
-          tallyTaskNo: previousTask?.taskNo
+          tallyTaskId: pkg.tallyTaskId === id ? previousTask?.id : pkg.tallyTaskId,
+          tallyTaskNo: pkg.tallyTaskId === id ? previousTask?.taskNo : pkg.tallyTaskNo
         };
       }
     });
@@ -7239,7 +7431,7 @@ export class InMemoryRepository {
       throw new NotFoundException('理货任务不存在');
     }
     const before = this.warehouseTallyTasks[index];
-    const scope = this.operatorCustomerScope(principal);
+    const scope = this.warehouseTallyCustomerScope(principal);
     const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
       (before.packageIds.includes(pkg.id) || pkg.tallyTaskId === before.id)
       && Boolean(pkg.salesperson)
@@ -7410,10 +7602,7 @@ export class InMemoryRepository {
           archivedByPackageId: resultMapping.resultPackageId,
           archivedByPackageNo: resultMapping.resultPackageNo,
           archivedReason: '理货完成',
-          archivedAt: now,
-          tallyTaskId: task.id,
-          tallyTaskNo: task.taskNo,
-          tallyStatus: resolveWarehouseTallyLifecycleStatus({ tallyTaskId: task.id, tallyTaskNo: task.taskNo, tallyCompleted: true })
+          archivedAt: now
         };
       }
     });
@@ -7451,11 +7640,16 @@ export class InMemoryRepository {
 
   async generateWarehouseTallyTaskLabel(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
     await this.ensurePermission(principal, 'warehouse:tally-completed:print', '没有生成理货标签权限');
+    const scope = this.warehouseTallyCustomerScope(principal);
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
     }
     const before = this.warehouseTallyTasks[index];
+    const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
+      before.packageIds.includes(pkg.id) && Boolean(pkg.salesperson) && scope.includes(pkg.salesperson!)
+    );
+    if (!hasScopedPackage) throw new ForbiddenException('当前账号不能处理该理货任务');
     if (before.status !== 'COMPLETED') {
       throw new BadRequestException('请先完成理货再生成标签');
     }
@@ -7625,6 +7819,11 @@ export class InMemoryRepository {
       throw new NotFoundException('理货标签不存在');
     }
     const beforeTask = this.warehouseTallyTasks[taskIndex];
+    const scope = this.warehouseTallyCustomerScope(principal);
+    const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
+      beforeTask.packageIds.includes(pkg.id) && Boolean(pkg.salesperson) && scope.includes(pkg.salesperson!)
+    );
+    if (!hasScopedPackage) throw new ForbiddenException('当前账号不能处理该理货任务');
     if (beforeTask.status !== 'COMPLETED' || beforeTask.labelStatus !== 'GENERATED') {
       throw new BadRequestException('请先完成理货并生成标签');
     }
@@ -7643,11 +7842,16 @@ export class InMemoryRepository {
 
   private async markWarehouseTallyTaskLabelOutput(principal: Principal, id: string, action: 'print' | 'download'): Promise<WarehouseTallyTaskSummary> {
     await this.ensurePermission(principal, action === 'print' ? 'warehouse:tally-completed:print' : 'warehouse:tally-completed:download', '没有输出理货标签权限');
+    const scope = this.warehouseTallyCustomerScope(principal);
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
     }
     const before = this.warehouseTallyTasks[index];
+    const hasScopedPackage = !scope || this.warehousePackages.some((pkg) =>
+      before.packageIds.includes(pkg.id) && Boolean(pkg.salesperson) && scope.includes(pkg.salesperson!)
+    );
+    if (!hasScopedPackage) throw new ForbiddenException('当前账号不能处理该理货任务');
     if (before.tallyProgressStatus === 'CANCELLED') {
       throw new BadRequestException('理货任务已取消，标签已失效');
     }
@@ -7993,13 +8197,10 @@ export class InMemoryRepository {
   }
 
   async getWaterReceipts(principal: Principal, query: WaterReceiptListQuery = {}): Promise<WaterReceiptListResponse> {
-    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:read');
+    await this.ensureAnyPermission(principal, ['finance:water-receipt:read', 'finance:water-match:read'], '无权查看水单');
     const canViewAll = await this.hasPermission(principal.role, 'finance:water-receipt:view-all');
     const currentCustomerScope = canViewAll ? undefined : this.operatorCustomerScope(principal);
-    const canViewVoucher = await this.hasAnyPermission(principal.role, [
-      'finance:water-receipt:voucher',
-      'finance:water-receipt:voucher-view'
-    ]);
+    const canViewVoucher = await this.hasPermission(principal.role, 'finance:water-receipt:voucher-view');
     const rows = this.waterReceipts.filter((row) => {
       if (!canViewAll && row.createdByUserId !== principal.id) return false;
       if (currentCustomerScope) {
@@ -8029,9 +8230,9 @@ export class InMemoryRepository {
 
   async createWaterReceipt(principal: Principal, input: WaterReceiptCreateInput): Promise<WaterReceiptSummary> {
     const customer = this.findCustomerForWaterReceipt(input.customerId, input.customerCode);
-    const canManage = await this.hasPermission(principal.role, 'finance:water-receipt:manage');
-    if (!canManage) {
-      await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:read');
+    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:create');
+    const canViewAll = await this.hasPermission(principal.role, 'finance:water-receipt:view-all');
+    if (!canViewAll) {
       const scope = this.operatorCustomerScope(principal);
       if (!scope || !customer?.salesperson || !scope.includes(customer.salesperson)) throw new ForbiddenException('只能为本人客户新增水单');
     }
@@ -8088,7 +8289,7 @@ export class InMemoryRepository {
 
   async updateWaterReceipt(principal: Principal, id: string, input: WaterReceiptUpdateInput): Promise<WaterReceiptSummary> {
     const row = this.findWaterReceiptById(id);
-    await this.ensureWaterReceiptPermission(principal, row.status === 'PENDING' ? 'finance:water-receipt:manage' : 'finance:water-receipt:arrived-update');
+    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:update');
     const canViewAll = await this.ensureWaterReceiptRecordAccess(principal, row);
     if (!canViewAll && row.status !== 'PENDING') {
       throw new ForbiddenException('业务员只能修改本人录入的未到账水单');
@@ -8320,7 +8521,7 @@ export class InMemoryRepository {
   }
 
   async matchWaterReceiptOrders(principal: Principal, id: string, input: WaterReceiptMatchOrdersInput): Promise<WaterReceiptSummary> {
-    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:match');
+    await this.ensureWaterMatchPermission(principal, 'finance:water-match:create');
     const receipt = this.findWaterReceiptById(id);
     await this.ensureWaterReceiptMatchAccess(principal, receipt);
     if (!['ARRIVED', 'PARTIAL_MATCHED'].includes(receipt.status)) throw new BadRequestException('水单未到账，不能匹配订单');
@@ -8690,6 +8891,7 @@ export class InMemoryRepository {
     id: string,
     input: ReceivableMatchRequestUpdateInput
   ): Promise<ReceivableAuditSummary> {
+    await this.ensureWaterMatchPermission(principal, 'finance:water-match:adjust');
     const initial = this.waterReceiptMatchRequests.find((row) => row.id === id);
     if (!initial) throw new NotFoundException('水单匹配申请不存在');
     await this.ensureWaterReceiptMatchRequestManageAccess(principal, initial);
@@ -8752,6 +8954,7 @@ export class InMemoryRepository {
   }
 
   async deleteReceivableMatchRequest(principal: Principal, id: string): Promise<ReceivableAuditSummary> {
+    await this.ensureWaterMatchPermission(principal, 'finance:water-match:cancel');
     const initial = this.waterReceiptMatchRequests.find((row) => row.id === id);
     if (!initial) throw new NotFoundException('水单匹配申请不存在');
     await this.ensureWaterReceiptMatchRequestManageAccess(principal, initial);
@@ -8956,6 +9159,7 @@ export class InMemoryRepository {
   }
 
   async uploadWaterReceiptVoucher(principal: Principal, id: string, input: WaterReceiptVoucherInput): Promise<WaterReceiptVoucherSummary> {
+    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:voucher-upload');
     const row = this.findWaterReceiptById(id);
     await this.ensureWaterReceiptVoucherAccess(principal, row);
     const before = row.voucher ? { ...row.voucher } : undefined;
@@ -8977,7 +9181,7 @@ export class InMemoryRepository {
   }
 
   async exportWaterReceipts(principal: Principal, input: WaterReceiptExportRequest): Promise<WaterReceiptExportResponse> {
-    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:export');
+    await this.ensureAnyPermission(principal, ['finance:water-receipt:export', 'finance:water-match:export'], '无权导出水单');
     const response = await this.getWaterReceipts(principal, { ...(input.query ?? {}), page: 1, pageSize: -1, includeArchived: true });
     const rows = input.ids?.length ? response.rows.filter((row) => input.ids?.includes(row.id)) : response.rows;
     this.audit('finance.water_receipt.export', input.ids?.join(',') ?? 'filtered', principal, null, { count: rows.length });
@@ -9322,7 +9526,7 @@ export class InMemoryRepository {
       addQuick('agent-bill-ai', '代理账单', '核对代理账单和处理差异');
     }
 
-    if (await can('finance:payable:payment')) {
+    if (await can('finance:pending-payment:read')) {
       const response = await this.getPendingPayments(principal, { status: 'ALL', currency: 'ALL', page: 1, pageSize: -1 });
       const pending = response.rows.filter((row) => row.status === 'PENDING' || row.status === 'READY');
       const missingVoucher = response.rows.filter((row) => row.status === 'APPLIED' && !row.vouchers.length);
@@ -9389,7 +9593,7 @@ export class InMemoryRepository {
   }
 
   async matchPayableAuditShipment(principal: Principal, input: PayableAuditShipmentMatchInput): Promise<PayableAuditShipmentMatchSummary> {
-    await this.ensurePayablePermission(principal, 'finance:payable:manage');
+    await this.ensurePayablePermission(principal, 'finance:payable:match-shipment');
     const shipment = this.findShipmentForBusinessCostAudit(input);
     return this.toPayableAuditShipmentMatchSummary(shipment);
   }
@@ -9571,14 +9775,27 @@ export class InMemoryRepository {
 
   async getPendingPayments(principal: Principal, query: PendingPaymentListQuery = {}): Promise<PendingPaymentListResponse> {
     await this.ensurePendingPaymentPermission(principal, 'finance:pending-payment:read');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    const canFilterAgent = !fieldMasks['agent-short-name'] && !fieldMasks['agent-data'];
+    const [canViewBankData, canViewVoucher] = await Promise.all([
+      !isFinanceBankDataGloballyMasked(fieldMasks) && this.hasAnyPermission(principal.role, [
+        'finance:pending-payment:bank-select',
+        'finance:pending-payment:bank-manage'
+      ]),
+      !isPaymentVoucherGloballyMasked(fieldMasks)
+        && this.hasPermission(principal.role, 'finance:pending-payment:bill-voucher-upload')
+    ]);
+    const canFilterBank = canViewBankData;
     const rows = this.payablePaymentApplications
       .filter((row) => this.canExposePendingPaymentToFinance(row))
-      .map((row) => this.toPendingPaymentSummary(row));
-    return this.buildPendingPaymentListResponse(rows, query);
+      .map((row) => this.toPendingPaymentSummary(row, canViewBankData, canViewVoucher));
+    return this.buildPendingPaymentListResponse(rows, query, { canFilterAgent, canFilterBank });
   }
 
   async getPayeeBankAccounts(principal: Principal, query: { agentName?: string; agentId?: string; currency?: 'RMB' | 'USD' } = {}): Promise<PayeeBankAccountSummary[]> {
     await this.ensurePendingPaymentPermission(principal, 'finance:pending-payment:bank-select');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    if (isFinanceBankDataGloballyMasked(fieldMasks)) throw new ForbiddenException('总规则已屏蔽收款银行资料');
     return this.payeeBankAccounts.filter((row) => row.enabled
       && (!query.agentId || row.agentId === query.agentId)
       && (!query.currency || row.currency === query.currency)
@@ -9587,6 +9804,7 @@ export class InMemoryRepository {
 
   async upsertPayeeBankAccount(principal: Principal, input: PayeeBankAccountInput): Promise<PayeeBankAccountSummary> {
     await this.ensurePendingPaymentPermission(principal, 'finance:pending-payment:bank-manage');
+    await this.ensureFinanceBankDataVisible(principal, '总规则已屏蔽收款银行资料');
     if (!input.agentName?.trim() || !input.accountName?.trim() || !input.bankName?.trim() || !input.bankAccountNo?.trim()) {
       throw new BadRequestException('收款方、户名、银行和账号不能为空');
     }
@@ -9706,6 +9924,10 @@ export class InMemoryRepository {
 
   async createPaymentApplications(principal: Principal, input: PaymentApplicationCreateInput): Promise<PaymentApplicationSummary[]> {
     await this.ensurePendingPaymentPermission(principal, 'finance:pending-payment:create');
+    await this.ensureFinanceBankDataVisible(principal, '总规则已屏蔽银行资料，不能生成付款申请');
+    if (input.voucher?.fileName) {
+      await this.ensurePendingPaymentPermission(principal, 'finance:pending-payment:bill-voucher-upload');
+    }
     const ids = Array.from(new Set(input.pendingPaymentIds ?? []));
     if (!ids.length) throw new BadRequestException('请选择待付款记录');
     const rows = ids.map((id) => this.findPayablePaymentApplicationById(id));
@@ -9863,6 +10085,10 @@ export class InMemoryRepository {
 
   async updatePaymentApplication(principal: Principal, id: string, input: PaymentApplicationUpdateInput): Promise<PaymentApplicationSummary> {
     await this.ensurePendingPaymentPermission(principal, 'finance:pending-payment:update');
+    await this.ensureFinanceBankDataVisible(principal, '总规则已屏蔽银行资料，不能修改付款申请');
+    if (input.voucher?.fileName) {
+      await this.ensurePendingPaymentPermission(principal, 'finance:pending-payment:bill-voucher-upload');
+    }
     const app = this.findPaymentApplicationById(id);
     if (app.status !== 'WAITING_PAYMENT') throw new BadRequestException('只有待支付申请可以修改');
     const before = { ...app };
@@ -9902,7 +10128,16 @@ export class InMemoryRepository {
       });
     }
     this.audit('finance.payment_application.update', id, principal, before, this.toPaymentApplicationAuditSnapshot(this.toPaymentApplicationSummary(app)));
-    return this.toPaymentApplicationSummary(app);
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    const [canViewBank, canViewVoucher] = await Promise.all([
+      !isFinanceBankDataGloballyMasked(fieldMasks) && this.hasAnyPermission(principal.role, [
+        'finance:pending-payment:bank-select',
+        'finance:pending-payment:bank-manage'
+      ]),
+      !isPaymentVoucherGloballyMasked(fieldMasks)
+        && this.hasPermission(principal.role, 'finance:pending-payment:bill-voucher-upload')
+    ]);
+    return this.toPaymentApplicationSummary(app, { canViewBank, canViewVoucher });
   }
 
   async cancelPaymentApplication(principal: Principal, id: string, input: PaymentApplicationCancelInput = {}): Promise<PaymentApplicationSummary> {
@@ -9924,7 +10159,16 @@ export class InMemoryRepository {
     const after = this.toPaymentApplicationAuditSnapshot(this.toPaymentApplicationSummary(app), before.status, 'CANCELED', principal.username);
     this.paymentApplicationItems.splice(0, this.paymentApplicationItems.length, ...this.paymentApplicationItems.filter((item) => item.paymentApplicationId !== id));
     this.audit('finance.payment_application.cancel', id, principal, before, after);
-    return this.toPaymentApplicationSummary(app);
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    const [canViewBank, canViewVoucher] = await Promise.all([
+      !isFinanceBankDataGloballyMasked(fieldMasks) && this.hasAnyPermission(principal.role, [
+        'finance:pending-payment:bank-select',
+        'finance:pending-payment:bank-manage'
+      ]),
+      !isPaymentVoucherGloballyMasked(fieldMasks)
+        && this.hasPermission(principal.role, 'finance:pending-payment:bill-voucher-upload')
+    ]);
+    return this.toPaymentApplicationSummary(app, { canViewBank, canViewVoucher });
   }
 
   async exportPaymentApplications(principal: Principal, input: PaymentApplicationExportRequest): Promise<PaymentApplicationExportResponse> {
@@ -9943,7 +10187,7 @@ export class InMemoryRepository {
     if (requiredPermission) {
       await this.ensurePendingPaymentPermission(principal, requiredPermission);
     } else {
-      await this.ensurePayablePermission(principal, 'finance:payable:attachment');
+      await this.ensurePayablePermission(principal, 'finance:agent-bill:import');
     }
     if (!input.fileName?.trim()) throw new BadRequestException('凭证文件名不能为空');
     if (!input.paymentApplicationId && !input.pendingPaymentId) throw new BadRequestException('凭证必须关联待付款或付款申请');
@@ -10054,7 +10298,7 @@ export class InMemoryRepository {
   }
 
   async getPaymentVouchers(principal: Principal, query: PaymentVoucherListQuery = {}): Promise<PaymentVoucherSummary[]> {
-    await this.ensurePayablePermission(principal, 'finance:payable:read');
+    await this.ensurePayablePermission(principal, 'finance:agent-bill:read');
     const billNo = query.billNo?.trim().toLowerCase();
     const agentName = query.agentName?.trim().toLowerCase();
     const page = Math.max(1, Number(query.page ?? 1));
@@ -10091,7 +10335,7 @@ export class InMemoryRepository {
   }
 
   async updatePaymentVoucherDifference(principal: Principal, id: string, input: PaymentVoucherDifferenceInput): Promise<PaymentVoucherSummary> {
-    await this.ensurePayablePermission(principal, 'finance:payable:attachment');
+    await this.ensurePayablePermission(principal, 'finance:agent-bill:difference-resolve');
     const row = this.paymentVouchers.find((item) => item.id === id && item.voucherType === 'BILL');
     if (!row) throw new NotFoundException('代理账单不存在');
     if (input.differenceAmount !== undefined && input.differenceAmount < 0) throw new BadRequestException('差异金额不能小于 0');
@@ -10110,7 +10354,7 @@ export class InMemoryRepository {
   }
 
   async updatePaymentVoucherArchive(principal: Principal, id: string, input: PaymentVoucherArchiveInput): Promise<PaymentVoucherSummary> {
-    await this.ensurePayablePermission(principal, 'finance:payable:attachment');
+    await this.ensurePayablePermission(principal, input.archived ? 'finance:agent-bill:archive' : 'finance:agent-bill:reverse-archive');
     const row = this.paymentVouchers.find((item) => item.id === id && item.voucherType === 'BILL');
     if (!row) throw new NotFoundException('代理账单不存在');
     const before = this.toPaymentVoucherSummary(row);
@@ -10122,15 +10366,23 @@ export class InMemoryRepository {
 
   async getPaidPayments(principal: Principal, query: PaidPaymentListQuery = {}): Promise<PaidPaymentListResponse> {
     await this.ensurePayablePermission(principal, 'finance:paid-payment:read');
-    const canViewBank = await this.hasPermission(principal.role, 'finance:paid-payment:bank-view');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    const canFilterAgent = !fieldMasks['agent-company-name'] && !fieldMasks['agent-data'];
+    const [canViewBank, canViewVoucher] = await Promise.all([
+      !isFinanceBankDataGloballyMasked(fieldMasks) && this.hasPermission(principal.role, 'finance:paid-payment:bank-view'),
+      !isPaymentVoucherGloballyMasked(fieldMasks)
+        && this.hasPermission(principal.role, 'finance:paid-payment:voucher-view')
+    ]);
+    const canFilterBank = canViewBank;
     const rows = this.paymentApplications
       .filter((app) => (query.status && query.status !== 'ALL' ? app.status === query.status : app.status === 'WAITING_PAYMENT' || app.status === 'PAID'))
-      .map((app) => this.toPaidPaymentSummary(app, canViewBank));
-    return this.buildPaidPaymentListResponse(rows, query);
+      .map((app) => this.toPaidPaymentSummary(app, canViewBank, canViewVoucher));
+    return this.buildPaidPaymentListResponse(rows, query, { canFilterAgent, canFilterBank });
   }
 
   async confirmPaymentApplicationPaid(principal: Principal, id: string, input: PaymentConfirmPaidInput): Promise<PaidPaymentSummary> {
     await this.ensurePayablePermission(principal, 'finance:paid-payment:confirm');
+    await this.ensureFinanceBankDataVisible(principal, '总规则已屏蔽银行资料，不能确认付款');
     if (!input.payerBankName?.trim()) throw new BadRequestException('付款方银行不能为空');
     if (!input.payerBankAccountNo?.trim()) throw new BadRequestException('付款方账号不能为空');
     if (!input.paidAt) throw new BadRequestException('付款日期不能为空');
@@ -10204,11 +10456,18 @@ export class InMemoryRepository {
       ],
       metrics: { totalAmount: summary.totalAmount, itemCount: summary.items.length, currency: summary.currency }
     });
-    return this.toPaidPaymentSummary(app, await this.hasPermission(principal.role, 'finance:paid-payment:bank-view'));
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    return this.toPaidPaymentSummary(
+      app,
+      !isFinanceBankDataGloballyMasked(fieldMasks)
+        && await this.hasPermission(principal.role, 'finance:paid-payment:bank-view'),
+      !isPaymentVoucherGloballyMasked(fieldMasks)
+        && await this.hasPermission(principal.role, 'finance:paid-payment:voucher-view')
+    );
   }
 
   async updatePaidPayment(principal: Principal, id: string, input: PaidPaymentUpdateInput): Promise<PaidPaymentSummary> {
-    await this.ensurePayablePermission(principal, 'finance:paid-payment:confirm');
+    await this.ensurePayablePermission(principal, 'finance:paid-payment:update');
     const app = this.findPaymentApplicationById(id);
     if (app.status !== 'PAID') throw new BadRequestException('只有已支付记录可以补充信息');
     const before = { ...app };
@@ -10231,7 +10490,14 @@ export class InMemoryRepository {
     const summary = this.toPaidPaymentSummary(app, true);
     this.audit('finance.paid_payment.update', id, principal, before, this.toPaidPaymentAuditSnapshot(summary, before.status, app.status));
     if (waterReceiptVoucher) this.audit('finance.paid_payment.water_receipt.add', waterReceiptVoucher.id, principal, null, this.toPaidPaymentVoucherAuditSnapshot(waterReceiptVoucher, summary));
-    return this.toPaidPaymentSummary(app, await this.hasPermission(principal.role, 'finance:paid-payment:bank-view'));
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    return this.toPaidPaymentSummary(
+      app,
+      !isFinanceBankDataGloballyMasked(fieldMasks)
+        && await this.hasPermission(principal.role, 'finance:paid-payment:bank-view'),
+      !isPaymentVoucherGloballyMasked(fieldMasks)
+        && await this.hasPermission(principal.role, 'finance:paid-payment:voucher-view')
+    );
   }
 
   async reversePaidPayment(principal: Principal, id: string, input: PaidPaymentReverseInput = {}): Promise<PaidPaymentSummary> {
@@ -10258,7 +10524,14 @@ export class InMemoryRepository {
       if (payable) payable.paymentNo = undefined;
     });
     this.audit('finance.paid_payment.reverse', id, principal, before, this.toPaidPaymentAuditSnapshot(this.toPaidPaymentSummary(app, true), before.status, app.status, app.reversedBy, app.reversedAt));
-    return this.toPaidPaymentSummary(app, await this.hasPermission(principal.role, 'finance:paid-payment:bank-view'));
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    return this.toPaidPaymentSummary(
+      app,
+      !isFinanceBankDataGloballyMasked(fieldMasks)
+        && await this.hasPermission(principal.role, 'finance:paid-payment:bank-view'),
+      !isPaymentVoucherGloballyMasked(fieldMasks)
+        && await this.hasPermission(principal.role, 'finance:paid-payment:voucher-view')
+    );
   }
 
   async exportPaidPayments(principal: Principal, input: PaidPaymentExportRequest): Promise<PaidPaymentExportResponse> {
@@ -10290,7 +10563,9 @@ export class InMemoryRepository {
   }
 
   async getAgentBankAccounts(principal: Principal, query: { agentName?: string; agentId?: string; includeDisabled?: boolean | string } = {}): Promise<AgentBankAccountSummary[]> {
-    await this.ensurePayablePermission(principal, 'finance:payable:bank');
+    await this.ensureAnyPermission(principal, ['master-data:agents:read', 'finance:paid-payment:bank-view'], '没有付款银行查看权限');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    if (isFinanceBankDataGloballyMasked(fieldMasks)) throw new ForbiddenException('总规则已屏蔽代理银行资料');
     const includeDisabled = query.includeDisabled === true || query.includeDisabled === 'true';
     return this.agentBankAccounts.filter((row) => (includeDisabled || row.enabled)
       && (!query.agentId || row.agentId === query.agentId)
@@ -10320,7 +10595,11 @@ export class InMemoryRepository {
   }
 
   async upsertAgentBankAccount(principal: Principal, input: AgentBankAccountInput): Promise<AgentBankAccountSummary> {
-    await this.ensurePayablePermission(principal, 'finance:payable:bank');
+    await this.ensureAnyPermission(principal, [
+      input.id ? 'master-data:agents:update' : 'master-data:agents:create',
+      'finance:pending-payment:bank-manage'
+    ], '没有付款银行维护权限');
+    await this.ensureFinanceBankDataVisible(principal, '总规则已屏蔽代理银行资料');
     if (!input.agentName?.trim() || !input.accountName?.trim() || !input.bankName?.trim() || !input.bankAccountNo?.trim()) {
       throw new BadRequestException('代理、户名、银行和账号不能为空');
     }
@@ -10403,16 +10682,25 @@ export class InMemoryRepository {
       throw new ForbiddenException('当前角色不能查看单票费用明细');
     }
     const canViewReceivables = await this.canViewShipmentReceivables(principal);
-    const canViewBusinessCosts = this.canViewOrderEntryBusinessCosts(principal);
+    const usesCustomerServiceFinanceScope = await this.usesCustomerServiceFinanceScope(principal);
 
     const usesMarketCostView = await this.hasPermission(principal.role, 'market:pending-routing:business-cost:view');
+    const usesMarketPayableView = await this.hasPermission(principal.role, 'market:pending-routing:payable-cost:view');
     const hasNonMarketFinanceView = await this.canViewShipmentFinanceDetailOutsideMarket(principal);
     const marketScopedFinance = options.marketScopedFinance === true
       || principal.role === 'UG_MARKET'
-      || (usesMarketCostView && !hasNonMarketFinanceView);
+      || ((usesMarketCostView || usesMarketPayableView) && !hasNonMarketFinanceView);
+    const canViewMarketPayables = marketScopedFinance && usesMarketPayableView;
+    const receivableGlobalOnly = !marketScopedFinance
+      && principal.financeReceivableAllView === true
+      && !principal.financeAllView
+      && !isAdministratorRole(principal.role);
+    const canViewBusinessCosts = !receivableGlobalOnly && this.canViewOrderEntryBusinessCosts(principal);
     const shipment = marketScopedFinance
       ? this.marketVisibleShipment(principal, shipmentId)
-      : this.visibleReviewShipment(principal, shipmentId, true);
+      : usesCustomerServiceFinanceScope
+        ? this.visibleReviewShipment(principal, shipmentId, true)
+        : this.visibleFinanceShipment(principal, shipmentId);
     if (marketScopedFinance) {
       const allowedMarketStatuses = options.marketReturnReview
         ? ['WAITING_SORT', 'WAITING_DISPATCH', 'REVIEW_PENDING']
@@ -10429,7 +10717,7 @@ export class InMemoryRepository {
       .filter((fee) => fee.shipmentId === shipment.id)
       .map((fee) => this.toReceivableSummary(fee));
     const payables: PayableFeeSummary[] = this.payableFees
-      .filter((fee) => !marketScopedFinance && fee.shipmentId === shipment.id)
+      .filter((fee) => (!marketScopedFinance || canViewMarketPayables) && !receivableGlobalOnly && fee.shipmentId === shipment.id)
       .map((fee) => ({
         id: fee.id,
         shipmentId: fee.shipmentId,
@@ -10441,7 +10729,9 @@ export class InMemoryRepository {
     const businessCosts: BusinessCostFeeSummary[] = [];
     const manualItems = this.shipmentFinanceItems.filter((item) => item.shipmentId === shipment.id
       && !item.voided
-      && (!marketScopedFinance || item.type === 'BUSINESS_COST'));
+      && (!marketScopedFinance
+        ? (receivableGlobalOnly ? item.type === 'RECEIVABLE' : true)
+        : item.type === 'BUSINESS_COST' || (canViewMarketPayables && item.type === 'PAYABLE')));
     receivables.push(...manualItems
       .filter((item) => item.type === 'RECEIVABLE')
       .map((item) => this.toReceivableFinanceSummary(item, shipment)));
@@ -10454,41 +10744,45 @@ export class InMemoryRepository {
     payables.push(...manualItems
       .filter((item) => item.type === 'PAYABLE')
       .map((item) => this.toPayableFinanceSummary(item, shipment)));
+    const scopedPayables = marketScopedFinance && canViewMarketPayables
+      ? payables.map((row) => this.toMarketPayableSummary(row, shipment.status))
+      : payables;
     if (canViewBusinessCosts) {
       businessCosts.push(...manualItems
         .filter((item) => item.type === 'BUSINESS_COST')
         .map((item) => this.toBusinessCostFinanceSummary(item, shipment)));
     }
 
-    const usdRate = this.getShipmentFinanceDetailUsdToRmbRate([...receivables, ...payables, ...businessCosts]);
+    const usdRate = this.getShipmentFinanceDetailUsdToRmbRate([...receivables, ...scopedPayables, ...businessCosts]);
     receivables.forEach((row) => {
       row.rmbAmount = this.toShipmentFinanceDetailRmbAmount(row.amount, row.currency ?? 'RMB', usdRate);
       row.matchedReceiptNo = row.paymentNo;
     });
-    payables.forEach((row) => {
+    scopedPayables.forEach((row) => {
       row.rmbAmount = this.toShipmentFinanceDetailRmbAmount(row.amount, row.currency ?? 'RMB', usdRate);
     });
     businessCosts.forEach((row) => {
       row.rmbAmount = this.toShipmentFinanceDetailRmbAmount(row.amount, row.currency ?? 'RMB', usdRate);
     });
 
-    const canViewInternalPayables = await this.hasAnyPermission(principal.role, ['finance:order-fee:payable:view', 'finance:payable:view-sensitive', 'business:shipment:payable-view']);
-    const canViewPayables = !marketScopedFinance && canViewInternalPayables;
-    const canViewReceivablePayableProfit = !marketScopedFinance
+    const canViewInternalPayables = await this.hasAnyPermission(principal.role, ['finance:order-fee:payable:view', 'finance:payable:view-sensitive', 'business:shipment:payable-view', 'market:pending-routing:payable-cost:view']);
+    const canViewPayables = !receivableGlobalOnly && (!marketScopedFinance || canViewMarketPayables) && canViewInternalPayables;
+    const canViewReceivablePayableProfit = !marketScopedFinance && !receivableGlobalOnly
       && await this.hasAnyPermission(principal.role, ['finance:order-fee:profit:receivable-payable', 'finance:payable:view-profit', 'business:shipment:profit-view']);
     const canViewReceivableBusinessProfit = canViewBusinessCosts
       && await this.hasAnyPermission(principal.role, ['finance:order-fee:profit:receivable-business', 'finance:business-cost:view-profit', 'business:order-fee:profit-view', 'business:shipment:profit-view']);
-    const canViewBusinessPayableProfit = !marketScopedFinance && canViewBusinessCosts
+    const canViewBusinessPayableProfit = !marketScopedFinance && !receivableGlobalOnly && canViewBusinessCosts
       && await this.hasAnyPermission(principal.role, ['finance:order-fee:profit:business-payable', 'finance:payable:view-profit', 'business:shipment:profit-view']);
-    const canViewSensitivePayable = await this.hasPermission(principal.role, 'finance:payable:view-sensitive');
+    const canViewSensitivePayable = !receivableGlobalOnly
+      && await this.hasPermission(principal.role, 'finance:payable:view-sensitive');
     const canViewBusinessCostAgent = await this.hasAnyPermission(principal.role, ['finance:business-cost:view-agent', 'finance:payable:view-sensitive']);
     const visiblePayables = canViewPayables
-      ? payables.map((row) => canViewSensitivePayable
+      ? scopedPayables.map((row) => canViewSensitivePayable
           ? row
           : { ...row, agentId: undefined, agentName: undefined, paymentNo: undefined })
       : [];
     const receivableTotal = roundMoney(receivables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
-    const payableTotal = roundMoney(payables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
+    const payableTotal = roundMoney(scopedPayables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
     const visiblePayableTotal = roundMoney(visiblePayables.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
     const businessCostTotal = roundMoney(businessCosts.reduce((sum, fee) => sum + (fee.rmbAmount ?? fee.amount), 0));
     const businessProfit = roundMoney(receivableTotal - businessCostTotal);
@@ -10641,6 +10935,8 @@ export class InMemoryRepository {
       throw new BadRequestException('公司渠道不存在或已停用，请从基础资料库重新选择');
     }
     const optional = (value?: string) => value?.trim() || undefined;
+    const normalizedInboundNo = this.normalizeInboundNo(input.inboundNo);
+    this.assertInboundNoAvailable(normalizedInboundNo, shipment.id);
     const before = { ...shipment };
     Object.assign(shipment, {
       customerId: customer.id,
@@ -10651,7 +10947,7 @@ export class InMemoryRepository {
       channelName: channel.name,
       carrier: channel.carrier,
       customerOrderNo,
-      inboundNo: optional(input.inboundNo),
+      inboundNo: normalizedInboundNo ?? undefined,
       productName,
       productNames,
       destinationCountry,
@@ -10904,22 +11200,14 @@ export class InMemoryRepository {
     }
     const reason = input.reason?.trim();
     if (!reason) throw new BadRequestException('删除必须填写原因');
-    const before = { ...shipment };
-    const deletedAt = new Date().toISOString();
-    this.deletedShipmentIds.add(shipment.id);
-    shipment.deletedAt = deletedAt;
-    shipment.deletedBy = principal.username;
-    shipment.deletedReason = reason;
-    shipment.deleteType = 'MANUAL';
-    this.audit('shipment.review.delete', shipment.id, principal, before, {
-      ...shipment,
-      reviewStatus: 'DELETED',
-      statusFrom: before.status,
-      statusTo: shipment.status,
-      reviewer: principal.username,
-      deleteReason: reason,
-    });
-    return { id: shipment.id, deleted: true };
+    return this.hardDeleteReviewShipmentInMemory(
+      principal,
+      index,
+      shipment,
+      'shipment.review.delete',
+      'hard_delete',
+      reason
+    );
   }
 
   async restoreShipment(principal: Principal, shipmentId: string, input: ReviewRestoreInputWithManual = {}): Promise<ShipmentReviewDetailSummary> {
@@ -10990,25 +11278,111 @@ export class InMemoryRepository {
     if (shipment.status !== 'DRAFT' && shipment.status !== 'REVIEW_PENDING' && shipment.status !== 'REVIEW_REJECTED') {
       throw new BadRequestException('已进入后续流转的订单不能在待审核模块彻底删除');
     }
+    return this.hardDeleteReviewShipmentInMemory(
+      principal,
+      index,
+      shipment,
+      'shipment.review.purge',
+      'purge',
+      '彻底删除已删除订单'
+    );
+  }
+
+  private hardDeleteReviewShipmentInMemory(
+    principal: Principal,
+    shipmentIndex: number,
+    shipment: Shipment & { customerId: string; channelId?: string; agentId?: string },
+    auditAction: 'shipment.review.delete' | 'shipment.review.purge',
+    lineageAction: 'hard_delete' | 'purge',
+    reason: string
+  ): { id: string; deleted: true } {
     const before = { ...shipment };
-    this.shipments.splice(index, 1);
-    this.deletedShipmentIds.delete(shipmentId);
-    this.audit('shipment.review.purge', shipmentId, principal, before, { deleted: true });
+    const financeItemIds = new Set(this.shipmentFinanceItems
+      .filter((item) => item.shipmentId === shipment.id)
+      .map((item) => item.id));
+    const warehousePackages = this.warehousePackages.filter((pkg) => pkg.shipmentId === shipment.id);
+    if (warehousePackages.some((pkg) => (
+      !['PENDING', 'RECEIVED'].includes(pkg.status)
+      || pkg.measurementStatus === 'PENDING_REMEASURE'
+    ))) {
+      throw new BadRequestException('订单包含已出库、已合票或待重新过机包裹，不能删除并退回在仓');
+    }
+    const packageIds = new Set(warehousePackages.map((pkg) => pkg.id));
+    const hasProtectedReference = this.payablePaymentApplications.some((item) => item.shipmentId === shipment.id)
+      || this.paymentApplicationItems.some((item) => item.shipmentId === shipment.id)
+      || this.waterReceipts.some((receipt) => receipt.matches.some((match) => (
+        match.shipmentId === shipment.id
+        || (match.receivableFinanceItemId ? financeItemIds.has(match.receivableFinanceItemId) : false)
+      )))
+      || this.waterReceiptMatchRequests.some((request) => Boolean(
+        request.receivableFinanceItemId && financeItemIds.has(request.receivableFinanceItemId)
+      ))
+      || this.shipmentFinanceItems.some((item) => (
+        item.shipmentId === shipment.id
+        && !item.voided
+        && (item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus) || (item.receivedAmount ?? 0) > 0)
+      ))
+      || this.receivableFees.some((item) => (
+        item.shipmentId === shipment.id
+        && !item.voided
+        && (item.settled || item.reconciliationStatus === 'CONFIRMED' || (item.receivedAmount ?? 0) > 0)
+      ))
+      || this.payableFees.some((item) => item.shipmentId === shipment.id && item.settled)
+      || this.tickets.some((ticket) => ticket.shipmentId === shipment.id)
+      || this.labels.some((label) => label.shipmentId === shipment.id)
+      || this.carrierTasks.some((task) => task.shipmentId === shipment.id)
+      || this.warehouseConsolidations.some((consolidation) => (
+        consolidation.packageIds.some((packageId) => packageIds.has(packageId))
+      ));
+    if (hasProtectedReference) {
+      throw new BadRequestException('订单已被付款、水单、财务审核、问题件、面单、承运任务或合票引用，不能永久删除');
+    }
+    const removeWhere = <T>(rows: T[], predicate: (row: T) => boolean) => {
+      for (let rowIndex = rows.length - 1; rowIndex >= 0; rowIndex -= 1) {
+        if (predicate(rows[rowIndex]!)) rows.splice(rowIndex, 1);
+      }
+    };
+    removeWhere(this.shipmentFinanceItems, (item) => item.shipmentId === shipment.id);
+    removeWhere(this.receivableFees, (item) => item.shipmentId === shipment.id);
+    removeWhere(this.payableFees, (item) => item.shipmentId === shipment.id);
+    warehousePackages.forEach((pkg) => {
+      pkg.shipmentId = undefined;
+      pkg.systemOrderNo = undefined;
+    });
+    this.shipments.splice(shipmentIndex, 1);
+    this.deletedShipmentIds.delete(shipment.id);
+    this.audit(auditAction, shipment.id, principal, before, {
+      deleted: true,
+      deletionMode: 'PERMANENT',
+      statusFrom: before.status,
+      deletedBy: principal.username,
+      deleteReason: reason,
+      releasedWarehousePackageIds: warehousePackages.map((pkg) => pkg.id),
+      releasedWarehousePackageCount: warehousePackages.length
+    });
     void this.lineage?.recordEvent('orders.management.delete_restore', {
       actorUsername: principal.username,
-      businessId: shipmentId,
+      businessId: shipment.id,
       payload: {
-        action: 'purge',
-        shipmentId,
+        action: lineageAction,
+        shipmentId: shipment.id,
         systemOrderNo: before.systemOrderNo,
         customerOrderNo: before.customerOrderNo,
         status: before.status,
-        deleted: true
+        deleted: true,
+        deleteReason: reason,
+        releasedWarehousePackageIds: warehousePackages.map((pkg) => pkg.id)
       },
-      sourceRefs: [{ nodeType: 'shipment', id: shipmentId }],
-      metrics: { purged: 1 }
+      sourceRefs: [
+        { nodeType: 'shipment', id: shipment.id },
+        ...warehousePackages.map((pkg) => ({ nodeType: 'warehouse_package' as const, id: pkg.id }))
+      ],
+      metrics: {
+        hardDeleted: 1,
+        releasedWarehousePackageCount: warehousePackages.length
+      }
     });
-    return { id: shipmentId, deleted: true };
+    return { id: shipment.id, deleted: true };
   }
 
   private async buildShipmentReviewDetail(
@@ -11189,6 +11563,7 @@ export class InMemoryRepository {
     try {
       return {
         ...shipment,
+        receivableSummary: summarizeInMemoryReceivableRows(receivables),
         weightKg: packageWeightKg ?? shipment.weightKg ?? shipment.receivableWeightKg,
         volumeCbm: packageCbm ?? shipment.volumeCbm,
         chargeableWeightKg: packageChargeableWeightKg ?? shipment.chargeableWeightKg ?? shipment.receivableWeightKg ?? shipment.agentWeightKg,
@@ -11198,6 +11573,7 @@ export class InMemoryRepository {
     } catch (error) {
       return {
         ...shipment,
+        receivableSummary: summarizeInMemoryReceivableRows(receivables),
         weightKg: packageWeightKg ?? shipment.weightKg ?? shipment.receivableWeightKg,
         volumeCbm: packageCbm ?? shipment.volumeCbm,
         chargeableWeightKg: packageChargeableWeightKg ?? shipment.chargeableWeightKg ?? shipment.receivableWeightKg ?? shipment.agentWeightKg,
@@ -11213,30 +11589,46 @@ export class InMemoryRepository {
     });
   }
 
+  async createMarketRoutingCost(principal: Principal, shipmentId: string, input: ShipmentFinanceItemCreateInput) {
+    return this.createShipmentFinanceItem(principal, shipmentId, input, { marketRoutingCostOnly: true });
+  }
+
   async createShipmentFinanceItem(
     principal: Principal,
     shipmentId: string,
     input: ShipmentFinanceItemCreateInput,
-    options: { pendingReviewBusinessCostOnly?: boolean } = {}
+    options: { pendingReviewBusinessCostOnly?: boolean; marketRoutingCostOnly?: boolean } = {}
   ) {
-    const usesMarketCostCreate = !options.pendingReviewBusinessCostOnly
-      && input.type === 'BUSINESS_COST'
-      && await this.hasPermission(principal.role, 'market:pending-routing:business-cost:create');
+    const usesMarketCostCreate = options.marketRoutingCostOnly === true;
+    if (usesMarketCostCreate && !['BUSINESS_COST', 'PAYABLE'].includes(input.type)) {
+      throw new BadRequestException('市场排货只能维护业务成本或应付成本');
+    }
     if (usesMarketCostCreate) {
       input = this.normalizeMarketBusinessCostMutationInput(input);
       if (!isAdministratorRole(principal.role)) this.assertMarketBusinessCostMutationInput(input);
     }
+    input = this.normalizeReceivableCreateInput(input);
     const shipment = usesMarketCostCreate
       ? this.marketVisibleShipment(principal, shipmentId)
-      : this.visibleShipment(principal, shipmentId);
+      : input.type === 'RECEIVABLE' || (input.type === 'BUSINESS_COST' && await this.hasPermission(principal.role, 'business:order-fee:create'))
+        ? this.visibleFinanceShipment(principal, shipmentId)
+        : this.visibleShipment(principal, shipmentId);
     await this.ensurePendingRoutingCostMutationAccess(principal, input.type, shipment, 'create');
     if (options.pendingReviewBusinessCostOnly) {
       await this.ensurePendingReviewBusinessCostWrite(principal, input.type, shipment);
     }
+    const ownedBusinessCostMutation = input.type === 'BUSINESS_COST'
+      && await this.canManageOwnedOrderFee(principal, shipment, 'create');
+    if (ownedBusinessCostMutation) {
+      input = { ...input, reconciliationStatus: 'PENDING' };
+    }
     await this.ensureFinanceItemManageAccess(principal, input.type, shipment, options.pendingReviewBusinessCostOnly === true, options.pendingReviewBusinessCostOnly ? undefined : 'create');
-    this.ensureBusinessCostEditableAfterDispatch(principal, input.type, shipment);
+    this.ensureBusinessCostEditableAfterDispatch(principal, input.type, shipment, ownedBusinessCostMutation);
     const pendingReviewBusinessCostWrite = options.pendingReviewBusinessCostOnly === true;
-    const amount = this.resolveShipmentFinanceItemAmount(input.type, input);
+    const amount = this.resolveShipmentFinanceItemAmount(input.type, input, undefined, usesMarketCostCreate);
+    const billing = input.type === 'BUSINESS_COST' || input.type === 'PAYABLE'
+      ? resolveFinanceCostBillingFields(input.type, input)
+      : undefined;
     const financeAgent = input.type === 'PAYABLE' || input.type === 'BUSINESS_COST'
       ? pendingReviewBusinessCostWrite
         ? this.resolveShipmentAgent(shipment)
@@ -11255,7 +11647,9 @@ export class InMemoryRepository {
       reconciliationStatus: pendingReviewBusinessCostWrite ? 'PENDING' : input.reconciliationStatus ?? 'PENDING',
       agentId: financeAgent?.id,
       agentName: financeAgent?.name,
-      chargeWeightKg: input.chargeWeightKg,
+      billingUnit: billing?.billingUnit ?? input.billingUnit,
+      billingQuantity: billing?.billingQuantity ?? input.billingQuantity,
+      chargeWeightKg: billing ? billing.chargeWeightKg : input.chargeWeightKg,
       unitPrice: input.unitPrice,
       amountOverridden: this.isFinanceAmountOverridden({ ...input, amount }),
       remark: input.remark,
@@ -11275,7 +11669,9 @@ export class InMemoryRepository {
     this.audit('shipment.finance_item.create', item.id, principal, null, item);
     this.auditBusinessCostChangeNotification(principal, input.type, shipment, null, item);
     return usesMarketCostCreate
-      ? this.toMarketBusinessCostSummary(this.toBusinessCostFinanceSummary(item, shipment), shipment.status)
+      ? input.type === 'PAYABLE'
+        ? this.toMarketPayableSummary(this.toPayableFinanceSummary(item, shipment), shipment.status)
+        : this.toMarketBusinessCostSummary(this.toBusinessCostFinanceSummary(item, shipment), shipment.status)
       : this.scopeFinanceItemSummary(principal, input.type, this.toFinanceItemSummary(item, shipment));
   }
 
@@ -11323,7 +11719,7 @@ export class InMemoryRepository {
     }
     const draftOccupiedPackageIds = new Set(
       this.shipments
-        .filter((shipment) => !shipment.deletedAt)
+        .filter((shipment) => !shipment.deletedAt && shipment.id !== editingShipmentId)
         .flatMap((shipment) => shipment.draftWarehousePackageIds ?? [])
     );
     const domesticTrackingNo = query.domesticTrackingNo?.trim().toLowerCase();
@@ -11637,6 +12033,7 @@ export class InMemoryRepository {
     const requestedPackageIds = new Set(effectiveInput.warehousePackageIds);
     const removedPackageIds = packageIdsBefore.filter((id) => !requestedPackageIds.has(id));
     const addedPackageIds = effectiveInput.warehousePackageIds.filter((id) => !packageIdsBefore.includes(id));
+    this.assertOrderEntryPackageDraftAvailability(effectiveInput.warehousePackageIds, shipment.id);
     if (isPendingReviewEdit && removedPackageIds.some((id) => {
       const pkg = this.warehousePackages.find((item) => item.id === id);
       return Boolean(pkg && (['CONSOLIDATED', 'SHIPPED', 'TALLIED_ARCHIVED'].includes(pkg.status) || pkg.measurementStatus === 'PENDING_REMEASURE'));
@@ -11644,6 +12041,8 @@ export class InMemoryRepository {
       throw new BadRequestException('已出库或待重新过机的包裹不能从待审核运单移除');
     }
     const before = { ...shipment };
+    const normalizedInboundNo = this.normalizeInboundNo(input.shipment.inboundNo);
+    this.assertInboundNoAvailable(normalizedInboundNo, shipment.id);
     const productNames = normalizeShipmentProductNames(input.shipment.productNames, input.shipment.productName);
     Object.assign(shipment, {
       customerId: customer.id,
@@ -11656,7 +12055,7 @@ export class InMemoryRepository {
 	      outboundOrderNo: nextSystemOrderNo,
 	      entryAt: input.shipment.entryAt && this.canEditOrderEntryEntryAt(principal) ? new Date(input.shipment.entryAt).toISOString() : shipment.entryAt,
       subOrderNo: input.shipment.subOrderNo?.trim() || undefined,
-      inboundNo: input.shipment.inboundNo?.trim() || undefined,
+      inboundNo: normalizedInboundNo ?? undefined,
       draftWarehousePackageIds: input.submitForReview || isPendingReviewEdit ? [] : input.warehousePackageIds,
       productName: formatShipmentProductNames(productNames),
       productNames,
@@ -11861,24 +12260,35 @@ export class InMemoryRepository {
     });
   }
 
+  async updateMarketRoutingCost(principal: Principal, shipmentId: string, feeId: string, input: ShipmentFinanceItemUpdateInput) {
+    return this.updateShipmentFinanceItem(principal, shipmentId, feeId, input, { marketRoutingCostOnly: true });
+  }
+
   async updateShipmentFinanceItem(
     principal: Principal,
     shipmentId: string,
     feeId: string,
     input: ShipmentFinanceItemUpdateInput,
-    options: { requiredType?: ShipmentFinanceItemType; pendingReviewBusinessCostOnly?: boolean } = {}
+    options: { requiredType?: ShipmentFinanceItemType; pendingReviewBusinessCostOnly?: boolean; marketRoutingCostOnly?: boolean } = {}
   ) {
-    const usesMarketCostEdit = !options.pendingReviewBusinessCostOnly
-      && await this.hasPermission(principal.role, 'market:pending-routing:business-cost:edit');
+    const usesMarketCostEdit = options.marketRoutingCostOnly === true;
     if (usesMarketCostEdit) {
       input = this.normalizeMarketBusinessCostMutationInput(input);
       if (!isAdministratorRole(principal.role)) this.assertMarketBusinessCostMutationInput(input);
     }
     const shipment = usesMarketCostEdit
       ? this.marketVisibleShipment(principal, shipmentId)
-      : this.visibleShipment(principal, shipmentId);
+      : await this.hasPermission(principal.role, 'business:order-fee:update')
+        ? this.visibleFinanceShipment(principal, shipmentId)
+        : this.visibleShipment(principal, shipmentId);
     const item = this.findEditableFinanceItem(shipment.id, feeId);
+    if (usesMarketCostEdit && !['BUSINESS_COST', 'PAYABLE'].includes(item.type)) {
+      throw new NotFoundException('费用项目不存在');
+    }
+    if (input.type && item.type !== input.type) throw new NotFoundException('费用项目不存在');
     if (options.requiredType && item.type !== options.requiredType) throw new NotFoundException('费用项目不存在');
+    if (item.type === 'RECEIVABLE') this.visibleFinanceShipment(principal, shipmentId);
+    this.ensureReceivableStatusMutationAllowed(item.type, item.reconciliationStatus, input);
     if (usesMarketCostEdit && item.type === 'BUSINESS_COST' && !isAdministratorRole(principal.role)) {
       this.assertMarketBusinessCostMutationInput(input);
     }
@@ -11886,13 +12296,18 @@ export class InMemoryRepository {
     if (options.pendingReviewBusinessCostOnly) {
       await this.ensurePendingReviewBusinessCostWrite(principal, item.type, shipment);
     }
+    const ownedBusinessCostMutation = item.type === 'BUSINESS_COST'
+      && await this.canManageOwnedOrderFee(principal, shipment, 'update');
     await this.ensureFinanceItemManageAccess(principal, item.type, shipment, options.pendingReviewBusinessCostOnly === true, options.pendingReviewBusinessCostOnly ? undefined : 'update');
-    if (item.type === 'RECEIVABLE') this.ensureReceivableWaterMatchEditable('MANUAL', item.id, 'update');
-    this.ensureBusinessCostEditableAfterDispatch(principal, item.type, shipment);
+    if (item.type === 'RECEIVABLE') {
+      this.ensureReceivableMutableForFinanceItem(item, 'update');
+      this.ensureReceivableWaterMatchEditable('MANUAL', item.id, 'update');
+    }
+    this.ensureBusinessCostEditableAfterDispatch(principal, item.type, shipment, ownedBusinessCostMutation);
     const before = { ...item };
     const pendingReviewBusinessCostWrite = options.pendingReviewBusinessCostOnly === true;
     const canManageSensitiveFields = await this.canManageBusinessCostSensitiveFields(principal);
-    const amount = this.resolveShipmentFinanceItemAmount(item.type, input, item);
+    const amount = this.resolveShipmentFinanceItemAmount(item.type, input, item, usesMarketCostEdit);
     const financeAgent = item.type === 'PAYABLE' || item.type === 'BUSINESS_COST'
       ? pendingReviewBusinessCostWrite && !canManageSensitiveFields
         ? this.resolveFinanceAgent({ agentId: item.agentId, agentName: item.agentName }, this.resolveShipmentAgent(shipment))
@@ -11903,6 +12318,9 @@ export class InMemoryRepository {
     const latestShipment = this.shipments.find((row) => row.id === shipment.id);
     if (!latestShipment) throw new NotFoundException('运单不存在');
     this.ensurePendingRoutingCostMutationAccessSync(principal, item.type, latestShipment, 'update');
+    const billing = item.type === 'BUSINESS_COST' || item.type === 'PAYABLE'
+      ? resolveFinanceCostBillingFields(item.type, input, item)
+      : undefined;
     Object.assign(item, {
       name: input.name ?? item.name,
       amount,
@@ -11912,7 +12330,9 @@ export class InMemoryRepository {
       reconciliationStatus: pendingReviewBusinessCostWrite ? item.reconciliationStatus : input.reconciliationStatus ?? item.reconciliationStatus,
       agentId: financeAgent?.id,
       agentName: financeAgent?.name,
-      chargeWeightKg: input.chargeWeightKg ?? item.chargeWeightKg,
+      billingUnit: billing?.billingUnit ?? input.billingUnit ?? item.billingUnit,
+      billingQuantity: billing?.billingQuantity ?? input.billingQuantity ?? item.billingQuantity,
+      chargeWeightKg: billing ? billing.chargeWeightKg : input.chargeWeightKg ?? item.chargeWeightKg,
       unitPrice: input.unitPrice ?? item.unitPrice,
       amountOverridden: this.isFinanceAmountOverridden({ ...item, ...input, amount }),
       remark: input.remark ?? item.remark,
@@ -11920,8 +12340,12 @@ export class InMemoryRepository {
     });
     this.audit('shipment.finance_item.update', item.id, principal, before, item);
     this.auditBusinessCostChangeNotification(principal, item.type, shipment, before, item);
-    return usesMarketCostEdit && item.type === 'BUSINESS_COST'
-      ? this.toMarketBusinessCostSummary(this.toBusinessCostFinanceSummary(item, shipment), shipment.status)
+    return usesMarketCostEdit
+      ? item.type === 'PAYABLE'
+        ? this.toMarketPayableSummary(this.toPayableFinanceSummary(item, shipment), shipment.status)
+        : item.type === 'BUSINESS_COST'
+          ? this.toMarketBusinessCostSummary(this.toBusinessCostFinanceSummary(item, shipment), shipment.status)
+          : this.scopeFinanceItemSummary(principal, item.type, this.toFinanceItemSummary(item, shipment))
       : this.scopeFinanceItemSummary(principal, item.type, this.toFinanceItemSummary(item, shipment));
   }
 
@@ -11938,19 +12362,25 @@ export class InMemoryRepository {
     feeId: string,
     options: { requiredType?: ShipmentFinanceItemType; pendingReviewBusinessCostOnly?: boolean } = {}
   ) {
-    const usesMarketCostDelete = !options.pendingReviewBusinessCostOnly
-      && await this.hasPermission(principal.role, 'market:pending-routing:business-cost:delete');
+    const usesMarketCostDelete = !options.pendingReviewBusinessCostOnly && (
+      await this.hasPermission(principal.role, 'market:pending-routing:business-cost:delete')
+      || await this.hasPermission(principal.role, 'market:pending-routing:payable-cost:delete')
+    );
     const shipment = usesMarketCostDelete
       ? this.marketVisibleShipment(principal, shipmentId)
       : this.visibleShipment(principal, shipmentId);
     const item = this.findEditableFinanceItem(shipment.id, feeId);
     if (options.requiredType && item.type !== options.requiredType) throw new NotFoundException('费用项目不存在');
+    if (item.type === 'RECEIVABLE') this.visibleFinanceShipment(principal, shipmentId);
     await this.ensurePendingRoutingCostMutationAccess(principal, item.type, shipment, 'delete');
     if (options.pendingReviewBusinessCostOnly) {
       await this.ensurePendingReviewBusinessCostWrite(principal, item.type, shipment);
     }
     await this.ensureFinanceItemManageAccess(principal, item.type, shipment, options.pendingReviewBusinessCostOnly === true, options.pendingReviewBusinessCostOnly ? undefined : 'delete');
-    if (item.type === 'RECEIVABLE') this.ensureReceivableWaterMatchEditable('MANUAL', item.id, 'delete');
+    if (item.type === 'RECEIVABLE') {
+      this.ensureReceivableMutableForFinanceItem(item, 'delete');
+      this.ensureReceivableWaterMatchEditable('MANUAL', item.id, 'delete');
+    }
     this.ensureBusinessCostEditableAfterDispatch(principal, item.type, shipment);
     const before = { ...item };
     const pendingPaymentIds = this.payablePaymentApplications
@@ -11973,18 +12403,21 @@ export class InMemoryRepository {
     this.shipmentFinanceItems.splice(index, 1);
     this.audit('shipment.finance_item.delete', item.id, principal, before, { hardDelete: true });
     this.auditBusinessCostChangeNotification(principal, item.type, shipment, before, { ...before, hardDelete: true });
-    return usesMarketCostDelete && item.type === 'BUSINESS_COST'
-      ? this.toMarketBusinessCostSummary(this.toBusinessCostFinanceSummary(before, shipment), shipment.status)
+    return usesMarketCostDelete
+      ? item.type === 'PAYABLE'
+        ? this.toMarketPayableSummary(this.toPayableFinanceSummary(before, shipment), shipment.status)
+        : item.type === 'BUSINESS_COST'
+          ? this.toMarketBusinessCostSummary(this.toBusinessCostFinanceSummary(before, shipment), shipment.status)
+          : this.scopeFinanceItemSummary(principal, item.type, this.toFinanceItemSummary(before, shipment))
       : this.scopeFinanceItemSummary(principal, item.type, this.toFinanceItemSummary(before, shipment));
   }
 
   async lockShipmentFinanceItem(principal: Principal, shipmentId: string, feeId: string) {
-    const shipment = this.visibleShipment(principal, shipmentId);
+    const shipment = this.visibleFinanceShipment(principal, shipmentId);
     const item = this.findFinanceItem(shipment.id, feeId);
-    await this.ensureFinanceItemManageAccess(principal, item.type, shipment);
-    if (item.voided) {
-      throw new BadRequestException('已作废费用不能锁定');
-    }
+    await this.ensureFinanceItemManageAccess(principal, item.type, shipment, false, 'lock');
+    this.ensureBusinessCostEditableAfterDispatch(principal, item.type, shipment);
+    this.ensureManualFeeLockTransition(item, 'lock');
     const before = { ...item };
     item.locked = true;
     item.reconciliationStatus = 'LOCKED';
@@ -11994,12 +12427,11 @@ export class InMemoryRepository {
   }
 
   async unlockShipmentFinanceItem(principal: Principal, shipmentId: string, feeId: string) {
-    const shipment = this.visibleShipment(principal, shipmentId);
+    const shipment = this.visibleFinanceShipment(principal, shipmentId);
     const item = this.findFinanceItem(shipment.id, feeId);
-    await this.ensureFinanceItemManageAccess(principal, item.type, shipment);
-    if (item.voided) {
-      throw new BadRequestException('已作废费用不能解锁');
-    }
+    await this.ensureFinanceItemManageAccess(principal, item.type, shipment, false, 'unlock');
+    this.ensureBusinessCostEditableAfterDispatch(principal, item.type, shipment);
+    this.ensureManualFeeLockTransition(item, 'unlock');
     const before = { ...item };
     item.locked = false;
     item.reconciliationStatus = 'PENDING';
@@ -12281,6 +12713,8 @@ export class InMemoryRepository {
     const systemOrderNo = principal.role === 'CUSTOMER'
       ? createSystemOrderNo(input.businessType, new Date(), this.sequence)
       : input.outboundOrderNo?.trim() || input.systemOrderNo?.trim() || createSystemOrderNo(input.businessType, new Date(), this.sequence);
+    const normalizedInboundNo = this.normalizeInboundNo(input.inboundNo);
+    this.assertInboundNoAvailable(normalizedInboundNo);
     const shipment: Shipment & { customerId: string; channelId?: string; agentId?: string } = {
       id: `s-created-${this.sequence}`,
       customerId,
@@ -12295,7 +12729,7 @@ export class InMemoryRepository {
       outboundOrderNo: resolveShipmentOutboundOrderNo({ systemOrderNo }),
       systemOrderNo,
       subOrderNo: input.subOrderNo?.trim() || undefined,
-      inboundNo: input.inboundNo?.trim() || undefined,
+      inboundNo: normalizedInboundNo ?? undefined,
       draftWarehousePackageIds: [],
       outboundAt: input.outboundAt,
       productName: formatShipmentProductNames(productNames) || undefined,
@@ -12359,7 +12793,8 @@ export class InMemoryRepository {
       if (packages.some((pkg) => pkg?.measurementStatus === 'PENDING_REMEASURE')) {
         throw new BadRequestException('理货后包裹待重新过机，完成测量后才能录单');
       }
-      if (shouldBindWarehousePackages && packages.some((pkg) => pkg?.shipmentId || pkg?.systemOrderNo)) {
+      this.assertOrderEntryPackageDraftAvailability(requestedWarehousePackageIds);
+      if (packages.some((pkg) => pkg?.shipmentId || pkg?.systemOrderNo)) {
         throw new BadRequestException('选中的仓库包裹已绑定运单，请重新选择待录单包裹');
       }
       if (shouldBindWarehousePackages) {
@@ -12469,8 +12904,25 @@ export class InMemoryRepository {
       || body.unitPrice !== undefined
       || body.otherFee !== undefined
       || body.otherFeeRemark !== undefined;
-    if (hasLegacyRouteCostInput) {
-      throw new ForbiddenException('市场排货不能录入代理应付成本');
+    const chargeWeightKg = hasLegacyRouteCostInput ? Number(body.chargeWeightKg) : undefined;
+    const unitPrice = hasLegacyRouteCostInput ? Number(body.unitPrice) : undefined;
+    const otherFee = hasLegacyRouteCostInput ? Number(body.otherFee ?? 0) : undefined;
+    const otherFeeRemark = hasLegacyRouteCostInput ? body.otherFeeRemark?.trim() : undefined;
+    const routeCurrency = body.currency?.trim() || 'RMB';
+    if (hasLegacyRouteCostInput && (!Number.isFinite(chargeWeightKg) || Number(chargeWeightKg) <= 0)) {
+      throw new BadRequestException('请填写市场计费重');
+    }
+    if (hasLegacyRouteCostInput && (!Number.isFinite(unitPrice) || Number(unitPrice) <= 0)) {
+      throw new BadRequestException('请填写市场成本单价');
+    }
+    if (hasLegacyRouteCostInput && (!Number.isFinite(otherFee) || Number(otherFee) < 0)) {
+      throw new BadRequestException('其他费用不能小于 0');
+    }
+    if (hasLegacyRouteCostInput && Number(otherFee) > 0 && !otherFeeRemark) {
+      throw new BadRequestException('请填写其他费用包含内容');
+    }
+    if (!['RMB', 'USD'].includes(routeCurrency)) {
+      throw new BadRequestException('市场排货币种不支持');
     }
     const warehouseOutboundRemark = body.warehouseOutboundRemark === undefined
       ? undefined
@@ -12510,8 +12962,91 @@ export class InMemoryRepository {
     }
     let routeAgentChannelName = agentChannel?.channelName ?? requestedAgentChannelName;
     let savedAgentChannelToMasterData = false;
-    if (!agentChannel && body.saveAgentChannelToMasterData === true) {
+    const shouldSaveAgentChannelToMasterData = !agentChannel && body.saveAgentChannelToMasterData === true;
+    if (shouldSaveAgentChannelToMasterData) {
       await this.ensurePermission(principal, 'master-data:agent-channels:create', '没有新增代理渠道资料权限');
+    }
+    const routedAt = new Date().toISOString();
+    const existingPayables = this.shipmentFinanceItems.filter((item) => item.shipmentId === shipment.id && item.type === 'PAYABLE' && !item.voided);
+    const systemPayables = this.payableFees.filter((item) => item.shipmentId === shipment.id && item.amount > 0);
+    if (shipment.agentId && shipment.agentId !== agent.id && systemPayables.some((item) => item.settled)) {
+      throw new BadRequestException('存在已结算的历史应付费用，不能直接更换代理');
+    }
+    if (existingPayables.some((item) => item.locked && item.amount > 0 && item.agentName !== agent.name)) {
+      throw new BadRequestException('存在归属其他代理的已锁定应付费用，请先完成反审核再更换代理');
+    }
+    if (hasLegacyRouteCostInput && existingPayables.some((item) => (
+      isAutoRoutePayable(item)
+      && (
+        item.locked
+        || item.reconciliationStatus === 'CONFIRMED'
+        || this.payablePaymentApplications.some((application) => (
+          application.payableFinanceItemId === item.id && application.status !== 'INVALIDATED'
+        ))
+      )
+    ))) {
+      throw new BadRequestException('代理成本已锁定或已确认，请先完成反审核再修改');
+    }
+    existingPayables.filter((item) => !item.locked).forEach((item) => {
+      item.agentId = agent.id;
+      item.agentName = agent.name;
+      item.updatedAt = routedAt;
+    });
+    const assignedSystemPayables: StoredShipmentFinanceItem[] = systemPayables.map((item) => ({
+      id: item.id,
+      shipmentId: shipment.id,
+      type: 'PAYABLE',
+      name: item.name,
+      amount: item.amount,
+      currency: 'RMB',
+      reconciliationStatus: item.settled ? 'CONFIRMED' : 'PENDING',
+      agentId: agent.id,
+      agentName: agent.name,
+      locked: item.settled,
+      voided: false,
+      createdAt: routedAt,
+      updatedAt: routedAt,
+      sourceType: 'SYSTEM'
+    }));
+    let routePayables = existingPayables
+      .filter((item) => item.agentName === agent.name && !isLegacyAutoRoutePayable(item));
+    let routePayable: StoredShipmentFinanceItem | undefined;
+    if (hasLegacyRouteCostInput) {
+      existingPayables
+        .filter((item) => isLegacyAutoRoutePayable(item))
+        .forEach((item) => {
+          item.voided = true;
+          item.voidedAt = routedAt;
+          item.updatedAt = routedAt;
+        });
+      const amount = roundMoney(Number(chargeWeightKg) * Number(unitPrice) + Number(otherFee));
+      routePayable = {
+        id: `sfi-route-${Date.now()}-${this.shipmentFinanceItems.length + 1}`,
+        shipmentId: shipment.id,
+        type: 'PAYABLE',
+        name: '代理成本',
+        amount,
+        currency: routeCurrency,
+        settlementMethod: shipment.settlementMethod,
+        reconciliationStatus: 'PENDING',
+        agentId: agent.id,
+        agentName: agent.name,
+        chargeWeightKg,
+        unitPrice,
+        amountOverridden: false,
+        remark: formatRoutePayableRemark(routeAgentChannelName, Number(otherFee), otherFeeRemark),
+        locked: false,
+        voided: false,
+        createdBy: principal.username,
+        createdAt: routedAt,
+        updatedAt: routedAt,
+        sourceType: 'FINANCE_ITEM'
+      };
+      this.shipmentFinanceItems.push(routePayable);
+      routePayables = [...routePayables, routePayable];
+    }
+    routePayables = [...routePayables, ...assignedSystemPayables];
+    if (shouldSaveAgentChannelToMasterData) {
       agentChannel = {
         id: `ach-${randomUUID()}`,
         agentId: agent.id,
@@ -12524,7 +13059,18 @@ export class InMemoryRepository {
       this.agentChannels.push(agentChannel);
       this.audit('master_data.agent_channel.create', agentChannel.id, principal, null, { ...agentChannel, source: 'shipment.route' });
     }
-    const routedAt = new Date().toISOString();
+    const payableTotals = routePayables.reduce<Record<string, number>>((totals, item) => {
+      const currency = item.currency?.trim() || 'RMB';
+      totals[currency] = roundMoney((totals[currency] ?? 0) + Number(item.amount));
+      return totals;
+    }, {});
+    const payableCurrencies = Object.keys(payableTotals);
+    const payableTotal = payableCurrencies.length === 1 ? payableTotals[payableCurrencies[0]] : undefined;
+    const routePayableIds = routePayables.map((item) => item.id);
+    const routePayableRefs = routePayables.map((item) => ({
+      nodeType: item.sourceType === 'SYSTEM' ? 'payable_fee' : 'payable_finance_item',
+      id: item.id
+    }));
     if (shouldApprove) shipment.status = 'WAITING_DISPATCH';
     shipment.channelId = channel.id;
     shipment.channelName = channel.name;
@@ -12533,6 +13079,13 @@ export class InMemoryRepository {
     shipment.agentName = agent?.name ?? shipment.agentName;
     if (shouldApprove) shipment.routedAt = routedAt;
     shipment.routeAgentChannelName = routeAgentChannelName;
+    if (hasLegacyRouteCostInput) {
+      shipment.routeChargeWeightKg = chargeWeightKg;
+      shipment.routeUnitPrice = unitPrice;
+      shipment.routeOtherFee = otherFee;
+      shipment.routeCostTotal = payableTotal;
+      shipment.routeCurrency = routeCurrency;
+    }
     shipment.shippingMarkRequired = body.shippingMarkRequired === true;
     if (warehouseOutboundRemark !== undefined) {
       shipment.warehouseOutboundRemark = warehouseOutboundRemark || undefined;
@@ -12549,11 +13102,18 @@ export class InMemoryRepository {
       agentChannelId: agentChannel?.id,
       agentChannelName: routeAgentChannelName,
       savedAgentChannelToMasterData,
+      ...(hasLegacyRouteCostInput ? { chargeWeightKg, unitPrice, otherFee, otherFeeRemark, currency: routeCurrency } : {}),
+      payableFinanceItemIds: routePayableIds,
+      payableTotals,
+      ...(payableTotal === undefined ? {} : { payableTotal }),
       routedBy: principal.username,
       routedAt,
       shippingMarkRequired: shipment.shippingMarkRequired,
       warehouseOutboundRemark: shipment.warehouseOutboundRemark
     });
+    if (routePayable && isEarlyPaymentSettlementMethod(routePayable.settlementMethod)) {
+      this.upsertPayablePaymentApplication(routePayable);
+    }
     if (shouldApprove) void this.lineage?.recordEvent('market.pending_routing.route', {
       actorUsername: principal.username,
       businessId: shipment.id,
@@ -12568,6 +13128,9 @@ export class InMemoryRepository {
         agentName: agent.name,
         agentChannelId: agentChannel?.id,
         agentChannelName: routeAgentChannelName,
+        payableFinanceItemIds: routePayableIds,
+        payableTotals,
+        ...(payableTotal === undefined ? {} : { payableTotal }),
         shippingMarkRequired: shipment.shippingMarkRequired,
         warehouseOutboundRemark: shipment.warehouseOutboundRemark,
         routedBy: principal.username,
@@ -12577,9 +13140,12 @@ export class InMemoryRepository {
         { nodeType: 'shipment', id: shipment.id },
         { nodeType: 'company_channel', id: channel.id },
         { nodeType: 'agent', id: agent.id },
-        ...(agentChannel?.id ? [{ nodeType: 'agent_channel', id: agentChannel.id }] : [])
+        ...(agentChannel?.id ? [{ nodeType: 'agent_channel', id: agentChannel.id }] : []),
+        ...routePayableRefs
       ],
       metrics: {
+        payableItemCount: routePayableIds.length,
+        ...(payableTotal === undefined ? {} : { payableTotal }),
         shippingMarkRequired: shipment.shippingMarkRequired === true
       }
     });
@@ -13472,12 +14038,13 @@ export class InMemoryRepository {
   }
 
   async importTrackingEvents(principal: Principal, request: BulkTrackingApplyRequest): Promise<BulkTrackingApplyResponse> {
+    await this.ensurePermission(principal, 'tracking:external:import');
     if (!Array.isArray(request.updates) || request.updates.length === 0) {
       throw new BadRequestException('没有可导入的轨迹记录');
     }
     const latestByShipmentId = new Map<string, { shipment: Shipment; latestTracking: string; trackingDate: Date }>();
     for (const item of request.updates) {
-      const shipment = this.visibleShipment(principal, item.shipmentId);
+      const shipment = this.trackingVisibleShipment(principal, item.shipmentId);
       if (!item.latestTracking?.trim()) {
         throw new BadRequestException('最新轨迹不能为空');
       }
@@ -13553,9 +14120,8 @@ export class InMemoryRepository {
         metrics: { trackingStaleDays: shipment.trackingStaleDays }
       })));
     })();
-    const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal);
     return {
-      updated: canViewAgentWeight ? updated : updated.map((shipment) => this.scopeShipmentAgentWeight(shipment, false)),
+      updated: updated.map(toExternalTrackingShipmentSummary),
       importedCount: updated.length,
       importedRowCount: request.updates.length,
       failedRowCount: after.failedRowCount,
@@ -13602,11 +14168,16 @@ export class InMemoryRepository {
   }
 
   async runCarrierTask(principal: Principal, taskId: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
+    await this.ensurePermission(principal, 'tracking:carrier-task:sync');
+    const task = this.carrierTask(taskId);
+    this.trackingVisibleShipment(principal, task.shipmentId);
     return this.executeCarrierTask(taskId, body.fail === true, principal, 'run');
   }
 
   async retryCarrierTask(principal: Principal, taskId: string, body: { fail?: boolean } = {}): Promise<CarrierTaskRunResponse> {
+    await this.ensurePermission(principal, 'tracking:carrier-task:sync');
     const task = this.carrierTask(taskId);
+    this.trackingVisibleShipment(principal, task.shipmentId);
     if (task.status !== 'FAILED') {
       throw new BadRequestException('只有失败任务可以重试');
     }
@@ -13877,8 +14448,19 @@ export class InMemoryRepository {
     return label;
   }
 
-  async addTrackingEvent(principal: Principal, shipmentId: string, input: TrackingEventInput): Promise<Shipment> {
-    const shipment = this.visibleShipment(principal, shipmentId);
+  async addTrackingEvent(
+    principal: Principal,
+    shipmentId: string,
+    input: TrackingEventInput,
+    source: 'external-import' | 'operations-line-shipment'
+  ): Promise<Shipment> {
+    await this.ensurePermission(
+      principal,
+      source === 'external-import' ? 'tracking:external:import' : 'operations:line-shipment:tracking-add'
+    );
+    const shipment = source === 'external-import'
+      ? this.trackingVisibleShipment(principal, shipmentId)
+      : this.visibleShipment(principal, shipmentId);
     shipment.latestTracking = input.status;
     shipment.latestTrackingUpdatedAt = new Date(input.happenedAt).toISOString();
     shipment.trackingStaleDays = 0;
@@ -14113,7 +14695,7 @@ export class InMemoryRepository {
   private buildMemoryRoleRow(role: RoleKey): RolePermissionRow {
     const meta = this.roleMeta[role];
     const roleLabel = meta?.label ?? getRoleMetadata(role).label;
-    const permissions = configuredPermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
+    const permissions = managementPermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
     return buildRolePermissionRow(role, permissions, {
       label: roleLabel,
       description: meta?.description,
@@ -14131,7 +14713,7 @@ export class InMemoryRepository {
     return false;
   }
 
-  private async getGlobalFieldMaskState(principal: Principal): Promise<GlobalFieldMaskState> {
+  async getGlobalFieldMaskState(principal: Principal): Promise<GlobalFieldMaskState> {
     if (principal.globalFieldMasks) return principal.globalFieldMasks;
     const state = Object.fromEntries(globalFieldMaskKeys.map((key) => [key, false])) as GlobalFieldMaskState;
     const entries = await Promise.all(globalFieldMaskKeys.map(async (key) => [
@@ -14145,6 +14727,11 @@ export class InMemoryRepository {
       state['agent-channel'] = true;
     }
     return state;
+  }
+
+  private async ensureFinanceBankDataVisible(principal: Principal, message: string) {
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    if (isFinanceBankDataGloballyMasked(fieldMasks)) throw new ForbiddenException(message);
   }
 
   private async ensureTransferDataApproved(principal: Principal, shipmentId: string) {
@@ -14406,12 +14993,18 @@ export class InMemoryRepository {
     shipment: Shipment,
     operation: 'create' | 'update' | 'delete'
   ) {
-    if (isAdministratorRole(principal.role) || type !== 'BUSINESS_COST') return;
+    if (isAdministratorRole(principal.role)) return;
     if (!['WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment.status)) return;
     this.ensureMarketShipmentSiteScope(principal, shipment);
     if (shipment.status === 'WAITING_DISPATCH' && operation !== 'create') {
-      throw new ForbiddenException('审核后业务成本只能新增，不能修改或删除');
+      throw new ForbiddenException('审核后费用只能新增，不能修改或删除');
     }
+    if (type === 'PAYABLE') {
+      const permission = `market:pending-routing:payable-cost:${operation}` as PermissionKey;
+      await this.ensurePermission(principal, permission, `没有待排货应付成本${operation === 'create' ? '新增' : operation === 'update' ? '修改' : '删除'}权限`);
+      return;
+    }
+    if (type !== 'BUSINESS_COST') return;
     const permission = `market:pending-routing:business-cost:${operation}` as PermissionKey;
     await this.ensurePermission(principal, permission, `没有待排货业务成本${operation === 'create' ? '新增' : operation === 'update' ? '修改' : '删除'}权限`);
   }
@@ -14422,11 +15015,19 @@ export class InMemoryRepository {
     shipment: Shipment,
     operation: 'create' | 'update' | 'delete'
   ) {
-    if (isAdministratorRole(principal.role) || type !== 'BUSINESS_COST') return;
+    if (isAdministratorRole(principal.role)) return;
     if (!['WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment.status)) return;
     if (shipment.status === 'WAITING_DISPATCH' && operation !== 'create') {
-      throw new ForbiddenException('审核后业务成本只能新增，不能修改或删除');
+      throw new ForbiddenException('审核后费用只能新增，不能修改或删除');
     }
+    if (type === 'PAYABLE') {
+      const permission = `market:pending-routing:payable-cost:${operation}` as PermissionKey;
+      if (!this.hasPermissionSync(principal.role, permission)) {
+        throw new ForbiddenException(`没有待排货应付成本${operation === 'create' ? '新增' : operation === 'update' ? '修改' : '删除'}权限`);
+      }
+      return;
+    }
+    if (type !== 'BUSINESS_COST') return;
     const permission = `market:pending-routing:business-cost:${operation}` as PermissionKey;
     if (!this.hasPermissionSync(principal.role, permission)) {
       throw new ForbiddenException(`没有待排货业务成本${operation === 'create' ? '新增' : operation === 'update' ? '修改' : '删除'}权限`);
@@ -14457,24 +15058,101 @@ export class InMemoryRepository {
     type?: ShipmentFinanceItemType,
     shipment?: Shipment,
     allowPendingReviewBusinessCostWrite = false,
-    marketOperation?: 'create' | 'update' | 'delete'
+    marketOperation?: 'create' | 'update' | 'delete' | 'lock' | 'unlock'
   ) {
     if (isAdministratorRole(principal.role)) return;
+    if (marketOperation && (type === 'RECEIVABLE' || type === 'BUSINESS_COST')) {
+      const permission = `business:order-fee:${marketOperation}` as PermissionKey;
+      if (await this.hasPermission(principal.role, permission)
+        && await this.canManageOwnedOrderFee(principal, shipment, marketOperation)) return;
+      if (type === 'RECEIVABLE') {
+        if (marketOperation !== 'delete'
+          && principal.financeReceivableAllView
+          && await this.hasPermission(principal.role, 'finance:order-fee:receivable:manage')) return;
+        throw new NotFoundException('运单不存在');
+      }
+    }
     const orderEntryEditable = ['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED'].includes(shipment?.status ?? '');
     if (orderEntryEditable && type === 'BUSINESS_COST' && await this.hasPermission(principal.role, 'business:order-entry:business-cost')) return;
     if (orderEntryEditable && type === 'PAYABLE' && await this.hasPermission(principal.role, 'business:order-entry:payable-fee')) return;
-    if (orderEntryEditable && type === 'RECEIVABLE' && await this.hasPermission(principal.role, 'business:order-entry:edit')) return;
     if (allowPendingReviewBusinessCostWrite && await this.canWritePendingReviewBusinessCost(principal, type, shipment)) return;
-    if (marketOperation && ['WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment?.status ?? '') && type === 'BUSINESS_COST'
-      && await this.hasPermission(principal.role, `market:pending-routing:business-cost:${marketOperation}` as PermissionKey)) return;
+    if (marketOperation && ['WAITING_SORT', 'WAITING_DISPATCH'].includes(shipment?.status ?? '')) {
+      if (type === 'BUSINESS_COST'
+        && await this.hasPermission(principal.role, `market:pending-routing:business-cost:${marketOperation}` as PermissionKey)) return;
+      if (type === 'PAYABLE'
+        && await this.hasPermission(principal.role, `market:pending-routing:payable-cost:${marketOperation}` as PermissionKey)) return;
+    }
     if (type === 'BUSINESS_COST' && await this.isRestrictedBusinessCostActor(principal)) {
       throw new ForbiddenException('业务成本只能在待审核状态修改');
     }
-    if (!type && await this.hasPermission(principal.role, 'finance:receivable:update')) return;
+    if (!type && await this.hasPermission(principal.role, 'finance:order-fee:receivable:manage')) return;
     if (type === 'PAYABLE' && await this.hasAnyPermission(principal.role, ['finance:order-fee:payable:manage', 'finance:payable:manage'])) return;
     if (type === 'BUSINESS_COST' && await this.hasPermission(principal.role, 'finance:business-cost:manage')) return;
-    if (type === 'RECEIVABLE' && await this.hasPermission(principal.role, 'finance:receivable:update')) return;
+    if (type === 'RECEIVABLE' && await this.hasPermission(principal.role, 'finance:order-fee:receivable:manage')) return;
     throw new ForbiddenException('当前角色不能维护该类单票费用');
+  }
+
+  private async canManageOwnedOrderFee(
+    principal: Principal,
+    shipment: Shipment | undefined,
+    operation: 'create' | 'update' | 'delete' | 'lock' | 'unlock'
+  ) {
+    if (!await this.hasPermission(principal.role, `business:order-fee:${operation}` as PermissionKey)) return false;
+    const customer = shipment?.customerId ? this.customers.find((item) => item.id === shipment.customerId) : undefined;
+    const ownerIdentity = customer?.salesperson?.trim() || shipment?.salesperson?.trim() || shipment?.entryBy?.trim();
+    if (!ownerIdentity) return false;
+    const owner = this.accounts.find((account) => account.username === ownerIdentity);
+    if (!owner || owner.enabled === false) return false;
+    if (owner.username === principal.username?.trim()) return true;
+    if (!await this.hasPermission(principal.role, 'business:shipment:team-view')) return false;
+    return owner.directManagerId === principal.id;
+  }
+
+  private normalizeReceivableCreateInput(input: ShipmentFinanceItemCreateInput) {
+    return input.type === 'RECEIVABLE'
+      ? { ...input, reconciliationStatus: 'PENDING' as const }
+      : input;
+  }
+
+  private ensureReceivableStatusMutationAllowed(type: ShipmentFinanceItemType | undefined, currentStatus: string | null | undefined, input: ShipmentFinanceItemUpdateInput) {
+    if (type !== 'RECEIVABLE' || input.reconciliationStatus === undefined
+      || input.reconciliationStatus === (currentStatus ?? 'PENDING')) return;
+    throw new ForbiddenException('费用审核状态只能通过财务审核流程变更');
+  }
+
+  private ensureReceivableMutableForFinanceItem(item: {
+    locked?: boolean;
+    reconciliationStatus?: string | null;
+    reviewedAt?: string | null;
+    receivedAt?: string | null;
+    receivedAmount?: unknown;
+    receiptStatus?: string | null;
+  }, operation: 'update' | 'delete') {
+    if (item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus ?? 'PENDING')
+      || item.reviewedAt || item.receivedAt || Number(item.receivedAmount ?? 0) > 0
+      || (item.receiptStatus ?? 'UNPAID') !== 'UNPAID') {
+      throw new BadRequestException(`应收费用已审核或进入收付流程，只能查看或新增，不能${operation === 'update' ? '修改' : '删除'}`);
+    }
+  }
+
+  private ensureManualFeeLockTransition(item: {
+    locked?: boolean;
+    voided?: boolean;
+    reconciliationStatus?: string | null;
+    reviewedAt?: string | null;
+    receivedAmount?: unknown;
+    receiptStatus?: string | null;
+  }, operation: 'lock' | 'unlock') {
+    if (item.voided) throw new BadRequestException(`已作废费用不能${operation === 'lock' ? '锁定' : '解锁'}`);
+    if (item.reviewedAt || Number(item.receivedAmount ?? 0) > 0 || (item.receiptStatus ?? 'UNPAID') !== 'UNPAID') {
+      throw new BadRequestException('已审核或已进入收付流程的费用不能通过锁定/解锁改变状态');
+    }
+    if (operation === 'lock' && (item.locked || (item.reconciliationStatus ?? 'PENDING') !== 'PENDING')) {
+      throw new BadRequestException('只有待审核费用可以锁定');
+    }
+    if (operation === 'unlock' && (!item.locked || item.reconciliationStatus !== 'LOCKED')) {
+      throw new BadRequestException('只有手工锁定费用可以解锁');
+    }
   }
 
   private isAfterRouteDispatch(status?: string): boolean {
@@ -14532,9 +15210,14 @@ export class InMemoryRepository {
     return { ...summary, agentId: undefined, agentName: undefined };
   }
 
-  private ensureBusinessCostEditableAfterDispatch(principal: Principal, type: ShipmentFinanceItemType | undefined, shipment: Shipment) {
+  private ensureBusinessCostEditableAfterDispatch(
+    principal: Principal,
+    type: ShipmentFinanceItemType | undefined,
+    shipment: Shipment,
+    allowOwnedOrderFeeMutation = false
+  ) {
     if (type !== 'BUSINESS_COST' || !this.isAfterRouteDispatch(shipment.status)) return;
-    if (this.operatorCustomerScope(principal)) {
+    if (this.operatorCustomerScope(principal) && !allowOwnedOrderFeeMutation) {
       throw new ForbiddenException('排货后业务员不能修改业务成本，请联系客服或财务处理');
     }
   }
@@ -14581,6 +15264,27 @@ export class InMemoryRepository {
       || permissions.includes('market:pending-routing:business-cost:view');
   }
 
+  private async usesCustomerServiceFinanceScope(principal: Principal) {
+    if (!await this.hasPermission(principal.role, 'customer-service:data-confirm:business-update')) return false;
+    return !await this.hasAnyPermission(principal.role, [
+      'business:order-fee:view',
+      'business:order-fee:profit-view',
+      'business:review:view',
+      'business:shipment:finance-detail-view',
+      'business:shipment:payable-view',
+      'business:shipment:profit-view',
+      'finance:receivable:read',
+      'finance:business-cost:read',
+      'finance:business-cost:view-profit',
+      'finance:order-fee:payable:view',
+      'finance:order-fee:profit:receivable-payable',
+      'finance:order-fee:profit:receivable-business',
+      'finance:order-fee:profit:business-payable',
+      'finance:payable:view-sensitive',
+      'finance:payable:view-profit'
+    ]);
+  }
+
   private canViewShipmentFinanceDetail(principal: Principal) {
     return this.hasAnyPermission(principal.role, [
       'customer-service:data-confirm:business-update',
@@ -14588,12 +15292,14 @@ export class InMemoryRepository {
       'business:shipment:finance-detail-view',
       'business:order-entry:business-cost',
       'market:pending-routing:business-cost:view',
+      'market:pending-routing:payable-cost:view',
       'business:order-entry:payable-fee',
       'business:shipment:payable-view',
       'business:shipment:profit-view',
+      'business:order-fee:view',
       'business:order-fee:profit-view',
       'market:pending-routing:business-cost:view',
-      'finance:receivable:detail',
+      'finance:receivable:read',
       'finance:business-cost:read',
       'finance:business-cost:view-profit',
       'finance:order-fee:payable:view',
@@ -14614,8 +15320,9 @@ export class InMemoryRepository {
       'business:order-entry:payable-fee',
       'business:shipment:payable-view',
       'business:shipment:profit-view',
+      'business:order-fee:view',
       'business:order-fee:profit-view',
-      'finance:receivable:detail',
+      'finance:receivable:read',
       'finance:business-cost:read',
       'finance:business-cost:view-profit',
       'finance:order-fee:payable:view',
@@ -14634,8 +15341,9 @@ export class InMemoryRepository {
       'market:pending-routing:business-cost:view',
       'business:shipment:payable-view',
       'business:shipment:profit-view',
+      'business:order-fee:view',
       'business:order-fee:profit-view',
-      'finance:receivable:detail',
+      'finance:receivable:read',
       'finance:business-cost:read',
       'finance:business-cost:view-profit',
       'finance:order-fee:payable:view',
@@ -14668,9 +15376,10 @@ export class InMemoryRepository {
     return this.hasAnyPermission(principal.role, [
       'business:shipment:finance-detail-view',
       'business:review:view',
+      'business:order-fee:view',
       'finance:receivable:read',
-      'finance:receivable:detail',
-      'finance:receivable:update'
+      'finance:receivable:read',
+      'finance:order-fee:receivable:manage'
     ]);
   }
 
@@ -14736,6 +15445,21 @@ export class InMemoryRepository {
       throw new BadRequestException('选中的仓库包裹已绑定运单，请重新选择待录单包裹');
     }
     return packages.filter((pkg): pkg is WarehousePackageSummary => Boolean(pkg));
+  }
+
+  private isWarehousePackageDraftOccupied(packageId: string, currentShipmentId?: string) {
+    return this.shipments.some((shipment) => (
+      !shipment.deletedAt
+      && shipment.id !== currentShipmentId
+      && (shipment.draftWarehousePackageIds ?? []).includes(packageId)
+    ));
+  }
+
+  private assertOrderEntryPackageDraftAvailability(packageIds: string[], currentShipmentId?: string) {
+    const ids = Array.from(new Set(packageIds.map((id) => id.trim()).filter(Boolean)));
+    if (ids.some((id) => this.isWarehousePackageDraftOccupied(id, currentShipmentId))) {
+      throw new BadRequestException('选中的仓库包裹已被其他录单草稿占用，请先删除原草稿后再录单');
+    }
   }
 
   private calculateOrderEntryPackageTotals(packages: WarehousePackageSummary[], channel?: ChannelSummary) {
@@ -15280,17 +16004,22 @@ export class InMemoryRepository {
     return undefined;
   }
 
-  private resolveShipmentFinanceItemAmount(type: ShipmentFinanceItemType, input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput, current?: StoredShipmentFinanceItem) {
+  private resolveShipmentFinanceItemAmount(
+    type: ShipmentFinanceItemType,
+    input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput,
+    current?: StoredShipmentFinanceItem,
+    calculateFromQuantityAndUnitPrice = false
+  ) {
+    if (calculateFromQuantityAndUnitPrice && (type === 'BUSINESS_COST' || type === 'PAYABLE')) {
+      const amount = calculateMarketRoutingCostAmount(type, input, current);
+      if (amount === undefined) throw new BadRequestException('市场排货费用必须填写有效的计费数量和单价');
+      return amount;
+    }
     if (input.amount !== undefined && input.amount !== null) {
       return Number(input.amount);
     }
-    if (type === 'BUSINESS_COST') {
+    if (type === 'BUSINESS_COST' || type === 'PAYABLE') {
       return calculateFinanceItemAmount(type, input, current, Number(current?.amount ?? 0));
-    }
-    const chargeWeightKg = input.chargeWeightKg ?? current?.chargeWeightKg;
-    const unitPrice = input.unitPrice ?? current?.unitPrice;
-    if (type === 'PAYABLE' && chargeWeightKg !== undefined && unitPrice !== undefined) {
-      return roundMoney(Number(chargeWeightKg) * Number(unitPrice));
     }
     return Number(current?.amount ?? 0);
   }
@@ -15740,6 +16469,7 @@ export class InMemoryRepository {
   }
 
   async assertWaterReceiptVoucherUploadAccess(principal: Principal, id: string): Promise<void> {
+    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:voucher-upload');
     const receipt = this.findWaterReceiptById(id);
     await this.ensureWaterReceiptVoucherAccess(principal, receipt);
   }
@@ -15748,7 +16478,6 @@ export class InMemoryRepository {
     principal: Principal,
     row: Pick<WaterReceiptSummary, 'createdByUserId' | 'customerId' | 'status'>
   ) {
-    await this.ensureWaterReceiptPermission(principal, 'finance:water-receipt:voucher');
     const canViewAll = await this.ensureWaterReceiptRecordAccess(principal, row);
     if (!canViewAll && row.status !== 'PENDING') {
       throw new ForbiddenException('业务员只能维护本人录入的未到账水单凭证');
@@ -16153,7 +16882,7 @@ export class InMemoryRepository {
     throw new BadRequestException('待付款第一版仅支持 RMB / USD');
   }
 
-  private toPendingPaymentSummary(row: StoredPayablePaymentApplication): PendingPaymentSummary {
+  private toPendingPaymentSummary(row: StoredPayablePaymentApplication, canViewBank = true, canViewVoucher = true): PendingPaymentSummary {
     const payable = this.findPayableFinanceItemById(row.payableFinanceItemId);
     const shipment = this.shipments.find((item) => item.id === row.shipmentId);
     if (!shipment) throw new NotFoundException('运单不存在');
@@ -16180,15 +16909,25 @@ export class InMemoryRepository {
       currency: this.normalizePaymentCurrency(row.currency),
       remark: row.remark,
       status,
-      bankAccount,
-      vouchers: this.paymentVouchers.filter((voucher) => voucher.pendingPaymentId === row.id),
+      bankAccount: canViewBank ? bankAccount : undefined,
+      vouchers: canViewVoucher ? this.paymentVouchers.filter((voucher) => voucher.pendingPaymentId === row.id) : [],
       paymentApplicationNo: app?.applicationNo,
       createdAt: row.createdAt,
       appliedAt: row.appliedAt
     };
   }
 
-  private buildPendingPaymentListResponse(rows: PendingPaymentSummary[], query: PendingPaymentListQuery): PendingPaymentListResponse {
+  private buildPendingPaymentListResponse(
+    rows: PendingPaymentSummary[],
+    query: PendingPaymentListQuery,
+    visibility: { canFilterAgent: boolean; canFilterBank: boolean } = { canFilterAgent: true, canFilterBank: true }
+  ): PendingPaymentListResponse {
+    if (!visibility.canFilterAgent && ['agentName', 'agentShortName'].includes(query.sortBy ?? '')) {
+      throw new ForbiddenException('总规则已屏蔽代理字段，不能按代理排序');
+    }
+    if (!visibility.canFilterBank && (query.payeeName || query.bankAccountNo)) {
+      throw new ForbiddenException('总规则已屏蔽收款银行字段，不能按银行资料筛选');
+    }
     const systemOrderNoNeedle = query.outboundOrderNo ?? query.systemOrderNo;
     const keyword = (value: string | undefined, needle: string | undefined) => !needle || (value ?? '').toLowerCase().includes(needle.toLowerCase());
     const dateInRange = (value: string | undefined, from?: string, to?: string) => {
@@ -16200,14 +16939,14 @@ export class InMemoryRepository {
       const status = query.status ?? 'ALL';
       return (status === 'ALL' || row.status === status)
         && (!query.currency || query.currency === 'ALL' || row.currency === query.currency)
-        && keyword(row.agentShortName, query.agent)
+        && (!query.agent || !visibility.canFilterAgent || keyword(row.agentShortName, query.agent))
         && keyword(row.salesperson, query.salesperson)
         && keyword(row.customerCode, query.customerCode)
         && (keyword(resolveShipmentOutboundOrderNo(row), systemOrderNoNeedle) || keyword(row.systemOrderNo, systemOrderNoNeedle))
         && keyword(row.feeName, query.feeName)
         && keyword(row.remark, query.remark)
-        && keyword(row.bankAccount?.accountName, query.payeeName)
-        && keyword(row.bankAccount?.bankAccountNo, query.bankAccountNo)
+        && (!query.payeeName || !visibility.canFilterBank || keyword(row.bankAccount?.accountName, query.payeeName))
+        && (!query.bankAccountNo || !visibility.canFilterBank || keyword(row.bankAccount?.bankAccountNo, query.bankAccountNo))
         && (query.amount === undefined || row.amount === Number(query.amount))
         && dateInRange(row.appliedAt ?? row.createdAt, query.applicationDateFrom, query.applicationDateTo);
     });
@@ -16286,7 +17025,10 @@ export class InMemoryRepository {
     return row;
   }
 
-  private toPaymentApplicationSummary(row: StoredPaymentApplication): PaymentApplicationSummary {
+  private toPaymentApplicationSummary(
+    row: StoredPaymentApplication,
+    visibility: { canViewBank: boolean; canViewVoucher: boolean } = { canViewBank: true, canViewVoucher: true }
+  ): PaymentApplicationSummary {
     const items = this.paymentApplicationItems.filter((item) => item.paymentApplicationId === row.id);
     return {
       id: row.id,
@@ -16295,11 +17037,11 @@ export class InMemoryRepository {
       currency: row.currency,
       totalAmount: row.totalAmount,
       status: row.status,
-      bankAccount: row.payeeBankAccountId ? this.payeeBankAccounts.find((bank) => bank.id === row.payeeBankAccountId) : undefined,
+      bankAccount: visibility.canViewBank && row.payeeBankAccountId ? this.payeeBankAccounts.find((bank) => bank.id === row.payeeBankAccountId) : undefined,
       remark: row.remark,
-      payerBankName: row.payerBankName,
-      payerBankAccountName: row.payerBankAccountName,
-      payerBankAccountNo: row.payerBankAccountNo,
+      payerBankName: visibility.canViewBank ? row.payerBankName : undefined,
+      payerBankAccountName: visibility.canViewBank ? row.payerBankAccountName : undefined,
+      payerBankAccountNo: visibility.canViewBank ? row.payerBankAccountNo : undefined,
       paidAt: row.paidAt,
       paidBy: row.paidBy,
       paidRemark: row.paidRemark,
@@ -16310,7 +17052,7 @@ export class InMemoryRepository {
       appliedAt: row.appliedAt,
       canceledAt: row.canceledAt,
       items,
-      vouchers: this.paymentApplicationVouchers(row, items)
+      vouchers: visibility.canViewVoucher ? this.paymentApplicationVouchers(row, items) : []
     };
   }
 
@@ -16350,11 +17092,11 @@ export class InMemoryRepository {
     return Array.from(new Map(vouchers.map((item) => [item.id, item])).values());
   }
 
-  private toPaidPaymentSummary(row: StoredPaymentApplication, canViewBank = true): PaidPaymentSummary {
+  private toPaidPaymentSummary(row: StoredPaymentApplication, canViewBank = true, canViewVoucher = true): PaidPaymentSummary {
     const payment = this.toPaymentApplicationSummary(row);
     const first = payment.items[0];
     const vouchers = payment.vouchers;
-    const bankAccount = payment.bankAccount ? { ...payment.bankAccount, bankAccountNo: this.maskBankAccountNo(payment.bankAccount.bankAccountNo, canViewBank) ?? payment.bankAccount.bankAccountNo } : undefined;
+    const bankAccount = canViewBank && payment.bankAccount ? { ...payment.bankAccount } : undefined;
     return {
       id: row.id,
       applicationNo: row.applicationNo,
@@ -16369,12 +17111,12 @@ export class InMemoryRepository {
       totalAmount: row.totalAmount,
       remark: row.remark ?? row.paidRemark,
       status: row.status,
-      billVouchers: vouchers.filter((voucher) => voucher.voucherType !== 'PAYMENT_RECEIPT'),
-      waterReceipts: vouchers.filter((voucher) => voucher.voucherType === 'PAYMENT_RECEIPT'),
+      billVouchers: canViewVoucher ? vouchers.filter((voucher) => voucher.voucherType !== 'PAYMENT_RECEIPT') : [],
+      waterReceipts: canViewVoucher ? vouchers.filter((voucher) => voucher.voucherType === 'PAYMENT_RECEIPT') : [],
       payeeBankAccount: bankAccount,
-      payerBankName: row.payerBankName,
-      payerBankAccountName: row.payerBankAccountName,
-      payerBankAccountNo: this.maskBankAccountNo(row.payerBankAccountNo, canViewBank),
+      payerBankName: canViewBank ? row.payerBankName : undefined,
+      payerBankAccountName: canViewBank ? row.payerBankAccountName : undefined,
+      payerBankAccountNo: canViewBank ? row.payerBankAccountNo : undefined,
       paidAt: row.paidAt,
       paidBy: row.paidBy,
       paidRemark: row.paidRemark,
@@ -16443,7 +17185,17 @@ export class InMemoryRepository {
     return accountNo.length <= 4 ? '****' : `${'*'.repeat(Math.max(4, accountNo.length - 4))}${accountNo.slice(-4)}`;
   }
 
-  private buildPaidPaymentListResponse(rows: PaidPaymentSummary[], query: PaidPaymentListQuery = {}): PaidPaymentListResponse {
+  private buildPaidPaymentListResponse(
+    rows: PaidPaymentSummary[],
+    query: PaidPaymentListQuery = {},
+    visibility: { canFilterAgent: boolean; canFilterBank: boolean } = { canFilterAgent: true, canFilterBank: true }
+  ): PaidPaymentListResponse {
+    if (!visibility.canFilterAgent && query.sortBy === 'agentName') {
+      throw new ForbiddenException('总规则已屏蔽代理字段，不能按代理排序');
+    }
+    if (!visibility.canFilterBank && (query.payeeName || query.bankAccountNo || query.payerBank)) {
+      throw new ForbiddenException('总规则已屏蔽银行字段，不能按银行资料筛选');
+    }
     const systemOrderNoNeedle = query.outboundOrderNo ?? query.systemOrderNo;
     const keyword = (value: string | undefined, needle: string | undefined) => !needle || (value ?? '').toLowerCase().includes(needle.toLowerCase());
     const dateInRange = (value: string | undefined, from?: string, to?: string) => {
@@ -16455,15 +17207,15 @@ export class InMemoryRepository {
       const status = query.status ?? 'ALL';
       return (status === 'ALL' || row.status === status)
         && (!query.currency || query.currency === 'ALL' || row.currency === query.currency)
-        && keyword(row.agentName, query.agent)
+        && (!query.agent || !visibility.canFilterAgent || keyword(row.agentName, query.agent))
         && keyword(row.salesperson, query.salesperson)
         && keyword(row.customerCode, query.customerCode)
         && (keyword(resolveShipmentOutboundOrderNo(row), systemOrderNoNeedle) || keyword(row.systemOrderNo, systemOrderNoNeedle))
         && keyword(row.feeName, query.feeName)
         && keyword(row.remark, query.remark)
-        && keyword(row.payeeBankAccount?.accountName, query.payeeName)
-        && keyword(row.payeeBankAccount?.bankAccountNo, query.bankAccountNo)
-        && keyword(row.payerBankName, query.payerBank)
+        && (!query.payeeName || !visibility.canFilterBank || keyword(row.payeeBankAccount?.accountName, query.payeeName))
+        && (!query.bankAccountNo || !visibility.canFilterBank || keyword(row.payeeBankAccount?.bankAccountNo, query.bankAccountNo))
+        && (!query.payerBank || !visibility.canFilterBank || keyword(row.payerBankName, query.payerBank))
         && (query.amount === undefined || row.totalAmount === Number(query.amount))
         && dateInRange(row.date, query.applicationDateFrom, query.applicationDateTo)
         && dateInRange(row.paidAt, query.paidDateFrom, query.paidDateTo);
@@ -16838,6 +17590,8 @@ export class InMemoryRepository {
       locked: item.locked,
       voided: item.voided,
       sourceType: 'MANUAL',
+      billingUnit: item.billingUnit,
+      billingQuantity: item.billingQuantity,
       chargeWeightKg: item.chargeWeightKg,
       unitPrice: item.unitPrice,
       amountOverridden: item.amountOverridden ?? false
@@ -16886,10 +17640,37 @@ export class InMemoryRepository {
       rmbAmount: row.rmbAmount,
       remark: row.remark,
       sourceType: row.sourceType,
+      billingUnit: row.billingUnit,
+      billingQuantity: row.billingQuantity,
       chargeWeightKg: row.chargeWeightKg,
       unitPrice: row.unitPrice,
       amountOverridden: row.amountOverridden,
       marketEditable: shipmentStatus !== 'WAITING_DISPATCH'
+        && !['CONFIRMED', 'LOCKED'].includes(row.reconciliationStatus ?? 'PENDING')
+    };
+  }
+
+  private toMarketPayableSummary(row: PayableFeeSummary, shipmentStatus: ShipmentStatus): PayableFeeSummary & { marketEditable?: boolean } {
+    return {
+      id: row.id,
+      shipmentId: row.shipmentId,
+      name: row.name,
+      amount: row.amount,
+      settled: row.settled,
+      type: 'PAYABLE',
+      currency: row.currency,
+      rmbAmount: row.rmbAmount,
+      reconciliationStatus: row.reconciliationStatus,
+      locked: row.locked,
+      remark: row.remark,
+      sourceType: row.sourceType,
+      billingUnit: row.billingUnit,
+      billingQuantity: row.billingQuantity,
+      chargeWeightKg: row.chargeWeightKg,
+      unitPrice: row.unitPrice,
+      amountOverridden: row.amountOverridden,
+      marketEditable: row.sourceType === 'MANUAL'
+        && shipmentStatus !== 'WAITING_DISPATCH'
         && !['CONFIRMED', 'LOCKED'].includes(row.reconciliationStatus ?? 'PENDING')
     };
   }
@@ -16935,6 +17716,22 @@ export class InMemoryRepository {
       return activeShipments.filter((shipment) => this.isShipmentInSalesScope(shipment, scope));
     }
     return activeShipments;
+  }
+
+  private normalizeInboundNo(value: unknown): string | null {
+    const normalized = typeof value === 'string' ? value.trim() : '';
+    if (!normalized) return null;
+    if (normalized.length > 100) throw new BadRequestException('入仓号不能超过 100 个字符');
+    return normalized;
+  }
+
+  private assertInboundNoAvailable(inboundNo: string | null, excludeShipmentId?: string) {
+    if (!inboundNo) return;
+    const duplicate = this.shipments.find((item) => (
+      item.id !== excludeShipmentId
+      && item.inboundNo?.trim().toLowerCase() === inboundNo.toLowerCase()
+    ));
+    if (duplicate) throw new BadRequestException(`入仓号 ${inboundNo} 已存在，不能重复使用`);
   }
 
   private visibleReviewShipments(principal: Principal, allowDepartmentTeam = false) {
@@ -17204,6 +18001,11 @@ export class InMemoryRepository {
     return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
   }
 
+  private warehouseTallyCustomerScope(principal: Principal) {
+    if (isWarehouseWideScopePrincipal(principal)) return undefined;
+    return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
+  }
+
   private orderEntryCustomerScope(principal: Principal, allowDepartmentTeam = false) {
     if (isAdministratorRole(principal.role) || (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role))) return undefined;
     if (principal.departmentTeamScope?.length) return principal.departmentTeamScope;
@@ -17282,6 +18084,26 @@ export class InMemoryRepository {
     return Boolean(marketOwner && identities.includes(marketOwner));
   }
 
+  private isShipmentInCustomerServiceScope(principal: Principal, shipment: Shipment & { customerId?: string }): boolean {
+    if (isAdministratorRole(principal.role)) return true;
+    const site = principal.site?.trim() || '深圳思远';
+    const permissions = new Set(effectivePermissionsForRole(principal.assignedRole ?? principal.role, this.rolePermissionMatrix[principal.assignedRole ?? principal.role] ?? []));
+    const canViewAll = permissions.has('customer-service:dashboard:all-view');
+    const canViewTeam = permissions.has('customer-service:dashboard:team-view');
+    const siteIdentities = new Set(this.accounts
+      .filter((account) => (account.site?.trim() || '深圳思远') === site)
+      .map((account) => account.username));
+    const team = principal.departmentTeamScope?.filter((username) => siteIdentities.has(username));
+    const identities = canViewAll
+      ? [...siteIdentities]
+      : canViewTeam
+        ? (team?.length ? team : [principal.username].filter((username) => siteIdentities.has(username)))
+        : [principal.username].filter((username) => siteIdentities.has(username));
+    const customerOwner = this.customers.find((customer) => customer.id === shipment.customerId)?.salesperson?.trim();
+    const owner = customerOwner || shipment.entryBy?.trim();
+    return Boolean(owner && identities.includes(owner));
+  }
+
   private ensureMarketShipmentSiteScope(principal: Principal, shipment: Shipment & { customerId?: string }) {
     if (!this.isShipmentInMarketSiteScope(principal, shipment)) throw new NotFoundException('运单不存在');
   }
@@ -17293,11 +18115,47 @@ export class InMemoryRepository {
     return shipment;
   }
 
+  private customerServiceVisibleShipment(principal: Principal, shipmentId: string) {
+    const shipment = this.shipments.find((item) => item.id === shipmentId && !this.deletedShipmentIds.has(item.id));
+    if (!shipment || !this.isShipmentInCustomerServiceScope(principal, shipment)) {
+      throw new NotFoundException('运单不存在');
+    }
+    return shipment;
+  }
+
+  private trackingVisibleShipment(principal: Principal, shipmentId: string) {
+    switch (trackingShipmentScopeForPrincipal(principal)) {
+      case 'all':
+      case 'customer': return this.visibleShipment(principal, shipmentId);
+      case 'customer-service': return this.customerServiceVisibleShipment(principal, shipmentId);
+      case 'market': return this.marketVisibleShipment(principal, shipmentId);
+      case 'sales': return this.visibleShipment({ ...principal, dataScope: 'SALES_OWN' }, shipmentId);
+      default: throw new NotFoundException('运单不存在');
+    }
+  }
+
   private visibleReviewShipment(principal: Principal, shipmentId: string, allowDepartmentTeam = false) {
     const shipment = this.visibleReviewShipments(principal, allowDepartmentTeam).find((item) => item.id === shipmentId);
     if (!shipment) {
       throw new NotFoundException('运单不存在');
     }
+    return shipment;
+  }
+
+  private visibleFinanceShipment(principal: Principal, shipmentId: string) {
+    const shipment = this.shipments.find((item) => {
+      if (item.id !== shipmentId || this.deletedShipmentIds.has(item.id)) return false;
+      if (principal.role === 'CUSTOMER') return item.customerId === principal.customerId;
+      if (isAdministratorRole(principal.role) || principal.financeReceivableAllView) return true;
+      const scope = principal.departmentTeamScope?.filter(Boolean).length
+        ? principal.departmentTeamScope.filter(Boolean)
+        : principal.username?.trim() ? [principal.username.trim()] : [];
+      if (!scope.length) return false;
+      const customer = this.customers.find((row) => row.id === item.customerId);
+      const salesperson = customer?.salesperson?.trim() || item.salesperson?.trim();
+      return salesperson ? scope.includes(salesperson) : Boolean(item.entryBy && scope.includes(item.entryBy));
+    });
+    if (!shipment) throw new NotFoundException('运单不存在');
     return shipment;
   }
 
@@ -17404,7 +18262,7 @@ export class InMemoryRepository {
       });
       return {
         task,
-        shipment: this.scopeShipmentAgentWeight(shipment, await this.canViewShipmentAgentWeight(principal))
+        shipment: toExternalTrackingShipmentSummary(shipment)
       };
     }
 
@@ -17451,7 +18309,7 @@ export class InMemoryRepository {
     });
     return {
       task,
-      shipment: this.scopeShipmentAgentWeight(shipment, await this.canViewShipmentAgentWeight(principal))
+      shipment: toExternalTrackingShipmentSummary(shipment)
     };
   }
 
@@ -17918,24 +18776,50 @@ function sanitizeDepartmentTeamBusinessCosts(rows: OrderEntryFinanceItemInput[] 
   }));
 }
 
+function summarizeInMemoryReceivableRows(rows: Array<{ amount?: unknown; currency?: string | null; settlementMethod?: string | null }>): Shipment['receivableSummary'] {
+  if (!rows.length) return undefined;
+  const amountsByCurrency = new Map<string, number>();
+  const settlementMethods = new Set<string>();
+  rows.forEach((row) => {
+    const currency = row.currency?.trim().toUpperCase() || 'RMB';
+    amountsByCurrency.set(currency, roundMoney((amountsByCurrency.get(currency) ?? 0) + Number(row.amount ?? 0)));
+    const settlementMethod = row.settlementMethod?.trim();
+    if (settlementMethod) settlementMethods.add(settlementMethod);
+  });
+  const amounts = [...amountsByCurrency.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([currency, amount]) => ({ currency, amount }));
+  return {
+    amounts,
+    currencies: amounts.map((item) => item.currency),
+    settlementMethods: [...settlementMethods].sort((left, right) => left.localeCompare(right))
+  };
+}
+
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-function isLegacyAutoRoutePayable(item: {
+function formatRoutePayableRemark(agentChannelName: string, otherFee: number, otherFeeRemark?: string) {
+  return `市场排货渠道：${agentChannelName}${otherFee > 0 ? `；其他费用：${otherFee}${otherFeeRemark ? `；其他费用备注：${otherFeeRemark}` : ''}` : ''}`;
+}
+
+function isAutoRoutePayable(item: {
   name?: string;
-  locked?: boolean;
   amountOverridden?: boolean;
   chargeWeightKg?: unknown;
   unitPrice?: unknown;
   remark?: string;
 }) {
   return item.name === '代理成本'
-    && item.locked !== true
     && item.amountOverridden === false
     && item.chargeWeightKg !== undefined
     && item.unitPrice !== undefined
     && item.remark?.startsWith('市场排货渠道：') === true;
+}
+
+function isLegacyAutoRoutePayable(item: Parameters<typeof isAutoRoutePayable>[0] & { locked?: boolean }) {
+  return item.locked !== true && isAutoRoutePayable(item);
 }
 
 function buildWarehousePackageSummary(id: string, input: WarehousePackageCreateInput): WarehousePackageSummary {
@@ -18119,7 +19003,7 @@ function createBackendPriceLookup(
     throw new BadRequestException('没有匹配的代理成本价');
   }
 
-  const canViewInternalPricing = canViewPricingInternalRoute(principal.role);
+  const canViewInternalPricing = canViewPricingInternalForPrincipal(principal);
   const recommendations = matchedPrices
     .map<PriceLookupRecommendation | null>((price) => {
       const priceBookAgentName = priceBookAgentNameMap.get(price.priceBookId) ?? price.agentName;
@@ -18252,14 +19136,21 @@ function redactLegacyPricingResponse(response: LegacyPricingQuoteResponse, visib
   };
   const recommendations = response.recommendations.map(redact);
   const byId = new Map(recommendations.map((item) => [item.id, item]));
+  const query = visibility.internalSource
+    ? response.query
+    : { ...response.query, agentName: undefined, origin: undefined, channel: undefined };
   return {
     ...response,
+    query,
     recommendations,
     cheapestRecommendations: response.cheapestRecommendations.map((item) => byId.get(item.id) ?? redact(item)),
     fastestRecommendations: response.fastestRecommendations.map((item) => byId.get(item.id) ?? redact(item)),
     selected: response.selected ? byId.get(response.selected.id) ?? redact(response.selected) : undefined,
+    agentErrors: visibility.internalSource ? response.agentErrors : [],
     metrics: {
       ...response.metrics,
+      agents: visibility.internalSource ? response.metrics.agents : 0,
+      channels: visibility.internalSource ? response.metrics.channels : 0,
       sources: visibility.internalSource ? response.metrics.sources : 0
     }
   };
@@ -18279,24 +19170,19 @@ function redactPriceBookRows(rows: PriceBookRowSummary[], visibility: PricingFie
 }
 
 function canViewPricingInternalRoute(role: string): boolean {
-  return isAdministratorRole(role) || role === 'UG_MARKET';
+  return role !== 'CUSTOMER';
 }
 
-function priceRowCargoCapabilityText(row: PriceBookRowSummary): string {
-  const extra = row as PriceBookRowSummary & { remark?: string; raw?: unknown };
-  return [
-    row.channelName,
-    row.realChannelName,
-    row.businessRouteName,
-    row.sourceSheetName,
-    extra.remark,
-    row.productSurchargeRemark,
-    row.specialRemark,
-    JSON.stringify(extra.raw ?? {})
-  ].filter(Boolean).join(' ');
+function canViewPricingInternalForPrincipal(principal: Principal): boolean {
+  const masks = principal.globalFieldMasks;
+  const agentMasked = masks?.['agent-short-name'] || masks?.['agent-company-name'] || masks?.['agent-channel'] || masks?.['agent-data'];
+  return canViewPricingInternalRoute(principal.role) && !agentMasked && !masks?.['payable-cost'];
 }
 
 function priceRowSupportsLargeCargo(row: PriceBookRowSummary): boolean {
+  // Channel notes are descriptive text only. Large-cargo routing must come
+  // from canonical channel/route/source identifiers, never from a remark
+  // such as “超大件、大包裹，建议走卡派渠道”.
   const routeText = [
     row.channelName,
     row.realChannelName,
@@ -18304,12 +19190,7 @@ function priceRowSupportsLargeCargo(row: PriceBookRowSummary): boolean {
     row.sourceSheetName
   ].filter(Boolean).join(' ');
   const positive = /卡派|卡航|卡车|海卡|超大件|大件|托盘|卡板|打托|木箱|木架|尾板|truck|oversize/i;
-  if (positive.test(routeText)) return true;
-  const fullText = priceRowCargoCapabilityText(row);
-  if (/(不收|不接|不接受|不可接|拒收|不承接).{0,12}(超大件|大件|托盘|卡板|打托|木箱|木架)/.test(fullText)) {
-    return false;
-  }
-  return positive.test(fullText);
+  return positive.test(routeText);
 }
 
 function filterPriceRowsByCargoProfile(rows: PriceBookRowSummary[], module: LegacyPricingModule, profile: LargeCargoProfile): PriceBookRowSummary[] {
@@ -18352,7 +19233,7 @@ function createInMemoryEuropeExpressUnitQuote(
     buildPriceBookAgentSourcesFromRows(priceRows, priceBookFileNameMap, priceBookAgentNameMap)
   ).filter((rule) => !rule.deletedAt && rule.enabled);
   const markupRuleIndex = buildMarkupRuleIndex(markupRules);
-  const canViewInternalPricing = canViewPricingInternalRoute(principal.role);
+  const canViewInternalPricing = canViewPricingInternalForPrincipal(principal);
   const recommendations = priceRows
     .filter((row) => !input.agentName || row.agentName === input.agentName)
     .filter((row) => !destinationCountry || row.destinationCountry === destinationCountry)

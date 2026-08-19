@@ -26,6 +26,17 @@ import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions, resolveAgentIdByIdentity } from '../../shared/agentIdentity';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 import { canViewOrderLifecycleBusinessCosts } from '../../shared/businessCostAccess';
+import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
+import {
+  canCreateOrderFeeType,
+  canDeleteOrderFeeType,
+  canLockOrderFeeType,
+  canUnlockOrderFeeType,
+  canUpdateOrderFeeType,
+  canViewOrderFeeBusinessCostAgent,
+  canViewOrderFeePayables,
+  hasOrderFeeUiPermission
+} from './orderFeePermissions';
 
 const { Text } = Typography;
 
@@ -174,6 +185,20 @@ function isManualEditable(row: OrderFeeRow) {
   return row.sourceType === 'MANUAL' && getFeeAuditStatus(row) === 'PENDING' && !hasPendingMatch;
 }
 
+function isManualLockTransitionAvailable(row: OrderFeeRow, action: 'lock' | 'unlock') {
+  if (row.sourceType !== 'MANUAL') return false;
+  if (action === 'lock') return !row.locked && row.reconciliationStatus === 'PENDING';
+  return row.locked === true && row.reconciliationStatus === 'LOCKED';
+}
+
+function hasLegacyOrderFeePermission(
+  role: RoleKey,
+  permissions: readonly PermissionKey[] | undefined,
+  permission: string
+) {
+  return role === 'ADMIN' || Boolean((permissions as readonly string[] | undefined)?.includes(permission));
+}
+
 function hasUiPermission(role: RoleKey, permissions: PermissionKey[] | undefined, permission: PermissionKey) {
   return role === 'ADMIN' || Boolean(permissions?.includes(permission));
 }
@@ -210,6 +235,7 @@ export function OrderFeePanel({
   renderShipmentOrderNoLink
 }: OrderFeePanelProps) {
   const [modal, modalContextHolder] = Modal.useModal();
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
   const [activeType, setActiveType] = useState<OrderFeeTableType>('RECEIVABLE');
   const [inspectedRowId, setInspectedRowId] = useState<string>();
   const [editor, setEditor] = useState<OrderFeeEditorState | null>(null);
@@ -224,24 +250,31 @@ export function OrderFeePanel({
   const [receiptRows, setReceiptRows] = useState<ReceivableWaterReceiptCandidate[]>([]);
   const [receiptLoading, setReceiptLoading] = useState(false);
 
-  const roleCanViewPayables = hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
-    || hasUiPermission(role, permissions, 'finance:payable:view-sensitive');
-  const visiblePayables = roleCanViewPayables && (detail?.canViewPayables
-    ?? (
-      hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
-      || hasUiPermission(role, permissions, 'finance:payable:view-sensitive')
-    ));
+  const businessCostMasked = role !== 'ADMIN'
+    && hasLegacyOrderFeePermission(role, permissions, 'business:order-entry:business-cost-mask');
+  const payableFeeMasked = (role !== 'ADMIN'
+    && hasLegacyOrderFeePermission(role, permissions, 'business:order-entry:payable-fee-mask'))
+    || !fieldVisibility.showPayableCost;
+  const roleCanViewPayables = canViewOrderFeePayables(role, permissions);
+  const visiblePayables = !payableFeeMasked
+    && roleCanViewPayables
+    && detail?.canViewPayables === true;
   const visibleReceivables = [
+    'business:order-fee:view',
     'business:shipment:finance-detail-view',
     'business:review:view',
     'finance:receivable:read',
     'finance:receivable:detail',
     'finance:receivable:update'
   ].some((permission) => hasUiPermission(role, permissions, permission as PermissionKey));
-  const canViewBusinessCostAgent = roleCanViewPayables && (hasUiPermission(role, permissions, 'finance:business-cost:view-agent')
-    || hasUiPermission(role, permissions, 'finance:order-fee:payable:view')
-    || hasUiPermission(role, permissions, 'finance:payable:view-sensitive'));
-  const canViewBusinessCosts = canViewOrderLifecycleBusinessCosts(role, permissions);
+  const canViewBusinessCostAgent = fieldVisibility.showAgentData
+    && fieldVisibility.showAgentCompanyName
+    && canViewOrderFeeBusinessCostAgent(role, permissions);
+  const canViewBusinessCosts = !businessCostMasked && (
+    canViewOrderLifecycleBusinessCosts(role, permissions)
+    || hasOrderFeeUiPermission(role, permissions, 'finance:business-cost:read')
+    || hasLegacyOrderFeePermission(role, permissions, 'business:review:finance-detail-view')
+  );
   const receivableRows = (detail?.receivables ?? []).filter(isActiveFeeRow);
   const businessCostRows = canViewBusinessCosts ? (detail?.businessCosts ?? []).filter(isActiveFeeRow) : [];
   const payableRows = visiblePayables ? (detail?.payables ?? []).filter(isActiveFeeRow) : [];
@@ -262,8 +295,9 @@ export function OrderFeePanel({
   const inspectedRow = currentRows.find((row) => row.id === inspectedRowId) ?? currentRows[0];
   const selectedKeys = selectedRowKeys[activeType];
   const selectedRows = currentRows.filter((row) => selectedKeys.includes(row.id));
-  const canCreateFee = hasUiPermission(role, permissions, 'business:order-fee:create');
-  const canUpdateFee = hasUiPermission(role, permissions, 'business:order-fee:update');
+  const canCreateFee = hasOrderFeeUiPermission(role, permissions, 'business:order-fee:create');
+  const canUpdateFee = hasOrderFeeUiPermission(role, permissions, 'business:order-fee:update');
+  const canManageOwnedOrderFee = canCreateFee || canUpdateFee;
   const canAdjustCost = hasUiPermission(role, permissions, 'finance:order-fee:cost-adjust');
   const canManageBusinessCostSensitiveFields = canAdjustCost || (
     hasUiPermission(role, permissions, 'finance:business-cost:manage')
@@ -271,31 +305,36 @@ export function OrderFeePanel({
   );
   const hasOrderEntryBusinessCostWrite = hasUiPermission(role, permissions, 'business:order-entry:business-cost');
   const canWritePendingReviewBusinessCost = shipment.status === 'REVIEW_PENDING' && hasOrderEntryBusinessCostWrite;
-  const usesPendingReviewBusinessCostOnly = !canManageBusinessCostSensitiveFields && (
+  const usesPendingReviewBusinessCostOnly = !canManageBusinessCostSensitiveFields && !canManageOwnedOrderFee && (
     hasOrderEntryBusinessCostWrite
     || hasUiPermission(role, permissions, 'business:shipment:team-view')
     || hasUiPermission(role, permissions, 'data-scope:sales-own')
   );
   const canCreateCurrentFee = usesPendingReviewBusinessCostOnly
     ? activeType === 'BUSINESS_COST' && canWritePendingReviewBusinessCost
-    : canCreateFee;
+    : canCreateOrderFeeType(role, activeType, permissions);
   const canUpdateCurrentFee = usesPendingReviewBusinessCostOnly
     ? activeType === 'BUSINESS_COST' && canWritePendingReviewBusinessCost
-    : activeType === 'RECEIVABLE'
-      ? canUpdateFee
-      : activeType === 'BUSINESS_COST'
-        ? canManageBusinessCostSensitiveFields
-        : canAdjustCost;
+    : canUpdateOrderFeeType(role, activeType, permissions);
+  const canViewCurrentPayableStatus = activeType !== 'PAYABLE' || fieldVisibility.showPayableStatus;
   const canMatchReceipt = [
     'finance:receivable:match-water',
     'finance:water-match:create'
   ].some((permission) => hasUiPermission(role, permissions, permission as PermissionKey));
   const canDeleteReceivable = hasUiPermission(role, permissions, 'finance:receivable:void');
-  const canDeleteFee = hasUiPermission(role, permissions, 'business:order-fee:delete')
+  const canDeleteFee = canDeleteOrderFeeType(role, activeType, permissions)
     || (activeType === 'RECEIVABLE' && canDeleteReceivable);
   const canDeleteCurrentFee = usesPendingReviewBusinessCostOnly
     ? activeType === 'BUSINESS_COST' && canWritePendingReviewBusinessCost
     : canDeleteFee;
+  const canLockCurrentFee = !usesPendingReviewBusinessCostOnly
+    && canLockOrderFeeType(role, activeType, permissions);
+  const canUnlockCurrentFee = !usesPendingReviewBusinessCostOnly
+    && canUnlockOrderFeeType(role, activeType, permissions);
+  const canBatchCurrentFee = canDeleteCurrentFee || canLockCurrentFee || canUnlockCurrentFee;
+  const editableSelectedRows = selectedRows.filter(isManualEditable);
+  const lockableSelectedRows = selectedRows.filter((row) => isManualLockTransitionAvailable(row, 'lock'));
+  const unlockableSelectedRows = selectedRows.filter((row) => isManualLockTransitionAvailable(row, 'unlock'));
   const settlementRows = useMemo(() => getSettlementMethodRows(catalogItems), [catalogItems]);
   const settlementOptions = useMemo(() => createSettlementMethodOptions(settlementRows), [settlementRows]);
   const agentOptions = useMemo(() => getDetailedCompanyAgentOptions(agents), [agents]);
@@ -379,6 +418,10 @@ export function OrderFeePanel({
   }, [apiClient, receiptMatch, reload]);
 
   const openEditor = useCallback((type: OrderFeeTableType, row?: OrderFeeRow) => {
+    if (type === 'PAYABLE' && !visiblePayables) {
+      message.warning('当前账号无权查看应付费用字段');
+      return;
+    }
     setActiveType(type);
     setInspectedRowId(row?.id);
     setEditor({ type, row });
@@ -402,7 +445,7 @@ export function OrderFeePanel({
       unitPrice: row && hasChargePricing(row) ? row.unitPrice : undefined,
       remark: row?.remark
     });
-  }, [agents, editorForm, shipment.agentId, shipment.agentName]);
+  }, [agents, editorForm, shipment.agentId, shipment.agentName, visiblePayables]);
 
   const closeEditor = useCallback(() => {
     setEditor(null);
@@ -426,6 +469,7 @@ export function OrderFeePanel({
       ? Number((Number(quantity) * Number(values.unitPrice)).toFixed(2))
       : Number(values.amount ?? 0);
     const input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput = {
+      type: editor.type,
       name: values.name?.trim(),
       amount,
       currency: values.currency ?? 'RMB',
@@ -495,6 +539,7 @@ export function OrderFeePanel({
           const quantity = type === 'BUSINESS_COST' ? row.billingQuantity ?? row.chargeWeightKg : row.chargeWeightKg;
           if (!quantity || !row.unitPrice) continue;
           await apiClient.updateShipmentFinanceItem(shipment.id, row.id, {
+            type,
             amount: Number((quantity * row.unitPrice).toFixed(2)),
             billingUnit: type === 'BUSINESS_COST' ? row.billingUnit ?? 'KG' : undefined,
             billingQuantity: type === 'BUSINESS_COST' ? quantity : undefined,
@@ -537,20 +582,25 @@ export function OrderFeePanel({
   const quickAdd = useCallback(async (type: OrderFeeTableType, name: string) => {
     setSubmitting(true);
     try {
-      await apiClient.createShipmentFinanceItem(shipment.id, {
+      const input: ShipmentFinanceItemCreateInput = {
         type,
         name,
         amount: 0,
         currency: 'RMB',
         reconciliationStatus: 'PENDING',
         agentId: type === 'RECEIVABLE' ? undefined : shipment.agentId ?? resolveAgentIdByIdentity(agents, shipment.agentName)
-      });
+      };
+      if (usesPendingReviewBusinessCostOnly && type === 'BUSINESS_COST') {
+        await apiClient.createPendingReviewBusinessCost(shipment.id, input);
+      } else {
+        await apiClient.createShipmentFinanceItem(shipment.id, input);
+      }
       await reload();
       message.success(`已快速添加${name}`);
     } finally {
       setSubmitting(false);
     }
-  }, [agents, apiClient, reload, shipment.agentId, shipment.agentName, shipment.id]);
+  }, [agents, apiClient, reload, shipment.agentId, shipment.agentName, shipment.id, usesPendingReviewBusinessCostOnly]);
 
   const inspectRow = useCallback((rowId: string) => {
     setEditor(null);
@@ -573,13 +623,13 @@ export function OrderFeePanel({
       ellipsis: true,
       sorter: (left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN')
     },
-    {
+    ...(isReceivable || activeType === 'BUSINESS_COST' || fieldVisibility.showPayableStatus ? [{
       title: '费用审核状态',
       key: 'status',
       width: isReceivable ? '14%' : '15%',
-      render: (_, row) => renderStatus(row),
-      sorter: (left, right) => getFeeAuditStatus(left).localeCompare(getFeeAuditStatus(right))
-    },
+      render: (_: unknown, row: OrderFeeRow) => renderStatus(row),
+      sorter: (left: OrderFeeRow, right: OrderFeeRow) => getFeeAuditStatus(left).localeCompare(getFeeAuditStatus(right))
+    }] : []),
     {
       title: '币种',
       key: 'currency',
@@ -639,7 +689,7 @@ export function OrderFeePanel({
       });
     }
     return columns;
-  }, [activeType, canUpdateCurrentFee, inspectRow, openEditor]);
+  }, [activeType, canUpdateCurrentFee, fieldVisibility.showPayableStatus, inspectRow, openEditor]);
 
   const detailItem = (label: string, value: ReactNode, wide = false) => (
     <div className={`order-fee-inspector-item${wide ? ' order-fee-inspector-item-wide' : ''}`}>
@@ -679,7 +729,9 @@ export function OrderFeePanel({
               <Form.Item name="paymentNo" label="付款编号" className="order-fee-side-form-wide">
                 <Input placeholder="匹配水单后自动回写，也可手动记录" />
               </Form.Item>
-            ) : editor.type === 'PAYABLE' || canViewBusinessCostAgent ? (
+            ) : (editor.type === 'PAYABLE'
+              ? fieldVisibility.showAgentData && fieldVisibility.showAgentCompanyName
+              : canViewBusinessCostAgent) ? (
               <Form.Item name="agentId" label={agentFieldLabels.detailedCompanyName} className="order-fee-side-form-wide">
                 <Select showSearch allowClear optionFilterProp="searchText" options={agentOptions} placeholder="选择代理详细公司名" />
               </Form.Item>
@@ -703,7 +755,7 @@ export function OrderFeePanel({
                   <InputNumber min={0} precision={2} />
                 </Form.Item>
               </>
-            ) : editor.type === 'PAYABLE' ? (
+            ) : editor.type === 'PAYABLE' && fieldVisibility.showPayableCost ? (
               <>
                 <Form.Item name="chargeWeightKg" label="计费重">
                   <InputNumber min={0} precision={3} addonAfter="KG" />
@@ -739,6 +791,8 @@ export function OrderFeePanel({
 
     const isReceivable = activeType === 'RECEIVABLE';
     const canDeleteInspected = inspectedRow.sourceType === 'MANUAL' && canDeleteCurrentFee;
+    const canLockInspected = canLockCurrentFee && isManualLockTransitionAvailable(inspectedRow, 'lock');
+    const canUnlockInspected = canUnlockCurrentFee && isManualLockTransitionAvailable(inspectedRow, 'unlock');
     const canMatchInspected = isReceivable && canMatchReceipt;
     const agentName = 'agentName' in inspectedRow ? inspectedRow.agentName || shipment.agentName || '-' : shipment.agentName || '-';
     const receiptStatus = isReceivable && 'receiptStatus' in inspectedRow ? inspectedRow.receiptStatus : undefined;
@@ -751,13 +805,13 @@ export function OrderFeePanel({
         ? '该应收费用已完成收款，无需再次匹配水单'
         : undefined;
     return (
-      <div className="order-fee-inspector-detail">
+        <div className="order-fee-inspector-detail">
         <div className="order-fee-inspector-heading">
           <div>
             <strong>费用详情</strong>
             <Text type="secondary">{feeTypeTitles[activeType]} · {inspectedRow.name}</Text>
           </div>
-          {renderStatus(inspectedRow)}
+          {canViewCurrentPayableStatus ? renderStatus(inspectedRow) : null}
         </div>
         <section className="order-fee-inspector-group">
           <h4>基础信息</h4>
@@ -766,7 +820,7 @@ export function OrderFeePanel({
             {detailItem('客户编号', parseCustomerCode(shipment.customerName))}
             {detailItem('出货单号', renderShipmentOrderNoLink(resolveShipmentOutboundOrderNo(shipment), { shipment }))}
             {detailItem('转单号', shipment.transferNo || '-')}
-            {activeType !== 'RECEIVABLE' && (activeType !== 'BUSINESS_COST' || canViewBusinessCostAgent)
+            {activeType !== 'RECEIVABLE' && fieldVisibility.showAgentCompanyName && (activeType !== 'BUSINESS_COST' || canViewBusinessCostAgent)
               ? detailItem(agentFieldLabels.detailedCompanyName, agentName, true)
               : null}
           </div>
@@ -789,7 +843,7 @@ export function OrderFeePanel({
             {hasChargePricing(inspectedRow) && activeType === 'BUSINESS_COST'
               ? detailItem('计费方式', 'billingUnit' in inspectedRow && inspectedRow.billingUnit === 'CBM' ? '体积（CBM）' : '计费重（KG）')
               : null}
-            {hasChargePricing(inspectedRow)
+            {hasChargePricing(inspectedRow) && (activeType !== 'PAYABLE' || fieldVisibility.showPayableCost)
               ? detailItem(activeType === 'BUSINESS_COST' ? '计费数量' : '计费重', (() => {
                 const quantity = activeType === 'BUSINESS_COST'
                   ? ('billingQuantity' in inspectedRow ? inspectedRow.billingQuantity : undefined) ?? inspectedRow.chargeWeightKg
@@ -798,11 +852,13 @@ export function OrderFeePanel({
                 return quantity === undefined ? '-' : `${quantity} ${unit}`;
               })())
               : null}
-            {hasChargePricing(inspectedRow)
+            {hasChargePricing(inspectedRow) && (activeType !== 'PAYABLE' || fieldVisibility.showPayableCost)
               ? detailItem('单价', inspectedRow.unitPrice === undefined ? '-' : `${formatFinanceAmount(inspectedRow.unitPrice, inspectedRow.currency)}/${activeType === 'BUSINESS_COST' && 'billingUnit' in inspectedRow && inspectedRow.billingUnit === 'CBM' ? 'CBM' : 'KG'}`)
               : null}
-            {hasChargePricing(inspectedRow) ? detailItem('金额来源', inspectedRow.amountOverridden ? <Tag color="orange">人工覆盖</Tag> : '公式计算') : null}
-            {'businessProfit' in inspectedRow ? detailItem('业务利润', inspectedRow.businessProfit === undefined ? '-' : formatCurrency(inspectedRow.businessProfit)) : null}
+            {hasChargePricing(inspectedRow) && (activeType !== 'PAYABLE' || fieldVisibility.showPayableCost) ? detailItem('金额来源', inspectedRow.amountOverridden ? <Tag color="orange">人工覆盖</Tag> : '公式计算') : null}
+            {'businessProfit' in inspectedRow && canViewBusinessCosts && visiblePayables
+              ? detailItem('业务利润', inspectedRow.businessProfit === undefined ? '-' : formatCurrency(inspectedRow.businessProfit))
+              : null}
           </div>
         </section>
         <section className="order-fee-inspector-group">
@@ -827,7 +883,15 @@ export function OrderFeePanel({
           {canDeleteInspected ? (
             <Button danger disabled={!isManualEditable(inspectedRow)} onClick={() => confirmRunRows(activeType, 'delete', [inspectedRow])}>删除</Button>
           ) : null}
-          {!canMatchInspected && !canDeleteInspected ? <Text type="secondary">当前账号仅支持查看</Text> : null}
+          {canLockInspected ? (
+            <Button onClick={() => confirmRunRows(activeType, 'lock', [inspectedRow])}>锁定</Button>
+          ) : null}
+          {canUnlockInspected ? (
+            <Button onClick={() => confirmRunRows(activeType, 'unlock', [inspectedRow])}>解锁</Button>
+          ) : null}
+          {!canMatchInspected && !canDeleteInspected && !canLockInspected && !canUnlockInspected
+            ? <Text type="secondary">当前账号仅支持查看</Text>
+            : null}
         </div>
       </div>
     );
@@ -840,9 +904,10 @@ export function OrderFeePanel({
     </div>
   );
 
-  const profitSections = roleCanViewPayables
+  const profitSections = !businessCostMasked && !payableFeeMasked && fieldVisibility.showPayableStatus && roleCanViewPayables
     ? (detail?.profitSections ?? []).filter((item) => canViewBusinessCosts || !['RECEIVABLE_BUSINESS', 'BUSINESS_PAYABLE'].includes(item.key))
     : [];
+  const visibleGrossProfit = canViewBusinessCosts && visiblePayables && detail?.grossProfit !== undefined;
   const receivableRmbTotal = receivableRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
   const businessCostRmbTotal = businessCostRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
   const payableRmbTotal = payableRows.reduce((sum, row) => sum + (resolveRmbAmount(row) ?? 0), 0);
@@ -864,7 +929,7 @@ export function OrderFeePanel({
         {metric('应收费用', receivableRows.length ? formatCurrency(receivableRmbTotal) : '待生成', receivableRows.length ? 'success' : 'warning')}
         {canViewBusinessCosts ? metric('业务成本', businessCostRows.length ? formatCurrency(businessCostRmbTotal) : '待生成') : null}
         {visiblePayables ? metric('应付费用', payableRows.length ? formatCurrency(payableRmbTotal) : '待生成', payableRows.length ? 'warning' : 'neutral') : null}
-        {visiblePayables ? metric('利润汇总', detail?.grossProfit === undefined ? '待生成' : formatCurrency(detail.grossProfit), detail?.grossProfit === undefined ? 'neutral' : detail.grossProfit >= 0 ? 'success' : 'warning') : null}
+        {visibleGrossProfit ? metric('利润汇总', formatCurrency(detail.grossProfit!), detail.grossProfit! >= 0 ? 'success' : 'warning') : null}
       </div>
       {profitSections.length ? (
         <div className="order-fee-profit-band">
@@ -900,11 +965,17 @@ export function OrderFeePanel({
               tableLayout="fixed"
               loading={loading}
               pagination={{ ...tenRowTablePagination, hideOnSinglePage: true }}
-              rowSelection={canDeleteCurrentFee ? {
+              rowSelection={canBatchCurrentFee ? {
                 selectedRowKeys: selectedKeys,
                 onChange: (next) => setSelectedRowKeys((current) => ({ ...current, [activeType]: next.map(String) })),
                 columnWidth: 42,
-                getCheckboxProps: (row) => ({ disabled: !isManualEditable(row) })
+                getCheckboxProps: (row) => ({
+                  disabled: !(
+                    (canDeleteCurrentFee && isManualEditable(row))
+                    || (canLockCurrentFee && isManualLockTransitionAvailable(row, 'lock'))
+                    || (canUnlockCurrentFee && isManualLockTransitionAvailable(row, 'unlock'))
+                  )
+                })
               } : undefined}
               showSelectionSummary={false}
               onRow={(row) => ({ onClick: () => inspectRow(row.id) })}
@@ -917,11 +988,13 @@ export function OrderFeePanel({
               {activeType !== 'RECEIVABLE' && chargeWeightTotal > 0 ? <span>计费重 {chargeWeightTotal.toFixed(3)} KG</span> : null}
               {activeType === 'BUSINESS_COST' && billingVolumeTotal > 0 ? <span>体积 {billingVolumeTotal.toFixed(6)} CBM</span> : null}
             </div>
-            {canCreateCurrentFee || canDeleteCurrentFee ? (
+            {canCreateCurrentFee || canBatchCurrentFee ? (
               <div className="order-fee-toolbar">
                 <Space wrap>
-                  {canDeleteCurrentFee ? <Text type="secondary">已选 {selectedKeys.length} 条</Text> : null}
-                  {canDeleteCurrentFee ? <Button size="small" disabled={!selectedKeys.length} onClick={() => confirmRunRows(activeType, 'delete', selectedRows)}>删除</Button> : null}
+                  {canBatchCurrentFee ? <Text type="secondary">已选 {selectedKeys.length} 条</Text> : null}
+                  {canDeleteCurrentFee ? <Button size="small" disabled={!editableSelectedRows.length} onClick={() => confirmRunRows(activeType, 'delete', editableSelectedRows)}>删除</Button> : null}
+                  {canLockCurrentFee ? <Button size="small" disabled={!lockableSelectedRows.length} onClick={() => confirmRunRows(activeType, 'lock', lockableSelectedRows)}>锁定</Button> : null}
+                  {canUnlockCurrentFee ? <Button size="small" disabled={!unlockableSelectedRows.length} onClick={() => confirmRunRows(activeType, 'unlock', unlockableSelectedRows)}>解锁</Button> : null}
                   {canCreateCurrentFee ? (
                     <Dropdown
                       menu={{ items: quickFeeNames.map((name) => ({ key: name, label: name })), onClick: ({ key }) => quickAdd(activeType, String(key)) }}

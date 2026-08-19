@@ -200,9 +200,9 @@ export function ReceivableAuditPage({
   const canAudit = permissions.includes('finance:receivable:audit');
   const canReverse = permissions.includes('finance:receivable:reverse');
   const canVoid = permissions.includes('finance:receivable:void');
-  const canBatchAudit = permissions.includes('finance:receivable:batch-audit');
-  const canBatchReverse = permissions.includes('finance:receivable:batch-reverse');
-  const canBatchVoid = permissions.includes('finance:receivable:batch-void');
+  const canBatchAudit = canAudit;
+  const canBatchReverse = canReverse;
+  const canBatchVoid = canVoid;
   const canExport = permissions.includes('finance:receivable:export');
   const canAuditMatch = permissions.includes('finance:water-match:audit');
   const canReverseMatch = permissions.includes('finance:water-match:reverse');

@@ -6,6 +6,8 @@ import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWo
 import { downloadCsv } from '../finance/exportCsv';
 import { formatCurrency } from '../shared/format';
 import { AppActionGroup, AppPageHeader, ManagedTable, MetricCard, renderNoticeBar } from '../shared/ui';
+import type { PermissionKey, RoleKey } from '../../apiClient';
+import { getGlobalFieldMaskVisibility } from '../shared/globalFieldMask';
 
 const { Text } = Typography;
 
@@ -198,17 +200,21 @@ export function ReportsPage(props: {
   receivables: ReceivableAuditSummary[];
   businessCostAudits: BusinessCostAuditSummary[];
   payableAudits: PayableAuditSummary[];
+  role?: RoleKey | string;
+  permissions?: PermissionKey[];
   onAiAssist: (input: { module?: string; task?: string; scenario?: string; prompt: string; context?: Record<string, unknown> }) => Promise<void>;
   aiLoading: boolean;
 }) {
-  const { config, notice, shipments, receivables, businessCostAudits, payableAudits, onAiAssist, aiLoading } = props;
+  const { config, notice, shipments, receivables, businessCostAudits, payableAudits, role, permissions = [], onAiAssist, aiLoading } = props;
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
   const [activeSection, setActiveSection] = useState<ReportSectionKey>('operations');
 
   const operationsRows = useMemo(() => buildOperationsRows(shipments), [shipments]);
   const warehouseRows = useMemo(() => buildWarehouseRows(shipments), [shipments]);
   const financeRows = useMemo(
-    () => buildFinanceRows(receivables, businessCostAudits, payableAudits),
-    [businessCostAudits, payableAudits, receivables]
+    () => buildFinanceRows(receivables, businessCostAudits, payableAudits)
+      .filter((row) => row.key !== 'payable' || (fieldVisibility.showPayableCost && fieldVisibility.showPayableStatus)),
+    [businessCostAudits, fieldVisibility.showPayableCost, fieldVisibility.showPayableStatus, payableAudits, receivables]
   );
   const todayOutboundCount = useMemo(() => getTodayShipmentCount(shipments), [shipments]);
   const waitingDispatchCount = useMemo(

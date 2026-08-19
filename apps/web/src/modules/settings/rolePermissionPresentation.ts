@@ -105,6 +105,38 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       codes: ['market:pending-routing:business-cost:delete']
     },
     {
+      id: 'market-pending-payable-cost-view',
+      label: '查看应付成本',
+      description: '查看该票代理侧应付费用明细。',
+      category: '敏感字段',
+      risk: 'sensitive',
+      codes: ['market:pending-routing:payable-cost:view']
+    },
+    {
+      id: 'market-pending-payable-cost-create',
+      label: '新增应付成本',
+      description: '新增代理侧应付费用；审核后仍只允许新增。',
+      category: '敏感字段',
+      risk: 'sensitive',
+      codes: ['market:pending-routing:payable-cost:create']
+    },
+    {
+      id: 'market-pending-payable-cost-edit',
+      label: '修改应付成本',
+      description: '修改未完成审核的代理侧应付费用。',
+      category: '敏感字段',
+      risk: 'sensitive',
+      codes: ['market:pending-routing:payable-cost:edit']
+    },
+    {
+      id: 'market-pending-payable-cost-delete',
+      label: '删除应付成本',
+      description: '删除未完成审核且未被付款引用的代理侧应付费用。',
+      category: '高风险操作',
+      risk: 'high',
+      codes: ['market:pending-routing:payable-cost:delete']
+    },
+    {
       id: 'market-pending-return-review',
       label: '退回重审',
       description: '将待排货订单退回业务重新审核。',
@@ -169,6 +201,101 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
   ]
 };
 
+const financePermissionControls: Record<string, PermissionControl[]> = {
+  '财务管理 / 财务看板': [
+    control('finance-dashboard-view', '查看', '查看财务看板。', '页面访问', 'normal', ['finance:dashboard:view'])
+  ],
+  '财务管理 / 应收审核': [
+    control('finance-receivable-read', '查看', '查看应收审核列表。', '页面访问', 'normal', ['finance:receivable:read']),
+    control('finance-receivable-create', '新增', '新增应收记录。', '业务操作', 'normal', ['finance:receivable:create']),
+    control('finance-receivable-audit', '审核', '审核单条或批量审核应收。', '高风险操作', 'high', ['finance:receivable:audit']),
+    control('finance-receivable-reverse', '反审核', '反审核单条或批量反审核应收。', '高风险操作', 'high', ['finance:receivable:reverse']),
+    control('finance-receivable-void', '删除', '删除单条或批量删除应收。', '高风险操作', 'high', ['finance:receivable:void']),
+    control('finance-receivable-export', '导出', '导出应收审核数据。', '高风险操作', 'high', ['finance:receivable:export']),
+    control('finance-receivable-view-all', '查看全部数据', '查看职责范围外的全部应收数据。', '敏感字段', 'sensitive', ['finance:receivable:view-all'])
+  ],
+  '财务管理 / 业务成本审核': [
+    control('finance-business-cost-read', '查看', '查看业务成本审核列表。', '页面访问', 'normal', ['finance:business-cost:read']),
+    control('finance-business-cost-manage', '新增和修改', '新增或修改业务成本。', '业务操作', 'normal', ['finance:business-cost:manage']),
+    control('finance-business-cost-audit', '审核', '审核单条或批量审核业务成本。', '高风险操作', 'high', ['finance:business-cost:audit']),
+    control('finance-business-cost-reverse', '反审核', '反审核单条或批量反审核业务成本。', '高风险操作', 'high', ['finance:business-cost:reverse']),
+    control('finance-business-cost-void', '作废', '作废单条或批量作废业务成本。', '高风险操作', 'high', ['finance:business-cost:void']),
+    control('finance-business-cost-export', '导出', '导出业务成本数据。', '高风险操作', 'high', ['finance:business-cost:export']),
+    control('finance-business-cost-view-agent', '查看代理信息', '查看业务成本关联的代理信息。', '敏感字段', 'sensitive', ['finance:business-cost:view-agent']),
+    control('finance-business-cost-view-profit', '查看利润', '查看业务利润字段。', '敏感字段', 'sensitive', ['finance:business-cost:view-profit']),
+    control('finance-business-cost-view-all', '查看全部数据', '查看职责范围外的全部业务成本。', '敏感字段', 'sensitive', ['finance:business-cost:view-all'])
+  ],
+  '财务管理 / 市场应付审核': [
+    control('finance-payable-read', '查看', '查看市场应付审核列表。', '页面访问', 'normal', ['finance:payable:read']),
+    control('finance-payable-manage', '新增和修改', '新增或修改应付费用。', '业务操作', 'normal', ['finance:payable:manage']),
+    control('finance-payable-match-shipment', '匹配订单', '按单号匹配应付所属订单。', '业务操作', 'normal', ['finance:payable:match-shipment']),
+    control('finance-payable-audit', '审核', '审核单条或批量审核应付。', '高风险操作', 'high', ['finance:payable:audit']),
+    control('finance-payable-reverse', '反审核', '反审核单条或批量反审核应付。', '高风险操作', 'high', ['finance:payable:reverse']),
+    control('finance-payable-void', '删除', '删除单条或批量删除应付。', '高风险操作', 'high', ['finance:payable:void']),
+    control('finance-payable-export', '导出', '导出市场应付数据。', '高风险操作', 'high', ['finance:payable:export']),
+    control('finance-payable-view-sensitive', '查看应付金额和代理', '查看真实应付金额及代理字段。', '敏感字段', 'sensitive', ['finance:payable:view-sensitive']),
+    control('finance-payable-view-profit', '查看利润', '查看应收利润和运营利润。', '敏感字段', 'sensitive', ['finance:payable:view-profit'])
+  ],
+  '财务管理 / 待付款': [
+    control('finance-pending-read', '查看', '查看待付款列表。', '页面访问', 'normal', ['finance:pending-payment:read']),
+    control('finance-pending-create', '生成付款申请', '按付款组生成付款申请并上传必需的供应商账单。', '高风险操作', 'high', ['finance:pending-payment:create', 'finance:pending-payment:bill-voucher-upload']),
+    control('finance-pending-cancel', '撤回付款申请', '撤回尚未支付的付款申请。', '高风险操作', 'high', ['finance:pending-payment:cancel']),
+    control('finance-pending-bank-select', '选择收款银行', '从已有银行资料中选择收款银行。', '敏感字段', 'sensitive', ['finance:pending-payment:bank-select']),
+    control('finance-pending-bank-manage', '维护收款银行', '录入并保存收款银行资料。', '高风险操作', 'high', ['finance:pending-payment:bank-manage']),
+    control('finance-pending-export', '导出', '导出待付款数据。', '高风险操作', 'high', ['finance:pending-payment:export'])
+  ],
+  '财务管理 / 已付款': [
+    control('finance-paid-read', '查看', '查看已付款列表。', '页面访问', 'normal', ['finance:paid-payment:read']),
+    control('finance-paid-confirm', '确认支付', '确认付款并形成已付款记录。', '高风险操作', 'high', ['finance:paid-payment:confirm']),
+    control('finance-paid-update', '补充付款信息', '补充已付款信息。', '业务操作', 'normal', ['finance:paid-payment:update']),
+    control('finance-paid-reverse', '反核销', '撤销已付款确认并退回待付款。', '高风险操作', 'high', ['finance:paid-payment:reverse']),
+    control('finance-paid-voucher-view', '查看付款凭证', '查看付款凭证。', '敏感字段', 'sensitive', ['finance:paid-payment:voucher-view']),
+    control('finance-paid-voucher-upload', '上传付款凭证', '上传或补充付款凭证。', '高风险操作', 'high', ['finance:paid-payment:voucher-upload']),
+    control('finance-paid-bank-view', '查看付款银行', '查看收付款银行字段。', '敏感字段', 'sensitive', ['finance:paid-payment:bank-view']),
+    control('finance-paid-export', '导出', '导出已付款数据。', '高风险操作', 'high', ['finance:paid-payment:export'])
+  ],
+  '财务管理 / 水单到账查询': [
+    control('finance-water-read', '查看', '查看水单到账列表。', '页面访问', 'normal', ['finance:water-receipt:read']),
+    control('finance-water-create', '新增', '新增水单。', '业务操作', 'normal', ['finance:water-receipt:create']),
+    control('finance-water-update', '修改', '修改水单信息。', '业务操作', 'normal', ['finance:water-receipt:update']),
+    control('finance-water-arrive', '确认到账', '确认水单到账。', '高风险操作', 'high', ['finance:water-receipt:arrive']),
+    control('finance-water-archive', '归档', '归档已完成水单。', '高风险操作', 'high', ['finance:water-receipt:archive']),
+    control('finance-water-void', '作废', '作废水单。', '高风险操作', 'high', ['finance:water-receipt:void']),
+    control('finance-water-voucher-view', '查看凭证', '查看水单凭证。', '敏感字段', 'sensitive', ['finance:water-receipt:voucher-view']),
+    control('finance-water-voucher-upload', '上传凭证', '上传或替换水单凭证。', '高风险操作', 'high', ['finance:water-receipt:voucher-upload']),
+    control('finance-water-voucher-delete', '删除凭证', '删除水单凭证。', '高风险操作', 'high', ['finance:water-receipt:voucher-delete']),
+    control('finance-water-export', '导出', '导出水单数据。', '高风险操作', 'high', ['finance:water-receipt:export']),
+    control('finance-water-view-all', '查看全部数据', '查看职责范围外的全部水单。', '敏感字段', 'sensitive', ['finance:water-receipt:view-all'])
+  ],
+  '财务管理 / 水单匹配': [
+    control('finance-water-match-read', '查看', '查看水单匹配列表。', '页面访问', 'normal', ['finance:water-match:read']),
+    control('finance-water-match-create', '匹配', '发起水单与应收匹配。', '高风险操作', 'high', ['finance:water-match:create']),
+    control('finance-water-match-audit', '审核匹配', '审核单条或批量审核水单匹配。', '高风险操作', 'high', ['finance:water-match:audit']),
+    control('finance-water-match-reverse', '反审核匹配', '反审核单条或批量反审核水单匹配。', '高风险操作', 'high', ['finance:water-match:reverse']),
+    control('finance-water-match-adjust', '修改待审核分配金额', '修改尚未审核的水单分配金额。', '高风险操作', 'high', ['finance:water-match:adjust']),
+    control('finance-water-match-cancel', '删除待审核分配', '删除单条或批量删除尚未审核的水单分配。', '高风险操作', 'high', ['finance:water-match:cancel']),
+    control('finance-water-match-export', '导出', '导出水单匹配数据。', '高风险操作', 'high', ['finance:water-match:export'])
+  ],
+  '财务管理 / 代理账单': [
+    control('finance-agent-bill-read', '查看', '查看代理账单列表。', '页面访问', 'normal', ['finance:agent-bill:read']),
+    control('finance-agent-bill-import', '保存代理账单', '录入并保存代理账单。', '高风险操作', 'high', ['finance:agent-bill:import']),
+    control('finance-agent-bill-difference', '处理差异', '将代理账单差异标记为已处理。', '高风险操作', 'high', ['finance:agent-bill:difference-resolve']),
+    control('finance-agent-bill-archive', '归档', '归档代理账单。', '高风险操作', 'high', ['finance:agent-bill:archive']),
+    control('finance-agent-bill-reverse-archive', '反归档', '恢复已归档代理账单。', '高风险操作', 'high', ['finance:agent-bill:reverse-archive'])
+  ]
+};
+
+function control(
+  id: string,
+  label: string,
+  description: string,
+  category: PermissionControlCategory,
+  risk: PermissionControlRisk,
+  codes: PermissionKey[]
+): PermissionControl {
+  return { id, label, description, category, risk, codes };
+}
+
 export function canBulkGrantPermissionControl(control: PermissionControl, _role: RoleKey): boolean {
   return control.bulkGrantEligible === true && control.risk === 'normal';
 }
@@ -211,7 +338,7 @@ function inferPermissionCategory(permission: PermissionDefinition, risk: Permiss
 }
 
 export function getPermissionControls(group: string, permissions: PermissionDefinition[]): PermissionControl[] {
-  const configured = marketPermissionControls[group];
+  const configured = marketPermissionControls[group] ?? financePermissionControls[group];
   const configurablePermissions = permissions.filter(
     (permission) => !isUiPreferencePermission(permission)
       && !isLineShipmentStageEditBlockPermission(permission)
@@ -280,6 +407,17 @@ export function getPermissionGroupAccessState(
   permissions: PermissionDefinition[],
   grantedPermissions: PermissionKey[]
 ) {
+  if (usesIndependentPageEntry(group)) {
+    const accessControl = getPermissionGroupAccessControl(group, permissions);
+    const granted = new Set(grantedPermissions);
+    const accessCodes = accessControl?.codes ?? [];
+    const grantedCount = accessCodes.filter((code) => granted.has(code)).length;
+    return {
+      checked: accessCodes.length > 0 && grantedCount === accessCodes.length,
+      indeterminate: grantedCount > 0 && grantedCount < accessCodes.length,
+      grantedCount
+    };
+  }
   const codes = getPermissionControls(group, permissions).flatMap((control) => control.codes);
   const granted = new Set(grantedPermissions);
   const grantedCount = codes.filter((code) => granted.has(code)).length;
@@ -300,12 +438,30 @@ export function updatePermissionGroupAccess(
   if (!groupCodes.length) return grantedPermissions;
 
   const next = new Set(grantedPermissions);
+  if (usesIndependentPageEntry(group)) {
+    if (checked) {
+      getPermissionGroupAccessControl(group, permissions)?.codes.forEach((code) => next.add(code));
+    } else {
+      groupCodes.forEach((code) => next.delete(code));
+    }
+    return [...next];
+  }
   if (checked) {
     groupCodes.forEach((code) => next.add(code));
   } else {
     groupCodes.forEach((code) => next.delete(code));
   }
   return [...next];
+}
+
+function usesIndependentPageEntry(group: string): boolean {
+  return [
+    '业务管理 / ',
+    '物流轨迹管理 / ',
+    '财务管理 / ',
+    '杂费 / ',
+    '基础资料库 / '
+  ].some((prefix) => group.startsWith(prefix));
 }
 
 export function updatePermissionControl(

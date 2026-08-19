@@ -10,7 +10,9 @@ import type { PermissionKey, RoleKey } from '../../apiClient';
 import { formatCurrency, formatUsd } from '../shared/format';
 import { demoOperationalNow, menuItems } from './config';
 
-export function getRoleDisplayName(role: RoleKey) {
+export function getRoleDisplayName(role: RoleKey, roleLabel?: string) {
+  const normalizedRoleLabel = roleLabel?.trim();
+  if (normalizedRoleLabel) return normalizedRoleLabel;
   const labels: Record<RoleKey, string> = {
     ADMIN: '管理员组',
     CUSTOMER_SERVICE: '客服',
@@ -19,7 +21,7 @@ export function getRoleDisplayName(role: RoleKey) {
     FINANCE: '财务',
     CUSTOMER: '客户'
   };
-  return labels[role];
+  return labels[role] ?? role;
 }
 
 export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[], role: RoleKey): StaffMenuKey[] {

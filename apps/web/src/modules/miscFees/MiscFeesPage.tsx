@@ -95,6 +95,7 @@ import {
   type ManagedTableColumns
 } from '../shared/ui';
 import { formatBeijingDate, formatBeijingDateTime } from '../shared/format';
+import { getGlobalFieldMaskVisibility } from '../shared/globalFieldMask';
 import { createSettlementMethodOptions, getSettlementMethodCurrency, getSettlementMethodRows } from '../finance/catalog';
 import { downloadCsv } from '../finance/exportCsv';
 import { deliveryLedgerLabels, deliveryPrimaryStatus, formatDeliveryCargoData } from './deliveryLedger';
@@ -298,12 +299,12 @@ function pickupFeeSourceForScope(scope: MiscFeeUiDataScope): MiscFeeSourceType |
   return undefined;
 }
 
-function miscFeeSectionAllowedForScope(section: MiscFeeSectionKey, scope: MiscFeeUiDataScope) {
-  if (scope === 'ALL') return true;
-  if (scope === 'WAREHOUSE_SITE') return ['pickup', 'tally', 'hang', 'warehouse-profit'].includes(section);
-  if (scope === 'MARKET') return ['pickup', 'delivery', 'hang', 'market-profit'].includes(section);
-  if (scope === 'SALES_OWN') return ['kuayue', 'purchase', 'delivery', 'hang'].includes(section);
-  return false;
+export function canViewMiscFeeSection(
+  role: RoleKey,
+  permissions: readonly PermissionKey[],
+  section: MiscFeeSectionKey
+) {
+  return role === 'ADMIN' || permissions.includes(`misc-fee:${permissionSection(section)}:read`);
 }
 
 function miscFeeCreateAllowedForScope(section: MiscFeeSectionKey, scope: MiscFeeUiDataScope) {
@@ -439,10 +440,18 @@ export function MiscFeesPage({
   initialSection?: string;
 }) {
   const miscFeeDataScope = resolveMiscFeeUiDataScope(role, permissions);
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
+  const payableUiVisible = fieldVisibility.showPayableCost && fieldVisibility.showPayableStatus;
   const visibleItems = useMemo(
-    () => sectionItems.filter((item) => miscFeeSectionAllowedForScope(item.key, miscFeeDataScope)
-      && (role === 'ADMIN' || permissions.includes(`misc-fee:${permissionSection(item.key)}:read`))),
-    [miscFeeDataScope, permissions, role]
+    () => sectionItems.map((item) => ({
+      ...item,
+      description: !fieldVisibility.showAgentData && item.key === 'delivery'
+        ? '送货费用登记与订单关联'
+        : !payableUiVisible && ['kuayue', 'pickup'].includes(item.key)
+          ? item.key === 'kuayue' ? '账单导入与业务归属' : '提货费用登记与业务归属'
+          : item.description
+    })).filter((item) => canViewMiscFeeSection(role, permissions, item.key)),
+    [fieldVisibility.showAgentData, payableUiVisible, permissions, role]
   );
   const initialVisibleSection = visibleItems.some((item) => item.key === initialSection)
     ? initialSection as MiscFeeSectionKey
@@ -559,20 +568,24 @@ function FeeWorkbench({
   const [detailLoading, setDetailLoading] = useState(false);
   const permissionPrefix = `misc-fee:${permissionSection(section)}`;
   const miscFeeDataScope = resolveMiscFeeUiDataScope(role, permissions);
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
   const hasPermission = useCallback(
     (action: string) => role === 'ADMIN' || permissions.includes(`${permissionPrefix}:${action}` as PermissionKey),
     [permissionPrefix, permissions, role]
   );
-  const canViewPayable = hasPermission('view-payable');
-  const canDirectPayAndArchive = role === 'ADMIN'
+  const canViewPayable = hasPermission('view-payable') && fieldVisibility.showPayableCost;
+  const canViewPayableStatus = canViewPayable && fieldVisibility.showPayableStatus;
+  const canViewAgent = fieldVisibility.showAgentData && fieldVisibility.showAgentShortName && fieldVisibility.showAgentCompanyName;
+  const canDirectPayAndArchive = fieldVisibility.showPayableStatus && (role === 'ADMIN'
     || permissions.includes('finance:payable:paid-confirm')
-    || permissions.includes('finance:paid-payment:confirm');
-  const canAssignBusinessCost = ['ALL', 'SALES_OWN'].includes(miscFeeDataScope) && hasPermission('match') && hasPermission('confirm');
+    || permissions.includes('finance:paid-payment:confirm'));
+  const canAssignBusinessCost = ['ALL', 'SALES_OWN'].includes(miscFeeDataScope) && hasPermission('match');
   const canManageTallyRegistration = section === 'tally' && ['ALL', 'WAREHOUSE_SITE'].includes(miscFeeDataScope);
   const canManagePurchaseApplication = section === 'purchase' && ['ALL', 'SALES_OWN'].includes(miscFeeDataScope);
   const canCreateCurrentFee = hasPermission('create')
     && miscFeeCreateAllowedForScope(section, miscFeeDataScope)
     && (canViewPayable || section === 'purchase')
+    && (section !== 'delivery' || canViewAgent)
     && (section !== 'tally' || canManageTallyRegistration)
     && (section !== 'purchase' || canManagePurchaseApplication);
   const sources = sourceSectionMap[section] ?? [];
@@ -1096,13 +1109,13 @@ function FeeWorkbench({
           {section === 'tally' && canManageTallyRegistration && hasPermission('confirm') && row.matchStatus === 'UNMATCHED' && row.confirmationStatus === 'PENDING' && row.auditStatus === 'PENDING' && !row.voidedAt ? (
             <Button size="small" type="primary" onClick={() => void performAction(row, 'confirm')}>仓库确认</Button>
           ) : null}
-          {section === 'pickup' && canViewPayable && hasPermission('update') && canEditPickupFeeRegistration(row) ? (
+          {section === 'pickup' && canViewPayable && canViewAgent && hasPermission('update') && canEditPickupFeeRegistration(row) ? (
             <Button size="small" onClick={() => openEdit(row)}>修改登记</Button>
           ) : null}
           {section === 'purchase' && canManagePurchaseApplication && hasPermission('update') && row.hangStatus === 'NONE' && row.confirmationStatus === 'PENDING' && !row.voidedAt ? (
             <Button size="small" onClick={() => openEdit(row)}>修改</Button>
           ) : null}
-          {section === 'purchase' && canManagePurchaseApplication && hasPermission('hang') && !['PENDING', 'APPROVED'].includes(row.hangStatus ?? 'NONE') && !row.voidedAt ? (
+          {section === 'purchase' && canViewPayableStatus && canManagePurchaseApplication && hasPermission('hang') && !['PENDING', 'APPROVED'].includes(row.hangStatus ?? 'NONE') && !row.voidedAt ? (
             <Button size="small" type="primary" onClick={() => openHangRequest(row)}>挂账</Button>
           ) : canAssignBusinessCost && row.confirmationStatus === 'PENDING' && !row.voidedAt && ['pickup', 'delivery'].includes(section)
             && (section !== 'pickup' || canAssignPickupBusinessCost(row)) ? (
@@ -1110,16 +1123,16 @@ function FeeWorkbench({
           ) : !['pickup', 'tally', 'purchase', 'kuayue'].includes(section) && hasPermission('confirm') && row.confirmationStatus === 'PENDING' && row.businessAmount !== undefined && !row.voidedAt ? (
             <Button size="small" onClick={() => void performAction(row, 'confirm')}>确认</Button>
           ) : null}
-          {section !== 'purchase' && hasPermission('audit') && canAuditMiscFeeRow(row) && !row.voidedAt ? (
+          {section !== 'purchase' && canViewPayableStatus && hasPermission('audit') && canAuditMiscFeeRow(row) && !row.voidedAt ? (
             <Button size="small" type="primary" onClick={() => void performAction(row, 'audit')}>审核</Button>
           ) : null}
-          {section !== 'purchase' && hasPermission('hang') && (canViewPayable || section === 'kuayue') && canSubmitMiscFeeHangRequest(row) && !['PENDING', 'APPROVED'].includes(row.hangStatus ?? 'NONE') && !row.voidedAt ? (
+          {section !== 'purchase' && canViewPayableStatus && hasPermission('hang') && (canViewPayable || section === 'kuayue') && canSubmitMiscFeeHangRequest(row) && !['PENDING', 'APPROVED'].includes(row.hangStatus ?? 'NONE') && !row.voidedAt ? (
             <Button size="small" onClick={() => openHangRequest(row)}>挂账</Button>
           ) : null}
           {section === 'kuayue' && canDirectPayAndArchive && canDirectPayAndArchiveKuayue(row) ? (
             <Button size="small" danger onClick={() => openDirectPaidArchive(row)}>已付归档</Button>
           ) : null}
-          {hasPermission('reverse-audit') && row.auditStatus === 'APPROVED' ? (
+          {canViewPayableStatus && hasPermission('reverse-audit') && row.auditStatus === 'APPROVED' ? (
             <Button size="small" onClick={() => {
               setReverseAuditTarget(row);
               setReverseAuditReason('');
@@ -1144,7 +1157,7 @@ function FeeWorkbench({
 
     if (section === 'kuayue') {
       const kuayueColumns: ManagedTableColumns<MiscFeeSummary> = [];
-      if (canViewPayable) {
+      if (canViewPayable && canViewAgent) {
         kuayueColumns.push({ title: '代理', dataIndex: 'agentName', key: 'agentName', width: 110, ellipsis: true, render: (value?: string) => value ?? '-' });
       }
       kuayueColumns.push(
@@ -1180,7 +1193,7 @@ function FeeWorkbench({
         { title: '服务方式', key: 'serviceType', width: 110, ellipsis: true, render: (_, row) => row.kuayueBill?.serviceType ?? '-' },
         { title: '客户编号', dataIndex: 'customerCode', key: 'customerCode', width: 110, ellipsis: true },
         { title: '运单号', key: 'systemOrderNo', width: 160, ellipsis: true, render: (_, row) => row.systemOrderNo ?? '-' },
-        { title: '是否挂账', key: 'hangStatus', width: 100, render: (_, row) => hangTag(row.hangStatus) ?? '未挂账' },
+        ...(canViewPayableStatus ? [{ title: '是否挂账', key: 'hangStatus', width: 100, render: (_: unknown, row: MiscFeeSummary) => hangTag(row.hangStatus) ?? '未挂账' }] : []),
         { title: '备注', dataIndex: 'remark', key: 'remark', width: 150, ellipsis: true, render: (value?: string) => value?.trim() || '-' },
         {
           title: '状态',
@@ -1190,8 +1203,8 @@ function FeeWorkbench({
             <Space size={[4, 4]} wrap>
               {row.matchStatus === 'MATCHED' ? statusTag('已匹配订单', 'success') : statusTag('仅归属客户', 'warning')}
               {businessAssignmentTag(row)}
-              {canViewPayable ? auditTag(row.auditStatus) : null}
-              {row.paymentStatus && row.paymentStatus !== 'NONE' ? statusTag(`付款 ${row.paymentStatus}`, 'blue') : null}
+              {canViewPayableStatus ? auditTag(row.auditStatus) : null}
+              {canViewPayableStatus && row.paymentStatus && row.paymentStatus !== 'NONE' ? statusTag(`付款 ${row.paymentStatus}`, 'blue') : null}
             </Space>
           )
         },
@@ -1207,12 +1220,12 @@ function FeeWorkbench({
     if (section === 'pickup' || section === 'tally') {
       const pickupColumns: ManagedTableColumns<MiscFeeSummary> = [];
       pickupColumns.push({
-        title: section === 'pickup' ? '提货来源' : '代理',
+        title: section === 'pickup' || canViewAgent ? '提货来源' : '来源',
         key: 'source',
         width: 130,
         render: (_, row) => pickupSourceLabel(row)
       });
-      if (section === 'pickup' && canViewPayable) {
+      if (section === 'pickup' && canViewPayable && canViewAgent) {
         pickupColumns.push({
           title: '实际付款对象',
           dataIndex: 'agentName',
@@ -1331,10 +1344,10 @@ function FeeWorkbench({
                     : statusTag('待订单匹配', 'processing')
                   : statusTag('待仓库确认', 'warning')
                 : businessAssignmentTag(row)}
-              {canViewPayable ? auditTag(row.auditStatus) : null}
-              {canViewPayable ? hangTag(row.hangStatus) : null}
+              {canViewPayableStatus ? auditTag(row.auditStatus) : null}
+              {canViewPayableStatus ? hangTag(row.hangStatus) : null}
               {row.voidedAt ? statusTag('已作废', 'error') : null}
-              {canViewPayable && row.paymentStatus && row.paymentStatus !== 'NONE' ? statusTag(`付款 ${row.paymentStatus}`, 'blue') : null}
+              {canViewPayableStatus && row.paymentStatus && row.paymentStatus !== 'NONE' ? statusTag(`付款 ${row.paymentStatus}`, 'blue') : null}
             </Space>
           )
         },
@@ -1345,7 +1358,7 @@ function FeeWorkbench({
 
     if (section === 'purchase') {
       const purchaseColumns: ManagedTableColumns<MiscFeeSummary> = [];
-      if (canViewPayable) {
+      if (canViewPayable && canViewAgent) {
         purchaseColumns.push({
           title: '代理',
           key: 'agent',
@@ -1382,7 +1395,7 @@ function FeeWorkbench({
 
     if (section === 'delivery') {
       const deliveryColumns: ManagedTableColumns<MiscFeeSummary> = [];
-      if (canViewPayable) {
+      if (canViewPayable && canViewAgent) {
         deliveryColumns.push({
           title: deliveryLedgerLabels.agent,
           dataIndex: 'agentName',
@@ -1397,7 +1410,7 @@ function FeeWorkbench({
         { title: deliveryLedgerLabels.customerCode, dataIndex: 'customerCode', key: 'customerCode', width: 110, ellipsis: true },
         { title: deliveryLedgerLabels.waybillNo, key: 'waybillNo', width: 170, ellipsis: true, render: (_, row) => miscFeeWaybillNo(row) },
         { title: deliveryLedgerLabels.cargoData, key: 'cargoData', width: 230, ellipsis: true, render: (_, row) => formatDeliveryCargoData(row.cargoData) },
-        { title: deliveryLedgerLabels.dispatchAgent, dataIndex: 'dispatchAgentName', key: 'dispatchAgentName', width: 140, ellipsis: true, render: (value?: string) => value?.trim() || '-' },
+        ...(canViewAgent ? [{ title: deliveryLedgerLabels.dispatchAgent, dataIndex: 'dispatchAgentName', key: 'dispatchAgentName', width: 140, ellipsis: true, render: (value?: string) => value?.trim() || '-' }] : []),
         {
           title: deliveryLedgerLabels.businessCost,
           children: [
@@ -1461,8 +1474,8 @@ function FeeWorkbench({
                   ? statusTag('已匹配', 'success')
                   : statusTag('未匹配', 'warning')}
               {businessAssignmentTag(row)}
-              {canViewPayable ? auditTag(row.auditStatus) : null}
-              {canViewPayable && row.hangStatus === 'PENDING' ? hangTag(row.hangStatus) : null}
+              {canViewPayableStatus ? auditTag(row.auditStatus) : null}
+              {canViewPayableStatus && row.hangStatus === 'PENDING' ? hangTag(row.hangStatus) : null}
               {row.voidedAt ? statusTag('已作废', 'error') : null}
             </Space>
           )
@@ -1541,14 +1554,14 @@ function FeeWorkbench({
           <Space direction="vertical" size={4}>
             {row.matchStatus === 'MATCHED' ? statusTag('已匹配订单', 'success') : statusTag('待匹配订单', 'warning')}
             {row.voidedAt ? statusTag('已作废', 'error') : null}
-            {canViewPayable && row.paymentStatus && row.paymentStatus !== 'NONE' ? statusTag(`付款 ${row.paymentStatus}`, 'blue') : null}
+            {canViewPayableStatus && row.paymentStatus && row.paymentStatus !== 'NONE' ? statusTag(`付款 ${row.paymentStatus}`, 'blue') : null}
           </Space>
         )
       },
       actionColumn
     );
     return base;
-  }, [canAssignBusinessCost, canDirectPayAndArchive, canManagePurchaseApplication, canManageTallyRegistration, canViewPayable, hasPermission, section]);
+  }, [canAssignBusinessCost, canDirectPayAndArchive, canManagePurchaseApplication, canManageTallyRegistration, canViewAgent, canViewPayable, canViewPayableStatus, hasPermission, section]);
 
   const miscFeeMatrixColumns = useMemo<ManagedTableColumns<MiscFeeSummary>>(() => {
     const actionColumn = columns.find((column) => column.key === 'action');
@@ -1590,10 +1603,10 @@ function FeeWorkbench({
           title: [row.kuayueBill?.receiverCompany, row.kuayueBill?.receiver].filter(Boolean).join(' / ') || undefined
         },
         { key: 'serviceType', label: '服务方式', value: row.kuayueBill?.serviceType ?? '-' },
-        canViewPayable ? { key: 'agentName', label: '代理', value: row.agentName ?? '-', title: row.agentName } : null,
+        canViewPayable && canViewAgent ? { key: 'agentName', label: '代理', value: row.agentName ?? '-', title: row.agentName } : null,
         { key: 'customerCode', label: '客户编号', value: row.customerCode },
         { key: 'systemOrderNo', label: '运单号', value: row.systemOrderNo ?? '-', title: row.systemOrderNo },
-        { key: 'hangStatus', label: '是否挂账', value: hangTag(row.hangStatus) ?? '未挂账' },
+        canViewPayableStatus ? { key: 'hangStatus', label: '是否挂账', value: hangTag(row.hangStatus) ?? '未挂账' } : null,
         { key: 'confirmedBy', label: '确认账号', value: row.confirmedBy ?? row.createdBy ?? '-' },
         canViewPayable ? { key: 'reviewedBy', label: '审核账号', value: row.reviewedBy ?? '-' } : null,
         {
@@ -1603,8 +1616,8 @@ function FeeWorkbench({
             <Space size={4}>
               {row.matchStatus === 'MATCHED' ? statusTag('已匹配订单', 'success') : statusTag('仅归属客户', 'warning')}
               {businessAssignmentTag(row)}
-              {canViewPayable ? auditTag(row.auditStatus) : null}
-              {row.paymentStatus && row.paymentStatus !== 'NONE' ? statusTag(`付款 ${row.paymentStatus}`, 'blue') : null}
+              {canViewPayableStatus ? auditTag(row.auditStatus) : null}
+              {canViewPayableStatus && row.paymentStatus && row.paymentStatus !== 'NONE' ? statusTag(`付款 ${row.paymentStatus}`, 'blue') : null}
             </Space>
           )
         },
@@ -1638,8 +1651,8 @@ function FeeWorkbench({
       { key: 'source', label: section === 'pickup' ? '提货来源' : '来源', value: section === 'pickup' || section === 'tally' ? pickupSourceLabel(row) : row.sourceLabel },
       { key: 'fee', label: '费用名称', value: row.feeName, emphasis: true, title: row.feeName },
       section === 'pickup'
-        ? canViewPayable ? { key: 'agent', label: '付款对象', value: row.agentName ?? '-' } : null
-        : { key: 'agent', label: '代理', value: section === 'tally' ? pickupSourceLabel(row) : row.agentName ?? (section === 'purchase' ? '代购' : '-') },
+        ? canViewPayable && canViewAgent ? { key: 'agent', label: '付款对象', value: row.agentName ?? '-' } : null
+        : canViewAgent ? { key: 'agent', label: '代理', value: section === 'tally' ? pickupSourceLabel(row) : row.agentName ?? (section === 'purchase' ? '代购' : '-') } : null,
       { key: 'customer', label: '客户编号', value: `${row.customerCode} · ${row.customerName}`, title: `${row.customerCode} · ${row.customerName}` },
       { key: 'order', label: '运单号', value: miscFeeWaybillNo(row), title: miscFeeWaybillNo(row) },
       { key: 'businessAmount', label: '业务成本', value: money(row.businessAmount, row.businessCurrency), emphasis: true },
@@ -1652,8 +1665,8 @@ function FeeWorkbench({
             {row.matchStatus === 'MATCHED'
               ? statusTag(section === 'pickup' ? '已归属运单' : '已匹配订单', 'success')
               : statusTag(section === 'pickup' ? '待业务归属' : '待匹配订单', 'warning')}
-            {canViewPayable ? auditTag(row.auditStatus) : null}
-            {canViewPayable ? hangTag(row.hangStatus) : null}
+            {canViewPayableStatus ? auditTag(row.auditStatus) : null}
+            {canViewPayableStatus ? hangTag(row.hangStatus) : null}
             {row.voidedAt ? statusTag('已作废', 'error') : null}
           </Space>
         )
@@ -1682,7 +1695,7 @@ function FeeWorkbench({
       ...informationColumns,
       { ...actionColumn, title: '', width: 180 }
     ];
-  }, [canViewPayable, columns, section]);
+  }, [canViewAgent, canViewPayable, canViewPayableStatus, columns, section]);
 
   const kuayueUnassignedMatrixColumns = useMemo<ManagedTableColumns<KuayueImportLineSummary>>(() => {
     const matrixColumnCount = 5;
@@ -1821,12 +1834,12 @@ function FeeWorkbench({
             {section === 'tally' ? '批量仓库确认' : '批量确认'}
           </Button>
         ) : null}
-        {section !== 'purchase' && hasPermission('audit') ? (
+        {section !== 'purchase' && canViewPayableStatus && hasPermission('audit') ? (
           <Button size="small" disabled={!selectedRows.some((row) => canAuditMiscFeeRow(row))} onClick={() => void performBatch('audit')}>
             批量审核
           </Button>
         ) : null}
-        {section !== 'purchase' && hasPermission('hang') && (canViewPayable || section === 'kuayue') ? (
+        {section !== 'purchase' && canViewPayableStatus && hasPermission('hang') && (canViewPayable || section === 'kuayue') ? (
           <Button size="small" disabled={!selectedRows.some((row) => canSubmitMiscFeeHangRequest(row) && !['PENDING', 'APPROVED'].includes(row.hangStatus ?? 'NONE'))} onClick={openBatchHangRequest}>
             批量挂账
           </Button>
@@ -1843,16 +1856,15 @@ function FeeWorkbench({
         actions={(
           <Space wrap>
             <Button icon={<RefreshCw size={15} />} onClick={() => void load()}>刷新</Button>
-            {section === 'kuayue' ? (
+            {section === 'kuayue' ? (hasPermission('create') && canViewPayable ? (
               <Button
                 type="primary"
                 icon={<FileInput size={15} />}
-                disabled={!hasPermission('create')}
                 onClick={() => setImportOpen(true)}
               >
                 导入账单
               </Button>
-            ) : canCreateCurrentFee ? (
+            ) : null) : canCreateCurrentFee ? (
               <Button type="primary" icon={<Plus size={15} />} onClick={openCreate}>新增费用</Button>
             ) : null}
           </Space>
@@ -2163,7 +2175,7 @@ function FeeWorkbench({
                     />
                   </Form.Item>
                 </Col>
-                <Col xs={24} md={12}>
+                {canViewAgent ? <Col xs={24} md={12}>
                   <Form.Item name="agentId" label="送货代理" rules={[{ required: true, message: '请选择送货代理' }]}>
                     <Select
                       showSearch
@@ -2172,7 +2184,7 @@ function FeeWorkbench({
                       options={agents.filter((agent) => agent.enabled).map((agent) => ({ label: agent.shortName ? `${agent.shortName} · ${agent.name}` : agent.name, value: agent.id }))}
                     />
                   </Form.Item>
-                </Col>
+                </Col> : null}
                 <Col xs={24} md={12}>
                   <Form.Item label="应付成本" required>
                     <Space.Compact block>
@@ -2533,7 +2545,7 @@ function FeeWorkbench({
       <Modal
         title="导入跨越账单"
         width={1120}
-        open={importOpen}
+        open={importOpen && canViewPayable}
         destroyOnClose
         okText="确认导入"
         okButtonProps={{ disabled: !importPreview || importPreview.validRows <= importPreview.duplicateRows }}
@@ -2618,7 +2630,7 @@ function FeeWorkbench({
           showIcon
           message={canViewPayable
             ? `业务成本 ${money(claimingLine?.businessAmount)}；应付金额 ${money(claimingLine?.payableAmount)}。归属后等待财务审核。`
-            : `业务成本 ${money(claimingLine?.businessAmount)}；应付金额仅财务授权岗位可见。`}
+            : `业务成本 ${money(claimingLine?.businessAmount)}；后续财务信息由授权岗位处理。`}
         />
         <Form form={claimForm} layout="vertical" requiredMark="optional" className="misc-fee-kuayue-claim-form">
           <AppFormSection title="归属路径">
@@ -2680,7 +2692,7 @@ function FeeWorkbench({
                 fields={[
                   ...(detail.sourceType === 'WAREHOUSE_PICKUP' || detail.sourceType === 'MARKET_PICKUP' || detail.sourceType === 'OTHER_PICKUP' ? [
                     { key: 'pickupSource', label: '提货来源', value: pickupSourceLabel(detail) },
-                    ...(canViewPayable ? [{ key: 'payee', label: '付款对象', value: detail.agentName ?? '-' }] : [])
+                    ...(canViewPayable && canViewAgent ? [{ key: 'payee', label: '付款对象', value: detail.agentName ?? '-' }] : [])
                   ] : []),
                   { key: 'customer', label: '客户编号', value: `${detail.customerCode} · ${detail.customerName}`, emphasis: true },
                   { key: 'sales', label: '业务员', value: detail.salesperson ?? '-' },
@@ -2728,8 +2740,8 @@ function FeeWorkbench({
                     <div className="misc-fee-cost-track misc-fee-payable-track">
                       <Text type="secondary">真实应付</Text>
                       <strong>{money(detail.payableAmount, detail.payableCurrency)}</strong>
-                      <span>{detail.agentName ?? detail.payableSettlementMethod ?? '未指定应付方'}</span>
-                      <Space size={4} wrap>{auditTag(detail.auditStatus)}{hangTag(detail.hangStatus)}</Space>
+                      <span>{canViewAgent ? (detail.agentName ?? detail.payableSettlementMethod ?? '未指定应付方') : detail.payableSettlementMethod ?? '未指定应付方'}</span>
+                      {canViewPayableStatus ? <Space size={4} wrap>{auditTag(detail.auditStatus)}{hangTag(detail.hangStatus)}</Space> : null}
                     </div>
                   </Col>
                 ) : null}

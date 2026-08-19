@@ -18,6 +18,14 @@ export class WarehouseTallyQueryService {
     return this.repository.getWarehouseConsolidationItems(principal, id);
   }
 
+  listSortRules(principal: Principal) {
+    return this.repository.getWarehouseTallySortRules(principal);
+  }
+
+  updateSortRules(principal: Principal, input: Parameters<WarehouseTallyQueryRepository['updateWarehouseTallySortRules']>[1]) {
+    return this.repository.updateWarehouseTallySortRules(principal, input);
+  }
+
   listTasks(principal: Principal, query: WarehouseTallyTaskListQuery = {}) {
     return this.repository.getWarehouseTallyTasks(principal, query);
   }

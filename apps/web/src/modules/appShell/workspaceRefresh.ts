@@ -1,9 +1,11 @@
+import { toExternalTrackingShipmentSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey, Principal } from '../../apiClient';
 import { loadProblemTickets, type ProblemTicketClient } from '../problemTickets/problemTicketClient';
 
 export type WorkspaceRefreshClient = Pick<
   ApiClient,
   | 'shipments'
+  | 'customerServiceShipments'
   | 'warehouseDispatchShipments'
   | 'receivableAudits'
   | 'businessCostAudits'
@@ -13,7 +15,7 @@ export type WorkspaceRefreshClient = Pick<
   | 'accountLedger'
   | 'masterData'
 > & ProblemTicketClient & {
-  carrierTaskQuery: Pick<ApiClient['carrierTaskQuery'], 'carrierTasks'>;
+  carrierTaskQuery: Pick<ApiClient['carrierTaskQuery'], 'carrierTasks' | 'externalShipments'>;
 };
 
 type ShipmentRows = Awaited<ReturnType<ApiClient['shipments']>>;
@@ -25,6 +27,7 @@ type StatementRows = Awaited<ReturnType<ApiClient['customerStatements']>>;
 type CustomerAccountRows = Awaited<ReturnType<ApiClient['customerAccounts']>>;
 type AccountLedgerRows = Awaited<ReturnType<ApiClient['accountLedger']>>;
 type CarrierTaskRows = Awaited<ReturnType<ApiClient['carrierTaskQuery']['carrierTasks']>>;
+type ExternalTrackingShipmentRows = Awaited<ReturnType<ApiClient['carrierTaskQuery']['externalShipments']>>;
 type MasterData = Awaited<ReturnType<ApiClient['masterData']>>;
 
 export interface WorkspaceRefreshWriters {
@@ -37,6 +40,7 @@ export interface WorkspaceRefreshWriters {
   setCustomerAccounts(rows: CustomerAccountRows): void;
   setAccountLedger(rows: AccountLedgerRows): void;
   setCarrierTasks(rows: CarrierTaskRows): void;
+  setExternalTrackingShipments?(rows: ExternalTrackingShipmentRows): void;
   setMasterData(value: MasterData): void;
 }
 
@@ -79,6 +83,15 @@ export function createWorkspaceRefreshCoordinator(): WorkspaceRefreshCoordinator
   };
 }
 
+export function mergeWorkspaceShipmentRows(groups: ShipmentRows[]): ShipmentRows {
+  const rowsById = new Map<string, ShipmentRows[number]>();
+  groups.flat().forEach((row) => {
+    const current = rowsById.get(row.id);
+    rowsById.set(row.id, current ? { ...current, ...row } : row);
+  });
+  return Array.from(rowsById.values());
+}
+
 export async function refreshWorkspaceData(options: WorkspaceRefreshOptions) {
   const {
     client,
@@ -93,19 +106,34 @@ export async function refreshWorkspaceData(options: WorkspaceRefreshOptions) {
   const canReadBusinessCosts = !skipIrrelevantWorkspaceData && permissionSet.has('finance:business-cost:read');
   const canReadInternalFinance = !skipIrrelevantWorkspaceData && permissionSet.has('finance:payable:read');
   const canReadCarrierTasks = !skipIrrelevantWorkspaceData && permissionSet.has('tracking:carrier-task:view') && user?.role !== 'CUSTOMER';
+  const canReadExternalTracking = !skipIrrelevantWorkspaceData && permissionSet.has('tracking:external:view');
   const canReadMasterData = !skipIrrelevantWorkspaceData && permissions.some((permission) => permission.startsWith('master-data:') && permission.endsWith(':read'));
   const canReadProblems = !skipIrrelevantWorkspaceData && permissionSet.has('customer-service:problem:view');
   const canReadBusinessShipments = !skipIrrelevantWorkspaceData && permissionSet.has('business:shipment:list');
   const canReadWarehouseDispatch = !skipIrrelevantWorkspaceData && (permissionSet.has('warehouse:dispatch-pending:view') || permissionSet.has('warehouse:outbounded:view'));
+  const customerServiceShipmentViewPermissions = [
+    'customer-service:data-confirm:view',
+    'customer-service:transfer:view',
+    'customer-service:pending-routing:view',
+    'customer-service:waiting-departure:view',
+    'customer-service:departed:view',
+    'customer-service:arrived-port:view',
+    'customer-service:delivering:view',
+    'customer-service:signed:view'
+  ] as PermissionKey[];
+  const canReadCustomerServiceShipments = user?.role !== 'CUSTOMER'
+    && permissions.some((permission) => customerServiceShipmentViewPermissions.includes(permission));
 
-  const [nextShipments, nextTickets] = await Promise.all([
-    canReadBusinessShipments
-      ? client.shipments()
-      : canReadWarehouseDispatch
-        ? client.warehouseDispatchShipments()
-        : Promise.resolve([]),
+  const shipmentRequests: Array<Promise<ShipmentRows>> = [
+    ...(canReadBusinessShipments ? [client.shipments()] : []),
+    ...(canReadCustomerServiceShipments ? [client.customerServiceShipments()] : []),
+    ...(canReadWarehouseDispatch ? [client.warehouseDispatchShipments()] : [])
+  ];
+  const [shipmentGroups, nextTickets] = await Promise.all([
+    Promise.all(shipmentRequests),
     canReadProblems ? loadProblemTickets(client) : Promise.resolve([])
   ]);
+  const nextShipments = mergeWorkspaceShipmentRows(shipmentGroups);
   writers.setShipments(nextShipments);
   writers.setProblemTickets(nextTickets);
 
@@ -141,6 +169,18 @@ export async function refreshWorkspaceData(options: WorkspaceRefreshOptions) {
     }
   } else {
     writers.setCarrierTasks([]);
+  }
+
+  if (writers.setExternalTrackingShipments && canReadExternalTracking) {
+    try {
+      writers.setExternalTrackingShipments(await client.carrierTaskQuery.externalShipments());
+    } catch {
+      writers.setExternalTrackingShipments(canReadBusinessShipments
+        ? nextShipments.map(toExternalTrackingShipmentSummary)
+        : []);
+    }
+  } else if (writers.setExternalTrackingShipments) {
+    writers.setExternalTrackingShipments([]);
   }
 
   if (canReadMasterData) {

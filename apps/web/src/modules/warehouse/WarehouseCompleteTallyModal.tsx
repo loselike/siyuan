@@ -16,6 +16,7 @@ interface WarehouseCompleteTallyModalProps {
   open: boolean;
   taskNo?: string;
   sourceItems: WarehouseTallySourceItem[];
+  sourcePackagesLoading?: boolean;
   error: string | null;
   submitting: boolean;
   mode: WarehouseTallyProcessMode;
@@ -34,6 +35,7 @@ export function WarehouseCompleteTallyModal({
   open,
   taskNo,
   sourceItems,
+  sourcePackagesLoading = false,
   error,
   submitting,
   mode,
@@ -59,6 +61,7 @@ export function WarehouseCompleteTallyModal({
       okText="确认完成"
       cancelText="取消"
       confirmLoading={submitting}
+      okButtonProps={{ disabled: sourcePackagesLoading }}
       cancelButtonProps={{ disabled: submitting }}
       closable={!submitting}
       maskClosable={!submitting}
@@ -67,8 +70,9 @@ export function WarehouseCompleteTallyModal({
         <Alert
           type="info"
           showIcon
-          message={open ? `任务 ${taskNo ?? ''}：理货后每个实体件单独生成一条在仓记录，件重尺将在逐件重新过机或人工录入后覆盖` : '请选择理货任务'}
+          message={open ? `任务 ${taskNo ?? ''}：只处理已勾选的原始包裹；未勾选包裹继续保留在仓。理货结果先生成待复测标签，重新过机或人工录入后才进入在仓数据` : '请选择理货任务'}
         />
+        {sourcePackagesLoading ? <Alert type="info" showIcon message="正在加载本理货任务的原始包裹，请稍候" /> : null}
         {error ? <Alert type="error" showIcon message="理货未完成" description={error} /> : null}
         <Segmented
           block

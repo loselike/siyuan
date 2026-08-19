@@ -950,6 +950,8 @@ interface LineShipmentPoolOptions {
   afterSaleShipmentIds?: string[];
   packageSummariesByShipmentId?: Record<string, LineShipmentPackageSummary>;
   financeSummariesByShipmentId?: Record<string, LineShipmentFinanceSummary>;
+  /** Whether the caller is allowed to use the agent identity in keyword matching. */
+  includeAgentKeyword?: boolean;
 }
 
 export interface ShipmentRouteInput {
@@ -980,6 +982,10 @@ export interface ShipmentDispatchInput {
 
 export interface WarehouseDispatchDeclarationUpdateInput {
   declarationRequired: boolean;
+}
+
+export interface WarehouseDispatchInboundNoUpdateInput {
+  inboundNo: string;
 }
 
 export interface WarehouseHandoverPrintInput {
@@ -1114,7 +1120,7 @@ export interface BulkTrackingApplyRequest {
 }
 
 export interface BulkTrackingApplyResponse {
-  updated: Shipment[];
+  updated: ExternalTrackingShipmentSummary[];
   importedCount?: number;
   importedRowCount?: number;
   failedRowCount?: number;
@@ -1134,6 +1140,8 @@ export interface AuditLogQuery {
   endedAt?: string;
   page?: number;
   pageSize?: number;
+  /** Row-only callers can skip the expensive dashboard aggregation queries. */
+  includeDashboard?: boolean;
 }
 
 export interface AuditLogSummary {
@@ -1233,9 +1241,44 @@ export interface CarrierTaskSummary {
   completedAt?: string;
 }
 
+/** Minimal DTO for the external tracking page; excludes finance, agent and recipient data. */
+export interface ExternalTrackingShipmentSummary {
+  id: string;
+  createdAt: string;
+  customerName: string;
+  customerOrderNo: string;
+  outboundOrderNo?: string;
+  systemOrderNo: string;
+  transferNo?: string;
+  subOrderNo?: string;
+  carrier: string;
+  latestTracking: string;
+  latestTrackingUpdatedAt?: string;
+  trackingStaleDays: number;
+  status: ShipmentStatus;
+}
+
+export function toExternalTrackingShipmentSummary(shipment: Shipment): ExternalTrackingShipmentSummary {
+  return {
+    id: shipment.id,
+    createdAt: shipment.createdAt,
+    customerName: shipment.customerName,
+    customerOrderNo: shipment.customerOrderNo,
+    outboundOrderNo: shipment.outboundOrderNo,
+    systemOrderNo: shipment.systemOrderNo,
+    transferNo: shipment.transferNo,
+    subOrderNo: shipment.subOrderNo,
+    carrier: shipment.carrier,
+    latestTracking: shipment.latestTracking,
+    latestTrackingUpdatedAt: shipment.latestTrackingUpdatedAt,
+    trackingStaleDays: shipment.trackingStaleDays,
+    status: shipment.status
+  };
+}
+
 export interface CarrierTaskRunResponse {
   task: CarrierTaskSummary;
-  shipment: Shipment;
+  shipment: ExternalTrackingShipmentSummary;
 }
 
 export interface ChargeableWeightInput {
@@ -4505,6 +4548,8 @@ export interface ShipmentFinanceItemCreateInput {
 }
 
 export interface ShipmentFinanceItemUpdateInput {
+  /** Optional type hint lets the field-mask layer distinguish business-cost edits from payable edits. */
+  type?: ShipmentFinanceItemType;
   name?: string;
   amount?: number;
   currency?: string;
@@ -5958,7 +6003,10 @@ export function calculateTransitTimeLabel(shipment: Shipment, now: string | Date
   return shipment.signedAt || shipment.status === 'SIGNED' ? `签收 ${days} 天` : `在途 ${days} 天`;
 }
 
-export function createBulkTrackingImportResult(rows: BulkTrackingImportRow[], shipments: Shipment[]): BulkTrackingImportResult {
+export function createBulkTrackingImportResult(
+  rows: BulkTrackingImportRow[],
+  shipments: Array<Pick<Shipment, 'id' | 'systemOrderNo' | 'customerOrderNo' | 'transferNo' | 'subOrderNo'>>
+): BulkTrackingImportResult {
   const updates: BulkTrackingUpdate[] = [];
   const unmatchedOrderNos: string[] = [];
   const conflictOrderNos: string[] = [];
@@ -6175,7 +6223,7 @@ export function summarizeLineShipmentPool(
       shipment.transferNo,
       shipment.subOrderNo,
       shipment.channelName,
-      shipment.agentName,
+      ...(options.includeAgentKeyword === false ? [] : [shipment.agentName]),
       shipment.destinationCountry,
       shipment.latestTracking,
       ...(packageSummary?.domesticTrackingNos ?? []),

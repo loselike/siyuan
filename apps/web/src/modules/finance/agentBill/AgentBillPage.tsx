@@ -1,19 +1,21 @@
 import { useEffect, useState } from 'react';
-import { App as AntdApp, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag } from 'antd';
+import { Alert, App as AntdApp, Button, Card, Col, Form, Input, InputNumber, Row, Select, Space, Tag } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { AgentSummary, PaymentVoucherInput, PaymentVoucherListQuery, PaymentVoucherSummary } from '@siyuan/shared';
-import type { ApiClient, PermissionKey } from '../../../apiClient';
+import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { formatBeijingDateTime } from '../../shared/format';
 import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, tenRowTablePagination, type ManagedTableColumns } from '../../shared/ui';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions } from '../../shared/agentIdentity';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
+import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
 
 type AgentBillPageProps = {
   apiClient: ApiClient;
   permissions: PermissionKey[];
   agents: AgentSummary[];
   historicalMode?: boolean;
+  role?: RoleKey | string;
 };
 
 function hasPermission(permissions: PermissionKey[], permission: PermissionKey) {
@@ -28,16 +30,23 @@ const statusLabels: Record<string, string> = {
   ARCHIVED: '已归档'
 };
 
-export function AgentBillPage({ apiClient, permissions, agents, historicalMode = false }: AgentBillPageProps) {
+export function AgentBillPage({ apiClient, permissions, agents, historicalMode = false, role }: AgentBillPageProps) {
   const { message } = AntdApp.useApp();
   const [queryForm] = Form.useForm<PaymentVoucherListQuery>();
   const [form] = Form.useForm<PaymentVoucherInput>();
   const [rows, setRows] = useState<PaymentVoucherSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  const canImport = !historicalMode && hasPermission(permissions, 'finance:agent-bill:import');
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
+  const canUseAgentBillFields = fieldVisibility.showAgentData
+    && fieldVisibility.showAgentCompanyName
+    && fieldVisibility.showAgentChannel
+    && fieldVisibility.showPayableCost
+    && fieldVisibility.showPayableStatus;
+  const canImport = !historicalMode && canUseAgentBillFields && hasPermission(permissions, 'finance:agent-bill:import');
   const canResolveDifference = hasPermission(permissions, 'finance:agent-bill:difference-resolve');
-  const canArchive = hasPermission(permissions, 'finance:agent-bill:archive') || hasPermission(permissions, 'finance:agent-bill:reverse-archive');
+  const canArchive = hasPermission(permissions, 'finance:agent-bill:archive');
+  const canReverseArchive = hasPermission(permissions, 'finance:agent-bill:reverse-archive');
   const agentOptions = getDetailedCompanyAgentOptions(agents);
   const agentNameOptions = agentOptions.map((option) => ({ ...option, value: agents.find((agent) => agent.id === option.value)?.name ?? option.label }));
 
@@ -51,9 +60,9 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
   };
 
   useEffect(() => {
-    void loadRows({});
+    if (canUseAgentBillFields) void loadRows({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [canUseAgentBillFields]);
 
   const submit = async (values: PaymentVoucherInput) => {
     setSaving(true);
@@ -103,21 +112,29 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
     }
   };
 
+  if (!canUseAgentBillFields) {
+    return <Alert type="warning" showIcon message="当前账号无权查看该页面" />;
+  }
+
   const columns: ColumnsType<PaymentVoucherSummary> = [
     { title: '账单号', dataIndex: 'billNo', width: 150, fixed: 'left' },
-    { title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190 },
+    ...(fieldVisibility.showAgentCompanyName ? [{ title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190 }] : []),
     { title: '账单日期', dataIndex: 'billDate', width: 130, render: (value?: string) => value ? value.slice(0, 10) : '-' },
     { title: '币种', dataIndex: 'currency', width: 90 },
     { title: '账单金额', dataIndex: 'billAmount', width: 120, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
     { title: '出货单号', dataIndex: 'systemOrderNo', width: 150, render: (_: string | undefined, row) => resolveShipmentOutboundOrderNo(row) },
     { title: '转单号', dataIndex: 'transferNo', width: 140, render: (value?: string) => value || '-' },
-    { title: '代理渠道', dataIndex: 'agentChannel', width: 140, render: (value?: string) => value || '-' },
+    ...(fieldVisibility.showAgentChannel ? [{ title: '代理渠道', dataIndex: 'agentChannel', width: 140, render: (value?: string) => value || '-' }] : []),
     { title: '计费重', dataIndex: 'chargeWeightKg', width: 100, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
     { title: '单价', dataIndex: 'unitPrice', width: 90, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
-    { title: '应付金额', dataIndex: 'payableAmount', width: 110, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
-    { title: '应付费用 id', dataIndex: 'payableFinanceItemId', width: 170, render: (value?: string) => value || '-' },
-    { title: '付款申请号', dataIndex: 'paymentApplicationNo', width: 170, render: (value?: string) => value || '-' },
-    { title: '已支付记录', dataIndex: 'paidPaymentId', width: 150, render: (value?: string) => value || '-' },
+    ...(fieldVisibility.showPayableCost ? [
+      { title: '应付金额', dataIndex: 'payableAmount', width: 110, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
+      { title: '应付费用 id', dataIndex: 'payableFinanceItemId', width: 170, render: (value?: string) => value || '-' }
+    ] : []),
+    ...(fieldVisibility.showPayableStatus ? [
+      { title: '付款申请号', dataIndex: 'paymentApplicationNo', width: 170, render: (value?: string) => value || '-' },
+      { title: '已支付记录', dataIndex: 'paidPaymentId', width: 150, render: (value?: string) => value || '-' }
+    ] : []),
     { title: '差异类型', dataIndex: 'differenceType', width: 120, render: (value?: string) => value || '-' },
     { title: '差异金额', dataIndex: 'differenceAmount', width: 110, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
     { title: '差异原因', dataIndex: 'differenceReason', width: 180, render: (value?: string) => value || '-' },
@@ -126,7 +143,7 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
     { title: '杂费类型', dataIndex: 'extraFeeType', width: 120, render: (value?: string) => value || '-' },
     { title: '杂费金额', dataIndex: 'extraFeeAmount', width: 110, render: (value?: number) => typeof value === 'number' ? value.toFixed(2) : '-' },
     { title: '杂费币种', dataIndex: 'extraFeeCurrency', width: 90, render: (value?: string) => value || '-' },
-    { title: '杂费代理', dataIndex: 'extraFeeAgentName', width: 130, render: (value?: string) => value || '-' },
+    ...(fieldVisibility.showAgentCompanyName ? [{ title: '杂费代理', dataIndex: 'extraFeeAgentName', width: 130, render: (value?: string) => value || '-' }] : []),
     { title: '归属客户', dataIndex: 'extraFeeCustomerCode', width: 110, render: (value?: string) => value || '-' },
     { title: '归属订单', dataIndex: 'extraFeeSystemOrderNo', width: 150, render: (value?: string) => value || '-' },
     { title: '发生日期', dataIndex: 'extraFeeOccurredAt', width: 120, render: (value?: string) => value ? value.slice(0, 10) : '-' },
@@ -145,7 +162,14 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
     { title: '操作', key: 'actions', width: 180, fixed: 'right', render: (_, row) => (
       <Space size={6}>
         <Button size="small" disabled={!canResolveDifference || row.status !== 'DIFFERENCE_PENDING'} loading={saving} onClick={() => handleDifference(row)}>处理差异</Button>
-        <Button size="small" disabled={!canArchive} loading={saving} onClick={() => handleArchive(row)}>{row.status === 'ARCHIVED' ? '反归档' : '归档'}</Button>
+        <Button
+          size="small"
+          disabled={row.status === 'ARCHIVED' ? !canReverseArchive : !canArchive}
+          loading={saving}
+          onClick={() => handleArchive(row)}
+        >
+          {row.status === 'ARCHIVED' ? '反归档' : '归档'}
+        </Button>
       </Space>
     ) }
   ];
@@ -162,19 +186,19 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
           labelWidth={66}
           fields={[
             { key: 'billNo', label: '账单号', value: row.billNo || '-', title: row.billNo },
-            { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true },
+            fieldVisibility.showAgentCompanyName ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
             { key: 'billDate', label: '账单日期', value: row.billDate ? row.billDate.slice(0, 10) : '-' },
             { key: 'currency', label: '币种', value: <Tag>{row.currency || 'RMB'}</Tag> },
             { key: 'billAmount', label: '账单金额', value: typeof row.billAmount === 'number' ? row.billAmount.toFixed(2) : '-' },
             { key: 'systemOrderNo', label: '出货单号', value: resolveShipmentOutboundOrderNo(row), title: resolveShipmentOutboundOrderNo(row) },
             { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
-            { key: 'agentChannel', label: agentFieldLabels.channel, value: row.agentChannel || '-', title: row.agentChannel },
+            fieldVisibility.showAgentChannel ? { key: 'agentChannel', label: agentFieldLabels.channel, value: row.agentChannel || '-', title: row.agentChannel } : null,
             { key: 'chargeWeightKg', label: '计费重', value: typeof row.chargeWeightKg === 'number' ? row.chargeWeightKg.toFixed(2) : '-' },
             { key: 'unitPrice', label: '单价', value: typeof row.unitPrice === 'number' ? row.unitPrice.toFixed(2) : '-' },
-            { key: 'payableAmount', label: '应付金额', value: typeof row.payableAmount === 'number' ? row.payableAmount.toFixed(2) : '-' },
-            row.payableFinanceItemId ? { key: 'payableFinanceItemId', label: '应付费用ID', value: row.payableFinanceItemId, title: row.payableFinanceItemId } : null,
-            row.paymentApplicationNo ? { key: 'paymentApplicationNo', label: '付款申请号', value: row.paymentApplicationNo, title: row.paymentApplicationNo } : null,
-            row.paidPaymentId ? { key: 'paidPaymentId', label: '已支付记录', value: row.paidPaymentId, title: row.paidPaymentId } : null,
+            fieldVisibility.showPayableCost ? { key: 'payableAmount', label: '应付金额', value: typeof row.payableAmount === 'number' ? row.payableAmount.toFixed(2) : '-' } : null,
+            fieldVisibility.showPayableCost && row.payableFinanceItemId ? { key: 'payableFinanceItemId', label: '应付费用ID', value: row.payableFinanceItemId, title: row.payableFinanceItemId } : null,
+            fieldVisibility.showPayableStatus && row.paymentApplicationNo ? { key: 'paymentApplicationNo', label: '付款申请号', value: row.paymentApplicationNo, title: row.paymentApplicationNo } : null,
+            fieldVisibility.showPayableStatus && row.paidPaymentId ? { key: 'paidPaymentId', label: '已支付记录', value: row.paidPaymentId, title: row.paidPaymentId } : null,
             row.differenceType ? { key: 'differenceType', label: '差异类型', value: row.differenceType } : null,
             typeof row.differenceAmount === 'number' ? { key: 'differenceAmount', label: '差异金额', value: row.differenceAmount.toFixed(2) } : null,
             row.differenceReason ? { key: 'differenceReason', label: '差异原因', value: row.differenceReason, title: row.differenceReason, wrap: true } : null,
@@ -183,7 +207,7 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
             row.extraFeeType ? { key: 'extraFeeType', label: '杂费类型', value: row.extraFeeType } : null,
             typeof row.extraFeeAmount === 'number' ? { key: 'extraFeeAmount', label: '杂费金额', value: row.extraFeeAmount.toFixed(2) } : null,
             row.extraFeeCurrency ? { key: 'extraFeeCurrency', label: '杂费币种', value: row.extraFeeCurrency } : null,
-            row.extraFeeAgentName ? { key: 'extraFeeAgentName', label: '杂费代理', value: row.extraFeeAgentName, title: row.extraFeeAgentName, wrap: true } : null,
+            fieldVisibility.showAgentCompanyName && row.extraFeeAgentName ? { key: 'extraFeeAgentName', label: '杂费代理', value: row.extraFeeAgentName, title: row.extraFeeAgentName, wrap: true } : null,
             row.extraFeeCustomerCode ? { key: 'extraFeeCustomerCode', label: '归属客户', value: row.extraFeeCustomerCode } : null,
             row.extraFeeSystemOrderNo ? { key: 'extraFeeSystemOrderNo', label: '归属订单', value: row.extraFeeSystemOrderNo, title: row.extraFeeSystemOrderNo } : null,
             row.extraFeeOccurredAt ? { key: 'extraFeeOccurredAt', label: '发生日期', value: row.extraFeeOccurredAt.slice(0, 10) } : null,
@@ -212,14 +236,14 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
       <Card title={historicalMode ? '历史代理账单查询' : '代理账单人工导入'} className="finance-filter-card">
         <Form name="agentBillQuery" form={queryForm} layout="inline" onFinish={loadRows} initialValues={{ currency: 'ALL', status: 'ALL' }}>
           <Form.Item name="billNo" label="账单号筛选"><Input allowClear /></Form.Item>
-          <Form.Item name="agentName" label={`${agentFieldLabels.detailedCompanyName}筛选`}><Select showSearch allowClear optionFilterProp="searchText" options={agentNameOptions} style={{ width: 220 }} /></Form.Item>
+          {fieldVisibility.showAgentCompanyName ? <Form.Item name="agentName" label={`${agentFieldLabels.detailedCompanyName}筛选`}><Select showSearch allowClear optionFilterProp="searchText" options={agentNameOptions} style={{ width: 220 }} /></Form.Item> : null}
           <Form.Item name="currency" label="币种"><Select style={{ width: 96 }} options={['ALL', 'RMB', 'USD'].map((value) => ({ label: value === 'ALL' ? '全部' : value, value }))} /></Form.Item>
           <Form.Item name="status" label="状态"><Select style={{ width: 130 }} options={[{ label: '全部', value: 'ALL' }, { label: '已导入', value: 'IMPORTED' }, { label: '已匹配', value: 'MATCHED' }, { label: '差异待处理', value: 'DIFFERENCE_PENDING' }, { label: '差异已处理', value: 'DIFFERENCE_HANDLED' }, { label: '已归档', value: 'ARCHIVED' }]} /></Form.Item>
           <Form.Item><Button type="primary" htmlType="submit" loading={loading}>查询</Button></Form.Item>
         </Form>
       </Card>
 
-      {!historicalMode ? <Card title="登记代理账单" className="finance-work-card">
+      {!historicalMode && canUseAgentBillFields ? <Card title="登记代理账单" className="finance-work-card">
         <Form name="agentBillImport" form={form} layout="vertical" disabled={!canImport} initialValues={{ currency: 'RMB' }} onFinish={submit}>
           <Row gutter={[12, 0]}>
             <Col xs={24} md={6}><Form.Item name="billNo" label="账单号" rules={[{ required: true, whitespace: true, message: '请输入账单号' }]}><Input /></Form.Item></Col>
@@ -233,7 +257,7 @@ export function AgentBillPage({ apiClient, permissions, agents, historicalMode =
             <Col xs={24} md={5}><Form.Item name="extraFeeType" label="杂费类型"><Input /></Form.Item></Col>
             <Col xs={24} md={4}><Form.Item name="extraFeeAmount" label="杂费金额"><InputNumber min={0} precision={2} style={{ width: '100%' }} /></Form.Item></Col>
             <Col xs={24} md={3}><Form.Item name="extraFeeCurrency" label="杂费币种"><Select allowClear options={['RMB', 'USD'].map((value) => ({ label: value, value }))} /></Form.Item></Col>
-            <Col xs={24} md={5}><Form.Item name="extraFeeAgentName" label="杂费代理"><Input /></Form.Item></Col>
+            {fieldVisibility.showAgentCompanyName ? <Col xs={24} md={5}><Form.Item name="extraFeeAgentName" label="杂费代理"><Input /></Form.Item></Col> : null}
             <Col xs={24} md={3}><Form.Item name="extraFeeCustomerCode" label="归属客户"><Input /></Form.Item></Col>
             <Col xs={24} md={5}><Form.Item name="extraFeeSystemOrderNo" label="归属订单"><Input /></Form.Item></Col>
             <Col xs={24} md={4}><Form.Item name="extraFeeOccurredAt" label="发生日期"><AppDatePicker /></Form.Item></Col>

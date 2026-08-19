@@ -12,7 +12,7 @@ import type {
   FinanceBillingUnit,
   FinanceCatalogItemSummary
 } from '@siyuan/shared';
-import type { ApiClient, PermissionKey } from '../../../apiClient';
+import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
 import { createFinanceFeeNameOptions, financeCatalogCurrencyOptions } from '../catalog';
 import { downloadCsv } from '../exportCsv';
 import { formatBeijingDateTime, formatCurrency } from '../../shared/format';
@@ -20,6 +20,7 @@ import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, type ManagedTableColumns } from '../../shared/ui';
 import { ChargeWeightChangeTag } from '../ChargeWeightChangeTag';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
+import { getGlobalFieldMaskVisibility } from '../../shared/globalFieldMask';
 
 const { Text } = Typography;
 
@@ -35,6 +36,7 @@ function billingUnitLabel(unit?: FinanceBillingUnit) {
 type BusinessCostAuditPageProps = {
   apiClient: ApiClient;
   permissions: PermissionKey[];
+  role?: RoleKey | string;
   rows: BusinessCostAuditSummary[];
   financeCatalogItems: FinanceCatalogItemSummary[];
   renderShipmentOrderNoLink: (systemOrderNo?: string) => ReactNode;
@@ -114,6 +116,7 @@ function hasPermission(permissions: PermissionKey[], permission: PermissionKey) 
 export function BusinessCostAuditPage({
   apiClient,
   permissions,
+  role,
   rows,
   financeCatalogItems,
   renderShipmentOrderNoLink,
@@ -133,15 +136,16 @@ export function BusinessCostAuditPage({
   const [editingRow, setEditingRow] = useState<BusinessCostAuditSummary | null>(null);
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
 
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
   const canManage = hasPermission(permissions, 'finance:business-cost:manage');
   const canAudit = hasPermission(permissions, 'finance:business-cost:audit');
   const canReverse = hasPermission(permissions, 'finance:business-cost:reverse');
   const canVoid = hasPermission(permissions, 'finance:business-cost:void');
-  const canBatchAudit = hasPermission(permissions, 'finance:business-cost:batch-audit');
-  const canBatchReverse = hasPermission(permissions, 'finance:business-cost:batch-reverse');
-  const canBatchVoid = hasPermission(permissions, 'finance:business-cost:batch-void');
+  const canBatchAudit = canAudit;
+  const canBatchReverse = canReverse;
+  const canBatchVoid = canVoid;
   const canExport = hasPermission(permissions, 'finance:business-cost:export');
-  const canViewAgent = hasPermission(permissions, 'finance:business-cost:view-agent') || response.rows.some((row) => row.canViewAgent);
+  const canViewAgent = fieldVisibility.showAgentCompanyName && (hasPermission(permissions, 'finance:business-cost:view-agent') || response.rows.some((row) => row.canViewAgent));
   const canViewProfit = hasPermission(permissions, 'finance:business-cost:view-profit') || response.rows.some((row) => row.canViewProfit);
   const feeNameOptions = useMemo(
     () => createFinanceFeeNameOptions(financeCatalogItems),
@@ -349,7 +353,7 @@ export function BusinessCostAuditPage({
             { key: 'transferNo', label: '转单号', value: row.transferNo || '-', title: row.transferNo },
             { key: 'salesperson', label: '业务员', value: row.salesperson || '-' },
             { key: 'name', label: '费用名称', value: row.name || '-' },
-            row.canViewAgent ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
+            row.canViewAgent && fieldVisibility.showAgentCompanyName ? { key: 'agentName', label: agentFieldLabels.detailedCompanyName, value: row.agentName || '-', title: row.agentName, wrap: true } : null,
             { key: 'currency', label: '币种', value: <Tag>{row.currency ?? 'RMB'}</Tag> },
             { key: 'billingUnit', label: '计费方式', value: row.billingUnit === 'CBM' ? '体积（CBM）' : '计费重（KG）' },
             { key: 'chargeWeightKg', label: '计费数量', value: row.billingUnit === 'CBM' ? `${(row.billingQuantity ?? 0).toFixed(6)} CBM` : <ChargeWeightChangeTag value={row.billingQuantity ?? row.chargeWeightKg} change={row.chargeWeightChange} showUnit /> },
@@ -394,7 +398,7 @@ export function BusinessCostAuditPage({
           <Button disabled={!canExport} onClick={async () => {
             const exported = await apiClient.exportBusinessCostAudits({ ids: selectedIds.length ? selectedIds : undefined, query });
             downloadCsv('business-cost-audits.csv', [
-              { key: 'agentName', label: agentFieldLabels.detailedCompanyName },
+              ...(fieldVisibility.showAgentCompanyName ? [{ key: 'agentName', label: agentFieldLabels.detailedCompanyName }] : []),
               { key: 'name', label: '费用名称' },
               { key: 'customerCode', label: '客户编号' },
               { key: 'outboundOrderNo', label: '出货单号' },

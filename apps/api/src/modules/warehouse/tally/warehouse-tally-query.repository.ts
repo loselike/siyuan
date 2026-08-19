@@ -1,13 +1,15 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type {
   WarehousePackageSummary,
+  WarehouseTallySortRule,
+  WarehouseTallySortRulesUpdateInput,
   WarehouseTallyTaskListQuery,
   WarehouseTallyTaskSummary
 } from '@siyuan/shared';
-import { sortWarehouseTallyTasks } from '@siyuan/shared';
+import { Prisma } from '@prisma/client';
 import { PrismaRepository } from '../../prisma.repository.js';
 import { PrismaService } from '../../prisma.service.js';
-import { isAdministratorRole, isSalesScopedRole, type PermissionKey, type Principal } from '../../rbac.js';
+import { isWarehouseWideScopePrincipal, type PermissionKey, type Principal } from '../../rbac.js';
 import { WAREHOUSE_TALLY_AGGREGATE_CORRECTION_ARCHIVE_REASON } from '../../warehouse-tally-aggregate-correction.js';
 import {
   loadWarehouseTallyTaskOutputPackages,
@@ -15,11 +17,18 @@ import {
   mapWarehouseTallyTask,
   resolveWarehouseTallyRecentCutoff
 } from '../warehouse-query.shared.js';
+import {
+  mapWarehouseTallySortRules,
+  normalizeWarehouseTallySortRuleInput,
+  sortPendingWarehouseTallyTasks
+} from './warehouse-tally-sort-rules.js';
 
 export const WAREHOUSE_TALLY_QUERY_REPOSITORY = 'WAREHOUSE_TALLY_QUERY_REPOSITORY';
 
 export interface WarehouseTallyQueryRepository {
   getWarehouseConsolidationItems(principal: Principal, id: string): Promise<WarehousePackageSummary[]>;
+  getWarehouseTallySortRules(principal: Principal): Promise<WarehouseTallySortRule[]>;
+  updateWarehouseTallySortRules(principal: Principal, input: WarehouseTallySortRulesUpdateInput): Promise<WarehouseTallySortRule[]>;
   getWarehouseTallyTasks(principal: Principal, query?: WarehouseTallyTaskListQuery): Promise<WarehouseTallyTaskSummary[]>;
   getWarehouseTallyTaskSourcePackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]>;
   getWarehouseTallyTaskHistoryChain(principal: Principal, packageId: string): Promise<WarehouseTallyTaskSummary[]>;
@@ -42,6 +51,43 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       orderBy: { id: 'asc' }
     });
     return items.map((item: any) => mapWarehousePackage(item.package));
+  }
+
+  async getWarehouseTallySortRules(principal: Principal): Promise<WarehouseTallySortRule[]> {
+    await this.ensurePendingView(principal);
+    return this.readWarehouseTallySortRules();
+  }
+
+  async updateWarehouseTallySortRules(
+    principal: Principal,
+    input: WarehouseTallySortRulesUpdateInput
+  ): Promise<WarehouseTallySortRule[]> {
+    await this.ensurePendingEdit(principal);
+    const rules = normalizeWarehouseTallySortRuleInput(input);
+    return this.prisma.$transaction(async (tx: any) => {
+      await tx.$queryRaw(Prisma.sql`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended('warehouse-tally-sort-rules', 0))`);
+      const beforeRows = await tx.warehouseTallySortRule.findMany({ orderBy: [{ sortOrder: 'asc' }, { channel: 'asc' }] });
+      for (const rule of rules) {
+        await tx.warehouseTallySortRule.upsert({
+          where: { channel: rule.channel },
+          create: { ...rule, updatedBy: principal.username },
+          update: { sortOrder: rule.sortOrder, preferredTimeSlot: rule.preferredTimeSlot, enabled: rule.enabled, updatedBy: principal.username }
+        });
+      }
+      const updatedRows = await tx.warehouseTallySortRule.findMany({ orderBy: [{ sortOrder: 'asc' }, { channel: 'asc' }] });
+      const before = mapWarehouseTallySortRules(beforeRows);
+      const updated = mapWarehouseTallySortRules(updatedRows);
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'warehouse.tally.sort_rules.update',
+          target: 'warehouse:tally-sort-rules',
+          before: JSON.parse(JSON.stringify(before)),
+          after: JSON.parse(JSON.stringify(updated))
+        }
+      });
+      return updated;
+    });
   }
 
   async getWarehouseTallyTasks(
@@ -155,7 +201,10 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
         .filter((row) => row.status === 'CANCELLED' && row.tallyProgressStatus === 'CANCELLED')
         .sort((left, right) => Date.parse(right.cancelledAt ?? right.createdAt) - Date.parse(left.cancelledAt ?? left.createdAt));
     }
-    const pendingRows = sortWarehouseTallyTasks<WarehouseTallyTaskSummary>(mappedRows.filter((row) => row.status === 'PENDING'));
+    const pendingRows = sortPendingWarehouseTallyTasks(
+      mappedRows.filter((row) => row.status === 'PENDING'),
+      await this.readWarehouseTallySortRules()
+    );
     return query.status === 'PENDING' ? pendingRows : [...pendingRows, ...mappedRows.filter((row) => row.status !== 'PENDING')];
   }
 
@@ -216,16 +265,20 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     const visitedTaskIds: string[] = [];
     const chain: WarehouseTallyTaskSummary[] = [];
     let currentPackageId: string | undefined = normalizedPackageId;
+    let legacyPreviousTaskId: string | undefined;
 
-    while (currentPackageId && chain.length < 20) {
-      const lookupPackageId = currentPackageId;
-      const currentPackage: { tallyTaskId?: string | null; tallyTaskNo?: string | null } | null = await (this.prisma as any).warehousePackage.findUnique({
-        where: { id: lookupPackageId },
-        select: { tallyTaskId: true, tallyTaskNo: true }
-      });
-      const task: any = await (this.prisma as any).warehouseTallyTask.findFirst({
+    while ((currentPackageId || legacyPreviousTaskId) && chain.length < 20) {
+      const lookupPackageId: string | undefined = currentPackageId;
+      const currentPackage: { tallyTaskId?: string | null; tallyTaskNo?: string | null; sourcePackageId?: string | null } | null = lookupPackageId
+        ? await (this.prisma as any).warehousePackage.findUnique({
+          where: { id: lookupPackageId },
+          select: { tallyTaskId: true, tallyTaskNo: true, sourcePackageId: true }
+        })
+        : null;
+      let task: any = lookupPackageId ? await (this.prisma as any).warehouseTallyTask.findFirst({
         where: {
           status: 'COMPLETED',
+          tallyProgressStatus: { not: 'CANCELLED' },
           ...(visitedTaskIds.length ? { id: { notIn: visitedTaskIds } } : {}),
           ...(scopedCustomerCode ? { customerCode: scopedCustomerCode } : {}),
           OR: [
@@ -237,11 +290,22 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
           ]
         },
         orderBy: [{ completedAt: 'desc' }, { createdAt: 'desc' }]
-      });
+      }) : null;
+      if (!task && legacyPreviousTaskId && !visitedTaskIds.includes(legacyPreviousTaskId)) {
+        task = await (this.prisma as any).warehouseTallyTask.findFirst({
+          where: {
+            id: legacyPreviousTaskId,
+            status: 'COMPLETED',
+            tallyProgressStatus: { not: 'CANCELLED' },
+            ...(scopedCustomerCode ? { customerCode: scopedCustomerCode } : {})
+          }
+        });
+      }
       if (!task) break;
       visitedTaskIds.push(task.id);
       chain.push(mapWarehouseTallyTask(task));
-      currentPackageId = task.sourcePackageId;
+      currentPackageId = currentPackage?.sourcePackageId ?? undefined;
+      legacyPreviousTaskId = task.previousTallyTaskId ?? undefined;
     }
 
     return chain.reverse();
@@ -255,11 +319,20 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     if (!(await this.hasAnyPermission(principal, ['warehouse:tally-completed:view']))) {
       throw new ForbiddenException('当前角色不能查看理货结果包裹');
     }
+    const scope = this.operatorCustomerScope(principal);
+    const task = await (this.prisma as any).warehouseTallyTask.findUnique({
+      where: { id },
+      select: { id: true, salesperson: true }
+    });
+    if (!task) throw new NotFoundException('理货任务不存在');
+    if (scope && (!task.salesperson || !scope.includes(task.salesperson))) {
+      throw new ForbiddenException('当前账号不能查看该理货任务结果');
+    }
     return loadWarehouseTallyTaskOutputPackages(this.prisma, id);
   }
 
   private ensureWarehouseAccess(principal: Principal) {
-    if (!isAdministratorRole(principal.role) && !['WAREHOUSE', 'UG_WAREHOUSE_RECEIVE', 'UG_WAREHOUSE_OUTBOUND'].includes(principal.role)) {
+    if (!isWarehouseWideScopePrincipal(principal)) {
       throw new ForbiddenException('当前角色不能操作仓库管理');
     }
   }
@@ -277,6 +350,12 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     }
   }
 
+  private async ensurePendingEdit(principal: Principal) {
+    if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:edit'))) {
+      throw new ForbiddenException('当前角色不能修改理货排序规则');
+    }
+  }
+
   private async ensureCompletedView(principal: Principal) {
     if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view'))) {
       throw new ForbiddenException('当前角色不能查看已完成理货');
@@ -284,10 +363,12 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
   }
 
   private operatorCustomerScope(principal: Principal) {
-    const explicitlySalesScoped = principal.dataScope === 'SALES_OWN';
-    if (!explicitlySalesScoped && (principal.role === 'UG_MARKET' || !isSalesScopedRole(principal.role))) {
-      return undefined;
-    }
+    if (isWarehouseWideScopePrincipal(principal)) return undefined;
     return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));
+  }
+
+  private async readWarehouseTallySortRules(): Promise<WarehouseTallySortRule[]> {
+    const rows = await (this.prisma as any).warehouseTallySortRule.findMany({ orderBy: [{ sortOrder: 'asc' }, { channel: 'asc' }] });
+    return mapWarehouseTallySortRules(rows);
   }
 }

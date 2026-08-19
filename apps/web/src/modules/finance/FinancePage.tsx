@@ -48,7 +48,7 @@ import {
   type ShipmentStatus,
   type WarehousePackageSummary
 } from '@siyuan/shared';
-import { ApiClient, type PermissionKey } from '../../apiClient';
+import { ApiClient, isAdministratorRole, type PermissionKey } from '../../apiClient';
 import { confirmDangerousAction } from '../shared/dangerousAction';
 import { FinanceEntryPage } from './entry/FinanceEntryPage';
 import { FinanceCatalogPage } from './FinanceCatalogPage';
@@ -71,6 +71,7 @@ import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { filterServerScopedBusinessShipments, resolveBusinessDraftRows, resolveBusinessPendingReviewRows } from './financeBusinessScope';
 import { ShipmentRiskFlag } from '../shared/ShipmentRiskFlag';
 import { canViewOrderLifecycleBusinessCosts } from '../shared/businessCostAccess';
+import { getGlobalFieldMaskVisibility } from '../shared/globalFieldMask';
 
 const { Text } = Typography;
 
@@ -213,22 +214,26 @@ export function FinancePage({
     reason?: string;
   }>();
   const hasUiPermission = (permission: PermissionKey) => role === 'ADMIN' || permissions.includes(permission);
+  const fieldVisibility = useMemo(() => getGlobalFieldMaskVisibility(role, permissions), [permissions, role]);
   const canViewBusinessCosts = canViewOrderLifecycleBusinessCosts(role, permissions);
   const canEditOrderEntry = hasUiPermission('business:order-entry:edit');
   const canMaintainOrderEntryBusinessCost = hasUiPermission('business:order-entry:business-cost');
-  const canMaintainOrderEntryPayable = hasUiPermission('business:order-entry:payable-fee');
+  const canMaintainOrderEntryPayable = fieldVisibility.showPayableCost && hasUiPermission('business:order-entry:payable-fee');
   const canViewOrderEntry = canEditOrderEntry || canMaintainOrderEntryBusinessCost || canMaintainOrderEntryPayable;
   const canCreateOrderEntry = canEditOrderEntry;
   const canViewOrderEntryDrafts = hasUiPermission('business:order-entry:draft-view');
   const canSaveOrderEntryDraft = canEditOrderEntry || hasUiPermission('business:order-entry:draft-edit');
   const canSubmitOrderEntryForReview = hasUiPermission('business:order-entry:submit-review');
-  const canUseOrderEntryAgentFields = hasUiPermission('master-data:agents:read');
+  const canUseOrderEntryAgentFields = hasUiPermission('master-data:agents:read')
+    && fieldVisibility.showAgentData
+    && fieldVisibility.showAgentShortName
+    && fieldVisibility.showAgentCompanyName
+    && fieldVisibility.showAgentChannel;
   const canContinueOrderEntryDraft = canEditOrderEntry || canMaintainOrderEntryBusinessCost || canMaintainOrderEntryPayable;
   const canViewPendingReview = hasUiPermission('business:review:view');
   const canEditPendingReview = hasUiPermission('business:review:edit');
   const canAdjustPendingReviewPackages = canEditPendingReview;
   const canUseFinanceWorkspace = hasUiPermission('finance:dashboard:view') || hasUiPermission('finance:receivable:read') || hasUiPermission('finance:business-cost:read') || hasUiPermission('finance:payable:read') || hasUiPermission('finance:pending-payment:read') || hasUiPermission('finance:paid-payment:read') || hasUiPermission('finance:water-receipt:read') || hasUiPermission('finance:water-match:read') || hasUiPermission('finance:agent-bill:read');
-  const isBusinessWaterReceiptUser = permissions.includes('data-scope:sales-own' as PermissionKey);
   const canRestoreReviewShipment = canEditPendingReview;
   const canPurgeReviewShipment = canEditPendingReview;
   const [financeDashboard, setFinanceDashboard] = useState<FinanceDashboardResponse | null>(null);
@@ -382,11 +387,26 @@ export function FinancePage({
     if (typeof amount !== 'number' || !Number.isFinite(amount)) return '-';
     return currency === 'USD' ? `USD ${amount.toFixed(2)}` : formatCurrency(amount);
   };
+  const formatPendingReviewCurrencyAmount = (amount: number, currency?: string | null) => {
+    const normalizedCurrency = currency?.trim().toUpperCase() || 'RMB';
+    return `${normalizedCurrency} ${amount.toFixed(2)}`;
+  };
+  const formatPendingReviewReceivableSummary = (shipment: Shipment) => {
+    const amounts = shipment.receivableSummary?.amounts ?? [];
+    if (!amounts.length) return undefined;
+    return amounts
+      .map((item) => formatPendingReviewCurrencyAmount(item.amount, item.currency))
+      .join(' / ');
+  };
   const getPendingReviewWeight = (shipment?: Shipment | null) => shipment?.weightKg ?? shipment?.receivableWeightKg;
   const getPendingReviewChargeableWeight = (shipment?: Shipment | null) => shipment?.chargeableWeightKg ?? shipment?.receivableWeightKg ?? shipment?.agentWeightKg;
-  const renderPendingReviewReceivable = (shipment: Shipment) => shipment.receivableRmbTotalError
-    ? <Text type="danger">{shipment.receivableRmbTotalError}</Text>
-    : formatPendingReviewMoney(shipment.receivableRmbTotal);
+  const renderPendingReviewReceivable = (shipment: Shipment) => {
+    const rawSummary = formatPendingReviewReceivableSummary(shipment);
+    if (rawSummary) return rawSummary;
+    return shipment.receivableRmbTotalError
+      ? <Text type="danger">{shipment.receivableRmbTotalError}</Text>
+      : formatPendingReviewMoney(shipment.receivableRmbTotal);
+  };
   const getPendingReviewCustomerCode = (shipment?: Shipment | null) => {
     return shipment?.customerCode || shipment?.customerName?.split('-')[0]?.trim() || '-';
   };
@@ -444,8 +464,9 @@ export function FinancePage({
     ...(canViewBusinessCosts ? [pendingReviewDetail ? pendingReviewPriceText : '-'] : []),
     getPendingReviewOutboundOrderNo(detailShipment)
   ].join('——');
-  const canViewReviewAgentIdentity = role === 'ADMIN' || permissions.includes('finance:business-cost:view-agent');
+  const canViewReviewAgentIdentity = fieldVisibility.showAgentCompanyName && (role === 'ADMIN' || permissions.includes('finance:business-cost:view-agent'));
   const canViewReviewFinanceFields = canViewPendingReview;
+  const canViewReviewPayableFields = canViewReviewFinanceFields && fieldVisibility.showPayableStatus;
   const canDirectEditPendingReviewBusinessCost = canViewBusinessCosts && hasUiPermission('business:order-entry:business-cost');
   const renderShipmentCargoData = (shipment?: Shipment | null) => [
     `件数 ${formatPendingReviewValue(shipment?.packageCount)}`,
@@ -709,14 +730,14 @@ export function FinancePage({
     if (!target) return;
     let reason = '';
     modal.confirm({
-      title: '删除待审核订单？',
+      title: '永久删除待审核订单？',
       content: (
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
-          <Typography.Text>订单 {target.systemOrderNo || target.customerOrderNo} 将移入“已删除订单”，仍可恢复；彻底删除需在已删除列表单独执行。</Typography.Text>
+          <Typography.Text>订单 {target.systemOrderNo || target.customerOrderNo} 删除后不可恢复；其占用的仓库包裹会解除关联并回到在仓数据。</Typography.Text>
           <Input.TextArea rows={3} placeholder="请填写删除原因" onChange={(event) => { reason = event.target.value; }} />
         </Space>
       ),
-      okText: '删除',
+      okText: '永久删除并释放包裹',
       okButtonProps: { danger: true },
       cancelText: '取消',
       onOk: async () => {
@@ -727,7 +748,7 @@ export function FinancePage({
         }
         await apiClient.deleteShipmentReview(target.id, { reason: trimmedReason });
         setPendingReviewRows((current) => current.filter((row) => row.id !== target.id));
-        messageApi.success('订单已移入已删除列表');
+        messageApi.success('订单已永久删除，关联包裹已释放回在仓数据');
         setFinanceReviewSelectedShipmentId(null);
         setPendingReviewDetail(null);
         await refreshPendingReviewWorkbench();
@@ -896,7 +917,7 @@ export function FinancePage({
         ...(canViewReviewFinanceFields && canViewBusinessCosts ? [
           ['业务成本审核日期', shipment?.businessReviewedAt ? formatBeijingDateTime(shipment.businessReviewedAt) : '-'] as [string, ReactNode]
         ] : []),
-        ...(canViewReviewFinanceFields ? [['应付审核日期', '-'] as [string, ReactNode]] : []),
+        ...(canViewReviewPayableFields ? [['应付审核日期', '-'] as [string, ReactNode]] : []),
         ['收货人电话', shipment?.receiverPhone],
         ['邮编', shipment?.receiverPostalCode]
       ])}
@@ -1518,7 +1539,7 @@ export function FinancePage({
                           <Flex gap={10} wrap="wrap" className="finance-pending-finance-metrics">
                             <MetricCard title="应收" value={formatCurrency(pendingReviewDetail.finance.receivableTotal)} icon={<CircleDollarSign size={16} />} extra="待审核" />
                             {canViewBusinessCosts ? <MetricCard title="业务成本" value={formatCurrency(pendingReviewDetail.finance.businessCostTotal ?? 0)} icon={<Banknote size={16} />} extra="成本校验" /> : null}
-                            {pendingReviewDetail.finance.canViewPayables ? <MetricCard title="应付" value={formatCurrency(pendingReviewDetail.finance.payableTotal ?? 0)} icon={<Landmark size={16} />} extra="代理侧" /> : null}
+                            {pendingReviewDetail.finance.canViewPayables && fieldVisibility.showPayableCost ? <MetricCard title="应付" value={formatCurrency(pendingReviewDetail.finance.payableTotal ?? 0)} icon={<Landmark size={16} />} extra="代理侧" /> : null}
                           </Flex>
                           <Divider className="finance-pending-section-divider" />
                           {renderShipmentFinancePanel(pendingReviewDetail.shipment, pendingReviewDetail.finance, {
@@ -1613,20 +1634,13 @@ export function FinancePage({
             { key: 'fee-names', label: '费用名称' },
             { key: 'settlement-methods', label: '结算方式' },
             { key: 'cargo-types', label: '货物类型' },
-            { key: 'agents', label: '代理资料' },
-            { key: 'agent-channels', label: '代理渠道' },
+            ...(fieldVisibility.showAgentData && fieldVisibility.showAgentShortName && fieldVisibility.showAgentCompanyName ? [{ key: 'agents', label: '代理资料' }] : []),
+            ...(fieldVisibility.showAgentData && fieldVisibility.showAgentShortName && fieldVisibility.showAgentChannel ? [{ key: 'agent-channels', label: '代理渠道' }] : []),
             { key: 'company-channels', label: '公司渠道' },
             { key: 'channel-categories', label: '渠道类别' },
             { key: 'remote-areas', label: '偏远' },
             { key: 'exchange-rates', label: '汇率' }
           ]
-      : isBusinessWaterReceiptUser
-        ? [
-            { key: 'water-receipt-arrivals', label: '水单到账查询' },
-            { key: 'water-receipts', label: '水单匹配' }
-          ].filter((item) => item.key === 'water-receipt-arrivals'
-            ? hasUiPermission('finance:water-receipt:read')
-            : hasUiPermission('finance:water-match:read'))
       : !canUseFinanceWorkspace
         ? [
             { key: 'water-receipt-arrivals', label: '水单到账查询' },
@@ -1638,24 +1652,22 @@ export function FinancePage({
             { key: 'finance-dashboard', label: '财务看板' },
             { key: 'receivables', label: '应收审核' },
             { key: 'business-costs', label: '业务成本审核' },
-            { key: 'payables', label: '市场应付审核' },
-            { key: 'payment-applications', label: '付款申请' },
-            { key: 'paid-verification', label: '待付款' },
-            { key: 'paid-payments', label: '已付款' },
+            ...(fieldVisibility.showPayableCost ? [{ key: 'payables', label: '市场应付审核' }] : []),
+            ...(fieldVisibility.showPayableCost && fieldVisibility.showPayableStatus ? [{ key: 'payment-applications', label: '付款申请' }, { key: 'paid-verification', label: '待付款' }, { key: 'paid-payments', label: '已付款' }] : []),
             { key: 'water-receipt-arrivals', label: '水单到账查询' },
             { key: 'water-receipts', label: '水单匹配' },
-            { key: 'agent-bill-ai', label: '历史代理账单' }
+            ...(fieldVisibility.showAgentData && fieldVisibility.showAgentCompanyName && fieldVisibility.showPayableCost && fieldVisibility.showPayableStatus ? [{ key: 'agent-bill-ai', label: '历史代理账单' }] : [])
           ].filter((item) => ({
             'finance-dashboard': hasUiPermission('finance:dashboard:view'),
             receivables: hasUiPermission('finance:receivable:read'),
             'business-costs': hasUiPermission('finance:business-cost:read'),
-            payables: hasUiPermission('finance:payable:read'),
-            'payment-applications': hasUiPermission('finance:pending-payment:read'),
-            'paid-verification': hasUiPermission('finance:paid-payment:read'),
-            'paid-payments': hasUiPermission('finance:paid-payment:read'),
+            payables: fieldVisibility.showPayableCost && hasUiPermission('finance:payable:read'),
+            'payment-applications': fieldVisibility.showPayableCost && fieldVisibility.showPayableStatus && hasUiPermission('finance:pending-payment:read'),
+            'paid-verification': fieldVisibility.showPayableCost && fieldVisibility.showPayableStatus && hasUiPermission('finance:paid-payment:read'),
+            'paid-payments': fieldVisibility.showPayableCost && fieldVisibility.showPayableStatus && hasUiPermission('finance:paid-payment:read'),
             'water-receipt-arrivals': hasUiPermission('finance:water-receipt:read'),
             'water-receipts': hasUiPermission('finance:water-match:read'),
-            'agent-bill-ai': hasUiPermission('finance:agent-bill:read')
+            'agent-bill-ai': fieldVisibility.showAgentData && fieldVisibility.showAgentCompanyName && fieldVisibility.showPayableCost && fieldVisibility.showPayableStatus && hasUiPermission('finance:agent-bill:read')
           })[item.key]);
   useEffect(() => {
     if (!financeSubItems.some((item) => item.key === activeFinanceSection)) {
@@ -2076,6 +2088,7 @@ export function FinancePage({
 	            <BusinessCostAuditPage
 	              apiClient={apiClient}
 	              permissions={permissions}
+	              role={role}
 	              rows={businessCostAudits}
 	              financeCatalogItems={financeCatalogItems}
 	              renderShipmentOrderNoLink={renderShipmentOrderNoLink}
@@ -2085,6 +2098,7 @@ export function FinancePage({
 	            <PayableAuditPage
 	              apiClient={apiClient}
 	              permissions={permissions}
+	              role={role}
 	              rows={payableAudits}
 	              financeCatalogItems={financeCatalogItems}
 	              renderShipmentOrderNoLink={renderShipmentOrderNoLink}
@@ -2099,6 +2113,7 @@ export function FinancePage({
             <PendingPaymentPage
               apiClient={apiClient}
               permissions={permissions}
+              role={role}
               renderShipmentOrderNoLink={renderShipmentOrderNoLink}
               initialQuery={pendingPaymentInitialQuery}
             />
@@ -2107,6 +2122,7 @@ export function FinancePage({
             <PaidPaymentPage
               apiClient={apiClient}
               permissions={permissions}
+              role={role}
               renderShipmentOrderNoLink={renderShipmentOrderNoLink}
               viewMode="waiting"
             />
@@ -2115,6 +2131,7 @@ export function FinancePage({
             <PaidPaymentPage
               apiClient={apiClient}
               permissions={permissions}
+              role={role}
               renderShipmentOrderNoLink={renderShipmentOrderNoLink}
               viewMode="paid"
             />
@@ -2141,11 +2158,10 @@ export function FinancePage({
               customers={customers}
               settlementOptions={financeCatalog.settlementOptions}
               renderShipmentOrderNoLink={renderShipmentOrderNoLink}
-              readOnlyMatching={isBusinessWaterReceiptUser}
             />
 	          ) : null}
 	          {activeFinanceSection === 'agent-bill-ai' ? (
-            <AgentBillPage apiClient={apiClient} permissions={permissions} agents={agents} historicalMode />
+            <AgentBillPage apiClient={apiClient} permissions={permissions} agents={agents} role={role} historicalMode />
 	          ) : null}
 	          {['fee-names', 'settlement-methods', 'cargo-types'].includes(activeFinanceSection) ? (
             <FinanceCatalogPage

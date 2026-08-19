@@ -4,7 +4,6 @@ import type {
   ReceivableAuditCreateInput,
   ReceivableAuditExportRequest,
   ReceivableAuditListQuery,
-  ReceivableAuditUpdateInput,
   ReceivableMatchRequestBatchInput,
   ReceivableMatchRequestUpdateInput,
   ReceivableMatchReviewInput,
@@ -58,12 +57,6 @@ export class FinanceReceivableController {
   @RequirePermission('finance:receivable:create')
   async createReceivableAudit(@Req() request: { user: Principal }, @Body() body: ReceivableAuditCreateInput) {
     return this.service.createReceivableAudit(request.user, body);
-  }
-
-  @Put('finance/receivable-audits/:id')
-  @RequirePermission('finance:receivable:update')
-  async updateReceivableAudit(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: ReceivableAuditUpdateInput) {
-    return this.service.updateReceivableAudit(request.user, id, body);
   }
 
   @Post('finance/receivable-audits/:id/audit')
@@ -144,19 +137,19 @@ export class FinanceReceivableController {
   }
 
   @Post('finance/receivable-audits/batch-audit')
-  @RequirePermission('finance:receivable:batch-audit')
+  @RequirePermission('finance:receivable:audit')
   async batchAuditReceivableAudits(@Req() request: { user: Principal }, @Body() body: ReceivableAuditBatchInput) {
     return this.service.batchAuditReceivableAudits(request.user, body);
   }
 
   @Post('finance/receivable-audits/batch-reverse-audit')
-  @RequirePermission('finance:receivable:batch-reverse')
+  @RequirePermission('finance:receivable:reverse')
   async batchReverseAuditReceivableAudits(@Req() request: { user: Principal }, @Body() body: ReceivableAuditBatchInput) {
     return this.service.batchReverseAuditReceivableAudits(request.user, body);
   }
 
   @Post('finance/receivable-audits/batch-void')
-  @RequirePermission('finance:receivable:batch-void')
+  @RequirePermission('finance:receivable:void')
   async batchVoidReceivableAudits(@Req() request: { user: Principal }, @Body() body: ReceivableAuditBatchInput) {
     return this.service.batchVoidReceivableAudits(request.user, body);
   }
@@ -168,7 +161,7 @@ export class FinanceReceivableController {
   }
 
   @Get('finance/receivable-audits/:id/water-receipt-candidates')
-  @RequirePermission(['finance:receivable:match-water', 'finance:water-match:receivable-view', 'finance:water-match:create'])
+  @RequirePermission('finance:water-match:create')
   async receivableWaterReceiptCandidates(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.waterReceiptAllocationService.listReceivableWaterReceiptCandidates(request.user, id);
   }
@@ -201,7 +194,7 @@ export class FinanceReceivableController {
   }
 
   @Put('finance/water-receipts/:id')
-  @RequirePermission(['finance:water-receipt:update', 'finance:water-receipt:arrived-update'])
+  @RequirePermission('finance:water-receipt:update')
   async updateWaterReceipt(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -221,13 +214,13 @@ export class FinanceReceivableController {
   }
 
   @Get('finance/water-receipts/:id/matchable-receivables')
-  @RequirePermission('finance:water-match:receivable-view')
+  @RequirePermission('finance:water-match:read')
   async waterReceiptMatchableReceivables(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.waterReceiptAllocationService.listWaterReceiptMatchableReceivables(request.user, id);
   }
 
   @Post('finance/water-receipts/:id/match-orders')
-  @RequirePermission('finance:water-receipt:match')
+  @RequirePermission('finance:water-match:create')
   async matchWaterReceiptOrders(
     @Req() request: { user: Principal },
     @Param('id') id: string,
@@ -269,7 +262,7 @@ export class FinanceReceivableController {
   }
 
   @Post('finance/water-receipts/export')
-  @RequirePermission('finance:water-receipt:export')
+  @RequirePermission(['finance:water-receipt:export', 'finance:water-match:export'])
   async exportWaterReceipts(@Req() request: { user: Principal }, @Body() body: WaterReceiptExportRequest) {
     return this.waterReceiptLifecycleService.export(request.user, body);
   }

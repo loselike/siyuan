@@ -30,6 +30,7 @@ import {
 } from '@siyuan/shared';
 import { formatBeijingDateTime } from '../shared/format';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
+import { getGlobalFieldMaskVisibility } from '../shared/globalFieldMask';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedDualViewTable, ManagedTable, MetricCard, renderNoticeBar, tenRowTablePagination, type ManagedTableColumns } from '../shared/ui';
@@ -60,6 +61,14 @@ export function lifecycleStatusColor(status: ShipmentStatus) {
 
 export function orderManagementStatusLabel(status: ShipmentStatus) {
   return status === 'WAITING_DISPATCH' ? '已排货' : shipmentStatusLabels[status];
+}
+
+export function resolveOrderManagementCurrentNode(
+  shipment: Pick<Shipment, 'status' | 'hasProblemTicket'>
+) {
+  return shipment.hasProblemTicket && !['PROBLEM', 'STUCK'].includes(shipment.status)
+    ? '有问题件'
+    : orderManagementStatusLabel(shipment.status);
 }
 
 export function canViewOrderManagementAgentWeight(
@@ -237,10 +246,11 @@ type OrderManagementFilters = {
   outboundOrderKeyword: string;
   site: string;
   salesperson: string;
+  node: string;
 };
 
 function createEmptyOrderManagementFilters(): OrderManagementFilters {
-  return { customerKeyword: '', outboundOrderKeyword: '', site: '', salesperson: '' };
+  return { customerKeyword: '', outboundOrderKeyword: '', site: '', salesperson: '', node: '' };
 }
 
 export function matchesOrderManagementFilters(shipment: Shipment, filters: OrderManagementFilters) {
@@ -252,7 +262,8 @@ export function matchesOrderManagementFilters(shipment: Shipment, filters: Order
   const outboundOrderKeyword = filters.outboundOrderKeyword.toLowerCase();
   if (outboundOrderKeyword && !resolveShipmentOutboundOrderNo(shipment).toLowerCase().includes(outboundOrderKeyword)) return false;
   if (filters.site && shipment.site?.trim() !== filters.site) return false;
-  return !filters.salesperson || shipment.salesperson?.trim() === filters.salesperson;
+  if (filters.salesperson && shipment.salesperson?.trim() !== filters.salesperson) return false;
+  return !filters.node || resolveOrderManagementCurrentNode(shipment) === filters.node;
 }
 
 
@@ -335,8 +346,18 @@ export function OrdersPage({
   role: import('../../apiClient').RoleKey;
 }) {
   const hasBusinessPermission = (permission: import('../../apiClient').PermissionKey) => role === 'ADMIN' || permissions.includes(permission);
-  const showAgentDetails = canViewOrderManagementAgentDetails(role, permissions);
-  const showAgentWeight = canViewOrderManagementAgentWeight(permissions);
+  const fieldVisibility = useMemo(() => getGlobalFieldMaskVisibility(role, permissions), [permissions, role]);
+  const canUploadInvoice = hasBusinessPermission('business:order-entry:invoice-upload');
+  const canViewOrderAi = hasBusinessPermission('business:order-ai:view');
+  const canViewAgentDetails = canViewOrderManagementAgentDetails(role, permissions);
+  const showAgentDetails = canViewAgentDetails && (fieldVisibility.showAgentShortName || fieldVisibility.showAgentChannel);
+  const showAgentShortName = canViewAgentDetails && fieldVisibility.showAgentShortName;
+  const showAgentChannel = canViewAgentDetails && fieldVisibility.showAgentChannel;
+  const canUseRoutingAgentFields = fieldVisibility.showAgentData
+    && fieldVisibility.showAgentCompanyName
+    && showAgentShortName
+    && showAgentChannel;
+  const showAgentWeight = canViewOrderManagementAgentWeight(permissions) && fieldVisibility.showAgentWeight;
   const [tableDensity, setTableDensity] = useState<OrderManagementDensity>('compact');
   const [downloadingInvoiceTemplateId, setDownloadingInvoiceTemplateId] = useState<string>();
   const [downloadingBusinessInvoiceId, setDownloadingBusinessInvoiceId] = useState<string>();
@@ -352,6 +373,13 @@ export function OrdersPage({
       .sort((left, right) => left.localeCompare(right, 'zh-CN'))
       .map((value) => ({ label: value, value }));
   }, [shipments]);
+  const nodeOptions = useMemo(() => {
+    const labels = new Set(
+      Object.values(shipmentStatusLabels).filter((label) => !['已预报', '待上网'].includes(label))
+    );
+    labels.add('有问题件');
+    return [...labels].map((value) => ({ label: value, value }));
+  }, []);
   const filteredShipments = useMemo(() => {
     return shipments.filter((shipment) => matchesOrderManagementFilters(shipment, appliedFilters));
   }, [appliedFilters, shipments]);
@@ -361,7 +389,8 @@ export function OrdersPage({
       customerKeyword: filterDraft.customerKeyword.trim(),
       outboundOrderKeyword: filterDraft.outboundOrderKeyword.trim(),
       site: filterDraft.site.trim(),
-      salesperson: filterDraft.salesperson.trim()
+      salesperson: filterDraft.salesperson.trim(),
+      node: filterDraft.node.trim()
     });
   };
   const resetFilters = () => {
@@ -417,23 +446,21 @@ export function OrdersPage({
       },
       {
         key: 'matrixRoute',
-        title: '路线与代理',
+        title: showAgentDetails ? '路线与代理' : '路线信息',
         width: showAgentDetails ? 210 : 180,
         className: `order-matrix-group-route${showAgentDetails ? '' : ' order-matrix-group-route-restricted'}`,
         render: (_, record, index) => renderOrderMatrixCell(matrixSourceColumns, [
           { key: 'destinationCountry', label: '目的地' },
           { key: 'channel', label: '公司渠道' },
-          ...(showAgentDetails ? [
-            { key: 'agentShortName', label: agentFieldLabels.shortName },
-            { key: 'agentChannel', label: agentFieldLabels.channel }
-          ] : [])
+          ...(showAgentShortName ? [{ key: 'agentShortName', label: agentFieldLabels.shortName }] : []),
+          ...(showAgentChannel ? [{ key: 'agentChannel', label: agentFieldLabels.channel }] : [])
         ], record, index, showAgentDetails ? {
-          agentShortName: <Text type={resolveOrderManagementAgentShortName(record, masterData.agents) === '-' ? 'secondary' : undefined}>
+          agentShortName: showAgentShortName ? <Text type={resolveOrderManagementAgentShortName(record, masterData.agents) === '-' ? 'secondary' : undefined}>
             {resolveOrderManagementAgentShortName(record, masterData.agents)}
-          </Text>,
-          agentChannel: <Text type={record.routeAgentChannelName ? undefined : 'secondary'}>
+          </Text> : null,
+          agentChannel: showAgentChannel ? <Text type={record.routeAgentChannelName ? undefined : 'secondary'}>
             {record.routeAgentChannelName || '-'}
-          </Text>
+          </Text> : null
         } : undefined)
       },
       {
@@ -490,7 +517,7 @@ export function OrdersPage({
         render: (_, record, index) => renderOrderColumnValue(matrixSourceColumns, 'actions', record, index)
       }
     ],
-    [formatPaymentSummary, masterData.agents, matrixSourceColumns, showAgentDetails, showAgentWeight]
+    [formatPaymentSummary, masterData.agents, matrixSourceColumns, showAgentChannel, showAgentDetails, showAgentShortName, showAgentWeight]
   );
   const tableDensityToolbar = (
     <Select<OrderManagementDensity>
@@ -565,10 +592,18 @@ export function OrdersPage({
   const orderSubItems = useMemo<ModuleSubNavItem[]>(
     () => [
       { key: 'stageBoard', label: '订单预览', description: '状态池与单票操作' },
-      { key: 'invoiceTasks', label: '待上传发票', description: '下载代理模板并上传业务发票' },
-      { key: 'aiAssistant', label: 'AI 订单助手', description: '风险识别与话术建议' }
+      ...(canUploadInvoice
+        && fieldVisibility.showAgentData
+        && fieldVisibility.showAgentShortName
+        && fieldVisibility.showAgentCompanyName
+        && fieldVisibility.showAgentChannel
+        ? [{ key: 'invoiceTasks', label: '待上传发票', description: '下载代理模板并上传业务发票' }]
+        : []),
+      ...(canViewOrderAi
+        ? [{ key: 'aiAssistant', label: 'AI 订单助手', description: '风险识别与话术建议' }]
+        : [])
     ],
-    []
+    [canUploadInvoice, canViewOrderAi, fieldVisibility.showAgentChannel, fieldVisibility.showAgentCompanyName, fieldVisibility.showAgentData, fieldVisibility.showAgentShortName]
   );
 
   const fulfillmentAdviceQueue = useMemo(
@@ -582,11 +617,14 @@ export function OrdersPage({
 
   const invoiceTaskShipments = useMemo(
     () =>
-      shipments.filter((shipment) =>
+      fieldVisibility.showAgentData
+        && fieldVisibility.showAgentShortName
+        && fieldVisibility.showAgentCompanyName
+        && fieldVisibility.showAgentChannel ? shipments.filter((shipment) =>
         Boolean(shipment.agentId || shipment.agentName)
         && !['DRAFT', 'REVIEW_PENDING', 'REVIEW_REJECTED', 'WAITING_RECEIVE', 'WAITING_SORT', 'CANCELLED'].includes(shipment.status)
-      ),
-    [shipments]
+      ) : [],
+    [fieldVisibility.showAgentChannel, fieldVisibility.showAgentCompanyName, fieldVisibility.showAgentData, fieldVisibility.showAgentShortName, shipments]
   );
 
   const invoiceColumns = useMemo<ColumnsType<Shipment>>(
@@ -719,6 +757,21 @@ export function OrdersPage({
                     </Button>
                   );
                 })}
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  aria-label="节点筛选"
+                  placeholder="节点筛选"
+                  className="fulfillment-board-node-filter"
+                  value={filterDraft.node || undefined}
+                  options={nodeOptions}
+                  onChange={(value) => {
+                    const node = value ?? '';
+                    setFilterDraft((current) => ({ ...current, node }));
+                    setAppliedFilters((current) => ({ ...current, node }));
+                  }}
+                />
               </div>
             </div>
             <ManagedDualViewTable
@@ -771,7 +824,12 @@ export function OrdersPage({
           </Card>
         ) : null}
 
-        {activeSection === 'invoiceTasks' && hasBusinessPermission('business:order-entry:invoice-upload') ? (
+        {activeSection === 'invoiceTasks'
+          && fieldVisibility.showAgentData
+          && fieldVisibility.showAgentShortName
+          && fieldVisibility.showAgentCompanyName
+          && fieldVisibility.showAgentChannel
+          && hasBusinessPermission('business:order-entry:invoice-upload') ? (
           <Card
             className="fulfillment-board-card"
             title={
@@ -1025,7 +1083,7 @@ export function OrdersPage({
 
       <Modal
         title="分配渠道"
-        open={Boolean(routingAssignmentShipment)}
+        open={Boolean(routingAssignmentShipment) && canUseRoutingAgentFields}
         destroyOnHidden
         okText="确认分配"
         cancelText="取消"
@@ -1033,13 +1091,13 @@ export function OrdersPage({
         onOk={() => void onConfirmRoutingAssignment().catch(() => undefined)}
         onCancel={onCancelRoutingAssignment}
       >
-        <Alert
+        {canUseRoutingAgentFields ? <Alert
           className="notice-bar"
           type="info"
           showIcon
           message="可从基础资料选择代理与发货渠道；如果手动输入新代理或新渠道，系统会先写入基础资料，再执行排货。"
-        />
-        <Form form={routingAssignmentForm} layout="vertical">
+        /> : null}
+        {canUseRoutingAgentFields ? <Form form={routingAssignmentForm} layout="vertical">
           <Row gutter={16}>
             <Col xs={24} md={12}>
               <Form.Item name="agentId" label="代理">
@@ -1084,7 +1142,7 @@ export function OrdersPage({
               </Form.Item>
             </Col>
           </Row>
-        </Form>
+        </Form> : null}
       </Modal>
 
       <Modal

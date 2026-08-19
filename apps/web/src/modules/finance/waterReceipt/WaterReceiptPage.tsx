@@ -378,15 +378,15 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
   const canMatch = !readOnlyMatching && hasPermission(permissions, 'finance:water-match:create');
   const canDeleteMatch = !readOnlyMatching && hasPermission(permissions, 'finance:water-match:cancel');
   const canAdjustMatch = !readOnlyMatching && hasPermission(permissions, 'finance:water-match:adjust');
-  const canViewMatchRecords = hasPermission(permissions, 'finance:water-match:receivable-view');
+  const canViewMatchRecords = hasPermission(permissions, 'finance:water-match:read');
   const isMatchReviewMode = matchPanelMode === 'manage';
   const canVoid = hasPermission(permissions, 'finance:water-receipt:void');
   const canArchive = hasPermission(permissions, 'finance:water-receipt:archive');
-  const canExport = hasPermission(permissions, 'finance:water-receipt:export');
+  const canExport = hasPermission(permissions, isMatchingMode ? 'finance:water-match:export' : 'finance:water-receipt:export');
   const canVoucher = hasPermission(permissions, 'finance:water-receipt:voucher-upload');
-  const canViewVoucher = hasPermission(permissions, 'finance:water-receipt:voucher-view') || canVoucher;
+  const canViewVoucher = hasPermission(permissions, 'finance:water-receipt:voucher-view');
+  const canDeleteVoucher = hasPermission(permissions, 'finance:water-receipt:voucher-delete');
   const canViewAll = hasPermission(permissions, 'finance:water-receipt:view-all');
-  const canArrivedEdit = hasPermission(permissions, 'finance:water-receipt:arrived-update');
   const editingAfterArrival = Boolean(editing && editing.status !== 'PENDING');
   const editingHasActiveMatches = Boolean(editing?.matches?.some((match) => !match.voided));
   const editingHasPendingAllocation = Number(editing?.pendingAllocatedAmount ?? 0) > 0;
@@ -939,8 +939,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
       width: 300,
       render: (_, row) => (
         <Space size={6}>
-          {((row.status === 'PENDING' && canManage)
-            || (row.status !== 'PENDING' && row.status !== 'VOIDED' && canArrivedEdit && canViewAll))
+          {(canManage && row.status !== 'VOIDED' && (row.status === 'PENDING' || canViewAll))
             ? <Button size="small" onClick={() => openEdit(row)}>编辑</Button>
             : null}
           {canArrive && row.status === 'PENDING' ? (
@@ -1008,7 +1007,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
         </Space>
       )
     }
-  ], [apiClient, arrivingIds, canArchive, canArrive, canArrivedEdit, canManage, canMatch, canViewAll, canViewMatchRecords, canViewVoucher, canVoid, canVoucher, isMatchingMode, load, renderShipmentOrderNoLink, voucherForm]);
+  ], [apiClient, arrivingIds, canArchive, canArrive, canManage, canMatch, canViewAll, canViewMatchRecords, canViewVoucher, canVoid, canVoucher, isMatchingMode, load, renderShipmentOrderNoLink, voucherForm]);
 
   const matrixColumns = useMemo<ManagedTableColumns<WaterReceiptSummary>>(() => [
     {
@@ -1478,7 +1477,7 @@ export function WaterReceiptPage({ mode = 'matching', apiClient, permissions, cu
             />
           </Form.Item>
           {!voucherRow?.voucher ? <Text type="secondary">暂无水单图片</Text> : null}
-          {voucherRow?.voucher ? <Popconfirm title="确认删除水单凭证？" onConfirm={() => void deleteVoucher()}><Button danger>删除图片</Button></Popconfirm> : null}
+          {voucherRow?.voucher && canDeleteVoucher ? <Popconfirm title="确认删除水单凭证？" onConfirm={() => void deleteVoucher()}><Button danger>删除图片</Button></Popconfirm> : null}
         </Form>
       </Modal>
 

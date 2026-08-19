@@ -49,7 +49,7 @@ export function PersonalCenterModal({
             </div>
             <div>
               <span>当前角色</span>
-              <Tag color={user.role === 'ADMIN' ? 'red' : 'blue'}>{getRoleDisplayName(user.role)}</Tag>
+              <Tag color={user.role === 'ADMIN' ? 'red' : 'blue'}>{getRoleDisplayName(user.role, user.roleLabel)}</Tag>
             </div>
           </div>
           <Form

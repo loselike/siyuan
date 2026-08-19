@@ -10,6 +10,7 @@ import { PayerBankAccountsPage } from './PayerBankAccountsPage';
 import { CustomerSourcesPage } from './CustomerSourcesPage';
 import { ModuleSubWorkspace, type ModuleSubNavItem } from '../shared/ModuleSubWorkspace';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
+import { getGlobalFieldMaskVisibility } from '../shared/globalFieldMask';
 import { AppActionGroup, AppDatePicker, AppPage, AppPageHeader, ManagedTable, MetricCard, renderFilterActions, renderFilterField, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import { formatBeijingDate, formatBeijingDateTime, formatBusinessDate } from '../shared/format';
 
@@ -320,6 +321,7 @@ export function MasterDataPage({
 }) {
   const summary = summarizeMasterDataSnapshot(masterData);
   const currentSalesperson = currentUser.username;
+  const fieldVisibility = getGlobalFieldMaskVisibility(currentUser.role, permissions);
   const [masterCustomerForm] = Form.useForm<MasterCustomerFormValues>();
   const watchedCustomerSource = Form.useWatch('customerSource', masterCustomerForm) ?? '';
   const [masterCustomerContactForm] = Form.useForm<MasterCustomerContactFormValues>();
@@ -392,10 +394,16 @@ export function MasterDataPage({
   const financeCatalog = useFinanceCatalog(apiClient, activeMasterSection === 'financeCatalog');
   const hasMasterPermission = (...keys: PermissionKey[]) => currentUser.role === 'ADMIN' || keys.some((key) => permissions.includes(key));
   const canReadCustomers = hasMasterPermission('master-data:customers:read');
-  const canWriteCustomers = hasMasterPermission('master-data:customers:create', 'master-data:customers:update');
+  const canCreateCustomers = hasMasterPermission('master-data:customers:create');
+  const canUpdateCustomers = hasMasterPermission('master-data:customers:update');
+  const canEnableCustomers = canUpdateCustomers;
+  const canDeleteCustomers = hasMasterPermission('master-data:customers:delete');
+  const canExportCustomers = hasMasterPermission('master-data:customers:export');
+  const canWriteCustomers = canCreateCustomers || canUpdateCustomers;
   const canDeleteCustomerSources = hasMasterPermission('master-data:customers:delete');
   const canManageCustomerContacts = hasMasterPermission('master-data:customers:contacts-manage');
-  const canAssignCustomerSalesperson = hasMasterPermission('master-data:customers:assign-salesperson');
+  const canDisableCustomerContacts = canManageCustomerContacts;
+  const canAssignCustomerSalesperson = canUpdateCustomers;
 
   useEffect(() => {
     if (initialSection) setActiveMasterSection(initialSection);
@@ -439,28 +447,83 @@ export function MasterDataPage({
     };
   }, [apiClient, canReadCustomers, masterCustomerOpen, onNotice]);
   const canReadFinanceCatalog = hasMasterPermission('master-data:finance:read');
-  const canWriteFinanceCatalog = hasMasterPermission('master-data:finance:fee-name:create', 'master-data:finance:fee-name:update', 'master-data:finance:settlement:create', 'master-data:finance:settlement:update');
-  const canReadPayerBanks = hasMasterPermission('master-data:payer-banks:read');
-  const canWritePayerBanks = hasMasterPermission('master-data:payer-banks:manage');
-  const canReadAgents = hasMasterPermission('master-data:agents:read');
-  const canWriteAgents = hasMasterPermission('master-data:agents:create', 'master-data:agents:update');
-  const canReadAgentChannels = hasMasterPermission('master-data:agent-channels:read');
-  const canWriteAgentChannels = hasMasterPermission('master-data:agent-channels:create', 'master-data:agent-channels:update');
+  const financeCatalogCapabilities = {
+    FEE_NAME: {
+      create: hasMasterPermission('master-data:finance:fee-name:create'),
+      update: hasMasterPermission('master-data:finance:fee-name:update'),
+      delete: hasMasterPermission('master-data:finance:fee-name:delete'),
+      reorder: hasMasterPermission('master-data:finance:fee-name:reorder')
+    },
+    SETTLEMENT_METHOD: {
+      create: hasMasterPermission('master-data:finance:settlement:create'),
+      update: hasMasterPermission('master-data:finance:settlement:update'),
+      delete: hasMasterPermission('master-data:finance:settlement:delete')
+    },
+    CARGO_TYPE: {
+      create: hasMasterPermission('master-data:finance:cargo-type:create'),
+      update: hasMasterPermission('master-data:finance:cargo-type:update'),
+      delete: hasMasterPermission('master-data:finance:cargo-type:delete')
+    },
+    PRODUCT_NAME: {
+      create: hasMasterPermission('master-data:finance:product-name:create'),
+      update: hasMasterPermission('master-data:finance:product-name:update'),
+      delete: hasMasterPermission('master-data:finance:product-name:delete')
+    }
+  } as const;
+  // 付款方银行资料属于公司付款信息，不应因为代理字段被屏蔽而
+  // 一并消失；它只受应付成本总规则和本模块权限控制。
+  const canReadPayerBanks = fieldVisibility.showPayableCost
+    && hasMasterPermission('master-data:payer-banks:read');
+  const canCreatePayerBanks = canReadPayerBanks && hasMasterPermission('master-data:payer-banks:create');
+  const canUpdatePayerBanks = canReadPayerBanks && hasMasterPermission('master-data:payer-banks:update');
+  const canDeletePayerBanks = canReadPayerBanks && hasMasterPermission('master-data:payer-banks:delete');
+  const canReadAgents = fieldVisibility.showAgentData
+    && hasMasterPermission('master-data:agents:read');
+  const canCreateAgents = canReadAgents
+    && fieldVisibility.showAgentShortName
+    && fieldVisibility.showAgentCompanyName
+    && hasMasterPermission('master-data:agents:create');
+  const canUpdateAgents = canReadAgents
+    && fieldVisibility.showAgentShortName
+    && fieldVisibility.showAgentCompanyName
+    && hasMasterPermission('master-data:agents:update');
+  const canDeleteAgents = canReadAgents && hasMasterPermission('master-data:agents:delete');
+  const canReadAgentChannels = fieldVisibility.showAgentData
+    && fieldVisibility.showAgentChannel
+    && hasMasterPermission('master-data:agent-channels:read');
+  const canCreateAgentChannels = canReadAgentChannels
+    && fieldVisibility.showAgentShortName
+    && hasMasterPermission('master-data:agent-channels:create');
+  const canUpdateAgentChannels = canReadAgentChannels
+    && fieldVisibility.showAgentShortName
+    && hasMasterPermission('master-data:agent-channels:update');
+  const canDeleteAgentChannels = canReadAgentChannels && hasMasterPermission('master-data:agent-channels:delete');
   const canReadChannels = hasMasterPermission('master-data:channels:read');
-  const canWriteChannels = hasMasterPermission('master-data:channels:create', 'master-data:channels:update');
-  const canManageChannelWarnings = hasMasterPermission('master-data:channels:weight-rule-manage');
-  const canManageChannelMinimumCharges = hasMasterPermission('master-data:channels:settlement-rule-manage');
+  const canCreateChannels = hasMasterPermission('master-data:channels:create');
+  const canUpdateChannels = hasMasterPermission('master-data:channels:update');
+  const canManageChannelWarnings = canUpdateChannels;
+  const canManageChannelMinimumCharges = canUpdateChannels;
   const canDeleteChannels = hasMasterPermission('master-data:channels:delete');
-  const canBatchDeleteChannels = hasMasterPermission('master-data:channels:batch-delete');
   const canReadChannelCategories = hasMasterPermission('master-data:channel-categories:read');
-  const canWriteChannelCategories = hasMasterPermission('master-data:channel-categories:create', 'master-data:channel-categories:update');
+  const canCreateChannelCategories = hasMasterPermission('master-data:channel-categories:create');
+  const canUpdateChannelCategories = hasMasterPermission('master-data:channel-categories:update');
+  const canDeleteChannelCategories = hasMasterPermission('master-data:channel-categories:delete');
   const canReadRemoteAreas = hasMasterPermission('master-data:remote-areas:read');
-  const canWriteRemoteAreas = hasMasterPermission('master-data:remote-areas:rule-manage');
+  const canUploadRemoteAreas = hasMasterPermission('master-data:remote-areas:file-upload');
+  const canDeleteRemoteAreas = hasMasterPermission('master-data:remote-areas:file-delete');
   const canReadExchangeRates = hasMasterPermission('master-data:exchange-rates:read');
-  const canWriteExchangeRates = hasMasterPermission('master-data:exchange-rates:create', 'master-data:exchange-rates:update');
+  const canCreateExchangeRates = hasMasterPermission('master-data:exchange-rates:create');
+  const canUpdateExchangeRates = hasMasterPermission('master-data:exchange-rates:update');
+  const canDisableExchangeRates = hasMasterPermission('master-data:exchange-rates:disable');
   const canReadAssistant = hasMasterPermission('master-data:assistant:read');
-  const canReadAgentBanks = hasMasterPermission('master-data:agents:bank-view');
-  const canWriteAgentBanks = hasMasterPermission('master-data:agents:bank-manage');
+  const canReadAgentBanks = canReadAgents
+    && fieldVisibility.showAgentData
+    && fieldVisibility.showAgentShortName
+    && fieldVisibility.showAgentCompanyName
+    && fieldVisibility.showAgentChannel
+    && fieldVisibility.showPayableCost;
+  const canCreateAgentBanks = canReadAgentBanks && canCreateAgents;
+  const canUpdateAgentBanks = canReadAgentBanks && canUpdateAgents;
   const normalizedWatchedCustomerSource = watchedCustomerSource.trim().toLocaleLowerCase('zh-CN');
   const watchedCustomerSourceExists = Boolean(normalizedWatchedCustomerSource)
     && customerSources.some((source) => source.enabled && source.normalizedName === normalizedWatchedCustomerSource);
@@ -590,34 +653,32 @@ export function MasterDataPage({
       fixed: 'right',
       render: (_value, record) => (
         <Space size={6}>
-          <Button size="small" type="link" disabled={!canWriteCustomers} onClick={(event) => { event.stopPropagation(); void handleEditMasterCustomer(record); }}>编辑</Button>
-          <Popconfirm
+          {canUpdateCustomers ? <Button size="small" type="link" onClick={(event) => { event.stopPropagation(); void handleEditMasterCustomer(record); }}>编辑</Button> : null}
+          {canEnableCustomers ? <Popconfirm
             title={`确认${record.enabled ? '停用' : '启用'}该客户？`}
             okText={`确认${record.enabled ? '停用' : '启用'}`}
             cancelText="取消"
             okButtonProps={{ danger: record.enabled }}
-            disabled={!canWriteCustomers}
             onConfirm={() => record.enabled ? handleDisableMasterCustomer(record) : handleEnableMasterCustomer(record)}
             destroyOnHidden
           >
-            <Button size="small" type="link" danger={record.enabled} disabled={!canWriteCustomers} onClick={(event) => event.stopPropagation()}>
+            <Button size="small" type="link" danger={record.enabled} onClick={(event) => event.stopPropagation()}>
               {record.enabled ? '停用' : '启用'}
             </Button>
-          </Popconfirm>
-          <Popconfirm
+          </Popconfirm> : null}
+          {canDeleteCustomers ? <Popconfirm
             title="删除客户资料"
             description="删除后不可恢复，请确认该客户无未完成运单、费用或收款记录。"
             okText="确认删除"
             cancelText="取消"
             okButtonProps={{ danger: true }}
-            disabled={!canWriteCustomers}
             onConfirm={() => handleDeleteMasterCustomer(record)}
             destroyOnHidden
           >
-            <Button size="small" type="link" danger disabled={!canWriteCustomers} onClick={(event) => event.stopPropagation()}>
+            <Button size="small" type="link" danger onClick={(event) => event.stopPropagation()}>
               删除
             </Button>
-          </Popconfirm>
+          </Popconfirm> : null}
         </Space>
       )
     }
@@ -638,39 +699,47 @@ export function MasterDataPage({
       fixed: 'right',
       render: (_value, record) => (
         <Space size={4}>
-          <Button size="small" type="link" disabled={!canWriteCustomers} onClick={() => handleEditMasterCustomerContact(record)}>
+          {canManageCustomerContacts ? <Button size="small" type="link" onClick={() => handleEditMasterCustomerContact(record)}>
             修改
-          </Button>
-          <Popconfirm
+          </Button> : null}
+          {canDisableCustomerContacts ? <Popconfirm
             title="确认停用该收货人？"
             okText="确认停用"
             cancelText="取消"
             okButtonProps={{ danger: true }}
-            disabled={!canWriteCustomers}
             onConfirm={() => void handleDisableMasterCustomerContact(record)}
             destroyOnHidden
           >
-            <Button size="small" type="link" danger disabled={!canWriteCustomers}>
+            <Button size="small" type="link" danger>
               停用
             </Button>
-          </Popconfirm>
+          </Popconfirm> : null}
         </Space>
       )
     }
   ];
   const agentRows = masterData.agents
-    .map((agent) => ({
-      ...agent,
-      code: agent.code ?? agent.name.toUpperCase().slice(0, 6),
-      shortName: agent.shortName ?? agent.name,
-      integrationType: agent.integrationType ?? 'MANUAL',
-      bankAccounts: sortAgentBanks(agentBankAccounts.filter((bank) => bank.enabled && matchesAgentBank(agent, bank))).slice(0, 3)
-    }))
-    .sort((left, right) => compareMasterCreatedAt(left.createdAt, right.createdAt) || left.name.localeCompare(right.name, 'zh-CN'));
+    .map((agent) => {
+      const visibleCompanyName = fieldVisibility.showAgentCompanyName ? agent.name : undefined;
+      const visibleShortName = fieldVisibility.showAgentShortName ? agent.shortName : undefined;
+      const code = agent.code
+        ?? visibleCompanyName?.toUpperCase().slice(0, 6)
+        ?? `AGENT-${agent.id.slice(0, 6).toUpperCase()}`;
+      return {
+        ...agent,
+        code,
+        name: visibleCompanyName ?? '',
+        shortName: visibleShortName ?? code,
+        integrationType: agent.integrationType ?? 'MANUAL',
+        bankAccounts: sortAgentBanks(agentBankAccounts.filter((bank) => bank.enabled && matchesAgentBank(agent, bank))).slice(0, 3)
+      };
+    })
+    .sort((left, right) => compareMasterCreatedAt(left.createdAt, right.createdAt)
+      || String(left.name ?? left.shortName ?? left.code).localeCompare(String(right.name ?? right.shortName ?? right.code), 'zh-CN'));
   const filteredAgentRows = agentRows.filter((agent) => {
-    const nameKeyword = appliedAgentFilters.name.trim().toLowerCase();
+    const nameKeyword = fieldVisibility.showAgentCompanyName ? appliedAgentFilters.name.trim().toLowerCase() : '';
     const codeKeyword = appliedAgentFilters.code.trim().toLowerCase();
-    const matchesName = !nameKeyword || `${agent.shortName} ${agent.name}`.toLowerCase().includes(nameKeyword);
+    const matchesName = !nameKeyword || String(agent.name ?? '').toLowerCase().includes(nameKeyword);
     const matchesCode = !codeKeyword || agent.code.toLowerCase().includes(codeKeyword);
     const matchesStatus =
       appliedAgentFilters.status === 'ALL' ||
@@ -682,8 +751,8 @@ export function MasterDataPage({
   const selectedAgent = selectedAgents.length === 1 ? selectedAgents[0] : null;
   const agentColumns: ColumnsType<(typeof agentRows)[number]> = [
     { title: '代理编码', dataIndex: 'code', width: 140, render: (value: string) => <Text strong>{value}</Text> },
-    { title: agentFieldLabels.shortName, dataIndex: 'shortName', width: 180, render: (value: string) => <Text strong>{value}</Text> },
-    { title: agentFieldLabels.detailedCompanyName, dataIndex: 'name', width: 220 },
+    ...(fieldVisibility.showAgentShortName ? [{ title: agentFieldLabels.shortName, dataIndex: 'shortName', width: 180, render: (value: string) => <Text strong>{value}</Text> }] : []),
+    ...(fieldVisibility.showAgentCompanyName ? [{ title: agentFieldLabels.detailedCompanyName, dataIndex: 'name', width: 220 }] : []),
     { title: '代理账期', dataIndex: 'settlementCycle', width: 130, render: (value?: AgentSummary['settlementCycle']) => settlementCycleLabel(value) },
     { title: '创建时间', dataIndex: 'createdAt', width: 170, render: (value?: string) => formatMasterDateTime(value) },
     { title: '仓库地址一', dataIndex: 'warehouseAddress1', width: 220, render: (value?: string) => value || '-' },
@@ -770,7 +839,7 @@ export function MasterDataPage({
   }, [remoteAreaFiles]);
 
   async function handleRemoteAreaFile(rule: string, file: File, source: RemoteAreaAttachment['source']) {
-    if (!canWriteRemoteAreas) return;
+    if (!canUploadRemoteAreas) return;
     if (!isRemoteAreaFile(file)) {
       onNotice?.('仅支持 xls、xlsx、csv 或图片');
       return;
@@ -816,8 +885,8 @@ export function MasterDataPage({
   });
   const selectedAgentChannel = agentChannelRows.find((channel) => channel.id === selectedAgentChannelId) ?? null;
   const agentChannelColumns: ColumnsType<(typeof agentChannelRows)[number]> = [
-    { title: agentFieldLabels.shortName, dataIndex: 'agentName', width: 220, render: (value: string) => <Text strong>{value}</Text> },
-    { title: '渠道名称', dataIndex: 'channelName' },
+    ...(fieldVisibility.showAgentShortName ? [{ title: agentFieldLabels.shortName, dataIndex: 'agentName', width: 220, render: (value: string) => <Text strong>{value}</Text> }] : []),
+    ...(fieldVisibility.showAgentChannel ? [{ title: '渠道名称', dataIndex: 'channelName' }] : []),
     { title: '状态', dataIndex: 'enabled', width: 90, render: (enabled: boolean) => <Tag color={enabled ? 'green' : 'default'}>{enabled ? '启用' : '停用'}</Tag> }
   ];
   const companyChannelRows = masterData.channels.map((channel) => ({
@@ -844,11 +913,7 @@ export function MasterDataPage({
   const selectedCompanyChannel = selectedCompanyChannelIds.length === 1
     ? companyChannelRows.find((channel) => channel.id === selectedCompanyChannelIds[0]) ?? null
     : null;
-  const canDeleteSelectedCompanyChannels = selectedCompanyChannelIds.length > 0 && (
-    selectedCompanyChannelIds.length === 1
-      ? canDeleteChannels || canBatchDeleteChannels
-      : canBatchDeleteChannels
-  );
+  const canDeleteSelectedCompanyChannels = selectedCompanyChannelIds.length > 0 && canDeleteChannels;
   const enabledCompanyChannelCategoryOptions = masterData.channelCategories.filter((category) => category.enabled).map((category) => category.name);
   const companyChannelCategoryFilterOptions = Array.from(new Set([...enabledCompanyChannelCategoryOptions, ...companyChannelRows.map((channel) => channel.category)].filter(Boolean)));
   const companyChannelCategoryFormOptions = Array.from(new Set([...enabledCompanyChannelCategoryOptions, editingMasterCompanyChannel?.category].filter(Boolean)));
@@ -883,7 +948,7 @@ export function MasterDataPage({
         const files = remoteAreaFiles.filter((file) => file.rule === rule);
         return (
           <Space direction="vertical" size={8} className="full-width" onPaste={(event) => handleRemoteAreaPaste(rule, event)}>
-            {canWriteRemoteAreas ? (
+            {canUploadRemoteAreas ? (
               <Upload
                 accept=".xls,.xlsx,.csv,image/*"
                 showUploadList={false}
@@ -900,7 +965,7 @@ export function MasterDataPage({
                 <a href={file.url} target="_blank" rel="noreferrer">{file.fileName}</a>
                 <Tag>{formatFileSize(file.sizeBytes)}</Tag>
                 <Tag>{file.source === 'paste' ? '粘贴' : '上传'}</Tag>
-                {canWriteRemoteAreas ? <Button size="small" onClick={() => setRemoteAreaFiles((current) => current.filter((item) => item.id !== file.id))}>删除</Button> : null}
+                {canDeleteRemoteAreas ? <Button size="small" onClick={() => setRemoteAreaFiles((current) => current.filter((item) => item.id !== file.id))}>删除</Button> : null}
               </Space>
             )) : <Text type="secondary">-</Text>}
           </Space>
@@ -945,22 +1010,21 @@ export function MasterDataPage({
       width: 150,
       render: (_value, record) => (
         <Space size={8}>
-          <Button size="small" type="link" disabled={!canWriteExchangeRates} onClick={() => openEditMasterExchangeRate(record)}>
+          {canUpdateExchangeRates ? <Button size="small" type="link" onClick={() => openEditMasterExchangeRate(record)}>
             修改
-          </Button>
-          <Popconfirm
+          </Button> : null}
+          {canDisableExchangeRates ? <Popconfirm
             title="确认停用该汇率？"
             okText="确认停用"
             cancelText="取消"
             okButtonProps={{ danger: true }}
-            disabled={!canWriteExchangeRates}
             onConfirm={() => void handleDisableMasterExchangeRate(record)}
             destroyOnHidden
           >
-            <Button size="small" type="link" danger disabled={!canWriteExchangeRates}>
+            <Button size="small" type="link" danger>
               停用
             </Button>
-          </Popconfirm>
+          </Popconfirm> : null}
         </Space>
       )
     }
@@ -1349,7 +1413,7 @@ export function MasterDataPage({
       onNotice(error instanceof Error ? error.message : '代理资料保存失败');
       return;
     }
-    if (canWriteAgentBanks) {
+    if (editingMasterAgent ? canUpdateAgentBanks : canCreateAgentBanks) {
       const savedBanks: AgentBankAccountSummary[] = [];
       const existingEditableBanks = editingMasterAgent
         ? sortAgentBanks(agentBankAccounts.filter((bank) => matchesAgentBank(editingMasterAgent, bank))).slice(0, MAX_AGENT_BANK_ACCOUNTS)
@@ -1700,7 +1764,7 @@ export function MasterDataPage({
     <AppPage>
       <AppPageHeader
         title="基础资料库"
-        description="按手册维护客户资料和代理资料，支持查询、增删改和列表设置。"
+        description={fieldVisibility.showAgentData ? '按手册维护客户资料和代理资料，支持查询、增删改和列表设置。' : '按手册维护客户资料，支持查询、增删改和列表设置。'}
         actions={
           <AppActionGroup>
             <Button
@@ -1711,7 +1775,7 @@ export function MasterDataPage({
                 onAiAssist({
                   module: '基础资料',
                   task: '资料体检',
-                  prompt: '请检查客户资料和代理资料的完整性，输出缺失项和处理顺序。',
+                  prompt: fieldVisibility.showAgentData ? '请检查客户资料和代理资料的完整性，输出缺失项和处理顺序。' : '请检查客户资料的完整性，输出缺失项和处理顺序。',
                   context: { masterData }
                 })
               }
@@ -1745,7 +1809,7 @@ export function MasterDataPage({
             <MetricCard icon={<Users />} title="客户资料" value={summary.enabledCustomers} extra="业务员归属、客户编号、客户名称、结算方式" />
           </Col>
           <Col xs={24} md={8}>
-            <MetricCard icon={<Route />} title="代理资料" value={summary.enabledAgents} extra={`${summary.enabledChannels} 条渠道 / ${summary.enabledCarriers} 个承运商`} />
+            {canReadAgents ? <MetricCard icon={<Route />} title="代理资料" value={summary.enabledAgents} extra={`${summary.enabledChannels} 条渠道 / ${summary.enabledCarriers} 个承运商`} /> : null}
           </Col>
           <Col xs={24} md={8}>
             <MetricCard icon={<FileText />} title="费用/汇率" value={summary.enabledSurcharges} extra={`${summary.activeExchangeRates} 条启用汇率`} />
@@ -1769,13 +1833,16 @@ export function MasterDataPage({
               {...financeCatalog.pageProps}
               title="财务资料"
               pagination={tenRowTablePagination}
-              canWrite={canWriteFinanceCatalog}
+              canWrite={Object.values(financeCatalogCapabilities).some((capability) => Object.values(capability).some(Boolean))}
+              capabilities={financeCatalogCapabilities}
             />
           ) : null}
           {activeMasterSection === 'payerBanks' ? (
             <PayerBankAccountsPage
               apiClient={apiClient}
-              canWrite={canWritePayerBanks}
+              canCreate={canCreatePayerBanks}
+              canUpdate={canUpdatePayerBanks}
+              canDelete={canDeletePayerBanks}
               onNotice={onNotice}
             />
           ) : null}
@@ -1853,7 +1920,7 @@ export function MasterDataPage({
                           <Button
                             type="primary"
                             aria-label={editingMasterExchangeRate ? '保存修改历史汇率' : '新增历史汇率'}
-                            disabled={!canWriteExchangeRates}
+                            disabled={editingMasterExchangeRate ? !canUpdateExchangeRates : !canCreateExchangeRates}
                             onClick={() => void handleSubmitMasterExchangeRate()}
                           >
                             {editingMasterExchangeRate ? '保存修改' : '新增'}
@@ -1916,26 +1983,26 @@ export function MasterDataPage({
                 </Col>
               </Row>
               <Space wrap className="surface-strip">
-                <Button size="small" aria-label="新增渠道类别" disabled={!canWriteChannelCategories} onClick={() => void handleCreateMasterChannelCategory()}>
+                {canCreateChannelCategories ? <Button size="small" aria-label="新增渠道类别" onClick={() => void handleCreateMasterChannelCategory()}>
                   新增
-                </Button>
-                <Button size="small" aria-label="修改渠道类别" disabled={!selectedChannelCategory || !canWriteChannelCategories} onClick={() => selectedChannelCategory && void handleEditMasterChannelCategory(selectedChannelCategory)}>
+                </Button> : null}
+                {canUpdateChannelCategories ? <Button size="small" aria-label="修改渠道类别" disabled={!selectedChannelCategory} onClick={() => selectedChannelCategory && void handleEditMasterChannelCategory(selectedChannelCategory)}>
                   修改
-                </Button>
-                <Popconfirm
+                </Button> : null}
+                {canDeleteChannelCategories ? <Popconfirm
                   title="确认删除该渠道类别？"
                   description="删除后不可恢复；已被公司渠道引用时不能删除。"
                   okText="确认删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
-                  disabled={!selectedChannelCategory || !canWriteChannelCategories}
+                  disabled={!selectedChannelCategory}
                   destroyOnHidden
                   onConfirm={() => selectedChannelCategory && handleDeleteMasterChannelCategory(selectedChannelCategory)}
                 >
-                  <Button size="small" aria-label="删除渠道类别" disabled={!selectedChannelCategory || !canWriteChannelCategories}>
+                  <Button size="small" aria-label="删除渠道类别" disabled={!selectedChannelCategory}>
                     删除
                   </Button>
-                </Popconfirm>
+                </Popconfirm> : null}
               </Space>
               <ManagedTable
                 recordDetail={{ title: '渠道类别详情' }}
@@ -2030,13 +2097,13 @@ export function MasterDataPage({
                 </Col>
               </Row>
               <Space wrap className="surface-strip">
-                <Button size="small" aria-label="增加公司渠道" disabled={!canWriteChannels} onClick={() => void handleCreateMasterCompanyChannel()}>
+                {canCreateChannels ? <Button size="small" aria-label="增加公司渠道" onClick={() => void handleCreateMasterCompanyChannel()}>
                   增加
-                </Button>
-                <Button size="small" aria-label="修改公司渠道" disabled={!selectedCompanyChannel || !canWriteChannels} onClick={() => selectedCompanyChannel && void handleEditMasterCompanyChannel(selectedCompanyChannel)}>
+                </Button> : null}
+                {canUpdateChannels ? <Button size="small" aria-label="修改公司渠道" disabled={!selectedCompanyChannel} onClick={() => selectedCompanyChannel && void handleEditMasterCompanyChannel(selectedCompanyChannel)}>
                   修改
-                </Button>
-                <Popconfirm
+                </Button> : null}
+                {canDeleteChannels ? <Popconfirm
                   title={`确认删除已选 ${selectedCompanyChannelIds.length} 条公司渠道？`}
                   description="删除后将从当前资料和新业务选项中移除；已有运单、报价规则和燃油费率历史不会被级联删除。"
                   okText="确认删除"
@@ -2049,7 +2116,7 @@ export function MasterDataPage({
                   <Button size="small" aria-label="删除公司渠道" disabled={!canDeleteSelectedCompanyChannels}>
                     删除
                   </Button>
-                </Popconfirm>
+                </Popconfirm> : null}
               </Space>
               <ManagedTable
                 recordDetail={{ title: '公司渠道详情' }}
@@ -2070,11 +2137,11 @@ export function MasterDataPage({
             </Space>
           </Card>
           ) : null}
-          {activeMasterSection === 'agentChannels' ? (
+          {activeMasterSection === 'agentChannels' && canReadAgentChannels ? (
           <Card className="module-grid" title="代理渠道">
             <Space direction="vertical" size={12} className="ai-list">
               <Row gutter={[10, 10]} className="module-filter-grid">
-                <Col xs={24} md={8} xl={5}>
+                {fieldVisibility.showAgentShortName ? <Col xs={24} md={8} xl={5}>
                   {renderFilterField(agentFieldLabels.shortName, (
                     <select
                       aria-label={`${agentFieldLabels.shortName}筛选`}
@@ -2088,7 +2155,7 @@ export function MasterDataPage({
                       ))}
                     </select>
                   ))}
-                </Col>
+                </Col> : null}
                 <Col xs={24} md={8} xl={5}>
                   {renderFilterField('渠道名称', (
                     <Input
@@ -2124,26 +2191,26 @@ export function MasterDataPage({
                 </Col>
               </Row>
               <Space wrap className="surface-strip">
-                <Button size="small" aria-label="增加代理渠道" disabled={!canWriteAgentChannels || agentRows.length === 0} onClick={() => void handleCreateMasterAgentChannel()}>
+                {canCreateAgentChannels ? <Button size="small" aria-label="增加代理渠道" disabled={agentRows.length === 0} onClick={() => void handleCreateMasterAgentChannel()}>
                   增加
-                </Button>
-                <Button size="small" aria-label="修改代理渠道" disabled={!selectedAgentChannel || !canWriteAgentChannels} onClick={() => selectedAgentChannel && void handleEditMasterAgentChannel(selectedAgentChannel)}>
+                </Button> : null}
+                {canUpdateAgentChannels ? <Button size="small" aria-label="修改代理渠道" disabled={!selectedAgentChannel} onClick={() => selectedAgentChannel && void handleEditMasterAgentChannel(selectedAgentChannel)}>
                   修改
-                </Button>
-                <Popconfirm
+                </Button> : null}
+                {canDeleteAgentChannels ? <Popconfirm
                   title="确认删除该代理渠道？"
                   description="删除后不可恢复。"
                   okText="确认删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
-                  disabled={!selectedAgentChannel || !canWriteAgentChannels}
+                  disabled={!selectedAgentChannel}
                   destroyOnHidden
                   onConfirm={() => selectedAgentChannel && handleDeleteMasterAgentChannel(selectedAgentChannel)}
                 >
-                  <Button size="small" aria-label="删除代理渠道" disabled={!selectedAgentChannel || !canWriteAgentChannels}>
+                  <Button size="small" aria-label="删除代理渠道" disabled={!selectedAgentChannel}>
                     删除
                   </Button>
-                </Popconfirm>
+                </Popconfirm> : null}
               </Space>
               <ManagedTable
                 recordDetail={{ title: '代理渠道详情' }}
@@ -2180,15 +2247,15 @@ export function MasterDataPage({
               }
               extra={
                 <Space wrap>
-                  <Button type="primary" icon={<Plus size={16} />} aria-label="增加客户" disabled={!canWriteCustomers} onClick={() => void handleCreateMasterCustomer()}>
+                  {canCreateCustomers ? <Button type="primary" icon={<Plus size={16} />} aria-label="增加客户" onClick={() => void handleCreateMasterCustomer()}>
                     新增客户
-                  </Button>
+                  </Button> : null}
                   <Button icon={<UploadIcon size={16} />} onClick={() => onNotice('客户导入请使用当前模板整理后导入')}>
                     导入
                   </Button>
-                  <Button icon={<Download size={16} />} onClick={exportCustomers}>
+                  {canExportCustomers ? <Button icon={<Download size={16} />} onClick={exportCustomers}>
                     导出
-                  </Button>
+                  </Button> : null}
                   <Button icon={<Settings size={16} />} aria-label="客户列表设置" onClick={() => setCustomerListSettingOpen(true)}>
                     列表设置
                   </Button>
@@ -2244,19 +2311,19 @@ export function MasterDataPage({
                 </div>
                 <div className="customer-master-batch">
                   <Text>已选择 {selectedCustomerIds.length} 项</Text>
-                  <Button icon={<Edit size={15} />} disabled={!selectedCustomerForAction || !canWriteCustomers} onClick={() => selectedCustomerForAction && void handleEditMasterCustomer(selectedCustomerForAction)}>
+                  {canUpdateCustomers ? <Button icon={<Edit size={15} />} disabled={!selectedCustomerForAction} onClick={() => selectedCustomerForAction && void handleEditMasterCustomer(selectedCustomerForAction)}>
                     修改
-                  </Button>
-                  <Popconfirm
+                  </Button> : null}
+                  {canEnableCustomers ? <Popconfirm
                     title={`确认${selectedCustomerForAction?.enabled === false ? '启用' : '停用'}该客户？`}
                     description={selectedCustomerForAction?.enabled === false ? '启用后可重新用于业务下单。' : '停用保留历史记录，不影响既有业务数据。'}
                     okText={`确认${selectedCustomerForAction?.enabled === false ? '启用' : '停用'}`}
                     cancelText="取消"
                     okButtonProps={{ danger: selectedCustomerForAction?.enabled !== false }}
-                    disabled={!selectedCustomerForAction || !canWriteCustomers}
+                    disabled={!selectedCustomerForAction}
                     destroyOnHidden
                     open={customerDisableConfirmOpen}
-                    onOpenChange={(open) => setCustomerDisableConfirmOpen(Boolean(selectedCustomerForAction && canWriteCustomers && open))}
+                    onOpenChange={(open) => setCustomerDisableConfirmOpen(Boolean(selectedCustomerForAction && canEnableCustomers && open))}
                     onConfirm={async () => {
                       if (selectedCustomerForAction) {
                         await (selectedCustomerForAction.enabled ? handleDisableMasterCustomer(selectedCustomerForAction) : handleEnableMasterCustomer(selectedCustomerForAction));
@@ -2265,24 +2332,24 @@ export function MasterDataPage({
                     }}
                     onCancel={() => setCustomerDisableConfirmOpen(false)}
                   >
-                    <Button icon={<Power size={15} />} danger={selectedCustomerForAction?.enabled !== false} disabled={!selectedCustomerForAction || !canWriteCustomers}>
+                    <Button icon={<Power size={15} />} danger={selectedCustomerForAction?.enabled !== false} disabled={!selectedCustomerForAction}>
                       {selectedCustomerForAction?.enabled === false ? '启用' : '停用'}
                     </Button>
-                  </Popconfirm>
-                  <Popconfirm
+                  </Popconfirm> : null}
+                  {canDeleteCustomers ? <Popconfirm
                     title="删除客户资料"
                     description="删除后不可恢复，请确认该客户无未完成运单、费用或收款记录。"
                     okText="确认删除"
                     cancelText="取消"
                     okButtonProps={{ danger: true }}
-                    disabled={!selectedCustomerForAction || !canWriteCustomers}
+                    disabled={!selectedCustomerForAction}
                     onConfirm={() => selectedCustomerForAction ? handleDeleteMasterCustomer(selectedCustomerForAction) : undefined}
                     destroyOnHidden
                   >
-                    <Button icon={<Trash2 size={15} />} danger aria-label="删除客户" disabled={!selectedCustomerForAction || !canWriteCustomers}>
+                    <Button icon={<Trash2 size={15} />} danger aria-label="删除客户" disabled={!selectedCustomerForAction}>
                       删除
                     </Button>
-                  </Popconfirm>
+                  </Popconfirm> : null}
                 </div>
                 <ManagedTable
                   recordDetail={false}
@@ -2361,15 +2428,15 @@ export function MasterDataPage({
                   <div className="customer-detail-section">
                     <Flex justify="space-between" align="center">
                       <Text strong>收货信息</Text>
-                      <Button
+                      {canManageCustomerContacts ? <Button
                         size="small"
                         type="text"
                         icon={<Plus size={14} />}
                         aria-label="新增收货人"
                         title="新增收货人"
-                        disabled={!selectedCustomer || !canManageCustomerContacts || selectedCustomerContacts.length >= 4}
+                        disabled={!selectedCustomer || selectedCustomerContacts.length >= 4}
                         onClick={() => void handleOpenMasterCustomerContact()}
-                      />
+                      /> : null}
                     </Flex>
                     <ManagedTable
                       recordDetail={false}
@@ -2384,22 +2451,21 @@ export function MasterDataPage({
                     />
                   </div>
                   <Flex gap={10} justify="flex-end" className="customer-detail-actions">
-                    <Button onClick={() => void handleEditMasterCustomer(selectedCustomer)} disabled={!canWriteCustomers}>编辑客户</Button>
-                    <Button danger disabled={!canWriteCustomers} onClick={() => selectedCustomer.enabled ? void handleDisableMasterCustomer(selectedCustomer) : void handleEnableMasterCustomer(selectedCustomer)}>
+                    {canUpdateCustomers ? <Button onClick={() => void handleEditMasterCustomer(selectedCustomer)}>编辑客户</Button> : null}
+                    {canEnableCustomers ? <Button danger onClick={() => selectedCustomer.enabled ? void handleDisableMasterCustomer(selectedCustomer) : void handleEnableMasterCustomer(selectedCustomer)}>
                       {selectedCustomer.enabled ? '停用' : '启用'}
-                    </Button>
-                    <Popconfirm
+                    </Button> : null}
+                    {canDeleteCustomers ? <Popconfirm
                       title="删除客户资料"
                       description="删除后不可恢复，请确认该客户无未完成运单、费用或收款记录。"
                       okText="确认删除"
                       cancelText="取消"
                       okButtonProps={{ danger: true }}
                       onConfirm={() => handleDeleteMasterCustomer(selectedCustomer)}
-                      disabled={!canWriteCustomers}
                       destroyOnHidden
                     >
-                      <Button danger type="primary" disabled={!canWriteCustomers}>删除</Button>
-                    </Popconfirm>
+                      <Button danger type="primary">删除</Button>
+                    </Popconfirm> : null}
                   </Flex>
                 </Space>
               ) : null}
@@ -2422,12 +2488,12 @@ export function MasterDataPage({
           </div>
           ) : null}
 
-          {activeMasterSection === 'agents' ? (
+          {activeMasterSection === 'agents' && canReadAgents ? (
           <Card className="module-grid" title="代理资料">
             <Space direction="vertical" size={8} className="ai-list master-agent-stack">
               <div className="master-agent-command-bar">
                 <Row gutter={[10, 10]} className="module-filter-grid master-agent-filter-grid">
-                  <Col xs={24} md={9} xl={7}>
+                  {fieldVisibility.showAgentCompanyName ? <Col xs={24} md={9} xl={7}>
                   {renderFilterField(agentFieldLabels.detailedCompanyName, (
                     <Input
                       aria-label={`${agentFieldLabels.detailedCompanyName}筛选`}
@@ -2435,7 +2501,7 @@ export function MasterDataPage({
                       onChange={(event) => setAgentFilters((current) => ({ ...current, name: event.target.value }))}
                     />
                   ))}
-                  </Col>
+                  </Col> : null}
                   <Col xs={24} md={7} xl={5}>
                   {renderFilterField('状态', (
                     <select
@@ -2462,31 +2528,31 @@ export function MasterDataPage({
                   </Col>
                 </Row>
                 <Space wrap size={8} className="master-agent-actions">
-                <Button size="small" aria-label="增加代理" disabled={!canWriteAgents} onClick={() => void handleCreateMasterAgent()}>
+                {canCreateAgents ? <Button size="small" aria-label="增加代理" onClick={() => void handleCreateMasterAgent()}>
                   增加
-                </Button>
-                <Button size="small" aria-label="修改代理" disabled={!selectedAgent || selectedAgentIds.length !== 1 || !canWriteAgents} onClick={() => selectedAgent && void handleEditMasterAgent(selectedAgent)}>
+                </Button> : null}
+                {canUpdateAgents ? <Button size="small" aria-label="修改代理" disabled={!selectedAgent || selectedAgentIds.length !== 1} onClick={() => selectedAgent && void handleEditMasterAgent(selectedAgent)}>
                   修改
-                </Button>
-                <Popconfirm
+                </Button> : null}
+                {canDeleteAgents ? <Popconfirm
                   title="是否确认删除？"
                   okText="确认删除"
                   cancelText="取消"
                   okButtonProps={{ danger: true }}
-                  disabled={!selectedAgentIds.length || !canWriteAgents}
+                  disabled={!selectedAgentIds.length}
                   destroyOnHidden
                   open={agentDisableConfirmOpen}
-                  onOpenChange={(open) => setAgentDisableConfirmOpen(Boolean(selectedAgentIds.length && canWriteAgents && open))}
+                  onOpenChange={(open) => setAgentDisableConfirmOpen(Boolean(selectedAgentIds.length && canDeleteAgents && open))}
                   onConfirm={async () => {
                     await handleDeleteSelectedMasterAgents();
                     setAgentDisableConfirmOpen(false);
                   }}
                   onCancel={() => setAgentDisableConfirmOpen(false)}
                 >
-                  <Button size="small" aria-label="删除代理" disabled={!selectedAgentIds.length || !canWriteAgents}>
+                  <Button size="small" aria-label="删除代理" disabled={!selectedAgentIds.length}>
                     删除
                   </Button>
-                </Popconfirm>
+                </Popconfirm> : null}
                 </Space>
               </div>
               <ManagedTable
@@ -2527,7 +2593,7 @@ export function MasterDataPage({
             <Space direction="vertical" size={12} className="quality-panel">
               <Tag color="blue">硅基流动</Tag>
               <Alert type="info" showIcon message="客户联系人缺手机号时提醒客服补齐" />
-              <Alert type="warning" showIcon message="代理 API 对接预留不需要填写真实 key" />
+              {fieldVisibility.showAgentData ? <Alert type="warning" showIcon message="代理 API 对接预留不需要填写真实 key" /> : null}
               <Alert type="warning" showIcon message="汇率超过 24 小时未更新时提示复核" />
               <Alert type="info" showIcon message="模板权限变更写入 audit_logs" />
             </Space>
@@ -2762,7 +2828,7 @@ export function MasterDataPage({
       </Modal>
       <Modal
         title={editingMasterAgentChannel ? '编辑代理渠道' : '新建代理渠道'}
-        open={masterAgentChannelOpen}
+        open={masterAgentChannelOpen && canReadAgentChannels}
         destroyOnHidden
         okText={editingMasterAgentChannel ? '保存代理渠道' : '创建代理渠道'}
         cancelText="取消"
@@ -3046,7 +3112,7 @@ export function MasterDataPage({
       </Modal>
       <Modal
         title={editingMasterAgent ? '编辑代理' : '新建代理'}
-        open={masterAgentOpen}
+        open={masterAgentOpen && canReadAgents}
         destroyOnHidden
         okText={editingMasterAgent ? '保存代理' : '创建代理'}
         cancelText="取消"
@@ -3191,20 +3257,22 @@ export function MasterDataPage({
                         extra={
                           <Space size={4}>
                             <Text type="secondary">{`${fields.length}/${MAX_AGENT_BANK_ACCOUNTS}`}</Text>
-                            <Button
+                            {canCreateAgentBanks ? <Button
                               aria-label="新增收款银行账户"
-                              disabled={!canWriteAgentBanks || fields.length >= MAX_AGENT_BANK_ACCOUNTS}
+                              disabled={fields.length >= MAX_AGENT_BANK_ACCOUNTS}
                               icon={<Plus size={16} />}
                               onClick={() => add({ currency: 'RMB', enabled: 'true' })}
                               size="small"
                               type="text"
-                            />
+                            /> : null}
                           </Space>
                         }
                       >
                         <Space className="full-width" direction="vertical" size={12}>
-                          {fields.map((field, index) => (
-                            <Card
+                          {fields.map((field, index) => {
+                            const bankAccountId = masterAgentForm.getFieldValue(['bankAccounts', field.name, 'id']);
+                            const canWriteBankAccount = bankAccountId ? canUpdateAgentBanks : canCreateAgentBanks;
+                            return <Card
                               key={field.key}
                               size="small"
                               title={fields.length === 1 ? '收款银行账户' : `收款银行账户${agentItemOrdinals[index]}`}
@@ -3212,7 +3280,7 @@ export function MasterDataPage({
                                 <Button
                                   aria-label={`删除收款银行账户${agentItemOrdinals[index]}`}
                                   danger
-                                  disabled={!canWriteAgentBanks}
+                                  disabled={!canWriteBankAccount}
                                   icon={<Trash2 size={15} />}
                                   onClick={() => remove(field.name)}
                                   size="small"
@@ -3226,22 +3294,22 @@ export function MasterDataPage({
                               <Row gutter={12}>
                                 <Col xs={24} md={8}>
                                   <Form.Item name={[field.name, 'accountName']} label="收款方">
-                                    <Input disabled={!canWriteAgentBanks} placeholder="例如 深圳市鲸链国际物流有限公司" />
+                                    <Input disabled={!canWriteBankAccount} placeholder="例如 深圳市鲸链国际物流有限公司" />
                                   </Form.Item>
                                 </Col>
                                 <Col xs={24} md={8}>
                                   <Form.Item name={[field.name, 'bankName']} label="开户银行">
-                                    <Input disabled={!canWriteAgentBanks} placeholder="例如 招商银行深圳福永支行" />
+                                    <Input disabled={!canWriteBankAccount} placeholder="例如 招商银行深圳福永支行" />
                                   </Form.Item>
                                 </Col>
                                 <Col xs={24} md={8}>
                                   <Form.Item name={[field.name, 'bankAccountNo']} label="银行账号">
-                                    <Input disabled={!canWriteAgentBanks} placeholder="例如 755972950810001" />
+                                    <Input disabled={!canWriteBankAccount} placeholder="例如 755972950810001" />
                                   </Form.Item>
                                 </Col>
                                 <Col xs={24} md={8}>
                                   <Form.Item name={[field.name, 'currency']} label="币种">
-                                    <select aria-label={`收款银行账户${index + 1}币种`} className="native-select" disabled={!canWriteAgentBanks}>
+                                    <select aria-label={`收款银行账户${index + 1}币种`} className="native-select" disabled={!canWriteBankAccount}>
                                       <option value="RMB">RMB</option>
                                       <option value="USD">USD</option>
                                     </select>
@@ -3249,7 +3317,7 @@ export function MasterDataPage({
                                 </Col>
                                 <Col xs={24} md={8}>
                                   <Form.Item name={[field.name, 'enabled']} label="状态">
-                                    <select aria-label={`收款银行账户${index + 1}状态`} className="native-select" disabled={!canWriteAgentBanks}>
+                                    <select aria-label={`收款银行账户${index + 1}状态`} className="native-select" disabled={!canWriteBankAccount}>
                                       <option value="true">启用</option>
                                       <option value="false">停用</option>
                                     </select>
@@ -3257,12 +3325,12 @@ export function MasterDataPage({
                                 </Col>
                                 <Col xs={24} md={8}>
                                   <Form.Item name={[field.name, 'remark']} label="备注">
-                                    <Input disabled={!canWriteAgentBanks} placeholder="例如 默认付款账户" />
+                                    <Input disabled={!canWriteBankAccount} placeholder="例如 默认付款账户" />
                                   </Form.Item>
                                 </Col>
                               </Row>
-                            </Card>
-                          ))}
+                            </Card>;
+                          })}
                         </Space>
                       </Card>
                     </Col>

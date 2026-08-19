@@ -14,14 +14,20 @@ import {
 } from './rbac.js';
 
 const agentShortNameKeys = new Set([
-  'agentshortname', 'routeagentshortname', 'agentabbreviation', 'agentalias'
+  'agentshortname', 'routeagentshortname', 'agentabbreviation', 'agentalias', 'agents'
 ]);
 const agentCompanyNameKeys = new Set([
-  'agentname', 'agentcompanyname', 'agentfullname', 'agentdetailedcompanyname', 'routeagentname'
+  'agent', 'agentname', 'agentoptions', 'agentcompanyname', 'agentfullname', 'agentdetailedcompanyname', 'routeagentname'
 ]);
 const agentChannelKeys = new Set([
   'agentchannel', 'agentchannelid', 'agentchannelname', 'routeagentchannelid', 'routeagentchannelname',
   'agentroute', 'agentrouteid', 'agentroutename'
+]);
+const bankDataKeys = new Set([
+  'bankaccount', 'bankaccountid', 'accountno', 'payeeaccount', 'payeeaccountid', 'payeebankaccount', 'payeebankaccountid',
+  'payerbankaccount', 'payerbankaccountid',
+  'agentbankaccount', 'agentbankaccountid', 'accountname', 'bankname', 'bankaccountno',
+  'payeebankaccountno', 'payerbankname', 'payerbankaccountname', 'payerbankaccountno'
 ]);
 const agentDataKeys = new Set([
   ...agentShortNameKeys,
@@ -37,6 +43,10 @@ const payableCostKeys = new Set([
   'payabletotalamount', 'payablecosttotals', 'payablecurrency', 'payablefee',
   'payablefees', 'routechargeweightkg', 'routeunitprice', 'routeotherfee', 'routecosttotal', 'routecurrency',
   'routecostsummary', 'costamount', 'costtotal',
+  'cost', 'costperkg', 'costpercbm', 'costunitprice', 'costprice', 'costcurrency', 'costsource',
+  'originalcost', 'unitcost', 'markup', 'markups', 'markupperkg', 'markuppercbm',
+  'markupvalue', 'markuprange', 'markupbuckets', 'actualmarkup', 'linesmarkupperkg', 'linemarkupperkg',
+  'calculation', 'pricebookrow', 'pricebookrows',
   'grossprofit', 'profit', 'profits', 'profitsection', 'profitsections', 'profitamount', 'profitrate',
   'grossmargin', 'marginamount', 'marginrate'
 ]);
@@ -52,9 +62,20 @@ const contextualPayableStatusKeys = new Set([
 // Query controls such as costScope select a view; they are not payable data.
 // Keep them usable when the response's payable fields are globally masked.
 const nonSensitiveControlKeys = new Set(['costscope']);
+const businessCostSafeKeys = new Set([
+  'type', 'name', 'amount', 'currency', 'billingunit', 'billingquantity',
+  'chargeweightkg', 'unitprice', 'amountoverridden', 'remark', 'settlementmethod',
+  'createdat', 'updatedat', 'createdby', 'reviewedat', 'reviewedby', 'reconciliationstatus'
+]);
 
 function normalizedKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
+function isBusinessCostRecord(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const type = (value as Record<string, unknown>).type;
+  return typeof type === 'string' && normalizedKey(type) === 'businesscost';
 }
 
 function hasAnyMask(state?: GlobalFieldMaskState): boolean {
@@ -69,6 +90,34 @@ function isAgentChannelMasterPath(requestPath: string): boolean {
   return /\/master-data\/agent-channels(?:\/|\?|$)/i.test(requestPath);
 }
 
+function isPricingCostPath(requestPath: string): boolean {
+  return /\/api\/pricing\/(?:book-rows|books(?:\/|\?|$)|markup-rules(?:\/|\?|$)|rules(?:\/|\?|$)|south-africa\/(?:rules|images)(?:\/|\?|$)|legacy\/sources(?:\/|\?|$))/i.test(requestPath);
+}
+
+function isPricingAgentPath(requestPath: string): boolean {
+  return /\/api\/pricing\/(?:book-rows(?:\/|\?|$)|books(?:\/|\?|$)|markup-rules(?:\/|\?|$)|legacy\/(?:sources|rebuild|dubai-air-sea(?:\/|\?|$))(?:\/|\?|$)|cleanup-old-original-agents(?:\/|\?|$))/i.test(requestPath);
+}
+
+function isPricingInternalFieldPath(requestPath: string): boolean {
+  return /\/api\/pricing\/(?:book-rows|books|markup-rules|legacy)(?:\/|\?|$)/i.test(requestPath);
+}
+
+function isPricingPath(requestPath: string): boolean {
+  return /\/api\/pricing(?:\/|\?|$)/i.test(requestPath);
+}
+
+function isPricingQuotePath(requestPath: string): boolean {
+  return /\/api\/pricing\/(?:quote|lookup|rules\/quote|legacy\/[^/?]+\/quote)(?:\/|\?|$)/i.test(requestPath);
+}
+
+function isDirectPayerBankDataPath(requestPath: string): boolean {
+  return /\/api\/master-data\/payer-bank-accounts(?:\/|\?|$)/i.test(requestPath);
+}
+
+function isDirectBankDataPath(requestPath: string): boolean {
+  return /\/api\/(?:master-data\/payer-bank-accounts|finance\/(?:payee|agent)-bank-accounts)(?:\/|\?|$)/i.test(requestPath);
+}
+
 export function isGlobalSensitiveFilePathBlocked(requestPath: string, state: GlobalFieldMaskState): boolean {
   const path = requestPath.split('?')[0] ?? requestPath;
   if (!/(?:export|download|attachment|voucher|template|\/file(?:\/|$)|\/image(?:\/|$)|shipment-label)/i.test(path)) return false;
@@ -77,6 +126,9 @@ export function isGlobalSensitiveFilePathBlocked(requestPath: string, state: Glo
   if (/invoice-template/i.test(path)) return agentMasked;
   if (/\/shipments\/[^/]+\/invoice\/download$/i.test(path)) return agentMasked;
   if (/(?:\/labels?(?:\/|$)|tally-tasks\/[^/]+\/label(?:\/|$)|shipment-label)/i.test(path)) return false;
+  // 迪拜查价页展示的是已发布、销售安全的业务价表图片，不包含原始价格表下载内容。
+  // 全局敏感字段屏蔽不应阻断业务员查看该展示图片；价格表原始下载/版本图片仍继续受保护。
+  if (/\/pricing\/legacy\/dubai-air-sea\/display-pages\/[^/]+\/image$/i.test(path)) return false;
   if (/\/api\/finance\/(?:receivable-audits|water-receipts)\/export$/i.test(path)) return false;
   if (/\/api\/warehouse\/rent-details\/export$/i.test(path)) return false;
   if (agentMasked
@@ -91,7 +143,8 @@ function fieldIsMasked(
   rawKey: string,
   state: GlobalFieldMaskState,
   requestPath: string,
-  ancestors: readonly string[]
+  ancestors: readonly string[],
+  businessCostRecord = false
 ): boolean {
   const key = normalizedKey(rawKey);
   if (nonSensitiveControlKeys.has(key)) return false;
@@ -99,13 +152,24 @@ function fieldIsMasked(
   const agentMaster = isAgentMasterPath(requestPath) || /(?:^|\.)(?:agent|agents|agentdetail|agentdetails)(?:\.|$)/.test(ancestorPath);
   const marketCostMutation = /\/api\/shipments\/[^/]+\/(?:route|finance-items)(?:\/|\?|$)/i.test(requestPath);
   const requestContext = `${requestPath}.${ancestorPath}`.replace(/[^a-z0-9.]/gi, '').toLowerCase();
+  const pricingInternalContext = isPricingInternalFieldPath(requestPath);
+  const pricingContext = isPricingPath(requestPath);
+  const pricingQuoteContext = isPricingQuotePath(requestPath);
+  const bankContext = /(?:bank|payment|payee|payer)/i.test(requestPath) || /(?:bank|payment|payee|payer)/i.test(ancestorPath);
+  const payerBankContext = isDirectPayerBankDataPath(requestPath)
+    || /(?:payerbank|payer)/i.test(`${ancestorPath}.${key}`);
   // Business cost is an independent finance section. A payable-cost mask must
   // not remove it just because its field names contain "cost" or "amount".
-  const businessCostContext = /businesscost/.test(requestContext) || key.startsWith('businesscost');
+  const businessCostContext = businessCostRecord || /businesscost/.test(requestContext) || key.startsWith('businesscost');
   const payableContext = marketCostMutation || /payable|payment|settlement|reconciliation|writeoff|routecost|agentcost|profit|margin|miscfeehang/
     .test(requestContext);
   const agentMasked = state['agent-short-name'] || state['agent-company-name'] || state['agent-channel'] || state['agent-data'];
+  const bankMasked = agentMasked || state['payable-cost'];
   const narrativeContext = /(?:audit|lineage|internal-flow|flow-log|notification)/i.test(requestPath);
+
+  // Quote diagnostics may contain a fixed list of provider errors. Keep the
+  // response shape but never expose provider identifiers to a masked caller.
+  if (agentMasked && key === 'agenterrors') return true;
 
   if ((agentMasked || state['payable-cost'] || state['payable-status']) && key === 'raw') return true;
   if (narrativeContext && ['summary', 'message', 'description', 'detail', 'details'].includes(key)
@@ -113,19 +177,47 @@ function fieldIsMasked(
 
   if ((state['agent-short-name'] || state['agent-data'])
     && (agentShortNameKeys.has(key) || agentMaster && key === 'shortname'
-      || key.includes('agent') && /(?:shortname|abbreviation|alias)/.test(key))) return true;
+      || key.includes('agent') && /(?:shortname|abbreviation|alias)/.test(key))) {
+    if (pricingQuoteContext && key === 'agents') return false;
+    return true;
+  }
   if ((state['agent-company-name'] || state['agent-data'])
     && (agentCompanyNameKeys.has(key) || agentMaster && ['name', 'companyname', 'detailedcompanyname'].includes(key)
-      || key.includes('agent') && /(?:name|company)/.test(key))) return true;
+      || key.includes('agent') && /(?:name|company)/.test(key))) {
+    if (pricingQuoteContext && key === 'agentname') return false;
+    return true;
+  }
   if ((state['agent-channel'] || state['agent-data'])
     && (agentChannelKeys.has(key) || isAgentChannelMasterPath(requestPath) && ['name', 'channelname', 'channelid'].includes(key)
-      || key.includes('agent') && /(?:channel|route)/.test(key))) return true;
-  if (state['agent-data'] && (agentDataKeys.has(key) || key.includes('agent') && key !== 'useragent')) return true;
-  if (state['payable-cost'] && !businessCostContext && (payableCostKeys.has(key)
+      || key.includes('agent') && /(?:channel|route)/.test(key))) {
+    if (pricingQuoteContext && ['channelname', 'realchannelname', 'routechannelname'].includes(key)) return false;
+    return true;
+  }
+  // Pricing responses use agentName as a short-name/alias in several quote
+  // and price-book contracts, while channelName may be either the mapped
+  // agent channel or the resolved route channel. Keep those identity fields
+  // hidden across all pricing read paths, not only internal management APIs.
+  // Ordinary quote contracts require these stable strings for sorting and
+  // rendering. Repositories replace them with a non-sensitive route code
+  // when the caller is masked; deleting them here would leave blank cells or
+  // crash clients that call localeCompare on the required fields.
+  if (!pricingQuoteContext && pricingContext && (state['agent-short-name'] || state['agent-data']) && key === 'agentname') return true;
+  if (!pricingQuoteContext && pricingContext && (state['agent-channel'] || state['agent-data'])
+    && ['channelname', 'realchannelname', 'routechannelname'].includes(key)) return true;
+  if (bankContext && bankDataKeys.has(key)) {
+    const bankFieldMasked = payerBankContext ? state['payable-cost'] : bankMasked;
+    if (bankFieldMasked) return true;
+  }
+  if (state['agent-data'] && (agentDataKeys.has(key) || key.includes('agent') && key !== 'useragent')) {
+    if (pricingQuoteContext && ['agentname', 'channelname', 'realchannelname', 'routechannelname'].includes(key)) return false;
+    return true;
+  }
+  const businessCostFieldIsSafe = businessCostContext && businessCostSafeKeys.has(key);
+  if (state['payable-cost'] && !businessCostFieldIsSafe && (payableCostKeys.has(key)
     || /(?:profit|margin)/.test(key)
     || /payable/.test(key) && /(?:amount|total|currency|fee|price|rate|quantity|weight)/.test(key)
     || payableContext && /(?:amount|total|currency|unitprice|price|rate|quantity|weight)/.test(key))) return true;
-  if (state['payable-status'] && (payableStatusKeys.has(key)
+    if (state['payable-status'] && !businessCostFieldIsSafe && (payableStatusKeys.has(key)
     || payableContext && contextualPayableStatusKeys.has(key)
     || /(?:payable|payment)/.test(key) && /(?:status|settled|locked|paid|verified)/.test(key)
     || payableContext && /(?:status|settled|locked|paid|verified|voided|pendingcount|confirmedcount|voidedcount|waitingpaymentcount|paidcount)/.test(key))) return true;
@@ -160,12 +252,13 @@ export function stripGlobalSensitiveRequestFields<T>(
     return value.map((item, index) => stripGlobalSensitiveRequestFields(item, state, requestPath, [...ancestors, String(index)])) as T;
   }
   if (typeof value !== 'object' || value instanceof Date || Buffer.isBuffer(value)) return value;
+  const businessCostRecord = isBusinessCostRecord(value);
   const stripped = Object.fromEntries(Object.entries(value as Record<string, unknown>)
     .filter(([key, item]) => {
       const orderEntryFinanceContainer = isOrderEntryFinancePath(requestPath)
         && state['payable-cost']
         && normalizedKey(key) === 'payables';
-      return !(fieldIsMasked(key, state, requestPath, ancestors) || orderEntryFinanceContainer)
+      return !(fieldIsMasked(key, state, requestPath, ancestors, businessCostRecord) || orderEntryFinanceContainer)
         || isEmptyMaskedRequestValue(item);
     })
     .map(([key, item]) => [key, stripGlobalSensitiveRequestFields(item, state, requestPath, [...ancestors, key])]));
@@ -184,10 +277,22 @@ export function assertGlobalFieldMaskRequestAllowed(
     return;
   }
   if (typeof value !== 'object' || value instanceof Date || Buffer.isBuffer(value)) return;
+  const businessCostRecord = isBusinessCostRecord(value);
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     const normalized = normalizedKey(key);
     const requestContext = `${requestPath}.${ancestors.join('.')}`.replace(/[^a-z0-9.]/gi, '').toLowerCase();
     const payableRequestContext = /payable|pendingpayment|paidpayment|paymentapplication|agentbill|miscfee/.test(requestContext);
+    const agentMasked = state['agent-short-name'] || state['agent-company-name'] || state['agent-channel'] || state['agent-data'];
+    if (isPricingQuotePath(requestPath) && agentMasked) {
+      if (normalized === 'agentname' && !isEmptyMaskedRequestValue(item)) {
+        throw new ForbiddenException('总规则已屏蔽报价代理字段，不能按代理筛选');
+      }
+      if ((state['agent-channel'] || state['agent-data'])
+        && ['channel', 'channelname', 'realchannelname', 'routechannelname'].includes(normalized)
+        && !isEmptyMaskedRequestValue(item)) {
+        throw new ForbiddenException('总规则已屏蔽报价代理渠道，不能按渠道筛选');
+      }
+    }
     if (payableRequestContext && ['sortby', 'orderby', 'sortfield'].includes(normalized) && typeof item === 'string') {
       const sortValue = normalizedKey(item);
       if (state['payable-cost'] && /(?:amount|total|currency|cost|profit|margin|price|rate)/.test(sortValue)) {
@@ -197,7 +302,7 @@ export function assertGlobalFieldMaskRequestAllowed(
         throw new ForbiddenException('总规则已屏蔽该排序字段');
       }
     }
-    if (fieldIsMasked(key, state, requestPath, ancestors) && !isEmptyMaskedRequestValue(item)) {
+    if (fieldIsMasked(key, state, requestPath, ancestors, businessCostRecord) && !isEmptyMaskedRequestValue(item)) {
       throw new ForbiddenException('总规则已屏蔽该字段，不能查看或修改');
     }
     assertGlobalFieldMaskRequestAllowed(item, state, requestPath, [...ancestors, key]);
@@ -215,9 +320,17 @@ export function maskGlobalSensitiveValue<T>(
     return value.map((item, index) => maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, String(index)])) as T;
   }
   if (typeof value !== 'object' || value instanceof Date || Buffer.isBuffer(value) || value instanceof StreamableFile) return value;
+  const businessCostRecord = isBusinessCostRecord(value);
   const masked = Object.fromEntries(Object.entries(value as Record<string, unknown>)
-    .filter(([key]) => !fieldIsMasked(key, state, requestPath, ancestors))
-    .map(([key, item]) => [key, maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, key])]));
+    .flatMap(([key, item]) => {
+      if (!fieldIsMasked(key, state, requestPath, ancestors, businessCostRecord)) {
+        return [[key, maskGlobalSensitiveValue(item, state, requestPath, [...ancestors, key])]];
+      }
+      // Keep collection-shaped response contracts intact while removing the
+      // protected rows. Consumers can safely iterate an empty collection;
+      // omitting the key makes otherwise unrelated pages crash on \`.filter\`.
+      return Array.isArray(item) ? [[key, []]] : [];
+    }));
   return masked as T;
 }
 
@@ -273,6 +386,18 @@ export class GlobalFieldMaskInterceptor implements NestInterceptor {
     }
     if (state['agent-channel'] && isAgentChannelMasterPath(requestPath)) {
       throw new ForbiddenException('总规则已全局屏蔽代理渠道');
+    }
+    if (state['payable-cost'] && isPricingCostPath(requestPath)) {
+      throw new ForbiddenException('总规则已屏蔽报价内部成本数据');
+    }
+    if (isPricingAgentPath(requestPath)
+      && (state['agent-short-name'] || state['agent-company-name'] || state['agent-channel'] || state['agent-data'])) {
+      throw new ForbiddenException('总规则已屏蔽报价代理字段');
+    }
+    const bankMasked = state['agent-short-name'] || state['agent-company-name'] || state['agent-channel'] || state['agent-data'] || state['payable-cost'];
+    const directBankDataMasked = isDirectPayerBankDataPath(requestPath) ? state['payable-cost'] : bankMasked;
+    if (directBankDataMasked && isDirectBankDataPath(requestPath)) {
+      throw new ForbiddenException('总规则已屏蔽银行资料');
     }
     if (isGlobalSensitiveFilePathBlocked(requestPath, state)) {
       throw new ForbiddenException('总规则已屏蔽该导出或下载中的敏感数据');

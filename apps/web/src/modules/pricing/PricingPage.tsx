@@ -6,6 +6,7 @@ import { hasEffectivePricingCapability, normalizeCanadaAmazonWarehouseCode, norm
 import { ApiClient, isAdministratorRole, type PermissionKey } from '../../apiClient';
 import { ModuleSubWorkspace } from '../shared/ModuleSubWorkspace';
 import { formatBeijingDate, formatBeijingDateTime, formatCurrency } from '../shared/format';
+import { getGlobalFieldMaskVisibility } from '../shared/globalFieldMask';
 import { countryOptions, filterLocationOption } from '../finance/entry/countryStateOptions';
 import { AppActionGroup, AppPage, AppPageHeader, ManagedTable, MetricCard, paginationWhenNeeded, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import { calculatePriceChargeableWeight, seedImportedPriceRows, type ImportedPriceRow } from './excel';
@@ -24,7 +25,8 @@ import {
   renderMarkupDisplay,
   renderMarkupSource,
   renderRequirementCell,
-  renderRequirementDetailNote
+  renderRequirementDetailNote,
+  resolvePricingLookupResultFieldVisibility
 } from './pricingPageDisplay';
 import {
   amazonOriginFallbackOptions,
@@ -199,7 +201,7 @@ export function sortLegacyRecommendations(recommendations: LegacyPricingRecommen
     }
     return left.salesTotal - right.salesTotal
       || left.salesUnitPrice - right.salesUnitPrice
-      || left.channelName.localeCompare(right.channelName, 'zh-CN');
+      || (left.channelName ?? '').localeCompare(right.channelName ?? '', 'zh-CN');
   });
 }
 
@@ -274,6 +276,7 @@ export function PricingPage({
   apiClient,
   initialSection,
   role,
+  roleLabel,
   permissions,
   notice,
   onNotice
@@ -281,11 +284,13 @@ export function PricingPage({
   apiClient: ApiClient;
   initialSection?: string;
   role: StaffRoleKey;
+  roleLabel?: string;
   permissions: PermissionKey[];
   notice: string | null;
   onNotice: (message: string | null) => void;
 }) {
   const isMarkupRouteEditor = new URLSearchParams(window.location.search).get('view') === 'route-editor';
+  const fieldVisibility = getGlobalFieldMaskVisibility(role, permissions);
   const [lookupForm] = Form.useForm<LegacyLookupFormValues>();
   const [markupForm] = Form.useForm<AgentMarkupFormValues>();
   const [priceBookRemarkForm] = Form.useForm<PriceBookRemarkFormValues>();
@@ -476,10 +481,18 @@ export function PricingPage({
     () => filterPricingModulesByPermissions(legacyPricingModules, permissions, 'markup', role),
     [permissions, role]
   );
-  const canViewMarkupDetails = legacyPricingModules.some((item) => can(pricingMarkupPermissionCode(item.key, 'view')));
-  const canViewTierMarkup = can(pricingMarkupPermissionCode(markupModule, 'view'));
-  const canViewMarkupWorkspace = canViewMarkupDetails && availableMarkupModules.length > 0;
-  const canEditMarkup = can(pricingMarkupPermissionCode(markupModule, 'edit'));
+  const canViewMarkupDetails = fieldVisibility.showPayableCost
+    && legacyPricingModules.some((item) => can(pricingMarkupPermissionCode(item.key, 'view')));
+  const canViewTierMarkup = fieldVisibility.showPayableCost
+    && can(pricingMarkupPermissionCode(markupModule, 'view'));
+  const canViewAgentIdentity = fieldVisibility.showAgentData
+    && fieldVisibility.showAgentShortName
+    && fieldVisibility.showAgentCompanyName
+    && fieldVisibility.showAgentChannel;
+  const canViewMarkupWorkspace = canViewAgentIdentity && canViewMarkupDetails && availableMarkupModules.length > 0;
+  const canEditMarkup = fieldVisibility.showPayableCost
+    && canViewAgentIdentity
+    && can(pricingMarkupPermissionCode(markupModule, 'edit'));
   const canCreateMarkup = canEditMarkup;
   const canUpdateMarkup = canEditMarkup;
   const canImportMarkup = canEditMarkup;
@@ -487,7 +500,7 @@ export function PricingPage({
   const canChangeMarkupStatus = canEditMarkup;
   const canDeleteMarkup = canEditMarkup;
   const canMaintainMarkupTier = canEditMarkup;
-  const canViewPriceBooks = can('pricing:price-books:view');
+  const canViewPriceBooks = fieldVisibility.showPayableCost && canViewAgentIdentity && can('pricing:price-books:view');
   const canViewPriceBookRows = canViewPriceBooks;
   const priceBookManagementRowSelection = useMemo(() => {
     if (!canViewPriceBookRows && !can('pricing:price-books:update') && !can('pricing:price-books:delete')) {
@@ -499,16 +512,20 @@ export function PricingPage({
     };
   }, [can, canViewPriceBookRows, selectedPriceBookIds]);
   const canViewCurrentLookupModule = can(lookupPermissionByModule[legacyModule]);
-  const canViewCost = canViewCurrentLookupModule;
-  const canViewGrossProfit = canViewCurrentLookupModule;
-  const canViewMarkupBreakdown = canViewCurrentLookupModule;
+  const canViewInternalPricing = fieldVisibility.showPayableCost;
+  const lookupResultFieldVisibility = resolvePricingLookupResultFieldVisibility(canViewCurrentLookupModule, canViewInternalPricing);
+  const canViewLookupChannel = lookupResultFieldVisibility.channel;
+  const canViewCost = lookupResultFieldVisibility.cost;
+  const canViewGrossProfit = lookupResultFieldVisibility.grossProfit;
+  const canViewMarkupBreakdown = lookupResultFieldVisibility.markupBreakdown;
   const canViewPostalRule = canViewCurrentLookupModule;
-  const canViewRequirements = canViewCurrentLookupModule;
+  const canViewRequirements = lookupResultFieldVisibility.requirement;
+  const canViewCustomRemark = lookupResultFieldVisibility.customRemark;
   const canCopyQuote = canViewCurrentLookupModule;
   const canViewDubaiImages = can('pricing:lookup:dubai-air-sea');
   const canReadSouthAfricaRules = can('pricing:lookup:south-africa');
   const canViewSouthAfricaQuoteTable = canReadSouthAfricaRules;
-  const canViewSouthAfricaCostMarkup = can('pricing:markup:southAfrica:view');
+  const canViewSouthAfricaCostMarkup = fieldVisibility.showPayableCost && can('pricing:markup:southAfrica:view');
   const southAfricaQuoteTableRows = useMemo(() => buildSouthAfricaQuoteTableRows(southAfricaRules), [southAfricaRules]);
   const amazonTierLabels = useMemo(() => buildAmazonTierLabels(), []);
   const pricingSubItems = useMemo(
@@ -538,6 +555,11 @@ export function PricingPage({
       if (fallbackModule) setLegacyModule(fallbackModule);
     }
   }, [availableLookupModules, legacyModule]);
+  useEffect(() => {
+    if (!fieldVisibility.showAgentChannel && lookupForm.getFieldValue('channel')) {
+      lookupForm.setFieldValue('channel', undefined);
+    }
+  }, [fieldVisibility.showAgentChannel, lookupForm]);
   useEffect(() => {
     if (!availableMarkupModules.some((item) => item.key === markupModule)) {
       const fallbackModule = availableMarkupModules[0]?.key;
@@ -724,6 +746,11 @@ export function PricingPage({
   }, [activePricingSection, apiClient, canViewDubaiImages, legacyModule]);
 
   useEffect(() => {
+    if (!canViewDubaiImages) {
+      setDubaiPriceDisplay(null);
+      setDubaiImageObjectUrls({});
+      return () => undefined;
+    }
     const scopedPages = [
       ...buildDubaiLookupPageGroups('AIR', dubaiPriceDisplay?.airPages ?? []).groups.flatMap((group) => group.pages),
       ...buildDubaiLookupPageGroups('SEA', dubaiPriceDisplay?.seaPages ?? []).groups.flatMap((group) => group.pages)
@@ -747,10 +774,10 @@ export function PricingPage({
       cancelled = true;
       createdUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [apiClient, dubaiPriceDisplay]);
+  }, [apiClient, canViewDubaiImages, dubaiPriceDisplay]);
 
   useEffect(() => {
-    if (!selectedDubaiDisplayVersion) {
+    if (!canViewDubaiImages || !selectedDubaiDisplayVersion) {
       setDubaiVersionImageObjectUrls({});
       setDubaiVersionPreviewLoading(false);
       setDubaiVersionPreviewError(null);
@@ -780,16 +807,16 @@ export function PricingPage({
       cancelled = true;
       createdUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [apiClient, selectedDubaiDisplayVersion]);
+  }, [apiClient, canViewDubaiImages, selectedDubaiDisplayVersion]);
 
   useEffect(() => {
-    if (!can('pricing:price-books:view') || activePricingSection !== 'priceBooks' || priceBookManagementModule !== 'dubaiAirSea') return;
+    if (!canViewDubaiImages || !can('pricing:price-books:view') || activePricingSection !== 'priceBooks' || priceBookManagementModule !== 'dubaiAirSea') return;
     let alive = true;
     apiClient.priceBookQuery.dubaiPriceDisplayVersions()
       .then((response) => { if (alive) setDubaiDisplayVersions(response.versions); })
       .catch(() => { if (alive) setDubaiDisplayVersions([]); });
     return () => { alive = false; };
-  }, [activePricingSection, apiClient, can, priceBookManagementModule, priceBookImportJob?.status]);
+  }, [activePricingSection, apiClient, can, canViewDubaiImages, priceBookManagementModule, priceBookImportJob?.status]);
 
   useEffect(() => {
     let alive = true;
@@ -1773,6 +1800,7 @@ export function PricingPage({
 
   async function runLookup() {
     try {
+      if (!fieldVisibility.showAgentChannel) lookupForm.setFieldValue('channel', undefined);
       const values = await lookupForm.validateFields();
       const canadaAddressType = legacyModule === 'canadaAirSea'
         ? values.canadaAddressType === 'AMAZON' ? 'AMAZON' : 'PRIVATE'
@@ -1788,6 +1816,7 @@ export function PricingPage({
       const postalCode = legacyModule === 'usaAirSea'
         ? normalizeUsPostalCode(values.postalCode)
         : values.postalCode?.trim();
+      const safeValues = fieldVisibility.showAgentChannel ? values : { ...values, channel: undefined };
       const formMeasuredChargeableWeight = calculatePriceChargeableWeight({
         volumeCbm: values.volumeCbm,
         actualWeightKg: values.actualWeightKg,
@@ -1879,7 +1908,7 @@ export function PricingPage({
         }
         const legacy = await withPricingLookupTimeout(apiClient.quoteLegacyPricing({
           module: legacyModule,
-          ...values,
+          ...safeValues,
           ...(selectedAmazonTier ? { tier: selectedAmazonTier, weightBand: selectedAmazonTier } : {}),
           cargoType: values.cargoType === 'ALL' ? undefined : values.cargoType,
           amazonCode,
@@ -1990,7 +2019,8 @@ export function PricingPage({
     setVolumeCbmManual(false);
     setAmazonTierManual(false);
     setSouthAfricaCategoryManual(false);
-    lookupForm.setFieldsValue(legacyModuleDefaults[nextModule]);
+    const nextDefaults = legacyModuleDefaults[nextModule];
+    lookupForm.setFieldsValue(fieldVisibility.showAgentChannel ? nextDefaults : { ...nextDefaults, channel: undefined });
   }
 
   function renderLegacyLookupFields() {
@@ -2035,9 +2065,11 @@ export function PricingPage({
               <Form.Item name="destinationCountry" label="国家/地区关键词">
                 <Input tabIndex={lookupTabIndex('destinationCountry')} placeholder="国家/地区关键词" />
               </Form.Item>
-              <Form.Item name="channel" label="渠道关键词">
-                <Input tabIndex={lookupTabIndex('channel')} placeholder="渠道关键词" />
-              </Form.Item>
+              {fieldVisibility.showAgentChannel ? (
+                <Form.Item name="channel" label="渠道关键词">
+                  <Input tabIndex={lookupTabIndex('channel')} placeholder="渠道关键词" />
+                </Form.Item>
+              ) : null}
               <Form.Item name="actualWeightKg" label="实重 KG">
                 <InputNumber tabIndex={lookupTabIndex('actualWeightKg')} className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="如 500" />
               </Form.Item>
@@ -2102,18 +2134,20 @@ export function PricingPage({
               <Form.Item name="packageInfo" label="包装（可选）">
                 <Input tabIndex={lookupTabIndex('packageInfo')} aria-label="包装" placeholder="如 1个木箱、2托、纸箱货" />
               </Form.Item>
-              <Form.Item name="channel" label="渠道">
-                <Select
-                  tabIndex={lookupTabIndex('channel')}
-                  options={[
-                    { value: '', label: '全部运输方式' },
-                    { value: '空运', label: '空运' },
-                    { value: '海运', label: '海运' },
-                    { value: '铁路', label: '铁路' },
-                    { value: '铁海', label: '铁海联运' }
-                  ]}
-                />
-              </Form.Item>
+              {fieldVisibility.showAgentChannel ? (
+                <Form.Item name="channel" label="渠道">
+                  <Select
+                    tabIndex={lookupTabIndex('channel')}
+                    options={[
+                      { value: '', label: '全部运输方式' },
+                      { value: '空运', label: '空运' },
+                      { value: '海运', label: '海运' },
+                      { value: '铁路', label: '铁路' },
+                      { value: '铁海', label: '铁海联运' }
+                    ]}
+                  />
+                </Form.Item>
+              ) : null}
               <Form.Item name="actualWeightKg" label="实际重量 KG">
                 <InputNumber tabIndex={lookupTabIndex('actualWeightKg')} className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="没有可不填" />
               </Form.Item>
@@ -2169,17 +2203,19 @@ export function PricingPage({
               <Form.Item name="postalCode" label="邮编（意大利必填）" rules={postalRequired ? [{ required: true, message: '意大利分区报价需要邮编' }] : []}>
                 <Input tabIndex={lookupTabIndex('postalCode')} placeholder="如 20100" />
               </Form.Item>
-              <Form.Item name="channel" label="渠道">
-                <Select
-                  tabIndex={lookupTabIndex('channel')}
-                  options={[
-                    { value: '', label: '全部渠道' },
-                    { value: '空运', label: '空运' },
-                    { value: '海运', label: '海运' },
-                    { value: '铁路', label: '铁路' }
-                  ]}
-                />
-              </Form.Item>
+              {fieldVisibility.showAgentChannel ? (
+                <Form.Item name="channel" label="渠道">
+                  <Select
+                    tabIndex={lookupTabIndex('channel')}
+                    options={[
+                      { value: '', label: '全部渠道' },
+                      { value: '空运', label: '空运' },
+                      { value: '海运', label: '海运' },
+                      { value: '铁路', label: '铁路' }
+                    ]}
+                  />
+                </Form.Item>
+              ) : null}
               <Form.Item name="taxInclusion" label="税务口径">
                 <Select
                   tabIndex={lookupTabIndex('taxInclusion')}
@@ -2284,9 +2320,11 @@ export function PricingPage({
                   <Input tabIndex={lookupTabIndex('destinationCountry')} placeholder="迪拜" />
                 </Form.Item>
               )}
-              <Form.Item name="channel" label="渠道关键词">
-                <Input tabIndex={lookupTabIndex('channel')} placeholder="空运、海运、专线；留空查全部" />
-              </Form.Item>
+              {fieldVisibility.showAgentChannel ? (
+                <Form.Item name="channel" label="渠道关键词">
+                  <Input tabIndex={lookupTabIndex('channel')} placeholder="空运、海运、专线；留空查全部" />
+                </Form.Item>
+              ) : null}
               <Form.Item name="chargeableWeightKg" label="计费重量 KG">
                 <InputNumber tabIndex={lookupTabIndex('chargeableWeightKg')} className="pricing-measure-input" controls={false} min={0} precision={3} placeholder="如 100" />
               </Form.Item>
@@ -2355,7 +2393,7 @@ export function PricingPage({
     );
   }
 
-  if (isMarkupRouteEditor) {
+  if (isMarkupRouteEditor && fieldVisibility.showPayableCost && canViewAgentIdentity) {
     return <MarkupRouteEditor apiClient={apiClient} permissions={permissions} onNotice={onNotice} />;
   }
 
@@ -2636,7 +2674,7 @@ export function PricingPage({
                         <button type="button" className={`pricing-legacy-quote-card${index === 0 ? ' is-leading' : ''}`} onClick={() => setSelectedLegacyRecommendation(item)}>
                           {index === 0 ? <span className="pricing-legacy-leading-ribbon">{legacyRecommendationSort === 'price' ? '最低价' : '时效最快'}</span> : null}
                           <span className="pricing-legacy-card-head">
-                            <Text strong className="pricing-legacy-channel-name">{item.channelName}</Text>
+                            {canViewLookupChannel ? <Text strong className="pricing-legacy-channel-name">{item.channelName ?? '-'}</Text> : null}
                             <Text className="pricing-legacy-transit">{item.transitLabel ?? '时效待确认'}</Text>
                           </span>
                           <Title level={3} className="pricing-legacy-card-price">{formatCurrency(item.salesTotal)}</Title>
@@ -2667,10 +2705,10 @@ export function PricingPage({
                     size="small"
                     pagination={tenRowTablePagination}
                     dataSource={sortedLegacyRecommendations}
-                    scroll={{ x: canViewGrossProfit || canViewPostalRule ? 1710 : 1510 }}
+                    scroll={{ x: canViewInternalPricing ? 1710 : 1300 }}
                     onRow={(record) => ({ onClick: () => setSelectedLegacyRecommendation(record) })}
                     columns={[
-                      { title: '渠道', dataIndex: 'channelName', width: 240, render: (value) => <Text strong>{value}</Text> },
+                      ...(canViewLookupChannel ? [{ title: '渠道', dataIndex: 'channelName', width: 240, render: (value?: string) => <Text strong>{value ?? '-'}</Text> }] : []),
                       ...(legacyModule === 'inquiry' ? [{ title: '运输方式', dataIndex: 'transportMode', width: 110, render: (value?: LegacyPricingRecommendation['transportMode']) => value ? <Tag color="blue">{value === 'SEA_RAIL' ? '铁海联运' : value === 'AIR' ? '空运' : value === 'SEA' ? '海运' : '铁路'}</Tag> : '-' }] : []),
                       {
                         title: getLegacyRecommendationScopeColumnTitle(legacyResult?.module ?? legacyModule),
@@ -2688,14 +2726,14 @@ export function PricingPage({
                       { title: '总价', dataIndex: 'salesTotal', width: 120, render: (value) => <Text strong>{formatCurrency(value)}</Text> },
                       ...(canViewGrossProfit ? [{ title: '毛利', dataIndex: 'grossProfit', width: 100, render: (value?: number) => <Text className="pricing-profit">{value === undefined ? '-' : formatCurrency(value)}</Text> }] : []),
                       ...(canViewRequirements ? [{ title: '渠道要求', width: 120, render: (_value: unknown, record: LegacyPricingRecommendation) => renderRequirementCell(record, () => setSelectedLegacyRecommendation(record)) }] : []),
-                      {
+                      ...(canViewCustomRemark ? [{
                         title: '自定义备注',
                         width: 130,
                         render: (_value: unknown, record: LegacyPricingRecommendation) => renderCustomRemarkCell(record, () => setCustomRemarkDetail({
-                          title: `${record.channelName} · 自定义备注`,
+                          title: `${record.channelName ?? ''} · 自定义备注`,
                           content: getCustomRemarkText(record) ?? ''
                         }))
-                      },
+                      }] : []),
                     ]}
                   />
                 </>
@@ -2754,7 +2792,7 @@ export function PricingPage({
           {selectedLegacyRecommendation ? (
             <Space direction="vertical" size={14} className="full-width pricing-detail-modal">
               <div className="pricing-result-grid">
-                <div className="pricing-result-item"><Text type="secondary">渠道</Text><Text strong>{selectedLegacyRecommendation.channelName}</Text></div>
+                {canViewLookupChannel ? <div className="pricing-result-item"><Text type="secondary">渠道</Text><Text strong>{selectedLegacyRecommendation.channelName ?? '-'}</Text></div> : null}
                 <div className="pricing-result-item"><Text type="secondary">重量段</Text><Text strong>{selectedLegacyRecommendation.weightSegmentLabel}</Text></div>
                 {canViewPostalRule && selectedLegacyRecommendation.postalRule ? <div className="pricing-result-item"><Text type="secondary">匹配邮编/价格区</Text><Text strong>{selectedLegacyRecommendation.postalRule}</Text></div> : null}
                 <div className="pricing-result-item"><Text type="secondary">业务报价</Text><Text strong>{formatCurrency(selectedLegacyRecommendation.salesTotal)}</Text></div>
@@ -2769,7 +2807,7 @@ export function PricingPage({
                 </div>
               ) : null}
               {canViewRequirements ? renderRequirementDetailNote(selectedLegacyRecommendation) : null}
-              {selectedLegacyRecommendation.customRemark ? (
+              {canViewCustomRemark && selectedLegacyRecommendation.customRemark ? (
                 <div className="pricing-detail-note">
                   <Text type="secondary">自定义备注</Text>
                   <Text style={{ whiteSpace: 'pre-wrap' }}>{getCustomRemarkText(selectedLegacyRecommendation)}</Text>
