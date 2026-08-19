@@ -25,6 +25,8 @@
 - 开工时另一会话已把 `prisma.repository.ts` 发布为 `whitelist-ddcf91e9052e69a6e00bd7fe`；本分支采集 v3 manifest 并逐字节吸收该文件，源码重新达到 541/541 一致，未改写其业务逻辑。
 - 47 API 容器为 `NODE_ENV=production` 且收到 `SEED_ON_EMPTY=true`；现有 `resolveDatabaseSeedMode` 已返回 `DISABLED`，因此原扫描中的“生产会自动 seed”并不成立，本轮补真实服务启动回归测试而不改写已正确的生产行为。
 - 47 API 只通过 Web Nginx `/api/` 同源反向代理暴露，API 服务无宿主机端口；当前不可信 Origin 预检返回 `Access-Control-Allow-Origin: *`。
+- 首次发布 `git-09c4b2cb011b_web-1b702969afa5_api-fc5cc1dc3960` 后，CORS 固定样本已从 `Access-Control-Allow-Origin: *` 变为无放行头，同源 health/Web 均为 200，生产 seed 忽略日志与非种子规模业务数据均正常。
+- 首次发布结束后检测到另一会话把 `RoutingPage.tsx` 写入 47 源码；已采集 manifest `20260819-091939-git-09c4b2cb011b_web-1b702969afa5_api-fc5cc1dc3960` 并逐字节吸收该文件，Web typecheck 通过，没有改写其业务内容。需再次 cutover 让源码、镜像和 Git 来源完全一致。
 
 ## 成熟参考
 

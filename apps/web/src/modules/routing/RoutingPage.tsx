@@ -815,7 +815,7 @@ export function RoutingPage({
     return (
       <Space direction="vertical" size={12} className="full-width">
         <Flex justify="space-between" align="center">
-          <Text type="secondary">按运单归并；{type === 'BUSINESS_COST' ? '业务成本' : '应付成本'}按“计费数量 × 单价”计算，可选择 KG 或 CBM，合计按 RMB 口径展示。</Text>
+          <Text type="secondary">总金额 = 计费数量 × 每单位单价；例如 0.50 KG × 49 RMB/KG = 24.50 RMB。可选择 KG 或 CBM，合计按 RMB 口径展示。</Text>
           {canCreateCost ? <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type)}>新增费用</Button> : null}
         </Flex>
         <ManagedTable
@@ -864,10 +864,14 @@ export function RoutingPage({
               ) : `${(row.billingQuantity ?? row.chargeWeightKg ?? 0).toFixed(row.billingUnit === 'CBM' ? 6 : 2)} ${row.billingUnit === 'CBM' ? 'CBM' : 'KG'}`
             },
             {
-              title: '单价', dataIndex: 'unitPrice', width: 100,
+              title: '单位单价', dataIndex: 'unitPrice', width: 200,
               render: (value: number | undefined, row: PendingRoutingCostRow) => isEditingRow(row)
-                ? <InputNumber aria-label="单价" min={0} precision={2} value={costEditor?.unitPrice} onChange={(unitPrice) => updateCostEditor({ unitPrice: unitPrice ?? undefined }, true)} />
-                : value?.toFixed(2) ?? '-'
+                ? <Space.Compact block>
+                    <InputNumber aria-label="单位单价" min={0} precision={2} value={costEditor?.unitPrice} style={{ width: 112 }}
+                      onChange={(unitPrice) => updateCostEditor({ unitPrice: unitPrice ?? undefined }, true)} />
+                    <Input aria-label="单位单价单位" readOnly tabIndex={-1} value={`${costEditor?.currency ?? 'RMB'}/${costEditor?.billingUnit === 'CBM' ? 'CBM' : 'KG'}`} style={{ width: 82 }} />
+                  </Space.Compact>
+                : value === undefined ? '-' : `${value.toFixed(2)} ${row.currency ?? 'RMB'}/${row.billingUnit === 'CBM' ? 'CBM' : 'KG'}`
             },
             {
               title: '总金额', dataIndex: 'amount', width: 120,
