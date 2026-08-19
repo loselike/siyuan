@@ -16122,6 +16122,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         if (lockedShipment.status !== 'REVIEW_PENDING') {
           throw new BadRequestException('只有待审核运单可以审核通过');
         }
+        await this.assertNoUnresolvedProblemTickets(tx, lockedShipment.id);
         if (lockedShipment.businessReviewedAt) {
           const suffix = await this.canViewOrderEntryBusinessCosts(principal) ? '待排货与业务成本审核' : '待排货与后续费用审核';
           throw new BadRequestException(`该订单已完成业务员自审，已进入${suffix}`);
@@ -18995,6 +18996,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException(shouldApprove ? '当前状态不允许排货' : '只有待排货运单可以修改排货信息');
       }
       await this.ensureMarketShipmentSiteScope(principal, lockedShipment, tx);
+      if (shouldApprove) {
+        await this.assertNoUnresolvedProblemTickets(tx, shipment.id);
+      }
       routeBeforeStatus = lockedShipment.status;
       routeBeforeChannelId = lockedShipment.channelId;
       routeBeforeAgentId = lockedShipment.agentId;
@@ -19370,7 +19374,23 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       await this.ensureTransferDataApproved(principal, shipment.id);
     }
     const handoverNo = handover.handoverNo;
+    const dispatchOwnerWhere = this.shipmentOwnerWhere(principal);
     const dispatchState = await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, shipment.id);
+      const lockedShipment = await tx.shipment.findFirst({
+        where: {
+          id: shipment.id,
+          deletedAt: null,
+          ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
+          ...(dispatchOwnerWhere ?? {})
+        },
+        select: { id: true, status: true, deletedAt: true }
+      });
+      if (!lockedShipment || lockedShipment.deletedAt) throw new NotFoundException('运单不存在');
+      if (!canTransitionShipment(lockedShipment.status as ShipmentStatus, 'OUTBOUNDED')) {
+        throw new ConflictException('订单状态已变化，请刷新后重试');
+      }
+      await this.assertNoUnresolvedProblemTickets(tx, shipment.id);
       if (miscFeeIdsToMatch.length) {
         await this.lockMiscFeeProfitSettlementSources(tx);
       }
@@ -20344,6 +20364,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         }
       }
       if (options.marketSiteScope) await this.ensureMarketShipmentSiteScope(principal, locked, tx);
+      if (currentStatus !== nextStatus) {
+        await this.assertNoUnresolvedProblemTickets(tx, shipment.id);
+      }
       return tx.shipment.update({
         where: { id: shipment.id },
         data: {
@@ -21341,6 +21364,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async assertCustomerServiceProblemCreationAllowed(principal: Principal, shipmentId: string): Promise<void> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    this.assertProblemTicketCreationStage(shipment.status as ShipmentStatus);
     if (await this.hasPermission(principal.role, 'customer-service:problem:create')) return;
     const permissions = customerServiceProblemPermissionsForStatus(shipment.status);
     const allowed = (await Promise.all(permissions.map((permission) => this.hasPermission(principal.role, permission)))).some(Boolean);
@@ -21349,6 +21373,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async createProblemTicket(principal: Principal, shipmentId: string, input: ProblemTicketCreateInput): Promise<ProblemTicketSummary> {
     const shipment = await this.getVisibleShipment(principal, shipmentId);
+    this.assertProblemTicketCreationStage(shipment.status as ShipmentStatus);
     const tagSnapshot = normalizeProblemTicketTagSnapshot(input.tags);
     if (tagSnapshot?.length) {
       const activeTags = await this.prisma.commonTag.findMany({
@@ -21360,39 +21385,52 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException('常用标签已变更，请刷新后重试');
       }
     }
-    const ticket = await this.prisma.problemTicket.create({
-      data: {
-        shipmentId: shipment.id,
-        reason: input.reason,
-        status: 'OPEN',
-        customerVisible: input.customerVisible ?? true,
-        tagSnapshot
+    const ticket = await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, shipment.id);
+      const lockedShipment = await tx.shipment.findFirst({
+        where: { id: shipment.id, deletedAt: null },
+        select: { id: true, status: true }
+      });
+      if (!lockedShipment) throw new NotFoundException('运单不存在');
+      if (lockedShipment.status !== shipment.status) {
+        throw new ConflictException('运单状态已变化，请刷新后重试');
       }
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'problem.ticket.create',
-        target: ticket.id,
-        after: { shipmentId: shipment.id, status: ticket.status, customerVisible: ticket.customerVisible }
-      }
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'customer_service.issue.attach',
-        target: ticket.id,
-        after: {
+      this.assertProblemTicketCreationStage(lockedShipment.status as ShipmentStatus);
+      const created = await tx.problemTicket.create({
+        data: {
           shipmentId: shipment.id,
-          originalStatus: shipment.status,
-          originalStatusPool: shipment.status,
-          issueId: ticket.id,
-          issueType: ticket.reason,
-          customerVisible: ticket.customerVisible,
-          handledBy: principal.username,
-          attachedAt: ticket.createdAt.toISOString()
+          reason: input.reason,
+          status: 'OPEN',
+          customerVisible: input.customerVisible ?? true,
+          tagSnapshot
         }
-      }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'problem.ticket.create',
+          target: created.id,
+          after: { shipmentId: shipment.id, status: created.status, customerVisible: created.customerVisible }
+        }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'customer_service.issue.attach',
+          target: created.id,
+          after: {
+            shipmentId: shipment.id,
+            originalStatus: lockedShipment.status,
+            originalStatusPool: lockedShipment.status,
+            issueId: created.id,
+            issueType: created.reason,
+            customerVisible: created.customerVisible,
+            handledBy: principal.username,
+            attachedAt: created.createdAt.toISOString()
+          }
+        }
+      });
+      return created;
     });
     void this.lineage?.recordEvent('customer_service.problems.change', {
       actorUsername: principal.username,
@@ -21470,37 +21508,47 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
 
   async closeProblemTicket(principal: Principal, ticketId: string, reason?: string): Promise<ProblemTicketSummary> {
     const ticket = await this.getVisibleProblemTicket(principal, ticketId);
-    const closedAt = new Date();
-    await this.prisma.problemTicket.update({
-      where: { id: ticket.id },
-      data: { status: 'CLOSED', closedAt, closedBy: principal.username, closeReason: reason?.trim() || '已解决' } as any
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'problem.ticket.close',
-        target: ticket.id,
-        before: { status: ticket.status },
-        after: { status: 'CLOSED' }
-      }
-    });
-    await this.prisma.auditLog.create({
-      data: {
-        actorId: principal.id,
-        action: 'customer_service.issue.close',
-        target: ticket.id,
-        before: { status: ticket.status },
-        after: {
-          issueId: ticket.id,
-          shipmentId: ticket.shipmentId,
-          status: 'CLOSED',
-          originalStatusPool: ticket.shipment?.status,
-          handledBy: principal.username,
-          closedAt: closedAt.toISOString()
+    const closeResult = await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, ticket.shipmentId);
+      const [lockedTicket, lockedShipment] = await Promise.all([
+        tx.problemTicket.findUnique({ where: { id: ticket.id } }),
+        tx.shipment.findUnique({ where: { id: ticket.shipmentId }, select: { status: true } })
+      ]);
+      if (!lockedTicket) throw new NotFoundException('问题件不存在');
+      if (lockedTicket.status === 'CLOSED') return undefined;
+      const closedAt = new Date();
+      await tx.problemTicket.update({
+        where: { id: ticket.id },
+        data: { status: 'CLOSED', closedAt, closedBy: principal.username, closeReason: reason?.trim() || '已解决' } as any
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'problem.ticket.close',
+          target: ticket.id,
+          before: { status: lockedTicket.status },
+          after: { status: 'CLOSED' }
         }
-      }
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'customer_service.issue.close',
+          target: ticket.id,
+          before: { status: lockedTicket.status },
+          after: {
+            issueId: ticket.id,
+            shipmentId: ticket.shipmentId,
+            status: 'CLOSED',
+            originalStatusPool: lockedShipment?.status,
+            handledBy: principal.username,
+            closedAt: closedAt.toISOString()
+          }
+        }
+      });
+      return { closedAt, statusFrom: lockedTicket.status, originalStatusPool: lockedShipment?.status };
     });
-    void this.lineage?.recordEvent('customer_service.problems.change', {
+    if (closeResult) void this.lineage?.recordEvent('customer_service.problems.change', {
       actorUsername: principal.username,
       businessId: ticket.id,
       payload: {
@@ -21508,11 +21556,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
         issueId: ticket.id,
         shipmentId: ticket.shipmentId,
         systemOrderNo: ticket.shipment.systemOrderNo,
-        statusFrom: ticket.status,
+        statusFrom: closeResult.statusFrom,
         statusTo: 'CLOSED',
-        originalStatusPool: ticket.shipment?.status,
+        originalStatusPool: closeResult.originalStatusPool,
         handledBy: principal.username,
-        closedAt: closedAt.toISOString()
+        closedAt: closeResult.closedAt.toISOString()
       },
       sourceRefs: [{ nodeType: 'shipment', id: ticket.shipmentId }],
       metrics: { closed: 1 }
@@ -21526,8 +21574,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const trimmed = reason.trim();
     if (!trimmed) throw new BadRequestException('请填写协助说明');
     if (ticket.status === 'CLOSED') throw new BadRequestException('已关闭问题件不能请求协助');
-    await this.prisma.problemTicket.update({ where: { id: ticket.id }, data: { status: 'ASSISTANCE_REQUIRED' } });
-    await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'problem.ticket.assist', target: ticket.id, before: { status: ticket.status }, after: { status: 'ASSISTANCE_REQUIRED', assistanceReason: trimmed, assistanceRequestedAt: new Date().toISOString() } } });
+    await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, ticket.shipmentId);
+      const lockedTicket = await tx.problemTicket.findUnique({ where: { id: ticket.id } });
+      if (!lockedTicket) throw new NotFoundException('问题件不存在');
+      if (lockedTicket.status === 'CLOSED') throw new BadRequestException('已关闭问题件不能请求协助');
+      const assistanceAt = new Date();
+      await tx.problemTicket.update({
+        where: { id: ticket.id },
+        data: { status: 'ASSISTANCE_REQUIRED', assistanceReason: trimmed, assistanceAt } as any
+      });
+      await tx.auditLog.create({ data: { actorId: principal.id, action: 'problem.ticket.assist', target: ticket.id, before: { status: lockedTicket.status }, after: { status: 'ASSISTANCE_REQUIRED', assistanceReason: trimmed, assistanceRequestedAt: assistanceAt.toISOString() } } });
+    });
     return (await this.getProblemTickets({ ...principal, role: 'ADMIN' })).find((item) => item.id === ticketId)!;
   }
 
@@ -23000,6 +23058,34 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       WHERE "id" = ${shipmentId}
       FOR UPDATE
     `);
+  }
+
+  private async assertNoUnresolvedProblemTickets(tx: any, shipmentId: string) {
+    const openProblemCount = await tx.problemTicket.count({
+      where: { shipmentId, status: { not: 'CLOSED' } }
+    });
+    if (openProblemCount > 0) {
+      throw new BadRequestException('当前运单存在未解决问题件，请先处理并关闭问题件后再继续流转');
+    }
+  }
+
+  private assertProblemTicketCreationStage(status: ShipmentStatus) {
+    const allowedStatuses: ShipmentStatus[] = [
+      'REVIEW_PENDING',
+      'DECLARED',
+      'WAITING_RECEIVE',
+      'WAITING_SORT',
+      'WAITING_DISPATCH',
+      'OUTBOUNDED',
+      'WAITING_DEPARTURE',
+      'DEPARTED',
+      'ARRIVED_PORT',
+      'DELIVERING',
+      'SIGNED'
+    ];
+    if (!allowedStatuses.includes(status)) {
+      throw new BadRequestException('当前运单阶段不支持创建问题件');
+    }
   }
 
   private normalizeInboundNo(value: unknown): string | null {
@@ -30275,12 +30361,24 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     toStatus: ShipmentStatus,
     note: string
   ): Promise<Shipment> {
-    await this.createEvent(shipmentId, fromStatus, toStatus, note);
-    const updated = await this.prisma.shipment.update({
-      where: { id: shipmentId },
-      data: { status: toStatus },
-      include: shipmentIncludes
+    const transitionedAt = new Date();
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, shipmentId);
+      const lockedShipment = await tx.shipment.findUnique({
+        where: { id: shipmentId },
+        select: { id: true, status: true, deletedAt: true }
+      });
+      if (!lockedShipment || lockedShipment.deletedAt) throw new NotFoundException('运单不存在');
+      if (lockedShipment.status !== fromStatus) throw new ConflictException('订单状态已变化，请刷新后重试');
+      await this.assertNoUnresolvedProblemTickets(tx, shipmentId);
+      await tx.shipmentEvent.create({ data: { shipmentId, fromStatus, toStatus, note } });
+      return tx.shipment.update({
+        where: { id: shipmentId },
+        data: { status: toStatus },
+        include: shipmentIncludes
+      });
     });
+    await this.recordShipmentStageStatusTransition(shipmentId, fromStatus, toStatus, transitionedAt);
     return this.mapShipmentResponse(updated);
   }
 
