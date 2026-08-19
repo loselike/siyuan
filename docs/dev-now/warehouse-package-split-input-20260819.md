@@ -1,6 +1,6 @@
 # 底层优化第六阶段：仓库拆票输入契约
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 会话标题：`Sunny｜底层架构优化｜06`
 - 会话 slug：`warehouse-package-split-input-20260819`
 - 发布分支：`codex/release/warehouse-package-split-input-20260819`
@@ -38,8 +38,30 @@
 - [NestJS Validation](https://docs.nestjs.com/techniques/validation)：网络 payload 是无运行时类型信息的普通对象，可在校验边界转换并剥离未声明属性。
 - Sunny 不启用全局 `ValidationPipe`、不引入 decorator DTO/新依赖，也不把拆票事务或业务状态校验搬进 schema；NestJS 为 MIT，仅借鉴边界设计。
 
-## 验收计划
+## 完成结果
 
-- 先在接 schema 前运行数字字符串、优先级、默认件数和状态/审计 characterization；再新增 Shared schema 及非法输入测试。
-- API E2E 覆盖 401/403/400、合法不存在 404，并继续运行完整拆票生命周期样本；Shared/API typecheck、`git diff --check`。
-- 发布前进行输入边界与状态机对抗检查；47 current-baseline cutover 后完成无写入 API 探针、源码、provenance、镜像、容器、health、日志、锁与 recovery 验证。
+- Shared 新增 `warehousePackageSplitInputSchema`，Controller 在 Guard 后通过参数级 `RuntimeInputPipe` 解析拆票 body；未修改 Repository、Service、权限、状态机、事务、审计、lineage、Web 或数据库。
+- 合法兼容契约保持：数字字符串、非空 `pieces` 优先、`splitCount="2.8"` 向下取整为 2、仅传票数时每票默认 1 件；未知字段被剥离。
+- 非法顶层结构、逐票件数、拆分票数和备注类型在进入 handler 前返回 400；401/403/404、201、数据范围与拆票持久化行为由定向 E2E 保护。
+- 提交：`a6306516d77d7d97c146f977037815af15622885`；分支已推送 `origin/codex/release/warehouse-package-split-input-20260819`。
+
+## 验证证据
+
+- 迁移前 characterization：数字字符串、`pieces` 优先与默认单票件数 `1/1` 通过。
+- Shared schema 定向测试 `68/68` 通过；API 拆票生命周期与 RuntimeInputPipe 定向测试 `10/10` 通过；补充断言后的拆票生命周期 `8/8` 通过。
+- Shared/API typecheck、`git diff --check` 通过。
+- 两个历史宽 E2E 在改动前后均复现既有权限夹具漂移：仓库查询旧期望 403、实际 200；lineage 创建旧期望 201、实际 403。本阶段未借机改变权限语义。
+- 47 current-baseline cutover 发布 `git-a6306516d77d_web-6950c236390f_api-5758ff610aef` 成功；当时 Git bundle provenance、镜像/state、API release ID、内外 health、日志、锁与 recovery 均通过。
+- 47 无业务写入探针：未登录 401；三类非法 body 均 400；合法数字字符串 + 不存在包裹 404；包裹增量 0、`warehouse.package.split` 业务审计增量 0。四次鉴权后失败写请求按既有规则新增 4 条 `warehouse.request.write.failed` 请求失败审计。
+
+## 并发发布说明
+
+- 本阶段发布完成后，“权限3.0”会话于 `2026-08-19 19:23 Asia/Shanghai` 精确替换 3 个权限 Web 文件和 3 个权限 API 文件，并重新构建 API/Web；拆票源码仍保留在线，线上拆票探针已通过。
+- 当前该会话仍在处理自己的发布状态，47 暂时出现 `running-image-does-not-match-release-state`。这不是拆票代码回归；为避免覆盖并发权限改动，本阶段不回滚、不收养、不重建其文件，后续发布须等待该会话形成新的稳定基线。
+
+## 阶段重评
+
+- 安全/数据正确性候选：`PATCH /api/warehouse/packages/:id` 仍直接接收 interface，字符串字段可触发 `.trim()` 异常，数值字段存在宽松隐式转换；风险和输入面最高。
+- 高频业务流候选：备注、异常两个独立接口同样缺运行时校验，但只覆盖单一可选文本字段，收益低于完整包裹编辑。
+- 后端架构候选：继续拆 Repository 或迁移更多路由；当前输入边界还有可直接触发 500 的确定缺口，架构拆分优先级下调。
+- 决定：下一阶段继续仓库输入控制面，选择完整包裹编辑输入契约；仍只在 Controller/Shared schema 边界收口，不改变现有更新算法、权限、状态、事务和审计。
