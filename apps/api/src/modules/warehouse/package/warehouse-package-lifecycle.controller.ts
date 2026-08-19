@@ -1,6 +1,8 @@
 import { Body, Controller, Inject, Param, Patch, Post, Put, Req } from '@nestjs/common';
+import { warehouseSameSpecReplenishInputSchema } from '@siyuan/shared/warehouse-input';
 import { RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
+import { RuntimeInputPipe } from '../../runtime-input.pipe.js';
 import { WarehousePackageLifecycleService } from './warehouse-package-lifecycle.service.js';
 
 type WarehousePackageCreateInput = Parameters<WarehousePackageLifecycleService['create']>[1];
@@ -41,7 +43,7 @@ export class WarehousePackageLifecycleController {
   replenishWarehouseSameSpec(
     @Req() request: { user: Principal },
     @Param('id') id: string,
-    @Body() body: WarehouseSameSpecReplenishInput
+    @Body(new RuntimeInputPipe(warehouseSameSpecReplenishInputSchema)) body: WarehouseSameSpecReplenishInput
   ) {
     return this.warehousePackageLifecycle.replenishSameSpec(request.user, id, body);
   }
