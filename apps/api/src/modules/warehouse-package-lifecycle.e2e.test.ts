@@ -106,6 +106,106 @@ describe('warehouse package lifecycle API contract', () => {
       });
   });
 
+  it('preserves direct package creation numeric-string, default and clamping behavior', async () => {
+    const adminToken = await app.loginAs('admin');
+    const trackingNo = `KY-PH5-CHAR-${Date.now()}`;
+    const defaultTrackingNo = `${trackingNo}-DEFAULT`;
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: trackingNo,
+        expectedTotalPackageCount: '3.8',
+        packageIndex: '9',
+        weightKg: '8.125',
+        lengthCm: '40.25',
+        widthCm: '30',
+        heightCm: '20'
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          expectedTotalPackageCount: 3,
+          packageIndex: 3,
+          packageCount: 1,
+          weightKg: 8.13,
+          lengthCm: 40.25,
+          widthCm: 30,
+          heightCm: 20
+        }));
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: defaultTrackingNo
+      })
+      .expect(201)
+      .expect((response) => {
+        expect(response.body).toEqual(expect.objectContaining({
+          expectedTotalPackageCount: 1,
+          packageIndex: 1,
+          packageCount: 1,
+          weightKg: 0,
+          lengthCm: 0,
+          widthCm: 0,
+          heightCm: 0
+        }));
+      });
+  });
+
+  it('validates direct package creation input without weakening authentication or permission guards', async () => {
+    const adminToken = await app.loginAs('admin');
+    const customerToken = await app.loginAs('customer');
+    const invalidBody = {
+      customerCode: '9409',
+      domesticTrackingNo: 'KY-PH5-INVALID',
+      weightKg: true
+    };
+
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .send(invalidBody)
+      .expect(401);
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(customerToken))
+      .send(invalidBody)
+      .expect(403);
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send(invalidBody)
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('重量格式不正确');
+      });
+    await request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        customerCode: 'TOO-LONG-9',
+        domesticTrackingNo: 'KY-PH5-NO-WRITE',
+        expectedTotalPackageCount: '2',
+        packageIndex: '1',
+        packageCount: '1',
+        weightKg: '8',
+        lengthCm: '40',
+        widthCm: '30',
+        heightCm: '20'
+      })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('客户编号最长 8 位');
+      });
+  });
+
   it('preserves create, replenish idempotency, update, remark, exception, split and manual-receipt effects', async () => {
     const adminToken = await app.loginAs('admin');
     const authorization = app.auth(adminToken);

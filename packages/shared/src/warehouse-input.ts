@@ -5,6 +5,7 @@ import {
 import type {
   WarehouseManualReceiptCartonSpecInput,
   WarehouseManualReceiptCreateInput,
+  WarehousePackageCreateInput,
   WarehouseSameSpecReplenishInput
 } from './warehouse.js';
 
@@ -22,6 +23,49 @@ export const warehouseSameSpecReplenishInputSchema = defineRuntimeSchema<Warehou
   }
 
   return { supplementCount, requestId };
+});
+
+export const warehousePackageCreateInputSchema = defineRuntimeSchema<WarehousePackageCreateInput>((value) => {
+  const input = isRecord(value) ? value : {};
+  const customerCode = parseOptionalString(input.customerCode, '客户编号格式不正确');
+  const customerOrderNo = parseOptionalString(input.customerOrderNo, '客户单号格式不正确');
+  const combinedOrderNo = parseOptionalString(input.combinedOrderNo, '合并单号格式不正确');
+  const domesticTrackingNo = parseOptionalString(input.domesticTrackingNo, '快递单号格式不正确') ?? '';
+  const expectedTotalPackageCount = parseLegacyPositiveInteger(
+    input.expectedTotalPackageCount,
+    '预计总箱数格式不正确'
+  );
+  const packageIndex = Math.min(
+    expectedTotalPackageCount,
+    parseLegacyPositiveInteger(input.packageIndex, '箱序号格式不正确')
+  );
+  const packageCount = parseLegacyPositiveInteger(input.packageCount, '件数格式不正确');
+  const weightKg = parseLegacyMeasurement(input.weightKg, '重量格式不正确');
+  const lengthCm = parseLegacyMeasurement(input.lengthCm, '长宽高格式不正确');
+  const widthCm = parseLegacyMeasurement(input.widthCm, '长宽高格式不正确');
+  const heightCm = parseLegacyMeasurement(input.heightCm, '长宽高格式不正确');
+  const scanTime = parseOptionalString(input.scanTime, '扫描时间格式不正确');
+  const remark = parseOptionalString(input.remark, '备注格式不正确');
+  const manualException = parseOptionalString(input.manualException, '异常说明格式不正确');
+  const scanSource = parseOptionalString(input.scanSource, '扫描来源格式不正确');
+
+  return {
+    ...(customerCode === undefined ? {} : { customerCode }),
+    ...(customerOrderNo === undefined ? {} : { customerOrderNo }),
+    ...(combinedOrderNo === undefined ? {} : { combinedOrderNo }),
+    domesticTrackingNo,
+    expectedTotalPackageCount,
+    packageIndex,
+    packageCount,
+    weightKg,
+    lengthCm,
+    widthCm,
+    heightCm,
+    ...(scanTime === undefined ? {} : { scanTime }),
+    ...(remark === undefined ? {} : { remark }),
+    ...(manualException === undefined ? {} : { manualException }),
+    ...(scanSource === undefined ? {} : { scanSource })
+  };
 });
 
 export const warehouseManualReceiptCreateInputSchema = defineRuntimeSchema<WarehouseManualReceiptCreateInput>((value) => {
@@ -111,4 +155,30 @@ function parseOptionalString(value: unknown, message: string): string | undefine
     throw new RuntimeInputValidationError(message);
   }
   return value;
+}
+
+function parseLegacyPositiveInteger(value: unknown, message: string): number {
+  if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
+    return 1;
+  }
+  const parsed = parseFiniteNumber(value, message);
+  return Math.max(1, Math.floor(parsed || 1));
+}
+
+function parseLegacyMeasurement(value: unknown, message: string): number {
+  if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
+    return 0;
+  }
+  return parseFiniteNumber(value, message);
+}
+
+function parseFiniteNumber(value: unknown, message: string): number {
+  if (typeof value !== 'number' && typeof value !== 'string') {
+    throw new RuntimeInputValidationError(message);
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new RuntimeInputValidationError(message);
+  }
+  return parsed;
 }
