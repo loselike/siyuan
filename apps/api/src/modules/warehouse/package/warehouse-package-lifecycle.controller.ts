@@ -2,6 +2,7 @@ import { Body, Controller, Inject, Param, Patch, Post, Put, Req } from '@nestjs/
 import {
   warehouseManualReceiptCreateInputSchema,
   warehousePackageCreateInputSchema,
+  warehousePackageSplitInputSchema,
   warehouseSameSpecReplenishInputSchema
 } from '@siyuan/shared/warehouse-input';
 import { RequirePermission } from '../../require-permission.decorator.js';
@@ -57,7 +58,7 @@ export class WarehousePackageLifecycleController {
   splitWarehousePackage(
     @Req() request: { user: Principal },
     @Param('id') id: string,
-    @Body() body: WarehousePackageSplitInput
+    @Body(new RuntimeInputPipe(warehousePackageSplitInputSchema)) body: WarehousePackageSplitInput
   ) {
     return this.warehousePackageLifecycle.split(request.user, id, body);
   }

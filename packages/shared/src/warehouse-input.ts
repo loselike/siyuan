@@ -6,6 +6,7 @@ import type {
   WarehouseManualReceiptCartonSpecInput,
   WarehouseManualReceiptCreateInput,
   WarehousePackageCreateInput,
+  WarehousePackageSplitInput,
   WarehouseSameSpecReplenishInput
 } from './warehouse.js';
 
@@ -65,6 +66,33 @@ export const warehousePackageCreateInputSchema = defineRuntimeSchema<WarehousePa
     ...(remark === undefined ? {} : { remark }),
     ...(manualException === undefined ? {} : { manualException }),
     ...(scanSource === undefined ? {} : { scanSource })
+  };
+});
+
+export const warehousePackageSplitInputSchema = defineRuntimeSchema<WarehousePackageSplitInput>((value) => {
+  const input = isRecord(value) ? value : {};
+  if (input.pieces !== undefined) {
+    if (!Array.isArray(input.pieces)) {
+      throw new RuntimeInputValidationError('每票件数必须是大于 0 的整数');
+    }
+    if (input.pieces.length > 0) {
+      const pieces = input.pieces.map((piece) => parsePositiveInteger(piece, '每票件数必须是大于 0 的整数'));
+      if (pieces.length < 2) {
+        throw new RuntimeInputValidationError('拆分票数至少为 2');
+      }
+      const remark = parseOptionalString(input.remark, '备注格式不正确');
+      return {
+        pieces,
+        ...(remark === undefined ? {} : { remark })
+      };
+    }
+  }
+
+  const splitCount = parseLegacySplitCount(input.splitCount);
+  const remark = parseOptionalString(input.remark, '备注格式不正确');
+  return {
+    splitCount,
+    ...(remark === undefined ? {} : { remark })
   };
 });
 
@@ -170,6 +198,14 @@ function parseLegacyMeasurement(value: unknown, message: string): number {
     return 0;
   }
   return parseFiniteNumber(value, message);
+}
+
+function parseLegacySplitCount(value: unknown): number {
+  const splitCount = Math.floor(parseFiniteNumber(value, '拆分票数至少为 2'));
+  if (splitCount < 2) {
+    throw new RuntimeInputValidationError('拆分票数至少为 2');
+  }
+  return splitCount;
 }
 
 function parseFiniteNumber(value: unknown, message: string): number {

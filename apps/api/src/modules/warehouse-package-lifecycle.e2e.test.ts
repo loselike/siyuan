@@ -206,6 +206,140 @@ describe('warehouse package lifecycle API contract', () => {
       });
   });
 
+  it('preserves split numeric strings, pieces precedence and split-count defaults', async () => {
+    const adminToken = await app.loginAs('admin');
+    const authorization = app.auth(adminToken);
+    const suffix = `${Date.now()}`;
+
+    const createSource = async (trackingNo: string, weightKg: number) => request(app.getHttpServer())
+      .post('/api/warehouse/packages')
+      .set('Authorization', authorization)
+      .send({
+        customerCode: '9409',
+        customerOrderNo: '9409',
+        domesticTrackingNo: trackingNo,
+        packageCount: 1,
+        weightKg,
+        lengthCm: 40,
+        widthCm: 30,
+        heightCm: 20
+      })
+      .expect(201);
+
+    const piecesSource = await createSource(`KY-PH6-PIECES-${suffix}`, 30);
+    const piecesSplit = await request(app.getHttpServer())
+      .post(`/api/warehouse/packages/${piecesSource.body.id}/split`)
+      .set('Authorization', authorization)
+      .send({
+        pieces: ['10', '20'],
+        splitCount: 'not-used',
+        remark: '  phase6 pieces precedence  '
+      })
+      .expect(201);
+    expect(piecesSplit.body.sourcePackage).toEqual(expect.objectContaining({
+      id: piecesSource.body.id,
+      status: 'CONSOLIDATED'
+    }));
+    expect(piecesSplit.body.packages).toEqual([
+      expect.objectContaining({
+        sourcePackageId: piecesSource.body.id,
+        expectedTotalPackageCount: 2,
+        packageIndex: 1,
+        packageCount: 10,
+        weightKg: 10,
+        remark: 'phase6 pieces precedence'
+      }),
+      expect.objectContaining({
+        sourcePackageId: piecesSource.body.id,
+        expectedTotalPackageCount: 2,
+        packageIndex: 2,
+        packageCount: 20,
+        weightKg: 20,
+        remark: 'phase6 pieces precedence'
+      })
+    ]);
+
+    const countSource = await createSource(`KY-PH6-COUNT-${suffix}`, 8);
+    const countSplit = await request(app.getHttpServer())
+      .post(`/api/warehouse/packages/${countSource.body.id}/split`)
+      .set('Authorization', authorization)
+      .send({ splitCount: '2.8' })
+      .expect(201);
+    expect(countSplit.body.sourcePackage).toEqual(expect.objectContaining({
+      id: countSource.body.id,
+      status: 'CONSOLIDATED'
+    }));
+    expect(countSplit.body.packages).toEqual([
+      expect.objectContaining({ expectedTotalPackageCount: 2, packageIndex: 1, packageCount: 1, weightKg: 4 }),
+      expect.objectContaining({ expectedTotalPackageCount: 2, packageIndex: 2, packageCount: 1, weightKg: 4 })
+    ]);
+  });
+
+  it('validates split input before repository lookup without weakening authentication or permission guards', async () => {
+    const adminToken = await app.loginAs('admin');
+    const customerToken = await app.loginAs('customer');
+    const path = '/api/warehouse/packages/codex-phase6-nonexistent/split';
+    const invalidPieces = { pieces: [true, 1] };
+
+    await request(app.getHttpServer())
+      .post(path)
+      .send(invalidPieces)
+      .expect(401);
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(customerToken))
+      .send(invalidPieces)
+      .expect(403);
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send(invalidPieces)
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('每票件数必须是大于 0 的整数');
+      });
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ pieces: [1] })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('拆分票数至少为 2');
+      });
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ splitCount: {} })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('拆分票数至少为 2');
+      });
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send([])
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('拆分票数至少为 2');
+      });
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ pieces: [1, 1], splitCount: 'ignored', remark: 123 })
+      .expect(400)
+      .expect((response) => {
+        expect(response.body.message).toBe('备注格式不正确');
+      });
+    await request(app.getHttpServer())
+      .post(path)
+      .set('Authorization', app.auth(adminToken))
+      .send({ pieces: ['1', '2'], splitCount: 'ignored', remark: '  phase6 valid  ' })
+      .expect(404)
+      .expect((response) => {
+        expect(response.body.message).toBe('仓库包裹不存在');
+      });
+  });
+
   it('preserves create, replenish idempotency, update, remark, exception, split and manual-receipt effects', async () => {
     const adminToken = await app.loginAs('admin');
     const authorization = app.auth(adminToken);

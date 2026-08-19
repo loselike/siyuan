@@ -3,6 +3,7 @@ import { RuntimeInputValidationError } from './runtime-schema.js';
 import {
   warehouseManualReceiptCreateInputSchema,
   warehousePackageCreateInputSchema,
+  warehousePackageSplitInputSchema,
   warehouseSameSpecReplenishInputSchema
 } from './warehouse-input.js';
 
@@ -124,6 +125,63 @@ describe('warehousePackageCreateInputSchema', () => {
       domesticTrackingNo: 'KY-DIRECT-INVALID',
       [field]: invalidValue
     })).toThrow(new RuntimeInputValidationError(message));
+  });
+});
+
+describe('warehousePackageSplitInputSchema', () => {
+  it('normalizes numeric-string pieces and preserves their precedence over splitCount', () => {
+    expect(warehousePackageSplitInputSchema.parse({
+      pieces: ['10', 20],
+      splitCount: 'not-used',
+      remark: '  existing repository trims this  ',
+      ignored: 'not-forwarded'
+    })).toEqual({
+      pieces: [10, 20],
+      remark: '  existing repository trims this  '
+    });
+  });
+
+  it.each([
+    [{ splitCount: '2.8' }],
+    [{ pieces: [], splitCount: 2.8 }]
+  ])('preserves split-count flooring when no per-ticket pieces are supplied', (input) => {
+    expect(warehousePackageSplitInputSchema.parse(input)).toEqual({ splitCount: 2 });
+  });
+
+  it.each([
+    [{ pieces: '1,1', splitCount: 2 }],
+    [{ pieces: [true, 1] }],
+    [{ pieces: [[], 1] }],
+    [{ pieces: [{}, 1] }],
+    [{ pieces: ['not-a-number', 1] }],
+    [{ pieces: [0, 1] }],
+    [{ pieces: [1.5, 1] }]
+  ])('rejects malformed per-ticket pieces', (input) => {
+    expect(() => warehousePackageSplitInputSchema.parse(input)).toThrow(
+      new RuntimeInputValidationError('每票件数必须是大于 0 的整数')
+    );
+  });
+
+  it.each([
+    [undefined],
+    [null],
+    [[]],
+    [{}],
+    [{ pieces: [1] }],
+    [{ splitCount: true }],
+    [{ splitCount: [] }],
+    [{ splitCount: 'not-a-number' }],
+    [{ splitCount: 1.9 }]
+  ])('rejects a missing or invalid effective split count', (input) => {
+    expect(() => warehousePackageSplitInputSchema.parse(input)).toThrow(
+      new RuntimeInputValidationError('拆分票数至少为 2')
+    );
+  });
+
+  it('rejects a non-string remark after validating the effective split shape', () => {
+    expect(() => warehousePackageSplitInputSchema.parse({ pieces: [1, 1], remark: 123 })).toThrow(
+      new RuntimeInputValidationError('备注格式不正确')
+    );
   });
 });
 
