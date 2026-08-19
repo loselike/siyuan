@@ -49,3 +49,4 @@
 - Shared/API typecheck、`git diff --check` 通过。首次 API typecheck 因新 worktree 尚未生成 Prisma Client 产生全局类型噪声；执行本地 `prisma generate` 后为 0，未修改 schema/migrations。
 - 安全复核：Guard 仍先于参数 pipe；schema 不处理权限、对象范围、状态、事务、并发、审计或 lineage；Repository/Service/Web/数据库无改动。
 - 发布阻塞：47 当前由活跃的“权限3.0”会话占用，其运行镜像与 release state 暂不一致。为避免覆盖该会话 6 个权限文件和后续代理变更，本阶段未执行任何远端同步、构建、重启或状态收养。
+- 已实际执行只读 `release:47:baseline`：安全门返回 `running-image-does-not-match-release-state`（Web/API image 与 API release ID 均不匹配），因此未生成可用 baseline receipt；锁已自动释放、recovery clear。等待并发会话完成后从其稳定基线续发。
