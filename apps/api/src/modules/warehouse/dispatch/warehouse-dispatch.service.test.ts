@@ -14,6 +14,7 @@ function repositoryStub(
   return {
     getWarehouseDispatchShipments: vi.fn(),
     updateWarehouseDispatchDeclaration: vi.fn(),
+    updateWarehouseDispatchInboundNo: vi.fn(),
     getWarehouseHandover: vi.fn(),
     printWarehouseHandover: vi.fn(),
     dispatchShipment: vi.fn(),

@@ -12,6 +12,8 @@ function repositoryStub(
 ): WarehouseTallyQueryRepository {
   return {
     getWarehouseConsolidationItems: vi.fn().mockResolvedValue([]),
+    getWarehouseTallySortRules: vi.fn().mockResolvedValue([]),
+    updateWarehouseTallySortRules: vi.fn().mockResolvedValue([]),
     getWarehouseTallyTasks: vi.fn().mockResolvedValue([]),
     getWarehouseTallyTaskSourcePackages: vi.fn().mockResolvedValue([]),
     getWarehouseTallyTaskHistoryChain: vi.fn().mockResolvedValue([]),

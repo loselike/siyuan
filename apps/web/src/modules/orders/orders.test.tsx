@@ -30,7 +30,8 @@ describe('Orders flows', () => {
       customerKeyword: '',
       outboundOrderKeyword: '',
       site: '深圳思远',
-      salesperson: 'Rachel'
+      salesperson: 'Rachel',
+      node: ''
     }))).toEqual([target]);
   });
 
