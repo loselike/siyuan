@@ -23,7 +23,7 @@ import { PrismaProblemTicketQueryRepository } from './customer-service/problem-t
 import { PROBLEM_TICKET_QUERY_REPOSITORY } from './customer-service/problem-ticket/problem-ticket-query.repository.js';
 import { ProblemTicketQueryService } from './customer-service/problem-ticket/problem-ticket-query.service.js';
 import { DataController } from './data.controller.js';
-import { DatabaseSeedService } from './database-seed.service.js';
+import { DataAccessModule, usePrismaRepository } from './data-access.module.js';
 import { FinanceCatalogController } from './finance/catalog/finance-catalog.controller.js';
 import {
   FINANCE_CATALOG_AUDIT_WRITER,
@@ -51,7 +51,6 @@ import { WATER_RECEIPT_LIFECYCLE_REPOSITORY } from './finance/water-receipt/wate
 import { WaterReceiptLifecycleService } from './finance/water-receipt/water-receipt-lifecycle.service.js';
 import { MiscFeeController } from './finance/misc-fee/misc-fee.controller.js';
 import { MiscFeeService } from './finance/misc-fee/misc-fee.service.js';
-import { InMemoryRepository } from './in-memory.repository.js';
 import { LineageWatcher } from './lineage-watcher.js';
 import { LineageQueryController } from './lineage-query.controller.js';
 import { CustomerSourceController } from './master-data/customer-source/customer-source.controller.js';
@@ -74,7 +73,6 @@ import {
   PrismaPriceBookQueryRepository
 } from './pricing/price-book/price-book-query.repository.js';
 import { PrismaRepository } from './prisma.repository.js';
-import { PrismaService } from './prisma.service.js';
 import { RbacGuard } from './rbac.guard.js';
 import { ShipmentLabelLifecycleController } from './shipment/fulfillment/shipment-fulfillment-query.controller.js';
 import { ShipmentLabelFileStorage } from './shipment/fulfillment/shipment-label-file.storage.js';
@@ -121,13 +119,7 @@ import {
 } from './warehouse/dispatch/warehouse-dispatch.repository.js';
 import { WarehouseDispatchService } from './warehouse/dispatch/warehouse-dispatch.service.js';
 import { WarehouseInventoryQueryController } from './warehouse/inventory/warehouse-inventory-query.controller.js';
-import { LegacyWarehouseInventoryQueryRepository } from './warehouse/inventory/legacy-warehouse-inventory-query.repository.js';
-import {
-  PrismaWarehouseInventoryQueryRepository,
-  WAREHOUSE_INVENTORY_QUERY_AUTHORIZER,
-  WAREHOUSE_INVENTORY_QUERY_REPOSITORY
-} from './warehouse/inventory/warehouse-inventory-query.repository.js';
-import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
+import { WarehouseInventoryModule } from './warehouse/inventory/warehouse-inventory.module.js';
 import { WarehousePackageLifecycleController } from './warehouse/package/warehouse-package-lifecycle.controller.js';
 import { WAREHOUSE_PACKAGE_LIFECYCLE_REPOSITORY } from './warehouse/package/warehouse-package-lifecycle.repository.js';
 import { WarehousePackageLifecycleService } from './warehouse/package/warehouse-package-lifecycle.service.js';
@@ -165,16 +157,6 @@ import {
   PrismaUserTablePreferenceService,
   UserTablePreferenceService
 } from './user-table-preference.service.js';
-
-const usePrismaRepository =
-  process.env.USE_PRISMA_REPOSITORY === 'false'
-    ? false
-    : process.env.USE_PRISMA_REPOSITORY === 'true' || Boolean(process.env.DATABASE_URL);
-
-const repositoryProviders =
-  usePrismaRepository
-    ? [PrismaService, PrismaRepository, DatabaseSeedService]
-    : [{ provide: PrismaRepository, useClass: InMemoryRepository }];
 
 const httpAuditWriterProvider = {
   provide: HTTP_AUDIT_WRITER,
@@ -317,18 +299,6 @@ const warehouseTallyQueryRepositoryProvider = usePrismaRepository
   ? { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: PrismaWarehouseTallyQueryRepository }
   : { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: LegacyWarehouseTallyQueryRepository };
 
-const warehouseInventoryQueryRepositoryProvider = usePrismaRepository
-  ? { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: PrismaWarehouseInventoryQueryRepository }
-  : { provide: WAREHOUSE_INVENTORY_QUERY_REPOSITORY, useClass: LegacyWarehouseInventoryQueryRepository };
-
-const warehouseInventoryQueryAuthorizerProvider = {
-  provide: WAREHOUSE_INVENTORY_QUERY_AUTHORIZER,
-  useFactory: (repository: PrismaRepository) => ({
-    hasPermission: repository.hasPermission.bind(repository)
-  }),
-  inject: [PrismaRepository]
-};
-
 const trackingQueryRepositoryProvider = usePrismaRepository
   ? { provide: TRACKING_QUERY_REPOSITORY, useClass: PrismaTrackingQueryRepository }
   : { provide: TRACKING_QUERY_REPOSITORY, useClass: LegacyTrackingQueryRepository };
@@ -358,6 +328,7 @@ const systemIdentityAdminRepositoryProvider = {
 };
 
 @Module({
+  imports: [DataAccessModule, WarehouseInventoryModule],
   controllers: [
     AuthController,
     HealthController,
@@ -407,7 +378,6 @@ const systemIdentityAdminRepositoryProvider = {
     AuthSessionService,
     AiService,
     LineageWatcher,
-    ...repositoryProviders,
     financeCatalogRepositoryProvider,
     financeCatalogAuditWriterProvider,
     financeCatalogAuthorizerProvider,
@@ -429,7 +399,6 @@ const systemIdentityAdminRepositoryProvider = {
     waterReceiptAllocationRepositoryProvider,
     WaterReceiptLifecycleService,
     waterReceiptLifecycleRepositoryProvider,
-    WarehouseInventoryQueryService,
     WarehouseDispatchService,
     warehouseDispatchRepositoryProvider,
     warehouseDispatchAuthorizerProvider,
@@ -473,8 +442,6 @@ const systemIdentityAdminRepositoryProvider = {
     SystemDirectoryService,
     SystemIdentityAdminService,
     systemIdentityAdminRepositoryProvider,
-    warehouseInventoryQueryRepositoryProvider,
-    warehouseInventoryQueryAuthorizerProvider,
     warehouseTallyQueryRepositoryProvider,
     HttpAuditDispatcher,
     httpAuditWriterProvider,
