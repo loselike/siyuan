@@ -2187,6 +2187,10 @@ export class ApiClient {
     return this.request('/finance/payment-water-receipts', { method: 'POST', body: JSON.stringify(input) });
   }
 
+  async deletePaymentWaterReceipt(id: string): Promise<{ deleted: true }> {
+    return this.request(`/finance/payment-water-receipts/${id}`, { method: 'DELETE' });
+  }
+
   async agentBankAccounts(query: { agentName?: string; agentId?: string; includeDisabled?: boolean } = {}): Promise<AgentBankAccountSummary[]> {
     return this.request(`/finance/agent-bank-accounts${this.queryString(query)}`);
   }

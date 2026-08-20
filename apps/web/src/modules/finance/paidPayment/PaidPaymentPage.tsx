@@ -1,6 +1,6 @@
 import type { Key, ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, AutoComplete, Button, Card, Col, Descriptions, Form, Input, InputNumber, message, Modal, Popconfirm, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
+import { Alert, AutoComplete, Button, Card, Col, Descriptions, Form, Input, InputNumber, List, message, Modal, Popconfirm, Row, Select, Space, Tag, Tooltip, Typography } from 'antd';
 import { Download, RefreshCw, Search, SlidersHorizontal } from 'lucide-react';
 import type { PaidPaymentListQuery, PaidPaymentListResponse, PaidPaymentSummary, PayerBankAccountSummary, PaymentVoucherSummary } from '@siyuan/shared';
 import type { ApiClient, PermissionKey, RoleKey } from '../../../apiClient';
@@ -75,7 +75,7 @@ function formatBankInfo(row: PaidPaymentSummary) {
   return `${row.payeeBankAccount.accountName} / ${row.payeeBankAccount.bankName} / ${row.payeeBankAccount.bankAccountNo}`;
 }
 
-function renderVoucherThumb(apiClient: ApiClient, vouchers: PaymentVoucherSummary[], alt: string, onPreview: (url: string) => void) {
+function renderVoucherThumb(apiClient: ApiClient, vouchers: PaymentVoucherSummary[], alt: string, onPreview: (url: string) => void, action?: ReactNode) {
   const voucher = vouchers.find((item) => item.url) ?? vouchers[0];
   if (!voucher) return '-';
   return (
@@ -96,6 +96,7 @@ function renderVoucherThumb(apiClient: ApiClient, vouchers: PaymentVoucherSummar
       ) : null}
       <Text className="table-compact-text" title={voucher.fileName}>{voucher.fileName}</Text>
       {vouchers.length > 1 ? <Tag color="blue">{vouchers.length} 张</Tag> : null}
+      {action}
     </Space>
   );
 }
@@ -117,6 +118,8 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
   const [selectedRow, setSelectedRow] = useState<PaidPaymentSummary>();
   const [supplementRow, setSupplementRow] = useState<PaidPaymentSummary>();
   const [previewUrl, setPreviewUrl] = useState<string>();
+  const [voucherManagerRow, setVoucherManagerRow] = useState<PaidPaymentSummary>();
+  const [deletingVoucherId, setDeletingVoucherId] = useState<string>();
   const [confirmReceiptFile, setConfirmReceiptFile] = useState<File>();
   const [selectedPaymentIds, setSelectedPaymentIds] = useState<Key[]>([]);
   const [payerBankAccounts, setPayerBankAccounts] = useState<PayerBankAccountSummary[]>([]);
@@ -137,6 +140,11 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
     && hasPermission(permissions, 'finance:paid-payment:export');
   const canViewVoucher = hasPermission(permissions, 'finance:paid-payment:voucher-view');
   const canUploadVoucher = hasPermission(permissions, 'finance:paid-payment:voucher-upload');
+  const canDeleteVoucher = canViewVoucher
+    && canViewPayableAgentData
+    && canViewPayableCost
+    && fieldVisibility.showPayableStatus
+    && hasPermission(permissions, 'finance:paid-payment:voucher-delete');
   const canViewBank = canViewPayableBankData && hasPermission(permissions, 'finance:paid-payment:bank-view');
   const canReadPayerBanks = canViewPayableBankData && hasPermission(permissions, 'master-data:payer-banks:read');
 
@@ -159,6 +167,17 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
     const visibleIds = new Set(response.rows.map((row) => row.id));
     setSelectedPaymentIds((current) => current.filter((id) => visibleIds.has(String(id))));
   }, [response.rows]);
+
+  useEffect(() => {
+    if (!canDeleteVoucher) setVoucherManagerRow(undefined);
+  }, [canDeleteVoucher]);
+
+  useEffect(() => {
+    if (!voucherManagerRow) return;
+    const current = response.rows.find((row) => row.id === voucherManagerRow.id);
+    if (!current || current.waterReceipts.length === 0) setVoucherManagerRow(undefined);
+    else setVoucherManagerRow(current);
+  }, [response.rows, voucherManagerRow?.id]);
 
   useEffect(() => {
     if (!selectedRow || !canReadPayerBanks) return;
@@ -331,6 +350,47 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
     }
   };
 
+  const deleteWaterReceipt = useCallback(async (row: PaidPaymentSummary, voucher: PaymentVoucherSummary) => {
+    if (!canDeleteVoucher) return;
+    setDeletingVoucherId(voucher.id);
+    try {
+      await apiClient.deletePaymentWaterReceipt(voucher.id);
+      const remaining = row.waterReceipts.filter((item) => item.id !== voucher.id);
+      setVoucherManagerRow((current) => current?.id === row.id && remaining.length
+        ? { ...current, waterReceipts: remaining }
+        : undefined);
+      message.success('付款水单已删除');
+      await load();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '删除付款水单失败');
+    } finally {
+      setDeletingVoucherId(undefined);
+    }
+  }, [apiClient, canDeleteVoucher, load]);
+
+  const renderWaterReceiptCell = useCallback((row: PaidPaymentSummary) => {
+    if (!row.waterReceipts.length) return '-';
+    const voucher = row.waterReceipts.find((item) => item.url) ?? row.waterReceipts[0];
+    if (!voucher) return '-';
+    const action = canDeleteVoucher
+      ? row.waterReceipts.length === 1
+        ? (
+          <Popconfirm
+            title="确认删除这张付款水单？"
+            description="删除后列表不再显示该凭证，操作记录仍会保留。"
+            okText="删除"
+            cancelText="取消"
+            okButtonProps={{ danger: true, loading: deletingVoucherId === voucher.id }}
+            onConfirm={() => void deleteWaterReceipt(row, voucher)}
+          >
+            <Button type="link" danger size="small" loading={deletingVoucherId === voucher.id}>删除</Button>
+          </Popconfirm>
+        )
+        : <Button type="link" size="small" onClick={() => setVoucherManagerRow(row)}>管理</Button>
+      : undefined;
+    return renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl, action);
+  }, [apiClient, canDeleteVoucher, deleteWaterReceipt, deletingVoucherId]);
+
   const columns = useMemo<ManagedTableColumns<PaidPaymentSummary>>(() => [
     { title: '日期', dataIndex: 'date', width: 155, render: (value?: string) => formatBusinessDate(value) },
     ...(canViewPayableAgentData ? [{ title: agentFieldLabels.detailedCompanyName, dataIndex: 'agentName', width: 190, render: (value?: string) => value ?? '-' }] : []),
@@ -359,8 +419,8 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
     ...(canViewVoucher ? [{
       title: '水单',
       dataIndex: 'waterReceipts',
-      width: 180,
-      render: (_: unknown, row: PaidPaymentSummary) => renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl)
+      width: canDeleteVoucher ? 220 : 180,
+      render: (_: unknown, row: PaidPaymentSummary) => renderWaterReceiptCell(row)
     }] : []),
     {
       title: '操作',
@@ -379,7 +439,7 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
         </Space>
       )
     }
-  ], [apiClient, canConfirm, canReverse, canUpdate, canUploadVoucher, canViewBank, canViewPayableAgentData, canViewPayableCost, canViewVoucher, fieldVisibility.showPayableStatus, renderShipmentOrderNoLink]);
+  ], [apiClient, canConfirm, canDeleteVoucher, canReverse, canUpdate, canUploadVoucher, canViewBank, canViewPayableAgentData, canViewPayableCost, canViewVoucher, fieldVisibility.showPayableStatus, renderShipmentOrderNoLink, renderWaterReceiptCell]);
   const recordDetailColumns = useMemo<ManagedTableColumns<PaidPaymentSummary>>(() => [
     ...columns,
     {
@@ -457,13 +517,13 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
             canViewBank ? { key: 'payeeBankAccount', label: '收款银行', value: formatBankInfo(row), title: formatBankInfo(row), wrap: true } : null,
             canViewBank ? { key: 'payerBankName', label: '付款方银行', value: row.payerBankName || '-', title: row.payerBankName } : null,
             canViewPayableCost ? { key: 'paidAt', label: '付款日期', value: formatBusinessDate(row.paidAt) } : null,
-            canViewVoucher ? { key: 'waterReceipts', label: '水单', value: renderVoucherThumb(apiClient, row.waterReceipts, '付款水单', setPreviewUrl) } : null
+            canViewVoucher ? { key: 'waterReceipts', label: '水单', value: renderWaterReceiptCell(row) } : null
           ]}
         />
       )
     },
     { ...columns[columns.length - 1], key: 'action', width: PAID_PAYMENT_MATRIX_COLUMN_WIDTH, fixed: 'right' }
-  ], [apiClient, canViewBank, canViewPayableAgentData, canViewPayableCost, canViewVoucher, columns, fieldVisibility.showPayableStatus, renderShipmentOrderNoLink]);
+  ], [apiClient, canViewBank, canViewPayableAgentData, canViewPayableCost, canViewVoucher, columns, fieldVisibility.showPayableStatus, renderShipmentOrderNoLink, renderWaterReceiptCell]);
 
   if (!fieldVisibility.showPayableCost || !fieldVisibility.showPayableStatus) {
     return <Alert type="warning" showIcon message="当前账号无权查看该页面" />;
@@ -632,6 +692,55 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
 
       <Modal title="凭证预览" className="finance-modal finance-preview-modal" width={760} open={Boolean(previewUrl)} footer={null} onCancel={() => setPreviewUrl(undefined)} destroyOnHidden>
         {previewUrl ? <ProtectedVoucherImage apiClient={apiClient} url={previewUrl} alt="付款凭证" style={{ maxWidth: '100%' }} /> : null}
+      </Modal>
+
+      <Modal
+        title={`管理付款水单${voucherManagerRow ? ` · ${voucherManagerRow.applicationNo}` : ''}`}
+        className="finance-modal"
+        width={720}
+        open={Boolean(voucherManagerRow)}
+        footer={<Button onClick={() => setVoucherManagerRow(undefined)}>关闭</Button>}
+        onCancel={() => setVoucherManagerRow(undefined)}
+        destroyOnHidden
+      >
+        <List
+          dataSource={voucherManagerRow?.waterReceipts ?? []}
+          locale={{ emptyText: '暂无付款水单' }}
+          renderItem={(voucher) => (
+            <List.Item
+              actions={[
+                <Popconfirm
+                  key={`delete-${voucher.id}`}
+                  title="确认删除这张付款水单？"
+                  description="删除后列表不再显示该凭证，操作记录仍会保留。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true, loading: deletingVoucherId === voucher.id }}
+                  onConfirm={() => voucherManagerRow && void deleteWaterReceipt(voucherManagerRow, voucher)}
+                >
+                  <Button type="link" danger loading={deletingVoucherId === voucher.id}>删除</Button>
+                </Popconfirm>
+              ]}
+            >
+              <List.Item.Meta
+                avatar={voucher.url ? (
+                  <ProtectedVoucherImage
+                    apiClient={apiClient}
+                    url={voucher.url}
+                    alt="付款水单"
+                    width={56}
+                    height={42}
+                    preview={false}
+                    className="finance-paid-voucher-thumb"
+                    onDoubleClick={() => voucher.url && setPreviewUrl(voucher.url)}
+                  />
+                ) : null}
+                title={voucher.fileName}
+                description={`${voucher.uploadedBy ?? '未知上传人'} · ${voucher.createdAt ? formatBusinessDate(voucher.createdAt) : '上传时间未知'}`}
+              />
+            </List.Item>
+          )}
+        />
       </Modal>
 
       <Modal title="补充付款信息" className="finance-modal" width={720} open={Boolean(supplementRow)} onCancel={() => setSupplementRow(undefined)} onOk={() => void submitSupplement()} okText="保存" cancelText="取消" destroyOnHidden>

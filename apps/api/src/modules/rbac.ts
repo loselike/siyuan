@@ -584,7 +584,8 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
       if (permission === 'market:routed:replace-agent') return false;
       if (permission === 'customer-service:transfer:request-agent-change') return false;
       if (permission === 'finance:pending-payment:payment-voucher-upload'
-        || permission === 'finance:paid-payment:voucher-upload') return false;
+        || permission === 'finance:paid-payment:voucher-upload'
+        || permission === 'finance:paid-payment:voucher-delete') return false;
     }
     if (masks['agent-data']) {
       if (permission.startsWith('master-data:agents:') || permission.startsWith('master-data:agent-channels:')) return false;
@@ -603,7 +604,7 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
       if (permission.startsWith('market:pending-routing:payable-cost:')) return false;
       if (/^finance:payable:(?:manage|export|payment|attachment|attachment-view|view-sensitive|view-profit|paid-export|paid-voucher)$/.test(permission)) return false;
       if (/^finance:pending-payment:(?:create|update|bill-voucher-view|payment-voucher-view|payment-voucher-upload|export|view-sensitive)$/.test(permission)) return false;
-      if (/^finance:paid-payment:(?:update|voucher-view|voucher-upload|export|view-sensitive)$/.test(permission)) return false;
+      if (/^finance:paid-payment:(?:update|voucher-view|voucher-upload|voucher-delete|export|view-sensitive)$/.test(permission)) return false;
       if (/^finance:agent-bill:(?:import|save|difference-manage|difference-resolve|attachment-view|export|view-sensitive)$/.test(permission)) return false;
       if (/^pricing:price-books:(?:upload|import|legacy-source-import|legacy-rebuild|cleanup-original-agents|cost-row-view|export)$/.test(permission)) return false;
       if (permission === 'business:order-entry:payable-fee' || permission === 'business:shipment:payable-view' || permission === 'business:shipment:profit-view') return false;
@@ -616,7 +617,7 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
       if (permission === 'market:routed:replace-agent') return false;
       if (/^finance:payable:(?:audit|reverse|void|payment|paid-confirm|paid-reverse|batch-audit|batch-reverse|batch-void)$/.test(permission)) return false;
       if (/^finance:pending-payment:(?:create|update|cancel|payment-voucher-upload)$/.test(permission)) return false;
-      if (/^finance:paid-payment:(?:confirm|update|reverse|voucher-upload)$/.test(permission)) return false;
+      if (/^finance:paid-payment:(?:confirm|update|reverse|voucher-upload|voucher-delete)$/.test(permission)) return false;
       if (/^finance:agent-bill:(?:save|difference-resolve|archive|reverse-archive)$/.test(permission)) return false;
       if (/^finance:(?:pending-payment:(?:payment-voucher-view)|paid-payment:voucher-view|payable:paid-voucher)$/.test(permission)) return false;
       if (/^misc-fee:[^:]+:(?:confirm|audit|reverse-audit|void|match|hang|hang-approve|settlement-generate|settlement-audit|settlement-reverse)$/.test(permission)) return false;
@@ -935,7 +936,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
     ['business-cost', 'read', '查看'], ['business-cost', 'manage', '新增和修改'], ['business-cost', 'audit', '审核'], ['business-cost', 'reverse', '反审核'], ['business-cost', 'void', '作废'], ['business-cost', 'export', '导出'], ['business-cost', 'view-all', '查看全部数据'], ['business-cost', 'view-agent', '查看代理信息'], ['business-cost', 'view-profit', '查看利润'],
     ['payable', 'read', '查看'], ['payable', 'manage', '新增和修改'], ['payable', 'match-shipment', '匹配订单'], ['payable', 'audit', '审核'], ['payable', 'reverse', '反审核'], ['payable', 'void', '删除'], ['payable', 'export', '导出'], ['payable', 'view-sensitive', '查看应付金额和代理'], ['payable', 'view-profit', '查看利润'],
     ['pending-payment', 'read', '查看'], ['pending-payment', 'create', '生成付款申请'], ['pending-payment', 'cancel', '撤回付款申请'], ['pending-payment', 'bank-select', '选择收款银行'], ['pending-payment', 'bank-manage', '维护收款银行'], ['pending-payment', 'bill-voucher-upload', '上传供应商账单'], ['pending-payment', 'export', '导出'],
-    ['paid-payment', 'read', '查看'], ['paid-payment', 'confirm', '确认支付'], ['paid-payment', 'update', '补充付款信息'], ['paid-payment', 'reverse', '反核销'], ['paid-payment', 'voucher-view', '查看付款凭证'], ['paid-payment', 'voucher-upload', '上传付款凭证'], ['paid-payment', 'bank-view', '查看付款银行'], ['paid-payment', 'export', '导出'],
+    ['paid-payment', 'read', '查看'], ['paid-payment', 'confirm', '确认支付'], ['paid-payment', 'update', '补充付款信息'], ['paid-payment', 'reverse', '反核销'], ['paid-payment', 'voucher-view', '查看付款凭证'], ['paid-payment', 'voucher-upload', '上传付款凭证'], ['paid-payment', 'voucher-delete', '删除付款凭证'], ['paid-payment', 'bank-view', '查看付款银行'], ['paid-payment', 'export', '导出'],
     ['water-receipt', 'read', '查看'], ['water-receipt', 'create', '新增'], ['water-receipt', 'update', '修改'], ['water-receipt', 'arrive', '确认到账'], ['water-receipt', 'archive', '归档'], ['water-receipt', 'void', '作废'], ['water-receipt', 'voucher-view', '查看凭证'], ['water-receipt', 'voucher-upload', '上传凭证'], ['water-receipt', 'voucher-delete', '删除凭证'], ['water-receipt', 'export', '导出'], ['water-receipt', 'view-all', '查看全部数据'],
     ['water-match', 'read', '查看'], ['water-match', 'create', '匹配'], ['water-match', 'audit', '审核匹配'], ['water-match', 'reverse', '反审核匹配'], ['water-match', 'adjust', '修改待审核分配金额'], ['water-match', 'cancel', '删除待审核分配'], ['water-match', 'export', '导出'],
     ['agent-bill', 'read', '查看'], ['agent-bill', 'import', '保存代理账单'], ['agent-bill', 'difference-resolve', '处理差异'], ['agent-bill', 'archive', '归档'], ['agent-bill', 'reverse-archive', '反归档']
@@ -1803,6 +1804,10 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
   if (normalized.includes('finance:pending-payment:create')
     && !normalized.includes('finance:pending-payment:bank-select')) {
     normalized.push('finance:pending-payment:bank-select');
+  }
+  if (normalized.includes('finance:paid-payment:voucher-delete')
+    && !normalized.includes('finance:paid-payment:voucher-view')) {
+    normalized.push('finance:paid-payment:voucher-view');
   }
   const orderFeeViewDependencies: Array<[PermissionKey, PermissionKey]> = [
     ['business:order-fee:create', 'business:order-fee:view'],

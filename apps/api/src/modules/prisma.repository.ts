@@ -744,6 +744,7 @@ function formatAuditActionLabel(action: string): string {
     'finance.payment.bank.use_once': '本次使用收款银行',
     'finance.payment_voucher.add': '上传供应商账单截图',
     'finance.payment_voucher.delete': '删除供应商账单截图',
+    'finance.paid_payment.water_receipt.delete': '删除付款水单',
     'pricing.book.import': '导入价格表',
     'pricing.book.delete': '删除价格表',
     'pricing.markup_rule.create': '新增加价规则',
@@ -15645,6 +15646,61 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     });
     await this.prisma.auditLog.create({ data: { actorId: principal.id, action: 'finance.paid_payment.water_receipt.add', target: created.id, after: toAuditJson(this.toPaidPaymentVoucherAuditSnapshot(this.toPaymentVoucherSummary(created), this.toPaidPaymentSummary(application, true))) } });
     return this.toPaymentVoucherSummary(created);
+  }
+
+  async deletePaymentWaterReceipt(principal: Principal, id: string): Promise<{ deleted: true }> {
+    await this.ensurePayablePermission(principal, 'finance:paid-payment:voucher-delete');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    if (isPaymentVoucherGloballyMasked(fieldMasks)) {
+      throw new ForbiddenException('总规则已屏蔽付款凭证');
+    }
+    const deletedUrl = await (this.prisma as any).$transaction(async (transaction: any) => {
+      const candidate = await transaction.paymentVoucher.findFirst({
+        where: { id, voucherType: 'PAYMENT_RECEIPT', paymentApplicationId: { not: null } },
+        select: { paymentApplicationId: true }
+      });
+      if (!candidate?.paymentApplicationId) throw new NotFoundException('付款水单不存在');
+      await transaction.$queryRaw(Prisma.sql`
+        SELECT "id" FROM "PaymentApplication"
+        WHERE "id" = ${candidate.paymentApplicationId}
+        FOR UPDATE
+      `);
+      const current = await transaction.paymentVoucher.findFirst({
+        where: {
+          id,
+          paymentApplicationId: candidate.paymentApplicationId,
+          voucherType: 'PAYMENT_RECEIPT'
+        }
+      });
+      const application = await transaction.paymentApplication.findUnique({
+        where: { id: candidate.paymentApplicationId },
+        include: this.paymentApplicationInclude()
+      });
+      if (!current || !application) throw new NotFoundException('付款水单不存在');
+      const before = this.toPaidPaymentVoucherAuditSnapshot(
+        this.toPaymentVoucherSummary(current),
+        this.toPaidPaymentSummary(application, true)
+      );
+      await transaction.paymentVoucher.delete({ where: { id: current.id } });
+      const sharedFileReferenceCount = current.url
+        ? (await Promise.all([
+          transaction.paymentVoucher.count({ where: { url: current.url } }),
+          transaction.waterReceiptVoucher.count({ where: { url: current.url } }),
+          transaction.payableBillAttachment.count({ where: { url: current.url } })
+        ])).reduce((total, count) => total + count, 0)
+        : 0;
+      await transaction.auditLog.create({
+        data: {
+          actorId: principal.id,
+          action: 'finance.paid_payment.water_receipt.delete',
+          target: current.id,
+          before: toAuditJson(before)
+        }
+      });
+      return sharedFileReferenceCount === 0 ? current.url as string | undefined : undefined;
+    });
+    await this.removeManagedVoucherFile(deletedUrl);
+    return { deleted: true };
   }
 
   async getAgentBankAccounts(principal: Principal, query: { agentName?: string; agentId?: string; includeDisabled?: boolean | string } = {}): Promise<AgentBankAccountSummary[]> {

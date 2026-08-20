@@ -35,6 +35,15 @@
 - P1 修复已提交为 `f343a4c6`。推送经已配置代理立即失败（`127.0.0.1:7897` 无监听），显式禁用该 Git proxy 后又因 `github.com` DNS 无法解析而失败；修正版 47 审计同样被当前 sandbox 在 SSH 建连前拒绝。当前没有触碰生产源码、镜像、容器或数据库。
 - 下一门槛：网络恢复后先运行 `npm run audit:47:pending-tally`，要求两个迁移完成、危险窗口内角色创建/修改/删除/权限保存/复制均为 0、9 个 canonical 权限齐全、legacy 0、动作缺 view 0；再完成 P1 复审、推送 PR #5、等待 CI（含三个旧 E2E 和新锁测试）全绿并生成带签名的三个 digest。只有 `images.env` 的 `GIT_COMMIT` 与最终 `main` 完全一致，且锁内重新捕获的 v3 manifest 未漂移，才允许 current-baseline cutover。
 
+## 2026-08-20 网络恢复后的 reconciliation
+
+- 已移除失效的 GitHub 本机代理配置；PR #5 最终以 merge commit `1e1e59ea` 合入 `main`，对应 CI run `32341398781` 的 affected、API/Web/migration 镜像和 release manifest 全绿。生产未完成理货只读审计已返回 `PENDING_TALLY_PERMISSION_AUDIT=pass`。
+- 首次 current-baseline cutover 在任何源码上传、镜像拉取、迁移或重启前失败关闭：47 的运行镜像和 release state 不一致，且锁内 source manifest 与冻结清单漂移；发布锁随后为 free，recovery 保持 clear。
+- 只读核对确认漂移来自另一个已完成的“付款水单删除”合法发布：47 在 10:23 已精确上线 8 个运行文件和迁移 `20260820160000_restore_paid_payment_voucher_delete`，但未被并入 PR #5 的 Git 基线。不得用 PR #5 的旧 digest 覆盖该能力。
+- 当前 reconciliation 在 `1e1e59ea` 上合入上述生产功能的精确 hunks；Prisma/InMemory 的内部流转字段裁剪和 PAYABLE 运单锁仍保留。生产迁移文件 SHA-256 保持 `70e1486b75de03046b5196fd7c230ae7b5568c94ef18fad8c0f6dba9ac006b82`；新增只读 v3 基线 `docs/release-manifests/47/20260820-072840-whitelist-e8e96a8b463a84403672003b`，source tree SHA `6ae14c83ecb8b0a99c6cb007f3a52c22d571b90b52b011c944c42337dfb25e04`。
+- 本地定向验证：API 28/28、Web 3/3、Mojia 3/3、API/Web typecheck、482 路由治理、context governance 和 `git diff --check` 通过。架构基线只新增 `DELETE /finance/payment-water-receipts/:id` 的 canonical permission 路由及该生产能力对应的既有巨型文件计数，不吸收 lint 新债务。
+- 当前仍未切换生产。下一门槛：独立高风险复审无 P0/P1 -> reconciliation PR/CI 全绿并生成新的三个 attested digest -> 锁内再次核对最新 v3 manifest 与生产权限审计 -> current-baseline cutover -> 线上 provenance、容器、health、日志和权限允许/拒绝验证。
+
 ## 成熟参考与取舍
 
 - [Docker live restore](https://docs.docker.com/engine/daemon/live-restore/)：用于 daemon 异常时保留既有 Linux 容器；Sunny 已用 reload 启用，不在生产做 daemon kill 演练。

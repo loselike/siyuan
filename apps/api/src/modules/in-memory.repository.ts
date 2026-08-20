@@ -642,6 +642,7 @@ function formatInMemoryAuditActionLabel(action: string): string {
     'finance.payment.bank.use_once': '本次使用收款银行',
     'finance.payment_voucher.add': '上传供应商账单截图',
     'finance.payment_voucher.delete': '删除供应商账单截图',
+    'finance.paid_payment.water_receipt.delete': '删除付款水单',
     'pricing.book.import': '导入价格表',
     'pricing.book.delete': '删除价格表',
     'pricing.markup_rule.create': '新增加价规则',
@@ -10652,6 +10653,27 @@ export class InMemoryRepository {
     this.paymentVouchers.push(voucher);
     this.audit('finance.paid_payment.water_receipt.add', voucher.id, principal, null, this.toPaidPaymentVoucherAuditSnapshot(voucher, this.toPaidPaymentSummary(app, true)));
     return voucher;
+  }
+
+  async deletePaymentWaterReceipt(principal: Principal, id: string): Promise<{ deleted: true }> {
+    await this.ensurePayablePermission(principal, 'finance:paid-payment:voucher-delete');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    if (isPaymentVoucherGloballyMasked(fieldMasks)) {
+      throw new ForbiddenException('总规则已屏蔽付款凭证');
+    }
+    const voucherIndex = this.paymentVouchers.findIndex((item) => (
+      item.id === id
+      && item.voucherType === 'PAYMENT_RECEIPT'
+      && Boolean(item.paymentApplicationId)
+    ));
+    if (voucherIndex < 0) throw new NotFoundException('付款水单不存在');
+    const voucher = this.paymentVouchers[voucherIndex];
+    const application = this.paymentApplications.find((item) => item.id === voucher.paymentApplicationId);
+    if (!application) throw new NotFoundException('付款水单不存在');
+    const before = this.toPaidPaymentVoucherAuditSnapshot(voucher, this.toPaidPaymentSummary(application, true));
+    this.paymentVouchers.splice(voucherIndex, 1);
+    this.audit('finance.paid_payment.water_receipt.delete', voucher.id, principal, before, null);
+    return { deleted: true };
   }
 
   async getAgentBankAccounts(principal: Principal, query: { agentName?: string; agentId?: string; includeDisabled?: boolean | string } = {}): Promise<AgentBankAccountSummary[]> {

@@ -57,12 +57,14 @@ describe('global sensitive field deny baseline', () => {
       'finance:water-receipt:voucher-upload',
       'finance:pending-payment:payment-voucher-upload',
       'finance:paid-payment:voucher-upload',
+      'finance:paid-payment:voucher-delete',
       'system:global-mask:payable-cost'
     ] as PermissionKey[]);
 
     expect(effective).toContain('finance:water-receipt:voucher-upload');
     expect(effective).not.toContain('finance:pending-payment:payment-voucher-upload');
     expect(effective).not.toContain('finance:paid-payment:voucher-upload');
+    expect(effective).not.toContain('finance:paid-payment:voucher-delete');
     expect(isPaymentVoucherGloballyMasked(state)).toBe(true);
     expect(isGlobalSensitiveFilePathBlocked('/api/finance/voucher-images', state)).toBe(false);
   });
