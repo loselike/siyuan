@@ -11,7 +11,24 @@ export interface PermissionControl {
   risk: PermissionControlRisk;
   codes: PermissionKey[];
   adminGrantOnly?: boolean;
-  bulkGrantEligible?: boolean;
+}
+
+export function updateFinanceOrderFeePermission(
+  grantedPermissions: PermissionKey[],
+  codes: PermissionKey[],
+  checked: boolean
+): PermissionKey[] {
+  const next = new Set(grantedPermissions);
+  const viewCode: PermissionKey = 'finance:order-fee:payable:view';
+  const manageCode: PermissionKey = 'finance:order-fee:payable:manage';
+  if (checked) {
+    codes.forEach((code) => next.add(code));
+    if (codes.includes(manageCode)) next.add(viewCode);
+  } else {
+    codes.forEach((code) => next.delete(code));
+    if (codes.includes(viewCode)) next.delete(manageCode);
+  }
+  return [...next];
 }
 
 export type PermissionGroupAccessControl = Pick<PermissionControl, 'id' | 'label' | 'description' | 'codes'>;
@@ -26,7 +43,6 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       description: '查看市场看板。',
       category: '页面访问',
       risk: 'normal',
-      bulkGrantEligible: true,
       codes: ['market:dashboard:view']
     }
   ],
@@ -37,7 +53,6 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       description: '查看待排货列表和详情。',
       category: '页面访问',
       risk: 'normal',
-      bulkGrantEligible: true,
       codes: ['market:pending-routing:view']
     },
     {
@@ -152,16 +167,7 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       description: '查看已排货列表和详情。',
       category: '页面访问',
       risk: 'normal',
-      bulkGrantEligible: true,
       codes: ['market:routed:view']
-    },
-    {
-      id: 'market-routed-edit',
-      label: '修改',
-      description: '修改已排货订单中允许调整的运营资料。',
-      category: '业务操作',
-      risk: 'normal',
-      codes: ['market:routed:edit']
     },
     {
       id: 'market-routed-routing-log-view',
@@ -170,6 +176,14 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       category: '页面访问',
       risk: 'normal',
       codes: ['market:routed:routing-log:view']
+    },
+    {
+      id: 'market-routed-replace-agent',
+      label: '处理代理变更',
+      description: '处理客服在转单号阶段发起的代理或代理渠道变更申请。',
+      category: '高风险操作',
+      risk: 'high',
+      codes: ['market:routed:replace-agent']
     },
     {
       id: 'market-routed-reroute',
@@ -187,7 +201,6 @@ const marketPermissionControls: Record<string, PermissionControl[]> = {
       description: '查看本周或本月排货汇总和明细。',
       category: '页面访问',
       risk: 'normal',
-      bulkGrantEligible: true,
       codes: ['market:routing-report:view']
     },
     {
@@ -235,6 +248,13 @@ const financePermissionControls: Record<string, PermissionControl[]> = {
     control('finance-payable-export', '导出', '导出市场应付数据。', '高风险操作', 'high', ['finance:payable:export']),
     control('finance-payable-view-sensitive', '查看应付金额和代理', '查看真实应付金额及代理字段。', '敏感字段', 'sensitive', ['finance:payable:view-sensitive']),
     control('finance-payable-view-profit', '查看利润', '查看应收利润和运营利润。', '敏感字段', 'sensitive', ['finance:payable:view-profit'])
+  ],
+  '财务管理 / 单票费用': [
+    control('finance-order-fee-payable-view', '查看应付费用', '查看单票费用中的真实应付金额。', '敏感字段', 'sensitive', ['finance:order-fee:payable:view']),
+    control('finance-order-fee-payable-manage', '维护应付费用', '新增、修改或删除单票应付费用。', '高风险操作', 'high', ['finance:order-fee:payable:manage']),
+    control('finance-order-fee-profit-receivable-payable', '查看应收应付利润', '查看应收与应付之间的利润。', '敏感字段', 'sensitive', ['finance:order-fee:profit:receivable-payable']),
+    control('finance-order-fee-profit-receivable-business', '查看应收业务利润', '查看应收与业务成本之间的利润。', '敏感字段', 'sensitive', ['finance:order-fee:profit:receivable-business']),
+    control('finance-order-fee-profit-business-payable', '查看业务应付利润', '查看业务成本与应付之间的利润。', '敏感字段', 'sensitive', ['finance:order-fee:profit:business-payable'])
   ],
   '财务管理 / 待付款': [
     control('finance-pending-read', '查看', '查看待付款列表。', '页面访问', 'normal', ['finance:pending-payment:read']),
@@ -296,14 +316,6 @@ function control(
   return { id, label, description, category, risk, codes };
 }
 
-export function canBulkGrantPermissionControl(control: PermissionControl, _role: RoleKey): boolean {
-  return control.bulkGrantEligible === true && control.risk === 'normal';
-}
-
-export function requiresPermissionGrantConfirmation(control: PermissionControl, checked: boolean): boolean {
-  return checked && (control.risk === 'sensitive' || control.risk === 'high' || control.risk === 'critical');
-}
-
 export function isUiPreferencePermission(permission: Pick<PermissionDefinition, 'code' | 'label'>): boolean {
   return /:(?:column-setting|list-setting)$/i.test(permission.code) || /保存.*列设置/.test(permission.label);
 }
@@ -361,6 +373,48 @@ export function getPermissionControls(group: string, permissions: PermissionDefi
   const availableCodes = new Set(configurablePermissions.map((permission) => permission.code));
   return configured
     .map((control) => ({ ...control, codes: control.codes.filter((code) => availableCodes.has(code)) }))
+    .filter((control) => control.codes.length > 0);
+}
+
+const businessAgentOwnOnlyRoles = new Set<RoleKey>([
+  'OPERATOR',
+  'UG_BUSINESS',
+  'UG_SZ_WUHAN',
+  'UG_ZZ_SIHUA',
+  'UG_WH_JIUYULIAN'
+]);
+const businessAgentBroadScopeRoles = new Set<RoleKey>([
+  'UG_BUSINESS_MANAGER',
+  'UG_BUSINESS_SUPERVISOR'
+]);
+
+export function isPermissionAssignableForRole(
+  role: RoleKey | null | undefined,
+  permission: PermissionKey,
+  grantedPermissions: readonly PermissionKey[] = []
+): boolean {
+  const ownOnly = Boolean(role) && (
+    businessAgentOwnOnlyRoles.has(role!)
+    || (
+      !businessAgentBroadScopeRoles.has(role!)
+      && grantedPermissions.includes('data-scope:sales-own')
+    )
+  );
+  return !role
+    || !ownOnly
+    || !/(?:^|:)(?:all-view|team-view|view-all|all-order-context|scope-(?:team|site|all))$/.test(permission);
+}
+
+export function filterPermissionControlsForRole<T extends Pick<PermissionControl, 'codes'>>(
+  role: RoleKey | null | undefined,
+  controls: T[],
+  grantedPermissions: readonly PermissionKey[] = []
+): T[] {
+  return controls
+    .map((control) => ({
+      ...control,
+      codes: control.codes.filter((code) => isPermissionAssignableForRole(role, code, grantedPermissions))
+    }))
     .filter((control) => control.codes.length > 0);
 }
 
@@ -456,11 +510,14 @@ export function updatePermissionGroupAccess(
 
 function usesIndependentPageEntry(group: string): boolean {
   return [
+    '运营工作台 / ',
     '业务管理 / ',
+    '客服管理 / ',
     '物流轨迹管理 / ',
     '财务管理 / ',
     '杂费 / ',
-    '基础资料库 / '
+    '基础资料库 / ',
+    '系统管理 / '
   ].some((prefix) => group.startsWith(prefix));
 }
 

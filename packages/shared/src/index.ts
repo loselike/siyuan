@@ -392,6 +392,8 @@ export interface ShipmentRouteCostLineSummary {
   name: string;
   amount: number;
   currency: string;
+  billingUnit?: FinanceBillingUnit;
+  billingQuantity?: number;
   chargeWeightKg?: number;
   unitPrice?: number;
 }
@@ -414,6 +416,8 @@ export interface ShipmentRouteCostSourceLine {
   name?: string | null;
   amount: number;
   currency?: string | null;
+  billingUnit?: FinanceBillingUnit | null;
+  billingQuantity?: number | null;
   chargeWeightKg?: number | null;
   unitPrice?: number | null;
   voided?: boolean;
@@ -431,6 +435,10 @@ export function summarizeShipmentRouteCosts(rows: ShipmentRouteCostSourceLine[])
       name: row.name!.trim(),
       amount: row.amount,
       currency: normalizeShipmentRouteCostCurrency(row.currency),
+      billingUnit: row.billingUnit === 'KG' || row.billingUnit === 'CBM' ? row.billingUnit : undefined,
+      billingQuantity: row.billingQuantity === null || row.billingQuantity === undefined || !Number.isFinite(row.billingQuantity)
+        ? undefined
+        : row.billingQuantity,
       chargeWeightKg: row.chargeWeightKg === null || row.chargeWeightKg === undefined || !Number.isFinite(row.chargeWeightKg)
         ? undefined
         : row.chargeWeightKg,
@@ -441,7 +449,7 @@ export function summarizeShipmentRouteCosts(rows: ShipmentRouteCostSourceLine[])
   if (!activeLines.length) return undefined;
 
   const isCompleteFreight = (line: ShipmentRouteCostLineSummary) => (
-    line.chargeWeightKg !== undefined && line.unitPrice !== undefined
+    (line.billingQuantity !== undefined || line.chargeWeightKg !== undefined) && line.unitPrice !== undefined
   );
   const mainFreight = activeLines.find((line) => line.name === '运费' && isCompleteFreight(line))
     ?? activeLines.find((line) => line.name === '运费')
@@ -557,6 +565,10 @@ export interface Shipment {
   routeOtherFee?: number;
   routeCostTotal?: number;
   routeCurrency?: string;
+  /** Display-only audit marker; never changes the stored or searchable order number. */
+  agentReplacementCount?: number;
+  /** Current customer-service agent change request derived from audit events. */
+  agentChangeRequest?: ShipmentAgentChangeRequestSummary;
   routeCostSummary?: ShipmentRouteCostSummary;
   linePoolFinanceSummary?: LineShipmentFinanceSummary;
   shippingMarkRequired?: boolean;
@@ -1019,6 +1031,143 @@ export interface ShipmentInvoiceUploadResponse {
 
 export interface ShipmentRerouteInput {
   reason: string;
+}
+
+export interface ShipmentAgentReplacementPayableInput {
+  id: string;
+  name: string;
+  currency: 'RMB' | 'USD';
+  billingUnit: FinanceBillingUnit;
+  billingQuantity: number;
+  unitPrice: number;
+  remark?: string;
+}
+
+export type ShipmentAgentChangeRequestStatus = 'PENDING' | 'COMPLETED' | 'REJECTED';
+
+export interface ShipmentAgentChangeRequestSummary {
+  id: string;
+  shipmentId: string;
+  status: ShipmentAgentChangeRequestStatus;
+  reason: string;
+  requestedBy: string;
+  requestedAt: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  resolutionNote?: string;
+}
+
+export interface ShipmentAgentChangeRequestInput {
+  reason: string;
+}
+
+export interface ShipmentAgentChangeRequestRejectInput {
+  reason: string;
+}
+
+export const shipmentAgentChangeRequestActions = {
+  created: 'shipment.agent_change_request.created',
+  completed: 'shipment.agent_change_request.completed',
+  rejected: 'shipment.agent_change_request.rejected'
+} as const;
+
+export function summarizeShipmentAgentChangeRequest(
+  shipmentId: string,
+  events: Array<{ id: string; action: string; after?: unknown; createdAt: string | Date }>
+): ShipmentAgentChangeRequestSummary | undefined {
+  const createdEvents = events
+    .filter((event) => event.action === shipmentAgentChangeRequestActions.created)
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime());
+  const created = createdEvents[0];
+  if (!created) return undefined;
+  const createdAfter = created.after && typeof created.after === 'object'
+    ? created.after as Record<string, unknown>
+    : {};
+  const resolution = events
+    .filter((event) => (
+      event.action === shipmentAgentChangeRequestActions.completed
+      || event.action === shipmentAgentChangeRequestActions.rejected
+    ))
+    .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime())
+    .find((event) => {
+      const after = event.after && typeof event.after === 'object'
+        ? event.after as Record<string, unknown>
+        : {};
+      return after.requestId === created.id;
+    });
+  const resolutionAfter = resolution?.after && typeof resolution.after === 'object'
+    ? resolution.after as Record<string, unknown>
+    : {};
+  const requestedAt = typeof createdAfter.requestedAt === 'string'
+    ? createdAfter.requestedAt
+    : new Date(created.createdAt).toISOString();
+  const resolvedAt = resolution
+    ? typeof resolutionAfter.resolvedAt === 'string'
+      ? resolutionAfter.resolvedAt
+      : new Date(resolution.createdAt).toISOString()
+    : undefined;
+  return {
+    id: created.id,
+    shipmentId,
+    status: resolution?.action === shipmentAgentChangeRequestActions.completed
+      ? 'COMPLETED'
+      : resolution?.action === shipmentAgentChangeRequestActions.rejected
+        ? 'REJECTED'
+        : 'PENDING',
+    reason: typeof createdAfter.reason === 'string' ? createdAfter.reason : '',
+    requestedBy: typeof createdAfter.requestedBy === 'string' ? createdAfter.requestedBy : '-',
+    requestedAt,
+    resolvedBy: typeof resolutionAfter.resolvedBy === 'string' ? resolutionAfter.resolvedBy : undefined,
+    resolvedAt,
+    resolutionNote: typeof resolutionAfter.resolutionNote === 'string' ? resolutionAfter.resolutionNote : undefined
+  };
+}
+
+export interface ShipmentAgentReplacementInput {
+  requestId: string;
+  agentId: string;
+  agentChannelId?: string;
+  agentChannelName: string;
+  resolutionNote: string;
+  payables: ShipmentAgentReplacementPayableInput[];
+}
+
+export type ShipmentAgentReplacementPaymentState =
+  | 'UNAUDITED'
+  | 'AUDITED_REQUIRES_REVIEW'
+  | 'PAYMENT_BLOCKED';
+
+export interface ShipmentAgentReplacementPreview {
+  shipmentId: string;
+  systemOrderNo: string;
+  status: ShipmentStatus;
+  agentId?: string;
+  agentName?: string;
+  agentChannelId?: string;
+  agentChannelName?: string;
+  transferNo?: string;
+  paymentState: ShipmentAgentReplacementPaymentState;
+  request: ShipmentAgentChangeRequestSummary;
+  payables: PayableFeeSummary[];
+}
+
+export interface ShipmentAgentReplacementChange {
+  field: string;
+  label: string;
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface ShipmentAgentReplacementAuditSummary {
+  id: string;
+  shipmentId: string;
+  systemOrderNo: string;
+  changedAt: string;
+  changedBy: string;
+  state: 'UNAUDITED_REPLACED' | 'AUDITED_RECREATED';
+  requestReason: string;
+  resolutionNote: string;
+  changes: ShipmentAgentReplacementChange[];
 }
 
 export interface BulkTrackingImportRow {

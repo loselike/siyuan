@@ -34,13 +34,13 @@ export class WarehouseTallyLifecycleController {
   }
 
   @Post('warehouse/tally-tasks/:id/start')
-  @RequirePermission('warehouse:tally-pending:process')
+  @RequirePermission('warehouse:tally-pending:start')
   startWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.lifecycle.start(request.user, id);
   }
 
   @Post('warehouse/tally-tasks/:id/cancel')
-  @RequirePermission('warehouse:tally-pending:cancel')
+  @RequirePermission('warehouse:tally-pending:restart')
   cancelWarehouseTallyTask(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.lifecycle.cancel(request.user, id);
   }

@@ -233,6 +233,12 @@ export function FinancePage({
   const canViewPendingReview = hasUiPermission('business:review:view');
   const canEditPendingReview = hasUiPermission('business:review:edit');
   const canAdjustPendingReviewPackages = canEditPendingReview;
+  useEffect(() => {
+    if (!canAdjustPendingReviewPackages) {
+      setPendingPackageSelectedIds([]);
+      setPendingPackagePickerOpen(false);
+    }
+  }, [canAdjustPendingReviewPackages]);
   const canUseFinanceWorkspace = hasUiPermission('finance:dashboard:view') || hasUiPermission('finance:receivable:read') || hasUiPermission('finance:business-cost:read') || hasUiPermission('finance:payable:read') || hasUiPermission('finance:pending-payment:read') || hasUiPermission('finance:paid-payment:read') || hasUiPermission('finance:water-receipt:read') || hasUiPermission('finance:water-match:read') || hasUiPermission('finance:agent-bill:read');
   const canRestoreReviewShipment = canEditPendingReview;
   const canPurgeReviewShipment = canEditPendingReview;
@@ -597,7 +603,7 @@ export function FinancePage({
   };
   const savePendingPackageSelection = async (packageIds = pendingPackageSelectedIds) => {
     const shipment = detailShipment;
-    if (!shipment || shipment.status !== 'REVIEW_PENDING') return;
+    if (!canAdjustPendingReviewPackages || !shipment || shipment.status !== 'REVIEW_PENDING') return;
     setPendingPackageSaving(true);
     try {
       const detail = await apiClient.orderEntryDetail(shipment.id);
@@ -620,7 +626,7 @@ export function FinancePage({
     }
   };
   const removePendingPackages = () => {
-    if (!pendingPackageSelectedIds.length || !detailShipment) return;
+    if (!canAdjustPendingReviewPackages || !pendingPackageSelectedIds.length || !detailShipment) return;
     const currentPackageIds = pendingReviewDetail?.packages.map((row) => row.warehousePackageId ?? row.id) ?? [];
     const remainingPackageIds = currentPackageIds.filter((id) => !pendingPackageSelectedIds.includes(id));
     modal.confirm({
@@ -1456,22 +1462,22 @@ export function FinancePage({
                       label: '单件明细',
                       children: (
                         <>
-                          <Space wrap size={8} className="finance-pending-package-actions">
-                            <Button type="primary" disabled={!canAdjustPendingReviewPackages || detailShipment?.status !== 'REVIEW_PENDING'} loading={pendingPackageLoading} onClick={() => void loadPendingPackagePicker()}>
+                          {canAdjustPendingReviewPackages ? <Space wrap size={8} className="finance-pending-package-actions">
+                            <Button type="primary" disabled={detailShipment?.status !== 'REVIEW_PENDING'} loading={pendingPackageLoading} onClick={() => void loadPendingPackagePicker()}>
                               补录
                             </Button>
-                            <Button danger disabled={!canAdjustPendingReviewPackages || detailShipment?.status !== 'REVIEW_PENDING' || !pendingPackageSelectedIds.length} loading={pendingPackageSaving} onClick={removePendingPackages}>
+                            <Button danger disabled={detailShipment?.status !== 'REVIEW_PENDING' || !pendingPackageSelectedIds.length} loading={pendingPackageSaving} onClick={removePendingPackages}>
                               移除包裹
                             </Button>
                             <Text type="secondary">勾选左侧包裹后可移除；移除只解除当前运单关联，不删除仓库原始数据。</Text>
-                          </Space>
+                          </Space> : null}
                           <ManagedTable
                             className="finance-embedded-table"
                             rowKey="id"
                             size="small"
                             columns={reviewPackageColumns}
                             dataSource={pendingReviewDetail.packages}
-                            rowSelection={{ selectedRowKeys: pendingPackageSelectedIds, onChange: (keys) => setPendingPackageSelectedIds(keys.map(String)), fixed: true }}
+                            rowSelection={canAdjustPendingReviewPackages ? { selectedRowKeys: pendingPackageSelectedIds, onChange: (keys) => setPendingPackageSelectedIds(keys.map(String)), fixed: true } : undefined}
                             pagination={false}
                             scroll={{ x: 1500 }}
                             sticky={false}

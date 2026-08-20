@@ -16,7 +16,7 @@ import type { ApiClient, PermissionKey } from '../../../apiClient';
 import { applySettlementMethodCurrency, createFinanceFeeNameOptions, createSettlementMethodOptions, financeCatalogCurrencyOptions, getSettlementMethodRows } from '../catalog';
 import { downloadCsv } from '../exportCsv';
 import { formatBeijingDateTime, formatBusinessDate } from '../../shared/format';
-import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, type ManagedTableColumns } from '../../shared/ui';
+import { AppDatePicker, ManagedDualViewTable, ManagedMatrixCell, ManagedMatrixDateTime, ManagedTable, renderAuthorizedAction, type ManagedTableColumns } from '../../shared/ui';
 import { resolveShipmentOutboundOrderNo } from '../../shared/shipmentOrderNo';
 
 const { Text } = Typography;
@@ -204,6 +204,8 @@ export function ReceivableAuditPage({
   const canBatchReverse = canReverse;
   const canBatchVoid = canVoid;
   const canExport = permissions.includes('finance:receivable:export');
+  const canUseBatchSelection = canBatchAudit || canBatchReverse || canBatchVoid || canExport;
+  const canUseRowActions = canAudit || canReverse || canVoid;
   const canAuditMatch = permissions.includes('finance:water-match:audit');
   const canReverseMatch = permissions.includes('finance:water-match:reverse');
   const loadRows = async (nextQuery = query) => {
@@ -504,26 +506,33 @@ export function ReceivableAuditPage({
         return (
           <Space size={4}>
             {!hasPendingAllocation && !hasApprovedAllocation && row.reconciliationStatus === 'CONFIRMED' ? (
-              <Popconfirm title="确认反审核该应收费用？" onConfirm={async () => { await apiClient.reverseAuditReceivable(row.id); await loadRows(); }} okText="反审核" cancelText="取消">
-                <Button size="small" disabled={!canReverse}>反审核费用</Button>
-              </Popconfirm>
+              renderAuthorizedAction(canReverse,
+                <Popconfirm title="确认反审核该应收费用？" onConfirm={async () => { await apiClient.reverseAuditReceivable(row.id); await loadRows(); }} okText="反审核" cancelText="取消">
+                  <Button size="small">反审核费用</Button>
+                </Popconfirm>
+              )
             ) : !hasPendingAllocation && row.reconciliationStatus !== 'CONFIRMED' ? (
-              <Popconfirm title="确认审核该应收费用？" onConfirm={async () => { await apiClient.auditReceivable(row.id); await loadRows(); }} okText="审核" cancelText="取消">
-                <Button size="small" type="primary" disabled={!canAudit || row.voided}>审核费用</Button>
-              </Popconfirm>
+              renderAuthorizedAction(canAudit,
+                <Popconfirm title="确认审核该应收费用？" onConfirm={async () => { await apiClient.auditReceivable(row.id); await loadRows(); }} okText="审核" cancelText="取消">
+                  <Button size="small" type="primary" disabled={row.voided}>审核费用</Button>
+                </Popconfirm>
+              )
             ) : (
               <Text type="secondary">在水单分配中处理</Text>
             )}
-            <Popconfirm title="确认删除该应收？" onConfirm={async () => { await apiClient.deleteReceivableAudit(row.id); await loadRows(); }} okText="删除" cancelText="取消">
-              <Button size="small" danger disabled={!canVoid || hasPendingAllocation || hasApprovedAllocation}>删除</Button>
-            </Popconfirm>
+            {renderAuthorizedAction(canVoid,
+              <Popconfirm title="确认删除该应收？" onConfirm={async () => { await apiClient.deleteReceivableAudit(row.id); await loadRows(); }} okText="删除" cancelText="取消">
+                <Button size="small" danger disabled={hasPendingAllocation || hasApprovedAllocation}>删除</Button>
+              </Popconfirm>
+            )}
           </Space>
         );
       }
     }
   };
 
-  const columns: ManagedTableColumns<ReceivableAuditSummary> = defaultColumnOrder.map((key) => baseColumns[key]);
+  const availableColumnOrder = defaultColumnOrder.filter((key) => key !== 'action' || canUseRowActions);
+  const columns: ManagedTableColumns<ReceivableAuditSummary> = availableColumnOrder.map((key) => baseColumns[key]);
   const matrixColumns: ManagedTableColumns<ReceivableAuditSummary> = [
     {
       key: 'matrixInformation',
@@ -561,7 +570,7 @@ export function ReceivableAuditPage({
         />
       )
     },
-    { ...columns[columns.length - 1], key: 'action', title: '', width: 150, fixed: 'right' }
+    ...(canUseRowActions ? [{ ...baseColumns.action, key: 'action', title: '', width: 150, fixed: 'right' as const }] : [])
   ];
 
   return (
@@ -570,16 +579,16 @@ export function ReceivableAuditPage({
       className="finance-work-card"
       extra={
         <Space wrap>
-          <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canBatchAudit}>批量审核</Button>
-          </Popconfirm>
-          <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canBatchReverse}>批量反审核</Button>
-          </Popconfirm>
-          <Popconfirm title={`确认批量删除已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('delete')} okText="批量删除" cancelText="取消">
-            <Button disabled={!selectedIds.length || !canBatchVoid} danger>批量删除</Button>
-          </Popconfirm>
-          <Button onClick={async () => {
+          {renderAuthorizedAction(canBatchAudit, <Popconfirm title={`确认批量审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('audit')} okText="批量审核" cancelText="取消">
+            <Button disabled={!selectedIds.length}>批量审核</Button>
+          </Popconfirm>)}
+          {renderAuthorizedAction(canBatchReverse, <Popconfirm title={`确认批量反审核已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('reverse')} okText="批量反审核" cancelText="取消">
+            <Button disabled={!selectedIds.length}>批量反审核</Button>
+          </Popconfirm>)}
+          {renderAuthorizedAction(canBatchVoid, <Popconfirm title={`确认批量删除已选 ${selectedIds.length} 条？`} onConfirm={() => void runBatch('delete')} okText="批量删除" cancelText="取消">
+            <Button disabled={!selectedIds.length} danger>批量删除</Button>
+          </Popconfirm>)}
+          {renderAuthorizedAction(canExport, <Button onClick={async () => {
             const exported = await apiClient.exportReceivableAudits({ ids: selectedIds.length ? selectedIds : undefined, query });
             downloadCsv('receivable-audits.csv', [
               { key: 'salesperson', label: '业务员' },
@@ -596,8 +605,8 @@ export function ReceivableAuditPage({
               { key: 'remark', label: '备注' }
             ], exported.rows as unknown as Array<Record<string, unknown>>);
             message.success(`应收导出已生成：${exported.rows.length} 条`);
-          }} disabled={!canExport}>导出</Button>
-          <Button onClick={() => setCreateOpen(true)} disabled={!canCreate}>新增应收</Button>
+          }}>导出</Button>)}
+          {renderAuthorizedAction(canCreate, <Button onClick={() => setCreateOpen(true)}>新增应收</Button>)}
           <Button icon={<RefreshCw size={15} />} onClick={() => void loadRows()} />
         </Space>
       }
@@ -655,8 +664,8 @@ export function ReceivableAuditPage({
               columnSettings: {
                 storageKey: 'sunny.finance.receivableAudit.matrix-columns-v2',
                 title: '应收审核矩阵列设置',
-                lockedKeys: ['action'],
-                labels: { matrixInformation: '信息', action: '操作' }
+                lockedKeys: canUseRowActions ? ['action'] : [],
+                labels: canUseRowActions ? { matrixInformation: '信息', action: '操作' } : { matrixInformation: '信息' }
               }
             }
           },
@@ -667,7 +676,7 @@ export function ReceivableAuditPage({
               className: 'finance-audit-table finance-receivable-audit-table finance-receivable-audit-ledger-table',
               minimumScrollX: 2200,
               recordDetail: { title: '应收审核详情' },
-              columnSettings: { storageKey: columnStorageKey, title: '应收审核列设置', defaultHiddenKeys: defaultHiddenColumnKeys, defaultColumnOrder, lockedKeys: ['systemOrderNo', 'action'] },
+              columnSettings: { storageKey: columnStorageKey, title: '应收审核列设置', defaultHiddenKeys: defaultHiddenColumnKeys, defaultColumnOrder: availableColumnOrder, lockedKeys: ['systemOrderNo', ...(canUseRowActions ? ['action' as const] : [])] },
               summary: () => (
                 <AntdTable.Summary fixed>
                   <AntdTable.Summary.Row>
@@ -683,7 +692,7 @@ export function ReceivableAuditPage({
         size="small"
         loading={loading}
         dataSource={response.rows}
-        rowSelection={{ selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) }}
+        rowSelection={canUseBatchSelection ? { selectedRowKeys: selectedIds, onChange: (keys) => setSelectedIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.voided }) } : undefined}
         columnSettingsPlacement="toolbar"
         pagination={{
           current: response.pagination.page,

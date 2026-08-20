@@ -7,6 +7,7 @@ import { matchesOrderManagementFilters } from './OrdersPage';
 async function openOrderManagement(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('menuitem', { name: '业务管理' }));
   expect(await screen.findByRole('heading', { name: '业务管理' })).toBeInTheDocument();
+  if (screen.queryByRole('heading', { name: '我的运单生命周期' })) return;
   await user.click(screen.getByRole('button', { name: '运单管理' }));
   expect(await screen.findByRole('heading', { name: '我的运单生命周期' })).toBeInTheDocument();
 }
@@ -30,7 +31,8 @@ describe('Orders flows', () => {
       customerKeyword: '',
       outboundOrderKeyword: '',
       site: '深圳思远',
-      salesperson: 'Rachel'
+      salesperson: 'Rachel',
+      node: ''
     }))).toEqual([target]);
   });
 
@@ -49,27 +51,25 @@ describe('Orders flows', () => {
 
     await openOrderManagement(user);
     expect(screen.getByRole('button', { name: '新建出货订单' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: '全生命周期运单' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /AI 订单助手/ })).toBeInTheDocument();
+    expect(screen.getByText('全生命周期运单')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'AI 批量处理' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '批量添加轨迹' })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '新建出货订单' }));
-    expect(await screen.findByRole('dialog', { name: '新建出货订单' })).toBeInTheDocument();
-    expect(screen.queryByLabelText('渠道')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('代理')).not.toBeInTheDocument();
-    await user.clear(screen.getByLabelText('客户单号'));
-    await user.type(screen.getByLabelText('客户单号'), 'TEST-ORDER-001');
-    await user.clear(screen.getByLabelText('出货单号'));
-    await user.type(screen.getByLabelText('出货单号'), 'SYTEST0606001');
-    await user.clear(screen.getByLabelText('目的地'));
-    await user.type(screen.getByLabelText('目的地'), '德国');
-    expect(screen.queryByLabelText('承运商')).not.toBeInTheDocument();
-    fireEvent.mouseDown(screen.getByLabelText('收货渠道').closest('.ant-select-selector')!);
+    const dialog = await screen.findByRole('dialog', { name: '新建出货订单' });
+    expect(within(dialog).queryByLabelText('渠道')).not.toBeInTheDocument();
+    expect(within(dialog).queryByLabelText('代理')).not.toBeInTheDocument();
+    await user.clear(within(dialog).getByLabelText('客户单号'));
+    await user.type(within(dialog).getByLabelText('客户单号'), 'TEST-ORDER-001');
+    await user.clear(within(dialog).getByLabelText('目的地'));
+    await user.type(within(dialog).getByLabelText('目的地'), '德国');
+    expect(within(dialog).queryByLabelText('承运商')).not.toBeInTheDocument();
+    fireEvent.mouseDown(within(dialog).getByLabelText('收货渠道').closest('.ant-select-selector')!);
     await user.click(await screen.findByTitle('海运DDP'));
-    await user.type(screen.getByLabelText('备注'), '客户要求优先入库，周五前排货');
-    await user.click(screen.getByRole('button', { name: '创建订单' }));
+    await user.type(within(dialog).getByLabelText('备注'), '客户要求优先入库，周五前排货');
+    await user.click(within(dialog).getByRole('button', { name: '创建订单' }));
 
-    expect(await screen.findByText('SYTEST0606001')).toBeInTheDocument();
+    expect(await screen.findByText('TEST-ORDER-001')).toBeInTheDocument();
     expect(screen.getAllByText('待获取快递号').length).toBeGreaterThan(0);
     expect(screen.getByText('德国')).toBeInTheDocument();
     expect(screen.getByText('客户要求优先入库，周五前排货')).toBeInTheDocument();

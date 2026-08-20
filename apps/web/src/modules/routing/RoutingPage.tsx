@@ -12,6 +12,9 @@ import {
   type BusinessCostAuditSummary,
   type PayableAuditSummary,
   type ShipmentFinanceDetailSummary,
+  type ShipmentAgentReplacementAuditSummary,
+  type ShipmentAgentReplacementInput,
+  type ShipmentAgentReplacementPreview,
   type MasterDataSnapshot,
   type Shipment,
   type ShipmentStatus
@@ -26,12 +29,15 @@ import { formatRoutingFeeStatus } from './routingFeeStatus';
 import { selectRecentRoutedShipmentHistory, selectRoutedShipmentHistory } from './routingHistory';
 import { getRoutingPeriodSnapshot, type RoutingDataPeriod } from './routingPeriod';
 import { emptyRoutedShipmentFilters, filterRoutedShipments, type RoutedShipmentFilters } from './routingRoutedFilters';
+import { getRoutedPayableDisplay } from './routedPayableDisplay';
 import { AppActionGroup, AppDateRangePicker, AppPageHeader, ManagedTable, MetricCard, RoutingStatusTag, StatusTag, renderNoticeBar, tenRowTablePagination } from '../shared/ui';
 import { formatBeijingDateTime, getBeijingDayStartTimestamp } from '../shared/format';
 import { resolveShipmentOutboundOrderNo } from '../shared/shipmentOrderNo';
 import type { PermissionKey } from '../../apiClient';
 
 const { Text } = Typography;
+
+const agentReplacementAllowedStatuses = new Set<ShipmentStatus>(['OUTBOUNDED']);
 
 function calculateCostAmount(chargeWeightKg?: number, unitPrice?: number, fallback?: number) {
   const weight = Number(chargeWeightKg);
@@ -162,6 +168,19 @@ function summarizeTop(rows: string[], limit = 5): MarketStatRow[] {
   return [...visible, { name: '其他', count: sorted.slice(limit - 1).reduce((total, item) => total + item.count, 0) }];
 }
 
+function formatAgentReplacementAuditValue(value: unknown): string {
+  if (value === undefined || value === null || value === '') return '-';
+  if (typeof value !== 'object') return String(value);
+  const item = value as Record<string, unknown>;
+  if (typeof item.billingQuantity === 'number' && typeof item.unitPrice === 'number') {
+    const currency = typeof item.currency === 'string' ? item.currency : 'RMB';
+    const unit = item.billingUnit === 'CBM' ? 'CBM' : 'KG';
+    const amount = typeof item.amount === 'number' ? item.amount : item.billingQuantity * item.unitPrice;
+    return `${String(item.name ?? '费用')} / ${item.billingQuantity} ${unit} × ${item.unitPrice} ${currency} = ${Number(amount).toFixed(2)} ${currency}${item.remark ? ` / ${String(item.remark)}` : ''}`;
+  }
+  return JSON.stringify(item);
+}
+
 
 
 
@@ -183,7 +202,10 @@ export function RoutingPage({
   onCancelAssignment,
   onConfirmAssignment,
   onRerouteShipment,
-  onEditShipment,
+  onLoadAgentReplacementPreview,
+  onReplaceShipmentAgent,
+  onRejectAgentChangeRequest,
+  onLoadAgentReplacementHistory,
   onViewRoutingLog,
   onViewPendingRoutingLog,
   onReturnReview,
@@ -210,7 +232,10 @@ export function RoutingPage({
   onCancelAssignment: () => void;
   onConfirmAssignment: (approve: boolean) => Promise<boolean>;
   onRerouteShipment: (shipment: Shipment, reason: string) => Promise<void>;
-  onEditShipment: (shipment: Shipment) => void;
+  onLoadAgentReplacementPreview: (shipment: Shipment) => Promise<ShipmentAgentReplacementPreview>;
+  onReplaceShipmentAgent: (shipment: Shipment, input: ShipmentAgentReplacementInput) => Promise<void>;
+  onRejectAgentChangeRequest: (shipment: Shipment, requestId: string, reason: string) => Promise<void>;
+  onLoadAgentReplacementHistory: (shipment: Shipment) => Promise<ShipmentAgentReplacementAuditSummary[]>;
   onViewRoutingLog: (shipment: Shipment) => void;
   onViewPendingRoutingLog: (shipment: Shipment) => void;
   onReturnReview: (shipment: Shipment) => Promise<void> | void;
@@ -241,8 +266,8 @@ export function RoutingPage({
   const canUpdatePending = can('market:pending-routing:edit') && !routeRequiredMaskActive;
   const canSaveDraft = canAssign || canUpdatePending;
   const canConfirm = can('market:pending-routing:approve') && !routeRequiredMaskActive;
-  const canUpdateRouted = can('market:routed:edit');
   const canReroute = can('market:routed:reroute');
+  const canReplaceAgent = can('market:routed:replace-agent') && !routeRequiredMaskActive;
   const canViewPendingLog = can('market:pending-routing:operation-log:view');
   const canViewRoutedLog = can('market:routed:routing-log:view');
   const canReturnReview = can('market:pending-routing:return-review');
@@ -267,9 +292,17 @@ export function RoutingPage({
   const [businessClock, setBusinessClock] = useState(() => Date.now());
   const [routingDataPeriod, setRoutingDataPeriod] = useState<RoutingDataPeriod>('week');
   const [rerouteShipment, setRerouteShipment] = useState<Shipment | null>(null);
+  const [agentReplacementShipment, setAgentReplacementShipment] = useState<Shipment | null>(null);
+  const [agentReplacementPreview, setAgentReplacementPreview] = useState<ShipmentAgentReplacementPreview | null>(null);
+  const [agentReplacementLoading, setAgentReplacementLoading] = useState(false);
+  const [agentReplacementSubmitting, setAgentReplacementSubmitting] = useState(false);
+  const [agentReplacementHistoryShipment, setAgentReplacementHistoryShipment] = useState<Shipment | null>(null);
+  const [agentReplacementHistory, setAgentReplacementHistory] = useState<ShipmentAgentReplacementAuditSummary[]>([]);
+  const [agentReplacementHistoryLoading, setAgentReplacementHistoryLoading] = useState(false);
   const [routingReportExporting, setRoutingReportExporting] = useState(false);
   const [assignmentSubmitting, setAssignmentSubmitting] = useState(false);
   const [rerouteForm] = Form.useForm<{ reason?: string }>();
+  const [agentReplacementForm] = Form.useForm<ShipmentAgentReplacementInput>();
   const [costEditor, setCostEditor] = useState<PendingRoutingCostEditor | null>(null);
   const [costSaving, setCostSaving] = useState(false);
   const [pendingFilterDraft, setPendingFilterDraft] = useState<PendingRoutingFilters>(emptyPendingRoutingFilters);
@@ -280,6 +313,7 @@ export function RoutingPage({
   const [routedPagination, setRoutedPagination] = useState({ current: 1, pageSize: 10 });
   const [routedView, setRoutedView] = useState<'recent' | 'history'>('recent');
   const watchedAgentId = Form.useWatch('agentId', assignmentForm);
+  const watchedReplacementAgentId = Form.useWatch('agentId', agentReplacementForm);
   const feeNameOptions = useMemo(() => createRoutingFeeNameOptions(feeNameCatalogItems ?? []), [feeNameCatalogItems]);
 
   useEffect(() => {
@@ -299,6 +333,100 @@ export function RoutingPage({
       return;
     }
     onOpenAssignment(shipment, mode);
+  }
+
+  async function openAgentReplacement(shipment: Shipment) {
+    setAgentReplacementShipment(shipment);
+    setAgentReplacementPreview(null);
+    setAgentReplacementLoading(true);
+    agentReplacementForm.resetFields();
+    try {
+      const preview = await onLoadAgentReplacementPreview(shipment);
+      setAgentReplacementPreview(preview);
+      agentReplacementForm.setFieldsValue({
+        requestId: preview.request.id,
+        agentId: preview.agentId,
+        agentChannelId: preview.agentChannelId,
+        agentChannelName: preview.agentChannelName ?? '',
+        resolutionNote: '',
+        payables: preview.payables.map((payable) => ({
+          id: payable.id,
+          name: payable.name,
+          currency: payable.currency === 'USD' ? 'USD' : 'RMB',
+          billingUnit: payable.billingUnit ?? 'KG',
+          billingQuantity: payable.billingQuantity ?? payable.chargeWeightKg ?? 0,
+          unitPrice: payable.unitPrice,
+          remark: payable.remark
+        }))
+      });
+    } catch (error) {
+      setAgentReplacementShipment(null);
+      messageApi.error(error instanceof Error ? error.message : '更换代理资料加载失败');
+    } finally {
+      setAgentReplacementLoading(false);
+    }
+  }
+
+  function closeAgentReplacement() {
+    if (agentReplacementSubmitting) return;
+    setAgentReplacementShipment(null);
+    setAgentReplacementPreview(null);
+    agentReplacementForm.resetFields();
+  }
+
+  async function submitAgentReplacement() {
+    if (!agentReplacementShipment || agentReplacementPreview?.paymentState === 'PAYMENT_BLOCKED') return;
+    try {
+      const values = await agentReplacementForm.validateFields();
+      setAgentReplacementSubmitting(true);
+      await onReplaceShipmentAgent(agentReplacementShipment, {
+        ...values,
+        agentChannelName: values.agentChannelName.trim(),
+        resolutionNote: values.resolutionNote.trim(),
+        payables: values.payables.map((payable) => ({
+          ...payable,
+          name: payable.name.trim(),
+          remark: payable.remark?.trim() || undefined
+        }))
+      });
+      setAgentReplacementSubmitting(false);
+      closeAgentReplacement();
+    } catch (error) {
+      if (error instanceof Error) messageApi.error(error.message);
+      setAgentReplacementSubmitting(false);
+    }
+  }
+
+  async function rejectAgentChangeRequest() {
+    if (!agentReplacementShipment || !agentReplacementPreview) return;
+    const resolutionNote = agentReplacementForm.getFieldValue('resolutionNote')?.trim();
+    if (!resolutionNote) {
+      agentReplacementForm.setFields([{ name: 'resolutionNote', errors: ['请填写市场处理备注'] }]);
+      return;
+    }
+    try {
+      setAgentReplacementSubmitting(true);
+      await onRejectAgentChangeRequest(agentReplacementShipment, agentReplacementPreview.request.id, resolutionNote);
+      setAgentReplacementSubmitting(false);
+      closeAgentReplacement();
+    } catch (error) {
+      if (error instanceof Error) messageApi.error(error.message);
+      setAgentReplacementSubmitting(false);
+    }
+  }
+
+  async function openAgentReplacementHistory(shipment: Shipment) {
+    setAgentReplacementHistoryShipment(shipment);
+    setAgentReplacementHistory([]);
+    setAgentReplacementHistoryLoading(true);
+    try {
+      setAgentReplacementHistory(await onLoadAgentReplacementHistory(shipment));
+    } catch (error) {
+      setAgentReplacementHistoryShipment(null);
+      messageApi.error(error instanceof Error ? error.message : '更换代理记录加载失败');
+    } finally {
+      setAgentReplacementHistoryLoading(false);
+    }
   }
 
   const submitAssignment = async (approve: boolean) => {
@@ -589,6 +717,12 @@ export function RoutingPage({
       })),
     [masterData.agentChannels, watchedAgentId]
   );
+  const replacementAgentChannelOptions = useMemo(
+    () => watchedReplacementAgentId ? masterData.agentChannels
+      .filter((channel) => channel.enabled && channel.agentId === watchedReplacementAgentId)
+      .map((channel) => ({ label: channel.channelName, value: channel.id })) : [],
+    [masterData.agentChannels, watchedReplacementAgentId]
+  );
 
   const marketColumns: ColumnsType<Shipment> = useMemo(
     () => [
@@ -597,14 +731,32 @@ export function RoutingPage({
       { title: '业务员', dataIndex: 'salesperson', width: 100, render: (value?: string) => value || '-' },
       { title: '客户编号', dataIndex: 'customerCode', width: 100, render: (value: string | undefined, record) => value || record.customerName.split('-')[0] },
       { title: '客户', dataIndex: 'customerName', width: 150 },
-      { title: '出货单号', dataIndex: 'systemOrderNo', width: 180 },
+      {
+        title: '出货单号', dataIndex: 'systemOrderNo', width: 180,
+        render: (value: string, record) => (
+          <Space size={2}>
+            <Text>{value}</Text>
+            {record.agentReplacementCount ? (
+              <Button
+                type="link"
+                size="small"
+                aria-label={`查看 ${value} 更换代理记录`}
+                style={{ paddingInline: 0 }}
+                onClick={() => void openAgentReplacementHistory(record)}
+              >
+                (G)
+              </Button>
+            ) : null}
+          </Space>
+        )
+      },
       { title: '货物数据', width: 140, render: (_, record) => `${record.packageCount} 件 / ${record.receivableWeightKg.toFixed(2)} kg` },
       { title: '目的地', dataIndex: 'destinationCountry', width: 90 },
       ...(canViewRouteCost ? [
-        { title: '代理计费重', width: 104, render: (_: unknown, record: Shipment) => record.routeChargeWeightKg === undefined ? '-' : `${record.routeChargeWeightKg.toFixed(3)} KG` },
-        { title: '代理单价', width: 96, render: (_: unknown, record: Shipment) => formatAmount(record.routeUnitPrice, record.routeCurrency) },
-        { title: '代理其他费用', width: 116, render: (_: unknown, record: Shipment) => formatAmount(record.routeOtherFee, record.routeCurrency) },
-        { title: '代理总成本', width: 112, render: (_: unknown, record: Shipment) => formatAmount(record.routeCostTotal, record.routeCurrency) }
+        { title: '代理计费重', width: 112, render: (_: unknown, record: Shipment) => getRoutedPayableDisplay(record).billingQuantity },
+        { title: '代理单价', width: 132, render: (_: unknown, record: Shipment) => getRoutedPayableDisplay(record).unitPrice },
+        { title: '代理其他费用', width: 144, render: (_: unknown, record: Shipment) => getRoutedPayableDisplay(record).otherFees },
+        { title: '代理总成本', width: 144, render: (_: unknown, record: Shipment) => getRoutedPayableDisplay(record).total }
       ] : []),
       ...(canViewAgentChannel ? [
         { title: '代理', dataIndex: 'agentName', width: 130, render: (value?: string) => value || '待分配' },
@@ -630,8 +782,8 @@ export function RoutingPage({
         fixed: 'right',
         render: (_, record) => {
           const canAssignRoute = record.status === 'WAITING_SORT';
-          const canManualEdit = record.status === 'WAITING_DISPATCH';
           const canRerouteRecord = ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(record.status);
+          const hasPendingAgentChangeRequest = record.agentChangeRequest?.status === 'PENDING';
 
           return (
             <Space wrap>
@@ -640,14 +792,13 @@ export function RoutingPage({
                   排货
                 </Button>
               ) : null}
-              {canManualEdit && canUpdateRouted ? (
-                <Button size="small" onClick={() => onEditShipment(record)}>
-                  修改
-                </Button>
-              ) : null}
               {canViewRoutedLog ? <Button size="small" onClick={() => onViewRoutingLog(record)}>排货日志</Button> : null}
               {canViewBusinessCost ? (
                 <Button size="small" onClick={() => openAssignment(record, 'business-cost')}>业务成本</Button>
+              ) : null}
+              {hasPendingAgentChangeRequest ? <Tag color="processing">待变更</Tag> : null}
+              {canReplaceAgent && hasPendingAgentChangeRequest && agentReplacementAllowedStatuses.has(record.status) ? (
+                <Button size="small" type="primary" onClick={() => void openAgentReplacement(record)}>处理变更</Button>
               ) : null}
               {canRerouteRecord && canReroute && canViewAgentChannel ? (
                 <Button size="small" icon={<RotateCcw size={14} />} onClick={() => setRerouteShipment(record)}>
@@ -659,7 +810,7 @@ export function RoutingPage({
         }
       }
     ],
-    [canAssign, canReroute, canUpdateRouted, canViewAgentChannel, canViewBusinessCost, canViewRouteCost, canViewRoutedLog, onEditShipment, onViewRoutingLog]
+    [canAssign, canReplaceAgent, canReroute, canViewAgentChannel, canViewBusinessCost, canViewRouteCost, canViewRoutedLog, onViewRoutingLog]
   );
 
   const weeklyColumns: ColumnsType<Shipment> = useMemo(() => {
@@ -682,10 +833,13 @@ export function RoutingPage({
   const pendingColumns: ColumnsType<Shipment> = useMemo(
     () => createPendingRoutingColumns({
       businessCostAudits,
+      payableAudits,
       mode: 'market',
       onRoute: canAssign ? (shipment) => openAssignment(shipment, 'assign') : undefined,
       onApprove: canConfirm ? (shipment) => void onApproveRouting(shipment) : undefined,
       onModify: canUpdatePending ? (shipment) => openAssignment(shipment, 'update') : undefined,
+      onViewFees: canViewBusinessCost ? (shipment) => openAssignment(shipment, 'business-cost') : undefined,
+      onViewPayableFees: canViewPayableCost ? (shipment) => openAssignment(shipment, 'payable-cost') : undefined,
       onViewLog: canViewPendingLog ? onViewPendingRoutingLog : undefined,
       onReturnReview: canReturnReview ? onReturnReview : undefined,
       canViewBusinessCost,
@@ -693,7 +847,7 @@ export function RoutingPage({
       canViewAgentChannel,
       canViewRouteCost
     }),
-    [businessCostAudits, canAssign, canConfirm, canReturnReview, canUpdatePending, canViewAgentChannel, canViewBusinessCost, canViewPayableCost, canViewPendingLog, canViewRouteCost, onApproveRouting, onReturnReview, onViewPendingRoutingLog]
+    [businessCostAudits, canAssign, canConfirm, canReturnReview, canUpdatePending, canViewAgentChannel, canViewBusinessCost, canViewPayableCost, canViewPendingLog, canViewRouteCost, onApproveRouting, onReturnReview, onViewPendingRoutingLog, payableAudits]
   );
 
   const assignmentBusinessCosts = useMemo(
@@ -815,7 +969,7 @@ export function RoutingPage({
     return (
       <Space direction="vertical" size={12} className="full-width">
         <Flex justify="space-between" align="center">
-          <Text type="secondary">按运单归并；{type === 'BUSINESS_COST' ? '业务成本' : '应付成本'}按“计费数量 × 单价”计算，可选择 KG 或 CBM，合计按 RMB 口径展示。</Text>
+          <Text type="secondary">总金额 = 计费数量 × 每单位单价；例如 0.50 KG × 49 RMB/KG = 24.50 RMB。可选择 KG 或 CBM，合计按 RMB 口径展示。</Text>
           {canCreateCost ? <Button size="small" disabled={Boolean(costEditor)} onClick={() => openCostEditor(type)}>新增费用</Button> : null}
         </Flex>
         <ManagedTable
@@ -864,10 +1018,14 @@ export function RoutingPage({
               ) : `${(row.billingQuantity ?? row.chargeWeightKg ?? 0).toFixed(row.billingUnit === 'CBM' ? 6 : 2)} ${row.billingUnit === 'CBM' ? 'CBM' : 'KG'}`
             },
             {
-              title: '单价', dataIndex: 'unitPrice', width: 100,
+              title: '单位单价', dataIndex: 'unitPrice', width: 200,
               render: (value: number | undefined, row: PendingRoutingCostRow) => isEditingRow(row)
-                ? <InputNumber aria-label="单价" min={0} precision={2} value={costEditor?.unitPrice} onChange={(unitPrice) => updateCostEditor({ unitPrice: unitPrice ?? undefined }, true)} />
-                : value?.toFixed(2) ?? '-'
+                ? <Space.Compact block>
+                    <InputNumber aria-label="单位单价" min={0} precision={2} value={costEditor?.unitPrice} style={{ width: 112 }}
+                      onChange={(unitPrice) => updateCostEditor({ unitPrice: unitPrice ?? undefined }, true)} />
+                    <Input aria-label="单位单价单位" readOnly tabIndex={-1} value={`${costEditor?.currency ?? 'RMB'}/${costEditor?.billingUnit === 'CBM' ? 'CBM' : 'KG'}`} style={{ width: 82 }} />
+                  </Space.Compact>
+                : value === undefined ? '-' : `${value.toFixed(2)} ${row.currency ?? 'RMB'}/${row.billingUnit === 'CBM' ? 'CBM' : 'KG'}`
             },
             {
               title: '总金额', dataIndex: 'amount', width: 120,
@@ -1457,6 +1615,196 @@ export function RoutingPage({
             </section>
           ) : null}
         </div>
+      </Modal>
+      <Modal
+        title={agentReplacementShipment ? `处理代理变更 · ${agentReplacementShipment.systemOrderNo}` : '处理代理变更'}
+        open={Boolean(agentReplacementShipment)}
+        destroyOnHidden
+        width={1120}
+        confirmLoading={agentReplacementSubmitting}
+        footer={(
+          <Space>
+            <Button disabled={agentReplacementSubmitting} onClick={closeAgentReplacement}>取消</Button>
+            <Button danger disabled={agentReplacementLoading || !agentReplacementPreview} loading={agentReplacementSubmitting} onClick={() => void rejectAgentChangeRequest()}>驳回申请</Button>
+            <Button type="primary" disabled={agentReplacementLoading || !agentReplacementPreview || agentReplacementPreview.paymentState === 'PAYMENT_BLOCKED'} loading={agentReplacementSubmitting} onClick={() => void submitAgentReplacement()}>确认变更</Button>
+          </Space>
+        )}
+        onCancel={closeAgentReplacement}
+      >
+        {agentReplacementLoading ? (
+          <Alert type="info" showIcon message="正在读取代理、应付和付款状态…" />
+        ) : agentReplacementPreview ? (
+          <Space direction="vertical" size={14} className="full-width">
+            <Card size="small" title="客服变更申请">
+              <Row gutter={[16, 8]}>
+                <Col xs={24} md={12}>变更原因：{agentReplacementPreview.request.reason || '-'}</Col>
+                <Col xs={24} md={6}>发起人：{agentReplacementPreview.request.requestedBy}</Col>
+                <Col xs={24} md={6}>发起时间：{formatBeijingDateTime(agentReplacementPreview.request.requestedAt)}</Col>
+                <Col xs={24} md={12}>当前代理：{agentReplacementPreview.agentName || '-'}</Col>
+                <Col xs={24} md={12}>当前代理渠道：{agentReplacementPreview.agentChannelName || '-'}</Col>
+              </Row>
+            </Card>
+            <Alert
+              showIcon
+              type={agentReplacementPreview.paymentState === 'PAYMENT_BLOCKED'
+                ? 'error'
+                : agentReplacementPreview.paymentState === 'AUDITED_REQUIRES_REVIEW' ? 'warning' : 'info'}
+              message={agentReplacementPreview.paymentState === 'PAYMENT_BLOCKED'
+                ? '该票已进入付款申请、付款、凭证或结算链路，不能更换代理。请先撤销付款链路。'
+                : agentReplacementPreview.paymentState === 'AUDITED_REQUIRES_REVIEW'
+                  ? '该票应付已审核。确认后原应付将作废，并生成待审核的新应付。'
+                  : '该票应付尚未审核。确认后将在原记录上更新，并完整记录前后差异。'}
+            />
+            <Form form={agentReplacementForm} layout="vertical" disabled={agentReplacementPreview.paymentState === 'PAYMENT_BLOCKED'}>
+              <Form.Item name="requestId" hidden><Input /></Form.Item>
+              <Form.Item name="agentChannelName" hidden><Input /></Form.Item>
+              <Row gutter={[14, 0]}>
+                <Col xs={24} md={12}>
+                  <Form.Item name="agentId" label="代理" rules={[{ required: true, message: '请选择代理' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder="选择基础资料里的代理"
+                      options={masterData.agents.filter((agent) => agent.enabled).map((agent) => ({
+                        value: agent.id,
+                        label: [agent.shortName, agent.name].filter(Boolean).join(' / ')
+                      }))}
+                      onChange={() => agentReplacementForm.setFieldsValue({ agentChannelId: undefined, agentChannelName: '' })}
+                    />
+                  </Form.Item>
+                </Col>
+                <Col xs={24} md={12}>
+                  <Form.Item name="agentChannelId" label="代理渠道" rules={[{ required: true, message: '请选择代理渠道' }]}>
+                    <Select
+                      showSearch
+                      optionFilterProp="label"
+                      placeholder={watchedReplacementAgentId ? '选择代理渠道' : '请先选择代理'}
+                      disabled={!watchedReplacementAgentId}
+                      options={replacementAgentChannelOptions}
+                      onChange={(agentChannelId) => {
+                        const option = replacementAgentChannelOptions.find((item) => item.value === agentChannelId);
+                        agentReplacementForm.setFieldValue('agentChannelName', option?.label ?? '');
+                      }}
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Form.List name="payables">
+                {(fields) => (
+                  <Space direction="vertical" size={10} className="full-width">
+                    <Flex justify="space-between" align="center">
+                      <Text strong>应付成本</Text>
+                      <Text type="secondary">仅更新原有费用；计费数量 × 单价自动形成新金额。</Text>
+                    </Flex>
+                    {fields.length ? fields.map((field, index) => (
+                      <Card key={field.key} size="small" title={`费用 ${index + 1}`}>
+                        <Form.Item name={[field.name, 'id']} hidden><Input /></Form.Item>
+                        <Row gutter={[12, 0]}>
+                          <Col xs={24} md={5}>
+                            <Form.Item name={[field.name, 'name']} label="费用名称" rules={[{ required: true, whitespace: true, message: '请填写费用名称' }]}>
+                              <Input />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={12} md={3}>
+                            <Form.Item name={[field.name, 'currency']} label="币种" rules={[{ required: true }]}>
+                              <Select options={[{ label: 'RMB', value: 'RMB' }, { label: 'USD', value: 'USD' }]} />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={12} md={3}>
+                            <Form.Item name={[field.name, 'billingUnit']} label="计费单位" rules={[{ required: true }]}>
+                              <Select options={[{ label: 'KG', value: 'KG' }, { label: 'CBM', value: 'CBM' }]} />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={12} md={4}>
+                            <Form.Item name={[field.name, 'billingQuantity']} label="计费数量" rules={[{ required: true, message: '请填写计费数量' }]}>
+                              <InputNumber min={0} precision={6} className="full-width" />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={12} md={4}>
+                            <Form.Item name={[field.name, 'unitPrice']} label="单价" rules={[{ required: true, message: '请填写单价' }]}>
+                              <InputNumber min={0} precision={2} className="full-width" />
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24} md={5}>
+                            <Form.Item label="总金额" shouldUpdate noStyle>
+                              {() => {
+                                const payable = agentReplacementForm.getFieldValue(['payables', index]) as ShipmentAgentReplacementInput['payables'][number] | undefined;
+                                const amount = Number(payable?.billingQuantity ?? 0) * Number(payable?.unitPrice ?? 0);
+                                return (
+                                  <Form.Item label="总金额">
+                                    <Input value={`${Number.isFinite(amount) ? amount.toFixed(2) : '0.00'} ${payable?.currency ?? 'RMB'}`} disabled />
+                                  </Form.Item>
+                                );
+                              }}
+                            </Form.Item>
+                          </Col>
+                          <Col xs={24}>
+                            <Form.Item name={[field.name, 'remark']} label="费用备注" rules={[{ max: 500, message: '费用备注不能超过 500 个字符' }]} style={{ marginBottom: 0 }}>
+                              <Input placeholder="选填" />
+                            </Form.Item>
+                          </Col>
+                        </Row>
+                      </Card>
+                    )) : <Alert type="info" showIcon message="该票当前没有有效应付成本，本次仅更新代理和代理渠道。" />}
+                  </Space>
+                )}
+              </Form.List>
+
+              <Form.Item
+                name="resolutionNote"
+                label="市场处理备注"
+                rules={[
+                  { required: true, whitespace: true, message: '请填写市场处理备注' },
+                  { max: 500, message: '市场处理备注不能超过 500 个字符' }
+                ]}
+                style={{ marginTop: 14, marginBottom: 0 }}
+              >
+                <Input.TextArea rows={3} maxLength={500} showCount placeholder="填写处理结果；确认变更或驳回都会记录此备注" />
+              </Form.Item>
+            </Form>
+          </Space>
+        ) : null}
+      </Modal>
+
+      <Modal
+        title={agentReplacementHistoryShipment ? `${agentReplacementHistoryShipment.systemOrderNo}(G) · 更换代理记录` : '更换代理记录'}
+        open={Boolean(agentReplacementHistoryShipment)}
+        width={900}
+        footer={<Button onClick={() => setAgentReplacementHistoryShipment(null)}>关闭</Button>}
+        onCancel={() => setAgentReplacementHistoryShipment(null)}
+      >
+        {agentReplacementHistoryLoading ? (
+          <Alert type="info" showIcon message="正在读取更换记录…" />
+        ) : agentReplacementHistory.length ? (
+          <Space direction="vertical" size={12} className="full-width">
+            {agentReplacementHistory.map((entry) => (
+              <Card
+                key={entry.id}
+                size="small"
+                title={`${new Date(entry.changedAt).toLocaleString('zh-CN', { hour12: false })} · ${entry.changedBy}`}
+                extra={<Tag color={entry.state === 'AUDITED_RECREATED' ? 'gold' : 'blue'}>{entry.state === 'AUDITED_RECREATED' ? '原应付作废并重建待审' : '未审应付原位更新'}</Tag>}
+              >
+                <Space direction="vertical" size={2}>
+                  <Text>客服变更原因：{entry.requestReason || '-'}</Text>
+                  <Text>市场处理备注：{entry.resolutionNote || '-'}</Text>
+                </Space>
+                <Table
+                  rowKey="field"
+                  size="small"
+                  pagination={false}
+                  style={{ marginTop: 10 }}
+                  dataSource={entry.changes}
+                  columns={[
+                    { title: '字段', dataIndex: 'label', width: 150 },
+                    { title: '修改前', dataIndex: 'before', render: formatAgentReplacementAuditValue },
+                    { title: '修改后', dataIndex: 'after', render: formatAgentReplacementAuditValue }
+                  ]}
+                />
+              </Card>
+            ))}
+          </Space>
+        ) : <Alert type="info" showIcon message="暂无更换代理记录" />}
       </Modal>
       <Modal
         title="代理退回重排"

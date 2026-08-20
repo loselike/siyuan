@@ -134,7 +134,6 @@ export interface ShipmentOperationLog {
 }
 
 type ShipmentLogViewMode = 'operation' | 'routing';
-type OrderManagementDensity = 'compact' | 'dense';
 
 const precisionLedgerColumnWidths: Record<string, number> = {
   createdAt: 88,
@@ -358,7 +357,6 @@ export function OrdersPage({
     && showAgentShortName
     && showAgentChannel;
   const showAgentWeight = canViewOrderManagementAgentWeight(permissions) && fieldVisibility.showAgentWeight;
-  const [tableDensity, setTableDensity] = useState<OrderManagementDensity>('compact');
   const [downloadingInvoiceTemplateId, setDownloadingInvoiceTemplateId] = useState<string>();
   const [downloadingBusinessInvoiceId, setDownloadingBusinessInvoiceId] = useState<string>();
   const [filterDraft, setFilterDraft] = useState<OrderManagementFilters>(createEmptyOrderManagementFilters);
@@ -518,18 +516,6 @@ export function OrdersPage({
       }
     ],
     [formatPaymentSummary, masterData.agents, matrixSourceColumns, showAgentChannel, showAgentDetails, showAgentShortName, showAgentWeight]
-  );
-  const tableDensityToolbar = (
-    <Select<OrderManagementDensity>
-      aria-label="表格密度"
-      size="small"
-      value={tableDensity}
-      options={[
-        { label: '紧凑', value: 'compact' },
-        { label: '高密度', value: 'dense' }
-      ]}
-      onChange={setTableDensity}
-    />
   );
   const tableFilterToolbar = (
     <Space wrap className="fulfillment-board-filters">
@@ -816,10 +802,9 @@ export function OrdersPage({
               rowKey="id"
               dataSource={filteredStageShipments}
               size="small"
-              density={tableDensity}
+              columnSettingsPlacement="toolbar"
               pagination={tenRowTablePagination}
               toolbarLeading={tableFilterToolbar}
-              toolbarActions={tableDensityToolbar}
             />
           </Card>
         ) : null}

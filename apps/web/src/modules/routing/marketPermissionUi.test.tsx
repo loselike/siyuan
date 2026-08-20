@@ -43,14 +43,24 @@ function MarketPermissionFixture({
   onLoadRoutingReportExportRows = async () => [],
   shipments = [pendingShipment],
   onReturnReview = vi.fn(),
-  onRerouteShipment = async () => undefined
+  onSavePendingRoutingCost = vi.fn(async () => undefined),
+  onRerouteShipment = async () => undefined,
+  onLoadAgentReplacementPreview = async () => { throw new Error('not used'); },
+  onReplaceShipmentAgent = async () => undefined,
+  onRejectAgentChangeRequest = async () => undefined,
+  onLoadAgentReplacementHistory = async () => []
 }: {
   permissions?: PermissionKey[];
   assignmentFinanceDetail?: Parameters<typeof RoutingPage>[0]['assignmentFinanceDetail'];
   onLoadRoutingReportExportRows?: () => Promise<Shipment[]>;
   shipments?: Shipment[];
   onReturnReview?: (shipment: Shipment) => Promise<void> | void;
+  onSavePendingRoutingCost?: Parameters<typeof RoutingPage>[0]['onSavePendingRoutingCost'];
   onRerouteShipment?: (shipment: Shipment, reason: string) => Promise<void>;
+  onLoadAgentReplacementPreview?: Parameters<typeof RoutingPage>[0]['onLoadAgentReplacementPreview'];
+  onReplaceShipmentAgent?: Parameters<typeof RoutingPage>[0]['onReplaceShipmentAgent'];
+  onRejectAgentChangeRequest?: Parameters<typeof RoutingPage>[0]['onRejectAgentChangeRequest'];
+  onLoadAgentReplacementHistory?: Parameters<typeof RoutingPage>[0]['onLoadAgentReplacementHistory'];
 }) {
   const [assignmentShipment, setAssignmentShipment] = useState<Shipment | null>(null);
   const [assignmentForm] = Form.useForm<RoutingAssignmentFormValues>();
@@ -69,11 +79,14 @@ function MarketPermissionFixture({
         onCancelAssignment={() => setAssignmentShipment(null)}
         onConfirmAssignment={async () => true}
         onRerouteShipment={onRerouteShipment}
-        onEditShipment={vi.fn()}
+        onLoadAgentReplacementPreview={onLoadAgentReplacementPreview}
+        onReplaceShipmentAgent={onReplaceShipmentAgent}
+        onRejectAgentChangeRequest={onRejectAgentChangeRequest}
+        onLoadAgentReplacementHistory={onLoadAgentReplacementHistory}
         onViewRoutingLog={vi.fn()}
         onViewPendingRoutingLog={vi.fn()}
         onReturnReview={onReturnReview}
-        onSavePendingRoutingCost={async () => undefined}
+        onSavePendingRoutingCost={onSavePendingRoutingCost}
         onDeletePendingRoutingCost={async () => undefined}
         onLoadRoutingReportExportRows={onLoadRoutingReportExportRows}
         onAiAssist={async () => undefined}
@@ -89,13 +102,13 @@ describe('market positive permission UI', () => {
   it('keeps business-cost create independent and hides unrelated actions', async () => {
     const user = userEvent.setup();
     render(<MarketPermissionFixture />);
-    const row = await screen.findByRole('row', { name: /MARKET-COST-ONLY-1/ });
+    const row = await screen.findByRole('row', { name: /CUSTOMER-ORDER-1/ });
     expect(within(row).getByRole('button', { name: '业务成本' })).toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: /排\s*货/ })).not.toBeInTheDocument();
     expect(within(row).queryByRole('button', { name: /修\s*改/ })).not.toBeInTheDocument();
     await user.click(within(row).getByRole('button', { name: '业务成本' }));
     const dialog = await screen.findByRole('dialog', { name: '市场排货' });
-    expect(within(dialog).getByRole('tab', { name: '业务成本' })).toHaveAttribute('aria-selected', 'true');
+    expect(dialog.querySelector('#routing-assignment-business-cost-title')).toHaveTextContent('业务成本');
     expect(within(dialog).getByRole('button', { name: '新增费用' })).toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: /排\s*货/ })).not.toBeInTheDocument();
   });
@@ -120,7 +133,7 @@ describe('market positive permission UI', () => {
       id: 'approved-cost-1', shipmentId: pendingShipment.id,
       name: '已审核业务成本', amount: 88, currency: 'RMB', settled: false, marketEditable: false
     }], receivableTotal: 0, businessCostTotal: 88, payableTotal: 0 }} />);
-    const row = await screen.findByRole('row', { name: /MARKET-COST-ONLY-1/ });
+    const row = await screen.findByRole('row', { name: /CUSTOMER-ORDER-1/ });
     await user.click(within(row).getByRole('button', { name: '业务成本' }));
     const dialog = await screen.findByRole('dialog', { name: '市场排货' });
     expect(within(dialog).getByRole('button', { name: '新增费用' })).toBeInTheDocument();
@@ -129,6 +142,21 @@ describe('market positive permission UI', () => {
     const approvedRow = within(dialog).getByRole('row', { name: /已审核业务成本/ });
     expect(within(approvedRow).queryByRole('button', { name: '修改' })).not.toBeInTheDocument();
     expect(within(approvedRow).queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
+  });
+
+  it('keeps payable-cost create independently reachable', async () => {
+    const user = userEvent.setup();
+    render(<MarketPermissionFixture permissions={[
+      'market:pending-routing:view',
+      'market:pending-routing:payable-cost:view',
+      'market:pending-routing:payable-cost:create'
+    ]} />);
+    const row = await screen.findByRole('row', { name: /CUSTOMER-ORDER-1/ });
+    await user.click(within(row).getByRole('button', { name: '应付成本' }));
+    const dialog = await screen.findByRole('dialog', { name: '市场排货' });
+    expect(dialog.querySelector('#routing-assignment-payable-cost-title')).toHaveTextContent('应付成本');
+    expect(within(dialog).getByRole('button', { name: '新增费用' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: /排\s*货/ })).not.toBeInTheDocument();
   });
 
   it('keeps reroute independently reachable without report permission', async () => {

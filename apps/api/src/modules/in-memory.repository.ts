@@ -308,6 +308,15 @@ import {
   type CustomerServiceTransferBatchInput,
   type CustomerServiceTransferBatchResponse,
   type ShipmentPaymentUpdateInput,
+  shipmentAgentChangeRequestActions,
+  summarizeShipmentAgentChangeRequest,
+  type ShipmentAgentChangeRequestInput,
+  type ShipmentAgentChangeRequestRejectInput,
+  type ShipmentAgentChangeRequestSummary,
+  type ShipmentAgentReplacementInput,
+  type ShipmentAgentReplacementPreview,
+  type ShipmentAgentReplacementAuditSummary,
+  type ShipmentAgentReplacementChange,
   type ShipmentDispatchInput,
   type WarehouseDispatchDeclarationUpdateInput,
   type WarehouseDispatchInboundNoUpdateInput,
@@ -495,6 +504,7 @@ const warehouseNavigationViewPermissions: PermissionKey[] = [
   'warehouse:today-receipt:view',
   'warehouse:in-stock:view',
   'warehouse:tally-pending:view',
+  'warehouse:tally-pending:problem-view',
   'warehouse:tally-completed:view',
   'warehouse:dispatch-pending:view',
   'warehouse:outbounded:view',
@@ -1473,6 +1483,30 @@ export class InMemoryRepository {
       await this.hasPermission(principal.role, 'operations:line-shipment:process')
       || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view')
     );
+    const canViewAgentReplacementAudit = options.marketSiteScope === true
+      && !fieldMasks['agent-short-name']
+      && !fieldMasks['agent-company-name']
+      && !fieldMasks['agent-channel']
+      && !fieldMasks['agent-data']
+      && !fieldMasks['payable-cost']
+      && !fieldMasks['payable-status']
+      && await this.hasPermission(principal.role, 'market:routed:view');
+    const canViewAgentChangeRequest = options.marketSiteScope === true
+      && !fieldMasks['agent-short-name']
+      && !fieldMasks['agent-company-name']
+      && !fieldMasks['agent-channel']
+      && !fieldMasks['agent-data']
+      && !fieldMasks['payable-cost']
+      && !fieldMasks['payable-status']
+      && await this.hasPermission(principal.role, 'market:routed:replace-agent');
+    const agentReplacementCountByShipmentId = new Map<string, number>();
+    if (canViewAgentReplacementAudit) {
+      this.auditLogs.forEach((row) => {
+        if (row.action === 'shipment.agent.replace') {
+          agentReplacementCountByShipmentId.set(row.target, (agentReplacementCountByShipmentId.get(row.target) ?? 0) + 1);
+        }
+      });
+    }
     const scopedShipments = options.marketSiteScope
       ? this.shipments
         .filter((shipment) => !this.deletedShipmentIds.has(shipment.id))
@@ -1486,7 +1520,19 @@ export class InMemoryRepository {
       principal,
       (() => {
         const visibleShipment = this.withSalespersonSite(this.withWarehouseDispatchArchiveFields(shipment));
-        const routedShipment = visibleShipment.routedAt && this.isAfterRouteDispatch(visibleShipment.status) ? this.withRouteCostSummary(visibleShipment) : visibleShipment;
+        const replacementCount = agentReplacementCountByShipmentId.get(visibleShipment.id);
+        const replacementTaggedShipment = replacementCount
+          ? { ...visibleShipment, agentReplacementCount: replacementCount }
+          : visibleShipment;
+        const request = canViewAgentChangeRequest
+          ? this.getShipmentAgentChangeRequestSummary(visibleShipment.id)
+          : undefined;
+        const requestTaggedShipment = request
+          ? { ...replacementTaggedShipment, agentChangeRequest: request }
+          : replacementTaggedShipment;
+        const routedShipment = requestTaggedShipment.routedAt && this.isAfterRouteDispatch(requestTaggedShipment.status)
+          ? this.withRouteCostSummary(requestTaggedShipment)
+          : requestTaggedShipment;
         return canViewLinePoolFinanceSummary
           ? { ...routedShipment, linePoolFinanceSummary: this.summarizeLinePoolFinanceRow(routedShipment) }
           : routedShipment;
@@ -1729,8 +1775,10 @@ export class InMemoryRepository {
       .filter((shipment) => this.isCustomerServiceDataApproved(shipment.id, 'business') && this.isCustomerServiceDataApproved(shipment.id, 'agent'))
       .filter((shipment) => canViewAll || shipment.salesperson === principal.username);
     const can = (permission: PermissionKey) => this.hasPermission(principal.role, permission);
+    const canRequestAgentChange = await can('customer-service:transfer:request-agent-change');
     return Promise.all(rows.map(async (shipment) => {
-      const row = { ...shipment } as Record<string, unknown>;
+      const request = canRequestAgentChange ? this.getShipmentAgentChangeRequestSummary(shipment.id) : undefined;
+      const row = { ...shipment, ...(request ? { agentChangeRequest: request } : {}) } as Record<string, unknown>;
       if (!await can('customer-service:transfer:view-outbound-time')) delete row.outboundAt;
       if (!await can('customer-service:transfer:view-agent')) {
         delete row.agentName;
@@ -1758,12 +1806,15 @@ export class InMemoryRepository {
       try {
         const transferNo = row.transferNo?.trim();
         if (!transferNo) throw new BadRequestException('转单号不能为空');
+        if (this.getShipmentAgentChangeRequestSummary(row.shipmentId)?.status === 'PENDING') {
+          throw new ConflictException('代理变更申请待市场处理，暂不能填写转单号');
+        }
         const updated = await this.updateShipmentOperational(principal, row.shipmentId, {
           transferNo,
           subOrderNo: row.subOrderNo?.trim() || undefined,
           status: 'WAITING_DEPARTURE',
           latestTracking: '已填写转单号，待离港'
-        }, { allowCustomerServiceTransferAgentWeight: true });
+        }, { allowCustomerServiceTransferAgentWeight: true, customerServiceScope: true });
         this.audit('customer_service.transfer.fill', updated.id, principal, null, { transferNo, subOrderNo: row.subOrderNo?.trim(), pushToSales: row.pushToSales === true, pushStatus: row.pushToSales ? 'PENDING' : undefined });
         results.push({ shipmentId: row.shipmentId, systemOrderNo: updated.systemOrderNo, success: true, shipment: updated });
       } catch (error) {
@@ -3369,13 +3420,13 @@ export class InMemoryRepository {
     }
     const before = [...(this.rolePermissionMatrix[role] ?? [])];
     const beforeEffective = effectivePermissionsForRole(role, before);
-    const normalized = normalizeRolePermissions(role, permissions);
-    normalized.push(...protectedDataScopePermissions.filter((permission) => beforeEffective.includes(permission)));
+    const protectedScopes = protectedDataScopePermissions.filter((permission) => beforeEffective.includes(permission));
+    const normalized = normalizeRolePermissions(role, [...permissions, ...protectedScopes]);
     normalized.push(...hiddenPersistedApiPermissionsForRole(role, before));
     if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(beforeEffective, normalized).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
-    const effectivePermissions = normalized;
+    const effectivePermissions = [...new Set<PermissionKey>([...normalized, ...protectedScopes])];
     const roleHasDirectReports = this.accounts.some((manager) => manager.role === role
       && this.accounts.some((item) => item.directManagerId === manager.id));
     if (!isAdministratorRole(role) && roleHasDirectReports && !effectivePermissions.includes('business:shipment:team-view')) {
@@ -3409,20 +3460,25 @@ export class InMemoryRepository {
       throw new BadRequestException('停用用户组不能作为权限复制来源');
     }
     const before = effectivePermissionsForRole(role, this.rolePermissionMatrix[role] ?? []);
-    const sourcePermissions = managementPermissionsForRole(sourceRoleKey, this.rolePermissionMatrix[sourceRoleKey] ?? []);
-    sourcePermissions.push(...hiddenPersistedApiPermissionsForRole(role, this.rolePermissionMatrix[role] ?? []));
-    if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, sourcePermissions).length > 0) {
+    const sourcePermissions = configuredPermissionsForRole(sourceRoleKey, this.rolePermissionMatrix[sourceRoleKey] ?? []);
+    const targetProtectedScopes = protectedDataScopePermissions.filter((permission) => before.includes(permission));
+    const copiedPermissions = [...new Set<PermissionKey>([
+      ...normalizeRolePermissions(role, [...sourcePermissions, ...targetProtectedScopes]),
+      ...targetProtectedScopes,
+      ...hiddenPersistedApiPermissionsForRole(role, this.rolePermissionMatrix[role] ?? [])
+    ])];
+    if (!isAdministratorRole(principal.role) && getNewlyAddedMarketSensitivePermissions(before, copiedPermissions).length > 0) {
       throw new ForbiddenException('只有管理员可以授予真实代理、真实应付和市场成本等敏感权限');
     }
     const roleHasDirectReports = this.accounts.some((manager) => manager.role === role
       && this.accounts.some((item) => item.directManagerId === manager.id));
-    if (roleHasDirectReports && !sourcePermissions.includes('business:shipment:team-view')) {
+    if (roleHasDirectReports && !copiedPermissions.includes('business:shipment:team-view')) {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能覆盖为不含团队管理的权限');
     }
-    if (roleHasDirectReports && sourcePermissions.includes('business:shipment:all-view')) {
+    if (roleHasDirectReports && copiedPermissions.includes('business:shipment:all-view')) {
       throw new BadRequestException('该用户组仍有经理账号绑定直属下属，不能覆盖为全部运单查看权限');
     }
-    this.rolePermissionMatrix[role] = [...sourcePermissions];
+    this.rolePermissionMatrix[role] = [...copiedPermissions];
     const after = effectivePermissionsForRole(role, this.rolePermissionMatrix[role]);
     this.audit('system.role_permissions.copy', `role:${role}`, principal, { permissions: before }, {
       sourceRoleKey,
@@ -6722,7 +6778,7 @@ export class InMemoryRepository {
   }
 
   async createWarehouseConsolidation(principal: Principal, input: WarehouseConsolidationCreateInput): Promise<WarehouseConsolidationSummary> {
-    await this.ensurePermission(principal, input.mode === 'MERGE_AND_SHIP' ? 'warehouse:tally-pending:complete-and-ship' : 'warehouse:tally-pending:process', '没有仓库合并权限');
+    await this.ensurePermission(principal, input.mode === 'MERGE_AND_SHIP' ? 'warehouse:tally-pending:shipment-create' : 'warehouse:tally-pending:process', '没有仓库合并权限');
     if (!Array.isArray(input.packageIds) || input.packageIds.length === 0) {
       throw new BadRequestException('请先选择要合并的包裹');
     }
@@ -6780,7 +6836,7 @@ export class InMemoryRepository {
   }
 
   async createShipmentFromWarehouseConsolidation(principal: Principal, id: string): Promise<WarehouseConsolidationSummary> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:complete-and-ship', '没有仓库合并出货权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:shipment-create', '没有仓库合并出货权限');
     const consolidation = this.warehouseConsolidations.find((item) => item.id === id);
     if (!consolidation) {
       throw new NotFoundException('合并批次不存在');
@@ -6830,21 +6886,34 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTasks(principal: Principal, query: WarehouseTallyTaskListQuery = {}): Promise<WarehouseTallyTaskSummary[]> {
-    if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED') {
+    const problemOnly = query.problemOnly === true || query.problemOnly === 'true';
+    if (problemOnly && query.status && query.status !== 'CANCELLED') {
+      throw new BadRequestException('理货问题件查询不能同时指定其他任务状态');
+    }
+    if (problemOnly && (query.completedScope || query.completedFrom || query.completedTo)) {
+      throw new BadRequestException('理货问题件查询不能同时指定已完成理货范围');
+    }
+    if (query.status && query.status !== 'PENDING' && query.status !== 'COMPLETED' && query.status !== 'CANCELLED') {
       throw new BadRequestException('理货任务状态无效');
     }
     const canViewPending = await this.hasPermission(principal.role, 'warehouse:tally-pending:view');
+    const canViewProblems = await this.hasPermission(principal.role, 'warehouse:tally-pending:problem-view');
     const canViewCompleted = await this.hasPermission(principal.role, 'warehouse:tally-completed:view');
-    if (!canViewPending && !canViewCompleted) {
+    if (!problemOnly && query.status !== 'CANCELLED' && !canViewPending && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看理货任务');
     }
     if (query.status === 'PENDING' && !canViewPending) {
       throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
     }
+    if ((problemOnly || query.status === 'CANCELLED') && !canViewProblems) {
+      throw new ForbiddenException('当前用户组已屏蔽查看理货问题件');
+    }
     if (query.status === 'COMPLETED' && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看已完成理货');
     }
-    const effectiveStatus = query.status ?? (!canViewPending ? 'COMPLETED' : !canViewCompleted ? 'PENDING' : undefined);
+    const effectiveStatus = problemOnly
+      ? 'CANCELLED'
+      : query.status ?? (!canViewPending ? 'COMPLETED' : !canViewCompleted ? 'PENDING' : undefined);
     const scope = this.operatorCustomerScope(principal);
     const keyword = (value: string | undefined, needle: string | undefined) => !needle || (value ?? '').toLowerCase().includes(needle.toLowerCase());
     const rows = this.warehouseTallyTasks
@@ -6876,6 +6945,11 @@ export class InMemoryRepository {
           outputPackages: outputs.map((pkg) => ({ ...pkg, exceptions: [...pkg.exceptions] }))
         };
       });
+    if (effectiveStatus === 'CANCELLED') {
+      return rows
+        .filter((task) => task.status === 'CANCELLED' && task.tallyProgressStatus === 'CANCELLED')
+        .sort((left, right) => Date.parse(right.cancelledAt ?? right.createdAt) - Date.parse(left.cancelledAt ?? left.createdAt));
+    }
     const pendingRows = sortPendingWarehouseTallyTasks(
       rows.filter((task) => task.status === 'PENDING'),
       this.warehouseTallySortRules
@@ -6886,7 +6960,7 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallySortRules(principal: Principal): Promise<WarehouseTallySortRule[]> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:view', '当前角色不能查看理货排序规则');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:sort-rule-manage', '当前角色不能查看理货排序规则');
     return this.warehouseTallySortRules.map((rule) => ({ ...rule }));
   }
 
@@ -6894,7 +6968,7 @@ export class InMemoryRepository {
     principal: Principal,
     input: WarehouseTallySortRulesUpdateInput
   ): Promise<WarehouseTallySortRule[]> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:edit', '当前角色不能修改理货排序规则');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:sort-rule-manage', '当前角色不能修改理货排序规则');
     const normalized = normalizeWarehouseTallySortRuleInput(input);
     const before = this.warehouseTallySortRules.map((rule) => ({ ...rule }));
     const updatedAt = new Date().toISOString();
@@ -6906,7 +6980,12 @@ export class InMemoryRepository {
   }
 
   async getWarehouseTallyTaskSourcePackages(principal: Principal, id: string): Promise<WarehousePackageSummary[]> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:view', '当前角色不能查看理货原始包裹');
+    if (!(await this.hasAnyPermission(principal.role, [
+      'warehouse:tally-pending:detail',
+      'warehouse:tally-pending:process'
+    ]))) {
+      throw new ForbiddenException('当前角色不能查看理货原始包裹');
+    }
     const scope = this.operatorCustomerScope(principal);
     const task = this.warehouseTallyTasks.find((item) =>
       item.id === id
@@ -7104,7 +7183,7 @@ export class InMemoryRepository {
   }
 
   async startWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:process', '没有开始理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:start', '没有开始理货任务权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) throw new NotFoundException('理货任务不存在');
     const before = this.warehouseTallyTasks[index];
@@ -7197,7 +7276,7 @@ export class InMemoryRepository {
   }
 
   async cancelWarehouseTallyTask(principal: Principal, id: string): Promise<WarehouseTallyTaskSummary> {
-    await this.ensurePermission(principal, 'warehouse:tally-pending:cancel', '没有取消理货任务权限');
+    await this.ensurePermission(principal, 'warehouse:tally-pending:restart', '没有退回重理权限');
     const index = this.warehouseTallyTasks.findIndex((task) => task.id === id);
     if (index < 0) {
       throw new NotFoundException('理货任务不存在');
@@ -13339,6 +13418,328 @@ export class InMemoryRepository {
     return this.scopeShipmentAgentWeight(shipment, await this.canViewShipmentAgentWeight(principal));
   }
 
+  async createShipmentAgentChangeRequest(
+    principal: Principal,
+    shipmentId: string,
+    input: ShipmentAgentChangeRequestInput
+  ): Promise<ShipmentAgentChangeRequestSummary> {
+    await this.ensurePermission(principal, 'customer-service:transfer:request-agent-change', '没有发起代理变更权限');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    ensureAgentChangeRequestFieldsVisible(fieldMasks);
+    const reason = normalizeAgentChangeRequestReason(input.reason, '请填写变更原因');
+    const shipment = this.customerServiceVisibleShipment(principal, shipmentId);
+    ensureAgentChangeRequestShipmentStage(shipment.status, shipment.transferNo);
+    await this.ensureTransferDataApproved(principal, shipmentId);
+    ensureAgentChangeRequestShipmentStage(shipment.status, shipment.transferNo);
+    if (this.tickets.some((ticket) => ticket.shipmentId === shipmentId && ticket.status !== 'CLOSED')) {
+      throw new BadRequestException('当前运单存在未解决问题件，不能发起代理变更');
+    }
+    if (this.getShipmentAgentChangeRequestSummary(shipmentId)?.status === 'PENDING') {
+      throw new ConflictException('该票已有待处理的代理变更申请');
+    }
+    const requestId = randomUUID();
+    const requestedAt = new Date().toISOString();
+    this.audit(shipmentAgentChangeRequestActions.created, shipmentId, principal, null, {
+      reason,
+      requestedBy: principal.username,
+      requestedAt,
+      agentId: shipment.agentId,
+      agentName: shipment.agentName
+    }, requestId);
+    this.audit('shipment.event', shipmentId, principal, null, {
+      fromStatus: shipment.status,
+      toStatus: shipment.status,
+      note: `客服发起代理变更：${reason}`
+    });
+    return { id: requestId, shipmentId, status: 'PENDING', reason, requestedBy: principal.username, requestedAt };
+  }
+
+  async rejectShipmentAgentChangeRequest(
+    principal: Principal,
+    shipmentId: string,
+    requestId: string,
+    input: ShipmentAgentChangeRequestRejectInput
+  ): Promise<ShipmentAgentChangeRequestSummary> {
+    await this.ensurePermission(principal, 'market:routed:replace-agent', '没有处理代理变更权限');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    ensureAgentReplacementFieldsVisible(fieldMasks);
+    const resolutionNote = normalizeAgentChangeRequestReason(input.reason, '请填写驳回原因');
+    const shipment = this.marketVisibleShipment(principal, shipmentId);
+    ensureAgentReplacementShipmentStatus(shipment.status);
+    const current = this.getShipmentAgentChangeRequestSummary(shipmentId);
+    ensurePendingAgentChangeRequest(current, requestId);
+    const resolvedAt = new Date().toISOString();
+    this.audit(shipmentAgentChangeRequestActions.rejected, shipmentId, principal, null, {
+      requestId,
+      resolutionNote,
+      resolvedBy: principal.username,
+      resolvedAt
+    });
+    this.audit('shipment.event', shipmentId, principal, null, {
+      fromStatus: shipment.status,
+      toStatus: shipment.status,
+      note: `市场驳回代理变更：${resolutionNote}`
+    });
+    return { ...current!, status: 'REJECTED', resolutionNote, resolvedBy: principal.username, resolvedAt };
+  }
+
+  async getShipmentAgentReplacementPreview(
+    principal: Principal,
+    shipmentId: string
+  ): Promise<ShipmentAgentReplacementPreview> {
+    await this.ensurePermission(principal, 'market:routed:replace-agent', '没有更换代理权限');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    ensureAgentReplacementFieldsVisible(fieldMasks);
+    const shipment = this.marketVisibleShipment(principal, shipmentId);
+    ensureAgentReplacementShipmentStatus(shipment.status);
+    const payables = this.shipmentFinanceItems
+      .filter((item) => item.shipmentId === shipmentId && item.type === 'PAYABLE' && !item.voided)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const routeAfter = this.latestAgentReplacementRouteSnapshot(shipmentId);
+    const request = this.getShipmentAgentChangeRequestSummary(shipmentId);
+    ensurePendingAgentChangeRequest(request);
+    return {
+      shipmentId,
+      systemOrderNo: shipment.systemOrderNo,
+      status: shipment.status,
+      agentId: shipment.agentId,
+      agentName: shipment.agentName,
+      agentChannelId: typeof routeAfter?.agentChannelId === 'string' ? routeAfter.agentChannelId : undefined,
+      agentChannelName: typeof routeAfter?.agentChannelName === 'string' ? routeAfter.agentChannelName : shipment.routeAgentChannelName,
+      transferNo: shipment.transferNo,
+      paymentState: this.resolveAgentReplacementPaymentState(payables),
+      request: request!,
+      payables: payables.map((item) => this.toPayableFinanceSummary(item, shipment))
+    };
+  }
+
+  async replaceShipmentAgent(
+    principal: Principal,
+    shipmentId: string,
+    input: ShipmentAgentReplacementInput
+  ): Promise<Shipment> {
+    await this.ensurePermission(principal, 'market:routed:replace-agent', '没有更换代理权限');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    ensureAgentReplacementFieldsVisible(fieldMasks);
+    const normalized = normalizeShipmentAgentReplacementInput(input);
+    const shipment = this.marketVisibleShipment(principal, shipmentId);
+    ensureAgentReplacementShipmentStatus(shipment.status);
+    const agent = this.agents.find((item) => item.id === normalized.agentId && item.enabled);
+    if (!agent) throw new BadRequestException('代理不存在或已停用');
+    const agentChannel = this.agentChannels.find((item) => (
+      item.agentId === agent.id
+      && item.enabled
+      && (normalized.agentChannelId ? item.id === normalized.agentChannelId : item.channelName === normalized.agentChannelName)
+    ));
+    if (!agentChannel) throw new BadRequestException('代理渠道不存在、已停用或不属于所选代理');
+
+    const payables = this.shipmentFinanceItems
+      .filter((item) => item.shipmentId === shipmentId && item.type === 'PAYABLE' && !item.voided)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const currentIds = payables.map((item) => item.id).sort();
+    const submittedIds = normalized.payables.map((item) => item.id).sort();
+    if (JSON.stringify(currentIds) !== JSON.stringify(submittedIds)) {
+      throw new ConflictException('应付成本已变化，请刷新后重试');
+    }
+    const paymentState = this.resolveAgentReplacementPaymentState(payables);
+    if (paymentState === 'PAYMENT_BLOCKED') {
+      throw new BadRequestException('应付成本已生成付款申请或已付款，请先撤销付款链路');
+    }
+    if (paymentState === 'UNAUDITED' && payables.some((item) => item.locked || item.reconciliationStatus !== 'PENDING')) {
+      throw new ConflictException('应付成本审核状态已变化，请刷新后重试');
+    }
+    const requestSummary = this.getShipmentAgentChangeRequestSummary(shipmentId);
+    ensurePendingAgentChangeRequest(requestSummary, normalized.requestId);
+
+    const routeAfter = this.latestAgentReplacementRouteSnapshot(shipmentId);
+    const beforeSnapshot = agentReplacementSnapshot({
+      agentId: shipment.agentId,
+      agentName: shipment.agentName,
+      agentChannelId: typeof routeAfter?.agentChannelId === 'string' ? routeAfter.agentChannelId : undefined,
+      agentChannelName: typeof routeAfter?.agentChannelName === 'string' ? routeAfter.agentChannelName : shipment.routeAgentChannelName,
+      transferNo: shipment.transferNo,
+      payables: payables.map(agentReplacementPayableSnapshot)
+    });
+    const requestedSnapshot = agentReplacementSnapshot({
+      agentId: agent.id,
+      agentName: agent.name,
+      agentChannelId: agentChannel.id,
+      agentChannelName: agentChannel.channelName,
+      transferNo: shipment.transferNo,
+      payables: normalized.payables.map((payable) => ({
+        ...payable,
+        amount: roundMoney(payable.billingQuantity * payable.unitPrice),
+        reconciliationStatus: 'PENDING'
+      }))
+    });
+    if (!buildAgentReplacementChanges(beforeSnapshot, requestedSnapshot).length) {
+      throw new BadRequestException('代理、渠道和应付成本均未变化');
+    }
+    const now = new Date().toISOString();
+    const createdPayables: StoredShipmentFinanceItem[] = [];
+    if (paymentState === 'AUDITED_REQUIRES_REVIEW') {
+      payables.forEach((item) => {
+        item.voided = true;
+        item.voidedAt = now;
+        item.updatedAt = now;
+      });
+      normalized.payables.forEach((payable, index) => {
+        const item: StoredShipmentFinanceItem = {
+          id: `sfi-agent-replace-${Date.now()}-${index + 1}`,
+          shipmentId,
+          type: 'PAYABLE',
+          name: payable.name,
+          amount: roundMoney(payable.billingQuantity * payable.unitPrice),
+          currency: payable.currency,
+          reconciliationStatus: 'PENDING',
+          agentId: agent.id,
+          agentName: agent.name,
+          billingUnit: payable.billingUnit,
+          billingQuantity: payable.billingQuantity,
+          chargeWeightKg: payable.billingUnit === 'KG' ? payable.billingQuantity : undefined,
+          unitPrice: payable.unitPrice,
+          amountOverridden: false,
+          remark: payable.remark,
+          locked: false,
+          voided: false,
+          createdBy: principal.username,
+          createdAt: now,
+          updatedAt: now,
+          sourceType: 'FINANCE_ITEM'
+        };
+        this.shipmentFinanceItems.push(item);
+        createdPayables.push(item);
+      });
+    } else {
+      normalized.payables.forEach((payable) => {
+        const item = payables.find((row) => row.id === payable.id)!;
+        Object.assign(item, {
+          name: payable.name,
+          amount: roundMoney(payable.billingQuantity * payable.unitPrice),
+          currency: payable.currency,
+          agentId: agent.id,
+          agentName: agent.name,
+          billingUnit: payable.billingUnit,
+          billingQuantity: payable.billingQuantity,
+          chargeWeightKg: payable.billingUnit === 'KG' ? payable.billingQuantity : undefined,
+          unitPrice: payable.unitPrice,
+          amountOverridden: false,
+          remark: payable.remark,
+          updatedAt: now
+        });
+        createdPayables.push(item);
+      });
+    }
+    shipment.agentId = agent.id;
+    shipment.agentName = agent.name;
+    shipment.agentShortName = agent.shortName || agent.name;
+    shipment.routeAgentChannelName = agentChannel.channelName;
+    const afterSnapshot = agentReplacementSnapshot({
+      agentId: agent.id,
+      agentName: agent.name,
+      agentChannelId: agentChannel.id,
+      agentChannelName: agentChannel.channelName,
+      transferNo: shipment.transferNo,
+      payables: createdPayables.map(agentReplacementPayableSnapshot)
+    });
+    const changes = buildAgentReplacementChanges(beforeSnapshot, afterSnapshot);
+    this.audit('shipment.agent.replace', shipmentId, principal, beforeSnapshot, {
+      ...afterSnapshot,
+      systemOrderNo: shipment.systemOrderNo,
+      state: paymentState === 'AUDITED_REQUIRES_REVIEW' ? 'AUDITED_RECREATED' : 'UNAUDITED_REPLACED',
+      requestReason: requestSummary!.reason,
+      resolutionNote: normalized.resolutionNote,
+      requestId: requestSummary!.id,
+      changes,
+      changedBy: principal.username,
+      changedAt: now,
+      routedAt: typeof routeAfter?.routedAt === 'string' ? routeAfter.routedAt : shipment.routedAt
+    });
+    this.audit(shipmentAgentChangeRequestActions.completed, shipmentId, principal, null, {
+      requestId: requestSummary!.id,
+      resolutionNote: normalized.resolutionNote,
+      resolvedBy: principal.username,
+      resolvedAt: now
+    });
+    this.audit('shipment.event', shipmentId, principal, null, {
+      fromStatus: shipment.status,
+      toStatus: shipment.status,
+      note: `更换代理：${beforeSnapshot.agentName ?? '-'} → ${agent.name}`
+    });
+    shipment.agentReplacementCount = this.auditLogs.filter((row) => row.action === 'shipment.agent.replace' && row.target === shipmentId).length;
+    return shipment;
+  }
+
+  async getShipmentAgentReplacementHistory(
+    principal: Principal,
+    shipmentId: string
+  ): Promise<ShipmentAgentReplacementAuditSummary[]> {
+    await this.ensurePermission(principal, 'market:routed:view', '没有查看已排货权限');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    ensureAgentReplacementFieldsVisible(fieldMasks);
+    const shipment = this.marketVisibleShipment(principal, shipmentId);
+    return this.auditLogs
+      .filter((row) => row.target === shipmentId && row.action === 'shipment.agent.replace')
+      .map((row) => {
+        const after = (row.after ?? {}) as Record<string, unknown>;
+        return {
+          id: row.id,
+          shipmentId,
+          systemOrderNo: shipment.systemOrderNo,
+          changedAt: typeof after.changedAt === 'string' ? after.changedAt : row.createdAt,
+          changedBy: typeof after.changedBy === 'string' ? after.changedBy : '-',
+          state: after.state === 'AUDITED_RECREATED' ? 'AUDITED_RECREATED' : 'UNAUDITED_REPLACED',
+          requestReason: typeof after.requestReason === 'string' ? after.requestReason : '',
+          resolutionNote: typeof after.resolutionNote === 'string' ? after.resolutionNote : '',
+          changes: Array.isArray(after.changes) ? after.changes as ShipmentAgentReplacementChange[] : []
+        };
+      });
+  }
+
+  private latestAgentReplacementRouteSnapshot(shipmentId: string): Record<string, unknown> | undefined {
+    const row = this.auditLogs.find((item) => (
+      item.target === shipmentId
+      && ['shipment.agent.replace', 'shipment.route', 'shipment.route.update'].includes(item.action)
+    ));
+    return row?.after as Record<string, unknown> | undefined;
+  }
+
+  private getShipmentAgentChangeRequestSummary(shipmentId: string) {
+    return summarizeShipmentAgentChangeRequest(
+      shipmentId,
+      this.auditLogs.filter((item) => (
+        item.target === shipmentId
+        && Object.values(shipmentAgentChangeRequestActions).includes(item.action as any)
+      ))
+    );
+  }
+
+  private resolveAgentReplacementPaymentState(
+    payables: StoredShipmentFinanceItem[]
+  ): ShipmentAgentReplacementPreview['paymentState'] {
+    const ids = new Set(payables.map((item) => item.id));
+    if (!ids.size) return 'UNAUDITED';
+    const pendingRows = this.payablePaymentApplications.filter((row) => ids.has(row.payableFinanceItemId));
+    const pendingIds = new Set(pendingRows.map((row) => row.id));
+    const paymentBlocked = pendingRows.length > 0
+      || this.paymentApplicationItems.some((row) => (
+        ids.has(row.payableFinanceItemId ?? '')
+        && ['WAITING_PAYMENT', 'PAID'].includes(
+          this.paymentApplications.find((application) => application.id === row.paymentApplicationId)?.status ?? ''
+        )
+      ))
+      || this.paymentVouchers.some((row) => (
+        ids.has(row.payableFinanceItemId ?? '')
+        || ids.has(row.extraFeeFinanceItemId ?? '')
+        || pendingIds.has(row.pendingPaymentId ?? '')
+      ))
+      || this.payableFees.some((row) => row.shipmentId === payables[0]?.shipmentId && row.settled);
+    if (paymentBlocked) return 'PAYMENT_BLOCKED';
+    return payables.some((item) => item.locked || ['CONFIRMED', 'LOCKED'].includes(item.reconciliationStatus))
+      ? 'AUDITED_REQUIRES_REVIEW'
+      : 'UNAUDITED';
+  }
+
   async approveShipmentBusinessData(principal: Principal, shipmentId: string, body: CustomerServiceDataReviewInput): Promise<Shipment> {
     const shipment = this.visibleShipment(principal, shipmentId);
     if (!(await this.hasAnyPermission(principal.role, ['customer-service:data-confirm:business-approve', 'customer-service:data-confirm:approve-all']))) {
@@ -13688,26 +14089,14 @@ export class InMemoryRepository {
     principal: Principal,
     shipmentId: string,
     input: ShipmentOperationalUpdateInput,
-    options: { allowCustomerServiceTransferAgentWeight?: boolean; enforceOperationsLineShipmentStageEdit?: boolean; marketSiteScope?: boolean } = {}
+    options: { allowCustomerServiceTransferAgentWeight?: boolean; enforceOperationsLineShipmentStageEdit?: boolean; customerServiceScope?: boolean } = {}
   ): Promise<Shipment> {
-    if (options.marketSiteScope) {
-      const allowedMarketFields = new Set(['latestTracking', 'etaAt', 'etdAt']);
-      const disallowedFields = Object.keys(input).filter((field) => !allowedMarketFields.has(field));
-      if (disallowedFields.length > 0) {
-        throw new BadRequestException(`市场已排货修改不允许变更：${disallowedFields.join('、')}`);
-      }
-    }
-    const shipment = options.marketSiteScope
-      ? this.marketVisibleShipment(principal, shipmentId)
+    const shipment = options.customerServiceScope
+      ? this.customerServiceVisibleShipment(principal, shipmentId)
       : this.visibleShipment(principal, shipmentId);
     if (shipment.status === 'WAITING_SORT'
       && (input.status === 'WAITING_DISPATCH' || input.channelId !== undefined)) {
       throw new BadRequestException('待排货的状态和渠道请通过市场排货入口修改');
-    }
-    if (shipment.status === 'WAITING_DISPATCH') {
-      if (input.status === undefined || input.status === 'WAITING_DISPATCH') {
-        await this.ensurePermission(principal, 'market:routed:edit', '没有已排货修改权限');
-      }
     }
     if (options.enforceOperationsLineShipmentStageEdit) await this.ensureOperationLineShipmentStageEditable(principal, shipment);
     const canViewAgentWeight = await this.canViewShipmentAgentWeight(principal)
@@ -13800,13 +14189,13 @@ export class InMemoryRepository {
       && (input.status === 'WAITING_DISPATCH' || input.channelId !== undefined)) {
       throw new ConflictException('运单状态已变化，请通过市场排货入口修改状态和渠道');
     }
-    if (latestShipmentBeforeMutation.status === 'WAITING_DISPATCH'
-      && (input.status === undefined || input.status === 'WAITING_DISPATCH')) {
-      if (!this.hasPermissionSync(principal.role, 'market:routed:edit')) {
-        throw new ForbiddenException('没有已排货修改权限');
-      }
+    if (options.customerServiceScope && !this.isShipmentInCustomerServiceScope(principal, latestShipmentBeforeMutation)) {
+      throw new NotFoundException('运单不存在');
     }
-    if (options.marketSiteScope) this.ensureMarketShipmentSiteScope(principal, latestShipmentBeforeMutation);
+    if (before.status !== nextStatus
+      && this.tickets.some((ticket) => ticket.shipmentId === shipment.id && ticket.status !== 'CLOSED')) {
+      throw new BadRequestException('当前运单存在未解决问题件，请先处理并关闭问题件后再继续流转');
+    }
     if (latestTracking !== undefined) {
       shipment.latestTracking = latestTracking;
       shipment.trackingStaleDays = 0;
@@ -16015,11 +16404,12 @@ export class InMemoryRepository {
       if (amount === undefined) throw new BadRequestException('市场排货费用必须填写有效的计费数量和单价');
       return amount;
     }
+    if (type === 'BUSINESS_COST' || type === 'PAYABLE') {
+      const calculatedAmount = calculateFinanceItemAmount(type, input, current, Number.NaN);
+      if (Number.isFinite(calculatedAmount)) return calculatedAmount;
+    }
     if (input.amount !== undefined && input.amount !== null) {
       return Number(input.amount);
-    }
-    if (type === 'BUSINESS_COST' || type === 'PAYABLE') {
-      return calculateFinanceItemAmount(type, input, current, Number(current?.amount ?? 0));
     }
     return Number(current?.amount ?? 0);
   }
@@ -18799,6 +19189,180 @@ function summarizeInMemoryReceivableRows(rows: Array<{ amount?: unknown; currenc
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
+
+type AgentReplacementSnapshot = {
+  agentId?: string;
+  agentName?: string;
+  agentChannelId?: string;
+  agentChannelName?: string;
+  transferNo?: string;
+  payables: Array<{
+    id: string;
+    name: string;
+    currency: 'RMB' | 'USD';
+    billingUnit: FinanceBillingUnit;
+    billingQuantity: number;
+    unitPrice: number;
+    amount: number;
+    remark?: string;
+    reconciliationStatus?: string;
+  }>;
+};
+
+function ensureAgentReplacementShipmentStatus(status: ShipmentStatus) {
+  if (status !== 'OUTBOUNDED') {
+    throw new BadRequestException('只有转单号阶段的订单可以处理代理变更');
+  }
+}
+
+function ensureAgentReplacementFieldsVisible(fieldMasks: GlobalFieldMaskState) {
+  if (
+    fieldMasks['agent-short-name']
+    || fieldMasks['agent-company-name']
+    || fieldMasks['agent-channel']
+    || fieldMasks['agent-data']
+    || fieldMasks['payable-cost']
+    || fieldMasks['payable-status']
+  ) {
+    throw new ForbiddenException('当前角色已屏蔽代理或应付数据，不能更换代理');
+  }
+}
+
+function ensureAgentChangeRequestFieldsVisible(fieldMasks: GlobalFieldMaskState) {
+  if (
+    fieldMasks['agent-short-name']
+    || fieldMasks['agent-company-name']
+    || fieldMasks['agent-channel']
+    || fieldMasks['agent-data']
+  ) {
+    throw new ForbiddenException('当前角色已屏蔽代理数据，不能发起代理变更');
+  }
+}
+
+function ensureAgentChangeRequestShipmentStage(status: ShipmentStatus, transferNo?: string | null) {
+  if (status !== 'OUTBOUNDED') {
+    throw new BadRequestException('只有转单号阶段可以发起代理变更');
+  }
+  if (transferNo?.trim()) {
+    throw new BadRequestException('该票已填写转单号，不能在转单号阶段发起代理变更');
+  }
+}
+
+function normalizeAgentChangeRequestReason(value: string | undefined, emptyMessage: string) {
+  const reason = value?.trim();
+  if (!reason) throw new BadRequestException(emptyMessage);
+  if (reason.length > 500) throw new BadRequestException('备注不能超过 500 个字符');
+  return reason;
+}
+
+function ensurePendingAgentChangeRequest(
+  request: ShipmentAgentChangeRequestSummary | undefined,
+  expectedRequestId?: string
+) {
+  if (!request || request.status !== 'PENDING') {
+    throw new ConflictException('该票没有待处理的代理变更申请，请刷新后重试');
+  }
+  if (expectedRequestId && request.id !== expectedRequestId) {
+    throw new ConflictException('代理变更申请已变化，请刷新后重试');
+  }
+}
+
+function normalizeShipmentAgentReplacementInput(input: ShipmentAgentReplacementInput): ShipmentAgentReplacementInput {
+  const requestId = input.requestId?.trim();
+  const agentId = input.agentId?.trim();
+  const agentChannelId = input.agentChannelId?.trim() || undefined;
+  const agentChannelName = input.agentChannelName?.trim();
+  const resolutionNote = input.resolutionNote?.trim();
+  if (!requestId) throw new BadRequestException('代理变更申请无效，请刷新后重试');
+  if (!agentId) throw new BadRequestException('请选择代理');
+  if (!agentChannelId && !agentChannelName) throw new BadRequestException('请选择或填写代理渠道');
+  if (!resolutionNote) throw new BadRequestException('请填写市场处理备注');
+  if (resolutionNote.length > 500) throw new BadRequestException('市场处理备注不能超过 500 个字符');
+  const payables = Array.isArray(input.payables) ? input.payables.map((item) => {
+    const id = item.id?.trim();
+    const name = item.name?.trim();
+    const remark = item.remark?.trim() || undefined;
+    const billingQuantity = Number(item.billingQuantity);
+    const unitPrice = Number(item.unitPrice);
+    if (!id) throw new BadRequestException('应付成本记录无效');
+    if (!name) throw new BadRequestException('请填写应付费用名称');
+    if (!['KG', 'CBM'].includes(item.billingUnit)) throw new BadRequestException('应付计费单位仅支持 KG 或 CBM');
+    if (!['RMB', 'USD'].includes(item.currency)) throw new BadRequestException('应付币种仅支持 RMB 或 USD');
+    if (!Number.isFinite(billingQuantity) || billingQuantity < 0) throw new BadRequestException('应付计费数量不能小于 0');
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) throw new BadRequestException('应付单价不能小于 0');
+    if (remark && remark.length > 500) throw new BadRequestException('应付备注不能超过 500 个字符');
+    return {
+      id,
+      name,
+      currency: item.currency,
+      billingUnit: item.billingUnit,
+      billingQuantity: roundMoney(billingQuantity),
+      unitPrice: roundMoney(unitPrice),
+      remark
+    };
+  }) : [];
+  if (new Set(payables.map((item) => item.id)).size !== payables.length) {
+    throw new BadRequestException('应付成本记录重复');
+  }
+  return { requestId, agentId, agentChannelId, agentChannelName, resolutionNote, payables };
+}
+
+function agentReplacementPayableSnapshot(item: any): AgentReplacementSnapshot['payables'][number] {
+  const billingUnit: FinanceBillingUnit = item.billingUnit === 'CBM' ? 'CBM' : 'KG';
+  const billingQuantity = Number(item.billingQuantity ?? item.chargeWeightKg ?? 0);
+  const unitPrice = Number(item.unitPrice ?? 0);
+  return {
+    id: String(item.id),
+    name: String(item.name ?? ''),
+    currency: item.currency === 'USD' ? 'USD' : 'RMB',
+    billingUnit,
+    billingQuantity: roundMoney(Number.isFinite(billingQuantity) ? billingQuantity : 0),
+    unitPrice: roundMoney(Number.isFinite(unitPrice) ? unitPrice : 0),
+    amount: roundMoney(Number(item.amount) || 0),
+    remark: typeof item.remark === 'string' && item.remark.trim() ? item.remark.trim() : undefined,
+    reconciliationStatus: typeof item.reconciliationStatus === 'string' ? item.reconciliationStatus : undefined
+  };
+}
+
+function agentReplacementSnapshot(input: AgentReplacementSnapshot): AgentReplacementSnapshot {
+  return {
+    agentId: input.agentId || undefined,
+    agentName: input.agentName || undefined,
+    agentChannelId: input.agentChannelId || undefined,
+    agentChannelName: input.agentChannelName || undefined,
+    transferNo: input.transferNo || undefined,
+    payables: input.payables.map((item) => ({ ...item }))
+  };
+}
+
+function buildAgentReplacementChanges(before: AgentReplacementSnapshot, after: AgentReplacementSnapshot): ShipmentAgentReplacementChange[] {
+  const changes: ShipmentAgentReplacementChange[] = [];
+  const push = (field: string, label: string, beforeValue: unknown, afterValue: unknown) => {
+    if (JSON.stringify(beforeValue ?? null) !== JSON.stringify(afterValue ?? null)) {
+      changes.push({ field, label, before: beforeValue, after: afterValue });
+    }
+  };
+  push('agent', '代理', { id: before.agentId, name: before.agentName }, { id: after.agentId, name: after.agentName });
+  push('agentChannel', '代理渠道', { id: before.agentChannelId, name: before.agentChannelName }, { id: after.agentChannelId, name: after.agentChannelName });
+  push('transferNo', '转单号', before.transferNo, after.transferNo);
+  const maxLength = Math.max(before.payables.length, after.payables.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const beforeItem = before.payables[index];
+    const afterItem = after.payables[index];
+    const compact = (item?: AgentReplacementSnapshot['payables'][number]) => item ? {
+      name: item.name,
+      currency: item.currency,
+      billingUnit: item.billingUnit,
+      billingQuantity: item.billingQuantity,
+      unitPrice: item.unitPrice,
+      amount: item.amount,
+      remark: item.remark
+    } : undefined;
+    push(`payables.${index}`, `应付成本 ${index + 1}`, compact(beforeItem), compact(afterItem));
+  }
+  return changes;
+}
+
 
 function formatRoutePayableRemark(agentChannelName: string, otherFee: number, otherFeeRemark?: string) {
   return `市场排货渠道：${agentChannelName}${otherFee > 0 ? `；其他费用：${otherFee}${otherFeeRemark ? `；其他费用备注：${otherFeeRemark}` : ''}` : ''}`;

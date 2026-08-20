@@ -50,6 +50,7 @@ export function getVisibleStaffMenuKeysByPermissions(permissions: PermissionKey[
       'warehouse:today-receipt:view',
       'warehouse:in-stock:view',
       'warehouse:tally-pending:view',
+      'warehouse:tally-pending:problem-view',
       'warehouse:tally-completed:view',
       'warehouse:dispatch-pending:view',
       'warehouse:outbounded:view',

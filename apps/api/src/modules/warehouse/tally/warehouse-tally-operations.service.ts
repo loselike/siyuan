@@ -21,7 +21,7 @@ export class WarehouseTallyOperationsService {
 
   async createConsolidation(principal: Principal, input: WarehouseConsolidationCreateInput) {
     const permission: PermissionKey = input.mode === 'MERGE_AND_SHIP'
-      ? 'warehouse:tally-pending:complete-and-ship'
+      ? 'warehouse:tally-pending:shipment-create'
       : 'warehouse:tally-pending:process';
     if (!(await this.repository.hasPermission(principal.role, permission))) {
       await this.repository.recordPermissionDenied(principal, {

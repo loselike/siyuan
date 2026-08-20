@@ -18,25 +18,25 @@ export class WarehouseTallyQueryController {
   }
 
   @Get('warehouse/tally-sort-rules')
-  @RequirePermission('warehouse:tally-pending:view')
+  @RequirePermission('warehouse:tally-pending:sort-rule-manage')
   warehouseTallySortRules(@Req() request: { user: Principal }) {
     return this.service.listSortRules(request.user);
   }
 
   @Put('warehouse/tally-sort-rules')
-  @RequirePermission('warehouse:tally-pending:edit')
+  @RequirePermission('warehouse:tally-pending:sort-rule-manage')
   updateWarehouseTallySortRules(@Req() request: { user: Principal }, @Body() body: WarehouseTallySortRulesUpdateInput) {
     return this.service.updateSortRules(request.user, body);
   }
 
   @Get('warehouse/tally-tasks')
-  @RequirePermission(['warehouse:tally-pending:view', 'warehouse:tally-completed:view'])
+  @RequirePermission(['warehouse:tally-pending:view', 'warehouse:tally-pending:problem-view', 'warehouse:tally-completed:view'])
   warehouseTallyTasks(@Req() request: { user: Principal }, @Query() query: WarehouseTallyTaskListQuery) {
     return this.service.listTasks(request.user, query);
   }
 
   @Get('warehouse/tally-tasks/:id/source-packages')
-  @RequirePermission('warehouse:tally-pending:view')
+  @RequirePermission(['warehouse:tally-pending:detail', 'warehouse:tally-pending:process'])
   warehouseTallyTaskSourcePackages(@Req() request: { user: Principal }, @Param('id') id: string) {
     return this.service.listTaskSourcePackages(request.user, id);
   }

@@ -2,6 +2,7 @@ import { Button, Popconfirm, Space, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { BusinessCostAuditSummary, PayableAuditSummary, Shipment } from '@siyuan/shared';
 import { formatBeijingDateTime } from './format';
+import { resolveShipmentOutboundOrderNo } from './shipmentOrderNo';
 
 const { Text } = Typography;
 
@@ -107,7 +108,7 @@ export function createPendingRoutingColumns(options: {
     { title: '站点', dataIndex: 'site', width: 100, render: (value?: string) => value || '-' },
     { title: '业务员', dataIndex: 'salesperson', width: 110, render: (value?: string) => value || '-' },
     { title: '客户编号', dataIndex: 'customerCode', width: 110, render: (value: string | undefined, record) => value || record.customerName.split('-')[0] || '-' },
-    { title: '运单号', dataIndex: 'systemOrderNo', width: 170 },
+    { title: '运单号', dataIndex: 'systemOrderNo', width: 170, render: (_value: string, record) => resolveShipmentOutboundOrderNo(record) },
     { title: '公司渠道', dataIndex: 'channelName', width: 150, render: (value?: string) => value || '-' },
     {
       title: '国家',

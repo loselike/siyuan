@@ -135,6 +135,12 @@ import type {
   PriceLookupResponse,
   LineShipmentPoolQuery,
   ShipmentInternalFlowLogResponse,
+  ShipmentAgentChangeRequestInput,
+  ShipmentAgentChangeRequestRejectInput,
+  ShipmentAgentChangeRequestSummary,
+  ShipmentAgentReplacementAuditSummary,
+  ShipmentAgentReplacementInput,
+  ShipmentAgentReplacementPreview,
   LineShipmentPoolResponse,
   PricingQuoteRequest,
   PricingRuleCreateInput,
@@ -424,8 +430,8 @@ export type PermissionKey =
   | 'market:pending-routing:payable-cost:delete'
   | 'market:pending-routing:return-review'
   | 'market:routed:view'
-  | 'market:routed:edit'
   | 'market:routed:reroute'
+  | 'market:routed:replace-agent'
   | 'market:routed:routing-log:view'
   | 'market:routing-report:view'
   | 'market:routing-report:export'
@@ -445,10 +451,14 @@ export type PermissionKey =
   | 'warehouse:in-stock:import'
   | 'warehouse:in-stock:export'
   | 'warehouse:tally-pending:view'
+  | 'warehouse:tally-pending:detail'
   | 'warehouse:tally-pending:edit'
-  | 'warehouse:tally-pending:cancel'
+  | 'warehouse:tally-pending:start'
   | 'warehouse:tally-pending:process'
-  | 'warehouse:tally-pending:complete-and-ship'
+  | 'warehouse:tally-pending:restart'
+  | 'warehouse:tally-pending:sort-rule-manage'
+  | 'warehouse:tally-pending:problem-view'
+  | 'warehouse:tally-pending:shipment-create'
   | 'warehouse:tally-completed:view'
   | 'warehouse:tally-completed:print'
   | 'warehouse:tally-completed:download'
@@ -557,6 +567,7 @@ export interface Principal {
   role: RoleKey;
   assignedRole?: RoleKey;
   roleLabel?: string;
+  warehouseScopeFingerprint?: string;
   site?: string;
   customerId?: string;
   name?: string;
@@ -925,6 +936,26 @@ export class ApiClient {
 
   async rerouteShipment(id: string, body: ShipmentRerouteInput): Promise<Shipment> {
     return this.request(`/shipments/${id}/reroute`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async shipmentAgentReplacementPreview(id: string): Promise<ShipmentAgentReplacementPreview> {
+    return this.request(`/shipments/${id}/agent-replacement-preview`);
+  }
+
+  async replaceShipmentAgent(id: string, body: ShipmentAgentReplacementInput): Promise<Shipment> {
+    return this.request(`/shipments/${id}/agent-replacement`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async createShipmentAgentChangeRequest(id: string, body: ShipmentAgentChangeRequestInput): Promise<ShipmentAgentChangeRequestSummary> {
+    return this.request(`/customer-service/transfer-shipments/${id}/agent-change-request`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async rejectShipmentAgentChangeRequest(id: string, requestId: string, body: ShipmentAgentChangeRequestRejectInput): Promise<ShipmentAgentChangeRequestSummary> {
+    return this.request(`/shipments/${id}/agent-change-request/${requestId}/reject`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async shipmentAgentReplacementHistory(id: string): Promise<ShipmentAgentReplacementAuditSummary[]> {
+    return this.request(`/shipments/${id}/agent-replacements`);
   }
 
   async dispatchShipment(id: string, body: ShipmentDispatchInput): Promise<Shipment> {

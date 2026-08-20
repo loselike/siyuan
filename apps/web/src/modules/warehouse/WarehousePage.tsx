@@ -360,11 +360,14 @@ export function WarehousePage({
   const canInStockSplit = hasWarehousePermission('warehouse:in-stock:split');
   const canInStockTallyRecordView = canInStockView;
   const canTallyPendingView = hasWarehousePermission('warehouse:tally-pending:view');
+  const canTallyDetail = hasWarehousePermission('warehouse:tally-pending:detail');
   const canTallyUpdate = hasWarehousePermission('warehouse:tally-pending:edit');
-  const canTallyCancel = hasWarehousePermission('warehouse:tally-pending:cancel');
+  const canStartPendingTally = hasWarehousePermission('warehouse:tally-pending:start');
   const canTallyProcess = hasWarehousePermission('warehouse:tally-pending:process');
-  const canTallyCompleteAndShip = hasWarehousePermission('warehouse:tally-pending:complete-and-ship');
-  const canTallyDetail = canTallyPendingView;
+  const canRestartPendingTally = hasWarehousePermission('warehouse:tally-pending:restart');
+  const canManageTallySortRules = hasWarehousePermission('warehouse:tally-pending:sort-rule-manage');
+  const canViewTallyProblems = hasWarehousePermission('warehouse:tally-pending:problem-view');
+  const canCreateTallyShipment = hasWarehousePermission('warehouse:tally-pending:shipment-create');
   const canTallyCompletedView = hasWarehousePermission('warehouse:tally-completed:view');
   const canTallyCompletedDetail = canTallyCompletedView;
   const canTallyCompletedReverseReview = hasWarehousePermission('warehouse:tally-completed:reverse');
@@ -480,7 +483,8 @@ export function WarehousePage({
   const [tallyTaskPackageIds, setTallyTaskPackageIds] = useState<string[]>([]);
   const [tallyTasks, setTallyTasks] = useState<WarehouseTallyTaskSummary[]>(cachedTallyTasks);
   const [tallyProblemTasks, setTallyProblemTasks] = useState<WarehouseTallyTaskSummary[]>([]);
-  const [pendingTallyView, setPendingTallyView] = useState<'tasks' | 'problems'>('tasks');
+  const [tallyProblemTasksScopeKey, setTallyProblemTasksScopeKey] = useState<string | null>(null);
+  const [pendingTallyView, setPendingTallyView] = useState<'tasks' | 'problems'>(canTallyPendingView ? 'tasks' : 'problems');
   const [restartingTallyProblemTaskId, setRestartingTallyProblemTaskId] = useState<string | null>(null);
   const [tallyChannelDraft, setTallyChannelDraft] = useState('');
   const [tallySortTick, setTallySortTick] = useState(0);
@@ -613,6 +617,7 @@ export function WarehousePage({
     setCompletedTallyArchiveRows([]);
     setTallyTasks([]);
     setTallyProblemTasks([]);
+    setTallyProblemTasksScopeKey(null);
     setSelectedTallyTaskDetails([]);
     setSelectedTallySourcePackages(undefined);
     setNotificationPackageDetailTarget(null);
@@ -959,33 +964,45 @@ export function WarehousePage({
     };
   }, [apiClient, canTallyCompletedView, loadWarehousePackagesFallback, mergeWarehousePackages, needsCompletedArchive, pageSearchQueryKeyword, refreshVersion, warehouseCacheScopeKey]);
   useEffect(() => {
-    if (!canTallyPendingView && !canTallyCompletedView) {
+    if (!canTallyPendingView && canViewTallyProblems) setPendingTallyView('problems');
+    else if (canTallyPendingView && !canViewTallyProblems) setPendingTallyView('tasks');
+  }, [canTallyPendingView, canViewTallyProblems]);
+  useEffect(() => {
+    if (!canTallyPendingView && !canViewTallyProblems && !canTallyCompletedView) {
       setTallyTasks([]);
       setTallyProblemTasks([]);
+      setTallyProblemTasksScopeKey(null);
       return;
     }
     if (!needsTallyTasks) return;
     let alive = true;
     const loadTallyTasks = () => {
-      void apiClient.warehouseQuery.warehouseTallyTasks({ keyword: pageSearchQueryKeyword })
-        .then((rows) => {
-          if (!alive) return;
-          getWarehousePageCache(apiClient, warehouseCacheScopeKey).tallyTasks = { updatedAt: Date.now(), rows };
-          setTallyTasks(rows);
-        })
-        .catch(() => {
-          // Keep the last successful snapshot during a transient polling failure.
-        });
-      if (canTallyPendingView) {
+      if (canTallyPendingView || canTallyCompletedView) {
+        void apiClient.warehouseQuery.warehouseTallyTasks({ keyword: pageSearchQueryKeyword })
+          .then((rows) => {
+            if (!alive) return;
+            getWarehousePageCache(apiClient, warehouseCacheScopeKey).tallyTasks = { updatedAt: Date.now(), rows };
+            setTallyTasks(rows);
+          })
+          .catch(() => {
+            // Keep the last successful snapshot during a transient polling failure.
+          });
+      } else {
+        setTallyTasks([]);
+      }
+      if (canViewTallyProblems) {
         void apiClient.warehouseQuery.warehouseTallyTasks({ problemOnly: true, keyword: pageSearchQueryKeyword })
           .then((rows) => {
-            if (alive) setTallyProblemTasks(rows);
+            if (!alive) return;
+            setTallyProblemTasks(rows);
+            setTallyProblemTasksScopeKey(warehouseCacheScopeKey);
           })
           .catch(() => {
             // Keep the last successful problem snapshot during a transient polling failure.
           });
       } else {
         setTallyProblemTasks([]);
+        setTallyProblemTasksScopeKey(null);
       }
     };
     loadTallyTasks();
@@ -996,9 +1013,9 @@ export function WarehousePage({
       alive = false;
       if (refreshTimer !== undefined) window.clearInterval(refreshTimer);
     };
-  }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, needsTallyTasks, pageSearchQueryKeyword, refreshVersion, warehouseCacheScopeKey]);
+  }, [activeReceiveSection, apiClient, canTallyCompletedView, canTallyPendingView, canViewTallyProblems, needsTallyTasks, pageSearchQueryKeyword, refreshVersion, warehouseCacheScopeKey]);
   useEffect(() => {
-    if (!canTallyPendingView || !needsTallyTasks) return;
+    if (!canManageTallySortRules || !needsTallyTasks) return;
     let alive = true;
     void apiClient.warehouseQuery.warehouseTallySortRules()
       .then((rules) => {
@@ -1012,7 +1029,7 @@ export function WarehousePage({
     return () => {
       alive = false;
     };
-  }, [apiClient, canTallyPendingView, needsTallyTasks, refreshVersion]);
+  }, [apiClient, canManageTallySortRules, needsTallyTasks, refreshVersion]);
   useEffect(() => {
     const refreshTimer = window.setInterval(() => setTallySortTick((current) => current + 1), 30_000);
     return () => window.clearInterval(refreshTimer);
@@ -1197,9 +1214,17 @@ export function WarehousePage({
     ? warehousePackages.filter((pkg) => selectedConsolidation.packageIds.includes(pkg.id))
     : [];
   const pendingTallyTasks = useMemo(
-    () => sortPendingTallyTasksByRequestTime(tallyTasks.filter((task) => task.status === 'PENDING'), tallySortRules),
-    [tallySortRules, tallySortTick, tallyTasks]
+    () => {
+      const rows = tallyTasks.filter((task) => task.status === 'PENDING');
+      return canManageTallySortRules ? sortPendingTallyTasksByRequestTime(rows, tallySortRules) : rows;
+    },
+    [canManageTallySortRules, tallySortRules, tallySortTick, tallyTasks]
   );
+  const scopedTallyProblemTasks = tallyProblemTasksScopeKey === warehouseCacheScopeKey ? tallyProblemTasks : [];
+  const pendingTallyViewOptions = [
+    ...(canTallyPendingView ? [{ label: '任务', value: 'tasks' as const }] : []),
+    ...(canViewTallyProblems ? [{ label: `理货问题件${scopedTallyProblemTasks.length ? ` (${scopedTallyProblemTasks.length})` : ''}`, value: 'problems' as const }] : [])
+  ];
   const restartedProblemTaskById = useMemo(() => {
     const result = new Map<string, WarehouseTallyTaskSummary>();
     tallyTasks
@@ -1951,7 +1976,7 @@ export function WarehousePage({
     dashboard: canWarehouseDashboardView,
     today: canTodayReceiptView,
     packages: canInStockView,
-    consolidation: canTallyPendingView,
+    consolidation: canTallyPendingView || canViewTallyProblems,
     'completed-consolidation': canTallyCompletedView,
     'pending-routing': false,
     queue: canDispatchView,
@@ -4095,19 +4120,16 @@ export function WarehousePage({
             title={(
               <Space size={12} wrap>
                 <span>未完成理货</span>
-                <Text type="secondary">共 {pendingTallyView === 'tasks' ? pendingTallyTasks.length : tallyProblemTasks.length} 条</Text>
+                <Text type="secondary">共 {pendingTallyView === 'tasks' ? pendingTallyTasks.length : scopedTallyProblemTasks.length} 条</Text>
                 <Segmented
                   size="small"
                   value={pendingTallyView}
                   onChange={(value) => setPendingTallyView(value as 'tasks' | 'problems')}
-                  options={[
-                    { label: '任务', value: 'tasks' },
-                    { label: `理货问题件${tallyProblemTasks.length ? ` (${tallyProblemTasks.length})` : ''}`, value: 'problems' }
-                  ]}
+                  options={pendingTallyViewOptions}
                 />
               </Space>
             )}
-            extra={canTallyUpdate ? (
+            extra={canManageTallySortRules ? (
               <Button
                 size="small"
                 icon={<Settings2 size={14} />}
@@ -4125,9 +4147,9 @@ export function WarehousePage({
               >排序规则</Button>
             ) : undefined}
           >
-          {pendingTallyView === 'tasks' ? (
+          {pendingTallyView === 'tasks' && canTallyPendingView ? (
             <ManagedTable<WarehouseTallyTaskSummary>
-              recordDetail={{ title: '未完成理货任务详情' }}
+              recordDetail={canTallyDetail ? { title: '未完成理货任务详情' } : false}
               rowKey="id"
               dataSource={pendingTallyTasks}
               size="small"
@@ -4166,19 +4188,19 @@ export function WarehousePage({
                     <Space size={6} wrap>
                       {canTallyDetail ? <Button size="small" onClick={() => void openPendingTallyTaskDetails(task)}>查看任务</Button> : null}
                       {canTallyUpdate ? <Button size="small" onClick={() => openEditTallyTask(task)}>修改</Button> : null}
-                      {canTallyProcess && task.tallyProgressStatus !== 'IN_PROGRESS' ? <Button size="small" onClick={() => void startWarehouseTallyTask(task)}>开始理货</Button> : null}
+                      {canStartPendingTally && task.tallyProgressStatus !== 'IN_PROGRESS' ? <Button size="small" onClick={() => void startWarehouseTallyTask(task)}>开始理货</Button> : null}
                       {canTallyProcess ? <Button size="small" type="primary" onClick={() => openCompleteTallyTask(task)}>处理理货</Button> : null}
-                      {canTallyCancel ? <Button size="small" danger onClick={() => setCancellingTallyTask(task)}>退回重理</Button> : null}
+                      {canRestartPendingTally ? <Button size="small" danger onClick={() => setCancellingTallyTask(task)}>退回重理</Button> : null}
                     </Space>
                   )
                 }
               ]}
             />
-          ) : (
+          ) : canViewTallyProblems ? (
             <ManagedTable<WarehouseTallyTaskSummary>
               recordDetail={{ title: '理货问题件详情' }}
               rowKey="id"
-              dataSource={tallyProblemTasks}
+              dataSource={scopedTallyProblemTasks}
               size="small"
               pagination={tenRowTablePagination}
               columnSettingsPlacement="toolbar"
@@ -4203,22 +4225,21 @@ export function WarehousePage({
                     const restarted = restartedProblemTaskById.get(task.id);
                     return restarted ? (
                       <Tag color="blue">已重新发起：{restarted.taskNo}</Tag>
-                    ) : (
+                    ) : canTallyStart ? (
                       <Button
                         size="small"
                         type="primary"
                         loading={restartingTallyProblemTaskId === task.id}
-                        disabled={!canTallyStart}
                         onClick={() => void restartWarehouseTallyProblemTask(task)}
                       >
                         重新发起理货
                       </Button>
-                    );
+                    ) : null;
                   }
                 }
               ]}
             />
-          )}
+          ) : null}
           </Card>
           <div hidden>
           <Card
@@ -4390,10 +4411,10 @@ export function WarehousePage({
                   <Text strong>{selectedWarehouseTotals.chargeableWeightKg.toFixed(2)} KG</Text>
                 </div>
               </div>
-              {canTallyProcess || canTallyCompleteAndShip ? (
+              {canTallyProcess || canCreateTallyShipment ? (
                 <div className="warehouse-tally-action-buttons">
                   {canTallyProcess ? <Button block onClick={() => void consolidateSelectedPackages('MERGE_ONLY')}>合并成一箱</Button> : null}
-                  {canTallyCompleteAndShip ? <Button type="primary" block onClick={() => void consolidateSelectedPackages('MERGE_AND_SHIP')}>理货并创建出货单</Button> : null}
+                  {canCreateTallyShipment ? <Button type="primary" block onClick={() => void consolidateSelectedPackages('MERGE_AND_SHIP')}>理货并创建出货单</Button> : null}
                 </div>
               ) : null}
               <Alert

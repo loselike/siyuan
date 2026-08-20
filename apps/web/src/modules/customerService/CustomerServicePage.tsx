@@ -2,7 +2,7 @@ import { useEffect, useRef, useMemo, useState, type PointerEvent as ReactPointer
 import { Alert, AutoComplete, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Spin, Table, Tag, Typography, message } from 'antd';
 import { Download } from 'lucide-react';
 import type { ColumnsType } from 'antd/es/table';
-import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type FinanceCatalogItemSummary, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
+import { shipmentStatusLabels, type AgentSummary, type AuditLogSummary, type BusinessCostAuditSummary, type CustomerServiceBusinessCostInput, type CustomerServiceDataConfirmListResponse, type CustomerServiceDataConfirmRow, type CustomerServiceFinanceItemUpdateInput, type CustomerServiceFinanceUpdatePreview, type CustomerServiceFinanceUpdatePreviewRow, type FinanceBillingUnit, type FinanceCatalogItemSummary, type ProblemTicketCreateInput, type ProblemTicketSummary, type Shipment, type ShipmentAgentChangeRequestSummary, type ShipmentFinanceDetailSummary, type ShipmentLabelSummary, type ShipmentOutboundOrderNoSource, type ShipmentStatus } from '@siyuan/shared';
 import { type ApiClient } from '../../apiClient';
 import { agentFieldLabels } from '../shared/agentFieldLabels';
 import { formatBeijingDateTime, formatBeijingDateTimeInputValue, isBeijingCurrentWeek, isBeijingToday, parseBeijingDateTimeInputToIso } from '../shared/format';
@@ -194,6 +194,27 @@ function getDashboardTaskNumericValue(value: number | string) {
 
 function formatFeeAmount(amount?: number, currency = 'RMB') {
   return typeof amount === 'number' ? `${amount.toFixed(2)} ${currency}` : '-';
+}
+
+function AgentChangeRequestDetail({ request }: { request: ShipmentAgentChangeRequestSummary }) {
+  const status = request.status === 'PENDING' ? '待市场处理' : request.status === 'COMPLETED' ? '已完成' : '已驳回';
+  const color = request.status === 'PENDING' ? 'processing' : request.status === 'COMPLETED' ? 'success' : 'error';
+  return (
+    <Space direction="vertical" size={8} className="full-width">
+      <Space>
+        <Text strong>申请状态</Text>
+        <Tag color={color}>{status}</Tag>
+      </Space>
+      <Text>客服备注：{request.reason || '-'}</Text>
+      <Text type="secondary">发起人：{request.requestedBy} · {formatBeijingDateTime(request.requestedAt)}</Text>
+      {request.status !== 'PENDING' ? (
+        <>
+          <Text>市场处理备注：{request.resolutionNote || '-'}</Text>
+          <Text type="secondary">处理人：{request.resolvedBy || '-'} · {request.resolvedAt ? formatBeijingDateTime(request.resolvedAt) : '-'}</Text>
+        </>
+      ) : null}
+    </Space>
+  );
 }
 
 function formatFeeTotals(rows: Array<{ amount: number; currency?: string }>) {
@@ -502,6 +523,7 @@ export function CustomerServicePage({
   const [dataReverseForm] = Form.useForm<{ reason?: string }>();
   const [departureShipment, setDepartureShipment] = useState<Shipment | null>(null);
   const [problemShipment, setProblemShipment] = useState<Shipment | null>(null);
+  const [problemCreationMode, setProblemCreationMode] = useState<'problem' | 'after-sale'>('problem');
   const [dataConfirmShipment, setDataConfirmShipment] = useState<Shipment | null>(null);
   const [dataConfirmApproveTarget, setDataConfirmApproveTarget] = useState<DataConfirmApproveTarget | null>(null);
   const [dataEditTarget, setDataEditTarget] = useState<{ shipment: Shipment; kind: 'business' | 'agent'; snapshot?: CustomerServiceDataConfirmRow['agentDataSnapshot'] } | null>(null);
@@ -584,9 +606,14 @@ export function CustomerServicePage({
   const [transferFillRows, setTransferFillRows] = useState<Shipment[]>([]);
   const [transferSubmitting, setTransferSubmitting] = useState(false);
   const [transferForm] = Form.useForm<{ rows: Array<{ transferNo?: string; subOrderNo?: string; pushToSales?: boolean }> }>();
+  const [agentChangeRequestTarget, setAgentChangeRequestTarget] = useState<Shipment | null>(null);
+  const [agentChangeRequestMode, setAgentChangeRequestMode] = useState<'create' | 'view'>('view');
+  const [agentChangeRequestSubmitting, setAgentChangeRequestSubmitting] = useState(false);
+  const [agentChangeRequestForm] = Form.useForm<{ reason?: string }>();
   const canTransferView = permissions.includes('customer-service:transfer:view');
   const canTransferWrite = permissions.includes('customer-service:transfer:write');
   const canTransferBatchWrite = permissions.includes('customer-service:transfer:batch-write');
+  const canRequestAgentChange = permissions.includes('customer-service:transfer:request-agent-change');
   const canViewTransferOutboundAt = permissions.includes('customer-service:transfer:view-outbound-time');
   const canViewTransferAgent = permissions.includes('customer-service:transfer:view-agent');
   const canViewTransferAgentCompany = canViewTransferAgent && fieldVisibility.showAgentCompanyName;
@@ -608,13 +635,16 @@ export function CustomerServicePage({
   const canCreateWaitingDepartureProblem = can('customer-service:waiting-departure:problem-create');
   const canUploadWaitingDepartureLabel = can('customer-service:waiting-departure:label-upload');
   const canProblemView = can('customer-service:problem:view');
+  const canAfterSaleView = can('customer-service:signed:after-sale-view');
+  const canAssistanceView = can('customer-service:problem:after-sale-view');
   const canColumnSetting: Record<string, boolean> = {
     dataConfirm: can('customer-service:data-confirm:view'), transferNo: canTransferView,
     'pending-routing': canViewPendingRouting, waitingDeparture: can('customer-service:waiting-departure:view'),
     departed: can('customer-service:departed:view'), arrivedPort: can('customer-service:arrived-port:view'),
     delivering: can('customer-service:delivering:view'), signed: can('customer-service:signed:view'),
     problems: canProblemView,
-    afterSale: can('customer-service:problem:after-sale-view') || can('customer-service:signed:after-sale-view')
+    sale: canAfterSaleView,
+    afterSale: canAssistanceView
   };
   const items: ModuleSubNavItem[] = [
     ...(can('customer-service:dashboard:view') ? [{ key: 'service-dashboard', label: '客服看板' }] : []),
@@ -626,8 +656,9 @@ export function CustomerServicePage({
     ...(can('customer-service:arrived-port:view') ? [{ key: 'arrivedPort', label: '已到港' }] : []),
     ...(can('customer-service:delivering:view') ? [{ key: 'delivering', label: '已派送' }] : []),
     ...(can('customer-service:signed:view') ? [{ key: 'signed', label: '已签收' }] : []),
+    ...(canAfterSaleView ? [{ key: 'sale', label: '售后' }] : []),
     ...(canProblemView ? [{ key: 'problems', label: '问题件' }] : []),
-    ...(can('customer-service:problem:after-sale-view') || can('customer-service:signed:after-sale-view') ? [{ key: 'afterSale', label: '需协助问题件' }] : [])
+    ...(canAssistanceView ? [{ key: 'afterSale', label: '需协助问题件' }] : [])
   ];
   useEffect(() => {
     // 数据确认已经有专用的服务端分页接口；首屏不要再并行拉取整套客服状态池。
@@ -1069,7 +1100,7 @@ export function CustomerServicePage({
           {can('customer-service:signed:remark') ? <Button size="small" type="primary" onClick={() => addSignedRemark(row)}>
             增加批注
           </Button> : null}
-          {can('customer-service:signed:after-sale-create') ? <Button size="small" onClick={() => openProblemModal(row)}>问题件</Button> : null}
+          {can('customer-service:signed:after-sale-create') ? <Button size="small" onClick={() => openProblemModal(row, 'after-sale')}>售后</Button> : null}
         </Space>
       )
     }
@@ -1091,6 +1122,7 @@ export function CustomerServicePage({
   const problemRows = useMemo(() => {
     const minDwellDays = Number(problemFilters.minDwellDays);
     return rawProblemRows.filter((row) => {
+      if (row.sourceStatus === 'SIGNED') return false;
       if (problemCategory === 'all' && row.ticket.status === 'CLOSED') return false;
       if (problemCategory !== 'all' && row.category !== problemCategory) return false;
       const shipment = row.shipment;
@@ -1102,6 +1134,12 @@ export function CustomerServicePage({
         && keywordMatch(shipment?.agentName, problemFilters.agentName);
     });
   }, [outboundOrderSearchQuery, problemCategory, problemFilters, rawProblemRows]);
+  const saleRows = useMemo(
+    () => rawProblemRows.filter((row) => row.sourceStatus === 'SIGNED'
+      && row.ticket.status !== 'CLOSED'
+      && matchesExactOutboundOrderNo(row.shipment ?? row.ticket, outboundOrderSearchQuery)),
+    [outboundOrderSearchQuery, rawProblemRows]
+  );
   const afterSaleRows = useMemo(
     () => rawProblemRows.filter((row) => row.category === 'assistance'
       && matchesExactOutboundOrderNo(row.shipment ?? row.ticket, outboundOrderSearchQuery)),
@@ -1110,6 +1148,7 @@ export function CustomerServicePage({
   const problemCategoryCounts = useMemo(() => {
     const counts: Record<Exclude<ProblemCategory, 'all'>, number> = { preDeparture: 0, arrivedPort: 0, delivering: 0, assistance: 0, history: 0 };
     rawProblemRows.forEach((row) => {
+      if (row.sourceStatus === 'SIGNED') return;
       counts[row.category] += 1;
     });
     return counts;
@@ -1544,13 +1583,16 @@ export function CustomerServicePage({
   }, [activeSection, apiClient, canTransferView]);
 
   function openTransferFill(shipmentsToFill: Shipment[]) {
-    if (!canFillTransferNo || !shipmentsToFill.length) return;
+    if (!canFillTransferNo
+      || !shipmentsToFill.length
+      || shipmentsToFill.some((shipment) => shipment.agentChangeRequest?.status === 'PENDING')
+      || (shipmentsToFill.length > 1 && !canTransferBatchWrite)) return;
     setTransferFillRows(shipmentsToFill);
     transferForm.setFieldsValue({ rows: shipmentsToFill.map(() => ({ pushToSales: false })) });
   }
 
   async function submitTransferFill() {
-    if (!apiClient || !canFillTransferNo) {
+    if (!apiClient || !canFillTransferNo || (transferFillRows.length > 1 && !canTransferBatchWrite)) {
       setTransferFillRows([]);
       return;
     }
@@ -1575,6 +1617,39 @@ export function CustomerServicePage({
     } finally { setTransferSubmitting(false); }
   }
 
+  function openAgentChangeRequest(shipment: Shipment, mode: 'create' | 'view') {
+    setAgentChangeRequestTarget(shipment);
+    setAgentChangeRequestMode(mode);
+    agentChangeRequestForm.setFieldsValue({ reason: mode === 'create' ? '' : shipment.agentChangeRequest?.reason ?? '' });
+  }
+
+  function closeAgentChangeRequest() {
+    setAgentChangeRequestTarget(null);
+    setAgentChangeRequestMode('view');
+    agentChangeRequestForm.resetFields();
+  }
+
+  async function submitAgentChangeRequest() {
+    if (!apiClient || !agentChangeRequestTarget) return;
+    const values = await agentChangeRequestForm.validateFields();
+    setAgentChangeRequestSubmitting(true);
+    try {
+      const request = await apiClient.createShipmentAgentChangeRequest(agentChangeRequestTarget.id, {
+        reason: values.reason?.trim() ?? ''
+      });
+      setTransferRows((current) => current.map((row) => (
+        row.id === agentChangeRequestTarget.id ? { ...row, agentChangeRequest: request } : row
+      )));
+      setSelectedTransferIds((current) => current.filter((id) => id !== agentChangeRequestTarget.id));
+      onNotice?.(`${agentChangeRequestTarget.systemOrderNo} 已发起代理变更，等待市场处理`);
+      closeAgentChangeRequest();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '发起代理变更失败');
+    } finally {
+      setAgentChangeRequestSubmitting(false);
+    }
+  }
+
   const transferColumns = useMemo<ColumnsType<Shipment>>(() => {
     const result: ColumnsType<Shipment> = [
       { title: '运单创建时间', dataIndex: 'createdAt', width: 165, sorter: (a, b) => a.createdAt.localeCompare(b.createdAt), render: formatBeijingDateTime },
@@ -1587,10 +1662,31 @@ export function CustomerServicePage({
       ...(canViewTransferAgentData && fieldVisibility.showAgentWeight ? [{ title: '代理计费重', dataIndex: 'agentWeightKg', width: 105 }] : []),
       { title: '品名', dataIndex: 'productName', width: 120 },
       ...(canViewTransferSensitive ? [{ title: '报关', dataIndex: 'declarationRequired', width: 70, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> }, { title: '敏感', dataIndex: 'sensitive', width: 70, render: (value?: boolean) => <ShipmentRiskFlag value={value} /> }] : []),
-      ...(canFillTransferNo ? [{ title: '操作', key: 'action', fixed: 'right' as const, width: 115, render: (_: unknown, row: Shipment) => <Button size="small" type="primary" onClick={() => openTransferFill([row])}>填写转单号</Button> }] : [])
+      ...(canFillTransferNo || canRequestAgentChange ? [{
+        title: '操作',
+        key: 'action',
+        fixed: 'right' as const,
+        width: 260,
+        render: (_: unknown, row: Shipment) => {
+          const request = row.agentChangeRequest;
+          const pending = request?.status === 'PENDING';
+          return (
+            <Space size={6} wrap>
+              {pending ? <Tag color="processing">待市场处理</Tag> : null}
+              {canFillTransferNo ? (
+                <Button size="small" type="primary" disabled={pending} onClick={() => openTransferFill([row])}>填写转单号</Button>
+              ) : null}
+              {canRequestAgentChange && row.status === 'OUTBOUNDED' && !pending ? (
+                <Button size="small" onClick={() => openAgentChangeRequest(row, 'create')}>发起变更</Button>
+              ) : null}
+              {request ? <Button size="small" onClick={() => openAgentChangeRequest(row, 'view')}>查看申请</Button> : null}
+            </Space>
+          );
+        }
+      }] : [])
     ];
     return result;
-  }, [canFillTransferNo, canViewTransferAgent, canViewTransferAgentChannel, canViewTransferAgentCompany, canViewTransferAgentData, canViewTransferOutboundAt, canViewTransferSensitive, fieldVisibility.showAgentWeight]);
+  }, [canFillTransferNo, canRequestAgentChange, canViewTransferAgent, canViewTransferAgentChannel, canViewTransferAgentCompany, canViewTransferAgentData, canViewTransferOutboundAt, canViewTransferSensitive, fieldVisibility.showAgentWeight]);
 
   function openDepartureModal(shipment: Shipment) {
     setDepartureShipment(shipment);
@@ -1624,7 +1720,8 @@ export function CustomerServicePage({
     });
   }
 
-  function openProblemModal(shipment: Shipment) {
+  function openProblemModal(shipment: Shipment, mode: 'problem' | 'after-sale' = 'problem') {
+    setProblemCreationMode(mode);
     setProblemShipment(shipment);
   }
 
@@ -1982,9 +2079,9 @@ export function CustomerServicePage({
     onProblemTicketCreated?.(ticket);
     onShipmentUpdated?.({ ...problemShipment, hasProblemTicket: true });
     setProblemCategory(problemCategoryForStatus(problemShipment.status));
-    setActiveSection('problems');
+    setActiveSection(problemCreationMode === 'after-sale' ? 'sale' : 'problems');
     await refreshCustomerServiceAuditLogs();
-    onNotice?.(`${problemShipment.systemOrderNo} 已创建问题件${input.pushToSales ? '，业务推送待企业微信接入' : ''}`);
+    onNotice?.(`${problemShipment.systemOrderNo} 已创建${problemCreationMode === 'after-sale' ? '售后' : '问题件'}${input.pushToSales ? '，业务推送待企业微信接入' : ''}`);
   }
 
   async function submitDataConfirm() {
@@ -2465,6 +2562,41 @@ export function CustomerServicePage({
             </Space>
           </Card>
         ) : null}
+        {activeSection === 'sale' ? (
+          <Card title="售后">
+            <Space direction="vertical" size={12} className="full-width">
+              {outboundOrderSearch}
+              <ManagedDualViewTable
+                viewStorageKey="sunny.customer-service.sale.table-view-v1"
+                defaultView="ledger"
+                viewAriaLabel="售后表格视图"
+                rowKey={(row) => row.ticket.id}
+                size="small"
+                dataSource={saleRows}
+                pagination={tenRowTablePagination}
+                views={{
+                  matrix: {
+                    columns: afterSaleMatrixColumns,
+                    tableProps: {
+                      tableLayout: 'fixed',
+                      minimumScrollX: 1136,
+                      recordDetail: { title: '售后详情' },
+                      columnSettings: canColumnSetting.sale ? { storageKey: 'sunny.customer-service.sale.matrix-columns-v1', title: '售后矩阵列设置', lockedKeys: ['matrixInformation', 'matrixActions'] } : undefined
+                    }
+                  },
+                  ledger: {
+                    columns: afterSaleColumns,
+                    tableProps: {
+                      minimumScrollX: 3300,
+                      recordDetail: { title: '售后详情' },
+                      columnSettings: canColumnSetting.sale ? { storageKey: 'sunny.customer-service.sale.columns', title: '售后列设置', defaultHiddenKeys: hiddenProblemColumns, defaultColumnOrder: problemColumnOrder, lockedKeys: ['action'] } : undefined
+                    }
+                  }
+                }}
+              />
+            </Space>
+          </Card>
+        ) : null}
         {activeSection === 'afterSale' ? (
           <Card title="需协助问题件">
             <Space direction="vertical" size={12} className="full-width">
@@ -2555,7 +2687,7 @@ export function CustomerServicePage({
                   action={<Button size="small" onClick={() => void refreshCustomerServiceDataConfirmRows()}>重试</Button>}
                 />
               ) : null}
-              {activeSection === 'transferNo' && canFillTransferNo ? <Button type="primary" disabled={!selectedTransferIds.length || (selectedTransferIds.length > 1 && !canTransferBatchWrite)} onClick={() => openTransferFill(transferRows.filter((row) => selectedTransferIds.includes(row.id)))}>填写转单号</Button> : null}
+              {activeSection === 'transferNo' && canFillTransferNo ? <Button type="primary" disabled={!selectedTransferIds.length || (selectedTransferIds.length > 1 && !canTransferBatchWrite)} onClick={() => openTransferFill(transferRows.filter((row) => selectedTransferIds.includes(row.id) && row.agentChangeRequest?.status !== 'PENDING'))}>填写转单号</Button> : null}
               {activeSection === 'waitingDeparture' ? (
                 <ManagedDualViewTable
                   viewStorageKey="sunny.customer-service.waiting-departure.table-view"
@@ -2612,7 +2744,7 @@ export function CustomerServicePage({
                         ? '数据加载失败，请重试'
                         : '暂无待确认数据'
                   } : undefined}
-                  rowSelection={activeSection === 'transferNo' && canFillTransferNo ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), fixed: true } : undefined}
+                  rowSelection={activeSection === 'transferNo' && canFillTransferNo ? { selectedRowKeys: selectedTransferIds, onChange: (keys) => setSelectedTransferIds(keys.map(String)), getCheckboxProps: (row) => ({ disabled: row.agentChangeRequest?.status === 'PENDING' }), fixed: true, type: canTransferBatchWrite ? 'checkbox' : 'radio' } : undefined}
                   pagination={activeSection === 'dataConfirm' ? {
                     ...tenRowTablePagination,
                     current: dataConfirmPagination.page,
@@ -2669,6 +2801,43 @@ export function CustomerServicePage({
             )}
           </Form.List>
         </Form>
+      </Modal>
+      <Modal
+        title={agentChangeRequestMode === 'create' ? '发起代理变更' : '代理变更申请'}
+        open={Boolean(agentChangeRequestTarget)}
+        onCancel={closeAgentChangeRequest}
+        onOk={agentChangeRequestMode === 'create' ? () => void submitAgentChangeRequest() : closeAgentChangeRequest}
+        okText={agentChangeRequestMode === 'create' ? '发起变更' : '关闭'}
+        cancelButtonProps={{ style: agentChangeRequestMode === 'create' ? undefined : { display: 'none' } }}
+        confirmLoading={agentChangeRequestSubmitting}
+        width={620}
+        destroyOnHidden
+      >
+        <Space direction="vertical" size={14} className="full-width">
+          <Card size="small">
+            <Space direction="vertical" size={4}>
+              <Text strong>{agentChangeRequestTarget?.systemOrderNo}</Text>
+              {canViewTransferAgentCompany ? <Text>当前代理：{agentChangeRequestTarget?.agentName || '-'}</Text> : null}
+              {canViewTransferAgentChannel ? <Text>当前代理渠道：{agentChangeRequestTarget?.routeAgentChannelName || '-'}</Text> : null}
+            </Space>
+          </Card>
+          {agentChangeRequestMode === 'create' ? (
+            <Form form={agentChangeRequestForm} layout="vertical">
+              <Form.Item
+                name="reason"
+                label="变更原因"
+                rules={[
+                  { required: true, whitespace: true, message: '请填写变更原因' },
+                  { max: 500, message: '变更原因不能超过 500 个字符' }
+                ]}
+              >
+                <Input.TextArea rows={4} maxLength={500} showCount placeholder="说明代理或代理渠道为什么需要调整" />
+              </Form.Item>
+            </Form>
+          ) : agentChangeRequestTarget?.agentChangeRequest ? (
+            <AgentChangeRequestDetail request={agentChangeRequestTarget.agentChangeRequest} />
+          ) : null}
+        </Space>
       </Modal>
       <Modal
         title="费用明细"
@@ -3104,6 +3273,7 @@ export function CustomerServicePage({
       {apiClient ? <ProblemTicketCreateModal
         shipment={problemShipment}
         apiClient={apiClient}
+        title={problemCreationMode === 'after-sale' ? '创建售后' : '创建问题件'}
         role={role ?? ''}
         permissions={permissions}
         defaultCustomerVisible

@@ -67,6 +67,9 @@ import {
   type ShipmentFinanceDetailSummary,
   type ShipmentInternalFlowLogItem,
   type ShipmentInternalFlowLogResponse,
+  type ShipmentAgentReplacementAuditSummary,
+  type ShipmentAgentReplacementInput,
+  type ShipmentAgentReplacementPreview,
   type ShipmentPaymentMethod,
   type ShipmentReviewDetailSummary,
   type ShipmentReviewPackageSummary,
@@ -1963,6 +1966,29 @@ export function App() {
     setNotice(`${record.systemOrderNo} 已退回待排货`);
   }
 
+  async function handleLoadAgentReplacementPreview(record: Shipment): Promise<ShipmentAgentReplacementPreview> {
+    return apiClient.shipmentAgentReplacementPreview(record.id);
+  }
+
+  async function handleReplaceShipmentAgent(record: Shipment, input: ShipmentAgentReplacementInput) {
+    const updated = await apiClient.replaceShipmentAgent(record.id, input);
+    setLocalShipments((current) => current.map((shipment) => (
+      shipment.id === record.id ? mergeShipmentListRecord(shipment, updated) : shipment
+    )));
+    await Promise.all([refreshWorkspace(), refreshMarketWorkspace()]);
+    setNotice(`${record.systemOrderNo} 已完成代理变更`);
+  }
+
+  async function handleRejectAgentChangeRequest(record: Shipment, requestId: string, reason: string) {
+    await apiClient.rejectShipmentAgentChangeRequest(record.id, requestId, { reason });
+    await refreshMarketWorkspace();
+    setNotice(`${record.systemOrderNo} 的代理变更申请已驳回`);
+  }
+
+  async function handleLoadAgentReplacementHistory(record: Shipment): Promise<ShipmentAgentReplacementAuditSummary[]> {
+    return apiClient.shipmentAgentReplacementHistory(record.id);
+  }
+
   function openEditShipmentOperationalModal(record: Shipment, source: ShipmentEditSource = 'operation') {
     setEditingShipmentSource(source);
     setEditingShipment(record);
@@ -3176,6 +3202,7 @@ export function App() {
                 onNotificationTargetHandled={consumePendingNotificationTarget}
                 role={session.user.role}
                 permissions={session.permissions}
+                warehouseScopeFingerprint={session.user.warehouseScopeFingerprint}
                 shipments={businessShipments}
                 businessCostAudits={businessCostAudits}
                 notice={notice}
@@ -3253,7 +3280,10 @@ export function App() {
                 }}
                 onConfirmAssignment={handleConfirmRoutingAssignment}
                 onRerouteShipment={handleRerouteShipment}
-                onEditShipment={(record) => openEditShipmentOperationalModal(record, 'routing')}
+                onLoadAgentReplacementPreview={handleLoadAgentReplacementPreview}
+                onReplaceShipmentAgent={handleReplaceShipmentAgent}
+                onRejectAgentChangeRequest={handleRejectAgentChangeRequest}
+                onLoadAgentReplacementHistory={handleLoadAgentReplacementHistory}
                 onViewRoutingLog={(record) => openShipmentLogModal(record, 'routing')}
                 onViewPendingRoutingLog={(record) => openShipmentLogModal(record, 'operation')}
                 onReturnReview={handleReverseShipmentReview}

@@ -105,8 +105,8 @@ export type PermissionKey =
   | 'market:pending-routing:payable-cost:delete'
   | 'market:pending-routing:return-review'
   | 'market:routed:view'
-  | 'market:routed:edit'
   | 'market:routed:reroute'
+  | 'market:routed:replace-agent'
   | 'market:routed:routing-log:view'
   | 'market:routing-report:view'
   | 'market:routing-report:export'
@@ -126,10 +126,14 @@ export type PermissionKey =
   | 'warehouse:in-stock:import'
   | 'warehouse:in-stock:export'
   | 'warehouse:tally-pending:view'
+  | 'warehouse:tally-pending:detail'
   | 'warehouse:tally-pending:edit'
-  | 'warehouse:tally-pending:cancel'
+  | 'warehouse:tally-pending:start'
   | 'warehouse:tally-pending:process'
-  | 'warehouse:tally-pending:complete-and-ship'
+  | 'warehouse:tally-pending:restart'
+  | 'warehouse:tally-pending:sort-rule-manage'
+  | 'warehouse:tally-pending:problem-view'
+  | 'warehouse:tally-pending:shipment-create'
   | 'warehouse:tally-completed:view'
   | 'warehouse:tally-completed:print'
   | 'warehouse:tally-completed:download'
@@ -205,6 +209,7 @@ export type PermissionKey =
   | 'customer-service:transfer:tracking-website-view'
   | 'customer-service:transfer:label-upload'
   | 'customer-service:transfer:label-view'
+  | 'customer-service:transfer:request-agent-change'
   | 'customer-service:pending-routing:view'
   | 'customer-service:pending-routing:fee-detail-view'
   | 'customer-service:pending-routing:fee-detail-block'
@@ -450,6 +455,7 @@ export function createPrincipalScopeFingerprint(
     site: principal.site ?? null,
     role: principal.role,
     assignedRole: principal.assignedRole ?? null,
+    roleLabel: principal.roleLabel ?? null,
     dataScope: principal.dataScope ?? null,
     shipmentAllView: principal.shipmentAllView === true,
     departmentTeamScope: Array.from(new Set(principal.departmentTeamScope ?? [])).sort(),
@@ -575,6 +581,8 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
     if (masks['agent-short-name'] || masks['agent-company-name'] || masks['agent-channel'] || masks['agent-data']) {
       if (/^pricing:price-books:(?:upload|import|legacy-source-import|legacy-rebuild|cleanup-original-agents)$/.test(permission)) return false;
       if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
+      if (permission === 'market:routed:replace-agent') return false;
+      if (permission === 'customer-service:transfer:request-agent-change') return false;
       if (permission === 'finance:pending-payment:payment-voucher-upload'
         || permission === 'finance:paid-payment:voucher-upload') return false;
     }
@@ -591,6 +599,7 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
     if (masks['payable-cost']) {
       if (permission.startsWith('master-data:payer-banks:')) return false;
       if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
+      if (permission === 'market:routed:replace-agent') return false;
       if (permission.startsWith('market:pending-routing:payable-cost:')) return false;
       if (/^finance:payable:(?:manage|export|payment|attachment|attachment-view|view-sensitive|view-profit|paid-export|paid-voucher)$/.test(permission)) return false;
       if (/^finance:pending-payment:(?:create|update|bill-voucher-view|payment-voucher-view|payment-voucher-upload|export|view-sensitive)$/.test(permission)) return false;
@@ -604,6 +613,7 @@ export function applyGlobalPermissionDenies(permissions: readonly PermissionKey[
     }
     if (masks['payable-status']) {
       if (/^market:pending-routing:(?:route|edit|approve)$/.test(permission)) return false;
+      if (permission === 'market:routed:replace-agent') return false;
       if (/^finance:payable:(?:audit|reverse|void|payment|paid-confirm|paid-reverse|batch-audit|batch-reverse|batch-void)$/.test(permission)) return false;
       if (/^finance:pending-payment:(?:create|update|cancel|payment-voucher-upload)$/.test(permission)) return false;
       if (/^finance:paid-payment:(?:confirm|update|reverse|voucher-upload)$/.test(permission)) return false;
@@ -773,8 +783,8 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'market:pending-routing:payable-cost:delete', label: '删除应付成本', group: '市场管理 / 待排货' },
   { code: 'market:pending-routing:return-review', label: '退回重审', group: '市场管理 / 待排货' },
   { code: 'market:routed:view', label: '查看', group: '市场管理 / 已排货' },
-  { code: 'market:routed:edit', label: '修改', group: '市场管理 / 已排货' },
   { code: 'market:routed:reroute', label: '退回重排', group: '市场管理 / 已排货' },
+  { code: 'market:routed:replace-agent', label: '处理代理变更', group: '市场管理 / 已排货' },
   { code: 'market:routed:routing-log:view', label: '查看排货日志', group: '市场管理 / 已排货' },
   { code: 'market:routing-report:view', label: '查看', group: '市场管理 / 排货数据' },
   { code: 'market:routing-report:export', label: '导出', group: '市场管理 / 排货数据' },
@@ -794,10 +804,14 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'warehouse:in-stock:import', label: '批量导入', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:in-stock:export', label: '批量下载', group: '仓库管理 / 在仓数据' },
   { code: 'warehouse:tally-pending:view', label: '查看', group: '仓库管理 / 未完成理货' },
-  { code: 'warehouse:tally-pending:edit', label: '编辑任务', group: '仓库管理 / 未完成理货' },
-  { code: 'warehouse:tally-pending:cancel', label: '取消任务', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:detail', label: '查看任务', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:edit', label: '修改', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:start', label: '开始理货', group: '仓库管理 / 未完成理货' },
   { code: 'warehouse:tally-pending:process', label: '处理理货', group: '仓库管理 / 未完成理货' },
-  { code: 'warehouse:tally-pending:complete-and-ship', label: '理货并创建出货单', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:restart', label: '退回重理', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:sort-rule-manage', label: '排序规则', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:problem-view', label: '查看理货问题件', group: '仓库管理 / 未完成理货' },
+  { code: 'warehouse:tally-pending:shipment-create', label: '技术前置：创建理货出货单', group: '仓库管理 / 未完成理货', assignable: false },
   { code: 'warehouse:tally-completed:view', label: '查看', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:print', label: '打印标签', group: '仓库管理 / 已完成理货' },
   { code: 'warehouse:tally-completed:download', label: '下载标签', group: '仓库管理 / 已完成理货' },
@@ -865,6 +879,7 @@ export const permissionDefinitions: PermissionDefinition[] = [
   { code: 'customer-service:transfer:tracking-website-view', label: '查看追踪网站', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:label-upload', label: '上传面单', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:label-view', label: '查看面单', group: '客服管理 / 转单号' },
+  { code: 'customer-service:transfer:request-agent-change', label: '发起代理变更', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-outbound-time', label: '查看转单号出库时间', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-agent', label: '查看转单号代理信息', group: '客服管理 / 转单号' },
   { code: 'customer-service:transfer:view-agent-data', label: '查看转单号代理数据', group: '客服管理 / 转单号' },
@@ -1081,7 +1096,7 @@ const warehouseBasePermissions: PermissionKey[] = [
   'warehouse:dashboard:view',
   'warehouse:today-receipt:view', 'warehouse:today-receipt:edit', 'warehouse:today-receipt:delete', 'warehouse:today-receipt:manual-create', 'warehouse:today-receipt:import', 'warehouse:today-receipt:export',
   'warehouse:in-stock:view', 'warehouse:in-stock:edit', 'warehouse:in-stock:delete', 'warehouse:in-stock:split', 'warehouse:in-stock:tally', 'warehouse:in-stock:order-entry', 'warehouse:in-stock:import', 'warehouse:in-stock:export',
-  'warehouse:tally-pending:view', 'warehouse:tally-pending:edit', 'warehouse:tally-pending:cancel', 'warehouse:tally-pending:process', 'warehouse:tally-pending:complete-and-ship',
+  'warehouse:tally-pending:view', 'warehouse:tally-pending:detail', 'warehouse:tally-pending:edit', 'warehouse:tally-pending:start', 'warehouse:tally-pending:process', 'warehouse:tally-pending:restart', 'warehouse:tally-pending:sort-rule-manage', 'warehouse:tally-pending:problem-view', 'warehouse:tally-pending:shipment-create',
   'warehouse:tally-completed:view', 'warehouse:tally-completed:print', 'warehouse:tally-completed:download', 'warehouse:tally-completed:scan', 'warehouse:tally-completed:reverse', 'warehouse:tally-completed:correct',
   'warehouse:dispatch-pending:view', 'warehouse:dispatch-pending:edit', 'warehouse:dispatch-pending:handover-print', 'warehouse:dispatch-pending:label-manage', 'warehouse:dispatch-pending:shipping-mark-confirm', 'warehouse:dispatch-pending:confirm',
   'warehouse:outbounded:view', 'warehouse:outbounded:export',
@@ -1092,7 +1107,7 @@ const marketBasePermissions: PermissionKey[] = [
   'business:shipment:agent-weight-view',
   'market:dashboard:view',
   'market:pending-routing:view', 'market:pending-routing:route', 'market:pending-routing:edit', 'market:pending-routing:approve', 'market:pending-routing:operation-log:view', 'market:pending-routing:business-cost:view', 'market:pending-routing:business-cost:create', 'market:pending-routing:business-cost:edit', 'market:pending-routing:business-cost:delete', 'market:pending-routing:payable-cost:view', 'market:pending-routing:payable-cost:create', 'market:pending-routing:payable-cost:edit', 'market:pending-routing:payable-cost:delete', 'market:pending-routing:return-review',
-  'market:routed:view', 'market:routed:edit', 'market:routed:reroute', 'market:routed:routing-log:view',
+  'market:routed:view', 'market:routed:reroute', 'market:routed:replace-agent', 'market:routed:routing-log:view',
   'market:routing-report:view', 'market:routing-report:export'
 ];
 
@@ -1325,7 +1340,11 @@ export function isBusinessAgentOwnOnlyRole(role: string): boolean {
 }
 
 function isBusinessAgentCrossScopePermission(permission: PermissionKey): boolean {
-  return /(?:^|:)(?:all-view|team-view|view-all|all-order-context|scope-all)$/.test(permission);
+  return /(?:^|:)(?:all-view|team-view|view-all|all-order-context|scope-(?:team|site|all))$/.test(permission);
+}
+
+function isBusinessAgentBroadScopeRole(role: string): boolean {
+  return role === 'UG_BUSINESS_MANAGER' || role === 'UG_BUSINESS_SUPERVISOR';
 }
 
 /**
@@ -1452,8 +1471,14 @@ function withImpliedTargetPageViewPermissions(permissions: readonly PermissionKe
     ['business:dashboard:', 'business:dashboard:view'],
     ['business:shipment:', 'business:shipment:list'],
     ['business:order-ai:', 'business:order-ai:view'],
+    ['operations:line-shipment:', 'operations:line-shipment:view'],
+    ['operations:ai-queue:', 'operations:ai-queue:view'],
+    ['operations:product-map:', 'operations:product-map:view'],
+    ['operations:import-quality:', 'operations:import-quality:view'],
     ['tracking:carrier-task:', 'tracking:carrier-task:view'],
     ['tracking:external:', 'tracking:external:view'],
+    ['system:announcements:', 'system:announcements:read'],
+    ['system:notifications:', 'system:notifications:operations-read'],
     ...(['kuayue', 'pickup', 'tally', 'purchase', 'delivery', 'hang', 'market-profit', 'warehouse-profit', 'finance-profit'] as const)
       .map((section) => [`misc-fee:${section}:`, `misc-fee:${section}:read` as PermissionKey] as [string, PermissionKey]),
     ...(['customers', 'finance', 'payer-banks', 'agents', 'agent-channels', 'channels', 'channel-categories', 'remote-areas', 'exchange-rates', 'assistant'] as const)
@@ -1464,6 +1489,8 @@ function withImpliedTargetPageViewPermissions(permissions: readonly PermissionKe
       definition.assignable !== false
       && definition.code !== view
       && definition.code.startsWith(prefix)
+      && !definition.code.includes('-block')
+      && !definition.code.includes(':block:')
       && next.has(definition.code)
     ));
     if (hasAssignableAction) next.add(view);
@@ -1511,6 +1538,9 @@ function withImpliedOperationalPermissions(permissions: readonly PermissionKey[]
   for (const permission of [...next]) {
     const match = /^(warehouse:[^:]+):(.+)$/.exec(permission);
     if (!match || match[2] === 'view' || match[2].startsWith('scope-')) continue;
+    // 理货问题件和隐藏的出货兼容能力都不是普通任务列表入口。
+    if (permission === 'warehouse:tally-pending:problem-view'
+      || permission === 'warehouse:tally-pending:shipment-create') continue;
     const viewPermission = warehouseViewDependencies[match[1]];
     if (viewPermission) next.add(viewPermission);
   }
@@ -1554,7 +1584,8 @@ export const hiddenPersistedApiPermissions: readonly PermissionKey[] = [
   'master-data:customers:user-create',
   'master-data:finance:surcharge-manage',
   'master-data:finance:surcharge-enable',
-  'master-data:finance:fuel-rate-manage'
+  'master-data:finance:fuel-rate-manage',
+  'warehouse:tally-pending:shipment-create'
 ];
 
 export function hiddenPersistedApiPermissionsForRole(
@@ -1590,16 +1621,6 @@ export function configuredPermissionsForRole(
     ? defaultPermissionsForRole(role)
     : normalizeRolePermissions(role, [...configuredPermissions]);
   const hiddenApiPermissions = hiddenPersistedApiPermissionsForRole(role, configuredPermissions ?? []);
-  if (role === 'UG_BUSINESS_MANAGER') {
-    const crossTeamPermissions = new Set<PermissionKey>([
-      'business:dashboard:all-view',
-      'business:shipment:all-view'
-    ]);
-    for (let index = permissions.length - 1; index >= 0; index -= 1) {
-      if (crossTeamPermissions.has(permissions[index]!)) permissions.splice(index, 1);
-    }
-    permissions.push('business:dashboard:team-view', 'business:shipment:team-view');
-  }
   const defaultProtectedScopes = protectedDataScopePermissions.filter((permission) =>
     defaultPermissionsForRole(role).includes(permission)
   );
@@ -1647,7 +1668,13 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
   ]);
   const normalized = [...new Set(permissions)]
     .filter((permission) => allowed.has(permission))
-    .filter((permission) => !isBusinessAgentOwnOnlyRole(role) || !isBusinessAgentCrossScopePermission(permission));
+    .filter((permission) => !(
+      isBusinessAgentOwnOnlyRole(role)
+      || (
+        !isBusinessAgentBroadScopeRole(role)
+        && permissions.includes('data-scope:sales-own')
+      )
+    ) || !isBusinessAgentCrossScopePermission(permission));
   if (normalized.includes(globalFieldMaskPermissionCode('agent-data'))) {
     for (const dependency of ['agent-short-name', 'agent-company-name', 'agent-channel'] as GlobalFieldMaskKey[]) {
       const code = globalFieldMaskPermissionCode(dependency);
@@ -1736,13 +1763,17 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
     ['market:pending-routing:payable-cost:delete', 'market:pending-routing:view'],
     ['market:pending-routing:payable-cost:delete', 'market:pending-routing:payable-cost:view'],
     ['market:pending-routing:return-review', 'market:pending-routing:view'],
-    ['market:routed:edit', 'market:routed:view'],
     ['market:routed:reroute', 'market:routed:view'],
+    ['market:routed:replace-agent', 'market:routed:view'],
     ['market:routed:routing-log:view', 'market:routed:view'],
     ['market:routing-report:export', 'market:routing-report:view']
   ];
   for (const [action, view] of marketViewDependencies) {
     if (normalized.includes(action) && !normalized.includes(view)) normalized.push(view);
+  }
+  if (normalized.includes('customer-service:transfer:request-agent-change')
+    && !normalized.includes('customer-service:transfer:view')) {
+    normalized.push('customer-service:transfer:view');
   }
   const financePageViewByPrefix: Array<[string, PermissionKey]> = [
     ['finance:dashboard:', 'finance:dashboard:view'],
@@ -1783,6 +1814,10 @@ export function normalizeRolePermissions(role: RoleKey, permissions: PermissionK
   ];
   for (const [action, view] of orderFeeViewDependencies) {
     if (normalized.includes(action) && !normalized.includes(view)) normalized.push(view);
+  }
+  if (normalized.includes('finance:order-fee:payable:manage')
+    && !normalized.includes('finance:order-fee:payable:view')) {
+    normalized.push('finance:order-fee:payable:view');
   }
   return withImpliedOperationalPermissions(withImpliedCustomerServiceViewPermissions(withImpliedTargetPageViewPermissions(normalized)));
 }

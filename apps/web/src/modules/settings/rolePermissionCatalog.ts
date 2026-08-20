@@ -39,6 +39,29 @@ export function isGlobalFieldMaskPermission(code: string): boolean {
   return code.startsWith('system:global-mask:');
 }
 
+export function updateGlobalFieldMaskPermissions(
+  grantedPermissions: PermissionKey[],
+  code: PermissionKey,
+  checked: boolean
+): PermissionKey[] {
+  const next = new Set(grantedPermissions);
+  const agentDataCode = globalFieldMaskPermissionCode('agent-data');
+  const impliedAgentCodes = [
+    globalFieldMaskPermissionCode('agent-short-name'),
+    globalFieldMaskPermissionCode('agent-company-name'),
+    globalFieldMaskPermissionCode('agent-channel')
+  ];
+  if (checked) {
+    next.add(code);
+    if (code === agentDataCode) impliedAgentCodes.forEach((permission) => next.add(permission));
+  } else {
+    next.delete(code);
+    if (code === agentDataCode) impliedAgentCodes.forEach((permission) => next.delete(permission));
+    if (impliedAgentCodes.includes(code)) next.delete(agentDataCode);
+  }
+  return [...next];
+}
+
 /**
  * Legacy market mask/block permissions are kept out of the assignable catalog.
  * They may still exist in an old role snapshot during the migration window,
@@ -76,6 +99,34 @@ export const orderEntryPermissionControls: Array<{
   }
 ];
 
+export const orderFeePermissionControls: Array<{ label: string; code: PermissionKey }> = [
+  { label: '查看费用', code: 'business:order-fee:view' },
+  { label: '新增费用', code: 'business:order-fee:create' },
+  { label: '修改费用', code: 'business:order-fee:update' },
+  { label: '删除费用', code: 'business:order-fee:delete' },
+  { label: '锁定费用', code: 'business:order-fee:lock' },
+  { label: '解锁费用', code: 'business:order-fee:unlock' },
+  { label: '查看利润', code: 'business:order-fee:profit-view' }
+];
+
+export function updateOrderFeePermission(
+  grantedPermissions: PermissionKey[],
+  code: PermissionKey,
+  checked: boolean
+): PermissionKey[] {
+  const next = new Set(grantedPermissions);
+  if (checked) {
+    next.add(code);
+    next.add('business:order-fee:view');
+  } else {
+    next.delete(code);
+    if (code === 'business:order-fee:view') {
+      orderFeePermissionControls.forEach((control) => next.delete(control.code));
+    }
+  }
+  return [...next];
+}
+
 export function isOrderEntryPermission(code: string): boolean {
   return orderEntryPermissionControls.some((control) => control.code === code);
 }
@@ -89,6 +140,7 @@ export const customerServiceTransferPermissionControls: Array<{ label: string; c
   { label: '查看追踪网站', code: 'customer-service:transfer:tracking-website-view' },
   { label: '上传面单', code: 'customer-service:transfer:label-upload' },
   { label: '查看面单', code: 'customer-service:transfer:label-view' },
+  { label: '发起代理变更', code: 'customer-service:transfer:request-agent-change' },
   { label: '查看出库时间', code: 'customer-service:transfer:view-outbound-time' },
   { label: '查看代理信息', code: 'customer-service:transfer:view-agent' },
   { label: '查看代理数据', code: 'customer-service:transfer:view-agent-data' },
@@ -288,7 +340,7 @@ export const permissionWorkspaceCatalog: PermissionWorkspaceDefinition[] = [
     key: 'finance',
     label: '财务管理',
     // 付款申请与待付款共用 finance:pending-payment:* 权限，统一成一个入口开关。
-    groups: ['财务看板', '应收审核', '业务成本审核', '市场应付审核', '待付款', '已付款', '水单到账查询', '水单匹配', '代理账单'].map((label) => ({ label }))
+    groups: ['财务看板', '应收审核', '业务成本审核', '市场应付审核', '单票费用', '待付款', '已付款', '水单到账查询', '水单匹配', '代理账单'].map((label) => ({ label }))
   },
   {
     key: 'miscFees',
@@ -314,7 +366,7 @@ export const permissionWorkspaceCatalog: PermissionWorkspaceDefinition[] = [
   {
     key: 'system',
     label: '系统管理',
-    groups: ['用户组', '用户名', '站点', '操作日志', '角色权限分配', '权限安全区', 'AI 接口安全', '系统基础配置'].map((label) => ({ label }))
+    groups: ['用户组', '用户名', '站点', '操作日志', '角色权限分配', '权限安全区', 'AI 接口安全', '公告管理', '通知运行', '系统基础配置'].map((label) => ({ label }))
   }
 ];
 

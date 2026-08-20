@@ -22,7 +22,7 @@ import {
 } from './entryModel';
 import { countryOptions as builtInCountryOptions, filterLocationOption, getStateOptions } from './countryStateOptions';
 import { WarehouseTallyHistoryChain } from '../../warehouse/WarehouseTallyHistoryChain';
-import { ManagedTable } from '../../shared/ui';
+import { ManagedTable, renderAuthorizedAction } from '../../shared/ui';
 import { WarehousePackageNoWithTallyStatus } from '../../shared/WarehousePackageNoWithTallyStatus';
 import { agentFieldLabels } from '../../shared/agentFieldLabels';
 import { getDetailedCompanyAgentOptions, resolveAgentIdByIdentity } from '../../shared/agentIdentity';
@@ -1856,8 +1856,14 @@ export function FinanceEntryPage({ apiClient, role, permissions, username, finan
       </div>
       <div className="finance-entry-actions">
         {canEditOrderEntry ? <Button onClick={reset} disabled={submitting || draftLoading}>清空</Button> : null}
-        <Button onClick={() => submit(false)} loading={submitting} disabled={draftLoading || (!canEditOrderEntry && (!draftId || !canMaintainOrderEntryFinance)) || (canEditOrderEntry && (!canSaveDraft || (!draftId && !canCreateOrderEntry)))}>{canEditOrderEntry ? '保存草稿' : '保存费用'}</Button>
-        {canEditOrderEntry ? <Button type="primary" onClick={() => submit(true)} loading={submitting} disabled={draftLoading || !canSaveDraft || !canSubmitForReview || (!draftId && !canCreateOrderEntry)}>提交审核</Button> : null}
+        {renderAuthorizedAction(
+          (canEditOrderEntry && canSaveDraft && Boolean(draftId || canCreateOrderEntry))
+            || (!canEditOrderEntry && Boolean(draftId) && canMaintainOrderEntryFinance),
+          <Button onClick={() => submit(false)} loading={submitting} disabled={draftLoading}>{canEditOrderEntry ? '保存草稿' : '保存费用'}</Button>
+        )}
+        {renderAuthorizedAction(canEditOrderEntry && canSaveDraft && canSubmitForReview && Boolean(draftId || canCreateOrderEntry),
+          <Button type="primary" onClick={() => submit(true)} loading={submitting} disabled={draftLoading}>提交审核</Button>
+        )}
       </div>
       <Modal
         title={`已选包裹详情（${selectedPackages.length} 条）`}

@@ -54,7 +54,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
   }
 
   async getWarehouseTallySortRules(principal: Principal): Promise<WarehouseTallySortRule[]> {
-    await this.ensurePendingView(principal);
+    await this.ensurePendingSortRuleManage(principal);
     return this.readWarehouseTallySortRules();
   }
 
@@ -62,7 +62,7 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     input: WarehouseTallySortRulesUpdateInput
   ): Promise<WarehouseTallySortRule[]> {
-    await this.ensurePendingEdit(principal);
+    await this.ensurePendingSortRuleManage(principal);
     const rules = normalizeWarehouseTallySortRuleInput(input);
     return this.prisma.$transaction(async (tx: any) => {
       await tx.$queryRaw(Prisma.sql`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended('warehouse-tally-sort-rules', 0))`);
@@ -105,14 +105,15 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
       throw new BadRequestException('理货任务状态无效');
     }
     const canViewPending = await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:view');
+    const canViewProblems = await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:problem-view');
     const canViewCompleted = await this.permissions.hasPermission(principal.role, 'warehouse:tally-completed:view');
-    if (!canViewPending && !canViewCompleted) {
+    if (!problemOnly && query.status !== 'CANCELLED' && !canViewPending && !canViewCompleted) {
       throw new ForbiddenException('当前角色不能查看理货任务');
     }
     if (query.status === 'PENDING' && !canViewPending) {
       throw new ForbiddenException('当前用户组已屏蔽查看未完成理货');
     }
-    if ((problemOnly || query.status === 'CANCELLED') && !canViewPending) {
+    if ((problemOnly || query.status === 'CANCELLED') && !canViewProblems) {
       throw new ForbiddenException('当前用户组已屏蔽查看理货问题件');
     }
     const requestsCompleted = query.status === 'COMPLETED'
@@ -212,8 +213,10 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     principal: Principal,
     id: string
   ): Promise<WarehousePackageSummary[]> {
-    await this.ensurePendingView(principal);
-    if (!(await this.hasAnyPermission(principal, ['warehouse:tally-pending:view']))) {
+    if (!(await this.hasAnyPermission(principal, [
+      'warehouse:tally-pending:detail',
+      'warehouse:tally-pending:process'
+    ]))) {
       throw new ForbiddenException('当前角色不能查看理货原始包裹');
     }
     const scope = this.operatorCustomerScope(principal);
@@ -350,8 +353,8 @@ export class PrismaWarehouseTallyQueryRepository implements WarehouseTallyQueryR
     }
   }
 
-  private async ensurePendingEdit(principal: Principal) {
-    if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:edit'))) {
+  private async ensurePendingSortRuleManage(principal: Principal) {
+    if (!(await this.permissions.hasPermission(principal.role, 'warehouse:tally-pending:sort-rule-manage'))) {
       throw new ForbiddenException('当前角色不能修改理货排序规则');
     }
   }

@@ -23,7 +23,7 @@ export class WarehouseTallyOperationsController {
   }
 
   @Post('warehouse/consolidations/:id/create-shipment')
-  @RequirePermission('warehouse:tally-pending:complete-and-ship')
+  @RequirePermission('warehouse:tally-pending:shipment-create')
   createWarehouseConsolidationShipment(
     @Req() request: { user: Principal },
     @Param('id') id: string

@@ -102,6 +102,11 @@ import type {
   ShipmentOperationalUpdateInput,
   CustomerServiceTransferBatchInput,
   ShipmentPaymentUpdateInput,
+  ShipmentAgentChangeRequestInput,
+  ShipmentAgentChangeRequestRejectInput,
+  ShipmentAgentReplacementInput,
+  ShipmentAgentReplacementPreview,
+  ShipmentAgentReplacementAuditSummary,
   ShipmentRerouteInput,
   ShipmentRouteInput,
   ShipmentRestoreInput,
@@ -220,8 +225,11 @@ export class DataController {
         routeUnitPrice: shipment.routeUnitPrice,
         routeOtherFee: shipment.routeOtherFee,
         routeCostTotal: shipment.routeCostTotal,
-        routeCurrency: shipment.routeCurrency
+        routeCurrency: shipment.routeCurrency,
+        routeCostSummary: shipment.routeCostSummary
       } : {}),
+      agentReplacementCount: shipment.agentReplacementCount,
+      agentChangeRequest: shipment.agentChangeRequest,
       warehouseOutboundRemark: shipment.warehouseOutboundRemark,
       shippingMarkRequired: shipment.shippingMarkRequired,
       hasProblemTicket: shipment.hasProblemTicket,
@@ -258,6 +266,12 @@ export class DataController {
       routedAt: projected.routedAt,
       routeReturnedAt: projected.routeReturnedAt,
       routeAgentChannelName: projected.routeAgentChannelName,
+      routeChargeWeightKg: projected.routeChargeWeightKg,
+      routeUnitPrice: projected.routeUnitPrice,
+      routeOtherFee: projected.routeOtherFee,
+      routeCostTotal: projected.routeCostTotal,
+      routeCurrency: projected.routeCurrency,
+      routeCostSummary: projected.routeCostSummary,
       hasProblemTicket: false,
       site: projected.site
     };
@@ -268,11 +282,12 @@ export class DataController {
     costScope?: string
   ): Promise<Array<Partial<Shipment> & Pick<Shipment, 'id' | 'status' | 'createdAt'>>> {
     const role = principal.role;
-    const [canViewDashboard, canViewPending, canViewRouted, canReroute, canViewReport] = await Promise.all([
+    const [canViewDashboard, canViewPending, canViewRouted, canReroute, canReplaceAgent, canViewReport] = await Promise.all([
       this.repository.hasPermission(role, 'market:dashboard:view'),
       this.repository.hasPermission(role, 'market:pending-routing:view'),
       this.repository.hasPermission(role, 'market:routed:view'),
       this.repository.hasPermission(role, 'market:routed:reroute'),
+      this.repository.hasPermission(role, 'market:routed:replace-agent'),
       this.repository.hasPermission(role, 'market:routing-report:view')
     ]);
     const rows = await this.repository.getShipments(principal, {
@@ -294,7 +309,11 @@ export class DataController {
       );
       const detailVisible = (canViewPending && shipment.status === 'WAITING_SORT')
         || (canViewRouted && shipment.status === 'WAITING_DISPATCH')
-        || (canViewRouted && canReroute && ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status));
+        || (canViewRouted && canReroute && ['OUTBOUNDED', 'WAITING_DEPARTURE'].includes(shipment.status))
+        || (canViewRouted
+          && canReplaceAgent
+          && shipment.status === 'OUTBOUNDED'
+          && shipment.agentChangeRequest?.status === 'PENDING');
       if (detailVisible) return [this.projectMarketShipment(shipment, true)];
       if (reportVisible) return [this.projectMarketRoutingReportShipment(shipment)];
       const dashboardVisible = canViewDashboard && (
@@ -957,6 +976,45 @@ export class DataController {
     return this.projectMarketShipment(await this.repository.rerouteShipment(request.user, id, body));
   }
 
+  @Get('shipments/:id/agent-replacement-preview')
+  @RequirePermission('market:routed:replace-agent')
+  async shipmentAgentReplacementPreview(
+    @Req() request: { user: Principal },
+    @Param('id') id: string
+  ): Promise<ShipmentAgentReplacementPreview> {
+    return this.repository.getShipmentAgentReplacementPreview(request.user, id);
+  }
+
+  @Post('shipments/:id/agent-replacement')
+  @RequirePermission('market:routed:replace-agent')
+  async replaceShipmentAgent(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: ShipmentAgentReplacementInput
+  ) {
+    return this.projectMarketShipment(await this.repository.replaceShipmentAgent(request.user, id, body));
+  }
+
+  @Post('shipments/:id/agent-change-request/:requestId/reject')
+  @RequirePermission('market:routed:replace-agent')
+  async rejectShipmentAgentChangeRequest(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Param('requestId') requestId: string,
+    @Body() body: ShipmentAgentChangeRequestRejectInput
+  ) {
+    return this.repository.rejectShipmentAgentChangeRequest(request.user, id, requestId, body);
+  }
+
+  @Get('shipments/:id/agent-replacements')
+  @RequirePermission('market:routed:view')
+  async shipmentAgentReplacementHistory(
+    @Req() request: { user: Principal },
+    @Param('id') id: string
+  ): Promise<ShipmentAgentReplacementAuditSummary[]> {
+    return this.repository.getShipmentAgentReplacementHistory(request.user, id);
+  }
+
   @Get('operations/line-shipments/:id/internal-flow-log')
   @RequireAuth()
   async shipmentInternalFlowLog(@Req() request: { user: Principal }, @Param('id') id: string) {
@@ -1012,29 +1070,13 @@ export class DataController {
                 : body.trackingWebsite !== undefined
                   ? ['customer-service:waiting-departure:update-tracking-website', 'customer-service:departed:update-tracking-website', 'customer-service:arrived-port:update-tracking-website']
                   : ['customer-service:waiting-departure:update-info', 'customer-service:departed:update-info', 'customer-service:arrived-port:update-info', 'customer-service:delivering:update-info'];
-    const canUseMarketRoutedEdit = (body.status === undefined || body.status === 'WAITING_DISPATCH')
-      && await this.repository.hasPermission(request.user.role, 'market:routed:edit');
-    const currentStatus = await this.repository.getShipmentStatusForPermission(request.user, id, {
-      marketSiteScope: canUseMarketRoutedEdit
-    });
-    const isRoutedSameStatus = currentStatus === 'WAITING_DISPATCH'
-      && (body.status === undefined || body.status === 'WAITING_DISPATCH');
+    const currentStatus = await this.repository.getShipmentStatusForPermission(request.user, id);
     if (currentStatus === 'WAITING_SORT'
       && (body.status === 'WAITING_DISPATCH' || body.channelId !== undefined)) {
       throw new BadRequestException('待排货的状态和渠道请通过市场排货入口修改');
     }
-    if (isRoutedSameStatus) {
-      await this.ensurePermission(request.user, 'market:routed:edit');
-      const allowedFields = new Set(['latestTracking', 'etaAt', 'etdAt']);
-      const disallowedFields = Object.keys(body).filter((field) => !allowedFields.has(field));
-      if (disallowedFields.length > 0) {
-        throw new BadRequestException(`市场已排货修改不允许变更：${disallowedFields.join('、')}`);
-      }
-    } else {
-      await this.ensureAnyPermission(request.user, baseActionPermissions);
-    }
-    const updated = await this.repository.updateShipmentOperational(request.user, id, body, { marketSiteScope: isRoutedSameStatus });
-    return isRoutedSameStatus ? this.projectMarketShipment(updated) : updated;
+    await this.ensureAnyPermission(request.user, baseActionPermissions);
+    return this.repository.updateShipmentOperational(request.user, id, body);
   }
 
   @Patch('operations/line-shipments/:id/operational')
@@ -1073,6 +1115,16 @@ export class DataController {
     if (body.rows.some((row) => Boolean(row.subOrderNo?.trim()))) await this.ensurePermission(request.user, 'customer-service:transfer:sub-order-write');
     if (body.rows.some((row) => Boolean(row.pushToSales))) await this.ensurePermission(request.user, 'customer-service:transfer:push-sales');
     return this.repository.fillCustomerServiceTransferShipments(request.user, body);
+  }
+
+  @Post('customer-service/transfer-shipments/:id/agent-change-request')
+  @RequirePermission('customer-service:transfer:request-agent-change')
+  async createShipmentAgentChangeRequest(
+    @Req() request: { user: Principal },
+    @Param('id') id: string,
+    @Body() body: ShipmentAgentChangeRequestInput
+  ) {
+    return this.repository.createShipmentAgentChangeRequest(request.user, id, body);
   }
 
   @Post('shipments/:id/payment')

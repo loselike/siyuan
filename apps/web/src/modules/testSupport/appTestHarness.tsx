@@ -2938,6 +2938,14 @@ async function mockFetch(input: RequestInfo | URL, init?: RequestInit) {
     return jsonResponse(employeeShipments.filter((shipment) => shipment.status === 'OUTBOUNDED' && approved(shipment.id, 'business') && approved(shipment.id, 'agent')));
   }
 
+  if (new URL(url, 'http://test.local').pathname === '/api/customer-service/shipments') {
+    return jsonResponse(employeeShipments);
+  }
+
+  if (new URL(url, 'http://test.local').pathname === '/api/warehouse/dispatch-shipments') {
+    return jsonResponse(employeeShipments.filter((shipment) => ['WAITING_DISPATCH', 'OUTBOUNDED'].includes(shipment.status)));
+  }
+
   // The market workbench uses dedicated read endpoints. Keep the fixture
   // contract aligned with production so the page receives an array of rows,
   // rather than falling through to the generic `{}` response.

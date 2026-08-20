@@ -21,6 +21,10 @@ export const APP_DATE_FORMAT = 'YYYY-MM-DD';
 export const APP_DATE_TIME_FORMAT = 'YYYY-MM-DD HH:mm';
 export const APP_DATE_TIME_VALUE_FORMAT = 'YYYY-MM-DDTHH:mm';
 
+export function renderAuthorizedAction(allowed: boolean, action: ReactNode) {
+  return allowed ? action : null;
+}
+
 export type NoticeBarType = 'success' | 'info' | 'warning' | 'error';
 
 export interface NoticeBarPresentation {

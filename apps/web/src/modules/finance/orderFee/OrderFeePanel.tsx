@@ -37,6 +37,7 @@ import {
   canViewOrderFeePayables,
   hasOrderFeeUiPermission
 } from './orderFeePermissions';
+import { calculateOrderFeeAmount } from './orderFeeAmount';
 
 const { Text } = Typography;
 
@@ -461,21 +462,20 @@ export function OrderFeePanel({
     const billingQuantity = editor.type === 'BUSINESS_COST'
       ? Number(values.billingQuantity ?? values.chargeWeightKg ?? 0)
       : undefined;
-    const quantity = editor.type === 'BUSINESS_COST' ? billingQuantity : values.chargeWeightKg;
-    const shouldCalculateAmount = (editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE')
-      && quantity !== undefined
-      && values.unitPrice !== undefined;
-    const amount = shouldCalculateAmount
-      ? Number((Number(quantity) * Number(values.unitPrice)).toFixed(2))
-      : Number(values.amount ?? 0);
-    const input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput = {
+    const amount = calculateOrderFeeAmount({
       type: editor.type,
+      billingUnit,
+      billingQuantity,
+      chargeWeightKg: values.chargeWeightKg,
+      unitPrice: values.unitPrice
+    }) ?? Number(values.amount ?? 0);
+    const input: ShipmentFinanceItemCreateInput | ShipmentFinanceItemUpdateInput = {
       name: values.name?.trim(),
       amount,
       currency: values.currency ?? 'RMB',
       settlementMethod: values.settlementMethod,
       paymentNo: editor.type === 'RECEIVABLE' ? values.paymentNo : undefined,
-      reconciliationStatus: editor.row?.reconciliationStatus ?? 'PENDING',
+      reconciliationStatus: editor.row ? undefined : 'PENDING',
       agentId: editor.type === 'RECEIVABLE' ? undefined : values.agentId,
       billingUnit,
       billingQuantity: editor.type === 'BUSINESS_COST' ? billingQuantity : undefined,
@@ -485,7 +485,7 @@ export function OrderFeePanel({
       unitPrice: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE' ? values.unitPrice : undefined,
       amountOverridden: editor.type === 'BUSINESS_COST' || editor.type === 'PAYABLE'
         ? calculateAmountOverride({ amount, type: editor.type, billingUnit, billingQuantity, chargeWeightKg: values.chargeWeightKg, unitPrice: values.unitPrice })
-        : false,
+        : undefined,
       remark: values.remark
     };
     setSubmitting(true);
@@ -509,10 +509,24 @@ export function OrderFeePanel({
       await reload();
       if (editedId) setInspectedRowId(editedId);
       message.success(editor.row ? '费用已修改' : '费用已新增');
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '费用保存失败，请稍后重试');
     } finally {
       setSubmitting(false);
     }
   }, [apiClient, closeEditor, editor, editorForm, reload, shipment.id, usesPendingReviewBusinessCostOnly]);
+
+  const syncEditorAmount = useCallback((changedValues: Record<string, unknown>, values: ShipmentFinanceItemUpdateInput) => {
+    if (!editor || editor.type === 'RECEIVABLE') return;
+    if (!('billingQuantity' in changedValues) && !('chargeWeightKg' in changedValues) && !('unitPrice' in changedValues)) return;
+    editorForm.setFieldValue('amount', calculateOrderFeeAmount({
+      type: editor.type,
+      billingUnit: values.billingUnit,
+      billingQuantity: values.billingQuantity,
+      chargeWeightKg: values.chargeWeightKg,
+      unitPrice: values.unitPrice
+    }));
+  }, [editor, editorForm]);
 
   const runRows = useCallback(async (type: OrderFeeTableType, action: 'delete' | 'lock' | 'unlock' | 'recalc', rows: OrderFeeRow[]) => {
     const targets = rows.filter((row) => row.sourceType === 'MANUAL');
@@ -708,7 +722,7 @@ export function OrderFeePanel({
               <Text type="secondary">在右侧完成编辑，保存后左侧列表自动更新。</Text>
             </div>
           </div>
-          <Form form={editorForm} layout="vertical" className="order-fee-side-form">
+          <Form form={editorForm} layout="vertical" className="order-fee-side-form" onValuesChange={syncEditorAmount}>
             <Form.Item name="name" label="费用名称" rules={[{ required: true, message: '请选择费用名称' }]}>
               <Select showSearch options={feeNameOptions} placeholder="选择费用名称" />
             </Form.Item>
@@ -765,8 +779,8 @@ export function OrderFeePanel({
                 </Form.Item>
               </>
             ) : null}
-            <Form.Item name="amount" label="总金额" rules={[{ required: true, message: '请输入金额' }]}>
-              <InputNumber min={0} precision={2} />
+            <Form.Item name="amount" label={editor.type === 'RECEIVABLE' ? '总金额' : '总金额（自动核算）'} rules={[{ required: true, message: '请输入金额' }]}>
+              <InputNumber min={0} precision={2} readOnly={editor.type !== 'RECEIVABLE'} />
             </Form.Item>
             <Form.Item name="remark" label="备注" className="order-fee-side-form-wide">
               <Input.TextArea rows={3} />

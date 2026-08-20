@@ -624,7 +624,7 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
           <Form.Item label="付款备注" name="paidRemark"><Input.TextArea rows={2} /></Form.Item>
           {canUploadVoucher ? (
             <Form.Item label="付款水单截图" name="waterReceiptImage">
-              <VoucherImageInput apiClient={apiClient} disabled={!canUploadVoucher} onFileChange={setConfirmReceiptFile} />
+              <VoucherImageInput apiClient={apiClient} onFileChange={setConfirmReceiptFile} />
             </Form.Item>
           ) : null}
         </Form>
@@ -641,7 +641,7 @@ export function PaidPaymentPage({ apiClient, permissions, role, renderShipmentOr
             <Form.Item label="付款水单截图" name="waterReceiptImage">
               <VoucherImageInput
                 apiClient={apiClient}
-                disabled={!canUploadVoucher || !supplementRow}
+                disabled={!supplementRow}
                 uploadFile={(file) => apiClient.uploadVoucherImage({ file, context: 'PAID_PAYMENT_RECEIPT', paymentApplicationId: supplementRow?.id }) as Promise<VoucherImageValue>}
               />
             </Form.Item>
