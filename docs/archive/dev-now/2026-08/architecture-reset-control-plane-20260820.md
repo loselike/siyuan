@@ -1,6 +1,6 @@
 # 架构控制面快速落地
 
-- 状态：`in_progress`
+- 状态：`complete`
 - 会话标题：`Sunny｜架构控制面快速落地｜01`
 - 续接自：无
 - 上下文状态：`green`
@@ -36,24 +36,27 @@
 - FinanceCatalog、ShipmentOverview、SystemDirectory 已从根模块直接装配迁入独立 Nest Module；FinanceCatalog/SystemDirectory 使用真实 Prisma Adapter，ShipmentOverview 明确保留过渡 facade。
 - 架构门禁已阻止第二个 `PermissionKey` 定义，并冻结裸 `@Body()` 债务不再高于 230；模块依赖方向纳入 boundary 检查。
 - 第一切片复评：安全/数据正确性候选中的输入校验会改变既有非法请求行为，按用户要求暂不猜测；高频前端数据流风险更高；因此继续选择后端只改装配的模块化切片，并在三个代表模块通过后停止扩大本轮范围。
+- 已通过 PR #13 合并到 `main@f9630b68fc74094f7d90c97fdb4855efbebdc308`，并以 GitHub Actions 生成的不可变 API/Web digest 发布到 47；未执行数据库迁移、seed 或生产业务数据写入。
 
 ## 验证
 
 - FinanceCatalog 允许/拒绝、响应、写入和审计 E2E 1/1；Prisma/InMemory repository contract 4/4。
 - ShipmentOverview service/policy/E2E 10/10；SystemDirectory 允许/拒绝 E2E 与 Prisma repository 4/4。
 - Shared/API/Web 全量 typecheck 通过；architecture 448 路由契约与 governance/security 通过；`git diff --check` 通过。
+- 47 发布 `git-f9630b68fc74_web-f7984a62526a_api-4e07c0b4cb80` 成功；provenance 为 `GIT_SOURCE_BUILD/ORIGIN_BRANCH/GHCR_DIGESTS`，Web/API image 与 API release ID 全部匹配。
+- 47 公网 `/api/health` 返回 200；`/api/finance/catalog`、`/api/system/sites`、`/api/shipments` 无凭证均返回既有 401；发布锁 free、recovery clear。
 
 ## 交接
 
 - 阻塞：无
-- 剩余风险：47 当前 provenance mismatch，发布前必须重新读取线上发布状态并取得全局锁；若仍不可信，不能覆盖并发远端变化。ShipmentOverview 的窄 port 仍通过巨型 PrismaRepository facade 实现，属于已记录过渡债务。
+- 剩余风险：ShipmentOverview 的窄 port 仍通过巨型 PrismaRepository facade 实现，属于已记录过渡债务；裸 `@Body()` 债务本轮只冻结在 230，没有在无法证明非法输入行为等价时批量改写。
 - 用户验收目标：系统业务流、界面与功能完全不变，但新增开发不能继续制造重复权限类型、裸写接口和根模块直接装配债务。
 - 效果证据：FinanceCatalog、ShipmentOverview、SystemDirectory 共 19 条定向断言通过，原 URL、角色允许/拒绝、响应、审计与只读投影保持。
 - 安全证据：三端类型检查、448 路由架构门、PermissionKey 唯一来源门、230 裸 Body 上限与安全契约通过。
-- 未验证项：47 线上尚未发布验证。
-- 发布状态：`未发布`
+- 未验证项：未进行 UI 人工视觉验收；本轮未改 UI。未使用生产写样本复测财务目录写入，写入与审计等价由本地 E2E 保护。
+- 发布状态：`已发布 47，git-f9630b68fc74_web-f7984a62526a_api-4e07c0b4cb80`
 - 稳定附件：无
-- 准确下一步：完成最终差异审查与提交，然后按发布锁和 provenance 规则尝试精确发布 API/Web/shared 候选。
+- 准确下一步：按阶段重评选择下一个只读代表切片；优先补 characterization 后再把 ShipmentOverview 从巨型 PrismaRepository facade 迁到真实窄 Adapter，继续保持业务、界面和功能不变。
 - 建议新标题：`Sunny｜架构控制面快速落地｜02`
 - 建议新状态文件：`docs/dev-now/architecture-reset-control-plane-20260820-02.md`
 - 接手要求：状态改为 `handed_off` 后，新的唯一写会话才能继续。
