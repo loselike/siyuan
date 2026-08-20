@@ -10,6 +10,7 @@ import {
 } from './user-table-preference.service.js';
 
 const principal: Principal = { id: 'user-1', username: 'staff', role: 'UG_BUSINESS' };
+const otherPrincipal: Principal = { id: 'user-2', username: 'other', role: 'UG_BUSINESS' };
 const validKey = 'table.columns.0123456789abcdef';
 
 describe('user table preference runtime input boundary', () => {
@@ -57,5 +58,20 @@ describe('user table preference runtime input boundary', () => {
     expect(() => controller.upsert({ user: principal }, validKey, {})).toThrowError(
       new BadRequestException('表格偏好内容必须是对象')
     );
+  });
+
+  it('keeps list, delete, and per-user isolation unchanged', async () => {
+    const service = new InMemoryUserTablePreferenceService();
+    await service.upsert(principal, validKey, { columns: ['code'] });
+    await service.upsert(otherPrincipal, validKey, { columns: ['status'] });
+
+    await expect(service.list(principal)).resolves.toEqual([
+      expect.objectContaining({ key: validKey, value: { columns: ['code'] } })
+    ]);
+    await expect(service.remove(principal, validKey)).resolves.toEqual({ ok: true });
+    await expect(service.list(principal)).resolves.toEqual([]);
+    await expect(service.list(otherPrincipal)).resolves.toEqual([
+      expect.objectContaining({ key: validKey, value: { columns: ['status'] } })
+    ]);
   });
 });

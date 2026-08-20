@@ -280,6 +280,47 @@
       ]
     },
     {
+      "name": "user-table-preference-module-slice",
+      "status": "reference",
+      "files": [
+        {
+          "path": "apps/api/src/modules/app.module.ts",
+          "requiredImports": [
+            "./user-table-preference.module.js"
+          ],
+          "forbiddenImports": [
+            "./user-table-preference.controller.js",
+            "./user-table-preference.service.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/user-table-preference.module.ts",
+          "requiredImports": [
+            "./data-access.module.js",
+            "./user-table-preference.controller.js",
+            "./user-table-preference.service.js"
+          ],
+          "forbiddenImports": [
+            "./prisma.repository.js"
+          ],
+          "forbiddenText": [
+            "useExisting: PrismaRepository"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/user-table-preference.controller.ts",
+          "requiredImports": [
+            "./user-table-preference.service.js"
+          ],
+          "forbiddenImports": [
+            "./prisma.repository.js",
+            "./prisma.service.js",
+            "./app.module.js"
+          ]
+        }
+      ]
+    },
+    {
       "name": "shipment-overview-query-slice",
       "status": "transitional-query-boundary",
       "files": [

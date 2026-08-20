@@ -14,6 +14,12 @@ const skipLint = process.argv.includes('--skip-lint');
 const compact = process.argv.includes('--compact');
 const selfTest = process.argv.includes('--self-test');
 const nakedBodyDecoratorsMax = 230;
+const rootAppModuleDebtMax = Object.freeze({
+  lines: 414,
+  directControllers: 40,
+  directProviders: 66,
+  legacyPrismaRepositoryBindings: 24
+});
 
 const hotspotFiles = [
   'apps/api/src/modules/prisma.repository.ts',
@@ -61,6 +67,70 @@ function countNakedBodyDecorators() {
 
 function checkRuntimeInputDebt(failures) {
   assertMaximum('naked @Body() decorators', countNakedBodyDecorators(), nakedBodyDecoratorsMax, failures);
+}
+
+function rootAppModuleAssemblySnapshot() {
+  const appModulePath = path.join(repositoryRoot, 'apps/api/src/modules/app.module.ts');
+  const source = readFileSync(appModulePath, 'utf8');
+  const sourceFile = ts.createSourceFile(appModulePath, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const appModule = sourceFile.statements.find(
+    (statement) => ts.isClassDeclaration(statement) && statement.name?.text === 'AppModule'
+  );
+  if (!appModule || !ts.isClassDeclaration(appModule) || !ts.canHaveDecorators(appModule)) {
+    throw new Error('AppModule class metadata is missing');
+  }
+  const moduleDecorator = (ts.getDecorators(appModule) ?? []).find(
+    (decorator) => ts.isCallExpression(decorator.expression)
+      && decorator.expression.expression.getText(sourceFile) === 'Module'
+  );
+  if (!moduleDecorator || !ts.isCallExpression(moduleDecorator.expression)) {
+    throw new Error('AppModule @Module decorator is missing');
+  }
+  const metadata = moduleDecorator.expression.arguments[0];
+  if (!metadata || !ts.isObjectLiteralExpression(metadata)) {
+    throw new Error('AppModule @Module metadata must be an object literal');
+  }
+  const arrayEntryCount = (propertyName) => {
+    const property = metadata.properties.find(
+      (entry) => ts.isPropertyAssignment(entry) && entry.name.getText(sourceFile) === propertyName
+    );
+    if (!property || !ts.isPropertyAssignment(property) || !ts.isArrayLiteralExpression(property.initializer)) {
+      throw new Error(`AppModule ${propertyName} must be an array literal`);
+    }
+    return property.initializer.elements.length;
+  };
+  return {
+    lines: source.trimEnd().split(/\r?\n/).length,
+    directControllers: arrayEntryCount('controllers'),
+    directProviders: arrayEntryCount('providers'),
+    legacyPrismaRepositoryBindings: source.match(/useExisting:\s*PrismaRepository/g)?.length ?? 0
+  };
+}
+
+function validateRootAppModuleDebt(actual, failures) {
+  assertMaximum('AppModule lines', actual.lines, rootAppModuleDebtMax.lines, failures);
+  assertMaximum(
+    'AppModule direct controllers',
+    actual.directControllers,
+    rootAppModuleDebtMax.directControllers,
+    failures
+  );
+  assertMaximum(
+    'AppModule direct providers',
+    actual.directProviders,
+    rootAppModuleDebtMax.directProviders,
+    failures
+  );
+  assertMaximum(
+    'AppModule legacy PrismaRepository bindings',
+    actual.legacyPrismaRepositoryBindings,
+    rootAppModuleDebtMax.legacyPrismaRepositoryBindings,
+    failures
+  );
+}
+
+function checkRootAppModuleDebt(failures) {
+  validateRootAppModuleDebt(rootAppModuleAssemblySnapshot(), failures);
 }
 
 function permissionKeyDefinitionFiles(files) {
@@ -490,6 +560,12 @@ function runSelfTest() {
     },
     failures
   );
+  validateRootAppModuleDebt({
+    lines: rootAppModuleDebtMax.lines + 1,
+    directControllers: rootAppModuleDebtMax.directControllers + 1,
+    directProviders: rootAppModuleDebtMax.directProviders + 1,
+    legacyPrismaRepositoryBindings: rootAppModuleDebtMax.legacyPrismaRepositoryBindings + 1
+  }, failures);
   const requiredFragments = [
     'route auth contract changed',
     'new route requires auth contract review',
@@ -500,7 +576,11 @@ function runSelfTest() {
     'new duplicate HTTP route group',
     'hotspot lines apps/api/src/modules/prisma.repository.ts increased',
     'api lint debt increased',
-    'web lint debt increased'
+    'web lint debt increased',
+    'AppModule lines increased',
+    'AppModule direct controllers increased',
+    'AppModule direct providers increased',
+    'AppModule legacy PrismaRepository bindings increased'
   ];
   for (const fragment of requiredFragments) {
     if (!failures.some((failure) => failure.includes(fragment))) throw new Error(`architecture self-test missed failure class: ${fragment}`);
@@ -557,6 +637,7 @@ checkModuleBoundaries(failures);
 checkRoutePolicyEvidence(failures);
 checkPermissionKeyContract(failures);
 checkRuntimeInputDebt(failures);
+checkRootAppModuleDebt(failures);
 
 if (failures.length) {
   for (const failure of failures) console.error(`[architecture:check] ${failure}`);
