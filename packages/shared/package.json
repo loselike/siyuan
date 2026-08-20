@@ -37,6 +37,10 @@
     "./permissions": {
       "types": "./dist/permissions.d.ts",
       "import": "./dist/permissions.js"
+    },
+    "./shipment": {
+      "types": "./dist/shipment.d.ts",
+      "import": "./dist/shipment.js"
     }
   },
   "scripts": {
