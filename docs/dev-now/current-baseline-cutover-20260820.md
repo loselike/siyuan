@@ -32,6 +32,7 @@
 - 独立高风险复审发现 4 个 P1：内部流通日志可从审计摘要泄露代理身份；制品清单可替换为任意 GHCR digest 且未绑定签名来源；两阶段未完成理货迁移存在角色保存竞争窗口；应付新增与更换代理未共用运单锁。当前候选已分别增加全局字段屏蔽裁剪及 masked-role E2E、固定三个 Sunny GHCR 仓库并用 GitHub artifact attestation 绑定 repo/workflow/main/commit、47 只读迁移竞争审计脚本、应付 create/update/audit 的运单行锁和事务内重读。应付锁顺序 3/3、RBAC 15/15、API typecheck、481 路由治理与 Mojia 3/3 通过；本地 E2E 仍仅因 `listen EPERM` 未启动。
 - 增量高风险复审在补齐 `system.role.create/update/delete` 与两类权限保存/复制审计后未发现 P0/P1，确认可提交并推送 PR CI；迁移审计解析器的允许路径与 5 类危险写入逐项拒绝共 6/6、发布制品策略测试、shell 语法和 CI YAML 解析均通过。复审同时明确：生产只读迁移审计未返回 PASS 前仍不可 cutover。
 - 当前受控环境同时拒绝到 GitHub 和 47 的外部网络：47 只读审计返回 SSH `Operation not permitted`，因此尚未取得“迁移窗口无角色保存”的生产证据；本地最新 commit 也尚未推送。不得绕过这两个 fail-closed 门或启动 cutover。
+- P1 修复已提交为 `f343a4c6`。推送经已配置代理立即失败（`127.0.0.1:7897` 无监听），显式禁用该 Git proxy 后又因 `github.com` DNS 无法解析而失败；修正版 47 审计同样被当前 sandbox 在 SSH 建连前拒绝。当前没有触碰生产源码、镜像、容器或数据库。
 - 下一门槛：网络恢复后先运行 `npm run audit:47:pending-tally`，要求两个迁移完成、危险窗口内角色创建/修改/删除/权限保存/复制均为 0、9 个 canonical 权限齐全、legacy 0、动作缺 view 0；再完成 P1 复审、推送 PR #5、等待 CI（含三个旧 E2E 和新锁测试）全绿并生成带签名的三个 digest。只有 `images.env` 的 `GIT_COMMIT` 与最终 `main` 完全一致，且锁内重新捕获的 v3 manifest 未漂移，才允许 current-baseline cutover。
 
 ## 成熟参考与取舍
