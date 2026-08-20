@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
+import { AuthSessionService } from './auth/auth-session.service.js';
 import type { Principal } from './rbac.js';
 import { SystemDirectoryController } from './system/directory/system-directory.controller.js';
 import {
@@ -24,6 +25,15 @@ describe('System directory API', () => {
     providers: [
       SystemDirectoryService,
       PrismaSystemDirectoryRepository,
+      {
+        provide: AuthSessionService,
+        useValue: {
+          hydrateCurrentSession: vi.fn(async (principal: Principal) => (
+            principal.role === 'ADMIN' ? ['system:accounts:read', 'system:sites:read'] : []
+          )),
+          recordPermissionDenied: vi.fn(async () => undefined)
+        }
+      },
       { provide: SYSTEM_DIRECTORY_REPOSITORY, useExisting: PrismaSystemDirectoryRepository }
     ],
     prisma: {

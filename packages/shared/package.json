@@ -33,6 +33,10 @@
     "./runtime-schema": {
       "types": "./dist/runtime-schema.d.ts",
       "import": "./dist/runtime-schema.js"
+    },
+    "./permissions": {
+      "types": "./dist/permissions.d.ts",
+      "import": "./dist/permissions.js"
     }
   },
   "scripts": {
