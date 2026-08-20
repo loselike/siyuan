@@ -39,6 +39,8 @@ const requiredGovernanceFiles = [
   'scripts/install-47-runtime-resilience.sh',
   'scripts/runtime-resilience.test.sh',
   'scripts/release-build-policy.test.sh',
+  'scripts/audit-47-pending-tally-permissions.sh',
+  'scripts/pending-tally-permission-audit.test.sh',
   'deploy/47/siyuan-compose-recovery.sh',
   'deploy/47/siyuan-compose-recovery.service',
   'scripts/lib/release-source-policy.sh',
@@ -90,7 +92,7 @@ for (const [path, content, requiredText] of [
   if (!content.includes(requiredText)) failures.push(`${path} is missing acceptance rule: ${requiredText}`);
 }
 
-for (const requiredScript of ['context:check', 'context:archive', 'validation:select', 'release:47:baseline', 'release:47:manifest', 'release:47:resilience', 'audit:47:provenance', 'deploy:47:whitelist', 'architecture:check']) {
+for (const requiredScript of ['context:check', 'context:archive', 'validation:select', 'release:47:baseline', 'release:47:manifest', 'release:47:resilience', 'audit:47:provenance', 'audit:47:pending-tally', 'deploy:47:whitelist', 'architecture:check']) {
   if (!packageJson.scripts?.[requiredScript]) failures.push(`package.json is missing governance command: ${requiredScript}`);
 }
 if (!packageJson.scripts?.['governance:check']?.includes('npm run context:check')) {
@@ -162,6 +164,32 @@ for (const immutableImageGate of [
   'IMAGE_MANIFEST_SHA256='
 ]) {
   if (!deployScript.includes(immutableImageGate)) failures.push(`immutable image promotion is missing gate: ${immutableImageGate}`);
+}
+for (const signedImageGate of [
+  "^ghcr\\.io/loselike/siyuan-api@sha256:",
+  "^ghcr\\.io/loselike/siyuan-db-migrate@sha256:",
+  "^ghcr\\.io/loselike/siyuan-web@sha256:",
+  'gh attestation verify "oci://$verified_image"',
+  '--repo loselike/siyuan',
+  '--signer-workflow loselike/siyuan/.github/workflows/ci.yml',
+  '--source-digest "$GIT_COMMIT"',
+  '--source-ref refs/heads/main',
+  '--deny-self-hosted-runners'
+]) {
+  if (!deployScript.includes(signedImageGate)) failures.push(`immutable image promotion is missing signed provenance gate: ${signedImageGate}`);
+}
+const ciWorkflow = readFileSync('.github/workflows/ci.yml', 'utf8');
+for (const attestationGate of [
+  'uses: actions/attest@v4',
+  'attestations: write',
+  'id-token: write',
+  'subject-name: ghcr.io/${{ github.repository_owner }}/siyuan-api',
+  'subject-name: ghcr.io/${{ github.repository_owner }}/siyuan-db-migrate',
+  'subject-name: ghcr.io/${{ github.repository_owner }}/siyuan-web',
+  'push-to-registry: true',
+  'create-storage-record: false'
+]) {
+  if (!ciWorkflow.includes(attestationGate)) failures.push(`CI image build is missing attestation gate: ${attestationGate}`);
 }
 for (const productionBuildIsolationGate of [
   'Standard 47 runtime releases require CI-built immutable images via --image-manifest.',

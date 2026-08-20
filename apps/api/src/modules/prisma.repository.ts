@@ -2114,9 +2114,18 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     } else if (!canViewOperationsLog) {
       throw new ForbiddenException('没有内部流通日志查看权限');
     }
-    const canViewAgentChannel = shipment.status === 'WAITING_SORT'
-      ? await this.hasPermission(principal.role, 'master-data:agent-channels:read')
-      : await this.hasPermission(principal.role, 'master-data:agent-channels:read');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    const [hasAgentRead, hasAgentChannelRead] = await Promise.all([
+      this.hasPermission(principal.role, 'master-data:agents:read'),
+      this.hasPermission(principal.role, 'master-data:agent-channels:read')
+    ]);
+    const canViewAgentName = hasAgentRead
+      && !fieldMasks['agent-short-name']
+      && !fieldMasks['agent-company-name']
+      && !fieldMasks['agent-data'];
+    const canViewAgentChannel = hasAgentChannelRead
+      && !fieldMasks['agent-channel']
+      && !fieldMasks['agent-data'];
     const canViewBusinessCosts = await this.canViewOrderEntryBusinessCosts(principal);
     const [warehousePackages, financeItems, problemTickets] = await Promise.all([
       (this.prisma as any).warehousePackage.findMany({
@@ -2149,8 +2158,12 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     const users = actorIds.length ? await this.prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, username: true, name: true, nickname: true } }) : [];
     const actorById = new Map(users.map((user) => [user.id, user.name || user.nickname || user.username]));
     const items = [{ key: 'created', stage: '业务录单', happenedAt: shipment.createdAt.toISOString(), operator: shipment.entryBy ?? '系统', summary: '运单已创建' }, ...rows.map((row) => {
-      const summaryAfter = row.action === 'shipment.route' && !canViewAgentChannel && row.after && typeof row.after === 'object'
-        ? { ...(row.after as Record<string, unknown>), agentChannelName: undefined }
+      const summaryAfter = row.action === 'shipment.route' && row.after && typeof row.after === 'object'
+        ? {
+            ...(row.after as Record<string, unknown>),
+            ...(!canViewAgentName ? { agentName: undefined } : {}),
+            ...(!canViewAgentChannel ? { agentChannelName: undefined } : {})
+          }
         : row.after;
       return { key: row.id, stage: internalFlowStage(row.action, row.after), happenedAt: row.createdAt.toISOString(), operator: actorById.get(row.actorId) ?? '系统', summary: internalFlowSummary(row.action, summaryAfter) };
     })].filter((item) => item.stage);
@@ -14184,40 +14197,45 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.ensurePayablePermission(principal, 'finance:payable:manage');
     const canViewSensitivePayable = await this.hasPermission(principal.role, 'finance:payable:view-sensitive');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:payable:view-profit');
-    const shipment = await this.findShipmentForFinanceAudit(principal, input);
+    const resolvedShipment = await this.findShipmentForFinanceAudit(principal, input);
     const unitPrice = this.normalizePayableUnitPrice(input.unitPrice);
     const amount = this.calculatePayableAmount(input.chargeWeightKg, unitPrice, input.amount ?? 0);
     if (!Number.isFinite(Number(amount)) || Number(amount) < 0) {
       throw new BadRequestException('应付金额必须大于等于 0');
     }
-    const financeAgent = await this.resolveFinanceAgent(this.prisma, input, shipment.agent);
-    const settlementMethod = input.settlementMethod ?? shipment.settlementMethod ?? undefined;
-    const item = await (this.prisma as any).shipmentFinanceItem.create({
-      data: {
-        shipmentId: shipment.id,
-        type: 'PAYABLE',
-        name: input.name,
-        amount,
-        currency: input.currency ?? 'RMB',
-        settlementMethod,
-        paymentNo: input.paymentNo,
-        reconciliationStatus: 'PENDING',
-        agentId: financeAgent?.id,
-        agentName: financeAgent?.name,
-        chargeWeightKg: input.chargeWeightKg,
-        unitPrice,
-        amountOverridden: input.chargeWeightKg === undefined || input.unitPrice === undefined,
-        remark: input.remark,
-        createdBy: principal.username
-      },
-      include: this.payableAuditInclude()
+    const item = await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, resolvedShipment.id);
+      const shipment = await this.findShipmentForFinanceAudit(principal, { shipmentId: resolvedShipment.id }, tx);
+      const financeAgent = await this.resolveFinanceAgent(tx, input, shipment.agent);
+      const settlementMethod = input.settlementMethod ?? shipment.settlementMethod ?? undefined;
+      const created = await tx.shipmentFinanceItem.create({
+        data: {
+          shipmentId: shipment.id,
+          type: 'PAYABLE',
+          name: input.name,
+          amount,
+          currency: input.currency ?? 'RMB',
+          settlementMethod,
+          paymentNo: input.paymentNo,
+          reconciliationStatus: 'PENDING',
+          agentId: financeAgent?.id,
+          agentName: financeAgent?.name,
+          chargeWeightKg: input.chargeWeightKg,
+          unitPrice,
+          amountOverridden: input.chargeWeightKg === undefined || input.unitPrice === undefined,
+          remark: input.remark,
+          createdBy: principal.username
+        },
+        include: this.payableAuditInclude()
+      });
+      await tx.auditLog.create({
+        data: { actorId: principal.id, action: 'finance.payable.create', target: created.id, before: undefined, after: created }
+      });
+      if (isEarlyPaymentSettlementMethod(settlementMethod)) {
+        await this.upsertPayablePaymentApplication(created, tx);
+      }
+      return created;
     });
-    await this.prisma.auditLog.create({
-      data: { actorId: principal.id, action: 'finance.payable.create', target: item.id, before: undefined, after: item }
-    });
-    if (isEarlyPaymentSettlementMethod(settlementMethod)) {
-      await this.upsertPayablePaymentApplication(item);
-    }
     return this.toPayableAuditSummary(item, { canViewSensitivePayable, canViewProfit });
   }
 
@@ -14231,41 +14249,46 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     await this.ensurePayablePermission(principal, 'finance:payable:manage');
     const canViewSensitivePayable = await this.hasPermission(principal.role, 'finance:payable:view-sensitive');
     const canViewProfit = await this.hasPermission(principal.role, 'finance:payable:view-profit');
-    const current = await this.findPayableFinanceItemById(id);
-    this.ensurePayableAuditEditable(current);
-    const nextChargeWeight = input.chargeWeightKg ?? (current.chargeWeightKg === null ? undefined : Number(current.chargeWeightKg));
-    const nextUnitPrice = this.normalizePayableUnitPrice(input.unitPrice ?? (current.unitPrice === null ? undefined : Number(current.unitPrice)));
-    const amount = this.calculatePayableAmount(nextChargeWeight, nextUnitPrice, input.amount ?? Number(current.amount));
-    if (!Number.isFinite(Number(amount)) || Number(amount) < 0) {
-      throw new BadRequestException('应付金额必须大于等于 0');
-    }
-    const financeAgent = input.agentId !== undefined || input.agentName !== undefined
-      ? await this.resolveFinanceAgent(this.prisma, input)
-      : { id: current.agentId ?? current.shipment?.agent?.id, name: current.agentName ?? current.shipment?.agent?.name };
-    const settlementMethod = input.settlementMethod ?? current.settlementMethod ?? current.shipment?.settlementMethod ?? undefined;
-    const updated = await (this.prisma as any).shipmentFinanceItem.update({
-      where: { id },
-      data: {
-        name: input.name ?? current.name,
-        amount,
-        currency: input.currency ?? current.currency,
-        settlementMethod,
-        paymentNo: input.paymentNo ?? current.paymentNo,
-        agentId: financeAgent?.id,
-        agentName: financeAgent?.name,
-        chargeWeightKg: input.chargeWeightKg ?? current.chargeWeightKg,
-        unitPrice: nextUnitPrice,
-        amountOverridden: nextChargeWeight === undefined || nextUnitPrice === undefined,
-        remark: input.remark ?? current.remark
-      },
-      include: this.payableAuditInclude()
+    const snapshot = await this.findPayableFinanceItemById(id);
+    const updated = await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, snapshot.shipmentId);
+      const current = await this.findPayableFinanceItemById(id, tx);
+      this.ensurePayableAuditEditable(current);
+      const nextChargeWeight = input.chargeWeightKg ?? (current.chargeWeightKg === null ? undefined : Number(current.chargeWeightKg));
+      const nextUnitPrice = this.normalizePayableUnitPrice(input.unitPrice ?? (current.unitPrice === null ? undefined : Number(current.unitPrice)));
+      const amount = this.calculatePayableAmount(nextChargeWeight, nextUnitPrice, input.amount ?? Number(current.amount));
+      if (!Number.isFinite(Number(amount)) || Number(amount) < 0) {
+        throw new BadRequestException('应付金额必须大于等于 0');
+      }
+      const financeAgent = input.agentId !== undefined || input.agentName !== undefined
+        ? await this.resolveFinanceAgent(tx, input)
+        : { id: current.agentId ?? current.shipment?.agent?.id, name: current.agentName ?? current.shipment?.agent?.name };
+      const settlementMethod = input.settlementMethod ?? current.settlementMethod ?? current.shipment?.settlementMethod ?? undefined;
+      const saved = await tx.shipmentFinanceItem.update({
+        where: { id },
+        data: {
+          name: input.name ?? current.name,
+          amount,
+          currency: input.currency ?? current.currency,
+          settlementMethod,
+          paymentNo: input.paymentNo ?? current.paymentNo,
+          agentId: financeAgent?.id,
+          agentName: financeAgent?.name,
+          chargeWeightKg: input.chargeWeightKg ?? current.chargeWeightKg,
+          unitPrice: nextUnitPrice,
+          amountOverridden: nextChargeWeight === undefined || nextUnitPrice === undefined,
+          remark: input.remark ?? current.remark
+        },
+        include: this.payableAuditInclude()
+      });
+      await tx.auditLog.create({
+        data: { actorId: principal.id, action: 'finance.payable.update', target: id, before: current, after: saved }
+      });
+      if (isEarlyPaymentSettlementMethod(settlementMethod)) {
+        await this.upsertPayablePaymentApplication(saved, tx);
+      }
+      return saved;
     });
-    await this.prisma.auditLog.create({
-      data: { actorId: principal.id, action: 'finance.payable.update', target: id, before: current, after: updated }
-    });
-    if (isEarlyPaymentSettlementMethod(settlementMethod)) {
-      await this.upsertPayablePaymentApplication(updated);
-    }
     return this.toPayableAuditSummary(updated, { canViewSensitivePayable, canViewProfit });
   }
 
@@ -14288,24 +14311,29 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       if (!approvedRequest) throw new NotFoundException('跨越挂账审核记录不存在');
       return this.toKuayuePayableAuditSummary(approvedRequest, { canViewSensitivePayable, canViewProfit });
     }
-    const current = await this.findPayableFinanceItemById(id);
-    await this.ensurePayableReadyForFinance(current);
-    if (current.voided) {
-      throw new BadRequestException('已作废应付费用不能审核');
-    }
-    if (current.reconciliationStatus !== 'PENDING') {
-      throw new BadRequestException('只有待审核应付费用可以审核');
-    }
-    const reviewedAt = new Date();
-    const profitSnapshot = await this.financeProfitReviewSnapshotData(current.amount, current.currency, reviewedAt);
-    const updated = await (this.prisma as any).shipmentFinanceItem.update({
-      where: { id },
-      data: { locked: true, reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt, ...profitSnapshot },
-      include: this.payableAuditInclude()
-    });
-    const application = await this.upsertPayablePaymentApplication(updated);
-    await this.prisma.auditLog.create({
-      data: { actorId: principal.id, action: 'finance.payable.audit', target: id, before: current, after: toAuditJson(this.toPayableReviewAuditSnapshot(updated, principal, current.reconciliationStatus, 'CONFIRMED', 'audit', application)) }
+    const snapshot = await this.findPayableFinanceItemById(id);
+    const { current, updated, application } = await this.prisma.$transaction(async (tx: any) => {
+      await this.lockShipmentRow(tx, snapshot.shipmentId);
+      const locked = await this.findPayableFinanceItemById(id, tx);
+      await this.ensurePayableReadyForFinance(locked, tx);
+      if (locked.voided) {
+        throw new BadRequestException('已作废应付费用不能审核');
+      }
+      if (locked.reconciliationStatus !== 'PENDING') {
+        throw new BadRequestException('只有待审核应付费用可以审核');
+      }
+      const reviewedAt = new Date();
+      const profitSnapshot = await this.financeProfitReviewSnapshotData(locked.amount, locked.currency, reviewedAt, tx);
+      const saved = await tx.shipmentFinanceItem.update({
+        where: { id },
+        data: { locked: true, reconciliationStatus: 'CONFIRMED', reviewedBy: principal.username, reviewedAt, ...profitSnapshot },
+        include: this.payableAuditInclude()
+      });
+      const pendingApplication = await this.upsertPayablePaymentApplication(saved, tx);
+      await tx.auditLog.create({
+        data: { actorId: principal.id, action: 'finance.payable.audit', target: id, before: locked, after: toAuditJson(this.toPayableReviewAuditSnapshot(saved, principal, locked.reconciliationStatus, 'CONFIRMED', 'audit', pendingApplication)) }
+      });
+      return { current: locked, updated: saved, application: pendingApplication };
     });
     void this.lineage?.recordEvent('finance.payables.audit', {
       actorUsername: principal.username,
@@ -24841,9 +24869,9 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     customerOrderNo?: string;
     transferNo?: string;
     customerCode?: string;
-  }) {
+  }, database: any = this.prisma) {
     const systemOrderNo = input.outboundOrderNo?.trim() || input.systemOrderNo?.trim();
-    const shipment = await this.prisma.shipment.findFirst({
+    const shipment = await database.shipment.findFirst({
       where: {
         deletedAt: null,
         ...(input.shipmentId ? { id: input.shipmentId } : {}),
@@ -25219,11 +25247,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return this.isPayableHangAccount(item) || await this.isPayableWorkflowReady(item);
   }
 
-  private async ensurePayableReadyForFinance(item: any) {
+  private async ensurePayableReadyForFinance(item: any, database: any = this.prisma) {
     const missing: string[] = [];
     const shipment = item.shipment;
-    if (!await this.isCustomerServiceDataApproved(item.shipmentId, 'business', shipment?.outboundAt)) missing.push('业务数据确认');
-    if (!await this.isCustomerServiceDataApproved(item.shipmentId, 'agent', shipment?.outboundAt)) missing.push('代理数据确认');
+    if (!await this.isCustomerServiceDataApproved(item.shipmentId, 'business', shipment?.outboundAt, database)) missing.push('业务数据确认');
+    if (!await this.isCustomerServiceDataApproved(item.shipmentId, 'agent', shipment?.outboundAt, database)) missing.push('代理数据确认');
     if (!shipment?.transferNo?.trim()) missing.push('转单号');
     if (missing.length) throw new BadRequestException(`应付审核前请先完成${missing.join('、')}`);
   }
@@ -25237,8 +25265,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     if (!await this.canExposePendingPaymentToFinance(row)) throw new BadRequestException('普通订单需完成数据确认并填写转单号后才能申请付款');
   }
 
-  private async upsertPayablePaymentApplication(item: any) {
-    return (this.prisma as any).payablePaymentApplication.upsert({
+  private async upsertPayablePaymentApplication(item: any, database: any = this.prisma) {
+    return database.payablePaymentApplication.upsert({
       where: { payableFinanceItemId: item.id },
       create: {
         payableFinanceItemId: item.id,
@@ -25276,8 +25304,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
     return item;
   }
 
-  private async findPayableFinanceItemById(id: string) {
-    const item = await (this.prisma as any).shipmentFinanceItem.findFirst({
+  private async findPayableFinanceItemById(id: string, database: any = this.prisma) {
+    const item = await database.shipmentFinanceItem.findFirst({
       where: { id, type: 'PAYABLE', miscFeeRecordId: null },
       include: this.payableAuditInclude()
     });

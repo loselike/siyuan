@@ -133,7 +133,7 @@ npm run deploy:47 -- \
   --image-manifest /absolute/path/to/images.env
 ```
 
-制品提升会先校验清单 commit 与当前 HEAD、三个 `ghcr.io/...@sha256:<64 hex>` 引用和清单 SHA；47 只拉取 digest、以 `--no-build` 重启受影响服务，并把 digest 清单证据写入不可变 receipt。没有有效清单、GHCR 拉取失败或 migration 指纹变化都会在成功状态写入前失败关闭；migration 仍必须走独立 reviewed whitelist 流程，不会被制品提升隐式执行。
+制品提升会先校验清单 commit 与当前 HEAD、三个固定 Sunny 仓库的 `ghcr.io/loselike/siyuan-{api,db-migrate,web}@sha256:<64 hex>` 引用和清单 SHA。随后使用 `gh attestation verify` 验证每个 OCI digest 均由 `loselike/siyuan/.github/workflows/ci.yml` 在 GitHub 托管 runner 上生成，source digest 等于当前 commit 且 source ref 为 `refs/heads/main`；任一仓库名、签名、workflow、commit 或分支不匹配都会在接触 47 前失败关闭。47 只拉取已验证 digest、以 `--no-build` 重启受影响服务，并把 digest 清单证据写入不可变 receipt。没有有效清单、GHCR 拉取失败或 migration 指纹变化都会在成功状态写入前失败关闭；migration 仍必须走独立 reviewed whitelist 流程，不会被制品提升隐式执行。
 
 白名单运行时发布只保留为 break-glass：必须显式传 `--emergency-server-build --reason <8-200 字符原因>`，发布状态记录原因 SHA 和 `EMERGENCY_SERVER_BUILD` provenance。常规功能不得使用；`scope none` 的治理脚本同步不构建，也不能携带该开关。
 

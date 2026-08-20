@@ -350,13 +350,30 @@ if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
   PREBUILT_API_IMAGE="$(manifest_value API_IMAGE)"
   PREBUILT_MIGRATE_IMAGE="$(manifest_value MIGRATE_IMAGE)"
   PREBUILT_WEB_IMAGE="$(manifest_value WEB_IMAGE)"
-  image_ref_pattern='^ghcr\.io/[a-z0-9._-]+/[a-z0-9._-]+@sha256:[0-9a-f]{64}$'
-  if [[ ! "$PREBUILT_API_IMAGE" =~ $image_ref_pattern \
-    || ! "$PREBUILT_MIGRATE_IMAGE" =~ $image_ref_pattern \
-    || ! "$PREBUILT_WEB_IMAGE" =~ $image_ref_pattern ]]; then
+  api_image_ref_pattern='^ghcr\.io/loselike/siyuan-api@sha256:[0-9a-f]{64}$'
+  migrate_image_ref_pattern='^ghcr\.io/loselike/siyuan-db-migrate@sha256:[0-9a-f]{64}$'
+  web_image_ref_pattern='^ghcr\.io/loselike/siyuan-web@sha256:[0-9a-f]{64}$'
+  if [[ ! "$PREBUILT_API_IMAGE" =~ $api_image_ref_pattern \
+    || ! "$PREBUILT_MIGRATE_IMAGE" =~ $migrate_image_ref_pattern \
+    || ! "$PREBUILT_WEB_IMAGE" =~ $web_image_ref_pattern ]]; then
     echo "Immutable image manifest contains an invalid digest reference." >&2
     exit 88
   fi
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "Immutable image promotion requires GitHub CLI for signed provenance verification." >&2
+    exit 88
+  fi
+  for verified_image in "$PREBUILT_API_IMAGE" "$PREBUILT_MIGRATE_IMAGE" "$PREBUILT_WEB_IMAGE"; do
+    gh attestation verify "oci://$verified_image" \
+      --repo loselike/siyuan \
+      --signer-workflow loselike/siyuan/.github/workflows/ci.yml \
+      --source-digest "$GIT_COMMIT" \
+      --source-ref refs/heads/main \
+      --deny-self-hosted-runners >/dev/null || {
+        echo "Immutable image provenance verification failed: $verified_image" >&2
+        exit 88
+      }
+  done
   IMAGE_MANIFEST_SHA256="$(sha256_file "$IMAGE_MANIFEST_FILE")"
 fi
 if [[ "$MODE" == "apply" && "$LOCK_STATUS" == false && "$PRINT_FINGERPRINTS" == false && ( ! "$GIT_COMMIT" =~ ^[0-9a-f]{40}$ || -z "$GIT_BRANCH" ) ]]; then

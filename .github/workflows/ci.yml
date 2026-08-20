@@ -46,7 +46,9 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     permissions:
+      attestations: write
       contents: read
+      id-token: write
       packages: write
     steps:
       - uses: actions/checkout@v6
@@ -73,6 +75,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=siyuan-api-runner
           provenance: true
           sbom: true
+      - name: Attest API image provenance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/siyuan-api
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
       - name: Write API image metadata
         if: always()
         env:
@@ -101,7 +111,9 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     permissions:
+      attestations: write
       contents: read
+      id-token: write
       packages: write
     steps:
       - uses: actions/checkout@v6
@@ -126,6 +138,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=siyuan-api-migrate
           provenance: true
           sbom: true
+      - name: Attest migration image provenance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/siyuan-db-migrate
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
 
   image-web:
     needs: affected
@@ -134,7 +154,9 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     permissions:
+      attestations: write
       contents: read
+      id-token: write
       packages: write
     steps:
       - uses: actions/checkout@v6
@@ -162,6 +184,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=siyuan-web
           provenance: true
           sbom: true
+      - name: Attest Web image provenance
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest@v4
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/siyuan-web
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
 
   release-manifest:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

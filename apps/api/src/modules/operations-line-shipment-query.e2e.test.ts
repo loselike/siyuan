@@ -103,6 +103,44 @@ describe('Operations line shipment query API', () => {
       });
 
     await request(app.getHttpServer())
+      .post('/api/shipments/s-seed-1/route')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        channelId: 'ch-dhl-hk',
+        agentId: 'a-yuhuan',
+        agentChannelName: '宇环 DHL',
+        chargeWeightKg: 18,
+        unitPrice: 8,
+        currency: 'RMB'
+      })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .put('/api/system/roles/WAREHOUSE/permissions')
+      .set('Authorization', app.auth(adminToken))
+      .send({
+        permissions: [
+          'operations:line-shipment:internal-log-view',
+          'master-data:agents:read',
+          'master-data:agent-channels:read',
+          'system:global-mask:agent-short-name',
+          'system:global-mask:agent-company-name',
+          'system:global-mask:agent-channel'
+        ]
+      })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get('/api/operations/line-shipments/s-seed-1/internal-flow-log')
+      .set('Authorization', app.auth(warehouseToken))
+      .expect(200)
+      .expect((response) => {
+        const routeItem = response.body.items.find((item: { stage: string }) => item.stage === '市场排货');
+        expect(routeItem).toEqual(expect.objectContaining({ summary: '已完成市场排货' }));
+        expect(JSON.stringify(response.body)).not.toContain('宇环');
+      });
+
+    await request(app.getHttpServer())
       .get('/api/operations/line-shipments')
       .expect(401)
       .expect((response) => {

@@ -1906,9 +1906,18 @@ export class InMemoryRepository {
     } else if (!canViewOperationsLog) {
       throw new ForbiddenException('没有内部流通日志查看权限');
     }
-    const canViewAgentChannel = shipment.status === 'WAITING_SORT'
-      ? await this.hasPermission(principal.role, 'master-data:agent-channels:read')
-      : await this.hasPermission(principal.role, 'master-data:agent-channels:read');
+    const fieldMasks = principal.globalFieldMasks ?? await this.getGlobalFieldMaskState(principal);
+    const [hasAgentRead, hasAgentChannelRead] = await Promise.all([
+      this.hasPermission(principal.role, 'master-data:agents:read'),
+      this.hasPermission(principal.role, 'master-data:agent-channels:read')
+    ]);
+    const canViewAgentName = hasAgentRead
+      && !fieldMasks['agent-short-name']
+      && !fieldMasks['agent-company-name']
+      && !fieldMasks['agent-data'];
+    const canViewAgentChannel = hasAgentChannelRead
+      && !fieldMasks['agent-channel']
+      && !fieldMasks['agent-data'];
     const canViewBusinessCosts = this.canViewOrderEntryBusinessCosts(principal);
     const packageIds = new Set([
       ...(shipment.draftWarehousePackageIds ?? []),
@@ -1925,8 +1934,12 @@ export class InMemoryRepository {
       .filter((row) => traceTargetIds.has(row.target))
       .filter((row) => canViewBusinessCosts || !businessCostItemIds.has(row.target));
     const items = [{ key: 'created', stage: '业务录单', happenedAt: shipment.createdAt, operator: shipment.entryBy ?? '系统', summary: '运单已创建' }, ...actions.map((row) => {
-      const summaryAfter = row.action === 'shipment.route' && !canViewAgentChannel && row.after && typeof row.after === 'object'
-        ? { ...(row.after as Record<string, unknown>), agentChannelName: undefined }
+      const summaryAfter = row.action === 'shipment.route' && row.after && typeof row.after === 'object'
+        ? {
+            ...(row.after as Record<string, unknown>),
+            ...(!canViewAgentName ? { agentName: undefined } : {}),
+            ...(!canViewAgentChannel ? { agentChannelName: undefined } : {})
+          }
         : row.after;
       return { key: row.id, stage: internalFlowStage(row.action, row.after), happenedAt: row.createdAt, operator: row.actorUsername, summary: internalFlowSummary(row.action, summaryAfter) };
     })]

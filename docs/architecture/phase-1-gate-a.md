@@ -73,6 +73,8 @@ Mojia 检查使用 AST 验证设备 token validator 是 handler 第一条有效�
 
 结构指标也按同一生产快照精确冻结：DataController 214，根 ApiClient 方法/直接请求 387/361，Shared 根导入 149，`as any` 954，`process.env` 38，Prisma/InMemory Repository 方法 756/640，孤儿候选 10，重复路由 34。热点上限只取本次快照的实际行数；全局 CSS 已从 13,222 降至 13,194，仍按更低值收紧。API/Web lint 错误按现状 107/155 冻结。退出条件是后续领域拆分或修复使任一指标下降时，在独立治理变更中同步收紧，禁止再次用整表重采样恢复额度。
 
+独立安全复审随后发现内部流通日志字段裁剪和应付代理更换并发问题。修复后 `as any` 从 954 收紧为 949；Prisma/InMemory 热点因增加后端字段裁剪、运单行锁、事务内重读及审计测试支撑分别调整为 34,175/21,010 行。481 条路由、方法数、重复路由和 lint 上限没有变化。该热点例外仅覆盖两个 P1 修复，替代保护为屏蔽角色 E2E、三条应付 create/update/audit 锁顺序测试及独立高风险复审；后续拆分只能收紧，不能据此继续增长。
+
 这次例外的替代保护包括：完整 route owner/auth/permission 精确比较、无 metadata 路由显式白名单、Mojia 首语句 token 自检、Repository 二次授权、相关允许/拒绝 E2E，以及 PR CI 在镜像 job 前串联 `governance:check`。任何一项失败均不得生成生产 digest。
 
 ## 3. 增量债务预算

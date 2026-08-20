@@ -11,6 +11,14 @@ grep -Fq 'Standard 47 runtime releases require CI-built immutable images via --i
 grep -Fq 'REMOTE_SERVER_BUILD_POLICY_VIOLATION' "$STANDARD"
 ! grep -Fq 'siyuan_47_run_bounded_build docker compose build' "$STANDARD"
 grep -Fq 'bootstrap/source-bundle is only compatible with the reviewed current-baseline cutover' "$STANDARD"
+grep -Fq "^ghcr\\.io/loselike/siyuan-api@sha256:" "$STANDARD"
+grep -Fq "^ghcr\\.io/loselike/siyuan-db-migrate@sha256:" "$STANDARD"
+grep -Fq "^ghcr\\.io/loselike/siyuan-web@sha256:" "$STANDARD"
+grep -Fq 'gh attestation verify "oci://$verified_image"' "$STANDARD"
+grep -Fq -- '--signer-workflow loselike/siyuan/.github/workflows/ci.yml' "$STANDARD"
+grep -Fq -- '--source-digest "$GIT_COMMIT"' "$STANDARD"
+grep -Fq -- '--source-ref refs/heads/main' "$STANDARD"
+grep -Fq -- '--deny-self-hosted-runners' "$STANDARD"
 
 set +e
 bash "$WHITELIST" \

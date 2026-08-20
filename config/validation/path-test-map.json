@@ -16,6 +16,13 @@
       "safety": ["npm run typecheck", "npm run governance:check"]
     },
     {
+      "id": "payable-agent-serialization",
+      "patterns": ["apps/api/src/modules/prisma.repository.payable-agent-lock.test.ts"],
+      "risk": "finance-and-concurrency-boundary",
+      "effect": ["npm run test:api:safe -- --run src/modules/prisma.repository.payable-agent-lock.test.ts"],
+      "safety": ["npm run typecheck -w @siyuan/api", "npm run governance:check"]
+    },
+    {
       "id": "finance-catalog-web",
       "patterns": [
         "apps/web/src/modules/finance/FinanceCatalogPage.tsx",
