@@ -1,6 +1,6 @@
 # 47 当前运行基线归并与 digest cutover
 
-- 状态：`in_progress`
+- 状态：`published_47`
 - 会话 slug：`current-baseline-cutover-20260820`
 - 分支：`codex/release/current-baseline-20260820`
 - worktree：`/Users/j1ng/Tools/sunny/.worktrees/current-baseline-cutover-work`
@@ -43,6 +43,15 @@
 - 当前 reconciliation 在 `1e1e59ea` 上合入上述生产功能的精确 hunks；Prisma/InMemory 的内部流转字段裁剪和 PAYABLE 运单锁仍保留。生产迁移文件 SHA-256 保持 `70e1486b75de03046b5196fd7c230ae7b5568c94ef18fad8c0f6dba9ac006b82`；新增只读 v3 基线 `docs/release-manifests/47/20260820-072840-whitelist-e8e96a8b463a84403672003b`，source tree SHA `6ae14c83ecb8b0a99c6cb007f3a52c22d571b90b52b011c944c42337dfb25e04`。
 - 本地定向验证：API 28/28、Web 3/3、Mojia 3/3、API/Web typecheck、482 路由治理、context governance 和 `git diff --check` 通过。架构基线只新增 `DELETE /finance/payment-water-receipts/:id` 的 canonical permission 路由及该生产能力对应的既有巨型文件计数，不吸收 lint 新债务。
 - 当前仍未切换生产。下一门槛：独立高风险复审无 P0/P1 -> reconciliation PR/CI 全绿并生成新的三个 attested digest -> 锁内再次核对最新 v3 manifest 与生产权限审计 -> current-baseline cutover -> 线上 provenance、容器、health、日志和权限允许/拒绝验证。
+
+## 2026-08-20 最终发布与验收
+
+- reconciliation 候选以 `e213c945` 推送并通过 PR #6 合入 `main`，最终 merge commit 为 `1881c1e4fe3bdad7c2f219f81c294d82148e2944`；main CI run `32345704937` 的 affected、API/Web/migration 镜像和 release manifest 全绿，三个镜像均为 GitHub attestation 绑定的 Sunny GHCR immutable digest。
+- 47 已完成 current-baseline cutover，release 为 `git-1881c1e4fe3b_web-32159ac4e7bd_api-e1213f6a56dc`。生产仅拉取 CI digest 并重建 API/Web；已应用迁移无需重跑，服务器未执行 Docker build。
+- 发布后 provenance 为 `traceable/ok`，Git commit、Git bundle、Web/API image digest 和 API release ID 全部匹配；release lock 为 free、recovery 为 clear，Web/API/Postgres/Redis 四个服务运行，服务器本机首页与 `/api/health` 均为 200，最近 5 分钟 Web/API 关键错误为 0。
+- 未完成理货生产审计通过：2 个迁移完成、危险窗口 5 类角色权限图写入均为 0、9 个 canonical permission 齐全、legacy permission 为 0、动作缺少 view 的异常授权为 0。
+- 47 使用启用角色和容器内 2 分钟 JWT、固定不存在资源完成无业务数据写入的权限探针：查看、查看任务、修改、开始理货、处理理货、退回重理、排序规则、查看理货问题件，以及付款凭证删除，允许路径均进入业务层并返回 200/404，拒绝路径均为 403。
+- 独立高风险复审未发现 P0/P1。保留 P2：付款凭证数据库删除成功后若物理文件清理失败，目前不会阻断事务但缺少持久重试/孤儿文件告警；新环境首次执行未完成理货迁移时，业务表并发写可能触发行数保护而安全回滚，应在无流量窗口执行。
 
 ## 成熟参考与取舍
 
