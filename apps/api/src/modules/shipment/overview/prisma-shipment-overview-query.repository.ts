@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import {
   shipmentAgentChangeRequestActions,
   summarizeShipmentAgentChangeRequest,
@@ -7,7 +7,6 @@ import {
   type Shipment,
   type ShipmentStatus
 } from '@siyuan/shared/shipment';
-import { hasEffectivePricingCapability } from '@siyuan/shared/permissions';
 import { PrismaService } from '../../prisma.service.js';
 import {
   globalFieldMaskKeys,
@@ -20,7 +19,7 @@ import {
   type Principal,
   type RoleKey
 } from '../../rbac.js';
-import { resolveStoredRolePermissions } from '../../prisma-role-permissions.js';
+import { PrismaRolePermissionReader } from '../../prisma-role-permissions.js';
 import {
   buildShipmentStageDwell,
   buildShipmentStageDwellHistory,
@@ -64,30 +63,21 @@ const warehouseNavigationViewPermissions: PermissionKey[] = [
 @Injectable()
 export class PrismaShipmentOverviewQueryRepository implements ShipmentOverviewQueryRepository {
   private readonly logger = new Logger(PrismaShipmentOverviewQueryRepository.name);
-  private readonly salesScopedRoleCache = new Set<RoleKey>();
+  private readonly rolePermissionReader: PrismaRolePermissionReader;
 
-  constructor(@Inject(PrismaService) private readonly prisma: PrismaService) {}
+  constructor(
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Optional() @Inject(PrismaRolePermissionReader) rolePermissionReader?: PrismaRolePermissionReader
+  ) {
+    this.rolePermissionReader = rolePermissionReader ?? new PrismaRolePermissionReader(prisma);
+  }
 
   async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
-    const row = await this.prisma.role.findUnique({
-      where: { name: role },
-      include: { permissions: true }
-    });
-    if (!isAdministratorRole(role) && row && row.enabled !== true) return false;
-    const permissions = resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey));
-    return permissions.includes(permission) || hasEffectivePricingCapability(permissions, permission);
+    return this.rolePermissionReader.hasPermission(role, permission);
   }
 
   async getPermissionsForRole(role: RoleKey): Promise<PermissionKey[]> {
-    const row = await this.prisma.role.findUnique({
-      where: { name: role },
-      include: { permissions: true }
-    });
-    if (!isAdministratorRole(role) && row && row.enabled !== true) return [];
-    const permissions = resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey));
-    if (permissions.includes('data-scope:sales-own')) this.salesScopedRoleCache.add(role);
-    else this.salesScopedRoleCache.delete(role);
-    return permissions;
+    return this.rolePermissionReader.getPermissionsForRole(role);
   }
 
   async getShipments(principal: Principal, options: ShipmentOverviewQueryOptions = {}): Promise<Shipment[]> {
@@ -402,7 +392,7 @@ export class PrismaShipmentOverviewQueryRepository implements ShipmentOverviewQu
   private operatorCustomerScope(principal: Principal) {
     if (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role)) return undefined;
     const isSalesScoped = principal.dataScope === 'SALES_OWN'
-      || this.salesScopedRoleCache.has(principal.role)
+      || this.rolePermissionReader.isSalesScoped(principal.role)
       || isSalesScopedRole(principal.role);
     if (principal.role === 'UG_MARKET' || !isSalesScoped) return undefined;
     return Array.from(new Set([principal.username, principal.name, principal.nickname].filter((value): value is string => Boolean(value))));

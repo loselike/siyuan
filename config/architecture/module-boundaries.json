@@ -356,6 +356,11 @@
             "./legacy-shipment-overview-query.repository.js",
             "./shipment-overview-query.controller.js",
             "./shipment-overview-query.service.js"
+          ],
+          "forbiddenText": [
+            "this.prisma.role.findUnique",
+            "salesScopedRoleCache",
+            "resolveStoredRolePermissions("
           ]
         },
         {
@@ -440,6 +445,38 @@
             "../../prisma.service.js",
             "./shipment-overview-query.controller.js",
             "./shipment-overview-query.service.js"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "role-permission-reader-control-plane",
+      "status": "single-prisma-reader",
+      "files": [
+        {
+          "path": "apps/api/src/modules/prisma-role-permissions.ts",
+          "requiredImports": [
+            "@siyuan/shared/permissions",
+            "./prisma.service.js"
+          ],
+          "forbiddenImports": [
+            "./prisma.repository.js",
+            "./shipment/overview/prisma-shipment-overview-query.repository.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/data-access.module.ts",
+          "requiredImports": [
+            "./prisma-role-permissions.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/prisma.repository.ts",
+          "requiredImports": [
+            "./prisma-role-permissions.js"
+          ],
+          "forbiddenText": [
+            "salesScopedRoleCache"
           ]
         }
       ]

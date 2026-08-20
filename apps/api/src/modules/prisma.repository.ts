@@ -420,7 +420,6 @@ import {
   type WarehouseTallyTaskUpdateInput,
   type WarehouseTodayQuery,
   type WarehouseTodayResponse,
-  hasEffectivePricingCapability,
   type WaterReceiptCreateInput,
   type ReceivableWaterReceiptCandidatesResponse,
   type WaterReceiptExportRequest,
@@ -537,7 +536,11 @@ import {
 } from './shipment-stage-dwell.js';
 import { mapCarrierTask, toCarrierAdapterCode } from './tracking/tracking.shared.js';
 import { PrismaShipmentOverviewQueryRepository } from './shipment/overview/prisma-shipment-overview-query.repository.js';
-import { resolveStoredRolePermissions, rolePermissionConfigurationMarker } from './prisma-role-permissions.js';
+import {
+  PrismaRolePermissionReader,
+  resolveStoredRolePermissions,
+  rolePermissionConfigurationMarker
+} from './prisma-role-permissions.js';
 import {
   agentInvoiceTemplateOptions,
   agentInvoiceTemplates,
@@ -902,7 +905,6 @@ function buildAuditDashboard(rows: AuditLogSummary[], now = new Date()): NonNull
 
 @Injectable()
 export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
-  private readonly salesScopedRoleCache = new Set<RoleKey>();
   private priceBookRefreshWorkerRunning = false;
   private priceBookRefreshWorkerTimer?: ReturnType<typeof setTimeout>;
   private mojiaRequestSampleRetentionTimer?: ReturnType<typeof setInterval>;
@@ -914,15 +916,19 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   private auditDashboardInFlight?: Promise<AuditLogRecord[]>;
   private readonly masterDataReadRepository: PrismaMasterDataReadRepository;
   private readonly shipmentOverviewQueryRepository: PrismaShipmentOverviewQueryRepository;
+  private readonly rolePermissionReader: PrismaRolePermissionReader;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Optional() @Inject(LineageWatcher) private readonly lineage?: LineageWatcher,
     @Optional() @Inject(PrismaMasterDataReadRepository) masterDataReadRepository?: PrismaMasterDataReadRepository,
-    @Optional() @Inject(PrismaShipmentOverviewQueryRepository) shipmentOverviewQueryRepository?: PrismaShipmentOverviewQueryRepository
+    @Optional() @Inject(PrismaShipmentOverviewQueryRepository) shipmentOverviewQueryRepository?: PrismaShipmentOverviewQueryRepository,
+    @Optional() @Inject(PrismaRolePermissionReader) rolePermissionReader?: PrismaRolePermissionReader
   ) {
+    this.rolePermissionReader = rolePermissionReader ?? new PrismaRolePermissionReader(prisma);
     this.masterDataReadRepository = masterDataReadRepository ?? new PrismaMasterDataReadRepository(prisma);
-    this.shipmentOverviewQueryRepository = shipmentOverviewQueryRepository ?? new PrismaShipmentOverviewQueryRepository(prisma);
+    this.shipmentOverviewQueryRepository = shipmentOverviewQueryRepository
+      ?? new PrismaShipmentOverviewQueryRepository(prisma, this.rolePermissionReader);
   }
 
   private async lockCompanyChannelForMutation(tx: Prisma.TransactionClient, channelId: string): Promise<void> {
@@ -3372,29 +3378,11 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async hasPermission(role: RoleKey, permission: PermissionKey): Promise<boolean> {
-    const row = await this.prisma.role.findUnique({
-      where: { name: role },
-      include: { permissions: true }
-    });
-    if (!isAdministratorRole(role) && row && row.enabled !== true) {
-      return false;
-    }
-    const permissions = resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey));
-    return permissions.includes(permission) || hasEffectivePricingCapability(permissions, permission);
+    return this.rolePermissionReader.hasPermission(role, permission);
   }
 
   async getPermissionsForRole(role: RoleKey): Promise<PermissionKey[]> {
-    const row = await this.prisma.role.findUnique({
-      where: { name: role },
-      include: { permissions: true }
-    });
-    if (!isAdministratorRole(role) && row && row.enabled !== true) {
-      return [];
-    }
-    const permissions = resolveStoredRolePermissions(role, row?.permissions.map((item) => item.code as PermissionKey));
-    if (permissions.includes('data-scope:sales-own')) this.salesScopedRoleCache.add(role);
-    else this.salesScopedRoleCache.delete(role);
-    return permissions;
+    return this.rolePermissionReader.getPermissionsForRole(role);
   }
 
   async getRolePermissionMatrix(): Promise<{ availablePermissions: typeof permissionDefinitions; roles: RolePermissionRow[] }> {
@@ -3991,7 +3979,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           }))
         }
       });
-      if (permissions.includes('data-scope:sales-own')) this.salesScopedRoleCache.add(role.name);
+      this.rolePermissionReader.rememberPermissions(role.name, permissions);
       return after;
     });
   }
@@ -4093,7 +4081,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           before: JSON.parse(JSON.stringify(beforeRow))
         }
       });
-      this.salesScopedRoleCache.delete(role);
+      this.rolePermissionReader.forgetRole(role);
       return beforeRow;
     });
   }
@@ -4152,8 +4140,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
       include: { permissions: true }
     });
     const after = resolveStoredRolePermissions(role, updated.permissions.map((item) => item.code as PermissionKey));
-    if (after.includes('data-scope:sales-own')) this.salesScopedRoleCache.add(role);
-    else this.salesScopedRoleCache.delete(role);
+    this.rolePermissionReader.rememberPermissions(role, after);
     await transaction.auditLog.create({
       data: {
         actorId: principal.id,
@@ -4249,8 +4236,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
           }))
         }
       });
-      if (after.includes('data-scope:sales-own')) this.salesScopedRoleCache.add(role);
-      else this.salesScopedRoleCache.delete(role);
+      this.rolePermissionReader.rememberPermissions(role, after);
       return mapRoleRow(updated);
     });
   }
@@ -26034,7 +26020,7 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   private operatorCustomerScope(principal: Principal) {
     if (principal.shipmentAllView && !isBusinessAgentOwnOnlyRole(principal.role)) return undefined;
     const isSalesScoped = principal.dataScope === 'SALES_OWN'
-      || this.salesScopedRoleCache.has(principal.role)
+      || this.rolePermissionReader.isSalesScoped(principal.role)
       || isSalesScopedRole(principal.role);
     if (principal.role === 'UG_MARKET' || !isSalesScoped) {
       return undefined;

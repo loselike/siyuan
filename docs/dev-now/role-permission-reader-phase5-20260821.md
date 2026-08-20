@@ -7,8 +7,8 @@
 - 已观察压缩：`1`
 - 输入来源：`无（持续目标自动续接）`
 - 会话 slug：`role-permission-reader-phase5-20260821`
-- 分支：`待从最新 main 创建 codex/role-permission-reader-phase5-20260821`
-- worktree：`待创建独立 worktree`
+- 分支：`codex/role-permission-reader-phase5-20260821`
+- worktree：`/Users/j1ng/Tools/sunny-role-permission-reader-phase5-20260821`
 - 认领时间：`2026-08-21 Asia/Shanghai`
 
 ## 用户可见目标
@@ -48,7 +48,9 @@
 ## 当前进度
 
 - 已完成三类候选重评并选择角色权限唯一 Reader。
-- 已检查 NestJS、Keycloak 官方实现边界；尚未开始运行时代码修改。
+- 已检查 NestJS、Keycloak 官方实现边界；已从最新 `main@23ec4174` 创建独立 worktree。
+- 已建立 `PrismaRolePermissionReader`：停用岗位失败关闭、报价派生权限、销售范围兼容状态和同角色并发读取收口到唯一实现；只合并正在执行的 Promise，完成或失败后立即清除，不保留跨请求 TTL。
+- 总 Prisma Repository 与 ShipmentOverview 真仓储均已注入同一 Reader；角色增删、权限更新/复制继续同步更新销售范围兼容状态；架构门禁止两个调用方恢复私有缓存或直接角色查询。
 
 ## 验证计划
 
@@ -56,8 +58,14 @@
 - 回归：ShipmentOverview 真实 Prisma、Service/Policy/E2E；API typecheck；架构/governance/context；`git diff --check`。
 - 47：管理员/市场允许、业务/仓库拒绝、市场站点与敏感字段裁剪、四条未登录 401；源码/provenance/镜像/health/日志/锁/recovery。
 
+## 当前验证
+
+- Reader 与 ShipmentOverview 定向保护 22/22：管理员缺省、停用岗位、报价派生、同角色并发去重、失败重试、返回数组隔离、销售范围记忆/失效、注入委托、市场字段裁剪、业务本人范围、Service/Policy/E2E/Legacy 全部通过。
+- API typecheck、448 路由、no-new-lint-debt、治理、上下文、安全契约 3/3 与 `git diff --check` 通过。
+- 对抗检查：Reader 不保留跨请求 TTL；完成/失败均清除 in-flight；返回权限数组复制；InMemory 模式不注册 Prisma Reader；生产 DataAccess 中总仓储与 ShipmentOverview 使用同一 singleton provider。
+
 ## 交接
 
 - 阻塞：无
-- 发布状态：`未实施`
-- 准确下一步：合并本阶段终态与重评记录，从最新 main 创建独立 worktree，先写 Reader characterization 再切换依赖。
+- 发布状态：`本地已完成，待主干 CI 与 47 发布`
+- 准确下一步：完成差异复核与 API 类型检查，提交 PR；主干 CI 通过后从干净发布协调 worktree执行 API-only 精确发布并验证固定角色样本。

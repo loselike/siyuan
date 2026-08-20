@@ -91,6 +91,20 @@ function setup(permissions: PermissionKey[], row = shipmentRow()) {
 }
 
 describe('PrismaShipmentOverviewQueryRepository', () => {
+  it('delegates permission reads to the injected control-plane reader', async () => {
+    const hasPermission = vi.fn(async () => true);
+    const getPermissionsForRole = vi.fn(async () => ['business:shipment:list'] as PermissionKey[]);
+    const repository = new PrismaShipmentOverviewQueryRepository({} as never, {
+      hasPermission,
+      getPermissionsForRole
+    } as never);
+
+    await expect(repository.hasPermission('OPERATOR', 'business:shipment:list')).resolves.toBe(true);
+    await expect(repository.getPermissionsForRole('OPERATOR')).resolves.toEqual(['business:shipment:list']);
+    expect(hasPermission).toHaveBeenCalledWith('OPERATOR', 'business:shipment:list');
+    expect(getPermissionsForRole).toHaveBeenCalledWith('OPERATOR');
+  });
+
   it('keeps market site scope and payable/agent field visibility on the real Prisma path', async () => {
     const { repository, shipmentQuery } = setup([
       'market:routed:view',
