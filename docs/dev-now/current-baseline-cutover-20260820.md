@@ -23,6 +23,7 @@
 
 ## 当前门槛
 
-- `node scripts/check-development-governance.mjs` 通过；完整 `governance:check` 被既有 `docs/dev-now/market-positive-permission-rebuild-20260815.md` 缺 canonical status 阻断。当前会话按所有权规则不修改其他会话状态文件。
+- 候选已提交为 `183d89ea`、推送到 `codex/release/current-baseline-20260820` 并创建 [PR #5](https://github.com/loselike/siyuan/pull/5)。CI 的 Shared build、Prisma generate、API/Web typecheck、API/Web 代表性测试均通过。
+- `node scripts/check-development-governance.mjs` 通过；PR CI 最终被既有 `docs/dev-now/market-positive-permission-rebuild-20260815.md` 缺 canonical status 阻断，三个镜像 job 因此按依赖失败关闭且未生成/推送镜像。当前会话按所有权规则不修改其他会话状态文件。
 - `architecture:check` 仍被当前生产组合版本相对旧 baseline 的路由权限契约、重复路由和规模债务阻断；不得通过机械更新 baseline 数字或删除检查来绕过，必须逐项审查后形成独立治理变更。
 - 候选可以提交并推送到 release 分支用于保存与 PR 审查，但在上述 CI 阻断关闭前不得合并 main、生成生产 digest 或执行 cutover。只有 `images.env` 的 `GIT_COMMIT` 与最终候选完全一致，且锁内重新捕获的 v3 manifest 未漂移，才允许 cutover。
