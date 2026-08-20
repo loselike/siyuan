@@ -1,10 +1,10 @@
 # 运单总览真实 Prisma 查询仓储
 
-- 状态：`in_progress`
+- 状态：`complete`
 - 会话标题：`Sunny｜架构控制面快速落地｜04`
 - 续接自：`docs/archive/dev-now/2026-08/architecture-shipment-overview-compatibility-adapter-20260821.md`
 - 上下文状态：`green`
-- 已观察压缩：`0`
+- 已观察压缩：`1`
 - 输入来源：`无（持续目标自动续接）`
 - 会话 slug：`shipment-overview-prisma-query-phase4-20260821`
 - 分支：`codex/shipment-overview-prisma-query-phase4-20260821`
@@ -53,20 +53,23 @@
 
 ## 验证
 
-- 已通过：迁移前 10/10；迁移后 Service/Policy/E2E/Legacy/真实 Prisma Repository 14/14；Shared build；API/Web typecheck；448 路由、完整治理、上下文与安全门禁；`git diff --check`。
-- 待执行：完整治理/上下文检查、主干 CI、47 管理员/市场/业务/仓库角色与源码指纹验证。
+- 本地已通过：迁移前 10/10；迁移后 Service/Policy/E2E/Legacy/真实 Prisma Repository 14/14；Shared build；API/Web typecheck；448 路由、完整治理、上下文与安全门禁；`git diff --check`。
+- 主干已通过：PR #19 合并为 `bbf6431f1dac0987956e58102bd5e4d71d6335db`；CI affected、Web/API/migrate 镜像与 release manifest 全部成功。
+- 47 已通过：发布 `git-bbf6431f1dac_web-2020decf8c83_api-c2e887e0e893`；管理员运单 91 条、状态 19 类、角标 21 项；市场 46 条且站点越界 0、付款/利润/应付敏感字段违规 0；业务与两个仓库岗位拒绝路径均为 403；四条未登录路径均为 401。
+- 47 发布证据：8 个关键源码 checksum 与候选一致；Git/Origin/GHCR provenance 可追溯，Web/API image 与 API release ID 匹配；公网与容器 health 正常，发布锁空闲、recovery clear、20 分钟 API/Web 日志未发现 Nest ERROR、Unhandled、FATAL 或 Exception。
+- 生产没有启用的客户固定样本，未创建生产用户；客户拒绝路径由本地 E2E 保护。
 
 ## 交接
 
 - 阻塞：无
-- 剩余风险：本地真实 Prisma 仓储已完成，但尚未经过主干 CI 与 47 真实数据库角色样本对比；发布前不得宣称线上已切换。
+- 剩余风险：生产没有启用的客户固定样本，客户拒绝路径仅有本地 E2E；角色权限读取仍在巨型仓储与新查询仓储各自发起 Prisma 查询，下一阶段需要重评是否收口为唯一 reader。
 - 用户验收目标：所有页面和功能不变，生产运单总览读取不再进入巨型 PrismaRepository 实现。
 - 效果证据：迁移前 10/10、迁移后 14/14；真实 Prisma 单测固定市场站点、销售本人范围、代理/成本/付款字段裁剪和停用岗位拒绝。
 - 安全证据：架构门禁 448 路由与 no-new-lint-debt 通过；生产实现禁止导入巨型仓储，Shared 根依赖未新增；停用非管理员角色定向验证 fail-closed。
-- 未验证项：主干 CI 与 47 线上允许/拒绝/字段裁剪/数据范围。
-- 发布状态：`未发布`
+- 未验证项：启用客户的 47 真实拒绝样本（当前生产不存在，不为验收造数据）。
+- 发布状态：`已发布：git-bbf6431f1dac_web-2020decf8c83_api-c2e887e0e893`
 - 稳定附件：无
-- 准确下一步：运行完整本地治理与差异审查，合并主干后从干净发布协调 worktree 精确发布 Web+API 并验证固定角色样本。
+- 准确下一步：按阶段完成重评比较输入安全、前端数据流和权限读取收口，检查相关优秀项目官方实现后再确定下一切片。
 - 建议新标题：`Sunny｜架构控制面快速落地｜05`
 - 建议新状态文件：`docs/dev-now/architecture-control-plane-phase5-20260821.md`
 - 接手要求：状态改为 `handed_off` 后，新的唯一写会话才能继续。
