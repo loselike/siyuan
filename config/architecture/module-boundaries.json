@@ -322,13 +322,14 @@
     },
     {
       "name": "shipment-overview-query-slice",
-      "status": "compatibility-adapter",
+      "status": "prisma-query-repository",
       "files": [
         {
           "path": "apps/api/src/modules/shipment/overview/shipment-overview.module.ts",
           "requiredImports": [
             "../../data-access.module.js",
             "./legacy-shipment-overview-query.repository.js",
+            "./prisma-shipment-overview-query.repository.js",
             "./shipment-overview-query.controller.js",
             "./shipment-overview-query.repository.js",
             "./shipment-overview-query.service.js"
@@ -338,7 +339,35 @@
             "../../prisma.service.js"
           ],
           "forbiddenText": [
-            "useExisting: PrismaRepository"
+            "useExisting: PrismaRepository",
+            "useClass: LegacyShipmentOverviewQueryRepository"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/shipment/overview/prisma-shipment-overview-query.repository.ts",
+          "requiredImports": [
+            "../../prisma.service.js",
+            "../../prisma-role-permissions.js",
+            "./shipment-overview-prisma.mapper.js",
+            "./shipment-overview-query.repository.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.repository.js",
+            "./legacy-shipment-overview-query.repository.js",
+            "./shipment-overview-query.controller.js",
+            "./shipment-overview-query.service.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/shipment/overview/shipment-overview-prisma.mapper.ts",
+          "forbiddenImports": [
+            "@nestjs/common",
+            "../../prisma.repository.js",
+            "../../prisma.service.js",
+            "./legacy-shipment-overview-query.repository.js"
+          ],
+          "forbiddenText": [
+            "this.prisma"
           ]
         },
         {

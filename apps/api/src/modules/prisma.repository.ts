@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Inject, Inj
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
-import { Prisma, type Permission as PrismaPermission, type Role as PrismaRole, type Shipment as PrismaShipment } from '@prisma/client';
+import { Prisma, type Permission as PrismaPermission, type Role as PrismaRole } from '@prisma/client';
 import * as xlsx from '@e965/xlsx';
 import { buildChargeWeightChangeMap } from './charge-weight-change.js';
 import {
@@ -48,7 +48,6 @@ import {
   isTimestampInBeijingDateRange,
   summarizeStatement,
   summarizePaymentSettlement,
-  summarizeLineShipmentFinance,
   summarizeLineShipmentPool,
   getLineShipmentEditStages,
   lineShipmentStageEditPermissionCode,
@@ -72,7 +71,6 @@ import {
   isFinancialDecimalWithinScale,
   roundFinancialDecimal,
   roundMonetaryTotal,
-  summarizeShipmentRouteCosts,
   resolveShipmentOutboundOrderNo,
   resolveWarehouseTallyLifecycleStatus,
   warehouseCodePrefixCandidates,
@@ -329,8 +327,6 @@ import {
   type ShipmentFinanceItemCreateInput,
   type ShipmentFinanceItemType,
   type ShipmentFinanceItemUpdateInput,
-  type LineShipmentFinanceSourceItem,
-  type LineShipmentFinanceSummary,
   shipmentStatusLabels,
   type BulkTrackingApplyRequest,
   type BulkTrackingApplyResponse,
@@ -502,7 +498,6 @@ import {
   buildRolePermissionRow,
   configuredPermissionsForRole,
   defaultPermissionsForRole,
-  effectivePermissionsForRole,
   getPermissionDefinitions,
   getNewlyAddedMarketSensitivePermissions,
   getRoleMetadata,
@@ -541,31 +536,21 @@ import {
   type ShipmentStageHistoryRecord
 } from './shipment-stage-dwell.js';
 import { mapCarrierTask, toCarrierAdapterCode } from './tracking/tracking.shared.js';
-
-type ShipmentWithRelations = PrismaShipment & {
-  customer: { id: string; code: string; name: string; salesperson: string | null };
-  channel: ({ name: string; carrier: { name: string } | null } | null);
-  agent: ({
-    name: string;
-    invoiceTemplateName?: string | null;
-    invoiceTemplateUrl?: string | null;
-    invoiceTemplateName2?: string | null;
-    invoiceTemplateUrl2?: string | null;
-    invoiceTemplateName3?: string | null;
-    invoiceTemplateUrl3?: string | null;
-    invoiceTemplates?: unknown;
-  } | null);
-  problemTickets: Array<{ id: string; status: string }>;
-  financeItems?: Array<{ type: string; name: string; amount: unknown; currency?: string | null; settlementMethod?: string | null; billingUnit?: string | null; billingQuantity?: unknown; chargeWeightKg?: unknown; unitPrice?: unknown; remark?: string | null; voided?: boolean; createdAt?: Date | string; reconciliationStatus?: string | null; receiptStatus?: string | null; settled?: boolean }>;
-  payableFees?: Array<{ name: string; amount: unknown; settled?: boolean; voided?: boolean }>;
-  receivableFees?: Array<{ amount: unknown; currency?: string | null; settlementMethod?: string | null; voided?: boolean; reconciliationStatus?: string | null; receiptStatus?: string | null; settled?: boolean }>;
-};
-
-type ShipmentRouteArchiveFields = {
-  agentChannelId?: string;
-  agentChannelName?: string;
-  routedAt?: string;
-};
+import { PrismaShipmentOverviewQueryRepository } from './shipment/overview/prisma-shipment-overview-query.repository.js';
+import { resolveStoredRolePermissions, rolePermissionConfigurationMarker } from './prisma-role-permissions.js';
+import {
+  agentInvoiceTemplateOptions,
+  agentInvoiceTemplates,
+  applyShipmentRouteArchiveFields,
+  mapShipmentOverview as mapShipment,
+  normalizeShipmentRouteArchive,
+  resolveInvoiceTemplateStoredFileName,
+  scopeShipmentRouteCostSummary,
+  shipmentOverviewIncludes as shipmentIncludes,
+  withShipmentSite,
+  type ShipmentRouteArchiveFields,
+  type ShipmentWithRelations
+} from './shipment/overview/shipment-overview-prisma.mapper.js';
 
 type ReviewRestoreInputWithManual = ShipmentRestoreInput & {
   mode?: ShipmentRestoreInput['mode'] | 'MANUAL_TIME';
@@ -928,13 +913,16 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   private auditDashboardCache?: { expiresAt: number; rows: AuditLogRecord[] };
   private auditDashboardInFlight?: Promise<AuditLogRecord[]>;
   private readonly masterDataReadRepository: PrismaMasterDataReadRepository;
+  private readonly shipmentOverviewQueryRepository: PrismaShipmentOverviewQueryRepository;
 
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Optional() @Inject(LineageWatcher) private readonly lineage?: LineageWatcher,
-    @Optional() @Inject(PrismaMasterDataReadRepository) masterDataReadRepository?: PrismaMasterDataReadRepository
+    @Optional() @Inject(PrismaMasterDataReadRepository) masterDataReadRepository?: PrismaMasterDataReadRepository,
+    @Optional() @Inject(PrismaShipmentOverviewQueryRepository) shipmentOverviewQueryRepository?: PrismaShipmentOverviewQueryRepository
   ) {
     this.masterDataReadRepository = masterDataReadRepository ?? new PrismaMasterDataReadRepository(prisma);
+    this.shipmentOverviewQueryRepository = shipmentOverviewQueryRepository ?? new PrismaShipmentOverviewQueryRepository(prisma);
   }
 
   private async lockCompanyChannelForMutation(tx: Prisma.TransactionClient, channelId: string): Promise<void> {
@@ -1290,176 +1278,8 @@ export class PrismaRepository implements OnModuleInit, OnModuleDestroy {
   }
 
   async getShipments(principal: Principal, options: { exposeWarehouseRouting?: boolean; salesScopeMode?: 'CUSTOMER_OR_ENTRY' | 'ENTRY_ONLY'; customerServiceFieldScope?: boolean; customerServiceTransferAgentWeight?: boolean; routeCostScope?: 'ROUTED'; includeLinePoolFinanceSummary?: boolean; marketSiteScope?: boolean; customerServiceScope?: boolean } = {}): Promise<Shipment[]> {
-    const [canViewAgentIdentity, canViewReceivableSummary, canViewCustomerServiceAgent, canViewCustomerServiceTransferAgentWeight, canViewShipmentAgentWeight] = await Promise.all([
-      this.hasAnyPermission(principal.role, [
-        'master-data:agents:read',
-        'master-data:agent-channels:read',
-        'finance:business-cost:view-agent',
-        'finance:payable:view-sensitive'
-      ]),
-      this.canViewShipmentFinanceDetail(principal),
-      options.customerServiceFieldScope
-        ? this.hasPermission(principal.role, 'customer-service:data-confirm:agent-view')
-        : Promise.resolve(false),
-      options.customerServiceTransferAgentWeight
-        ? this.hasPermission(principal.role, 'customer-service:transfer:view-agent-data')
-        : Promise.resolve(false),
-      this.canViewShipmentAgentWeight(principal)
-    ]);
-    const fieldMasks = await this.getGlobalFieldMaskState(principal);
-    const canViewMarketRouteCost = options.marketSiteScope === true
-      && !fieldMasks['payable-cost']
-      && await this.hasAnyPermission(principal.role, [
-        'market:pending-routing:route',
-        'market:pending-routing:edit',
-        'market:routed:view',
-        'market:routing-report:view'
-      ]);
-    const canViewRoutedCostDetails = canViewMarketRouteCost;
-    const canViewRoutedCostTotals = canViewMarketRouteCost;
-    const canViewLegacyMarketCostDetails = canViewMarketRouteCost;
-    const canViewLegacyMarketCostTotals = canViewMarketRouteCost;
-    const canViewLinePoolFinanceSummary = options.includeLinePoolFinanceSummary === true && (
-      await this.hasPermission(principal.role, 'operations:line-shipment:process')
-      || await this.hasPermission(principal.role, 'operations:product-map:cost-sensitive-view')
-    );
-    const canViewAgentReplacementAudit = options.marketSiteScope === true
-      && !fieldMasks['agent-short-name']
-      && !fieldMasks['agent-company-name']
-      && !fieldMasks['agent-channel']
-      && !fieldMasks['agent-data']
-      && !fieldMasks['payable-cost']
-      && !fieldMasks['payable-status']
-      && await this.hasPermission(principal.role, 'market:routed:view');
-    const canViewAgentChangeRequest = options.marketSiteScope === true
-      && !fieldMasks['agent-short-name']
-      && !fieldMasks['agent-company-name']
-      && !fieldMasks['agent-channel']
-      && !fieldMasks['agent-data']
-      && !fieldMasks['payable-cost']
-      && !fieldMasks['payable-status']
-      && await this.hasPermission(principal.role, 'market:routed:replace-agent');
-    const shipmentOwnerWhere = options.marketSiteScope || options.customerServiceScope
-      ? undefined
-      : this.shipmentOwnerWhere(principal, options.salesScopeMode);
-    const marketSiteWhere = options.marketSiteScope ? await this.marketShipmentSiteWhere(principal) : undefined;
-    const customerServiceWhere = options.customerServiceScope ? await this.customerServiceShipmentWhere(principal) : undefined;
-    const accessWhere = [shipmentOwnerWhere, marketSiteWhere, customerServiceWhere].filter((value): value is Record<string, unknown> => Boolean(value));
-    const rows = await this.prisma.shipment.findMany({
-      where: {
-        deletedAt: null,
-        ...(principal.role === 'CUSTOMER' ? { customerId: principal.customerId } : {}),
-        ...(accessWhere.length ? { AND: accessWhere } : {})
-      },
-      include: shipmentIncludes,
-      orderBy: { createdAt: 'desc' }
-    });
-
-    const marketOwners = [...new Set(rows
-      .map((row) => row.customer.salesperson?.trim() || row.entryBy?.trim())
-      .filter((value): value is string => Boolean(value)))];
-    const marketOwnerSites = new Map(
-      (await this.prisma.user.findMany({
-        where: { username: { in: marketOwners } },
-        select: { username: true, site: true }
-      })).map((user) => [user.username, user.site ?? undefined])
-    );
-
-    const dispatchLogs = rows.length
-      ? await this.prisma.auditLog.findMany({
-          where: { action: 'shipment.dispatch', target: { in: rows.map((row) => row.id) } },
-          orderBy: { createdAt: 'desc' },
-          select: { target: true, after: true }
-        })
-      : [];
-    const latestDispatchByShipmentId = new Map<string, ShipmentDispatchArchiveFields>();
-    dispatchLogs.forEach((row) => {
-      if (!latestDispatchByShipmentId.has(row.target)) {
-        latestDispatchByShipmentId.set(row.target, normalizeShipmentDispatchArchive(row.after));
-      }
-    });
-
-    const routeLogs = rows.length
-      ? await this.prisma.auditLog.findMany({
-          where: {
-            action: { in: canViewAgentReplacementAudit
-              ? ['shipment.agent.replace', 'shipment.route', 'shipment.route.update']
-              : ['shipment.route', 'shipment.route.update'] },
-            target: { in: rows.map((row) => row.id) }
-          },
-          orderBy: { createdAt: 'desc' },
-          select: { target: true, action: true, after: true, createdAt: true }
-        })
-      : [];
-    const latestRouteByShipmentId = new Map<string, ShipmentRouteArchiveFields>();
-    const agentReplacementCountByShipmentId = new Map<string, number>();
-    routeLogs.forEach((row) => {
-      if (row.action === 'shipment.agent.replace') {
-        agentReplacementCountByShipmentId.set(row.target, (agentReplacementCountByShipmentId.get(row.target) ?? 0) + 1);
-      }
-      if (!latestRouteByShipmentId.has(row.target)) {
-        latestRouteByShipmentId.set(row.target, normalizeShipmentRouteArchive(row.after, row.createdAt));
-      }
-    });
-    const requestRows = canViewAgentChangeRequest && rows.length
-      ? await this.prisma.auditLog.findMany({
-          where: {
-            target: { in: rows.map((row) => row.id) },
-            action: { in: Object.values(shipmentAgentChangeRequestActions) }
-          },
-          orderBy: { createdAt: 'desc' },
-          select: { id: true, target: true, action: true, after: true, createdAt: true }
-        })
-      : [];
-    const requestRowsByShipmentId = new Map<string, typeof requestRows>();
-    requestRows.forEach((row) => requestRowsByShipmentId.set(row.target, [
-      ...(requestRowsByShipmentId.get(row.target) ?? []),
-      row
-    ]));
-
-    const visibleShipments = rows.map((row) => {
-      const visibleShipment = {
-        ...applyShipmentDispatchArchiveFields(
-          applyShipmentRouteArchiveFields(mapShipment(row), latestRouteByShipmentId.get(row.id)),
-          latestDispatchByShipmentId.get(row.id)
-        ),
-        ...(agentReplacementCountByShipmentId.get(row.id)
-          ? { agentReplacementCount: agentReplacementCountByShipmentId.get(row.id) }
-          : {}),
-        ...(canViewAgentChangeRequest
-          ? (() => {
-              const request = summarizeShipmentAgentChangeRequest(row.id, requestRowsByShipmentId.get(row.id) ?? []);
-              return request ? { agentChangeRequest: request } : {};
-            })()
-          : {}),
-        ...(canViewLinePoolFinanceSummary ? { linePoolFinanceSummary: summarizeLinePoolFinanceRow(row) } : {}),
-        ...(canViewReceivableSummary ? { receivableSummary: summarizeShipmentReceivables(row) } : {}),
-        site: marketOwnerSites.get(row.customer.salesperson?.trim() || row.entryBy?.trim() || '') ?? ''
-      };
-      const routeCostSummary = this.isAfterRouteDispatch(visibleShipment.status)
-        ? scopeShipmentRouteCostSummary(
-            summarizeShipmentRouteCostsFromRow(row),
-            { canViewDetails: canViewRoutedCostDetails, canViewTotals: canViewRoutedCostTotals }
-          )
-        : undefined;
-      return this.maskShipmentListFields(principal, {
-        ...visibleShipment,
-        ...(routeCostSummary ? { routeCostSummary } : {}),
-      }, {
-        canViewAgentIdentity: canViewAgentIdentity || canViewCustomerServiceAgent,
-        canViewLegacyMarketCostDetails,
-        canViewLegacyMarketCostTotals,
-        canViewRoutedCostDetails,
-        canViewRoutedCostTotals,
-        exposeWarehouseRouting: options.exposeWarehouseRouting ?? false,
-        allowSalesScopedAgent: canViewCustomerServiceAgent,
-        canViewAgentWeight: canViewShipmentAgentWeight || canViewCustomerServiceAgent || canViewCustomerServiceTransferAgentWeight,
-        fieldMasks
-      });
-    });
-    return this.attachShipmentStageDwell(visibleShipments);
+    return this.shipmentOverviewQueryRepository.getShipments(principal, options);
   }
-
   async getTrackingShipments(principal: Principal): Promise<Shipment[]> {
     switch (trackingShipmentScopeForPrincipal(principal)) {
       case 'all':
@@ -31105,16 +30925,6 @@ function internalTrackingOperator(
   return nearest && nearest.distance <= 60_000 ? usernamesByActorId.get(nearest.actorId) : undefined;
 }
 
-const shipmentIncludes = {
-  customer: true,
-  channel: { include: { carrier: true } },
-  agent: true,
-  receivableFees: { where: { voided: false }, orderBy: { createdAt: 'desc' } },
-  financeItems: { where: { voided: false }, orderBy: { createdAt: 'desc' } },
-  payableFees: true,
-  trackingEvents: { where: { kind: 'LOGISTICS' }, orderBy: { happenedAt: 'desc' }, take: 1 },
-  problemTickets: true
-} as const;
 
 // Market reverse-review is a market-scoped workflow.  It must not hydrate
 // payable rows before the permission branch is selected; otherwise a hidden
@@ -31166,30 +30976,6 @@ const customerServiceDataConfirmShipmentIncludes = {
   problemTickets: { where: { status: { not: 'CLOSED' } }, select: { id: true, status: true } }
 } as const;
 
-function summarizeShipmentReceivables(row: ShipmentWithRelations): Shipment['receivableSummary'] {
-  const fees = [
-    ...(row.receivableFees ?? []).filter((fee) => !fee.voided),
-    ...(row.financeItems ?? []).filter((fee) => fee.type === 'RECEIVABLE' && !fee.voided)
-  ];
-  if (!fees.length) return undefined;
-
-  const amountsByCurrency = new Map<string, number>();
-  const settlementMethods = new Set<string>();
-  fees.forEach((fee) => {
-    const currency = fee.currency?.trim().toUpperCase() || 'RMB';
-    amountsByCurrency.set(currency, roundMoney((amountsByCurrency.get(currency) ?? 0) + Number(fee.amount)));
-    const settlementMethod = fee.settlementMethod?.trim();
-    if (settlementMethod) settlementMethods.add(settlementMethod);
-  });
-  const amounts = [...amountsByCurrency.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([currency, amount]) => ({ currency, amount }));
-  return {
-    amounts,
-    currencies: amounts.map((item) => item.currency),
-    settlementMethods: [...settlementMethods].sort((left, right) => left.localeCompare(right))
-  };
-}
 
 function summarizeReceivableRows(rows: Array<{ amount?: unknown; currency?: string | null; settlementMethod?: string | null }>): Shipment['receivableSummary'] {
   if (!rows.length) return undefined;
@@ -31211,94 +30997,10 @@ function summarizeReceivableRows(rows: Array<{ amount?: unknown; currency?: stri
   };
 }
 
-function summarizeLinePoolFinanceRow(row: ShipmentWithRelations): LineShipmentFinanceSummary {
-  const items: LineShipmentFinanceSourceItem[] = [
-    ...(row.receivableFees ?? []).map((item) => ({
-      type: 'RECEIVABLE' as const,
-      amount: Number(item.amount),
-      currency: item.currency ?? 'RMB',
-      reconciliationStatus: (item.reconciliationStatus ?? 'PENDING') as LineShipmentFinanceSourceItem['reconciliationStatus'],
-      receiptStatus: (item.receiptStatus ?? 'UNPAID') as LineShipmentFinanceSourceItem['receiptStatus']
-    })),
-    ...(row.payableFees ?? []).filter((item) => !item.voided).map((item) => ({
-      type: 'PAYABLE' as const,
-      amount: Number(item.amount),
-      currency: 'RMB',
-      settled: item.settled === true,
-      reconciliationStatus: item.settled ? 'CONFIRMED' as const : 'PENDING' as const
-    })),
-    ...(row.financeItems ?? []).filter((item) => !item.voided).flatMap((item) => {
-      if (!['RECEIVABLE', 'PAYABLE', 'BUSINESS_COST'].includes(item.type)) return [];
-      return [{
-        type: item.type as LineShipmentFinanceSourceItem['type'],
-        amount: Number(item.amount),
-        currency: item.currency ?? 'RMB',
-        reconciliationStatus: (item.reconciliationStatus ?? 'PENDING') as LineShipmentFinanceSourceItem['reconciliationStatus'],
-        receiptStatus: (item.receiptStatus ?? 'UNPAID') as LineShipmentFinanceSourceItem['receiptStatus'],
-        settled: item.settled === true,
-        billingUnit: (item.billingUnit === 'KG' ? 'KG' : item.billingUnit === 'CBM' ? 'CBM' : undefined) as LineShipmentFinanceSourceItem['billingUnit']
-      }];
-    })
-  ];
-  return summarizeLineShipmentFinance(items);
-}
 
-function summarizeShipmentRouteCostsFromRow(row: ShipmentWithRelations) {
-  return summarizeShipmentRouteCosts([
-    ...(row.financeItems ?? [])
-      .filter((item) => item.type === 'PAYABLE')
-      .map((item) => ({
-        name: item.name,
-        amount: Number(item.amount),
-        currency: item.currency,
-        billingUnit: (item.billingUnit === 'KG' || item.billingUnit === 'CBM' ? item.billingUnit : undefined) as FinanceBillingUnit | undefined,
-        billingQuantity: item.billingQuantity === null || item.billingQuantity === undefined ? undefined : Number(item.billingQuantity),
-        chargeWeightKg: item.chargeWeightKg === null || item.chargeWeightKg === undefined ? undefined : Number(item.chargeWeightKg),
-        unitPrice: item.unitPrice === null || item.unitPrice === undefined ? undefined : Number(item.unitPrice),
-        voided: item.voided
-      })),
-    ...(row.payableFees ?? []).map((item) => ({
-      name: item.name,
-      amount: Number(item.amount),
-      currency: 'RMB'
-    }))
-  ]);
-}
 
-function scopeShipmentRouteCostSummary(
-  summary: Shipment['routeCostSummary'],
-  visibility: { canViewDetails: boolean; canViewTotals: boolean }
-): Shipment['routeCostSummary'] {
-  if (!summary || (!visibility.canViewDetails && !visibility.canViewTotals)) return undefined;
-  return {
-    mainFreight: visibility.canViewDetails ? summary.mainFreight : undefined,
-    otherFees: visibility.canViewDetails ? summary.otherFees : [],
-    totals: visibility.canViewTotals ? summary.totals : []
-  };
-}
 
-function normalizeShipmentRouteArchive(value: unknown, createdAt?: Date): ShipmentRouteArchiveFields {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return {};
-  }
-  const row = value as Record<string, unknown>;
-  return {
-    agentChannelId: typeof row.agentChannelId === 'string' ? row.agentChannelId : undefined,
-    agentChannelName: typeof row.agentChannelName === 'string' ? row.agentChannelName : undefined,
-    routedAt: typeof row.routedAt === 'string' ? row.routedAt : createdAt?.toISOString()
-  };
-}
 
-function applyShipmentRouteArchiveFields(shipment: Shipment, archive?: ShipmentRouteArchiveFields): Shipment {
-  if (!archive) {
-    return shipment;
-  }
-  return {
-    ...shipment,
-    routeAgentChannelName: archive.agentChannelName ?? shipment.routeAgentChannelName,
-    routedAt: archive.routedAt ?? shipment.routedAt
-  };
-}
 
 function summarizePayableTotals(rows: Array<{ amount: unknown; currency?: string | null }>) {
   return rows.reduce<Record<string, number>>((totals, row) => {
@@ -31336,168 +31038,12 @@ function normalizeRouteAgentChannelName(value: string) {
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 }
 
-function parseRoutePayableRemark(remark?: string | null): { agentChannelName?: string; otherFee?: number } {
-  if (!remark?.startsWith('市场排货渠道：')) {
-    return {};
-  }
-  const body = remark.replace('市场排货渠道：', '');
-  const parts = body.split('；');
-  const otherFeePart = parts.find((part) => part.startsWith('其他费用：'));
-  const otherFee = otherFeePart ? Number(otherFeePart.replace('其他费用：', '')) : undefined;
-  return {
-    agentChannelName: parts[0] || undefined,
-    otherFee: Number.isFinite(otherFee) ? otherFee : undefined
-  };
-}
 
-type ShipmentDispatchArchiveFields = {
-  handoverNo?: string;
-  outboundBy?: string;
-  batchDispatchSource?: string;
-  outboundAt?: string;
-};
 
-function normalizeShipmentDispatchArchive(value: unknown): ShipmentDispatchArchiveFields {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return {};
-  }
-  const row = value as Record<string, unknown>;
-  return {
-    handoverNo: typeof row.handoverNo === 'string' ? row.handoverNo : undefined,
-    outboundBy: typeof row.outboundBy === 'string' ? row.outboundBy : undefined,
-    batchDispatchSource: typeof row.batchDispatchSource === 'string' ? row.batchDispatchSource : undefined,
-    outboundAt: typeof row.outboundAt === 'string' ? row.outboundAt : undefined
-  };
-}
 
-function applyShipmentDispatchArchiveFields(shipment: Shipment, archive?: ShipmentDispatchArchiveFields): Shipment {
-  if (!archive) {
-    return shipment;
-  }
-  return {
-    ...shipment,
-    handoverNo: archive.handoverNo ?? shipment.handoverNo,
-    outboundBy: archive.outboundBy ?? shipment.outboundBy,
-    batchDispatchSource: archive.batchDispatchSource ?? shipment.batchDispatchSource,
-    outboundAt: shipment.outboundAt ?? archive.outboundAt
-  };
-}
 
-function mapShipment(row: ShipmentWithRelations): Shipment {
-  const routePayable = row.financeItems?.find((item) => item.type === 'PAYABLE' && item.name === '代理成本' && !item.voided);
-  const routeRemark = parseRoutePayableRemark(routePayable?.remark);
-  const latestExternalTracking = (row as any).trackingEvents?.[0];
-  return {
-    id: row.id,
-    createdAt: row.createdAt.toISOString(),
-    entryAt: (row as any).entryAt?.toISOString?.() ?? (row as any).entryAt ?? undefined,
-    customerName: `${row.customer.code}-${row.customer.name}`,
-    customerId: row.customer.id,
-    customerCode: row.customer.code,
-    salesperson: row.customer.salesperson ?? (row as any).entryBy ?? undefined,
-    customerOrderNo: row.customerOrderNo,
-    outboundOrderNo: resolveShipmentOutboundOrderNo(row),
-    systemOrderNo: row.systemOrderNo,
-    transferNo: row.transferNo ?? undefined,
-    subOrderNo: (row as any).subOrderNo ?? undefined,
-    draftWarehousePackageIds: row.draftWarehousePackageIds ?? [],
-    inboundNo: (row as any).inboundNo ?? undefined,
-    outboundAt: (row as any).outboundAt?.toISOString?.() ?? (row as any).outboundAt ?? undefined,
-    productName: formatShipmentProductNames((row as any).productNames, (row as any).productName) || undefined,
-    productNames: normalizeShipmentProductNames((row as any).productNames, (row as any).productName),
-    declarationRequired: (row as any).declarationRequired ?? false,
-    sensitive: (row as any).sensitive ?? false,
-    cargoType: (row as any).cargoType ?? undefined,
-    volumeCbm: (row as any).volumeCbm === null || (row as any).volumeCbm === undefined ? undefined : Number((row as any).volumeCbm),
-    actualWeightKg: (row as any).actualWeightKg === null || (row as any).actualWeightKg === undefined ? undefined : Number((row as any).actualWeightKg),
-    weightKg: (row as any).actualWeightKg === null || (row as any).actualWeightKg === undefined ? undefined : Number((row as any).actualWeightKg),
-    cargoDataSource: (row as any).cargoDataSource === 'MANUAL_ADJUSTED' ? 'MANUAL_ADJUSTED' : 'AUTO_MATCHED',
-    chargeWeightOverridden: Boolean((row as any).chargeWeightOverridden),
-    settlementMethod: (row as any).settlementMethod ?? undefined,
-    tradeTerms: (row as any).tradeTerms ?? undefined,
-    fbaInboundNo: (row as any).fbaInboundNo ?? undefined,
-    receiverName: (row as any).receiverName ?? undefined,
-    receiverCompany: (row as any).receiverCompany ?? undefined,
-    receiverPhone: (row as any).receiverPhone ?? undefined,
-    receiverAddress: (row as any).receiverAddress ?? undefined,
-    receiverCountry: (row as any).receiverCountry ?? undefined,
-    receiverState: (row as any).receiverState ?? undefined,
-    receiverPostalCode: (row as any).receiverPostalCode ?? undefined,
-    fbaWarehouseCode: (row as any).fbaWarehouseCode ?? undefined,
-    entryBy: (row as any).entryBy ?? undefined,
-    businessReviewedBy: (row as any).businessReviewedBy ?? undefined,
-    businessReviewedAt: (row as any).businessReviewedAt?.toISOString?.() ?? (row as any).businessReviewedAt ?? undefined,
-    reviewedBy: (row as any).reviewedBy ?? undefined,
-    reviewedAt: (row as any).reviewedAt?.toISOString?.() ?? (row as any).reviewedAt ?? undefined,
-    reviewRejectedReason: (row as any).reviewRejectedReason ?? undefined,
-    deletedAt: (row as any).deletedAt?.toISOString?.() ?? (row as any).deletedAt ?? undefined,
-    deletedBy: (row as any).deletedBy ?? undefined,
-    deletedReason: (row as any).deletedReason ?? undefined,
-    deleteType: (row as any).deleteType ?? undefined,
-    restoredAt: (row as any).restoredAt?.toISOString?.() ?? (row as any).restoredAt ?? undefined,
-    restoredBy: (row as any).restoredBy ?? undefined,
-    restoreMode: (row as any).restoreMode ?? undefined,
-    etaAt: row.etaAt?.toISOString(),
-    etdAt: row.etdAt?.toISOString(),
-    remark: (row as any).remark ?? undefined,
-    businessType: row.businessType as BusinessType,
-    packageType: row.packageType as 'DOC' | 'WPX' | 'PAK',
-    destinationCountry: row.destinationCountry,
-    carrier: row.channel?.carrier?.name ?? '',
-    packageCount: row.packageCount,
-    receivableWeightKg: Number(row.receivableWeightKg),
-    agentWeightKg: Number(row.agentWeightKg),
-    chargeableWeightKg: Number(row.receivableWeightKg),
-    latestTracking: (row as any).trackingEvents ? (latestExternalTracking?.status ?? '') : (row.latestTracking ?? ''),
-    latestTrackingUpdatedAt: latestExternalTracking?.happenedAt?.toISOString?.() ?? latestExternalTracking?.happenedAt ?? undefined,
-    trackingStaleDays: row.trackingStaleDays,
-    isRemoteArea: row.isRemoteArea,
-    status: row.status as ShipmentStatus,
-    channelId: row.channelId ?? undefined,
-    channelName: row.channel?.name ?? '',
-    agentId: row.agentId ?? undefined,
-    agentName: row.agent?.name ?? '',
-    agentShortName: (row.agent as { shortName?: string } | null | undefined)?.shortName ?? row.agent?.name ?? '',
-    routedAt: routePayable?.createdAt instanceof Date ? routePayable.createdAt.toISOString() : routePayable?.createdAt,
-    routeAgentChannelName: routeRemark.agentChannelName,
-    routeChargeWeightKg: routePayable?.chargeWeightKg === null || routePayable?.chargeWeightKg === undefined ? undefined : Number(routePayable.chargeWeightKg),
-    routeUnitPrice: routePayable?.unitPrice === null || routePayable?.unitPrice === undefined ? undefined : Number(routePayable.unitPrice),
-    routeOtherFee: routeRemark.otherFee,
-    routeCostTotal: routePayable?.amount === null || routePayable?.amount === undefined ? undefined : Number(routePayable.amount),
-    routeCurrency: routePayable?.currency ?? undefined,
-    shippingMarkRequired: (row as any).shippingMarkRequired === true,
-    warehouseOutboundRemark: (row as any).warehouseOutboundRemark ?? undefined,
-    businessInvoiceName: (row as any).businessInvoiceName ?? undefined,
-    businessInvoiceUrl: (row as any).businessInvoiceUrl ?? undefined,
-    businessInvoiceUploadedBy: (row as any).businessInvoiceUploadedBy ?? undefined,
-    businessInvoiceUploadedAt: (row as any).businessInvoiceUploadedAt?.toISOString?.() ?? (row as any).businessInvoiceUploadedAt ?? undefined,
-    invoiceTemplateAvailable: agentInvoiceTemplateOptions(row.agent).length > 0,
-    invoiceTemplateOptions: agentInvoiceTemplateOptions(row.agent),
-    paymentAmountUsd: row.paymentAmountUsd === null ? undefined : Number(row.paymentAmountUsd),
-    paymentAmountCny: row.paymentAmountCny === null ? undefined : Number(row.paymentAmountCny),
-    paymentMethod: row.paymentMethod === null ? undefined : row.paymentMethod as ShipmentPaymentMethod,
-    hasProblemTicket: row.problemTickets.some((ticket) => ticket.status !== 'CLOSED')
-  };
-}
 
-export function withShipmentSite(shipment: Shipment, site?: string | null): Shipment {
-  return { ...shipment, site: site?.trim() || DEFAULT_MARKET_SITE };
-}
 
-function resolveInvoiceTemplateStoredFileName(templateUrl: string | null | undefined): string | undefined {
-  if (!templateUrl?.startsWith('/api/uploads/invoice-templates/')) return undefined;
-  let path: string;
-  try {
-    path = decodeURIComponent(new URL(templateUrl, 'http://siyuan.local').pathname);
-  } catch {
-    return undefined;
-  }
-  const prefix = '/api/uploads/invoice-templates/';
-  if (!path.startsWith(prefix)) return undefined;
-  const storedFileName = path.slice(prefix.length);
-  if (!storedFileName || storedFileName !== basename(storedFileName) || !/\.xlsx?$/i.test(storedFileName)) return undefined;
-  return storedFileName;
-}
 
 function resolveStoredUploadFileName(url: string | null | undefined, segment: string, extensionPattern: RegExp): string | undefined {
   if (!url?.startsWith(`/api/uploads/${segment}/`)) return undefined;
@@ -31524,31 +31070,7 @@ function storedUploadMimeType(fileName: string) {
   }
 }
 
-function agentInvoiceTemplateOptions(agent: ShipmentWithRelations['agent'] | null | undefined) {
-  return agentInvoiceTemplates(agent).flatMap(({ id, name, url }) => resolveInvoiceTemplateStoredFileName(url)
-    ? [{ id, name }]
-    : []);
-}
 
-function agentInvoiceTemplates(agent: ShipmentWithRelations['agent'] | AgentSummary | null | undefined): AgentInvoiceTemplate[] {
-  const stored = (agent as any)?.invoiceTemplates;
-  if (Array.isArray(stored)) {
-    return stored.flatMap((item): AgentInvoiceTemplate[] => {
-      if (!item || typeof item !== 'object') return [];
-      const id = typeof item.id === 'string' ? item.id.trim() : '';
-      const name = typeof item.name === 'string' ? item.name.trim() : '';
-      const url = typeof item.url === 'string' ? item.url.trim() : '';
-      return id && name && url ? [{ id, name, url }] : [];
-    });
-  }
-  return [
-    { id: 'legacy-1', name: (agent as any)?.invoiceTemplateName, url: (agent as any)?.invoiceTemplateUrl },
-    { id: 'legacy-2', name: (agent as any)?.invoiceTemplateName2, url: (agent as any)?.invoiceTemplateUrl2 },
-    { id: 'legacy-3', name: (agent as any)?.invoiceTemplateName3, url: (agent as any)?.invoiceTemplateUrl3 }
-  ].flatMap(({ id, name, url }, index) => typeof url === 'string' && url.trim()
-    ? [{ id, name: typeof name === 'string' && name.trim() ? name.trim() : `模板 ${index + 1}`, url: url.trim() }]
-    : []);
-}
 
 function normalizeAgentInvoiceTemplateInputs(input: AgentInvoiceTemplateInput[] | undefined): AgentInvoiceTemplate[] {
   if (!input?.length) return [];
@@ -33989,25 +33511,6 @@ function mapChannel(channel: {
   };
 }
 
-const rolePermissionConfigurationMarker = 'system-internal:role-permissions-configured';
-
-function resolveStoredRolePermissions(role: RoleKey, permissions?: readonly string[]): PermissionKey[] {
-  const explicitlyConfigured = permissions?.includes(rolePermissionConfigurationMarker) === true;
-  const stored = (permissions ?? []).filter((permission) => permission !== rolePermissionConfigurationMarker) as PermissionKey[];
-  const effective = permissions === undefined
-    ? effectivePermissionsForRole(role)
-    : explicitlyConfigured
-      ? effectivePermissionsForRole(role, stored)
-      : effectivePermissionsForRole(role, [...defaultPermissionsForRole(role), ...stored]);
-  const legacySalesScopedCustomRole = !isBuiltinRoleKey(role)
-    && role !== 'UG_MARKET'
-    && stored.includes('business:order-entry:view')
-    && stored.includes('master-data:customers:view-own');
-  if (legacySalesScopedCustomRole && !effective.includes('data-scope:sales-own')) {
-    effective.push('data-scope:sales-own');
-  }
-  return effective;
-}
 
 function resolveStoredRolePermissionsForManagement(role: RoleKey, permissions?: readonly string[]): PermissionKey[] {
   const explicitlyConfigured = permissions?.includes(rolePermissionConfigurationMarker) === true;

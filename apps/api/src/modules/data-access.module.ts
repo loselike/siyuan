@@ -3,6 +3,7 @@ import { DatabaseSeedService } from './database-seed.service.js';
 import { InMemoryRepository } from './in-memory.repository.js';
 import { PrismaRepository } from './prisma.repository.js';
 import { PrismaService } from './prisma.service.js';
+import { PrismaShipmentOverviewQueryRepository } from './shipment/overview/prisma-shipment-overview-query.repository.js';
 
 export const usePrismaRepository =
   process.env.USE_PRISMA_REPOSITORY === 'false'
@@ -10,11 +11,11 @@ export const usePrismaRepository =
     : process.env.USE_PRISMA_REPOSITORY === 'true' || Boolean(process.env.DATABASE_URL);
 
 const dataAccessProviders = usePrismaRepository
-  ? [PrismaService, PrismaRepository, DatabaseSeedService]
+  ? [PrismaService, PrismaShipmentOverviewQueryRepository, PrismaRepository, DatabaseSeedService]
   : [{ provide: PrismaRepository, useClass: InMemoryRepository }];
 
 const dataAccessExports = usePrismaRepository
-  ? [PrismaService, PrismaRepository]
+  ? [PrismaService, PrismaShipmentOverviewQueryRepository, PrismaRepository]
   : [PrismaRepository];
 
 @Module({
