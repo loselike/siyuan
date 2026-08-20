@@ -22,7 +22,7 @@ describe('Tracking import command API', () => {
       .set('Authorization', app.auth(customerToken))
       .send({ updates: [] })
       .expect(403)
-      .expect((response) => expect(response.body.message).toBe('客户不能批量导入轨迹'));
+      .expect((response) => expect(response.body.message).toBe('没有访问权限'));
 
     await request(app.getHttpServer())
       .post(path)

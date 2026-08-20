@@ -1,9 +1,9 @@
 # 47 当前运行基线归并与 digest cutover
 
-- 状态：`blocked`
+- 状态：`in_progress`
 - 会话 slug：`current-baseline-cutover-20260820`
 - 分支：`codex/release/current-baseline-20260820`
-- worktree：`/private/tmp/sunny-47-current-baseline-20260820`
+- worktree：`/Users/j1ng/Tools/sunny/.worktrees/current-baseline-cutover-work`
 - 上游：`codex/release/resilience-20260820` / `3001e4db`
 
 ## 目标与边界
@@ -24,6 +24,16 @@
 ## 当前门槛
 
 - 候选已提交为 `183d89ea`、推送到 `codex/release/current-baseline-20260820` 并创建 [PR #5](https://github.com/loselike/siyuan/pull/5)。CI 的 Shared build、Prisma generate、API/Web typecheck、API/Web 代表性测试均通过。
-- `node scripts/check-development-governance.mjs` 通过；PR CI 最终被既有 `docs/dev-now/market-positive-permission-rebuild-20260815.md` 缺 canonical status 阻断，三个镜像 job 因此按依赖失败关闭且未生成/推送镜像。当前会话按所有权规则不修改其他会话状态文件。
-- `architecture:check` 仍被当前生产组合版本相对旧 baseline 的路由权限契约、重复路由和规模债务阻断；不得通过机械更新 baseline 数字或删除检查来绕过，必须逐项审查后形成独立治理变更。
-- 候选可以提交并推送到 release 分支用于保存与 PR 审查，但在上述 CI 阻断关闭前不得合并 main、生成生产 digest 或执行 cutover。只有 `images.env` 的 `GIT_COMMIT` 与最终候选完全一致，且锁内重新捕获的 v3 manifest 未漂移，才允许 cutover。
+- 用户已明确授权继续解除 P1 门禁；既有 `market-positive-permission-rebuild-20260815` 任务已核对为 47 已发布，补 canonical `published_47` 状态后归档，避免治理器把已完成任务误判为悬空任务。
+- 已从当前候选重新生成架构快照并逐项审查：旧基线 434 条 handler 契约，当前 481 条；新增 50、删除 3、变化 53。51 项为正向权限集合变化；`tracking` 导入由 `auth` 收紧为 `tracking:external:import`；代理银行账户写入口由静态 permission 改为 `auth`，但 Controller 首段和 Prisma/InMemory Repository 均继续按创建/修改及财务银行管理权限二次判权并做字段裁剪。
+- 当前 34 组重复 HTTP 路由中 32 组权限元数据一致；`GET /operations/line-shipments/:id/internal-flow-log` 与 `GET /shipments` 两组存在动态联合授权差异，均由先命中的 DataController 转入 Repository 执行同一业务能力的角色、数据范围和字段裁剪，并已有允许/拒绝 E2E。Mojia 重复入口继续由治理器强制检查 handler 首语句设备 token。
+- 当前生产组合的集中债务（DataController 214、ApiClient 387/361、Shared 根导入 149、`as any` 954、`process.env` 38、Prisma/InMemory 方法 756/640、10 个孤儿候选和 34 组重复路由）被本次例外基线精确冻结；这不是认可或扩大额度，后续任何新增仍 fail-closed，下降后必须收紧。完整取舍记录见 `docs/architecture/phase-1-gate-a.md`。
+- 三个旧 E2E 夹具已按当前生产契约修正：旧 `cancel-completed` 路由固定为 404、轨迹导入拒绝由 Guard 返回通用权限文案、可选代理字段按空展示值断言，内部流通日志断言 Repository 的明确拒绝文案。RBAC 15/15、市场权限 3/3、Mojia 3/3、系统身份 1/1 通过；当前受控沙箱禁止测试监听 `0.0.0.0`，10 个 E2E 在应用启动前以 `listen EPERM` 终止，逻辑结果以 PR CI 为最终门。
+- 下一门槛：本地 context/architecture/governance/diff 检查通过、独立高风险复审无 P0/P1、PR #5 CI 全绿并生成三个不可变 digest。只有 `images.env` 的 `GIT_COMMIT` 与最终候选完全一致，且锁内重新捕获的 v3 manifest 未漂移，才允许合并和 current-baseline cutover。
+
+## 成熟参考与取舍
+
+- [Docker live restore](https://docs.docker.com/engine/daemon/live-restore/)：用于 daemon 异常时保留既有 Linux 容器；Sunny 已用 reload 启用，不在生产做 daemon kill 演练。
+- [docker/build-push-action](https://github.com/docker/build-push-action)：采用 CI 一次构建、Git SHA/digest 标识和制品提升；Sunny 保留 Compose，但 47 标准发布只拉取精确 digest。
+- [Kamal](https://github.com/basecamp/kamal) 与 [Argo Rollouts](https://github.com/argoproj/argo-rollouts)：借鉴先健康后切换、保留可回滚版本和失败自动停止；不引入 Ruby/Kubernetes 运维栈。
+- 权限边界沿用 [Casbin](https://github.com/casbin/casbin)、[Keycloak](https://github.com/keycloak/keycloak) 与 [Cerbos](https://github.com/cerbos/cerbos) 的 resource/action、后端决策点和对象属性校验原则。以上项目/文档许可证清晰；本次只借鉴架构原则，不复制策略语法、数据库结构或代码。

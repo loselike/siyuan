@@ -65,6 +65,27 @@
       "safety": ["npm run typecheck"]
     },
     {
+      "id": "operations-line-shipment-query-contract",
+      "patterns": ["apps/api/src/modules/operations-line-shipment-query.e2e.test.ts"],
+      "risk": "permission-and-data-scope-boundary",
+      "effect": ["npm run test:api:safe -- --run src/modules/operations-line-shipment-query.e2e.test.ts"],
+      "safety": ["npm run typecheck -w @siyuan/api"]
+    },
+    {
+      "id": "tracking-import-command-contract",
+      "patterns": ["apps/api/src/modules/tracking-import-command.e2e.test.ts"],
+      "risk": "permission-boundary",
+      "effect": ["npm run test:api:safe -- --run src/modules/tracking-import-command.e2e.test.ts"],
+      "safety": ["npm run typecheck -w @siyuan/api"]
+    },
+    {
+      "id": "warehouse-tally-lifecycle-contract",
+      "patterns": ["apps/api/src/modules/warehouse-tally-lifecycle.e2e.test.ts"],
+      "risk": "permission-and-state-boundary",
+      "effect": ["npm run test:api:safe -- --run src/modules/warehouse-tally-lifecycle.e2e.test.ts"],
+      "safety": ["npm run typecheck -w @siyuan/api"]
+    },
+    {
       "id": "api",
       "patterns": ["apps/api/**"],
       "risk": "normal",

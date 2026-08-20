@@ -60,6 +60,21 @@ Mojia 检查使用 AST 验证设备 token validator 是 handler 第一条有效�
 
 复核证据由现有仓库查询 Repository 定向测试、订单财务详情允许/拒绝与字段裁剪 E2E、财务水单/单票费用 E2E，以及 `architecture:check` 的完整路由元数据对比共同提供。未被测试覆盖的既有实现差异不在本次治理更新中修正，需单独建立行为任务。
 
+### 2026-08-20 生产组合版本归并复核
+
+47 在多次白名单发布后形成了一个尚未进入 `main` 的生产组合版本。本次 current-baseline cutover 先在全局发布锁内捕获 v3 manifest，再逐文件拉取并复算 550 个运行时文件；候选与线上快照逐字节一致。治理 baseline 的更新仅承认并冻结这份已经运行的事实，不改变运行时代码、权限语义或生产数据，也不把新增债务视为合理额度。
+
+相对旧 baseline 的路由审计结果为：434 条 handler 契约变为 481 条，新增 50、删除 3、变化 53。51 项变化仍为 `permission -> permission`；轨迹批量导入从 `auth` 收紧为 `tracking:external:import`；代理银行账户写入口从静态 permission 变为 `auth`，但 Controller 首段和 Prisma/InMemory Repository 都继续要求创建/修改或财务银行管理权限，并执行全局字段裁剪。新增路由除既有公开 health/auth 与 Mojia 设备 token 入口外均有 auth/permission 元数据，Mojia handler 首语句 token 检查继续由 AST 门和 401 定向测试保护。
+
+当前 34 组重复 HTTP route 中，32 组的权限集合一致。两组差异按动态联合授权保留：
+
+- `GET /operations/line-shipments/:id/internal-flow-log` 的 DataController 入口允许运营内部日志或市场待排货/已排货日志能力，Repository 再做权限、角色、数据范围和站点校验；领域 Controller 的单一运营权限元数据不扩大先命中入口的实际能力。
+- `GET /shipments` 的 DataController 按业务运单或市场看板/待排货/已排货/报表能力分流查询，Repository 继续执行岗位、客户归属、站点和字段裁剪；领域 Controller 的业务单权限路由不会覆盖前者的联合授权行为。
+
+结构指标也按同一生产快照精确冻结：DataController 214，根 ApiClient 方法/直接请求 387/361，Shared 根导入 149，`as any` 954，`process.env` 38，Prisma/InMemory Repository 方法 756/640，孤儿候选 10，重复路由 34。热点上限只取本次快照的实际行数；全局 CSS 已从 13,222 降至 13,194，仍按更低值收紧。API/Web lint 错误按现状 107/155 冻结。退出条件是后续领域拆分或修复使任一指标下降时，在独立治理变更中同步收紧，禁止再次用整表重采样恢复额度。
+
+这次例外的替代保护包括：完整 route owner/auth/permission 精确比较、无 metadata 路由显式白名单、Mojia 首语句 token 自检、Repository 二次授权、相关允许/拒绝 E2E，以及 PR CI 在镜像 job 前串联 `governance:check`。任何一项失败均不得生成生产 digest。
+
 ## 3. 增量债务预算
 
 当前预算阻止以下指标增长：

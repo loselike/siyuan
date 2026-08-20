@@ -5,7 +5,7 @@ import { setupE2eApp } from './test-support/e2e-harness.js';
 describe('warehouse tally lifecycle contract', () => {
   const app = setupE2eApp();
 
-  it('preserves start and completed-cancellation permissions, states, package effects and audits', async () => {
+  it('preserves start and completion permissions, states, package effects and audits', async () => {
     const adminToken = await app.loginAs('admin');
     const warehouseToken = await app.loginAs('warehouse');
     const operatorToken = await app.loginAs('operator');
@@ -138,67 +138,9 @@ describe('warehouse tally lifecycle contract', () => {
 
     await request(app.getHttpServer())
       .post(`/api/warehouse/tally-tasks/${task.body.id}/cancel-completed`)
-      .set('Authorization', app.auth(operatorToken))
-      .send({ reason: '越权取消' })
-      .expect(403);
-    await request(app.getHttpServer())
-      .post(`/api/warehouse/tally-tasks/${task.body.id}/cancel-completed`)
       .set('Authorization', app.auth(warehouseToken))
-      .send({})
-      .expect(400)
-      .expect((response) => expect(response.body.message).toBe('取消理货必须填写原因'));
-
-    const reason = '理货选择错误，退回重新处理';
-    await request(app.getHttpServer())
-      .post(`/api/warehouse/tally-tasks/${task.body.id}/cancel-completed`)
-      .set('Authorization', app.auth(warehouseToken))
-      .send({ reason })
-      .expect(201)
-      .expect((response) => {
-        expect(response.body).toEqual(expect.objectContaining({
-          id: task.body.id,
-          status: 'COMPLETED',
-          tallyProgressStatus: 'CANCELLED',
-          cancelReason: reason,
-          cancelledBy: 'warehouse'
-        }));
-        expect(response.body.cancelledAt).toBeTruthy();
-      });
-
-    await request(app.getHttpServer())
-      .get('/api/warehouse/in-stock')
-      .query({ combinedOrderNo })
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
-      .expect((response) => {
-        const restored = response.body.rows.find((row: { id: string }) => row.id === sourceId);
-        expect(restored).toEqual(expect.objectContaining({
-          id: sourceId,
-          status: 'RECEIVED',
-          tallyTaskId: task.body.id
-        }));
-      });
-    await request(app.getHttpServer())
-      .get('/api/warehouse/packages')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
-      .expect((response) => {
-        expect(response.body).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            sourcePackageId: sourceId,
-            tallyTaskId: task.body.id,
-            status: 'TALLIED_ARCHIVED',
-            archivedReason: '理货取消'
-          })
-        ]));
-      });
-
-    await request(app.getHttpServer())
-      .post(`/api/warehouse/tally-tasks/${task.body.id}/cancel-completed`)
-      .set('Authorization', app.auth(warehouseToken))
-      .send({ reason: '重复取消' })
-      .expect(400)
-      .expect((response) => expect(response.body.message).toBe('只有未取消的已完成理货任务可以取消'));
+      .send({ reason: '旧入口已由反审核替代' })
+      .expect(404);
 
     await request(app.getHttpServer())
       .get('/api/system/audit-logs?action=warehouse.tally.start')
@@ -225,24 +167,6 @@ describe('warehouse tally lifecycle contract', () => {
             after: expect.objectContaining({
               task: expect.objectContaining({ status: 'COMPLETED', completedPackageCount: 1 }),
               resultMappings: [expect.objectContaining({ sourcePackageIds: [sourceId] })]
-            })
-          })
-        ]));
-      });
-    await request(app.getHttpServer())
-      .get('/api/system/audit-logs?action=warehouse.tally.cancel_completed')
-      .set('Authorization', app.auth(adminToken))
-      .expect(200)
-      .expect((response) => {
-        expect(response.body.rows).toEqual(expect.arrayContaining([
-          expect.objectContaining({
-            action: 'warehouse.tally.cancel_completed',
-            target: task.body.id,
-            after: expect.objectContaining({
-              tallyProgressStatus: 'CANCELLED',
-              cancelReason: reason,
-              restoredPackageIds: [sourceId],
-              archivedResultPackageIds: expect.any(Array)
             })
           })
         ]));

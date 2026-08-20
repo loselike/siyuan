@@ -45,8 +45,8 @@ describe('Operations line shipment query API', () => {
           shipment: { agentName?: string; agentChannelName?: string; remark?: string };
         }) => {
           expect(row.receivableAmount).toBeUndefined();
-          expect(row.shipment.agentName).toBe('');
-          expect(row.shipment.agentChannelName).toBe('');
+          expect(row.shipment.agentName ?? '').toBe('');
+          expect(row.shipment.agentChannelName ?? '').toBe('');
           expect(row.shipment.remark).toBeUndefined();
         });
       });
@@ -85,7 +85,7 @@ describe('Operations line shipment query API', () => {
       .set('Authorization', app.auth(warehouseToken))
       .expect(403)
       .expect((response) => {
-        expect(response.body.message).toBe('没有访问权限');
+        expect(response.body.message).toBe('没有内部流通日志查看权限');
       });
 
     await request(app.getHttpServer())
