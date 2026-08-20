@@ -1,6 +1,6 @@
 # 运单总览查询边界重构
 
-- 状态：`in_progress`
+- 状态：`completed`
 - 分支：`codex/shipment-query-boundary-20260820`
 - 基线：`74521a08fb1f33482a2b02f3ae42f784faf435a0`
 - 用户目标：进入新一阶段，继续完成收益最大的底层优化，同时保持现有业务行为、权限与返回契约不变。
@@ -49,4 +49,19 @@
 - [x] 实施查询边界迁移与单元保护。
 - [x] 定向 E2E、API typecheck、架构治理和 diff 检查。
 - [x] 权限 / 数据范围独立风险审查。
-- [ ] 合并、精确发布 47，并验证允许 / 拒绝、字段裁剪、容器、provenance、日志、锁与 recovery。
+- [x] 合并、精确发布 47，并验证允许 / 拒绝、字段裁剪、容器、provenance、日志、锁与 recovery。
+
+## 合并与 47 发布结果
+
+- PR `#11` 已合并，merge commit：`be4d860626e645414a0dc4cb2534721fdc5a2337`。
+- 47 仅提升 API，不涉及 Prisma schema / migration，也未重启 Web；发布 ID：`git-be4d860626e6_web-32159ac4e7bd_api-bf0ea903914e`。
+- 线上固定样本：管理员 `/api/shipments?costScope=routed` 返回 200 / 91 条；仓库角色访问 `/api/shipments` 返回 403；市场角色 `/api/market/shipments?costScope=routed` 返回 200 / 46 条；非市场业务角色访问市场运单返回 403。
+- 市场结果按真实运单归属回查，46 条全部属于当前市场角色站点；`paymentAmountUsd`、`paymentAmountCny`、`paymentMethod`、`grossProfit`、`payables` 敏感键违规数为 0。
+- `/api/shipments/status-counts` 返回 200；生产没有启用的客户账号，因此客户角标 403 使用本地 E2E 锁定，线上改用无员工端权限的仓库角色验证 403，未为采证写入生产账号。
+- API / Web / Postgres / Redis 均运行；公网 health 与首页分别返回正常 / 200；API 最近 10 分钟无 `ERROR`、`Unhandled`、`FATAL`、`Exception`。
+- provenance 为 `traceable / ok`，Git commit、API 镜像、运行时 release ID 一致；release lock 为 `free`，recovery 为 `clear`。
+
+## 阶段完成重评
+
+- 本切片已在查询边界、权限、字段裁剪和 47 运行时形成闭环，不继续扩大同一改动面。
+- `DataController` 仍有 180 条路由，但下一切片不自动沿用“继续拆后端”的结论；应重新比较 Compose seed 治理、前端 route-owned 数据所有权和剩余后端高频边界的实际收益与保护成本。
