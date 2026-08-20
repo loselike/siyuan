@@ -57,6 +57,7 @@ describe('Operations line shipment query API', () => {
     const operatorToken = await app.loginAs('operator');
     const customerToken = await app.loginAs('customer');
     const warehouseToken = await app.loginAs('warehouse');
+    const marketToken = await app.loginAs('market');
 
     await request(app.getHttpServer())
       .get('/api/operations/line-shipments/s-seed-6/internal-flow-log')
@@ -79,6 +80,14 @@ describe('Operations line shipment query API', () => {
       .get('/api/operations/line-shipments/s-seed-6/internal-flow-log')
       .set('Authorization', app.auth(operatorToken))
       .expect(404);
+
+    await request(app.getHttpServer())
+      .get('/api/operations/line-shipments/s-seed-1/internal-flow-log')
+      .set('Authorization', app.auth(marketToken))
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.shipmentId).toBe('s-seed-1');
+      });
 
     await request(app.getHttpServer())
       .get('/api/operations/line-shipments/s-seed-6/internal-flow-log')

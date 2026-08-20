@@ -1,7 +1,7 @@
 import { Controller, ForbiddenException, Get, Inject, Param, Query, Req } from '@nestjs/common';
 import type { LineShipmentPoolQuery } from '@siyuan/shared';
 import { PrismaRepository } from '../../prisma.repository.js';
-import { RequirePermission } from '../../require-permission.decorator.js';
+import { RequireAuth, RequirePermission } from '../../require-permission.decorator.js';
 import type { Principal } from '../../rbac.js';
 
 @Controller()
@@ -15,7 +15,7 @@ export class OperationsLineShipmentQueryController {
   }
 
   @Get('operations/line-shipments/:id/internal-flow-log')
-  @RequirePermission('operations:line-shipment:internal-log-view')
+  @RequireAuth()
   async lineShipmentInternalFlowLog(@Req() request: { user: Principal }, @Param('id') id: string) {
     if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能查看内部流通日志');
     return this.repository.getShipmentInternalFlowLog(request.user, id);

@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
-import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Headers, Inject, Logger, NotFoundException, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UnauthorizedException, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, NotFoundException, Param, Patch, Post, Put, Query, Req, Res, StreamableFile, UploadedFile, UseInterceptors } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
 import { resolveUploadDirectory, resolveUploadRoot } from '../configure-app.js';
@@ -12,8 +12,6 @@ import type {
   AgentChannelCreateInput,
   AgentChannelUpdateInput,
   AgentMarkupCreateInput,
-  AgentMarkupListQuery,
-  MarkupRouteListQuery,
   MarkupRoutePreviewBatchInput,
   MarkupRoutePreviewInput,
   MarkupRouteTierBatchReplaceInput,
@@ -36,8 +34,6 @@ import type {
   CustomerContactCreateInput,
   CustomerContactUpdateInput,
   CustomerCreateInput,
-  CustomerSourceInput,
-  CustomerSourceListQuery,
   CustomerUpdateInput,
   CustomerUserCreateInput,
   EnabledUpdateInput,
@@ -73,7 +69,6 @@ import type {
   PriceBookImportInput,
   PriceBookBatchDeleteInput,
   PriceBookImportTargetModule,
-  PriceBookRowsQuery,
   PriceBookRemarkUpdateInput,
   DubaiPriceDisplayActivateInput,
   DubaiSeaMarkupUpdateInput,
@@ -91,10 +86,8 @@ import type {
   PriceLookupResponse,
   PricingQuoteRequest,
   PricingRuleCreateInput,
-  PricingRuleQuoteRequest,
   ReceivableAdjustmentInput,
   SurchargeCreateInput,
-  RoleGroupInput,
   ShipmentCreateInput,
   ShipmentFinanceItemCreateInput,
   ShipmentFinanceItemUpdateInput,
@@ -114,13 +107,6 @@ import type {
   ShipmentReviewDeleteInput,
   ShipmentReviewRejectInput,
   Shipment,
-  SiteCreateInput,
-  SiteUpdateInput,
-  StaffAccountCreateInput,
-  StaffAccountPasswordResetInput,
-  StaffAccountQuery,
-  StaffAccountUpdateInput,
-  WarehousePackageCreateInput,
   MasterDataSnapshot,
   NavigationReadStateInput
 } from '@siyuan/shared';
@@ -130,14 +116,9 @@ import { buildMasterDataSnapshotSelection, hasSalesOwnDataScope } from './master
 import { sanitizePricingChannelRequirement } from './pricing-excel.js';
 import { RequireAllPermissions, RequireAuth, RequirePermission } from './require-permission.decorator.js';
 import { isAdministratorRole, type PermissionKey, type Principal, type RoleKey } from './rbac.js';
-import { WarehouseInventoryQueryService } from './warehouse/inventory/warehouse-inventory-query.service.js';
 
 const PRICE_BOOK_FILE_IMPORT_MAX_BYTES = 30 * 1024 * 1024;
 const SOUTH_AFRICA_RATE_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
-const MOJIA_REQUEST_SAMPLE_RETENTION_MS = 72 * 60 * 60 * 1000;
-const MOJIA_REQUEST_SAMPLE_MAX_BYTES = 16 * 1024;
-const MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES = 100;
-const MOJIA_REQUEST_SAMPLE_WRITE_CONCURRENCY = 2;
 const pricingLookupPermissionByModule: Record<LegacyPricingModule, PermissionKey> = {
   amazon: 'pricing:lookup:amazon',
   inquiry: 'pricing:lookup:europe-oversize',
@@ -152,8 +133,7 @@ const pricingLookupPermissionByModule: Record<LegacyPricingModule, PermissionKey
 export class DataController {
   constructor(
     @Inject(PrismaRepository) private readonly repository: PrismaRepository,
-    @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService,
-    @Inject(WarehouseInventoryQueryService) private readonly warehouseInventoryQueries: WarehouseInventoryQueryService
+    @Inject(FinanceCatalogService) private readonly financeCatalogService: FinanceCatalogService
   ) {}
   private readonly imageMimeExtensions: Record<string, string> = {
     'image/png': '.png',
@@ -161,13 +141,6 @@ export class DataController {
     'image/webp': '.webp',
     'image/gif': '.gif'
   };
-  private readonly logger = new Logger(DataController.name);
-  private readonly mojiaRequestSampleWriteQueue: Array<{
-    run: () => void;
-    drop: () => void;
-    priority: boolean;
-  }> = [];
-  private mojiaRequestSampleActiveWrites = 0;
   private readonly excelMimeExtensions: Record<string, string> = {
     'application/vnd.ms-excel': '.xls',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
@@ -504,210 +477,6 @@ export class DataController {
     };
   }
 
-  private ensureMojiaDeviceToken(headers: Record<string, string | string[] | undefined>, queryToken?: string) {
-    const expected = process.env.MOJIA_DEVICE_TOKEN?.trim();
-    const headerValue = headers['x-device-token'];
-    const actual = (Array.isArray(headerValue) ? headerValue[0] : headerValue)?.trim() || queryToken?.trim();
-    if (!expected || actual !== expected) {
-      throw new UnauthorizedException('设备 token 无效');
-    }
-  }
-
-  private toWarehousePackageInput(body: MojiaMeasurementInput): WarehousePackageCreateInput {
-    const barcode = String(body.barcode ?? body.orderNo ?? '').trim();
-    const separatorIndex = barcode.search(/[-－—–]/);
-    if (!barcode && !body.customerCode) {
-      throw new BadRequestException('请填写条码');
-    }
-    const measuredAt = normalizeMojiaMeasuredAt(body.measuredAt);
-    const deviceNo = String(body.deviceNo ?? body.machineNo ?? '').trim();
-    const customerOrderNo = String(
-      body.customerCode ?? (separatorIndex > 0 ? barcode.slice(0, separatorIndex) : '待补客户')
-    ).trim();
-    const parsedTrackingNo = separatorIndex > 0 ? barcode.slice(separatorIndex + 1).trim() : '';
-    const providedTrackingNo = body.trackingNo !== undefined ? String(body.trackingNo).trim() : parsedTrackingNo;
-    const domesticTrackingNo = providedTrackingNo || '待补充';
-    const remark = deviceNo ? `设备号：${deviceNo}` : '';
-    return {
-      customerCode: customerOrderNo,
-      customerOrderNo,
-      domesticTrackingNo,
-      combinedOrderNo: `${customerOrderNo}-${domesticTrackingNo}`,
-      expectedTotalPackageCount: positiveInt(body.expectedTotalPackageCount, 1),
-      packageIndex: positiveInt(body.packageIndex, 1),
-      packageCount: positiveInt(body.packageCount, 1),
-      weightKg: positiveNumber(body.weightKg ?? body.weight, 'weight'),
-      lengthCm: positiveNumber(body.lengthCm ?? body.length, 'length'),
-      widthCm: positiveNumber(body.widthCm ?? body.width, 'width'),
-      heightCm: positiveNumber(body.heightCm ?? body.height, 'height'),
-      scanTime: measuredAt,
-      scanSource: '墨家设备',
-      remark: remark || undefined
-    };
-  }
-
-  @Post('integrations/mojia/measurements')
-  async receiveMojiaMeasurement(
-    @Headers() headers: Record<string, string | string[] | undefined>,
-    @Query('token') queryToken: string | undefined,
-    @Body() body: MojiaMeasurementInput
-  ) {
-    this.ensureMojiaDeviceToken(headers, queryToken);
-    const startedAt = Date.now();
-    const measurement = body && typeof body === 'object' ? body : {};
-    const sampleId = this.createMojiaRequestSample(measurement);
-    try {
-      const barcode = String(measurement.barcode ?? measurement.orderNo ?? '').trim();
-      if (barcode) {
-        const matched = await this.repository.applyWarehouseTallyMeasurementByBarcode(mojiaPrincipal, {
-          barcode,
-          weightKg: positiveNumber(measurement.weightKg ?? measurement.weight, 'weight'),
-          lengthCm: positiveNumber(measurement.lengthCm ?? measurement.length, 'length'),
-          widthCm: positiveNumber(measurement.widthCm ?? measurement.width, 'width'),
-          heightCm: positiveNumber(measurement.heightCm ?? measurement.height, 'height'),
-          measuredAt: normalizeMojiaMeasuredAt(measurement.measuredAt),
-          deviceNo: String(measurement.deviceNo ?? measurement.machineNo ?? '').trim() || undefined
-        });
-        if (matched) {
-          this.completeMojiaRequestSample(sampleId, 'SUCCESS', matched.package.id);
-          return { result: 'true', message: `${matched.package.labelNo} ${matched.alreadyApplied ? '已接收' : '复测覆盖成功'}` };
-        }
-      }
-      const input = this.toWarehousePackageInput(measurement);
-      const duplicate = await this.findDuplicateMojiaPackage(input);
-      if (duplicate) {
-        this.completeMojiaRequestSample(sampleId, 'SUCCESS');
-        return { result: 'true', message: `${duplicate.combinedOrderNo} 已接收` };
-      }
-      const created = await this.repository.createWarehousePackage(mojiaPrincipal, input);
-      this.completeMojiaRequestSample(sampleId, 'SUCCESS', created.id);
-      return { result: 'true', message: `${created.combinedOrderNo} 录入成功` };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : '录入失败';
-      this.completeMojiaRequestSample(sampleId, 'FAILED', undefined, message);
-      await this.recordMojiaPushFailure(message, startedAt);
-      return { result: 'false', message };
-    }
-  }
-
-  private createMojiaRequestSample(body: MojiaMeasurementInput): Promise<string | undefined> {
-    try {
-      const receivedAt = new Date();
-      const parsedPayload = sanitizeMojiaRequestSamplePayload(body as Record<string, unknown>);
-      const serialized = JSON.stringify(parsedPayload);
-      const originalBytes = Buffer.byteLength(serialized, 'utf8');
-      const payload = originalBytes <= MOJIA_REQUEST_SAMPLE_MAX_BYTES
-        ? parsedPayload
-        : {
-            _sampling: {
-              omitted: true,
-              reason: 'PAYLOAD_TOO_LARGE',
-              originalBytes,
-              fieldCount: Object.keys(parsedPayload).length,
-              fieldNames: Object.keys(parsedPayload).slice(0, 20).map((field) => field.slice(0, 80))
-            }
-          };
-      return this.enqueueMojiaRequestSampleWrite(() => this.repository.createMojiaRequestSample({
-        deviceNo: String(body.deviceNo ?? body.machineNo ?? '').trim() || undefined,
-        payload,
-        payloadHash: createHash('sha256').update(serialized).digest('hex'),
-        receivedAt,
-        expiresAt: new Date(receivedAt.getTime() + MOJIA_REQUEST_SAMPLE_RETENTION_MS)
-      }));
-    } catch {
-      this.logger.warn('墨家请求采样写入失败，业务接收继续执行');
-      return Promise.resolve(undefined);
-    }
-  }
-
-  private completeMojiaRequestSample(
-    sampleId: Promise<string | undefined>,
-    result: 'SUCCESS' | 'FAILED',
-    warehousePackageId?: string,
-    errorMessage?: string
-  ) {
-    void sampleId.then((resolvedSampleId) => {
-      if (!resolvedSampleId) return;
-      void this.enqueueMojiaRequestSampleWrite(async () => {
-        await this.repository.completeMojiaRequestSample(resolvedSampleId, {
-          result,
-          warehousePackageId,
-          errorMessage: errorMessage?.slice(0, 1000),
-          completedAt: new Date()
-        });
-      }, true);
-    });
-  }
-
-  private enqueueMojiaRequestSampleWrite<T>(task: () => Promise<T>, priority = false): Promise<T | undefined> {
-    if (!priority && this.mojiaRequestSampleWriteQueue.length >= MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES) {
-      this.logger.warn('墨家请求采样队列已满，本次采样已丢弃');
-      return Promise.resolve(undefined);
-    }
-    return new Promise((resolve) => {
-      const queued = {
-        priority,
-        drop: () => resolve(undefined),
-        run: () => {
-          this.mojiaRequestSampleActiveWrites += 1;
-          void task()
-            .then(resolve)
-            .catch(() => {
-              this.logger.warn('墨家请求采样后台写入失败，业务接收结果不受影响');
-              resolve(undefined);
-            })
-            .finally(() => {
-              this.mojiaRequestSampleActiveWrites -= 1;
-              this.drainMojiaRequestSampleWriteQueue();
-            });
-        }
-      };
-      if (priority) {
-        if (this.mojiaRequestSampleWriteQueue.length >= MOJIA_REQUEST_SAMPLE_MAX_PENDING_WRITES) {
-          let normalIndex = -1;
-          for (let index = this.mojiaRequestSampleWriteQueue.length - 1; index >= 0; index -= 1) {
-            if (!this.mojiaRequestSampleWriteQueue[index]?.priority) {
-              normalIndex = index;
-              break;
-            }
-          }
-          if (normalIndex >= 0) this.mojiaRequestSampleWriteQueue.splice(normalIndex, 1)[0]?.drop();
-        }
-        this.mojiaRequestSampleWriteQueue.unshift(queued);
-      } else {
-        this.mojiaRequestSampleWriteQueue.push(queued);
-      }
-      this.drainMojiaRequestSampleWriteQueue();
-    });
-  }
-
-  private drainMojiaRequestSampleWriteQueue() {
-    while (
-      this.mojiaRequestSampleActiveWrites < MOJIA_REQUEST_SAMPLE_WRITE_CONCURRENCY
-      && this.mojiaRequestSampleWriteQueue.length > 0
-    ) {
-      this.mojiaRequestSampleWriteQueue.shift()?.run();
-    }
-  }
-
-  private async recordMojiaPushFailure(message: string, startedAt: number) {
-    await (this.repository as any).recordHttpAudit?.(mojiaPrincipal, {
-      method: 'POST',
-      path: '/api/integrations/mojia/measurements',
-      result: 'FAILED',
-      durationMs: Date.now() - startedAt,
-      errorMessage: message
-    }).catch(() => undefined);
-  }
-
-  private async findDuplicateMojiaPackage(input: WarehousePackageCreateInput) {
-    return this.warehouseInventoryQueries.findDuplicateMojiaPackage(mojiaPrincipal, {
-      combinedOrderNo: input.combinedOrderNo as string,
-      scanTime: input.scanTime,
-      remark: input.remark
-    });
-  }
-
   @Post('navigation/read-state')
   @RequirePermission('business:shipment:list')
   async markNavigationRead(@Req() request: { user: Principal }, @Body() input: NavigationReadStateInput) {
@@ -1015,13 +784,6 @@ export class DataController {
     return this.repository.getShipmentAgentReplacementHistory(request.user, id);
   }
 
-  @Get('operations/line-shipments/:id/internal-flow-log')
-  @RequireAuth()
-  async shipmentInternalFlowLog(@Req() request: { user: Principal }, @Param('id') id: string) {
-    if (request.user.role === 'CUSTOMER') throw new ForbiddenException('客户不能查看内部流通日志');
-    return this.repository.getShipmentInternalFlowLog(request.user, id);
-  }
-
   @Post('master-data/agent-invoice-template/upload')
   @RequirePermission('master-data:agents:invoice-template-manage')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
@@ -1327,31 +1089,6 @@ export class DataController {
     return this.scopeMasterDataCustomers(request.user, await this.repository.getMasterData()).customers;
   }
 
-  @Get('master-data/customer-sources')
-  @RequirePermission('master-data:customers:read')
-  async masterDataCustomerSources(@Req() request: { user: Principal }, @Query('keyword') keyword?: string, @Query('enabledOnly') enabledOnly?: string) {
-    const query: CustomerSourceListQuery = { keyword, enabledOnly: enabledOnly === 'true' };
-    return this.repository.listCustomerSources(request.user, query);
-  }
-
-  @Post('master-data/customer-sources')
-  @RequirePermission('master-data:customers:create')
-  async createMasterDataCustomerSource(@Req() request: { user: Principal }, @Body() body: CustomerSourceInput) {
-    return this.repository.createCustomerSource(request.user, body);
-  }
-
-  @Put('master-data/customer-sources/:id')
-  @RequirePermission('master-data:customers:update')
-  async updateMasterDataCustomerSource(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: Partial<CustomerSourceInput>) {
-    return this.repository.updateCustomerSource(request.user, id, body);
-  }
-
-  @Delete('master-data/customer-sources/:id')
-  @RequirePermission('master-data:customers:delete')
-  async deleteMasterDataCustomerSource(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteCustomerSource(request.user, id);
-  }
-
   @Post('master-data/customers')
   @RequirePermission('master-data:customers:create')
   async createMasterDataCustomer(@Req() request: { user: Principal }, @Body() body: CustomerCreateInput) {
@@ -1572,125 +1309,6 @@ export class DataController {
     return this.repository.updateExchangeRate(request.user, id, { enabled: false }, 'master-data:exchange-rates:disable');
   }
 
-  @Get('system/roles')
-  @RequirePermission(['system:user-groups:read', 'system:role-permissions:read'])
-  async systemRoles() {
-    return this.repository.getRolePermissionMatrix();
-  }
-
-  @Post('system/roles')
-  @RequirePermission('system:user-groups:create')
-  async createSystemRole(@Req() request: { user: Principal }, @Body() body: RoleGroupInput) {
-    return this.repository.createRoleGroup(request.user, body);
-  }
-
-  @Put('system/roles/:role')
-  @RequirePermission('system:user-groups:update')
-  async updateSystemRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body() body: RoleGroupInput) {
-    return this.repository.updateRoleGroup(request.user, role, body);
-  }
-
-  @Put('system/roles/:role/enabled')
-  @RequirePermission('system:user-groups:enable')
-  async updateSystemRoleEnabled(@Req() request: { user: Principal }, @Param('role') role: RoleKey, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateRoleGroupEnabled(request.user, role, body);
-  }
-
-  @Delete('system/roles/:role')
-  @RequirePermission('system:user-groups:delete')
-  async deleteSystemRole(@Req() request: { user: Principal }, @Param('role') role: RoleKey) {
-    return this.repository.deleteRoleGroup(request.user, role);
-  }
-
-  @Get('system/staff-accounts')
-  @RequirePermission('system:accounts:read')
-  async systemStaffAccounts(@Req() request: { user: Principal }, @Query() query: StaffAccountQuery) {
-    return this.repository.getStaffAccounts(request.user, query);
-  }
-
-  @Post('system/sites')
-  @RequirePermission('system:sites:create')
-  async createSystemSite(@Req() request: { user: Principal }, @Body() body: SiteCreateInput) {
-    return this.repository.createSite(request.user, body);
-  }
-
-  @Put('system/sites/:id')
-  @RequirePermission('system:sites:update')
-  async updateSystemSite(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: SiteUpdateInput) {
-    return this.repository.updateSite(request.user, id, body);
-  }
-
-  @Put('system/sites/:id/enabled')
-  @RequirePermission('system:sites:enable')
-  async updateSystemSiteEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateSiteEnabled(request.user, id, body);
-  }
-
-  @Post('system/staff-accounts')
-  @RequirePermission('system:accounts:create')
-  async createSystemStaffAccount(@Req() request: { user: Principal }, @Body() body: StaffAccountCreateInput) {
-    return this.repository.createStaffAccount(request.user, body);
-  }
-
-  @Put('system/staff-accounts/:id/enabled')
-  @RequirePermission('system:accounts:enable')
-  async updateSystemStaffAccountEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
-    return this.repository.updateStaffAccountEnabled(request.user, id, body);
-  }
-
-  @Put('system/staff-accounts/:id')
-  @RequirePermission('system:accounts:update-profile')
-  async updateSystemStaffAccount(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: StaffAccountUpdateInput) {
-    if (body.role) await this.ensurePermission(request.user, 'system:accounts:update-role');
-    if (body.site !== undefined) await this.ensurePermission(request.user, 'system:accounts:update-site');
-    if (body.enabled !== undefined) await this.ensurePermission(request.user, 'system:accounts:enable');
-    if (body.password !== undefined) await this.ensurePermission(request.user, 'system:accounts:reset-password');
-    // 部门调整当前复用账号资料维护权限；部门不联动用户组或站点。
-    return this.repository.updateStaffAccount(request.user, id, body);
-  }
-
-  @Delete('system/staff-accounts/:id')
-  @RequirePermission('system:accounts:delete')
-  async deleteSystemStaffAccount(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.deleteStaffAccount(request.user, id);
-  }
-
-  @Post('system/staff-accounts/reset-passwords')
-  @RequirePermission('system:accounts:reset-password')
-  async resetSystemStaffAccountPasswords(@Req() request: { user: Principal }, @Body() body: StaffAccountPasswordResetInput) {
-    return this.repository.resetStaffAccountPasswords(request.user, body);
-  }
-
-  @Put('system/staff-accounts/:id/site')
-  @RequirePermission('system:accounts:update-site')
-  async updateSystemStaffAccountSite(
-    @Req() request: { user: Principal },
-    @Param('id') id: string,
-    @Body() body: { site?: string }
-  ) {
-    return this.repository.updateStaffAccountSite(request.user, id, body);
-  }
-
-  @Put('system/roles/:role/permissions')
-  @RequirePermission('system:role-permissions:save')
-  async updateRolePermissions(
-    @Req() request: { user: Principal },
-    @Param('role') role: RoleKey,
-    @Body() body: { permissions?: PermissionKey[] }
-  ) {
-    return this.repository.updateRolePermissions(request.user, role, body.permissions ?? []);
-  }
-
-  @Put('system/roles/:role/permissions/copy')
-  @RequirePermission('system:role-permissions:copy-role')
-  async copyRolePermissions(
-    @Req() request: { user: Principal },
-    @Param('role') role: RoleKey,
-    @Body() body: { sourceRoleKey?: RoleKey }
-  ) {
-    return this.repository.copyRolePermissions(request.user, role, body.sourceRoleKey);
-  }
-
   @Get('system/audit-logs')
   @RequirePermission('system:audit:read')
   async systemAuditLogs(@Req() request: { user: Principal }, @Query() query: AuditLogQuery) {
@@ -1704,44 +1322,6 @@ export class DataController {
       throw new ForbiddenException('客户不能访问内部查价');
     }
     return this.repository.quote(body);
-  }
-
-  @Get('pricing/books/rule-refresh-progress')
-  @RequirePermission('pricing:price-books:health')
-  async priceBookRuleRefreshProgress(@Req() request: { user: Principal }) {
-    return this.repository.getPriceBookRuleRefreshProgress(request.user);
-  }
-
-  @Get('pricing/book-rows')
-  @RequirePermission('pricing:price-books:view')
-  async priceBookRows(@Req() request: { user: Principal }, @Query() query: PriceBookRowsQuery) {
-    return this.repository.getPriceBookRows(request.user, undefined, query);
-  }
-
-  @Get('pricing/books/:id/rows')
-  @RequirePermission(['pricing:price-books:view', 'pricing:price-books:export', 'pricing:price-books:update', 'pricing:price-books:delete', 'pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
-  async priceBookRowsByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: PriceBookRowsQuery) {
-    return this.repository.getPriceBookRows(request.user, id, query);
-  }
-
-  @Get('pricing/books/:id/markup-routes')
-  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
-  async markupRoutesByBook(@Req() request: { user: Principal }, @Param('id') id: string, @Query() query: MarkupRouteListQuery) {
-    return this.repository.getMarkupRoutes(request.user, id, query);
-  }
-
-  @Get('pricing/books/:id/download')
-  @RequirePermission('pricing:price-books:export')
-  async downloadPriceBook(@Req() request: { user: Principal }, @Param('id') id: string, @Res({ passthrough: true }) response: Response) {
-    const file = await this.repository.downloadPriceBook(request.user, id);
-    const extension = extname(file.fileName).toLowerCase();
-    const mimeType = extension === '.xls'
-      ? 'application/vnd.ms-excel'
-      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    response.setHeader('Content-Type', mimeType);
-    response.setHeader('Content-Length', String(file.buffer.length));
-    response.setHeader('Content-Disposition', `attachment; filename="price-book${extension || '.xlsx'}"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
-    return new StreamableFile(file.buffer);
   }
 
   @Post('pricing/cleanup-old-original-agents')
@@ -1972,18 +1552,6 @@ export class DataController {
     return this.repository.rebuildLegacyPricing(request.user, body.module);
   }
 
-  @Get('pricing/markup-rules')
-  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
-  async agentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
-    return this.repository.getAgentMarkupRules(request.user, query);
-  }
-
-  @Get('pricing/markup-rules/export')
-  @RequirePermission(['pricing:markup:amazon:export', 'pricing:markup:inquiry:export', 'pricing:markup:europeExpress:export', 'pricing:markup:southAfrica:export', 'pricing:markup:usaAirSea:export', 'pricing:markup:canadaAirSea:export', 'pricing:markup:dubaiAirSea:export'])
-  async exportAgentMarkupRules(@Req() request: { user: Principal }, @Query() query: AgentMarkupListQuery) {
-    return this.repository.exportAgentMarkupRules(request.user, query);
-  }
-
   @Post('pricing/markup-rules/import')
   @RequirePermission(['pricing:markup:amazon:import', 'pricing:markup:inquiry:import', 'pricing:markup:europeExpress:import', 'pricing:markup:southAfrica:import', 'pricing:markup:usaAirSea:import', 'pricing:markup:canadaAirSea:import', 'pricing:markup:dubaiAirSea:import'])
   async importAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { rows?: AgentMarkupCreateInput[] }) {
@@ -2006,12 +1574,6 @@ export class DataController {
   @RequirePermission(['pricing:markup:amazon:delete', 'pricing:markup:inquiry:delete', 'pricing:markup:europeExpress:delete', 'pricing:markup:southAfrica:delete', 'pricing:markup:usaAirSea:delete', 'pricing:markup:canadaAirSea:delete', 'pricing:markup:dubaiAirSea:delete'])
   async batchDeleteAgentMarkupRules(@Req() request: { user: Principal }, @Body() body: { ids?: string[]; agentNames?: string[]; scopes?: Array<{ agentName?: string; priceBookId?: string; legacyModule?: LegacyPricingModule }> }) {
     return this.repository.batchDeleteAgentMarkupRules(request.user, body);
-  }
-
-  @Get('pricing/markup-rules/:id/preview')
-  @RequirePermission(['pricing:markup:amazon:view', 'pricing:markup:inquiry:view', 'pricing:markup:europeExpress:view', 'pricing:markup:southAfrica:view', 'pricing:markup:usaAirSea:view', 'pricing:markup:canadaAirSea:view', 'pricing:markup:dubaiAirSea:view'])
-  async previewAgentMarkupRule(@Req() request: { user: Principal }, @Param('id') id: string) {
-    return this.repository.previewAgentMarkupRule(request.user, id);
   }
 
   @Post('pricing/markup-rules/route-preview')
@@ -2126,12 +1688,6 @@ export class DataController {
     return this.repository.batchDeletePriceBooks(request.user, body.ids);
   }
 
-  @Get('pricing/rules')
-  @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
-  async pricingRules(@Req() request: { user: Principal }) {
-    return this.repository.getPricingRules(request.user);
-  }
-
   @Post('pricing/rules')
   @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async createPricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleCreateInput) {
@@ -2142,12 +1698,6 @@ export class DataController {
   @RequireAllPermissions('pricing:markup:amazon:tier', 'pricing:markup:inquiry:tier', 'pricing:markup:europeExpress:tier', 'pricing:markup:southAfrica:tier', 'pricing:markup:usaAirSea:tier', 'pricing:markup:canadaAirSea:tier', 'pricing:markup:dubaiAirSea:tier')
   async updatePricingRuleEnabled(@Req() request: { user: Principal }, @Param('id') id: string, @Body() body: EnabledUpdateInput) {
     return this.repository.updatePricingRuleEnabled(request.user, id, body);
-  }
-
-  @Post('pricing/rules/quote')
-  @RequireAllPermissions('pricing:lookup:amazon', 'pricing:lookup:europe-oversize', 'pricing:lookup:europe-express', 'pricing:lookup:south-africa', 'pricing:lookup:usa-air-sea', 'pricing:lookup:canada-air-sea', 'pricing:lookup:dubai-air-sea')
-  async quotePricingRule(@Req() request: { user: Principal }, @Body() body: PricingRuleQuoteRequest) {
-    return this.repository.quotePricingRule(request.user, body);
   }
 
   @Get('finance/business-cost-audits')
@@ -2628,99 +2178,6 @@ function normalizeUploadedFileName(fileName: string) {
   return normalized.replace(/[\\/:\0]/g, '_').trim() || '未命名文件';
 }
 
-function sanitizeMojiaRequestSamplePayload(value: Record<string, unknown>): Record<string, unknown> {
-  return sanitizeMojiaRequestSampleValue(value, 0) as Record<string, unknown>;
-}
-
-function sanitizeMojiaRequestSampleValue(value: unknown, depth: number): unknown {
-  if (!value || typeof value !== 'object') return value;
-  if (depth >= 8) return '[OMITTED_MAX_DEPTH]';
-  if (Array.isArray(value)) return value.map((item) => sanitizeMojiaRequestSampleValue(item, depth + 1));
-  return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, child]) => [
-    key,
-    isMojiaRequestSampleSensitiveKey(key)
-      ? '[REDACTED]'
-      : sanitizeMojiaRequestSampleValue(child, depth + 1)
-  ]));
-}
-
-function isMojiaRequestSampleSensitiveKey(key: string): boolean {
-  const normalized = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
-  return /密码|令牌|密钥|签名|口令|凭证/.test(key)
-    || normalized === 'auth'
-    || normalized === 'jwt'
-    || normalized === 'bearer'
-    || normalized.includes('authorization')
-    || normalized.endsWith('token')
-    || normalized.endsWith('password')
-    || normalized.endsWith('passwd')
-    || normalized.endsWith('pwd')
-    || normalized.endsWith('secret')
-    || normalized.endsWith('credential')
-    || normalized.endsWith('cookie')
-    || normalized.endsWith('apikey')
-    || normalized.endsWith('accesskey')
-    || normalized.endsWith('privatekey')
-    || normalized.endsWith('sessionid')
-    || normalized.endsWith('sessionkey')
-    || normalized.endsWith('signature')
-    || normalized === 'sign';
-}
-
-type MojiaMeasurementInput = {
-  orderNo?: unknown;
-  barcode?: unknown;
-  customerCode?: unknown;
-  trackingNo?: unknown;
-  length?: unknown;
-  width?: unknown;
-  height?: unknown;
-  weight?: unknown;
-  lengthCm?: unknown;
-  widthCm?: unknown;
-  heightCm?: unknown;
-  weightKg?: unknown;
-  packageCount?: unknown;
-  packageIndex?: unknown;
-  expectedTotalPackageCount?: unknown;
-  measuredAt?: unknown;
-  machineNo?: unknown;
-  deviceNo?: unknown;
-};
-
-const mojiaPrincipal: Principal = {
-  id: 'system-mojia-device',
-  username: 'mojia-device',
-  role: 'WAREHOUSE',
-  name: '墨家设备'
-};
-
-function positiveNumber(value: unknown, field: string): number {
-  const numberValue = Number(value);
-  if (!Number.isFinite(numberValue) || numberValue <= 0) {
-    throw new BadRequestException(`${field} 必须是大于 0 的数字`);
-  }
-  return numberValue;
-}
-
-function positiveInt(value: unknown, fallback: number): number {
-  const numberValue = Math.floor(Number(value) || fallback);
-  return Number.isFinite(numberValue) && numberValue > 0 ? numberValue : fallback;
-}
-
-function normalizeMojiaMeasuredAt(value: unknown): string | undefined {
-  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
-  const raw = String(value).trim();
-  if (!raw) return undefined;
-  const numeric = Number(raw);
-  const normalizedRaw = raw.replace(/^(\d{4})[./](\d{1,2})[./](\d{1,2})[ T/](\d{1,2}:\d{1,2}(?::\d{1,2})?)$/, '$1-$2-$3 $4');
-  const date = Number.isFinite(numeric)
-    ? new Date(raw.length <= 10 ? numeric * 1000 : numeric)
-    : new Date(normalizedRaw);
-  if (Number.isNaN(date.getTime())) return undefined;
-  date.setMilliseconds(0);
-  return date.toISOString();
-}
 function ensureInternalOrderEntryScope(principal: Principal) {
   if (principal.role === 'CUSTOMER') throw new ForbiddenException('当前角色不能使用内部录单');
   if (principal.shipmentAllView || principal.dataScope === 'SALES_OWN' || principal.departmentTeamScope?.length) return;

@@ -10,8 +10,8 @@ export class CustomerSourceService {
     private readonly repository: CustomerSourceRepository
   ) {}
 
-  async list(query: CustomerSourceListQuery) {
-    return this.repository.listCustomerSources(query);
+  async list(principal: Principal, query: CustomerSourceListQuery) {
+    return this.repository.listCustomerSources(principal, query);
   }
 
   async create(principal: Principal, input: CustomerSourceInput) {
