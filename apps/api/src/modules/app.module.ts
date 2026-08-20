@@ -24,17 +24,7 @@ import { PROBLEM_TICKET_QUERY_REPOSITORY } from './customer-service/problem-tick
 import { ProblemTicketQueryService } from './customer-service/problem-ticket/problem-ticket-query.service.js';
 import { DataController } from './data.controller.js';
 import { DataAccessModule, usePrismaRepository } from './data-access.module.js';
-import { FinanceCatalogController } from './finance/catalog/finance-catalog.controller.js';
-import {
-  FINANCE_CATALOG_AUDIT_WRITER,
-  LegacyFinanceCatalogAuditWriter,
-  PrismaFinanceCatalogAuditWriter
-} from './finance/catalog/finance-catalog.audit.js';
-import { FINANCE_CATALOG_AUTHORIZER } from './finance/catalog/finance-catalog.authorization.js';
-import { InMemoryFinanceCatalogRepository } from './finance/catalog/finance-catalog.in-memory-repository.js';
-import { PrismaFinanceCatalogRepository } from './finance/catalog/finance-catalog.prisma-repository.js';
-import { FINANCE_CATALOG_REPOSITORY } from './finance/catalog/finance-catalog.repository.js';
-import { FinanceCatalogService } from './finance/catalog/finance-catalog.service.js';
+import { FinanceCatalogModule } from './finance/catalog/finance-catalog.module.js';
 import { PayerBankAccountController } from './finance/payer-bank/payer-bank-account.controller.js';
 import {
   InMemoryPayerBankAccountRepository,
@@ -88,16 +78,8 @@ import { ShipmentBusinessInvoiceFileStorage } from './shipment/invoice/shipment-
 import { SHIPMENT_BUSINESS_INVOICE_REPOSITORY } from './shipment/invoice/shipment-business-invoice.repository.js';
 import { ShipmentBusinessInvoiceService } from './shipment/invoice/shipment-business-invoice.service.js';
 import { OrderEntryQueryController } from './shipment/order-entry/order-entry-query.controller.js';
-import { ShipmentOverviewQueryController } from './shipment/overview/shipment-overview-query.controller.js';
-import { SHIPMENT_OVERVIEW_QUERY_REPOSITORY } from './shipment/overview/shipment-overview-query.repository.js';
-import { ShipmentOverviewQueryService } from './shipment/overview/shipment-overview-query.service.js';
-import { SystemDirectoryController } from './system/directory/system-directory.controller.js';
-import { LegacySystemDirectoryRepository } from './system/directory/legacy-system-directory.repository.js';
-import {
-  PrismaSystemDirectoryRepository,
-  SYSTEM_DIRECTORY_REPOSITORY
-} from './system/directory/system-directory.repository.js';
-import { SystemDirectoryService } from './system/directory/system-directory.service.js';
+import { ShipmentOverviewModule } from './shipment/overview/shipment-overview.module.js';
+import { SystemDirectoryModule } from './system/directory/system-directory.module.js';
 import { SystemIdentityAdminController } from './system/identity/system-identity-admin.controller.js';
 import { SYSTEM_IDENTITY_ADMIN_REPOSITORY } from './system/identity/system-identity-admin.repository.js';
 import { SystemIdentityAdminService } from './system/identity/system-identity-admin.service.js';
@@ -164,23 +146,6 @@ import {
 const httpAuditWriterProvider = {
   provide: HTTP_AUDIT_WRITER,
   useExisting: PrismaRepository
-};
-
-const financeCatalogRepositoryProvider = usePrismaRepository
-  ? { provide: FINANCE_CATALOG_REPOSITORY, useClass: PrismaFinanceCatalogRepository }
-  : { provide: FINANCE_CATALOG_REPOSITORY, useClass: InMemoryFinanceCatalogRepository };
-
-const financeCatalogAuditWriterProvider = usePrismaRepository
-  ? { provide: FINANCE_CATALOG_AUDIT_WRITER, useClass: PrismaFinanceCatalogAuditWriter }
-  : { provide: FINANCE_CATALOG_AUDIT_WRITER, useClass: LegacyFinanceCatalogAuditWriter };
-
-const financeCatalogAuthorizerProvider = {
-  provide: FINANCE_CATALOG_AUTHORIZER,
-  useFactory: (repository: PrismaRepository) => ({
-    hasPermission: repository.hasPermission.bind(repository),
-    recordPermissionDenied: repository.recordPermissionDenied.bind(repository)
-  }),
-  inject: [PrismaRepository]
 };
 
 const waterReceiptAllocationRepositoryProvider = {
@@ -258,11 +223,6 @@ const shipmentBusinessInvoiceRepositoryProvider = {
   useExisting: PrismaRepository
 };
 
-const shipmentOverviewQueryRepositoryProvider = {
-  provide: SHIPMENT_OVERVIEW_QUERY_REPOSITORY,
-  useExisting: PrismaRepository
-};
-
 const problemTicketQueryRepositoryProvider = usePrismaRepository
   ? { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: PrismaProblemTicketQueryRepository }
   : { provide: PROBLEM_TICKET_QUERY_REPOSITORY, useClass: LegacyProblemTicketQueryRepository };
@@ -299,10 +259,6 @@ const userTablePreferenceServiceProvider = usePrismaRepository
   ? { provide: UserTablePreferenceService, useClass: PrismaUserTablePreferenceService }
   : { provide: UserTablePreferenceService, useClass: InMemoryUserTablePreferenceService };
 
-const systemDirectoryRepositoryProvider = usePrismaRepository
-  ? { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: PrismaSystemDirectoryRepository }
-  : { provide: SYSTEM_DIRECTORY_REPOSITORY, useClass: LegacySystemDirectoryRepository };
-
 const warehouseTallyQueryRepositoryProvider = usePrismaRepository
   ? { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: PrismaWarehouseTallyQueryRepository }
   : { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: LegacyWarehouseTallyQueryRepository };
@@ -336,7 +292,7 @@ const systemIdentityAdminRepositoryProvider = {
 };
 
 @Module({
-  imports: [DataAccessModule, WarehouseInventoryModule],
+  imports: [DataAccessModule, FinanceCatalogModule, ShipmentOverviewModule, SystemDirectoryModule, WarehouseInventoryModule],
   controllers: [
     AuthController,
     HealthController,
@@ -349,7 +305,6 @@ const systemIdentityAdminRepositoryProvider = {
     ProblemTicketCommandController,
     ProblemTicketTagController,
     CustomerSourceController,
-    FinanceCatalogController,
     PayerBankAccountController,
     FinanceReceivableController,
     NotificationController,
@@ -364,8 +319,6 @@ const systemIdentityAdminRepositoryProvider = {
     PricingRuleQueryController,
     ShipmentBusinessInvoiceController,
     ShipmentLabelLifecycleController,
-    ShipmentOverviewQueryController,
-    SystemDirectoryController,
     SystemIdentityAdminController,
     TrackingQueryController,
     TrackingImportCommandController,
@@ -387,12 +340,8 @@ const systemIdentityAdminRepositoryProvider = {
     AuthSessionService,
     AiService,
     LineageWatcher,
-    financeCatalogRepositoryProvider,
-    financeCatalogAuditWriterProvider,
-    financeCatalogAuthorizerProvider,
     problemTicketQueryRepositoryProvider,
     payerBankAccountRepositoryProvider,
-    FinanceCatalogService,
     ProblemTicketQueryService,
     CustomerServiceDataConfirmService,
     customerServiceDataConfirmRepositoryProvider,
@@ -418,8 +367,6 @@ const systemIdentityAdminRepositoryProvider = {
     ShipmentBusinessInvoiceService,
     ShipmentBusinessInvoiceFileStorage,
     shipmentBusinessInvoiceRepositoryProvider,
-    ShipmentOverviewQueryService,
-    shipmentOverviewQueryRepositoryProvider,
     WarehouseMachineImportService,
     warehouseMachineImportRepositoryProvider,
     MojiaMeasurementService,
@@ -441,7 +388,6 @@ const systemIdentityAdminRepositoryProvider = {
     userTablePreferenceServiceProvider,
     ...(usePrismaRepository ? [NotificationAuditWorker] : []),
     MiscFeeService,
-    systemDirectoryRepositoryProvider,
     trackingQueryRepositoryProvider,
     TrackingImportCommandService,
     trackingImportCommandRepositoryProvider,
@@ -450,7 +396,6 @@ const systemIdentityAdminRepositoryProvider = {
     CarrierTaskCommandService,
     carrierTaskCommandRepositoryProvider,
     priceBookQueryRepositoryProvider,
-    SystemDirectoryService,
     SystemIdentityAdminService,
     systemIdentityAdminRepositoryProvider,
     warehouseTallyQueryRepositoryProvider,

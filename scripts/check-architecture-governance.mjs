@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -13,6 +13,7 @@ const printCurrent = process.argv.includes('--print-current');
 const skipLint = process.argv.includes('--skip-lint');
 const compact = process.argv.includes('--compact');
 const selfTest = process.argv.includes('--self-test');
+const nakedBodyDecoratorsMax = 230;
 
 const hotspotFiles = [
   'apps/api/src/modules/prisma.repository.ts',
@@ -42,6 +43,54 @@ const routePolicyEvidence = {
     validator: 'ensureMojiaDeviceToken'
   }
 };
+
+function sourceFiles(directory) {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolutePath = path.join(directory, entry.name);
+    if (entry.isDirectory()) return sourceFiles(absolutePath);
+    return entry.isFile() && /\.[cm]?[jt]sx?$/.test(entry.name) ? [absolutePath] : [];
+  });
+}
+
+function countNakedBodyDecorators() {
+  const controllersRoot = path.join(repositoryRoot, 'apps/api/src/modules');
+  return sourceFiles(controllersRoot)
+    .filter((file) => file.endsWith('.controller.ts'))
+    .reduce((total, file) => total + (readFileSync(file, 'utf8').match(/@Body\(\)/g)?.length ?? 0), 0);
+}
+
+function checkRuntimeInputDebt(failures) {
+  assertMaximum('naked @Body() decorators', countNakedBodyDecorators(), nakedBodyDecoratorsMax, failures);
+}
+
+function permissionKeyDefinitionFiles(files) {
+  return files
+    .filter((file) => /(?:^|\s)(?:export\s+)?type\s+PermissionKey\s*=/.test(readFileSync(file, 'utf8')))
+    .map((file) => path.relative(repositoryRoot, file).split(path.sep).join('/'))
+    .sort();
+}
+
+function validatePermissionKeyDefinitions(definitions, failures) {
+  const canonical = 'packages/shared/src/permissions.ts';
+  if (definitions.length !== 1 || definitions[0] !== canonical) {
+    failures.push(`PermissionKey must have one canonical definition in ${canonical}; found ${definitions.join(', ') || 'none'}`);
+  }
+}
+
+function checkPermissionKeyContract(failures) {
+  const roots = ['apps/api/src', 'apps/web/src', 'packages/shared/src'].map((directory) => path.join(repositoryRoot, directory));
+  const definitions = permissionKeyDefinitionFiles(roots.flatMap(sourceFiles));
+  validatePermissionKeyDefinitions(definitions, failures);
+  for (const bridge of ['apps/api/src/modules/rbac.ts', 'apps/web/src/apiClient.ts']) {
+    const source = readFileSync(path.join(repositoryRoot, bridge), 'utf8');
+    if (!source.includes("import type { PermissionKey } from '@siyuan/shared/permissions';")) {
+      failures.push(`${bridge} must import PermissionKey from @siyuan/shared/permissions`);
+    }
+    if (!source.includes("export type { PermissionKey } from '@siyuan/shared/permissions';")) {
+      failures.push(`${bridge} must preserve its compatibility re-export for PermissionKey`);
+    }
+  }
+}
 
 function scannerSnapshot() {
   const output = execFileSync(process.execPath, ['scripts/architecture-baseline.mjs', 'json'], {
@@ -470,6 +519,14 @@ function runSelfTest() {
     rejectedInvalidBudget = error instanceof Error && error.message.includes('debt.dataControllerRoutesMax');
   }
   if (!rejectedInvalidBudget) throw new Error('architecture self-test must reject missing debt budget fields');
+  const permissionFailures = [];
+  validatePermissionKeyDefinitions(
+    ['apps/api/src/modules/rbac.ts', 'packages/shared/src/permissions.ts'],
+    permissionFailures
+  );
+  if (!permissionFailures.some((failure) => failure.includes('one canonical definition'))) {
+    throw new Error('architecture self-test must reject duplicate PermissionKey definitions');
+  }
   execFileSync(process.execPath, ['scripts/architecture-baseline.mjs', 'self-test'], { cwd: repositoryRoot, stdio: 'pipe' });
   console.log(`[architecture:check] SELF-TEST PASS (${requiredFragments.length + 3} failure classes)`);
 }
@@ -498,6 +555,8 @@ compareDebt(expected.debt, actual.debt, failures);
 if (!skipLint) compareLint(expected.lint, actual.lint, failures);
 checkModuleBoundaries(failures);
 checkRoutePolicyEvidence(failures);
+checkPermissionKeyContract(failures);
+checkRuntimeInputDebt(failures);
 
 if (failures.length) {
   for (const failure of failures) console.error(`[architecture:check] ${failure}`);

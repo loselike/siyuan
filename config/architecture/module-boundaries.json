@@ -6,6 +6,18 @@
       "status": "reference",
       "files": [
         {
+          "path": "apps/api/src/modules/finance/catalog/finance-catalog.module.ts",
+          "requiredImports": [
+            "../../data-access.module.js",
+            "./finance-catalog.controller.js",
+            "./finance-catalog.repository.js",
+            "./finance-catalog.service.js"
+          ],
+          "forbiddenText": [
+            "useExisting: PrismaRepository"
+          ]
+        },
+        {
           "path": "apps/api/src/modules/finance/catalog/finance-catalog.controller.ts",
           "requiredImports": [
             "./finance-catalog.service.js"
@@ -208,9 +220,82 @@
       ]
     },
     {
+      "name": "system-directory-query-slice",
+      "status": "reference",
+      "files": [
+        {
+          "path": "apps/api/src/modules/system/directory/system-directory.module.ts",
+          "requiredImports": [
+            "../../data-access.module.js",
+            "./system-directory.controller.js",
+            "./system-directory.repository.js",
+            "./system-directory.service.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/system/directory/system-directory.controller.ts",
+          "requiredImports": [
+            "./system-directory.service.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.repository.js",
+            "../../prisma.service.js",
+            "./system-directory.repository.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/system/directory/system-directory.service.ts",
+          "requiredImports": [
+            "./system-directory.repository.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.repository.js",
+            "../../prisma.service.js",
+            "./system-directory.controller.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/system/directory/system-directory.repository.ts",
+          "requiredImports": [
+            "../../prisma.service.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.repository.js",
+            "./system-directory.controller.js",
+            "./system-directory.service.js"
+          ]
+        },
+        {
+          "path": "apps/api/src/modules/system/directory/legacy-system-directory.repository.ts",
+          "requiredImports": [
+            "../../prisma.repository.js",
+            "./system-directory.repository.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.service.js",
+            "./system-directory.controller.js",
+            "./system-directory.service.js"
+          ]
+        }
+      ]
+    },
+    {
       "name": "shipment-overview-query-slice",
       "status": "transitional-query-boundary",
       "files": [
+        {
+          "path": "apps/api/src/modules/shipment/overview/shipment-overview.module.ts",
+          "requiredImports": [
+            "../../data-access.module.js",
+            "../../prisma.repository.js",
+            "./shipment-overview-query.controller.js",
+            "./shipment-overview-query.repository.js",
+            "./shipment-overview-query.service.js"
+          ],
+          "forbiddenImports": [
+            "../../prisma.service.js"
+          ]
+        },
         {
           "path": "apps/api/src/modules/shipment/overview/shipment-overview-query.controller.ts",
           "requiredImports": [
