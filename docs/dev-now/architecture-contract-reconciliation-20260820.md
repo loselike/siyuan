@@ -1,6 +1,6 @@
 # 架构路由契约对账（2026-08-20）
 
-- status: local_validated
+- 状态：`in_progress`
 - branch: `codex/architecture-contract-reconciliation-20260820`
 - baseline: `9012a8c422003a63c69730a6b3cc33f0bf48bb5d`
 - production ancestor: `1881c1e4fe3bdad7c2f219f81c294d82148e2944`
