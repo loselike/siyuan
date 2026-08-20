@@ -127,9 +127,10 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 if [[ -n "$IMAGE_MANIFEST_FILE" ]]; then
-  if [[ -n "$BOOTSTRAP_MANIFEST_DIR" || "$CONFIRM_BOOTSTRAP" == true || "$CURRENT_BASELINE_CUTOVER" == true \
-    || "$SOURCE_BUNDLE_MODE" == true || ! -f "$IMAGE_MANIFEST_FILE" || -L "$IMAGE_MANIFEST_FILE" ]]; then
-    echo "Immutable image promotion requires a regular manifest and cannot be combined with bootstrap/source-bundle mode." >&2
+  if [[ ! -f "$IMAGE_MANIFEST_FILE" || -L "$IMAGE_MANIFEST_FILE" \
+    || ( ( -n "$BOOTSTRAP_MANIFEST_DIR" || "$CONFIRM_BOOTSTRAP" == true || "$SOURCE_BUNDLE_MODE" == true ) \
+      && "$CURRENT_BASELINE_CUTOVER" != true ) ]]; then
+    echo "Immutable image promotion requires a regular manifest; bootstrap/source-bundle is only compatible with the reviewed current-baseline cutover." >&2
     exit 2
   fi
   PREBUILT_IMAGE_MODE=true
@@ -615,7 +616,7 @@ fi
 
 echo "RELEASE_SCOPE=$RELEASE_SCOPE"
 echo "MIGRATION_REQUIRED=$DB_MIGRATION_REQUIRED"
-echo "BUILD_MODE=$([[ "$PREBUILT_IMAGE_MODE" == true ]] && echo immutable-image-promotion || echo server-build)"
+echo "BUILD_MODE=$([[ "$PREBUILT_IMAGE_MODE" == true ]] && echo immutable-image-promotion || echo server-build-blocked)"
 echo "DIRTY_RUNTIME_COUNT=$DIRTY_RUNTIME_COUNT"
 echo "Release scope: web=$WEB_CHANGED api=$API_CHANGED migrate=$DB_MIGRATION_REQUIRED"
 if [[ -n "$SYNC_CHANGES" ]]; then
@@ -630,6 +631,13 @@ if [[ "$MODE" == "dry-run" ]]; then
     printf '%s\n' "$DIRTY_RUNTIME_FILES"
   fi
   exit 0
+fi
+
+if [[ ( "$WEB_CHANGED" == true || "$API_CHANGED" == true || "$DB_MIGRATION_REQUIRED" == true ) \
+  && "$PREBUILT_IMAGE_MODE" != true ]]; then
+  echo "Standard 47 runtime releases require CI-built immutable images via --image-manifest." >&2
+  echo "Production-host docker compose build is disabled; use the reviewed emergency whitelist path only for break-glass recovery." >&2
+  exit 89
 fi
 
 if [[ "$MIGRATE_CHANGED" == true && "$BOOTSTRAP_MODE" != true ]]; then
@@ -792,17 +800,14 @@ while IFS= read -r service; do
   [[ -n "$service" ]] && build_services+=("$service")
 done < <(siyuan_47_plan_build_services "$WEB_CHANGED" "$API_CHANGED" "$MIGRATE_CHANGED")
 if ((${#build_services[@]})); then
-  if [[ "$PREBUILT_IMAGE_MODE" == true ]]; then
-    siyuan_47_record_release_phase artifact-pull-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
-    SIYUAN_47_BUILD_TIMEOUT_SECONDS="$BUILD_TIMEOUT_SECONDS" \
-      siyuan_47_run_bounded_build docker compose --profile tools pull "${build_services[@]}"
-    siyuan_47_record_release_phase artifact-pull-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
-  else
-    siyuan_47_record_release_phase build-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
-    SIYUAN_47_BUILD_TIMEOUT_SECONDS="$BUILD_TIMEOUT_SECONDS" BUILDKIT_PROGRESS=plain \
-      siyuan_47_run_bounded_build docker compose build "${build_services[@]}"
-    siyuan_47_record_release_phase build-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
-  fi
+  [[ "$PREBUILT_IMAGE_MODE" == true ]] || {
+    echo "REMOTE_SERVER_BUILD_POLICY_VIOLATION" >&2
+    exit 89
+  }
+  siyuan_47_record_release_phase artifact-pull-start "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
+  SIYUAN_47_BUILD_TIMEOUT_SECONDS="$BUILD_TIMEOUT_SECONDS" \
+    siyuan_47_run_bounded_build docker compose --profile tools pull "${build_services[@]}"
+  siyuan_47_record_release_phase artifact-pull-complete "$RELEASE_LOCK_DIR" "$RELEASE_LOCK_TOKEN"
   siyuan_47_capture_release_image_ids "$API_IMAGE_REFRESH_REQUIRED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
   siyuan_47_verify_release_image_ids "$API_IMAGE_REFRESH_REQUIRED" "$WEB_CHANGED" "$MIGRATE_CHANGED"
 fi

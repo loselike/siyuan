@@ -23,6 +23,9 @@ APPROVED_MIGRATIONS=()
 APPROVED_MIGRATION_SPECS=()
 NO_CACHE=false
 ADOPT_CURRENT_RUNTIME=false
+EMERGENCY_SERVER_BUILD=false
+EMERGENCY_BUILD_REASON=""
+EMERGENCY_BUILD_REASON_SHA256=""
 SIYUAN_47_BUILD_TIMEOUT_SECONDS="${SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800}"
 SIYUAN_47_MIGRATION_TIMEOUT_SECONDS="${SIYUAN_47_MIGRATION_TIMEOUT_SECONDS:-900}"
 
@@ -50,8 +53,16 @@ while [[ "$#" -gt 0 ]]; do
       ADOPT_CURRENT_RUNTIME=true
       shift
       ;;
+    --emergency-server-build)
+      EMERGENCY_SERVER_BUILD=true
+      shift
+      ;;
+    --reason)
+      EMERGENCY_BUILD_REASON="${2:-}"
+      shift 2
+      ;;
     *)
-      echo "Usage: npm run deploy:47:whitelist -- [--no-cache] [--adopt-current-runtime] --scope <none|web|api|web+api|api+migrate|web+api+migrate> --file <candidate> <target> <expected-sha|MISSING> [--file ...]" >&2
+      echo "Usage: npm run deploy:47:whitelist -- [--adopt-current-runtime] [--emergency-server-build --reason <8-200 chars> [--no-cache]] --scope <none|web|api|web+api|api+migrate|web+api+migrate> --file <candidate> <target> <expected-sha|MISSING> [--file ...]" >&2
       exit 2
       ;;
   esac
@@ -74,6 +85,22 @@ fi
 if [[ "${#SOURCE_FILES[@]}" -eq 0 ]]; then
   echo "At least one --file candidate is required." >&2
   exit 2
+fi
+if [[ "$SCOPE" == none ]]; then
+  if [[ "$EMERGENCY_SERVER_BUILD" == true || -n "$EMERGENCY_BUILD_REASON" || "$NO_CACHE" == true ]]; then
+    echo "Zero-build governance synchronization cannot declare an emergency server build." >&2
+    exit 2
+  fi
+elif [[ "$EMERGENCY_SERVER_BUILD" != true ]]; then
+  echo "Whitelist runtime releases are break-glass only and require --emergency-server-build with --reason." >&2
+  exit 89
+elif [[ ${#EMERGENCY_BUILD_REASON} -lt 8 || ${#EMERGENCY_BUILD_REASON} -gt 200 || "$EMERGENCY_BUILD_REASON" == *$'\n'* || "$EMERGENCY_BUILD_REASON" == *$'\r'* ]]; then
+  echo "Emergency server-build reason must be a single line between 8 and 200 characters." >&2
+  exit 2
+else
+  EMERGENCY_BUILD_REASON_SHA256="$(printf '%s' "$EMERGENCY_BUILD_REASON" | shasum -a 256 | awk '{print $1}')"
+  echo "EMERGENCY_SERVER_BUILD=true"
+  echo "EMERGENCY_BUILD_REASON_SHA256=$EMERGENCY_BUILD_REASON_SHA256"
 fi
 
 NEEDS_WEB=false
@@ -373,7 +400,7 @@ EXPECTED_SOURCE_MIGRATE="$(printf '%s\n' "$EXPECTED_SOURCE_FINGERPRINTS" | sed -
 
 if [[ "$SCOPE" != "none" ]]; then
   siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_RELEASE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" bash -s -- \
-  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_ARG" "$NO_CACHE" "$WHITELIST_RELEASE_ID" "$EXPECTED_SOURCE_WEB" "$EXPECTED_SOURCE_API" "$EXPECTED_SOURCE_MIGRATE" "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" <<'REMOTE_SCRIPT'
+  "$SIYUAN_47_DIR" "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SCOPE" "$APPROVED_MIGRATIONS_ARG" "$NO_CACHE" "$WHITELIST_RELEASE_ID" "$EXPECTED_SOURCE_WEB" "$EXPECTED_SOURCE_API" "$EXPECTED_SOURCE_MIGRATE" "$SIYUAN_47_BUILD_TIMEOUT_SECONDS" "$SIYUAN_47_MIGRATION_TIMEOUT_SECONDS" "$EMERGENCY_BUILD_REASON_SHA256" <<'REMOTE_SCRIPT'
 set -euo pipefail
 remote_dir="$1"
 lock_dir="$2"
@@ -387,11 +414,16 @@ expected_source_api="$9"
 expected_source_migrate="${10}"
 build_timeout_seconds="${11}"
 migration_timeout_seconds="${12}"
+emergency_reason_sha256="${13}"
 [[ "$approved_migrations_csv" == __SIYUAN_EMPTY__ ]] && approved_migrations_csv=""
 if [[ ! "$whitelist_release_id" =~ ^whitelist-[0-9a-f]{24}$ ]]; then
   echo "RELEASE_ID_ARGUMENT_INVALID actual=$whitelist_release_id" >&2
   exit 83
 fi
+[[ "$emergency_reason_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+  echo "EMERGENCY_BUILD_REASON_SHA_INVALID" >&2
+  exit 89
+}
 actual_token="$(sed -n '1p' "$lock_dir/token" 2>/dev/null || true)"
 if [[ "$actual_token" != "$expected_token" ]]; then
   echo "47 release lock ownership changed before whitelist build." >&2
@@ -445,10 +477,10 @@ migrate_changed=false
 [[ "$scope" == *api* ]] && api_changed=true
 [[ "$scope" == *web* ]] && web_changed=true
 [[ "$scope" == *migrate* ]] && migrate_changed=true
-siyuan_47_record_release_phase build-start "$lock_dir" "$expected_token"
+siyuan_47_record_release_phase emergency-build-start "$lock_dir" "$expected_token"
 SIYUAN_47_BUILD_TIMEOUT_SECONDS="$build_timeout_seconds" BUILDKIT_PROGRESS=plain \
   siyuan_47_run_bounded_build docker compose build "${build_args[@]}" "${build_services[@]}"
-siyuan_47_record_release_phase build-complete "$lock_dir" "$expected_token"
+siyuan_47_record_release_phase emergency-build-complete "$lock_dir" "$expected_token"
 verify_whitelist_source_snapshot
 siyuan_47_capture_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
 siyuan_47_verify_release_image_ids "$api_changed" "$web_changed" "$migrate_changed"
@@ -536,12 +568,13 @@ else
 fi
 siyuan_47_release_phase state-write-start
 siyuan_47_ssh_bounded_remote "$SIYUAN_47_REMOTE_STATE_TIMEOUT_SECONDS" "$SIYUAN_47_REMOTE" bash -s -- \
-  "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SIYUAN_47_DIR" "$WHITELIST_RELEASE_ID" <<'REMOTE_SCRIPT'
+  "$SIYUAN_47_RELEASE_LOCK_DIR" "$SIYUAN_47_RELEASE_LOCK_TOKEN" "$SIYUAN_47_DIR" "$WHITELIST_RELEASE_ID" "${EMERGENCY_BUILD_REASON_SHA256:-__SIYUAN_NONE__}" <<'REMOTE_SCRIPT'
 set -eu
 lock_dir="$1"
 expected_token="$2"
 remote_dir="$3"
 release_id="$4"
+emergency_reason_sha256="$5"
 # shellcheck source=lib/47-release-ssh.sh
 source "$remote_dir/scripts/lib/47-release-ssh.sh"
 siyuan_47_record_release_phase state-write-start "$lock_dir" "$expected_token"
@@ -563,6 +596,10 @@ web_container="$(cd "$remote_dir" && docker compose ps -q web 2>/dev/null | tail
 api_container="$(cd "$remote_dir" && docker compose ps -q api 2>/dev/null | tail -1)"
 web_image_id="$(siyuan_docker_container_image_id "$web_container")"
 api_image_id="$(siyuan_docker_container_image_id "$api_container")"
+build_provenance=GOVERNANCE_ONLY
+if [ "$emergency_reason_sha256" != __SIYUAN_NONE__ ]; then
+  build_provenance=EMERGENCY_SERVER_BUILD
+fi
 cat > "$state_tmp" <<STATE
 WEB_FINGERPRINT=$web_fingerprint
 API_FINGERPRINT=$api_fingerprint
@@ -572,6 +609,8 @@ RELEASED_AT=$(date -Iseconds)
 SOURCE_MODE=WHITELIST_CAS
 WEB_IMAGE_ID=$web_image_id
 API_IMAGE_ID=$api_image_id
+BUILD_PROVENANCE=$build_provenance
+EMERGENCY_BUILD_REASON_SHA256=$emergency_reason_sha256
 STATE
 mv "$state_tmp" "$state_file"
 siyuan_47_record_release_phase state-write-complete "$lock_dir" "$expected_token"

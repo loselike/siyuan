@@ -36,6 +36,11 @@ const requiredGovernanceFiles = [
   'scripts/release-fingerprint-artifact-filter.test.sh',
   'scripts/lib/47-release-ssh.sh',
   'scripts/release-ssh-policy.test.sh',
+  'scripts/install-47-runtime-resilience.sh',
+  'scripts/runtime-resilience.test.sh',
+  'scripts/release-build-policy.test.sh',
+  'deploy/47/siyuan-compose-recovery.sh',
+  'deploy/47/siyuan-compose-recovery.service',
   'scripts/lib/release-source-policy.sh',
   'scripts/release-source-policy.test.sh',
   'scripts/ci-affected.mjs',
@@ -85,7 +90,7 @@ for (const [path, content, requiredText] of [
   if (!content.includes(requiredText)) failures.push(`${path} is missing acceptance rule: ${requiredText}`);
 }
 
-for (const requiredScript of ['context:check', 'context:archive', 'validation:select', 'release:47:baseline', 'release:47:manifest', 'audit:47:provenance', 'deploy:47:whitelist', 'architecture:check']) {
+for (const requiredScript of ['context:check', 'context:archive', 'validation:select', 'release:47:baseline', 'release:47:manifest', 'release:47:resilience', 'audit:47:provenance', 'deploy:47:whitelist', 'architecture:check']) {
   if (!packageJson.scripts?.[requiredScript]) failures.push(`package.json is missing governance command: ${requiredScript}`);
 }
 if (!packageJson.scripts?.['governance:check']?.includes('npm run context:check')) {
@@ -157,6 +162,27 @@ for (const immutableImageGate of [
   'IMAGE_MANIFEST_SHA256='
 ]) {
   if (!deployScript.includes(immutableImageGate)) failures.push(`immutable image promotion is missing gate: ${immutableImageGate}`);
+}
+for (const productionBuildIsolationGate of [
+  'Standard 47 runtime releases require CI-built immutable images via --image-manifest.',
+  'REMOTE_SERVER_BUILD_POLICY_VIOLATION'
+]) {
+  if (!deployScript.includes(productionBuildIsolationGate)) {
+    failures.push(`standard release is missing production build isolation gate: ${productionBuildIsolationGate}`);
+  }
+}
+if (deployScript.includes('siyuan_47_run_bounded_build docker compose build')) {
+  failures.push('standard release must not execute docker compose build on 47');
+}
+for (const emergencyBuildGate of [
+  '--emergency-server-build',
+  'Whitelist runtime releases are break-glass only',
+  'EMERGENCY_BUILD_REASON_SHA256=',
+  'build_provenance=EMERGENCY_SERVER_BUILD'
+]) {
+  if (!whitelistDeployScript.includes(emergencyBuildGate)) {
+    failures.push(`whitelist release is missing emergency build gate: ${emergencyBuildGate}`);
+  }
 }
 if (!provenanceAuditScript.includes('immutable-image-provenance-mismatch')
   || !provenanceAuditScript.includes('GHCR_DIGESTS')) {
@@ -314,13 +340,17 @@ if (!releaseLockScript.includes('47-release-ssh.sh')
   || !releaseSshScript.includes('siyuan_47_scp')) {
   failures.push('47 release SSH/SCP must share bounded connect and keepalive policy');
 }
-for (const releaseScript of [deployScript, whitelistDeployScript]) {
-  if (!releaseScript.includes('siyuan_47_run_bounded_build docker compose build')
-    || !releaseScript.includes('SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800')
-    || !releaseScript.includes('siyuan_47_record_release_phase build-start')
-    || !releaseScript.includes('siyuan_47_record_release_phase health-complete')) {
-    failures.push('47 runtime build paths must emit phases and enforce a bounded plain-progress build');
-  }
+if (!deployScript.includes('siyuan_47_run_bounded_build docker compose --profile tools pull')
+  || !deployScript.includes('SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800')
+  || !deployScript.includes('siyuan_47_record_release_phase artifact-pull-start')
+  || !deployScript.includes('siyuan_47_record_release_phase health-complete')) {
+  failures.push('standard 47 runtime releases must emit phases and bound immutable artifact pulls');
+}
+if (!whitelistDeployScript.includes('siyuan_47_run_bounded_build docker compose build')
+  || !whitelistDeployScript.includes('SIYUAN_47_BUILD_TIMEOUT_SECONDS:-1800')
+  || !whitelistDeployScript.includes('siyuan_47_record_release_phase emergency-build-start')
+  || !whitelistDeployScript.includes('siyuan_47_record_release_phase health-complete')) {
+  failures.push('break-glass 47 runtime builds must emit emergency phases and enforce a bounded plain-progress build');
 }
 if (!releaseSshScript.includes('timeout --signal=TERM --kill-after=60')
   || !releaseSshScript.includes('RELEASE_BUILD_TIMEOUT')

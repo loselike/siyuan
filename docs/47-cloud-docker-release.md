@@ -6,7 +6,7 @@
 
 - 47 是全局串行发布资源。Web、API、Shared、迁移和纯源码白名单共用同一把远端发布锁，不按服务拆锁；多个会话可以并行开发，但不得并行同步、构建、迁移、重启或写发布状态。
 - 运行时发布还必须为每个 release ID 使用唯一的 API/Web/db-migrate 镜像标签，并在构建后、迁移前、重启前按镜像 ID 做 fencing 校验；远端队列锁是协调机制，不单独充当 fencing。禁止用共享 `latest` 标签作为已验证候选的最终启动引用。
-- 标准发布只允许从完整 Git 源码构建。禁止把既有镜像作为基底覆盖编译后 JavaScript、从 source map 反向恢复源码、复用未由当前源码生成的 Shared `dist`/声明文件，或复用旧 Prisma Client 来绕过类型检查。此类产物只能作为故障取证，不能成为新基线。
+- 标准发布只允许提升由主干 CI 从完整 Git 源码构建的不可变 digest 镜像。47 禁止执行标准 `docker compose build`；禁止把既有镜像作为基底覆盖编译后 JavaScript、从 source map 反向恢复源码、复用未由当前源码生成的 Shared `dist`/声明文件，或复用旧 Prisma Client 来绕过类型检查。此类产物只能作为故障取证，不能成为新基线。
 - 标准发布开始前先把候选分支推送到 `origin`，再用 `npm run release:47:baseline`：它要求发布协调 worktree 干净、HEAD 与同名远端分支精确一致，并核对当前提交的 Web/API/Prisma manifest 与 47 实际树完全一致，随后生成绑定 worktree、分支和祖先 commit 的 receipt。完成候选合并与验证后再次推送，并执行 `npm run deploy:47 -- --expected-release-id <记录值>`；远端 ID、receipt、远端分支 HEAD 或祖先关系任一不一致都会阻断。
 - baseline 捕获与标准 deploy 都会先执行 `audit:47:provenance -- --require-traceable`。当前这类 `legacy-untraceable` 线上状态不能进入标准同步；首次切换到统一 Git 基线必须走单独审查的 bootstrap cutover，不能用普通 deploy 参数绕过。
 - `npm run deploy:47 -- --lock-status` 只读查看当前锁、heartbeat 和 recovery-required 状态。锁目录异常残留时不得直接删除；先确认没有发布、构建或迁移进程，再由主推进会话处理。
@@ -28,13 +28,13 @@
 | 范围 | 触发条件 | 47 构建/重启 |
 | --- | --- | --- |
 | `state/docs-only` | 只改 `.codex-state.md`、`docs/**`、`AGENTS.md` 或不影响运行时代码的说明文件 | 只同步；不构建、不重启 |
-| `web` | `apps/web/**`、Web 依赖、只被前端使用的样式或 helper | `docker compose build web`；重启 `web` |
-| `api` | `apps/api/src/**`、API 依赖、只被后端使用的服务端逻辑 | `docker compose build api`；重启 `api` |
-| `api+migrate` | `apps/api/prisma/schema.prisma` 或 `apps/api/prisma/migrations/**` | `docker compose build db-migrate api`；运行 `db-migrate`；重启 `api` |
-| `web+api` | 前后端都改，或 `packages/shared/**` 同时影响前后端，但 Prisma 无变化 | 只构建/重启 `api web`，不运行 `db-migrate` |
-| `web+api+migrate` | 前后端和 Prisma 同时变化 | 构建 `db-migrate api web`；运行迁移；重启 `api web` |
-| `full-no-migrate` | 根依赖、Dockerfile、Compose、发布脚本变化，但 Prisma 指纹不变 | 完整重建受影响运行服务，不运行 `db-migrate` |
-| `full+migrate` | 全量影响面且 Prisma 指纹变化 | 完整构建、运行 `db-migrate`、重启受影响服务 |
+| `web` | `apps/web/**`、Web 依赖、只被前端使用的样式或 helper | 拉取 CI Web digest；重启 `web` |
+| `api` | `apps/api/src/**`、API 依赖、只被后端使用的服务端逻辑 | 拉取 CI API digest；重启 `api` |
+| `api+migrate` | `apps/api/prisma/schema.prisma` 或 `apps/api/prisma/migrations/**` | 拉取 CI migration/API digest；运行 `db-migrate`；重启 `api` |
+| `web+api` | 前后端都改，或 `packages/shared/**` 同时影响前后端，但 Prisma 无变化 | 拉取 CI API/Web digest；重启 `api web` |
+| `web+api+migrate` | 前后端和 Prisma 同时变化 | 拉取三个 CI digest；运行迁移；重启 `api web` |
+| `full-no-migrate` | 根依赖、Dockerfile、Compose、发布脚本变化，但 Prisma 指纹不变 | 拉取受影响的 CI digest，不运行 `db-migrate` |
+| `full+migrate` | 全量影响面且 Prisma 指纹变化 | 拉取三个 CI digest、运行迁移、重启受影响服务 |
 
 `package-lock.json`、根 `package.json`、Dockerfile、Compose 和发布脚本变化默认视为可能影响多个服务；除非能明确只影响单个 workspace，否则走 `web+api` 或 `full`。如果包含 Prisma schema/migrations，禁止跳过 `db-migrate`。
 
@@ -50,7 +50,9 @@ npm run sync:47
 
 ```bash
 npm run release:47:baseline
-npm run deploy:47 -- --expected-release-id <上一步记录的值>
+npm run deploy:47 -- \
+  --expected-release-id <上一步记录的值> \
+  --image-manifest /absolute/path/to/images.env
 ```
 
 `sync:47 --apply` 同时校验远端锁 token 和任务开始时的 `EXPECTED_RELEASE_ID`；缺失、锁属于其他发布或 baseline 已变化时直接拒绝。dry-run 不写远端。
@@ -93,6 +95,21 @@ npm run deploy:47 -- \
 
 该入口不接受 traceable 线上状态，强制使用已提交的 v3 清单和 Git bundle；锁内重新逐字节比较 release state、完整源码清单、Prisma 清单、容器、镜像和运行产物，并继续执行严格的已应用 migration 集合/checksum 核对。任一并发发布、源码或镜像变化都会在同步前停止；不能用它覆盖新的线上改动，也不能跳过历史迁移 checksum 例外白名单。
 
+完成 P1 cutover 时必须同时传入与该基线 Git commit 完全一致的 CI `--image-manifest`；即使是一次性 cutover，也不允许恢复生产宿主机构建。
+
+## Docker daemon 韧性
+
+47 使用官方 `live-restore` 保证 Docker daemon 崩溃或 reload 时既有 Linux 容器继续运行，并安装 root-owned `siyuan-compose-recovery.service`。恢复单元只按固定容器名启动已经存在的 Postgres、Redis、API、Web 容器并执行内部健康检查；禁止 create、pull、build 或 `compose up`。
+
+只读检查和一次性安装命令：
+
+```bash
+npm run release:47:resilience -- --status
+npm run release:47:resilience -- --apply --confirm-live-restore
+```
+
+安装脚本在全局发布锁内执行，先用 `dockerd --validate` 校验合并后的 daemon JSON，通过 `systemctl reload docker` 无停机启用，再验证四个容器 ID/启动时间未变化。配置、脚本和 unit 的回滚备份只保留最近 3 份；不得用生产 daemon stop/kill 作为演练手段。
+
 ## 一键智能发布
 
 日常发布固定执行：
@@ -100,7 +117,9 @@ npm run deploy:47 -- \
 ```bash
 npm run release:47:baseline
 # 完成候选合并与验证后
-npm run deploy:47 -- --expected-release-id <任务开始时记录的值>
+npm run deploy:47 -- \
+  --expected-release-id <任务开始时记录的值> \
+  --image-manifest /absolute/path/to/images.env
 ```
 
 常规生产发布只允许从 `main` 或专用 `codex/release/*` 分支执行。普通功能分支必须先走 Pull Request 自动检查；白名单 CAS 在普通功能分支默认拒绝，只有经过明确应急审查并设置 `SIYUAN_47_EMERGENCY_RELEASE=true` 才能使用。这个开关不绕过全局锁、CAS checksum、migration、镜像身份、recovery 或 health 门。
@@ -115,6 +134,8 @@ npm run deploy:47 -- \
 ```
 
 制品提升会先校验清单 commit 与当前 HEAD、三个 `ghcr.io/...@sha256:<64 hex>` 引用和清单 SHA；47 只拉取 digest、以 `--no-build` 重启受影响服务，并把 digest 清单证据写入不可变 receipt。没有有效清单、GHCR 拉取失败或 migration 指纹变化都会在成功状态写入前失败关闭；migration 仍必须走独立 reviewed whitelist 流程，不会被制品提升隐式执行。
+
+白名单运行时发布只保留为 break-glass：必须显式传 `--emergency-server-build --reason <8-200 字符原因>`，发布状态记录原因 SHA 和 `EMERGENCY_SERVER_BUILD` provenance。常规功能不得使用；`scope none` 的治理脚本同步不构建，也不能携带该开关。
 
 Pull Request 使用 `scripts/ci-affected.mjs` 按 shared/API/Web/Prisma/治理路径选择类型检查，并通过 `config/validation/path-test-map.json` 执行与变更领域直接对应、没有占位符的最小效果测试；巨型 legacy E2E 不再因公共 Repository 变化而自动整组运行。`packages/shared` 只构建一次，每个阶段的耗时和退出码保存为 Actions artifact。完整回归保留在手动/夜间 workflow，不以减少 PR 验证为理由降低权限、迁移、财务和数据正确性门。
 
@@ -207,5 +228,5 @@ curl -I http://127.0.0.1:${APP_PORT:-8899}/
 
 ## 后续优化方向
 
-- 若 47 上 Docker build 明显变慢，下一步改为本地/CI 构建镜像、推送镜像仓库，47 只执行 `docker compose pull`、`db-migrate` 和重启。
+- 完成 47 当前运行源码到 `main` 的一次性基线归并和 digest cutover 后，关闭白名单服务器构建的 break-glass 默认权限，并把 Docker/SSH 操作收敛到专用 deploy 身份。
 - 若数据量上来后列表接口变慢，优先把运单、仓库包裹、财务审核接口改成服务端分页和筛选，配合现有查询索引使用。

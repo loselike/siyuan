@@ -1,0 +1,21 @@
+[Unit]
+Description=Recover existing Sunny Compose containers after Docker daemon start
+Documentation=https://docs.docker.com/engine/daemon/live-restore/
+Requires=docker.service
+After=docker.service network-online.target
+PartOf=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/siyuan/siyuan-compose-recovery
+RemainAfterExit=yes
+TimeoutStartSec=180
+Restart=on-failure
+RestartSec=10
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=docker.service

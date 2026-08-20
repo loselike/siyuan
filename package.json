@@ -47,6 +47,7 @@
     "release:47:manifest": "bash scripts/capture-47-runtime-manifest.sh",
     "audit:47:provenance": "bash scripts/audit-47-runtime-provenance.sh",
     "release:47:resolve": "bash scripts/resolve-47-release-recovery.sh",
+    "release:47:resilience": "bash scripts/install-47-runtime-resilience.sh",
     "deploy:47:whitelist": "bash scripts/deploy-47-whitelist.sh",
     "deploy:47": "bash scripts/deploy-47.sh"
   },
