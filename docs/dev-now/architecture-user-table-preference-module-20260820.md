@@ -1,6 +1,6 @@
 # 架构控制面快速落地（二）
 
-- 状态：`ready_to_merge`
+- 状态：`in_progress`
 - 会话标题：`Sunny｜架构控制面快速落地｜02`
 - 续接自：`docs/archive/dev-now/2026-08/architecture-reset-control-plane-20260820.md`
 - 上下文状态：`green`
