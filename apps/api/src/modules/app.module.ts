@@ -136,12 +136,7 @@ import { WarehouseTallyLifecycleService } from './warehouse/tally/warehouse-tall
 import { WarehouseTallyOperationsController } from './warehouse/tally/warehouse-tally-operations.controller.js';
 import { WAREHOUSE_TALLY_OPERATIONS_REPOSITORY } from './warehouse/tally/warehouse-tally-operations.repository.js';
 import { WarehouseTallyOperationsService } from './warehouse/tally/warehouse-tally-operations.service.js';
-import { UserTablePreferenceController } from './user-table-preference.controller.js';
-import {
-  InMemoryUserTablePreferenceService,
-  PrismaUserTablePreferenceService,
-  UserTablePreferenceService
-} from './user-table-preference.service.js';
+import { UserTablePreferenceModule } from './user-table-preference.module.js';
 
 const httpAuditWriterProvider = {
   provide: HTTP_AUDIT_WRITER,
@@ -255,10 +250,6 @@ const notificationServiceProvider = usePrismaRepository
   ? { provide: NotificationService, useClass: PrismaNotificationService }
   : { provide: NotificationService, useClass: InMemoryNotificationService };
 
-const userTablePreferenceServiceProvider = usePrismaRepository
-  ? { provide: UserTablePreferenceService, useClass: PrismaUserTablePreferenceService }
-  : { provide: UserTablePreferenceService, useClass: InMemoryUserTablePreferenceService };
-
 const warehouseTallyQueryRepositoryProvider = usePrismaRepository
   ? { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: PrismaWarehouseTallyQueryRepository }
   : { provide: WAREHOUSE_TALLY_QUERY_REPOSITORY, useClass: LegacyWarehouseTallyQueryRepository };
@@ -292,7 +283,14 @@ const systemIdentityAdminRepositoryProvider = {
 };
 
 @Module({
-  imports: [DataAccessModule, FinanceCatalogModule, ShipmentOverviewModule, SystemDirectoryModule, WarehouseInventoryModule],
+  imports: [
+    DataAccessModule,
+    FinanceCatalogModule,
+    ShipmentOverviewModule,
+    SystemDirectoryModule,
+    UserTablePreferenceModule,
+    WarehouseInventoryModule
+  ],
   controllers: [
     AuthController,
     HealthController,
@@ -333,8 +331,7 @@ const systemIdentityAdminRepositoryProvider = {
     WarehouseTallyLabelController,
     WarehouseTallyLifecycleController,
     WarehouseTallyOperationsController,
-    WarehouseTallyQueryController,
-    UserTablePreferenceController
+    WarehouseTallyQueryController
   ],
   providers: [
     AuthSessionService,
@@ -385,7 +382,6 @@ const systemIdentityAdminRepositoryProvider = {
     WarehouseTallyOperationsService,
     warehouseTallyOperationsRepositoryProvider,
     notificationServiceProvider,
-    userTablePreferenceServiceProvider,
     ...(usePrismaRepository ? [NotificationAuditWorker] : []),
     MiscFeeService,
     trackingQueryRepositoryProvider,
