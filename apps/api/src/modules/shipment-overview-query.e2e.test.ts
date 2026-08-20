@@ -50,6 +50,27 @@ describe('Shipment overview query API', () => {
       .expect(200);
     expect(marketShipments.body.length).toBeGreaterThan(0);
     expect(marketShipments.body.every((shipment: { site?: string }) => shipment.site === '深圳思远')).toBe(true);
+
+    const invalidCostScope = await request(app.getHttpServer())
+      .get('/api/shipments')
+      .query({ costScope: 'unexpected' })
+      .set('Authorization', app.auth(marketToken))
+      .expect(200);
+    expect(invalidCostScope.body).toEqual(marketShipments.body);
+
+    const routedMarketShipments = await request(app.getHttpServer())
+      .get('/api/shipments')
+      .query({ costScope: 'routed' })
+      .set('Authorization', app.auth(marketToken))
+      .expect(200);
+    expect(routedMarketShipments.body.every((shipment: { site?: string }) => shipment.site === '深圳思远')).toBe(true);
+    routedMarketShipments.body.forEach((shipment: Record<string, unknown>) => {
+      expect(shipment).not.toHaveProperty('paymentAmountUsd');
+      expect(shipment).not.toHaveProperty('paymentAmountCny');
+      expect(shipment).not.toHaveProperty('paymentMethod');
+      expect(shipment).not.toHaveProperty('grossProfit');
+      expect(shipment).not.toHaveProperty('payables');
+    });
   });
 
   it('keeps unread badge authentication, permission, and customer denial behavior unchanged', async () => {

@@ -32,9 +32,11 @@
 - `GET /shipments` 保留市场角色兼容语义；业务、客户、市场允许，仓库拒绝的 E2E 通过。
 - 客户来源读取补回 `Principal` 向 Repository 的传递，允许、未登录和拒绝路径 E2E 通过。
 - 内部流通日志由 Repository 统一判断运营/市场 canonical permissions，运营、市场允许，仓库和客户拒绝路径 E2E 通过。
-- 本地通过：API typecheck、`git diff --check`、`architecture:check`（448 route contracts、lint no-new-debt、Mojia 3/3），以及 10 个相关测试文件的定向验证。
+- 系统角色/账号代表路由管理员 200、业务角色 403、未登录 401 的 HTTP 允许/拒绝契约覆盖。
+- 市场运单列表锁定 `costScope=routed`、非法 `costScope` 回退、站点范围和财务字段裁剪；内部流通日志直接路由补充未登录 401。
+- 本地通过：API typecheck、`git diff --check`、`architecture:check`（448 route contracts、lint no-new-debt、Mojia 3/3），以及 11 个相关测试文件的定向验证。
+- 权限专项独立审查无 P0/P1；审查提出的系统 HTTP 允许/拒绝、内部日志 401 和运单 `costScope`/字段裁剪三项 P2 保护缺口已全部补齐。
 
 ## 待完成
 
-- 独立审查高风险权限边界。
 - 精确发布 API 到 47，验证路由、权限、容器、release provenance 和错误日志。

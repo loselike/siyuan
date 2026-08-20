@@ -150,7 +150,7 @@ describe('Operations line shipment query API', () => {
       });
 
     await request(app.getHttpServer())
-      .get('/api/operations/line-shipments')
+      .get('/api/operations/line-shipments/s-seed-1/internal-flow-log')
       .expect(401)
       .expect((response) => {
         expect(response.body.message).toBe('缺少登录凭证');
