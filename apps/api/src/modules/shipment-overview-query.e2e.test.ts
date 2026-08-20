@@ -51,6 +51,17 @@ describe('Shipment overview query API', () => {
     expect(marketShipments.body.length).toBeGreaterThan(0);
     expect(marketShipments.body.every((shipment: { site?: string }) => shipment.site === '深圳思远')).toBe(true);
 
+    await request(app.getHttpServer())
+      .get('/api/market/shipments')
+      .set('Authorization', app.auth(marketToken))
+      .expect(200)
+      .expect(marketShipments.body);
+
+    await request(app.getHttpServer())
+      .get('/api/market/shipments')
+      .set('Authorization', app.auth(operatorToken))
+      .expect(403);
+
     const invalidCostScope = await request(app.getHttpServer())
       .get('/api/shipments')
       .query({ costScope: 'unexpected' })
