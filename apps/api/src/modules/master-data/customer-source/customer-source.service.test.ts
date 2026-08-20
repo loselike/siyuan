@@ -22,12 +22,12 @@ describe('CustomerSourceService', () => {
     const createInput = { name: '  展会  ', enabled: true };
     const updateInput = { remark: '  原样交给现有适配器  ', enabled: false };
 
-    await service.list(query);
+    await service.list(principal, query);
     await service.create(principal, createInput);
     await service.update(principal, 'source-1', updateInput);
     await service.delete(principal, 'source-1');
 
-    expect(repository.listCustomerSources).toHaveBeenCalledWith(query);
+    expect(repository.listCustomerSources).toHaveBeenCalledWith(principal, query);
     expect(repository.createCustomerSource).toHaveBeenCalledWith(principal, createInput);
     expect(repository.updateCustomerSource).toHaveBeenCalledWith(principal, 'source-1', updateInput);
     expect(repository.deleteCustomerSource).toHaveBeenCalledWith(principal, 'source-1');

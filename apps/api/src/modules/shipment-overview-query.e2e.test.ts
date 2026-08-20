@@ -10,6 +10,7 @@ describe('Shipment overview query API', () => {
     const adminToken = await app.loginAs('admin');
     const operatorToken = await app.loginAs('operator');
     const customerToken = await app.loginAs('customer');
+    const marketToken = await app.loginAs('market');
 
     const adminShipments = await request(app.getHttpServer())
       .get('/api/shipments')
@@ -41,6 +42,34 @@ describe('Shipment overview query API', () => {
       expect(shipment).not.toHaveProperty('paymentAmountCny');
       expect(shipment).not.toHaveProperty('paymentMethod');
       expect(shipment).not.toHaveProperty('routeCostTotal');
+    });
+
+    const marketShipments = await request(app.getHttpServer())
+      .get('/api/shipments')
+      .set('Authorization', app.auth(marketToken))
+      .expect(200);
+    expect(marketShipments.body.length).toBeGreaterThan(0);
+    expect(marketShipments.body.every((shipment: { site?: string }) => shipment.site === '深圳思远')).toBe(true);
+
+    const invalidCostScope = await request(app.getHttpServer())
+      .get('/api/shipments')
+      .query({ costScope: 'unexpected' })
+      .set('Authorization', app.auth(marketToken))
+      .expect(200);
+    expect(invalidCostScope.body).toEqual(marketShipments.body);
+
+    const routedMarketShipments = await request(app.getHttpServer())
+      .get('/api/shipments')
+      .query({ costScope: 'routed' })
+      .set('Authorization', app.auth(marketToken))
+      .expect(200);
+    expect(routedMarketShipments.body.every((shipment: { site?: string }) => shipment.site === '深圳思远')).toBe(true);
+    routedMarketShipments.body.forEach((shipment: Record<string, unknown>) => {
+      expect(shipment).not.toHaveProperty('paymentAmountUsd');
+      expect(shipment).not.toHaveProperty('paymentAmountCny');
+      expect(shipment).not.toHaveProperty('paymentMethod');
+      expect(shipment).not.toHaveProperty('grossProfit');
+      expect(shipment).not.toHaveProperty('payables');
     });
   });
 

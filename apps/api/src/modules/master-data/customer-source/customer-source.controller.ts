@@ -13,9 +13,13 @@ export class CustomerSourceController {
 
   @Get()
   @RequirePermission('master-data:customers:read')
-  async list(@Query('keyword') keyword?: string, @Query('enabledOnly') enabledOnly?: string) {
+  async list(
+    @Req() request: { user: Principal },
+    @Query('keyword') keyword?: string,
+    @Query('enabledOnly') enabledOnly?: string
+  ) {
     const query: CustomerSourceListQuery = { keyword, enabledOnly: enabledOnly === 'true' };
-    return this.customerSources.list(query);
+    return this.customerSources.list(request.user, query);
   }
 
   @Post()
